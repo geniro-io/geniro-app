@@ -9,6 +9,7 @@ import {
 import { ConflictException, NotFoundException } from '@packages/common';
 import type { Subscription } from 'rxjs';
 
+import { MemoryService } from '../../memory/services/memory.service';
 import { isTerminalRunStatus } from '../../runs/runs.types';
 import {
   type AnalysedRun,
@@ -67,6 +68,7 @@ export class ThreadAnalysisService
     private readonly itemDao: ItemDao,
     private readonly chats: ChatService,
     private readonly bus: AgentEventBus,
+    private readonly memory: MemoryService,
   ) {}
 
   /**
@@ -189,7 +191,11 @@ export class ThreadAnalysisService
       replyLanguage: input.replyLanguage,
       agentOptions: input.agentOptions,
       title: `Analysis: ${source.title ?? 'untitled thread'}`,
-      taskInstructions: threadAnalysisGuide(kind, input.focus ?? null),
+      taskInstructions: threadAnalysisGuide(
+        kind,
+        input.focus ?? null,
+        this.memory.enabled,
+      ),
       analysisSource: {
         runId: source.id,
         seq: snapshotSeq,
@@ -280,7 +286,10 @@ export class ThreadAnalysisService
       replyLanguage: input.replyLanguage,
       agentOptions: input.agentOptions,
       title: `Analysis: ${target.name}`,
-      taskInstructions: workflowAnalysisGuide(input.focus ?? null),
+      taskInstructions: workflowAnalysisGuide(
+        input.focus ?? null,
+        this.memory.enabled,
+      ),
       analysisWorkflow: { slug: target.slug, runs },
     });
     try {

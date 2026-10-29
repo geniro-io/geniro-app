@@ -1092,6 +1092,39 @@ export function parseTaskChanged(data: unknown): TaskChangedEvent | null {
   };
 }
 
+/** One write to the shared memory — never an entry's text. */
+export interface MemoryChangedEvent {
+  /** Null for a change to many entries at once. */
+  memoryId: string | null;
+  /** What the write did (`created`, `forgotten`, `bulk`…); opaque here. */
+  change: string;
+  projectId: string | null;
+}
+
+/**
+ * Read a `memory_changed` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `MemoryChangedEvent`
+ * (`apps/daemon/src/v1/memory/memory.types.ts`). Change one and change the other.
+ */
+export function parseMemoryChanged(data: unknown): MemoryChangedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { memoryId, change, projectId } = data as Record<string, unknown>;
+  if (
+    (memoryId !== null && typeof memoryId !== 'string') ||
+    typeof change !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    memoryId,
+    change,
+    projectId: typeof projectId === 'string' ? projectId : null,
+  };
+}
+
 /** One share row written or removed — never its link. */
 export interface SharesChangedEvent {
   runId: string;
@@ -1187,6 +1220,9 @@ export class DaemonClient {
   >();
   private readonly sharesChangedListeners = new Set<
     (event: SharesChangedEvent) => void
+  >();
+  private readonly memoryChangedListeners = new Set<
+    (event: MemoryChangedEvent) => void
   >();
   private readonly joinWaiters = new Map<string, Set<JoinWaiter>>();
   private readonly debugListeners = new Set<(entry: DebugLogEntry) => void>();
@@ -1352,6 +1388,14 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'memory_changed') {
+        const memory = parseMemoryChanged(data);
+        if (memory) {
+          for (const listener of this.memoryChangedListeners) {
+            listener(memory);
+          }
+        }
+      }
       if (event === 'shares_changed') {
         const share = parseSharesChanged(data);
         if (share) {
@@ -1506,6 +1550,14 @@ export class DaemonClient {
     this.sharesChangedListeners.add(listener);
     return () => {
       this.sharesChangedListeners.delete(listener);
+    };
+  }
+
+  /** Subscribe to every write to the shared memory, client-wide. */
+  onMemoryChanged(listener: (event: MemoryChangedEvent) => void): () => void {
+    this.memoryChangedListeners.add(listener);
+    return () => {
+      this.memoryChangedListeners.delete(listener);
     };
   }
 

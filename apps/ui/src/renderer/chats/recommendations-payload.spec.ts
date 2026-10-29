@@ -82,6 +82,30 @@ describe('recommendations payload readers', () => {
     expect(card?.items[0]?.evidence[0]?.runId).toBeNull();
   });
 
+  it('reads a memory item, and still drops an item whose target is unknown', () => {
+    const [w1] = CARD.items as Record<string, unknown>[];
+    const card = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        items: [
+          {
+            ...w1,
+            id: 'M-1',
+            target: 'memory',
+            kind: 'update',
+            location: 'm12',
+          },
+          { ...w1, id: 'W-2', target: 'skill' },
+        ],
+      }),
+    );
+
+    expect(card?.items.map((entry) => [entry.id, entry.target])).toEqual([
+      ['M-1', 'memory'],
+    ]);
+    expect(card?.items[0]).toMatchObject({ kind: 'update', location: 'm12' });
+  });
+
   it("reads each item's territory, and drops an item that names none or another", () => {
     const [w1, u1] = CARD.items as Record<string, unknown>[];
     const { territory: _omitted, ...untagged } = w1!;

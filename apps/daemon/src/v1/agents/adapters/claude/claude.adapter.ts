@@ -51,6 +51,7 @@ import type {
   DeleteSessionTranscriptResult,
   FollowUpMessage,
   InstalledApprovalSupport,
+  NativeMemoryReading,
   NO_PLAN_LIMITS,
   RecoveredSubagentOutcome,
   SessionPullRequest,
@@ -193,6 +194,7 @@ import {
   withDisabledServer,
 } from './utils/claude-mcp-toggle.utils';
 import { claudeDisallowedToolArgs } from './utils/claude-mcp-tool-name.utils';
+import { readClaudeMemoryNotes } from './utils/claude-memory.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
 import { ClaudeModelMismatchNotice } from './utils/claude-model-mismatch.utils';
 import {
@@ -215,6 +217,7 @@ import {
 } from './utils/claude-question.utils';
 import {
   carryClaudeSession,
+  claudeProjectDirName,
   deleteClaudeSession,
   listClaudeSessions,
   readClaudeSessionHistory,
@@ -1721,6 +1724,23 @@ export class ClaudeAdapter extends AgentAdapter {
       },
     );
     return parseMcpGetHealth(stdout);
+  }
+
+  /** Every `memory/*.md` note of the profile's projects (`claude-memory.utils.ts`). */
+  override async readNativeMemory(
+    configDir: string | null,
+  ): Promise<NativeMemoryReading> {
+    const profile = this.profileDir(configDir);
+    return { location: profile, notes: await readClaudeMemoryNotes(profile) };
+  }
+
+  /**
+   * A folder's notes sit under its flattened path, as its sessions do; claude
+   * files a repository's notes under its git root, so a project in a
+   * subfolder matches nothing and its notes are offered as global.
+   */
+  override nativeMemoryProjectKey(folder: string): string {
+    return claudeProjectDirName(folder);
   }
 
   /** The key this CLI files a folder's MCP switches under (`claudeProjectKey`). */

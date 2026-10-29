@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   geniroCardKindOf,
+  geniroMemoryToolOf,
   isGeniroCardKind,
   isGeniroToolName,
 } from './geniro-tool';
@@ -88,4 +89,38 @@ describe('which of them draw a card', () => {
     expect(isGeniroCardKind('call_agent')).toBe(false);
     expect(isGeniroCardKind(null)).toBe(false);
   });
+});
+
+describe('shared-memory tools', () => {
+  const MEMORY_TOOLS = [
+    'memory_search',
+    'memory_read',
+    'memory_save',
+    'memory_forget',
+  ] as const;
+
+  it.each(MEMORY_TOOLS)('recognises %s in claude’s spelling', (tool) => {
+    expect(geniroMemoryToolOf(`mcp__${SERVER}__${tool}`, RUN)).toBe(tool);
+  });
+
+  it.each(MEMORY_TOOLS)('recognises %s in cursor’s spelling', (tool) => {
+    expect(geniroMemoryToolOf(`${SERVER}-${tool}: ${tool}`, RUN)).toBe(tool);
+    expect(geniroMemoryToolOf(`Geniro ${SERVER}: ${tool}`, RUN)).toBe(tool);
+  });
+
+  it('refuses another server and another run', () => {
+    expect(geniroMemoryToolOf('mcp__geniro-mine__memory_save', RUN)).toBeNull();
+    expect(
+      geniroMemoryToolOf(`mcp__${SERVER}__memory_save`, 'ffffffff-0000'),
+    ).toBeNull();
+    expect(geniroMemoryToolOf(`mcp__${SERVER}__memory_saved`, RUN)).toBeNull();
+  });
+
+  it.each(MEMORY_TOOLS)(
+    'keeps the raw %s call visible, since its row is drawn from that pair',
+    (tool) => {
+      expect(isGeniroToolName(`mcp__${SERVER}__${tool}`, RUN)).toBe(false);
+      expect(geniroCardKindOf(`mcp__${SERVER}__${tool}`, RUN)).toBeNull();
+    },
+  );
 });

@@ -22,6 +22,7 @@ import {
   HOST_COMPARISON_TOOL,
   HOST_FINDINGS_TOOL,
   HOST_GALLERY_TOOL,
+  HOST_LIST_MONITORS_TOOL,
   HOST_MEMORY_SAVE_TOOL,
   HOST_MEMORY_SEARCH_TOOL,
   HOST_MEMORY_TOOLS,
@@ -40,6 +41,7 @@ import {
   HOST_RECORD_OUTCOME_TOOL,
   HOST_REMOVE_ACTION_TOOL,
   HOST_SEARCH_CHATS_TOOL,
+  HOST_STOP_MONITOR_TOOL,
   HOST_TEAM_NOTE_TOOL,
   HOST_TEAM_NOTES_TOOL,
   HOST_WORKFLOW_CHANGE_TOOL,
@@ -73,6 +75,7 @@ import type { ThreadReaderService } from '../../agents/services/thread-reader.se
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import { WorkflowBuilderBroker } from '../../agents/services/workflow-builder.broker';
 import { WorkflowProposalBroker } from '../../agents/services/workflow-proposal.broker';
+import { GENIRO_UI_PREAMBLE } from '../../agents/utils/agent-instructions';
 import {
   MAX_ARTIFACT_IMAGE_BYTES,
   MAX_ARTIFACT_PAGE_IMAGE_BYTES,
@@ -107,11 +110,13 @@ import {
   ANSWERING_WITH_CALLS_OUT,
 } from '../../graphs/utils/callee-text';
 import { callerKey } from '../../graphs/utils/caller-key';
+import { memoryDb } from '../../memory/__tests__/memory-db';
 import type {
   MemoryActor,
   MemorySaveInput,
   MemorySaveOutcome,
 } from '../../memory/memory.types';
+import { DEFAULT_MEMORY_CONFIG } from '../../memory/memory.types';
 import type { MemoryService } from '../../memory/services/memory.service';
 import { AgentKind } from '../../runs/runs.types';
 import type { ShareService } from '../../shares/services/share.service';
@@ -740,6 +745,42 @@ describe('McpServerService', () => {
       expect(await names(fakeMemory(false).service)).not.toEqual(
         expect.arrayContaining([HOST_MEMORY_SEARCH_TOOL]),
       );
+    });
+
+    it('lists the memory tools byte for byte the same after an entry is saved and the review policy changes, so a live thread’s tool block never moves', async () => {
+      const db = await memoryDb();
+      try {
+        db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+        const target = memoryService(db.service);
+        const tools = async () => {
+          const { json } = await post(
+            target,
+            'run-1',
+            'agent',
+            rpc('tools/list', {}),
+          );
+          return JSON.stringify(
+            (json().result as { tools: ToolListing[] }).tools,
+          );
+        };
+        const before = await tools();
+
+        const saved = await db.service.save(
+          { kind: 'agent', runId: 'run-1', agentKind: 'claude', model: 'opus' },
+          { title: 'Use pnpm', body: 'Never npm here.', type: 'feedback' },
+          null,
+        );
+        db.service.setConfig({
+          ...DEFAULT_MEMORY_CONFIG,
+          agentWrites: 'pending',
+          nativeMemoryOff: true,
+        });
+
+        expect(saved.kind).toBe('created');
+        expect(await tools()).toBe(before);
+      } finally {
+        await db.orm.close();
+      }
     });
 
     it('refuses a memory call once the user has turned memory off', async () => {
@@ -3330,6 +3371,55 @@ describe('McpServerService', () => {
  * Asserted on the tools/list RESPONSE rather than on the source string: that is
  * the text a model actually receives.
  */
+/**
+ * Every tool geniro lists, against the preamble's tools section: a tool is
+ * named there by the situation it is for (claude lists MCP tools by name only,
+ * so the preamble is where it learns when one is the move), or it is exempt
+ * below with the reason something else tells the agent.
+ */
+const PREAMBLE_EXEMPT: Readonly<Record<string, string>> = {
+  [HOST_TEAM_NOTE_TOOL]: 'workflow nodes only; their own descriptions carry it',
+  [HOST_TEAM_NOTES_TOOL]:
+    'workflow nodes only; their own descriptions carry it',
+  [HOST_RECORD_OUTCOME_TOOL]:
+    'workflow nodes only; their own descriptions carry it',
+  [HOST_MOVE_STAGE_TOOL]: 'staged workflow runs only; the stage map names it',
+  [HOST_QUESTION_TOOL]:
+    'the CLI’s own question tool comes first; the preamble words every question',
+  [HOST_REMOVE_ACTION_TOOL]:
+    'companion of publish_action, named in its description',
+  [HOST_STOP_MONITOR_TOOL]: 'companion of monitor, named in its description',
+  [HOST_LIST_MONITORS_TOOL]: 'companion of monitor, named in its description',
+  list_projects: 'board helper the named board tools point to',
+  board_vocabulary: 'board helper the named board tools point to',
+  [HOST_ANALYZED_THREAD_TOOL]: 'analysis chats only; their brief names it',
+  [HOST_RECOMMENDATIONS_TOOL]: 'analysis chats only; their brief names it',
+  [HOST_RECOMMENDATION_MARKS_TOOL]: 'analysis chats only; their brief names it',
+  [HOST_WORKFLOW_CHANGE_TOOL]:
+    'analysis and builder chats only; their brief names it',
+};
+
+describe('McpServerService — the host preamble names every tool', () => {
+  it('names each listed tool in its tools section or exempts it with a reason', async () => {
+    const section = GENIRO_UI_PREAMBLE.slice(
+      GENIRO_UI_PREAMBLE.indexOf("## Geniro's own tools"),
+    );
+    const names = (await everyHostTool()).map((tool) => tool.name);
+
+    expect(
+      names.filter(
+        (name) =>
+          !section.includes(`\`${name}\``) && !(name in PREAMBLE_EXEMPT),
+      ),
+    ).toEqual([]);
+    expect(
+      Object.keys(PREAMBLE_EXEMPT).filter(
+        (name) => !names.includes(name) || section.includes(`\`${name}\``),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe('McpServerService — the board tools', () => {
   /** A service whose board is `handler`, answering every call it is handed. */
   const boardService = (handler: Partial<TaskBoardHandler> = {}) => {

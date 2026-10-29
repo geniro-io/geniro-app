@@ -540,17 +540,23 @@ export type ReadAnalyzedThreadArgs = z.infer<
 
 /**
  * What a recommendation changes: the analysed workflow, the repository it
- * worked in, or the user's own standing-instructions file of an agent it ran
- * (`AdapterConfig.userInstructions`).
+ * worked in, the user's own standing-instructions file of an agent it ran
+ * (`AdapterConfig.userInstructions`), or geniro's shared memory.
  */
-export const RECOMMENDATION_TARGETS = ['workflow', 'repo', 'user'] as const;
+export const RECOMMENDATION_TARGETS = [
+  'workflow',
+  'repo',
+  'user',
+  'memory',
+] as const;
 export type RecommendationTarget = (typeof RECOMMENDATION_TARGETS)[number];
 
-/** Each target's id prefix — `W-1`, `R-1`, `U-1`. */
+/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`. */
 export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
   workflow: 'W-',
   repo: 'R-',
   user: 'U-',
+  memory: 'M-',
 };
 
 /**
@@ -570,8 +576,8 @@ export const MAX_RECOMMENDATIONS =
 export const RecommendationIdSchema = z
   .string()
   .regex(
-    /^[WRU]-\d{1,3}$/,
-    'an id is W-<n> for a workflow item, R-<n> for repo, U-<n> for a user-instructions file',
+    /^[WRUM]-\d{1,3}$/,
+    'an id is W-<n> for a workflow item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry',
   );
 
 export const RecommendationTargetSchema = z.enum(RECOMMENDATION_TARGETS);
@@ -602,7 +608,7 @@ export const RecommendationEvidenceSchema = z.object({
 
 export const RecommendationItemSchema = z.object({
   id: RecommendationIdSchema.describe(
-    'W-1, W-2… workflow; R-1, R-2… repo; U-1, U-2… user-instructions file',
+    'W-1, W-2… workflow; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory',
   ),
   target: RecommendationTargetSchema,
   territory: z
@@ -615,14 +621,14 @@ export const RecommendationItemSchema = z.object({
     .min(1)
     .max(40)
     .describe(
-      'workflow: role|edge|parallelize|model|effort|termination|node; repo/user: check|standard|rule|skill|pointer|access|remove',
+      'workflow: role|edge|parallelize|model|effort|termination|node; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget',
     ),
   location: z
     .string()
     .min(1)
     .max(300)
     .describe(
-      'A workflow node id, a repo file:line, or the user-instructions file path',
+      'A workflow node id, a repo file:line, the user-instructions file path, or for memory the entry handle (m12) to update or forget, or new to add',
     ),
   title: z.string().min(1).max(200),
   change: z
@@ -6931,7 +6937,11 @@ export const HOST_MEMORY_READ_TOOL = 'memory_read';
 export const HOST_MEMORY_SAVE_TOOL = 'memory_save';
 export const HOST_MEMORY_FORGET_TOOL = 'memory_forget';
 
-/** The shared memory's tools, in `tools/list` order. */
+/**
+ * The shared memory's tools, in `tools/list` order.
+ *
+ * TWIN PARSER: `GENIRO_MEMORY_TOOLS` in `apps/ui/src/renderer/chats/geniro-tool.ts`.
+ */
 export const HOST_MEMORY_TOOLS = [
   HOST_MEMORY_SEARCH_TOOL,
   HOST_MEMORY_READ_TOOL,

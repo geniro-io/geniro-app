@@ -15,27 +15,40 @@ import {
   DEFAULT_MEMORY_CONFIG,
   MEMORY_BODY_MAX_BYTES,
   MEMORY_FORGET_REASON_MAX_CHARS,
+  MEMORY_LIST_LIMIT_DEFAULT,
   MEMORY_READ_MAX,
   MEMORY_SEARCH_MAX,
+  MEMORY_STATUSES,
   MEMORY_TITLE_MAX_CHARS,
   type MemoryActor,
-  type MemoryChangedEvent,
+  type MemoryChange,
   type MemoryConfig,
+  type MemoryCreateInput,
+  type MemoryEdit,
   type MemoryEntry,
+  type MemoryExport,
+  type MemoryForgetAll,
   type MemoryForgetOutcome,
   memoryHandle,
   type MemoryHit,
+  type MemoryImportNote,
+  type MemoryImportResult,
+  type MemoryList,
+  type MemoryListQuery,
+  type MemoryPatch,
   type MemoryRefusalCode,
   type MemoryRunSnapshot,
   type MemorySaveInput,
   type MemorySaveOutcome,
   type MemoryScopeFacts,
-  type MemoryStatus,
   type MemoryStatusOutcome,
+  type MemoryUserStatus,
   parseMemoryHandle,
 } from '../memory.types';
+import { memoryExportMarkdown } from '../utils/memory-export';
 import {
   excerptOf,
+  importedText,
   memoryIndexText,
   similarTitles,
   titleCandidatesQuery,
@@ -47,10 +60,22 @@ const DUPLICATE_CANDIDATES = 20;
 
 type Refusal = Extract<MemorySaveOutcome, { kind: 'refused' }>;
 
+/** What a write stores, whoever writes it. */
+type MemoryText = Pick<
+  MemorySaveInput,
+  'title' | 'body' | 'type' | 'notDuplicateOf'
+>;
+
+const USER: MemoryActor = { kind: 'user' };
+
+/** The writer the import preview checks a note as: never an agent. */
+const IMPORT_CHECK: MemoryActor = { kind: 'import', importedFrom: '' };
+
 /**
- * The memory every agent shares, on every CLI. Every write — an agent's tool
- * call, and later the user's edit, an import or an analysis — goes through
- * {@link save} / {@link forget}, which hold the limits: size, secrets,
+ * The memory every agent shares, on every CLI. Every write is made here — an
+ * agent's {@link save} / {@link forget}, the user's {@link create},
+ * {@link edit}, {@link setStatus} and {@link forgetAll}, and
+ * {@link importNotes} — and each holds the limits: size, secrets,
  * near-duplicates, stale revisions and the review policy for agent writes.
  *
  * Writes are serialized, so a handle is allocated and a duplicate checked
@@ -119,7 +144,10 @@ export class MemoryService {
    *
    * Until Electron's first push the daemon holds only the default, which may
    * not be the user's: a run kept for its whole life is created without
-   * memory rather than with a setting nobody chose.
+   * memory rather than with a setting nobody chose. Each CLI's own memory is
+   * off only while the shared memory is on and the user switched it off (a
+   * successful import does), so an agent keeps one memory without the CLIs'
+   * notes being hidden before they are brought over.
    */
   async runSnapshot(facts: MemoryScopeFacts): Promise<MemoryRunSnapshot> {
     const none: MemoryRunSnapshot = {
@@ -129,17 +157,18 @@ export class MemoryService {
     if (!this.configured || !this.enabled) {
       return none;
     }
+    const shared = { ...none, nativeMemoryOff: this.config.nativeMemoryOff };
     try {
       const entries = await this.listVisible(await this.scopeFor(facts));
       return {
-        ...none,
+        ...shared,
         memoryIndex: memoryIndexText(entries.filter(indexable), new Date()),
       };
     } catch (error) {
       this.logger.warn(
         `memory index not read: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return none;
+      return shared;
     }
   }
 
@@ -260,14 +289,14 @@ export class MemoryService {
   }
 
   /**
-   * The user's own status change — approve a pending entry, restore a
-   * forgotten one, or forget one — on any entry, whatever its scope. Refused to
-   * an agent: approving is the review itself.
+   * The user's own status change — approve an entry, restore a forgotten one
+   * to the status it had, or forget one — on any entry, whatever its scope.
+   * Refused to an agent: approving is the review itself.
    */
   setStatus(
     actor: MemoryActor,
     id: string,
-    status: MemoryStatus,
+    status: MemoryUserStatus,
   ): Promise<MemoryStatusOutcome> {
     return this.serialize(async () => {
       if (isAgent(actor)) {
@@ -278,18 +307,11 @@ export class MemoryService {
       if (!row) {
         return refused('NOT_FOUND', `no memory ${id}`);
       }
-      const approves =
-        status === 'active' && actor.kind === 'user' && row.approvedAt === null;
-      if (row.status !== status || approves) {
-        row.status = status;
-        row.approvedAt =
-          status === 'active' && actor.kind === 'user'
-            ? (row.approvedAt ?? new Date())
-            : null;
-        row.forgetReason = status === 'forgotten' ? row.forgetReason : null;
+      const change = applyStatus(row, status, new Date());
+      if (change !== null) {
         row.rev += 1;
         await em.flush();
-        this.publish(row, 'status');
+        this.publish(row, change);
       }
       return { kind: 'changed', entry: toEntry(row) };
     });
@@ -312,6 +334,271 @@ export class MemoryService {
           usedAt(b) - usedAt(a),
       )
       .map(toEntry);
+  }
+
+  /** One page of the user's list, newest edit first. */
+  async list(query: MemoryListQuery): Promise<MemoryList> {
+    const limit = query.limit ?? MEMORY_LIST_LIMIT_DEFAULT;
+    let match: string | undefined;
+    if (query.q !== undefined) {
+      const ready = chatTextMatchQuery(query.q);
+      if (ready === null) {
+        return { memories: [], next: null };
+      }
+      match = ready;
+    }
+    const rows = await this.memories.page(
+      {
+        statuses: query.status
+          ? [query.status]
+          : query.handle !== undefined
+            ? MEMORY_STATUSES
+            : ['active', 'pending'],
+        handle:
+          query.handle === undefined
+            ? undefined
+            : (parseMemoryHandle(query.handle) ?? undefined),
+        projects:
+          query.scope === 'global'
+            ? { exactly: null }
+            : query.scope === 'project' && query.projectId !== undefined
+              ? { exactly: query.projectId }
+              : { any: true },
+        type: query.type,
+        match,
+        before:
+          query.beforeUpdatedAt !== undefined && query.beforeId !== undefined
+            ? { updatedAt: new Date(query.beforeUpdatedAt), id: query.beforeId }
+            : undefined,
+        limit,
+      },
+      this.em.fork(),
+    );
+    const last = rows.at(-1);
+    return {
+      memories: rows.map(toEntry),
+      next:
+        rows.length === limit && last
+          ? {
+              beforeUpdatedAt: last.updatedAt.toISOString(),
+              beforeId: last.id,
+            }
+          : null,
+    };
+  }
+
+  /** One entry by id, whatever its status or scope — the user's read. */
+  async get(id: string): Promise<MemoryEntry | null> {
+    const row = await this.memories.getById(id, this.em.fork());
+    return row ? toEntry(row) : null;
+  }
+
+  /** The user's own new entry, filed where the user chose. */
+  create(input: MemoryCreateInput): Promise<MemorySaveOutcome> {
+    return this.serialize(async () => {
+      const invalid = this.refuseInvalid(USER, input);
+      if (invalid) {
+        return invalid;
+      }
+      const em = this.em.fork();
+      const unknown = await this.refuseUnknownProject(input.projectId, em);
+      return unknown ?? this.writeRow(USER, input, input.projectId, null, em);
+    });
+  }
+
+  /**
+   * The user's edit of an entry's text, type or scope at the `rev` it was read
+   * at. Editing a pending entry makes it the user's own, so it is no longer
+   * waiting on review; a forgotten one must be restored before it is edited.
+   */
+  edit(id: string, input: MemoryEdit): Promise<MemorySaveOutcome> {
+    return this.serialize(async () => {
+      const invalid = this.refuseInvalid(USER, input);
+      if (invalid) {
+        return invalid;
+      }
+      const em = this.em.fork();
+      const row = await this.memories.getById(id, em);
+      if (!row || row.status === 'forgotten') {
+        return refused(
+          'NOT_FOUND',
+          row ? 'restore the entry before editing it' : `no memory ${id}`,
+        );
+      }
+      if (input.rev !== row.rev) {
+        return { kind: 'stale', current: toEntry(row) };
+      }
+      const unknown = await this.refuseUnknownProject(input.projectId, em);
+      return unknown ?? this.writeRow(USER, input, input.projectId, row, em);
+    });
+  }
+
+  /** The user's PATCH: a status change, or an edit of text and scope. */
+  change(
+    id: string,
+    patch: MemoryPatch,
+  ): Promise<MemorySaveOutcome | MemoryStatusOutcome> {
+    if (patch.status !== undefined) {
+      return this.setStatus(USER, id, patch.status);
+    }
+    const { rev, title, body, type, projectId, notDuplicateOf } = patch;
+    if (
+      rev === undefined ||
+      title === undefined ||
+      body === undefined ||
+      type === undefined ||
+      projectId === undefined
+    ) {
+      return Promise.resolve(
+        refused(
+          'INVALID_ENTRY',
+          'an edit carries rev, title, body, type and projectId',
+        ),
+      );
+    }
+    return this.edit(id, { rev, title, body, type, projectId, notDuplicateOf });
+  }
+
+  /** Forget every active and pending entry, each one restorable. */
+  forgetAll(): Promise<MemoryForgetAll> {
+    return this.serialize(async () => {
+      const forgotten = await this.memories.forgetAll(
+        new Date(),
+        this.em.fork(),
+      );
+      if (forgotten > 0) {
+        this.events.publish({
+          memoryId: null,
+          change: 'bulk',
+          status: 'forgotten',
+          projectId: null,
+        });
+      }
+      return { forgotten };
+    });
+  }
+
+  /** Every active and pending entry as one Markdown document. */
+  async exportMarkdown(now = new Date()): Promise<MemoryExport> {
+    const em = this.em.fork();
+    const rows = await this.memories.getAll(
+      { status: { $in: ['active', 'pending'] } },
+      { orderBy: { updatedAt: 'desc' } },
+      em,
+    );
+    const projects = new Map(
+      (await this.projects.getAll({}, undefined, em)).map((project) => [
+        project.id,
+        project.name,
+      ]),
+    );
+    return {
+      markdown: memoryExportMarkdown(rows.map(toEntry), projects, now),
+      count: rows.length,
+    };
+  }
+
+  /** Why a note could not be stored as an entry, or null when it could. */
+  problemOf(note: Pick<MemorySaveInput, 'title' | 'body'>): string | null {
+    return this.refuseInvalid(IMPORT_CHECK, note)?.reason ?? null;
+  }
+
+  /** Active and pending entries filed in `projectId` whose title says the same. */
+  async similarTo(title: string, projectId: string | null): Promise<Memory[]> {
+    return this.nearDuplicates(
+      { title, body: '' },
+      projectId,
+      null,
+      this.em.fork(),
+    );
+  }
+
+  /** What the active and pending imported entries say, each as `importedText`. */
+  async importedTexts(
+    em: EntityManager = this.em.fork(),
+  ): Promise<Set<string>> {
+    const rows = await this.memories.getAll(
+      {
+        sourceActor: 'import',
+        status: { $in: ['active', 'pending'] },
+      },
+      { fields: ['title', 'body'] },
+      em,
+    );
+    return new Set(rows.map((row) => importedText(row.title, row.body)));
+  }
+
+  /**
+   * Write the notes the user ticked in the import preview. Ticking one is the
+   * user's review: each lands active and approved, past the near-duplicate
+   * check the preview already showed, in one write announced as one `bulk`
+   * change. A note whose text an active or pending imported entry already
+   * holds is skipped, so a retried or repeated import writes it once.
+   */
+  importNotes(notes: readonly MemoryImportNote[]): Promise<MemoryImportResult> {
+    return this.serialize(async () => {
+      const em = this.em.fork();
+      const projects = new Set(
+        (await this.projects.getAll({}, undefined, em)).map((p) => p.id),
+      );
+      const held = await this.importedTexts(em);
+      const skipped: MemoryImportResult['skipped'] = [];
+      const now = new Date();
+      let handle = await this.memories.nextHandle(em);
+      let imported = 0;
+      for (const note of notes) {
+        const actor: MemoryActor = {
+          kind: 'import',
+          importedFrom: note.importedFrom,
+        };
+        const refusal =
+          this.refuseInvalid(actor, note) ??
+          (note.projectId !== null && !projects.has(note.projectId)
+            ? refused('NO_PROJECT', `no project ${note.projectId}`)
+            : null);
+        if (refusal) {
+          skipped.push({ key: note.key, reason: refusal.reason });
+          continue;
+        }
+        const text = importedText(note.title, note.body);
+        if (held.has(text)) {
+          skipped.push({ key: note.key, reason: 'already imported' });
+          continue;
+        }
+        held.add(text);
+        const row = new Memory();
+        row.handle = handle++;
+        row.title = note.title.trim();
+        row.body = note.body.trim();
+        row.type = note.type;
+        row.projectId = note.projectId;
+        row.status = 'active';
+        stampSource(row, actor);
+        row.approvedAt = now;
+        em.persist(row);
+        imported += 1;
+      }
+      if (imported > 0) {
+        await em.flush();
+        this.events.publish({
+          memoryId: null,
+          change: 'bulk',
+          status: 'active',
+          projectId: null,
+        });
+      }
+      return { imported, skipped };
+    });
+  }
+
+  private async refuseUnknownProject(
+    projectId: string | null,
+    em: EntityManager,
+  ): Promise<Refusal | null> {
+    if (projectId === null || (await this.projects.getById(projectId, em))) {
+      return null;
+    }
+    return refused('NO_PROJECT', `no project ${projectId}`);
   }
 
   private async saveNow(
@@ -350,6 +637,16 @@ export class MemoryService {
         'this run works in no project, so the entry can only be global — save it with scope: global',
       );
     }
+    return this.writeRow(actor, input, target, existing, em);
+  }
+
+  private async writeRow(
+    actor: MemoryActor,
+    input: MemoryText,
+    target: string | null,
+    existing: Memory | null,
+    em: EntityManager,
+  ): Promise<MemorySaveOutcome> {
     const duplicates = await this.nearDuplicates(input, target, existing, em);
     const live = duplicates.filter((row) => row.status === 'active');
     // The user is the reviewer: an entry waiting on them never blocks them.
@@ -423,17 +720,18 @@ export class MemoryService {
         `no active memory ${handle} this run can see`,
       );
     }
+    row.statusBeforeForget = row.status;
     row.status = 'forgotten';
     row.forgetReason = trimmed;
     row.rev += 1;
     await em.flush();
-    this.publish(row, 'status');
+    this.publish(row, 'forgotten');
     return { kind: 'forgotten', entry: toEntry(row) };
   }
 
   private refuseInvalid(
     actor: MemoryActor,
-    input: MemorySaveInput,
+    input: Pick<MemorySaveInput, 'title' | 'body'>,
   ): Refusal | null {
     if (isAgent(actor) && !this.config.enabled) {
       return refused('MEMORY_DISABLED', 'the user has turned memory off');
@@ -477,7 +775,7 @@ export class MemoryService {
     return isAgent(actor) && this.config.agentWrites === 'pending';
   }
 
-  private publish(row: Memory, change: MemoryChangedEvent['change']): void {
+  private publish(row: Memory, change: MemoryChange): void {
     this.events.publish({
       memoryId: row.id,
       change,
@@ -508,7 +806,7 @@ export class MemoryService {
    * the entry being updated and the ones the writer vouched for.
    */
   private async nearDuplicates(
-    input: MemorySaveInput,
+    input: MemoryText,
     target: string | null,
     existing: Memory | null,
     em: EntityManager,
@@ -555,6 +853,39 @@ function indexable(entry: MemoryEntry): boolean {
     entry.source.actor === 'import' ||
     entry.approvedAt !== null
   );
+}
+
+/**
+ * Move `row` to the user's chosen status and name what that did, or null when
+ * it changes nothing. Forgetting keeps what the entry was, so a restore puts
+ * it back there — a pending entry waits for review again — and approval stays
+ * a press of its own.
+ */
+function applyStatus(
+  row: Memory,
+  status: MemoryUserStatus,
+  now: Date,
+): MemoryChange | null {
+  if (status === 'forgotten') {
+    if (row.status === 'forgotten') {
+      return null;
+    }
+    row.statusBeforeForget = row.status;
+    row.status = 'forgotten';
+    return 'forgotten';
+  }
+  if (row.status === 'forgotten') {
+    row.status = row.statusBeforeForget ?? 'active';
+    row.statusBeforeForget = null;
+    row.forgetReason = null;
+    return 'restored';
+  }
+  if (row.status === 'active' && row.approvedAt !== null) {
+    return null;
+  }
+  row.status = 'active';
+  row.approvedAt ??= now;
+  return 'approved';
 }
 
 function isAgent(actor: MemoryActor): boolean {

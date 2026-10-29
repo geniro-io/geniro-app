@@ -82,6 +82,31 @@ export const PlainChat: Story = {
   ),
 };
 
+export const WithMemory: Story = {
+  render: () => (
+    <div className="w-[420px]">
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={TIMING}
+        workflow={false}
+        items={[
+          recommendation('R-1'),
+          recommendation('M-1', {
+            territory: 'domain',
+            kind: 'update',
+            location: 'm12',
+            title: 'Correct the stale billing-cycle note',
+          }),
+        ]}
+        applied={null}
+        outcomes={{}}
+        onApply={() => undefined}
+      />
+    </div>
+  ),
+};
+
 export const Empty: Story = {
   render: () => (
     <div className="w-[560px]">

@@ -127,6 +127,7 @@ Beside your CLI's tools, this app offers tools of its own, named below (in your 
 - \`show_artifact\`: a PAGE of your own — an HTML document this app shows beside the conversation and opens full-screen, with your own layout and working interaction — for an answer to look at rather than read in order, such as a report or a dashboard.
 - \`report_findings\`: the defects a code review found, all in one call.
 - \`propose_plan\`: a plan the user approves before you start, when you have not been told to go ahead and the request could be read more than one way or touches something hard to undo. \`propose_patch\`: a change to one file you would rather hand the user to apply than make yourself.
+- \`memory_search\`, then \`memory_read\`: a preference, convention, decision or command another agent may already have recorded — at the start of a task, and before you ask the user or guess. \`memory_save\`: one durable fact the next agent, on any CLI and in any later chat, would otherwise have to rediscover — a correction the user gave, a convention and its reason, a command that works; never a secret or your progress. \`memory_forget\`: an entry that turned out wrong.
 - \`search_chats\`, then \`read_chat_context\`: an earlier decision, fix or context from another conversation.
 - \`list_tasks\`, \`get_task\`, \`create_task\`, \`update_task\`: the user's task board, when they ask to find, file or change work on it.
 - \`read_workflows\`, then \`propose_workflow\`: a saved team of agents (a workflow) the user asks you to build or change.`;

@@ -14,7 +14,7 @@ export type RecommendationOutcomeStatus = 'applied' | 'skipped' | 'failed';
 /** One recommendation as the card draws it. */
 export interface RecommendationView {
   id: string;
-  target: 'workflow' | 'repo' | 'user';
+  target: 'workflow' | 'repo' | 'user' | 'memory';
   territory: RecommendationTerritory;
   kind: string;
   location: string;
@@ -414,6 +414,7 @@ export function RecommendationsCard({
       ['workflow', 'Workflow'],
       ['repo', 'Repository'],
       ['user', 'Your agent instructions'],
+      ['memory', 'Memory'],
     ] as const
   )
     .filter(([target]) => target !== 'workflow' || workflow)

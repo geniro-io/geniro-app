@@ -58,7 +58,12 @@ export abstract class MemoryMcpTool extends BaseMcpTool {
   }
 }
 
-/** One line naming an entry: handle, revision, scope, type and title. */
+/**
+ * One line naming an entry: handle, revision, scope, type and title.
+ *
+ * TWIN PARSER: `memoryToolEntryOf` in `apps/ui/src/renderer/chats/memory-tool-row.tsx`
+ * reads this text for the transcript row; reword it there too.
+ */
 export function memoryEntryLine(
   entry: Pick<MemoryHit, 'handle' | 'rev' | 'projectId' | 'type' | 'title'>,
 ): string {

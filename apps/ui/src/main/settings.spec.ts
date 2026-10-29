@@ -659,6 +659,7 @@ describe('memory settings', () => {
     expect(readSettings().memory).toEqual({
       enabled: false,
       agentWrites: 'active',
+      nativeMemoryOff: false,
     });
   });
 });

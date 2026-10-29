@@ -6,6 +6,7 @@ import {
   DaemonClient,
   parseChangedRuns,
   parseDeletedRunId,
+  parseMemoryChanged,
   parseRunStatus,
   parseTaskChanged,
   parseUsageRecorded,
@@ -915,6 +916,33 @@ describe('parseDeletedRunId — the run_deleted twin', () => {
     // A blank string is not a run identity; degrading to null here means "no
     // ghost row gets cleared" rather than "clear every run in the sidebar".
     expect(parseDeletedRunId({ runId: '' })).toBeNull();
+  });
+});
+
+describe('parseMemoryChanged — the memory_changed twin', () => {
+  it('reads one entry’s change and a bulk change naming no entry', () => {
+    expect(
+      parseMemoryChanged({
+        memoryId: 'e1',
+        change: 'forgotten',
+        status: 'forgotten',
+        projectId: 'p1',
+      }),
+    ).toEqual({ memoryId: 'e1', change: 'forgotten', projectId: 'p1' });
+    expect(
+      parseMemoryChanged({
+        memoryId: null,
+        change: 'bulk',
+        status: 'forgotten',
+        projectId: null,
+      }),
+    ).toEqual({ memoryId: null, change: 'bulk', projectId: null });
+  });
+
+  it('refuses a payload without a change or with an entry id of the wrong type', () => {
+    expect(parseMemoryChanged(null)).toBeNull();
+    expect(parseMemoryChanged({ memoryId: 'e1' })).toBeNull();
+    expect(parseMemoryChanged({ memoryId: 7, change: 'created' })).toBeNull();
   });
 });
 

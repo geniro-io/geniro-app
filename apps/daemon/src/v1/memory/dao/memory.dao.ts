@@ -9,7 +9,11 @@ import {
   MEMORY_TEXT_TRIGGERS,
 } from '../../../db/memory-text-index.ddl';
 import { Memory } from '../entity/memory.entity';
-import type { MemoryStatus, MemoryTextDatabase } from '../memory.types';
+import type {
+  MemoryStatus,
+  MemoryTextDatabase,
+  MemoryType,
+} from '../memory.types';
 
 /** Which entries a read or a full-text match may return. */
 export interface MemoryMatchScope {
@@ -17,8 +21,20 @@ export interface MemoryMatchScope {
   /**
    * `visibleTo`: global entries plus this project's (null = global only).
    * `exactly`: entries filed under exactly this scope (null = global).
+   * `any`: every scope — the user's own view.
    */
-  projects: { visibleTo: string | null } | { exactly: string | null };
+  projects:
+    { visibleTo: string | null } | { exactly: string | null } | { any: true };
+}
+
+/** One page of the user's list, newest edit first. */
+export interface MemoryPageFilter extends MemoryMatchScope {
+  type?: MemoryType;
+  handle?: number;
+  /** A ready-made FTS5 query. */
+  match?: string;
+  before?: { updatedAt: Date; id: string };
+  limit: number;
 }
 
 @Injectable()
@@ -89,12 +105,81 @@ export class MemoryDao extends BaseDao<Memory> {
     return rows.map((row) => row.id);
   }
 
+  async page(
+    filter: MemoryPageFilter,
+    em: EntityManager = this.em,
+  ): Promise<Memory[]> {
+    const { type, handle, match, before } = filter;
+    let query = this.scoped(filter, em).select('m.id');
+    if (type !== undefined) {
+      query = query.where('m.type', '=', type);
+    }
+    if (handle !== undefined) {
+      query = query.where('m.handle', '=', handle);
+    }
+    if (match !== undefined) {
+      query = query.where((eb) =>
+        eb(
+          'm.id',
+          'in',
+          eb
+            .selectFrom('memories_fts')
+            .select('memories_fts.memory_id')
+            .where('memories_fts', 'match', match),
+        ),
+      );
+    }
+    if (before !== undefined) {
+      const at = before.updatedAt.getTime();
+      query = query.where((eb) =>
+        eb.or([
+          eb('m.updated_at', '<', at),
+          eb.and([eb('m.updated_at', '=', at), eb('m.id', '<', before.id)]),
+        ]),
+      );
+    }
+    const rows = await query
+      .orderBy('m.updated_at', 'desc')
+      .orderBy('m.id', 'desc')
+      .limit(filter.limit)
+      .execute();
+    const ids = rows.map((row) => row.id);
+    const byId = new Map(
+      (await this.getByIds(ids, em)).map((row) => [row.id, row]),
+    );
+    return ids
+      .map((id) => byId.get(id))
+      .filter((row): row is Memory => row !== undefined);
+  }
+
+  /**
+   * Forget every active and pending entry in one statement, keeping each
+   * restorable, and say how many it took.
+   */
+  async forgetAll(at: Date, em: EntityManager = this.em): Promise<number> {
+    const result = await this.database(em)
+      .updateTable('memories')
+      .set((eb) => ({
+        status_before_forget: eb.ref('status'),
+        status: 'forgotten',
+        rev: eb('rev', '+', 1),
+        updated_at: at.getTime(),
+      }))
+      .where('deleted_at', 'is', null)
+      .where('status', 'in', ['active', 'pending'])
+      .executeTakeFirst();
+    return Number(result.numUpdatedRows);
+  }
+
   /** Live rows of the given statuses in the given scope. */
   private scoped(scope: MemoryMatchScope, em: EntityManager) {
     const query = this.database(em)
       .selectFrom('memories as m')
       .where('m.deleted_at', 'is', null)
       .where('m.status', 'in', [...scope.statuses]);
+    if ('any' in scope.projects) {
+      return query;
+    }
     if ('visibleTo' in scope.projects) {
       const project = scope.projects.visibleTo;
       return query.where((eb) =>

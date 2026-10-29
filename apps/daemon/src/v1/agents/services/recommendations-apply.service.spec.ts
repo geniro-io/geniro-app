@@ -16,10 +16,22 @@ import { RecommendationsApplyService } from './recommendations-apply.service';
 function item(id: string, title: string): RecommendationItem {
   return {
     id,
-    target: id.startsWith('W') ? 'workflow' : 'repo',
+    target: id.startsWith('W')
+      ? 'workflow'
+      : id.startsWith('M')
+        ? 'memory'
+        : 'repo',
     territory: id.startsWith('W') ? 'process' : 'domain',
-    kind: id.startsWith('W') ? 'parallelize' : 'ADD',
-    location: id.startsWith('W') ? 'reviewer' : 'AGENTS.md:12',
+    kind: id.startsWith('W')
+      ? 'parallelize'
+      : id.startsWith('M')
+        ? 'update'
+        : 'ADD',
+    location: id.startsWith('W')
+      ? 'reviewer'
+      : id.startsWith('M')
+        ? 'm12'
+        : 'AGENTS.md:12',
     title,
     change: `the exact change for ${id}`,
     evidence: [{ seq: 4, quote: 'waited' }],
@@ -118,6 +130,29 @@ describe('RecommendationsApplyService.apply', () => {
       clientMessageId: 'press-1',
       apply: { cardSeq: 5, ids: ['W-1'] },
     });
+  });
+
+  it('sends a memory item with its handle and kind, and keeps it on the card', async () => {
+    const { service, sendMessage } = build({
+      card: {
+        payload: JSON.stringify({
+          ...CARD,
+          items: [...CARD.items, item('M-1', 'Correct a stale note')],
+        }),
+      },
+    });
+
+    await service.apply('analysis', {
+      cardSeq: 5,
+      ids: ['M-1'],
+      clientMessageId: 'press-4',
+    });
+
+    const text = (sendMessage.mock.calls[0] as unknown as [string, string])[1];
+    expect(text).toContain('### M-1 · Correct a stale note');
+    expect(text).toContain('Target: memory · domain · update · m12');
+    expect(text).toContain('the exact change for M-1');
+    expect(text).toContain('Not selected — leave alone: W-1, R-1.');
   });
 
   it('refuses a card whose items name no territory, and sends nothing', async () => {

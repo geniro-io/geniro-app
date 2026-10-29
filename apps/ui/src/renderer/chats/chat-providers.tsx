@@ -24,6 +24,7 @@ import {
   type LocalImageLoader,
   LocalImageLoaderContext,
 } from './local-image-loader';
+import { MemoryOpenContext } from './memory-tool-row';
 import {
   type AttachmentLoader,
   AttachmentLoaderContext,
@@ -77,6 +78,8 @@ export interface TranscriptValues {
   runStages: StageProgress | null;
   /** Open the notes popup on one note — see `TeamNoteOpenContext`. */
   openTeamNote: ((seq: number) => void) | null;
+  /** Open Settings → Memory on one entry — see `MemoryOpenContext`. */
+  openMemory?: ((handle: string) => void) | null;
 }
 
 /**
@@ -280,26 +283,30 @@ export function TranscriptContexts({
   runOutcomes,
   runStages,
   openTeamNote,
+  openMemory = null,
   children,
 }: TranscriptValues & { children: React.ReactNode }): React.JSX.Element {
   return (
     <RunOutcomesContext.Provider value={runOutcomes}>
       <TeamNoteOpenContext.Provider value={openTeamNote}>
-        <RunStagesContext.Provider value={runStages}>
-          <CollapseToolStepsContext.Provider value={collapseToolSteps}>
-            <RunActivityContext.Provider value={runActivity}>
-              <TurnDurationContext.Provider value={turnDurations}>
-                <RevealCallBlockContext.Provider value={revealCallBlock}>
-                  <RevealCallContext.Provider value={revealCall}>
-                    <SubagentDetailContext.Provider value={openSubagentDetail}>
-                      {children}
-                    </SubagentDetailContext.Provider>
-                  </RevealCallContext.Provider>
-                </RevealCallBlockContext.Provider>
-              </TurnDurationContext.Provider>
-            </RunActivityContext.Provider>
-          </CollapseToolStepsContext.Provider>
-        </RunStagesContext.Provider>
+        <MemoryOpenContext.Provider value={openMemory}>
+          <RunStagesContext.Provider value={runStages}>
+            <CollapseToolStepsContext.Provider value={collapseToolSteps}>
+              <RunActivityContext.Provider value={runActivity}>
+                <TurnDurationContext.Provider value={turnDurations}>
+                  <RevealCallBlockContext.Provider value={revealCallBlock}>
+                    <RevealCallContext.Provider value={revealCall}>
+                      <SubagentDetailContext.Provider
+                        value={openSubagentDetail}>
+                        {children}
+                      </SubagentDetailContext.Provider>
+                    </RevealCallContext.Provider>
+                  </RevealCallBlockContext.Provider>
+                </TurnDurationContext.Provider>
+              </RunActivityContext.Provider>
+            </CollapseToolStepsContext.Provider>
+          </RunStagesContext.Provider>
+        </MemoryOpenContext.Provider>
       </TeamNoteOpenContext.Provider>
     </RunOutcomesContext.Provider>
   );

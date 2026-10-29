@@ -486,6 +486,17 @@ export const CODEX_APPS_FEATURE_KEY = 'features.apps';
 export const CODEX_MEMORIES_FEATURE_KEY = 'features.memories';
 
 /**
+ * The memories feature's handbook, `<CODEX_HOME>/memories/MEMORY.md`: one
+ * `# Task Group: <name>` block per entry, its `scope:` / `applies_to:` lines
+ * and `## Task <n>` subsections inside it. Read from codex 0.162.0's own
+ * prompts (the format is undocumented; `memory_summary.md`, `rollout_summaries/`
+ * and `skills/` beside it are its index and details, not entries).
+ */
+export const CODEX_MEMORIES_DIR_NAME = 'memories';
+export const CODEX_MEMORY_HANDBOOK_FILE = 'MEMORY.md';
+export const CODEX_MEMORY_ENTRY_HEADING = /^#\s+Task Group:\s*(.*\S)\s*$/;
+
+/**
  * Why a node cannot switch off a plugin's server for its own turns. MEASURED
  * on 0.161.0: `plugins.<id>.enabled = false` in the thread config does remove
  * the plugin's server (`cua_repl` of `unified-computer-use@openai-bundled`) —

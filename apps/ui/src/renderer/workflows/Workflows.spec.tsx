@@ -1041,6 +1041,65 @@ describe('Workflows — an agent node’s profile', () => {
   });
 });
 
+describe('Workflows — the profiles an agent node is offered', () => {
+  beforeEach(() => {
+    getCapabilities.mockImplementation(async () => ({
+      agents: [],
+      approvals: [],
+      configDirs: [{ agent: 'cursor-agent', unavailableReason: null }],
+      interactiveTerminals: [],
+      modelEfforts: [],
+      options: [],
+      followUps: [],
+    }));
+    getWorkflow.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      workflow: {
+        ...EMPTY,
+        nodes: [
+          {
+            id: 'eng',
+            kind: 'agent',
+            agent: 'cursor-agent',
+            approval: 'auto',
+          },
+        ],
+        layout: { eng: { x: 0, y: 0 } },
+      },
+    }));
+  });
+
+  it('offers a profile named in Settings while the builder was hidden', async () => {
+    await openBuilder();
+    await paint(false);
+    await act(async () => {
+      await window.geniro.updateSettings({
+        configProfiles: [
+          {
+            id: 'p1',
+            name: 'cursor-pf',
+            agent: 'cursor-agent',
+            dir: '/profiles/cursor-pf',
+            color: 'green',
+          },
+        ],
+      });
+    });
+    await paint(true);
+    await act(async () => {
+      container
+        .querySelector<HTMLElement>('.react-flow__node[data-id="eng"]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await press('Agent config directory for this node');
+
+    const rows = [
+      ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].map((option) => option.textContent ?? '');
+    expect(rows.some((row) => row.includes('cursor-pf'))).toBe(true);
+  });
+});
+
 describe('Workflows — an agent node’s MCP switches', () => {
   /** One listing row as the daemon answers it for a profile. */
   const mcpRow = (name: string, turnReason: string | null = null): unknown => ({

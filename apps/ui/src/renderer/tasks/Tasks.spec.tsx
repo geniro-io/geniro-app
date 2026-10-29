@@ -1144,6 +1144,57 @@ describe('the column surface', () => {
     });
   });
 
+  it('offers a profile named in Settings while the board was hidden', async () => {
+    mocks.listProjects.mockResolvedValue([aProject({ agentKind: 'claude' })]);
+    mocks.capabilities = {
+      getCapabilities: vi.fn(async () => ({
+        configDirs: [{ agent: 'claude', unavailableReason: null }],
+        interactiveTerminals: [],
+        approvals: [],
+        followUps: [],
+      })),
+    };
+    window.geniro = createPreloadStub();
+    const el = await boardOnProject();
+    await act(async () => {
+      root!.render(<Tasks handle={handle} client={null} active={false} />);
+    });
+    await act(async () => {
+      await window.geniro.updateSettings({
+        configProfiles: [
+          {
+            id: 'p1',
+            name: 'Claude work',
+            dir: '/profiles/claude-work',
+            color: 'blue',
+            agent: 'claude',
+          },
+        ],
+      });
+    });
+    await act(async () => {
+      root!.render(<Tasks handle={handle} client={null} active />);
+    });
+
+    const add = [...el.querySelectorAll('button')].find(
+      (node) => node.getAttribute('aria-label') === 'Add a task to To do',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      add.click();
+    });
+    await act(async () => {
+      (
+        document.body.querySelector(
+          '[aria-label="Config directory for this task"]',
+        ) as HTMLButtonElement
+      ).click();
+    });
+    const rows = [
+      ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].map((node) => node.textContent ?? '');
+    expect(rows.some((row) => row.includes('Claude work'))).toBe(true);
+  });
+
   it('says where to drop while a card is over the column', async () => {
     // An empty column reads "No tasks" until a drag arrives, and then has to
     // say it is a target — with the dashed placeholder border gone, the words

@@ -514,6 +514,78 @@ describe('scanTurns + openTurnWorkedMs', () => {
     });
   });
 
+  describe('work the agent took up on its own after its turn ended', () => {
+    const offTurn = (): ChatItem[] => [
+      userAt('2026-08-14T10:00:00.000Z'),
+      cliDone('2026-08-14T10:00:10.000Z', 9_000),
+      item('shell_info', '2026-08-14T10:01:00.000Z', {
+        payload: { id: 'call-1' },
+      }),
+      item('message', '2026-08-14T10:01:05.000Z', {
+        role: 'assistant',
+        payload: { text: 'The index is ready.' },
+      }),
+      item('tool_call', '2026-08-14T10:01:06.000Z', {
+        role: 'assistant',
+        payload: { id: 'call-2', name: 'Agent' },
+      }),
+    ];
+
+    it('opens a turn at its first reply, so the clock moves', () => {
+      const { open } = scanTurns(offTurn());
+
+      expect(open).toEqual([
+        {
+          agentKey: CHAT_AGENT_KEY,
+          startedAt: at('2026-08-14T10:01:05.000Z'),
+          parkedMs: 0,
+          openSince: [],
+        },
+      ]);
+      expect(openTurnWorkedMs(open, at('2026-08-14T10:02:05.000Z'))).toBe(
+        60_000,
+      );
+    });
+
+    it('closes it on the continuation’s own ending, measured by the CLI', () => {
+      const ending = cliDone('2026-08-14T10:03:00.000Z', 110_000);
+      const { open, durations } = scanTurns([...offTurn(), ending]);
+
+      expect(open).toEqual([]);
+      expect(durations.get(ending.id)).toEqual({ ms: 110_000, source: 'cli' });
+    });
+
+    it('is not opened by a delegate’s rows', () => {
+      const { open } = scanTurns([
+        userAt('2026-08-14T10:00:00.000Z'),
+        cliDone('2026-08-14T10:00:10.000Z', 9_000),
+        item('tool_call', '2026-08-14T10:01:06.000Z', {
+          role: 'assistant',
+          payload: { id: 'call-3', name: 'Bash', parentToolUseId: 'toolu_1' },
+        }),
+      ]);
+
+      expect(open).toEqual([]);
+    });
+
+    it('gives way to a message the user sends next', () => {
+      const { open } = scanTurns([
+        ...offTurn(),
+        userAt('2026-08-14T10:30:00.000Z'),
+      ]);
+
+      expect(open.map((turn) => turn.startedAt)).toEqual([
+        at('2026-08-14T10:30:00.000Z'),
+      ]);
+    });
+
+    it('is not read from a window that holds no ending', () => {
+      const { open } = scanTurns(offTurn().slice(2));
+
+      expect(open).toEqual([]);
+    });
+  });
+
   it('still answers the settled durations exactly as turnDurations does', () => {
     // The two share one scan; a divergence would mean the transcript rows and
     // the header disagreed about the same turn.

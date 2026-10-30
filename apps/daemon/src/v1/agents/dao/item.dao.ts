@@ -2457,7 +2457,8 @@ export class ItemDao extends BaseDao<Item> {
 
   /**
    * When a 1:1 chat's open turn began: its first user message after the run's
-   * last turn ending, or null when nothing has been asked since.
+   * last turn ending, else the start of the work the agent took up on its own
+   * since ({@link offTurnStartedAt}), or null when there is neither.
    *
    * The FIRST rather than the newest, because a message delivered into a turn
    * already running joins that turn rather than starting one — the clock the
@@ -2502,7 +2503,9 @@ export class ItemDao extends BaseDao<Item> {
       },
     );
     if (opener === undefined) {
-      return null;
+      return ending === undefined
+        ? null
+        : this.offTurnStartedAt(runId, ending.seq, txEm);
     }
     const measured = await db
       .selectFrom('items')
@@ -2531,6 +2534,49 @@ export class ItemDao extends BaseDao<Item> {
       measuredAt.getTime() < opener.createdAt.getTime()
       ? opener.createdAt
       : measuredAt;
+  }
+
+  /**
+   * When the main agent began working on its own after the turn ending at
+   * `endingSeq` — its first reply, reasoning or tool call since, a delegate's
+   * excluded — or null when it has produced none.
+   *
+   * TWIN PARSER: the renderer's turn scan (`turn-duration.ts` →
+   * `opensOffTurnStretch`).
+   */
+  private async offTurnStartedAt(
+    runId: string,
+    endingSeq: number,
+    txEm?: EntityManager,
+  ): Promise<Date | null> {
+    const stamped = await this.payloadRefsStamped(runId, txEm);
+    const row = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('created_at')
+      .where('run_id', '=', runId)
+      .where('node_id', 'is', null)
+      .where('seq', '>', endingSeq)
+      .where('deleted_at', 'is', null)
+      .where((eb) =>
+        eb.or([
+          eb('kind', 'in', ['tool_call', 'reasoning']),
+          eb.and([eb('kind', '=', 'message'), eb('role', '=', 'assistant')]),
+        ]),
+      )
+      .where(
+        (eb) =>
+          eb.fn.coalesce(
+            payloadRef(eb, 'parent_tool_use_id', stamped),
+            eb.val(''),
+          ),
+        '=',
+        '',
+      )
+      .orderBy('seq', 'asc')
+      .limit(1)
+      .executeTakeFirst();
+    return row === undefined ? null : new Date(row.created_at);
   }
 
   /**

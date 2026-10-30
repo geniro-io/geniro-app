@@ -2,10 +2,12 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { useState } from 'react';
 
 import {
+  HOTSPOTS,
   ITEMS,
   LOOK,
   recommendation,
   TIMING,
+  WORKFLOW_STATS,
 } from '../__fixtures__/recommendations';
 import { RecommendationsCard } from './recommendations-card';
 
@@ -13,11 +15,13 @@ import { RecommendationsCard } from './recommendations-card';
 function SelectingDemo(): React.JSX.Element {
   const [applied, setApplied] = useState<string[] | null>(null);
   return (
-    <div className="w-[560px]">
+    <div className="w-[600px]">
       <RecommendationsCard
         look={LOOK}
-        summary="Most of the 3h went to the two reviewers running one after the other (seq 1204–1690)."
-        timing={TIMING}
+        summary="Most of each run goes to the reviewer: the two reviews run one after the other, and QA runs its checklist on opus."
+        timing={null}
+        workflowStats={WORKFLOW_STATS}
+        hotspots={HOTSPOTS}
         workflow
         items={ITEMS}
         applied={applied}
@@ -44,7 +48,9 @@ export const Applied: Story = {
       <RecommendationsCard
         look={LOOK}
         summary={null}
-        timing={TIMING}
+        timing={null}
+        workflowStats={WORKFLOW_STATS}
+        hotspots={HOTSPOTS}
         workflow
         items={ITEMS}
         applied={['W-1', 'R-1']}
@@ -72,6 +78,14 @@ export const PlainChat: Story = {
         look={LOOK}
         summary={null}
         timing={TIMING}
+        hotspots={[
+          {
+            title: 'The test suite ran four times',
+            node: null,
+            why: 'Each fix re-ran the whole suite instead of the one failing spec: 4 × 6m of the 3h.',
+            items: ['R-1'],
+          },
+        ]}
         workflow={false}
         items={[recommendation('R-1'), recommendation('R-2')]}
         applied={null}
@@ -116,6 +130,25 @@ export const Empty: Story = {
         timing={TIMING}
         workflow
         items={[]}
+        applied={null}
+        outcomes={{}}
+        onApply={() => undefined}
+      />
+    </div>
+  ),
+};
+
+export const Phone: Story = {
+  render: () => (
+    <div className="w-[360px]">
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        workflowStats={WORKFLOW_STATS}
+        hotspots={HOTSPOTS}
+        workflow
+        items={ITEMS}
         applied={null}
         outcomes={{}}
         onApply={() => undefined}

@@ -6,6 +6,7 @@ import type { Item } from '../../runs/entity/item.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { type ItemKind, ItemKindSchema } from '../../runs/runs.types';
 import {
+  type AnalysedRun,
   type AnalysedWorkflowRef,
   ANALYSIS_SPAN_KINDS,
   type AnalysisReadScope,
@@ -13,8 +14,10 @@ import {
   type AnalysisSpanKind,
   type FoldedRun,
   type ReadAnalyzedThreadArgs,
+  type RunFold,
   type RunWaterfallTurn,
   type WorkflowVersionIndex,
+  type WorkflowVersionIndexReader,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
@@ -155,8 +158,7 @@ export class ThreadReaderService {
      * The workflow's version numbers, which the stats module keeps; without
      * it, or when it fails, view=runs names each run's version by hash alone.
      */
-    versionIndex:
-      ((slug: string) => Promise<WorkflowVersionIndex>) | null = null,
+    versionIndex: WorkflowVersionIndexReader | null = null,
   ): Promise<Answer> {
     if (args.view === 'history') {
       return {
@@ -229,6 +231,46 @@ export class ThreadReaderService {
     }
   }
 
+  async foldRuns(analysedRuns: readonly AnalysedRun[]): Promise<RunFold[]> {
+    const em = this.em.fork();
+    const folds: RunFold[] = [];
+    for (const analysed of analysedRuns) {
+      const run = await this.runDao.getById(analysed.runId, em);
+      if (run === null) {
+        folds.push({ analysed, run: null, folded: null });
+        continue;
+      }
+      const reading = await this.timelines.read(
+        analysed.runId,
+        analysed.snapshotSeq,
+        analysed.working,
+      );
+      folds.push({
+        analysed,
+        run,
+        folded:
+          reading === null
+            ? null
+            : {
+                runId: run.id,
+                turns: reading.fold.turns,
+                lanes: reading.fold.lanes,
+                calls: reading.fold.calls,
+                wallWorkedMs: await this.wallTurns.nodeSums(
+                  analysed.runId,
+                  em,
+                  analysed.snapshotSeq,
+                ),
+                costUsd: reading.fold.totals.costUsd,
+                version: snapshotVersion(run.workflowSnapshot),
+                ...configuredModels(run.workflowSnapshot),
+                timeline: reading.timeline,
+              },
+      });
+    }
+    return folds;
+  }
+
   /**
    * A workflow analysis's runs side by side: each run's totals and outcome,
    * every node's figures, and every node's turns per model — each folded from
@@ -237,24 +279,19 @@ export class ThreadReaderService {
   private async runs(
     key: string,
     slug: string,
-    analysedRuns: NonNullable<AnalysisReadScope['workflow']>['runs'],
+    analysedRuns: readonly AnalysedRun[],
     index: WorkflowVersionIndex | null,
   ): Promise<Answer> {
     const em = this.em.fork();
     const folded: FoldedRun[] = [];
     const runs: Answer[] = [];
-    for (const analysed of analysedRuns) {
-      const run = await this.runDao.getById(analysed.runId, em);
+    for (const { analysed, run, folded: entry } of await this.foldRuns(
+      analysedRuns,
+    )) {
       if (run === null) {
         runs.push({ runId: analysed.runId, gone: true });
         continue;
       }
-      const reading = await this.timelines.read(
-        analysed.runId,
-        analysed.snapshotSeq,
-        analysed.working,
-      );
-      const version = snapshotVersion(run.workflowSnapshot);
       const outcomes = await this.outcomes.read(
         analysed.runId,
         analysed.snapshotSeq,
@@ -280,30 +317,20 @@ export class ThreadReaderService {
         title: run.title,
         createdAt: run.createdAt.toISOString(),
         statusNow: run.status,
-        version: versionRef(version, index),
+        version: versionRef(
+          entry === null
+            ? snapshotVersion(run.workflowSnapshot)
+            : entry.version,
+          index,
+        ),
         snapshotSeq: analysed.snapshotSeq,
         workingAtSnapshot: analysed.working,
         questionsAsked: outcomes.questionsAsked,
       };
-      if (reading === null) {
+      if (entry === null) {
         runs.push({ ...header, note: 'The run has no rows yet.' });
         continue;
       }
-      const entry: FoldedRun = {
-        runId: run.id,
-        turns: reading.fold.turns,
-        lanes: reading.fold.lanes,
-        calls: reading.fold.calls,
-        wallWorkedMs: await this.wallTurns.nodeSums(
-          analysed.runId,
-          em,
-          analysed.snapshotSeq,
-        ),
-        costUsd: reading.fold.totals.costUsd,
-        version,
-        ...configuredModels(run.workflowSnapshot),
-        timeline: reading.timeline,
-      };
       folded.push(entry);
       runs.push({
         ...header,

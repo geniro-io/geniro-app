@@ -33,7 +33,14 @@ const ENTRY: RecommendationsEntry = {
   nodeId: null,
   parentToolUseId: null,
   runId: 'analysis',
-  card: { summary: null, timing: null, sourceKind: 'workflow', items: ITEMS },
+  card: {
+    summary: null,
+    timing: null,
+    workflowStats: null,
+    hotspots: [],
+    sourceKind: 'workflow',
+    items: ITEMS,
+  },
   applied: null,
   outcomes: {},
 };

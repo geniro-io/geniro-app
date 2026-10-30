@@ -42,7 +42,16 @@ function card(ids: string[]): RecommendationsPayload {
       change: `change for ${id}`,
       evidence: [{ runId: 'newest', seq: 4, quote: 'slow' }],
       rootCause: 'the reviewer runs the largest model',
-      impact: { minutesSaved: 4, basis: 'turn spans', confidence: 3 },
+      impact:
+        id === 'W-1'
+          ? {
+              minutesSaved: 4,
+              costSavedUsd: 0.6,
+              basis: 'turn spans',
+              confidence: 3,
+              outcome: 'reviewer 9m → 5m per run',
+            }
+          : { minutesSaved: 4, basis: 'turn spans', confidence: 3 },
       risk: { level: 'low', note: 'none' },
     })),
   };
@@ -222,9 +231,15 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
         change: 'change for W-1',
         rootCause: 'the reviewer runs the largest model',
         minutesSaved: 4,
+        costSavedUsd: 0.6,
+        expectedOutcome: 'reviewer 9m → 5m per run',
         confidence: 3,
         risk: 'low',
         outcomeSeq: 9,
+      });
+      expect(rows[1]).toMatchObject({
+        costSavedUsd: null,
+        expectedOutcome: null,
       });
     });
 

@@ -12,6 +12,7 @@ import {
   runNodeFigures,
   snapshotVersion,
   versionFigures,
+  workflowCardStats,
 } from './workflow-runs-fold';
 
 type Turn = FoldedRun['turns'][number];
@@ -356,6 +357,15 @@ describe('nodeFigures', () => {
         costUsd: 4,
       }),
     ]);
+  });
+
+  it('prices a node per run over the runs that reported its cost, never the unpriced ones as free', () => {
+    const [dev] = nodeFigures([
+      run('r1', [], { lanes: [lane({ costUsd: 6 })] }),
+      run('r2', [], { lanes: [lane({ costUsd: null })] }),
+    ]);
+
+    expect(dev).toMatchObject({ runs: 2, costUsd: 6, costPerRunUsd: 6 });
   });
 });
 
@@ -757,5 +767,183 @@ describe('versionFigures', () => {
     expect(
       versionFigures([run('one', [turn({})], { version: 'v-b' })], null)[0],
     ).toMatchObject({ version: 'v-b', number: null, current: false });
+  });
+});
+
+describe('workflowCardStats', () => {
+  const index = {
+    current: 'v-b',
+    numbers: new Map([
+      ['v-a', 1],
+      ['v-b', 2],
+    ]),
+  };
+
+  const newest = run(
+    'r2',
+    [
+      ...Array.from({ length: 45 }, () => turn({})),
+      turn({ outcome: 'failed', model: 'opus' }),
+      turn({ nodeId: 'qa', model: 'gpt' }),
+    ],
+    {
+      version: 'v-b',
+      costUsd: 12,
+      lanes: [
+        lane({ turns: 46, workedMs: 600_000, toolCalls: 90, costUsd: 11 }),
+        lane({
+          nodeId: 'qa',
+          agentKind: 'cursor-agent',
+          workedMs: 60_000,
+          costUsd: 1,
+        }),
+      ],
+      calls: Array.from({ length: 7 }, (_, at) =>
+        call({ calleeNodeId: `n${at}`, durationMs: (at + 1) * 1_000 }),
+      ),
+      timeline: {
+        wallMs: 900_000,
+        activeMs: 700_000,
+        waitingOnUserMs: 60_000,
+        criticalPathMs: 800_000,
+        criticalPath: [
+          { kind: 'work', nodeId: 'dev', startMs: 0, durationMs: 500_000 },
+        ],
+        nodes: [
+          nodeTime({ busyMs: 500_000, waitingOnCalleeMs: 100_000 }),
+          nodeTime({ nodeId: 'qa', busyMs: 60_000 }),
+        ],
+        tools: [tool({ failed: true })],
+      },
+    },
+  );
+  const older = run('r1', [turn({})], {
+    costUsd: null,
+    lanes: [lane({ workedMs: 300_000, costUsd: null })],
+  });
+
+  it("states the runs' averages and totals and each run with its version, over every turn and call", () => {
+    const stats = workflowCardStats(
+      [
+        { title: 'Newest', createdAt: new Date(2_000), folded: newest },
+        { title: null, createdAt: new Date(1_000), folded: older },
+      ],
+      index,
+    );
+
+    expect(stats).toMatchObject({
+      runs: 2,
+      perRun: {
+        wallMs: 480_000,
+        activeMs: 375_000,
+        waitingOnUserMs: 32_500,
+        criticalPathMs: 420_000,
+        turns: 24,
+        calls: 3.5,
+        costUsd: 12,
+        pricedRuns: 1,
+      },
+      totals: {
+        wallMs: 960_000,
+        activeMs: 750_000,
+        turns: 48,
+        failedTurns: 1,
+        cancelledTurns: 0,
+        toolCalls: 94,
+        failedToolCalls: 1,
+        calls: 7,
+        costUsd: 12,
+      },
+      runList: [
+        {
+          runId: 'r2',
+          title: 'Newest',
+          createdAt: new Date(2_000).toISOString(),
+          version: 2,
+          current: true,
+          wallMs: 900_000,
+          activeMs: 700_000,
+          waitingOnUserMs: 60_000,
+          turns: 47,
+          failedTurns: 1,
+          costUsd: 12,
+        },
+        {
+          runId: 'r1',
+          title: null,
+          version: 1,
+          current: false,
+          turns: 1,
+          failedTurns: 0,
+          costUsd: null,
+        },
+      ],
+    });
+    expect(stats?.callEdges).toBe(7);
+    expect(stats?.calls.map((edge) => [edge.callee, edge.totalMs])).toEqual([
+      ['n6', 7_000],
+      ['n5', 6_000],
+      ['n4', 5_000],
+      ['n3', 4_000],
+      ['n2', 3_000],
+    ]);
+  });
+
+  it('sums each agent over the runs, longest working first, with its models, each per-run figure over the runs that measured it', () => {
+    const stats = workflowCardStats(
+      [
+        { title: null, createdAt: new Date(2_000), folded: newest },
+        { title: null, createdAt: new Date(1_000), folded: older },
+      ],
+      null,
+    );
+
+    expect(stats?.agents).toEqual([
+      {
+        node: 'dev',
+        agent: 'claude',
+        runs: 2,
+        turns: 47,
+        failedTurns: 1,
+        cancelledTurns: 0,
+        workedMs: 900_000,
+        workedPerRunMs: 450_000,
+        waitingOnCalleePerRunMs: 100_000,
+        criticalPathPerRunMs: 250_000,
+        toolCalls: 92,
+        failedToolCalls: 1,
+        costUsd: 11,
+        costPerRunUsd: 11,
+        maxContextTokens: null,
+        models: [
+          expect.objectContaining({
+            model: 'sonnet',
+            turns: 46,
+            failedTurns: 0,
+            avgTurnMs: 1_000,
+            costPerTurnUsd: 0.5,
+          }),
+          expect.objectContaining({
+            model: 'opus',
+            turns: 1,
+            failedTurns: 1,
+          }),
+        ],
+      },
+      expect.objectContaining({
+        node: 'qa',
+        agent: 'cursor-agent',
+        runs: 1,
+        workedMs: 60_000,
+        workedPerRunMs: 60_000,
+        costPerRunUsd: 1,
+        models: [expect.objectContaining({ model: 'gpt', turns: 1 })],
+      }),
+    ]);
+    expect(stats?.runList.map((entry) => entry.version)).toEqual([null, null]);
+  });
+
+  it('is null when no run could be folded', () => {
+    expect(workflowCardStats([], index)).toBeNull();
   });
 });

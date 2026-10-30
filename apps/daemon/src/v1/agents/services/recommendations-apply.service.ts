@@ -7,9 +7,9 @@ import {
 } from '@packages/common';
 
 import {
+  type CardRecommendationItem,
   HOST_RECOMMENDATION_MARKS_TOOL,
   type ItemWire,
-  type RecommendationItem,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
@@ -95,8 +95,8 @@ export class RecommendationsApplyService {
 /** The Apply message: every selected item in full, then what to leave alone. */
 export function composeApplyMessage(
   cardSeq: number,
-  selected: readonly RecommendationItem[],
-  unselected: readonly RecommendationItem[],
+  selected: readonly CardRecommendationItem[],
+  unselected: readonly CardRecommendationItem[],
   note: string | undefined,
 ): string {
   const blocks = selected.map((item) =>

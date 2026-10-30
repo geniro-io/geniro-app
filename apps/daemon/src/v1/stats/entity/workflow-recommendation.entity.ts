@@ -75,6 +75,12 @@ export class WorkflowRecommendation extends TimestampsEntity {
   @Property({ type: 'float' })
   minutesSaved!: number;
 
+  @Property({ type: 'float', nullable: true })
+  costSavedUsd: number | null = null;
+
+  @Property({ type: 'text', nullable: true })
+  expectedOutcome: string | null = null;
+
   @Property({ type: 'integer' })
   confidence!: number;
 

@@ -1,6 +1,7 @@
 import { HOST_RECOMMENDATIONS_TOOL } from '../../../agents/chat.types';
 import type { AnalysisBroker } from '../../../agents/services/analysis.broker';
 import type { MemoryService } from '../../../memory/services/memory.service';
+import type { WorkflowHistoryService } from '../../../stats/services/workflow-history.service';
 import type {
   McpCallContext,
   McpListContext,
@@ -21,6 +22,7 @@ export class ReportRecommendationsTool extends BaseMcpTool {
   constructor(
     private readonly analysis: AnalysisBroker,
     private readonly memory: Pick<MemoryService, 'enabled'>,
+    private readonly history: Pick<WorkflowHistoryService, 'versionIndex'>,
   ) {
     super();
   }
@@ -46,7 +48,9 @@ export class ReportRecommendationsTool extends BaseMcpTool {
       return this.invalidArgs(read.error);
     }
     const result = recommendationsResultText(
-      await this.analysis.report(runId, nodeId, read.query),
+      await this.analysis.report(runId, nodeId, read.query, (slug) =>
+        this.history.versionIndex(slug),
+      ),
     );
     return this.text(result.text, result.isError);
   }

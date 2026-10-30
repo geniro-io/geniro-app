@@ -144,6 +144,8 @@ export interface WorkflowRecommendationRow {
   change: string;
   rootCause: string;
   minutesSaved: number;
+  costSavedUsd: number | null;
+  expectedOutcome: string | null;
   confidence: number;
   risk: string;
   selectedAt: Date | null;
@@ -220,7 +222,13 @@ export interface HistoryChange {
 
 /** What became of a recommendation, from the ledger. */
 export type HistoryRecommendationStatus =
-  'applied' | 'skipped' | 'failed' | 'selected' | 'open' | 'not-selected';
+  | 'applied'
+  | 'skipped'
+  | 'failed'
+  | 'selected'
+  | 'open'
+  | 'not-selected'
+  | 'unanswered';
 
 /** One workflow's history, as an analysis reads it (`read_analyzed_thread` view=history). */
 export interface WorkflowHistory {
@@ -267,6 +275,8 @@ export interface WorkflowHistory {
       change: string;
       rootCause: string;
       expectedMinutesSavedPerRun: number;
+      expectedCostSavedPerRunUsd: number | null;
+      expectedOutcome: string | null;
       confidence: number;
       risk: string;
       status: HistoryRecommendationStatus;

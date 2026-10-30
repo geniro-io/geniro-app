@@ -4,16 +4,20 @@ import {
 } from '../../graphs/utils/workflow-snapshot';
 import { workflowVersionOf } from '../../graphs/utils/workflow-version';
 import type { AgentKind } from '../../runs/runs.types';
-import type {
-  AnalysedVersionRef,
-  CallFigures,
-  FoldedRun,
-  ModelFigures,
-  NodeFigures,
-  RunFigures,
-  RunNodeFigures,
-  VersionRunFigures,
-  WorkflowVersionIndex,
+import {
+  type AnalysedVersionRef,
+  type CallFigures,
+  type FoldedRun,
+  MAX_CARD_AGENT_MODELS,
+  MAX_CARD_AGENTS,
+  MAX_CARD_CALL_EDGES,
+  type ModelFigures,
+  type NodeFigures,
+  type RecommendationsWorkflowStats,
+  type RunFigures,
+  type RunNodeFigures,
+  type VersionRunFigures,
+  type WorkflowVersionIndex,
 } from '../chat.types';
 import { laneOf } from './analysis-lane';
 import { snapshotNodePoolProfiles } from './snapshot-config-dirs';
@@ -286,6 +290,7 @@ export function callFigures(runs: readonly FoldedRun[]): CallFigures[] {
  */
 export function nodeFigures(runs: readonly FoldedRun[]): NodeFigures[] {
   const rows = new Map<string, NodeFigures>();
+  const pricedRuns = new Map<string, number>();
   for (const run of runs) {
     for (const lane of run.lanes) {
       const node = laneOf(lane.nodeId);
@@ -312,15 +317,20 @@ export function nodeFigures(runs: readonly FoldedRun[]): NodeFigures[] {
       row.workedMs = plus(row.workedMs, workedOf(run, lane));
       row.toolCalls += lane.toolCalls;
       row.costUsd = plus(row.costUsd, lane.costUsd);
+      if (lane.costUsd !== null) {
+        pricedRuns.set(key, (pricedRuns.get(key) ?? 0) + 1);
+      }
       rows.set(key, row);
     }
   }
-  return [...rows.values()]
-    .map((row) => ({
+  return [...rows.entries()]
+    .map(([key, row]) => ({
       ...row,
       costUsd: row.costUsd === null ? null : roundUsd(row.costUsd),
       costPerRunUsd:
-        row.costUsd === null ? null : roundUsd(row.costUsd / row.runs),
+        row.costUsd === null
+          ? null
+          : roundUsd(row.costUsd / (pricedRuns.get(key) ?? 1)),
     }))
     .sort((a, b) => a.node.localeCompare(b.node));
 }
@@ -460,4 +470,205 @@ export function modelFigures(runs: readonly FoldedRun[]): ModelFigures[] {
           : roundUsd(row.costUsd / row.pricedTurns),
     }))
     .sort((a, b) => a.node.localeCompare(b.node) || b.turns - a.turns);
+}
+
+type CardAgentStats = RecommendationsWorkflowStats['agents'][number];
+
+interface Measured {
+  total: number | null;
+  runs: number;
+}
+
+function measure(measured: Measured, value: number | null): Measured {
+  return value === null
+    ? measured
+    : { total: (measured.total ?? 0) + value, runs: measured.runs + 1 };
+}
+
+function perMeasuredRun(measured: Measured): number | null {
+  return measured.total === null ? null : measured.total / measured.runs;
+}
+
+const UNMEASURED: Measured = { total: null, runs: 0 };
+
+function cardAgentStats(runs: readonly FoldedRun[]): CardAgentStats[] {
+  const rows = new Map<
+    string,
+    {
+      node: string;
+      agent: CardAgentStats['agent'];
+      runs: number;
+      turns: number;
+      failedTurns: number;
+      cancelledTurns: number;
+      worked: Measured;
+      waitingOnCallee: Measured;
+      criticalPath: Measured;
+      toolCalls: number;
+      failedToolCalls: number;
+      cost: Measured;
+      maxContextTokens: number | null;
+    }
+  >();
+  for (const run of runs) {
+    for (const node of runNodeFigures(run)) {
+      const row = rows.get(node.node) ?? {
+        node: node.node,
+        agent: node.agent,
+        runs: 0,
+        turns: 0,
+        failedTurns: 0,
+        cancelledTurns: 0,
+        worked: UNMEASURED,
+        waitingOnCallee: UNMEASURED,
+        criticalPath: UNMEASURED,
+        toolCalls: 0,
+        failedToolCalls: 0,
+        cost: UNMEASURED,
+        maxContextTokens: null,
+      };
+      row.agent ??= node.agent;
+      row.runs += 1;
+      row.turns += node.turns;
+      row.failedTurns += node.failedTurns;
+      row.cancelledTurns += node.cancelledTurns;
+      row.worked = measure(row.worked, node.workedMs);
+      row.waitingOnCallee = measure(
+        row.waitingOnCallee,
+        node.waitingOnCalleeMs,
+      );
+      row.criticalPath = measure(row.criticalPath, node.criticalPathMs);
+      row.toolCalls += node.toolCalls;
+      row.failedToolCalls += node.failedToolCalls;
+      row.cost = measure(row.cost, node.costUsd);
+      row.maxContextTokens =
+        node.maxContextTokens === null
+          ? row.maxContextTokens
+          : Math.max(row.maxContextTokens ?? 0, node.maxContextTokens);
+      rows.set(node.node, row);
+    }
+  }
+  const models = modelFigures(runs);
+  const round = (value: number | null): number | null =>
+    value === null ? null : Math.round(value);
+  return [...rows.values()]
+    .map((row): CardAgentStats => ({
+      node: row.node,
+      agent: row.agent,
+      runs: row.runs,
+      turns: row.turns,
+      failedTurns: row.failedTurns,
+      cancelledTurns: row.cancelledTurns,
+      workedMs: round(row.worked.total),
+      workedPerRunMs: round(perMeasuredRun(row.worked)),
+      waitingOnCalleePerRunMs: round(perMeasuredRun(row.waitingOnCallee)),
+      criticalPathPerRunMs: round(perMeasuredRun(row.criticalPath)),
+      toolCalls: row.toolCalls,
+      failedToolCalls: row.failedToolCalls,
+      costUsd: row.cost.total === null ? null : roundUsd(row.cost.total),
+      costPerRunUsd:
+        row.cost.total === null
+          ? null
+          : roundUsd(row.cost.total / row.cost.runs),
+      maxContextTokens: row.maxContextTokens,
+      models: models
+        .filter((model) => model.node === row.node)
+        .slice(0, MAX_CARD_AGENT_MODELS)
+        .map((model) => ({
+          agent: model.agent,
+          model: model.model,
+          modelSource: model.modelSource,
+          turns: model.turns,
+          failedTurns: model.failedTurns,
+          cancelledTurns: model.cancelledTurns,
+          avgTurnMs: model.avgTurnMs,
+          costUsd: model.costUsd,
+          costPerTurnUsd: model.costPerTurnUsd,
+        })),
+    }))
+    .sort(
+      (a, b) =>
+        (b.workedMs ?? -1) - (a.workedMs ?? -1) || a.node.localeCompare(b.node),
+    )
+    .slice(0, MAX_CARD_AGENTS);
+}
+
+export function workflowCardStats(
+  runs: readonly { title: string | null; createdAt: Date; folded: FoldedRun }[],
+  index: WorkflowVersionIndex | null,
+): RecommendationsWorkflowStats | null {
+  if (runs.length === 0) {
+    return null;
+  }
+  const folded = runs.map((run) => run.folded);
+  const figures = folded.map(runFigures);
+  const edges = callFigures(folded);
+  const count = runs.length;
+  const sum = (pick: (run: RunFigures) => number): number =>
+    figures.reduce((total, run) => total + pick(run), 0);
+  const average = (pick: (run: RunFigures) => number): number =>
+    Math.round(sum(pick) / count);
+  const priced = figures.flatMap((run) =>
+    run.costUsd === null ? [] : [run.costUsd],
+  );
+  const cost =
+    priced.length === 0
+      ? null
+      : priced.reduce((total, value) => total + value, 0);
+  return {
+    runs: count,
+    perRun: {
+      wallMs: average((run) => run.wallMs),
+      activeMs: average((run) => run.activeMs),
+      waitingOnUserMs: average((run) => run.waitingOnUserMs),
+      criticalPathMs: average((run) => run.criticalPathMs),
+      turns: Math.round((sum((run) => run.turns) / count) * 10) / 10,
+      calls: Math.round((sum((run) => run.calls) / count) * 10) / 10,
+      costUsd: cost === null ? null : roundUsd(cost / priced.length),
+      pricedRuns: priced.length,
+    },
+    totals: {
+      wallMs: Math.round(sum((run) => run.wallMs)),
+      activeMs: Math.round(sum((run) => run.activeMs)),
+      turns: sum((run) => run.turns),
+      failedTurns: sum((run) => run.failedTurns),
+      cancelledTurns: sum((run) => run.cancelledTurns),
+      toolCalls: folded.reduce(
+        (total, run) =>
+          total + run.lanes.reduce((lanes, lane) => lanes + lane.toolCalls, 0),
+        0,
+      ),
+      failedToolCalls: sum((run) => run.failedToolCalls),
+      calls: sum((run) => run.calls),
+      costUsd: cost === null ? null : roundUsd(cost),
+    },
+    runList: runs.map(({ title, createdAt, folded: run }, position) => {
+      const own = figures[position]!;
+      const version = versionRef(run.version, index);
+      return {
+        runId: run.runId,
+        title,
+        createdAt: createdAt.toISOString(),
+        version: version.number,
+        current: version.current,
+        wallMs: Math.round(own.wallMs),
+        activeMs: Math.round(own.activeMs),
+        waitingOnUserMs: Math.round(own.waitingOnUserMs),
+        turns: own.turns,
+        failedTurns: own.failedTurns,
+        costUsd: own.costUsd === null ? null : roundUsd(own.costUsd),
+      };
+    }),
+    agents: cardAgentStats(folded),
+    callEdges: edges.length,
+    calls: edges.slice(0, MAX_CARD_CALL_EDGES).map((call) => ({
+      caller: call.caller,
+      callee: call.callee,
+      calls: call.calls,
+      failedCalls: call.failedCalls,
+      totalMs: Math.round(call.totalMs),
+      avgMs: call.avgMs,
+      maxMs: Math.round(call.maxMs),
+    })),
+  };
 }

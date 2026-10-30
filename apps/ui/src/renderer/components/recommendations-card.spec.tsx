@@ -4,10 +4,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  HOTSPOTS,
   ITEMS,
   LOOK,
   recommendation,
   TIMING,
+  WORKFLOW_STATS,
 } from '../__fixtures__/recommendations';
 import { RecommendationsCard } from './recommendations-card';
 
@@ -61,6 +63,18 @@ function footer(el: HTMLElement): string {
   );
 }
 
+function projection(el: HTMLElement): string {
+  return (
+    el.querySelector('[data-slot="analysis-projection"]')?.textContent ?? ''
+  );
+}
+
+function projectionRows(el: HTMLElement): string[] {
+  return [...el.querySelectorAll('[data-slot="analysis-projection-row"]')].map(
+    (row) => row.textContent ?? '',
+  );
+}
+
 describe('RecommendationsCard', () => {
   it('counts the selection and its savings live, and applies only what was ticked', () => {
     const onApply = vi.fn();
@@ -82,7 +96,8 @@ describe('RecommendationsCard', () => {
     click(button(el, 'W-1'));
     click(button(el, 'R-1'));
 
-    expect(footer(el)).toContain('2 of 4 selected · ≈ 30 min/run saved');
+    expect(footer(el)).toContain('2 of 4 selected');
+    expect(projection(el)).toContain('with the 2 selected');
     click(button(el, 'Apply selected'));
     expect(onApply).toHaveBeenCalledWith(['W-1', 'R-1']);
   });
@@ -320,5 +335,241 @@ describe('RecommendationsCard', () => {
     const bar = el.querySelector('[role="img"]')!;
     expect(bar.getAttribute('aria-label')).toContain('reviewer 1h 10m');
     expect(el.textContent).toContain('Critical path');
+  });
+
+  it("projects the runs' time and cost with what is ticked, and with every item while nothing is", () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        workflowStats={WORKFLOW_STATS}
+        workflow
+        items={ITEMS}
+        applied={null}
+        outcomes={{}}
+        onApply={vi.fn()}
+      />,
+    );
+
+    expect(projection(el)).toContain('with all 4');
+    expect(projectionRows(el)).toEqual([
+      expect.stringContaining('42m→2m'),
+      expect.stringContaining('$3.10→$1.85'),
+    ]);
+
+    click(button(el, 'W-1'));
+    click(button(el, 'R-1'));
+
+    expect(projection(el)).toContain('with the 2 selected');
+    expect(projectionRows(el)).toEqual([
+      expect.stringContaining('42m→12m−30m · −71%'),
+      expect.stringContaining('$3.10→$2.70−$0.40 · −13%'),
+    ]);
+  });
+
+  it('shows a change that adds time or money as a rise, never as a saving', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        workflowStats={WORKFLOW_STATS}
+        workflow
+        items={[
+          recommendation('W-1', {
+            minutesSaved: -4,
+            costSavedUsd: -0.5,
+            outcome: 'A QA pass catches the failures before review',
+          }),
+        ]}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+    const row = el.querySelector('[data-id="W-1"]')!;
+
+    expect(
+      row.querySelector('[data-slot="recommendation-time"]')?.textContent,
+    ).toBe('+4m/run');
+    expect(
+      row.querySelector('[data-slot="recommendation-cost"]')?.textContent,
+    ).toBe('+$0.50/run');
+    expect(
+      row.querySelector('[data-slot="recommendation-expected"]')?.textContent,
+    ).toBe('A QA pass catches the failures before review');
+    expect(projectionRows(el)).toEqual([
+      expect.stringContaining('42m→46m+4m · +10%'),
+      expect.stringContaining('$3.10→$3.60+$0.50 · +16%'),
+    ]);
+  });
+
+  it("draws the runs' measured figures: a scorecard, each agent's share of the working time, and models, runs and calls in folds", () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        workflowStats={WORKFLOW_STATS}
+        workflow
+        items={ITEMS}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+    const tiles = [...el.querySelectorAll('[data-slot="analysis-tile"]')].map(
+      (tile) => tile.textContent,
+    );
+    const agents = [...el.querySelectorAll('[data-slot="analysis-agent"]')];
+
+    expect(el.textContent).toContain('Workflow analysis · 8 runs');
+    expect(tiles).toEqual([
+      expect.stringContaining('Time per run42maverage of 8 runs'),
+      expect.stringContaining('Cost per run$3.10$24.80 in all'),
+      expect.stringContaining('Failed turns7of 196 turns'),
+      expect.stringContaining('Waiting on you6m'),
+    ]);
+    expect(agents.map((agent) => agent.getAttribute('data-node'))).toEqual([
+      'reviewer',
+      'builder',
+      'qa',
+      'lead',
+    ]);
+    expect(agents[0]!.textContent).toContain('opus34m/run53%$1.80/run');
+    expect(agents[3]!.textContent).toContain('29m blocked on callees');
+    expect(el.querySelector('[data-slot="analysis-models"]')).toBeNull();
+
+    click(button(el, 'Models'));
+    click(button(el, 'Runs'));
+    click(button(el, 'Calls between agents'));
+
+    expect(
+      el.querySelector('[data-slot="analysis-models"]')?.textContent,
+    ).toContain('gpt-5.5-codex');
+    expect(el.querySelectorAll('[data-slot="analysis-runs"] li')).toHaveLength(
+      8,
+    );
+    expect(
+      el.querySelector('[data-slot="analysis-calls"]')?.textContent,
+    ).toContain('lead → reviewer');
+    expect(el.textContent).toContain('Calls between agents · 3');
+  });
+
+  it('explains each hotspot with the figures of the agent it names, and ticks its fix from there', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        workflowStats={WORKFLOW_STATS}
+        hotspots={HOTSPOTS}
+        workflow
+        items={ITEMS}
+        applied={null}
+        outcomes={{}}
+        onApply={vi.fn()}
+      />,
+    );
+    const hotspots = [...el.querySelectorAll('[data-slot="analysis-hotspot"]')];
+    const fix = hotspots[1]!.querySelector<HTMLButtonElement>(
+      '[data-slot="analysis-hotspot-fix"]',
+    )!;
+
+    expect(hotspots).toHaveLength(2);
+    expect(
+      hotspots[0]!.querySelector('[data-slot="analysis-hotspot-figures"]')
+        ?.textContent,
+    ).toBe('reviewer34m/run53% of the agents’ time$1.80/run3 failed turns');
+    expect(hotspots[0]!.textContent).toContain('The lead waits for reviewer-a');
+    expect(fix.textContent).toBe('W-2');
+
+    click(fix);
+
+    expect(fix.getAttribute('aria-pressed')).toBe('true');
+    expect(
+      el
+        .querySelector('[data-id="W-2"] button[aria-pressed]')
+        ?.getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(footer(el)).toContain('1 of 4 selected');
+  });
+
+  it("projects a plain chat's wall time from its timing, and a saving with no measured cost as a bare change", () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={TIMING}
+        workflow={false}
+        items={[recommendation('R-1', { costSavedUsd: 0.3 })]}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+
+    expect(projectionRows(el)).toEqual([
+      expect.stringContaining('3h 0m→2h 52m'),
+    ]);
+    expect(projection(el)).toContain('−$0.30 per thread');
+  });
+
+  it('projects only what was applied, leaving out what failed or was skipped', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        workflowStats={WORKFLOW_STATS}
+        workflow
+        items={ITEMS}
+        applied={['W-1', 'R-1', 'U-1']}
+        outcomes={{
+          'W-1': { status: 'applied', note: null, backup: null },
+          'R-1': { status: 'failed', note: 'file moved', backup: null },
+        }}
+      />,
+    );
+
+    expect(projection(el)).toContain('with the 2 applied');
+    expect(projectionRows(el)).toEqual([
+      expect.stringContaining('42m→16m'),
+      expect.stringContaining('$3.10→$2.70'),
+    ]);
+  });
+
+  it('says when the calls fold lists only the longest edges', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        workflowStats={{ ...WORKFLOW_STATS, callEdges: 12 }}
+        workflow
+        items={ITEMS}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+
+    expect(el.textContent).toContain('Calls between agents · longest 3 of 12');
+  });
+
+  it('never says nothing is worth changing beside the hotspots it shows', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        workflowStats={WORKFLOW_STATS}
+        hotspots={[{ ...HOTSPOTS[0]!, items: [] }]}
+        workflow
+        items={[]}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+
+    expect(el.textContent).toContain('No recommendations on this card.');
+    expect(el.textContent).not.toContain('nothing was found worth changing');
   });
 });

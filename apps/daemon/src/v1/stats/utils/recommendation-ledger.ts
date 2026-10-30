@@ -58,6 +58,8 @@ export function filedRecommendationsOf(
     change: item.change,
     rootCause: item.rootCause,
     minutesSaved: item.impact.minutesSaved,
+    costSavedUsd: item.impact.costSavedUsd ?? null,
+    expectedOutcome: item.impact.outcome ?? null,
     confidence: item.impact.confidence,
     risk: item.risk.level,
   }));

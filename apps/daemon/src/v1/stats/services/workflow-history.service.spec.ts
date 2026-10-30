@@ -212,6 +212,8 @@ describe('WorkflowHistoryService (in-memory sqlite)', () => {
       change: 'x'.repeat(itemId === 'W-2' ? 1000 : 10),
       rootCause: 'the reviewer runs the largest model',
       minutesSaved: 5,
+      costSavedUsd: itemId === 'W-1' ? 1.25 : null,
+      expectedOutcome: itemId === 'W-1' ? 'reviewer turns 4m → 2m' : null,
       confidence: 4,
       risk: 'low',
     };
@@ -452,6 +454,15 @@ describe('WorkflowHistoryService (in-memory sqlite)', () => {
       { id: 'W-2', status: 'not-selected', note: null },
       { id: 'R-1', status: 'skipped', note: 'the check exists already' },
     ]);
+    expect(oldest!.items[0]).toMatchObject({
+      expectedMinutesSavedPerRun: 5,
+      expectedCostSavedPerRunUsd: 1.25,
+      expectedOutcome: 'reviewer turns 4m → 2m',
+    });
+    expect(oldest!.items[1]).toMatchObject({
+      expectedCostSavedPerRunUsd: null,
+      expectedOutcome: null,
+    });
     expect(oldest!.items[0]!.changedIn).toEqual([
       {
         at: history.changeLog[1]!.at,
@@ -467,7 +478,56 @@ describe('WorkflowHistoryService (in-memory sqlite)', () => {
       selected: 0,
       open: 1,
       'not-selected': 1,
+      unanswered: 0,
     });
+  });
+
+  it('counts a card replaced before anything on it was applied as unanswered, never as passed over', async () => {
+    await recommendations.file([
+      filed('analysis-replaced', 4, 'W-1', '2026-10-05T10:00:00.000Z'),
+      filed('analysis-replaced', 4, 'W-2', '2026-10-05T10:00:00.000Z'),
+    ]);
+
+    const history = await service.read('dev-team', {
+      analysedRunIds: [],
+      readerRunId: null,
+    });
+
+    expect(
+      history.recommendations[0]!.items.map(({ id, status }) => [id, status]),
+    ).toEqual([
+      ['W-1', 'unanswered'],
+      ['W-2', 'unanswered'],
+    ]);
+    expect(history.summary.recommendations).toMatchObject({
+      unanswered: 2,
+      'not-selected': 0,
+    });
+  });
+
+  it('counts an item left out of an Apply as not selected, while its chat still exists too', async () => {
+    await recommendations.file([
+      filed('analysis-new', 3, 'W-1', '2026-10-12T10:00:00.000Z'),
+      filed('analysis-new', 3, 'W-2', '2026-10-12T10:00:00.000Z'),
+    ]);
+    await recommendations.markSelected(
+      'analysis-new',
+      3,
+      ['W-1'],
+      new Date('2026-10-12T11:00:00.000Z'),
+    );
+
+    const history = await service.read('dev-team', {
+      analysedRunIds: [],
+      readerRunId: null,
+    });
+
+    expect(
+      history.recommendations[0]!.items.map(({ id, status }) => [id, status]),
+    ).toEqual([
+      ['W-1', 'selected'],
+      ['W-2', 'not-selected'],
+    ]);
   });
 
   it('counts an item the user selected but nobody marked as selected', async () => {

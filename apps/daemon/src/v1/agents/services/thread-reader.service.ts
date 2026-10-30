@@ -23,7 +23,7 @@ import { analysedSourceOf } from '../utils/analysed-runs';
 import { CHAT_LANE, laneOf } from '../utils/analysis-lane';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import { asRecord } from '../utils/json-util';
-import { readRunOutcomes } from '../utils/run-outcomes';
+import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
 import { sizedUserInstructionFiles } from '../utils/user-instruction-files';
 import {
@@ -38,6 +38,7 @@ import {
   versionRef,
 } from '../utils/workflow-runs-fold';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
+import { RunOutcomeHistoryService } from './run-outcome-history.service';
 import { ThreadTimelineService } from './thread-timeline.service';
 
 /** The overview's byte budget — small enough to read whole, first. */
@@ -144,6 +145,7 @@ export class ThreadReaderService {
     private readonly timelines: ThreadTimelineService,
     private readonly adapters: AgentAdapterRegistry,
     private readonly wallTurns: WallTurnDao,
+    private readonly outcomes: RunOutcomeHistoryService,
   ) {}
 
   async read(
@@ -253,6 +255,26 @@ export class ThreadReaderService {
         analysed.working,
       );
       const version = snapshotVersion(run.workflowSnapshot);
+      const outcomes = await this.outcomes.read(
+        analysed.runId,
+        analysed.snapshotSeq,
+        em,
+      );
+      const pullRequests = outcomes.pullRequests.flatMap(
+        ({ outcomes: [newest], ...pullRequest }) =>
+          newest === undefined
+            ? []
+            : [
+                {
+                  pullRequest: pullRequestOutcomeKey(pullRequest),
+                  acceptance: newest.acceptance,
+                  reviewRounds: newest.reviewRounds,
+                  draft: newest.draft,
+                  changesRequestedRounds: pullRequest.changesRequestedRounds,
+                  msToAccepted: pullRequest.msToAccepted,
+                },
+              ],
+      );
       const header = {
         runId: run.id,
         title: run.title,
@@ -261,15 +283,8 @@ export class ThreadReaderService {
         version: versionRef(version, index),
         snapshotSeq: analysed.snapshotSeq,
         workingAtSnapshot: analysed.working,
+        questionsAsked: outcomes.questionsAsked,
       };
-      const pullRequests = [...readRunOutcomes(run.runOutcomes).entries()].map(
-        ([pullRequest, outcome]) => ({
-          pullRequest,
-          acceptance: outcome.acceptance,
-          reviewRounds: outcome.reviewRounds,
-          draft: outcome.draft,
-        }),
-      );
       if (reading === null) {
         runs.push({ ...header, note: 'The run has no rows yet.' });
         continue;

@@ -42,6 +42,7 @@ import type {
   RetriedDto,
   RunArtifactsDto,
   RunDto,
+  RunOutcomesDto,
   RunProcessesDto,
   RunSeenDto,
   RunStateDto,
@@ -169,6 +170,10 @@ export interface ChatsApiReadRunArtifactsRequest {
 export interface ChatsApiReadRunNamedPathsRequest {
     runId: string;
     namedPathsDto: NamedPathsDto;
+}
+
+export interface ChatsApiReadRunOutcomesRequest {
+    runId: string;
 }
 
 export interface ChatsApiReadRunProcessesRequest {
@@ -1432,6 +1437,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async readRunNamedPaths(requestParameters: ChatsApiReadRunNamedPathsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<NamedPathsResultDto> {
         const response = await this.readRunNamedPathsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readRunOutcomesRaw(requestParameters: ChatsApiReadRunOutcomesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunOutcomesDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readRunOutcomes().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/outcomes`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readRunOutcomes(requestParameters: ChatsApiReadRunOutcomesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunOutcomesDto> {
+        const response = await this.readRunOutcomesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

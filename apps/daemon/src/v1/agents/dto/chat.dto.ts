@@ -27,6 +27,7 @@ import {
   RecommendationApplySchema,
   ReplyLanguageSchema,
   RunArtifactsWireSchema,
+  RunOutcomesWireSchema,
   RunProcessesWireSchema,
   RunSeenWireSchema,
   RunStateWireSchema,
@@ -767,6 +768,9 @@ export class RunArtifactsDto extends createZodDto(RunArtifactsWireSchema) {}
 
 /** Every team note of one run — see `RunTeamNotesWireSchema`. */
 export class RunTeamNotesDto extends createZodDto(RunTeamNotesWireSchema) {}
+
+/** Every recorded pull request outcome of one run — see `RunOutcomesWireSchema`. */
+export class RunOutcomesDto extends createZodDto(RunOutcomesWireSchema) {}
 
 /** One run as money, order and timing — see `RunWaterfallWireSchema`. */
 export class RunWaterfallDto extends createZodDto(RunWaterfallWireSchema) {}

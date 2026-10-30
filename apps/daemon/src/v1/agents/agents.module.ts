@@ -59,6 +59,7 @@ import { ChatArtifactsService } from './services/chat-artifacts.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatHistoryService } from './services/chat-history.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
+import { ChatRunOutcomesService } from './services/chat-run-outcomes.service';
 import { ChatSearchService } from './services/chat-search.service';
 import { ChatShellsService } from './services/chat-shells.service';
 import { ChatTeamNotesService } from './services/chat-team-notes.service';
@@ -113,6 +114,7 @@ import { RunIdleReapService } from './services/run-idle-reap.service';
 import { RunKindRowsCache } from './services/run-kind-rows.cache';
 import { RunNamedPathsService } from './services/run-named-paths.service';
 import { RunOutcomeBroker } from './services/run-outcome.broker';
+import { RunOutcomeHistoryService } from './services/run-outcome-history.service';
 import {
   currentRunOwner,
   RunProcessAttribution,
@@ -185,6 +187,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatActionsService,
     ChatArtifactsService,
     ChatTeamNotesService,
+    ChatRunOutcomesService,
     ChatTimelineService,
     ChatWaterfallService,
     ThreadTimelineService,
@@ -252,6 +255,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     MonitorBroker,
     TeamNoteBroker,
     RunOutcomeBroker,
+    RunOutcomeHistoryService,
     HostWakeBus,
     HostWakeChatDelivery,
     ArtifactPageService,
@@ -586,6 +590,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // each node's sink and reads the unread figure into call replies and wakes.
     TeamNoteBroker,
     RunOutcomeBroker,
+    RunOutcomeHistoryService,
     // For the workflow delivery, which records the end of output it drops.
     MonitorRowWriter,
     // For the share service, which wakes the agent that asked once a share

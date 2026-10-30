@@ -7278,6 +7278,76 @@ export type RunOutcomeAcceptance = typeof RunOutcomeAcceptance[keyof typeof RunO
 /**
  * 
  * @export
+ * @interface RunOutcomeEntry
+ */
+export interface RunOutcomeEntry {
+    /**
+     * 
+     * @type {number}
+     * @memberof RunOutcomeEntry
+     */
+    seq: number;
+    /**
+     * when the row was written (ISO)
+     * @type {string}
+     * @memberof RunOutcomeEntry
+     */
+    at: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof RunOutcomeEntry
+     */
+    draft: boolean;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunOutcomeEntry
+     */
+    reviewRounds: number;
+    /**
+     * 
+     * @type {RunOutcomeAcceptance}
+     * @memberof RunOutcomeEntry
+     */
+    acceptance: RunOutcomeAcceptance;
+    /**
+     * questions put to the user on the run before this outcome
+     * @type {number}
+     * @memberof RunOutcomeEntry
+     */
+    questionsAsked: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunOutcomeEntry
+     */
+    summary: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunOutcomeEntry
+     */
+    nodeId: string;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface RunOutcomesDto
+ */
+export interface RunOutcomesDto {
+    /**
+     * 
+     * @type {Array<RunPullRequestOutcomes>}
+     * @memberof RunOutcomesDto
+     */
+    pullRequests: Array<RunPullRequestOutcomes>;
+}
+/**
+ * 
+ * @export
  * @interface RunProcess
  */
 export interface RunProcess {
@@ -7502,6 +7572,55 @@ export interface RunPullRequest {
      * @memberof RunPullRequest
      */
     seq: number;
+}
+/**
+ * 
+ * @export
+ * @interface RunPullRequestOutcomes
+ */
+export interface RunPullRequestOutcomes {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunPullRequestOutcomes
+     */
+    owner: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunPullRequestOutcomes
+     */
+    repo: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunPullRequestOutcomes
+     */
+    number: number;
+    /**
+     * as the newest outcome names it
+     * @type {string}
+     * @memberof RunPullRequestOutcomes
+     */
+    url: string;
+    /**
+     * times it went to changes_requested
+     * @type {number}
+     * @memberof RunPullRequestOutcomes
+     */
+    changesRequestedRounds: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunPullRequestOutcomes
+     */
+    msToAccepted: number | null;
+    /**
+     * newest first
+     * @type {Array<RunOutcomeEntry>}
+     * @memberof RunPullRequestOutcomes
+     */
+    outcomes: Array<RunOutcomeEntry>;
 }
 /**
  * 

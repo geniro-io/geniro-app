@@ -133,6 +133,14 @@ export class UsageActivity extends TimestampsEntity {
   @Property({ type: 'integer', nullable: true })
   outcomeQuestionsAsked: number | null = null;
 
+  /** Times the pull request went to `changes_requested` over every outcome the run recorded for it; null until counted. */
+  @Property({ type: 'integer', nullable: true })
+  outcomeChangesRequestedRounds: number | null = null;
+
+  /** From the pull request's first outcome to its first `accepted`; null while never accepted, or not counted yet. */
+  @Property({ type: 'integer', nullable: true })
+  outcomeMsToAccepted: number | null = null;
+
   /** `workflowVersionOf` the run's own graph copy; null while unstamped, and for a run that kept no copy it can read. */
   @Property({ type: 'string', nullable: true })
   workflowVersion: string | null = null;

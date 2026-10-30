@@ -108,7 +108,7 @@ export const RunOutcomesContext = createContext<RunOutcomes>({
   resolved: new Map(),
 });
 
-function plural(count: number, one: string, many: string): string {
+export function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 

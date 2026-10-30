@@ -1,5 +1,6 @@
 import {
   type PullRequestOutcome,
+  type RunOutcomeAcceptance,
   RunOutcomeAcceptanceSchema,
 } from '../chat.types';
 import { pullRequestOutcomeKey } from './pull-request-capture';
@@ -105,4 +106,42 @@ export function withRunOutcome(
     outcomes.set(key, outcome);
   }
   return JSON.stringify(Object.fromEntries(outcomes));
+}
+
+/** What one pull request's recorded outcomes say over time, not only at the newest. */
+export interface OutcomeHistoryFigures {
+  /** How many times it went to `changes_requested`: each arrival from another acceptance, a first outcome that already asks for changes included. */
+  changesRequestedRounds: number;
+  /** From its first outcome to its first `accepted`; null while it has none. */
+  msToAccepted: number | null;
+}
+
+export function outcomeHistoryFigures(
+  outcomes: readonly {
+    seq: number;
+    at: Date;
+    acceptance: RunOutcomeAcceptance;
+  }[],
+): OutcomeHistoryFigures {
+  const ordered = [...outcomes].sort((a, b) => a.seq - b.seq);
+  let changesRequestedRounds = 0;
+  let previous: RunOutcomeAcceptance | null = null;
+  for (const outcome of ordered) {
+    if (
+      outcome.acceptance === 'changes_requested' &&
+      previous !== 'changes_requested'
+    ) {
+      changesRequestedRounds += 1;
+    }
+    previous = outcome.acceptance;
+  }
+  const first = ordered[0];
+  const accepted = ordered.find((outcome) => outcome.acceptance === 'accepted');
+  return {
+    changesRequestedRounds,
+    msToAccepted:
+      first === undefined || accepted === undefined
+        ? null
+        : Math.max(0, accepted.at.getTime() - first.at.getTime()),
+  };
 }

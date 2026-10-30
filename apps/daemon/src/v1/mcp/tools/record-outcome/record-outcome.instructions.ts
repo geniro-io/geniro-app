@@ -2,10 +2,11 @@
 export function recordOutcomeInstructions(): string {
   return (
     'Record where one pull request of this workflow run stands — a structured record geniro keeps ' +
-    'with the run, shows on it, and counts per workflow version. Use it when your role says to, ' +
-    'typically each time you have read a delivery report on a pull request and again after the user ' +
-    'answers whether they accept it. One call per pull request; a later call for the same pull ' +
-    'request replaces its earlier outcome, so send every field each time. `review_rounds` counts the ' +
+    'with the run, shows on it, and counts per workflow version. Use it when your role says to, and ' +
+    'only when something changed: the draft state, the review rounds or the acceptance. A call ' +
+    'repeating the newest outcome of that pull request writes nothing and answers "Unchanged". One ' +
+    'call per pull request; a later call for the same pull request replaces its earlier outcome, so ' +
+    'send every field each time. `review_rounds` counts the ' +
     "reviews of the pull request run after it was built; `acceptance` is the user's verdict: " +
     '`accepted`, `changes_requested`, `not_yet`, or `not_needed` when the pull request needs no ' +
     'acceptance. Give `summary` a sentence or three a person can read on the outcome — what the ' +

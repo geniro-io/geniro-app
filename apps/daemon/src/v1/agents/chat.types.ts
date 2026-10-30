@@ -3825,6 +3825,58 @@ export const PullRequestOutcomeSchema = z
   .meta({ id: 'PullRequestOutcome' });
 export type PullRequestOutcome = z.infer<typeof PullRequestOutcomeSchema>;
 
+/** One `run_outcome` row of a pull request, as its history lists it. */
+export const RunOutcomeEntrySchema = z
+  .object({
+    seq: z.number().int(),
+    at: z.string().describe('when the row was written (ISO)'),
+    draft: z.boolean(),
+    reviewRounds: z.number().int(),
+    acceptance: RunOutcomeAcceptanceSchema,
+    questionsAsked: z
+      .number()
+      .int()
+      .describe('questions put to the user on the run before this outcome'),
+    summary: z.string().nullable(),
+    nodeId: z.string(),
+  })
+  .meta({ id: 'RunOutcomeEntry' });
+export type RunOutcomeEntry = z.infer<typeof RunOutcomeEntrySchema>;
+
+/** Every recorded outcome of one pull request on one run, with what they add up to. */
+export const RunPullRequestOutcomesSchema = z
+  .object({
+    owner: z.string(),
+    repo: z.string(),
+    number: z.number().int(),
+    url: z.string().describe('as the newest outcome names it'),
+    changesRequestedRounds: z
+      .number()
+      .int()
+      .describe('times it went to changes_requested'),
+    msToAccepted: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        'from its first outcome to its first accepted; null while never accepted',
+      ),
+    outcomes: z.array(RunOutcomeEntrySchema).describe('newest first'),
+  })
+  .meta({ id: 'RunPullRequestOutcomes' });
+export type RunPullRequestOutcomes = z.infer<
+  typeof RunPullRequestOutcomesSchema
+>;
+
+/**
+ * Every pull request a run recorded an outcome for, the most recently recorded
+ * first. No `.meta({ id })` on this root, on `ChatTimelineWireSchema`'s rule.
+ */
+export const RunOutcomesWireSchema = z.object({
+  pullRequests: z.array(RunPullRequestOutcomesSchema),
+});
+export type RunOutcomesWire = z.infer<typeof RunOutcomesWireSchema>;
+
 /** A `record_outcome` call as its reader hands it over. */
 export interface RunOutcomeInput {
   prNumber: number;
@@ -3838,6 +3890,8 @@ export interface RunOutcomeInput {
 
 export type RunOutcomeWriteOutcome =
   | { status: 'recorded'; seq: number; questionsAsked: number }
+  /** The pull request's newest outcome already holds these figures; nothing was written. */
+  | { status: 'unchanged'; seq: number }
   | { status: 'refused'; reason: string };
 
 /** A `monitor` call as its reader hands it over. */

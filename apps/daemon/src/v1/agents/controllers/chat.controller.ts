@@ -34,6 +34,7 @@ import type {
   ItemWire,
   LocalImageWire,
   RunArtifactsWire,
+  RunOutcomesWire,
   RunProcessesWire,
   RunSeenWire,
   RunStateWire,
@@ -76,6 +77,7 @@ import {
   RetriedDto,
   RunArtifactsDto,
   RunDto,
+  RunOutcomesDto,
   RunProcessesDto,
   RunSeenDto,
   RunStateDto,
@@ -107,6 +109,7 @@ import { ChatArtifactsService } from '../services/chat-artifacts.service';
 import { ChatExportService } from '../services/chat-export.service';
 import { ChatHistoryService } from '../services/chat-history.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
+import { ChatRunOutcomesService } from '../services/chat-run-outcomes.service';
 import { ChatSearchService } from '../services/chat-search.service';
 import { ChatShellsService } from '../services/chat-shells.service';
 import { ChatTeamNotesService } from '../services/chat-team-notes.service';
@@ -139,6 +142,7 @@ export class ChatController {
   constructor(
     private readonly artifacts: ChatArtifactsService,
     private readonly teamNotes: ChatTeamNotesService,
+    private readonly runOutcomes: ChatRunOutcomesService,
     private readonly chatService: ChatService,
     private readonly chatExport: ChatExportService,
     private readonly history: ChatHistoryService,
@@ -503,6 +507,14 @@ export class ChatController {
   @ZodResponse({ status: 200, type: RunTeamNotesDto })
   readTeamNotes(@Param('runId') runId: string): Promise<RunTeamNotesWire> {
     return this.teamNotes.read(runId);
+  }
+
+  /** Every pull request outcome this run's agents recorded, per pull request with its history. */
+  @Get(':runId/outcomes')
+  @ApiOperation({ operationId: 'readRunOutcomes' })
+  @ZodResponse({ status: 200, type: RunOutcomesDto })
+  readOutcomes(@Param('runId') runId: string): Promise<RunOutcomesWire> {
+    return this.runOutcomes.read(runId);
   }
 
   /**

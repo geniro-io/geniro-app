@@ -85,6 +85,7 @@ import { ProcessRegistry } from '../../agents/services/process-registry';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
+import { RunOutcomeHistoryService } from '../../agents/services/run-outcome-history.service';
 import type { RunProcessReaper } from '../../agents/services/run-process-reaper.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { RunWriteQueue } from '../../agents/services/run-write.queue';
@@ -1387,12 +1388,15 @@ function setup(
   const teamNotes = new TeamNoteBroker(em, itemDao as unknown as ItemDao);
   const runOutcomes = new RunOutcomeBroker(
     em,
-    itemDao as unknown as ItemDao,
     {
       outcomeContextOf: async (runId: string) => runDao.runs.get(runId) ?? null,
       updateWithoutActivity: async () => undefined,
     } as unknown as RunDao,
-    { all: () => new Map() } as unknown as AgentAdapterRegistry,
+    new RunOutcomeHistoryService(
+      em,
+      itemDao as unknown as ItemDao,
+      { all: () => new Map() } as unknown as AgentAdapterRegistry,
+    ),
     {
       announceOutcome: async () => undefined,
     } as unknown as PullRequestCaptureService,

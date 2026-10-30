@@ -83,6 +83,8 @@ interface ActivityDatabase {
     outcome_review_rounds: UsageActivity['outcomeReviewRounds'];
     outcome_acceptance: UsageActivity['outcomeAcceptance'];
     outcome_questions_asked: UsageActivity['outcomeQuestionsAsked'];
+    outcome_changes_requested_rounds: UsageActivity['outcomeChangesRequestedRounds'];
+    outcome_ms_to_accepted: UsageActivity['outcomeMsToAccepted'];
     workflow_version: UsageActivity['workflowVersion'];
     workflow_version_inferred: number | null;
   };
@@ -185,8 +187,9 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
    * Record one pull request's outcome on one run, or move its row forward to this one.
    * A row already holding a newer outcome (a higher `sourceSeq`) is left as it is: the
    * live copy and the boot sweep can reach one pull request out of order, and neither
-   * may move an outcome backwards. One statement, so two copies racing land in seq
-   * order whichever arrives first.
+   * may move an outcome backwards. A row at the same seq is rewritten only while it lacks
+   * the history figures (written before they were counted), so the sweep can fill them in.
+   * One statement, so two copies racing land in seq order whichever arrives first.
    */
   async upsertRunOutcome(
     row: RunOutcomeLedgerRow,
@@ -215,6 +218,8 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
         outcome_review_rounds: row.reviewRounds,
         outcome_acceptance: row.acceptance,
         outcome_questions_asked: row.questionsAsked,
+        outcome_changes_requested_rounds: row.changesRequestedRounds,
+        outcome_ms_to_accepted: row.msToAccepted,
       })
       .onConflict((conflict) =>
         conflict
@@ -229,6 +234,10 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
             outcome_review_rounds: eb.ref('excluded.outcome_review_rounds'),
             outcome_acceptance: eb.ref('excluded.outcome_acceptance'),
             outcome_questions_asked: eb.ref('excluded.outcome_questions_asked'),
+            outcome_changes_requested_rounds: eb.ref(
+              'excluded.outcome_changes_requested_rounds',
+            ),
+            outcome_ms_to_accepted: eb.ref('excluded.outcome_ms_to_accepted'),
           }))
           .where((eb) =>
             eb.or([
@@ -238,6 +247,18 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
                 '<',
                 eb.ref('excluded.source_seq'),
               ),
+              eb.and([
+                eb(
+                  'usage_activity.source_seq',
+                  '=',
+                  eb.ref('excluded.source_seq'),
+                ),
+                eb(
+                  'usage_activity.outcome_changes_requested_rounds',
+                  'is',
+                  null,
+                ),
+              ]),
             ]),
           ),
       )
@@ -296,27 +317,38 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
         reviewRounds: row.outcomeReviewRounds,
         acceptance: row.outcomeAcceptance,
         questionsAsked: row.outcomeQuestionsAsked,
+        changesRequestedRounds: row.outcomeChangesRequestedRounds,
+        msToAccepted: row.outcomeMsToAccepted,
       });
     }
     return outcomes;
   }
 
   /**
-   * Each recorded outcome's `sourceSeq`, by ledger key — what the boot sweep compares a
-   * run's newest outcome item against, read once rather than per pull request.
+   * Each recorded outcome's `sourceSeq` and whether its history figures were counted, by
+   * ledger key — what the boot sweep compares a run's newest outcome item against, read
+   * once rather than per pull request.
    */
-  async runOutcomeSeqs(txEm?: EntityManager): Promise<Map<string, number>> {
+  async runOutcomeCopies(
+    txEm?: EntityManager,
+  ): Promise<Map<string, { sourceSeq: number; counted: boolean }>> {
     const rows = await this.getRepo(txEm).find(
       { kind: 'run_outcome' },
-      { fields: ['dedupKey', 'sourceSeq'], disableIdentityMap: true },
+      {
+        fields: ['dedupKey', 'sourceSeq', 'outcomeChangesRequestedRounds'],
+        disableIdentityMap: true,
+      },
     );
-    const seqs = new Map<string, number>();
+    const copies = new Map<string, { sourceSeq: number; counted: boolean }>();
     for (const row of rows) {
       if (row.sourceSeq !== null) {
-        seqs.set(row.dedupKey, row.sourceSeq);
+        copies.set(row.dedupKey, {
+          sourceSeq: row.sourceSeq,
+          counted: row.outcomeChangesRequestedRounds !== null,
+        });
       }
     }
-    return seqs;
+    return copies;
   }
 
   /** Record one cumulative lines snapshot. Never refused, since a thread is measured many times. */

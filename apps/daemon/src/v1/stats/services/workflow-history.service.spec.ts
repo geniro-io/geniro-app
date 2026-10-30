@@ -170,6 +170,7 @@ describe('WorkflowHistoryService (in-memory sqlite)', () => {
     runId: string,
     acceptance: 'accepted' | 'changes_requested',
     reviewRounds: number,
+    questionsAsked = 0,
   ): Promise<void> {
     await activityDao.upsertRunOutcome({
       runId,
@@ -183,7 +184,9 @@ describe('WorkflowHistoryService (in-memory sqlite)', () => {
       draft: false,
       reviewRounds,
       acceptance,
-      questionsAsked: 0,
+      questionsAsked,
+      changesRequestedRounds: acceptance === 'changes_requested' ? 1 : 0,
+      msToAccepted: acceptance === 'accepted' ? 60_000 : null,
     });
   }
 
@@ -226,7 +229,7 @@ describe('WorkflowHistoryService (in-memory sqlite)', () => {
       { costUsd: 1, durationMs: 30_000 },
     ]);
     await pullRequest('run-a', 'changes_requested', 3);
-    await pullRequest('run-c', 'accepted', 1);
+    await pullRequest('run-c', 'accepted', 1, 2);
 
     const history = await service.read('dev-team', {
       analysedRunIds: ['run-c', 'run-a'],
@@ -249,7 +252,14 @@ describe('WorkflowHistoryService (in-memory sqlite)', () => {
         turns: 1,
         cliWorkedMs: 30_000,
         avgCliWorkedMs: 30_000,
-        pullRequests: { total: 1, accepted: 1, avgReviewRounds: 1 },
+        pullRequests: {
+          total: 1,
+          accepted: 1,
+          avgReviewRounds: 1,
+          avgChangesRequestedRounds: 0,
+          avgMsToAccepted: 60_000,
+          avgQuestionsPerRun: 2,
+        },
       },
     });
     expect(second!.changes!.diff).toContain('+    model: sonnet');
@@ -265,7 +275,14 @@ describe('WorkflowHistoryService (in-memory sqlite)', () => {
         avgTurns: 1.5,
         cliWorkedMs: 240_000,
         avgCliWorkedMs: 120_000,
-        pullRequests: { total: 1, changesRequested: 1, avgReviewRounds: 3 },
+        pullRequests: {
+          total: 1,
+          changesRequested: 1,
+          avgReviewRounds: 3,
+          avgChangesRequestedRounds: 1,
+          avgMsToAccepted: null,
+          avgQuestionsPerRun: 0,
+        },
       },
       changes: null,
     });
@@ -276,6 +293,69 @@ describe('WorkflowHistoryService (in-memory sqlite)', () => {
         runIds: ['run-a'],
       },
     ]);
+  });
+
+  it('counts a run’s questions once whatever its pull requests, and leaves out copies made before questions were counted', async () => {
+    await workflowRun('run-x', V1, '2026-10-02T10:00:00.000Z', [
+      { costUsd: 1, durationMs: 60_000 },
+    ]);
+    await workflowRun('run-old', V1, '2026-10-01T10:00:00.000Z', [
+      { costUsd: 1, durationMs: 60_000 },
+    ]);
+    const copy = (
+      runId: string,
+      prNumber: number,
+      figures: {
+        questionsAsked: number;
+        changesRequestedRounds: number | null;
+        msToAccepted: number | null;
+      },
+    ): Promise<void> =>
+      activityDao.upsertRunOutcome({
+        runId,
+        sourceSeq: prNumber,
+        occurredAt: new Date('2026-10-11T10:00:00.000Z'),
+        workflowSlug: 'dev-team',
+        prOwner: 'acme',
+        prRepo: 'app',
+        prNumber,
+        prUrl: `https://github.com/acme/app/pull/${prNumber}`,
+        draft: false,
+        reviewRounds: 1,
+        acceptance: 'accepted',
+        ...figures,
+      });
+    await copy('run-x', 1, {
+      questionsAsked: 2,
+      changesRequestedRounds: 1,
+      msToAccepted: 60_000,
+    });
+    await copy('run-x', 2, {
+      questionsAsked: 5,
+      changesRequestedRounds: 0,
+      msToAccepted: 180_000,
+    });
+    await copy('run-old', 3, {
+      questionsAsked: 0,
+      changesRequestedRounds: null,
+      msToAccepted: null,
+    });
+
+    const history = await service.read('dev-team', {
+      analysedRunIds: ['run-x'],
+      readerRunId: 'analysis-new',
+    });
+
+    expect(
+      history.versions.find((entry) => entry.version?.version === V1)?.figures
+        .pullRequests,
+    ).toMatchObject({
+      total: 3,
+      accepted: 3,
+      avgChangesRequestedRounds: 0.5,
+      avgMsToAccepted: 120_000,
+      avgQuestionsPerRun: 5,
+    });
   });
 
   it('names who changed the workflow and why, and what became of every earlier recommendation, an analysis that is gone included', async () => {

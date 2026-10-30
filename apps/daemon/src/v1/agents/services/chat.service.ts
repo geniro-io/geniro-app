@@ -231,6 +231,7 @@ import { ProcessRegistry } from './process-registry';
 import { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
+import { RunHoldRegistry } from './run-hold.registry';
 import { RunTeardownService } from './run-teardown.service';
 import { RunWriteQueue } from './run-write.queue';
 import { SkillHarvestStore } from './skill-harvest.store';
@@ -240,6 +241,17 @@ import { WorkflowBuilderBroker } from './workflow-builder.broker';
 import { WorkflowProposalBroker } from './workflow-proposal.broker';
 
 /** A deferred card another module raised — one that stands across turns. */
+/**
+ * The sentence under the badge while a turn is held for `count` sub-agents —
+ * the only unit a hold counts (`openWork` adds `unit === 'agent'` alone), and
+ * the app's own word for a delegate in the panel and the transcript alike.
+ */
+function heldActivity(count: number): string | null {
+  return count === 0
+    ? null
+    : `waiting on ${count} sub-agent${count === 1 ? '' : 's'}`;
+}
+
 function isStandingCard(entry: PendingApproval): boolean {
   return entry.standing === true;
 }
@@ -714,6 +726,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * queue that will not drain for minutes.
    */
   private readonly heldRuns = new Map<string, number>();
+  /** Main-thread tool calls of the stretch the CLI is running by itself. */
+  private readonly offTurnToolCalls = new Map<string, number>();
 
   /**
    * Runs holding DETACHED commands that have not reported back, by work id.
@@ -814,6 +828,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly workflowBuilders: WorkflowBuilderBroker,
     private readonly runWrites: RunWriteQueue,
     private readonly memory: MemoryService,
+    private readonly holds: RunHoldRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     @Optional() private readonly agentMcp?: AgentMcpService,
     /** The `monitor` tool's commands, stopped with the thread. Optional for the positional specs. */
@@ -932,6 +947,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     status: RunStatus,
     announce: RunStatusAnnounce = {},
   ): Promise<void> {
+    // A settle ends the open turn, and with it its holds; an off-turn stretch
+    // writing `running` is dated by its own start (`off_turn_started`).
+    if (isTerminalRunStatus(status)) {
+      this.holds.forget(runId);
+    }
     const previous = this.statusWrites.get(runId) ?? Promise.resolve();
     // A failed earlier write must not prevent a later Stop from settling the run.
     const write = previous
@@ -983,6 +1003,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     } else {
       this.heldRuns.delete(runId);
     }
+    this.holds.hold(runId, open);
     this.bus.publishRunStatus({
       runId,
       status: null,
@@ -3510,6 +3531,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // into has just been destroyed.
       this.approvals.sweepDeferred(runId);
       this.heldVerdicts.delete(runId);
+      this.offTurnToolCalls.delete(runId);
+      this.holds.forget(runId);
       // The run is gone, so its posture has nothing left to govern — and the
       // teardown has already closed the process that would have consulted it.
       this.runPosture.delete(runId);
@@ -3837,6 +3860,36 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * is logged and swallowed: this is called from the session's event path,
    * where a throw has no caller to reach.
    */
+  /**
+   * Add what a stretch the CLI ran by itself worked to the run's totals —
+   * `Run.workedMs` and `toolCalls`, which the in-turn closure adds for a turn
+   * of ours. Its main-thread tool calls are counted as they arrive and added
+   * with its ending, whatever that ending is; only a completion carries a
+   * duration.
+   */
+  private async countOffTurnWork(
+    runId: string,
+    event: AgentEvent,
+  ): Promise<void> {
+    if (event.type === 'tool_call' && event.parentToolUseId === undefined) {
+      this.offTurnToolCalls.set(
+        runId,
+        (this.offTurnToolCalls.get(runId) ?? 0) + 1,
+      );
+      return;
+    }
+    if (terminalStatus(event) === null) {
+      return;
+    }
+    const toolCalls = this.offTurnToolCalls.get(runId) ?? 0;
+    this.offTurnToolCalls.delete(runId);
+    const workedMs =
+      event.type === 'turn_complete' ? (event.usage?.durationMs ?? null) : null;
+    // Awaited, unlike the in-turn write: the ending's settle announce, a few
+    // lines on, reads the totals back.
+    await this.runDao.rememberWork(runId, workedMs, toolCalls).catch(() => {});
+  }
+
   private async handleBetweenTurnEvent(
     runId: string,
     agent: AgentKind,
@@ -3862,6 +3915,22 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     ) {
       return;
     }
+    // The in-turn hold's twin, for a stretch the CLI opened by itself: the
+    // agent has stopped and waits on sub-agents it launched there. It maps to
+    // no row, so it is read ahead of the row gate.
+    if (event.type === 'turn_held') {
+      if (this.ownsSession(runId, session)) {
+        this.announceRunHold(runId, event.open, heldActivity(event.open));
+      }
+      return;
+    }
+    if (event.type === 'off_turn_started') {
+      if (this.ownsSession(runId, session)) {
+        this.holds.startStretch(runId, event.at);
+      }
+      return;
+    }
+    await this.countOffTurnWork(runId, event);
     // A continuation the CLI ran by itself made requests too, so the cache was
     // re-warmed by it. Awaited ahead of everything below, which is where the
     // continuation's own terminal settles the run and announces the expiry.
@@ -4614,6 +4683,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     cause: SessionCloseCause | null = null,
   ): Promise<void> {
     this.clearDelegateLease(runId);
+    // No process, so nothing is held for: a hold announced between turns has
+    // no finalizer to clear it, and its own release arrives after the session
+    // stopped being this run's.
+    if (this.heldRuns.has(runId) && !this.registry.has(runId)) {
+      this.announceRunHold(runId, 0, null);
+    }
     // A WORKFLOW's sessions reach this listener too, under the executor's
     // composite key (`<runId>::node:…` / `<runId>::call:…`), which names no run
     // and so matches nothing below. That is the right outcome rather than a
@@ -5714,6 +5789,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // The previous turn's delegates cannot outlive this one's badge, and the
       // set is what would otherwise grow for the life of a long chat.
       this.closedDelegates.delete(runId);
+      this.holds.forget(runId);
       await this.setRunStatus(em, runId, 'running');
       shownWorking = true;
 
@@ -5854,20 +5930,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * Null leaves the run's own "Working…" standing, which is the honest
        * phrase for an agent that is simply thinking.
        */
-      const idleActivity = (): string | null => {
-        const count = heldOnBackgroundWork;
-        if (count === 0) {
-          return null;
-        }
-        // SUB-AGENTS, which is the only thing this tally holds: `openWork` adds
-        // a unit only for `unit === 'agent'`, a backgrounded command having
-        // been deliberately excluded from the hold. The old wording named a
-        // third thing the screen has no counter for — reported as "it says
-        // waiting for two background tasks, but I only see one terminal and
-        // four agents" — and the app's own word for a delegate, in the panel
-        // and in the transcript block alike, is sub-agent.
-        return `waiting on ${count} sub-agent${count === 1 ? '' : 's'}`;
-      };
+      const idleActivity = (): string | null =>
+        heldActivity(heldOnBackgroundWork);
       const enqueue = (work: () => Promise<void>): void => {
         chain = chain.then(work).catch((err: unknown) => {
           eventHandlingFailed = true;

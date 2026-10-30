@@ -7,6 +7,7 @@ import {
   cliTurnDurationMs,
   clockMs,
   formatDuration,
+  heldSinceOf,
   openTurnWorkedMs,
   parkWhileHeld,
   scanTurns,
@@ -356,6 +357,31 @@ describe('scanTurns + openTurnWorkedMs', () => {
     ).toBe(45_000);
   });
 
+  it('leaves out the holds that already ended, as the daemon counts them', () => {
+    const { open } = scanTurns([userAt('2026-08-14T10:00:00.000Z')]);
+
+    const resumed = parkWhileHeld(open, undefined, 600_000);
+    expect(openTurnWorkedMs(resumed, at('2026-08-14T10:15:00.000Z'))).toBe(
+      300_000,
+    );
+
+    const heldAgain = parkWhileHeld(
+      open,
+      at('2026-08-14T10:15:00.000Z'),
+      600_000,
+    );
+    expect(openTurnWorkedMs(heldAgain, at('2026-08-14T10:40:00.000Z'))).toBe(
+      300_000,
+    );
+  });
+
+  it('reads the daemon’s standing hold, and none for a null', () => {
+    expect(heldSinceOf('2026-08-14T10:15:00.000Z')).toBe(
+      at('2026-08-14T10:15:00.000Z'),
+    );
+    expect(heldSinceOf(null)).toBeUndefined();
+  });
+
   it('leaves a hold on top of an unanswered card, rather than replacing it', () => {
     // Both can be true at once, and `openSince` is a LIST for that reason.
     // Overwriting it would resume the clock the card had stopped.
@@ -511,6 +537,79 @@ describe('scanTurns + openTurnWorkedMs', () => {
       expect(openTurnWorkedMs(open, at('2026-08-14T10:01:10.000Z'))).toBe(
         40_000,
       );
+    });
+  });
+
+  describe('work the agent took up on its own after its turn ended', () => {
+    const offTurn = (): ChatItem[] => [
+      userAt('2026-08-14T10:00:00.000Z'),
+      cliDone('2026-08-14T10:00:10.000Z', 9_000),
+      item('shell_info', '2026-08-14T10:01:00.000Z', {
+        payload: { id: 'call-1' },
+      }),
+      item('message', '2026-08-14T10:01:05.000Z', {
+        role: 'assistant',
+        payload: { text: 'The index is ready.' },
+      }),
+      item('tool_call', '2026-08-14T10:01:06.000Z', {
+        role: 'assistant',
+        payload: { id: 'call-2', name: 'Agent' },
+      }),
+    ];
+
+    it('opens a turn at its first reply, so the clock moves', () => {
+      const { open } = scanTurns(offTurn());
+
+      expect(open).toEqual([
+        {
+          agentKey: CHAT_AGENT_KEY,
+          startedAt: at('2026-08-14T10:01:05.000Z'),
+          parkedMs: 0,
+          openSince: [],
+          offTurn: true,
+        },
+      ]);
+      expect(openTurnWorkedMs(open, at('2026-08-14T10:02:05.000Z'))).toBe(
+        60_000,
+      );
+    });
+
+    it('closes it on the continuation’s own ending, measured by the CLI', () => {
+      const ending = cliDone('2026-08-14T10:03:00.000Z', 110_000);
+      const { open, durations } = scanTurns([...offTurn(), ending]);
+
+      expect(open).toEqual([]);
+      expect(durations.get(ending.id)).toEqual({ ms: 110_000, source: 'cli' });
+    });
+
+    it('is not opened by a delegate’s rows', () => {
+      const { open } = scanTurns([
+        userAt('2026-08-14T10:00:00.000Z'),
+        cliDone('2026-08-14T10:00:10.000Z', 9_000),
+        item('tool_call', '2026-08-14T10:01:06.000Z', {
+          role: 'assistant',
+          payload: { id: 'call-3', name: 'Bash', parentToolUseId: 'toolu_1' },
+        }),
+      ]);
+
+      expect(open).toEqual([]);
+    });
+
+    it('gives way to a message the user sends next', () => {
+      const { open } = scanTurns([
+        ...offTurn(),
+        userAt('2026-08-14T10:30:00.000Z'),
+      ]);
+
+      expect(open.map((turn) => turn.startedAt)).toEqual([
+        at('2026-08-14T10:30:00.000Z'),
+      ]);
+    });
+
+    it('is not read from a window that holds no ending', () => {
+      const { open } = scanTurns(offTurn().slice(2));
+
+      expect(open).toEqual([]);
     });
   });
 
@@ -798,5 +897,59 @@ describe('withDurableChatTurn', () => {
       withDurableChatTurn(own, '2026-10-01T10:00:00.000Z', CHAT_AGENT_KEY),
     ).toBe(own);
     expect(withDurableChatTurn([], null, CHAT_AGENT_KEY)).toEqual([]);
+  });
+
+  it('dates a stretch the agent runs by itself from when the daemon saw it wake', () => {
+    const { open } = scanTurns([
+      userAt('2026-10-01T10:00:00.000Z'),
+      cliDone('2026-10-01T10:00:10.000Z', 9_000),
+      item('tool_call', '2026-10-01T10:01:08.000Z', {
+        role: 'assistant',
+        payload: { id: 'call-1', name: 'Bash' },
+      }),
+    ]);
+
+    const [turn] = withDurableChatTurn(
+      open,
+      '2026-10-01T10:01:00.000Z',
+      CHAT_AGENT_KEY,
+    );
+
+    expect(turn?.startedAt).toBe(Date.parse('2026-10-01T10:01:00.000Z'));
+  });
+
+  it('takes the daemon’s stretch over one the window dates from a stretch that ended without a row', () => {
+    const { open } = scanTurns([
+      userAt('2026-10-01T10:00:00.000Z'),
+      cliDone('2026-10-01T10:00:10.000Z', 9_000),
+      item('tool_call', '2026-10-01T10:01:08.000Z', {
+        role: 'assistant',
+        payload: { id: 'call-1', name: 'Bash' },
+      }),
+      item('tool_call', '2026-10-01T12:00:05.000Z', {
+        role: 'assistant',
+        payload: { id: 'call-2', name: 'Bash' },
+      }),
+    ]);
+
+    const [turn] = withDurableChatTurn(
+      open,
+      '2026-10-01T12:00:00.000Z',
+      CHAT_AGENT_KEY,
+    );
+
+    expect(turn?.startedAt).toBe(Date.parse('2026-10-01T12:00:00.000Z'));
+  });
+
+  it('keeps a turn the user opened at their message, whatever an older reading says', () => {
+    const { open } = scanTurns([userAt('2026-10-01T10:05:00.000Z')]);
+
+    const [turn] = withDurableChatTurn(
+      open,
+      '2026-10-01T10:01:00.000Z',
+      CHAT_AGENT_KEY,
+    );
+
+    expect(turn?.startedAt).toBe(Date.parse('2026-10-01T10:05:00.000Z'));
   });
 });

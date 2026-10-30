@@ -5141,7 +5141,25 @@ export class GraphExecutorService
        * run being DELETED is refused, since its rows are going.
        */
       const offTurnCompactions = new CompactionRows();
+      // The main-thread tool calls of a stretch the CLI runs by itself, added
+      // to the node's totals with its ending, as a turn of ours adds its own.
+      let offTurnToolCalls = 0;
       const onOffTurnEvent = (event: AgentEvent): void => {
+        if (event.type === 'tool_call' && event.parentToolUseId === undefined) {
+          offTurnToolCalls += 1;
+        } else if (terminalStatus(event) !== null) {
+          const toolCalls = offTurnToolCalls;
+          offTurnToolCalls = 0;
+          const workedMs =
+            event.type === 'turn_complete'
+              ? (event.usage?.durationMs ?? null)
+              : null;
+          enqueue(() =>
+            this.nodeStateDao
+              .rememberWork(runId, node.id, workedMs, toolCalls, em)
+              .catch(() => {}),
+          );
+        }
         enqueue(async () => {
           if (this.deleting.has(runId)) {
             return;

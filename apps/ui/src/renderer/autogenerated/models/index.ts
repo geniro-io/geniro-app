@@ -7750,6 +7750,18 @@ export interface RunStateDto {
      * @memberof RunStateDto
      */
     turnStartedAt: string | null;
+    /**
+     * a 1:1 chat's open turn: how long the holds that have ended kept it waiting on background work it launched
+     * @type {number}
+     * @memberof RunStateDto
+     */
+    turnHeldMs: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunStateDto
+     */
+    turnHeldSince: string | null;
 }
 
 /**
@@ -10639,6 +10651,18 @@ export interface ThreadOverviewDtoState {
      * @memberof ThreadOverviewDtoState
      */
     turnStartedAt: string | null;
+    /**
+     * a 1:1 chat's open turn: how long the holds that have ended kept it waiting on background work it launched
+     * @type {number}
+     * @memberof ThreadOverviewDtoState
+     */
+    turnHeldMs: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadOverviewDtoState
+     */
+    turnHeldSince: string | null;
 }
 /**
  * 

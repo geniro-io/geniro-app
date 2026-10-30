@@ -1850,6 +1850,70 @@ describe('ItemDao (in-memory sqlite)', () => {
         expect(await dao.openTurnStartedAt('run-o')).toEqual(new Date(5_000));
       },
     );
+
+    it('starts at the first reply the agent made on its own after the last ending', async () => {
+      await chatRow('run-o', 0, 'message', 1_000, {}, { role: 'user' });
+      await chatRow('run-o', 1, 'turn_complete', 2_000);
+      // None of these is the main agent working: a background command's end,
+      // a delegate's own call, a workflow node's reply, another run's reply.
+      await chatRow('run-o', 2, 'shell_info', 2_500, { id: 'call-1' });
+      await chatRow(
+        'run-o',
+        3,
+        'tool_call',
+        2_600,
+        { id: 'call-2', parentToolUseId: 'toolu_1' },
+        { role: 'assistant' },
+      );
+      await chatRow(
+        'run-o',
+        4,
+        'message',
+        2_700,
+        {},
+        {
+          role: 'assistant',
+          nodeId: 'n1',
+        },
+      );
+      await chatRow(
+        'run-other',
+        5,
+        'message',
+        2_800,
+        {},
+        {
+          role: 'assistant',
+        },
+      );
+      await chatRow('run-o', 6, 'message', 3_000, {}, { role: 'assistant' });
+      await chatRow(
+        'run-o',
+        7,
+        'tool_call',
+        3_500,
+        { id: 'call-3' },
+        {
+          role: 'assistant',
+        },
+      );
+
+      expect(await dao.openTurnStartedAt('run-o')).toEqual(new Date(3_000));
+    });
+
+    it('gives the turn to a message the user sent after the agent took up work on its own', async () => {
+      await chatRow('run-o', 1, 'turn_complete', 2_000);
+      await chatRow('run-o', 2, 'reasoning', 3_000, {}, { role: 'assistant' });
+      await chatRow('run-o', 3, 'message', 4_000, {}, { role: 'user' });
+
+      expect(await dao.openTurnStartedAt('run-o')).toEqual(new Date(4_000));
+    });
+
+    it('opens no work of the agent’s own before any turn has ended', async () => {
+      await chatRow('run-o', 0, 'message', 1_000, {}, { role: 'assistant' });
+
+      expect(await dao.openTurnStartedAt('run-o')).toBeNull();
+    });
   });
 
   describe('pullRequestCandidates', () => {

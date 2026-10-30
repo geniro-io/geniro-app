@@ -35,6 +35,7 @@ import type {
   AgentApprovalMode,
   AgentEvent,
   AgentTurnInput,
+  AgentUsage,
   ApprovalResolution,
   InstalledApprovalSupport,
   SessionCloseCause,
@@ -12781,6 +12782,43 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
 
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+
+  it('adds what a node worked on its own after its turn to the node’s totals', async () => {
+    const { service, claude, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const root = claude.starts[0]!;
+    completeTurn(root, 'done');
+    await drain();
+    const before = nodeDao.row(run.id, 'a');
+    const workedBefore = before?.workedMs ?? 0;
+    const toolsBefore = before?.toolCalls ?? 0;
+
+    root.emitOffTurn({ type: 'tool_call', id: 'c1', name: 'Bash', input: {} });
+    root.emitOffTurn({
+      type: 'tool_call',
+      id: 'c2',
+      name: 'Bash',
+      input: {},
+      parentToolUseId: 'toolu_d',
+    });
+    root.emitOffTurn({
+      type: 'turn_complete',
+      usage: { durationMs: 45_000 } as AgentUsage,
+      stopReason: null,
+      finalText: null,
+    });
+    await drain();
+
+    const after = nodeDao.row(run.id, 'a');
+    expect((after?.workedMs ?? 0) - workedBefore).toBe(45_000);
+    expect((after?.toolCalls ?? 0) - toolsBefore).toBe(1);
   });
 
   it('files what the callee does AFTER its turn under that callee and its call', async () => {

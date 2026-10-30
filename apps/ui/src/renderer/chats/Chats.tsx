@@ -340,6 +340,7 @@ import {
 } from './transcript-item';
 import { JUMP_MARK_CLASS, TranscriptRow } from './transcript-row';
 import {
+  heldSinceOf,
   movesPausedSpans,
   parkWhileHeld,
   scanTurns,
@@ -6827,7 +6828,12 @@ export function Chats({
           runState.turnStartedAt,
           CHAT_AGENT_KEY,
         ),
-        activeRunId === null ? undefined : holding.get(activeRunId),
+        // A chat's holds are the daemon's: it knows the ones that ended and
+        // when the standing one began, which a window opened mid-turn cannot.
+        // The live announce stands in while the re-read it triggers is out.
+        heldSinceOf(runState.turnHeldSince) ??
+          (activeRunId === null ? undefined : holding.get(activeRunId)),
+        runState.turnHeldMs,
       ),
     [
       turnScan.open,
@@ -6836,6 +6842,8 @@ export function Chats({
       holding,
       activeRunId,
       runState.turnStartedAt,
+      runState.turnHeldSince,
+      runState.turnHeldMs,
     ],
   );
   /**

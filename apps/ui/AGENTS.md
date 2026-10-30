@@ -136,6 +136,7 @@ One home for each concern:
 - The chat live-plane key is `CHAT_LIVE_KEY` (`liveTextKey`), never the daemon's owner key `agent`. Node id is the discriminator.
 - `chats/geniro-tool.ts` is the one place host tool names are matched. A composing card of an unknown kind draws nothing.
 - While a turn runs there is one clock, the worked total, and no second elapsed-time readout beside it.
+- A chat's open turn starts at the user's message, else at the agent's first reply, reasoning or tool call after the last ending (a stretch the CLI runs by itself; `opensOffTurnStretch`, twin of `ItemDao.openTurnStartedAt`), moved back to when the daemon saw it wake (`RunStateDto.turnStartedAt`, `withDurableChatTurn`). Its holds, ended and standing, are the daemon's (`turnHeldMs`, `turnHeldSince`); the live announce stands in only while the re-read is out.
 - Turn duration uses the CLI's own figure where one exists. A thread total is the sum of its turns, never `updatedAt - createdAt`.
 - A workflow's header clock (`clockMs`) is one formula for any number of open turns: the union of working stretches minus `pausedSpans`, the time a card waited on the user with no background shell or delegate running. Both come from the daemon's totals route (`utils/active-spans.ts`). It is re-read when the run's `awaiting`, shells-out or delegates-out flip, or a row they are folded from lands (`movesPausedSpans`). Never fold them from loaded `items`.
 

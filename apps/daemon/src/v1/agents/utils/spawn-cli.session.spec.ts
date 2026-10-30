@@ -54,6 +54,8 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     cost?: number;
     /** Of {@link cost}, the part geniro priced itself. */
     estimated?: number;
+    /** How long a `done` line's segment worked, by the CLI's own clock. */
+    ms?: number;
     /** Whose thread it came from: absent is the main one, a value a delegate's. */
     parent?: string;
     /** How the settling unit ended, when the fake line states it. */
@@ -150,7 +152,7 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
           ...(row.estimated === undefined
             ? {}
             : { estimatedCostUsd: row.estimated }),
-          durationMs: null,
+          durationMs: row.ms ?? null,
           apiMs: null,
           ttftMs: null,
           timeToRequestMs: null,
@@ -2794,11 +2796,11 @@ describe('a turn whose background work outlives its result', () => {
     await reportAndGoIdle(child, 'task-1');
     await Promise.resolve();
 
-    // Held, and the count came DOWN as the first unit reported — the sentence
-    // under the badge counts off the delegates instead of standing still.
+    // The first report wakes the agent, so the hold is over for now — though
+    // the turn still waits on the other unit before it can end.
     expect(events.filter((e) => e.type === 'turn_held')).toEqual([
       { type: 'turn_held', open: 2 },
-      { type: 'turn_held', open: 1 },
+      { type: 'turn_held', open: 0 },
     ]);
 
     await reportAndGoIdle(child, 'task-2');
@@ -2820,9 +2822,8 @@ describe('a turn whose background work outlives its result', () => {
     await Promise.resolve();
 
     // Still held — the stray report closed nothing this turn was waiting on,
-    // so the count it re-announces is unchanged.
+    // so it woke nobody.
     expect(events.filter((e) => e.type === 'turn_held')).toEqual([
-      { type: 'turn_held', open: 1 },
       { type: 'turn_held', open: 1 },
     ]);
 
@@ -3572,10 +3573,15 @@ describe('a turn whose background work outlives its result', () => {
 
     line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
-    expect(between).toEqual([]);
+    expect(between).toEqual([{ type: 'turn_held', open: 1 }]);
 
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
-    expect(between).toEqual([COMPLETE]);
+    // The stretch ended without ending the turn that just opened.
+    expect(between).toEqual([
+      { type: 'turn_held', open: 1 },
+      { type: 'turn_held', open: 0 },
+      { ...COMPLETE, insideTurn: true },
+    ]);
 
     // The turn that just opened is still held by the same outstanding unit.
     line(child, { done: true });
@@ -3583,6 +3589,227 @@ describe('a turn whose background work outlives its result', () => {
     expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
     await reportAndGoIdle(child, 'task-1');
     await handle?.done;
+  });
+
+  describe('a stretch the CLI runs by itself, held for its own sub-agents', () => {
+    it('announces the hold, and its end when a unit it waits on reports', async () => {
+      const between: AgentEvent[] = [];
+      const { child } = openSession(undefined, undefined, (e) =>
+        between.push(e),
+      );
+
+      line(child, { says: 'launching two' });
+      line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+      line(child, { work: 'task-2', phase: 'started', unit: 'agent' });
+      line(child, { done: true, cost: 1 });
+      line(child, { work: 'task-1', phase: 'settled' });
+      line(child, { says: 'one is back' });
+      line(child, { done: true, cost: 1 });
+
+      expect(between.filter((e) => e.type === 'turn_held')).toEqual([
+        { type: 'turn_held', open: 2 },
+        { type: 'turn_held', open: 0 },
+        { type: 'turn_held', open: 1 },
+      ]);
+    });
+
+    it('dates the stretch from the report that woke it, after the CLI went idle', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000_000);
+      const between: AgentEvent[] = [];
+      const { session, child } = openSession(undefined, undefined, (e) =>
+        between.push(e),
+      );
+      const handle = session.startTurn({ onEvent: () => {} });
+      line(child, {
+        work: 'sh-1',
+        phase: 'started',
+        unit: 'other',
+        call: 'c1',
+      });
+      line(child, { done: true });
+      await handle?.done;
+      line(child, { state: 'idle' });
+
+      vi.setSystemTime(1_060_000);
+      line(child, { work: 'sh-1', phase: 'settled' });
+      vi.setSystemTime(1_068_000);
+      line(child, { says: 'the build finished' });
+
+      expect(between.find((e) => e.type === 'off_turn_started')).toEqual({
+        type: 'off_turn_started',
+        at: 1_060_000,
+      });
+    });
+
+    it('dates the stretch from the result when the report came in while the CLI was still talking', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000_000);
+      const between: AgentEvent[] = [];
+      const { session, child } = openSession(undefined, undefined, (e) =>
+        between.push(e),
+      );
+      const handle = session.startTurn({ onEvent: () => {} });
+      line(child, {
+        work: 'sh-1',
+        phase: 'started',
+        unit: 'other',
+        call: 'c1',
+      });
+      vi.setSystemTime(1_005_000);
+      line(child, { work: 'sh-1', phase: 'settled' });
+      vi.setSystemTime(1_006_000);
+      line(child, { done: true });
+      await handle?.done;
+
+      vi.setSystemTime(1_012_000);
+      line(child, { says: 'the build finished' });
+
+      expect(between.find((e) => e.type === 'off_turn_started')).toEqual({
+        type: 'off_turn_started',
+        at: 1_006_000,
+      });
+    });
+
+    it('dates the stretch from its first output when nothing reported since the CLI went idle', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000_000);
+      const between: AgentEvent[] = [];
+      const { session, child } = openSession(undefined, undefined, (e) =>
+        between.push(e),
+      );
+      const handle = session.startTurn({ onEvent: () => {} });
+      line(child, {
+        work: 'sh-1',
+        phase: 'started',
+        unit: 'other',
+        call: 'c1',
+      });
+      line(child, { work: 'sh-1', phase: 'settled' });
+      line(child, { done: true });
+      await handle?.done;
+      line(child, { state: 'idle' });
+
+      vi.setSystemTime(2_000_000);
+      line(child, { says: 'something else' });
+
+      expect(between.find((e) => e.type === 'off_turn_started')).toEqual({
+        type: 'off_turn_started',
+        at: 2_000_000,
+      });
+    });
+
+    it('folds every segment it continued past into the ending, cost and time alike', async () => {
+      const between: AgentEvent[] = [];
+      const { child } = openSession(undefined, undefined, (e) =>
+        between.push(e),
+      );
+
+      line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+      line(child, { done: true, cost: 1.25, ms: 60_000, finalText: 'first' });
+      line(child, { says: 'back to work' });
+      line(child, { work: 'task-2', phase: 'started', unit: 'agent' });
+      line(child, { done: true, cost: 0.5, ms: 30_000, finalText: 'second' });
+      line(child, { says: 'and again' });
+      await reportAndGoIdle(child, 'task-1');
+      line(child, { work: 'task-2', phase: 'settled' });
+      line(child, { done: true, cost: 0.25, ms: 10_000, finalText: 'third' });
+
+      const endings = between.filter((e) => e.type === 'turn_complete');
+      expect(endings).toHaveLength(1);
+      expect(endings[0]).toMatchObject({
+        finalText: 'third',
+        usage: { costUsd: 2, durationMs: 100_000 },
+      });
+    });
+
+    it('keeps the held segments on the live cost until the ending records them', async () => {
+      const between: AgentEvent[] = [];
+      const { child } = openSession(undefined, undefined, (e) =>
+        between.push(e),
+      );
+      const live = (): number | undefined =>
+        between.findLast((e) => e.type === 'cost_progress')?.costUsd;
+
+      line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+      line(child, { live: 1.2 });
+      line(child, { done: true, cost: 1.25 });
+      expect(live()).toBe(1.25);
+
+      line(child, { says: 'back to work' });
+      line(child, { live: 0.4 });
+      expect(live()).toBeCloseTo(1.65);
+
+      await reportAndGoIdle(child, 'task-1');
+      line(child, { done: true, cost: 0.5 });
+      expect(live()).toBe(0);
+      expect(
+        between.filter((e) => e.type === 'turn_complete').at(-1),
+      ).toMatchObject({ usage: { costUsd: 1.75 } });
+    });
+
+    it('files what it continued past under the turn of ours that opens while it works', async () => {
+      const between: AgentEvent[] = [];
+      const events: AgentEvent[] = [];
+      const { session, child } = openSession(undefined, undefined, (e) =>
+        between.push(e),
+      );
+
+      // A CLI that announces its state, as claude does: a report alone
+      // releases nothing, so the agent talking again continues past the hold.
+      line(child, { state: 'running' });
+      line(child, { says: 'launching' });
+      line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+      line(child, { done: true, cost: 1.25, ms: 60_000 });
+      line(child, { work: 'task-1', phase: 'settled' });
+      line(child, { says: 'back to work' });
+      const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+      line(child, { done: true, cost: 0.5, ms: 10_000, finalText: 'yours' });
+      await handle?.done;
+
+      expect(events.filter((e) => e.type === 'turn_complete')).toEqual([
+        expect.objectContaining({
+          finalText: 'yours',
+          usage: expect.objectContaining({ costUsd: 1.75, durationMs: 70_000 }),
+        }),
+      ]);
+      expect(between.some((e) => e.type === 'turn_complete')).toBe(false);
+    });
+
+    it('hands over what it continued past when the process ends before its ending', async () => {
+      const between: AgentEvent[] = [];
+      const { child } = openSession(undefined, undefined, (e) =>
+        between.push(e),
+      );
+
+      line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+      line(child, { done: true, cost: 1.25, ms: 60_000 });
+      line(child, { says: 'back to work' });
+      child.emit('close', 1, null);
+      await Promise.resolve();
+
+      expect(between.filter((e) => e.type === 'turn_complete')).toEqual([
+        expect.objectContaining({
+          usage: expect.objectContaining({ costUsd: 1.25, durationMs: 60_000 }),
+        }),
+      ]);
+    });
+
+    it('announces nothing while a turn of ours is open', async () => {
+      const between: AgentEvent[] = [];
+      const { session, child } = openSession(undefined, undefined, (e) =>
+        between.push(e),
+      );
+      const handle = session.startTurn({ onEvent: () => {} });
+
+      line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+      line(child, { continuationDone: true });
+
+      expect(between.filter((e) => e.type === 'turn_held')).toEqual([]);
+      await reportAndGoIdle(child, 'task-1');
+      line(child, { done: true });
+      await handle?.done;
+    });
   });
 
   it('gives up on an off-turn hold whose work never reports', async () => {
@@ -3604,10 +3831,12 @@ describe('a turn whose background work outlives its result', () => {
 
     expect(between.map((event) => event.type)).toEqual([
       'subagent_info',
+      'turn_held',
       'subagent_info',
+      'turn_held',
       'turn_complete',
     ]);
-    expect(between.at(-2)).toMatchObject({
+    expect(between.at(-3)).toMatchObject({
       id: 'toolu_a',
       backgroundOpen: false,
       backgroundOutcome: 'untracked',
@@ -3635,13 +3864,14 @@ describe('a turn whose background work outlives its result', () => {
     line(child, { done: true });
     await vi.advanceTimersByTimeAsync(45_000);
     await simulateSleep(4 * 60 * 60 * 1000);
-    expect(between).toEqual([]);
+    const held = { type: 'turn_held', open: 1 };
+    expect(between).toEqual([held]);
 
     // A full window from the wake, not the 45s-shortened remainder.
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000 - 1);
-    expect(between).toEqual([]);
+    expect(between).toEqual([held]);
     await vi.advanceTimersByTimeAsync(1);
-    expect(between).toEqual([COMPLETE]);
+    expect(between).toEqual([held, { type: 'turn_held', open: 0 }, COMPLETE]);
   });
 
   it('does not let a unit the deadline gave up on hold the next turn too', async () => {

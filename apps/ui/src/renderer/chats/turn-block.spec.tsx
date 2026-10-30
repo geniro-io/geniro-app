@@ -242,6 +242,12 @@ describe('TurnBlock identity frame', () => {
     expect(container.textContent?.split('Writer')).toHaveLength(2);
   });
 
+  it('draws the agent’s words at the composer’s 16px on a phone', () => {
+    renderTurn(false, 'writer');
+    const prose = container.querySelector('[data-role="assistant"] > div');
+    expect(prose?.className.split(' ')).toContain('max-sm:text-[16px]');
+  });
+
   it('drops the frame INSIDE a sub-agent enclosure, even in a multi-agent run', () => {
     // The frame there is not merely redundant, it is wrong: its avatar and
     // sender line come from `nodeId`, which every delegate row carries as the

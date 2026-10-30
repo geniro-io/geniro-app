@@ -69,6 +69,24 @@ function render(el: React.ReactNode): void {
   act(() => root.render(el));
 }
 
+describe('TranscriptItem — message text', () => {
+  it('draws the user’s own message at the composer’s 16px on a phone', () => {
+    render(
+      <TranscriptItem
+        item={{
+          ...item('message', { text: 'Ship it.' }, null),
+          role: 'user',
+        }}
+        nodes={NODES}
+      />,
+    );
+    const prose = [...container.querySelectorAll('p')].find(
+      (el) => el.textContent === 'Ship it.',
+    )?.parentElement;
+    expect(prose?.className.split(' ')).toContain('max-sm:text-[16px]');
+  });
+});
+
 describe('TranscriptItem — agent-call rows', () => {
   it('keeps internal delivery acknowledgements out of the conversation', () => {
     render(

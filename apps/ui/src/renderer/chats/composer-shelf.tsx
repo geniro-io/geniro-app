@@ -111,7 +111,7 @@ export function ComposerShelf({
     <div
       data-slot="composer-shelf"
       className={cn(
-        'flex min-h-7 items-center gap-1.5 overflow-hidden px-1',
+        'flex min-h-7 items-center gap-1.5 overflow-clip px-1',
         inline && '-ml-2 min-w-0 [&:not(:has(>:not(:empty)))]:hidden',
       )}>
       {children}

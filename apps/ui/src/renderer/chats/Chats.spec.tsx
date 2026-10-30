@@ -8198,17 +8198,24 @@ describe('Chats queued messages', () => {
       inCard.indexOf(bottomRow),
     );
 
-    // NEITHER row wraps from `sm` up: wrapping the top one leaves
-    // `auto-approve` alone under the other four. It holds one line by
-    // SHRINKING the chips whose labels are user data (see `Select`'s
-    // `flexible`); the geometry of that was measured in a real browser, which
-    // jsdom cannot do, so what is pinned here is the rule that produces it.
+    // NEITHER row wraps, at any width: wrapping the top one leaves a chip
+    // alone on a second line. It holds one line by SHRINKING the chips whose
+    // labels are user data (see `Select`'s `flexible`); the geometry of that
+    // was measured in a real browser, which jsdom cannot do, so what is pinned
+    // here is the rule that produces it.
     //
-    // Below `sm` — a phone — it DOES wrap: a chip gives up its label and then
-    // its icon and chevron spill out of a box narrower than themselves, which
-    // prints the folder's chevron over the trigger chip at 393px.
-    expect(topRow.className).toContain('sm:flex-nowrap');
-    expect(topRow.className.split(' ')).toContain('flex-wrap');
+    // On a phone every chip is capped at one share of the screen and may
+    // shrink, so four fit before any is squeezed under its glyphs.
+    expect(topRow.className.split(' ')).not.toContain('flex-wrap');
+    expect(topRow.className.split(' ')).toEqual(
+      expect.arrayContaining([
+        'max-sm:[&>*]:max-w-[21vw]',
+        'max-sm:[&>*]:min-w-0',
+        'max-sm:[&>*]:shrink',
+        'max-sm:[&_[data-menu-trigger]]:w-full',
+        'max-sm:[&_[data-menu-trigger]]:min-w-0',
+      ]),
+    );
     // Below it, the pinned actions make wrapping wrong, and they never shrink.
     expect(bottomRow.className).not.toContain('flex-wrap');
     // And the chips that may give up width are the run's folder and branch —

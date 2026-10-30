@@ -158,16 +158,16 @@ const COMPONENTS: Components = {
   ),
   li: ({ children }) => <li className="mt-0.5">{children}</li>,
   h1: ({ children }) => (
-    <p className="m-0 text-sm font-bold not-first:mt-2.5">{children}</p>
+    <p className="m-0 font-bold not-first:mt-2.5">{children}</p>
   ),
   h2: ({ children }) => (
-    <p className="m-0 text-sm font-bold not-first:mt-2.5">{children}</p>
+    <p className="m-0 font-bold not-first:mt-2.5">{children}</p>
   ),
   h3: ({ children }) => (
-    <p className="m-0 text-sm font-semibold not-first:mt-2">{children}</p>
+    <p className="m-0 font-semibold not-first:mt-2">{children}</p>
   ),
   h4: ({ children }) => (
-    <p className="m-0 text-sm font-semibold not-first:mt-2">{children}</p>
+    <p className="m-0 font-semibold not-first:mt-2">{children}</p>
   ),
   // Only INLINE code reaches here: a fenced block is intercepted by `pre`
   // below, which renders CodeBlock instead of these children.
@@ -302,6 +302,12 @@ function urlTransform(url: string, key: string, node: HastNode): string {
     ? url
     : defaultUrlTransform(url);
 }
+
+/**
+ * A conversation message's size on a phone: the composer's 16px (iOS zooms
+ * into a smaller field), so what is read and what is typed match.
+ */
+export const MESSAGE_TEXT_CLASS = 'max-sm:text-[16px]';
 
 /** Markdown-rendered message text (geniro web's MarkdownContent). */
 export const MarkdownContent = memo(function MarkdownContent({

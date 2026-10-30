@@ -221,6 +221,7 @@ function stubScript(handle) {
   window.geniro = {
     getStatus: async () => ({ onboardingComplete: true, daemon: { connected: true, handle: ${h} } }),
     getDaemonHandle: async () => (${h}),
+    ensureDaemon: async () => (${h}),
     onDaemonRestarted: () => () => {},
     pickProjectFolder: async () => ${cwd}, pickAgentBinary: async () => null,
     // Every key the renderer WRITES is remembered, not just the one the
@@ -270,8 +271,9 @@ function stubScript(handle) {
     // behind those calls are real-repository territory and are tested there, in
     // apps/ui/src/main/git-info.spec.ts.
     getGitInfo: async () => (${gitStub}
-      ? { isRepo: true, branch: 'main', branches: ['main', 'dev'], dirty: true }
-      : { isRepo: false, branch: null, branches: [], dirty: false }),
+      ? { isRepo: true, branch: 'main', branches: ['main', 'dev'], dirty: true, worktrees: [], worktreeOf: null }
+      : { isRepo: false, branch: null, branches: [], dirty: false, worktrees: [], worktreeOf: null }),
+    getGitStamp: async () => ({ sha: null, dirty: null }),
     switchBranch: async () => (${gitStub}
       ? { ok: false, branch: 'main', error: 'Uncommitted changes in this folder — the branch stays put', dirty: true }
       : { ok: false, branch: null, error: 'not a repo in the run-desktop stub', dirty: false }),
@@ -304,7 +306,19 @@ function stubScript(handle) {
     // degraded feature here but the whole app on its error boundary.
     onClearAgentCaches: () => () => {},
     toggleDevTools: async () => {},
-  };`;
+  };
+  // Main grows a bridge member most weeks, and one the stub lacks threw the
+  // whole shell to its error boundary. Anything not stubbed above answers as
+  // an absent main would: a subscription that never fires, a call that
+  // resolves null, each named once on the console.
+  window.geniro = new Proxy(window.geniro, {
+    get(target, name) {
+      if (name in target || typeof name !== 'string') return target[name];
+      console.warn('[run-desktop] unstubbed window.geniro.' + name);
+      target[name] = name.startsWith('on') ? () => () => {} : async () => null;
+      return target[name];
+    },
+  });`;
 }
 
 const SEED_WORKFLOW = `name: Permission demo
@@ -354,9 +368,22 @@ const COMMANDS = {
       headless: !headed,
       args: ['--no-sandbox', '--disable-web-security', '--force-color-profile=srgb', ...(headed ? [] : ['--disable-gpu'])],
     });
-    ctx = await browser.newContext({ bypassCSP: true, viewport: { width: 1360, height: 900 }, deviceScaleFactor: 2 });
+    // `GENIRO_RUN_PHONE=1` is an iPhone-sized touch viewport: the layout a
+    // paired phone gets below `sm`, which a desktop-sized window never draws.
+    const phone = process.env.GENIRO_RUN_PHONE === '1';
+    ctx = await browser.newContext({
+      bypassCSP: true,
+      ...(phone
+        ? { viewport: { width: 393, height: 852 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true }
+        : { viewport: { width: 1360, height: 900 }, deviceScaleFactor: 2 }),
+    });
     page = await ctx.newPage();
     page.on('pageerror', (e) => log('PAGEERROR', e.message));
+    page.on('console', async (m) => {
+      if (m.type() !== 'error' && !m.text().startsWith('[run-desktop]')) return;
+      const stack = await m.args()[0]?.evaluate((e) => (e instanceof Error ? e.stack : null)).catch(() => null);
+      log('CONSOLE', (stack ?? m.text()).slice(0, 900));
+    });
     await page.addInitScript(stubScript(handle));
     await page.goto(`http://127.0.0.1:${staticPort}/index.html`, { waitUntil: 'domcontentloaded' });
     try { await page.waitForSelector('[aria-label="Tool-approval mode"], nav', { timeout: 20000 }); log('app shell ready ✓'); }

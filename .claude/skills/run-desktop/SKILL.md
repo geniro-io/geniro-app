@@ -94,6 +94,8 @@ Environment knobs, set before `node .claude/skills/run-desktop/driver.mjs`:
 
 - `GENIRO_HEADED=1` — open a visible Chromium window instead of headless, so a
   human on a Mac can watch the session the driver is scripting.
+- `GENIRO_RUN_PHONE=1` — a 393×852 touch viewport at 3× instead of the
+  1360×900 desktop window, so the phone layout (below `sm`) is what renders.
 - `GENIRO_RUN_SETTINGS=<json file>` — extra `settings.json` keys the stubbed
   `getSettings` answers with (saved run configurations, fast actions…); a write
   from the app still wins over them.

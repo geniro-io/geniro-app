@@ -9,6 +9,7 @@ import type { ItemDao } from '../../../agents/dao/item.dao';
 import type { RunDao } from '../../../agents/dao/run.dao';
 import { AnalysisBroker } from '../../../agents/services/analysis.broker';
 import { AnalysisReportsService } from '../../../agents/services/analysis-reports.service';
+import type { ThreadReaderService } from '../../../agents/services/thread-reader.service';
 import type { ThreadTimelineService } from '../../../agents/services/thread-timeline.service';
 import type { MemoryService } from '../../../memory/services/memory.service';
 import type { Run } from '../../../runs/entity/run.entity';
@@ -48,7 +49,13 @@ function item(id: string, seq = 3): RecommendationItem {
     change: 'the exact change',
     evidence: [{ seq, quote: 'waited for the reviewer' }],
     rootCause: 'serial calls',
-    impact: { minutesSaved: 12, basis: 'critical path', confidence: 4 },
+    impact: {
+      minutesSaved: 12,
+      costSavedUsd: 0.3,
+      basis: 'critical path',
+      confidence: 4,
+      outcome: 'reviewer 20m → 8m per run',
+    },
     risk: { level: 'low', note: 'nothing breaks' },
   };
 }
@@ -92,6 +99,7 @@ function setup(
         }),
     } as unknown as ThreadTimelineService,
     memory,
+    { foldRuns: () => Promise.resolve([]) } as unknown as ThreadReaderService,
   );
   const analysis = new AnalysisBroker();
   analysis.register(
@@ -111,9 +119,11 @@ function setup(
       },
     ),
   );
-  const tool = new ReportRecommendationsTool(analysis, memory);
+  const tool = new ReportRecommendationsTool(analysis, memory, {
+    versionIndex: () => Promise.resolve({ current: null, numbers: new Map() }),
+  });
   const report = (args: Record<string, unknown>) =>
-    tool.call('report_recommendations', args, CONTEXT);
+    tool.call('report_recommendations', { hotspots: [], ...args }, CONTEXT);
   const description = () => tool.list(CONTEXT)[0]?.description ?? '';
   return { report, description, written, checked };
 }
@@ -341,6 +351,37 @@ describe('ReportRecommendationsTool', () => {
     expect((await report({ items: [] })).isError).toBe(false);
     const malformed = await report({ items: [{ id: 'W-1' }] });
     expect(malformed.content[0]!.text).toMatch(/^INVALID_ARGS/);
+    expect(written).toHaveLength(1);
+  });
+
+  it('asks every item for its cost and its outcome, and the card for its hotspots', async () => {
+    const { report, written } = setup('dev-team');
+    const { costSavedUsd: _cost, ...withoutCost } = item('R-1').impact;
+    const { outcome: _outcome, ...withoutOutcome } = item('R-1').impact;
+
+    const noCost = await report({
+      items: [{ ...item('R-1'), impact: withoutCost }],
+    });
+    const noOutcome = await report({
+      items: [{ ...item('R-1'), impact: withoutOutcome }],
+    });
+    const noHotspots = await report({
+      hotspots: undefined,
+      items: [item('R-1')],
+    });
+    const unpriced = await report({
+      items: [
+        {
+          ...item('R-1'),
+          impact: { ...item('R-1').impact, costSavedUsd: null },
+        },
+      ],
+    });
+
+    expect(noCost.isError).toBe(true);
+    expect(noOutcome.isError).toBe(true);
+    expect(noHotspots.isError).toBe(true);
+    expect(unpriced.isError).toBe(false);
     expect(written).toHaveLength(1);
   });
 });

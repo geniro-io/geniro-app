@@ -16,12 +16,16 @@ import {
   type RecommendationsPayload,
   type RecommendationsReport,
   type RecommendationsTiming,
+  type RecommendationsWorkflowStats,
+  type WorkflowVersionIndexReader,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { analysedSourceOf } from '../utils/analysed-runs';
 import { readCard } from '../utils/recommendations-card';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
+import { workflowCardStats } from '../utils/workflow-runs-fold';
+import { ThreadReaderService } from './thread-reader.service';
 import { ThreadTimelineService } from './thread-timeline.service';
 
 /** Writes one row into the analysis chat's own transcript and answers the row written. */
@@ -49,12 +53,14 @@ export class AnalysisReportsService {
     private readonly itemDao: ItemDao,
     private readonly timelines: ThreadTimelineService,
     private readonly memory: MemoryService,
+    private readonly threads: ThreadReaderService,
   ) {}
 
   sinkFor(turn: AnalysisTurn, write: AnalysisRowWriter): AnalysisSink {
     return {
       turn,
-      report: (report) => this.report(turn, report, write),
+      report: (report, versionIndex) =>
+        this.report(turn, report, write, versionIndex),
       mark: (marks) => this.mark(turn, marks, write),
     };
   }
@@ -63,6 +69,7 @@ export class AnalysisReportsService {
     turn: AnalysisTurn,
     report: RecommendationsReport,
     write: AnalysisRowWriter,
+    versionIndex: WorkflowVersionIndexReader | null,
   ): Promise<AnalysisFiled> {
     const em = this.em.fork();
     let sourceKind: AnalysedThreadKind = 'workflow';
@@ -109,13 +116,18 @@ export class AnalysisReportsService {
         );
       }
     }
+    const workflowStats = await this.workflowStats(turn, versionIndex);
+    const hotspotProblem = checkHotspots(report, workflowStats);
+    if (hotspotProblem !== null) {
+      return refused(hotspotProblem);
+    }
     const payload: RecommendationsPayload = {
       ...report,
       sourceRunId: turn.sourceRunId,
       sourceKind,
-      // One run's timing would pass for the workflow's; the comparison is the
-      // analysis's own to state.
+      // One run's timing would pass for the workflow's.
       timing: turn.workflow ? null : await this.timing(turn),
+      workflowStats,
     };
     const row = await write('recommendations', payload);
     return { status: 'recorded', seq: row.seq, count: report.items.length };
@@ -150,6 +162,28 @@ export class AnalysisReportsService {
     return { status: 'recorded', seq: row.seq, count: marks.outcomes.length };
   }
 
+  private async workflowStats(
+    turn: AnalysisTurn,
+    versionIndex: WorkflowVersionIndexReader | null,
+  ): Promise<RecommendationsWorkflowStats | null> {
+    if (!turn.workflow) {
+      return null;
+    }
+    const folds = await this.threads.foldRuns(turn.workflow.runs);
+    const index =
+      versionIndex === null
+        ? null
+        : await versionIndex(turn.workflow.slug).catch(() => null);
+    return workflowCardStats(
+      folds.flatMap(({ run, folded }) =>
+        run === null || folded === null
+          ? []
+          : [{ title: run.title, createdAt: run.createdAt, folded }],
+      ),
+      index,
+    );
+  }
+
   private async timing(
     turn: AnalysisTurn,
   ): Promise<RecommendationsTiming | null> {
@@ -173,6 +207,31 @@ export class AnalysisReportsService {
       })),
     };
   }
+}
+
+export function checkHotspots(
+  report: RecommendationsReport,
+  workflowStats: RecommendationsWorkflowStats | null,
+): string | null {
+  const ids = new Set(report.items.map((item) => item.id));
+  const nodes =
+    workflowStats === null
+      ? null
+      : new Set(workflowStats.agents.map((agent) => agent.node));
+  for (const hotspot of report.hotspots) {
+    const unknown = hotspot.items.filter((id) => !ids.has(id));
+    if (unknown.length > 0) {
+      return `hotspot "${hotspot.title}" names ${unknown.join(', ')}, which ${unknown.length === 1 ? 'is' : 'are'} not on the card`;
+    }
+    if (
+      nodes !== null &&
+      hotspot.node !== undefined &&
+      !nodes.has(hotspot.node)
+    ) {
+      return `hotspot "${hotspot.title}" names node ${hotspot.node}, which took no turn in the analysed runs — name a node view=runs lists, or leave node out`;
+    }
+  }
+  return null;
 }
 
 /** Why a report's items cannot go on a card as they are, or null. */

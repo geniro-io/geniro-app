@@ -32,6 +32,8 @@ interface RecommendationDatabase {
     change: string;
     root_cause: string;
     minutes_saved: number;
+    cost_saved_usd: number | null;
+    expected_outcome: string | null;
     confidence: number;
     risk: string;
     selected_at: number | null;
@@ -91,6 +93,8 @@ export class WorkflowRecommendationDao extends BaseDao<WorkflowRecommendation> {
           change: item.change,
           root_cause: item.rootCause,
           minutes_saved: item.minutesSaved,
+          cost_saved_usd: item.costSavedUsd,
+          expected_outcome: item.expectedOutcome,
           confidence: item.confidence,
           risk: item.risk,
           selected_at: null,
@@ -194,6 +198,8 @@ export class WorkflowRecommendationDao extends BaseDao<WorkflowRecommendation> {
       change: row.change,
       rootCause: row.root_cause,
       minutesSaved: row.minutes_saved,
+      costSavedUsd: row.cost_saved_usd,
+      expectedOutcome: row.expected_outcome,
       confidence: row.confidence,
       risk: row.risk,
       selectedAt: dateOf(row.selected_at),

@@ -124,7 +124,7 @@ Charts, comparisons, scorecards, image galleries, review findings, patches, plan
 <td valign="top">
 
 <b>🔬 Thread analyzer</b><br>
-An agent studies a finished run, from slow tools to failed calls to the critical path, and proposes fixes. Tick the ones you like and press **Apply selected**.
+An agent studies a finished run, or a workflow's latest runs, shows where the time and money went and why, and proposes fixes with what each should save. Tick the ones you like and press **Apply selected**.
 
 </td>
 <td valign="top">
@@ -217,7 +217,7 @@ flowchart LR
 - **Agents talk to each other.** An agent can `call_agent` a teammate it is wired to, `message_agent` it mid-task, `await_agent` its answer, `answer_agent` its questions, or `cancel_agent` it when plans change.
 - **Team notes:** every agent in a run can write to and read from one shared notebook.
 - **Pull request outcomes.** An agent records where each pull request stands: draft or ready, review rounds, and whether you accepted it. Geniro counts the questions it asked you. Each record shows in the chat, and the side panel lists a pull request's whole history under it: how many times it was sent back and how long it took to be accepted.
-- **Analyze & improve.** An analysis reads the workflow's latest runs and its whole history: every version with what its runs cost and took, how often its pull requests were sent back and how many questions they asked you, every change made to it with who made it and why, and what earlier analyses recommended and whether you applied, skipped or passed over each item. It compares runs within a version, says whether each earlier change helped, and proposes undoing one that made the runs worse. It does not suggest again what you passed over unless newer runs give new evidence. Nothing changes until you tick the items and press **Apply selected**.
+- **Analyze & improve.** An analysis reads the workflow's latest runs and its whole history: every version with what its runs cost and took, how often its pull requests were sent back and how many questions they asked you, every change made to it with who made it and why, and what earlier analyses recommended and whether you applied, skipped or passed over each item. It compares runs within a version, says whether each earlier change helped, and proposes undoing one that made the runs worse. Its card opens with what Geniro measured over those runs: time and cost per run, failed turns, each agent's share of the working time with its model and cost, and folds for every model, run and call between agents. It then says what costs the most and why, beside the measured figures of the agent at fault, and projects the time and cost per run with the items you tick. It does not suggest again what you passed over unless newer runs give new evidence. Nothing changes until you tick the items and press **Apply selected**.
 - **Build it by talking.** A chat dock in the builder edits the workflow from plain-language requests. It also reads the workflow's latest runs, so you can ask it what to change ("which stages should we add?"): it answers with the same report and recommendations card as **Analyze & improve**, and each workflow change you apply comes back as a card showing the exact diff. A chat agent can also propose a whole workflow as a card for you to approve.
 
 ![The workflow canvas: a trigger feeds a planner that fans out to a codex backend agent and a cursor frontend agent, both feeding a reviewer; a house-style instruction block is wired into both builders, and the planner can call a researcher](docs/screenshots/workflow-canvas.png)
@@ -294,12 +294,18 @@ Finished a long run and wondering why it took 40 minutes? Press **Analyze thread
 
 1. Pick the agent, account, model and effort that should do the analysis.
 2. It reads a snapshot of the thread: timings, slow or failed tools, the critical path and every row.
-3. You get a **recommendations card** with evidence for each item, tagged by where the fix belongs: your workflow, your repo, your own instruction files, or the shared memory.
-4. Tick what you want and press **Apply selected**. Workflow edits are saved only if the file has not changed in the meantime, and a backup is written first.
+3. You get a **recommendations card** that explains itself: what cost the most time and money and why, then each fix with its evidence, the minutes and dollars it should save per run and what the next run looks like with it, tagged by where the fix belongs: your workflow, your repo, your own instruction files, or the shared memory.
+4. Tick what you want: the card projects the time and cost per run with exactly those fixes. Press **Apply selected**. Workflow edits are saved only if the file has not changed in the meantime, and a backup is written first.
 
 The analysis lives in a popup over the thread it analyzed, so you can come back to it, ask follow-up questions, or start a fresh one.
 
-![An analysis of a rate-limiter bug fix: the run took 59 seconds, and one repository recommendation, ticked, says to document the real check script and what ACME_ENV=test touches, with its evidence quoted from the thread and an Apply selected button](docs/screenshots/thread-analysis.png)
+On a workflow, **Analyze & improve** reads its latest runs together. The card opens with what Geniro measured over them: time and cost per run, failed turns, and each agent's share of the working time with its model and cost per run. Then it names what costs the most and why, next to the measured figures of the agent at fault.
+
+![A workflow analysis over two runs: 45 seconds and $0.62 per run, the drafter agent taking 73% of the agents' time at $0.39 per run, and two numbered causes — a pointless search and rewrite pass, and a leak the checker catches but nobody fixes — each with the fixes that address it](docs/screenshots/workflow-analysis.png)
+
+Each fix shows the time and money it should save per run, or add, and what the next runs look like with it. Ticking fixes projects the time and cost per run with exactly those.
+
+![The same analysis's fixes: W-1, ticked, saves 18 seconds and $0.15 per run with its evidence quoted from both runs; W-2 adds 12 seconds and $0.10 per run to stop shipping a known defect; the projection reads 45s to 27s and $0.62 to $0.47 per run with the one selected](docs/screenshots/workflow-analysis-fixes.png)
 
 ## 🧠 Shared memory
 

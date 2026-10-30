@@ -6,14 +6,16 @@ import {
 } from '../components/recommendations-card';
 import { describeDaemonError } from '../daemon-api';
 import { categoryToken } from '../stats/charts/chart-theme';
-import { formatDuration } from '../stats/stats-format';
+import { formatDuration, formatPercent } from '../stats/stats-format';
+import { formatUsd } from './agent-activity';
 import { RecommendationsApplyContext } from './recommendations-apply-context';
 import { useThreadFlags } from './thread-ui-memory';
 import type { RecommendationsEntry } from './transcript-groups';
 
-/** The app's duration format and chart palette — see `RecommendationsLook`. */
 const LOOK: RecommendationsLook = {
   formatMs: formatDuration,
+  formatUsd,
+  formatPercent,
   sinkColor: categoryToken,
 };
 
@@ -55,6 +57,8 @@ export function RecommendationsBlock({
       }}
       summary={entry.card.summary}
       timing={entry.card.timing}
+      workflowStats={entry.card.workflowStats}
+      hotspots={entry.card.hotspots}
       workflow={entry.card.sourceKind === 'workflow'}
       items={entry.card.items}
       applied={entry.applied ?? sent}

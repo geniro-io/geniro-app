@@ -44,6 +44,7 @@ const NO_STATUSES: Record<HistoryRecommendationStatus, number> = {
   selected: 0,
   open: 0,
   'not-selected': 0,
+  unanswered: 0,
 };
 
 function clip(text: string, max: number): string {
@@ -159,6 +160,7 @@ function figuresOf(
 function statusOf(
   row: WorkflowRecommendationRow,
   chatStillExists: boolean,
+  cardApplied: boolean,
 ): HistoryRecommendationStatus {
   if (
     row.outcome === 'applied' ||
@@ -170,7 +172,10 @@ function statusOf(
   if (row.selectedAt !== null) {
     return 'selected';
   }
-  return chatStillExists ? 'open' : 'not-selected';
+  if (cardApplied) {
+    return 'not-selected';
+  }
+  return chatStillExists ? 'open' : 'unanswered';
 }
 
 /**
@@ -255,8 +260,15 @@ export function foldWorkflowHistory(
 
   const statuses = { ...NO_STATUSES };
   const cards = new Map<string, WorkflowHistory['recommendations'][number]>();
+  const cardKey = (row: WorkflowRecommendationRow): string =>
+    JSON.stringify([row.chatRunId, row.cardSeq]);
+  const appliedCards = new Set(
+    input.recommendations.flatMap((row) =>
+      row.selectedAt === null ? [] : [cardKey(row)],
+    ),
+  );
   for (const row of input.recommendations) {
-    const key = JSON.stringify([row.chatRunId, row.cardSeq]);
+    const key = cardKey(row);
     const chatStillExists = input.liveChats.has(row.chatRunId);
     const card = cards.get(key) ?? {
       chatRunId: row.chatRunId,
@@ -270,7 +282,7 @@ export function foldWorkflowHistory(
         row.libraryVersion === null ? null : ref(row.libraryVersion),
       items: [],
     };
-    const status = statusOf(row, chatStillExists);
+    const status = statusOf(row, chatStillExists, appliedCards.has(key));
     statuses[status] += 1;
     card.items.push({
       id: row.itemId,
@@ -282,6 +294,8 @@ export function foldWorkflowHistory(
       change: clip(row.change, HISTORY_CHANGE_CHARS),
       rootCause: row.rootCause,
       expectedMinutesSavedPerRun: row.minutesSaved,
+      expectedCostSavedPerRunUsd: row.costSavedUsd,
+      expectedOutcome: row.expectedOutcome,
       confidence: row.confidence,
       risk: row.risk,
       status,

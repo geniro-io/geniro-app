@@ -607,6 +607,37 @@ export const RecommendationEvidenceSchema = z.object({
     .describe('A short verbatim excerpt of that item'),
 });
 
+const RecommendationImpactSchema = z.object({
+  minutesSaved: z
+    .number()
+    .min(-100_000)
+    .max(100_000)
+    .describe(
+      'Estimated minutes saved per run; negative when the change adds time',
+    ),
+  costSavedUsd: z
+    .number()
+    .min(-100_000)
+    .max(100_000)
+    .nullable()
+    .describe(
+      'Estimated dollars saved per run; negative when the change costs more; null when the runs report no cost',
+    ),
+  basis: z
+    .string()
+    .min(1)
+    .max(400)
+    .describe('Which figures or spans the estimates are drawn from'),
+  confidence: z.number().int().min(1).max(5),
+  outcome: z
+    .string()
+    .min(1)
+    .max(400)
+    .describe(
+      'What the next runs look like with it in place: the figure it moves, from what to what (review rounds 3 → 1; reviewer 34m → 12m per run)',
+    ),
+});
+
 export const RecommendationItemSchema = z.object({
   id: RecommendationIdSchema.describe(
     'W-1, W-2… workflow; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory',
@@ -641,19 +672,7 @@ export const RecommendationItemSchema = z.object({
     ),
   evidence: z.array(RecommendationEvidenceSchema).min(1).max(6),
   rootCause: z.string().min(1).max(600),
-  impact: z.object({
-    minutesSaved: z
-      .number()
-      .min(0)
-      .max(100_000)
-      .describe('Estimated minutes saved per run'),
-    basis: z
-      .string()
-      .min(1)
-      .max(400)
-      .describe('Which spans the estimate is drawn from'),
-    confidence: z.number().int().min(1).max(5),
-  }),
+  impact: RecommendationImpactSchema,
   risk: z.object({
     level: RecommendationRiskLevelSchema,
     note: z
@@ -665,6 +684,36 @@ export const RecommendationItemSchema = z.object({
 });
 export type RecommendationItem = z.infer<typeof RecommendationItemSchema>;
 
+export const MAX_RECOMMENDATION_HOTSPOTS = 6;
+
+export const RecommendationHotspotSchema = z.object({
+  title: z
+    .string()
+    .min(1)
+    .max(160)
+    .describe('Where the time or money went, in one line'),
+  node: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "A workflow analysis: the node it is about, as view=runs names it — the card draws that agent's measured figures beside it",
+    ),
+  why: z
+    .string()
+    .min(1)
+    .max(800)
+    .describe(
+      "Why it costs that much: the mechanism behind it, with the figures from the tool's answers",
+    ),
+  items: z
+    .array(RecommendationIdSchema)
+    .max(MAX_RECOMMENDATIONS)
+    .describe('The ids of the items on this card that address it; [] for none'),
+});
+export type RecommendationHotspot = z.infer<typeof RecommendationHotspotSchema>;
+
 /** The `report_recommendations` arguments. */
 export const RecommendationsReportSchema = z.object({
   summary: z
@@ -672,9 +721,120 @@ export const RecommendationsReportSchema = z.object({
     .max(2000)
     .optional()
     .describe('One or two sentences on where the time went'),
+  hotspots: z
+    .array(RecommendationHotspotSchema)
+    .max(MAX_RECOMMENDATION_HOTSPOTS)
+    .describe(
+      'Where the time and money went, costliest first, and why — the card draws them over the figures the daemon measured',
+    ),
   items: z.array(RecommendationItemSchema).max(MAX_RECOMMENDATIONS),
 });
 export type RecommendationsReport = z.infer<typeof RecommendationsReportSchema>;
+
+const CardRecommendationItemSchema = RecommendationItemSchema.extend({
+  impact: RecommendationImpactSchema.partial({
+    costSavedUsd: true,
+    outcome: true,
+  }),
+});
+export type CardRecommendationItem = z.infer<
+  typeof CardRecommendationItemSchema
+>;
+
+export const MAX_CARD_CALL_EDGES = 5;
+export const MAX_CARD_AGENTS = 100;
+export const MAX_CARD_AGENT_MODELS = 50;
+
+const msSchema = z.number().min(0);
+const countSchema = z.number().int().min(0);
+const usdSchema = z.number().min(0).nullable();
+
+export const RecommendationsRunStatsSchema = z.object({
+  runId: z.string(),
+  title: z.string().nullable(),
+  createdAt: z.string(),
+  version: z.number().int().nullable(),
+  current: z.boolean(),
+  wallMs: msSchema,
+  activeMs: msSchema,
+  waitingOnUserMs: msSchema,
+  turns: countSchema,
+  failedTurns: countSchema,
+  costUsd: usdSchema,
+});
+
+export const RecommendationsModelStatsSchema = z.object({
+  agent: z.string().nullable(),
+  model: z.string().nullable(),
+  modelSource: z.enum(['reported', 'configured', 'unreported']),
+  turns: countSchema,
+  failedTurns: countSchema,
+  cancelledTurns: countSchema,
+  avgTurnMs: msSchema.nullable(),
+  costUsd: usdSchema,
+  costPerTurnUsd: usdSchema,
+});
+
+export const RecommendationsAgentStatsSchema = z.object({
+  node: z.string(),
+  agent: z.string().nullable(),
+  runs: countSchema,
+  turns: countSchema,
+  failedTurns: countSchema,
+  cancelledTurns: countSchema,
+  workedMs: msSchema.nullable(),
+  workedPerRunMs: msSchema.nullable(),
+  waitingOnCalleePerRunMs: msSchema.nullable(),
+  criticalPathPerRunMs: msSchema.nullable(),
+  toolCalls: countSchema,
+  failedToolCalls: countSchema,
+  costUsd: usdSchema,
+  costPerRunUsd: usdSchema,
+  maxContextTokens: countSchema.nullable(),
+  models: z.array(RecommendationsModelStatsSchema).max(MAX_CARD_AGENT_MODELS),
+});
+
+export const RecommendationsCallStatsSchema = z.object({
+  caller: z.string(),
+  callee: z.string(),
+  calls: countSchema,
+  failedCalls: countSchema,
+  totalMs: msSchema,
+  avgMs: msSchema,
+  maxMs: msSchema,
+});
+
+export const RecommendationsWorkflowStatsSchema = z.object({
+  runs: countSchema,
+  perRun: z.object({
+    wallMs: msSchema,
+    activeMs: msSchema,
+    waitingOnUserMs: msSchema,
+    criticalPathMs: msSchema,
+    turns: z.number().min(0),
+    calls: z.number().min(0),
+    costUsd: usdSchema,
+    pricedRuns: countSchema,
+  }),
+  totals: z.object({
+    wallMs: msSchema,
+    activeMs: msSchema,
+    turns: countSchema,
+    failedTurns: countSchema,
+    cancelledTurns: countSchema,
+    toolCalls: countSchema,
+    failedToolCalls: countSchema,
+    calls: countSchema,
+    costUsd: usdSchema,
+  }),
+  runList: z.array(RecommendationsRunStatsSchema).max(50),
+  agents: z.array(RecommendationsAgentStatsSchema).max(MAX_CARD_AGENTS),
+  callEdges: countSchema,
+  calls: z.array(RecommendationsCallStatsSchema).max(MAX_CARD_CALL_EDGES),
+});
+export type RecommendationsWorkflowStats = z.infer<
+  typeof RecommendationsWorkflowStatsSchema
+>;
 
 /** The summary strip a card opens with — measured by the daemon, never the agent. */
 export const RecommendationsTimingSchema = z.object({
@@ -691,9 +851,14 @@ export type RecommendationsTiming = z.infer<typeof RecommendationsTimingSchema>;
  * `recommendations` item payload.
  */
 export const RecommendationsPayloadSchema = RecommendationsReportSchema.extend({
+  hotspots: RecommendationsReportSchema.shape.hotspots.optional(),
+  items: z.array(CardRecommendationItemSchema).max(MAX_RECOMMENDATIONS),
   sourceRunId: z.string(),
   sourceKind: z.enum(['workflow', 'chat']),
   timing: RecommendationsTimingSchema.nullable(),
+  workflowStats: RecommendationsWorkflowStatsSchema.nullable()
+    .optional()
+    .catch(null),
 });
 export type RecommendationsPayload = z.infer<
   typeof RecommendationsPayloadSchema
@@ -1013,6 +1178,12 @@ export interface FoldedRun {
   >;
 }
 
+export interface RunFold {
+  analysed: AnalysedRun;
+  run: Run | null;
+  folded: FoldedRun | null;
+}
+
 /** A run's own totals at its snapshot. */
 export interface RunFigures {
   wallMs: number;
@@ -1084,6 +1255,10 @@ export interface WorkflowVersionIndex {
   current: string | null;
   numbers: ReadonlyMap<string, number>;
 }
+
+export type WorkflowVersionIndexReader = (
+  slug: string,
+) => Promise<WorkflowVersionIndex>;
 
 /** A graph version as an analysis names it. */
 export interface AnalysedVersionRef {
@@ -1178,7 +1353,10 @@ export type AnalysisFiled =
  */
 export interface AnalysisSink {
   turn: AnalysisTurn;
-  report(report: RecommendationsReport): Promise<AnalysisFiled>;
+  report(
+    report: RecommendationsReport,
+    versionIndex: WorkflowVersionIndexReader | null,
+  ): Promise<AnalysisFiled>;
   mark(marks: RecommendationMarks): Promise<AnalysisFiled>;
 }
 

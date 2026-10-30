@@ -174,32 +174,48 @@ describe('workflowAnalysisGuide', () => {
     }
   });
 
-  it('asks for the whole report in the reply, section by section, before the card', () => {
+  it('asks the reply for what the card does not draw, section by section, before the card, and nothing the card does', () => {
     const guide = workflowAnalysisGuide(null, true);
     const report = guide.indexOf('## The report');
     const send = guide.indexOf('## What to send');
     const sections = [
-      `1. Headline — one \`${HOST_METRICS_TOOL}\` scorecard`,
-      '2. Versions and earlier changes — a table per version',
-      '3. Time per run — a table, newest first: run, its version,',
-      `4. Time per agent — one \`${HOST_CHART_TOOL}\` bar chart`,
-      '5. Calls between agents',
-      '6. Models — a table per agent and model',
-      '7. Instruction size — a table per agent',
-      '8. Instruction quality — a table per agent',
-      '9. Where the time went',
-      '10. The one change that matters most',
+      '1. Versions and earlier changes — a table per version that has runs',
+      '2. Outcomes — a table per run, newest first: its questions to the user',
+      "3. Models — your verdict on each agent's model and effort",
+      '4. Instruction size — a table per agent',
+      '5. Instruction quality — a table per agent',
+      '6. The one change that matters most',
     ].map((section) => guide.indexOf(section, report));
 
     expect(report).toBeGreaterThan(-1);
     expect(sections).not.toContain(-1);
     expect([...sections].sort((a, b) => a - b)).toEqual(sections);
     expect(sections.at(-1)!).toBeLessThan(send);
+    expect(guide).toContain(
+      'Never repeat those in your reply: no scorecard, chart or table of them.',
+    );
+    expect(guide).not.toContain(HOST_METRICS_TOOL);
+    expect(guide).not.toContain(HOST_CHART_TOOL);
+    expect(guide).not.toContain('Time per run — a table');
     expect(guide).toContain('write "not measured" for a null');
     expect(guide.slice(send)).toContain(
       '1. The report above, whole, in your reply',
     );
     expect(guide).not.toContain('A short summary in your reply');
+  });
+
+  it('files again what a replaced card left unanswered, but not what the user passed over', () => {
+    const guide = workflowAnalysisGuide(null, true);
+
+    expect(guide).toContain(
+      'unanswered (its card was replaced before the user applied anything from it)',
+    );
+    expect(guide).toContain(
+      'An unanswered one was never decided: file it again when the runs still call for it.',
+    );
+    expect(guide).toContain(
+      'Never recommend again what the user skipped or passed over (not-selected)',
+    );
   });
 
   it("adds the user's focus as its own section", () => {
@@ -212,7 +228,7 @@ describe('workflowAnalysisGuide', () => {
 describe('workflowAnalysisBrief', () => {
   it('names the workflow, how many runs, and where to start', () => {
     expect(workflowAnalysisBrief({ name: 'Dev Team', runs: 5 })).toBe(
-      'Analyse the workflow "Dev Team" across its 5 latest runs: report how long each run and each agent worked, how large and how good each agent\'s instructions are, how its agents and their models compare, and how the earlier changes to it worked out, and find what in the workflow or its environment would make the next runs faster, cheaper or less error-prone. Start with read_analyzed_thread view=history, then view=runs.',
+      "Analyse the workflow \"Dev Team\" across its 5 latest runs: explain where its runs' time and money went and why, how large and how good each agent's instructions are, how its agents' models fit their work, and how the earlier changes to it worked out, and find what in the workflow or its environment would make the next runs faster, cheaper or less error-prone. Start with read_analyzed_thread view=history, then view=runs.",
     );
     expect(workflowAnalysisBrief({ name: 'Dev Team', runs: 1 })).toContain(
       'across its latest run:',

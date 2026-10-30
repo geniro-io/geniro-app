@@ -36,7 +36,13 @@ function item(id: string, title: string): RecommendationItem {
     change: `the exact change for ${id}`,
     evidence: [{ seq: 4, quote: 'waited' }],
     rootCause: 'serial calls',
-    impact: { minutesSaved: 12, basis: 'critical path', confidence: 4 },
+    impact: {
+      minutesSaved: 12,
+      costSavedUsd: null,
+      basis: 'critical path',
+      confidence: 4,
+      outcome: 'reviewer waits end',
+    },
     risk: { level: 'low', note: 'none' },
   };
 }

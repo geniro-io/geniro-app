@@ -4294,7 +4294,20 @@ export const RunStateWireSchema = z.object({
     .string()
     .nullable()
     .describe(
-      "a 1:1 chat's open turn: its first user message since the last turn ended; null otherwise",
+      "a 1:1 chat's open turn: its first user message since the last turn ended, else when the agent woke for a stretch of its own since; null otherwise",
+    ),
+  turnHeldMs: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      "a 1:1 chat's open turn: how long the holds that have ended kept it waiting on background work it launched",
+    ),
+  turnHeldSince: z
+    .string()
+    .nullable()
+    .describe(
+      "a 1:1 chat's open turn: when the hold still standing began; null when none stands",
     ),
 });
 export type RunStateWire = z.infer<typeof RunStateWireSchema>;

@@ -96,6 +96,10 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // Ends an off-turn stretch the owner keeps in memory (the badge it took),
       // not something that happened in the conversation.
       return null;
+    case 'off_turn_started':
+      // When a stretch of the CLI's own began, which the owner keeps in memory
+      // for the clock; its rows are the stretch's own output.
+      return null;
     case 'approval_withdrawn':
       // Turn plumbing that `runCliSession` forwards only so the OWNER can
       // retire the card it drew for the request — which is the owner's registry

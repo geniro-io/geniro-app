@@ -974,6 +974,8 @@ interface TurnState {
    * whatever terminal the turn does end on, so that segment's cost survives.
    */
   continuedSegment: Extract<AgentEvent, { type: 'turn_complete' }> | null;
+  /** Whether the owner was last told this turn is held. */
+  holdAnnounced: boolean;
   /**
    * The CLI's own latest `cost_progress` figure — what it has spent since its
    * last `result` line — kept so {@link heldCostOf} can be added to it.
@@ -1328,6 +1330,129 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
 
   /** Bounds {@link deferredOffTurnTerminal}, as the turn's own deadline does. */
   let offTurnHoldTimer: AwakeTimer | null = null;
+  /**
+   * Held off-turn results the stretch has since continued past — the off-turn
+   * twin of `TurnState.continuedSegment`: never an ending again, only a bill,
+   * folded into whatever ends the stretch.
+   */
+  let offTurnContinued: Extract<AgentEvent, { type: 'turn_complete' }> | null =
+    null;
+  /** The CLI's own `cost_progress` reading since its last off-turn `result`. */
+  let offTurnLiveCostUsd = 0;
+  /** Of {@link offTurnLiveCostUsd}, the part geniro priced itself. */
+  let offTurnLiveEstimatedCostUsd = 0;
+  /** Whether the owner was last told an off-turn stretch is held. */
+  let offTurnHoldAnnounced = false;
+  /** Whether a non-zero off-turn live cost is up, owed a zero to come down. */
+  let offTurnCostPublished = false;
+  /**
+   * When the CLI last gave a result, last reported background work done to
+   * the agent, and last went idle — what dates the moment it woke for a
+   * stretch of its own ({@link offTurnWakeAt}).
+   */
+  let lastResultAt = 0;
+  let lastReportAt = 0;
+  let lastIdleAt = 0;
+  /** A stretch of the CLI's own is running (or held), so it has been dated. */
+  let offTurnStretchOpen = false;
+
+  /**
+   * When the CLI began the stretch it is starting now. claude starts working
+   * on a background unit's report at once (its `task_notification`), or right
+   * after its result when the report came in while it was still talking, and
+   * goes idle only once nothing is left — so a report since the last idle
+   * dates the wake. Without one, the stretch's first output is all there is.
+   */
+  const offTurnWakeAt = (now: number): number =>
+    lastReportAt > lastIdleAt
+      ? Math.min(now, Math.max(lastReportAt, lastResultAt))
+      : now;
+
+  /**
+   * A background unit the agent was waiting on has reported, and the CLI
+   * starts working on it at once — so a hold standing for it is over now, not
+   * when the agent next says something.
+   */
+  const wakeOnReport = (): void => {
+    lastReportAt = Date.now();
+    if (current?.deferredTerminal) {
+      announceTurnHold(current, 0);
+    } else if (deferredOffTurnTerminal !== null) {
+      announceOffTurnHold(0);
+    }
+  };
+
+  /** The in-turn hold's announcement, each change once. */
+  const announceTurnHold = (turn: TurnState, open: number): void => {
+    if (open === 0 && !turn.holdAnnounced) {
+      return;
+    }
+    turn.holdAnnounced = open > 0;
+    turn.options.onEvent({ type: 'turn_held', open });
+  };
+
+  const continueOffTurnPast = (held: AgentEvent): void => {
+    if (held.type !== 'turn_complete') {
+      return;
+    }
+    offTurnContinued = offTurnContinued
+      ? foldTurnComplete(offTurnContinued, held)
+      : held;
+  };
+
+  const withOffTurnSegments = (ending: AgentEvent): AgentEvent => {
+    if (
+      ending.type !== 'turn_complete' &&
+      ending.type !== 'error' &&
+      ending.type !== 'turn_cancelled'
+    ) {
+      return ending;
+    }
+    const continued = offTurnContinued;
+    offTurnContinued = null;
+    if (current === null) {
+      offTurnStretchOpen = false;
+    }
+    // The ending records every held segment, so the live figure comes down
+    // ahead of it, as `finishTurn` brings a turn's down.
+    offTurnLiveCostUsd = 0;
+    offTurnLiveEstimatedCostUsd = 0;
+    if (deferredOffTurnTerminal === null) {
+      publishOffTurnLiveCost();
+    }
+    return withContinuedSegment(continued, ending);
+  };
+
+  /** The in-turn `turn_held`, for a stretch the CLI opened by itself. */
+  const announceOffTurnHold = (open: number): void => {
+    if (current !== null || (open === 0 && !offTurnHoldAnnounced)) {
+      return;
+    }
+    offTurnHoldAnnounced = open > 0;
+    opts.onBetweenTurnEvent?.({ type: 'turn_held', open });
+  };
+
+  /** The off-turn twin of `publishLiveCost`: the held segments count too. */
+  const publishOffTurnLiveCost = (): void => {
+    let costUsd = offTurnLiveCostUsd;
+    let estimatedCostUsd = offTurnLiveEstimatedCostUsd;
+    for (const segment of [deferredOffTurnTerminal, offTurnContinued]) {
+      if (segment?.type !== 'turn_complete') {
+        continue;
+      }
+      costUsd += positiveOrZero(segment.usage?.costUsd);
+      estimatedCostUsd += positiveOrZero(segment.usage?.estimatedCostUsd);
+    }
+    if (costUsd <= 0 && !offTurnCostPublished) {
+      return;
+    }
+    offTurnCostPublished = costUsd > 0;
+    opts.onBetweenTurnEvent?.({
+      type: 'cost_progress',
+      costUsd,
+      ...(estimatedCostUsd > 0 ? { estimatedCostUsd } : {}),
+    });
+  };
   /**
    * Notices raised with NO turn to carry them, held for the next one.
    *
@@ -1705,24 +1830,37 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * next turn adopts it — see {@link pendingApprovals}.
    */
   function handleOrphanEvent(event: AgentEvent): void {
-    // The off-turn twin of the in-turn discard: the CLI speaking again means
+    if (
+      current === null &&
+      !offTurnStretchOpen &&
+      event.parentToolUseId === undefined &&
+      RESUMES_A_HELD_TURN.has(event.type)
+    ) {
+      offTurnStretchOpen = true;
+      opts.onBetweenTurnEvent?.({
+        type: 'off_turn_started',
+        at: offTurnWakeAt(Date.now()),
+      });
+    }
+    // The off-turn twin of the in-turn release: the CLI speaking again means
     // the continuation this hold was released for has begun, so the held
-    // terminal describes a stretch that is demonstrably not over. Dropped
-    // rather than released — the run then settles on the continuation's OWN
-    // result, exactly as a turn does.
+    // terminal no longer ends anything — but what that segment cost is still
+    // the stretch's, and it is folded into whatever ends it.
     if (
       deferredOffTurnTerminal !== null &&
       event.parentToolUseId === undefined &&
       RESUMES_A_HELD_TURN.has(event.type)
     ) {
       opts.logger?.debug?.(
-        `${opts.command}: dropping the off-turn hold — the main thread is talking again with ${openWork.size} unit(s) still out`,
+        `${opts.command}: releasing the off-turn hold — the main thread is talking again with ${openWork.size} unit(s) still out`,
       );
-      deferredOffTurnTerminal = null;
       if (offTurnHoldTimer) {
         offTurnHoldTimer.clear();
         offTurnHoldTimer = null;
       }
+      continueOffTurnPast(deferredOffTurnTerminal);
+      deferredOffTurnTerminal = null;
+      announceOffTurnHold(0);
     }
     if (event.type === 'background_work') {
       // Turn plumbing wherever it arrives. It is NOT forwarded to the owner as
@@ -1731,6 +1869,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // from it, which is the only thing that can correct a block whose
       // launching call returned the moment the delegate was accepted.
       trackBackgroundWork(event);
+      return;
+    }
+    if (event.type === 'cost_progress') {
+      offTurnLiveCostUsd = event.costUsd > 0 ? event.costUsd : 0;
+      offTurnLiveEstimatedCostUsd = positiveOrZero(event.estimatedCostUsd);
+      publishOffTurnLiveCost();
       return;
     }
     if (
@@ -1749,12 +1893,16 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           `${opts.command}: holding an off-turn '${event.type}' — ${openWork.size} unit(s) of background work have not reported`,
         );
         armOffTurnHold();
+        offTurnLiveCostUsd = 0;
+        offTurnLiveEstimatedCostUsd = 0;
+        announceOffTurnHold(openWork.size);
+        publishOffTurnLiveCost();
       }
       return;
     }
     if (event.type !== 'approval_request') {
       if (opts.onBetweenTurnEvent) {
-        opts.onBetweenTurnEvent(event);
+        opts.onBetweenTurnEvent(withOffTurnSegments(event));
         return;
       }
       opts.logger?.warn(
@@ -2208,6 +2356,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (!idle) {
       return;
     }
+    lastIdleAt = Date.now();
+    offTurnStretchOpen = false;
     const turn = current;
     const held = turn?.deferredTerminal ?? deferredOffTurnTerminal;
     if (held) {
@@ -2424,16 +2574,27 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     opts.onBetweenTurnEvent?.(announcement);
   };
 
-  /** Hand a held off-turn terminal to the owner, once. */
-  const releaseOffTurnHold = (): void => {
+  /**
+   * Hand a held off-turn terminal to the owner, once, carrying every segment
+   * the stretch continued past. `insideTurn` when a turn of ours has opened:
+   * the stretch ended without ending that turn.
+   */
+  const releaseOffTurnHold = (insideTurn = false): void => {
     const held = deferredOffTurnTerminal;
     deferredOffTurnTerminal = null;
     if (offTurnHoldTimer) {
       offTurnHoldTimer.clear();
       offTurnHoldTimer = null;
     }
+    announceOffTurnHold(0);
     if (held) {
-      opts.onBetweenTurnEvent?.(held);
+      opts.onBetweenTurnEvent?.(
+        withOffTurnSegments(
+          insideTurn && held.type === 'turn_complete'
+            ? { ...held, insideTurn: true }
+            : held,
+        ),
+      );
     }
   };
 
@@ -2803,6 +2964,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // `foregroundUnits` is written around the two calls, never inside them: both
     // twins read it, so it must say "waited on" through both and change only
     // once both have answered.
+    // Read before either twin forgets the unit: a detached command of the main
+    // thread ending is a report the agent wakes for, as a delegate's is.
+    const mainShellEnded =
+      event.phase === 'settled' &&
+      runningShells.has(event.id) &&
+      !delegateShells.has(event.id) &&
+      !foregroundUnits.has(event.id);
     if (event.phase === 'started' && event.foreground === true) {
       foregroundUnits.add(event.id);
     }
@@ -2839,7 +3007,11 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       }
       return;
     }
-    if (!openWork.delete(event.id) || openWork.size > 0) {
+    const closed = openWork.delete(event.id);
+    if (closed || mainShellEnded) {
+      wakeOnReport();
+    }
+    if (!closed || openWork.size > 0) {
       return;
     }
     // The last unit reported, so anything held for it is due. Only reached when
@@ -2948,6 +3120,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       onSessionState(event.idle);
       return;
     }
+    if (
+      event.parentToolUseId === undefined &&
+      (event.type === 'turn_complete' ||
+        event.type === 'error' ||
+        event.type === 'turn_cancelled')
+    ) {
+      lastResultAt = Date.now();
+    }
     if (event.type === 'approval_withdrawn') {
       // Turn plumbing wherever it arrives: a request can be withdrawn inside a
       // turn, between turns, or while it sits held for the next one.
@@ -2974,15 +3154,6 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // fires instantly for one nobody is waiting on.
     if (event.type === 'background_work') {
       trackBackgroundWork(event);
-      if (turn.deferredTerminal !== null) {
-        // Still held, by fewer (or more) units than a moment ago. Re-announced
-        // so the sentence under the badge counts down instead of standing at
-        // whatever it said when the hold began.
-        turn.options.onEvent({
-          type: 'turn_held',
-          open: openWork.size,
-        });
-      }
       armSilenceDeadline(turn);
       return;
     }
@@ -3151,10 +3322,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           // stopped, and the turn is alive only for its listeners. See
           // `AgentEvent`'s `turn_held` for the two readings that were wrong
           // without it.
-          turn.options.onEvent({
-            type: 'turn_held',
-            open: openWork.size,
-          });
+          announceTurnHold(turn, openWork.size);
           publishLiveCost(turn);
         }
         armSilenceDeadline(turn);
@@ -3208,7 +3376,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         `${opts.command}: releasing the hold — the main thread is talking again with ${openWork.size} unit(s) still out`,
       );
       supersedeHeldTerminal(turn);
-      turn.options.onEvent({ type: 'turn_held', open: 0 });
+      announceTurnHold(turn, 0);
     }
     // The CLI is still talking, so it has not wedged — push the deadline out.
     armSilenceDeadline(turn);
@@ -3448,7 +3616,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       closeOpenDelegates('untracked', 'process-ended');
     }
     openWork.clear();
-    releaseOffTurnHold();
+    releaseOffTurnHold(current !== null);
+    const continued = offTurnContinued;
+    offTurnContinued = null;
+    if (continued) {
+      opts.onBetweenTurnEvent?.(
+        current ? { ...continued, insideTurn: true } : continued,
+      );
+    }
     if (current) {
       settleTurn(current, 'the process ended');
     }
@@ -3807,18 +3982,22 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       unconsumedFollowUps: [],
       supersededTerminal: null,
       continuedSegment: null,
+      holdAnnounced: false,
       liveCostUsd: 0,
       liveEstimatedCostUsd: 0,
       costPublished: false,
     };
+    announceOffTurnHold(0);
+    offTurnStretchOpen = false;
     current = turn;
     // A continuation's result held for background work is handed over BEFORE
     // this turn produces anything of its own — it belongs to what happened
     // before, and holding it further would file it under this turn's rows. The
     // owner will not settle the run on it (a real turn is running now, which is
     // exactly the case `offTurnRuns` distinguishes), so what it costs is
-    // nothing and what it saves is the row, with its usage and its cost.
-    releaseOffTurnHold();
+    // nothing and what it saves is the row, with its usage and its cost. It
+    // ends the stretch, not this turn, so it is stamped as ending nothing.
+    releaseOffTurnHold(true);
     // Kept at session scope so a request arriving AFTER this turn settles can
     // still be refused rather than dropped — see `handleOrphanEvent`.
     approvalEncoder = turnOptions.buildApprovalResponse;
@@ -4112,7 +4291,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
             `${opts.command}: releasing the hold — a follow-up was delivered into the held turn`,
           );
           supersedeHeldTerminal(turn);
-          turn.options.onEvent({ type: 'turn_held', open: 0 });
+          announceTurnHold(turn, 0);
           armSilenceDeadline(turn);
         }
         return delivered;

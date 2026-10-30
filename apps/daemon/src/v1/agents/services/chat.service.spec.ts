@@ -42,6 +42,7 @@ import type {
   AgentApprovalMode,
   AgentEvent,
   AgentTurnInput,
+  AgentUsage,
   CarrySessionInput,
   InstalledApprovalSupport,
 } from '../adapters/adapter.types';
@@ -133,6 +134,7 @@ import { ProcessRegistry } from './process-registry';
 import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
+import { RunHoldRegistry } from './run-hold.registry';
 import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunTeardownService } from './run-teardown.service';
 import { RunWriteQueue } from './run-write.queue';
@@ -1103,6 +1105,7 @@ function setup(
     runWrites?: RunWriteQueue;
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot'>;
+    holds?: RunHoldRegistry;
     /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
     contextWindows?: Record<string, number>;
     /** What claude resolves each name to — see `fakeAdapter`'s `resolutions`. */
@@ -1372,6 +1375,7 @@ function setup(
     workflowBuilders,
     opts.runWrites ?? new RunWriteQueue(),
     (opts.memory ?? MEMORY_OFF) as unknown as MemoryService,
+    opts.holds ?? new RunHoldRegistry(),
     {
       token: 'launch',
       version: '0.0.0',
@@ -11829,6 +11833,114 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     // …and it says WHOSE running this is, so a chat the user thought was
     // finished does not silently start spinning again with no explanation.
     expect(statuses.at(-1)?.activity).toContain('still working');
+  });
+
+  describe('a stretch the CLI runs by itself', () => {
+    async function settledChat(holds?: RunHoldRegistry) {
+      const ctx = setup({ holds });
+      const run = await ctx.service.createChat({
+        agentKind: 'claude',
+        cwd: process.cwd(),
+      });
+      await ctx.service.sendMessage(run.id, 'go');
+      await drain();
+      ctx.claude.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: null,
+        finalText: null,
+      });
+      ctx.claude.finish();
+      await drain();
+      ctx.statuses.length = 0;
+      return {
+        ...ctx,
+        run,
+        between: ctx.claude.sessions[0]!.onBetweenTurnEvent!,
+      };
+    }
+
+    it('announces its hold on sub-agents as the in-turn hold is announced', async () => {
+      const holds = new RunHoldRegistry();
+      const { run, between, statuses } = await settledChat(holds);
+      between({ type: 'tool_call', id: 'call-1', name: 'Agent', input: {} });
+      await drain();
+
+      between({ type: 'turn_held', open: 2 });
+      await drain();
+
+      expect(statuses.at(-1)).toMatchObject({
+        runId: run.id,
+        holdingFor: 2,
+        activity: 'waiting on 2 sub-agents',
+      });
+      expect(holds.read(run.id).heldSince).not.toBeNull();
+
+      between({ type: 'turn_held', open: 0 });
+      await drain();
+
+      expect(statuses.at(-1)).toMatchObject({ holdingFor: 0 });
+      expect(holds.read(run.id).heldSince).toBeNull();
+    });
+
+    it('keeps when the agent woke for it, for the clock', async () => {
+      const holds = new RunHoldRegistry();
+      const { run, between } = await settledChat(holds);
+
+      between({ type: 'off_turn_started', at: 1_234_000 });
+
+      expect(holds.read(run.id).startedAt).toBe(1_234_000);
+    });
+
+    it('adds what it worked to the run’s totals when it ends', async () => {
+      const { run, between, runDao } = await settledChat();
+      const workedBefore = (await runDao.getById(run.id))?.workedMs ?? 0;
+      const toolsBefore = (await runDao.getById(run.id))?.toolCalls ?? 0;
+
+      between({ type: 'tool_call', id: 'call-1', name: 'Bash', input: {} });
+      between({
+        type: 'tool_call',
+        id: 'call-2',
+        name: 'Bash',
+        input: {},
+        parentToolUseId: 'toolu_d',
+      });
+      between({ type: 'tool_call', id: 'call-3', name: 'Read', input: {} });
+      between({
+        type: 'turn_complete',
+        usage: { durationMs: 90_000 } as AgentUsage,
+        stopReason: null,
+        finalText: null,
+      });
+      await drain();
+
+      const row = await runDao.getById(run.id);
+      expect((row?.workedMs ?? 0) - workedBefore).toBe(90_000);
+      expect((row?.toolCalls ?? 0) - toolsBefore).toBe(2);
+    });
+
+    it('starts its holds over once the run’s status moves on', async () => {
+      const holds = new RunHoldRegistry();
+      const { run, between } = await settledChat(holds);
+      between({ type: 'tool_call', id: 'call-1', name: 'Agent', input: {} });
+      await drain();
+      between({ type: 'turn_held', open: 1 });
+      expect(holds.read(run.id).heldSince).not.toBeNull();
+
+      between({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: null,
+        finalText: null,
+      });
+      await drain();
+
+      expect(holds.read(run.id)).toEqual({
+        startedAt: null,
+        heldMs: 0,
+        heldSince: null,
+      });
+    });
   });
 
   it('puts the badge back to running for a delegate launched between turns', async () => {

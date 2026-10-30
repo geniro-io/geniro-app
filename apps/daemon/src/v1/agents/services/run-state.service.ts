@@ -27,6 +27,7 @@ import { ApprovalRegistry } from './approval-registry';
 import { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { MonitorRegistry } from './monitor.registry';
+import { RunHoldRegistry } from './run-hold.registry';
 import { RunKindRowsCache } from './run-kind-rows.cache';
 
 /**
@@ -54,6 +55,7 @@ export class RunStateService {
     private readonly seqs: ItemSeqAllocator,
     private readonly monitors: MonitorRegistry,
     private readonly kindRows: RunKindRowsCache,
+    private readonly holds: RunHoldRegistry,
   ) {}
 
   async read(runId: string): Promise<RunStateWire> {
@@ -193,11 +195,16 @@ export class RunStateService {
 
     // A workflow's turns belong to its nodes, each with a clock of its own on
     // `node_state`; only a chat's turn is the RUN's.
-    const turnStartedAt =
-      run.workflowId === null && run.status === 'running'
-        ? ((await this.itemDao.openTurnStartedAt(runId, em))?.toISOString() ??
-          null)
-        : null;
+    const chatTurnOpen = run.workflowId === null && run.status === 'running';
+    const hold = chatTurnOpen ? this.holds.read(runId) : null;
+    // A stretch the CLI runs by itself is dated by when it woke, which no row
+    // records; the rows answer for a turn of ours and a stretch it missed.
+    const turnStartedAt = !chatTurnOpen
+      ? null
+      : hold?.startedAt != null
+        ? new Date(hold.startedAt).toISOString()
+        : ((await this.itemDao.openTurnStartedAt(runId, em))?.toISOString() ??
+          null);
 
     return {
       openRequests,
@@ -217,6 +224,9 @@ export class RunStateService {
         ),
       ).live,
       turnStartedAt,
+      turnHeldMs: Math.round(hold?.heldMs ?? 0),
+      turnHeldSince:
+        hold?.heldSince == null ? null : new Date(hold.heldSince).toISOString(),
     };
   }
 

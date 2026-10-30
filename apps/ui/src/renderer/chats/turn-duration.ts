@@ -185,6 +185,8 @@ export interface OpenTurn {
    * figure exists precisely to not be the wall clock.
    */
   openSince: readonly number[];
+  /** Opened by the agent's own output after its turn ended, not by a message. */
+  offTurn?: true;
 }
 
 /**
@@ -204,13 +206,17 @@ export interface OpenTurn {
  * purpose. It is a live fact about the run, and it arrives from the run-status
  * channel.
  *
- * `heldSince` undefined means not held, and the turn passes through untouched.
+ * `heldSince` undefined means not held. `endedHoldsMs` is what the holds that
+ * have already ended parked, which only the daemon can say for a chat
+ * (`RunStateDto.turnHeldMs`): the agent talks again between them, and the
+ * turn's own rows record none of them.
  */
 export function parkWhileHeld(
   open: readonly OpenTurn[],
   heldSince: number | undefined,
+  endedHoldsMs = 0,
 ): readonly OpenTurn[] {
-  if (heldSince === undefined) {
+  if (heldSince === undefined && endedHoldsMs <= 0) {
     return open;
   }
   // A hold is a fact about the RUN, so it parks every turn open under it. In a
@@ -219,8 +225,16 @@ export function parkWhileHeld(
   // holding for are exactly the ones with turns still open.
   return open.map((turn) => ({
     ...turn,
-    openSince: [...turn.openSince, heldSince],
+    parkedMs: turn.parkedMs + Math.max(0, endedHoldsMs),
+    openSince:
+      heldSince === undefined ? turn.openSince : [...turn.openSince, heldSince],
   }));
+}
+
+/** The daemon's `RunStateDto.turnHeldSince` as epoch ms, or undefined when none stands. */
+export function heldSinceOf(iso: string | null): number | undefined {
+  const at = iso === null ? Number.NaN : Date.parse(iso);
+  return Number.isFinite(at) ? at : undefined;
 }
 
 /**
@@ -274,7 +288,9 @@ export function withDurableOpenTurns(
  * The chat twin of {@link withDurableOpenTurns}: a turn opens on the user's
  * message, and a turn running longer than the loaded page has that message
  * above it — so the header's clock had no open turn to count and stood still.
- * The window's own reading wins whenever it has one.
+ * The window's own reading wins whenever it has one, except for a stretch the
+ * agent runs by itself: the daemon knows when it woke for it, before its first
+ * row.
  */
 export function withDurableChatTurn(
   open: readonly OpenTurn[],
@@ -283,13 +299,19 @@ export function withDurableChatTurn(
 ): readonly OpenTurn[] {
   const startedAt =
     turnStartedAt === null ? Number.NaN : Date.parse(turnStartedAt);
-  if (
-    !Number.isFinite(startedAt) ||
-    open.some((turn) => turn.agentKey === agentKey)
-  ) {
+  if (!Number.isFinite(startedAt)) {
     return open;
   }
-  return [...open, { agentKey, startedAt, parkedMs: 0, openSince: [] }];
+  const windowTurn = open.find((turn) => turn.agentKey === agentKey);
+  if (windowTurn === undefined) {
+    return [...open, { agentKey, startedAt, parkedMs: 0, openSince: [] }];
+  }
+  if (windowTurn.offTurn === true && startedAt < windowTurn.startedAt) {
+    return open.map((turn) =>
+      turn === windowTurn ? { ...turn, startedAt } : turn,
+    );
+  }
+  return open;
 }
 
 /**
@@ -699,6 +721,7 @@ export function scanTurns(
         startedAt,
         parkedMs: state.parkedMs,
         openSince: [...state.parkedSince.values()],
+        ...(state.startedAt === null ? { offTurn: true as const } : {}),
       });
     }
   }

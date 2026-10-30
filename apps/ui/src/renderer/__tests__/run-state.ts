@@ -14,5 +14,7 @@ export function emptyRunState(): RunStateDto {
     openToolCalls: [],
     throughSeq: -1,
     turnStartedAt: null,
+    turnHeldMs: 0,
+    turnHeldSince: null,
   };
 }

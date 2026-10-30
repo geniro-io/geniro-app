@@ -104,6 +104,8 @@ const EMPTY: RunStateDto = {
   // Nothing read yet: no ending is the daemon's to state.
   throughSeq: -1,
   turnStartedAt: null,
+  turnHeldMs: 0,
+  turnHeldSince: null,
 };
 
 interface Stamped {

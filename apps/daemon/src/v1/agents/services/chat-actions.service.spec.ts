@@ -28,6 +28,7 @@ import { ChatActionsService } from './chat-actions.service';
 import type { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { MonitorRegistry } from './monitor.registry';
+import { RunHoldRegistry } from './run-hold.registry';
 import { RunStateService } from './run-state.service';
 
 /**
@@ -92,6 +93,7 @@ describe('ChatActionsService (in-memory sqlite)', () => {
       seqs,
       { list: () => [] } as unknown as MonitorRegistry,
       kindRowsPassthrough(items),
+      new RunHoldRegistry(),
     );
     await runs.create({ id: 'run-a', status: 'running', workflowId: null });
   });

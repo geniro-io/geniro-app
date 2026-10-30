@@ -154,6 +154,7 @@ import { ChatProviders, TranscriptContexts } from './chat-providers';
 import { ChatScopeFilter } from './chat-scope-filter';
 import { ChatSearchDialog } from './chat-search-dialog';
 import { isComposerSendKey } from './composer-keys';
+import { followUpPlaceholder } from './composer-placeholder';
 import { ComposerTopRow } from './composer-rows';
 import {
   ActiveWorkflowChips,
@@ -10285,15 +10286,12 @@ export function Chats({
                             rows: 2,
                             'aria-label': 'Message the agent',
                             disabled: activeRunArchived,
-                            placeholder: activeRunArchived
-                              ? 'This chat is archived — unarchive it to continue.'
-                              : streaming && !activeRunHeld
-                                ? activeRun?.workflowId
-                                  ? 'The workflow is working — your message will queue…'
-                                  : 'Agent is working — your message will queue…'
-                                : activeRun?.workflowId
-                                  ? 'Message the workflow — it goes to the same trigger…'
-                                  : 'Message the agent…',
+                            placeholder: followUpPlaceholder({
+                              archived: activeRunArchived,
+                              working: streaming && !activeRunHeld,
+                              workflow: Boolean(activeRun?.workflowId),
+                              narrow: narrowViewport,
+                            }),
                             onChange: (event) => setInput(event.target.value),
                             onKeyDown: (event) => {
                               if (handleSkillMenuKeys(event)) {

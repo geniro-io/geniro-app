@@ -6,7 +6,7 @@ import { CallBlock } from './call-block';
 import { EntryCard } from './entry-card';
 import { jumpAnchorProps } from './jump-target';
 import { liveRowKind } from './live-row';
-import { MarkdownContent } from './markdown-content';
+import { MarkdownContent, MESSAGE_TEXT_CLASS } from './markdown-content';
 import { formatClockTime } from './relative-time';
 import { SubagentBlock } from './subagent-block';
 import { NestedThreadContext } from './subagent-context';
@@ -141,6 +141,7 @@ export const TurnBlock = memo(function TurnBlock({
         <div key={item.id} data-role="assistant">
           <MarkdownContent
             content={payloadString(item.payload, 'text') ?? ''}
+            className={MESSAGE_TEXT_CLASS}
           />
         </div>
       );
@@ -167,7 +168,10 @@ export const TurnBlock = memo(function TurnBlock({
               memoryKey={`thinking:${item.id}`}>
               <MarkdownContent
                 content={reasoning}
-                className="text-muted-foreground italic"
+                className={cn(
+                  'text-muted-foreground italic',
+                  MESSAGE_TEXT_CLASS,
+                )}
               />
             </ThinkingDisclosure>
           ) : (

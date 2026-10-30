@@ -20,7 +20,7 @@ import {
 } from './error-payload';
 import { isGeniroCardKind } from './geniro-tool';
 import { ComposingRow, liveRowKind, ThinkingRow, WorkingRow } from './live-row';
-import { MarkdownContent } from './markdown-content';
+import { MarkdownContent, MESSAGE_TEXT_CLASS } from './markdown-content';
 import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { MonitorNoticeRow } from './monitor-divider';
@@ -238,7 +238,9 @@ export const TranscriptItem = memo(function TranscriptItem({
           <MessageAttachments runId={item.runId} attachments={attachments} />
           {/* An image alone is a complete message — don't render an empty
               markdown block under it. */}
-          {text ? <MarkdownContent content={text} /> : null}
+          {text ? (
+            <MarkdownContent content={text} className={MESSAGE_TEXT_CLASS} />
+          ) : null}
         </MessageBubble>
       );
       if (

@@ -9,6 +9,7 @@ import { DEV_TEAM_VERSIONS } from '../__fixtures__/workflow-versions';
 import { withVocabulary } from '../__tests__/agent-vocabulary-api';
 import { withHistoryPages } from '../__tests__/history-page';
 import { emptyRunState } from '../__tests__/run-state';
+import { settleStageGraphs } from '../__tests__/settle-stage-graphs';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type {
   ItemDto as ChatItem,
@@ -1274,10 +1275,11 @@ describe('Workflows — a workflow’s stages', () => {
   it('draws the stage graph over the canvas', async () => {
     opens(STAGES);
     await openBuilder();
+    await settleStageGraphs(container);
 
     expect(
       canvasStages()
-        ?.querySelector('[data-slot="stage-graph"] svg')
+        ?.querySelector('[data-slot="stage-graph-canvas"]')
         ?.getAttribute('aria-label'),
     ).toBe('Stages: Plan → Build');
     expect(canvasStages()!.textContent).toContain('2 stages');
@@ -1319,10 +1321,11 @@ describe('Workflows — a workflow’s stages', () => {
   it('opens the stage editor on the stage pressed in the graph', async () => {
     opens(STAGES);
     await openBuilder();
+    await settleStageGraphs(container);
 
     await act(async () => {
       canvasStages()!
-        .querySelector<SVGGElement>(
+        .querySelector<HTMLElement>(
           '[data-slot="stage-pill"][data-stage-id="build"]',
         )!
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));

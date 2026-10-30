@@ -60,7 +60,11 @@ export interface RunOutcomeLedgerRow {
   draft: boolean;
   reviewRounds: number;
   acceptance: RunOutcomeAcceptance;
+  /** Questions put to the user on the run before this outcome. */
   questionsAsked: number;
+  /** Over every outcome the run recorded for the pull request; null where its rows could not be read. */
+  changesRequestedRounds: number | null;
+  msToAccepted: number | null;
 }
 
 /**
@@ -187,6 +191,15 @@ export interface HistoryVersionFigures {
     notYet: number;
     notNeeded: number;
     avgReviewRounds: number | null;
+    /** Times a pull request went to `changes_requested`, on average over those whose history was counted. */
+    avgChangesRequestedRounds: number | null;
+    /** From a pull request's first outcome to its acceptance, on average over the accepted ones. */
+    avgMsToAccepted: number | null;
+    /**
+     * Questions put to the user per run, up to its last recorded outcome — over the runs
+     * whose outcomes were counted, never a copy made before questions were (stored as 0).
+     */
+    avgQuestionsPerRun: number | null;
   };
 }
 

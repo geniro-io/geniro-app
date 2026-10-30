@@ -3,21 +3,24 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import type { ItemKind } from '../../runs/runs.types';
 import {
-  HOST_QUESTION_TOOL,
   type ItemWire,
+  type PullRequestOutcome,
   type RunOutcomeInput,
   type RunOutcomePayload,
   type RunOutcomeWriteOutcome,
 } from '../chat.types';
-import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
-import { asRecord, asString } from '../utils/json-util';
 import { KeyedChain } from '../utils/keyed-chain';
 import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
-import { parsePullRequestUrl, withRunOutcome } from '../utils/run-outcomes';
-import { AgentAdapterRegistry } from './agent-adapter.registry';
+import {
+  parsePullRequestUrl,
+  type PullRequestIdentity,
+  readRunOutcomes,
+  withRunOutcome,
+} from '../utils/run-outcomes';
 import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 import { PullRequestCaptureService } from './pull-request-capture.service';
+import { RunOutcomeHistoryService } from './run-outcome-history.service';
 
 /** The conversation behind a `record_outcome` call. */
 export interface RunOutcomeRecorder {
@@ -43,30 +46,15 @@ export interface RunOutcomeSink {
 }
 
 /**
- * How many questions one question card put to the user: its normalized
- * `questions` when the row carries them, else the CLI's own `input.questions`
- * (rows written before the normalized field), else one.
- */
-function questionsOnCard(payload: Record<string, unknown>): number {
-  if (Array.isArray(payload.questions) && payload.questions.length > 0) {
-    return payload.questions.length;
-  }
-  const input = asRecord(payload.input);
-  if (Array.isArray(input?.questions) && input.questions.length > 0) {
-    return input.questions.length;
-  }
-  return 1;
-}
-
-/**
  * `record_outcome`: a workflow node records where one pull request of its run
  * ended up. The `run_outcome` row is the record; the run's `runOutcomes`
  * column keeps the newest per pull request for the run's wire projection, and
  * the stats module copies each row into its ledger (`RunOutcomeLedgerService`
  * there), which outlives the run.
  *
- * `questionsAsked` is counted here, over every question card of the run, never
- * taken from the agent: a remembered number drifts, the rows do not.
+ * `questionsAsked` is counted by {@link RunOutcomeHistoryService} over every
+ * question card of the run, never taken from the agent: a remembered number
+ * drifts, the rows do not.
  */
 @Injectable()
 export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
@@ -76,9 +64,8 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
 
   constructor(
     private readonly em: EntityManager,
-    private readonly itemDao: ItemDao,
     private readonly runDao: RunDao,
-    private readonly adapters: AgentAdapterRegistry,
+    private readonly history: RunOutcomeHistoryService,
     private readonly captures: PullRequestCaptureService,
   ) {
     super();
@@ -136,7 +123,33 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
     if (run === null) {
       return { status: 'refused', reason: 'this run no longer exists' };
     }
-    const questionsAsked = await this.questionsAsked(runId, em);
+    const key = pullRequestOutcomeKey(pullRequest);
+    const history = await this.history.read(runId, undefined, em);
+    const newest = history.pullRequests.find(
+      (entry) => pullRequestOutcomeKey(entry) === key,
+    )?.outcomes[0];
+    // A column write that failed earlier is caught up by the next call, for
+    // whichever pull request it records.
+    const column = readRunOutcomes(run.runOutcomes);
+    const lagging = history.pullRequests.flatMap((entry) => {
+      const outcome = entry.outcomes[0];
+      return outcome !== undefined &&
+        column.get(pullRequestOutcomeKey(entry))?.seq !== outcome.seq
+        ? [{ pullRequest: entry, outcome }]
+        : [];
+    });
+    if (
+      newest !== undefined &&
+      newest.draft === input.draft &&
+      newest.reviewRounds === input.reviewRounds &&
+      newest.acceptance === input.acceptance
+    ) {
+      if (lagging.length > 0) {
+        await this.writeColumn(runId, run.runOutcomes, lagging, em);
+      }
+      return { status: 'unchanged', seq: newest.seq };
+    }
+    const questionsAsked = history.questionsAsked;
     const recorder = sink.recorder(caller);
     const payload: RunOutcomePayload = {
       prOwner: pullRequest.owner,
@@ -154,67 +167,64 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
       ...(recorder.callId === null ? {} : { callId: recorder.callId }),
     };
     const item = await sink.persistItem(nodeId, 'run_outcome', null, payload);
-    // The row is the record; the column only feeds the run's wire projection.
-    // A failure past this point is logged and never refuses the call, which
-    // would have the agent record the same outcome again.
+    await this.writeColumn(
+      runId,
+      run.runOutcomes,
+      [
+        ...lagging.filter(
+          (entry) => pullRequestOutcomeKey(entry.pullRequest) !== key,
+        ),
+        { pullRequest, outcome: { seq: item.seq, ...payload } },
+      ],
+      em,
+    );
+    return { status: 'recorded', seq: item.seq, questionsAsked };
+  }
+
+  /**
+   * Keep the run's newest outcome per pull request in its column and
+   * announce the list. The row is the record; the column only feeds the
+   * run's wire projection, so a failure here is logged and never refuses the
+   * call, which would have the agent record the same outcome again.
+   */
+  private async writeColumn(
+    runId: string,
+    column: string | null,
+    outcomes: readonly {
+      pullRequest: PullRequestIdentity;
+      outcome: PullRequestOutcome;
+    }[],
+    em: EntityManager,
+  ): Promise<void> {
     try {
-      const runOutcomes = withRunOutcome(run.runOutcomes, pullRequest, {
-        seq: item.seq,
-        draft: payload.draft,
-        reviewRounds: payload.reviewRounds,
-        acceptance: payload.acceptance,
-        questionsAsked,
-      });
+      let runOutcomes = column;
+      for (const { pullRequest, outcome } of outcomes) {
+        runOutcomes = withRunOutcome(runOutcomes, pullRequest, {
+          seq: outcome.seq,
+          draft: outcome.draft,
+          reviewRounds: outcome.reviewRounds,
+          acceptance: outcome.acceptance,
+          questionsAsked: outcome.questionsAsked,
+        });
+      }
       await this.runDao.updateWithoutActivity(runId, { runOutcomes }, em);
       // Through the capture pass's per-run order: it announces the same list,
       // and two independent announces could each re-send a list the other had
       // already moved. Queued, not awaited — the order is fixed at the call,
       // and a rescan in flight can take seconds the agent need not wait.
-      void this.captures
-        .announceOutcome(runId, pullRequestOutcomeKey(pullRequest))
-        .catch((err: unknown) => {
-          this.log.warn(
-            `run ${runId} could not announce its pull requests: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
+      for (const { pullRequest } of outcomes) {
+        void this.captures
+          .announceOutcome(runId, pullRequestOutcomeKey(pullRequest))
+          .catch((err: unknown) => {
+            this.log.warn(
+              `run ${runId} could not announce its pull requests: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+      }
     } catch (err) {
       this.log.warn(
-        `run ${runId} recorded outcome row ${item.seq} but could not update its pull-request list: ${err instanceof Error ? err.message : String(err)}`,
+        `run ${runId} recorded outcome rows ${outcomes.map(({ outcome }) => outcome.seq).join(', ')} but could not update its pull-request list: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    return { status: 'recorded', seq: item.seq, questionsAsked };
-  }
-
-  /** Every question put to the user on this run so far, by any of its agents. */
-  private async questionsAsked(
-    runId: string,
-    em: EntityManager,
-  ): Promise<number> {
-    const questionTools = new Set<string>([HOST_QUESTION_TOOL]);
-    for (const adapter of this.adapters.all().values()) {
-      const name = adapter.getConfig().questionToolName;
-      if (name !== null) {
-        questionTools.add(name);
-      }
-    }
-    const rows = await this.itemDao.rowsOfKinds(
-      runId,
-      ['approval_request'],
-      undefined,
-      em,
-    );
-    let count = 0;
-    for (const row of rows) {
-      const payload = asRecord(row.payload);
-      const toolName = asString(payload?.toolName);
-      if (
-        payload !== null &&
-        toolName !== null &&
-        questionTools.has(toolName)
-      ) {
-        count += questionsOnCard(payload);
-      }
-    }
-    return count;
   }
 }

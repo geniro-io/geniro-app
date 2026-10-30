@@ -15,9 +15,15 @@ import {
   vi,
 } from 'vitest';
 
-import type { ItemWire, RunOutcomePayload } from '../../agents/chat.types';
+import type {
+  ItemWire,
+  RunOutcomePayload,
+  SeqRange,
+} from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
+import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { RunOutcomeHistoryService } from '../../agents/services/run-outcome-history.service';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import { RunOutcomeLedgerService } from './run-outcome-ledger.service';
@@ -42,9 +48,22 @@ const payload = (
 interface StoredItem {
   runId: string;
   seq: number;
+  /** `run_outcome` when absent. */
+  kind?: string;
   payload: string;
   createdAt: Date;
 }
+
+const questionCard = (runId: string, seq: number): StoredItem => ({
+  runId,
+  seq,
+  kind: 'approval_request',
+  payload: JSON.stringify({
+    toolName: 'AskUserQuestion',
+    questions: [{ question: 'Ship it?' }],
+  }),
+  createdAt: new Date('2026-10-20T09:59:00.000Z'),
+});
 
 /**
  * The copy of each recorded outcome into the ledger that outlives the run: the live
@@ -81,9 +100,42 @@ describe('RunOutcomeLedgerService (in-memory sqlite)', () => {
     bus = new AgentEventBus();
     items = [];
     const itemDao = {
-      runOutcomeRows: async () => items.map((item) => ({ ...item })),
+      runOutcomeRows: async () =>
+        items
+          .filter((item) => (item.kind ?? 'run_outcome') === 'run_outcome')
+          .map((item) => ({ ...item })),
+      rowsOfKinds: async (
+        runId: string,
+        kinds: readonly string[],
+        range: SeqRange | undefined,
+      ) =>
+        items
+          .filter(
+            (item) =>
+              item.runId === runId &&
+              kinds.includes(item.kind ?? 'run_outcome') &&
+              (range === undefined ||
+                !('before' in range) ||
+                item.seq < range.before),
+          )
+          .map((item) => ({ ...item })),
     } as unknown as ItemDao;
-    service = new RunOutcomeLedgerService(orm.em, bus, itemDao, dao);
+    const adapters = {
+      all: () =>
+        new Map([
+          [
+            'claude',
+            { getConfig: () => ({ questionToolName: 'AskUserQuestion' }) },
+          ],
+        ]),
+    } as unknown as AgentAdapterRegistry;
+    service = new RunOutcomeLedgerService(
+      orm.em,
+      bus,
+      itemDao,
+      dao,
+      new RunOutcomeHistoryService(orm.em, itemDao, adapters),
+    );
   });
 
   afterEach(() => {
@@ -118,7 +170,23 @@ describe('RunOutcomeLedgerService (in-memory sqlite)', () => {
       service.onModuleInit();
     });
 
-    it('copies a recorded outcome into the ledger as it is announced', async () => {
+    it('copies a recorded outcome into the ledger as it is announced, with what the run’s history says', async () => {
+      items = [
+        questionCard('run-1', 2),
+        {
+          runId: 'run-1',
+          seq: 4,
+          payload: JSON.stringify(payload({ acceptance: 'changes_requested' })),
+          createdAt: new Date('2026-10-20T09:50:00.000Z'),
+        },
+        questionCard('run-1', 8),
+        {
+          runId: 'run-1',
+          seq: 12,
+          payload: JSON.stringify(payload({ acceptance: 'accepted' })),
+          createdAt: new Date('2026-10-20T10:00:00.000Z'),
+        },
+      ];
       publish(12, 'run_outcome', payload({ acceptance: 'accepted' }));
 
       await vi.waitFor(async () =>
@@ -131,6 +199,9 @@ describe('RunOutcomeLedgerService (in-memory sqlite)', () => {
           acceptance: 'accepted',
           workflowSlug: 'dev-team',
           occurredAt: new Date('2026-10-20T10:00:00.000Z'),
+          questionsAsked: 2,
+          changesRequestedRounds: 1,
+          msToAccepted: 10 * 60_000,
         }),
       ]);
     });
@@ -233,6 +304,8 @@ describe('RunOutcomeLedgerService (in-memory sqlite)', () => {
         reviewRounds: 0,
         acceptance: 'not_yet',
         questionsAsked: 0,
+        changesRequestedRounds: 0,
+        msToAccepted: null,
       });
       await dao.upsertRunOutcome({
         runId: 'run-2',
@@ -247,6 +320,8 @@ describe('RunOutcomeLedgerService (in-memory sqlite)', () => {
         reviewRounds: 2,
         acceptance: 'accepted',
         questionsAsked: 4,
+        changesRequestedRounds: 0,
+        msToAccepted: 0,
       });
       items = [
         stored(9, { acceptance: 'changes_requested' }),
@@ -259,6 +334,41 @@ describe('RunOutcomeLedgerService (in-memory sqlite)', () => {
           .map((row) => `${row.runId}@${row.sourceSeq}:${row.acceptance}`)
           .sort(),
       ).toEqual(['run-1@9:changes_requested', 'run-2@30:accepted']);
+    });
+
+    it('fills the history figures into a copy made before they were counted, once', async () => {
+      await dao.upsertRunOutcome({
+        runId: 'run-1',
+        sourceSeq: 9,
+        occurredAt: new Date('2026-10-20T10:00:09.000Z'),
+        workflowSlug: 'dev-team',
+        prOwner: 'acme',
+        prRepo: 'platform',
+        prNumber: 87,
+        prUrl: 'https://github.com/acme/platform/pull/87',
+        draft: false,
+        reviewRounds: 1,
+        acceptance: 'accepted',
+        questionsAsked: 0,
+        changesRequestedRounds: null,
+        msToAccepted: null,
+      });
+      items = [
+        stored(3, { acceptance: 'changes_requested' }),
+        questionCard('run-1', 5),
+        stored(9, { acceptance: 'accepted', reviewRounds: 1 }),
+      ];
+
+      expect(await service.sweep()).toBe(1);
+      expect(await service.sweep()).toBe(0);
+      expect(await dao.runOutcomes({})).toEqual([
+        expect.objectContaining({
+          sourceSeq: 9,
+          questionsAsked: 1,
+          changesRequestedRounds: 1,
+          msToAccepted: 6_000,
+        }),
+      ]);
     });
   });
 });

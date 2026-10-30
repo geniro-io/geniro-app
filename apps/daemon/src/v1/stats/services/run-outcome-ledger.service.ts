@@ -4,10 +4,15 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import type { RunItemEvent } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { RunOutcomeHistoryService } from '../../agents/services/run-outcome-history.service';
 import { parseJsonColumn } from '../../agents/utils/json-util';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import type { RunOutcomeLedgerRow } from '../stats.types';
-import { ledgerRowOf, newestOutcomes } from '../utils/run-outcome-ledger';
+import {
+  ledgerRowOf,
+  newestOutcomes,
+  withHistory,
+} from '../utils/run-outcome-ledger';
 
 /**
  * Copies every pull request's recorded outcome (`run_outcome` items, written by
@@ -16,9 +21,12 @@ import { ledgerRowOf, newestOutcomes } from '../utils/run-outcome-ledger';
  * `UsageActivityRecorderService`: the agents module writes the row and cannot depend on
  * this module.
  *
+ * Each copy carries what the run's whole outcome history says about the pull request
+ * (`RunOutcomeHistoryService`), read when the copy is made, so it survives the run too.
  * The live copy is fire-and-forget, so two outcomes of one pull request can land out of
  * order; the upsert only ever moves a row forward (`sourceSeq`). A copy a crash or a
- * failed write lost is made at the next launch by the sweep, behind the boot.
+ * failed write lost, or one made before the history was counted, is made at the next
+ * launch by the sweep, behind the boot.
  */
 @Injectable()
 export class RunOutcomeLedgerService implements OnModuleInit {
@@ -29,6 +37,7 @@ export class RunOutcomeLedgerService implements OnModuleInit {
     private readonly bus: AgentEventBus,
     private readonly itemDao: ItemDao,
     private readonly activityDao: UsageActivityDao,
+    private readonly history: RunOutcomeHistoryService,
   ) {}
 
   onModuleInit(): void {
@@ -43,9 +52,9 @@ export class RunOutcomeLedgerService implements OnModuleInit {
   }
 
   /**
-   * Write every outcome the ledger lacks, or holds an older copy of; returns how many
-   * rows it wrote. The ledger's seqs are read once, so a launch with nothing to do
-   * writes nothing.
+   * Write every outcome the ledger lacks, holds an older copy of, or holds without its
+   * history figures; returns how many rows it wrote. The ledger's copies are read once,
+   * and each run's history once, so a launch with nothing to do writes nothing.
    */
   async sweep(): Promise<number> {
     const em = this.em.fork();
@@ -59,12 +68,28 @@ export class RunOutcomeLedgerService implements OnModuleInit {
         rows.push(row);
       }
     }
-    const recorded = await this.activityDao.runOutcomeSeqs(em);
-    let written = 0;
+    const recorded = await this.activityDao.runOutcomeCopies(em);
+    const owed = new Map<string, RunOutcomeLedgerRow[]>();
     for (const [key, row] of newestOutcomes(rows)) {
-      const seq = recorded.get(key);
-      if (seq === undefined || seq < row.sourceSeq) {
-        await this.activityDao.upsertRunOutcome(row, em);
+      const copy = recorded.get(key);
+      if (
+        copy === undefined ||
+        copy.sourceSeq < row.sourceSeq ||
+        !copy.counted
+      ) {
+        const runRows = owed.get(row.runId) ?? [];
+        runRows.push(row);
+        owed.set(row.runId, runRows);
+      }
+    }
+    let written = 0;
+    for (const [runId, runRows] of owed) {
+      const { pullRequests } = await this.history.read(runId, undefined, em);
+      for (const row of runRows) {
+        await this.activityDao.upsertRunOutcome(
+          withHistory(row, pullRequests),
+          em,
+        );
         written += 1;
       }
     }
@@ -85,7 +110,9 @@ export class RunOutcomeLedgerService implements OnModuleInit {
       return;
     }
     try {
-      await this.activityDao.upsertRunOutcome(row);
+      await this.activityDao.upsertRunOutcome(
+        withHistory(row, (await this.history.read(event.runId)).pullRequests),
+      );
     } catch (err) {
       this.logger.warn(
         `could not copy run ${event.runId} outcome row ${event.item.seq} to the ledger: ${err instanceof Error ? err.message : String(err)}`,

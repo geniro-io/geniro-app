@@ -58,6 +58,37 @@ function average(total: number | null, count: number): number | null {
     : Math.round((total / count) * 10_000) / 10_000;
 }
 
+function tenths(values: readonly number[]): number | null {
+  return values.length === 0
+    ? null
+    : Math.round(
+        (values.reduce((total, value) => total + value, 0) / values.length) *
+          10,
+      ) / 10;
+}
+
+function wholeAverage(values: readonly number[]): number | null {
+  return values.length === 0
+    ? null
+    : Math.round(
+        values.reduce((total, value) => total + value, 0) / values.length,
+      );
+}
+
+/** Each run's questions to the user: the most any of its outcomes counted, since each counts every card before it. */
+function questionsPerRun(
+  prs: readonly RunOutcomeLedgerRow[],
+): Map<string, number> {
+  const perRun = new Map<string, number>();
+  for (const pr of prs) {
+    perRun.set(
+      pr.runId,
+      Math.max(perRun.get(pr.runId) ?? 0, pr.questionsAsked),
+    );
+  }
+  return perRun;
+}
+
 function figuresOf(
   runIds: readonly string[],
   totals: ReadonlyMap<string, ChatTotalsWire>,
@@ -85,7 +116,6 @@ function figuresOf(
   }
   const ids = new Set(runIds);
   const prs = outcomes.filter((outcome) => ids.has(outcome.runId));
-  const rounds = prs.reduce((total, pr) => total + pr.reviewRounds, 0);
   return {
     runs: runIds.length,
     pricedRuns,
@@ -106,8 +136,22 @@ function figuresOf(
       ).length,
       notYet: prs.filter((pr) => pr.acceptance === 'not_yet').length,
       notNeeded: prs.filter((pr) => pr.acceptance === 'not_needed').length,
-      avgReviewRounds:
-        prs.length === 0 ? null : Math.round((rounds / prs.length) * 10) / 10,
+      avgReviewRounds: tenths(prs.map((pr) => pr.reviewRounds)),
+      avgChangesRequestedRounds: tenths(
+        prs.flatMap((pr) =>
+          pr.changesRequestedRounds === null ? [] : [pr.changesRequestedRounds],
+        ),
+      ),
+      avgMsToAccepted: wholeAverage(
+        prs.flatMap((pr) =>
+          pr.msToAccepted === null ? [] : [pr.msToAccepted],
+        ),
+      ),
+      avgQuestionsPerRun: tenths([
+        ...questionsPerRun(
+          prs.filter((pr) => pr.changesRequestedRounds !== null),
+        ).values(),
+      ]),
     },
   };
 }

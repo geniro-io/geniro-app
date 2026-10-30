@@ -487,6 +487,8 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       reviewRounds: 0,
       acceptance: 'not_yet',
       questionsAsked: 1,
+      changesRequestedRounds: 0,
+      msToAccepted: null,
       ...overrides,
     });
 
@@ -534,6 +536,28 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       ]);
     });
 
+    it('rewrites a row at the same outcome only to fill history figures it lacks', async () => {
+      await dao.upsertRunOutcome(
+        outcome({ changesRequestedRounds: null, questionsAsked: 0 }),
+      );
+      expect(
+        (await dao.runOutcomeCopies()).get('outcome:run-1:acme/platform#87'),
+      ).toEqual({ sourceSeq: 10, counted: false });
+
+      await dao.upsertRunOutcome(
+        outcome({
+          changesRequestedRounds: 2,
+          msToAccepted: 5_000,
+          questionsAsked: 4,
+        }),
+      );
+      await dao.upsertRunOutcome(outcome({ changesRequestedRounds: 9 }));
+
+      expect(await dao.runOutcomes({ runIds: ['run-1'] })).toMatchObject([
+        { changesRequestedRounds: 2, msToAccepted: 5_000, questionsAsked: 4 },
+      ]);
+    });
+
     it('never moves the row back to an older outcome that arrives late', async () => {
       await dao.upsertRunOutcome(
         outcome({ sourceSeq: 20, acceptance: 'accepted' }),
@@ -563,11 +587,11 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
         ),
       ).toEqual(['dev-team-b']);
       expect(await dao.runOutcomes({ runIds: [] })).toEqual([]);
-      expect(await dao.runOutcomeSeqs()).toEqual(
+      expect(await dao.runOutcomeCopies()).toEqual(
         new Map([
-          ['outcome:run-1:acme/platform#87', 10],
-          ['outcome:run-1:acme/platform#88', 11],
-          ['outcome:run-2:acme/platform#87', 10],
+          ['outcome:run-1:acme/platform#87', { sourceSeq: 10, counted: true }],
+          ['outcome:run-1:acme/platform#88', { sourceSeq: 11, counted: true }],
+          ['outcome:run-2:acme/platform#87', { sourceSeq: 10, counted: true }],
         ]),
       );
     });
@@ -651,6 +675,8 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
         reviewRounds: 1,
         acceptance: 'accepted',
         questionsAsked: 0,
+        changesRequestedRounds: 0,
+        msToAccepted: 0,
       });
 
       expect(

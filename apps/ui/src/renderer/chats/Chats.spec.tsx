@@ -68,6 +68,7 @@ const api = vi.hoisted(() => ({
   readChatTimeline: vi.fn(),
   readRunArtifacts: vi.fn(),
   readRunTeamNotes: vi.fn(),
+  readRunOutcomes: vi.fn(),
   readRunWaterfall: vi.fn(),
   readRunProcesses: vi.fn(),
   getThreadAnalysis: vi.fn(),
@@ -800,6 +801,7 @@ beforeEach(() => {
   api.updateChatSettings.mockReset();
   api.readRunArtifacts.mockReset().mockResolvedValue({ artifacts: [] });
   api.readRunTeamNotes.mockReset().mockResolvedValue({ notes: [] });
+  api.readRunOutcomes.mockReset().mockResolvedValue({ pullRequests: [] });
   api.readChatMetrics.mockReset().mockResolvedValue({
     context: null,
     breakdownReason: 'no live agent',
@@ -4653,6 +4655,52 @@ describe('Chats workflow runs', () => {
       createdAt: 'now',
     };
   }
+
+  it('reads the outcome history of a workflow run only, again when an announce carries a newer outcome', async () => {
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(api.readRunOutcomes).not.toHaveBeenCalled();
+
+    await clickRun(container, 'Review team');
+    const reads = (): number =>
+      api.readRunOutcomes.mock.calls.filter(([arg]) => arg.runId === 'w1')
+        .length;
+    const before = reads();
+    const announce = (outcomeSeq: number): void =>
+      emitRunStatus({
+        runId: 'w1',
+        status: null,
+        pullRequests: [
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 87,
+            url: 'https://github.com/acme/platform/pull/87',
+            seq: 3,
+            opened: true,
+            outcome: {
+              seq: outcomeSeq,
+              draft: false,
+              reviewRounds: 1,
+              acceptance: 'accepted',
+              questionsAsked: 0,
+            },
+          },
+        ],
+      });
+
+    await act(async () => {
+      announce(40);
+    });
+    expect(reads()).toBe(before + 1);
+
+    await act(async () => {
+      announce(40);
+    });
+    expect(reads()).toBe(before + 1);
+  });
 
   it('keeps the working state past a NODE terminal item, clears it on the RUN terminal', async () => {
     workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);

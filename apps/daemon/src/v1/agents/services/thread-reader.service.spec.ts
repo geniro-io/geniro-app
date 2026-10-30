@@ -31,6 +31,7 @@ import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ChatWaterfallService } from './chat-waterfall.service';
 import type { ItemCallIndexService } from './item-call-index.service';
 import type { PolledSpendService } from './polled-spend.service';
+import { RunOutcomeHistoryService } from './run-outcome-history.service';
 import {
   ITEM_TEXT_CHARS,
   OVERVIEW_BYTES,
@@ -94,6 +95,15 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         }),
       } as unknown as AgentAdapterRegistry,
       wallTurns,
+      new RunOutcomeHistoryService(em, itemDao, {
+        all: () =>
+          new Map([
+            [
+              'claude',
+              { getConfig: () => ({ questionToolName: 'AskUserQuestion' }) },
+            ],
+          ]),
+      } as unknown as AgentAdapterRegistry),
     );
     const run = new Run();
     run.id = 'source';
@@ -611,7 +621,6 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     async function workflowRun(
       id: string,
       createdAt: number,
-      runOutcomes: string | null = null,
       title = `Run ${id}`,
     ): Promise<void> {
       const run = new Run();
@@ -620,7 +629,6 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       run.status = 'completed';
       run.workflowId = 'team';
       run.createdAt = new Date(T0 + createdAt);
-      run.runOutcomes = runOutcomes;
       const fork = orm.em.fork();
       fork.persist(run);
       await fork.flush();
@@ -648,6 +656,20 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       await fork.flush();
     }
 
+    const outcomeRow = (acceptance: string, reviewRounds: number) => ({
+      prOwner: 'o',
+      prRepo: 'r',
+      prNumber: 7,
+      prUrl: 'https://github.com/o/r/pull/7',
+      draft: false,
+      reviewRounds,
+      acceptance,
+      questionsAsked: 0,
+      workflowSlug: 'team',
+      nodeId: 'dev',
+      conversationId: null,
+    });
+
     const turn = (model: string, costUsd: number, durationMs: number) => ({
       usage: { durationMs, costUsd, contextModel: model },
     });
@@ -667,23 +689,36 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     };
 
     beforeEach(async () => {
-      await workflowRun(
-        'wf-new',
-        2_000,
-        JSON.stringify({
-          'o/r#7': {
-            seq: 2,
-            draft: false,
-            reviewRounds: 2,
-            acceptance: 'accepted',
-            questionsAsked: 0,
-          },
-        }),
-      );
+      await workflowRun('wf-new', 2_000);
       await workflowRun('wf-old', 1_000);
       await row('wf-new', 0, 'message', { text: 'go' }, 0, 'dev');
       await row('wf-new', 1, 'turn_complete', turn('opus', 3, 6_000), 6, 'dev');
       await row('wf-new', 2, 'turn_complete', turn('opus', 1, 2_000), 9, 'dev');
+      await row(
+        'wf-new',
+        3,
+        'run_outcome',
+        outcomeRow('accepted', 2),
+        10,
+        'dev',
+      );
+      // Past the snapshot too: neither may reach the comparison.
+      await row(
+        'wf-new',
+        5,
+        'run_outcome',
+        outcomeRow('changes_requested', 3),
+        31,
+        'dev',
+      );
+      await row(
+        'wf-new',
+        6,
+        'approval_request',
+        { toolName: 'AskUserQuestion', questions: [{ question: 'More?' }] },
+        32,
+        'dev',
+      );
       // Written after the analysis began: past this run's snapshot.
       await row(
         'wf-new',
@@ -792,6 +827,36 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       });
     });
 
+    it('counts the questions put to the user up to each run’s snapshot', async () => {
+      await workflowRun('wf-q', 3_000);
+      const question = {
+        toolName: 'AskUserQuestion',
+        questions: [{ question: 'Ship it?' }],
+      };
+      await row('wf-q', 0, 'message', { text: 'go' }, 0, 'dev');
+      await row('wf-q', 1, 'approval_request', question, 1, 'dev');
+      await row('wf-q', 2, 'approval_verdict', { allow: true }, 2, 'dev');
+      await row('wf-q', 3, 'turn_complete', turn('opus', 1, 3_000), 3, 'dev');
+      await row('wf-q', 4, 'approval_request', question, 4, 'dev');
+
+      const answer = await reader.read(
+        {
+          sourceRunId: 'wf-q',
+          snapshotSeq: 3,
+          sourceWorking: false,
+          workflow: {
+            slug: 'team',
+            runs: [{ runId: 'wf-q', snapshotSeq: 3, working: false }],
+          },
+        },
+        { view: 'runs' },
+      );
+
+      expect(answer.runs).toEqual([
+        expect.objectContaining({ runId: 'wf-q', questionsAsked: 1 }),
+      ]);
+    });
+
     it("compares the runs and each node's models, every turn up to each run's own snapshot", async () => {
       const answer = await reader.read(scope, { view: 'runs' });
 
@@ -810,12 +875,15 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
               costUsd: 4,
             }),
           ],
+          questionsAsked: 0,
           pullRequests: [
             {
               pullRequest: 'o/r#7',
               acceptance: 'accepted',
               reviewRounds: 2,
               draft: false,
+              changesRequestedRounds: 0,
+              msToAccepted: 0,
             },
           ],
         }),
@@ -904,7 +972,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     it('pages a long comparison rather than dropping runs, and names a run with no rows yet', async () => {
       const many = Array.from({ length: 30 }, (_, index) => `wf-${index}`);
       for (const [index, id] of many.entries()) {
-        await workflowRun(id, 10_000 + index, null, `${id} ${'t'.repeat(600)}`);
+        await workflowRun(id, 10_000 + index, `${id} ${'t'.repeat(600)}`);
         await row(id, 0, 'message', { text: 'go' }, 0, 'dev');
         for (let seq = 1; seq <= 3; seq += 1) {
           await row(
@@ -960,7 +1028,6 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         await workflowRun(
           id,
           20_000 + index,
-          null,
           `${id} ${secret} ${'p'.repeat(index * 37)}`,
         );
         await row(id, 0, 'message', { text: 'go' }, 0, 'dev');

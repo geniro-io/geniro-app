@@ -101,6 +101,12 @@ describe('recordOutcomeResultText', () => {
     );
   });
 
+  it('says nothing was written when the outcome already stands', () => {
+    expect(recordOutcomeResultText({ status: 'unchanged', seq: 412 })).toBe(
+      'Unchanged: outcome 412 already records this draft state, review rounds and acceptance for the pull request, so nothing was written.',
+    );
+  });
+
   it('says it was not recorded when no pass could record it', () => {
     expect(
       recordOutcomeResultText({ status: 'unavailable', reason: 'no pass' }),

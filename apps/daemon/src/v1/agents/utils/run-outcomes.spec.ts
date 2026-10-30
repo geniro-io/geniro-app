@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { PullRequestOutcome } from '../chat.types';
 import {
+  outcomeHistoryFigures,
   parsePullRequestUrl,
   readRunOutcomes,
   withRunOutcome,
@@ -124,5 +125,46 @@ describe('withRunOutcome', () => {
       'acme/platform#87',
       'acme/platform#88',
     ]);
+  });
+});
+
+describe('outcomeHistoryFigures', () => {
+  const at = (minute: number): Date =>
+    new Date(Date.UTC(2026, 9, 27, 9, minute));
+
+  it('counts each arrival at changes_requested, not each outcome that repeats it', () => {
+    expect(
+      outcomeHistoryFigures([
+        { seq: 10, at: at(0), acceptance: 'not_yet' },
+        { seq: 20, at: at(5), acceptance: 'changes_requested' },
+        { seq: 30, at: at(9), acceptance: 'changes_requested' },
+        { seq: 40, at: at(20), acceptance: 'not_yet' },
+        { seq: 50, at: at(25), acceptance: 'changes_requested' },
+        { seq: 60, at: at(40), acceptance: 'accepted' },
+      ]),
+    ).toEqual({ changesRequestedRounds: 2, msToAccepted: 40 * 60_000 });
+  });
+
+  it('reads the outcomes in seq order whatever order they arrive in', () => {
+    expect(
+      outcomeHistoryFigures([
+        { seq: 30, at: at(30), acceptance: 'accepted' },
+        { seq: 10, at: at(0), acceptance: 'changes_requested' },
+        { seq: 20, at: at(10), acceptance: 'accepted' },
+      ]),
+    ).toEqual({ changesRequestedRounds: 1, msToAccepted: 10 * 60_000 });
+  });
+
+  it('has no time to acceptance while the pull request was never accepted', () => {
+    expect(
+      outcomeHistoryFigures([
+        { seq: 10, at: at(0), acceptance: 'not_yet' },
+        { seq: 20, at: at(5), acceptance: 'not_needed' },
+      ]),
+    ).toEqual({ changesRequestedRounds: 0, msToAccepted: null });
+    expect(outcomeHistoryFigures([])).toEqual({
+      changesRequestedRounds: 0,
+      msToAccepted: null,
+    });
   });
 });

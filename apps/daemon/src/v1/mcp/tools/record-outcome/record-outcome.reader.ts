@@ -62,5 +62,8 @@ export function recordOutcomeResultText(
   if (outcome.status === 'unavailable') {
     return `Not recorded: ${outcome.reason}.`;
   }
+  if (outcome.status === 'unchanged') {
+    return `Unchanged: outcome ${outcome.seq} already records this draft state, review rounds and acceptance for the pull request, so nothing was written.`;
+  }
   return `Recorded as outcome ${outcome.seq} (${outcome.questionsAsked} ${outcome.questionsAsked === 1 ? 'question' : 'questions'} asked of the user on this run so far).`;
 }

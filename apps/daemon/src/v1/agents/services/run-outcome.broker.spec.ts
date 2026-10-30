@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
-import { describe, expect, it, vi } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Run } from '../../runs/entity/run.entity';
 import type {
@@ -13,6 +14,7 @@ import { readRunOutcomes } from '../utils/run-outcomes';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunOutcomeBroker, type RunOutcomeSink } from './run-outcome.broker';
+import { RunOutcomeHistoryService } from './run-outcome-history.service';
 
 const PR_URL = 'https://github.com/acme/platform/pull/87';
 
@@ -56,9 +58,18 @@ function setUp(): Harness {
       kinds: readonly string[],
       range: unknown,
     ) => {
-      // The count is the whole run's: no seq range, question rows only.
       harness.reads.push({ kinds: [...kinds], range });
-      return harness.approvals;
+      // As the table hands them back: `Item.payload` is the column's JSON text.
+      if (kinds.includes('run_outcome')) {
+        return harness.rows.map((row, at) => ({
+          seq: 101 + at,
+          payload: JSON.stringify(row.payload),
+          createdAt: new Date('2026-10-27T09:00:00.000Z'),
+        }));
+      }
+      return harness.approvals.map((row) => ({
+        payload: JSON.stringify(row.payload),
+      }));
     },
   } as unknown as ItemDao;
   const runDao = {
@@ -94,9 +105,8 @@ function setUp(): Harness {
   } as unknown as PullRequestCaptureService;
   harness.broker = new RunOutcomeBroker(
     em,
-    itemDao,
     runDao,
-    adapters,
+    new RunOutcomeHistoryService(em, itemDao, adapters),
     captures,
   );
   return harness;
@@ -133,6 +143,10 @@ const INPUT: RunOutcomeInput = {
 };
 
 describe('RunOutcomeBroker', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('records one run_outcome row with the identity read from the URL and the run’s workflow', async () => {
     const harness = setUp();
     harness.broker.register('run-1', 'manager', sinkFor(harness));
@@ -185,6 +199,102 @@ describe('RunOutcomeBroker', () => {
       acceptance: 'changes_requested',
       summary: 'The user wants the retry moved behind a flag.',
     });
+  });
+
+  it('writes nothing for a call that repeats the pull request’s newest outcome, and records the next change', async () => {
+    const harness = setUp();
+    harness.broker.register('run-1', 'manager', sinkFor(harness));
+    await harness.broker.record('run-1', 'manager', 'manager', INPUT);
+    const announcedBefore = harness.announced.length;
+
+    const repeat = await harness.broker.record('run-1', 'manager', 'manager', {
+      ...INPUT,
+      prUrl: 'https://github.com/ACME/Platform/pull/87',
+      summary: 'Same figures, new words.',
+    });
+    const changed = await harness.broker.record('run-1', 'manager', 'manager', {
+      ...INPUT,
+      reviewRounds: 1,
+    });
+
+    expect(repeat).toEqual({ status: 'unchanged', seq: 101 });
+    expect(harness.announced.length).toBe(announcedBefore + 1);
+    expect(changed).toMatchObject({ status: 'recorded', seq: 102 });
+    expect(harness.rows.map((row) => row.payload.reviewRounds)).toEqual([0, 1]);
+  });
+
+  it('records a call that changes the draft state alone', async () => {
+    const harness = setUp();
+    harness.broker.register('run-1', 'manager', sinkFor(harness));
+    await harness.broker.record('run-1', 'manager', 'manager', INPUT);
+
+    expect(
+      await harness.broker.record('run-1', 'manager', 'manager', {
+        ...INPUT,
+        draft: false,
+      }),
+    ).toMatchObject({ status: 'recorded', seq: 102 });
+  });
+
+  it('judges a repeat by the newest row, not by a pull-request column whose write failed', async () => {
+    const harness = setUp();
+    harness.broker.register('run-1', 'manager', sinkFor(harness));
+    await harness.broker.record('run-1', 'manager', 'manager', INPUT);
+    harness.failColumnWrite = true;
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    await harness.broker.record('run-1', 'manager', 'manager', {
+      ...INPUT,
+      acceptance: 'changes_requested',
+    });
+
+    expect(
+      await harness.broker.record('run-1', 'manager', 'manager', INPUT),
+    ).toMatchObject({ status: 'recorded', seq: 103 });
+    expect(harness.rows.map((row) => row.payload.acceptance)).toEqual([
+      'not_yet',
+      'changes_requested',
+      'not_yet',
+    ]);
+  });
+
+  it('writes the newest row into a pull-request column that missed it when the agent repeats it', async () => {
+    const harness = setUp();
+    harness.broker.register('run-1', 'manager', sinkFor(harness));
+    await harness.broker.record('run-1', 'manager', 'manager', INPUT);
+    harness.failColumnWrite = true;
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const changed = { ...INPUT, acceptance: 'changes_requested' as const };
+    await harness.broker.record('run-1', 'manager', 'manager', changed);
+    harness.failColumnWrite = false;
+    const announcedBefore = harness.announced.length;
+
+    expect(
+      await harness.broker.record('run-1', 'manager', 'manager', changed),
+    ).toEqual({ status: 'unchanged', seq: 102 });
+    expect(harness.rows).toHaveLength(2);
+    expect(
+      readRunOutcomes(harness.run?.runOutcomes).get('acme/platform#87'),
+    ).toMatchObject({ seq: 102, acceptance: 'changes_requested' });
+    expect(harness.announced.length).toBe(announcedBefore + 1);
+  });
+
+  it('catches up a pull request the column missed when another pull request is recorded', async () => {
+    const harness = setUp();
+    harness.broker.register('run-1', 'manager', sinkFor(harness));
+    harness.failColumnWrite = true;
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    await harness.broker.record('run-1', 'manager', 'manager', INPUT);
+    harness.failColumnWrite = false;
+
+    await harness.broker.record('run-1', 'manager', 'manager', {
+      ...INPUT,
+      prNumber: 90,
+      prUrl: 'https://github.com/acme/platform/pull/90',
+    });
+
+    const column = readRunOutcomes(harness.run?.runOutcomes);
+    expect(column.get('acme/platform#87')).toMatchObject({ seq: 101 });
+    expect(column.get('acme/platform#90')).toMatchObject({ seq: 102 });
   });
 
   it('files the row under the call the recording conversation answers', async () => {
@@ -242,6 +352,7 @@ describe('RunOutcomeBroker', () => {
     expect(outcome).toMatchObject({ questionsAsked: 7 });
     expect(harness.rows[0]?.payload.questionsAsked).toBe(7);
     expect(harness.reads).toEqual([
+      { kinds: ['run_outcome'], range: undefined },
       { kinds: ['approval_request'], range: undefined },
     ]);
   });

@@ -382,6 +382,7 @@ import { type GitNotice, useGitInfo } from './use-git-info';
 import { useMessageQueue } from './use-message-queue';
 import { useNodeDurableReadings } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
+import { useRunOutcomes } from './use-run-outcomes';
 import { useRunProcesses } from './use-run-processes';
 import { useRunState } from './use-run-state';
 import { useRunTeamNotes } from './use-run-team-notes';
@@ -6592,6 +6593,24 @@ export function Chats({
   const openTeamNote = useLatestCallback((seq: number) => {
     setNotesView({ selected: seq });
   }, []);
+  /**
+   * The newest outcome the open run's pull-request list carries — the outcome
+   * history's one refresh trigger, moved by every announce of a written outcome.
+   */
+  const latestOutcomeSeq = useMemo(
+    () =>
+      (activeRunPullRequests ?? []).reduce(
+        (newest, row) => Math.max(newest, row.outcome?.seq ?? 0),
+        0,
+      ),
+    [activeRunPullRequests],
+  );
+  /** Every outcome the open run recorded per pull request — a workflow run's only. */
+  const { pullRequests: pullRequestOutcomes } = useRunOutcomes(
+    chatApi,
+    activeRun?.workflowId != null ? activeRunId : null,
+    latestOutcomeSeq,
+  );
   /** The run's team notes, read from the daemon — a workflow run's only. */
   const { notes: teamNotes } = useRunTeamNotes(
     chatApi,
@@ -10658,6 +10677,7 @@ export function Chats({
                       artifacts={artifacts}
                       publishedArtifacts={publishedArtifacts}
                       threadPullRequests={openedByActiveThread}
+                      pullRequestOutcomes={pullRequestOutcomes}
                       workflows={runWorkflows}
                       onRevealWorkflow={revealWorkflow}
                       stages={

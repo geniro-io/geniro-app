@@ -376,7 +376,7 @@ function stageService(
 /** A `record_outcome` broker no case here records through: listing only. */
 function runOutcomeBroker(): RunOutcomeBroker {
   return new RunOutcomeBroker(
-    ...([{}, {}, {}, {}, {}] as unknown as ConstructorParameters<
+    ...([{}, {}, {}, {}] as unknown as ConstructorParameters<
       typeof RunOutcomeBroker
     >),
   );

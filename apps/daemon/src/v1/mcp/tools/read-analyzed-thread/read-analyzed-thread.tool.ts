@@ -9,6 +9,7 @@ import {
 } from '../../../agents/services/thread-reader.service';
 import { analysedSourceOf } from '../../../agents/utils/analysed-runs';
 import type { WorkflowChangeService } from '../../../graphs/services/workflow-change.service';
+import type { WorkflowHistoryService } from '../../../stats/services/workflow-history.service';
 import type {
   McpCallContext,
   McpListContext,
@@ -21,6 +22,12 @@ import {
   readAnalyzedThreadArgs,
 } from './read-analyzed-thread.reader';
 import { readAnalyzedThreadSchema } from './read-analyzed-thread.schema';
+
+const NOT_A_WORKFLOW = {
+  error: 'NOT_A_WORKFLOW',
+  message:
+    'The analysed thread is a plain chat (or is gone): it has no workflow.',
+};
 
 /**
  * `read_analyzed_thread` — an analysis chat's paged read of the one thread it
@@ -37,6 +44,7 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
     private readonly analysis: AnalysisBroker,
     private readonly threads: ThreadReaderService,
     private readonly workflows: WorkflowChangeService,
+    private readonly history: WorkflowHistoryService,
   ) {
     super();
   }
@@ -66,9 +74,34 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
       return this.text(`Nothing to read: ${turn.reason}.`, true);
     }
     try {
+      if (read.query.view === 'history') {
+        const workflow = await this.threads.analysedWorkflowOf(turn);
+        if (workflow === null) {
+          return this.text(analyzedThreadResultText(NOT_A_WORKFLOW));
+        }
+        return this.text(
+          analyzedThreadResultText(
+            pagedAnswer(
+              maskedAnswer({
+                ...(await this.history.read(workflow.slug, {
+                  analysedRunIds: turn.workflow
+                    ? turn.workflow.runs.map((run) => run.runId)
+                    : [turn.sourceRunId],
+                  readerRunId: runId,
+                })),
+              }),
+              read.query.offset ?? 0,
+            ),
+          ),
+        );
+      }
       if (read.query.view !== 'workflow') {
         return this.text(
-          analyzedThreadResultText(await this.threads.read(turn, read.query)),
+          analyzedThreadResultText(
+            await this.threads.read(turn, read.query, (slug) =>
+              this.history.versionIndex(slug),
+            ),
+          ),
         );
       }
       const named = analysedSourceOf(turn, read.query.runId);
@@ -77,13 +110,7 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
       }
       const workflow = await this.threads.analysedWorkflowOf(turn, named);
       if (workflow === null) {
-        return this.text(
-          analyzedThreadResultText({
-            error: 'NOT_A_WORKFLOW',
-            message:
-              'The analysed thread is a plain chat (or is gone): it has no workflow.',
-          }),
-        );
+        return this.text(analyzedThreadResultText(NOT_A_WORKFLOW));
       }
       return this.text(
         analyzedThreadResultText(

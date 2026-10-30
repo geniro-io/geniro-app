@@ -20,7 +20,10 @@ import {
 } from 'vitest';
 
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { WorkflowChangeLogDao } from '../../graphs/dao/workflow-change-log.dao';
+import { WorkflowChangeLogEntry } from '../../graphs/entity/workflow-change-log-entry.entity';
 import type { Workflow } from '../../graphs/graphs.types';
+import { WorkflowChangeLogService } from '../../graphs/services/workflow-change-log.service';
 import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import {
   canonicalGraphJson,
@@ -49,6 +52,7 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
   let activityDao: UsageActivityDao;
   let usageDao: UsageEventDao;
   let versionDao: WorkflowVersionDao;
+  let changeLog: WorkflowChangeLogService;
   let get: ReturnType<typeof vi.fn>;
   let service: WorkflowVersionsService;
 
@@ -56,7 +60,12 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [UsageActivity, UsageEvent, WorkflowVersion],
+        entities: [
+          UsageActivity,
+          UsageEvent,
+          WorkflowVersion,
+          WorkflowChangeLogEntry,
+        ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -76,6 +85,7 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
     activityDao = new UsageActivityDao(em);
     usageDao = new UsageEventDao(em);
     versionDao = new WorkflowVersionDao(em);
+    changeLog = new WorkflowChangeLogService(new WorkflowChangeLogDao(em));
     get = vi.fn(async () => ({ slug: 'dev-team', workflow: graph, hash: 'h' }));
     service = new WorkflowVersionsService(
       em,
@@ -84,6 +94,7 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
       versionDao,
       { all: () => new Map() } as unknown as AgentAdapterRegistry,
       { get } as unknown as WorkflowStoreService,
+      changeLog,
     );
   });
 
@@ -241,6 +252,7 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
         versionDao,
         { all: () => new Map() } as unknown as AgentAdapterRegistry,
         store,
+        changeLog,
       );
     });
 
@@ -268,6 +280,32 @@ describe('WorkflowVersionsService (in-memory sqlite)', () => {
       expect(restored.hash).toBe((await store.get('dev-team')).hash);
       expect(restored.backup).toMatch(/^\.backups\/dev-team\..+\.yaml$/);
       expect(await readFile(join(dir, restored.backup), 'utf8')).toBe(before);
+    });
+
+    it('logs the restore with the version it replaced and the one it wrote back', async () => {
+      const { hash, workflow } = await store.get('dev-team');
+
+      const restored = await restoring.restore('dev-team', OLDER, hash);
+
+      expect(await changeLog.entriesOf('dev-team')).toEqual([
+        expect.objectContaining({
+          source: 'restore',
+          fromVersion: workflowVersionOf(workflow),
+          toVersion: OLDER,
+          summary: `Restored version 1 (${OLDER})`,
+          recommendationIds: [],
+          chatRunId: null,
+          backup: restored.backup,
+        }),
+      ]);
+    });
+
+    it('logs nothing for a restore it refused', async () => {
+      await expect(
+        restoring.restore('dev-team', OLDER, 'stale-hash'),
+      ).rejects.toThrow();
+
+      expect(await changeLog.entriesOf('dev-team')).toEqual([]);
     });
 
     describe('with stages', () => {

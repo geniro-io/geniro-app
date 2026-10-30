@@ -121,6 +121,7 @@ import type { MemoryService } from '../../memory/services/memory.service';
 import { AgentKind } from '../../runs/runs.types';
 import type { ShareService } from '../../shares/services/share.service';
 import type { AgentShareOutcome } from '../../shares/shares.types';
+import type { WorkflowHistoryService } from '../../stats/services/workflow-history.service';
 import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
 import { createMcpTools } from '../tools/mcp-tools';
 import { MoveStageTool } from '../tools/move-stage/move-stage.tool';
@@ -238,6 +239,8 @@ function service(
       analysis,
       threads,
       workflowChanges,
+      // Never asked by the cases that list tools.
+      workflowHistory: {} as WorkflowHistoryService,
       workflowGate,
       workflowBuilders,
       workflowStore,
@@ -4212,6 +4215,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       analysis: new AnalysisBroker(),
       threads: {} as ThreadReaderService,
       workflowChanges: {} as WorkflowChangeService,
+      workflowHistory: {} as WorkflowHistoryService,
       workflowGate: new WorkflowProposalBroker(),
       workflowBuilders: builders,
       workflowStore: {} as WorkflowStoreService,
@@ -4309,6 +4313,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       analysis: new AnalysisBroker(),
       threads: {} as ThreadReaderService,
       workflowChanges: {} as WorkflowChangeService,
+      workflowHistory: {} as WorkflowHistoryService,
       workflowGate: new WorkflowProposalBroker(),
       workflowBuilders: builders,
       workflowStore: store,
@@ -4372,6 +4377,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       analysis: new AnalysisBroker(),
       threads: {} as ThreadReaderService,
       workflowChanges: {} as WorkflowChangeService,
+      workflowHistory: {} as WorkflowHistoryService,
       workflowGate: new WorkflowProposalBroker(),
       workflowBuilders: builders,
       workflowStore: {} as WorkflowStoreService,
@@ -4445,6 +4451,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       analysis: new AnalysisBroker(),
       threads: {} as ThreadReaderService,
       workflowChanges: {} as WorkflowChangeService,
+      workflowHistory: {} as WorkflowHistoryService,
       workflowGate: gate,
       workflowBuilders: new WorkflowBuilderBroker(),
       workflowStore: {} as WorkflowStoreService,

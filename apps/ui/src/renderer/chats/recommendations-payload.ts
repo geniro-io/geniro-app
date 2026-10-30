@@ -171,7 +171,7 @@ export function readRecommendations(
     .map(readItem)
     .filter((entry): entry is RecommendationView => entry !== null);
   // Items that all fail to read are not "no recommendations": drawn, the card
-  // would claim the thread ran efficiently.
+  // would claim nothing was found worth changing.
   if (items.length === 0 && row.items.length > 0) {
     return null;
   }

@@ -169,7 +169,8 @@ describe('composeWorkflowChatInstructions', () => {
     expect(BRIEF).toContain(
       `You read its ${BUILDER_CHAT_ANALYSED_RUNS} newest runs through \`${HOST_ANALYZED_THREAD_TOOL}\``,
     );
-    expect(BRIEF).toMatch(/Read view=runs first/);
+    expect(BRIEF).toMatch(/Read view=history first/);
+    expect(BRIEF).toMatch(/Read view=runs next/);
     expect(BRIEF).toContain(`call \`${HOST_RECOMMENDATIONS_TOOL}\` ONCE`);
   });
 

@@ -18,16 +18,19 @@ import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
-import type { Workflow } from '../graphs.types';
+import type { WorkflowChangeLogDao } from '../dao/workflow-change-log.dao';
+import type { Workflow, WorkflowChangeLogRecord } from '../graphs.types';
 import { configDirToken } from '../utils/config-dir-redaction';
 import { WORKFLOW_BACKUP_DIR } from '../utils/workflow-backup';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
+import { workflowVersionOf } from '../utils/workflow-version';
 import { InstructionSizesService } from './instruction-sizes.service';
 import {
   type WorkflowChange,
   type WorkflowChangeAuthority,
   WorkflowChangeService,
 } from './workflow-change.service';
+import { WorkflowChangeLogService } from './workflow-change-log.service';
 import { WorkflowStoreService } from './workflow-store.service';
 
 const WF: Workflow = {
@@ -37,6 +40,26 @@ const WF: Workflow = {
     { id: 'reviewer', kind: 'agent', agent: 'claude', approval: 'auto' },
   ],
   edges: [{ from: 'builder', to: 'reviewer', kind: 'data' as const }],
+};
+
+/** The card the Apply in `applies` names, at seq 3. */
+const CARD = {
+  sourceRunId: 'newest',
+  sourceKind: 'workflow',
+  timing: null,
+  items: ['W-1', 'W-2'].map((id) => ({
+    id,
+    target: 'workflow',
+    territory: 'process',
+    kind: 'model',
+    location: 'reviewer',
+    title: `Title of ${id}`,
+    change: 'model: sonnet',
+    evidence: [{ runId: 'newest', seq: 4, quote: 'slow review' }],
+    rootCause: 'the reviewer runs the largest model',
+    impact: { minutesSaved: 3, basis: 'turn spans', confidence: 3 },
+    risk: { level: 'low', note: 'reviews may miss more' },
+  })),
 };
 
 const FASTER: Workflow = {
@@ -51,6 +74,7 @@ describe('WorkflowChangeService', () => {
   let dir: string;
   let store: WorkflowStoreService;
   let applies: unknown[];
+  let logged: WorkflowChangeLogRecord[];
   let service: WorkflowChangeService;
 
   beforeEach(async () => {
@@ -58,6 +82,7 @@ describe('WorkflowChangeService', () => {
     store = new WorkflowStoreService({ workflowsDir: dir });
     await store.create(WF, 'dev-team');
     applies = [{ cardSeq: 3, ids: ['W-1', 'W-2'] }];
+    logged = [];
     service = new WorkflowChangeService(
       { fork: () => ({}) } as unknown as EntityManager,
       store,
@@ -70,6 +95,15 @@ describe('WorkflowChangeService', () => {
               payload: JSON.stringify({ text: 'apply', apply }),
             })),
           ]),
+        rowAtSeq: (_runId: string, seq: number) =>
+          Promise.resolve(
+            seq === 3
+              ? {
+                  kind: 'recommendations',
+                  payload: JSON.stringify(CARD),
+                }
+              : null,
+          ),
       } as unknown as ItemDao,
       {
         for: (agent: string) => ({
@@ -85,6 +119,12 @@ describe('WorkflowChangeService', () => {
           new CodexAdapter({ clientVersion: '1.0.0' }),
         ]),
       ),
+      new WorkflowChangeLogService({
+        append: (record: WorkflowChangeLogRecord) => {
+          logged.push(record);
+          return Promise.resolve();
+        },
+      } as unknown as WorkflowChangeLogDao),
     );
   });
 
@@ -157,6 +197,83 @@ describe('WorkflowChangeService', () => {
     expect((await store.list()).map((entry) => entry.slug)).toEqual([
       'dev-team',
     ]);
+  });
+
+  it('logs an applied change under the Apply it carried out: its items, card, versions and backup', async () => {
+    const before = workflowVersionOf((await store.get('dev-team')).workflow);
+
+    const result = await change({ ids: ['W-2'] });
+
+    expect(result).toMatchObject({ saved: true });
+    const after = workflowVersionOf((await store.get('dev-team')).workflow);
+    expect(after).not.toBe(before);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({
+      slug: 'dev-team',
+      source: 'analysis',
+      fromVersion: before,
+      toVersion: after,
+      summary: 'W-2 Title of W-2',
+      recommendationIds: ['W-2'],
+      chatRunId: 'analysis',
+      cardSeq: 3,
+      backup: result.backup,
+    });
+  });
+
+  it('logs nothing for a dry run, a refused save or a builder check', async () => {
+    await change({ dryRun: true });
+    await change({ baseHash: 'stale' });
+    await change({ authority: builder({ savedHash: await hash() }) });
+
+    expect(logged).toEqual([]);
+  });
+
+  it('still saves, logging the change untitled, when the card can no longer be read', async () => {
+    applies = [{ cardSeq: 8, ids: ['W-1'] }];
+
+    expect(await change()).toMatchObject({ saved: true });
+    expect(logged[0]).toMatchObject({
+      summary: null,
+      recommendationIds: ['W-1'],
+      cardSeq: 8,
+    });
+  });
+
+  it('still answers saved when the change log cannot be written', async () => {
+    const failing = new WorkflowChangeService(
+      { fork: () => ({}) } as unknown as EntityManager,
+      store,
+      {
+        userMessagesInOrder: () =>
+          Promise.resolve([
+            { seq: 1, payload: JSON.stringify({ apply: applies[0] }) },
+          ]),
+        rowAtSeq: () => Promise.resolve(null),
+      } as unknown as ItemDao,
+      {} as AgentAdapterRegistry,
+      {} as InstructionSizesService,
+      new WorkflowChangeLogService({
+        append: () => Promise.reject(new Error('SQLITE_BUSY')),
+      } as unknown as WorkflowChangeLogDao),
+    );
+
+    await expect(
+      failing.save({
+        authority: {
+          kind: 'apply',
+          analysisRunId: 'analysis',
+          ids: ['W-1'],
+          baseHash: await hash(),
+        },
+        slug: 'dev-team',
+        edits: [{ path: 'nodes/reviewer/model', value: 'sonnet' }],
+        dryRun: false,
+      }),
+    ).resolves.toMatchObject({ saved: true });
+    expect((await store.get('dev-team')).workflow.nodes[1]).toMatchObject({
+      model: 'sonnet',
+    });
   });
 
   it('refuses an id that is not in the latest Apply, even one an earlier Apply named', async () => {
@@ -659,6 +776,7 @@ describe('WorkflowChangeService', () => {
       new InstructionSizesService(
         new AgentAdapterRegistry([new ClaudeAdapter()]),
       ),
+      new WorkflowChangeLogService({} as WorkflowChangeLogDao),
     );
 
     const described = await sized.describe('dev-team', null);

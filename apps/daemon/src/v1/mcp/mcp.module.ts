@@ -32,6 +32,8 @@ import { MemoryModule } from '../memory/memory.module';
 import { MemoryService } from '../memory/services/memory.service';
 import { ShareService } from '../shares/services/share.service';
 import { SharesModule } from '../shares/shares.module';
+import { WorkflowHistoryService } from '../stats/services/workflow-history.service';
+import { StatsModule } from '../stats/stats.module';
 import { McpController } from './controllers/mcp.controller';
 import { McpServerService } from './services/mcp-server.service';
 import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
@@ -42,15 +44,22 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
  *
  * Its own module because it sits ABOVE the two it serves: the render family's
  * brokers live in {@link AgentsModule}, the call runtime and the board's
- * rendezvous in {@link GraphsModule}, and the host needs both. Nothing imports
- * this module back.
+ * rendezvous in {@link GraphsModule}, and the host needs both — and the
+ * workflow history an analysis reads in {@link StatsModule}, which sits above
+ * those two. Nothing imports this module back.
  *
  * The tools are plain classes, one directory each under `tools/`, built by ONE
  * factory so their listing order is written in one place
  * ({@link createMcpTools}).
  */
 @Module({
-  imports: [AgentsModule, GraphsModule, SharesModule, MemoryModule],
+  imports: [
+    AgentsModule,
+    GraphsModule,
+    SharesModule,
+    MemoryModule,
+    StatsModule,
+  ],
   controllers: [McpController],
   providers: [
     {
@@ -79,6 +88,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         analysis: AnalysisBroker,
         threads: ThreadReaderService,
         workflowChanges: WorkflowChangeService,
+        workflowHistory: WorkflowHistoryService,
         workflowGate: WorkflowProposalBroker,
         workflowBuilders: WorkflowBuilderBroker,
         workflowStore: WorkflowStoreService,
@@ -109,6 +119,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           analysis,
           threads,
           workflowChanges,
+          workflowHistory,
           workflowGate,
           workflowBuilders,
           workflowStore,
@@ -139,6 +150,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         AnalysisBroker,
         ThreadReaderService,
         WorkflowChangeService,
+        WorkflowHistoryService,
         WorkflowProposalBroker,
         WorkflowBuilderBroker,
         WorkflowStoreService,

@@ -143,7 +143,7 @@ describe('RecommendationsCard', () => {
     expect(el.textContent).toContain('file moved');
   });
 
-  it('says the thread ran efficiently when there is nothing to recommend', () => {
+  it('says nothing was found worth changing when there is nothing to recommend', () => {
     const el = render(
       <RecommendationsCard
         look={LOOK}
@@ -157,7 +157,7 @@ describe('RecommendationsCard', () => {
       />,
     );
     expect(el.textContent).toContain(
-      'No recommendations — this thread ran efficiently.',
+      'No recommendations — nothing was found worth changing.',
     );
     expect(el.querySelector('[data-slot="recommendations-footer"]')).toBeNull();
   });

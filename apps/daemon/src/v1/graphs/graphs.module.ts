@@ -5,6 +5,7 @@ import { ConfigDirPinService } from '../agents/services/config-dir-pin.service';
 import { MemoryModule } from '../memory/memory.module';
 import { CapabilitiesController } from './controllers/capabilities.controller';
 import { WorkflowsController } from './controllers/workflows.controller';
+import { WorkflowChangeLogDao } from './dao/workflow-change-log.dao';
 import { CallBroker } from './services/call-broker.service';
 import { CapabilitiesService } from './services/capabilities.service';
 import { GraphExecutorService } from './services/graph-executor.service';
@@ -19,6 +20,7 @@ import { TaskBoardBroker } from './services/task-board.broker';
 import { WorkflowActionsService } from './services/workflow-actions.service';
 import { WorkflowAnalysisService } from './services/workflow-analysis.service';
 import { WorkflowChangeService } from './services/workflow-change.service';
+import { WorkflowChangeLogService } from './services/workflow-change-log.service';
 import { WorkflowChatService } from './services/workflow-chat.service';
 import { WorkflowProposalService } from './services/workflow-proposal.service';
 import { WorkflowStoreService } from './services/workflow-store.service';
@@ -66,6 +68,8 @@ import { WorkflowStoreService } from './services/workflow-store.service';
     WorkflowChatService,
     WorkflowAnalysisService,
     WorkflowChangeService,
+    WorkflowChangeLogDao,
+    WorkflowChangeLogService,
     WorkflowActionsService,
     WorkflowProposalService,
   ],
@@ -81,6 +85,8 @@ import { WorkflowStoreService } from './services/workflow-store.service';
   // and reading the library there is how an edit would reach a run it must not.
   // `WorkflowProposalService` is exported for the MCP host's `propose_workflow`
   // and for `main.ts`'s boot rehydration of standing proposal cards.
+  // `WorkflowChangeLogService` is exported for the stats module's version
+  // restore, which writes the library too, and for its workflow history read.
   exports: [
     WorkflowStoreService,
     GraphExecutorService,
@@ -89,6 +95,7 @@ import { WorkflowStoreService } from './services/workflow-store.service';
     RunWorkflowService,
     StageService,
     WorkflowChangeService,
+    WorkflowChangeLogService,
     WorkflowProposalService,
   ],
 })

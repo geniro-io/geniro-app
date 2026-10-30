@@ -38,6 +38,7 @@ import { checkWorkflow } from '../utils/workflow-check';
 import { diffWorkflows } from '../utils/workflow-diff';
 import { parseWorkflowYaml } from '../utils/workflow-yaml';
 import { GraphExecutorService } from './graph-executor.service';
+import { WorkflowChangeLogService } from './workflow-change-log.service';
 import { WorkflowStoreService } from './workflow-store.service';
 
 export type PreparedProposal =
@@ -88,6 +89,7 @@ export class WorkflowProposalService {
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
     private readonly chats: ChatService,
+    private readonly changeLog: WorkflowChangeLogService,
   ) {}
 
   /**
@@ -392,7 +394,11 @@ export class WorkflowProposalService {
       };
     } else if (allow) {
       try {
-        verdict = verdictOf(proposal, await this.apply(proposal), note);
+        verdict = verdictOf(
+          proposal,
+          await this.apply(proposal, { runId, note }),
+          note,
+        );
       } catch (error) {
         this.logger.error(
           `run ${runId} could not save an approved workflow: ${error instanceof Error ? error.message : String(error)}`,
@@ -561,7 +567,14 @@ export class WorkflowProposalService {
     };
   }
 
-  async apply(proposal: WorkflowProposal): Promise<AppliedProposal> {
+  /**
+   * Write an approved card, and log what it wrote under the chat that raised
+   * it (`by`) and the note the user typed on it.
+   */
+  async apply(
+    proposal: WorkflowProposal,
+    by: { runId: string; note: string | null } | null = null,
+  ): Promise<AppliedProposal> {
     if (proposal.mode === 'create') {
       try {
         await this.store.create(proposal.workflow, proposal.slug);
@@ -571,6 +584,7 @@ export class WorkflowProposalService {
         }
         throw error;
       }
+      await this.logApproved(proposal, null, null, by);
       return { outcome: 'saved', slug: proposal.slug, backup: null };
     }
     const { directory, path } = this.store.locate(proposal.slug);
@@ -600,8 +614,62 @@ export class WorkflowProposalService {
       }
       throw error;
     }
+    await this.logApproved(
+      proposal,
+      readableWorkflow(current.source),
+      backup,
+      by,
+    );
     return { outcome: 'saved', slug: proposal.slug, backup };
   }
+
+  /**
+   * The change log's entry for an approved card. A builder chat's card names
+   * the recommendation ids it carries out in its reason (its brief asks it
+   * to), so they are read from there.
+   */
+  private async logApproved(
+    proposal: WorkflowProposal,
+    before: Workflow | null,
+    backup: string | null,
+    by: { runId: string; note: string | null } | null,
+  ): Promise<void> {
+    const chat =
+      by === null
+        ? null
+        : await this.runDao.getById(by.runId, this.em.fork()).catch(() => null);
+    const builder = (chat?.editsWorkflowSlug ?? null) === proposal.slug;
+    await this.changeLog.record({
+      slug: proposal.slug,
+      source: builder ? 'builder' : 'chat',
+      before,
+      after: proposal.workflow,
+      summary: proposal.summary,
+      reason: proposal.reason,
+      userNote: by?.note,
+      recommendationIds: builder
+        ? workflowItemIdsIn(
+            `${proposal.summary ?? ''}\n${proposal.reason ?? ''}`,
+          )
+        : [],
+      chatRunId: by?.runId,
+      backup,
+    });
+  }
+}
+
+/** The workflow a library file holds, or null when it does not parse. */
+function readableWorkflow(source: string): Workflow | null {
+  try {
+    return parseWorkflowYaml(source);
+  } catch {
+    return null;
+  }
+}
+
+/** Every workflow recommendation id (`W-2`) a text names, in order. */
+function workflowItemIdsIn(text: string): string[] {
+  return [...text.matchAll(/\bW-\d{1,3}\b/g)].map((match) => match[0]);
 }
 
 /**

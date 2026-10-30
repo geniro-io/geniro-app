@@ -149,6 +149,27 @@ export class RunDao extends BaseDao<Run> {
     );
   }
 
+  /**
+   * Every chat that can file recommendations about a library workflow — its
+   * analyses and its builder chats — archived ones included.
+   */
+  async workflowRecommendationChats(
+    txEm?: EntityManager,
+  ): Promise<Pick<Run, 'id' | 'analysisWorkflowSlug' | 'editsWorkflowSlug'>[]> {
+    return this.getRepo(txEm).find(
+      {
+        $or: [
+          { analysisWorkflowSlug: { $ne: null } },
+          { editsWorkflowSlug: { $ne: null } },
+        ],
+      },
+      {
+        fields: ['id', 'analysisWorkflowSlug', 'editsWorkflowSlug'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
   /** The slugs of every workflow some analysis was started on. */
   async workflowAnalysisSlugs(txEm?: EntityManager): Promise<string[]> {
     const rows = await this.getRepo(txEm).find(

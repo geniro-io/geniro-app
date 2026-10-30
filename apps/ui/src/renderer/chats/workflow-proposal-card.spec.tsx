@@ -9,6 +9,8 @@ import {
   REPLACE_TO_AUTO_PROPOSAL,
   STAGES_PROPOSAL,
 } from '../__fixtures__/workflow-proposals';
+import { settleStageGraphs } from '../__tests__/settle-stage-graphs';
+import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 
 // React Flow measures through ResizeObserver, which jsdom has none of; the
 // graph's own drawing is the preview's business, and the card is under test.
@@ -349,13 +351,17 @@ describe('WorkflowProposalCard', () => {
     expect(buttonNamed(el, 'Approve')!.disabled).toBe(false);
   });
 
-  it('draws the stages a proposal walks and names each stage change', () => {
+  it('draws the stages a proposal walks and names each stage change', async () => {
+    stubResizeObserver();
     const el = render(card({ input: STAGES_PROPOSAL }));
+    await settleStageGraphs(el);
     expect(el.textContent).toContain('2 agents · 2 connections · 3 stages');
     const stages = el.querySelector('[data-slot="workflow-proposal-stages"]');
-    expect(stages?.querySelector('svg')?.getAttribute('aria-label')).toMatch(
-      /Plan.*Build.*Review/,
-    );
+    expect(
+      stages
+        ?.querySelector('[data-slot="stage-graph-canvas"]')
+        ?.getAttribute('aria-label'),
+    ).toMatch(/Plan.*Build.*Review/);
     const rows = [...el.querySelectorAll('[data-slot="workflow-diff"] li')].map(
       (row) => row.textContent,
     );

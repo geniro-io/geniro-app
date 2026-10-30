@@ -918,6 +918,29 @@ describe('withDurableChatTurn', () => {
     expect(turn?.startedAt).toBe(Date.parse('2026-10-01T10:01:00.000Z'));
   });
 
+  it('takes the daemon’s stretch over one the window dates from a stretch that ended without a row', () => {
+    const { open } = scanTurns([
+      userAt('2026-10-01T10:00:00.000Z'),
+      cliDone('2026-10-01T10:00:10.000Z', 9_000),
+      item('tool_call', '2026-10-01T10:01:08.000Z', {
+        role: 'assistant',
+        payload: { id: 'call-1', name: 'Bash' },
+      }),
+      item('tool_call', '2026-10-01T12:00:05.000Z', {
+        role: 'assistant',
+        payload: { id: 'call-2', name: 'Bash' },
+      }),
+    ]);
+
+    const [turn] = withDurableChatTurn(
+      open,
+      '2026-10-01T12:00:00.000Z',
+      CHAT_AGENT_KEY,
+    );
+
+    expect(turn?.startedAt).toBe(Date.parse('2026-10-01T12:00:00.000Z'));
+  });
+
   it('keeps a turn the user opened at their message, whatever an older reading says', () => {
     const { open } = scanTurns([userAt('2026-10-01T10:05:00.000Z')]);
 

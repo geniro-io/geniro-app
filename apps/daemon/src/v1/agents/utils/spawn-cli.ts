@@ -3998,6 +3998,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // nothing and what it saves is the row, with its usage and its cost. It
     // ends the stretch, not this turn, so it is stamped as ending nothing.
     releaseOffTurnHold(true);
+    // A stretch the agent was still working when this turn opened: what it
+    // continued past is this turn's earlier work now, whichever result ends it.
+    if (offTurnContinued !== null) {
+      turn.continuedSegment = offTurnContinued;
+      offTurnContinued = null;
+    }
     // Kept at session scope so a request arriving AFTER this turn settles can
     // still be refused rather than dropped — see `handleOrphanEvent`.
     approvalEncoder = turnOptions.buildApprovalResponse;

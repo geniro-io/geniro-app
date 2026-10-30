@@ -3748,6 +3748,34 @@ describe('a turn whose background work outlives its result', () => {
       ).toMatchObject({ usage: { costUsd: 1.75 } });
     });
 
+    it('files what it continued past under the turn of ours that opens while it works', async () => {
+      const between: AgentEvent[] = [];
+      const events: AgentEvent[] = [];
+      const { session, child } = openSession(undefined, undefined, (e) =>
+        between.push(e),
+      );
+
+      // A CLI that announces its state, as claude does: a report alone
+      // releases nothing, so the agent talking again continues past the hold.
+      line(child, { state: 'running' });
+      line(child, { says: 'launching' });
+      line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+      line(child, { done: true, cost: 1.25, ms: 60_000 });
+      line(child, { work: 'task-1', phase: 'settled' });
+      line(child, { says: 'back to work' });
+      const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+      line(child, { done: true, cost: 0.5, ms: 10_000, finalText: 'yours' });
+      await handle?.done;
+
+      expect(events.filter((e) => e.type === 'turn_complete')).toEqual([
+        expect.objectContaining({
+          finalText: 'yours',
+          usage: expect.objectContaining({ costUsd: 1.75, durationMs: 70_000 }),
+        }),
+      ]);
+      expect(between.some((e) => e.type === 'turn_complete')).toBe(false);
+    });
+
     it('hands over what it continued past when the process ends before its ending', async () => {
       const between: AgentEvent[] = [];
       const { child } = openSession(undefined, undefined, (e) =>

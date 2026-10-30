@@ -290,7 +290,8 @@ export function withDurableOpenTurns(
  * above it — so the header's clock had no open turn to count and stood still.
  * The window's own reading wins whenever it has one, except for a stretch the
  * agent runs by itself: the daemon knows when it woke for it, before its first
- * row.
+ * row, and which stretch is the current one when an earlier one ended with no
+ * row to say so.
  */
 export function withDurableChatTurn(
   open: readonly OpenTurn[],
@@ -306,7 +307,7 @@ export function withDurableChatTurn(
   if (windowTurn === undefined) {
     return [...open, { agentKey, startedAt, parkedMs: 0, openSince: [] }];
   }
-  if (windowTurn.offTurn === true && startedAt < windowTurn.startedAt) {
+  if (windowTurn.offTurn === true && startedAt !== windowTurn.startedAt) {
     return open.map((turn) =>
       turn === windowTurn ? { ...turn, startedAt } : turn,
     );

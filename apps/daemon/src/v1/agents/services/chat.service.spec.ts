@@ -11883,6 +11883,22 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       expect(holds.read(run.id).heldSince).toBeNull();
     });
 
+    it('takes a hold down when the session closes under it', async () => {
+      const { run, between, statuses, sessions } = await settledChat();
+      between({ type: 'tool_call', id: 'call-1', name: 'Agent', input: {} });
+      await drain();
+      between({ type: 'turn_held', open: 1 });
+      await drain();
+      expect(statuses.at(-1)).toMatchObject({ holdingFor: 1 });
+
+      sessions.close(run.id, 'closed');
+      await drain();
+
+      expect(statuses).toContainEqual(
+        expect.objectContaining({ runId: run.id, holdingFor: 0 }),
+      );
+    });
+
     it('keeps when the agent woke for it, for the clock', async () => {
       const holds = new RunHoldRegistry();
       const { run, between } = await settledChat(holds);

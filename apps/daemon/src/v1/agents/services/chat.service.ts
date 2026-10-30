@@ -4683,6 +4683,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     cause: SessionCloseCause | null = null,
   ): Promise<void> {
     this.clearDelegateLease(runId);
+    // No process, so nothing is held for: a hold announced between turns has
+    // no finalizer to clear it, and its own release arrives after the session
+    // stopped being this run's.
+    if (this.heldRuns.has(runId) && !this.registry.has(runId)) {
+      this.announceRunHold(runId, 0, null);
+    }
     // A WORKFLOW's sessions reach this listener too, under the executor's
     // composite key (`<runId>::node:…` / `<runId>::call:…`), which names no run
     // and so matches nothing below. That is the right outcome rather than a

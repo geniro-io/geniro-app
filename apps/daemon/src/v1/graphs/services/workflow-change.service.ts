@@ -11,7 +11,7 @@ import {
 } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
-import { appliesOf } from '../../agents/utils/recommendations-card';
+import { appliesOf, readCard } from '../../agents/utils/recommendations-card';
 import { sizedUserInstructionFiles } from '../../agents/utils/user-instruction-files';
 import type { AgentKind } from '../../runs/runs.types';
 import type { Workflow } from '../graphs.types';
@@ -27,6 +27,7 @@ import type { WorkflowEdit } from '../utils/workflow-edits';
 import { parseWorkflowSnapshot } from '../utils/workflow-snapshot';
 import { parseWorkflowYaml } from '../utils/workflow-yaml';
 import { InstructionSizesService } from './instruction-sizes.service';
+import { WorkflowChangeLogService } from './workflow-change-log.service';
 import { WorkflowStoreService } from './workflow-store.service';
 
 /**
@@ -111,6 +112,7 @@ export class WorkflowChangeService {
     private readonly itemDao: ItemDao,
     private readonly adapters: AgentAdapterRegistry,
     private readonly instructionSizes: InstructionSizesService,
+    private readonly changeLog: WorkflowChangeLogService,
   ) {}
 
   /**
@@ -301,6 +303,15 @@ export class WorkflowChangeService {
       }
       throw error;
     }
+    if (authority.kind === 'apply') {
+      await this.logApplied(
+        change.slug,
+        authority,
+        current.workflow,
+        next,
+        backup,
+      );
+    }
     return {
       saved: true,
       ...(backup === null ? {} : { backup }),
@@ -335,6 +346,49 @@ export class WorkflowChangeService {
       backedUp: true,
       backup: await backUpWorkflow(directory, slug, current.source),
     };
+  }
+
+  /**
+   * Log an analysis's saved change under the Apply it carried out, titled by
+   * the card's items. A card that can no longer be read leaves the entry
+   * untitled: the ids still name the items.
+   */
+  private async logApplied(
+    slug: string,
+    authority: Extract<WorkflowChangeAuthority, { kind: 'apply' }>,
+    before: Workflow,
+    after: Workflow,
+    backup: string | null,
+  ): Promise<void> {
+    const apply = await this.latestApply(authority.analysisRunId).catch(
+      () => null,
+    );
+    const titles =
+      apply === null
+        ? []
+        : await readCard(
+            this.itemDao,
+            authority.analysisRunId,
+            apply.cardSeq,
+            this.em.fork(),
+          )
+            .then((card) =>
+              card.items
+                .filter((item) => authority.ids.includes(item.id))
+                .map((item) => `${item.id} ${item.title}`),
+            )
+            .catch(() => []);
+    await this.changeLog.record({
+      slug,
+      source: 'analysis',
+      before,
+      after,
+      summary: titles.join('; '),
+      recommendationIds: authority.ids,
+      chatRunId: authority.analysisRunId,
+      cardSeq: apply?.cardSeq ?? null,
+      backup,
+    });
   }
 
   /** An analysis's save refused for what its latest Apply did not select, or null. */

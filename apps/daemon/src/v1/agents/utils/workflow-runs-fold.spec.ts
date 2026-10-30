@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { WorkflowSchema } from '../../graphs/graphs.types';
+import { workflowVersionOf } from '../../graphs/utils/workflow-version';
 import type { FoldedRun } from '../chat.types';
 import {
   callFigures,
@@ -8,6 +10,8 @@ import {
   nodeFigures,
   runFigures,
   runNodeFigures,
+  snapshotVersion,
+  versionFigures,
 } from './workflow-runs-fold';
 
 type Turn = FoldedRun['turns'][number];
@@ -58,6 +62,7 @@ function run(
     calls: [],
     wallWorkedMs: new Map(),
     costUsd: 9,
+    version: 'v-a',
     nodeModels: new Map(),
     pooledNodes: new Set(),
     timeline: {
@@ -629,5 +634,128 @@ describe('configuredModels', () => {
   it('reads an unreadable or missing copy as nothing configured', () => {
     expect(configuredModels(null).nodeModels.size).toBe(0);
     expect(configuredModels('{nope').pooledNodes.size).toBe(0);
+  });
+});
+
+describe('snapshotVersion', () => {
+  it('is the graph version the workflow ledger stamps the run with', () => {
+    const workflow = {
+      name: 'Team',
+      nodes: [{ id: 'dev', kind: 'agent', agent: 'claude', approval: 'auto' }],
+      edges: [],
+    } as const;
+    const renamed = { ...workflow, name: 'Renamed team' };
+    const changed = {
+      ...workflow,
+      nodes: [{ ...workflow.nodes[0], model: 'opus' }],
+    };
+
+    const version = snapshotVersion(JSON.stringify(workflow));
+
+    expect(version).toBe(workflowVersionOf(WorkflowSchema.parse(workflow)));
+    expect(snapshotVersion(JSON.stringify(renamed))).toBe(version);
+    expect(snapshotVersion(JSON.stringify(changed))).not.toBe(version);
+  });
+
+  it('is null for a run that kept no copy it can read', () => {
+    expect(snapshotVersion(null)).toBeNull();
+    expect(snapshotVersion('{nope')).toBeNull();
+  });
+});
+
+describe('versionFigures', () => {
+  const index = {
+    current: 'v-b',
+    numbers: new Map([
+      ['v-a', 1],
+      ['v-b', 2],
+    ]),
+  };
+
+  function timed(wallMs: number, costUsd: number | null): Partial<FoldedRun> {
+    return {
+      costUsd,
+      timeline: {
+        wallMs,
+        activeMs: wallMs / 2,
+        waitingOnUserMs: 0,
+        criticalPathMs: wallMs / 4,
+        criticalPath: [],
+        nodes: [],
+        tools: [tool({ failed: true })],
+      },
+    };
+  }
+
+  it('groups the runs by the version they ran and averages each group per run, newest version first', () => {
+    const figures = versionFigures(
+      [
+        run('old-1', [turn({ outcome: 'failed' }), turn({})], {
+          version: 'v-a',
+          ...timed(100_000, 2),
+        }),
+        run('old-2', [turn({})], { version: 'v-a', ...timed(300_000, 4) }),
+        run('new-1', [turn({})], { version: 'v-b', ...timed(40_000, 1) }),
+        run('new-2', [turn({})], { version: 'v-b', ...timed(60_000, null) }),
+        run('new-3', [turn({})], { version: 'v-b', ...timed(50_000, 2) }),
+      ],
+      index,
+    );
+
+    expect(figures.map((group) => [group.number, group.runIds])).toEqual([
+      [2, ['new-1', 'new-2', 'new-3']],
+      [1, ['old-1', 'old-2']],
+    ]);
+    const [current, earlier] = figures;
+    expect(current).toMatchObject({
+      version: 'v-b',
+      current: true,
+      avgWallMs: 50_000,
+      medianWallMs: 50_000,
+      avgActiveMs: 25_000,
+      avgCriticalPathMs: 12_500,
+      failedTurns: 0,
+      failedToolCalls: 3,
+      pricedRuns: 2,
+      avgCostUsd: 1.5,
+    });
+    expect(earlier).toMatchObject({
+      version: 'v-a',
+      current: false,
+      avgWallMs: 200_000,
+      medianWallMs: 200_000,
+      failedTurns: 1,
+      pricedRuns: 2,
+      avgCostUsd: 3,
+    });
+  });
+
+  it('names a version no run or restore recorded by its hash alone, and a run with no copy as its own group', () => {
+    const figures = versionFigures(
+      [
+        run('edited', [turn({})], { version: 'v-c' }),
+        run('no-copy', [turn({})], { version: null }),
+      ],
+      index,
+    );
+
+    expect(
+      figures.map(({ version, number, current }) => ({
+        version,
+        number,
+        current,
+      })),
+    ).toEqual(
+      expect.arrayContaining([
+        { version: 'v-c', number: null, current: false },
+        { version: null, number: null, current: false },
+      ]),
+    );
+  });
+
+  it('names every version by hash alone when no index could be read', () => {
+    expect(
+      versionFigures([run('one', [turn({})], { version: 'v-b' })], null)[0],
+    ).toMatchObject({ version: 'v-b', number: null, current: false });
   });
 });

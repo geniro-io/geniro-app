@@ -15,6 +15,8 @@ import {
 } from 'vitest';
 
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
+import { WorkflowSchema } from '../../graphs/graphs.types';
+import { workflowVersionOf } from '../../graphs/utils/workflow-version';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
@@ -700,6 +702,94 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         4,
         'dev',
       );
+    });
+
+    describe('graph versions', () => {
+      const first = {
+        name: 'Team',
+        nodes: [
+          { id: 'dev', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [],
+      };
+      const second = {
+        ...first,
+        nodes: [{ ...first.nodes[0]!, model: 'opus' }],
+      };
+      const V1 = workflowVersionOf(WorkflowSchema.parse(first));
+      const V2 = workflowVersionOf(WorkflowSchema.parse(second));
+
+      beforeEach(async () => {
+        const fork = orm.em.fork();
+        const newest = await fork.findOneOrFail(Run, { id: 'wf-new' });
+        newest.workflowSnapshot = JSON.stringify(second);
+        const older = await fork.findOneOrFail(Run, { id: 'wf-old' });
+        older.workflowSnapshot = JSON.stringify(first);
+        await fork.flush();
+      });
+
+      it("names each run's graph version by its number and compares the runs version by version", async () => {
+        const asked: string[] = [];
+
+        const answer = await reader.read(scope, { view: 'runs' }, (slug) => {
+          asked.push(slug);
+          return Promise.resolve({
+            current: V2,
+            numbers: new Map([
+              [V1, 1],
+              [V2, 2],
+            ]),
+          });
+        });
+
+        expect(asked).toEqual(['team']);
+        expect(answer.currentVersion).toEqual({
+          version: V2,
+          number: 2,
+          current: true,
+        });
+        expect(answer.runs).toEqual([
+          expect.objectContaining({
+            runId: 'wf-new',
+            version: { version: V2, number: 2, current: true },
+          }),
+          expect.objectContaining({
+            runId: 'wf-old',
+            version: { version: V1, number: 1, current: false },
+          }),
+          { runId: 'wf-gone', gone: true },
+        ]);
+        expect(answer.versions).toEqual([
+          expect.objectContaining({
+            version: V2,
+            number: 2,
+            runIds: ['wf-new'],
+            avgCostUsd: 4,
+          }),
+          expect.objectContaining({
+            version: V1,
+            number: 1,
+            runIds: ['wf-old'],
+            avgCostUsd: 1,
+          }),
+        ]);
+      });
+
+      it('names the versions by hash alone when their numbers cannot be read', async () => {
+        const answer = await reader.read(scope, { view: 'runs' }, () =>
+          Promise.reject(new Error('SQLITE_BUSY')),
+        );
+
+        expect(answer.currentVersion).toBeNull();
+        expect(answer.runs).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              runId: 'wf-new',
+              version: { version: V2, number: null, current: false },
+            }),
+          ]),
+        );
+      });
     });
 
     it("compares the runs and each node's models, every turn up to each run's own snapshot", async () => {

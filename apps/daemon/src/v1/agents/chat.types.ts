@@ -463,6 +463,7 @@ export const ANALYSIS_VIEWS = [
   'item',
   'workflow',
   'runs',
+  'history',
 ] as const;
 export const ANALYSIS_SPAN_KINDS = [
   'turn',
@@ -479,7 +480,7 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
   view: z
     .enum(ANALYSIS_VIEWS)
     .describe(
-      "overview: timing summary, per-node time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. workflow: the workflow as it is in the library now, its hash and how it differs from the copy this run started with (workflow threads only). runs: every run a workflow analysis reads, with its totals and outcome, every node's totals and every node's turns per model across them, in chunks when long (workflow analyses only)",
+      "overview: timing summary, per-node time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. workflow: the workflow as it is in the library now, its hash and how it differs from the copy this run started with (workflow threads only). runs: every run a workflow analysis reads, with its totals, outcome and graph version, the runs compared version by version, every node's totals and every node's turns per model across them, in chunks when long (workflow analyses only). history: every graph version of the workflow with what its runs did and how it differs from the one before, every change made to it with who made it and why, and every recommendation filed about it with what became of it, in chunks when long (workflow threads and analyses only)",
     ),
   runId: z
     .string()
@@ -514,7 +515,7 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
     .min(0)
     .optional()
     .describe(
-      'item, runs, workflow: the `next.offset` the previous chunk returned',
+      'item, runs, workflow, history: the `next.offset` the previous chunk returned',
     ),
   nodeId: z
     .string()
@@ -621,7 +622,7 @@ export const RecommendationItemSchema = z.object({
     .min(1)
     .max(40)
     .describe(
-      'workflow: role|edge|parallelize|model|effort|termination|node; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget',
+      'workflow: role|edge|parallelize|model|effort|termination|node|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget',
     ),
   location: z
     .string()
@@ -994,6 +995,8 @@ export interface FoldedRun {
   >[];
   /** The run's whole bill, a polled-spend CLI's included. */
   costUsd: number | null;
+  /** The graph version its own frozen copy is (`workflowVersionOf`); null when it keeps none it can read. */
+  version: string | null;
   /** The model each node recorded — what a turn that reported none ran on. */
   nodeModels: ReadonlyMap<string | null, string | null>;
   /** Nodes with a pool: their turns are compared per member (`RunWaterfallTurn.member`). */
@@ -1070,6 +1073,41 @@ export interface CallFigures {
   totalMs: number;
   avgMs: number;
   maxMs: number;
+}
+
+/**
+ * A workflow's recorded graph versions by number (1 for the first used), and
+ * the library's version now — what `view=runs` names each run's version by.
+ * The stats module keeps it; the MCP host hands it to the reader.
+ */
+export interface WorkflowVersionIndex {
+  current: string | null;
+  numbers: ReadonlyMap<string, number>;
+}
+
+/** A graph version as an analysis names it. */
+export interface AnalysedVersionRef {
+  version: string | null;
+  /** Null for a version no run or restore has recorded yet, and for a run that kept no copy. */
+  number: number | null;
+  /** The library's graph is this version now. */
+  current: boolean;
+}
+
+/** The analysed runs of one graph version, compared as a group. */
+export interface VersionRunFigures extends AnalysedVersionRef {
+  runIds: string[];
+  avgWallMs: number;
+  medianWallMs: number;
+  avgActiveMs: number;
+  avgCriticalPathMs: number;
+  avgTurns: number;
+  failedTurns: number;
+  cancelledTurns: number;
+  failedToolCalls: number;
+  avgCalls: number;
+  pricedRuns: number;
+  avgCostUsd: number | null;
 }
 
 /** One node's work summed over every analysed run, from its lanes. */

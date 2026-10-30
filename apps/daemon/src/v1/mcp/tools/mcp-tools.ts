@@ -26,6 +26,7 @@ import type { WorkflowProposalService } from '../../graphs/services/workflow-pro
 import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ShareService } from '../../shares/services/share.service';
+import type { WorkflowHistoryService } from '../../stats/services/workflow-history.service';
 import type { McpTool } from '../mcp.types';
 import { AnswerAgentTool } from './answer-agent/answer-agent.tool';
 import { AskUserQuestionTool } from './ask-user-question/ask-user-question.tool';
@@ -95,6 +96,7 @@ export interface McpToolDeps {
   analysis: AnalysisBroker;
   threads: ThreadReaderService;
   workflowChanges: WorkflowChangeService;
+  workflowHistory: WorkflowHistoryService;
   workflowGate: WorkflowProposalBroker;
   workflowBuilders: WorkflowBuilderBroker;
   workflowStore: WorkflowStoreService;
@@ -159,6 +161,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
       deps.analysis,
       deps.threads,
       deps.workflowChanges,
+      deps.workflowHistory,
     ),
     new ReportRecommendationsTool(deps.analysis, deps.memory),
     new MarkRecommendationsTool(deps.analysis),

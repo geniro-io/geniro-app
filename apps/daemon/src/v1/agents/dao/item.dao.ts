@@ -1596,15 +1596,15 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
-  /** A run's live user messages as (seq, payload), oldest first. */
+  /** A run's live user messages as (seq, time, payload), oldest first. */
   async userMessagesInOrder(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'seq' | 'payload'>[]> {
+  ): Promise<Pick<Item, 'seq' | 'createdAt' | 'payload'>[]> {
     return this.getRepo(txEm).find(
       { runId, kind: 'message', role: 'user' },
       {
-        fields: ['seq', 'payload'],
+        fields: ['seq', 'createdAt', 'payload'],
         orderBy: { seq: 'asc' },
         disableIdentityMap: true,
       },

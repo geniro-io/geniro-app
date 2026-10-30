@@ -1,12 +1,19 @@
-import { readWorkflowSnapshot } from '../../graphs/utils/workflow-snapshot';
+import {
+  parseWorkflowSnapshot,
+  readWorkflowSnapshot,
+} from '../../graphs/utils/workflow-snapshot';
+import { workflowVersionOf } from '../../graphs/utils/workflow-version';
 import type { AgentKind } from '../../runs/runs.types';
 import type {
+  AnalysedVersionRef,
   CallFigures,
   FoldedRun,
   ModelFigures,
   NodeFigures,
   RunFigures,
   RunNodeFigures,
+  VersionRunFigures,
+  WorkflowVersionIndex,
 } from '../chat.types';
 import { laneOf } from './analysis-lane';
 import { snapshotNodePoolProfiles } from './snapshot-config-dirs';
@@ -28,6 +35,99 @@ export function configuredModels(
     nodeModels: new Map(nodes.map((node) => [node.id, node.model ?? null])),
     pooledNodes: new Set(snapshotNodePoolProfiles(snapshot).keys()),
   };
+}
+
+/**
+ * The graph version a run's frozen copy is — the version the workflow ledger
+ * stamps the run with — or null when it keeps no copy the schema can read.
+ */
+export function snapshotVersion(snapshot: string | null): string | null {
+  const reading = parseWorkflowSnapshot(snapshot);
+  return reading.state === 'readable'
+    ? workflowVersionOf(reading.workflow)
+    : null;
+}
+
+/** A version named by its number in `index`; without an index, by its hash alone. */
+export function versionRef(
+  version: string | null,
+  index: WorkflowVersionIndex | null,
+): AnalysedVersionRef {
+  return {
+    version,
+    number: version === null ? null : (index?.numbers.get(version) ?? null),
+    current: version !== null && version === index?.current,
+  };
+}
+
+function median(values: readonly number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1
+    ? sorted[middle]!
+    : Math.round((sorted[middle - 1]! + sorted[middle]!) / 2);
+}
+
+/**
+ * The analysed runs grouped by the graph version they ran, each group's
+ * figures averaged per run — what tells a change's effect from the runs on
+ * either side of it. Newest version first: numbered ones by number, then the
+ * rest by their newest run.
+ */
+export function versionFigures(
+  runs: readonly FoldedRun[],
+  index: WorkflowVersionIndex | null,
+): VersionRunFigures[] {
+  const groups = new Map<string | null, FoldedRun[]>();
+  for (const run of runs) {
+    const group = groups.get(run.version) ?? [];
+    group.push(run);
+    groups.set(run.version, group);
+  }
+  return [...groups]
+    .map(([version, group]): VersionRunFigures => {
+      const figures = group.map(runFigures);
+      const count = group.length;
+      const sum = (pick: (run: RunFigures) => number): number =>
+        figures.reduce((total, run) => total + pick(run), 0);
+      const priced = figures.flatMap((run) =>
+        run.costUsd === null ? [] : [run.costUsd],
+      );
+      return {
+        ...versionRef(version, index),
+        runIds: group.map((run) => run.runId),
+        avgWallMs: Math.round(sum((run) => run.wallMs) / count),
+        medianWallMs: median(figures.map((run) => run.wallMs)),
+        avgActiveMs: Math.round(sum((run) => run.activeMs) / count),
+        avgCriticalPathMs: Math.round(sum((run) => run.criticalPathMs) / count),
+        avgTurns: Math.round((sum((run) => run.turns) / count) * 10) / 10,
+        failedTurns: sum((run) => run.failedTurns),
+        cancelledTurns: sum((run) => run.cancelledTurns),
+        failedToolCalls: sum((run) => run.failedToolCalls),
+        avgCalls: Math.round((sum((run) => run.calls) / count) * 10) / 10,
+        pricedRuns: priced.length,
+        avgCostUsd:
+          priced.length === 0
+            ? null
+            : roundUsd(
+                priced.reduce((total, cost) => total + cost, 0) / priced.length,
+              ),
+      };
+    })
+    .sort(
+      (a, b) =>
+        (b.number ?? 0) - (a.number ?? 0) ||
+        newestStart(groups.get(b.version)) - newestStart(groups.get(a.version)),
+    );
+}
+
+function newestStart(runs: readonly FoldedRun[] | undefined): number {
+  return Math.max(
+    0,
+    ...(runs ?? []).flatMap((run) =>
+      run.turns.map((turn) => Date.parse(turn.startedAt)),
+    ),
+  );
 }
 
 /** Adds where either side measured something; null only when neither did. */

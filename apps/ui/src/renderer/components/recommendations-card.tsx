@@ -450,7 +450,7 @@ export function RecommendationsCard({
       )}
       {items.length === 0 ? (
         <p className="m-0 text-xs text-muted-foreground">
-          No recommendations — this thread ran efficiently.
+          No recommendations — nothing was found worth changing.
         </p>
       ) : (
         groups.map((group) => (

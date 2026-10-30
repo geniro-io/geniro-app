@@ -835,6 +835,35 @@ export type PendingWorkflowProposal = z.infer<
   typeof PendingWorkflowProposalSchema
 >;
 
+/**
+ * Who wrote a change to a library workflow, as its change log names it: an
+ * analysis's applied recommendations, an approved card in the workflow's
+ * builder chat or in another chat, or a recorded version written back.
+ */
+export const WORKFLOW_CHANGE_SOURCES = [
+  'analysis',
+  'builder',
+  'chat',
+  'restore',
+] as const;
+export type WorkflowChangeSource = (typeof WORKFLOW_CHANGE_SOURCES)[number];
+
+/** One write to a workflow as the change log records it (`WorkflowChangeLogEntry`). */
+export interface WorkflowChangeLogRecord {
+  slug: string;
+  changedAt: Date;
+  source: WorkflowChangeSource;
+  fromVersion: string | null;
+  toVersion: string;
+  summary: string | null;
+  reason: string | null;
+  userNote: string | null;
+  recommendationIds: string[];
+  chatRunId: string | null;
+  cardSeq: number | null;
+  backup: string | null;
+}
+
 /** Where one workflow's file sits on disk (`WorkflowStoreService.locate`). */
 export interface WorkflowLocation {
   /** The library directory — what an editing agent is given as its cwd. */

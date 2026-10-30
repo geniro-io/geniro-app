@@ -114,15 +114,34 @@ describe('threadAnalysisBrief', () => {
 });
 
 describe('workflowAnalysisGuide', () => {
-  it('starts from the cross-run comparison and asks for models and the graph', () => {
+  it('starts from the history, then the cross-run comparison, and asks for models and the graph', () => {
     const guide = workflowAnalysisGuide(null, true);
 
     expect(guide).toContain('# Workflow analysis');
-    expect(guide).toContain('Read view=runs first');
-    expect(guide).toContain('3. Model effectiveness.');
+    expect(guide.indexOf('1. History. Read view=history first')).toBeLessThan(
+      guide.indexOf('2. Compare the runs. Read view=runs next'),
+    );
+    expect(guide).toContain('7. Model effectiveness.');
     expect(guide).toContain('recommend nothing from a single sample');
-    expect(guide).toContain('4. Graph structure.');
+    expect(guide).toContain('8. Graph structure.');
     expect(guide).toContain('its `runId` and seq');
+  });
+
+  it('has the analyst judge the earlier changes by their runs and not repeat what the user passed over', () => {
+    const guide = workflowAnalysisGuide(null, true);
+
+    expect(guide).toContain('3. Versions, not one pool.');
+    expect(guide).toContain(
+      'A problem seen only in runs older than a change that addressed it is not a finding',
+    );
+    expect(guide).toContain('4. Earlier changes.');
+    expect(guide).toContain('helped, no effect, worse, or too few runs');
+    expect(guide).toContain('kind "revert"');
+    expect(guide).toContain('5. Earlier recommendations.');
+    expect(guide).toContain(
+      'Never recommend again what the user skipped or passed over (not-selected) unless runs since then show new evidence',
+    );
+    expect(guide).toContain('Set every item against view=history');
   });
 
   it('offers workflow, repo and user changes and the workflow save', () => {
@@ -140,10 +159,10 @@ describe('workflowAnalysisGuide', () => {
   it("has the analyst measure every agent's instructions and grade them on five marks", () => {
     const guide = workflowAnalysisGuide(null, true);
 
-    expect(guide).toContain('5. Instruction size. Read view=workflow');
+    expect(guide).toContain('9. Instruction size. Read view=workflow');
     expect(guide).toContain('`instructionSizes`');
     expect(guide).toContain('`inThisRun`');
-    expect(guide).toContain('6. Instruction quality.');
+    expect(guide).toContain('10. Instruction quality.');
     for (const mark of [
       'clear (',
       'specific (',
@@ -161,14 +180,15 @@ describe('workflowAnalysisGuide', () => {
     const send = guide.indexOf('## What to send');
     const sections = [
       `1. Headline — one \`${HOST_METRICS_TOOL}\` scorecard`,
-      '2. Time per run — a table',
-      `3. Time per agent — one \`${HOST_CHART_TOOL}\` bar chart`,
-      '4. Calls between agents',
-      '5. Models — a table per agent and model',
-      '6. Instruction size — a table per agent',
-      '7. Instruction quality — a table per agent',
-      '8. Where the time went',
-      '9. The one change that matters most',
+      '2. Versions and earlier changes — a table per version',
+      '3. Time per run — a table, newest first: run, its version,',
+      `4. Time per agent — one \`${HOST_CHART_TOOL}\` bar chart`,
+      '5. Calls between agents',
+      '6. Models — a table per agent and model',
+      '7. Instruction size — a table per agent',
+      '8. Instruction quality — a table per agent',
+      '9. Where the time went',
+      '10. The one change that matters most',
     ].map((section) => guide.indexOf(section, report));
 
     expect(report).toBeGreaterThan(-1);
@@ -192,7 +212,7 @@ describe('workflowAnalysisGuide', () => {
 describe('workflowAnalysisBrief', () => {
   it('names the workflow, how many runs, and where to start', () => {
     expect(workflowAnalysisBrief({ name: 'Dev Team', runs: 5 })).toBe(
-      'Analyse the workflow "Dev Team" across its 5 latest runs: report how long each run and each agent worked, how large and how good each agent\'s instructions are, and how its agents and their models compare, and find what in the workflow or its environment would make the next runs faster, cheaper or less error-prone. Start with read_analyzed_thread view=runs.',
+      'Analyse the workflow "Dev Team" across its 5 latest runs: report how long each run and each agent worked, how large and how good each agent\'s instructions are, how its agents and their models compare, and how the earlier changes to it worked out, and find what in the workflow or its environment would make the next runs faster, cheaper or less error-prone. Start with read_analyzed_thread view=history, then view=runs.',
     );
     expect(workflowAnalysisBrief({ name: 'Dev Team', runs: 1 })).toContain(
       'across its latest run:',

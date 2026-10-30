@@ -7,13 +7,16 @@ import { StatsController } from './controllers/stats.controller';
 import { LineBaselineDao } from './dao/line-baseline.dao';
 import { UsageActivityDao } from './dao/usage-activity.dao';
 import { UsageEventDao } from './dao/usage-event.dao';
+import { WorkflowRecommendationDao } from './dao/workflow-recommendation.dao';
 import { WorkflowVersionDao } from './dao/workflow-version.dao';
+import { RecommendationLedgerService } from './services/recommendation-ledger.service';
 import { RunOutcomeLedgerService } from './services/run-outcome-ledger.service';
 import { StatsService } from './services/stats.service';
 import { UsageActivityRecorderService } from './services/usage-activity-recorder.service';
 import { UsageBackfillService } from './services/usage-backfill.service';
 import { UsageEventBus } from './services/usage-events.bus';
 import { UsageRecorderService } from './services/usage-recorder.service';
+import { WorkflowHistoryService } from './services/workflow-history.service';
 import { WorkflowLedgerService } from './services/workflow-ledger.service';
 import { WorkflowVersionsService } from './services/workflow-versions.service';
 
@@ -49,10 +52,15 @@ import { WorkflowVersionsService } from './services/workflow-versions.service';
     WorkflowVersionDao,
     WorkflowLedgerService,
     WorkflowVersionsService,
+    WorkflowRecommendationDao,
+    RecommendationLedgerService,
+    WorkflowHistoryService,
   ],
-  // The bus alone. The WS gateway announces each recorded turn so an open Stats
-  // page can refresh — the same direction as everything else here: the channel
-  // observes this module, this module observes nothing above it.
-  exports: [UsageEventBus],
+  // The bus, and the workflow history. The WS gateway announces each recorded
+  // turn so an open Stats page can refresh, and the MCP host's analysis reader
+  // answers a workflow's history from these ledgers — the same direction as
+  // everything else here: both sit above this module, which observes nothing
+  // above it.
+  exports: [UsageEventBus, WorkflowHistoryService],
 })
 export class StatsModule {}

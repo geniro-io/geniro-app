@@ -120,6 +120,151 @@ export interface ThreadLedgerRow {
   inferred: boolean | null;
 }
 
+/** Which kind of chat filed a workflow's recommendations card. */
+export type WorkflowRecommendationChat = 'analysis' | 'builder';
+
+/** One `workflow_recommendations` row (see the entity). */
+export interface WorkflowRecommendationRow {
+  slug: string;
+  chatRunId: string;
+  chatKind: WorkflowRecommendationChat;
+  cardSeq: number;
+  filedAt: Date;
+  libraryVersion: string | null;
+  itemId: string;
+  target: string;
+  territory: string;
+  kind: string;
+  location: string;
+  title: string;
+  change: string;
+  rootCause: string;
+  minutesSaved: number;
+  confidence: number;
+  risk: string;
+  selectedAt: Date | null;
+  outcome: string | null;
+  outcomeNote: string | null;
+  outcomeAt: Date | null;
+  outcomeSeq: number | null;
+}
+
+/** A card's item as the ledger first files it: nothing selected or marked yet. */
+export type FiledRecommendation = Omit<
+  WorkflowRecommendationRow,
+  'selectedAt' | 'outcome' | 'outcomeNote' | 'outcomeAt' | 'outcomeSeq'
+>;
+
+/** One workflow's chat as the recommendation ledger files it. */
+export interface WorkflowRecommendationSource {
+  chatRunId: string;
+  slug: string;
+  chatKind: WorkflowRecommendationChat;
+}
+
+/** A graph version as the history names it: its hash, its number once recorded, and whether it is the library's now. */
+export interface HistoryVersionRef {
+  version: string;
+  number: number | null;
+  current: boolean;
+}
+
+/** What one version's runs did, folded from the ledgers over every run of it, deleted ones included. */
+export interface HistoryVersionFigures {
+  runs: number;
+  pricedRuns: number;
+  costUsd: number | null;
+  avgCostUsd: number | null;
+  turns: number;
+  avgTurns: number | null;
+  /** The CLIs' own reported working time; a turn its CLI did not time adds nothing. */
+  cliWorkedMs: number | null;
+  avgCliWorkedMs: number | null;
+  pullRequests: {
+    total: number;
+    accepted: number;
+    changesRequested: number;
+    notYet: number;
+    notNeeded: number;
+    avgReviewRounds: number | null;
+  };
+}
+
+/** One logged write to the workflow, as the history shows it. */
+export interface HistoryChange {
+  at: string;
+  source: string;
+  from: HistoryVersionRef | null;
+  to: HistoryVersionRef;
+  summary: string | null;
+  reason: string | null;
+  userNote: string | null;
+  recommendationIds: string[];
+  chatRunId: string | null;
+  byThisChat: boolean;
+  backup: string | null;
+}
+
+/** What became of a recommendation, from the ledger. */
+export type HistoryRecommendationStatus =
+  'applied' | 'skipped' | 'failed' | 'selected' | 'open' | 'not-selected';
+
+/** One workflow's history, as an analysis reads it (`read_analyzed_thread` view=history). */
+export interface WorkflowHistory {
+  workflow: string;
+  currentVersion: HistoryVersionRef | null;
+  summary: {
+    versions: number;
+    changesLogged: number;
+    recommendations: Record<HistoryRecommendationStatus, number>;
+    analysedRunsByVersion: {
+      version: HistoryVersionRef | null;
+      runIds: string[];
+    }[];
+  };
+  versions: {
+    version: HistoryVersionRef | null;
+    inferred: boolean;
+    firstRunAt: string | null;
+    lastRunAt: string | null;
+    analysedRunIds: string[];
+    figures: HistoryVersionFigures;
+    madeBy: Pick<
+      HistoryChange,
+      'at' | 'source' | 'summary' | 'recommendationIds'
+    >[];
+    changes: VersionChangesWire | null;
+  }[];
+  changeLog: HistoryChange[];
+  recommendations: {
+    chatRunId: string;
+    chat: WorkflowRecommendationChat;
+    byThisChat: boolean;
+    chatStillExists: boolean;
+    cardSeq: number;
+    filedAt: string;
+    libraryVersion: HistoryVersionRef | null;
+    items: {
+      id: string;
+      target: string;
+      territory: string;
+      kind: string;
+      location: string;
+      title: string;
+      change: string;
+      rootCause: string;
+      expectedMinutesSavedPerRun: number;
+      confidence: number;
+      risk: string;
+      status: HistoryRecommendationStatus;
+      note: string | null;
+      selectedAt: string | null;
+      decidedAt: string | null;
+      changedIn: { at: string; to: HistoryVersionRef }[];
+    }[];
+  }[];
+}
+
 /** One `workflow_versions` row. */
 export interface WorkflowVersionGraph {
   version: string;

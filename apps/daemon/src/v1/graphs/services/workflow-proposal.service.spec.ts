@@ -23,14 +23,21 @@ import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { ChatService } from '../../agents/services/chat.service';
-import type { Workflow, WorkflowProposal } from '../graphs.types';
+import type { WorkflowChangeLogDao } from '../dao/workflow-change-log.dao';
+import type {
+  Workflow,
+  WorkflowChangeLogRecord,
+  WorkflowProposal,
+} from '../graphs.types';
 import {
   configDirToken,
   redactConfigDirs,
 } from '../utils/config-dir-redaction';
 import { WORKFLOW_BACKUP_DIR } from '../utils/workflow-backup';
 import type { WorkflowEdit } from '../utils/workflow-edits';
+import { workflowVersionOf } from '../utils/workflow-version';
 import type { GraphExecutorService } from './graph-executor.service';
+import { WorkflowChangeLogService } from './workflow-change-log.service';
 import { WorkflowProposalService } from './workflow-proposal.service';
 import { WorkflowStoreService } from './workflow-store.service';
 
@@ -57,6 +64,8 @@ const FASTER: Workflow = {
 /** `Run.pendingWorkflowProposal` per run, and every write to it in order. */
 class FakeRuns {
   readonly column = new Map<string, string | null>();
+  /** The workflow each builder chat edits, by run. */
+  readonly edits = new Map<string, string>();
   readonly writes: { runId: string; value: string | null }[] = [];
   /** Set by a test to watch what was on disk at the moment of a write. */
   onWrite: ((value: string | null) => void) | null = null;
@@ -65,9 +74,13 @@ class FakeRuns {
   /** Set by a test to hold a clear back until it is released. */
   holdClear: Promise<void> | null = null;
 
-  getById(id: string): Promise<{ pendingWorkflowProposal: string | null }> {
+  getById(id: string): Promise<{
+    pendingWorkflowProposal: string | null;
+    editsWorkflowSlug: string | null;
+  }> {
     return Promise.resolve({
       pendingWorkflowProposal: this.column.get(id) ?? null,
+      editsWorkflowSlug: this.edits.get(id) ?? null,
     });
   }
   setPendingWorkflowProposal(id: string, value: string | null): Promise<void> {
@@ -161,6 +174,7 @@ describe('WorkflowProposalService', () => {
   let chats: ReturnType<typeof fakeChats>;
   /** The card ids the transcript already closes, per run. */
   let closedCards: Map<string, string[]>;
+  let logged: WorkflowChangeLogRecord[];
   let service: WorkflowProposalService;
 
   beforeEach(async () => {
@@ -173,6 +187,7 @@ describe('WorkflowProposalService', () => {
     approvals = new ApprovalRegistry();
     chats = fakeChats(approvals);
     closedCards = new Map();
+    logged = [];
     service = new WorkflowProposalService(
       store,
       { assertRunnable } as unknown as GraphExecutorService,
@@ -187,6 +202,12 @@ describe('WorkflowProposalService', () => {
           ),
       } as unknown as ItemDao,
       chats as unknown as ChatService,
+      new WorkflowChangeLogService({
+        append: (record: WorkflowChangeLogRecord) => {
+          logged.push(record);
+          return Promise.resolve();
+        },
+      } as unknown as WorkflowChangeLogDao),
     );
   });
 
@@ -590,6 +611,40 @@ describe('WorkflowProposalService', () => {
       ).resolves.toBe(before);
     });
 
+    it("logs an approved change with its versions, why, the user's note and the items its reason names", async () => {
+      await store.create(TEAM, 'team');
+      runs.edits.set('run-1', 'team');
+      const before = workflowVersionOf((await store.get('team')).workflow);
+      await service.proposeChange('run-1', {
+        slug: 'team',
+        edits: TO_SONNET,
+        summary: 'Reviewer on sonnet',
+        reason: 'Carries out W-2 and W-3: reviews took most of each run.',
+      });
+
+      approvals.resolve('run-1', standingCard('run-1'), true, 'try it');
+      await verdictAfterPress();
+
+      const backups = await readdir(join(dir, WORKFLOW_BACKUP_DIR));
+      expect(logged).toEqual([
+        {
+          slug: 'team',
+          changedAt: expect.any(Date),
+          source: 'builder',
+          fromVersion: before,
+          toVersion: workflowVersionOf((await store.get('team')).workflow),
+          summary: 'Reviewer on sonnet',
+          reason: 'Carries out W-2 and W-3: reviews took most of each run.',
+          userNote: 'try it',
+          recommendationIds: ['W-2', 'W-3'],
+          chatRunId: 'run-1',
+          cardSeq: null,
+          backup: `${WORKFLOW_BACKUP_DIR}/${backups[0]}`,
+        },
+      ]);
+      expect(logged[0]!.toVersion).not.toBe(before);
+    });
+
     it('saves nothing on Approve when the canvas changed the file after the card went up', async () => {
       await store.create(TEAM, 'team');
       await service.proposeChange('run-1', { slug: 'team', edits: TO_SONNET });
@@ -923,6 +978,44 @@ describe('WorkflowProposalService', () => {
         kind: 'not-saved',
         cause: 'gone',
       });
+    });
+
+    it("logs a workflow another chat created as new, reading no item ids from a chat that is not the workflow's builder", async () => {
+      await service.propose('run-1', {
+        workflow: TEAM,
+        summary: 'Two agents',
+        reason: 'Like W-1 of the old team.',
+      });
+
+      approvals.resolve('run-1', standingCard('run-1'), true);
+      await verdictAfterPress();
+
+      expect(logged).toEqual([
+        expect.objectContaining({
+          slug: 'review-team',
+          source: 'chat',
+          fromVersion: null,
+          toVersion: workflowVersionOf(TEAM),
+          recommendationIds: [],
+          chatRunId: 'run-1',
+          backup: null,
+        }),
+      ]);
+    });
+
+    it('logs nothing when the card was declined or the approval wrote nothing', async () => {
+      await service.propose('run-1', { workflow: TEAM });
+      approvals.resolve('run-1', standingCard('run-1'), false, 'no');
+      await verdictAfterPress();
+      await store.create(TEAM, 'team');
+      await service.propose('run-2', { workflow: FASTER, replaces: 'team' });
+      await store.save('team', { ...TEAM, description: 'edited meanwhile' });
+      approvals.resolve('run-2', standingCard('run-2'), true);
+      await vi.waitFor(() =>
+        expect(chats.deliverOwnedCardVerdict).toHaveBeenCalledTimes(2),
+      );
+
+      expect(logged).toEqual([]);
     });
 
     it('passes the note typed on Approve to the agent', async () => {

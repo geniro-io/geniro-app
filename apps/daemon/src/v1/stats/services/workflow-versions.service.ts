@@ -9,6 +9,7 @@ import {
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
 import type { Workflow } from '../../graphs/graphs.types';
+import { WorkflowChangeLogService } from '../../graphs/services/workflow-change-log.service';
 import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import {
   backUpWorkflow,
@@ -60,6 +61,7 @@ export class WorkflowVersionsService {
     private readonly versionDao: WorkflowVersionDao,
     private readonly adapters: AgentAdapterRegistry,
     private readonly store: WorkflowStoreService,
+    private readonly changeLog: WorkflowChangeLogService,
   ) {}
 
   async read(slug: string): Promise<WorkflowVersionsWire> {
@@ -107,9 +109,8 @@ export class WorkflowVersionsService {
     version: string,
     baseHash: string | undefined,
   ): Promise<WorkflowVersionRestoredWire> {
-    const recorded = (
-      await this.versionDao.graphsOf(slug, this.em.fork())
-    ).find((graph) => graph.version === version);
+    const graphs = await this.versionDao.graphsOf(slug, this.em.fork());
+    const recorded = graphs.find((graph) => graph.version === version);
     if (recorded === undefined) {
       throw new NotFoundException(
         'WORKFLOW_VERSION_NOT_FOUND',
@@ -162,6 +163,14 @@ export class WorkflowVersionsService {
       restoredWorkflow(graph, replaced),
       current.hash,
     );
+    await this.changeLog.record({
+      slug,
+      source: 'restore',
+      before: replaced,
+      after: saved.workflow,
+      summary: `Restored version ${graphs.indexOf(recorded) + 1} (${version})`,
+      backup,
+    });
     return {
       slug,
       version: workflowVersionOf(saved.workflow),

@@ -48,7 +48,7 @@ export interface WorkflowVersionsInput {
 }
 
 /** Each run's spend: its turns, then its polled bill spread over its unpriced turns. */
-function totalsByRun(
+export function totalsByRun(
   usage: readonly UsageLedgerRow[],
   polledKinds: readonly string[],
 ): Map<string, ChatTotalsWire> {

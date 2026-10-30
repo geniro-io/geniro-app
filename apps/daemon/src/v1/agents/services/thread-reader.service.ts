@@ -14,6 +14,7 @@ import {
   type FoldedRun,
   type ReadAnalyzedThreadArgs,
   type RunWaterfallTurn,
+  type WorkflowVersionIndex,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
@@ -32,6 +33,9 @@ import {
   nodeFigures,
   runFigures,
   runNodeFigures,
+  snapshotVersion,
+  versionFigures,
+  versionRef,
 } from '../utils/workflow-runs-fold';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { ThreadTimelineService } from './thread-timeline.service';
@@ -145,7 +149,19 @@ export class ThreadReaderService {
   async read(
     turn: AnalysisReadScope,
     args: ReadAnalyzedThreadArgs,
+    /**
+     * The workflow's version numbers, which the stats module keeps; without
+     * it, or when it fails, view=runs names each run's version by hash alone.
+     */
+    versionIndex:
+      ((slug: string) => Promise<WorkflowVersionIndex>) | null = null,
   ): Promise<Answer> {
+    if (args.view === 'history') {
+      return {
+        error: 'UNSUPPORTED',
+        message: 'The history view is answered by the tool, not the reader.',
+      };
+    }
     if (args.view === 'runs') {
       if (!turn.workflow) {
         return {
@@ -170,7 +186,15 @@ export class ThreadReaderService {
         };
       }
       return pagedAnswer(
-        kept ?? (await this.runs(key, turn.workflow.slug, turn.workflow.runs)),
+        kept ??
+          (await this.runs(
+            key,
+            turn.workflow.slug,
+            turn.workflow.runs,
+            versionIndex === null
+              ? null
+              : await versionIndex(turn.workflow.slug).catch(() => null),
+          )),
         offset,
       );
     }
@@ -212,6 +236,7 @@ export class ThreadReaderService {
     key: string,
     slug: string,
     analysedRuns: NonNullable<AnalysisReadScope['workflow']>['runs'],
+    index: WorkflowVersionIndex | null,
   ): Promise<Answer> {
     const em = this.em.fork();
     const folded: FoldedRun[] = [];
@@ -227,11 +252,13 @@ export class ThreadReaderService {
         analysed.snapshotSeq,
         analysed.working,
       );
+      const version = snapshotVersion(run.workflowSnapshot);
       const header = {
         runId: run.id,
         title: run.title,
         createdAt: run.createdAt.toISOString(),
         statusNow: run.status,
+        version: versionRef(version, index),
         snapshotSeq: analysed.snapshotSeq,
         workingAtSnapshot: analysed.working,
       };
@@ -258,6 +285,7 @@ export class ThreadReaderService {
           analysed.snapshotSeq,
         ),
         costUsd: reading.fold.totals.costUsd,
+        version,
         ...configuredModels(run.workflowSnapshot),
         timeline: reading.timeline,
       };
@@ -273,11 +301,13 @@ export class ThreadReaderService {
     // chunks matches in neither, and the per-page pass would let both out.
     const answer = maskedAnswer({
       workflow: slug,
+      currentVersion: index === null ? null : versionRef(index.current, index),
       runs,
+      versions: versionFigures(folded, index),
       nodes: nodeFigures(folded),
       calls: callFigures(folded),
       models: modelFigures(folded),
-      next: "Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=workflow runId=… is the workflow as the library holds it now, against that run's copy.",
+      next: "Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=workflow runId=… is the workflow as the library holds it now, against that run's copy. view=history is every version of the workflow, the changes made to it and why, and the earlier analyses' recommendations with what became of them.",
     });
     this.runsAnswers.delete(key);
     this.runsAnswers.set(key, { at: Date.now(), answer });

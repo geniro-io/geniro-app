@@ -11,6 +11,7 @@ import {
   registerSecret,
 } from '../../../diagnostics/utils/redact';
 import type { WorkflowChangeService } from '../../../graphs/services/workflow-change.service';
+import type { WorkflowHistoryService } from '../../../stats/services/workflow-history.service';
 import type { McpCallContext } from '../../mcp.types';
 import {
   analyzedThreadResultText,
@@ -30,6 +31,8 @@ function tool(
   reader: Partial<ThreadReaderService>,
   workflows: Partial<WorkflowChangeService> = {},
   installed = true,
+  history: Partial<WorkflowHistoryService> = {},
+  workflowRuns: string[] | null = null,
 ) {
   const analysis = new AnalysisBroker();
   if (installed) {
@@ -39,6 +42,18 @@ function tool(
         sourceRunId: 'source',
         snapshotSeq: 9,
         sourceWorking: true,
+        ...(workflowRuns === null
+          ? {}
+          : {
+              workflow: {
+                slug: 'dev-team',
+                runs: workflowRuns.map((runId) => ({
+                  runId,
+                  snapshotSeq: 9,
+                  working: false,
+                })),
+              },
+            }),
       },
       report: () => Promise.reject(new Error('unused')),
       mark: () => Promise.reject(new Error('unused')),
@@ -48,6 +63,7 @@ function tool(
     analysis,
     reader as ThreadReaderService,
     workflows as WorkflowChangeService,
+    history as WorkflowHistoryService,
   );
 }
 
@@ -195,6 +211,111 @@ describe('ReadAnalyzedThreadTool', () => {
 
     expect(textOf(result)).toContain('NOT_ANALYSED');
     expect(analysedWorkflowOf).not.toHaveBeenCalled();
+  });
+
+  it("answers the history view from the workflow's ledgers, scoped to the analysis's runs and naming its own chat", async () => {
+    registerSecret('ghp_0123456789abcdefghij', 'github token');
+    const read = vi.fn<WorkflowHistoryService['read']>(() =>
+      Promise.resolve({
+        workflow: 'dev-team',
+        changeLog: [
+          { reason: 'ghp_0123456789abcdefghij'.padEnd(PAGE_BYTES * 2, 'x') },
+        ],
+      } as unknown as Awaited<ReturnType<WorkflowHistoryService['read']>>),
+    );
+    const reading = tool(
+      {
+        analysedWorkflowOf: () =>
+          Promise.resolve({
+            slug: 'dev-team',
+            snapshot: null,
+            instructions: null,
+          }),
+      },
+      {},
+      true,
+      { read },
+      ['newest', 'older'],
+    );
+
+    const first = textOf(
+      await reading.call('read_analyzed_thread', { view: 'history' }, CONTEXT),
+    );
+
+    expect(read).toHaveBeenCalledWith('dev-team', {
+      analysedRunIds: ['newest', 'older'],
+      readerRunId: 'analysis',
+    });
+    expect(first.startsWith(HISTORY_RESULT_PREFACE)).toBe(true);
+    expect(first).not.toContain('ghp_0123456789abcdefghij');
+    expect(Buffer.byteLength(first)).toBeLessThanOrEqual(PAGE_BYTES + 200);
+    const page = JSON.parse(first.slice(first.indexOf('\n') + 1)) as {
+      next: { offset: number };
+    };
+    expect(page.next.offset).toBeGreaterThan(0);
+  });
+
+  it("scopes a workflow thread's history to the one thread it analyses", async () => {
+    const read = vi.fn<WorkflowHistoryService['read']>(() =>
+      Promise.resolve({ workflow: 'dev-team' } as unknown as Awaited<
+        ReturnType<WorkflowHistoryService['read']>
+      >),
+    );
+
+    await tool(
+      {
+        analysedWorkflowOf: () =>
+          Promise.resolve({
+            slug: 'dev-team',
+            snapshot: null,
+            instructions: null,
+          }),
+      },
+      {},
+      true,
+      { read },
+    ).call('read_analyzed_thread', { view: 'history' }, CONTEXT);
+
+    expect(read).toHaveBeenCalledWith('dev-team', {
+      analysedRunIds: ['source'],
+      readerRunId: 'analysis',
+    });
+  });
+
+  it('tells a plain chat analysis it has no workflow history, reading none', async () => {
+    const read = vi.fn<WorkflowHistoryService['read']>();
+
+    const result = await tool(
+      { analysedWorkflowOf: () => Promise.resolve(null) },
+      {},
+      true,
+      { read },
+    ).call('read_analyzed_thread', { view: 'history' }, CONTEXT);
+
+    expect(textOf(result)).toContain('NOT_A_WORKFLOW');
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("hands the reader the workflow's version numbers, so view=runs names each run's version", async () => {
+    const index = { current: 'v2', numbers: new Map([['v2', 2]]) };
+    const versionIndex = vi.fn(() => Promise.resolve(index));
+    let handed: unknown = null;
+
+    await tool(
+      {
+        read: async (_turn, _query, versions) => {
+          handed = await versions?.('dev-team');
+          return {};
+        },
+      },
+      {},
+      true,
+      { versionIndex },
+      ['newest'],
+    ).call('read_analyzed_thread', { view: 'runs' }, CONTEXT);
+
+    expect(versionIndex).toHaveBeenCalledWith('dev-team');
+    expect(handed).toBe(index);
   });
 
   it('is not offered, and reads nothing, without an analysis turn', async () => {

@@ -1235,8 +1235,8 @@ function InstanceSummary({
   const workedMs =
     settledMs === null && liveMs <= 0 ? null : (settledMs ?? 0) + liveMs;
   const rawLatest = thread.latest ?? null;
-  // Every keystroke and live delta re-renders the panel, and these regexes run
-  // over a whole message per instance.
+  // Every live delta and status announce re-renders the panel, and these
+  // regexes run over a whole message per instance.
   const latest = useMemo(
     () => (rawLatest === null ? null : plainMarkdownText(rawLatest)),
     [rawLatest],

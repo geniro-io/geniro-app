@@ -105,6 +105,7 @@ import {
   callNumber,
   readCallSeed,
 } from '../../agents/utils/call-seed';
+import { addCallWork, type CallWork } from '../../agents/utils/call-worked';
 import { asksForSecret } from '../../agents/utils/card-questions';
 import { withCarriedContext } from '../../agents/utils/carried-context';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
@@ -2358,6 +2359,7 @@ export class GraphExecutorService
     // Each node's wall-measured turns — what its CLI did not time — served on
     // top of the CLI-reported `workedMs` the row holds.
     const wallByNode = await this.wallTurns.nodeSums(runId, em);
+    const wallBySeq = await this.wallTurns.nodeTurnsBySeq(runId, em);
     const adapters = this.adapters.all();
     const poolKinds = snapshotPoolKinds(run.workflowSnapshot);
     const ownPoolMembers =
@@ -2376,6 +2378,9 @@ export class GraphExecutorService
       string,
       { nodeId: string; totals: ChatTotalsWire }
     >();
+    // Each call's worked time — its CLI's own figures plus the wall ledger's
+    // turns — and the newest turn ending it counts.
+    const callWork = new Map<string, CallWork>();
     // Each conversation's newest turn ending and the lifetime last stated for
     // it, per call and per node's own conversation — what its prompt-cache
     // expiry is read from.
@@ -2439,6 +2444,15 @@ export class GraphExecutorService
         nodeTtl.set(ttlKey, stated);
       }
       const figures = usageFiguresFrom(payload);
+      if (callId !== null) {
+        addCallWork(
+          callWork,
+          callId,
+          turn.seq,
+          payload,
+          wallBySeq.get(turn.seq),
+        );
+      }
       if (figures === null) {
         continue;
       }
@@ -2562,6 +2576,8 @@ export class GraphExecutorService
       forNode.push({
         callId,
         totals: callTotals.get(callId)?.totals ?? emptyTotals(),
+        workedMs: callWork.get(callId)?.ms ?? null,
+        workedThroughSeq: callWork.get(callId)?.throughSeq ?? null,
         ...toolsOf(nodeId, callId),
         promptCacheExpiresAt: cacheExpiryOf(callCache.get(callId)),
       });

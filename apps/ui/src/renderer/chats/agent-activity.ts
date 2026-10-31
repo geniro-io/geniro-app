@@ -13,6 +13,7 @@ import {
   subagentBlockStatus,
   subagentTitle,
 } from './transcript-groups';
+import type { OpenTurn } from './turn-duration';
 
 /**
  * Live per-agent execution state, derived purely from a run's transcript
@@ -350,6 +351,14 @@ interface AgentThreadFields {
    * cache lifetime, and absent for a sub-agent.
    */
   promptCacheExpiresAt?: string | null;
+  /**
+   * For a CALL thread: how long the callee has worked in this conversation
+   * over its settled turns (`resolveConversationWorked`). Null when nothing
+   * measured a turn; absent on other threads.
+   */
+  workedMs?: number | null;
+  /** The call thread's turn in flight, which a clock adds to {@link workedMs}. */
+  openTurns?: readonly OpenTurn[];
 }
 
 /**

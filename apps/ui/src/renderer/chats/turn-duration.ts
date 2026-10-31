@@ -5,7 +5,7 @@ import { CHAT_AGENT_KEY } from './agent-activity';
 import { formatElapsed } from './live-row';
 import { settlesOnContinuation, TERMINAL_KINDS } from './settled-status';
 import { subagentIdOf } from './subagent-payload';
-import { payloadBoolean } from './transcript-payload';
+import { payloadBoolean, payloadString } from './transcript-payload';
 
 /**
  * How long each turn actually WORKED, and the thread's total.
@@ -728,6 +728,173 @@ export function scanTurns(
   }
   return { durations, open };
 }
+
+/** One settled turn of a call, keyed by the seq of the row that ended it. */
+export interface CallTurnDuration {
+  seq: number;
+  ms: number;
+}
+
+/**
+ * Every call conversation's turns as the loaded rows show them: each call's
+ * settled turns and the one still open, keyed by call id.
+ *
+ * A call is its own conversation even when one node answers several at once,
+ * so the clock is keyed by the row's `callId`, never by node alone — the
+ * node-scoped {@link scanTurns} would time a second call from the first one's
+ * start. Only rows filed under a call count; a node's own conversation is not
+ * one of them.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/utils/wall-worked.ts` →
+ * `wallMeasuredTurns` (its `nodes` scope), which records the same turns in the
+ * wall ledger the daemon's `callFigures[].workedMs` sums, and
+ * `GraphExecutorService.getNodeStates`, which adds every terminal row's CLI
+ * figure to it. A settled turn here is what that figure does not hold yet.
+ */
+export function scanCallTurns(items: readonly ChatItem[]): {
+  durations: ReadonlyMap<string, readonly CallTurnDuration[]>;
+  open: ReadonlyMap<string, OpenTurn>;
+} {
+  const durations = new Map<string, CallTurnDuration[]>();
+  const clocks = new Map<string, TurnState & { nodeId: string }>();
+  const cardOwners = new Map<string, string>();
+  const reset = (clock: TurnState & { nodeId: string }): void => {
+    for (const id of clock.parkedSince.keys()) {
+      cardOwners.delete(`${clock.nodeId}\u0000${id}`);
+    }
+    clock.startedAt = null;
+    clock.parkedSince.clear();
+    clock.parkedMs = 0;
+    clock.continuationMeasured = false;
+  };
+  const record = (callId: string, seq: number, ms: number): void => {
+    const list = durations.get(callId);
+    if (list === undefined) {
+      durations.set(callId, [{ seq, ms }]);
+    } else {
+      list.push({ seq, ms });
+    }
+  };
+
+  for (const item of items) {
+    if (item.nodeId === null) {
+      continue;
+    }
+    const at = parsedAt(item.createdAt);
+    if (APPROVAL_CLOSING_KINDS.has(item.kind)) {
+      const id = approvalId(item.payload);
+      const owner =
+        id === null ? undefined : cardOwners.get(`${item.nodeId}\u0000${id}`);
+      const clock = owner === undefined ? undefined : clocks.get(owner);
+      const since = id === null ? undefined : clock?.parkedSince.get(id);
+      if (clock !== undefined && since !== undefined && at !== null) {
+        clock.parkedSince.delete(id!);
+        cardOwners.delete(`${item.nodeId}\u0000${id}`);
+        clock.parkedMs += Math.max(0, at - since);
+      }
+      continue;
+    }
+    const callId = payloadString(item.payload, 'callId');
+    if (callId === null) {
+      continue;
+    }
+    let clock = clocks.get(callId);
+    if (clock === undefined) {
+      clock = {
+        nodeId: item.nodeId,
+        startedAt: null,
+        lastAt: null,
+        parkedSince: new Map(),
+        parkedMs: 0,
+        continuationMeasured: false,
+        ended: false,
+        offTurnSince: null,
+      };
+      clocks.set(callId, clock);
+    }
+    if (item.kind === 'status') {
+      const status = payloadString(item.payload, 'status');
+      if (status === 'running') {
+        clock.startedAt ??= at;
+      } else if (status !== null && CALL_ENDING_STATUSES.has(status)) {
+        reset(clock);
+      }
+      continue;
+    }
+    if (item.kind === 'approval_request') {
+      const id = approvalId(item.payload);
+      if (id !== null && at !== null) {
+        clock.parkedSince.set(id, at);
+        cardOwners.set(`${item.nodeId}\u0000${id}`, callId);
+      }
+      continue;
+    }
+    if (!TERMINAL_KINDS.has(item.kind)) {
+      continue;
+    }
+    const cli = cliTurnDurationMs(item.payload);
+    if (payloadBoolean(item.payload, 'insideTurn') === true) {
+      if (cli !== null) {
+        record(callId, item.seq, cli);
+        clock.continuationMeasured = true;
+        if (clock.startedAt !== null && at !== null) {
+          clock.startedAt = Math.max(clock.startedAt, at);
+          clock.parkedMs = 0;
+          for (const [id, since] of clock.parkedSince) {
+            clock.parkedSince.set(id, Math.max(since, at));
+          }
+        }
+      }
+      continue;
+    }
+    if (at !== null) {
+      for (const since of clock.parkedSince.values()) {
+        clock.parkedMs += Math.max(0, at - since);
+      }
+    }
+    const answeredInside =
+      payloadBoolean(item.payload, 'answeredByContinuation') === true &&
+      clock.continuationMeasured;
+    if (cli !== null) {
+      record(callId, item.seq, cli);
+    } else if (
+      item.kind === 'turn_complete' &&
+      !answeredInside &&
+      clock.startedAt !== null &&
+      at !== null
+    ) {
+      record(
+        callId,
+        item.seq,
+        Math.max(0, at - clock.startedAt - clock.parkedMs),
+      );
+    }
+    reset(clock);
+  }
+  const open = new Map<string, OpenTurn>();
+  for (const [callId, clock] of clocks) {
+    if (clock.startedAt !== null) {
+      open.set(callId, {
+        agentKey: clock.nodeId,
+        startedAt: clock.startedAt,
+        parkedMs: clock.parkedMs,
+        openSince: [...clock.parkedSince.values()],
+      });
+    }
+  }
+  return { durations, open };
+}
+
+/**
+ * `status` values that end a call's stretch with no terminal row — twin of
+ * `ENDING_STATUSES` in `apps/daemon/src/v1/agents/utils/wall-worked.ts`.
+ */
+const CALL_ENDING_STATUSES: ReadonlySet<string> = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+  'skipped',
+]);
 
 /** The `id` an approval row pairs on — both halves carry it. */
 function approvalId(payload: unknown): string | null {

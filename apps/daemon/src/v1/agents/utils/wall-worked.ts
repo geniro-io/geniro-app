@@ -13,7 +13,9 @@ import { usageFiguresFrom } from './usage-figures';
  * the renderer's wall-clock fallback over the rows it has loaded — its
  * `nodeScoped: true` mode for a workflow's nodes (`scope: 'nodes'`) and its
  * default mode for a 1:1 chat (`scope: 'chat'`). Both read the same durable
- * rows the same way:
+ * rows the same way. A call card's clock reads the same rows per call through
+ * the renderer's `scanCallTurns`, keyed by node and `callId` as the `nodes`
+ * scope keys them:
  *
  * - a turn opens on a workflow node's `running` status row, or on a chat's
  *   USER message, and a row of that kind arriving inside an open turn does not

@@ -127,6 +127,26 @@ export class WallTurnDao extends BaseDao<WallTurn> {
   }
 
   /**
+   * Each recorded workflow-node turn of this run, by the seq of the
+   * `turn_complete` that ended it — what a call's own worked time is summed
+   * from, since the ledger keys a turn by its row and that row names its call.
+   */
+  async nodeTurnsBySeq(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Map<number, number>> {
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<WallTurnDatabase>({ convertValues: false })
+      .selectFrom('wall_turns')
+      .select(['seq', 'ms'])
+      .where('run_id', '=', runId)
+      .where('node_id', 'is not', null)
+      .where('deleted_at', 'is', null)
+      .execute();
+    return new Map(rows.map((row) => [Number(row.seq), Number(row.ms)]));
+  }
+
+  /**
    * Each of these runs' 1:1-chat wall time (the rows with no node), by run id
    * — one query, for a listing of many.
    */

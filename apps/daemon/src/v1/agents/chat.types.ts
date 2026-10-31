@@ -802,6 +802,11 @@ export const RecommendationsCallStatsSchema = z.object({
   totalMs: msSchema,
   avgMs: msSchema,
   maxMs: msSchema,
+  /**
+   * Of `totalMs`, how long the callees worked inside these calls — null when
+   * no turn of them was measured, absent on a card filed before it was kept.
+   */
+  workedMs: msSchema.nullable().optional(),
 });
 
 export const RecommendationsWorkflowStatsSchema = z.object({
@@ -1156,8 +1161,20 @@ export interface FoldedRun {
   wallWorkedMs: ReadonlyMap<string | null, number>;
   calls: readonly Pick<
     RunWaterfallCall,
-    'callerNodeId' | 'calleeNodeId' | 'status' | 'running' | 'durationMs'
+    | 'callerNodeId'
+    | 'calleeNodeId'
+    | 'status'
+    | 'running'
+    | 'durationMs'
+    | 'seq'
   >[];
+  /**
+   * How long each callee worked inside each call, by the seq of the call's
+   * `call_started` row (`RunWaterfallCall.seq`) — its CLI's own durations plus
+   * the wall ledger's turns, through the run's snapshot. A call no turn of
+   * which was measured is absent.
+   */
+  callWorkedMs: ReadonlyMap<number, number>;
   /** The run's whole bill, a polled-spend CLI's included. */
   costUsd: number | null;
   /** The graph version its own frozen copy is (`workflowVersionOf`); null when it keeps none it can read. */
@@ -1244,6 +1261,11 @@ export interface CallFigures {
   totalMs: number;
   avgMs: number;
   maxMs: number;
+  /**
+   * Of `totalMs`, how long the callees actually worked inside these calls —
+   * null when no turn of any of them was measured.
+   */
+  workedMs: number | null;
 }
 
 /**

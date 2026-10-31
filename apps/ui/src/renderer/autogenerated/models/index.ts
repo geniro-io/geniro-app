@@ -1955,6 +1955,18 @@ export interface CallFigures {
      */
     totals: ChatTotals;
     /**
+     * 
+     * @type {number}
+     * @memberof CallFigures
+     */
+    workedMs: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof CallFigures
+     */
+    workedThroughSeq: number | null;
+    /**
      * The tools the node itself called inside this call, its CLI sub-agents' excluded, counted from the transcript as of toolCallsThroughSeq
      * @type {number}
      * @memberof CallFigures

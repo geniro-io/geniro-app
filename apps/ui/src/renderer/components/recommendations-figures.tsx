@@ -91,6 +91,8 @@ export interface WorkflowCallStatsView {
   totalMs: number;
   avgMs: number;
   maxMs: number;
+  /** Of {@link totalMs}, how long the callees worked; null when unmeasured. */
+  workedMs: number | null;
 }
 
 export interface WorkflowStatsView {
@@ -597,6 +599,11 @@ function CallsTable({
             <th className={HEAD}>Average</th>
             <th className={HEAD}>Longest</th>
             <th className={HEAD}>Total</th>
+            <th
+              className={HEAD}
+              title="How much of the total the called agents spent working — the rest they spent waiting">
+              Worked
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -618,6 +625,9 @@ function CallsTable({
               <td className={CELL}>{look.formatMs(call.avgMs)}</td>
               <td className={CELL}>{look.formatMs(call.maxMs)}</td>
               <td className={CELL}>{look.formatMs(call.totalMs)}</td>
+              <td data-slot="analysis-call-worked" className={CELL}>
+                {call.workedMs === null ? '—' : look.formatMs(call.workedMs)}
+              </td>
             </tr>
           ))}
         </tbody>

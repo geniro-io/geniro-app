@@ -659,3 +659,87 @@
     animation: none;
   }
 }
+
+/* The composer shelf's live status glyphs — `chats/shelf-glyphs.tsx`. */
+@keyframes glyph-cursor-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.glyph-cursor-blink {
+  animation: glyph-cursor-blink 1s step-end infinite;
+}
+
+@keyframes glyph-trace {
+  0% {
+    stroke-dashoffset: 1;
+  }
+  55% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -1;
+  }
+}
+
+.glyph-trace {
+  stroke-dasharray: 1 1;
+  animation: glyph-trace 1.8s ease-in-out infinite;
+}
+
+@keyframes glyph-eyes-scan {
+  0%,
+  15%,
+  85%,
+  100% {
+    transform: translateX(0);
+  }
+  35%,
+  45% {
+    transform: translateX(-2px);
+  }
+  60%,
+  70% {
+    transform: translateX(2px);
+  }
+}
+
+.glyph-eyes-scan {
+  animation: glyph-eyes-scan 2.4s ease-in-out infinite;
+}
+
+@keyframes glyph-typing-dot {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-2px);
+    opacity: 1;
+  }
+}
+
+.glyph-typing-dot {
+  animation: glyph-typing-dot 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glyph-cursor-blink,
+  .glyph-trace,
+  .glyph-eyes-scan,
+  .glyph-typing-dot {
+    animation: none;
+  }
+
+  .glyph-trace {
+    stroke-dasharray: none;
+  }
+}

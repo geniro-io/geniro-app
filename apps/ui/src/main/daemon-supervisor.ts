@@ -16,6 +16,7 @@ import {
 } from '../shared/contracts';
 import {
   consumeCrashMark,
+  DAEMON_COMPACTION_MARK_NAME,
   DAEMON_CRASH_MARK_NAME,
   DAEMON_STOP_CAUSE_NAME,
   type DaemonInfo,
@@ -42,6 +43,12 @@ import { readSettings } from './settings';
  * nothing on the failure path.
  */
 const START_TIMEOUT_MS = 90_000;
+
+/**
+ * The deadline for a start that compacts the database first: a VACUUM runs for
+ * as long as the live data takes to copy, before the daemon listens.
+ */
+const COMPACTING_START_TIMEOUT_MS = 30 * 60_000;
 const HEALTH_POLL_INTERVAL_MS = 200;
 /** Per-attempt cap on the /health fetch — a wedged-but-listening daemon must
  * not stall start() on undici's multi-minute default. */
@@ -337,6 +344,8 @@ export interface DaemonSupervisorOptions {
   consumeCrashMark?: (pid: number) => boolean;
   /** Leave the next daemon the note of why this one stopped (`DAEMON_STOP_CAUSE_NAME`). */
   writeStopCause?: (cause: DaemonStopCause) => void;
+  /** Whether the next start compacts the database first (`DAEMON_COMPACTION_MARK_NAME`). */
+  compactionPending?: () => boolean;
   pollIntervalMs?: number;
   startTimeoutMs?: number;
   shutdownGraceMs?: number;
@@ -423,6 +432,7 @@ export class DaemonSupervisor {
   private readonly removePidfile: (path: string) => void;
   private readonly consumeCrashMark: (pid: number) => boolean;
   private readonly writeStopCause: (cause: DaemonStopCause) => void;
+  private readonly compactionPending: () => boolean;
   private readonly pollIntervalMs: number;
   private readonly startTimeoutMs: number;
   private readonly shutdownGraceMs: number;
@@ -463,6 +473,10 @@ export class DaemonSupervisor {
           join(app.getPath('userData'), DAEMON_STOP_CAUSE_NAME),
           cause,
         ));
+    this.compactionPending =
+      options.compactionPending ??
+      (() =>
+        existsSync(join(app.getPath('userData'), DAEMON_COMPACTION_MARK_NAME)));
     this.pollIntervalMs = options.pollIntervalMs ?? HEALTH_POLL_INTERVAL_MS;
     this.startTimeoutMs = options.startTimeoutMs ?? START_TIMEOUT_MS;
     this.shutdownGraceMs = options.shutdownGraceMs ?? SHUTDOWN_GRACE_MS;
@@ -532,6 +546,15 @@ export class DaemonSupervisor {
    * adopting a stale daemon is recoverable by quitting and relaunching, while
    * a turn killed mid-flight is not recoverable at all.
    */
+  /**
+   * Whether the daemon this supervisor serves runs anything a restart would
+   * kill — asked again right before a restart the user pressed for, since the
+   * page's own check was made earlier. Errs toward busy, as {@link isBusy}.
+   */
+  async isServingWork(): Promise<boolean> {
+    return this.handle === null ? false : this.isBusy(this.handle);
+  }
+
   private async isBusy(handle: DaemonHandle): Promise<boolean> {
     try {
       return (await this.checkBusy(handle)) !== false;
@@ -979,7 +1002,11 @@ export class DaemonSupervisor {
       this.scheduleRespawn();
     });
 
-    const deadline = Date.now() + this.startTimeoutMs;
+    const deadline =
+      Date.now() +
+      (this.compactionPending()
+        ? Math.max(this.startTimeoutMs, COMPACTING_START_TIMEOUT_MS)
+        : this.startTimeoutMs);
     while (Date.now() < deadline) {
       if (this.stopping) {
         await this.stopChild(child);

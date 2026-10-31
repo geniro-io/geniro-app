@@ -71,6 +71,7 @@ import { Memory } from './memory';
 import { ProjectsPane } from './projects';
 import { RemoteAccess } from './remote-access';
 import { Sharing } from './sharing';
+import { Storage } from './storage';
 
 /**
  * The value the `Keep for ever` row carries.
@@ -203,7 +204,8 @@ export type SettingsSection =
   | 'projects'
   | 'remote-access'
   | 'sharing'
-  | 'memory';
+  | 'memory'
+  | 'storage';
 
 const SECTION_LABEL: Record<SettingsSection, string> = {
   general: 'General',
@@ -213,6 +215,7 @@ const SECTION_LABEL: Record<SettingsSection, string> = {
   'remote-access': 'Remote access',
   sharing: 'Sharing',
   memory: 'Memory',
+  storage: 'Storage',
 };
 
 /**
@@ -235,6 +238,8 @@ const SECTION_NOTE: Record<SettingsSection, string> = {
     'The notes every agent shares, whatever its CLI — saved by agents as they work, or by you. New chats list the ones you wrote, imported or approved.',
   sharing:
     'Share a page as an encrypted link anyone holding it can open — uploaded through your own gcloud, aws or command, never a Geniro server.',
+  storage:
+    'What Geniro keeps on this Mac and how much room each part takes. Clean up what is safe to delete; every delete asks first.',
 };
 
 /** Nav order — General first, because it is what Settings has always been. */
@@ -246,6 +251,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'remote-access',
   'sharing',
   'memory',
+  'storage',
 ];
 
 export function Settings({
@@ -1416,6 +1422,8 @@ export function Settings({
             <RemoteAccess />
           ) : section === 'sharing' ? (
             <Sharing api={apis?.shares ?? null} />
+          ) : section === 'storage' ? (
+            <Storage api={apis?.storage ?? null} />
           ) : section === 'memory' ? (
             <Memory
               api={apis?.memories ?? null}

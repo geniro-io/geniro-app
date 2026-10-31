@@ -24,6 +24,15 @@ export class TaskDao extends BaseDao<Task> {
     super(em, Task);
   }
 
+  /** Every card id the table holds, soft-deleted rows included. */
+  async allIdsIncludingDeleted(txEm?: EntityManager): Promise<Set<string>> {
+    const rows = await this.getRepo(txEm).find(
+      {},
+      { fields: ['id'], filters: false, disableIdentityMap: true },
+    );
+    return new Set(rows.map((task) => task.id));
+  }
+
   /**
    * One project's board, in the order the columns render it: by status, then
    * by position within the column.

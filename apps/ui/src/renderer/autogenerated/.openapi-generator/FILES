@@ -11,6 +11,7 @@ apis/MemoriesApi.ts
 apis/ProjectsApi.ts
 apis/SharesApi.ts
 apis/StatsApi.ts
+apis/StorageApi.ts
 apis/TasksApi.ts
 apis/WorkflowsApi.ts
 apis/index.ts

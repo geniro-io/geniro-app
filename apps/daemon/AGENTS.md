@@ -357,6 +357,14 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
 - `ClaudeSessionCostLedger` persists session totals to disk (`claude-session-costs.json`). A resume's seed is registered at spawn and read from the transcript's last `cost-state` at the new process's `system/init`, never at spawn (the replaced process writes its line as it exits). A read that finds no line keeps a known total, and leaves the process's first result untrusted.
 - List prices come only from `ModelPriceCatalog` (models.dev, persisted to `model-prices.json`); never a hand-written price table. Provider is an adapter fact (`usage.listPrice`).
 
+### Storage
+
+`v1/storage` (Settings → Storage, `DesktopOnlyGuard`): `GET /v1/storage` measures every top-level name under the data folder it can file (`utils/storage-layout.ts`, plus each adapter's `AdapterConfig.userData`) and hands the rest back as `unclaimed` for Electron main; `POST /v1/storage/clean` starts ONE background clean-up (`STORAGE_BUSY` while one runs), whose progress `GET /v1/storage/job` reads without measuring anything.
+
+- Archived chats are deleted only through `ChatService.sweepArchived(0)` — the one teardown path, transcripts and files included. The space returns to the disk only with `compactDatabase`, a `VACUUM` on a connection of its own in a worker thread (`utils/vacuum-database.ts`, the recorded raw-SQL exception). It holds the write lock for its whole length, and every write of a running daemon (turns, monitors, cards, sweeps) gives up after better-sqlite3's 5 s busy timeout, so a running daemon never compacts: the route only writes the `compact-on-start` marker (refused `STORAGE_AGENTS_WORKING` while any turn runs or a kept CLI works between turns, since the page then restarts the daemon), and the next start runs it in `main.ts` before listen (`compactIfScheduled`, marker removed first so a crash is not retried). Both ends refuse a disk with less than twice the database's size free (`STORAGE_NO_ROOM`), and nothing else starts while one is scheduled. Electron main waits up to 30 min for a start while the marker is there (twin `DAEMON_COMPACTION_MARK_NAME`).
+- Orphaned folders are `attachments`/`artifacts` named after no run and `task-attachments` named after no card — soft-deleted rows count as existing — and older than `ORPHAN_MIN_AGE_MS`. Logs keep the sink's open file. Leftovers are names nothing in this build writes or reads (a CLI's own through `AdapterConfig.userData.leftovers`). Copies of `settings.json` (`.corrupt-*`, `.bak-*`) are their own group and clean-up, never leftovers: a `.corrupt-*` copy is the only copy of what an unreadable settings file held.
+- Every path it deletes is the data folder joined with a name it listed itself; no route takes a path.
+
 ### Diagnostics and notifications
 
 - `debug-sink` is a module-scope singleton (predates Nest).

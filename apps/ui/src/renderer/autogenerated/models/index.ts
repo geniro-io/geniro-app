@@ -9753,6 +9753,272 @@ export interface StoppedDetachedProcessesDto {
 /**
  * 
  * @export
+ * @interface StorageCleanDto
+ */
+export interface StorageCleanDto {
+    /**
+     * 
+     * @type {StorageCleanTarget}
+     * @memberof StorageCleanDto
+     */
+    target: StorageCleanTarget;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface StorageCleanOption
+ */
+export interface StorageCleanOption {
+    /**
+     * 
+     * @type {StorageCleanTarget}
+     * @memberof StorageCleanOption
+     */
+    target: StorageCleanTarget;
+    /**
+     * How many chats, files or folders it removes
+     * @type {number}
+     * @memberof StorageCleanOption
+     */
+    count: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof StorageCleanOption
+     */
+    bytes: number | null;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const StorageCleanTarget = {
+    ArchivedChats: 'archivedChats',
+    CompactDatabase: 'compactDatabase',
+    OrphanChatFiles: 'orphanChatFiles',
+    OrphanTaskFiles: 'orphanTaskFiles',
+    WorkflowBackups: 'workflowBackups',
+    Logs: 'logs',
+    Leftovers: 'leftovers',
+    SettingsCopies: 'settingsCopies'
+} as const;
+export type StorageCleanTarget = typeof StorageCleanTarget[keyof typeof StorageCleanTarget];
+
+/**
+ * 
+ * @export
+ * @interface StorageEntry
+ */
+export interface StorageEntry {
+    /**
+     * The path under the data folder
+     * @type {string}
+     * @memberof StorageEntry
+     */
+    name: string;
+    /**
+     * Space it takes on disk
+     * @type {number}
+     * @memberof StorageEntry
+     */
+    bytes: number;
+}
+/**
+ * 
+ * @export
+ * @interface StorageGroup
+ */
+export interface StorageGroup {
+    /**
+     * 
+     * @type {string}
+     * @memberof StorageGroup
+     */
+    id: StorageGroupIdEnum;
+    /**
+     * 
+     * @type {number}
+     * @memberof StorageGroup
+     */
+    bytes: number;
+    /**
+     * 
+     * @type {Array<StorageEntry>}
+     * @memberof StorageGroup
+     */
+    entries: Array<StorageEntry>;
+    /**
+     * 
+     * @type {Array<StorageCleanOption>}
+     * @memberof StorageGroup
+     */
+    clean: Array<StorageCleanOption>;
+}
+
+
+/**
+ * @export
+ */
+export const StorageGroupIdEnum = {
+    Database: 'database',
+    ChatFiles: 'chatFiles',
+    AgentSessions: 'agentSessions',
+    TaskFiles: 'taskFiles',
+    Workflows: 'workflows',
+    WorkflowBackups: 'workflowBackups',
+    Logs: 'logs',
+    Caches: 'caches',
+    AppState: 'appState',
+    Leftovers: 'leftovers',
+    SettingsCopies: 'settingsCopies'
+} as const;
+export type StorageGroupIdEnum = typeof StorageGroupIdEnum[keyof typeof StorageGroupIdEnum];
+
+/**
+ * 
+ * @export
+ * @interface StorageJob
+ */
+export interface StorageJob {
+    /**
+     * 
+     * @type {StorageCleanTarget}
+     * @memberof StorageJob
+     */
+    target: StorageCleanTarget;
+    /**
+     * 
+     * @type {string}
+     * @memberof StorageJob
+     */
+    state: StorageJobStateEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof StorageJob
+     */
+    startedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StorageJob
+     */
+    finishedAt: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof StorageJob
+     */
+    removed: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof StorageJob
+     */
+    freedBytes: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof StorageJob
+     */
+    error: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const StorageJobStateEnum = {
+    Scheduled: 'scheduled',
+    Running: 'running',
+    Done: 'done',
+    Failed: 'failed'
+} as const;
+export type StorageJobStateEnum = typeof StorageJobStateEnum[keyof typeof StorageJobStateEnum];
+
+/**
+ * 
+ * @export
+ * @interface StorageJobReadDto
+ */
+export interface StorageJobReadDto {
+    /**
+     * 
+     * @type {StorageJob}
+     * @memberof StorageJobReadDto
+     */
+    job: StorageJob | null;
+}
+/**
+ * 
+ * @export
+ * @interface StorageUsageDto
+ */
+export interface StorageUsageDto {
+    /**
+     * The data folder every entry is under
+     * @type {string}
+     * @memberof StorageUsageDto
+     */
+    root: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StorageUsageDto
+     */
+    scannedAt: string;
+    /**
+     * 
+     * @type {Array<StorageGroup>}
+     * @memberof StorageUsageDto
+     */
+    groups: Array<StorageGroup>;
+    /**
+     * 
+     * @type {StorageUsageDtoChats}
+     * @memberof StorageUsageDto
+     */
+    chats: StorageUsageDtoChats;
+    /**
+     * Top-level names the daemon does not own — the desktop app's own files, measured by Electron main
+     * @type {Array<string>}
+     * @memberof StorageUsageDto
+     */
+    unclaimed: Array<string>;
+    /**
+     * 
+     * @type {StorageJob}
+     * @memberof StorageUsageDto
+     */
+    job: StorageJob | null;
+}
+/**
+ * 
+ * @export
+ * @interface StorageUsageDtoChats
+ */
+export interface StorageUsageDtoChats {
+    /**
+     * 
+     * @type {number}
+     * @memberof StorageUsageDtoChats
+     */
+    active: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof StorageUsageDtoChats
+     */
+    archived: number;
+}
+/**
+ * 
+ * @export
  * @interface SweepArchivedDto
  */
 export interface SweepArchivedDto {

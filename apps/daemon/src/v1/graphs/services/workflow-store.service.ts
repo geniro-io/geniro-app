@@ -44,6 +44,9 @@ import {
   serializeWorkflowYaml,
 } from '../utils/workflow-yaml';
 
+/** `<userData>/` directory the workflow library lives in. */
+export const WORKFLOWS_DIR_NAME = 'workflows';
+
 /** Library file suffix — a workflow `foo` lives at `<dir>/foo.geniro.yaml`. */
 const WORKFLOW_SUFFIX = '.geniro.yaml';
 
@@ -89,7 +92,7 @@ export class WorkflowStoreService {
 
   constructor(options: WorkflowStoreOptions = {}) {
     this.dir =
-      options.workflowsDir ?? join(environment.userDataDir, 'workflows');
+      options.workflowsDir ?? join(environment.userDataDir, WORKFLOWS_DIR_NAME);
   }
 
   private fileFor(slug: string): string {

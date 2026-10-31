@@ -7,6 +7,9 @@ import type { AgentKind } from '../../runs/runs.types';
 import type { AgentReportedCommand } from '../adapters/adapter.types';
 import { harvestKey, HarvestStore } from './harvest-store';
 
+/** `<userData>/` file the harvested skill listings are kept in. */
+export const SKILL_HARVEST_FILE_NAME = 'skill-harvest.json';
+
 /** Defensive bound per key — init reports ~60 entries today. */
 const MAX_HARVESTED = 500;
 
@@ -46,7 +49,7 @@ export class SkillHarvestStore extends HarvestStore<AgentReportedCommand> {
     // shadows nothing that would otherwise be re-read. A command the CLI
     // reported once stays a real command until a later turn says otherwise.
     super(
-      options.file ?? join(environment.userDataDir, 'skill-harvest.json'),
+      options.file ?? join(environment.userDataDir, SKILL_HARVEST_FILE_NAME),
       MAX_HARVESTED,
     );
   }

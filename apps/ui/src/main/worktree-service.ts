@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 
 import { app } from 'electron';
 
+import type { WorktreeRemoval } from '../shared/contracts';
 import {
   IGNORE_SUBMODULE_WORKTREES,
   readSafeConfig,
@@ -70,8 +71,11 @@ export function taskBranchName(taskId: string): string {
   return `geniro/task-${taskId}`;
 }
 
+/** The directory under userData every task worktree is made in. */
+export const WORKTREES_DIR_NAME = 'worktrees';
+
 export function worktreesRoot(): string {
-  return join(app.getPath('userData'), 'worktrees');
+  return join(app.getPath('userData'), WORKTREES_DIR_NAME);
 }
 
 function registryPath(): string {
@@ -801,4 +805,125 @@ export async function settleWorktreeForTask(taskId: string): Promise<{
   }
   await removeWorktree(record);
   return { removed: true, committed };
+}
+
+/**
+ * Remove one entry of the worktrees directory because the user pressed
+ * Remove on it, named by its directory name.
+ *
+ * Wider than {@link reapFinishedWorktrees}, which runs unattended: a worktree
+ * whose agent moved it to a branch of its own name is removed too, since its
+ * commits are on that branch. What is never removed is work that would be lost
+ * — unsaved changes (except on a finished card's own branch, which
+ * {@link settleWorktreeForTask} commits first), a detached HEAD, an operation
+ * stopped half way — or a worktree whose card is still open.
+ *
+ * A directory the registry does not name is removed only by git itself
+ * (`worktree remove` without `--force`), after git lists it as a worktree of
+ * its repository: the registry alone authorizes a recursive delete here.
+ */
+export async function removeWorktreeOnRequest(
+  name: string,
+  isFinished: (taskIds: string[]) => Promise<ReadonlySet<string> | null>,
+): Promise<WorktreeRemoval> {
+  const path = join(worktreesRoot(), name);
+  if (!isInsideWorktreesRoot(path) || !existsSync(path)) {
+    return { removed: false, reason: 'it is no longer there' };
+  }
+  const record = readRegistry().find((row) => resolve(row.path) === path);
+  if (record !== undefined) {
+    const finished = await isFinished([record.taskId]).catch(() => null);
+    if (finished === null) {
+      return {
+        removed: false,
+        reason: 'the app could not ask whether its card is finished',
+      };
+    }
+    if (!finished.has(record.taskId)) {
+      return {
+        removed: false,
+        reason: 'its card is still open — finish or delete the card first',
+      };
+    }
+  }
+  if (record !== undefined && !existsSync(record.folder)) {
+    return {
+      removed: false,
+      reason:
+        'its repository is not where it was (moved, deleted or on a disk that is not attached), so git cannot say what it holds',
+    };
+  }
+  const folder = record?.folder ?? (await repositoryOf(path));
+  if (folder === null) {
+    return { removed: false, reason: 'git does not call it a worktree' };
+  }
+  const entries = await readWorktreeEntries(gitStdoutIn(folder));
+  if (
+    entries === null ||
+    !entries.some((entry) => resolve(entry.path) === path)
+  ) {
+    return {
+      removed: false,
+      reason: 'git does not list it as a worktree of its repository',
+    };
+  }
+  const head = await readHeadState(path, record?.branch ?? '');
+  if (head === null || head === 'detached' || head === 'in-progress') {
+    return {
+      removed: false,
+      reason:
+        head === 'in-progress'
+          ? 'a merge or rebase is stopped half way in it'
+          : 'its HEAD is not on a branch, so its commits could be lost',
+    };
+  }
+  const dirty = await isDirty(path);
+  if (dirty === null) {
+    return {
+      removed: false,
+      reason: 'git could not say whether it holds unsaved work',
+    };
+  }
+  if (dirty) {
+    if (record === undefined || head !== 'task-branch') {
+      return {
+        removed: false,
+        reason: 'it holds unsaved changes — commit or discard them first',
+      };
+    }
+    const outcome = await settleWorktreeForTask(record.taskId);
+    return outcome.removed
+      ? { removed: true, reason: null }
+      : {
+          removed: false,
+          reason: 'its unsaved changes could not be committed to its branch',
+        };
+  }
+  if (record !== undefined) {
+    await removeWorktree(record);
+    return { removed: true, reason: null };
+  }
+  try {
+    await git(folder, ['worktree', 'remove', '--', path]);
+  } catch (error) {
+    return {
+      removed: false,
+      reason: `git refused: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`,
+    };
+  }
+  return { removed: true, reason: null };
+}
+
+/** The repository a linked worktree belongs to, or null when git cannot say. */
+async function repositoryOf(path: string): Promise<string | null> {
+  const stdout = await gitStdoutIn(path)([
+    'rev-parse',
+    '--path-format=absolute',
+    '--git-common-dir',
+  ]);
+  const common = stdout?.trim();
+  if (!common) {
+    return null;
+  }
+  return basename(common) === '.git' ? dirname(common) : common;
 }

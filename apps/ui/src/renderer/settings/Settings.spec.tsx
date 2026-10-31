@@ -1297,6 +1297,7 @@ describe('Settings — sections', () => {
       'Remote access',
       'Sharing',
       'Memory',
+      'Storage',
     ]);
   });
 

@@ -221,6 +221,22 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.revealPath, path) as ReturnType<
       GeniroApi['revealPath']
     >,
+  getAppStorage: (unclaimed) =>
+    ipcRenderer.invoke(IPC.getAppStorage, unclaimed) as ReturnType<
+      GeniroApi['getAppStorage']
+    >,
+  removeStorageWorktree: (name) =>
+    ipcRenderer.invoke(IPC.removeStorageWorktree, name) as ReturnType<
+      GeniroApi['removeStorageWorktree']
+    >,
+  clearBrowserCache: () =>
+    ipcRenderer.invoke(IPC.clearBrowserCache) as ReturnType<
+      GeniroApi['clearBrowserCache']
+    >,
+  restartDaemon: () =>
+    ipcRenderer.invoke(IPC.restartDaemon) as ReturnType<
+      GeniroApi['restartDaemon']
+    >,
   toggleDevTools: () =>
     ipcRenderer.invoke(IPC.toggleDevTools) as ReturnType<
       GeniroApi['toggleDevTools']

@@ -350,6 +350,7 @@ Daemon side of the contract (zod wire schemas, `@ZodResponse`, operationIds, `se
   - Limits refuse rather than truncate (512KB of HTML). Dropped with the run by `RunTeardownService`.
 - **Task worktrees → `<userData>/worktrees/<taskId>/`**, registry `<userData>/worktrees.json` (`apps/ui/src/main/worktree-service.ts`).
   - Every git call belongs to the Electron main process; the daemon runs no git and is only told the path. Lifetime, removal and branch rules: `apps/ui/src/main/AGENTS.md` → _Task worktrees_.
+- **What the data folder holds, and its clean-ups → Settings → Storage** (`v1/storage` in the daemon, `app-storage.ts` in main). Every delete is a press with a confirm; chats go only through the archive sweep's teardown.
 - **Daemon inspector**: the `daemonInspect` setting (off by default) spawns the daemon with `--inspect=127.0.0.1:9229`. The flag goes before the entry script, or node passes it to the daemon as an argument.
 
 ---

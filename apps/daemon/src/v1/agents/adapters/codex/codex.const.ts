@@ -597,3 +597,6 @@ export const CODEX_THREAD_ID_PATTERN =
  * bounds a long-running daemon rather than any real working set.
  */
 export const CODEX_THREAD_FACTS_MAX = 256;
+
+/** `<userData>/` throwaway workspaces of codex's probes. */
+export const CODEX_PROBE_DIR_NAME = 'codex-probe';

@@ -109,6 +109,7 @@ function harness(opts: {
   onKill?: (pid: number, signal: NodeJS.Signals) => void;
   graceMs?: number;
   pollMs?: number;
+  compactionPending?: boolean;
   /** The kernel's start time for a pid — the recorded one, unless a test says. */
   startTime?: (pid: number) => number | null;
   stopWaitMs?: number;
@@ -139,6 +140,7 @@ function harness(opts: {
         : (opts.healthy ?? true),
     checkIdentity: async () => opts.identified ?? true,
     checkBusy: async () => opts.busy ?? false,
+    compactionPending: () => opts.compactionPending ?? false,
     killPid:
       opts.killPid ??
       ((pid, signal) => {
@@ -490,6 +492,49 @@ describe('DaemonSupervisor.start', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('waits past the startup deadline for a start that compacts the database first', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({
+        pidfile: null,
+        healthy: false,
+        graceMs: 50,
+        pollMs: 5_000,
+        compactionPending: true,
+      });
+
+      let settled = false;
+      const started = h.supervisor.start().then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      expect(settled).toBe(false);
+      expect(h.child.signals).toEqual([]);
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      await started;
+      expect(h.child.signals[0]).toBe('SIGTERM');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports work a restart would kill, and none without a daemon', async () => {
+    const idle = harness({ pidfile: null });
+    expect(await idle.supervisor.isServingWork()).toBe(false);
+    await idle.supervisor.start();
+    expect(await idle.supervisor.isServingWork()).toBe(false);
+
+    const busy = harness({ pidfile: null, busy: true });
+    await busy.supervisor.start();
+    expect(await busy.supervisor.isServingWork()).toBe(true);
   });
 
   it('waits out a slow boot instead of killing it — a large profile took 19 s on a cold cache', async () => {

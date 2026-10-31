@@ -21,6 +21,8 @@ import {
   CLAUDE_MODE_PROBE_TIMEOUT_MS,
   CLAUDE_MODE_REJECTION_FLAG_PATTERN,
   CLAUDE_MODE_REJECTION_VERDICT_PATTERN,
+  CLAUDE_PROBE_CACHE_FILE,
+  CLAUDE_PROBE_DIR_NAME,
 } from './claude.const';
 import type {
   ClaudeModeProbe,
@@ -119,9 +121,11 @@ export class ClaudeProbeService implements ClaudeModeProbe {
     options: ClaudeProbeOptions = {},
   ) {
     this.probeRootDir =
-      options.probeRootDir ?? join(environment.userDataDir, 'claude-probe');
+      options.probeRootDir ??
+      join(environment.userDataDir, CLAUDE_PROBE_DIR_NAME);
     this.cachePath =
-      options.cachePath ?? join(environment.userDataDir, 'claude-probe.json');
+      options.cachePath ??
+      join(environment.userDataDir, CLAUDE_PROBE_CACHE_FILE);
     this.turnTimeoutMs = options.turnTimeoutMs ?? CLAUDE_MODE_PROBE_TIMEOUT_MS;
     this.resolveVersionFn =
       options.resolveVersionFn ??

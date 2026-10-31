@@ -97,6 +97,9 @@ interface PreparedPage {
   images: PageImage[];
 }
 
+/** `<userData>/` directory published pages live in, one folder per run. */
+export const ARTIFACTS_DIR_NAME = 'artifacts';
+
 /**
  * The HTML pages agents publish with `show_artifact`, stored as files under
  * `<userData>/artifacts/<runId>/<artifactId>/`.
@@ -129,7 +132,8 @@ export class ArtifactStoreService {
   private readonly removedRuns = new Set<string>();
 
   constructor(options: ArtifactStoreOptions = {}) {
-    this.root = options.root ?? join(environment.userDataDir, 'artifacts');
+    this.root =
+      options.root ?? join(environment.userDataDir, ARTIFACTS_DIR_NAME);
     this.runs = options.runs;
   }
 

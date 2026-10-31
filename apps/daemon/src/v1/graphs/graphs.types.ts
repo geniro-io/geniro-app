@@ -1011,6 +1011,19 @@ export const NodeStateWireSchema = z.object({
         callId: z.string(),
         /** What this call's own turns spent, over the whole run. */
         totals: ChatTotalsWireSchema,
+        workedMs: z
+          .number()
+          .nullable()
+          .describe(
+            "How long the node worked inside this call: its CLI's own turn durations plus the wall_turns ledger's turns its CLI did not time. Null when no turn of it was measured",
+          ),
+        workedThroughSeq: z
+          .number()
+          .int()
+          .nullable()
+          .describe(
+            'The seq of the newest turn ending counted in workedMs; a later turn of this call is not in it. Null when none was counted',
+          ),
         toolCalls: z
           .number()
           .int()

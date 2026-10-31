@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowRight, ArrowRightLeft } from 'lucide-react';
+import { ArrowDown, ArrowRight, ArrowRightLeft, Timer } from 'lucide-react';
 import { createContext, memo, useContext, useState } from 'react';
 
 import { AgentIdentityContext, agentShortName } from '../agent-identity';
@@ -7,6 +7,7 @@ import { HoverPopover } from '../components/hover-popover';
 import { avatarTone, initialsOf } from '../components/ui/avatar';
 import { Badge } from '../components/ui/badge';
 import { cn } from '../components/ui/utils';
+import { useSecondTick } from '../components/use-second-tick';
 import {
   CONTEXT_ESTIMATE_NOTE,
   costEstimateTitle,
@@ -37,7 +38,7 @@ import {
 } from './call-message-box';
 import { ContextMeter } from './context-meter';
 import { jumpAnchorProps } from './jump-target';
-import { liveRowKind } from './live-row';
+import { formatElapsed, liveRowKind } from './live-row';
 import { THINKING_WORDS, useLiveWord } from './live-words';
 import { MessageBubble } from './message-bubble';
 import { NestedThreadContext } from './subagent-context';
@@ -63,6 +64,7 @@ import {
 import type { TranscriptNodeMeta } from './transcript-item';
 import { payloadString } from './transcript-payload';
 import { JUMP_MARK_CLASS, TranscriptRow } from './transcript-row';
+import { formatDuration, openTurnWorkedMs } from './turn-duration';
 import { JumpMarkContext } from './use-transcript-jump';
 
 function blockStatusOf(
@@ -308,6 +310,7 @@ function CallFigures({
   contextEstimated,
   costUsd,
   estimatedCostUsd,
+  workedMs,
 }: {
   slot: 'call-summary' | 'call-footer';
   tasks: readonly AgentTaskRow[];
@@ -324,9 +327,24 @@ function CallFigures({
   costUsd: number | null;
   /** Of {@link costUsd}, the part geniro priced itself; null when none. */
   estimatedCostUsd: number | null;
+  /** How long the callee has worked in this conversation, its open turn included. */
+  workedMs: number | null;
 }): React.JSX.Element {
   return (
     <>
+      {workedMs === null ? null : (
+        <span
+          data-slot={`${slot}-worked`}
+          title={
+            live
+              ? `${callee} has worked ${formatDuration(workedMs)} in this conversation so far`
+              : `${callee} worked ${formatDuration(workedMs)} in this conversation`
+          }
+          className="flex shrink-0 items-center gap-1 tabular-nums">
+          <Timer aria-hidden="true" className="size-3" />
+          {live ? formatElapsed(workedMs) : formatDuration(workedMs)}
+        </span>
+      )}
       {/* WHAT IT IS ON, without opening the card — asked for beside the
           figures ("also current tasks icon with popover"). The list is the
           callee's own, folded out of this block. */}
@@ -511,6 +529,20 @@ export const CallBlock = memo(function CallBlock({
       live?.contextWindowTokens ?? folded.contextWindowTokens,
   };
   const tasks = callBlockTasks(block);
+  /**
+   * The callee's working time in this conversation: the settled turns, plus
+   * the turn in flight while the card is working — never while it is settled,
+   * when an open turn is one a dead process left without an ending.
+   */
+  const workingTurns = status === 'running' ? (live?.openTurns ?? []) : [];
+  useSecondTick(workingTurns.length > 0);
+  const settledWorkedMs = live?.workedMs ?? null;
+  const liveWorkedMs =
+    workingTurns.length > 0 ? openTurnWorkedMs(workingTurns, Date.now()) : 0;
+  const workedMs =
+    settledWorkedMs === null && liveWorkedMs <= 0
+      ? null
+      : (settledWorkedMs ?? 0) + liveWorkedMs;
   const failed = block.status === 'failed';
   const identityText = caller ? `${caller} → ${callee}` : callee;
   const baseToggleLabel = caller ? `${identityText} call` : `Call to ${callee}`;
@@ -589,6 +621,7 @@ export const CallBlock = memo(function CallBlock({
    * pass `undefined` to say it has nothing to show.
    */
   const hasFigures =
+    workedMs !== null ||
     tasks.length > 0 ||
     usage.costUsd !== null ||
     context.contextTokens !== null;
@@ -605,6 +638,7 @@ export const CallBlock = memo(function CallBlock({
       contextEstimated={context.contextEstimated}
       costUsd={usage.costUsd}
       estimatedCostUsd={usage.estimatedCostUsd ?? null}
+      workedMs={workedMs}
     />
   );
   /**

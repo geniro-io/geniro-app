@@ -10,6 +10,7 @@ import {
   heldSinceOf,
   openTurnWorkedMs,
   parkWhileHeld,
+  scanCallTurns,
   scanTurns,
   threadWorkedMs,
   turnDurations,
@@ -718,6 +719,80 @@ describe('scanTurns over a WORKFLOW run', () => {
     const { durations, open } = scanTurns(items);
     expect([...durations.values()]).toEqual([{ ms: 7618, source: 'cli' }]);
     expect(openTurnWorkedMs(open, at('2026-08-14T10:05:30.000Z'))).toBe(30_000);
+  });
+});
+
+describe('scanCallTurns', () => {
+  const at = (iso: string): number => Date.parse(iso);
+  const running = (callId: string, iso: string): ChatItem =>
+    item('status', iso, {
+      nodeId: 'engineer',
+      payload: { nodeId: 'engineer', status: 'running', callId },
+    });
+  const done = (
+    callId: string,
+    iso: string,
+    usage: Record<string, unknown> = {},
+  ): ChatItem =>
+    item('turn_complete', iso, {
+      nodeId: 'engineer',
+      payload: { callId, usage },
+    });
+
+  it('times two calls one node answers at once, each from its own start', () => {
+    const first = running('call-1', '2026-10-31T10:00:00.000Z');
+    const second = running('call-2', '2026-10-31T10:01:00.000Z');
+    const firstDone = done('call-1', '2026-10-31T10:02:00.000Z');
+    const { durations, open } = scanCallTurns([first, second, firstDone]);
+
+    expect(durations.get('call-1')).toEqual([
+      { seq: firstDone.seq, ms: 120_000 },
+    ]);
+    expect(durations.get('call-2')).toBeUndefined();
+    expect(open.get('call-2')?.startedAt).toBe(at('2026-10-31T10:01:00.000Z'));
+    expect(open.has('call-1')).toBe(false);
+  });
+
+  it("takes the CLI's own figure over the wall clock", () => {
+    const end = done('call-1', '2026-10-31T10:05:00.000Z', {
+      durationMs: 4_200,
+    });
+    const { durations } = scanCallTurns([
+      running('call-1', '2026-10-31T10:00:00.000Z'),
+      end,
+    ]);
+
+    expect(durations.get('call-1')).toEqual([{ seq: end.seq, ms: 4_200 }]);
+  });
+
+  it('parks the clock while a card waits, though the verdict names no call', () => {
+    const end = done('call-1', '2026-10-31T10:10:00.000Z');
+    const { durations } = scanCallTurns([
+      running('call-1', '2026-10-31T10:00:00.000Z'),
+      item('approval_request', '2026-10-31T10:01:00.000Z', {
+        nodeId: 'engineer',
+        payload: { id: 'q1', callId: 'call-1' },
+      }),
+      item('approval_verdict', '2026-10-31T10:09:00.000Z', {
+        nodeId: 'engineer',
+        payload: { id: 'q1' },
+      }),
+      end,
+    ]);
+
+    expect(durations.get('call-1')).toEqual([{ seq: end.seq, ms: 120_000 }]);
+  });
+
+  it("ignores a node's own conversation", () => {
+    const { durations, open } = scanCallTurns([
+      item('status', '2026-10-31T10:00:00.000Z', {
+        nodeId: 'engineer',
+        payload: { nodeId: 'engineer', status: 'running' },
+      }),
+    ]);
+
+    expect(durations.size).toBe(0);
+    expect(open.size).toBe(0);
   });
 });
 

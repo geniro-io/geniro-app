@@ -13,6 +13,7 @@ import { CallBlock, RevealCallBlockContext } from './call-block';
 import {
   type CalleeContext,
   CalleeContextResolverContext,
+  type CalleeReading,
 } from './call-context';
 import {
   CallConversationContext,
@@ -31,6 +32,7 @@ import {
   type TranscriptEntry,
 } from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
+import type { OpenTurn } from './turn-duration';
 import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 (
@@ -1777,6 +1779,92 @@ describe('CallBlock', () => {
     expect(container.textContent).toContain('Waves rise and retreat');
     expect(container.textContent).toContain('completed');
     expect(container.textContent).not.toContain('is thinking');
+  });
+
+  describe('the callee’s working time', () => {
+    const NOW = Date.parse('2026-10-31T12:00:00.000Z');
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function renderWith(block: CallBlockEntry, reading: CalleeReading): void {
+      act(() =>
+        root.render(
+          <CalleeContextResolverContext.Provider value={() => reading}>
+            <CallBlock block={block} nodes={NODES} />
+          </CalleeContextResolverContext.Provider>,
+        ),
+      );
+    }
+
+    const worked = (): Element | null =>
+      container.querySelector('[data-slot="call-summary-worked"]');
+
+    const openSince = (startedAt: number): OpenTurn => ({
+      agentKey: 'poet',
+      startedAt,
+      parkedMs: 0,
+      openSince: [],
+    });
+
+    it('counts the settled turns plus the turn in flight, and keeps counting', () => {
+      renderWith(makeBlock(), {
+        contextTokens: null,
+        contextWindowTokens: null,
+        workedMs: 60_000,
+        openTurns: [openSince(NOW - 30_000)],
+      });
+
+      expect(worked()?.textContent).toBe('1m 30s');
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(worked()?.textContent).toBe('1m 32s');
+    });
+
+    it('adds no open turn to a settled call', () => {
+      const entries = groupTranscript([
+        item(
+          'call_started',
+          { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+          'orch',
+        ),
+        item(
+          'status',
+          { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+      const block = entries[0];
+      if (block?.type !== 'call-block') {
+        throw new Error('expected a call block');
+      }
+      renderWith(block, {
+        contextTokens: null,
+        contextWindowTokens: null,
+        workedMs: 7_600,
+        openTurns: [openSince(NOW - 30_000)],
+      });
+
+      expect(worked()?.textContent).toBe('7.6s');
+    });
+
+    it('draws no time for a call nothing has measured', () => {
+      renderWith(makeBlock(), {
+        contextTokens: null,
+        contextWindowTokens: null,
+        workedMs: null,
+        openTurns: [],
+      });
+
+      expect(worked()).toBeNull();
+    });
   });
 
   describe('the callee’s context ring', () => {

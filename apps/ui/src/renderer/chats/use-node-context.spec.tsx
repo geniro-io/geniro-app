@@ -127,6 +127,8 @@ describe('useNodeDurableReadings', () => {
       totals: NO_TOTALS,
       toolCalls: 0,
       toolCallsThroughSeq: null,
+      workedMs: null,
+      workedThroughSeq: null,
       promptCacheExpiresAt: null,
     };
     const call2Figures = {
@@ -135,6 +137,8 @@ describe('useNodeDurableReadings', () => {
       // The conversation's own tool count, which its call card draws.
       toolCalls: 141,
       toolCallsThroughSeq: 640,
+      workedMs: null,
+      workedThroughSeq: null,
       // When this call's cache lapses — what its instance row counts down to.
       promptCacheExpiresAt: '2026-10-11T11:00:00.000Z',
     };

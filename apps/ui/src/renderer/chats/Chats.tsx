@@ -133,6 +133,7 @@ import {
   resolveConversationContext,
   resolveConversationSpend,
   resolveConversationToolCalls,
+  resolveConversationWorked,
   spendOfTotals,
   spentOf,
   withLiveCost,
@@ -343,6 +344,7 @@ import {
   heldSinceOf,
   movesPausedSpans,
   parkWhileHeld,
+  scanCallTurns,
   scanTurns,
   threadWorkedMs,
   withDurableChatTurn,
@@ -4813,6 +4815,10 @@ export function Chats({
     () => ownToolCallSeqsByCall(transcriptRows),
     [transcriptRows],
   );
+  const callTurns = useMemo(
+    () => scanCallTurns(transcriptRows),
+    [transcriptRows],
+  );
   const resolveCallReading = useLatestCallback(
     (calleeNodeId: string, callIds: readonly string[]): CalleeReading => ({
       ...resolveConversationContext(
@@ -4829,8 +4835,14 @@ export function Chats({
         callIds,
         ownToolSeqs,
       ),
+      ...resolveConversationWorked(
+        nodeReadings,
+        calleeNodeId,
+        callIds,
+        callTurns,
+      ),
     }),
-    [liveText, nodeReadings, ownToolSeqs],
+    [liveText, nodeReadings, ownToolSeqs, callTurns],
   );
   /**
    * The direct line to a running call's callee, past the agent that called it.

@@ -293,7 +293,7 @@ One home for each concern:
 - The shelf's Tasks, Sub-agents and Terminals chips restate panel counts on purpose.
 - The chat-list row is four lines. Do not delete one.
 - The tail `ResizeObserver` watches the scroller itself as well as its children, because a shrinking viewport fires nothing else.
-- The composer shelf reserves its height (`min-h-7`). Anything thread-produced worth reaching is another chip there, never a new band. Content chips (changes, pull requests, stages, buttons, workflows) run durable to volatile from the left; the status counters (Terminals, Monitors, Sub-agents, Agents, Team notes, Tasks) are glyph + figure only in `ComposerShelf`'s right-anchored `status` cluster, volatile to durable so the right edge stays put.
+- The composer shelf reserves its height (`min-h-7`). Anything thread-produced worth reaching is another chip there, never a new band. Content chips (changes, pull requests, buttons, workflows) run durable to volatile from the left; the status counters (Terminals, Monitors, Sub-agents, Agents, Team notes, Tasks, Stages) are glyph + figure only in `ComposerShelf`'s right-anchored `status` cluster, volatile to durable so the right edge stays put.
 
 **Do not reintroduce:**
 

@@ -188,10 +188,10 @@ export const OnAPhone: Story = {
               <RunningCallChips calls={calls} onReveal={() => {}} />
               <TeamNotesChip {...args} notes={manyNotes} />
               <TaskListChip done={5} total={5} tasks={tasks} live={false} />
+              <StageProgressChip progress={stages} />
             </>
           }>
           <ThreadPullRequestChips results={[pullRequest]} />
-          <StageProgressChip progress={stages} />
         </ComposerShelf>
       </div>
     </ThreadUiMemoryContext.Provider>
@@ -209,6 +209,7 @@ export const OnTheShelf: Story = {
             <RunningSubagentChips running={1} threads={threads} />
             <TeamNotesChip {...args} />
             <TaskListChip done={1} total={3} tasks={tasks} live={true} />
+            <StageProgressChip progress={stages} />
           </>
         }>
         <FolderChangesChip

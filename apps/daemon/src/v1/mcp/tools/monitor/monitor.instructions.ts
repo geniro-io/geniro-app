@@ -33,7 +33,12 @@ export function monitorInstructions(): string {
     `A command printing more than ${MONITOR_FLOOD_MAX_LINES} lines or ${MONITOR_FLOOD_MAX_BYTES / 1024} KiB within ` +
     `${MONITOR_FLOOD_WINDOW_MS / 1000} s is stopped as flooded: filter it with \`grep --line-buffered\` and start it again. ` +
     `It is stopped after \`timeout_ms\` (default ${MONITOR_TIMEOUT_DEFAULT_MS / 60_000} minutes, at most ` +
-    `${MONITOR_TIMEOUT_MAX_MS / 60_000}). A thread runs at most ${MONITOR_RUN_MAX} monitors at once. ` +
+    `${MONITOR_TIMEOUT_MAX_MS / 3_600_000} hours), and that end wakes you too. Every wake re-reads your whole ` +
+    'conversation, and after a quiet stretch the prompt cache has expired, so a wake that only says it timed out ' +
+    'costs as much as a real turn. For a watcher that prints only when something happens (pull-request feedback, ' +
+    'a deploy finishing), write the command to print nothing until then and give it a timeout as long as you are ' +
+    'prepared to wait, rather than restarting a short one each time it times out quietly. ' +
+    `A thread runs at most ${MONITOR_RUN_MAX} monitors at once. ` +
     "It runs in this conversation's folder, under `/bin/sh`. Stop one early with stop_monitor; " +
     `list_monitors names the ones still running. \`description\` (at most ${MONITOR_DESCRIPTION_MAX} characters) is ` +
     'how the user and you will tell its messages apart, e.g. "CI run 4812".'

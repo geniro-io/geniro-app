@@ -3723,7 +3723,7 @@ export const MONITOR_DESCRIPTION_MAX = 60;
 export const MONITOR_COMMAND_MAX = 4000;
 export const MONITOR_TIMEOUT_MIN_MS = 1000;
 export const MONITOR_TIMEOUT_DEFAULT_MS = 600_000;
-export const MONITOR_TIMEOUT_MAX_MS = 3_600_000;
+export const MONITOR_TIMEOUT_MAX_MS = 86_400_000;
 
 /** geniro's own tools that write a team note and read the run's team notes. */
 export const HOST_TEAM_NOTE_TOOL = 'team_note';

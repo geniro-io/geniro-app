@@ -114,7 +114,7 @@ Smaller rules:
 - `remote-routes.ts` answers bridge calls through the same `ipc-registry.ts` table as IPC. `on*` push channels are no-ops remotely, and `filePath` answers `null`.
 - `serveStatic` 404s a missing file. Only a navigation (no extension, not under `/assets/`) falls back to `index.html`.
 - Cache headers: the page is `no-store`, `/assets/*` are `immutable`, and everything else is `no-cache`.
-- Proxied answers and bundle files are compressed for a client that accepts it (`compression.ts`: brotli, else gzip). Never an event stream, a picture or a body under `MIN_COMPRESSIBLE_BYTES`.
+- Proxied answers and bundle files are compressed for a client that accepts it (`compression.ts`: brotli, else gzip). Only text types and SVG; never an event stream, an already-encoded body or one under `MIN_COMPRESSIBLE_BYTES`. A daemon answer and a bundle file go out through `stream.pipeline`, never `pipe`: a daemon or file failing after the headers went out cuts the answer instead of leaving it open, and nothing is appended to it.
 
 ### App updates
 

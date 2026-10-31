@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import type { IncomingHttpHeaders, Server } from 'node:http';
 import { createServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
@@ -488,6 +488,55 @@ describe('RemoteGateway: static serving', () => {
     expect(plain.body).toBe(script);
     expect(icon.headers['content-encoding']).toBeUndefined();
     expect(icon.bytes.equals(picture)).toBe(true);
+  });
+
+  it('cuts the answer when a file cannot be read after its headers went out, compressed or not', async () => {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    writeFileSync(join(staticRoot, 'index.html'), '<html>page</html>');
+    mkdirSync(join(staticRoot, 'assets'));
+    const locked = join(staticRoot, 'assets', 'App-locked.js');
+    writeFileSync(locked, 'export {};'.repeat(500));
+    chmodSync(locked, 0o000);
+
+    const gateway = new RemoteGateway(makeGatewayOptions(staticRoot));
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port();
+    if (port === null) {
+      throw new Error('expected the gateway to be listening');
+    }
+    const read = (acceptEncoding?: string) =>
+      new Promise<string>((resolve) => {
+        const req = httpRequest(
+          {
+            host: '127.0.0.1',
+            port,
+            path: '/assets/App-locked.js',
+            headers: {
+              host: `${ALLOWED_HOST_NAME}:${port}`,
+              ...(acceptEncoding === undefined
+                ? {}
+                : { 'accept-encoding': acceptEncoding }),
+            },
+          },
+          (res) => {
+            res.on('data', () => undefined);
+            res.on('end', () => resolve('ended'));
+            res.on('error', () => resolve('cut'));
+            res.on('aborted', () => resolve('cut'));
+          },
+        );
+        req.on('error', () => resolve('cut'));
+        req.end();
+        setTimeout(() => resolve('hung'), 3_000);
+      });
+
+    try {
+      expect(await read()).toBe('cut');
+      expect(await read('gzip')).toBe('cut');
+    } finally {
+      chmodSync(locked, 0o644);
+    }
   });
 
   it('never serves a .map file', async () => {

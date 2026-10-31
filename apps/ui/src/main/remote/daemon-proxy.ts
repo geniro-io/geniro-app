@@ -79,6 +79,7 @@ export function proxyHttp(
   req: IncomingMessage,
   res: ServerResponse,
   handle: DaemonHandle,
+  responseTimeoutMs = DAEMON_RESPONSE_TIMEOUT_MS,
 ): void {
   const headers = forwardableHeaders(req.headers);
   headers.authorization = `Bearer ${handle.token}`;
@@ -91,16 +92,18 @@ export function proxyHttp(
     method: req.method,
     path: req.url,
     headers,
-    timeout: DAEMON_RESPONSE_TIMEOUT_MS,
+    timeout: responseTimeoutMs,
   });
 
+  // Once the answer has started, a sentence appended to it would corrupt the
+  // body (inside a compressed stream, the whole of it), so it is cut instead.
   const failUpstream = (): void => {
-    if (!res.headersSent) {
-      res.writeHead(502, { 'content-type': 'text/plain' });
+    if (res.headersSent) {
+      res.destroy();
+      return;
     }
-    if (!res.writableEnded) {
-      res.end('daemon unreachable');
-    }
+    res.writeHead(502, { 'content-type': 'text/plain' });
+    res.end('daemon unreachable');
   };
 
   // The socket-level timeout above only starts the clock; it fires as a
@@ -116,9 +119,12 @@ export function proxyHttp(
     const encoding = hasBody(req.method, status)
       ? negotiateEncoding(req.headers['accept-encoding'])
       : null;
+    // `pipeline`, never `pipe`: a daemon dying mid-answer destroys
+    // `upstreamRes` without an `error` on the request, and `pipe` would leave
+    // the client's response open for good.
     if (encoding === null || !isCompressible(upstreamRes.headers)) {
       res.writeHead(status, upstreamRes.headers);
-      upstreamRes.pipe(res);
+      pipeline(upstreamRes, res).catch(() => res.destroy());
       return;
     }
     res.writeHead(status, encodedHeaders(upstreamRes.headers, encoding));

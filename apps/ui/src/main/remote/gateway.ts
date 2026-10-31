@@ -632,7 +632,7 @@ export class RemoteGateway {
       : null;
     if (encoding === null || !isCompressible(headers)) {
       res.writeHead(200, headers);
-      createReadStream(filePath).pipe(res);
+      pipeline(createReadStream(filePath), res).catch(() => res.destroy());
       return;
     }
     res.writeHead(200, encodedHeaders(headers, encoding));

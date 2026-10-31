@@ -62,6 +62,7 @@ function run(
     lanes: [lane({}), lane({ nodeId: 'qa', agentKind: 'cursor-agent' })],
     calls: [],
     wallWorkedMs: new Map(),
+    callWorkedMs: new Map(),
     costUsd: 9,
     version: 'v-a',
     nodeModels: new Map(),
@@ -123,6 +124,7 @@ function call(patch: Partial<Call>): Call {
     status: 'ok',
     running: false,
     durationMs: 1_000,
+    seq: 1,
     ...patch,
   };
 }
@@ -592,6 +594,7 @@ describe('callFigures', () => {
         totalMs: 93_000,
         avgMs: 2_214,
         maxMs: 9_000,
+        workedMs: null,
       },
       {
         caller: 'lead',
@@ -603,7 +606,39 @@ describe('callFigures', () => {
         totalMs: 500,
         avgMs: 500,
         maxMs: 500,
+        workedMs: null,
       },
+    ]);
+  });
+
+  it('sums how long the callees worked inside each edge’s calls, matched by their start row', () => {
+    const rows = callFigures([
+      run('r1', [], {
+        calls: [
+          call({ seq: 10, durationMs: 60_000 }),
+          call({ seq: 20, durationMs: 30_000 }),
+          call({ seq: 30, calleeNodeId: 'qa', durationMs: 5_000 }),
+        ],
+        callWorkedMs: new Map([
+          [10, 40_000],
+          [20, 12_000],
+        ]),
+      }),
+      run('r2', [], {
+        calls: [call({ seq: 10, durationMs: 9_000 })],
+        callWorkedMs: new Map([[10, 7_000]]),
+      }),
+    ]);
+
+    expect(
+      rows.map(({ callee, totalMs, workedMs }) => ({
+        callee,
+        totalMs,
+        workedMs,
+      })),
+    ).toEqual([
+      { callee: 'dev', totalMs: 99_000, workedMs: 59_000 },
+      { callee: 'qa', totalMs: 5_000, workedMs: null },
     ]);
   });
 });

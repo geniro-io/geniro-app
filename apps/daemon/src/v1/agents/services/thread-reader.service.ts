@@ -24,10 +24,12 @@ import { RunDao } from '../dao/run.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
 import { analysedSourceOf } from '../utils/analysed-runs';
 import { CHAT_LANE, laneOf } from '../utils/analysis-lane';
+import { callWorkedMsByStart } from '../utils/call-worked';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import { asRecord } from '../utils/json-util';
 import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
+import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
 import { sizedUserInstructionFiles } from '../utils/user-instruction-files';
 import {
   callFigures,
@@ -41,6 +43,7 @@ import {
   versionRef,
 } from '../utils/workflow-runs-fold';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
+import { RunKindRowsCache } from './run-kind-rows.cache';
 import { RunOutcomeHistoryService } from './run-outcome-history.service';
 import { ThreadTimelineService } from './thread-timeline.service';
 
@@ -149,7 +152,25 @@ export class ThreadReaderService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly wallTurns: WallTurnDao,
     private readonly outcomes: RunOutcomeHistoryService,
+    private readonly kindRows: RunKindRowsCache,
   ) {}
+
+  /**
+   * How long each callee worked inside each call of a run, by the seq of the
+   * call's `call_started` row, over the rows at or below `throughSeq`.
+   */
+  private async callWorkedMs(
+    runId: string,
+    throughSeq: number,
+    em: EntityManager,
+  ): Promise<Map<number, number>> {
+    return callWorkedMsByStart(
+      await this.kindRows.rowsOf(runId, ['call_started']),
+      await this.kindRows.rowsOf(runId, USAGE_ITEM_KINDS),
+      await this.wallTurns.nodeTurnsBySeq(runId, em),
+      throughSeq,
+    );
+  }
 
   async read(
     turn: AnalysisReadScope,
@@ -260,6 +281,11 @@ export class ThreadReaderService {
                   analysed.runId,
                   em,
                   analysed.snapshotSeq,
+                ),
+                callWorkedMs: await this.callWorkedMs(
+                  analysed.runId,
+                  analysed.snapshotSeq,
+                  em,
                 ),
                 costUsd: reading.fold.totals.costUsd,
                 version: snapshotVersion(run.workflowSnapshot),
@@ -588,6 +614,11 @@ export class ThreadReaderService {
       }
     }
     if (wanted.has('call')) {
+      const worked = await this.callWorkedMs(
+        source.sourceRunId,
+        source.snapshotSeq,
+        this.em.fork(),
+      );
       for (const call of fold.calls) {
         all.push({
           type: 'call',
@@ -598,6 +629,9 @@ export class ThreadReaderService {
           running: call.running,
           startMs: Date.parse(call.startedAt),
           ms: call.durationMs,
+          // How long the callee worked inside the call, of `ms`; absent when
+          // no turn of it was measured.
+          ...(worked.has(call.seq) ? { workedMs: worked.get(call.seq) } : {}),
         });
       }
     }

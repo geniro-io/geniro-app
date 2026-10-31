@@ -265,6 +265,7 @@ export function callFigures(runs: readonly FoldedRun[]): CallFigures[] {
         totalMs: 0,
         avgMs: 0,
         maxMs: 0,
+        workedMs: null,
       };
       row.runIds.add(run.runId);
       row.calls += 1;
@@ -272,6 +273,7 @@ export function callFigures(runs: readonly FoldedRun[]): CallFigures[] {
       row.runningCalls += call.running ? 1 : 0;
       row.totalMs += call.durationMs;
       row.maxMs = Math.max(row.maxMs, call.durationMs);
+      row.workedMs = plus(row.workedMs, run.callWorkedMs.get(call.seq) ?? null);
       rows.set(key, row);
     }
   }

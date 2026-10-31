@@ -104,6 +104,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
             ],
           ]),
       } as unknown as AgentAdapterRegistry),
+      kindRowsPassthrough(itemDao),
     );
     const run = new Run();
     run.id = 'source';
@@ -355,6 +356,50 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           { model: 'opus', costUsd: 1 },
         ],
       }),
+    ]);
+  });
+
+  it('states how long the callee worked inside each call span, through the snapshot', async () => {
+    const started = (callId: string): Record<string, unknown> => ({
+      callId,
+      callerNodeId: 'lead',
+      calleeNodeId: 'dev',
+      mode: 'sync',
+    });
+    await insert(1, 'call_started', started('call-1'), 0);
+    await insert(
+      2,
+      'turn_complete',
+      { callId: 'call-1', usage: { durationMs: 4_000 } },
+      5,
+    );
+    await insert(3, 'call_result', { callId: 'call-1', status: 'ok' }, 6);
+    await insert(4, 'call_started', started('call-2'), 7);
+    await insert(
+      5,
+      'turn_complete',
+      { callId: 'call-2', usage: { costUsd: 0.1 } },
+      10,
+    );
+    await insert(6, 'call_result', { callId: 'call-2', status: 'ok' }, 11);
+    await insert(
+      7,
+      'turn_complete',
+      { callId: 'call-2', usage: { durationMs: 9_000 } },
+      12,
+    );
+    await wallTurns.record('source', [{ seq: 5, nodeId: 'dev', ms: 2_500 }]);
+
+    const spans = (
+      await reader.read(
+        { sourceRunId: 'source', snapshotSeq: 6, sourceWorking: false },
+        { view: 'spans', kinds: ['call'] },
+      )
+    ).spans as Record<string, unknown>[];
+
+    expect(spans.map((span) => [span.ms, span.workedMs])).toEqual([
+      [6_000, 4_000],
+      [4_000, 2_500],
     ]);
   });
 

@@ -105,6 +105,7 @@ import {
   callNumber,
   readCallSeed,
 } from '../../agents/utils/call-seed';
+import { addCallWork, type CallWork } from '../../agents/utils/call-worked';
 import { asksForSecret } from '../../agents/utils/card-questions';
 import { withCarriedContext } from '../../agents/utils/carried-context';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
@@ -140,7 +141,6 @@ import {
   pollsSpendFor,
   withNodePolledSpend,
 } from '../../agents/utils/polled-spend';
-import { positive } from '../../agents/utils/positive-figure';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import {
@@ -2380,7 +2380,7 @@ export class GraphExecutorService
     >();
     // Each call's worked time — its CLI's own figures plus the wall ledger's
     // turns — and the newest turn ending it counts.
-    const callWork = new Map<string, { ms: number; throughSeq: number }>();
+    const callWork = new Map<string, CallWork>();
     // Each conversation's newest turn ending and the lifetime last stated for
     // it, per call and per node's own conversation — what its prompt-cache
     // expiry is read from.
@@ -2445,14 +2445,13 @@ export class GraphExecutorService
       }
       const figures = usageFiguresFrom(payload);
       if (callId !== null) {
-        const cliMs = cliTurnDurationMs(payload);
-        const wallMs = wallBySeq.get(turn.seq);
-        if (cliMs !== null || positive(wallMs)) {
-          const work = callWork.get(callId) ?? { ms: 0, throughSeq: turn.seq };
-          work.ms += (cliMs ?? 0) + (wallMs ?? 0);
-          work.throughSeq = Math.max(work.throughSeq, turn.seq);
-          callWork.set(callId, work);
-        }
+        addCallWork(
+          callWork,
+          callId,
+          turn.seq,
+          payload,
+          wallBySeq.get(turn.seq),
+        );
       }
       if (figures === null) {
         continue;

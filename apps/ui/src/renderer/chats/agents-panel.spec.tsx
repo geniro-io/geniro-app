@@ -3043,6 +3043,48 @@ describe('AgentsPanel — the instances of a called agent', () => {
     expect(quiet.firstElementChild?.textContent).toBe('running');
   });
 
+  it('states how long each instance has worked, counting the running one as it goes', () => {
+    const now = Date.parse('2026-10-31T12:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      const turn = {
+        agentKey: 'engineer',
+        startedAt: now - 30_000,
+        parkedMs: 0,
+        openSince: [],
+      };
+      const el = panel({
+        ...engineer,
+        threads: [
+          call('call-0', 'Explore the repo', 'completed', {
+            workedMs: 7_600,
+            openTurns: [turn],
+          }),
+          call('call-1', 'Build the parser', 'running', {
+            workedMs: 60_000,
+            openTurns: [turn],
+          }),
+          call('call-2', 'Write the docs', 'running', { workedMs: null }),
+        ],
+      });
+      const worked = (id: string): string | null =>
+        block(el, id)!.querySelector('[data-slot="agent-instance-worked"]')
+          ?.textContent ?? null;
+
+      expect(worked('call-0')).toBe('7.6s');
+      expect(worked('call-1')).toBe('1m 30s');
+      expect(worked('call-2')).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(worked('call-1')).toBe('1m 32s');
+      expect(worked('call-0')).toBe('7.6s');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('starts folded while several instances work, and counts what each folded one holds', () => {
     // REPORTED as overloaded: three live calls opened at once stacked three
     // briefs and all their sections into one tall card.

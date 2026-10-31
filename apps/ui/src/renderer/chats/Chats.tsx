@@ -7174,6 +7174,12 @@ export function Chats({
             nodeId,
             thread.callIds,
           ),
+          ...resolveConversationWorked(
+            nodeReadings,
+            nodeId,
+            thread.callIds,
+            callTurns,
+          ),
         };
       });
       // Calls OLDER than the loaded window, known only from the daemon's
@@ -7279,6 +7285,12 @@ export function Chats({
             nodeReadings,
             nodeId,
             callIds,
+          ),
+          ...resolveConversationWorked(
+            nodeReadings,
+            nodeId,
+            callIds,
+            callTurns,
           ),
         };
       });
@@ -7458,6 +7470,7 @@ export function Chats({
     awaitingAnswer,
     callBlockIndex,
     callChains,
+    callTurns,
     streaming,
     wfNodes,
     liveText,

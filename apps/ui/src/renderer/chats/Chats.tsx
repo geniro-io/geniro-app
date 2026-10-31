@@ -7760,7 +7760,13 @@ export function Chats({
     // popover draws one block per agent, exactly as its task chip does.
     const subagentGroups: AgentSubagentGroup[] = [];
     let subagents = 0;
+    const rootAgentIds = activeRun?.workflowId
+      ? new Set(wfNodes.feedIds)
+      : null;
     for (const agent of agents) {
+      if (rootAgentIds !== null && !rootAgentIds.has(agent.id)) {
+        continue;
+      }
       const own: AgentThread[] = [];
       for (const thread of agent.threads) {
         if (thread.kind !== 'subagent') {
@@ -7879,7 +7885,14 @@ export function Chats({
       shellAgents,
       shellsLeftRunning,
     };
-  }, [agents, shellsByAgent, tasksByAgent, callChains]);
+  }, [
+    agents,
+    shellsByAgent,
+    tasksByAgent,
+    callChains,
+    activeRun?.workflowId,
+    wfNodes.feedIds,
+  ]);
 
   /**
    * Which sub-agent's detail panel is open, by the id of the tool call that
@@ -8879,11 +8892,12 @@ export function Chats({
           <RunningSubagentChips
             running={sidePanelLive.subagents}
             threads={sidePanelLive.subagentThreads}
-            // Split into a block per agent in a WORKFLOW only
-            // — the task chip's gate, for the task chip's
-            // reason.
+            // Only the root agents' own delegates, so a block per
+            // agent only when several roots have some.
             groups={
-              activeRun?.workflowId ? sidePanelLive.subagentGroups : undefined
+              sidePanelLive.subagentGroups.length > 1
+                ? sidePanelLive.subagentGroups
+                : undefined
             }
             // The same detail panel the agents panel's own
             // delegate rows open — the shelf is the readier
@@ -8918,6 +8932,7 @@ export function Chats({
             // about the same task for as long as that lasted.
             live={activeRunStatus === 'running'}
           />
+          <StageProgressChip progress={activeRun?.stages} />
         </>
       }>
       {/* FIRST in the row, and the one chip here that is
@@ -8971,7 +8986,6 @@ export function Chats({
         results={openedByActiveThread}
         outcomes={activeRunOutcomes.newest}
       />
-      <StageProgressChip progress={activeRun?.stages} />
       {/* Mounted only while open and keyed by the run, so its search and
           filters start clean on every open and never carry to another thread,
           and closing it is the notes field's way out: its owed text is saved. */}

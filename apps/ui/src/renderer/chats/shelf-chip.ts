@@ -52,7 +52,7 @@
  * segment `h-full` makes the outer boxes agree by construction, which is the
  * only way two different structures can keep agreeing.
  */
-const SHELF_ITEM_HEIGHT = 'h-[26px]';
+const SHELF_ITEM_HEIGHT = 'h-[22px]';
 
 /**
  * The CARD — the small white surface with a hairline and a soft lift.
@@ -61,16 +61,13 @@ const SHELF_ITEM_HEIGHT = 'h-[26px]';
  * makes a joined run look like one chip rather than like a new kind of object:
  * whatever the group holds, the row still reads as cards with gaps between them.
  */
-const SHELF_CARD = 'rounded-lg border border-border bg-card shadow-panel-sm';
+const SHELF_CARD = 'rounded-md border border-border bg-card shadow-panel-sm';
 
 /**
  * What is inside any of them — the box, the height, the type and the hover.
  *
- * `text-xs`'s own 15px line box is KEPT. `leading-none` was tried on the theory
- * that these labels carry no descenders, so their ink sits low in a box that
- * reserves descender space — and measured against the same height it moved the
- * ink by nothing at all (27.0 of 51 device rows either way). It buys no
- * alignment and costs a rule nobody could explain later, so it is gone.
+ * The type is 11px and every glyph inside is drawn at `size-3` by the
+ * descendant rule, so a chip's own `size-3.5` icon cannot outgrow the row.
  *
  * Two things that LOOK like measurements of this and are not, both learned the
  * expensive way. The spinner is a rotating ARC, so the bounding box of its INK
@@ -80,10 +77,10 @@ const SHELF_CARD = 'rounded-lg border border-border bg-card shadow-panel-sm';
  * the HEIGHT is held fixed: the first pass here changed the height and the
  * leading together and read the height's own 1px shift as the leading's.
  */
-const SHELF_BODY = `flex min-w-0 items-center gap-1.5 text-xs transition-colors hover:bg-sidebar-accent`;
+const SHELF_BODY = `flex min-w-0 items-center gap-1 text-[11px] transition-colors hover:bg-sidebar-accent [&_svg]:size-3`;
 
 /** A chip standing on its own — the default, and what most of the row is. */
-export const SHELF_CHIP_CLASS = `${SHELF_BODY} ${SHELF_ITEM_HEIGHT} px-2 ${SHELF_CARD}`;
+export const SHELF_CHIP_CLASS = `${SHELF_BODY} ${SHELF_ITEM_HEIGHT} px-1.5 ${SHELF_CARD}`;
 
 /**
  * What a `HoverPopover` chip puts on its WRAPPER, and what it puts on the
@@ -143,7 +140,7 @@ export const SHELF_CHIP_TRIGGER_CLASS = `${SHELF_CHIP_CLASS} shrink-0`;
  * honest degradation — a cut-off number reads as "there is more here", where
  * overlapping glyphs read as a broken app.
  */
-export const SHELF_SEGMENT_CLASS = `${SHELF_BODY} h-full overflow-hidden rounded-none px-2.5 focus-visible:bg-sidebar-accent`;
+export const SHELF_SEGMENT_CLASS = `${SHELF_BODY} h-full overflow-hidden rounded-none px-2 focus-visible:bg-sidebar-accent`;
 
 /**
  * A JOINED run of segments, wearing one card — used for the pull requests, and

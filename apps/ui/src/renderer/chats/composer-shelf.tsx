@@ -84,7 +84,7 @@ import { WorkflowChip, workflowShellStatus } from './workflow-block';
  * pinned to its tail, so a row appearing or vanishing resized the transcript
  * and moved every line in it — and the Terminals chip comes and goes with
  * nearly every command an agent runs. `min-h-7` is the tallest thing the row
- * can hold (the Unarchive button; chips are 26px), so no chip changes it.
+ * can hold (the Unarchive button; chips are 22px), so no chip changes it.
  *
  * `inline` is the same row placed at the head of the queued strip's header
  * line, whose own height is held at the shelf's instead. Standing on its own
@@ -278,7 +278,11 @@ export function FolderChangesChip({
       <span className="tabular-nums">
         {summary.files} {summary.files === 1 ? 'file' : 'files'}
       </span>
-      <DiffFigures added={summary.added} removed={summary.removed} />
+      <DiffFigures
+        added={summary.added}
+        removed={summary.removed}
+        className="text-[11px]"
+      />
     </button>
   );
 }

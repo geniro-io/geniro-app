@@ -328,6 +328,7 @@ export function ThreadPullRequestChip({
             <DiffFigures
               added={pullRequest.added}
               removed={pullRequest.removed}
+              className="text-[11px]"
             />
           </span>
         </span>

@@ -15172,6 +15172,138 @@ describe('Chats — running shells', () => {
     ).toBeNull();
   });
 
+  it("counts only the root agent's own sub-agents on a workflow's shelf, never a callee's", async () => {
+    const delegate = (id: string, nodeId: string, label: string) => ({
+      id,
+      nodeId,
+      callId: nodeId === 'eng' ? 'call-1' : null,
+      label,
+      kind: null,
+      status: 'running' as const,
+      launchSeq: 1,
+      startedAt: new Date().toISOString(),
+    });
+    api.listChats.mockResolvedValue([]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        ...run1,
+        id: 'w9',
+        title: 'Dev team',
+        workflowId: 'dev-team',
+        agentKind: null,
+      },
+    ]);
+    workflowApi.getWorkflow.mockResolvedValue({
+      slug: 'dev-team',
+      workflow: {
+        name: 'Dev team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
+          {
+            id: 'mgr',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            name: 'Manager',
+          },
+          {
+            id: 'eng',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            name: 'Engineer',
+          },
+        ],
+        edges: [{ from: 'start', to: 'mgr', kind: 'data' }],
+      },
+    });
+    api.listRunItems.mockResolvedValue([]);
+    api.readRunState.mockResolvedValue({
+      ...emptyRunState(),
+      delegates: [
+        delegate('d-mgr', 'mgr', 'Survey the repo'),
+        delegate('d-eng-1', 'eng', 'Read the adapters'),
+        delegate('d-eng-2', 'eng', 'Run the suite'),
+      ],
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Dev team');
+
+    const chip = container.querySelector('[data-slot="running-subagents"]')!;
+    expect(chip.textContent).toBe('1');
+    await act(async () => {
+      chip
+        .querySelector('button')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(
+      [...document.querySelectorAll('[data-slot="subagent-row"]')].map(
+        (row) => row.textContent,
+      ),
+    ).toEqual([expect.stringContaining('Survey the repo')]);
+  });
+
+  it("draws no sub-agents chip on a workflow whose only delegates are a callee's", async () => {
+    api.listChats.mockResolvedValue([]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        ...run1,
+        id: 'w9',
+        title: 'Dev team',
+        workflowId: 'dev-team',
+        agentKind: null,
+      },
+    ]);
+    workflowApi.getWorkflow.mockResolvedValue({
+      slug: 'dev-team',
+      workflow: {
+        name: 'Dev team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
+          {
+            id: 'mgr',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            name: 'Manager',
+          },
+          {
+            id: 'eng',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            name: 'Engineer',
+          },
+        ],
+        edges: [{ from: 'start', to: 'mgr', kind: 'data' }],
+      },
+    });
+    api.listRunItems.mockResolvedValue([]);
+    api.readRunState.mockResolvedValue({
+      ...emptyRunState(),
+      delegates: [
+        {
+          id: 'd-eng',
+          nodeId: 'eng',
+          callId: 'call-1',
+          label: 'Read the adapters',
+          kind: null,
+          status: 'running',
+          launchSeq: 1,
+          startedAt: new Date().toISOString(),
+        },
+      ],
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Dev team');
+
+    expect(
+      container.querySelector('[data-slot="running-subagents"]'),
+    ).toBeNull();
+  });
+
   it('drops a command as soon as its reply lands', async () => {
     api.listChats.mockResolvedValue([run1]);
     api.listRunItems.mockResolvedValue([

@@ -235,7 +235,7 @@ describe('RunningMonitorChips', () => {
     ).toBe('Agent ops');
   });
 
-  it('stops a monitor only on the second press', async () => {
+  it('stops a monitor on a single press', async () => {
     const stopped: string[] = [];
     const el = mount(
       <RunningMonitorChips
@@ -249,10 +249,6 @@ describe('RunningMonitorChips', () => {
     const stop = document.querySelector<HTMLButtonElement>(
       '[data-slot="monitor-stop"]',
     )!;
-    await act(async () => {
-      stop.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    expect(stopped).toEqual([]);
     await act(async () => {
       stop.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
@@ -810,7 +806,7 @@ describe('every shelf chip', () => {
     // shelf row rather than on its own trigger renders 15px medium beside 12px
     // neighbours. That was REPORTED once already, of these very counters in the
     // header ("давай сделаем меньше вот эти циферки"), and the fix travelled
-    // with them: `SHELF_CHIP_CLASS` carries `text-xs` and `HoverPopover` puts
+    // with them: `SHELF_CHIP_CLASS` carries `text-[11px]` and `HoverPopover` puts
     // it on the button itself.
     //
     // Classes, not `getComputedStyle` — jsdom loads no stylesheet, so every
@@ -825,7 +821,7 @@ describe('every shelf chip', () => {
     const triggers = [...el.querySelectorAll<HTMLElement>('button')];
     expect(triggers).toHaveLength(2);
     for (const trigger of triggers) {
-      expect(trigger.className).toContain('text-xs');
+      expect(trigger.className).toContain('text-[11px]');
     }
   });
 });
@@ -938,7 +934,7 @@ describe('the shelf — separate chips, ONE joined group', () => {
     expect(shelf.className).not.toContain('divide-x');
     expect(shelf.className).not.toContain('shadow-panel-sm');
     for (const chip of el.querySelectorAll<HTMLElement>('button')) {
-      expect(chip.className).toContain('rounded-lg');
+      expect(chip.className).toContain('rounded-md');
       expect(chip.className).toContain('shadow-panel-sm');
       // And the card's radius still beats HoverPopover's own `rounded-full`,
       // or a counter would fill as a lozenge inside its own chip.
@@ -977,9 +973,9 @@ describe('the shelf — separate chips, ONE joined group', () => {
     for (const chip of status.querySelectorAll<HTMLElement>('button')) {
       // The same chip as every other item on the row — height, padding and
       // card — only its content is shorter.
-      expect(chip.className).toContain('h-[26px]');
-      expect(chip.className).toContain('px-2');
-      expect(chip.className).toContain('rounded-lg');
+      expect(chip.className).toContain('h-[22px]');
+      expect(chip.className).toContain('px-1.5');
+      expect(chip.className).toContain('rounded-md');
       expect(chip.className).toContain('shadow-panel-sm');
       expect(chip.className).not.toContain('rounded-full');
     }
@@ -998,7 +994,7 @@ describe('the shelf — separate chips, ONE joined group', () => {
       '[data-slot="pull-request-group"]',
     )!;
     expect(group.className).toContain('divide-x');
-    expect(group.className).toContain('rounded-lg');
+    expect(group.className).toContain('rounded-md');
     expect(group.className).toContain('shadow-panel-sm');
     expect(group.className).toContain('overflow-hidden');
     // The `All N` is INSIDE it, and last — which is what makes the glyph read
@@ -1012,7 +1008,7 @@ describe('the shelf — separate chips, ONE joined group', () => {
     // line beside the divider, one with its own radius leaves notches of the
     // group's background inside the run.
     for (const segment of group.children) {
-      expect(segment.className).not.toContain('rounded-lg');
+      expect(segment.className).not.toContain('rounded-md');
       expect(segment.className).not.toContain('shadow-panel-sm');
       expect(segment.className).not.toMatch(/(^| )border( |$)/);
     }

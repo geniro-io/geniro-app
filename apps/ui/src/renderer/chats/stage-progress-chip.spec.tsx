@@ -127,10 +127,11 @@ describe('StageProgressChip', () => {
     },
   );
 
-  it('states the daemon’s position and the current stage’s title', () => {
+  it('shows only the position on the chip, the current stage’s title in its label', () => {
     mount(progress());
-    expect(trigger().textContent).toBe('2/4· Review');
+    expect(trigger().textContent).toBe('2/4');
     expect(trigger().getAttribute('aria-label')).toBe('Stage 2 of 4: Review');
+    expect(trigger().getAttribute('title')).toBe('Stages · 2 of 4 · Review');
   });
 
   it('takes the figure from the position, not from the stages it lists', () => {

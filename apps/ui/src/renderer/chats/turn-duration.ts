@@ -807,6 +807,8 @@ export function scanCallTurns(items: readonly ChatItem[]): {
         parkedSince: new Map(),
         parkedMs: 0,
         continuationMeasured: false,
+        ended: false,
+        offTurnSince: null,
       };
       clocks.set(callId, clock);
     }

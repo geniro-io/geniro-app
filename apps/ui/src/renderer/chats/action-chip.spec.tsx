@@ -184,6 +184,22 @@ describe('ChatActionChips', () => {
     expect(shelf.chips()).toEqual(['Ping']);
   });
 
+  it('keeps the shelf chip height on a phone, for the chips and their `All N`', async () => {
+    const shelf = harness([action(2, 'Deploy'), action(1, 'Merged')]);
+    await shelf.render();
+
+    const buttons = [
+      ...shelf.container.querySelectorAll<HTMLElement>(
+        '[data-slot="action-chip"], [data-slot="action-overflow"] button',
+      ),
+    ];
+    expect(buttons).toHaveLength(3);
+    for (const button of buttons) {
+      expect(button.className).toContain('h-[22px]');
+      expect(button.className).not.toMatch(/max-sm:h-/);
+    }
+  });
+
   it('draws nothing when no action is live', async () => {
     const shelf = harness([]);
     await shelf.render();

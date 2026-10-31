@@ -140,7 +140,7 @@ export function ActionChip({
       // tooltip and accessible name still carry it whole.
       className={cn(
         SHELF_CHIP_CLASS,
-        'min-w-min cursor-pointer focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none max-sm:h-11',
+        'min-w-min cursor-pointer focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
         busy && 'cursor-default',
         className,
       )}
@@ -306,7 +306,7 @@ export function ActionOverflow({
       side="top"
       align="end"
       className={cn(SHELF_CHIP_WRAPPER_CLASS, className)}
-      triggerClassName={cn(SHELF_CHIP_TRIGGER_CLASS, 'max-sm:h-11')}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       panelClassName="max-h-72 w-[20rem] overflow-y-auto"
       trigger={
         <>

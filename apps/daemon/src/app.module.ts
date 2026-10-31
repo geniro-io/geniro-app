@@ -23,6 +23,7 @@ import { ProjectsModule } from './v1/projects/projects.module';
 import { RunsModule } from './v1/runs/runs.module';
 import { SharesModule } from './v1/shares/shares.module';
 import { StatsModule } from './v1/stats/stats.module';
+import { StorageModule } from './v1/storage/storage.module';
 import { TasksModule } from './v1/tasks/tasks.module';
 
 export interface AppModuleOptions {
@@ -60,6 +61,7 @@ export class AppModule {
         TasksModule,
         SharesModule,
         MemoryModule,
+        StorageModule,
       ],
       providers: [
         { provide: APP_GUARD, useClass: LoopbackTokenGuard },

@@ -51,7 +51,8 @@ Task worktrees (`worktree-service.ts`):
 - `prepareWorktree` reuses the task's standing worktree (`reused`). If the start is then refused, leave a reused worktree alone. Refuse anything else in the slot that is not empty.
 - A worktree just made gets the files the checkout's `.worktreeinclude` lists (`worktree-include.ts`, Claude Code's convention): only untracked files the checkout's `.gitignore` also ignores, never through a symlink, never over a file already there. A reused worktree gets nothing. A failure is logged (`source: worktree`) and never fails the start. Nothing is kept anywhere but in the new worktree.
 - `settleWorktreeForTask` is the only path allowed to clear a dirty tree. It runs `git add -A` onto the task's branch first. If the commit fails (hooks refused, no git identity), keep the worktree. Hooks run and are never skipped. The branch is never removed.
-- Three IPC channels only: `geniro:prepareTaskWorktree` (returns a shaped `TaskWorktreeResult` and never throws), `geniro:pruneTaskWorktree` (keyed by task and looked up in the registry) and `geniro:settleTaskWorktree`.
+- Four IPC channels only: `geniro:prepareTaskWorktree` (returns a shaped `TaskWorktreeResult` and never throws), `geniro:pruneTaskWorktree` (keyed by task and looked up in the registry), `geniro:settleTaskWorktree` and `geniro:removeStorageWorktree` (Settings → Storage, `denyRemotely`).
+- `removeWorktreeOnRequest` is the user's Remove press, so it is wider than the reaper: a clean worktree on any branch is removed (its commits stay on that branch), a dirty one only through `settleWorktreeForTask` on its task branch, and never one on a detached HEAD, with an operation stopped half way, whose card is still open, or whose repository is no longer where the registry says (moved, deleted or on a detached disk: nothing can confirm what it holds). A directory the registry does not name is removed only by `git worktree remove` without `--force`, after git lists it; a folder git does not call a worktree is never removed.
 - `settleTaskWorktree` fires off the daemon's `work-finished` reason. Never fire it off a card's column (written optimistically on drag) or off its run settling.
 
 Background loops in main (main hosts them because a renderer timer dies with the window and is throttled):
@@ -66,6 +67,7 @@ Smaller rules:
 - **Clear Agent Cache** runs in the focused renderer. It reloads only after the daemon has answered, and never on a failure. It acts on the press alone, with no confirmation strip.
 - **Component Catalog** appears only when `isDev` (`ELECTRON_RENDERER_URL`) is passed in, and is omitted otherwise. Its port is a twin of `apps/ui/package.json`'s `storybook` script. Main never starts Storybook.
 - `reveal-path.ts` reveals in Finder and never opens.
+- Settings → Storage (`app-storage.ts`): main sizes only the data-folder names the daemon's `GET /v1/storage` left `unclaimed`, through one `/usr/bin/du -sk` call (hard links counted once, symlinks not followed), and clears only the window's HTTP and code caches (`session.clearCache`, `clearCodeCaches`). Every name arrives through `storageEntryNameSchema` (one path segment). `geniro:restartDaemon` (`denyRemotely`) is the page's restart for a scheduled compaction, the same `restartAndNotify` a settings change uses, refused when `isServingWork` finds a live run (the marker then waits for the next start).
 - `open-terminal.ts` hands off to the user's own terminal through a 0700 `.command` file. `renderer/handoff-open.ts` is its one renderer helper, with one call site in `Chats.tsx`.
 - `navigation-policy.ts` keeps the top frame on the renderer document. `URL.origin` cannot decide this, because it is `null` for every `file:` URL.
 
@@ -85,6 +87,7 @@ Smaller rules:
 - A crash leaves its pid in `<userData>/daemon-crashed` (`consumeCrashMark`).
 - Before signalling a daemon, write the cause to `<userData>/daemon-stop-cause` (`quit`, `self-update`, `restart`, `crash`). The daemon's boot reconcile reads it. Write it only for a daemon seen serving (`handle !== null`): one still booting has not read the previous note, and overwriting an unread `crash` lets the autopilot restart crash-cut cards unattended.
 - `start()` joins an in-flight restart rather than racing it.
+- A start with `<userData>/compact-on-start` present (`DAEMON_COMPACTION_MARK_NAME`, twin of the daemon's `COMPACTION_MARKER_FILE`) waits `COMPACTING_START_TIMEOUT_MS` instead of `START_TIMEOUT_MS`: the daemon compacts the database before it listens.
 - `before-quit` runs each step isolated through `quit-teardown.ts`, with `app.quit()` in a `finally`.
 
 **Terminal panel** (`main/terminal-sessions.ts`, `renderer/terminal/`):
@@ -114,6 +117,7 @@ Smaller rules:
 - `remote-routes.ts` answers bridge calls through the same `ipc-registry.ts` table as IPC. `on*` push channels are no-ops remotely, and `filePath` answers `null`.
 - `serveStatic` 404s a missing file. Only a navigation (no extension, not under `/assets/`) falls back to `index.html`.
 - Cache headers: the page is `no-store`, `/assets/*` are `immutable`, and everything else is `no-cache`.
+- Proxied answers and bundle files are compressed for a client that accepts it (`compression.ts`: brotli, else gzip). Only text types and SVG; never an event stream, an already-encoded body or one under `MIN_COMPRESSIBLE_BYTES`. A daemon answer and a bundle file go out through `stream.pipeline`, never `pipe`: a daemon or file failing after the headers went out cuts the answer instead of leaving it open, and nothing is appended to it.
 
 ### App updates
 
@@ -140,7 +144,7 @@ Smaller rules:
   - Pass `--ignore-submodules=dirty`, `core.hooksPath=/dev/null` and `core.fsmonitor=false` (a repository's fsmonitor is a program git runs on any index read).
   - Refuse a driver name `-c` cannot address.
 - User-pressed actions (switch, pull, stash, the worktree commit) keep the repository's filters and hooks.
-- A task worktree is committed and removed only while HEAD is the task's own branch, with no operation half done. A detached HEAD is kept.
+- A task worktree is committed and removed only while HEAD is the task's own branch, with no operation half done. A detached HEAD is kept. The one wider path is the user's Remove press (`removeWorktreeOnRequest`, above), which removes a clean tree on another branch and commits nothing there.
 - The renderer has no network beyond loopback and the artifact CDNs, WebRTC included (`network-lockdown.ts`). Three measures, all needed:
   - `disable_non_proxied_udp`.
   - A black-hole SOCKS proxy.

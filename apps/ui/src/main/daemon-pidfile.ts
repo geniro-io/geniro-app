@@ -28,6 +28,16 @@ export const DAEMON_LOOPBACK_HOST = '127.0.0.1';
 export const DAEMON_CRASH_MARK_NAME = 'daemon-crashed';
 
 /**
+ * The note that the next daemon start compacts the database before it serves
+ * anything (Settings → Storage) — the start the supervisor then waits longer
+ * for.
+ *
+ * TWIN: the daemon's `COMPACTION_MARKER_FILE` in
+ * `apps/daemon/src/v1/storage/utils/storage-layout.ts`.
+ */
+export const DAEMON_COMPACTION_MARK_NAME = 'compact-on-start';
+
+/**
  * Whether the daemon at `pid` left a crash mark at `path`, removing the mark
  * either way — one naming another pid is a leftover from an earlier daemon.
  */

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { MONITOR_TIMEOUT_DEFAULT_MS } from '../../../agents/chat.types';
+import {
+  MONITOR_TIMEOUT_DEFAULT_MS,
+  MONITOR_TIMEOUT_MAX_MS,
+} from '../../../agents/chat.types';
 import { monitorResultText, readMonitor } from './monitor.reader';
 
 describe('readMonitor', () => {
@@ -17,8 +20,21 @@ describe('readMonitor', () => {
     ).toMatchObject({ timeoutMs: 1000 });
   });
 
+  it('takes a watcher timeout of a whole day', () => {
+    expect(MONITOR_TIMEOUT_MAX_MS).toBe(86_400_000);
+    for (const timeoutMs of [3_600_001, 86_400_000]) {
+      expect(
+        readMonitor({
+          command: 'true',
+          description: 'x',
+          timeout_ms: timeoutMs,
+        }),
+      ).toMatchObject({ timeoutMs });
+    }
+  });
+
   it('refuses rather than clamps a timeout out of range', () => {
-    for (const timeoutMs of [999, 3_600_001, 1500.5]) {
+    for (const timeoutMs of [999, MONITOR_TIMEOUT_MAX_MS + 1, 1500.5]) {
       expect(
         readMonitor({
           command: 'true',

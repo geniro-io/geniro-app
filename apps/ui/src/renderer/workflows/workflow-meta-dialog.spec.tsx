@@ -3,6 +3,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { settleStageGraphs } from '../__tests__/settle-stage-graphs';
+import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type { WorkflowMeta } from './graph-doc';
 import { WorkflowMetaDialog } from './workflow-meta-dialog';
 
@@ -273,17 +275,19 @@ describe('WorkflowMetaDialog', () => {
       { id: 'fix', title: 'Fix', doneWhen: 'Fixed' },
     ];
 
-    function graphColumns(): string[][] | null {
+    async function graphColumns(): Promise<string[][] | null> {
+      stubResizeObserver();
+      await settleStageGraphs(container);
       const graph = container.querySelector('[data-slot="stage-graph"]');
       if (graph === null) {
         return null;
       }
       const columns: string[][] = [];
-      for (const pill of graph.querySelectorAll<SVGGElement>(
+      for (const pill of graph.querySelectorAll<HTMLElement>(
         '[data-slot="stage-pill"]',
       )) {
         (columns[Number(pill.dataset.column)] ??= []).push(
-          pill.querySelector('text')!.textContent!,
+          pill.querySelector('[data-slot="stage-pill-title"]')!.textContent!,
         );
       }
       return columns;
@@ -313,9 +317,9 @@ describe('WorkflowMetaDialog', () => {
       });
     }
 
-    it('says there are none and what stages are, and submits without a stages key', () => {
+    it('says there are none and what stages are, and submits without a stages key', async () => {
       render();
-      expect(graphColumns()).toBeNull();
+      expect(await graphColumns()).toBeNull();
       expect(emptyState()).toContain('No stages yet');
       expect(emptyState()).toContain('the steps every run walks');
       expect(container.querySelector('[data-slot="stages-count"]')).toBeNull();
@@ -324,13 +328,13 @@ describe('WorkflowMetaDialog', () => {
       expect(onSubmit).toHaveBeenCalledWith({ name: 'Team' });
     });
 
-    it('draws saved stages as the stage graph, a fork split into rows, with a count', () => {
+    it('draws saved stages as the stage graph, a fork split into rows, with a count', async () => {
       render({ initial: { name: 'Team', stages: STAGES } });
       expect(emptyState()).toBeNull();
-      expect(graphColumns()).toEqual(FORK_COLUMNS);
+      expect(await graphColumns()).toEqual(FORK_COLUMNS);
       expect(
         container
-          .querySelector('[data-slot="stage-graph"] svg')!
+          .querySelector('[data-slot="stage-graph-canvas"]')!
           .getAttribute('aria-label'),
       ).toBe('Stages: Investigation → Implementation or Fix');
       expect(
@@ -362,7 +366,7 @@ describe('WorkflowMetaDialog', () => {
       expect(onSubmit).toHaveBeenCalledWith({ name: 'Team', stages: STAGES });
     });
 
-    it('opens the stage editor over the form and takes its saved stages', () => {
+    it('opens the stage editor over the form and takes its saved stages', async () => {
       render();
       type(nameInput(), 'Team');
       expect(
@@ -380,7 +384,7 @@ describe('WorkflowMetaDialog', () => {
       expect(
         container.querySelector('[data-slot="stage-schema-editor"]'),
       ).toBeNull();
-      expect(graphColumns()).toEqual([['Stage 1']]);
+      expect(await graphColumns()).toEqual([['Stage 1']]);
       expect(onSubmit).not.toHaveBeenCalled();
       submit();
       expect(onSubmit).toHaveBeenCalledWith({
@@ -389,17 +393,17 @@ describe('WorkflowMetaDialog', () => {
       });
     });
 
-    it('leaves the stages alone when the editor is cancelled', () => {
+    it('leaves the stages alone when the editor is cancelled', async () => {
       render({ initial: { name: 'Team', stages: STAGES } });
       pressText('Edit stages');
       pressText('Add stage');
       pressText('Cancel');
-      expect(graphColumns()).toEqual(FORK_COLUMNS);
+      expect(await graphColumns()).toEqual(FORK_COLUMNS);
       submit();
       expect(onSubmit).toHaveBeenCalledWith({ name: 'Team', stages: STAGES });
     });
 
-    it('drops the stages key when the last stage is deleted', () => {
+    it('drops the stages key when the last stage is deleted', async () => {
       render({
         initial: {
           name: 'Team',
@@ -420,13 +424,13 @@ describe('WorkflowMetaDialog', () => {
           .click();
       });
       pressText('Done');
-      expect(graphColumns()).toBeNull();
+      expect(await graphColumns()).toBeNull();
       expect(emptyState()).toContain('No stages yet');
       submit();
       expect(onSubmit).toHaveBeenCalledWith({ name: 'Team' });
     });
 
-    it('keeps the stage edits through a re-render with an equal initial, and resets on reopening', () => {
+    it('keeps the stage edits through a re-render with an equal initial, and resets on reopening', async () => {
       const copy = (): WorkflowMeta => ({
         name: 'Team',
         stages: STAGES.map((stage) => ({ ...stage })),
@@ -436,7 +440,7 @@ describe('WorkflowMetaDialog', () => {
       pressText('Add stage');
       fillDoneWhen('Shipped');
       pressText('Done');
-      expect(graphColumns()!.flat()).toHaveLength(4);
+      expect((await graphColumns())!.flat()).toHaveLength(4);
 
       pressText('Edit stages');
       pressText('Add stage');
@@ -448,21 +452,21 @@ describe('WorkflowMetaDialog', () => {
         container.querySelectorAll('[data-slot="stage-row"]'),
       ).toHaveLength(5);
       pressText('Cancel');
-      expect(graphColumns()!.flat()).toHaveLength(4);
+      expect((await graphColumns())!.flat()).toHaveLength(4);
 
       render({ open: false, initial: copy() });
       render({ initial: copy() });
-      expect(graphColumns()).toEqual(FORK_COLUMNS);
+      expect(await graphColumns()).toEqual(FORK_COLUMNS);
     });
 
-    it('takes the stages a re-read brought while open, so a later Save does not write the old ones back', () => {
+    it('takes the stages a re-read brought while open, so a later Save does not write the old ones back', async () => {
       render({ initial: { name: 'Team', stages: STAGES } });
       const reread = STAGES.slice(0, 1).map((stage) => ({
         ...stage,
         next: undefined,
       }));
       render({ initial: { name: 'Team', stages: reread } });
-      expect(graphColumns()!.flat()).toHaveLength(1);
+      expect((await graphColumns())!.flat()).toHaveLength(1);
     });
 
     it('does not submit the form from the editor’s buttons', () => {

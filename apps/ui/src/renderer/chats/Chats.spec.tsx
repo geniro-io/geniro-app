@@ -170,6 +170,21 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     projects: projectsApi,
   })),
 }));
+// Counts the chat screen's own renders through a child it redraws on every one.
+const chatHeaderRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock('./chat-header', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./chat-header')>();
+  const { createElement } = await import('react');
+  return {
+    ...actual,
+    ChatHeader: function CountingChatHeader(
+      props: Parameters<typeof actual.ChatHeader>[0],
+    ) {
+      chatHeaderRenders.count += 1;
+      return createElement(actual.ChatHeader, props);
+    },
+  };
+});
 // Counts how many times each turn block actually re-rendered, so a test can
 // assert that a live delta does NOT rebuild the blocks it did not touch.
 const turnBlockRenders = vi.hoisted(() => ({
@@ -3648,6 +3663,49 @@ describe('Chats reconnect seam', () => {
     expect(turnBlockRenders.byId.get(settledId) ?? 0).toBe(0);
   });
 
+  it('redraws the composer alone while the user types, never the screen around it', async () => {
+    // The text was state on this screen, so each keystroke redrew the header,
+    // the transcript list and the agents panel — a lag per key on a phone.
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'first question'),
+      msg(1, 'assistant', 'an answer'),
+    ]);
+    const container = await mount(makeClient().client);
+    await clickRun(container, 'My chat');
+    const field = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Message the agent"]',
+    )!;
+    const typeText = async (text: string): Promise<void> => {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          'value',
+        )!.set!.call(field, text);
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
+    // Absent while the turn runs and the box is empty, disabled while idle.
+    const sendable = (): boolean => {
+      const button = field
+        .closest('[data-slot="composer-card"]')!
+        .querySelector<HTMLButtonElement>('button[aria-disabled]');
+      return button !== null && !button.disabled;
+    };
+
+    // The first character is a fact the screen draws: the send button.
+    expect(sendable()).toBe(false);
+    await typeText('h');
+    expect(sendable()).toBe(true);
+
+    chatHeaderRenders.count = 0;
+    for (const text of ['he', 'hel', 'hell', 'hello']) {
+      await typeText(text);
+    }
+
+    expect(field.value).toBe('hello');
+    expect(chatHeaderRenders.count).toBe(0);
+  });
+
   it('reads each reasoning stretch’s own anchor and count', async () => {
     // The turn-scoped row this replaces kept one line whose timer ran for the
     // whole turn — "it didnt clean time and just continued to update tools
@@ -4989,6 +5047,8 @@ describe('Chats workflow runs', () => {
             totals: NO_TOTALS,
             toolCalls: 0,
             toolCallsThroughSeq: null,
+            workedMs: null,
+            workedThroughSeq: null,
             promptCacheExpiresAt: null,
           },
         ],
@@ -5394,6 +5454,8 @@ describe('Chats workflow runs', () => {
             totals: NO_TOTALS,
             toolCalls: 0,
             toolCallsThroughSeq: null,
+            workedMs: null,
+            workedThroughSeq: null,
             promptCacheExpiresAt: null,
           },
         ],
@@ -5450,6 +5512,8 @@ describe('Chats workflow runs', () => {
             totals: NO_TOTALS,
             toolCalls: 0,
             toolCallsThroughSeq: null,
+            workedMs: null,
+            workedThroughSeq: null,
             promptCacheExpiresAt: '2020-01-01T00:00:00.000Z',
           },
         ],
@@ -5631,6 +5695,8 @@ describe('Chats workflow runs', () => {
             // tools are older than the loaded window.
             toolCalls: 140,
             toolCallsThroughSeq: 37,
+            workedMs: null,
+            workedThroughSeq: null,
             promptCacheExpiresAt: null,
           },
         ],
@@ -5720,6 +5786,8 @@ describe('Chats workflow runs', () => {
             }),
             toolCalls: 0,
             toolCallsThroughSeq: null,
+            workedMs: null,
+            workedThroughSeq: null,
             promptCacheExpiresAt: null,
           },
         ],
@@ -5796,6 +5864,8 @@ describe('Chats workflow runs', () => {
             totals: totals({ turns: 1, costUsd: 2, outputTokens: 1_000 }),
             toolCalls: 0,
             toolCallsThroughSeq: null,
+            workedMs: null,
+            workedThroughSeq: null,
             promptCacheExpiresAt: null,
           },
           {
@@ -5803,6 +5873,8 @@ describe('Chats workflow runs', () => {
             totals: totals({ turns: 1, costUsd: 3, outputTokens: 1_000 }),
             toolCalls: 0,
             toolCallsThroughSeq: null,
+            workedMs: null,
+            workedThroughSeq: null,
             promptCacheExpiresAt: null,
           },
         ],
@@ -5886,6 +5958,8 @@ describe('Chats workflow runs', () => {
             totals: NO_TOTALS,
             toolCalls: 0,
             toolCallsThroughSeq: null,
+            workedMs: null,
+            workedThroughSeq: null,
             promptCacheExpiresAt: null,
           },
         ],

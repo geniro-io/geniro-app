@@ -137,6 +137,8 @@ import {
   CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
   CLAUDE_PLAN_LIMITS_TIMEOUT_MS,
+  CLAUDE_PROBE_CACHE_FILE,
+  CLAUDE_PROBE_DIR_NAME,
   CLAUDE_PROFILE_SETTINGS_FILE,
   CLAUDE_PROJECT_MCP_FILE,
   CLAUDE_PROJECT_SETTINGS_FILES,
@@ -155,6 +157,7 @@ import {
   CLAUDE_TITLE_MODEL,
   CLAUDE_TITLE_TIMEOUT_MS,
   CLAUDE_TODO_TOOLS_ENV,
+  CLAUDE_USER_DATA_TMP_DIR_NAME,
 } from './claude.const';
 import type { ClaudeAdapterOptions, ClaudeModeProbe } from './claude.types';
 import {
@@ -273,6 +276,15 @@ export class ClaudeAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {
     return {
       kind: AgentKind.Claude,
+      userData: {
+        caches: [
+          CLAUDE_USER_DATA_TMP_DIR_NAME,
+          CLAUDE_PROBE_DIR_NAME,
+          CLAUDE_PROBE_CACHE_FILE,
+        ],
+        state: [CLAUDE_COST_TOTALS_FILE],
+        leftovers: ['claude-skills.json'],
+      },
       ollama: {
         args: [],
         env: {
@@ -1085,11 +1097,11 @@ export class ClaudeAdapter extends AgentAdapter {
   static forDaemon(deps: AdapterDaemonDeps): ClaudeAdapter {
     return new ClaudeAdapter({
       spawn: deps.spawn,
-      mcpConfigDir: join(deps.userDataDir, 'tmp'),
+      mcpConfigDir: join(deps.userDataDir, CLAUDE_USER_DATA_TMP_DIR_NAME),
       // The command-catalog probe's and the mode probe's throwaway
       // workspaces — daemon-owned, never a user folder.
-      probeRootDir: join(deps.userDataDir, 'claude-probe'),
-      modeProbeCachePath: join(deps.userDataDir, 'claude-probe.json'),
+      probeRootDir: join(deps.userDataDir, CLAUDE_PROBE_DIR_NAME),
+      modeProbeCachePath: join(deps.userDataDir, CLAUDE_PROBE_CACHE_FILE),
       costTotalsPath: join(deps.userDataDir, CLAUDE_COST_TOTALS_FILE),
       processes: deps.processes,
       versions: deps.versions,

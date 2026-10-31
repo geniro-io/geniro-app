@@ -12,10 +12,12 @@ import {
   resolveConversationContext,
   resolveConversationSpend,
   resolveConversationToolCalls,
+  resolveConversationWorked,
   spendOfTotals,
   withLiveCost,
 } from './call-context';
 import { type LiveState, partialOwnerKey } from './live-text';
+import type { OpenTurn } from './turn-duration';
 import type { NodeDurableReading } from './use-node-context';
 
 function live(
@@ -61,6 +63,8 @@ function reading(
             toolCalls: _toolCalls,
             toolCallsThroughSeq: _through,
             promptCacheExpiresAt: _expiry,
+            workedMs: _worked,
+            workedThroughSeq: _workedThrough,
             ...heavy
           }) => heavy,
         ),
@@ -70,6 +74,8 @@ function reading(
           toolCalls: entry.toolCalls ?? 0,
           toolCallsThroughSeq: entry.toolCallsThroughSeq ?? null,
           promptCacheExpiresAt: entry.promptCacheExpiresAt ?? null,
+          workedMs: entry.workedMs ?? null,
+          workedThroughSeq: entry.workedThroughSeq ?? null,
         })),
         totals: NO_TOTALS,
         mainTotals: NO_TOTALS,
@@ -373,6 +379,8 @@ describe('a call past the listing cap', () => {
               toolCalls: 230,
               toolCallsThroughSeq: 900,
               promptCacheExpiresAt: '2026-10-25T12:00:00.000Z',
+              workedMs: 61_000,
+              workedThroughSeq: 880,
             },
           ],
         },
@@ -388,6 +396,86 @@ describe('a call past the listing cap', () => {
     expect(resolveConversationCacheExpiry(readings, 'callee', ['call-1'])).toBe(
       '2026-10-25T12:00:00.000Z',
     );
+    expect(
+      resolveConversationWorked(readings, 'callee', ['call-1'], NO_CALL_TURNS)
+        .workedMs,
+    ).toBe(61_000);
+  });
+});
+
+const NO_CALL_TURNS = { durations: new Map(), open: new Map() };
+
+describe('resolveConversationWorked', () => {
+  const callReading = (
+    callId: string,
+    workedMs: number | null,
+    workedThroughSeq: number | null,
+  ): CallEntry => ({
+    promptCacheExpiresAt: null,
+    callId,
+    contextTokens: null,
+    contextEstimated: false,
+    contextWindowTokens: null,
+    start: null,
+    workedMs,
+    workedThroughSeq,
+  });
+  const openTurn = (startedAt: number): OpenTurn => ({
+    agentKey: 'callee',
+    startedAt,
+    parkedMs: 0,
+    openSince: [],
+  });
+
+  it('sums every call of the conversation, adding only the turns settled after the read', () => {
+    const readings = reading([
+      callReading('call-1', 30_000, 40),
+      callReading('call-2', 5_000, 90),
+    ]);
+    const turns = {
+      durations: new Map([
+        [
+          'call-1',
+          [
+            { seq: 40, ms: 30_000 },
+            { seq: 120, ms: 2_000 },
+          ],
+        ],
+        ['call-2', [{ seq: 90, ms: 5_000 }]],
+      ]),
+      open: new Map([['call-2', openTurn(1_000)]]),
+    };
+
+    expect(
+      resolveConversationWorked(
+        readings,
+        'callee',
+        ['call-1', 'call-2'],
+        turns,
+      ),
+    ).toEqual({ workedMs: 37_000, openTurns: [openTurn(1_000)] });
+  });
+
+  it('counts every held turn of a call the daemon has not measured', () => {
+    const turns = {
+      durations: new Map([['call-3', [{ seq: 7, ms: 4_000 }]]]),
+      open: new Map(),
+    };
+
+    expect(
+      resolveConversationWorked(NO_ROWS, 'callee', ['call-3'], turns),
+    ).toEqual({ workedMs: 4_000, openTurns: [] });
+  });
+
+  it('is unmeasured when nothing has measured a turn', () => {
+    expect(
+      resolveConversationWorked(
+        reading([callReading('call-1', null, null)]),
+        'callee',
+        ['call-1'],
+        NO_CALL_TURNS,
+      ).workedMs,
+    ).toBeNull();
   });
 });
 

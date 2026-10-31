@@ -21,6 +21,9 @@ import {
   MAX_LOCAL_IMAGE_BYTES,
 } from '../chat.types';
 
+/** `<userData>/` directory the attachments live in, one folder per run. */
+export const ATTACHMENTS_DIR_NAME = 'attachments';
+
 /** Constructor options — test seams, not user config. */
 export interface AttachmentStoreOptions {
   /** Attachments root (test seam); default `<userData>/attachments`. */
@@ -59,7 +62,8 @@ export class AttachmentStoreService {
   private readonly root: string;
 
   constructor(options: AttachmentStoreOptions = {}) {
-    this.root = options.root ?? join(environment.userDataDir, 'attachments');
+    this.root =
+      options.root ?? join(environment.userDataDir, ATTACHMENTS_DIR_NAME);
   }
 
   /**

@@ -1,7 +1,8 @@
 import type { IncomingMessage, Server } from 'node:http';
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import type { Socket } from 'node:net';
 import { connect as netConnect } from 'node:net';
+import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -39,6 +40,36 @@ function close(server: Server): Promise<void> {
     // the suite's own hook timeout.
     server.closeAllConnections();
     server.close(() => resolve());
+  });
+}
+
+/** A GET whose body is read as sent: `fetch` would decode it and hide the encoding. */
+function rawGet(
+  port: number,
+  path: string,
+  acceptEncoding?: string,
+): Promise<{ headers: IncomingMessage['headers']; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        host: '127.0.0.1',
+        port,
+        path,
+        headers:
+          acceptEncoding === undefined
+            ? {}
+            : { 'accept-encoding': acceptEncoding },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () =>
+          resolve({ headers: res.headers, body: Buffer.concat(chunks) }),
+        );
+      },
+    );
+    req.on('error', reject);
+    req.end();
   });
 }
 
@@ -148,6 +179,152 @@ describe('proxyHttp', () => {
       },
     );
     expect(response.status).toBe(502);
+  });
+
+  it("compresses a daemon answer for a client that accepts it, and passes one it can't use through untouched", async () => {
+    const page = JSON.stringify({
+      items: Array.from({ length: 500 }, (_, seq) => ({
+        seq,
+        kind: 'tool_result',
+        payload: { result: 'the same output, again and again' },
+      })),
+    });
+    const daemon = createServer((req, res) => {
+      if (req.url === '/v1/stream') {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.end(`data: ${'x'.repeat(4096)}\n\n`);
+        return;
+      }
+      if (req.url === '/v1/small') {
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'content-length': '11',
+        });
+        res.end('{"ok":true}');
+        return;
+      }
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': String(Buffer.byteLength(page)),
+      });
+      res.end(page);
+    });
+    servers.push(daemon);
+    const handle = makeHandle(await listen(daemon), 'token');
+    const gateway = createServer((req, res) => proxyHttp(req, res, handle));
+    servers.push(gateway);
+    const gatewayPort = await listen(gateway);
+
+    const gzipped = await rawGet(gatewayPort, '/v1/chats/run/items', 'gzip');
+    const brotli = await rawGet(
+      gatewayPort,
+      '/v1/chats/run/items',
+      'gzip, deflate, br',
+    );
+    const identity = await rawGet(gatewayPort, '/v1/chats/run/items');
+    const small = await rawGet(gatewayPort, '/v1/small', 'gzip');
+    const stream = await rawGet(gatewayPort, '/v1/stream', 'gzip');
+
+    expect(gzipped.headers['content-encoding']).toBe('gzip');
+    expect(gzipped.headers['content-length']).toBeUndefined();
+    expect(gzipped.headers.vary).toBe('Accept-Encoding');
+    expect(gzipped.body.length).toBeLessThan(page.length / 10);
+    expect(gunzipSync(gzipped.body).toString('utf8')).toBe(page);
+    expect(brotli.headers['content-encoding']).toBe('br');
+    expect(brotliDecompressSync(brotli.body).toString('utf8')).toBe(page);
+    expect(identity.headers['content-encoding']).toBeUndefined();
+    expect(identity.body.toString('utf8')).toBe(page);
+    expect(small.headers['content-encoding']).toBeUndefined();
+    expect(small.body.toString('utf8')).toBe('{"ok":true}');
+    expect(stream.headers['content-encoding']).toBeUndefined();
+  });
+
+  it('cuts an answer the daemon goes silent in, rather than appending a sentence to its body', async () => {
+    const daemon = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write(`[${'"row",'.repeat(2000)}`);
+    });
+    servers.push(daemon);
+    const handle = makeHandle(await listen(daemon), 'token');
+    const gateway = createServer((req, res) =>
+      proxyHttp(req, res, handle, 150),
+    );
+    servers.push(gateway);
+    const gatewayPort = await listen(gateway);
+
+    const read = (acceptEncoding?: string) =>
+      new Promise<{ outcome: string; body: string }>((resolve) => {
+        const chunks: Buffer[] = [];
+        const req = httpRequest(
+          {
+            host: '127.0.0.1',
+            port: gatewayPort,
+            path: '/v1/chats/run/items',
+            headers:
+              acceptEncoding === undefined
+                ? {}
+                : { 'accept-encoding': acceptEncoding },
+          },
+          (res) => {
+            const done = (outcome: string) => () =>
+              resolve({ outcome, body: Buffer.concat(chunks).toString() });
+            res.on('data', (chunk: Buffer) => chunks.push(chunk));
+            res.on('end', done('ended'));
+            res.on('aborted', done('cut'));
+            res.on('error', done('cut'));
+          },
+        );
+        req.on('error', () => resolve({ outcome: 'cut', body: '' }));
+        req.end();
+        setTimeout(() => resolve({ outcome: 'hung', body: '' }), 3_000);
+      });
+
+    const plain = await read();
+    const gzipped = await read('gzip');
+
+    expect(plain.outcome).toBe('cut');
+    expect(plain.body).not.toContain('daemon unreachable');
+    expect(gzipped.outcome).toBe('cut');
+  });
+
+  it('cuts an answer short when the daemon dies halfway through it, compressed or not, rather than leaving it open', async () => {
+    const daemon = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write(`[${'"row",'.repeat(2000)}`);
+      setTimeout(() => res.socket?.destroy(), 20);
+    });
+    servers.push(daemon);
+    const handle = makeHandle(await listen(daemon), 'token');
+    const gateway = createServer((req, res) => proxyHttp(req, res, handle));
+    servers.push(gateway);
+    const gatewayPort = await listen(gateway);
+
+    const read = (acceptEncoding?: string) =>
+      new Promise<string>((resolve) => {
+        const req = httpRequest(
+          {
+            host: '127.0.0.1',
+            port: gatewayPort,
+            path: '/v1/chats/run/items',
+            headers:
+              acceptEncoding === undefined
+                ? {}
+                : { 'accept-encoding': acceptEncoding },
+          },
+          (res) => {
+            res.on('data', () => undefined);
+            res.on('end', () => resolve('ended'));
+            res.on('error', () => resolve('cut'));
+            res.on('aborted', () => resolve('cut'));
+          },
+        );
+        req.on('error', () => resolve('cut'));
+        req.end();
+        setTimeout(() => resolve('hung'), 3_000);
+      });
+
+    expect(await read('gzip')).toBe('cut');
+    expect(await read()).toBe('cut');
   });
 });
 

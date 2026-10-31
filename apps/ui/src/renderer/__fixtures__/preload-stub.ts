@@ -365,6 +365,22 @@ export function createPreloadStub(
       note('saveMemoryExport');
       return Promise.resolve({ saved: false, path: null });
     },
+    getAppStorage: () => {
+      note('getAppStorage');
+      return Promise.resolve({ worktrees: [], browserCache: [], appData: [] });
+    },
+    removeStorageWorktree: () => {
+      note('removeStorageWorktree');
+      return Promise.resolve({ removed: true, reason: null });
+    },
+    clearBrowserCache: () => {
+      note('clearBrowserCache');
+      return Promise.resolve({ freedBytes: 0 });
+    },
+    restartDaemon: () => {
+      note('restartDaemon');
+      return Promise.resolve();
+    },
     revealPath: () => {
       note('revealPath');
       return Promise.resolve({

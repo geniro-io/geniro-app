@@ -26,6 +26,7 @@ import { ApprovalRegistry } from './approval-registry';
 import type { ChatShellsService } from './chat-shells.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { MonitorRegistry } from './monitor.registry';
+import { RunHoldRegistry } from './run-hold.registry';
 import type { RunKindRowsCache } from './run-kind-rows.cache';
 import { RunStateService } from './run-state.service';
 
@@ -38,6 +39,7 @@ describe('RunStateService (in-memory sqlite)', () => {
   let items: ItemDao;
   let runs: RunDao;
   let approvals: ApprovalRegistry;
+  let holds: RunHoldRegistry;
 
   beforeAll(async () => {
     orm = await MikroORM.init(
@@ -62,6 +64,7 @@ describe('RunStateService (in-memory sqlite)', () => {
     items = new ItemDao(orm.em.fork());
     runs = new RunDao(orm.em.fork());
     approvals = new ApprovalRegistry();
+    holds = new RunHoldRegistry();
     seqs = new ItemSeqAllocator(orm.em, items);
   });
 
@@ -113,6 +116,7 @@ describe('RunStateService (in-memory sqlite)', () => {
           running.filter((monitor) => monitor.owner.runId === runId),
       } as unknown as MonitorRegistry,
       recordingCache(),
+      holds,
     );
   }
 
@@ -689,6 +693,45 @@ describe('RunStateService (in-memory sqlite)', () => {
     const state = await service().read('run-a');
 
     expect(state.turnStartedAt).toBe(new Date(1000).toISOString());
+  });
+
+  it("serves the holds of a running chat's open turn", async () => {
+    await createRun('running');
+    holds.hold('run-a', 2, 1_000);
+    holds.hold('run-a', 0, 4_000);
+    holds.hold('run-a', 1, 9_000);
+
+    const state = await service().read('run-a');
+
+    expect(state.turnHeldMs).toBe(3_000);
+    expect(state.turnHeldSince).toBe(new Date(9_000).toISOString());
+  });
+
+  it('dates a stretch the agent runs by itself from when it woke, ahead of its rows', async () => {
+    await createRun('running');
+    await insert(1, 'message', { text: 'go' }, { role: 'user', at: 1000 });
+    await insert(2, 'turn_complete', {}, { at: 2000 });
+    await insert(
+      3,
+      'message',
+      { text: 'back' },
+      { role: 'assistant', at: 9000 },
+    );
+    holds.startStretch('run-a', 4_000);
+
+    const state = await service().read('run-a');
+
+    expect(state.turnStartedAt).toBe(new Date(4_000).toISOString());
+  });
+
+  it('serves no holds for a settled chat', async () => {
+    await createRun('completed');
+    holds.hold('run-a', 1, 1_000);
+
+    const state = await service().read('run-a');
+
+    expect(state.turnHeldMs).toBe(0);
+    expect(state.turnHeldSince).toBeNull();
   });
 
   it('dates no turn for a settled chat', async () => {

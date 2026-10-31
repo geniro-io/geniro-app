@@ -58,6 +58,7 @@ import { WorkflowProposalService } from './v1/graphs/services/workflow-proposal.
 import { MemoryTextIndexService } from './v1/memory/services/memory-text-index.service';
 import { ShareService } from './v1/shares/services/share.service';
 import { WorkflowLedgerService } from './v1/stats/services/workflow-ledger.service';
+import { StorageService } from './v1/storage/services/storage.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
 
 /**
@@ -251,6 +252,11 @@ bootstrapper.addExtension(
             }`,
           );
         });
+
+      // A compaction the user asked for in Settings → Storage: here, before
+      // listen, because it holds the write lock for its whole length and the
+      // daemon's own writes give up after better-sqlite3's 5 s busy timeout.
+      await app.get(StorageService).compactIfScheduled();
 
       // The full-text indexes (`db/chat-text-index.ddl.ts`,
       // `db/memory-text-index.ddl.ts`): AFTER the schema sync, because a sync

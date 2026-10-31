@@ -6,9 +6,12 @@ import { environment } from '../../../environments';
 /** The shape this module's own attachment directories are named by. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/** `<userData>/` directory a card's pasted images live in, one folder per card. */
+export const TASK_ATTACHMENTS_DIR_NAME = 'task-attachments';
+
 /** Where a card's pasted images live. */
 export function taskAttachmentsRoot(): string {
-  return join(environment.userDataDir, 'task-attachments');
+  return join(environment.userDataDir, TASK_ATTACHMENTS_DIR_NAME);
 }
 
 /**

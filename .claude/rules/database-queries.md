@@ -22,3 +22,8 @@ Every daemon query goes through MikroORM's QueryBuilder or its typed Kysely buil
 - Change a statement only by bumping that file's version (see its doc block).
 - The FTS tables are listed in `schemaGenerator.skipTables` (`CHAT_TEXT_TABLES`, `MEMORY_TEXT_TABLES`); keep each in step with its table on a rename.
 - Any other need for raw SQL needs its own reason recorded here, or a typed way to say it.
+
+## Recorded exception: compacting the database
+
+- `v1/storage/utils/vacuum-database.ts` runs `VACUUM` and `wal_checkpoint(TRUNCATE)` on a connection of its own in a worker thread, for Settings → Storage. No builder expresses either, and both are constants. On the daemon's own connection the statement would hold the event loop for its whole length. It holds the write lock throughout, and the daemon's writes give up after better-sqlite3's 5 s busy timeout, so it runs only at daemon start, before listen (`StorageService.compactIfScheduled`).
+- `StorageService.freeBytes` reads `freelist_count` and `page_size` through better-sqlite3's `pragma()`, as `main.ts` sets the journal mode.

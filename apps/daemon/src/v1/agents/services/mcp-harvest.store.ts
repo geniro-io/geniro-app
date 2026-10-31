@@ -11,6 +11,9 @@ import type {
 import { isHostMcpServerName } from '../utils/host-question';
 import { harvestKey, HarvestStore, parseHarvestKey } from './harvest-store';
 
+/** `<userData>/` file the harvested MCP listings are kept in. */
+export const MCP_HARVEST_FILE_NAME = 'mcp-harvest.json';
+
 /**
  * Defensive bound per key. A configured MCP set is a handful of servers; this
  * only exists so a malformed report cannot fill the disk.
@@ -80,7 +83,7 @@ const STATUSES: ReadonlySet<string> = new Set<AgentMcpServerStatus>([
 export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
   constructor(options: { file?: string; now?: () => number } = {}) {
     super(
-      options.file ?? join(environment.userDataDir, 'mcp-harvest.json'),
+      options.file ?? join(environment.userDataDir, MCP_HARVEST_FILE_NAME),
       MAX_HARVESTED,
       HARVEST_MAX_AGE_MS,
       options.now,

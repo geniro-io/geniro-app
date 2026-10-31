@@ -17,6 +17,9 @@ export interface ChatUploadStoreOptions {
 const UUID_SOURCE =
   '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
+/** `<userData>/` directory a phone's uploads land in. */
+export const CHAT_UPLOADS_DIR_NAME = 'chat-uploads';
+
 /**
  * A file a PHONE attached to a chat message, written where the agent can open
  * it — the composer's paperclip, for a device that has no path on this machine.
@@ -44,7 +47,8 @@ export class ChatUploadStoreService {
   private readonly root: string;
 
   constructor(options: ChatUploadStoreOptions = {}) {
-    this.root = options.root ?? join(environment.userDataDir, 'chat-uploads');
+    this.root =
+      options.root ?? join(environment.userDataDir, CHAT_UPLOADS_DIR_NAME);
   }
 
   /**

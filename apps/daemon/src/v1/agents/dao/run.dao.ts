@@ -224,6 +224,27 @@ export class RunDao extends BaseDao<Run> {
     return analyses.filter((run) => !alive.has(run.analysisSourceRunId!));
   }
 
+  /** How many runs are on the desk and how many are archived. */
+  async countByShelf(
+    txEm?: EntityManager,
+  ): Promise<{ active: number; archived: number }> {
+    const repo = this.getRepo(txEm);
+    const [active, archived] = await Promise.all([
+      repo.count({ archivedAt: null }),
+      repo.count({ archivedAt: { $ne: null } }),
+    ]);
+    return { active, archived };
+  }
+
+  /** Every run id the table holds, soft-deleted rows included. */
+  async allIdsIncludingDeleted(txEm?: EntityManager): Promise<Set<string>> {
+    const rows = await this.getRepo(txEm).find(
+      {},
+      { fields: ['id'], filters: false, disableIdentityMap: true },
+    );
+    return new Set(rows.map((run) => run.id));
+  }
+
   /**
    * Every ARCHIVED run shelved before `cutoff`, oldest first — both kinds.
    *

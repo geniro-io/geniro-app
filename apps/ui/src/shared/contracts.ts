@@ -1864,6 +1864,24 @@ export interface GeniroApi {
    * changes in that directory would be the user's own.
    */
   settleTaskWorktree(taskId: string): Promise<TaskWorktreeSettleResult>;
+  /**
+   * Settings → Storage: size the data folder's entries the daemon did not
+   * claim (its `unclaimed` answer) — the task worktrees one by one, the
+   * window's caches, the rest of the app's own files.
+   */
+  getAppStorage(unclaimed: string[]): Promise<AppStorageUsage>;
+  /**
+   * Remove one entry of the worktrees directory on the user's press, named
+   * by its directory name. Kept, with the reason, when work could be lost.
+   */
+  removeStorageWorktree(name: string): Promise<WorktreeRemoval>;
+  /** Empty the window's HTTP and code caches; answers the space it freed. */
+  clearBrowserCache(): Promise<{ freedBytes: number }>;
+  /**
+   * Restart the daemon, as a settings change that needs a fresh process does —
+   * for a database compaction, which runs only at its start.
+   */
+  restartDaemon(): Promise<void>;
   /** Switch the folder to a branch — refused when the tree is dirty. */
   switchBranch(dir: string, branch: string): Promise<BranchSwitchResult>;
   /**
@@ -2050,6 +2068,37 @@ export interface TerminalExitEvent {
  */
 type PreloadLocalMethod = 'filePath';
 
+export interface AppStorageEntry {
+  name: string;
+  bytes: number;
+}
+
+/** One entry of `<userData>/worktrees`, as Settings → Storage lists it. */
+export interface StorageWorktree {
+  /** Its directory name — what `removeStorageWorktree` takes. */
+  name: string;
+  bytes: number;
+  kind: 'worktree' | 'folder' | 'file';
+  /** The card it was made for, when the registry records it. */
+  taskId: string | null;
+  branch: string | null;
+  /** Whether that card's work is finished; null when unknown or not a card's. */
+  cardFinished: boolean | null;
+}
+
+export interface AppStorageUsage {
+  worktrees: StorageWorktree[];
+  browserCache: AppStorageEntry[];
+  appData: AppStorageEntry[];
+}
+
+/** What a Remove press did to one worktree. */
+export interface WorktreeRemoval {
+  removed: boolean;
+  /** Why it was kept; null once removed. */
+  reason: string | null;
+}
+
 /** IPC channel names — single source of truth for main ⇄ preload wiring. */
 export const IPC = {
   getStatus: 'geniro:getStatus',
@@ -2101,6 +2150,10 @@ export const IPC = {
   carryChangesToBranch: 'geniro:carryChangesToBranch',
   getPullRequestsByRef: 'geniro:getPullRequestsByRef',
   revealPath: 'geniro:revealPath',
+  getAppStorage: 'geniro:getAppStorage',
+  removeStorageWorktree: 'geniro:removeStorageWorktree',
+  clearBrowserCache: 'geniro:clearBrowserCache',
+  restartDaemon: 'geniro:restartDaemon',
   toggleDevTools: 'geniro:toggleDevTools',
   notify: 'geniro:notify',
   retractNotification: 'geniro:retractNotification',

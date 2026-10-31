@@ -6,6 +6,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { environment } from '../../../environments';
 import { atomicWriteSync } from '../../../utils/atomic-file';
 
+/** `<userData>/` file the learned context windows are kept in. */
+export const CONTEXT_WINDOWS_FILE_NAME = 'context-windows.json';
+
 /**
  * Defensive bound. One entry per (agent, model, window choice) the user has
  * ever run; a machine with more than this is not a real installation, and an
@@ -102,7 +105,7 @@ export class ContextWindowStore {
 
   constructor(options: ContextWindowStoreOptions = {}) {
     this.file =
-      options.file ?? join(environment.userDataDir, 'context-windows.json');
+      options.file ?? join(environment.userDataDir, CONTEXT_WINDOWS_FILE_NAME);
   }
 
   /** The window this model reported last, or null when never observed. */

@@ -317,6 +317,20 @@ export function installRemoteBridge(): void {
       >,
     revealPath: (path) =>
       invoke(IPC.revealPath, [path]) as ReturnType<GeniroApi['revealPath']>,
+    getAppStorage: (unclaimed) =>
+      invoke(IPC.getAppStorage, [unclaimed]) as ReturnType<
+        GeniroApi['getAppStorage']
+      >,
+    removeStorageWorktree: (name) =>
+      invoke(IPC.removeStorageWorktree, [name]) as ReturnType<
+        GeniroApi['removeStorageWorktree']
+      >,
+    clearBrowserCache: () =>
+      invoke(IPC.clearBrowserCache) as ReturnType<
+        GeniroApi['clearBrowserCache']
+      >,
+    restartDaemon: () =>
+      invoke(IPC.restartDaemon) as ReturnType<GeniroApi['restartDaemon']>,
     toggleDevTools: () =>
       invoke(IPC.toggleDevTools) as ReturnType<GeniroApi['toggleDevTools']>,
     notify: (notification) =>

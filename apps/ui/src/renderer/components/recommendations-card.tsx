@@ -19,7 +19,6 @@ import {
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { OptionIndicator } from './ui/option-list';
-import { cn } from './ui/utils';
 
 export type {
   RecommendationsFolds,

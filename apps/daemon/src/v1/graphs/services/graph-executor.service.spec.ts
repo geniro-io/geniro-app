@@ -35,6 +35,7 @@ import type {
   AgentApprovalMode,
   AgentEvent,
   AgentTurnInput,
+  AgentUsage,
   ApprovalResolution,
   InstalledApprovalSupport,
   SessionCloseCause,
@@ -12783,6 +12784,43 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     await drain();
   });
 
+  it('adds what a node worked on its own after its turn to the node’s totals', async () => {
+    const { service, claude, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const root = claude.starts[0]!;
+    completeTurn(root, 'done');
+    await drain();
+    const before = nodeDao.row(run.id, 'a');
+    const workedBefore = before?.workedMs ?? 0;
+    const toolsBefore = before?.toolCalls ?? 0;
+
+    root.emitOffTurn({ type: 'tool_call', id: 'c1', name: 'Bash', input: {} });
+    root.emitOffTurn({
+      type: 'tool_call',
+      id: 'c2',
+      name: 'Bash',
+      input: {},
+      parentToolUseId: 'toolu_d',
+    });
+    root.emitOffTurn({
+      type: 'turn_complete',
+      usage: { durationMs: 45_000 } as AgentUsage,
+      stopReason: null,
+      finalText: null,
+    });
+    await drain();
+
+    const after = nodeDao.row(run.id, 'a');
+    expect((after?.workedMs ?? 0) - workedBefore).toBe(45_000);
+    expect((after?.toolCalls ?? 0) - toolsBefore).toBe(1);
+  });
+
   it('files what the callee does AFTER its turn under that callee and its call', async () => {
     // A kept process is only half the fix: the CLI opens a further turn of its
     // own when the backgrounded work reports, and every row of it used to be
@@ -14025,6 +14063,30 @@ describe('GraphExecutorService — a node’s context reading', () => {
       { callId: 'call-1', toolCalls: 2, toolCallsThroughSeq: toolSeq('t2') },
       { callId: 'call-2', toolCalls: 1, toolCallsThroughSeq: toolSeq('t4') },
     ]);
+    const endSeq = (callId: string): number =>
+      itemDao.items.find(
+        (row) =>
+          row.kind === 'turn_complete' &&
+          (JSON.parse(row.payload) as { callId?: string }).callId === callId,
+      )!.seq;
+    expect(
+      calls?.map(({ callId, workedMs, workedThroughSeq }) => ({
+        callId,
+        workedMs,
+        workedThroughSeq,
+      })),
+    ).toEqual([
+      {
+        callId: 'call-1',
+        workedMs: 5_000,
+        workedThroughSeq: endSeq('call-1'),
+      },
+      {
+        callId: 'call-2',
+        workedMs: 7_000,
+        workedThroughSeq: endSeq('call-2'),
+      },
+    ]);
 
     completeTurn(claude.starts[0]!, 'done');
     await drain();
@@ -14066,6 +14128,8 @@ describe('GraphExecutorService — a node’s context reading', () => {
         callId: 'call-1',
         toolCalls: 2,
         toolCallsThroughSeq: lastSeq,
+        workedMs: null,
+        workedThroughSeq: null,
       }),
     ]);
     // Listed from its start row, brief included, though it has no reading.
@@ -14081,6 +14145,49 @@ describe('GraphExecutorService — a node’s context reading', () => {
     await drain();
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+
+  it("states a call's worked time from the wall ledger for a turn its CLI did not time", async () => {
+    const { service, claude, callBroker, itemDao, wallTurns } = setup();
+    const run = await service.startRun({
+      slug: 'work',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    await drain();
+    completeTurn(claude.starts[1]!, 'one done');
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    const endOf = (nodeId: string): number =>
+      itemDao.items.find(
+        (row) => row.kind === 'turn_complete' && row.nodeId === nodeId,
+      )!.seq;
+    wallTurns.rows.clear();
+    await wallTurns.record(run.id, [
+      { seq: endOf('callee'), nodeId: 'callee', ms: 4_000 },
+      { seq: endOf('a'), nodeId: 'a', ms: 9_000 },
+    ]);
+
+    const callee = (await service.getNodeStates(run.id)).find(
+      (n) => n.nodeId === 'callee',
+    );
+    expect(callee?.callFigures).toEqual([
+      expect.objectContaining({
+        callId: 'call-1',
+        workedMs: 4_000,
+        workedThroughSeq: endOf('callee'),
+      }),
+    ]);
   });
 
   it('adds a turn’s tools to the node total when the turn ends in an error or is cancelled', async () => {
@@ -14523,6 +14630,8 @@ describe('GraphExecutorService — a node’s context reading', () => {
         totals: expect.objectContaining({ turns: 0, costUsd: null }),
         toolCalls: 0,
         toolCallsThroughSeq: null,
+        workedMs: null,
+        workedThroughSeq: null,
         // No turn has ended yet, so there is no cache to lapse.
         promptCacheExpiresAt: null,
       },
@@ -14691,6 +14800,8 @@ describe('GraphExecutorService — a node’s context reading', () => {
       totals: expect.objectContaining({ turns: 1, costUsd: 2.5 }),
       toolCalls: 1,
       toolCallsThroughSeq: toolRow.seq,
+      workedMs: null,
+      workedThroughSeq: null,
       // The fake stamps every row at the epoch, so the lapse is an hour past it.
       promptCacheExpiresAt: '1970-01-01T01:00:00.000Z',
     });

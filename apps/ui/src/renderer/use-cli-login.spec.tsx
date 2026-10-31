@@ -66,6 +66,34 @@ afterEach(() => {
 });
 
 describe('useCliLogin', () => {
+  it('hands every render the same controller until a sign-in moves it', async () => {
+    // The chat screen derives the transcript's sign-in context from it, so a
+    // fresh object per render re-rendered every row on every keystroke.
+    const apis = {
+      cliAuth: { startCliLogin: vi.fn().mockResolvedValue(waiting) },
+    } as unknown as DaemonApis;
+    const seen: CliLoginController[] = [];
+    function Probe(): null {
+      seen.push(useCliLogin(apis, () => undefined));
+      return null;
+    }
+    act(() => {
+      root = createRoot(document.createElement('div'));
+      root.render(<Probe />);
+    });
+    act(() => root?.render(<Probe />));
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+
+    await act(async () => {
+      await seen.at(-1)!.start('claude');
+    });
+
+    expect(seen.at(-1)).not.toBe(seen[0]);
+    expect(seen.at(-1)!.login?.session).toEqual(waiting);
+  });
+
   it('ends a sign-in the daemon has forgotten instead of polling it forever', async () => {
     // A restarted daemon answers 404 for every sign-in it was running; a poll
     // that set an error and asked again would do so every 1.2s for good,

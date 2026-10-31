@@ -452,6 +452,11 @@ describe('RecommendationsCard', () => {
     expect(
       el.querySelector('[data-slot="analysis-calls"]')?.textContent,
     ).toContain('lead → reviewer');
+    expect(
+      [...el.querySelectorAll('[data-slot="analysis-call-worked"]')].map(
+        (cell) => cell.textContent,
+      ),
+    ).toEqual(['3h 10m', '2h 30m', '—']);
     expect(el.textContent).toContain('Calls between agents · 3');
   });
 

@@ -194,6 +194,7 @@ function folded(runId: string): FoldedRun {
     ],
     calls: [],
     wallWorkedMs: new Map(),
+    callWorkedMs: new Map(),
     costUsd: 2,
     version: 'v-b',
     nodeModels: new Map(),

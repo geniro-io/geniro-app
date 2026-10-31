@@ -25,7 +25,7 @@ export const WALL_WORK_VERSION = 2;
  * Only the sweep retires: every turn settled since is caught up live, and any
  * later catch-up of the same agent records whatever an earlier one missed.
  */
-const MARKER_FILE = 'wall-work-measured';
+export const WALL_WORK_MARKER_FILE = 'wall-work-measured';
 
 /**
  * The wall-clock ledger of agents' worked time: the turns a CLI did not time
@@ -59,7 +59,8 @@ export class WallWorkService {
     /** Test seam only — nothing in the app passes it. */
     @Optional() markerPath?: string,
   ) {
-    this.markerPath = markerPath ?? join(environment.userDataDir, MARKER_FILE);
+    this.markerPath =
+      markerPath ?? join(environment.userDataDir, WALL_WORK_MARKER_FILE);
   }
 
   /**

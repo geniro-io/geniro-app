@@ -110,6 +110,7 @@ import { RecommendationsApplyService } from './services/recommendations-apply.se
 import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
+import { RunHoldRegistry } from './services/run-hold.registry';
 import { RunIdleReapService } from './services/run-idle-reap.service';
 import { RunKindRowsCache } from './services/run-kind-rows.cache';
 import { RunNamedPathsService } from './services/run-named-paths.service';
@@ -393,6 +394,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     },
     AgentEventBus,
     RunContextRegistry,
+    RunHoldRegistry,
     ApprovalRegistry,
     {
       provide: ContextWindowStore,

@@ -1734,6 +1734,21 @@ type AgentEventBody =
     }
   | {
       /**
+       * The CLI has begun a stretch of work of its own, with no turn of ours
+       * open — woken by a background unit's report, at `at`: the later of that
+       * report and the CLI's last result, or the stretch's first output when
+       * nothing reported since it last went idle.
+       *
+       * NOT produced by any adapter — `runCliSession` raises it ahead of the
+       * stretch's first output, because the CLI starts working on the report
+       * well before it says anything, and its own duration counts from there.
+       */
+      type: 'off_turn_started';
+      /** Epoch ms. */
+      at: number;
+    }
+  | {
+      /**
        * The CLI reported the session's invokable slash commands (claude's
        * `system/init` `slash_commands`: built-ins + plugin skills + user and
        * project skills/commands, shadowing already resolved — verified live
@@ -4209,6 +4224,19 @@ export interface AdapterConfig {
    * so the binary name is never spelled a second time.
    */
   readonly kind: AgentKind;
+  /**
+   * The top-level names this adapter writes under the data folder, by what
+   * they hold — read by Settings → Storage. `conversations` is what a live
+   * chat resumes from; `caches` are rebuilt when missing; `state` must stay;
+   * `leftovers` are names an older build of this adapter wrote and nothing
+   * reads any more, the only ones Storage may delete. Absent: none.
+   */
+  readonly userData?: {
+    readonly conversations?: readonly string[];
+    readonly caches?: readonly string[];
+    readonly state?: readonly string[];
+    readonly leftovers?: readonly string[];
+  };
   readonly ollama?: {
     readonly args: readonly string[];
     readonly env: Readonly<Record<string, string>>;

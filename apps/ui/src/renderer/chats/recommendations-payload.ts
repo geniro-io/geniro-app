@@ -230,7 +230,7 @@ function readCall(value: unknown): WorkflowCallStatsView | null {
   ] as const);
   return caller === null || callee === null || !figures
     ? null
-    : { caller, callee, ...figures };
+    : { caller, callee, ...figures, workedMs: count(row?.workedMs) };
 }
 
 function readWorkflowStats(value: unknown): WorkflowStatsView | null {

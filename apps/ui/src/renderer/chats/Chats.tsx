@@ -133,6 +133,7 @@ import {
   resolveConversationContext,
   resolveConversationSpend,
   resolveConversationToolCalls,
+  resolveConversationWorked,
   spendOfTotals,
   spentOf,
   withLiveCost,
@@ -170,6 +171,7 @@ import {
   TeamNotesChip,
   ThreadPullRequestChips,
 } from './composer-shelf';
+import { createComposerText, useComposerTextFact } from './composer-text';
 import {
   isChatApprovalMode,
   targetAgentKind,
@@ -340,8 +342,10 @@ import {
 } from './transcript-item';
 import { JUMP_MARK_CLASS, TranscriptRow } from './transcript-row';
 import {
+  heldSinceOf,
   movesPausedSpans,
   parkWhileHeld,
+  scanCallTurns,
   scanTurns,
   threadWorkedMs,
   withDurableChatTurn,
@@ -699,11 +703,14 @@ export function Chats({
   phoneHomeSignal = 0,
   firstLaunchAgent = null,
   onFirstLaunchHandled,
+  transcriptPageCap,
 }: {
   client: DaemonClient;
   handle: DaemonHandle;
   firstLaunchAgent?: CliKind | null;
   onFirstLaunchHandled?: () => void;
+  /** The most one transcript page holds whatever `Settings.historyPageSize` says. */
+  transcriptPageCap?: number;
   /**
    * Take the app to a Settings pane. Absent in a harness, which is why every
    * call site is optional-chained rather than asserted.
@@ -822,7 +829,8 @@ export function Chats({
    * opposite of what a drawer is for.
    */
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
-  const [input, setInput] = useState('');
+  const [composerText] = useState(createComposerText);
+  const setInput = composerText.set;
   /**
    * The unsent message each thread is holding, with its staged images.
    *
@@ -834,17 +842,13 @@ export function Chats({
    * with it.
    *
    * A ref, not state: nothing renders from the map itself — the composer reads
-   * the live `input`/`attachments`, and this is only consulted at the moment of
-   * a switch. As state it would re-render every thread row on each keystroke.
+   * the live `composerText`/`attachments`, and this is only consulted at the
+   * moment of a switch. As state it would re-render every thread row on each
+   * keystroke.
    *
    * Keyed by run id, with {@link NEW_CHAT_DRAFT} standing in for the landing
    * card, which is a composer the user can equally leave half-filled.
    */
-  // Live mirrors, so the swap below can read what is on screen without putting
-  // `input`/`attachments` in the switch callbacks' deps — which would rebuild
-  // them on every keystroke.
-  const inputRef = useRef('');
-  inputRef.current = input;
   const draftsRef = useRef(
     new Map<string, { text: string; images: StagedAttachment[] }>(),
   );
@@ -1138,7 +1142,7 @@ export function Chats({
    */
   const swapDraft = useLatestCallback(
     (from: string | null, to: string | null): void => {
-      const text = inputRef.current;
+      const text = composerText.get();
       const images = attachmentsRef.current;
       const fromKey = from ?? NEW_CHAT_DRAFT;
       if (text.length > 0 || images.length > 0) {
@@ -1252,6 +1256,7 @@ export function Chats({
     chatApi,
     workflowApi,
     historyPageSize,
+    pageCap: transcriptPageCap,
     swapDraft,
     resetSteerStatus,
     hasQueuedMessages,
@@ -1290,7 +1295,7 @@ export function Chats({
   // Live mirror, so a callback that must not be rebuilt on every delta can
   // still ask whether a turn was in flight BEFORE it started one of its own —
   // which is what tells a failed send whether the working state is its to
-  // clear. Assigned during render like `inputRef`, never from an effect.
+  // clear. Assigned during render, never from an effect.
   const streamingRef = useRef(false);
   streamingRef.current = streaming;
   const holdingRef = useRef<ReadonlyMap<string, number>>(holding);
@@ -4125,7 +4130,10 @@ export function Chats({
     // wraps the trim rather than sitting beside the refusal below, so every
     // use of `text` downstream (the send body, the optimistic row) is the one
     // string, and none of them can be the pre-rewrite one.
-    const text = withAgentSlashSpelling(input.trim(), skillsRef.current);
+    const text = withAgentSlashSpelling(
+      composerText.get().trim(),
+      skillsRef.current,
+    );
     const images = attachments.toWire();
     // The staged form of those same images, kept so a refusal can put the
     // composer back exactly as it was — `toWire` is the send body, which the
@@ -4220,7 +4228,6 @@ export function Chats({
       }
     }
   }, [
-    input,
     streaming,
     workflowSlug,
     workflowApi,
@@ -4289,7 +4296,10 @@ export function Chats({
     // Rewritten before anything reads it, for the reason `send` states — and it
     // matters more here, where the text may sit in the queue for the length of
     // a turn before it is handed over.
-    const text = withAgentSlashSpelling(input.trim(), skillsRef.current);
+    const text = withAgentSlashSpelling(
+      composerText.get().trim(),
+      skillsRef.current,
+    );
     const images = attachments.toWire();
     const clientMessageId = randomId();
     // The staged form of the same images: what a failure puts back, and the
@@ -4447,7 +4457,6 @@ export function Chats({
       restoreUnsent(runId, text, staged);
     }
   }, [
-    input,
     streaming,
     startTurn,
     enqueueMessage,
@@ -4812,6 +4821,10 @@ export function Chats({
     () => ownToolCallSeqsByCall(transcriptRows),
     [transcriptRows],
   );
+  const callTurns = useMemo(
+    () => scanCallTurns(transcriptRows),
+    [transcriptRows],
+  );
   const resolveCallReading = useLatestCallback(
     (calleeNodeId: string, callIds: readonly string[]): CalleeReading => ({
       ...resolveConversationContext(
@@ -4828,8 +4841,14 @@ export function Chats({
         callIds,
         ownToolSeqs,
       ),
+      ...resolveConversationWorked(
+        nodeReadings,
+        calleeNodeId,
+        callIds,
+        callTurns,
+      ),
     }),
-    [liveText, nodeReadings, ownToolSeqs],
+    [liveText, nodeReadings, ownToolSeqs, callTurns],
   );
   /**
    * The direct line to a running call's callee, past the agent that called it.
@@ -5113,8 +5132,11 @@ export function Chats({
    * own ("what's wrong with this?" is carried by the screenshot), so gating the
    * send buttons on typed text alone would stage a paste that can never leave.
    */
-  const hasContent =
-    input.trim().length > 0 || attachments.attachments.length > 0;
+  const hasText = useComposerTextFact(
+    composerText,
+    (text) => text.trim().length > 0,
+  );
+  const hasContent = hasText || attachments.attachments.length > 0;
 
   /** The open transcript's pending queue (queues persist per run). */
   const queued = activeRunId ? (queues[activeRunId] ?? []) : [];
@@ -5213,12 +5235,13 @@ export function Chats({
     return workflowSlug ? null : configDir;
   }, [activeRunId, activeRun, workflowSlug, configDir]);
   const skillCwd = activeRunId !== null ? (activeRun?.cwd ?? null) : folder;
+  const skillQuery = useComposerTextFact(composerText, slashQuery);
   const skills = useAgentSkills(
     agentsApi,
     skillTargets,
     skillCwd,
     // Refreshed as the `/` popup opens, so it never shows a stale first read.
-    slashQuery(input) !== null,
+    skillQuery !== null,
   );
   // Assigned during render rather than from an effect: the two send paths read
   // it in a click handler, which cannot run before the render that produced
@@ -5610,7 +5633,6 @@ export function Chats({
     git.clearError();
     setRunConfigBranchNotice(null);
   };
-  const skillQuery = slashQuery(input);
   const skillMatches = useMemo(
     () => (skillQuery === null ? [] : filterSkills(skills, skillQuery)),
     [skills, skillQuery],
@@ -6827,7 +6849,12 @@ export function Chats({
           runState.turnStartedAt,
           CHAT_AGENT_KEY,
         ),
-        activeRunId === null ? undefined : holding.get(activeRunId),
+        // A chat's holds are the daemon's: it knows the ones that ended and
+        // when the standing one began, which a window opened mid-turn cannot.
+        // The live announce stands in while the re-read it triggers is out.
+        heldSinceOf(runState.turnHeldSince) ??
+          (activeRunId === null ? undefined : holding.get(activeRunId)),
+        runState.turnHeldMs,
       ),
     [
       turnScan.open,
@@ -6836,6 +6863,8 @@ export function Chats({
       holding,
       activeRunId,
       runState.turnStartedAt,
+      runState.turnHeldSince,
+      runState.turnHeldMs,
     ],
   );
   /**
@@ -7154,6 +7183,12 @@ export function Chats({
             nodeId,
             thread.callIds,
           ),
+          ...resolveConversationWorked(
+            nodeReadings,
+            nodeId,
+            thread.callIds,
+            callTurns,
+          ),
         };
       });
       // Calls OLDER than the loaded window, known only from the daemon's
@@ -7259,6 +7294,12 @@ export function Chats({
             nodeReadings,
             nodeId,
             callIds,
+          ),
+          ...resolveConversationWorked(
+            nodeReadings,
+            nodeId,
+            callIds,
+            callTurns,
           ),
         };
       });
@@ -7438,6 +7479,7 @@ export function Chats({
     awaitingAnswer,
     callBlockIndex,
     callChains,
+    callTurns,
     streaming,
     wfNodes,
     liveText,
@@ -9577,17 +9619,15 @@ export function Chats({
                               onRemoveAttachment={attachments.remove}
                               onAttachFiles={fileAttach.attach}
                               onPasteImages={attachments.addFromClipboard}
+                              text={composerText}
                               textareaProps={{
                                 ref: newChatInputRef,
-                                value: input,
                                 rows: 4,
                                 'aria-label': 'Task for the new run',
                                 className: 'min-h-24',
                                 placeholder: workflowSlug
                                   ? 'Describe the task for the workflow team…'
                                   : 'Message the agent…',
-                                onChange: (event) =>
-                                  setInput(event.target.value),
                                 onKeyDown: (event) => {
                                   if (handleSkillMenuKeys(event)) {
                                     return;
@@ -10314,8 +10354,8 @@ export function Chats({
                               />
                             ) : null
                           }
+                          text={composerText}
                           textareaProps={{
-                            value: input,
                             rows: 2,
                             'aria-label': 'Message the agent',
                             disabled: activeRunArchived,
@@ -10325,7 +10365,6 @@ export function Chats({
                               workflow: Boolean(activeRun?.workflowId),
                               narrow: narrowViewport,
                             }),
-                            onChange: (event) => setInput(event.target.value),
                             onKeyDown: (event) => {
                               if (handleSkillMenuKeys(event)) {
                                 return;

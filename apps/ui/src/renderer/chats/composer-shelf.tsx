@@ -1,12 +1,9 @@
 import {
   AlarmClock,
   ArrowRightLeft,
-  Bot,
   GitCompare,
   GitPullRequest,
   NotebookPen,
-  Radar,
-  SquareTerminal,
   Workflow as WorkflowIcon,
 } from 'lucide-react';
 import { useContext } from 'react';
@@ -38,6 +35,12 @@ import {
   SHELF_SEGMENT_CLASS,
   SHELF_STATUS_GROUP_CLASS,
 } from './shelf-chip';
+import {
+  CallGlyph,
+  MonitorGlyph,
+  SubagentGlyph,
+  TerminalGlyph,
+} from './shelf-glyphs';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
 import {
@@ -127,17 +130,20 @@ export function ComposerShelf({
 /** A status counter's face: its glyph, tinted while what it counts is working, and the figure. */
 function StatusFigure({
   icon,
-  live = false,
+  live,
   children,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
+  icon: React.ComponentType<{ className?: string; live?: boolean }>;
   live?: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   const Icon = icon;
   return (
     <>
-      <Icon className={cn('size-3.5 shrink-0', live && 'text-primary')} />
+      <Icon
+        live={live}
+        className={cn('size-3.5 shrink-0', live && 'text-primary')}
+      />
       <span className="text-muted-foreground tabular-nums">{children}</span>
     </>
   );
@@ -467,7 +473,7 @@ export function RunningShellChips({
       // and the rows are long — a command, not a name.
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
-        <StatusFigure icon={SquareTerminal} live>
+        <StatusFigure icon={TerminalGlyph} live>
           {count}
         </StatusFigure>
       }>
@@ -484,7 +490,7 @@ export function RunningShellChips({
 
 /**
  * The monitors this thread's agents have running RIGHT NOW, as a status
- * counter: the radar glyph, a count, and the list behind it, each row with its
+ * counter: the monitor glyph, a count, and the list behind it, each row with its
  * own Stop.
  *
  * Read off run state's `monitors` — the daemon's registry, never a fold of the
@@ -518,7 +524,7 @@ export function RunningMonitorChips({
       triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
-        <StatusFigure icon={Radar} live>
+        <StatusFigure icon={MonitorGlyph} live>
           {count}
         </StatusFigure>
       }>
@@ -611,7 +617,7 @@ export function RunningSubagentChips({
         groups ? 'max-h-[26rem]' : 'max-h-64',
       )}
       trigger={
-        <StatusFigure icon={Bot} live>
+        <StatusFigure icon={SubagentGlyph} live>
           {count}
         </StatusFigure>
       }>
@@ -692,7 +698,7 @@ export function RunningCallChips({
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
         <StatusFigure
-          icon={ArrowRightLeft}
+          icon={CallGlyph}
           live={calls.some((call) => !call.queued)}>
           {count}
         </StatusFigure>

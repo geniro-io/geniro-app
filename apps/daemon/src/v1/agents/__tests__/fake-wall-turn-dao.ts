@@ -33,6 +33,15 @@ export class FakeWallTurnDao {
     }
     return out;
   }
+  async nodeTurnsBySeq(runId: string): Promise<Map<number, number>> {
+    const out = new Map<number, number>();
+    for (const row of this.rows.values()) {
+      if (row.runId === runId && row.nodeId !== null) {
+        out.set(row.seq, row.ms);
+      }
+    }
+    return out;
+  }
   async chatSums(runIds: readonly string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     for (const row of this.rows.values()) {

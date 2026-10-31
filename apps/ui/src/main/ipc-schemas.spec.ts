@@ -6,6 +6,7 @@ import {
   gitDirSchema,
   memoryExportSaveSchema,
   settingsPatchSchema,
+  storageEntryNameSchema,
   taskIdSchema,
   taskWorktreeSchema,
   terminalColsSchema,
@@ -227,6 +228,30 @@ describe('settingsPatchSchema.replyLanguage', () => {
       expect(settingsPatchSchema.safeParse({ replyLanguage }).success).toBe(
         false,
       );
+    }
+  });
+});
+
+describe('storageEntryNameSchema', () => {
+  const accepts = (value: string): boolean =>
+    storageEntryNameSchema.safeParse(value).success;
+
+  it('accepts one name inside a directory', () => {
+    expect(accepts('t1')).toBe(true);
+    expect(accepts('Code Cache')).toBe(true);
+  });
+
+  it('refuses any name that could reach outside the directory', () => {
+    for (const bad of [
+      '',
+      '.',
+      '..',
+      'a/b',
+      '../etc',
+      'a\u0000b',
+      'x'.repeat(256),
+    ]) {
+      expect(accepts(bad), JSON.stringify(bad)).toBe(false);
     }
   });
 });

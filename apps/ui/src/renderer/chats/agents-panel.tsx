@@ -13,8 +13,16 @@ import {
   Search,
   Sparkles,
   Terminal as TerminalIcon,
+  Timer,
 } from 'lucide-react';
-import { Fragment, useContext, useEffect, useRef, useState } from 'react';
+import {
+  Fragment,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import type { CliKind, PullRequestRefResult } from '../../shared/contracts';
 import {
@@ -71,6 +79,7 @@ import { bareUrl, briefParts, plainMarkdownText } from './brief-text';
 import { callTitle } from './call-title';
 import { ContextMeter } from './context-meter';
 import { ConversationTimeline } from './conversation-timeline';
+import { formatElapsed } from './live-row';
 import {
   AGENTS_PANEL_COLLAPSED_FLAG,
   THREAD_PULL_REQUESTS_SETTLED_FLAG,
@@ -1217,10 +1226,21 @@ function InstanceSummary({
   // `117.6k in/out` stood here and is gone — see {@link AgentCost}, which
   // carried the same figure and drew the same report.
   const usd = measured(thread.spentUsd);
-  const latest =
-    thread.latest === undefined || thread.latest === null
-      ? null
-      : plainMarkdownText(thread.latest);
+  const workingTurns =
+    thread.status === 'running' ? (thread.openTurns ?? []) : [];
+  useSecondTick(workingTurns.length > 0);
+  const settledMs = measured(thread.workedMs);
+  const liveMs =
+    workingTurns.length > 0 ? openTurnWorkedMs(workingTurns, Date.now()) : 0;
+  const workedMs =
+    settledMs === null && liveMs <= 0 ? null : (settledMs ?? 0) + liveMs;
+  const rawLatest = thread.latest ?? null;
+  // Every live delta and status announce re-renders the panel, and these
+  // regexes run over a whole message per instance.
+  const latest = useMemo(
+    () => (rawLatest === null ? null : plainMarkdownText(rawLatest)),
+    [rawLatest],
+  );
   return (
     <p
       data-slot="agent-instance-latest"
@@ -1229,6 +1249,17 @@ function InstanceSummary({
         {latest ?? RUN_STATUS_META[thread.status].label}
       </span>
       {open ? null : <InstanceCounts instance={instance} />}
+      {workedMs === null ? null : (
+        <span
+          data-slot="agent-instance-worked"
+          title={`Worked ${formatDuration(workedMs)} in this conversation`}
+          className="flex shrink-0 items-center gap-0.5 tabular-nums">
+          <Timer aria-hidden="true" className="size-3" />
+          {workingTurns.length > 0
+            ? formatElapsed(workedMs)
+            : formatDuration(workedMs)}
+        </span>
+      )}
       {usd === null ? null : (
         <span
           className="shrink-0 tabular-nums"
@@ -1413,7 +1444,10 @@ function InstanceBlock({
   const { thread } = instance;
   const content = hasInstanceContent(instance);
   const rawBrief = thread.kind === 'call' ? (thread.brief ?? null) : null;
-  const brief = rawBrief === null ? null : briefParts(rawBrief);
+  const brief = useMemo(
+    () => (rawBrief === null ? null : briefParts(rawBrief)),
+    [rawBrief],
+  );
   const briefTitle =
     brief !== null && brief.title.length > 0 ? brief.title : null;
   const briefRest = brief?.rest ?? [];

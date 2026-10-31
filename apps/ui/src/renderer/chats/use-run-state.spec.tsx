@@ -37,6 +37,8 @@ const state = (calls: number): RunStateDto => ({
   openToolCalls: [],
   throughSeq: -1,
   turnStartedAt: null,
+  turnHeldMs: 0,
+  turnHeldSince: null,
 });
 
 let root: Root | null = null;

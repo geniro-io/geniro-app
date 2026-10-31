@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 import {
   AttachmentMediaType,
@@ -358,16 +358,30 @@ export function useAttachments(
     (read) => routing === undefined || read.routed === onScreen,
   );
 
-  return {
-    attachments,
-    error,
-    reading,
-    addFromClipboard,
-    addFiles,
-    remove,
-    clear,
-    restore,
-    clearError,
-    toWire,
-  };
+  return useMemo(
+    () => ({
+      attachments,
+      error,
+      reading,
+      addFromClipboard,
+      addFiles,
+      remove,
+      clear,
+      restore,
+      clearError,
+      toWire,
+    }),
+    [
+      attachments,
+      error,
+      reading,
+      addFromClipboard,
+      addFiles,
+      remove,
+      clear,
+      restore,
+      clearError,
+      toWire,
+    ],
+  );
 }

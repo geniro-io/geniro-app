@@ -254,6 +254,37 @@ function mountRouted(
   };
 }
 
+describe('useAttachments — identity', () => {
+  it('hands every render the same stage until what it holds changes', async () => {
+    const seen: ReturnType<typeof useAttachments>[] = [];
+    const codec = codecOf(1200, 800, 'image/png');
+    function Probe(): null {
+      seen.push(useAttachments(codec));
+      return null;
+    }
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root!.render(<Probe />);
+    });
+    act(() => {
+      root!.render(<Probe />);
+    });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+
+    act(() => {
+      seen.at(-1)!.addFiles([png('shot.png')]);
+    });
+    await settle();
+
+    expect(seen.at(-1)).not.toBe(seen[0]);
+    expect(seen.at(-1)!.attachments.map((a) => a.name)).toEqual(['shot.png']);
+  });
+});
+
 describe('useAttachments — addFiles (the paperclip)', () => {
   it('stages the images the model takes and hands back everything else', async () => {
     let leftover: File[] = [];

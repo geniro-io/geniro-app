@@ -50,8 +50,8 @@ function errorOnlyBlock(block: TurnBlockEntry): ChatItem[] | null {
  * both look identical.
  *
  * Memoized (with the other row shells): the transcript re-renders on every
- * composer keystroke, and `entry`/`nodes` are referentially stable across
- * those renders.
+ * live delta and status announce, and `entry`/`nodes` are referentially
+ * stable across those renders.
  */
 export const TranscriptEntryView = memo(function TranscriptEntryView({
   entry,

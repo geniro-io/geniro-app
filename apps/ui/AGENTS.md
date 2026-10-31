@@ -61,7 +61,7 @@ The rules live in `.claude/rules/renderer-*.md`; start from `renderer-components
 
 ### Chats
 
-**The transcript is a window.** A chat opens on its newest page (`Settings.historyPageSize`) and pages older through `beforeSeq`. Anything that describes the whole thread, a call conversation or an agent is read from the daemon, never folded from loaded `items` nor bounded by a capped listing (`.claude/rules/run-statistics.md`):
+**The transcript is a window.** A chat opens on its newest page (`Settings.historyPageSize`, capped at `REMOTE_HISTORY_PAGE` in a browser through the gateway: `App` passes `transcriptPageCap`) and pages older through `beforeSeq`. Anything that describes the whole thread, a call conversation or an agent is read from the daemon, never folded from loaded `items` nor bounded by a capped listing (`.claude/rules/run-statistics.md`):
 
 - Run state (`useRunState`, `GET /v1/chats/:runId/state`).
 - Spend (`useChatTotals`, and the nodes route for workflows).
@@ -96,6 +96,7 @@ One home for each concern:
 - Run-row fields from `run_status` are read by `chats/run-status-row.ts`.
 - The message queue rules are in `chats/use-message-queue.ts`. Only the chat screen persists queues (`queued-message-store.ts`, one key).
 - `joinRun`/`leaveRun` both live in `use-chat-run.ts` (`activateRun`/`deactivateRun`).
+- The chat screen's composer text is a store (`chats/composer-text.ts`), never state on `Chats`: the field subscribes to the text (`MessageComposer`'s `text`), the screen only to facts it draws (`useComposerTextFact`: is there text, the `/` query), and send paths read `get()` at the press. Typing must not re-render the screen (pinned in `Chats.spec.tsx`).
 - `Chats` stays mounted across nav switches. Read settings at the moment a run is created (`renderer/run-settings.ts` → `currentRunSettings()`, the one reader every renderer run start uses: chat, workflow run, analysis, a card's run, the builder's chat; main's autopilot normalises through the same `runSettingsOf` in `shared/contracts.ts`), never from cached state. Re-read lists such as fast actions when the screen becomes active again.
 
 **Sending and the queue:**

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import type { IncomingHttpHeaders, Server } from 'node:http';
 import { createServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
@@ -6,6 +6,7 @@ import type { Socket } from 'node:net';
 import { connect as netConnect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -25,8 +26,13 @@ interface RawResponse {
 /** A raw HTTP request whose Host header is set exactly as given, not derived from the connection target. */
 function rawRequest(
   port: number,
-  options: { path: string; method?: string; host?: string },
-): Promise<RawResponse> {
+  options: {
+    path: string;
+    method?: string;
+    host?: string;
+    acceptEncoding?: string;
+  },
+): Promise<RawResponse & { bytes: Buffer }> {
   return new Promise((resolve, reject) => {
     const req = httpRequest(
       {
@@ -34,15 +40,22 @@ function rawRequest(
         port,
         path: options.path,
         method: options.method ?? 'GET',
-        headers: options.host !== undefined ? { host: options.host } : {},
+        headers: {
+          ...(options.host !== undefined ? { host: options.host } : {}),
+          ...(options.acceptEncoding !== undefined
+            ? { 'accept-encoding': options.acceptEncoding }
+            : {}),
+        },
       },
       (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
         res.on('end', () => {
+          const bytes = Buffer.concat(chunks);
           resolve({
             status: res.statusCode ?? 0,
-            body: Buffer.concat(chunks).toString('utf8'),
+            body: bytes.toString('utf8'),
+            bytes,
             headers: res.headers,
           });
         });
@@ -420,6 +433,110 @@ describe('RemoteGateway: static serving', () => {
       'public, max-age=31536000, immutable',
     );
     expect(icon.headers['cache-control']).toBe('no-cache');
+  });
+
+  it('compresses a text file for a client that accepts it, brotli over gzip, and leaves a picture alone', async () => {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    writeFileSync(join(staticRoot, 'index.html'), '<html>page</html>');
+    mkdirSync(join(staticRoot, 'assets'));
+    const script = `export const rows = ${JSON.stringify(
+      Array.from({ length: 400 }, (_, i) => ({ id: i, text: 'a row' })),
+    )};`;
+    writeFileSync(join(staticRoot, 'assets', 'App-abc123.js'), script);
+    const picture = Buffer.alloc(4096, 7);
+    writeFileSync(join(staticRoot, 'icon.png'), picture);
+
+    const gateway = new RemoteGateway(makeGatewayOptions(staticRoot));
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port();
+    if (port === null) {
+      throw new Error('expected the gateway to be listening');
+    }
+    const host = `${ALLOWED_HOST_NAME}:${port}`;
+    const path = '/assets/App-abc123.js';
+
+    const lan = await rawRequest(port, {
+      path,
+      host,
+      acceptEncoding: 'gzip, deflate',
+    });
+    const tunnel = await rawRequest(port, {
+      path,
+      host,
+      acceptEncoding: 'gzip, deflate, br',
+    });
+    const plain = await rawRequest(port, { path, host });
+    const icon = await rawRequest(port, {
+      path: '/icon.png',
+      host,
+      acceptEncoding: 'gzip, br',
+    });
+
+    expect(lan.headers['content-encoding']).toBe('gzip');
+    expect(lan.headers['content-length']).toBeUndefined();
+    expect(lan.headers.vary).toBe('Accept-Encoding');
+    expect(lan.headers['cache-control']).toBe(
+      'public, max-age=31536000, immutable',
+    );
+    expect(lan.bytes.length).toBeLessThan(script.length / 4);
+    expect(gunzipSync(lan.bytes).toString('utf8')).toBe(script);
+    expect(tunnel.headers['content-encoding']).toBe('br');
+    expect(brotliDecompressSync(tunnel.bytes).toString('utf8')).toBe(script);
+    expect(plain.headers['content-encoding']).toBeUndefined();
+    expect(plain.headers['content-length']).toBe(String(script.length));
+    expect(plain.body).toBe(script);
+    expect(icon.headers['content-encoding']).toBeUndefined();
+    expect(icon.bytes.equals(picture)).toBe(true);
+  });
+
+  it('cuts the answer when a file cannot be read after its headers went out, compressed or not', async () => {
+    const staticRoot = mkdtempSync(join(tmpdir(), 'geniro-gateway-static-'));
+    writeFileSync(join(staticRoot, 'index.html'), '<html>page</html>');
+    mkdirSync(join(staticRoot, 'assets'));
+    const locked = join(staticRoot, 'assets', 'App-locked.js');
+    writeFileSync(locked, 'export {};'.repeat(500));
+    chmodSync(locked, 0o000);
+
+    const gateway = new RemoteGateway(makeGatewayOptions(staticRoot));
+    gateways.push(gateway);
+    await gateway.start();
+    const port = gateway.port();
+    if (port === null) {
+      throw new Error('expected the gateway to be listening');
+    }
+    const read = (acceptEncoding?: string) =>
+      new Promise<string>((resolve) => {
+        const req = httpRequest(
+          {
+            host: '127.0.0.1',
+            port,
+            path: '/assets/App-locked.js',
+            headers: {
+              host: `${ALLOWED_HOST_NAME}:${port}`,
+              ...(acceptEncoding === undefined
+                ? {}
+                : { 'accept-encoding': acceptEncoding }),
+            },
+          },
+          (res) => {
+            res.on('data', () => undefined);
+            res.on('end', () => resolve('ended'));
+            res.on('error', () => resolve('cut'));
+            res.on('aborted', () => resolve('cut'));
+          },
+        );
+        req.on('error', () => resolve('cut'));
+        req.end();
+        setTimeout(() => resolve('hung'), 3_000);
+      });
+
+    try {
+      expect(await read()).toBe('cut');
+      expect(await read('gzip')).toBe('cut');
+    } finally {
+      chmodSync(locked, 0o644);
+    }
   });
 
   it('never serves a .map file', async () => {

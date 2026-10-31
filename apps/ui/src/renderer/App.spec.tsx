@@ -32,6 +32,7 @@ vi.mock('./chats/Chats', async () => {
       onRunOpened?: () => void;
       onActiveRunChange?: (runId: string | null) => void;
       onWaitingChange?: (readings: readonly WaitReading[]) => void;
+      transcriptPageCap?: number;
     }) => {
       // Honours a thread request the way the real screen does: opens it,
       // reports it open, and clears the request.
@@ -46,6 +47,9 @@ vi.mock('./chats/Chats', async () => {
       return (
         <>
           <output data-slot="home-signal">{props.phoneHomeSignal ?? 0}</output>
+          <output data-slot="page-cap">
+            {props.transcriptPageCap ?? 'none'}
+          </output>
           <button
             type="button"
             onClick={() => props.onPhoneDetailChange?.(true)}>
@@ -93,6 +97,7 @@ import type { DaemonHandle } from '../shared/contracts';
 import { createPreloadStub } from './__fixtures__/preload-stub';
 import { afterPopstate } from './__tests__/after-popstate';
 import { App } from './App';
+import { REMOTE_HISTORY_PAGE } from './chats/use-chat-run';
 import type { WaitReading } from './chats/waiting';
 import { DaemonClient } from './daemon-client';
 
@@ -484,6 +489,14 @@ describe('App — phone pages and the tab bar', () => {
     await press('back to the list');
     expect(tabBar()).not.toBeNull();
     expect(title()).toBe('Chats');
+  });
+
+  it('caps the transcript page in a browser, which parses and draws every row it holds', async () => {
+    // This suite's runtime has no preload, so `isRemoteRuntime()` reads as the
+    // phone's page.
+    expect(container.querySelector('[data-slot="page-cap"]')?.textContent).toBe(
+      String(REMOTE_HISTORY_PAGE),
+    );
   });
 
   it('sends Chats home when its tab is pressed again — the phone’s way back to the list', async () => {

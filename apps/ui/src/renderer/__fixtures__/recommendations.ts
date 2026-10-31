@@ -298,6 +298,7 @@ export const WORKFLOW_STATS: WorkflowStatsView = {
       totalMs: 280 * MINUTE,
       avgMs: 12.7 * MINUTE,
       maxMs: 31 * MINUTE,
+      workedMs: 190 * MINUTE,
     },
     {
       caller: 'lead',
@@ -307,6 +308,7 @@ export const WORKFLOW_STATS: WorkflowStatsView = {
       totalMs: 170 * MINUTE,
       avgMs: 8.1 * MINUTE,
       maxMs: 19 * MINUTE,
+      workedMs: 150 * MINUTE,
     },
     {
       caller: 'lead',
@@ -316,6 +318,7 @@ export const WORKFLOW_STATS: WorkflowStatsView = {
       totalMs: 58 * MINUTE,
       avgMs: 7.3 * MINUTE,
       maxMs: 11 * MINUTE,
+      workedMs: null,
     },
   ],
 };

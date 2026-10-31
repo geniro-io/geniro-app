@@ -202,7 +202,27 @@ describe('recommendations payload readers', () => {
               ],
             },
           ],
-          calls: [],
+          calls: [
+            {
+              caller: 'lead',
+              callee: 'reviewer',
+              calls: 2,
+              failedCalls: 0,
+              totalMs: 80_000,
+              avgMs: 40_000,
+              maxMs: 50_000,
+              workedMs: 30_000,
+            },
+            {
+              caller: 'lead',
+              callee: 'qa',
+              calls: 1,
+              failedCalls: 0,
+              totalMs: 9_000,
+              avgMs: 9_000,
+              maxMs: 9_000,
+            },
+          ],
         },
       }),
     );
@@ -226,7 +246,11 @@ describe('recommendations payload readers', () => {
       perRun: { wallMs: 60_000, costUsd: null, pricedRuns: 0 },
       totals: { failedTurns: 1, costUsd: null },
       runList: [{ runId: 'r1', version: 3, current: true, costUsd: null }],
-      callEdges: 0,
+      callEdges: 2,
+      calls: [
+        { callee: 'reviewer', workedMs: 30_000 },
+        { callee: 'qa', workedMs: null },
+      ],
       agents: [
         {
           node: 'reviewer',

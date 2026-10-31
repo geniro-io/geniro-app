@@ -834,8 +834,13 @@ describe('workflowCardStats', () => {
         }),
       ],
       calls: Array.from({ length: 7 }, (_, at) =>
-        call({ calleeNodeId: `n${at}`, durationMs: (at + 1) * 1_000 }),
+        call({
+          calleeNodeId: `n${at}`,
+          durationMs: (at + 1) * 1_000,
+          seq: at + 1,
+        }),
       ),
+      callWorkedMs: new Map([[7, 4_400.4]]),
       timeline: {
         wallMs: 900_000,
         activeMs: 700_000,
@@ -915,12 +920,14 @@ describe('workflowCardStats', () => {
       ],
     });
     expect(stats?.callEdges).toBe(7);
-    expect(stats?.calls.map((edge) => [edge.callee, edge.totalMs])).toEqual([
-      ['n6', 7_000],
-      ['n5', 6_000],
-      ['n4', 5_000],
-      ['n3', 4_000],
-      ['n2', 3_000],
+    expect(
+      stats?.calls.map((edge) => [edge.callee, edge.totalMs, edge.workedMs]),
+    ).toEqual([
+      ['n6', 7_000, 4_400],
+      ['n5', 6_000, null],
+      ['n4', 5_000, null],
+      ['n3', 4_000, null],
+      ['n2', 3_000, null],
     ]);
   });
 

@@ -802,6 +802,11 @@ export const RecommendationsCallStatsSchema = z.object({
   totalMs: msSchema,
   avgMs: msSchema,
   maxMs: msSchema,
+  /**
+   * Of `totalMs`, how long the callees worked inside these calls — null when
+   * no turn of them was measured, absent on a card filed before it was kept.
+   */
+  workedMs: msSchema.nullable().optional(),
 });
 
 export const RecommendationsWorkflowStatsSchema = z.object({

@@ -671,6 +671,7 @@ export function workflowCardStats(
       totalMs: Math.round(call.totalMs),
       avgMs: call.avgMs,
       maxMs: Math.round(call.maxMs),
+      workedMs: call.workedMs === null ? null : Math.round(call.workedMs),
     })),
   };
 }

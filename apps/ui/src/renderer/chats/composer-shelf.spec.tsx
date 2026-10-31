@@ -92,6 +92,9 @@ describe('RunningShellChips', () => {
 
     const chip = el.querySelector('[data-slot="running-shells"]')!;
     expect(chip.textContent).toContain('2');
+    expect(
+      chip.querySelector('svg[data-glyph="terminal"] .glyph-cursor-blink'),
+    ).not.toBeNull();
     // Closed, the commands are not in the DOM at all — the count is the whole
     // of what the shelf spends space on.
     expect(el.textContent).not.toContain('pnpm build');
@@ -212,6 +215,9 @@ describe('RunningMonitorChips', () => {
     );
     const chip = el.querySelector('[data-slot="running-monitors"]')!;
     expect(chip.textContent).toBe('2');
+    expect(
+      chip.querySelector('svg[data-glyph="monitor"] .glyph-trace'),
+    ).not.toBeNull();
     expect(chip.querySelector('button')?.getAttribute('title')).toBe(
       'Monitors · 2 running',
     );
@@ -297,7 +303,7 @@ describe('RunningCallChips', () => {
     expect(rows[0]?.textContent).not.toContain('queued');
   });
 
-  it('does not tint its glyph as working while every call out is queued', () => {
+  it('does not tint or animate its glyph while every call out is queued', () => {
     const queued = mount(
       <RunningCallChips calls={[call({ queued: true })]} onReveal={() => {}} />,
     );
@@ -315,6 +321,12 @@ describe('RunningCallChips', () => {
         .querySelector('[data-slot="running-calls"] button svg')
         ?.getAttribute('class'),
     ).toContain('text-primary');
+    expect(trigger?.querySelectorAll('.glyph-typing-dot')).toHaveLength(0);
+    expect(
+      working.querySelectorAll(
+        '[data-slot="running-calls"] svg[data-glyph="call"] .glyph-typing-dot',
+      ),
+    ).toHaveLength(3);
   });
 
   it('draws nothing while no call is out', () => {
@@ -471,6 +483,9 @@ describe('RunningSubagentChips', () => {
     expect(trigger.querySelector('svg')?.getAttribute('class')).toContain(
       'text-primary',
     );
+    expect(
+      trigger.querySelector('svg[data-glyph="subagent"] .glyph-eyes-scan'),
+    ).not.toBeNull();
     // Closed, the delegates are not in the DOM at all.
     expect(el.textContent).not.toContain('review the diff');
 

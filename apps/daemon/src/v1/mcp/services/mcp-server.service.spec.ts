@@ -5135,7 +5135,7 @@ describe('McpServerService — the monitor tools', () => {
       { command: '   ', description: 'x' },
       { command: 'true', description: 'y'.repeat(61) },
       { command: 'true', description: 'x', timeout_ms: 999 },
-      { command: 'true', description: 'x', timeout_ms: 3_600_001 },
+      { command: 'true', description: 'x', timeout_ms: 86_400_001 },
       { command: 'true', description: 'x', timeout_ms: 1500.5 },
     ]) {
       const result = await call(subject, 'monitor', args);

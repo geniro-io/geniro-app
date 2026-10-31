@@ -486,6 +486,29 @@ export const taskIdSchema = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/);
 
+/**
+ * One name directly inside the data folder (or its worktrees directory), on
+ * its way into a `join` and a delete: one segment, never `.`, `..`, a
+ * separator or a NUL, so it cannot name anything outside the directory.
+ */
+export const storageEntryNameSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine(
+    (name) =>
+      name !== '.' &&
+      name !== '..' &&
+      !name.includes('/') &&
+      !name.includes('\u0000'),
+    'not a single file name',
+  );
+
+/** The daemon's `unclaimed` names, handed on by the renderer. */
+export const storageEntryNamesSchema = z
+  .array(storageEntryNameSchema)
+  .max(2000);
+
 /** Which task to make a worktree for, and the repository to cut it from. */
 export const taskWorktreeSchema = z.object({
   taskId: taskIdSchema,

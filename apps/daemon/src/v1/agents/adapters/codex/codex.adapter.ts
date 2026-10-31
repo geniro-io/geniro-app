@@ -88,6 +88,7 @@ import {
   CODEX_OLLAMA_PROVIDER,
   CODEX_ONESHOT_TIMEOUT_MS,
   CODEX_PLAN_LIMITS_TIMEOUT_MS,
+  CODEX_PROBE_DIR_NAME,
   CODEX_QUESTION_TOOL_NAME,
   CODEX_REASONING_EFFORT_KEY,
   CODEX_SESSION_SEARCH_PAGE,
@@ -166,6 +167,7 @@ export class CodexAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {
     return {
       kind: AgentKind.Codex,
+      userData: { caches: [CODEX_PROBE_DIR_NAME] },
       ollama: {
         args: [
           CODEX_CONFIG_FLAG,
@@ -463,7 +465,7 @@ export class CodexAdapter extends AgentAdapter {
       processes: deps.processes,
       logger: deps.logger(CodexAdapter.name),
       clientVersion: deps.clientVersion,
-      probeRootDir: join(deps.userDataDir, 'codex-probe'),
+      probeRootDir: join(deps.userDataDir, CODEX_PROBE_DIR_NAME),
       prices: deps.prices,
     });
   }

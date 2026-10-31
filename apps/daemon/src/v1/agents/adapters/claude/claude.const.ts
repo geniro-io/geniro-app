@@ -161,6 +161,15 @@ export const CLAUDE_PR_LINK_LINE_TYPE = 'pr-link';
 
 /** `<userData>/` file the per-session running cost totals survive a restart in. */
 export const CLAUDE_COST_TOTALS_FILE = 'claude-session-costs.json';
+
+/** `<userData>/` directory the per-turn `--mcp-config` files are written in. */
+export const CLAUDE_USER_DATA_TMP_DIR_NAME = 'tmp';
+
+/** `<userData>/` throwaway workspaces of the command-catalog and mode probes. */
+export const CLAUDE_PROBE_DIR_NAME = 'claude-probe';
+
+/** `<userData>/` file the mode probe's verdicts are cached in. */
+export const CLAUDE_PROBE_CACHE_FILE = 'claude-probe.json';
 /**
  * How far into a session file the listing reads to find its folder and its
  * opening prompt.

@@ -13,10 +13,12 @@ import { z } from 'zod';
 
 import { type DaemonHandle, IPC } from '../shared/contracts';
 import type { RemoteAccessState } from '../shared/remote';
+import { clearBrowserCache, readAppStorage } from './app-storage';
 import { detectClis } from './cli-detect';
 import { runCliInstall } from './cli-install';
 import { runCliUpdate } from './cli-update';
 import type { DaemonSupervisor } from './daemon-supervisor';
+import { readFinishedTasks } from './finished-tasks';
 import {
   readChangesSince,
   readChangesTotals,
@@ -59,6 +61,8 @@ import {
   retractNotificationSchema,
   revealPathSchema,
   settingsPatchSchema,
+  storageEntryNameSchema,
+  storageEntryNamesSchema,
   taskIdSchema,
   taskWorktreeSchema,
   terminalAckCharsSchema,
@@ -90,6 +94,7 @@ import { reportMainLog } from './window-diagnostics';
 import {
   prepareWorktree,
   pruneWorktreeForTask,
+  removeWorktreeOnRequest,
   settleWorktreeForTask,
   worktreesRoot,
 } from './worktree-service';
@@ -700,6 +705,55 @@ export function registerIpc(
     IPC.revealPath,
     denyRemotely('opens a Finder window on the computer running geniro'),
     (_event, path: unknown) => revealPath(revealPathSchema.parse(path)),
+  );
+
+  // Settings → Storage. Every name is one segment the schema bounds, joined
+  // onto the data folder by main; a phone may not delete the Mac's files.
+  const finishedCards = (
+    taskIds: string[],
+  ): Promise<ReadonlySet<string> | null> => {
+    const daemon = supervisor.getHandle();
+    return daemon === null
+      ? Promise.resolve(null)
+      : readFinishedTasks(daemon, taskIds);
+  };
+  handle(
+    IPC.getAppStorage,
+    denyRemotely("reads the computer running geniro's own files"),
+    (_event, unclaimed: unknown) =>
+      readAppStorage(
+        app.getPath('userData'),
+        storageEntryNamesSchema.parse(unclaimed),
+        finishedCards,
+      ),
+  );
+  handle(
+    IPC.removeStorageWorktree,
+    denyRemotely('deletes files on the computer running geniro'),
+    (_event, name: unknown) =>
+      removeWorktreeOnRequest(
+        storageEntryNameSchema.parse(name),
+        finishedCards,
+      ),
+  );
+  handle(
+    IPC.clearBrowserCache,
+    denyRemotely('deletes files on the computer running geniro'),
+    () => clearBrowserCache(app.getPath('userData')),
+  );
+  handle(
+    IPC.restartDaemon,
+    denyRemotely(
+      'restarts the service every chat on the computer running geniro runs in',
+    ),
+    async () => {
+      if (await supervisor.isServingWork()) {
+        throw new Error(
+          'an agent started working — Geniro compacts the database at its next start instead',
+        );
+      }
+      await restartAndNotify();
+    },
   );
 
   // No schema: there is no input. Acts on the SENDER's own WebContents rather

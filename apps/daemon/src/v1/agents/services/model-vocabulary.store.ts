@@ -6,6 +6,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { environment } from '../../../environments';
 import { atomicWriteSync } from '../../../utils/atomic-file';
 
+/** `<userData>/` file the model listings of each CLI are cached in. */
+export const MODEL_VOCABULARIES_FILE_NAME = 'model-vocabularies.json';
+
 /**
  * How old an entry may get before it is SERVED AND REFRESHED behind the answer
  * — see {@link StoredAnswer.stale}.
@@ -174,7 +177,8 @@ export class ModelVocabularyStore {
 
   constructor(options: ModelVocabularyStoreOptions = {}) {
     this.file =
-      options.file ?? join(environment.userDataDir, 'model-vocabularies.json');
+      options.file ??
+      join(environment.userDataDir, MODEL_VOCABULARIES_FILE_NAME);
     this.now = options.now ?? Date.now;
   }
 

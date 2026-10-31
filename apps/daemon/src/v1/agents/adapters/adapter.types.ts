@@ -4224,6 +4224,19 @@ export interface AdapterConfig {
    * so the binary name is never spelled a second time.
    */
   readonly kind: AgentKind;
+  /**
+   * The top-level names this adapter writes under the data folder, by what
+   * they hold — read by Settings → Storage. `conversations` is what a live
+   * chat resumes from; `caches` are rebuilt when missing; `state` must stay;
+   * `leftovers` are names an older build of this adapter wrote and nothing
+   * reads any more, the only ones Storage may delete. Absent: none.
+   */
+  readonly userData?: {
+    readonly conversations?: readonly string[];
+    readonly caches?: readonly string[];
+    readonly state?: readonly string[];
+    readonly leftovers?: readonly string[];
+  };
   readonly ollama?: {
     readonly args: readonly string[];
     readonly env: Readonly<Record<string, string>>;

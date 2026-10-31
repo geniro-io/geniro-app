@@ -31,7 +31,7 @@ const LOOKUP_CACHE_SIZE = 64;
  * written since is stamped, and a conversation read still stamps an unstamped
  * run on demand.
  */
-const MARKER_FILE = 'call-membership-indexed';
+export const CALL_MEMBERSHIP_MARKER_FILE = 'call-membership-indexed';
 
 /** Rows stamped per transaction while indexing one run's older rows. */
 const STAMP_BATCH_SIZE = 500;
@@ -79,7 +79,8 @@ export class ItemCallIndexService {
     /** Test seam only — nothing in the app passes it. */
     @Optional() markerPath?: string,
   ) {
-    this.markerPath = markerPath ?? join(environment.userDataDir, MARKER_FILE);
+    this.markerPath =
+      markerPath ?? join(environment.userDataDir, CALL_MEMBERSHIP_MARKER_FILE);
   }
 
   /**

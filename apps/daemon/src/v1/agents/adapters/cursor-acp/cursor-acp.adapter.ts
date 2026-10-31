@@ -332,6 +332,11 @@ export class CursorAcpAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {
     return {
       kind: AgentKind.CursorAgent,
+      userData: {
+        conversations: [CURSOR_SESSION_STORE_DIR_NAME],
+        caches: [CURSOR_PROFILE_DIR_NAME],
+        leftovers: ['cursor-probe', 'cursor-probe.json'],
+      },
       identity: {
         displayName: 'Cursor',
         // The binary is `cursor-agent`; a row of chrome has room for one word.

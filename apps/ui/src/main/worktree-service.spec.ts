@@ -27,6 +27,7 @@ import {
   pruneWorktreeForTask,
   readRegistry,
   reapFinishedWorktrees,
+  removeWorktreeOnRequest,
   settleWorktreeForTask,
   taskBranchName,
 } from './worktree-service';
@@ -1347,4 +1348,160 @@ describe('.worktreeinclude files a new worktree starts with', () => {
     },
     TIMEOUT_MS,
   );
+});
+
+describe('removeWorktreeOnRequest', () => {
+  const root = (): string => join(mocks.userData, 'worktrees');
+
+  /** A worktree of `repo` in the worktrees directory that no registry row names. */
+  const strayAt = (name: string, branch: string): string => {
+    const path = join(root(), name);
+    mkdirSync(root(), { recursive: true });
+    git(repo, 'worktree', 'add', '-b', branch, path);
+    return path;
+  };
+
+  it(
+    "removes a finished card's clean worktree its agent moved to a branch of its own, keeping the branch",
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      git(made.path, 'switch', '-c', 'feat/renamed');
+      writeFileSync(join(made.path, 'work.txt'), 'done\n');
+      git(made.path, 'add', '.');
+      git(made.path, 'commit', '-m', 'work');
+
+      const outcome = await removeWorktreeOnRequest('t1', allFinished);
+
+      expect(outcome).toEqual({ removed: true, reason: null });
+      expect(existsSync(made.path)).toBe(false);
+      expect(readRegistry()).toEqual([]);
+      expect(git(repo, 'log', '-1', '--format=%s', 'feat/renamed').trim()).toBe(
+        'work',
+      );
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'keeps a worktree whose card is still open',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      const outcome = await removeWorktreeOnRequest('t1', noneFinished);
+
+      expect(outcome.removed).toBe(false);
+      expect(outcome.reason).toMatch(/card is still open/);
+      expect(existsSync(made.path)).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "commits a finished card's unsaved work on its own branch before removing it",
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      writeFileSync(join(made.path, 'left.txt'), 'unsaved\n');
+
+      const outcome = await removeWorktreeOnRequest('t1', allFinished);
+
+      expect(outcome.removed).toBe(true);
+      expect(
+        git(repo, 'show', '--name-only', '--format=', made.branch).trim(),
+      ).toContain('left.txt');
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'removes a clean worktree no registry row names through git, keeping its branch',
+    async () => {
+      const path = strayAt('stray', 'feat/stray');
+
+      const outcome = await removeWorktreeOnRequest('stray', noneFinished);
+
+      expect(outcome).toEqual({ removed: true, reason: null });
+      expect(existsSync(path)).toBe(false);
+      expect(git(repo, 'worktree', 'list', '--porcelain')).not.toContain(path);
+      expect(git(repo, 'branch', '--list', 'feat/stray')).toContain(
+        'feat/stray',
+      );
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'keeps a worktree no registry row names while it holds unsaved changes',
+    async () => {
+      const path = strayAt('stray', 'feat/stray');
+      writeFileSync(join(path, 'draft.txt'), 'unsaved\n');
+
+      const outcome = await removeWorktreeOnRequest('stray', allFinished);
+
+      expect(outcome.removed).toBe(false);
+      expect(outcome.reason).toMatch(/unsaved changes/);
+      expect(readFileSync(join(path, 'draft.txt'), 'utf8')).toBe('unsaved\n');
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'keeps a worktree on a detached HEAD, whose commits could be lost',
+    async () => {
+      const path = strayAt('stray', 'feat/stray');
+      git(path, 'switch', '--detach');
+
+      const outcome = await removeWorktreeOnRequest('stray', allFinished);
+
+      expect(outcome.removed).toBe(false);
+      expect(outcome.reason).toMatch(/not on a branch/);
+      expect(existsSync(path)).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'keeps a worktree when the app cannot ask whether its card is finished',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      for (const unanswered of [
+        () => Promise.resolve(null),
+        () => Promise.reject(new Error('daemon down')),
+      ]) {
+        const outcome = await removeWorktreeOnRequest('t1', unanswered);
+        expect(outcome.removed).toBe(false);
+        expect(existsSync(made.path)).toBe(true);
+      }
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "keeps a finished card's worktree whose repository is not where it was",
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      writeFileSync(join(made.path, 'draft.txt'), 'unsaved\n');
+      rmSync(repo, { recursive: true, force: true });
+
+      const outcome = await removeWorktreeOnRequest('t1', allFinished);
+
+      expect(outcome.removed).toBe(false);
+      expect(outcome.reason).toMatch(/repository is not where it was/);
+      expect(readFileSync(join(made.path, 'draft.txt'), 'utf8')).toBe(
+        'unsaved\n',
+      );
+    },
+    TIMEOUT_MS,
+  );
+
+  it('deletes nothing in a folder git does not call a worktree', async () => {
+    const path = join(root(), 'notes');
+    mkdirSync(path, { recursive: true });
+    writeFileSync(join(path, 'keep.txt'), 'mine\n');
+
+    const outcome = await removeWorktreeOnRequest('notes', allFinished);
+
+    expect(outcome.removed).toBe(false);
+    expect(readFileSync(join(path, 'keep.txt'), 'utf8')).toBe('mine\n');
+  });
 });

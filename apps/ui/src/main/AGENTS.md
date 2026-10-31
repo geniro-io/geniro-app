@@ -114,6 +114,7 @@ Smaller rules:
 - `remote-routes.ts` answers bridge calls through the same `ipc-registry.ts` table as IPC. `on*` push channels are no-ops remotely, and `filePath` answers `null`.
 - `serveStatic` 404s a missing file. Only a navigation (no extension, not under `/assets/`) falls back to `index.html`.
 - Cache headers: the page is `no-store`, `/assets/*` are `immutable`, and everything else is `no-cache`.
+- Proxied answers and bundle files are compressed for a client that accepts it (`compression.ts`: brotli, else gzip). Never an event stream, a picture or a body under `MIN_COMPRESSIBLE_BYTES`.
 
 ### App updates
 

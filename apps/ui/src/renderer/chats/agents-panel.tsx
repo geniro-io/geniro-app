@@ -15,7 +15,14 @@ import {
   Terminal as TerminalIcon,
   Timer,
 } from 'lucide-react';
-import { Fragment, useContext, useEffect, useRef, useState } from 'react';
+import {
+  Fragment,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import type { CliKind, PullRequestRefResult } from '../../shared/contracts';
 import {
@@ -1227,10 +1234,13 @@ function InstanceSummary({
     workingTurns.length > 0 ? openTurnWorkedMs(workingTurns, Date.now()) : 0;
   const workedMs =
     settledMs === null && liveMs <= 0 ? null : (settledMs ?? 0) + liveMs;
-  const latest =
-    thread.latest === undefined || thread.latest === null
-      ? null
-      : plainMarkdownText(thread.latest);
+  const rawLatest = thread.latest ?? null;
+  // Every keystroke and live delta re-renders the panel, and these regexes run
+  // over a whole message per instance.
+  const latest = useMemo(
+    () => (rawLatest === null ? null : plainMarkdownText(rawLatest)),
+    [rawLatest],
+  );
   return (
     <p
       data-slot="agent-instance-latest"
@@ -1434,7 +1444,10 @@ function InstanceBlock({
   const { thread } = instance;
   const content = hasInstanceContent(instance);
   const rawBrief = thread.kind === 'call' ? (thread.brief ?? null) : null;
-  const brief = rawBrief === null ? null : briefParts(rawBrief);
+  const brief = useMemo(
+    () => (rawBrief === null ? null : briefParts(rawBrief)),
+    [rawBrief],
+  );
   const briefTitle =
     brief !== null && brief.title.length > 0 ? brief.title : null;
   const briefRest = brief?.rest ?? [];

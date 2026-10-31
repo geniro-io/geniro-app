@@ -1733,7 +1733,7 @@ export function Settings({
                   <SettingsPanelRow
                     label="Items loaded at a time"
                     htmlFor="settings-history-page-size"
-                    description="How much of a long chat opens at once, and how much more each scroll up brings. Badges, chips and the agents panel always count the whole conversation.">
+                    description="How much of a long chat opens at once, and how much more each scroll up brings; a paired phone takes at most 250. Badges, chips and the agents panel always count the whole conversation.">
                     <Select
                       id="settings-history-page-size"
                       className="w-56"

@@ -4,6 +4,7 @@ import { createServer, request as httpRequest } from 'node:http';
 import type { Socket } from 'node:net';
 import { hostname, networkInterfaces } from 'node:os';
 import { join, resolve as resolvePath, sep } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 import type { DaemonHandle } from '../../shared/contracts';
 import {
@@ -17,6 +18,13 @@ import {
   type RemoteGatewayState,
 } from '../../shared/remote';
 import type { IpcRegistry } from '../ipc-registry';
+import {
+  createCompressor,
+  encodedHeaders,
+  hasBody,
+  isCompressible,
+  negotiateEncoding,
+} from './compression';
 import { type ProxiedUpgrade, proxyHttp, proxyUpgrade } from './daemon-proxy';
 import type { DeviceRegistry } from './device-registry';
 import { isAllowedHost } from './host-guard';
@@ -614,11 +622,23 @@ export class RemoteGateway {
       res.end('not found');
       return;
     }
-    res.writeHead(200, {
+    const headers = {
       'content-type': contentTypeFor(filePath),
       'cache-control': cacheControlFor(url.pathname, filePath),
-    });
-    createReadStream(filePath).pipe(res);
+      'content-length': String(statSync(filePath).size),
+    };
+    const encoding = hasBody(req.method, 200)
+      ? negotiateEncoding(req.headers['accept-encoding'])
+      : null;
+    if (encoding === null || !isCompressible(headers)) {
+      res.writeHead(200, headers);
+      createReadStream(filePath).pipe(res);
+      return;
+    }
+    res.writeHead(200, encodedHeaders(headers, encoding));
+    pipeline(createReadStream(filePath), createCompressor(encoding), res).catch(
+      () => res.destroy(),
+    );
   }
 
   /**

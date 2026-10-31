@@ -120,6 +120,14 @@ const NO_OFF_SCOPE_RUNS: readonly ChatRun[] = [];
 export const HISTORY_PAGE = DEFAULT_HISTORY_PAGE_SIZE;
 
 /**
+ * The most a paired device's window reads at a time, whatever the setting says.
+ * A phone parses, folds and draws every row it holds: the newest 1,000 rows of
+ * a long workflow run measured 5.4MB and ten thousand elements, about twice the
+ * CPU of 250 rows to open and every re-render after.
+ */
+export const REMOTE_HISTORY_PAGE = 250;
+
+/**
  * How many items after a jumped-to one the window keeps.
  *
  * A hit landed on the very last row of the window would have nothing under it
@@ -353,6 +361,8 @@ export interface ChatRunScope {
    * every readout beside them is read from the daemon over the whole run.
    */
   historyPageSize?: number;
+  /** The most one fetch may bring back whatever the setting says — see {@link REMOTE_HISTORY_PAGE}. */
+  pageCap?: number;
 }
 
 /** The sidebar's run list, the open transcript, and the live plane over both. */
@@ -638,12 +648,17 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     drainQueueRef,
     onLiveUnsentRef,
     historyPageSize = HISTORY_PAGE,
+    pageCap,
   } = scope;
+  const windowSize =
+    pageCap === undefined
+      ? historyPageSize
+      : Math.min(historyPageSize, pageCap);
   // Read at REQUEST time by the stable pagers below, and captured once per
   // request so the size a page was asked for is the size its `hasOlder` test
   // compares against, even if the setting moves while it is in flight.
-  const pageSizeRef = useRef(historyPageSize);
-  pageSizeRef.current = historyPageSize;
+  const pageSizeRef = useRef(windowSize);
+  pageSizeRef.current = windowSize;
 
   const [runs, setRuns] = useState<ChatRun[]>([]);
   /**

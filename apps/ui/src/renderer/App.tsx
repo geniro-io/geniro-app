@@ -4,6 +4,7 @@ import type { CliKind } from '../shared/contracts';
 import type { DaemonHandle } from '../shared/contracts';
 import { AgentIdentityContext } from './agent-identity';
 import { Chats } from './chats/Chats';
+import { REMOTE_HISTORY_PAGE } from './chats/use-chat-run';
 import { useNextWaitingShortcut } from './chats/use-next-waiting-shortcut';
 import { nextWaiting, type WaitReading, waitsOnUser } from './chats/waiting';
 import { WaitingStatus } from './chats/waiting-status';
@@ -712,6 +713,9 @@ export function App(): React.JSX.Element {
                     client={clientRef.current}
                     handle={handle}
                     active={view === 'chats'}
+                    transcriptPageCap={
+                      isRemoteRuntime() ? REMOTE_HISTORY_PAGE : undefined
+                    }
                     firstLaunchAgent={chatLaunch}
                     onFirstLaunchHandled={() => setChatLaunch(null)}
                     onActiveRunChange={setOpenRunId}

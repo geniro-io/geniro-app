@@ -702,11 +702,14 @@ export function Chats({
   phoneHomeSignal = 0,
   firstLaunchAgent = null,
   onFirstLaunchHandled,
+  transcriptPageCap,
 }: {
   client: DaemonClient;
   handle: DaemonHandle;
   firstLaunchAgent?: CliKind | null;
   onFirstLaunchHandled?: () => void;
+  /** The most one transcript page holds whatever `Settings.historyPageSize` says. */
+  transcriptPageCap?: number;
   /**
    * Take the app to a Settings pane. Absent in a harness, which is why every
    * call site is optional-chained rather than asserted.
@@ -1255,6 +1258,7 @@ export function Chats({
     chatApi,
     workflowApi,
     historyPageSize,
+    pageCap: transcriptPageCap,
     swapDraft,
     resetSteerStatus,
     hasQueuedMessages,

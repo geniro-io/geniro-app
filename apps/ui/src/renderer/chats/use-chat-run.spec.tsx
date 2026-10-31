@@ -18,7 +18,12 @@ import type {
 } from '../daemon-client';
 import type { LiveTextEvent } from './live-text';
 import { RUN_LIST_MAX, RUN_LIST_PAGE } from './run-list-pages';
-import { type ChatRunState, HISTORY_PAGE, useChatRun } from './use-chat-run';
+import {
+  type ChatRunState,
+  HISTORY_PAGE,
+  REMOTE_HISTORY_PAGE,
+  useChatRun,
+} from './use-chat-run';
 import { ANCHOR_ASK_DELAY_MS } from './use-live-anchor-asks';
 
 (
@@ -256,6 +261,7 @@ interface Harness {
 async function mount(
   client: DaemonClient,
   historyPageSize?: number,
+  pageCap?: number,
 ): Promise<Harness> {
   let latest: ChatRunState | null = null;
   const swapDraft = vi.fn();
@@ -276,6 +282,7 @@ async function mount(
       drainQueueRef,
       onLiveUnsentRef,
       historyPageSize,
+      pageCap,
     });
     return null;
   }
@@ -2981,6 +2988,36 @@ describe('useChatRun — jumping to a hit outside the loaded window', () => {
     Array.from({ length: to - from + 1 }, (_, index) => from + index);
   const seqs = (harness: Harness): number[] =>
     harness.state().items.map((item) => item.seq);
+
+  it('reads no more than the cap per page, and the setting when it is smaller', async () => {
+    const { client } = makeClient();
+    serveTranscript(range(0, 2999));
+    const capped = await mount(client, 1000, REMOTE_HISTORY_PAGE);
+    await open(capped, 'r1');
+
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ runId: 'r1', limit: REMOTE_HISTORY_PAGE }),
+    );
+    expect(seqs(capped)).toEqual(range(2750, 2999));
+    expect(capped.state().hasOlder).toBe(true);
+
+    await act(async () => {
+      await capped.state().loadOlder();
+    });
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: 'r1',
+        limit: REMOTE_HISTORY_PAGE,
+        beforeSeq: 2750,
+      }),
+    );
+    expect(seqs(capped)).toEqual(range(2500, 2999));
+    capped.unmount();
+
+    const smaller = await mount(client, 2, REMOTE_HISTORY_PAGE);
+    await open(smaller, 'r1');
+    expect(seqs(smaller)).toEqual([2998, 2999]);
+  });
 
   it('reads back what streamed in while a jump that lands on the tail was loading', async () => {
     // Landing on the tail replaces the window, so a live row that arrived

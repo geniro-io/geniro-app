@@ -2,8 +2,16 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import type { Socket } from 'node:net';
 import { connect as netConnect } from 'node:net';
+import { pipeline } from 'node:stream/promises';
 
 import type { DaemonHandle } from '../../shared/contracts';
+import {
+  createCompressor,
+  encodedHeaders,
+  hasBody,
+  isCompressible,
+  negotiateEncoding,
+} from './compression';
 
 /**
  * How long the daemon has to answer an ordinary request before the client is
@@ -104,8 +112,19 @@ export function proxyHttp(
   upstream.on('error', failUpstream);
 
   upstream.on('response', (upstreamRes: IncomingMessage) => {
-    res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
-    upstreamRes.pipe(res);
+    const status = upstreamRes.statusCode ?? 502;
+    const encoding = hasBody(req.method, status)
+      ? negotiateEncoding(req.headers['accept-encoding'])
+      : null;
+    if (encoding === null || !isCompressible(upstreamRes.headers)) {
+      res.writeHead(status, upstreamRes.headers);
+      upstreamRes.pipe(res);
+      return;
+    }
+    res.writeHead(status, encodedHeaders(upstreamRes.headers, encoding));
+    pipeline(upstreamRes, createCompressor(encoding), res).catch(() =>
+      res.destroy(),
+    );
   });
 
   // A client that goes away mid-request (the phone locks, the app is

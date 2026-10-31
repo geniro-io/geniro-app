@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { GitInfo } from '../../shared/contracts';
 import type { BannerTone } from '../components/error-banner';
@@ -240,21 +240,37 @@ export function useGitInfo(dir: string | null): {
     [dir],
   );
 
-  return {
-    info,
-    notice,
-    switching,
-    pulling,
-    carrying,
-    switchTo,
-    pull,
-    carry,
-    refresh,
-    clearError: useLatestCallback(() => {
-      // A dismissed notice must not leave a stale target for a later pull to
-      // retry against — the user dismissed the guard, not just the sentence.
-      pendingSwitchTarget.current = null;
-      setNotice(null);
-    }, []),
-  };
+  const clearError = useLatestCallback(() => {
+    // A dismissed notice must not leave a stale target for a later pull to
+    // retry against — the user dismissed the guard, not just the sentence.
+    pendingSwitchTarget.current = null;
+    setNotice(null);
+  }, []);
+
+  return useMemo(
+    () => ({
+      info,
+      notice,
+      switching,
+      pulling,
+      carrying,
+      switchTo,
+      pull,
+      carry,
+      refresh,
+      clearError,
+    }),
+    [
+      info,
+      notice,
+      switching,
+      pulling,
+      carrying,
+      switchTo,
+      pull,
+      carry,
+      refresh,
+      clearError,
+    ],
+  );
 }

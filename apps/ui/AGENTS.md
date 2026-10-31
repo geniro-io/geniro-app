@@ -61,7 +61,7 @@ The rules live in `.claude/rules/renderer-*.md`; start from `renderer-components
 
 ### Chats
 
-**The transcript is a window.** A chat opens on its newest page (`Settings.historyPageSize`) and pages older through `beforeSeq`. Anything that describes the whole thread, a call conversation or an agent is read from the daemon, never folded from loaded `items` nor bounded by a capped listing (`.claude/rules/run-statistics.md`):
+**The transcript is a window.** A chat opens on its newest page (`Settings.historyPageSize`, capped at `REMOTE_HISTORY_PAGE` in a browser through the gateway: `App` passes `transcriptPageCap`) and pages older through `beforeSeq`. Anything that describes the whole thread, a call conversation or an agent is read from the daemon, never folded from loaded `items` nor bounded by a capped listing (`.claude/rules/run-statistics.md`):
 
 - Run state (`useRunState`, `GET /v1/chats/:runId/state`).
 - Spend (`useChatTotals`, and the nodes route for workflows).

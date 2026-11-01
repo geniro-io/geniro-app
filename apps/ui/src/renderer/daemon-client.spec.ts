@@ -337,6 +337,21 @@ describe('parseRunStatus — the run_status twin', () => {
     expect(skewed).not.toHaveProperty('seenAt');
   });
 
+  it('carries the run’s lead, a null included, and drops one that is not a string', () => {
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, currentLead: 'bob' }),
+    ).toMatchObject({ currentLead: 'bob' });
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, currentLead: null }),
+    ).toMatchObject({ currentLead: null });
+    expect(
+      parseRunStatus({ runId: 'r1', status: null, currentLead: 3 }),
+    ).not.toHaveProperty('currentLead');
+    expect(parseRunStatus({ runId: 'r1', status: null })).not.toHaveProperty(
+      'currentLead',
+    );
+  });
+
   it('carries the monitors-changed marker, and drops one that is not a number', () => {
     expect(
       parseRunStatus({ runId: 'r1', status: null, monitorsChangedAt: 1700 }),

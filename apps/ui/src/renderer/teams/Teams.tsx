@@ -153,9 +153,8 @@ const MODE_ITEMS: MenuGroup[] = [
       {
         value: 'relay',
         label: 'Relay',
-        subLabel: 'Each stage passes to its responsible members',
-        hint: 'coming soon',
-        disabled: true,
+        subLabel:
+          "Each stage's first responsible member leads it, then hands the run on",
       },
     ],
   },
@@ -1546,16 +1545,24 @@ export function Teams({
                   }
                 />
                 {team.mode === 'relay' ? (
-                  <p className="text-xs text-warning">
-                    Relay teams cannot run yet. Switch to One lead to run this
-                    team.
+                  <p
+                    data-slot="relay-note"
+                    className="text-xs text-muted-foreground">
+                    Each stage is led by its first responsible member, who can
+                    call the others for help. Finishing a stage hands the run to
+                    the next stage's lead, and your messages go to whoever leads
+                    now.
                   </p>
                 ) : null}
               </Field>
               <Field
                 label="Handled by"
                 htmlFor="team-trigger"
-                hint="The member the first message goes to. It runs the job and calls the others.">
+                hint={
+                  team.mode === 'relay'
+                    ? "The member that leads while no stage names a lead — the first message goes to the first stage's lead when it has one."
+                    : 'The member the first message goes to. It runs the job and calls the others.'
+                }>
                 <Select
                   id="team-trigger"
                   aria-label="Member that handles the first message"

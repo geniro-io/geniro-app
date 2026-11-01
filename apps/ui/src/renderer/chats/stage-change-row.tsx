@@ -4,6 +4,7 @@ import {
   type LucideIcon,
   RotateCcw,
   TriangleAlert,
+  UserRoundCheck,
 } from 'lucide-react';
 import {
   createContext,
@@ -73,6 +74,7 @@ const STAGE_ACTION_VIEW: Record<
     Icon: TriangleAlert,
     tone: 'destructive',
   },
+  handoff: { verb: 'handed to', Icon: UserRoundCheck, tone: 'primary' },
 };
 
 export function stageChangeHeadline(action: StageChangeAction): string {
@@ -187,6 +189,8 @@ export function stageChangeSuperseded(
       return (
         progress.stages.find((s) => s.id === change.stageId)?.rev !== change.rev
       );
+    case 'handoff':
+      return false;
     default:
       return progress.rev > change.rev;
   }
@@ -196,6 +200,7 @@ export function StageChangeRow({
   change,
   actor,
   nextTitle,
+  leadName,
   time,
   superseded = false,
   memoryKey,
@@ -203,6 +208,8 @@ export function StageChangeRow({
   change: StageChangePayload;
   actor: string;
   nextTitle?: string;
+  /** A hand-off's new lead, by name. */
+  leadName?: string;
   time?: string;
   superseded?: boolean;
   memoryKey?: string;
@@ -237,6 +244,16 @@ export function StageChangeRow({
               className={verbVariants({ tone, superseded })}>
               {verb}
             </span>
+            {change.action === 'handoff' && change.lead !== undefined ? (
+              <>
+                {' '}
+                <span
+                  data-slot="stage-lead"
+                  className="font-semibold text-foreground">
+                  {leadName ?? change.lead}
+                </span>
+              </>
+            ) : null}
           </p>
           {change.next === undefined ? null : (
             <StageBranch title={nextTitle ?? change.next} />

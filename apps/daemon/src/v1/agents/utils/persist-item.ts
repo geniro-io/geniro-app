@@ -271,5 +271,6 @@ export function runToWire(
     // earliest announcements.
     taskList: readRunTaskList(run.taskList),
     stages: readRunStageProgress(run.stageProgress),
+    currentLead: run.currentLead,
   };
 }

@@ -82,6 +82,7 @@ const run1: ChatRun = {
   taskList: [],
   stages: null,
   resetWakes: [],
+  currentLead: null,
 };
 const run2: ChatRun = { ...run1, id: 'r2', title: 'Other chat' };
 
@@ -1872,6 +1873,7 @@ describe('useChatRun', () => {
         runId: 'r1',
         status: null,
         resetWakes: [],
+        currentLead: null,
       } as RunStatusEvent);
     });
     expect(harness.state().runs.find((r) => r.id === 'r1')?.resetWakes).toEqual(

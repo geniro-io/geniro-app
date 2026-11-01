@@ -2104,12 +2104,20 @@ export type StageMoveResult =
       progress: StageProgress;
       resets: string[];
       payload: StageChangePayload;
+      /** Who leads the run after the move, and who led it before. */
+      lead: string | null;
+      previousLead: string | null;
     }
   | {
       ok: false;
       code: StageRefusalCode;
       message: string;
     };
+
+/** A move that was written, with who made it — what `StageService.onMoved` listeners are told. */
+export type StageMoved = Extract<StageMoveResult, { ok: true }> & {
+  actor: StageActor;
+};
 
 export const StageMoveResultSchema = z.object({
   progress: StageProgressSchema,

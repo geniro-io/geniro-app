@@ -9,6 +9,7 @@ import type { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { HostWakeBus } from '../../agents/services/host-wake.bus';
 import { member, teamOf } from '../__tests__/team-builders';
 import type { StageMoveResult, Team } from '../teams.types';
+import type { StageMoved } from '../teams.types';
 import type { StageService } from './stage.service';
 import { StageWakeService } from './stage-wake.service';
 import type { TeamExecutorService } from './team-executor.service';
@@ -29,6 +30,8 @@ const PROGRESS: StageProgress = {
 
 const REOPENED: Extract<StageMoveResult, { ok: true }> = {
   ok: true,
+  lead: 'lead',
+  previousLead: 'lead',
   team: TEAM,
   stages: TEAM.stages!,
   progress: PROGRESS,
@@ -43,7 +46,12 @@ const REOPENED: Extract<StageMoveResult, { ok: true }> = {
   },
 };
 
-type Note = { action: 'nudge' | 'stalled'; stageId: string; rev: number };
+type Note = {
+  action: 'nudge' | 'stalled' | 'handoff';
+  stageId: string;
+  rev: number;
+  lead?: string;
+};
 
 function setUp(options: {
   result?: StageMoveResult;
@@ -64,9 +72,13 @@ function setUp(options: {
   notified: RunStatusEvent[];
   settled: ((runId: string) => void)[];
   setCachedRev: (rev: number) => void;
+  setCached: (cached: { rev: number; leadId: string | null }) => void;
   bumpGeneration: () => void;
+  moved: ((runId: string, moved: StageMoved) => void)[];
 } {
+  const moved: ((runId: string, moved: StageMoved) => void)[] = [];
   let cachedRev = (options.progress ?? PROGRESS).rev;
+  let cachedLead: string | null = 'lead';
   let generation = 0;
   const notes: Note[] = [...(options.notes ?? [])];
   const notified: RunStatusEvent[] = [];
@@ -92,20 +104,35 @@ function setUp(options: {
             stages: TEAM.stages!,
             progress: options.progress ?? PROGRESS,
           },
-    cached: () => ({ progress: { ...PROGRESS, rev: cachedRev } }),
+    cached: () => ({
+      progress: { ...PROGRESS, rev: cachedRev },
+      leadId: cachedLead,
+    }),
     generation: () => generation,
     isWaiting: async () => options.waiting === true,
     notesOf: async () => [...notes],
+    onMoved: (listener: (runId: string, moved: StageMoved) => void) => {
+      moved.push(listener);
+      return () => undefined;
+    },
+    requestOf: async () => 'ship the feature',
     note: async (
       _runId: string,
-      action: 'nudge' | 'stalled',
+      action: 'nudge' | 'stalled' | 'handoff',
       stage: { id: string },
       rev: number,
+      _text: string,
+      lead?: string,
     ) => {
       if (options.noteRefused === true) {
         return false;
       }
-      notes.push({ action, stageId: stage.id, rev });
+      notes.push({
+        action,
+        stageId: stage.id,
+        rev,
+        ...(lead === undefined ? {} : { lead }),
+      });
       return true;
     },
   } as unknown as StageService;
@@ -136,9 +163,14 @@ function setUp(options: {
     setCachedRev: (rev) => {
       cachedRev = rev;
     },
+    setCached: (cached) => {
+      cachedRev = cached.rev;
+      cachedLead = cached.leadId;
+    },
     bumpGeneration: () => {
       generation += 1;
     },
+    moved,
   };
 }
 
@@ -198,6 +230,8 @@ describe('StageWakeService.userMove', () => {
       result: {
         ...REOPENED,
         team: { ...TEAM, triggers: [] },
+        lead: null,
+        previousLead: null,
       },
     });
     const answer = await h.service.userMove('run-1', REQUEST, 'desktop', 2);
@@ -370,5 +404,131 @@ describe('StageWakeService.onModuleInit', () => {
     h.settled[0]!('run-1');
     await new Promise((resolve) => setImmediate(resolve));
     expect(h.notes).toEqual([{ action: 'nudge', stageId: 'build', rev: 3 }]);
+  });
+});
+
+describe('StageWakeService in relay mode', () => {
+  const RELAY: Team = teamOf(
+    [member('lead'), member('helper', { name: 'Helper' })],
+    {
+      mode: 'relay',
+      stages: [
+        {
+          id: 'build',
+          title: 'Build',
+          goal: 'built',
+          responsible: ['lead'],
+          next: ['review'],
+        },
+        {
+          id: 'review',
+          title: 'Review',
+          goal: 'approved',
+          responsible: ['helper'],
+        },
+      ],
+    },
+  );
+  const ON_REVIEW: StageProgress = {
+    rev: 1,
+    current: 'review',
+    position: { index: 2, total: 2 },
+    stages: [
+      {
+        id: 'build',
+        title: 'Build',
+        status: 'done',
+        next: ['review'],
+        by: { kind: 'agent', nodeId: 'lead' },
+        text: 'built it',
+        rev: 1,
+      },
+      { id: 'review', title: 'Review', status: 'current', next: [] },
+    ],
+  };
+  const COMPLETED: StageMoved = {
+    ok: true,
+    team: RELAY,
+    stages: RELAY.stages!,
+    progress: ON_REVIEW,
+    resets: [],
+    lead: 'helper',
+    previousLead: 'lead',
+    payload: {
+      action: 'complete',
+      stageId: 'build',
+      stageTitle: 'Build',
+      text: 'built it',
+      rev: 1,
+      by: { kind: 'agent', nodeId: 'lead' },
+    },
+    actor: { kind: 'agent', nodeId: 'lead' },
+  };
+
+  it('wakes the stage lead, not the trigger member, in relay mode', async () => {
+    const h = setUp({ canWake: true, result: COMPLETED });
+    const answer = await h.service.userMove(
+      'run-1',
+      { action: 'complete', stage: 'build', text: 'looks done' },
+      'desktop',
+      0,
+    );
+    expect(answer).toEqual({ progress: ON_REVIEW, woke: true, hasLead: true });
+    expect(h.published).toHaveLength(1);
+    const [wake] = h.published;
+    expect(wake!.owner.memberId).toBe('helper');
+    expect(wake!.prompt).toContain(
+      'You (Helper) lead the run now, handed over from lead.',
+    );
+    expect(wake!.prompt).toContain('The user marked done the stage Build');
+    expect(wake!.prompt).toContain('- Build — done by lead: "built it"');
+    expect(wake!.row.message).toBe('Handed the run to Helper with your reason');
+    expect(h.notes).toEqual([
+      { action: 'handoff', stageId: 'review', rev: 1, lead: 'helper' },
+    ]);
+  });
+
+  it('hands the run on after an agent move that changes the lead', async () => {
+    const h = setUp({ canWake: true });
+    h.service.onModuleInit();
+    h.moved[0]!('run-1', COMPLETED);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(h.published.map((wake) => wake.owner.memberId)).toEqual(['helper']);
+    expect(h.notes).toEqual([
+      { action: 'handoff', stageId: 'review', rev: 1, lead: 'helper' },
+    ]);
+  });
+
+  it.each<[string, StageMoved]>([
+    ['the lead stays the same', { ...COMPLETED, previousLead: 'helper' }],
+    [
+      'the team runs in lead mode',
+      { ...COMPLETED, team: { ...RELAY, mode: 'lead' } },
+    ],
+    [
+      'the user made the move',
+      { ...COMPLETED, actor: { kind: 'user', via: 'desktop' } },
+    ],
+  ])('hands nothing on when %s', async (_why, moved) => {
+    const h = setUp({ canWake: true });
+    h.service.onModuleInit();
+    h.moved[0]!('run-1', moved);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(h.published).toEqual([]);
+    expect(h.notes).toEqual([]);
+  });
+
+  it('withdraws a held hand-off once the run moved on or another member leads', async () => {
+    const h = setUp({ canWake: true });
+    h.service.onModuleInit();
+    h.moved[0]!('run-1', COMPLETED);
+    await new Promise((resolve) => setImmediate(resolve));
+    const [wake] = h.published;
+    h.setCached({ rev: 1, leadId: 'helper' });
+    expect(wake!.withdrawn?.()).toBe(false);
+    h.setCached({ rev: 2, leadId: 'helper' });
+    expect(wake!.withdrawn?.()).toBe(true);
+    h.setCached({ rev: 1, leadId: 'lead' });
+    expect(wake!.withdrawn?.()).toBe(true);
   });
 });

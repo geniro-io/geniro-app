@@ -22,6 +22,7 @@ import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { MonitorRegistry } from '../../agents/services/monitor.registry';
 import { RunWriteQueue } from '../../agents/services/run-write.queue';
 import { parseJsonColumn } from '../../agents/utils/json-util';
+import { messageText } from '../../agents/utils/message-preview';
 import { persistItemAndEmit } from '../../agents/utils/persist-item';
 import { readPersistedResetWakes } from '../../agents/utils/run-reset-wakes';
 import {
@@ -31,6 +32,7 @@ import {
 import type { Run } from '../../runs/entity/run.entity';
 import type {
   StageMove,
+  StageMoved,
   StageMoveRequest,
   StageMoveResult,
   StageRefusalCode,
@@ -43,7 +45,7 @@ import {
   MAX_STAGE_TEXT_LENGTH,
 } from '../utils/stage-text';
 import { walkableStages } from '../utils/stage-validate';
-import { triggerMemberId } from '../utils/team-roster';
+import { currentLeadOf } from '../utils/team-roster';
 import { RunTeamService } from './run-team.service';
 
 export const STAGE_COLUMN_RETRY_MS = 30_000;
@@ -63,7 +65,11 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
   private readonly unsynced = new Set<string>();
   private readonly retries = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly announcedRevs = new Map<string, number>();
+  private readonly announcedLeads = new Map<string, string | null>();
   private readonly generations = new Map<string, number>();
+  private readonly movedListeners = new Set<
+    (runId: string, moved: StageMoved) => void
+  >();
 
   constructor(
     private readonly em: EntityManager,
@@ -115,7 +121,15 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
       this.drop(runId);
       this.generations.delete(runId);
       this.announcedRevs.delete(runId);
+      this.announcedLeads.delete(runId);
     });
+  }
+
+  onMoved(listener: (runId: string, moved: StageMoved) => void): () => void {
+    this.movedListeners.add(listener);
+    return () => {
+      this.movedListeners.delete(listener);
+    };
   }
 
   generation(runId: string): number {
@@ -159,7 +173,12 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
         const again = this.cache.get(runId);
         if (again !== undefined) {
           if (this.unsynced.has(runId)) {
-            await this.sync(runId, again.progress, this.em.fork());
+            await this.sync(
+              runId,
+              again.progress,
+              again.leadId,
+              this.em.fork(),
+            );
           }
           return again;
         }
@@ -177,14 +196,14 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
           return null;
         }
         const progress = foldStages(stages, await this.movesOf(runId, em));
-        if (readRunStageProgress(run.stageProgress)?.rev !== progress.rev) {
-          await this.sync(runId, progress, em);
+        const leadId = currentLeadOf(team, progress);
+        if (
+          readRunStageProgress(run.stageProgress)?.rev !== progress.rev ||
+          run.currentLead !== leadId
+        ) {
+          await this.sync(runId, progress, leadId, em);
         }
-        const loaded = {
-          stages,
-          progress,
-          leadId: triggerMemberId(team),
-        };
+        const loaded = { stages, progress, leadId };
         if (run.archivedAt === null) {
           this.cache.set(runId, loaded);
         }
@@ -224,9 +243,10 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
       }
       const moves = await this.movesOf(runId, em);
       const before = foldStages(stages, moves);
+      const previousLead = currentLeadOf(team, before);
       const column = readRunStageProgress(run.stageProgress);
       if (column !== null && column.rev !== before.rev) {
-        await this.sync(runId, before, em);
+        await this.sync(runId, before, previousLead, em);
       }
       if (
         options.expectedRev !== undefined &&
@@ -285,22 +305,40 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
         ...moves,
         toMove(payload, row.createdAt),
       ]);
-      await this.sync(runId, progress, em);
-      this.cache.set(runId, {
+      const lead = currentLeadOf(team, progress);
+      await this.sync(runId, progress, lead, em);
+      this.cache.set(runId, { stages, progress, leadId: lead });
+      const moved: StageMoved = {
+        ok: true,
         stages,
+        team,
         progress,
-        leadId: triggerMemberId(team),
-      });
-      return { ok: true, stages, team, progress, resets, payload };
+        resets,
+        payload,
+        lead,
+        previousLead,
+        actor,
+      };
+      for (const listener of this.movedListeners) {
+        try {
+          listener(runId, moved);
+        } catch (error) {
+          this.logger.error(
+            `run ${runId}: a stage move listener failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      return moved;
     });
   }
 
   async note(
     runId: string,
-    action: 'nudge' | 'stalled',
+    action: 'nudge' | 'stalled' | 'handoff',
     stage: TeamStage,
     rev: number,
     text: string,
+    lead?: string,
   ): Promise<boolean> {
     return this.writes.run(runId, async () => {
       const em = this.em.fork();
@@ -329,11 +367,17 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
             text,
             rev,
             by: { kind: 'system' },
+            ...(lead === undefined ? {} : { lead }),
           } satisfies StageChangePayload,
         },
       );
       return true;
     });
+  }
+
+  async requestOf(runId: string): Promise<string | null> {
+    const row = await this.itemDao.firstUserMessage(runId, this.em.fork());
+    return row === null ? null : messageText(row.payload);
   }
 
   async notesOf(
@@ -379,7 +423,8 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
       if (
         payload === null ||
         payload.action === 'nudge' ||
-        payload.action === 'stalled'
+        payload.action === 'stalled' ||
+        payload.action === 'handoff'
       ) {
         return [];
       }
@@ -390,14 +435,24 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
   private async sync(
     runId: string,
     progress: StageProgress,
+    lead: string | null,
     em: EntityManager,
   ): Promise<void> {
-    const stored = await this.store(runId, progress, em);
-    if (this.announcedRevs.get(runId) !== progress.rev) {
+    const stored = await this.store(runId, progress, lead, em);
+    if (
+      this.announcedRevs.get(runId) !== progress.rev ||
+      this.announcedLeads.get(runId) !== lead
+    ) {
       this.announcedRevs.set(runId, progress.rev);
+      this.announcedLeads.set(runId, lead);
       const announced = readRunStageProgress(writeRunStageProgress(progress));
       if (announced !== null) {
-        this.bus.publishRunStatus({ runId, status: null, stages: announced });
+        this.bus.publishRunStatus({
+          runId,
+          status: null,
+          stages: announced,
+          currentLead: lead,
+        });
       }
     }
     if (stored) {
@@ -413,7 +468,12 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
         void this.writes.run(runId, async () => {
           const cached = this.cache.get(runId);
           if (cached !== undefined && this.unsynced.has(runId)) {
-            await this.sync(runId, cached.progress, this.em.fork());
+            await this.sync(
+              runId,
+              cached.progress,
+              cached.leadId,
+              this.em.fork(),
+            );
           }
         });
       }, STAGE_COLUMN_RETRY_MS);
@@ -425,12 +485,17 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
   private async store(
     runId: string,
     progress: StageProgress,
+    currentLead: string | null,
     em: EntityManager,
   ): Promise<boolean> {
     const stageProgress = writeRunStageProgress(progress);
     let stored = true;
     try {
-      await this.runDao.updateWithoutActivity(runId, { stageProgress }, em);
+      await this.runDao.updateWithoutActivity(
+        runId,
+        { stageProgress, currentLead },
+        em,
+      );
     } catch (error) {
       stored = false;
       this.logger.error(

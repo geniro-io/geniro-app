@@ -4,6 +4,7 @@ import {
   GitCompare,
   GitPullRequest,
   NotebookPen,
+  UserRoundCheck,
   Workflow as WorkflowIcon,
 } from 'lucide-react';
 import { useContext } from 'react';
@@ -870,6 +871,35 @@ export function TaskListChip({
 
 /** How many of the newest notes the chip's panel previews. */
 const TEAM_NOTES_PREVIEW = 5;
+
+/**
+ * Who a relay team run's messages go to now — the lead of its current stage.
+ * A reading, not a control: the daemon moves it with each hand-off.
+ */
+export function LeadChip({
+  name,
+}: {
+  name: string | null;
+}): React.JSX.Element | null {
+  if (name === null) {
+    return null;
+  }
+  return (
+    <span
+      data-slot="lead-chip"
+      title={`Your messages go to ${name}, who leads the current stage`}
+      className={cn(SHELF_CHIP_CLASS, 'max-w-[14rem] gap-1 text-xs')}>
+      <UserRoundCheck
+        aria-hidden="true"
+        className="size-3 shrink-0 text-primary"
+      />
+      <span className="shrink-0 text-muted-foreground">Now leading:</span>
+      <span className="min-w-0 truncate font-medium text-foreground">
+        {name}
+      </span>
+    </span>
+  );
+}
 
 /**
  * The run's team notes as a shelf chip: a count, and on a press the newest

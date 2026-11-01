@@ -1708,6 +1708,23 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
+  /** The first thing the user said in this run — its request. */
+  async firstUserMessage(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'payload'> | null> {
+    const [row] = await this.getRepo(txEm).find(
+      { runId, kind: 'message', role: 'user' },
+      {
+        orderBy: { seq: 'asc' },
+        limit: 1,
+        fields: ['seq', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+    return row ?? null;
+  }
+
   /**
    * The newest thing the USER said in this run — what a retry re-sends on a CLI
    * that cannot reopen a conversation without a prompt.

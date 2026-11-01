@@ -15,6 +15,7 @@ import {
   ComposerShelf,
   FolderChangesChip,
   formatContinueTime,
+  LeadChip,
   type OpenCallChipRow,
   ResetWakeChip,
   RunningCallChips,
@@ -1365,5 +1366,30 @@ describe('TeamNotesChip', () => {
         ?.click(),
     );
     expect(onOpen).toHaveBeenCalledExactlyOnceWith(null);
+  });
+});
+
+describe('LeadChip', () => {
+  function mount(name: string | null): void {
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    act(() => root.render(<LeadChip name={name} />));
+  }
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it('says who leads the relay run now, and draws nothing without a lead', () => {
+    mount('Ada');
+    const chip = container.querySelector('[data-slot="lead-chip"]');
+    expect(chip?.textContent).toBe('Now leading:Ada');
+    expect(chip?.getAttribute('title')).toBe(
+      'Your messages go to Ada, who leads the current stage',
+    );
+    act(() => root.render(<LeadChip name={null} />));
+    expect(container.querySelector('[data-slot="lead-chip"]')).toBeNull();
   });
 });

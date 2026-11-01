@@ -6,6 +6,7 @@ import type { AgentThread } from './agent-activity';
 import {
   ComposerShelf,
   FolderChangesChip,
+  LeadChip,
   type OpenCallChipRow,
   RunningCallChips,
   RunningMonitorChips,
@@ -216,6 +217,23 @@ export const OnTheShelf: Story = {
           summary={{ files: 3, added: 26, removed: 1 }}
           onOpen={() => {}}
         />
+        <ThreadPullRequestChips results={[pullRequest]} />
+      </ComposerShelf>
+    </div>
+  ),
+};
+
+export const RelayLeadOnTheShelf: Story = {
+  render: (args) => (
+    <div className="w-[720px]">
+      <ComposerShelf
+        status={
+          <>
+            <TeamNotesChip {...args} />
+            <StageProgressChip progress={stages} />
+          </>
+        }>
+        <LeadChip name="Backend Engineer" />
         <ThreadPullRequestChips results={[pullRequest]} />
       </ComposerShelf>
     </div>

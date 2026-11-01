@@ -3732,6 +3732,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const moved = new MoveStageTool(
       stageService({ runId: 'run-1', memberId: 'lead' }, async () => ({
         ok: true,
+        lead: 'lead',
+        previousLead: 'lead',
         team: teamOf([member('lead')], { name: 'w' }),
         stages: [
           { id: 'build', title: 'Build', goal: 'built', next: ['review'] },

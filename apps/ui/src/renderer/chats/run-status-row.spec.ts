@@ -62,4 +62,14 @@ describe('runStatusRowFields', () => {
     expect(runStatusRowFields(announce({ stages }))).toEqual({ stages });
     expect(runStatusRowFields(announce())).not.toHaveProperty('stages');
   });
+
+  it('writes the run’s lead, a null included, and leaves it alone when absent', () => {
+    expect(runStatusRowFields(announce({ currentLead: null }))).toEqual({
+      currentLead: null,
+    });
+    expect(runStatusRowFields(announce({ currentLead: 'bob' }))).toEqual({
+      currentLead: 'bob',
+    });
+    expect(runStatusRowFields(announce())).not.toHaveProperty('currentLead');
+  });
 });

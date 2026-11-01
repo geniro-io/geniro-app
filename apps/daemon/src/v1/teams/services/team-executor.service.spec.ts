@@ -78,6 +78,7 @@ import type { ArtifactStoreService } from '../../agents/services/artifact-store.
 import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
 import { ChatActionsService } from '../../agents/services/chat-actions.service';
 import type { ChatUploadStoreService } from '../../agents/services/chat-upload-store.service';
+import { HostWakeBus } from '../../agents/services/host-wake.bus';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
@@ -127,9 +128,11 @@ import {
 } from '../utils/callee-text';
 import { callerKey } from '../utils/caller-key';
 import { CallBroker } from './call-broker.service';
+import { HostWakeGraphDelivery } from './host-wake-graph-delivery.service';
 import { InstructionSizesService } from './instruction-sizes.service';
 import { RunTeamService } from './run-team.service';
 import { StageService } from './stage.service';
+import { StageWakeService } from './stage-wake.service';
 import { TeamExecutorService } from './team-executor.service';
 import type { TeamStoreService } from './team-store.service';
 
@@ -285,6 +288,18 @@ class FakeItemDao {
     return this.items
       .filter((item) => item.runId === runId && item.kind === 'stage_change')
       .sort((a, b) => a.seq - b.seq);
+  }
+  async firstUserMessage(runId: string): Promise<Item | null> {
+    return (
+      this.items
+        .filter(
+          (item) =>
+            item.runId === runId &&
+            item.kind === 'message' &&
+            item.role === 'user',
+        )
+        .sort((a, b) => a.seq - b.seq)[0] ?? null
+    );
   }
   async teamNoteRows(runId: string): Promise<Item[]> {
     return this.items
@@ -1996,7 +2011,7 @@ describe('TeamExecutorService', () => {
       service.assertRunnable(
         teamOf([member('a')], { name: 'relay', mode: 'relay' }),
       ),
-    ).rejects.toMatchObject({ errorCode: 'TEAM_MODE_UNAVAILABLE' });
+    ).resolves.toMatchObject({ dropped: [] });
     await expect(
       service.assertRunnable(teamOf([member('a')], { name: 'ok' })),
     ).resolves.toMatchObject({ dropped: [] });
@@ -17073,5 +17088,313 @@ describe('TeamExecutorService — team stages', () => {
     expect(error).toHaveBeenCalledWith(
       expect.stringContaining('a settle listener failed: listener broke'),
     );
+  });
+});
+
+describe('TeamExecutorService — relay mode', () => {
+  const RELAY: Team = teamOf(
+    [
+      member('ada', { name: 'Ada', instructions: 'You Ada.' }),
+      member('bob', { name: 'Bob', instructions: 'You Bob.' }),
+      member('cy', { name: 'Cy', instructions: 'You Cy.' }),
+    ],
+    {
+      name: 'relay',
+      mode: 'relay',
+      stages: [
+        {
+          id: 'plan',
+          title: 'Plan',
+          goal: 'a plan',
+          responsible: ['ada'],
+          next: ['build'],
+        },
+        {
+          id: 'build',
+          title: 'Build',
+          goal: 'built',
+          responsible: ['bob', 'cy'],
+          next: ['review'],
+        },
+        {
+          id: 'review',
+          title: 'Review',
+          goal: 'approved',
+          responsible: ['bob'],
+        },
+      ],
+    },
+  );
+
+  /** A harness with the stage wakes and the host-wake delivery wired, as the module wires them. */
+  function relaySetup() {
+    const harness = setup();
+    const wakes = new HostWakeBus();
+    new HostWakeGraphDelivery(
+      wakes,
+      harness.service,
+      harness.sessions,
+    ).onModuleInit();
+    new StageWakeService(
+      harness.stages,
+      harness.service,
+      wakes,
+      { publishRunStatus: () => undefined } as unknown as AgentEventBus,
+      harness.teamNotes,
+    ).onModuleInit();
+    return harness;
+  }
+
+  const handOffRows = (itemDao: FakeItemDao, runId: string) =>
+    itemDao.items
+      .filter((item) => item.runId === runId && item.kind === 'stage_change')
+      .map((item) => JSON.parse(item.payload) as Record<string, unknown>)
+      .filter((payload) => payload.action === 'handoff');
+
+  /** Answer every turn from `from` on, the nudge a settle may start included. */
+  async function answerAll(claude: FakeAdapter, from: number): Promise<void> {
+    for (let index = from; index < claude.starts.length; index += 1) {
+      completeTurn(claude.starts[index]!, `R${index}`);
+      await drain();
+    }
+  }
+
+  async function handedToBob() {
+    const harness = relaySetup();
+    const run = await harness.service.startRun({
+      slug: 'relay',
+      team: RELAY,
+      cwd: dir,
+      prompt: 'ship the feature',
+    });
+    await drain();
+    const ada = turnsOf(harness.claude, 'You Ada.')[0]!;
+    const moved = await harness.stages.move(
+      run.id,
+      { action: 'complete', stage: 'plan', text: 'planned it in PLAN.md' },
+      { kind: 'agent', nodeId: 'ada' },
+    );
+    expect(moved.ok).toBe(true);
+    await drain();
+    return { ...harness, run, ada };
+  }
+
+  it('hands the run to the next stage lead on move_stage with a brief', async () => {
+    const { claude, itemDao, runDao, run, ada } = await handedToBob();
+    expect(ada.input.prompt.startsWith('ship the feature')).toBe(true);
+    expect(ada.input.stageMapPrompt).toContain('led by Ada');
+
+    const [bob] = turnsOf(claude, 'You Bob.');
+    expect(bob).toBeDefined();
+    expect(bob!.input.prompt).toContain(
+      'You (Bob) lead the run now, handed over from Ada.',
+    );
+    expect(bob!.input.prompt).toContain('Now: Build (build) (2/3).');
+    expect(bob!.input.prompt).toContain('Involve: Cy');
+    expect(bob!.input.prompt).toContain(
+      'The run\'s request: "ship the feature"',
+    );
+    expect(bob!.input.prompt).toContain(
+      '- Plan — done by Ada: "planned it in PLAN.md"',
+    );
+    expect(bob!.input.resumeSessionId ?? null).toBeNull();
+    expect(handOffRows(itemDao, run.id)).toEqual([
+      expect.objectContaining({
+        lead: 'bob',
+        stageId: 'build',
+        by: { kind: 'system' },
+      }),
+    ]);
+    expect(runDao.runs.get(run.id)!.currentLead).toBe('bob');
+    expect(ada.sendUserMessage).not.toHaveBeenCalled();
+    completeTurn(ada, 'handed on');
+    completeTurn(bob!, 'building');
+    await drain();
+  });
+
+  it('keeps the same conversation when consecutive stages share a lead', async () => {
+    const { claude, itemDao, stages, run, ada } = await handedToBob();
+    const [bob] = turnsOf(claude, 'You Bob.');
+    bob!.emit({ type: 'session', sessionId: 'sess-bob' });
+    completeTurn(ada, 'handed on');
+    await drain();
+    const before = claude.starts.length;
+
+    const moved = await stages.move(
+      run.id,
+      { action: 'complete', stage: 'build', text: 'built it' },
+      { kind: 'agent', nodeId: 'bob' },
+    );
+    expect(moved).toMatchObject({ ok: true, lead: 'bob', previousLead: 'bob' });
+    await drain();
+    expect(claude.starts).toHaveLength(before);
+    expect(handOffRows(itemDao, run.id)).toHaveLength(1);
+    completeTurn(bob!, 'reviewing');
+    await drain();
+  });
+
+  it('routes a user message to the current lead', async () => {
+    const { claude, service, run, ada } = await handedToBob();
+    const [bob] = turnsOf(claude, 'You Bob.');
+    bob!.emit({ type: 'session', sessionId: 'sess-bob' });
+    await drain();
+
+    await service.sendMessage(run.id, 'use the old API', [], 'mid-1');
+    await drain();
+    expect(bob!.sendUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'use the old API' }),
+    );
+    expect(ada.sendUserMessage).not.toHaveBeenCalled();
+
+    await answerAll(claude, 0);
+    expect(turnsOf(claude, 'You Bob.').at(-1)!.input.prompt).toContain(
+      'Stage Build is still open',
+    );
+    await service.sendMessage(run.id, 'and add tests', [], 'after-1');
+    await drain();
+    const next = claude.starts.at(-1)!;
+    expect(next.input.systemPrompt).toBe('You Bob.');
+    expect(next.input.prompt.startsWith('and add tests')).toBe(true);
+    expect(next.input.resumeSessionId).toBe('sess-bob');
+    expect(turnsOf(claude, 'You Ada.')).toHaveLength(1);
+    completeTurn(next, 'done');
+    await drain();
+  });
+
+  it('records the first stage’s lead as the run’s lead, and continues an idle run only through the lead', async () => {
+    const { service, claude, runDao } = relaySetup();
+    const run = await service.startRun({
+      slug: 'relay',
+      team: { ...RELAY, triggers: [{ kind: 'first-message', member: 'cy' }] },
+      cwd: dir,
+      prompt: 'go',
+    });
+    expect(runDao.runs.get(run.id)!.currentLead).toBe('ada');
+    await drain();
+    expect(claude.starts.map((turn) => turn.input.systemPrompt)).toEqual([
+      'You Ada.',
+    ]);
+    await answerAll(claude, 0);
+    const before = claude.starts.length;
+
+    await expect(
+      service.continueAsHost(run.id, 'cy', 'wake cy', {
+        severity: 'info',
+        message: 'x',
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      service.continueAsHost(run.id, 'ada', 'The user reopened Plan', {
+        severity: 'info',
+        message: 'x',
+      }),
+    ).resolves.toBe(true);
+    await drain();
+    expect(claude.starts).toHaveLength(before + 1);
+    expect(claude.starts.at(-1)!.input.systemPrompt).toBe('You Ada.');
+    await answerAll(claude, before);
+  });
+
+  it('holds a message until the new lead’s hand-off turn has opened, so the brief comes first', async () => {
+    const { service, claude, stages } = relaySetup();
+    const run = await service.startRun({
+      slug: 'relay',
+      team: RELAY,
+      cwd: dir,
+      prompt: 'ship the feature',
+    });
+    await drain();
+    await stages.move(
+      run.id,
+      { action: 'complete', stage: 'plan', text: 'planned it' },
+      { kind: 'agent', nodeId: 'ada' },
+    );
+    await expect(
+      service.sendMessage(run.id, 'too early', [], 'early-1'),
+    ).rejects.toMatchObject({ errorCode: 'RUN_BUSY' });
+    await drain();
+    const [bob] = turnsOf(claude, 'You Bob.');
+    expect(bob!.input.prompt).toContain('You (Bob) lead the run now');
+    expect(bob!.input.prompt).not.toContain('too early');
+
+    await service.sendMessage(run.id, 'now it can', [], 'later-1');
+    await drain();
+    expect(bob!.sendUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'now it can' }),
+    );
+    await answerAll(claude, 0);
+  });
+
+  it('counts a lead the run returns to while its own turn still runs, and never a former lead woken by its monitor', async () => {
+    const { service, claude, stages, run, rootsEvents } = await handedToBob();
+    const roots = () =>
+      rootsEvents.filter((event) => event.runId === run.id).at(-1)
+        ?.rootsWorking;
+    const reopened = await stages.move(
+      run.id,
+      { action: 'reopen', stage: 'plan', text: 'redo the plan' },
+      { kind: 'agent', nodeId: 'bob' },
+    );
+    expect(reopened).toMatchObject({ ok: true, lead: 'ada' });
+    expect(roots()).toBe(1);
+    await answerAll(claude, 0);
+    expect(roots()).toBe(0);
+
+    await stages.move(
+      run.id,
+      { action: 'complete', stage: 'plan', text: 'planned again' },
+      { kind: 'agent', nodeId: 'ada' },
+    );
+    await drain();
+    await answerAll(claude, 0);
+    expect(roots()).toBe(0);
+    const before = claude.starts.length;
+    expect(
+      service.wakeConversation(run.id, 'ada', 'CI output', {
+        severity: 'info',
+        message: 'CI · monitor m1: 1 line.',
+        monitors: [],
+        woke: true,
+      }),
+    ).toBe('woken');
+    await drain();
+    expect(claude.starts.at(before)?.input.systemPrompt).toBe('You Ada.');
+    expect(roots()).toBe(0);
+    await answerAll(claude, before);
+  });
+
+  it('resumes a non-trigger lead after a daemon restart', async () => {
+    const { claude, callBroker, stages, run, itemDao } = await handedToBob();
+    const [bob] = turnsOf(claude, 'You Bob.');
+    bob!.emit({ type: 'session', sessionId: 'sess-bob' });
+    await answerAll(claude, 0);
+    callBroker.unregisterRun(run.id);
+    stages.forget(run.id);
+    await drain();
+    const walked = claude.starts.length;
+
+    callBroker.restoreResetWakes(run.id, [
+      {
+        instant: Date.now() - 120_000,
+        continuesAt: Date.now() - 60_000,
+        resetsAt: '6:10pm (UTC)',
+        owners: [{ owner: 'bob', calls: [{ callId: 'call-3', callee: 'Cy' }] }],
+      },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await drain();
+
+    const resumed = claude.starts[walked];
+    expect(resumed?.input.systemPrompt).toBe('You Bob.');
+    expect(resumed?.input.resumeSessionId).toBe('sess-bob');
+    expect(resumed?.input.prompt).toContain('thread: "call-3"');
+    expect(
+      itemDao.items.some(
+        (item) =>
+          item.runId === run.id && item.payload.includes('"unreachable"'),
+      ),
+    ).toBe(false);
+    completeTurn(resumed!, 'done');
+    await drain();
   });
 });

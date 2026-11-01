@@ -262,15 +262,15 @@ describe('TeamProposalService', () => {
   it('refuses what a run start would refuse, with the check’s own code', async () => {
     assertRunnable.mockRejectedValueOnce(
       new BadRequestException(
-        'TEAM_MODE_UNAVAILABLE',
-        'relay is not available',
+        'TEAM_TRIGGER_COUNT',
+        'a team needs exactly one trigger',
       ),
     );
 
     await expect(service.prepare({ team: TEAM })).resolves.toEqual({
       ok: false,
-      code: 'TEAM_MODE_UNAVAILABLE',
-      message: 'relay is not available',
+      code: 'TEAM_TRIGGER_COUNT',
+      message: 'a team needs exactly one trigger',
     });
     expect(assertRunnable).toHaveBeenCalledWith(TEAM);
     await expect(readdir(dir)).resolves.toEqual([]);

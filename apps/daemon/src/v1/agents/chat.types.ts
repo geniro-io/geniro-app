@@ -3915,7 +3915,7 @@ export const StageMoveActionSchema = z
 export type StageMoveAction = z.infer<typeof StageMoveActionSchema>;
 
 export const StageChangeActionSchema = z
-  .enum([...STAGE_MOVE_ACTIONS, 'nudge', 'stalled'])
+  .enum([...STAGE_MOVE_ACTIONS, 'nudge', 'stalled', 'handoff'])
   .meta({ id: 'StageChangeAction' });
 export type StageChangeAction = z.infer<typeof StageChangeActionSchema>;
 
@@ -3941,6 +3941,10 @@ export const StageChangePayloadSchema = z.object({
   text: z.string(),
   rev: z.number().int(),
   by: StageActorSchema,
+  lead: z
+    .string()
+    .optional()
+    .describe('a hand-off: the member that leads the run from this move on'),
 });
 export type StageChangePayload = z.infer<typeof StageChangePayloadSchema>;
 
@@ -5799,6 +5803,8 @@ export interface RunStatusEvent {
    */
   taskList?: RunTaskGroup[];
   stages?: StageProgress;
+  /** The team member a run's messages go to now; sent when it changes. */
+  currentLead?: string | null;
   /**
    * How long this run's agent has WORKED and how many tools it has called, as
    * the durable totals stand now — sent on a SETTLE alone.
@@ -6669,6 +6675,12 @@ export const RunWireSchema = z.object({
   stages: StageProgressSchema.nullable().describe(
     "Where the run stands in its team's stage graph, folded by the daemon from every stage change; null when the team has no stages",
   ),
+  currentLead: z
+    .string()
+    .nullable()
+    .describe(
+      "A team run's member that leads it now — the one a message goes to; null for a chat or a run started before the lead was recorded",
+    ),
   /**
    * This chat's worked milliseconds and tool count, TOTALLED across its turns.
    *

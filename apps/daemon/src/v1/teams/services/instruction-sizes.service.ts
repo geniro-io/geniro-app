@@ -21,7 +21,10 @@ import { stageMapOf } from '../utils/stage-text';
 import { calleesOf, onDemandMemberIds } from '../utils/team-roster';
 
 export interface InstructionSizesInput {
-  team: Pick<Team, 'members' | 'triggers' | 'instructionBlocks' | 'stages'>;
+  team: Pick<
+    Team,
+    'members' | 'triggers' | 'instructionBlocks' | 'stages' | 'mode'
+  >;
   customInstructions?: string;
   replyLanguage?: string;
   /** A board card's instructions — known only when measuring for one run. */

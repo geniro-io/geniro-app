@@ -495,6 +495,8 @@ export interface RunStatusEvent {
   taskList?: RunTaskGroup[];
   /** TWIN PARSER: RunStatusEvent.stages in the daemon. */
   stages?: StageProgress;
+  /** TWIN PARSER: RunStatusEvent.currentLead in the daemon. */
+  currentLead?: string | null;
   /**
    * The run's pending usage-limit continues, the whole list as it stands now.
    *
@@ -723,6 +725,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     pullRequests,
     taskList,
     stages,
+    currentLead,
     resetWakes,
     workedMs,
     toolCalls,
@@ -845,6 +848,9 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // snapshot that cleared it) is a real reading the chip has to act on.
     ...(Array.isArray(taskList) ? { taskList: readTaskGroups(taskList) } : {}),
     ...(readStages === null ? {} : { stages: readStages }),
+    ...(currentLead === null || typeof currentLead === 'string'
+      ? { currentLead }
+      : {}),
     // An array whatever it holds, the empty one included — see the field.
     ...(Array.isArray(resetWakes)
       ? { resetWakes: readResetWakes(resetWakes) }

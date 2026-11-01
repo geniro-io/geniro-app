@@ -161,6 +161,7 @@ import {
   ActiveWorkflowChips,
   ComposerShelf,
   FolderChangesChip,
+  LeadChip,
   type OpenCallChipRow,
   ResetWakeChip,
   RunningCallChips,
@@ -308,7 +309,7 @@ import {
 } from './task-payload';
 import { restoreTaskWorktree, sendRestoringWorktree } from './task-worktree';
 import { agentNameOf } from './team-note-author';
-import { rootAgentOf, triggerFedAgentIds } from './team-root';
+import { firstMessageMemberOf, rootAgentOf, runLeadOf } from './team-root';
 import { hasThreadNotes } from './thread-notes';
 import { forgetThread, writeThreadFlag } from './thread-ui-memory';
 import { TranscriptEntryView } from './transcript-entry';
@@ -694,19 +695,18 @@ interface RunTrigger {
 }
 
 function runTriggersOf(team: Team): RunTrigger[] {
-  return team.triggers.flatMap((trigger) => {
-    const member = team.members.find((m) => m.id === trigger.member);
-    return member === undefined
-      ? []
-      : [
-          {
-            id: trigger.member,
-            name: member.name,
-            trigger: 'first message',
-            agent: member.agent,
-          },
-        ];
-  });
+  const id = firstMessageMemberOf(team);
+  const member = team.members.find((m) => m.id === id);
+  return member === undefined
+    ? []
+    : [
+        {
+          id: member.id,
+          name: member.name,
+          trigger: 'first message',
+          agent: member.agent,
+        },
+      ];
 }
 
 export function Chats({
@@ -5144,24 +5144,41 @@ export function Chats({
      * so its rows need no identity (see {@link rootAgentOf}).
      */
     rootId: string | null;
-    /** Every agent the trigger feeds — see {@link triggerFedAgentIds}. */
-    feedIds: string[];
+    /** Whether the run's team hands stages between their leads. */
+    relay: boolean;
   }>({
     agents: [],
     triggers: [],
     allIds: new Set(),
     rootId: null,
-    feedIds: [],
+    relay: false,
   });
   /**
-   * The agent nodes a message written into the open TEAM run lands in —
-   * the daemon's `deliverFollowUp` hands it to exactly the agents its trigger
-   * feeds. Empty for a chat, and until the run's snapshot has loaded.
+   * The member a message written into the open team run goes to now — the
+   * run's lead (see {@link runLeadOf}); null for a chat and until the run's
+   * snapshot has loaded.
+   */
+  const runLead = activeRun?.teamId
+    ? runLeadOf(activeRun.currentLead, wfNodes.allIds, wfNodes.rootId)
+    : null;
+  /** A relay run's lead by name — what the shelf chip and the placeholder say; null otherwise. */
+  const relayLeadName =
+    wfNodes.relay && runLead !== null
+      ? (wfNodes.agents.find((agent) => agent.id === runLead)?.name ?? runLead)
+      : null;
+  const feedIds = useMemo(
+    (): string[] => (runLead === null ? [] : [runLead]),
+    [runLead],
+  );
+  /**
+   * The member a message written into the open TEAM run lands in — the run's
+   * current lead, which the daemon's `deliverFollowUp` hands it to. Empty for
+   * a chat, and until the run's snapshot has loaded.
    */
   const teamFeedAgents = useMemo((): TeamMember[] => {
-    const fed = new Set(wfNodes.feedIds);
+    const fed = new Set(feedIds);
     return wfNodes.agents.filter((node) => fed.has(node.id));
-  }, [wfNodes]);
+  }, [wfNodes, feedIds]);
   // ── The composer's `/` skill autocomplete ──────────────────────────────
   // Which agents the current composer's message reaches, under which account,
   // and in which folder. A new-run team target resolves through its
@@ -5699,7 +5716,7 @@ export function Chats({
         triggers: [],
         allIds: new Set(),
         rootId: null,
-        feedIds: [],
+        relay: false,
       });
       return;
     }
@@ -5717,7 +5734,7 @@ export function Chats({
           triggers: runTriggersOf(team),
           allIds: new Set(team.members.map((member) => member.id)),
           rootId: rootAgentOf(team),
-          feedIds: triggerFedAgentIds(team),
+          relay: team.mode === 'relay',
         });
         setRunStageDefinitions(team.stages ?? null);
       })
@@ -5730,7 +5747,7 @@ export function Chats({
           triggers: [],
           allIds: new Set(),
           rootId: null,
-          feedIds: [],
+          relay: false,
         });
         // A deleted team is not a failure to report as one: the request
         // worked, the graph is simply gone. Say that in the user's terms and
@@ -7487,7 +7504,7 @@ export function Chats({
    * prompted and the one the run is about. `agents[0]` is not that node: it is
    * whichever happens to be first. A graph with no single root (none,
    * or several) leaves it withheld, as does a team whose definition has not
-   * arrived yet — `wfNodes.rootId` is null in all three, and a run-level figure
+   * arrived yet — `runLead` is null in all three, and a run-level figure
    * invented for them would be a number about nothing.
    *
    * Three sources, freshest first. The live delta is this turn's latest
@@ -7523,9 +7540,9 @@ export function Chats({
       // Already resolved through `cardContextOf`'s own four-tier chain, so the
       // root's ring here and its card in the panel cannot disagree.
       const root =
-        wfNodes.rootId === null
+        runLead === null
           ? undefined
-          : agents.find((agent) => agent.id === wfNodes.rootId);
+          : agents.find((agent) => agent.id === runLead);
       return {
         tokens: root?.contextTokens ?? null,
         window: root?.contextWindowTokens ?? null,
@@ -7545,7 +7562,7 @@ export function Chats({
     items.length,
     liveText,
     recallContextReading,
-    wfNodes.rootId,
+    runLead,
   ]);
   /** Why the ring has no figure, when that is worth drawing — see `useContextRing`. */
   const awaitingReading = useContextRing({
@@ -7783,7 +7800,7 @@ export function Chats({
     // popover draws one block per agent, exactly as its task chip does.
     const subagentGroups: AgentSubagentGroup[] = [];
     let subagents = 0;
-    const rootAgentIds = activeRun?.teamId ? new Set(wfNodes.feedIds) : null;
+    const rootAgentIds = activeRun?.teamId ? new Set(feedIds) : null;
     for (const agent of agents) {
       if (rootAgentIds !== null && !rootAgentIds.has(agent.id)) {
         continue;
@@ -7912,7 +7929,7 @@ export function Chats({
     tasksByAgent,
     callChains,
     activeRun?.teamId,
-    wfNodes.feedIds,
+    feedIds,
   ]);
 
   /**
@@ -8995,6 +9012,7 @@ export function Chats({
             commit for (a plain folder, a checkout with no
             commits, a chat that predates the stamp), have no
             "since" to answer about. */}
+      <LeadChip name={relayLeadName} />
       {activeRun?.cwd !== null && activeRun?.startSha !== null ? (
         <FolderChangesChip
           summary={chatChanges.summary}
@@ -10058,7 +10076,9 @@ export function Chats({
                                 nodes={nodeMeta}
                                 chatAgentName={activeRun?.agentKind ?? null}
                                 soloAgent={soloAgent}
-                                soloNodeId={wfNodes.rootId}
+                                soloNodeId={
+                                  wfNodes.relay ? null : wfNodes.rootId
+                                }
                               />,
                             );
                           }
@@ -10334,6 +10354,7 @@ export function Chats({
                               working: streaming && !activeRunHeld,
                               team: Boolean(activeRun?.teamId),
                               narrow: narrowViewport,
+                              lead: relayLeadName,
                             }),
                             onKeyDown: (event) => {
                               if (handleSkillMenuKeys(event)) {
@@ -10650,12 +10671,8 @@ export function Chats({
                               {chatContext.tokens === null ? null : (
                                 <ContextMeter
                                   className="ml-1.5"
-                                  runId={
-                                    wfNodes.rootId === null
-                                      ? null
-                                      : activeRun.id
-                                  }
-                                  memberId={wfNodes.rootId}
+                                  runId={runLead === null ? null : activeRun.id}
+                                  memberId={runLead}
                                   contextTokens={chatContext.tokens}
                                   contextWindowTokens={chatContext.window}
                                   contextEstimated={chatContext.estimated}

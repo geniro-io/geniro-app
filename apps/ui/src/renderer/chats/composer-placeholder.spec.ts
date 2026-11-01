@@ -33,6 +33,15 @@ describe('followUpPlaceholder', () => {
     ).toBe('This chat is archived — unarchive it to continue.');
   });
 
+  it('names the lead a relay run’s message goes to', () => {
+    expect(
+      followUpPlaceholder({ ...IDLE, team: true, narrow: false, lead: 'Bob' }),
+    ).toBe('Message the team — it goes to Bob, who leads now…');
+    expect(
+      followUpPlaceholder({ ...IDLE, team: true, narrow: true, lead: 'Bob' }),
+    ).toBe('Message the team…');
+  });
+
   it('fits one line of a phone field', () => {
     const phone = [
       followUpPlaceholder({ ...IDLE, narrow: true }),

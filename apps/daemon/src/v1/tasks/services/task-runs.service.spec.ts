@@ -158,6 +158,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     taskList: [],
     resetWakes: [],
     stages: null,
+    currentLead: null,
   });
 
   const start = (over: Partial<StartTaskRun> = {}): StartTaskRun => ({

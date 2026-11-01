@@ -703,6 +703,15 @@ export class Run extends TimestampsEntity {
   stageProgress: string | null = null;
 
   /**
+   * The team member a team run's messages go to now (`currentLeadOf`): the
+   * trigger's member in `lead` mode, the current stage's lead in `relay`
+   * mode. Written at run start and with every stage progress write; null for
+   * a chat and for a run started before it was recorded.
+   */
+  @Property({ type: 'text', nullable: true })
+  currentLead: string | null = null;
+
+  /**
    * Which capture rule {@link pullRequestsScannedSeq} was reached under
    * (`PULL_REQUEST_SCAN_VERSION`), or null for a run scanned before rules were
    * versioned. A marker reached under another rule says nothing about what the

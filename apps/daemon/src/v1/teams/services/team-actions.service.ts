@@ -14,7 +14,7 @@ import { TeamExecutorService } from './team-executor.service';
  * `TeamChatService`'s reason: `TeamsModule` imports `AgentsModule`, so
  * only this side can reach the executor.
  *
- * A message goes where a typed one does — the agents the run's trigger feeds
+ * A message goes where a typed one does — the run's lead at the press
  * (`TeamExecutorService.sendMessage`) — never back to the publisher's own
  * conversation, which may have settled long before the press.
  */
@@ -52,8 +52,8 @@ export class TeamActionsService {
 /**
  * The press's message as the receiving agents read it: prefixed with who
  * published it whenever the publisher carries an `agentLabel`, which
- * `TeamExecutorService.registerActionPublishers` withholds only from the
- * run's sole trigger-fed agent speaking in its own conversation.
+ * `TeamExecutorService.registerActionPublishers` withholds only from a
+ * `lead`-mode run's lead speaking in its own conversation.
  */
 function attributed(text: string, action: LiveAction): string {
   const agent = action.publisher.agentLabel;

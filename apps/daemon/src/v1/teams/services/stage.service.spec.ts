@@ -44,7 +44,11 @@ interface Harness {
   service: StageService;
   log: string[];
   rows: { seq: number; payload: StageChangePayload }[];
-  run: { stageProgress: string | null; teamId: string | null };
+  run: {
+    stageProgress: string | null;
+    teamId: string | null;
+    currentLead?: string | null;
+  };
   announced: RunStatusEvent[];
   archive: () => Promise<void>;
   failColumn: boolean;
@@ -64,6 +68,7 @@ function setUp(
     resetWakes?: string | null;
     monitorRunning?: boolean;
     withLead?: boolean;
+    team?: Team;
   } = {},
 ): Harness {
   const harness: Harness = {
@@ -80,10 +85,12 @@ function setUp(
     changed: new Subject<RunWire[]>(),
     fresh: () => undefined as unknown as StageService,
   };
-  const team: Team = teamOf([member('lead')], {
-    ...(options.withLead === true ? {} : { triggers: [] }),
-    ...(stages !== null ? { stages } : {}),
-  });
+  const team: Team =
+    options.team ??
+    teamOf([member('lead')], {
+      ...(options.withLead === true ? {} : { triggers: [] }),
+      ...(stages !== null ? { stages } : {}),
+    });
   let seq = 0;
   let reads = 0;
   let archived = options.archived === true;
@@ -138,13 +145,14 @@ function setUp(
     },
     updateWithoutActivity: async (
       _id: string,
-      data: { stageProgress: string },
+      data: { stageProgress: string; currentLead: string | null },
     ) => {
       if (harness.failColumn) {
         throw new Error('the column is locked');
       }
       harness.log.push('column');
       harness.run.stageProgress = data.stageProgress;
+      harness.run.currentLead = data.currentLead;
     },
   } as unknown as RunDao;
   const seqs = {
@@ -898,5 +906,60 @@ describe('StageService generations', () => {
     await h.service.current('other-run');
 
     expect(h.service.cached('run-1')).toBeNull();
+  });
+});
+
+describe('StageService in relay mode', () => {
+  const RELAY = teamOf([member('lead'), member('fixer'), member('reviewer')], {
+    mode: 'relay',
+    stages: STAGES.map((stage) =>
+      stage.id === 'fix'
+        ? { ...stage, responsible: ['fixer'] }
+        : stage.id === 'review'
+          ? { ...stage, responsible: ['reviewer'] }
+          : { ...stage, responsible: ['lead'] },
+    ),
+  });
+
+  it('writes the lead with the progress, announces it, and rewrites a stale lead on a cold read', async () => {
+    const h = setUp(STAGES, { team: RELAY });
+    const moved = await h.service.move(
+      'run-1',
+      { action: 'complete', stage: 'investigation', next: 'fix', text: 'x' },
+      AGENT,
+    );
+    expect(moved).toMatchObject({
+      ok: true,
+      lead: 'fixer',
+      previousLead: 'lead',
+    });
+    expect(h.run.currentLead).toBe('fixer');
+    expect(h.announced.at(-1)).toMatchObject({ currentLead: 'fixer' });
+
+    h.run.currentLead = 'lead';
+    const before = h.announced.length;
+    const loaded = await h.fresh().current('run-1');
+    expect(loaded?.leadId).toBe('fixer');
+    expect(h.run.currentLead).toBe('fixer');
+    expect(h.announced.length).toBe(before + 1);
+  });
+
+  it('keeps a written move when a move listener throws', async () => {
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    const h = setUp(STAGES, { team: RELAY });
+    h.service.onMoved(() => {
+      throw new Error('listener boom');
+    });
+    const heard: string[] = [];
+    h.service.onMoved((_runId, moved) => heard.push(moved.lead ?? 'none'));
+    const moved = await h.service.move(
+      'run-1',
+      { action: 'complete', stage: 'investigation', next: 'fix', text: 'x' },
+      AGENT,
+    );
+    expect(moved.ok).toBe(true);
+    expect(h.rows).toHaveLength(1);
+    expect(h.run.currentLead).toBe('fixer');
+    expect(heard).toEqual(['fixer']);
   });
 });

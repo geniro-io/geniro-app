@@ -42,7 +42,7 @@ const reviewer = member('reviewer', {
 /** The Dev Team's shape: a manager that handles the first message, a reviewer that only answers calls. */
 const DEV_TEAM: Pick<
   Team,
-  'members' | 'triggers' | 'instructionBlocks' | 'stages'
+  'members' | 'triggers' | 'instructionBlocks' | 'stages' | 'mode'
 > = teamOf([manager, reviewer], {
   instructionBlocks: [
     {

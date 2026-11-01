@@ -61,6 +61,8 @@ describe('moveStageResultText', () => {
     const reply = moveStageResultText(
       {
         ok: true,
+        lead: 'coder',
+        previousLead: 'coder',
         team: teamOf([coder]),
         stages,
         progress: {

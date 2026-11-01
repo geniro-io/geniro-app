@@ -213,7 +213,11 @@ flowchart LR
 ![The team editor: the mode, who handles the first message, the members with the selected Manager's public role, private instructions and character, the instruction blocks with their audiences, and the stages](docs/screenshots/team-editor.png)
 
 - **Members, not wires.** Each member has a **name**, a public **role** (what it does — every other member reads it to decide whom to call), private **instructions** (how it works — only its own turns see them) and an optional **character** (its manner and tone). Nothing is wired: any member may call any other.
-- **One lead.** The team's trigger is your first message, and you choose the member that handles it. That member runs the job; the others work when called. A member never calls one that is waiting on its own answer, so calls cannot loop back on themselves.
+- **One lead or a relay.** Each team picks how its stages run:
+  - **One lead** (the default): the team's trigger is your first message, and you choose the member that handles it. That member runs the whole job; the others work when called.
+  - **Relay**: each stage is led by its first responsible member, who owns that stage, calls any teammate for help and closes it with `move_stage` and a short summary. Geniro then hands the run to the next stage's lead with a brief: the stage and its goal, your original request, what each finished stage left behind and the unread team notes. A **Now leading** chip above the composer shows who your messages go to, and the transcript marks each hand-off ("Build handed to Ada").
+
+  Either way, a member never calls one that is waiting on its own answer, so calls cannot loop back on themselves.
 - **Instruction blocks** hold text several members need, like a house style guide, addressed to **everyone** or to the members you pick.
 - **Stages** are the steps every run walks, each with how to work in it, its goal and the members responsible for it (the first one leads it).
 - **Agents talk to each other.** A member can `call_agent` a teammate, `message_agent` it mid-task, `await_agent` its answer, `answer_agent` its questions, or `cancel_agent` it when plans change. Each call's card, and each of an agent's conversations in the side panel, shows how long the called agent has worked in it, ticking while it works, beside its context and cost (when the agent has ended its turn and the call waits on its monitor or its own calls, the card says `waiting` and the clock stands); an analysis reads the same figure, so it can tell a callee that worked from one that waited.

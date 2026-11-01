@@ -8,7 +8,7 @@ export type LocalImageLoader = (path: string) => Promise<string>;
 /**
  * Reads one picture on the daemon and returns it as a `data:` URL, the one form
  * `<img>` can show under this app's CSP (`img-src 'self' data:`). The chat screen
- * and the workflow dock both load through here, so the route and the URL form have
+ * and the team dock both load through here, so the route and the URL form have
  * one owner.
  */
 export async function readLocalImageDataUrl(

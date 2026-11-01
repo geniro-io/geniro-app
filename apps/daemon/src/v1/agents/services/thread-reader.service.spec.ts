@@ -15,13 +15,13 @@ import {
 } from 'vitest';
 
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
-import { WorkflowSchema } from '../../graphs/graphs.types';
-import { workflowVersionOf } from '../../graphs/utils/workflow-version';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import type { ItemKind } from '../../runs/runs.types';
+import { TeamSchema } from '../../teams/teams.types';
+import { teamVersionOf } from '../../teams/utils/team-version';
 import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -662,8 +662,8 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     expect(answer.error).toBe('SOURCE_GONE');
   });
 
-  describe('a workflow analysis', () => {
-    async function workflowRun(
+  describe('a team analysis', () => {
+    async function teamRun(
       id: string,
       createdAt: number,
       title = `Run ${id}`,
@@ -672,7 +672,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       run.id = id;
       run.title = title;
       run.status = 'completed';
-      run.workflowId = 'team';
+      run.teamId = 'team';
       run.createdAt = new Date(T0 + createdAt);
       const fork = orm.em.fork();
       fork.persist(run);
@@ -710,7 +710,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       reviewRounds,
       acceptance,
       questionsAsked: 0,
-      workflowSlug: 'team',
+      teamSlug: 'team',
       nodeId: 'dev',
       conversationId: null,
     });
@@ -723,7 +723,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       sourceRunId: 'wf-new',
       snapshotSeq: 3,
       sourceWorking: false,
-      workflow: {
+      team: {
         slug: 'team',
         runs: [
           { runId: 'wf-new', snapshotSeq: 3, working: false },
@@ -734,8 +734,8 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     };
 
     beforeEach(async () => {
-      await workflowRun('wf-new', 2_000);
-      await workflowRun('wf-old', 1_000);
+      await teamRun('wf-new', 2_000);
+      await teamRun('wf-old', 1_000);
       await row('wf-new', 0, 'message', { text: 'go' }, 0, 'dev');
       await row('wf-new', 1, 'turn_complete', turn('opus', 3, 6_000), 6, 'dev');
       await row('wf-new', 2, 'turn_complete', turn('opus', 1, 2_000), 9, 'dev');
@@ -796,15 +796,15 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         ...first,
         nodes: [{ ...first.nodes[0]!, model: 'opus' }],
       };
-      const V1 = workflowVersionOf(WorkflowSchema.parse(first));
-      const V2 = workflowVersionOf(WorkflowSchema.parse(second));
+      const V1 = teamVersionOf(TeamSchema.parse(first));
+      const V2 = teamVersionOf(TeamSchema.parse(second));
 
       beforeEach(async () => {
         const fork = orm.em.fork();
         const newest = await fork.findOneOrFail(Run, { id: 'wf-new' });
-        newest.workflowSnapshot = JSON.stringify(second);
+        newest.teamSnapshot = JSON.stringify(second);
         const older = await fork.findOneOrFail(Run, { id: 'wf-old' });
-        older.workflowSnapshot = JSON.stringify(first);
+        older.teamSnapshot = JSON.stringify(first);
         await fork.flush();
       });
 
@@ -873,7 +873,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     });
 
     it('counts the questions put to the user up to each run’s snapshot', async () => {
-      await workflowRun('wf-q', 3_000);
+      await teamRun('wf-q', 3_000);
       const question = {
         toolName: 'AskUserQuestion',
         questions: [{ question: 'Ship it?' }],
@@ -889,7 +889,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           sourceRunId: 'wf-q',
           snapshotSeq: 3,
           sourceWorking: false,
-          workflow: {
+          team: {
             slug: 'team',
             runs: [{ runId: 'wf-q', snapshotSeq: 3, working: false }],
           },
@@ -905,7 +905,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     it("compares the runs and each node's models, every turn up to each run's own snapshot", async () => {
       const answer = await reader.read(scope, { view: 'runs' });
 
-      expect(answer.workflow).toBe('team');
+      expect(answer.team).toBe('team');
       expect(answer.runs).toEqual([
         expect.objectContaining({
           runId: 'wf-new',
@@ -979,7 +979,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       ]);
       const wider = {
         ...scope,
-        workflow: {
+        team: {
           slug: 'team',
           runs: [{ runId: 'wf-old', snapshotSeq: 4, working: false }],
         },
@@ -1017,7 +1017,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     it('pages a long comparison rather than dropping runs, and names a run with no rows yet', async () => {
       const many = Array.from({ length: 30 }, (_, index) => `wf-${index}`);
       for (const [index, id] of many.entries()) {
-        await workflowRun(id, 10_000 + index, `${id} ${'t'.repeat(600)}`);
+        await teamRun(id, 10_000 + index, `${id} ${'t'.repeat(600)}`);
         await row(id, 0, 'message', { text: 'go' }, 0, 'dev');
         for (let seq = 1; seq <= 3; seq += 1) {
           await row(
@@ -1030,10 +1030,10 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           );
         }
       }
-      await workflowRun('wf-empty', 9_000);
+      await teamRun('wf-empty', 9_000);
       const wide = {
         ...scope,
-        workflow: {
+        team: {
           slug: 'team',
           runs: [
             ...many.map((runId) => ({ runId, snapshotSeq: 3, working: false })),
@@ -1070,7 +1070,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       registerSecret(secret, 'github token');
       const many = Array.from({ length: 40 }, (_, index) => `wf-m${index}`);
       for (const [index, id] of many.entries()) {
-        await workflowRun(
+        await teamRun(
           id,
           20_000 + index,
           `${id} ${secret} ${'p'.repeat(index * 37)}`,
@@ -1080,7 +1080,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       }
       const wide = {
         ...scope,
-        workflow: {
+        team: {
           slug: 'team',
           runs: many.map((runId) => ({
             runId,
@@ -1154,10 +1154,10 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       expect(stranger.error).toBe('NOT_ANALYSED');
     });
 
-    it('names its own workflow to view=workflow and the save, with the newest run’s start copy only while that run exists', async () => {
+    it('names its own team to view=team and the save, with the newest run’s start copy only while that run exists', async () => {
       const fork = orm.em.fork();
       const newest = await fork.findOneOrFail(Run, { id: 'wf-new' });
-      newest.workflowSnapshot = 'name: Team';
+      newest.teamSnapshot = 'name: Team';
       newest.customInstructions = 'MINE';
       newest.replyLanguage = 'Russian';
       newest.taskInstructions = 'CARD';
@@ -1165,7 +1165,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       newest.memoryIndex = 'INDEX';
       await fork.flush();
 
-      expect(await reader.analysedWorkflowOf(scope)).toEqual({
+      expect(await reader.analysedTeamOf(scope)).toEqual({
         slug: 'team',
         snapshot: 'name: Team',
         instructions: {
@@ -1177,14 +1177,14 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         },
       });
       expect(
-        await reader.analysedWorkflowOf({ ...scope, sourceRunId: 'wf-gone' }),
+        await reader.analysedTeamOf({ ...scope, sourceRunId: 'wf-gone' }),
       ).toEqual({ slug: 'team', snapshot: null, instructions: null });
       const older = await fork.findOneOrFail(Run, { id: 'wf-old' });
-      older.workflowSnapshot = 'name: Team v1';
+      older.teamSnapshot = 'name: Team v1';
       await fork.flush();
       // A run named reads against its own copy, with its own instructions.
       expect(
-        await reader.analysedWorkflowOf(scope, {
+        await reader.analysedTeamOf(scope, {
           sourceRunId: 'wf-old',
           snapshotSeq: 1,
           sourceWorking: false,
@@ -1201,7 +1201,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         },
       });
       expect(
-        await reader.analysedWorkflowOf({
+        await reader.analysedTeamOf({
           sourceRunId: 'source',
           snapshotSeq: 0,
           sourceWorking: false,
@@ -1209,7 +1209,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       ).toBeNull();
     });
 
-    it('answers view=runs only for a workflow analysis, and a thread analysis no other run', async () => {
+    it('answers view=runs only for a team analysis, and a thread analysis no other run', async () => {
       const thread = {
         sourceRunId: 'source',
         snapshotSeq: 0,

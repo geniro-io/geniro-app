@@ -32,7 +32,7 @@ function render(props: Partial<Props> = {}): void {
         open={props.open ?? true}
         busy={props.busy ?? false}
         error={props.error ?? null}
-        title={props.title ?? 'Delete workflow'}
+        title={props.title ?? 'Delete team'}
         confirmLabel={props.confirmLabel ?? 'Delete'}
         busyLabel={props.busyLabel ?? 'Deleting…'}
         onCancel={props.onCancel ?? vi.fn()}
@@ -69,7 +69,7 @@ describe('ConfirmDialog', () => {
   it('shows the title, the consequence, and both choices', () => {
     render();
     expect(container.querySelector('[role="dialog"]')).not.toBeNull();
-    expect(container.textContent).toContain('Delete workflow');
+    expect(container.textContent).toContain('Delete team');
     expect(container.textContent).toContain('Delete Review Team permanently?');
     expect(button('Cancel')).toBeTruthy();
     expect(button('Delete')).toBeTruthy();

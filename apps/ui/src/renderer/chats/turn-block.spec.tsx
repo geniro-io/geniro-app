@@ -86,8 +86,8 @@ function renderTurn(
 }
 
 describe('TurnBlock identity frame', () => {
-  it('drops the frame for the workflow ROOT node, and keeps it for every other', () => {
-    // A workflow's root agent is the one the user is talking TO — every other
+  it('drops the frame for the team ROOT node, and keeps it for every other', () => {
+    // A team's root agent is the one the user is talking TO — every other
     // agent reaches the screen inside a card that names itself — so framing it
     // asks the reader to tell one agent apart from nobody. Asked for as "make
     // root agent without its block… same as if I run claude separately".
@@ -130,7 +130,7 @@ describe('TurnBlock identity frame', () => {
   });
 
   it('keeps the avatar and the sender line when several agents can speak', () => {
-    // A workflow run needs identity: two nodes' turns are otherwise
+    // A team run needs identity: two nodes' turns are otherwise
     // indistinguishable in one flow.
     renderTurn(false, 'writer');
 
@@ -139,9 +139,9 @@ describe('TurnBlock identity frame', () => {
     expect(container.textContent).toContain('Working on it.');
   });
 
-  it('draws a RUN-level error bare in a workflow run, with no agent frame around it', () => {
+  it('draws a RUN-level error bare in a team run, with no agent frame around it', () => {
     // REPORTED as an "abandoned empty agent block": the daemon's boot
-    // reconcile writes `workflow run interrupted` with no `nodeId`, and the
+    // reconcile writes `team run interrupted` with no `nodeId`, and the
     // fold framed it as an avatar plus an `AGENT · 10:54` title naming nobody.
     const entries = buildTurnBlocks(
       groupTranscript([
@@ -149,7 +149,7 @@ describe('TurnBlock identity frame', () => {
           'error',
           {
             message:
-              'workflow run interrupted — the daemon stopped before it finished',
+              'team run interrupted — the daemon stopped before it finished',
             interrupted: true,
           },
           null,
@@ -179,7 +179,7 @@ describe('TurnBlock identity frame', () => {
     ).toBeNull();
     expect(container.textContent?.toLowerCase()).not.toContain('agent');
     // The failure itself still reaches the screen.
-    expect(container.textContent).toContain('workflow run interrupted');
+    expect(container.textContent).toContain('team run interrupted');
   });
 
   it('draws an agent block holding ONLY an error as the error row, naming the agent on it', () => {

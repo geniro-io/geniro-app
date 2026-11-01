@@ -63,7 +63,7 @@ describe('NavRail', () => {
     // that type-checks, ships, and cannot be opened.
     const LABELS: Record<AppView, string> = {
       chats: 'Chats',
-      workflows: 'Workflows',
+      teams: 'Teams',
       tasks: 'Tasks',
       stats: 'Stats',
       settings: 'Settings',
@@ -82,7 +82,7 @@ describe('NavRail', () => {
     // to nothing, which is the same unreachable view seen one step later.
     for (const [view, label] of Object.entries({
       chats: 'Chats',
-      workflows: 'Workflows',
+      teams: 'Teams',
       tasks: 'Tasks',
       stats: 'Stats',
       settings: 'Settings',
@@ -99,7 +99,7 @@ describe('NavRail', () => {
   it('offers every top-level destination', () => {
     const el = rail('chats');
 
-    for (const label of ['Chats', 'Workflows', 'Stats', 'Settings']) {
+    for (const label of ['Chats', 'Teams', 'Stats', 'Settings']) {
       expect(buttonNamed(el, label)).toBeTruthy();
     }
   });
@@ -127,12 +127,12 @@ describe('NavRail', () => {
     const labels = [...el.querySelectorAll('button')]
       .map((node) => node.textContent)
       .filter((text): text is string =>
-        ['Chats', 'Workflows', 'Stats', 'Settings'].includes(text ?? ''),
+        ['Chats', 'Teams', 'Stats', 'Settings'].includes(text ?? ''),
       );
 
-    // Stats is a primary destination, so it belongs with Chats and Workflows
+    // Stats is a primary destination, so it belongs with Chats and Teams
     // rather than in the utility group Settings sits in.
-    expect(labels).toEqual(['Chats', 'Workflows', 'Stats', 'Settings']);
+    expect(labels).toEqual(['Chats', 'Teams', 'Stats', 'Settings']);
   });
 
   it('keeps its own width toggle, in both directions', () => {

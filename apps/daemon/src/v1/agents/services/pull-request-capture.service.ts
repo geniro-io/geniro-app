@@ -191,16 +191,16 @@ export class PullRequestCaptureService implements OnModuleInit {
    * rather than one per tool call — in the steady state that pass is a single
    * indexed `max(seq)` read.
    *
-   * It used to require `nodeId === null` as well, and that was a WORKFLOW run
+   * It used to require `nodeId === null` as well, and that was a TEAM run
    * excluded outright: every row of one carries a node id, so this subscriber
    * never fired for a single one of them — and the other trigger, the chat
-   * listing, reads `RunDao.listChats`, which filters `workflowId: null`. Two
-   * independent gates, so a workflow's pull requests were never captured on
+   * listing, reads `RunDao.listChats`, which filters `teamId: null`. Two
+   * independent gates, so a team's pull requests were never captured on
    * any path. REPORTED as a shelf showing no chip over a transcript reading
    * "Draft PR #5303 is open"; measured on that run, `pullRequests` and
    * `pullRequestsScannedSeq` were both still null with the `gh pr create` at
    * seq 1347. Nothing about the capture itself is per-node — it reads the run's
-   * whole transcript by seq — so a workflow needed no new machinery, only to
+   * whole transcript by seq — so a team needed no new machinery, only to
    * stop being filtered out. One pass per NODE turn now, which is the same
    * bound seen from the other side: a fan-out's nodes settle a handful of times
    * between them, and each pass is that one `max(seq)` read.
@@ -714,9 +714,9 @@ export class PullRequestCaptureService implements OnModuleInit {
    * announce: this write moves no `updatedAt`, so a window whose copy of the
    * row a live announce had dated later kept that copy (`keepFresherRows`)
    * and dropped the listed pull requests — and every other window never asked
-   * at all. REPORTED as a workflow shelf with no chip under a manager reading
+   * at all. REPORTED as a team shelf with no chip under a manager reading
    * "It's on draft PR #6490"; reconstructed from run `4f7ae5fa`: the result
-   * at 14:02:32Z, a `GET /v1/workflows/runs` at 14:14:38Z that captured it,
+   * at 14:02:32Z, a `GET /v1/teams/runs` at 14:14:38Z that captured it,
    * the Engineer's turn end at 14:24:16Z that announced nothing.
    *
    * `status: null`, like the activity and hold announces beside it: this says

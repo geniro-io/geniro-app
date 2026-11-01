@@ -48,7 +48,7 @@ export function OnboardingOverview(): React.JSX.Element {
           Start with one agent. Add a team whenever it helps.
         </p>
         <ol
-          aria-label="Example team workflow"
+          aria-label="Example team"
           className="mt-8 grid w-full max-w-xl grid-cols-3">
           {ROLES.map(({ Icon: icon, title, detail }, index) => (
             <li key={title} className="flex min-w-0 flex-col items-center">

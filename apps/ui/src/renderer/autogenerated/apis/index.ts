@@ -14,4 +14,4 @@ export * from './SharesApi';
 export * from './StatsApi';
 export * from './StorageApi';
 export * from './TasksApi';
-export * from './WorkflowsApi';
+export * from './TeamsApi';

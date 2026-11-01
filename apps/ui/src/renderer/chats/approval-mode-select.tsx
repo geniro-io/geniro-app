@@ -30,7 +30,7 @@ const NO_WITHHELD: readonly ChatApprovalMode[] = [];
 
 /**
  * Withholds `plan` — the posture for a surface that runs unattended (a task,
- * a project default, a workflow node): `plan` makes an agent write a plan and
+ * a project default, a team node): `plan` makes an agent write a plan and
  * stop, which is not a thing to pin on a run nobody is watching to act on it.
  * A run already stored on it keeps the option regardless — see
  * {@link approvalOptions}'s current-value rule.

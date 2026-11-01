@@ -283,7 +283,7 @@ describe('persistItemAndEmit', () => {
   describe('the sidebar preview line', () => {
     // Items reach one run room, so a thread working in the background reaches
     // the sidebar only through this client-wide announce — made at the seam so
-    // the chat and workflow paths cannot differ.
+    // the chat and team paths cannot differ.
     const message = (payload: Record<string, unknown>) => ({
       runId: 'run-1',
       nodeId: 'manager',

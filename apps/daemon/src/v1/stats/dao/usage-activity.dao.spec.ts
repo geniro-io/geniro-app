@@ -478,7 +478,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       runId: 'run-1',
       sourceSeq: 10,
       occurredAt: at('2026-10-20T10:00:00.000Z'),
-      workflowSlug: 'dev-team',
+      teamSlug: 'dev-team',
       prOwner: 'acme',
       prRepo: 'platform',
       prNumber: 87,
@@ -569,21 +569,21 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       ]);
     });
 
-    it("keeps another pull request's and another run's outcome apart, and filters by workflow", async () => {
+    it("keeps another pull request's and another run's outcome apart, and filters by team", async () => {
       await dao.upsertRunOutcome(outcome());
       await dao.upsertRunOutcome(outcome({ prNumber: 88, sourceSeq: 11 }));
       await dao.upsertRunOutcome(
-        outcome({ runId: 'run-2', workflowSlug: 'dev-team-b' }),
+        outcome({ runId: 'run-2', teamSlug: 'dev-team-b' }),
       );
 
       expect(
-        (await dao.runOutcomes({ workflowSlug: 'dev-team' })).map(
+        (await dao.runOutcomes({ teamSlug: 'dev-team' })).map(
           (row) => `${row.runId}#${row.prNumber}`,
         ),
       ).toEqual(['run-1#87', 'run-1#88']);
       expect(
         (await dao.runOutcomes({ runIds: ['run-2'] })).map(
-          (row) => row.workflowSlug,
+          (row) => row.teamSlug,
         ),
       ).toEqual(['dev-team-b']);
       expect(await dao.runOutcomes({ runIds: [] })).toEqual([]);
@@ -613,7 +613,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('the workflow ledger stamps', () => {
+  describe('the team ledger stamps', () => {
     const created = at('2026-10-01T10:00:00.000Z');
     const version = {
       slug: 'dev-team',
@@ -654,19 +654,19 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
       expect([...rows.keys()]).toEqual(['run-1']);
     });
 
-    it('lists only thread rows of the asked workflow', async () => {
+    it('lists only thread rows of the asked team', async () => {
       await dao.stampThreadVersion('run-1', created, version);
       await dao.stampThreadVersion('run-2', created, {
         ...version,
         slug: 'other',
       });
       await dao.insertThreadOnce('chat-1', created);
-      // A run_outcome row of the same run carries the same workflow slug.
+      // A run_outcome row of the same run carries the same team slug.
       await dao.upsertRunOutcome({
         runId: 'run-1',
         sourceSeq: 10,
         occurredAt: created,
-        workflowSlug: 'dev-team',
+        teamSlug: 'dev-team',
         prOwner: 'acme',
         prRepo: 'platform',
         prNumber: 87,

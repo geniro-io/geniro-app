@@ -9,7 +9,7 @@ import { Dialog } from './ui/dialog';
  * same everywhere.
  *
  * The caller owns `open` and closes on success; a failed action keeps the
- * dialog up carrying `error`, mirroring `WorkflowMetaDialog`'s contract.
+ * dialog up carrying `error`, mirroring `TeamMetaDialog`'s contract.
  * While `busy`, Cancel/Escape/backdrop are inert — a half-finished delete
  * must not have its dialog yanked out from under it.
  */

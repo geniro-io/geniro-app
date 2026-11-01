@@ -9,7 +9,7 @@ import {
   PinOff,
   Sparkles,
   Trash2,
-  Workflow as WorkflowIcon,
+  Workflow as TeamIcon,
 } from 'lucide-react';
 import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -53,7 +53,7 @@ import { notesPreview } from './thread-notes';
 /**
  * What the agent label SAYS — `claude`, `cursor`, `graph`.
  *
- * Three shortenings, and each earns itself. A workflow run has no single CLI
+ * Three shortenings, and each earns itself. A team run has no single CLI
  * (its agents are per node), so the honest word is what it IS: a graph. The
  * daemon spells the second CLI `cursor-agent`, which is the BINARY's name — the
  * user's own word for it is `cursor`, and this label has room for one word.
@@ -71,21 +71,21 @@ import { notesPreview } from './thread-notes';
  */
 function agentLabel(
   agentKind: string | null,
-  isWorkflow: boolean,
-  workflowName: string | null,
+  isTeam: boolean,
+  teamName: string | null,
   identities: readonly AgentIdentityCapability[],
 ): string {
-  if (isWorkflow) {
-    // The WORKFLOW's own name when this client knows it, and `graph` only when
-    // it does not (a run of a workflow since deleted from the library).
+  if (isTeam) {
+    // The TEAM's own name when this client knows it, and `graph` only when
+    // it does not (a run of a team since deleted from the library).
     //
-    // It said `graph` on every workflow row, which is the same word for every
-    // run of every workflow — true, and the least useful true thing available:
+    // It said `graph` on every team row, which is the same word for every
+    // run of every team — true, and the least useful true thing available:
     // the label slot is the one part of the row that says what KIND of thing it
     // is, and the row's title now says what the run is DOING rather than which
-    // workflow it is (see the daemon's `ChatTitleService`). Asked for as the
-    // other half of that change — "name of workflow should be as chip".
-    return workflowName ?? 'graph';
+    // team it is (see the daemon's `ChatTitleService`). Asked for as the
+    // other half of that change — "name of team should be as chip".
+    return teamName ?? 'graph';
   }
   return agentKind === null ? 'agent' : agentShortName(identities, agentKind);
 }
@@ -113,7 +113,7 @@ function colorOfMenuValue(value: string): RunGroupColor | null | undefined {
 }
 
 /**
- * One chat-list row: the run's label (custom title, else its workflow's name,
+ * One chat-list row: the run's label (custom title, else its team's name,
  * else the agent), hover-revealed rename/delete controls, the latest message
  * as a one-line preview, and a status line — icon + tone per state, always
  * LEADING the status word, spinning while running — with the last-activity time
@@ -137,8 +137,8 @@ function colorOfMenuValue(value: string): RunGroupColor | null | undefined {
 export const ChatListItem = memo(function ChatListItem({
   runId,
   label,
-  isWorkflow,
-  workflowName = null,
+  isTeam,
+  teamName = null,
   status,
   lastMessage,
   lastActivityAt,
@@ -172,13 +172,13 @@ export const ChatListItem = memo(function ChatListItem({
 }: {
   runId: string;
   label: string;
-  /** Show the workflow glyph before the label (a team run, not a 1:1 chat). */
-  isWorkflow: boolean;
+  /** Show the team glyph before the label (a team run, not a 1:1 chat). */
+  isTeam: boolean;
   /**
-   * The workflow's own name, for the label chip — see {@link agentLabel}. Null
-   * for a 1:1 chat, and for a run whose workflow this client cannot name.
+   * The team's own name, for the label chip — see {@link agentLabel}. Null
+   * for a 1:1 chat, and for a run whose team this client cannot name.
    */
-  workflowName?: string | null;
+  teamName?: string | null;
   /**
    * The DISPLAY status, not the daemon's row value — wider than `RunStatus`
    * because `needs-input` is derived in the renderer (`displayRunStatus`) and
@@ -217,7 +217,7 @@ export const ChatListItem = memo(function ChatListItem({
   monitors?: number;
   /**
    * Which CLI drives this thread — the daemon's own spelling, or null for a run
-   * that recorded none. Ignored for a workflow, whose agents are per node; see
+   * that recorded none. Ignored for a team, whose agents are per node; see
    * {@link agentLabel}.
    */
   agentKind?: string | null;
@@ -262,7 +262,7 @@ export const ChatListItem = memo(function ChatListItem({
   onRename: (runId: string, title: string) => Promise<void>;
   onDelete: (runId: string) => void;
   /**
-   * Shelve this run — a chat or a workflow run alike; the archive is a
+   * Shelve this run — a chat or a team run alike; the archive is a
    * property of the row, not a chat feature. Optional only so a harness can
    * render a row with no shelving at all.
    */
@@ -359,15 +359,15 @@ export const ChatListItem = memo(function ChatListItem({
   const menuGroups = useMemo<MenuGroup[]>(() => {
     const groups: MenuGroup[] = [];
     const naming: MenuItem[] = [];
-    // BOTH kinds of row. A workflow run used to be excluded on the reading
-    // that its name came from the workflow it ran, so renaming it here would
+    // BOTH kinds of row. A team run used to be excluded on the reading
+    // that its name came from the team it ran, so renaming it here would
     // read as editing the library entry from another view — and that stopped
-    // being true when `ChatTitleService` began naming workflow runs from their
-    // own conversation and the workflow's name moved to the label chip. The
+    // being true when `ChatTitleService` began naming team runs from their
+    // own conversation and the team's name moved to the label chip. The
     // title is the RUN's own, the daemon's rename route is kind-blind and says
-    // so, and the sidebar lists both kinds together — so a shelf of workflow
+    // so, and the sidebar lists both kinds together — so a shelf of team
     // threads was the one part of that list nobody could name. REPORTED as "i
-    // should be able to rename workflow threads as well".
+    // should be able to rename team threads as well".
     naming.push({
       value: 'rename',
       label: 'Rename',
@@ -591,7 +591,7 @@ export const ChatListItem = memo(function ChatListItem({
       onContextMenu={editing ? undefined : rowMenu.onContextMenu}
       onActivate={() => onActivate(runId)}>
       <span className="flex items-center gap-1.5">
-        {/* Leads the row, ahead of the workflow glyph: it is about the row as a
+        {/* Leads the row, ahead of the team glyph: it is about the row as a
             whole rather than about what kind of run it is, and the left edge is
             where an eye scanning a list for "what is new" already goes. */}
         {unseen ? (
@@ -610,8 +610,8 @@ export const ChatListItem = memo(function ChatListItem({
             className="size-2.5 shrink-0 rounded-full bg-primary"
           />
         ) : null}
-        {isWorkflow ? (
-          <WorkflowIcon
+        {isTeam ? (
+          <TeamIcon
             aria-hidden="true"
             className="size-3.5 shrink-0 text-muted-foreground"
           />
@@ -723,7 +723,7 @@ export const ChatListItem = memo(function ChatListItem({
               {label}
             </span>
             {/* Both kinds of row — see the menu's own note: the title is the
-                RUN's own name now, not the workflow's. */}
+                RUN's own name now, not the team's. */}
             <Button
               type="button"
               variant="ghost"
@@ -842,12 +842,12 @@ export const ChatListItem = memo(function ChatListItem({
           data-slot="agent-kind"
           variant="muted"
           title={
-            isWorkflow
+            isTeam
               ? 'A team of agents running as a graph'
               : `Driven by ${agentKind ?? 'an unrecorded CLI'}`
           }
           className="min-w-0 shrink gap-1 truncate px-1.5 py-0 font-normal">
-          {agentLabel(agentKind, isWorkflow, workflowName, identities)}
+          {agentLabel(agentKind, isTeam, teamName, identities)}
         </Badge>
       </span>
       <span className="flex items-center gap-1 text-xs">

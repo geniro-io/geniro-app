@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import {
   existsSync,
   mkdtempSync,
@@ -13,6 +13,7 @@ import { defineConfig, MikroORM } from '@mikro-orm/sqlite';
 import { io, type Socket } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { BOOT_TIMEOUT_MS, bootDaemon } from './__tests__/boot-daemon';
 import { DAEMON_STOP_CAUSE_NAME, type DaemonInfo } from './utils/handshake';
 import {
   APP_MIGRATIONS_TABLE,
@@ -25,21 +26,15 @@ import {
  *
  * Every other spec here builds the instance it tests by hand, so a break in
  * the framework underneath (a DI change, a lifecycle-order change, a library
- * pair that refuses to render the OpenAPI document) would ship green. A child process rather than an in-suite
- * container: this suite's transform carries no decorator metadata, and the
- * swc-node loader `daemon:dev` uses does, so no build step is needed.
+ * pair that refuses to render the OpenAPI document) would ship green.
  */
 
-const DAEMON_DIR = join(__dirname, '..');
-const BOOT_TIMEOUT_MS = 90_000;
 const SOCKET_TIMEOUT_MS = 5_000;
-const OUTPUT_TAIL = 3000;
 
 let child: ChildProcess;
 let userData: string;
 let info: DaemonInfo;
-let output = '';
-let readyListeners: () => void = () => undefined;
+let output = (): string => '';
 
 const base = () => `http://${info.host}:${info.port}`;
 const auth = () => ({ authorization: `Bearer ${info.token}` });
@@ -85,77 +80,7 @@ beforeAll(async () => {
   userData = mkdtempSync(join(tmpdir(), 'geniro-boot-spec-'));
   // What the UI leaves before it stops a daemon; this boot must consume it.
   writeFileSync(join(userData, DAEMON_STOP_CAUSE_NAME), 'quit');
-  child = spawn(
-    process.execPath,
-    [
-      '-r',
-      '@swc-node/register',
-      '-r',
-      'tsconfig-paths/register',
-      './src/main.ts',
-    ],
-    {
-      cwd: DAEMON_DIR,
-      env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: '1',
-        NODE_ENV: 'development',
-        TS_NODE_PROJECT: join(DAEMON_DIR, '..', '..', 'tsconfig.json'),
-        GENIRO_USER_DATA: userData,
-        GENIRO_PORT: '',
-        // An orphan left by a killed test worker shuts itself down.
-        GENIRO_IDLE_EXIT_MS: '60000',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  );
-  child.stdout?.on('data', (chunk: Buffer) => (output += String(chunk)));
-  child.stderr?.on('data', (chunk: Buffer) => (output += String(chunk)));
-
-  await new Promise<void>((resolve, reject) => {
-    const settle = (error: Error | null) => {
-      clearInterval(poll);
-      clearTimeout(timer);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const poll = setInterval(() => {
-      if (output.includes('GENIRO_DAEMON_READY')) {
-        settle(null);
-      }
-    }, 100);
-    const timer = setTimeout(
-      () =>
-        settle(
-          new Error(
-            `daemon never became ready:\n${output.slice(-OUTPUT_TAIL)}`,
-          ),
-        ),
-      BOOT_TIMEOUT_MS,
-    );
-    const onExit = (code: number | null) =>
-      settle(
-        new Error(
-          `daemon exited (${code}) during boot:\n${output.slice(-OUTPUT_TAIL)}`,
-        ),
-      );
-    const onError = (error: Error) => settle(error);
-    child.once('exit', onExit);
-    child.once('error', onError);
-    // Detached once ready, so the SIGTERM case's own exit is not read as a
-    // failed boot.
-    readyListeners = () => {
-      child.off('exit', onExit);
-      child.off('error', onError);
-    };
-  });
-  readyListeners();
-  info = JSON.parse(
-    readFileSync(join(userData, 'daemon.json'), 'utf8'),
-  ) as DaemonInfo;
+  ({ child, info, output } = await bootDaemon(userData));
 }, BOOT_TIMEOUT_MS + 5_000);
 
 afterAll(() => {
@@ -195,8 +120,8 @@ describe('the daemon boots and serves', () => {
   });
 
   it('runs the migrations before the schema sync', async () => {
-    expect(output).toContain(
-      `${MIGRATING_LINE_PREFIX} {"id":"0001-app-migrations-journal","step":1,"of":1}`,
+    expect(output()).toContain(
+      `${MIGRATING_LINE_PREFIX} {"id":"0001-app-migrations-journal","step":1,"of":3}`,
     );
     const orm = await MikroORM.init(
       defineConfig({
@@ -224,7 +149,11 @@ describe('the daemon boots and serves', () => {
         .selectFrom('app_migrations')
         .select('id')
         .execute();
-      expect(applied).toEqual([{ id: '0001-app-migrations-journal' }]);
+      expect(applied.map((row) => row.id).sort()).toEqual([
+        '0001-app-migrations-journal',
+        '0002-workflow-to-team-names',
+        '0003-team-library-files',
+      ]);
     } finally {
       await orm.close(true);
     }
@@ -238,12 +167,12 @@ describe('the daemon boots and serves', () => {
     expect([...header]).toEqual([2, 2]);
   });
 
-  it('measures a draft workflow’s instruction sizes on its static route, not as a slug', async () => {
-    const res = await request(`${base()}/v1/workflows/instruction-sizes`, {
+  it('measures a draft team’s instruction sizes on its static route, not as a slug', async () => {
+    const res = await request(`${base()}/v1/teams/instruction-sizes`, {
       method: 'POST',
       headers: { ...auth(), 'content-type': 'application/json' },
       body: JSON.stringify({
-        workflow: {
+        team: {
           name: 'draft',
           nodes: [
             {

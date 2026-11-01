@@ -8,7 +8,7 @@ import {
   ScrollText,
   Sparkles,
   Table2,
-  Workflow,
+  Workflow as TeamIcon,
 } from 'lucide-react';
 
 import { cn } from '../components/ui/utils';
@@ -61,7 +61,7 @@ const KIND_META: Record<
   },
   patch: { icon: FileDiff, noun: 'a change', label: 'Proposed change' },
   plan: { icon: ListChecks, noun: 'a plan', label: 'Proposed plan' },
-  workflow: { icon: Workflow, noun: 'a workflow', label: 'Proposed workflow' },
+  team: { icon: TeamIcon, noun: 'a team', label: 'Proposed team' },
 };
 
 /**
@@ -207,7 +207,7 @@ function Skeleton({ kind }: { kind: GeniroCardKind }): React.JSX.Element {
           ))}
         </div>
       );
-    case 'workflow':
+    case 'team':
       // A graph: three node boxes on one row over the roster's lines — the
       // card that lands opens on a preview of the team, then lists it.
       return (

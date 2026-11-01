@@ -199,19 +199,19 @@ export const analyzeThreadSchema = z.object({
 });
 export class AnalyzeThreadDto extends createZodDto(analyzeThreadSchema) {}
 
-/** At most this many of a workflow's newest runs are read by one analysis. */
-export const MAX_ANALYSED_WORKFLOW_RUNS = 30;
+/** At most this many of a team's newest runs are read by one analysis. */
+export const MAX_ANALYSED_TEAM_RUNS = 30;
 
-/** `POST /v1/workflows/:slug/analyses` — "Analyze & improve" on a workflow. */
-export const analyzeWorkflowSchema = analyzeThreadSchema.extend({
+/** `POST /v1/teams/:slug/analyses` — "Analyze & improve" on a team. */
+export const analyzeTeamSchema = analyzeThreadSchema.extend({
   runs: z
     .number()
     .int()
     .min(1)
-    .max(MAX_ANALYSED_WORKFLOW_RUNS)
-    .describe("How many of the workflow's newest runs to read"),
+    .max(MAX_ANALYSED_TEAM_RUNS)
+    .describe("How many of the team's newest runs to read"),
 });
-export class AnalyzeWorkflowDto extends createZodDto(analyzeWorkflowSchema) {}
+export class AnalyzeTeamDto extends createZodDto(analyzeTeamSchema) {}
 
 /** `POST /v1/chats/:runId/recommendations/apply` — the card's Apply. */
 export const applyRecommendationsSchema = z.object({
@@ -303,7 +303,7 @@ export class UpdateChatSettingsDto extends createZodDto(
   updateChatSettingsSchema,
 ) {}
 
-/** Pasted images riding one message — shared by the chat and workflow routes. */
+/** Pasted images riding one message — shared by the chat and team routes. */
 export const messageImagesSchema = z
   .array(
     z.object({
@@ -477,7 +477,7 @@ export class SearchChatQueryDto extends createZodDto(searchChatQuerySchema) {}
 
 // ── Responses ───────────────────────────────────────────────────────────────
 
-/** A run — a single-agent chat or a workflow execution. */
+/** A run — a single-agent chat or a team execution. */
 export class RunDto extends createZodDto(RunWireSchema) {}
 
 /** A thread's analysis, or null when it has none — see `ThreadAnalysisWireSchema`. */
@@ -588,7 +588,7 @@ export class ShellOutputQueryDto extends createZodDto(
 
 /**
  * Which agent of the run a context readout is about. Absent means the chat's
- * own agent; a workflow run names the NODE, since each holds a window of its
+ * own agent; a team run names the NODE, since each holds a window of its
  * own — or one agent-to-agent CALL, whose callee holds a window per
  * conversation beside its node's own.
  */
@@ -598,7 +598,7 @@ export class ChatMetricsQueryDto extends createZodDto(
       .string()
       .min(1)
       .optional()
-      .describe("a workflow node's id; absent reads a chat's own agent"),
+      .describe("a team node's id; absent reads a chat's own agent"),
     callId: z
       .string()
       .min(1)
@@ -640,7 +640,7 @@ export class ShellKillQueryDto extends createZodDto(
 export class ShellKillDto extends createZodDto(ShellKillWireSchema) {}
 
 /**
- * Acknowledgement of a cancel request. Shared with the workflow routes — the
+ * Acknowledgement of a cancel request. Shared with the team routes — the
  * cancel surface is identical for chat and graph runs.
  */
 export class CancelledDto extends createZodDto(
@@ -726,8 +726,8 @@ export class SweptArchivedDto extends createZodDto(
 ) {}
 
 /**
- * Acknowledgement of a delete. Mirrors the workflow route's own
- * `WorkflowDeletedDto` rather than sharing it: they belong to different
+ * Acknowledgement of a delete. Mirrors the team route's own
+ * `TeamDeletedDto` rather than sharing it: they belong to different
  * modules' contracts, and the generated client names one class per tag.
  *
  * Prefixed because the OpenAPI component namespace is GLOBAL — two classes both

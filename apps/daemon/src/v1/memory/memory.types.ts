@@ -251,7 +251,7 @@ export const MEMORY_IMPORT_ROWS_MAX = 1000;
 
 /**
  * The CLI profiles to read besides each CLI's default one, which is always
- * read: the renderer gathers them (settings, and the library workflows'
+ * read: the renderer gathers them (settings, and the library teams'
  * agents, which `v1/agents` cannot read). A profile of a CLI that keeps no
  * memory is ignored.
  */

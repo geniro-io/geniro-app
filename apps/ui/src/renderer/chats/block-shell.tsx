@@ -31,7 +31,7 @@ const BlockCollapseContext = createContext<(() => void) | null>(null);
 
 /**
  * The wrapper class of a card the reader can be SENT to — a call card from the
- * composer shelf's Agents chip, a workflow card from its chip or the panel. The
+ * composer shelf's Agents chip, a team card from its chip or the panel. The
  * jump sets `data-revealed` on the wrapper for a moment, and this rings it, so
  * the card the reader was taken to is told apart from the cards around it.
  * REPORTED as a jump that should "как-то выделять его, чтобы он тут нашёлся".

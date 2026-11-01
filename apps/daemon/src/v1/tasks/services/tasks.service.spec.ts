@@ -194,7 +194,7 @@ describe('TasksService (in-memory sqlite)', () => {
     const thread = (id: string, taskId: string, taskIdentifier: string) =>
       runs.create({
         id,
-        workflowId: null,
+        teamId: null,
         status: 'completed',
         agentKind: 'claude',
         taskId,
@@ -296,7 +296,7 @@ describe('TasksService (in-memory sqlite)', () => {
     const task = await service.create({ projectId, title: 'card', status });
     await new RunDao(em).create({
       id: runId,
-      workflowId: null,
+      teamId: null,
       status: runStatus,
       agentKind: 'claude',
       taskId: task.id,

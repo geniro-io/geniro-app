@@ -235,10 +235,10 @@ describe('TaskCard — while an agent is on it', () => {
     );
   });
 
-  it('calls a workflow run a workflow rather than nothing', () => {
+  it('calls a team run a team rather than nothing', () => {
     // A graph run records no single CLI — its agents are per node — so the
     // honest word is what the run IS.
-    expect(card({}, { active: live(null) }).textContent).toContain('workflow');
+    expect(card({}, { active: live(null) }).textContent).toContain('team');
   });
 
   it('puts it on the accessible name AHEAD of the column', () => {

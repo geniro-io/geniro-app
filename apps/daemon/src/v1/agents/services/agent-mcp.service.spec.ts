@@ -135,7 +135,7 @@ interface HarnessOptions {
    */
   approveUnavailableReason?: string | null;
   /**
-   * Why no server can be switched off for one workflow node's turns. Defaults
+   * Why no server can be switched off for one team node's turns. Defaults
    * to null — the CLI that can.
    */
   turnToggleUnavailableReason?: string | null;
@@ -351,7 +351,7 @@ const DATADOG_PLUGIN = {
 };
 
 describe('AgentMcpService.list', () => {
-  it('answers every row whether a workflow node can switch it off for its own turns — the CLI’s reason first, else the row’s', async () => {
+  it('answers every row whether a team node can switch it off for its own turns — the CLI’s reason first, else the row’s', async () => {
     const cwd = realDir();
     const rows = (): Promise<AgentMcpServer[]> =>
       Promise.resolve([

@@ -13,7 +13,7 @@ import {
 } from './record-outcome.reader';
 import { recordOutcomeSchema } from './record-outcome.schema';
 
-/** `record_outcome` — record where one pull request of this workflow run stands. */
+/** `record_outcome` — record where one pull request of this team run stands. */
 export class RecordOutcomeTool extends BaseMcpTool {
   readonly name = HOST_RECORD_OUTCOME_TOOL;
 

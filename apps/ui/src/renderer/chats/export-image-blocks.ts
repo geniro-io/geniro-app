@@ -3,7 +3,7 @@
  *
  * A markdown export JSON-dumps any payload it has no prose form for, and a tool
  * result carrying a screenshot is one of those — so the bytes the agent looked at
- * are written out in full. MEASURED on one real export of a workflow run:
+ * are written out in full. MEASURED on one real export of a team run:
  * **13.8 MB of a 28.9 MB file** was 81 such blocks, none of which a reader can do
  * anything with. Analysing that export meant writing a parser, because no editor
  * or diff tool will open a 28.9 MB file with single lines megabytes long.

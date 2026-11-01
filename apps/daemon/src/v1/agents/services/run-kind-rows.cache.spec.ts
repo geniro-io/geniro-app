@@ -116,11 +116,11 @@ describe('RunKindRowsCache (in-memory sqlite)', () => {
     ]);
   });
 
-  it('serves a workflow run’s row written before its call stamp only once the run is stamped', async () => {
+  it('serves a team run’s row written before its call stamp only once the run is stamped', async () => {
     await new RunDao(orm.em.fork()).create({
       id: 'run-a',
       status: 'running',
-      workflowId: 'flow',
+      teamId: 'flow',
     });
     await write(0, 'turn_complete');
 
@@ -143,7 +143,7 @@ describe('RunKindRowsCache (in-memory sqlite)', () => {
     await new RunDao(orm.em.fork()).create({
       id: 'run-a',
       status: 'running',
-      workflowId: null,
+      teamId: null,
     });
     await write(0, 'turn_complete');
     const stamp = vi.spyOn(calls, 'ensureIndexed');

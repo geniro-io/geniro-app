@@ -10,13 +10,13 @@ const meta = {
   decorators: [(story) => <div className="h-[320px]">{story()}</div>],
   args: {
     open: true,
-    title: 'Delete workflow',
+    title: 'Delete team',
     confirmLabel: 'Delete',
     busyLabel: 'Deleting…',
     onCancel: () => undefined,
     onConfirm: () => undefined,
     children:
-      'This removes the workflow and every run it produced. This cannot be undone.',
+      'This removes the team and every run it produced. This cannot be undone.',
   },
 } satisfies Meta<typeof ConfirmDialog>;
 
@@ -30,5 +30,5 @@ export const Busy: Story = {
 };
 
 export const WithError: Story = {
-  args: { error: 'Could not delete the workflow — a run is still active.' },
+  args: { error: 'Could not delete the team — a run is still active.' },
 };

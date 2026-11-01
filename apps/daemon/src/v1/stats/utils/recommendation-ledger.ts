@@ -3,29 +3,29 @@ import {
   RecommendationApplySchema,
   type RecommendationMarks,
   RecommendationMarksSchema,
-  RecommendationsPayloadSchema,
 } from '../../agents/chat.types';
+import { parseRecommendationsPayload } from '../../agents/utils/recommendations-card';
 import type { Run } from '../../runs/entity/run.entity';
 import type {
   FiledRecommendation,
-  WorkflowRecommendationSource,
+  TeamRecommendationSource,
 } from '../stats.types';
 
-/** The workflow a chat files recommendations about, or null for a chat that files none. */
+/** The team a chat files recommendations about, or null for a chat that files none. */
 export function recommendationSourceOf(
-  run: Pick<Run, 'id' | 'analysisWorkflowSlug' | 'editsWorkflowSlug'>,
-): WorkflowRecommendationSource | null {
-  if (run.analysisWorkflowSlug !== null) {
+  run: Pick<Run, 'id' | 'analysisTeamSlug' | 'editsTeamSlug'>,
+): TeamRecommendationSource | null {
+  if (run.analysisTeamSlug !== null) {
     return {
       chatRunId: run.id,
-      slug: run.analysisWorkflowSlug,
+      slug: run.analysisTeamSlug,
       chatKind: 'analysis',
     };
   }
-  if (run.editsWorkflowSlug !== null) {
+  if (run.editsTeamSlug !== null) {
     return {
       chatRunId: run.id,
-      slug: run.editsWorkflowSlug,
+      slug: run.editsTeamSlug,
       chatKind: 'builder',
     };
   }
@@ -34,11 +34,11 @@ export function recommendationSourceOf(
 
 /** A `recommendations` row's items as the ledger files them, or null when the row does not read as a card. */
 export function filedRecommendationsOf(
-  source: WorkflowRecommendationSource,
+  source: TeamRecommendationSource,
   row: { seq: number; createdAt: Date; payload: unknown },
   libraryVersion: string | null,
 ): FiledRecommendation[] | null {
-  const card = RecommendationsPayloadSchema.safeParse(row.payload);
+  const card = parseRecommendationsPayload(row.payload);
   if (!card.success) {
     return null;
   }

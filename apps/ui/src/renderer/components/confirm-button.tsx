@@ -11,7 +11,7 @@ const ARM_WINDOW_MS = 3000;
  * destructive and shows the confirm label), the second click within the window
  * fires. A busy flag holds while the action's promise is in flight, so a
  * double-click can never fire it twice. The one shared confirm control for
- * destructive actions (delete workflow, end terminal session) — never
+ * destructive actions (delete team, end terminal session) — never
  * re-implemented inline.
  */
 export function ConfirmButton({
@@ -30,7 +30,7 @@ export function ConfirmButton({
      * itself when armed.
      *
      * Excluded at the type level rather than documented, because the one caller
-     * this had did pass it (the builder's Delete workflow button): the resting
+     * this had did pass it (the builder's Delete team button): the resting
      * state was then already the armed colour, so pressing it changed nothing
      * but the word inside, and the two-step guard gave the user no signal that
      * the NEXT press was the one that fires. A control whose whole job is a

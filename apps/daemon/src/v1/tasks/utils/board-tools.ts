@@ -3,8 +3,8 @@ import {
   type ChatApprovalMode,
   type HostBoardTool,
 } from '../../agents/chat.types';
-import type { TaskBoardTool } from '../../graphs/graphs.types';
 import { AgentKind } from '../../runs/runs.types';
+import type { TaskBoardTool } from '../../teams/teams.types';
 import {
   AUTOPILOT_PICKUP_SECONDS,
   BOARD_LIST_TASKS_DEFAULT_LIMIT,
@@ -29,7 +29,7 @@ import {
  * The listing is the whole manual: every argument says what it means, its
  * format, its bounds and its default, every enum is spelled with what each
  * value means, and every value that belongs to the MACHINE rather than to the
- * schema (labels in use, CLIs, models, workflows) names the tool that lists it.
+ * schema (labels in use, CLIs, models, teams) names the tool that lists it.
  * The descriptions join the audited set in `mcp-server.service.spec.ts`.
  */
 
@@ -202,13 +202,13 @@ function cardFieldArgs(nullable: boolean): Record<string, unknown> {
         'and plugins). Directories already used on the board are listed by board_vocabulary.' +
         inherit('config directory'),
     },
-    workflowSlug: {
+    teamSlug: {
       type: type('string'),
       description:
-        'Run the card through this saved WORKFLOW (a team of agents) instead of a single agent — its library slug, ' +
+        'Run the card through this saved TEAM instead of a single agent — its library slug, ' +
         'listed by board_vocabulary. The card decides over the project: whichever of the two is more specific and ' +
-        'names an agent or a workflow is what runs, and on one level a workflow wins over an agent.' +
-        inherit('workflow'),
+        'names an agent or a team is what runs, and on one level a team wins over an agent.' +
+        inherit('team'),
     },
   };
 }
@@ -219,7 +219,7 @@ const TOOLS: Readonly<Record<HostBoardTool, TaskBoardTool>> = {
     description:
       'List the projects on the task board — a project is a board of cards for one repository folder. For each: ' +
       'its id, name, card key (cards are numbered `<KEY>-<n>`, e.g. GEN-53), folder, the run configuration its ' +
-      'cards inherit (agent, model, effort, approval mode, config directory, workflow — null means not set), its ' +
+      'cards inherit (agent, model, effort, approval mode, config directory, team — null means not set), its ' +
       'autopilot (whether it is ARMED and which column it takes work from), and how many cards each column holds. ' +
       'Use it when you need a project id or key, before creating a card, or to check whether a column is an armed ' +
       'intake. Do not use it to read cards — list_tasks does that.',
@@ -233,10 +233,10 @@ const TOOLS: Readonly<Record<HostBoardTool, TaskBoardTool>> = {
     name: 'board_vocabulary',
     description:
       'The values a card field can take that belong to this machine rather than to the schema: the labels already ' +
-      'used on the board (and which carry instructions for the agent), the saved workflows (slugs), the CLI agents ' +
+      'used on the board (and which carry instructions for the agent), the saved teams (slugs), the CLI agents ' +
       'installed with the approval modes each offers, the config directories already in use, and — when you pass ' +
       '`agentKind` — that CLI’s model ids and effort levels. Use it when you are about to set labels, a model, an ' +
-      'effort, a workflow or a config directory on a card and need the exact spelling. Do not use it for anything ' +
+      'effort, a team or a config directory on a card and need the exact spelling. Do not use it for anything ' +
       'the tool schemas already enumerate (columns, priorities, approval modes).',
     inputSchema: {
       type: 'object',

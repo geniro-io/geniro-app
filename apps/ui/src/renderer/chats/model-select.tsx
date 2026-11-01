@@ -49,7 +49,7 @@ const CUSTOM_MODEL = '__custom__';
  * says out loud.
  *
  * …and the graph builder's node inspector, under {@link allowCustom}. ONE chip
- * for all three rather than a second picker in `workflows/`, on the rule the
+ * for all three rather than a second picker in `teams/`, on the rule the
  * effort chip beside it already follows: which rows the CLI reports, that a
  * stored model outside them still has to be named on screen, and what the
  * default row means are the parts worth getting right once.
@@ -77,7 +77,7 @@ export function ModelSelect({
    * Offer a `Custom…` row that opens free-text entry for a full model id.
    *
    * The builder's case, not the composer's, and the asymmetry is deliberate: a
-   * workflow is written once and run for months, so naming a model the CLI does
+   * team is written once and run for months, so naming a model the CLI does
    * not enumerate (`claude-fable-5`) is worth a text field there — while a chat
    * is started from whatever the CLI offers today.
    *

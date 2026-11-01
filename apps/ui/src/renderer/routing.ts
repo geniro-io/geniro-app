@@ -3,21 +3,24 @@ import type { AppView } from './components/nav-rail';
 /**
  * The address bar's view of the app — one member per `AppView` (see
  * `components/nav-rail.tsx`), each carrying whatever id that view can be
- * opened directly to. `chats`/`workflows`/`tasks` carry `null` for "this
+ * opened directly to. `chats`/`teams`/`tasks` carry `null` for "this
  * view, nothing further selected" rather than splitting into a separate
  * list-vs-item pair of members, which is what lets `App.tsx` build one from
  * its own state (`threadRequest`) without a branch per shape.
  */
 export type Route =
   | { view: 'chats'; runId: string | null }
-  | { view: 'workflows'; slug: string | null }
+  | { view: 'teams'; slug: string | null }
   | { view: 'tasks'; projectId: string | null }
   | { view: 'settings' }
   | { view: 'stats' };
 
 // Explicitly `AppView`-typed (rather than `Route['view']`) so a typo here
 // that names something outside `nav-rail.tsx`'s own union is a type error.
-const ID_VIEWS: ReadonlySet<AppView> = new Set(['chats', 'workflows', 'tasks']);
+const ID_VIEWS: ReadonlySet<AppView> = new Set(['chats', 'teams', 'tasks']);
+
+/** The teams view's hash before the rename, still found in saved links. */
+const LEGACY_TEAMS_VIEW = 'workflows';
 
 /**
  * Decode a hash's id segment, folding a malformed percent-escape into `null`
@@ -52,8 +55,9 @@ export function parseRoute(hash: string): Route | null {
     switch (rawView) {
       case 'chats':
         return { view: 'chats', runId: id };
-      case 'workflows':
-        return { view: 'workflows', slug: id };
+      case 'teams':
+      case LEGACY_TEAMS_VIEW:
+        return { view: 'teams', slug: id };
       case 'tasks':
         return { view: 'tasks', projectId: id };
       default:
@@ -65,8 +69,9 @@ export function parseRoute(hash: string): Route | null {
   switch (rawView) {
     case 'chats':
       return { view: 'chats', runId: null };
-    case 'workflows':
-      return { view: 'workflows', slug: null };
+    case 'teams':
+    case LEGACY_TEAMS_VIEW:
+      return { view: 'teams', slug: null };
     case 'tasks':
       return { view: 'tasks', projectId: null };
     case 'settings':
@@ -89,7 +94,7 @@ export function formatRoute(route: Route): string {
   const id =
     route.view === 'chats'
       ? route.runId
-      : route.view === 'workflows'
+      : route.view === 'teams'
         ? route.slug
         : route.view === 'tasks'
           ? route.projectId

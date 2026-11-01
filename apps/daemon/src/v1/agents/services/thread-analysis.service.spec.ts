@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type { RunWire } from '../chat.types';
-import { HOST_WORKFLOW_CHANGE_TOOL } from '../chat.types';
+import { HOST_TEAM_CHANGE_TOOL } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { RunDao } from '../dao/run.dao';
 import type { AgentEventBus } from './agent-events.bus';
@@ -60,12 +60,12 @@ describe('ThreadAnalysisService.start', () => {
         : ({
             id: 'source',
             title: 'Dev Team run',
-            workflowId: null,
+            teamId: null,
             cwd: folder,
             archivedAt: null,
             status: 'completed',
             analysisSourceRunId: null,
-            analysisWorkflowSlug: null,
+            analysisTeamSlug: null,
             ...source,
           } as Run);
     const runDao = {
@@ -218,9 +218,9 @@ describe('ThreadAnalysisService.start', () => {
     });
   });
 
-  it('starts a linked chat with the workflow guide for a workflow source', async () => {
+  it('starts a linked chat with the team guide for a team source', async () => {
     const { service, createChat, sendMessage } = build({
-      workflowId: 'dev-team',
+      teamId: 'dev-team',
     });
 
     await service.start('source', { agentKind: 'claude', model: 'opus' });
@@ -233,16 +233,16 @@ describe('ThreadAnalysisService.start', () => {
       title: 'Analysis: Dev Team run',
       analysisSource: { runId: 'source', seq: 41, working: false },
     });
-    expect(input.taskInstructions).toContain('This is a WORKFLOW thread');
-    expect(input.taskInstructions).toContain(HOST_WORKFLOW_CHANGE_TOOL);
+    expect(input.taskInstructions).toContain('This is a TEAM thread');
+    expect(input.taskInstructions).toContain(HOST_TEAM_CHANGE_TOOL);
     expect(sendMessage).toHaveBeenCalledWith(
       'analysis',
-      expect.stringContaining('a workflow thread'),
+      expect.stringContaining('a team thread'),
     );
   });
 
   it('hands the analysis chat the user’s reply language', async () => {
-    const { service, createChat } = build({ workflowId: 'dev-team' });
+    const { service, createChat } = build({ teamId: 'dev-team' });
 
     await service.start('source', {
       agentKind: 'claude',
@@ -275,7 +275,7 @@ describe('ThreadAnalysisService.start', () => {
     });
   });
 
-  it('gives a plain chat the guide without workflow changes, with the focus appended', async () => {
+  it('gives a plain chat the guide without team changes, with the focus appended', async () => {
     const { service, createChat } = build({});
 
     await service.start('source', {
@@ -284,8 +284,8 @@ describe('ThreadAnalysisService.start', () => {
     });
 
     const guide = createChat.mock.calls[0]![0].taskInstructions!;
-    expect(guide).toContain('Never recommend a workflow change');
-    expect(guide).not.toContain(HOST_WORKFLOW_CHANGE_TOOL);
+    expect(guide).toContain('Never recommend a team change');
+    expect(guide).not.toContain(HOST_TEAM_CHANGE_TOOL);
     expect(guide).toContain('why so many re-reads?');
   });
 
@@ -319,12 +319,12 @@ describe('ThreadAnalysisService.start', () => {
     const at = (status: string) => ({
       id: 'source',
       title: 'Dev Team run',
-      workflowId: null,
+      teamId: null,
       cwd: folder,
       archivedAt: null,
       status,
       analysisSourceRunId: null,
-      analysisWorkflowSlug: null,
+      analysisTeamSlug: null,
     });
     runDao.getById
       .mockResolvedValueOnce(at('completed') as never)
@@ -384,7 +384,7 @@ describe('ThreadAnalysisService.start', () => {
       }),
     ).rejects.toMatchObject({ errorCode: 'ANALYSIS_OF_ANALYSIS' });
     await expect(
-      build({ analysisWorkflowSlug: 'team' }).service.start('source', {
+      build({ analysisTeamSlug: 'team' }).service.start('source', {
         agentKind: 'claude',
       }),
     ).rejects.toMatchObject({ errorCode: 'ANALYSIS_OF_ANALYSIS' });
@@ -400,7 +400,7 @@ describe('ThreadAnalysisService.start', () => {
   });
 });
 
-describe('ThreadAnalysisService.startWorkflow', () => {
+describe('ThreadAnalysisService.startTeam', () => {
   let folder: string;
 
   beforeEach(() => {
@@ -429,7 +429,7 @@ describe('ThreadAnalysisService.startWorkflow', () => {
     );
     const sendMessage = vi.fn((): Promise<unknown> => Promise.resolve({}));
     const remove = vi.fn(() => Promise.resolve({ deleted: true }));
-    const findWorkflowAnalysis = vi.fn(() =>
+    const findTeamAnalysis = vi.fn(() =>
       Promise.resolve({ id: 'analysis', status: 'running' } as RunWire),
     );
     const rows = runs.map(
@@ -445,10 +445,10 @@ describe('ThreadAnalysisService.startWorkflow', () => {
       getById: vi.fn((id: string) =>
         Promise.resolve(rows.find((run) => run.id === id) ?? null),
       ),
-      newestWorkflowRuns: vi.fn((_slug: string, limit: number) =>
+      newestTeamRuns: vi.fn((_slug: string, limit: number) =>
         Promise.resolve(rows.slice(0, limit)),
       ),
-      listWorkflowAnalyses: vi.fn(() =>
+      listTeamAnalyses: vi.fn(() =>
         Promise.resolve([...listed, ...earlier].map((id) => ({ id }) as Run)),
       ),
     };
@@ -463,7 +463,7 @@ describe('ThreadAnalysisService.startWorkflow', () => {
         createChat,
         sendMessage,
         delete: remove,
-        findWorkflowAnalysis,
+        findTeamAnalysis,
       } as unknown as ChatService,
       {
         allDeleted: () => new Subject<string>().asObservable(),
@@ -486,19 +486,19 @@ describe('ThreadAnalysisService.startWorkflow', () => {
       { r3: 12, r2: -1, r1: 40, r0: 7 },
     );
 
-    await service.startWorkflow(TARGET, {
+    await service.startTeam(TARGET, {
       agentKind: 'claude',
       runs: 3,
       focus: 'cheaper',
     });
 
-    expect(runDao.newestWorkflowRuns).toHaveBeenCalledWith(
+    expect(runDao.newestTeamRuns).toHaveBeenCalledWith(
       'team',
       3,
       expect.anything(),
     );
     const input = createChat.mock.calls[0]![0];
-    expect(input.analysisWorkflow).toEqual({
+    expect(input.analysisTeam).toEqual({
       slug: 'team',
       runs: [
         { runId: 'r3', snapshotSeq: 12, working: true },
@@ -509,7 +509,7 @@ describe('ThreadAnalysisService.startWorkflow', () => {
     expect(input.title).toBe('Analysis: Dev Team');
     expect(input.cwd).toBe(folder);
     expect(input.approval).toBe('auto');
-    expect(input.taskInstructions).toContain('# Workflow analysis');
+    expect(input.taskInstructions).toContain('# Team analysis');
     expect(input.taskInstructions).toContain('cheaper');
     expect(sendMessage).toHaveBeenCalledWith(
       'analysis',
@@ -517,12 +517,12 @@ describe('ThreadAnalysisService.startWorkflow', () => {
     );
   });
 
-  it('replaces the workflow’s earlier analysis only once the new one has its brief', async () => {
+  it('replaces the team’s earlier analysis only once the new one has its brief', async () => {
     const { service, sendMessage, remove } = build([{ id: 'r1' }], { r1: 3 }, [
       'old',
     ]);
 
-    const started = await service.startWorkflow(TARGET, {
+    const started = await service.startTeam(TARGET, {
       agentKind: 'claude',
       runs: 5,
     });
@@ -535,13 +535,13 @@ describe('ThreadAnalysisService.startWorkflow', () => {
     expect(started.status).toBe('running');
   });
 
-  it('refuses a workflow with nothing to read, and keeps the old analysis', async () => {
+  it('refuses a team with nothing to read, and keeps the old analysis', async () => {
     const { service, createChat, remove } = build([{ id: 'r1' }], { r1: -1 }, [
       'old',
     ]);
 
     await expect(
-      service.startWorkflow(TARGET, { agentKind: 'claude', runs: 5 }),
+      service.startTeam(TARGET, { agentKind: 'claude', runs: 5 }),
     ).rejects.toMatchObject({ errorCode: 'ANALYSIS_NO_RUNS' });
     expect(createChat).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
@@ -557,14 +557,14 @@ describe('ThreadAnalysisService.startWorkflow', () => {
         { id: 'r1', cwd: own },
       ];
       const first = build(runs, { empty: -1, r1: 2 });
-      await first.service.startWorkflow(TARGET, {
+      await first.service.startTeam(TARGET, {
         agentKind: 'claude',
         runs: 2,
       });
       expect(first.createChat.mock.calls[0]![0].cwd).toBe(own);
 
       const sent = build(runs, { empty: -1, r1: 2 });
-      await sent.service.startWorkflow(TARGET, {
+      await sent.service.startTeam(TARGET, {
         agentKind: 'claude',
         runs: 2,
         cwd: picked,
@@ -573,7 +573,7 @@ describe('ThreadAnalysisService.startWorkflow', () => {
 
       const gone = build([{ id: 'r1', cwd: join(own, 'gone') }], { r1: 2 });
       await expect(
-        gone.service.startWorkflow(TARGET, { agentKind: 'claude', runs: 1 }),
+        gone.service.startTeam(TARGET, { agentKind: 'claude', runs: 1 }),
       ).rejects.toMatchObject({ errorCode: 'ANALYSIS_FOLDER_GONE' });
       expect(gone.createChat).not.toHaveBeenCalled();
     } finally {
@@ -582,12 +582,12 @@ describe('ThreadAnalysisService.startWorkflow', () => {
     }
   });
 
-  it('deletes exactly the analyses its workflow has', async () => {
+  it('deletes exactly the analyses its team has', async () => {
     const { service, remove, runDao } = build([], {}, ['a1', 'a2']);
 
-    await service.deleteWorkflowAnalyses('team');
+    await service.deleteTeamAnalyses('team');
 
-    expect(runDao.listWorkflowAnalyses).toHaveBeenCalledWith(
+    expect(runDao.listTeamAnalyses).toHaveBeenCalledWith(
       'team',
       expect.anything(),
     );
@@ -601,7 +601,7 @@ describe('ThreadAnalysisService.startWorkflow', () => {
     sendMessage.mockRejectedValueOnce(new Error('RUN_BUSY'));
 
     await expect(
-      service.startWorkflow(TARGET, { agentKind: 'claude', runs: 1 }),
+      service.startTeam(TARGET, { agentKind: 'claude', runs: 1 }),
     ).rejects.toThrow('RUN_BUSY');
     expect(remove).toHaveBeenCalledWith('analysis');
     expect(remove).not.toHaveBeenCalledWith('old');

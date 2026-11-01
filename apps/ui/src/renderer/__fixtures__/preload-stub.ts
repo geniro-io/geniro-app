@@ -137,12 +137,12 @@ export function createPreloadStub(
       note('pickTaskFiles');
       return Promise.resolve([]);
     },
-    pickWorkflowImport: () => {
-      note('pickWorkflowImport');
+    pickTeamImport: () => {
+      note('pickTeamImport');
       return Promise.resolve(null);
     },
-    pickWorkflowExport: () => {
-      note('pickWorkflowExport');
+    pickTeamExport: () => {
+      note('pickTeamExport');
       return Promise.resolve(null);
     },
 

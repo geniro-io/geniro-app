@@ -1,8 +1,8 @@
 /** What a model reads about `record_outcome`. */
 export function recordOutcomeInstructions(): string {
   return (
-    'Record where one pull request of this workflow run stands — a structured record geniro keeps ' +
-    'with the run, shows on it, and counts per workflow version. Use it when your role says to, and ' +
+    'Record where one pull request of this team run stands — a structured record geniro keeps ' +
+    'with the run, shows on it, and counts per team version. Use it when your role says to, and ' +
     'only when something changed: the draft state, the review rounds or the acceptance. A call ' +
     'repeating the newest outcome of that pull request writes nothing and answers "Unchanged". One ' +
     'call per pull request; a later call for the same pull request replaces its earlier outcome, so ' +

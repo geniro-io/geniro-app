@@ -31,11 +31,11 @@ export type ParkedReason =
   /** The turn is HELD: the agent's reply is over and the process waits for the
    *  background sub-agents it launched to report (`holdingFor`). */
   | 'held'
-  /** A workflow manager inside `await_agent` / a sync `call_agent` on its own
+  /** A team manager inside `await_agent` / a sync `call_agent` on its own
    *  callees. The daemon RELEASES that wait when a user message arrives
    *  (`CallBroker.interruptWaits`), so the manager reads it in seconds. */
   | 'awaiting-calls'
-  /** A workflow whose manager has ENDED its turn while calls it started run
+  /** A team whose manager has ENDED its turn while calls it started run
    *  on: the message starts the next pass. */
   | 'roots-idle'
   /** The reply is over and sub-agents it launched in the background run on. */

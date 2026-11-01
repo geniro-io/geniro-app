@@ -18,7 +18,7 @@ const group = (id: string, position: number): RunGroupDto => ({
   position,
   collapsed: false,
   autoCwd: null,
-  autoWorkflowId: null,
+  autoTeamId: null,
 });
 const run = (
   id: string,

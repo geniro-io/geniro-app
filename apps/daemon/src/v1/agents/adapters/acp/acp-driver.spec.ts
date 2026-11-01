@@ -5325,7 +5325,7 @@ describe('AcpSession — a SECOND turn on the same process', () => {
   });
 
   it('names the live session on a later turn, so a call it serves stays resumable', () => {
-    // A workflow call continued on this kept process records the turn's
+    // A team call continued on this kept process records the turn's
     // `session` event as its resume handle. The first turn announces it at
     // `session/new`; a later turn must announce it too, or the call is
     // recorded with no session and can never be continued.

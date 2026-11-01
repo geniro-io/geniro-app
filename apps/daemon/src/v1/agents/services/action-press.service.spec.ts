@@ -117,7 +117,7 @@ describe('ActionPressService (in-memory sqlite)', () => {
       NO_COMMANDS,
       new ActionCommandRegistry(),
     );
-    await runs.create({ id: 'run-a', status: 'completed', workflowId: null });
+    await runs.create({ id: 'run-a', status: 'completed', teamId: null });
   });
 
   async function publishedSeq(actionId: string): Promise<number> {
@@ -230,7 +230,7 @@ describe('ActionPressService (in-memory sqlite)', () => {
     await runs.create({
       id: 'run-b',
       status: 'completed',
-      workflowId: null,
+      teamId: null,
       archivedAt: new Date(),
     });
     await publisher.publish(
@@ -294,7 +294,7 @@ describe('ActionPressService (in-memory sqlite)', () => {
     await runs.create({
       id: 'run-b',
       status: 'completed',
-      workflowId: null,
+      teamId: null,
       archivedAt: new Date(),
     });
     await publisher.publish(
@@ -312,8 +312,8 @@ describe('ActionPressService (in-memory sqlite)', () => {
     expect(await actions.live('run-b')).toHaveLength(1);
   });
 
-  it('refuses a workflow run on the chat routes, which has routes of its own', async () => {
-    await runs.create({ id: 'run-w', status: 'running', workflowId: 'team' });
+  it('refuses a team run on the chat routes, which has routes of its own', async () => {
+    await runs.create({ id: 'run-w', status: 'running', teamId: 'team' });
     await publisher.publish(
       { ...ctx, runId: 'run-w' },
       { label: 'Go', message: 'go' },
@@ -578,7 +578,7 @@ describe('ActionPressService (in-memory sqlite)', () => {
       await runs.create({
         id: 'run-c',
         status: 'completed',
-        workflowId: null,
+        teamId: null,
         cwd: folder,
       });
     });
@@ -1047,7 +1047,7 @@ describe('ActionPressService (in-memory sqlite)', () => {
     });
 
     it('publish refuses a command with no cwd in a run that has no folder', async () => {
-      await runs.create({ id: 'run-d', status: 'completed', workflowId: null });
+      await runs.create({ id: 'run-d', status: 'completed', teamId: null });
 
       expect(await publishIn('run-d', { argv: ['ls'] })).toEqual({
         status: 'refused',

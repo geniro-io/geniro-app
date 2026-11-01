@@ -41,10 +41,10 @@ import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { createDaemonApis } from '../daemon-api';
 import { ConfigProfileList } from '../settings/config-profiles';
+import { configDirCapabilityFrom } from '../teams/use-config-dir-capability';
 import { useSharedCapabilities } from '../use-capabilities';
 import { signInAfterInstall, useCliInstall } from '../use-cli-install';
 import { isLoginOver, useCliLogin } from '../use-cli-login';
-import { configDirCapabilityFrom } from '../workflows/use-config-dir-capability';
 import type { FirstLaunch } from './first-launch';
 import { OnboardingOverview } from './onboarding-overview';
 

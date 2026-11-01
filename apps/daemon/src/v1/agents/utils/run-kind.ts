@@ -12,7 +12,7 @@ export function assertChatRun(run: Run | null, runId: string): Run {
   if (!run) {
     throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
   }
-  if (run.workflowId) {
+  if (run.teamId) {
     throw new BadRequestException(
       'NOT_A_CHAT_RUN',
       'run is not a single-agent chat',
@@ -21,21 +21,21 @@ export function assertChatRun(run: Run | null, runId: string): Run {
   return run;
 }
 
-/** A run {@link assertWorkflowRun} has vouched for: it names its workflow. */
-export type WorkflowRun = Run & { workflowId: string };
+/** A run {@link assertTeamRun} has vouched for: it names its team. */
+export type TeamRun = Run & { teamId: string };
 
-function namesWorkflow(run: Run): run is WorkflowRun {
-  return Boolean(run.workflowId);
+function namesTeam(run: Run): run is TeamRun {
+  return Boolean(run.teamId);
 }
 
-export function assertWorkflowRun(run: Run | null, runId: string): WorkflowRun {
+export function assertTeamRun(run: Run | null, runId: string): TeamRun {
   if (!run) {
     throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
   }
-  if (!namesWorkflow(run)) {
+  if (!namesTeam(run)) {
     throw new BadRequestException(
-      'NOT_A_WORKFLOW_RUN',
-      'run is not a workflow (graph) run',
+      'NOT_A_TEAM_RUN',
+      'run is not a team (graph) run',
     );
   }
   return run;

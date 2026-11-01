@@ -1,20 +1,20 @@
 import type { TurnMember } from '../../agents/chat.types';
 import { asRecord, asString } from '../../agents/utils/json-util';
-import { readWorkflowSnapshot } from '../../graphs/utils/workflow-snapshot';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
+import { readTeamSnapshot } from '../../teams/utils/team-snapshot';
 import type { UsageEventInput } from '../stats.types';
 
 /** The run columns {@link usageDimensions} reads. */
 export type UsageDimensionRun = Pick<
   Run,
-  'agentKind' | 'model' | 'cwd' | 'workflowId' | 'workflowSnapshot'
+  'agentKind' | 'model' | 'cwd' | 'teamId' | 'teamSnapshot'
 >;
 
 /** The denormalized half of a ledger row — what the turn ran AS. */
 export type UsageDimensions = Pick<
   UsageEventInput,
-  'agentKind' | 'model' | 'cwd' | 'workflowName'
+  'agentKind' | 'model' | 'cwd' | 'teamName'
 >;
 
 /**
@@ -32,7 +32,7 @@ export type UsageDimensions = Pick<
  * nothing.
  *
  * A graph node's own `node_state` wins over the run's fields where it has them:
- * a workflow run names no single agent (its `agentKind` is null) and each node
+ * a team run names no single agent (its `agentKind` is null) and each node
  * names its own, so reading the run alone would attribute every node's spend to
  * nothing. `cwd` only ever lives on the run — `node_state` stamps none — so it
  * comes from there for both shapes.
@@ -57,7 +57,7 @@ export function usageDimensions(
       agentKind: node?.agentKind ?? run?.agentKind ?? null,
       model: node?.model ?? run?.model ?? null,
       cwd: run?.cwd ?? null,
-      workflowName: workflowNameOf(run),
+      teamName: teamNameOf(run),
     },
     reportedModel,
     member,
@@ -82,33 +82,33 @@ export function forTurn(
 }
 
 /**
- * Which workflow this turn belongs to, or null for a single-agent chat.
+ * Which team this turn belongs to, or null for a single-agent chat.
  *
- * Gated on `workflowId`: a chat is null here whatever else it carries, since a
- * chat filed in the workflow breakdown is the one thing that breakdown must not
+ * Gated on `teamId`: a chat is null here whatever else it carries, since a
+ * chat filed in the team breakdown is the one thing that breakdown must not
  * contain.
  *
- * The NAME comes from the run's own copy of the workflow (`Run.workflowSnapshot`)
+ * The NAME comes from the run's own copy of the team (`Run.teamSnapshot`)
  * and never from the run's TITLE. It was the title, back when the executor
- * stamped every workflow run with its workflow's name; since workflow runs are
+ * stamped every team run with its team's name; since team runs are
  * named after their CONVERSATION like chats are, the title is what the task was
- * about, so one workflow's spend scattered into a row per conversation — and
+ * about, so one team's spend scattered into a row per conversation — and
  * into its slug for the turns before the name landed. The snapshot is taken at
- * run start, so it names the workflow as it was when the run ran, and it is
+ * run start, so it names the team as it was when the run ran, and it is
  * read through the graph module's own reader rather than a second parser of the
  * column. The slug is the fallback for a run with no readable snapshot.
  *
- * The consequence worth knowing: renaming a workflow splits its history at the
+ * The consequence worth knowing: renaming a team splits its history at the
  * rename, since each row keeps the name that was true when the turn ran. That
  * is the honest reading — relabelling past spend would restate history the
  * ledger deliberately keeps. For the same reason nothing re-reads rows already
  * written: those recorded while the title was the source keep what they say.
  */
-function workflowNameOf(run: UsageDimensionRun | null): string | null {
-  if (!run || run.workflowId === null) {
+function teamNameOf(run: UsageDimensionRun | null): string | null {
+  if (!run || run.teamId === null) {
     return null;
   }
-  return readWorkflowSnapshot(run.workflowSnapshot)?.name ?? run.workflowId;
+  return readTeamSnapshot(run.teamSnapshot)?.name ?? run.teamId;
 }
 
 /**

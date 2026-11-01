@@ -1,6 +1,6 @@
 /**
  * What a `run_outcome` row's payload says: one pull request's delivery outcome,
- * as a workflow node recorded it with `record_outcome`.
+ * as a team node recorded it with `record_outcome`.
  *
  * TWIN PARSER: `RunOutcomePayloadSchema` in
  * `apps/daemon/src/v1/agents/chat.types.ts`, which writes these rows. An item

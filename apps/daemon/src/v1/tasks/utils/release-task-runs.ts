@@ -25,7 +25,7 @@ import type { Run } from '../../runs/entity/run.entity';
  * as any chat's is whose folder was removed.
  *
  * Every run naming a card, not only the one the card names: a card re-pointed
- * at another agent or a workflow opens a new thread, and the earlier ones keep
+ * at another agent or a team opens a new thread, and the earlier ones keep
  * `taskId`. A pure helper rather than a method, because a card delete and a
  * board delete both need it and `ProjectsModule` may not import the tasks
  * module — the reason `removeTaskAttachments` lives beside it.

@@ -11,7 +11,7 @@ export type SettingsNotifyTarget = Pick<
 /**
  * Tell every window the settings file was just written — by the Settings
  * screen, another window or a paired phone — so a view showing figures
- * derived from settings (the workflow inspector's instruction sizes) can read
+ * derived from settings (the team inspector's instruction sizes) can read
  * them again. Carries no settings: a window that cares re-reads them.
  *
  * A window can be destroyed between the write and this send, and a send into

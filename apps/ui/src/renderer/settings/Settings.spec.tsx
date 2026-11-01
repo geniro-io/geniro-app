@@ -67,10 +67,10 @@ const chatsApi = vi.hoisted(() => ({
   forgetCustomInstructions: vi.fn(() => Promise.resolve({ cleared: 0 })),
   sweepArchivedChats: vi.fn(() => Promise.resolve({ deleted: 0 })),
 }));
-// Listed by the workflows screen, not by this one — kept because
+// Listed by the teams screen, not by this one — kept because
 // `createDaemonApis` is mocked whole and every key it returns must exist.
-const workflowsApi = vi.hoisted(() => ({
-  listWorkflows: vi.fn(() => Promise.resolve([])),
+const teamsApi = vi.hoisted(() => ({
+  listTeams: vi.fn(() => Promise.resolve([])),
 }));
 const projectsApi = vi.hoisted(() => ({
   // Annotated rather than inferred: an unannotated `Promise.resolve([])`
@@ -91,7 +91,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     cliAuth: cliAuthApi,
     capabilities: capabilitiesApi,
     chats: chatsApi,
-    workflows: workflowsApi,
+    teams: teamsApi,
     projects: projectsApi,
   })),
 }));

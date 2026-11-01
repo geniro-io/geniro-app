@@ -5,12 +5,12 @@
 export function followUpPlaceholder({
   archived,
   working,
-  workflow,
+  team,
   narrow,
 }: {
   archived: boolean;
   working: boolean;
-  workflow: boolean;
+  team: boolean;
   narrow: boolean;
 }): string {
   if (archived) {
@@ -22,14 +22,14 @@ export function followUpPlaceholder({
     if (narrow) {
       return 'Working — your message will queue…';
     }
-    return workflow
-      ? 'The workflow is working — your message will queue…'
+    return team
+      ? 'The team is working — your message will queue…'
       : 'Agent is working — your message will queue…';
   }
-  if (workflow) {
+  if (team) {
     return narrow
-      ? 'Message the workflow…'
-      : 'Message the workflow — it goes to the same trigger…';
+      ? 'Message the team…'
+      : 'Message the team — it goes to the same trigger…';
   }
   return 'Message the agent…';
 }

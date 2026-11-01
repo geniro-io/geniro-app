@@ -63,14 +63,14 @@ const GROUP_TEXT: Record<StorageGroupIdEnum, { title: string; about: string }> =
       title: 'Task files',
       about: 'Pictures attached to board cards. Deleted with their card.',
     },
-    [StorageGroupIdEnum.Workflows]: {
-      title: 'Workflows',
-      about: 'Your workflow library.',
+    [StorageGroupIdEnum.Teams]: {
+      title: 'Teams',
+      about: 'Your team library.',
     },
-    [StorageGroupIdEnum.WorkflowBackups]: {
-      title: 'Workflow backups',
+    [StorageGroupIdEnum.TeamBackups]: {
+      title: 'Team backups',
       about:
-        'Copies saved before a workflow was replaced, changed by an analysis or restored. Safe to delete.',
+        'Copies saved before a team was replaced, changed by an analysis or restored. Safe to delete.',
     },
     [StorageGroupIdEnum.Logs]: {
       title: 'Logs',
@@ -106,7 +106,7 @@ function cleanLabel(option: StorageCleanOption): string {
     case StorageCleanTarget.OrphanChatFiles:
     case StorageCleanTarget.OrphanTaskFiles:
       return `Delete ${option.count} orphaned folder${option.count === 1 ? '' : 's'}${size}`;
-    case StorageCleanTarget.WorkflowBackups:
+    case StorageCleanTarget.TeamBackups:
       return `Delete ${option.count} backup${option.count === 1 ? '' : 's'}${size}`;
     case StorageCleanTarget.Logs:
       return `Delete ${option.count} old log${option.count === 1 ? '' : 's'}${size}`;
@@ -145,7 +145,7 @@ const RUNNING_TEXT: Record<StorageCleanTarget, string> = {
   [StorageCleanTarget.CompactDatabase]: 'Compacting the database…',
   [StorageCleanTarget.OrphanChatFiles]: 'Deleting orphaned chat files…',
   [StorageCleanTarget.OrphanTaskFiles]: 'Deleting orphaned task files…',
-  [StorageCleanTarget.WorkflowBackups]: 'Deleting the workflow backups…',
+  [StorageCleanTarget.TeamBackups]: 'Deleting the team backups…',
   [StorageCleanTarget.Logs]: 'Deleting old logs…',
   [StorageCleanTarget.Leftovers]: 'Deleting leftovers…',
   [StorageCleanTarget.SettingsCopies]: 'Deleting the settings copies…',
@@ -502,8 +502,8 @@ export function Storage({
       )}
 
       <SettingsPanel>
-        {groupRow(StorageGroupIdEnum.WorkflowBackups)}
-        {groupRow(StorageGroupIdEnum.Workflows)}
+        {groupRow(StorageGroupIdEnum.TeamBackups)}
+        {groupRow(StorageGroupIdEnum.Teams)}
         {groupRow(StorageGroupIdEnum.Logs)}
         {groupRow(StorageGroupIdEnum.Leftovers)}
         {groupRow(StorageGroupIdEnum.SettingsCopies)}

@@ -12,15 +12,15 @@ import type {
 import { PAYLOAD_REFS_VERSION } from '../../agents/utils/payload-refs';
 import type { AgentKind, RunStatus } from '../runs.types';
 
-/** One execution of a workflow (graph) or a single-agent chat. */
+/** One execution of a team (graph) or a single-agent chat. */
 @Entity({ tableName: 'runs' })
 export class Run extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   id: string = randomUUID();
 
-  /** Workflow (graph) id this run executed; null for an ad-hoc single agent. */
+  /** Team (graph) id this run executed; null for an ad-hoc single agent. */
   @Property({ type: 'string', nullable: true })
-  workflowId: string | null = null;
+  teamId: string | null = null;
 
   @Property({ type: 'string' })
   status: RunStatus = 'pending';
@@ -30,7 +30,7 @@ export class Run extends TimestampsEntity {
 
   /**
    * Working directory of the run — the user's chosen project folder, which
-   * the adapter spawns the CLI in; a workflow run is refused without one
+   * the adapter spawns the CLI in; a team run is refused without one
    * (`RUN_NOT_CONFIGURED`). The daemon validates this path before spawning so
    * the headless agent is scoped to the user's project and never the daemon's
    * own cwd (the app repo).
@@ -79,7 +79,7 @@ export class Run extends TimestampsEntity {
 
   /**
    * Chat approval mode for a single-agent run; null for graph runs (their
-   * modes live in the workflow YAML).
+   * modes live in the team YAML).
    */
   @Property({ type: 'string', nullable: true })
   approval: ChatApprovalMode | null = null;
@@ -281,7 +281,7 @@ export class Run extends TimestampsEntity {
    * Plugin directory a single-agent run's turns load, CANONICAL (the path
    * `resolveValidConfigDir` returned when the chat was created); null = none,
    * which is every row predating the chip and every CLI with no plugin
-   * mechanism. A graph run's plugin directories live per node in the workflow
+   * mechanism. A graph run's plugin directories live per node in the team
    * YAML instead.
    *
    * Part of the run's IDENTITY, like `cwd`, rather than a per-turn setting: it
@@ -401,8 +401,8 @@ export class Run extends TimestampsEntity {
   pendingQuestion: string | null = null;
 
   /**
-   * The standing `propose_workflow` card, as JSON (`PendingWorkflowProposal`:
-   * the card's id and the workflow it would write), or null.
+   * The standing `propose_team` card, as JSON (`PendingTeamProposal`:
+   * the card's id and the team it would write), or null.
    *
    * Durable for the reason {@link pendingQuestion} is — the card waits on a
    * person, and the daemon routinely exits before they answer — and a column of
@@ -412,29 +412,29 @@ export class Run extends TimestampsEntity {
    * card at the next boot, never as a second write.
    */
   @Property({ type: 'text', nullable: true })
-  pendingWorkflowProposal: string | null = null;
+  pendingTeamProposal: string | null = null;
 
   /**
-   * The library workflow this chat EDITS — the slug of a `*.geniro.yaml` file
+   * The library team this chat EDITS — the slug of a `*.team.yaml` file
    * the builder's chat panel opened a conversation about; null for every other
    * run.
    *
-   * Not to be confused with {@link workflowId}, which names the workflow a run
-   * IS. This run is an ordinary chat that happens to be pointed at a workflow
+   * Not to be confused with {@link teamId}, which names the team a run
+   * IS. This run is an ordinary chat that happens to be pointed at a team
    * file, the same way a task run is an ordinary chat pointed at a worktree.
    *
    * It exists so the panel can find its conversation again: the builder holds
    * a slug and nothing else, so without a column the only way back to the
-   * chat would be matching on its title. Deleting the workflow deletes the
+   * chat would be matching on its title. Deleting the team deletes the
    * chat with it, unlike {@link taskId} — a conversation about a file that no
    * longer exists has no subject left.
    */
   @Property({ type: 'string', nullable: true })
-  editsWorkflowSlug: string | null = null;
+  editsTeamSlug: string | null = null;
 
   /**
    * What geniro tells that chat's agent about the file it owns — where it is,
-   * and what a workflow document may contain; null for every run outside the
+   * and what a team document may contain; null for every run outside the
    * builder's panel.
    *
    * Its own column beside {@link taskInstructions} rather than folded into it,
@@ -449,7 +449,7 @@ export class Run extends TimestampsEntity {
    * a live conversation would respawn its CLI between two messages.
    */
   @Property({ type: 'text', nullable: true })
-  workflowInstructions: string | null = null;
+  teamInstructions: string | null = null;
 
   /**
    * The user's per-CLI switches (`AdapterConfig.options` — cursor's Max Mode,
@@ -474,7 +474,7 @@ export class Run extends TimestampsEntity {
    * for one sitting loose at the bottom of the list.
    *
    * A plain id column rather than a MikroORM relation, the same shape
-   * `workflowId` uses: the group owns nothing about the run, and the direction
+   * `teamId` uses: the group owns nothing about the run, and the direction
    * that matters is the one this column already expresses. Deleting a group
    * nulls this on its runs (`RunDao.clearGroup`) instead of cascading, because
    * a folder disappearing must never take a conversation with it. TEXT so the
@@ -485,7 +485,7 @@ export class Run extends TimestampsEntity {
 
   /**
    * The board task this run was started for, or null for a run nobody started
-   * from a card — every chat and every workflow run.
+   * from a card — every chat and every team run.
    *
    * A plain nullable id on `groupId`'s shape and for its reasons, with one
    * more: `v1/runs` is the substrate feature modules OBSERVE, so it may not
@@ -558,17 +558,17 @@ export class Run extends TimestampsEntity {
   analysisSourceWorking: boolean | null = null;
 
   /**
-   * The library workflow this chat was started to ANALYSE across its recent
-   * runs ("Analyze & improve"), or null for every other chat. A workflow
+   * The library team this chat was started to ANALYSE across its recent
+   * runs ("Analyze & improve"), or null for every other chat. A team
    * analysis carries no {@link analysisSourceRunId}: it reads the runs named
-   * in {@link analysisRuns} instead, and belongs to the workflow — deleting
-   * one of those runs leaves it, deleting the workflow takes it.
+   * in {@link analysisRuns} instead, and belongs to the team — deleting
+   * one of those runs leaves it, deleting the team takes it.
    */
   @Property({ type: 'string', nullable: true })
-  analysisWorkflowSlug: string | null = null;
+  analysisTeamSlug: string | null = null;
 
   /**
-   * The runs a workflow analysis reads, newest first, each with the seq its
+   * The runs a team analysis reads, newest first, each with the seq its
    * reads stop at and whether it was working then — JSON
    * (`utils/analysed-runs.ts`). Null for every chat that is not one.
    */
@@ -622,7 +622,7 @@ export class Run extends TimestampsEntity {
    *
    * Consumed once: the next turn prepends it and clears the column in the same
    * write, so it cannot ride a second prompt. A CLI that compacts its own
-   * history never touches this, and neither does a workflow run.
+   * history never touches this, and neither does a team run.
    *
    * TEXT so the `safe: true` schema sync adds it additively, no migration.
    */
@@ -813,22 +813,22 @@ export class Run extends TimestampsEntity {
   taskList: string | null = null;
 
   /**
-   * The workflow this run RAN, as JSON — a copy taken when the run started, so
-   * editing the library workflow afterwards changes neither what the run's
+   * The team this run RAN, as JSON — a copy taken when the run started, so
+   * editing the library team afterwards changes neither what the run's
    * agents panel draws nor what a follow-up message runs. Asked for as "old
-   * workflows chats should not be changed if i change current workflow. They
+   * teams chats should not be changed if i change current team. They
    * should use snapshots".
    *
-   * Null on a chat run, and on a workflow run created before this column
+   * Null on a chat run, and on a team run created before this column
    * existed until something first reads it: that read takes the library copy
-   * as it is at that moment and keeps it (`RunWorkflowService`), so an old run
+   * as it is at that moment and keeps it (`RunTeamService`), so an old run
    * is frozen from then on rather than refused.
    *
    * TEXT so the `safe: true` schema sync adds it additively — the rule
    * {@link taskList} follows.
    */
   @Property({ type: 'text', nullable: true })
-  workflowSnapshot: string | null = null;
+  teamSnapshot: string | null = null;
 
   /**
    * What this run's POLLED conversations have cost, in CENTS, as the account
@@ -876,7 +876,7 @@ export class Run extends TimestampsEntity {
    * an hour into one turn has spent money no row carries. That figure was held
    * in the daemon's memory alone, and a client that missed the moment it moved
    * — a thread reopened, a restart — drew the recorded total as the whole bill:
-   * REPORTED as a workflow header falling from ~$40 to $1.71 on a thread
+   * REPORTED as a team header falling from ~$40 to $1.71 on a thread
    * switch. Kept here, written by `PartialStreamService` on every change and
    * cleared in step with it, so it survives a restart and seeds the live plane
    * at boot (`rehydrateUnrecordedSpend`).

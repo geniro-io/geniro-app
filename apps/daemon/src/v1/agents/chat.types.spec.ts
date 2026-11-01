@@ -135,7 +135,7 @@ describe('custom-instruction validation — the daemon is the enforcing side', (
     CustomInstructionsSchema.safeParse(value).success;
 
   it('puts no ceiling on the length — text far past the old 16,000 cap is accepted', () => {
-    // Instruction text has no size limit anywhere: a cap made a workflow whose
+    // Instruction text has no size limit anywhere: a cap made a team whose
     // instruction block ran past it fail to load at all.
     expect(chat('x'.repeat(100_000))).toBe(true);
   });
@@ -158,7 +158,7 @@ describe('custom-instruction validation — the daemon is the enforcing side', (
 
   it('is the single schema both entry points spell', () => {
     // Parity is held by CONSTRUCTION rather than by a second set of cases: the
-    // chat route and the workflow route both say
+    // chat route and the team route both say
     // `CustomInstructionsSchema.optional()`, so there is one rule to test and
     // no way for a later tightening to reach only one of them. This asserts
     // the shared schema is genuinely optional-wrapped rather than duplicated.

@@ -15,11 +15,11 @@ import {
  * and handed over by the renderer's `THEME_TOKENS`; the description
  * audit in mcp-server.service.spec.ts fails on a name nothing defines.
  *
- * `inWorkflowRun` adds what only holds in a workflow run: a page reaches the
+ * `inTeamRun` adds what only holds in a team run: a page reaches the
  * user from whichever agent publishes it, and its id is the RUN's.
  */
 export function showArtifactInstructions(
-  inWorkflowRun: boolean,
+  inTeamRun: boolean,
   shareOffered: boolean,
 ): string {
   return (
@@ -109,14 +109,14 @@ export function showArtifactInstructions(
     'current while you work. A different id, or none, makes a new page. ' +
     'Call it ONCE per page, and do not also write the content out as text: the user sees the page, so ' +
     'restating it shows the same thing twice. Say what it SHOWS, and what you want them to notice. ' +
-    (inWorkflowRun ? `${WORKFLOW_RUN_PAGES} ` : '') +
+    (inTeamRun ? `${TEAM_RUN_PAGES} ` : '') +
     (shareOffered ? `${SHARING} ` : '') +
     'The result is a short receipt naming the artifact_id and version, never the document.'
   );
 }
 
-const WORKFLOW_RUN_PAGES =
-  'In this workflow run a page reaches the user’s chat WHICHEVER agent of the run publishes it: one ' +
+const TEAM_RUN_PAGES =
+  'In this team run a page reaches the user’s chat WHICHEVER agent of the run publishes it: one ' +
   'you publish while answering another agent’s call is shown to the user directly, and that call’s ' +
   'result names its artifact_id, title and version to your caller. So the agent that holds the ' +
   'content publishes the page itself — never hand the HTML to your caller to publish for you. ' +

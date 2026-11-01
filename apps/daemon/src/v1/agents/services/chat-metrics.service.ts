@@ -86,17 +86,17 @@ import { RunKindRowsCache } from './run-kind-rows.cache';
  * it is talking to, or how one accounts for its window.
  */
 /**
- * WHOSE readout is being taken — a chat's one agent, or one node of a workflow
+ * WHOSE readout is being taken — a chat's one agent, or one node of a team
  * run — with everything that differs between the two resolved once.
  *
- * One shape rather than a second copy of the read path: a workflow node's
+ * One shape rather than a second copy of the read path: a team node's
  * readout first shipped as its own method that asked only the live process,
  * and so it lost the stored reading, the prewarm and the farewell a chat's
  * readout had, and showed nothing about a claude Manager that had gone idle.
  */
 interface ReadingTarget {
   runId: string;
-  /** The workflow node, or null for a chat's own agent. */
+  /** The team node, or null for a chat's own agent. */
   nodeId: string | null;
   /**
    * Every call of the agent-to-agent CONVERSATION being read, or null for a
@@ -120,7 +120,7 @@ interface ReadingTarget {
   /**
    * The ACCOUNT this agent runs under (`accountKeyOf`) — what its plan limits
    * are shared across. Unlike {@link configDir} it is resolved for a node too,
-   * off the run's own workflow copy, since a node names its own profile.
+   * off the run's own team copy, since a node names its own profile.
    */
   account: string | null;
   /** The last reading filed for this agent, verbatim JSON. */
@@ -191,7 +191,7 @@ export class ChatMetricsService implements OnModuleInit {
     // user's own agent — a tax on every turn of every conversation, for a
     // readout most of them never open.
     this.bus.all().subscribe((event) => {
-      // A workflow node's turn belongs to that node's own readout; a chat's
+      // A team node's turn belongs to that node's own readout; a chat's
       // rows carry no node.
       const nodeId = event.item.nodeId ?? null;
       const key =
@@ -229,7 +229,7 @@ export class ChatMetricsService implements OnModuleInit {
     if (nodeId !== null && callId !== null) {
       throw new BadRequestException(
         'METRICS_TARGET_AMBIGUOUS',
-        'name a workflow node or a call, not both',
+        'name a team node or a call, not both',
       );
     }
     const em = this.em.fork();
@@ -237,9 +237,9 @@ export class ChatMetricsService implements OnModuleInit {
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    // A workflow run names the NODE: it holds one process and one window per
+    // A team run names the NODE: it holds one process and one window per
     // node, so the run alone names no agent. REPORTED as "i cant see full
-    // context info for workflow". A CALL goes one level further down, since a
+    // context info for team". A CALL goes one level further down, since a
     // callee holds a process per conversation beside its node's own.
     if (callId !== null) {
       const target = await this.callTarget(run, runId, callId, em);
@@ -452,14 +452,14 @@ export class ChatMetricsService implements OnModuleInit {
   }
 
   /**
-   * One WORKFLOW node as a reading target, or null for a node that has never
+   * One TEAM node as a reading target, or null for a node that has never
    * run in this run.
    *
    * Pinned to the node's OWN newest row rather than the run's: the run's moves
    * with every other node's work, so a Manager's reading would stop being
    * served the moment its Engineer wrote a line — which is exactly while the
    * Manager sits idle and someone looks at it. The profile is not part of a
-   * node's key: a node's config directory is fixed by the run's workflow copy.
+   * node's key: a node's config directory is fixed by the run's team copy.
    */
   private async nodeTarget(
     run: Run,
@@ -472,17 +472,13 @@ export class ChatMetricsService implements OnModuleInit {
       return null;
     }
     let configDir =
-      snapshotNodeConfigDirs(run.workflowSnapshot).get(nodeId) ?? null;
-    if (snapshotNodePoolProfiles(run.workflowSnapshot).has(nodeId)) {
+      snapshotNodeConfigDirs(run.teamSnapshot).get(nodeId) ?? null;
+    if (snapshotNodePoolProfiles(run.teamSnapshot).has(nodeId)) {
       const member =
         readNodePoolMembers(await this.itemDao.poolHandOffRows(runId, em)).get(
           nodeId,
         ) ?? 1;
-      const profile = snapshotMemberProfile(
-        run.workflowSnapshot,
-        nodeId,
-        member,
-      );
+      const profile = snapshotMemberProfile(run.teamSnapshot, nodeId, member);
       if (profile?.agentKind === state.agentKind) {
         configDir = profile.configDir;
       }
@@ -501,7 +497,7 @@ export class ChatMetricsService implements OnModuleInit {
       polled: nodePolledSpend(
         state,
         (kind) => this.polledSpend.pollsSpend(kind),
-        snapshotPoolKinds(run.workflowSnapshot).get(nodeId),
+        snapshotPoolKinds(run.teamSnapshot).get(nodeId),
       ),
     };
   }
@@ -559,7 +555,7 @@ export class ChatMetricsService implements OnModuleInit {
       member === null
         ? null
         : snapshotMemberProfile(
-            run.workflowSnapshot,
+            run.teamSnapshot,
             conversation.calleeNodeId,
             member,
           );
@@ -623,7 +619,7 @@ export class ChatMetricsService implements OnModuleInit {
   /**
    * The merged wall-clock stretches in which some agent of this run worked,
    * and those in which it waited on the user — the chat header's clock on a
-   * workflow (`utils/active-spans.ts`).
+   * team (`utils/active-spans.ts`).
    */
   async readClockSpans(
     runId: string,
@@ -641,7 +637,7 @@ export class ChatMetricsService implements OnModuleInit {
   }
 
   /**
-   * `GET :runId/totals` — the spend, and on a WORKFLOW the working stretches.
+   * `GET :runId/totals` — the spend, and on a TEAM the working stretches.
    *
    * A chat's header draws its own clock, so its stretches would be read and
    * thrown away — on a route that runs on every thread open and every settle.
@@ -651,7 +647,7 @@ export class ChatMetricsService implements OnModuleInit {
     const run = await this.requireRun(runId, em);
     const totals = await this.totalsOf(runId, run, em);
     const spans =
-      run.workflowId === null
+      run.teamId === null
         ? { activeSpans: [], pausedSpans: [] }
         : await this.readClockSpans(runId);
     return { totals, ...spans };
@@ -711,12 +707,12 @@ export class ChatMetricsService implements OnModuleInit {
     // service so a burst of opens costs one request at most. Not awaited — a
     // header must not wait on a network read, and the next look serves the
     // answer this one fetched.
-    // A WORKFLOW run's own agentKind is null — its polled agents are nodes —
+    // A TEAM run's own agentKind is null — its polled agents are nodes —
     // so asking the run alone never priced a Dev Team run's cursor QA.
     if (await this.polledSpend.runHoldsPolledSpend(runId, run.agentKind)) {
       void this.polledSpend.refresh();
     }
-    if (run.workflowId === null) {
+    if (run.teamId === null) {
       return applyPolledSpend(
         sumUsagePayloads(
           (await this.kindRows.rowsOf(runId, USAGE_ITEM_KINDS)).map(
@@ -726,7 +722,7 @@ export class ChatMetricsService implements OnModuleInit {
         run,
       );
     }
-    // A WORKFLOW run mixes CLIs: self-pricing nodes report their own turns, a
+    // A TEAM run mixes CLIs: self-pricing nodes report their own turns, a
     // polled node's bill lands on the run. The bill is ADDED to the other
     // nodes' cost — replacing it showed the one polled node's price as the
     // run's whole cost. A polled node's own turn costs are left out of the sum
@@ -967,7 +963,7 @@ export class ChatMetricsService implements OnModuleInit {
     } satisfies StoredMetricsReading);
     try {
       // On the row the reading belongs to: one per run for a chat, one per
-      // node for a workflow run, whose nodes each hold their own window.
+      // node for a team run, whose nodes each hold their own window.
       await (target.nodeId === null
         ? this.runDao.rememberMetricsReading(
             target.runId,
@@ -1007,7 +1003,7 @@ export class ChatMetricsService implements OnModuleInit {
    * alive; on the prewarm path it is a cache miss and nothing more.
    */
   private async capture(sessionKey: string): Promise<void> {
-    // The registry key names whose process this is. A workflow NODE's is taken
+    // The registry key names whose process this is. A team NODE's is taken
     // on its way out exactly as a chat's is — without it a claude Manager left
     // idle while its callees worked had nothing to show. A call's process has
     // no readout of its own to file under, so it is left alone.
@@ -1135,7 +1131,7 @@ export class ChatMetricsService implements OnModuleInit {
   }
 
   /**
-   * The account a workflow node runs under: the profile the run's own workflow
+   * The account a team node runs under: the profile the run's own team
    * copy names for it (none means the CLI's default), under the same folder
    * pin a chat is — every node of a run works in the run's folder.
    */
@@ -1147,7 +1143,7 @@ export class ChatMetricsService implements OnModuleInit {
     return this.accountKey(
       run,
       agentKind,
-      snapshotNodeConfigDirs(run.workflowSnapshot).get(nodeId) ?? null,
+      snapshotNodeConfigDirs(run.teamSnapshot).get(nodeId) ?? null,
     );
   }
 
@@ -1188,7 +1184,7 @@ export class ChatMetricsService implements OnModuleInit {
     declared: DeclaredReasonField,
     sentences: AbsenceSentences,
   ): string {
-    // A run row's `agentKind` is nullable, and a workflow run genuinely has
+    // A run row's `agentKind` is nullable, and a team run genuinely has
     // none — its nodes each name their own. There is nothing to ask, and no
     // adapter to ask for a sentence.
     if (agentKind === null) {

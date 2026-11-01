@@ -311,8 +311,8 @@ describe('WallWorkService (in-memory sqlite)', () => {
   });
 
   describe('sweepAllQuietly', () => {
-    it("fills older workflow and chat runs, every node's turns, and retires itself", async () => {
-      await runs.create({ id: 'run-1', workflowId: 'dev-team' });
+    it("fills older team and chat runs, every node's turns, and retires itself", async () => {
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
       await runs.create({ id: 'chat-1' });
       await nodes.createPending('run-1', 'eng');
       await nodes.createPending('run-1', 'qa');
@@ -332,7 +332,7 @@ describe('WallWorkService (in-memory sqlite)', () => {
     });
 
     it('records each turn once beside a live catch-up running at the same time', async () => {
-      await runs.create({ id: 'run-1', workflowId: 'dev-team' });
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
       await nodes.createPending('run-1', 'eng');
       await turn(0, 9_000);
       await turn(10_000, 12_000);
@@ -349,7 +349,7 @@ describe('WallWorkService (in-memory sqlite)', () => {
     });
 
     it('stays retired once the marker names the current version', async () => {
-      await runs.create({ id: 'run-1', workflowId: 'dev-team' });
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
       await nodes.createPending('run-1', 'eng');
       await turn(0, 9_000);
       writeFileSync(marker, `${WALL_WORK_VERSION}\n`);
@@ -360,8 +360,8 @@ describe('WallWorkService (in-memory sqlite)', () => {
     });
 
     it('skips a run that fails, fills the rest, and is not retired', async () => {
-      await runs.create({ id: 'run-1', workflowId: 'dev-team' });
-      await runs.create({ id: 'run-2', workflowId: 'dev-team' });
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
+      await runs.create({ id: 'run-2', teamId: 'dev-team' });
       await nodes.createPending('run-1', 'eng');
       await nodes.createPending('run-2', 'eng');
       await turn(0, 9_000);
@@ -382,7 +382,7 @@ describe('WallWorkService (in-memory sqlite)', () => {
     });
 
     it('resolves when the runs cannot be listed, and is not retired', async () => {
-      vi.spyOn(runs, 'listWorkflowRuns').mockRejectedValue(new Error('locked'));
+      vi.spyOn(runs, 'listTeamRuns').mockRejectedValue(new Error('locked'));
       vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
 
       await expect(ledger.sweepAllQuietly()).resolves.toBeUndefined();
@@ -390,7 +390,7 @@ describe('WallWorkService (in-memory sqlite)', () => {
     });
 
     it('still fills the runs when the marker cannot be written', async () => {
-      await runs.create({ id: 'run-1', workflowId: 'dev-team' });
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
       await nodes.createPending('run-1', 'eng');
       await turn(0, 9_000);
       const warn = vi

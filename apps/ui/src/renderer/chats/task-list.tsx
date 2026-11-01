@@ -231,7 +231,7 @@ export interface AgentTaskGroup {
  * Several agents' task sets, one BLOCK each under the name of the agent that
  * keeps it.
  *
- * REPORTED against a workflow run: "if we working with workflows - each task
+ * REPORTED against a team run: "if we working with teams - each task
  * set should be inside popover in block related to its connected agent". The
  * shelf chip flattened every agent's rows into one run, so a Manager's four
  * tasks and an Engineer's nine arrived as thirteen rows with nothing between
@@ -251,7 +251,7 @@ export interface AgentTaskGroup {
  * different question.
  *
  * The heading is drawn for every group INCLUDING a lone one. Whether the
- * grouping happens at all is the caller's decision (a workflow, never a 1:1
+ * grouping happens at all is the caller's decision (a team, never a 1:1
  * chat — the same gate the terminals chip's labels take), so a run whose only
  * task list happens to belong to one node still says whose it is.
  */

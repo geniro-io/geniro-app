@@ -69,7 +69,7 @@ function rankClass(index: number): string {
  *
  * A COLUMN of one ruled surface rather than a `Card` of its own, and that is
  * what fixed the shape of this row: four cards in a grid are stretched to the
- * tallest, so a workflow breakdown holding ONE row was a 345px box with 300px
+ * tallest, so a team breakdown holding ONE row was a 345px box with 300px
  * of nothing in it, three times over. One surface has the same air in it and
  * does not draw three empty boxes around it.
  */

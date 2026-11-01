@@ -13,7 +13,7 @@ import { positive } from '../utils/positive-figure';
  * The listing feeds the nodes route, which a client reads WHOLE on every
  * reconnect — so its size is a per-reconnect cost, not a stored one. Nothing
  * else bounds it: a row is written per agent-to-agent call and never deleted
- * until the run is, so a long-lived workflow that fans out on a loop grows this
+ * until the run is, so a long-lived team that fans out on a loop grows this
  * without limit, and every reconnect pays for the whole history.
  *
  * Newest-first, because that is the half a client can still use: a ring is

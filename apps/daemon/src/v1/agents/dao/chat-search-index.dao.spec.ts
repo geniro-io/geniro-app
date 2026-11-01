@@ -177,10 +177,10 @@ describe('ChatSearchIndexDao (in-memory sqlite)', () => {
     await db.run(RUN_A, { cwd: '/one' });
     await db.run(RUN_B, { cwd: '/two', archivedAt: new Date() });
     await db.run('gone', { deletedAt: new Date() });
-    await db.run('builder', { editsWorkflowSlug: 'dev-team' });
+    await db.run('builder', { editsTeamSlug: 'dev-team' });
     // An analysis quotes its source, so it would answer the same words.
     await db.run('analysis', { analysisSourceRunId: RUN_A });
-    await db.run('wf-analysis', { analysisWorkflowSlug: 'dev-team' });
+    await db.run('wf-analysis', { analysisTeamSlug: 'dev-team' });
     await db.item('a', { runId: RUN_A, payload: said('shared word') });
     await db.item('b', { runId: RUN_B, payload: said('shared word') });
     await db.item('c', { runId: 'gone', payload: said('shared word') });
@@ -282,9 +282,9 @@ describe('ChatSearchIndexDao (in-memory sqlite)', () => {
 
   it('reads a run for a context read only where a search could have found it', async () => {
     await db.run(RUN_A);
-    await db.run('builder', { editsWorkflowSlug: 'dev-team' });
+    await db.run('builder', { editsTeamSlug: 'dev-team' });
     await db.run('analysis', { analysisSourceRunId: RUN_A });
-    await db.run('wf-analysis', { analysisWorkflowSlug: 'dev-team' });
+    await db.run('wf-analysis', { analysisTeamSlug: 'dev-team' });
     const dao = db.dao();
 
     expect((await dao.run(RUN_A))?.id).toBe(RUN_A);

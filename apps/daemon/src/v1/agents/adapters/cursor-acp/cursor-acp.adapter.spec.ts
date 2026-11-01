@@ -2408,7 +2408,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       const { spawn, child } = fakeSpawn();
       current = child;
       const events: AgentEvent[] = [];
-      // Run-scoped, as every chat and workflow turn is: the process outlives
+      // Run-scoped, as every chat and team turn is: the process outlives
       // the turn, which is what lets a turn be HELD for its delegates.
       const session = new CursorAcpAdapter({
         vocabularyStore: freshVocabularyStore(),

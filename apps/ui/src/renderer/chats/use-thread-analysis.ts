@@ -8,20 +8,20 @@ import { runStatusRowFields } from './run-status-row';
 /**
  * What a thread's Analyze button says about its analysis: none yet, one that
  * is idle, one working, or one waiting on the user (a question or an approval
- * — `save_workflow_change` asks).
+ * — `save_team_change` asks).
  */
 export type ThreadAnalysisMark = 'none' | 'idle' | 'working' | 'waiting';
 
 type Reading = Pick<RunDto, 'id' | 'status' | 'awaiting'> | null;
 
 /**
- * Whether a run is itself an analysis — of a thread, or of a workflow across
+ * Whether a run is itself an analysis — of a thread, or of a team across
  * its runs. An analysis is never analysed in turn.
  */
 export function isAnalysisRun(
-  run: Pick<RunDto, 'analysisSourceRunId' | 'analysisWorkflowSlug'>,
+  run: Pick<RunDto, 'analysisSourceRunId' | 'analysisTeamSlug'>,
 ): boolean {
-  return run.analysisSourceRunId != null || run.analysisWorkflowSlug != null;
+  return run.analysisSourceRunId != null || run.analysisTeamSlug != null;
 }
 
 /** The mark one reading of the analysis row makes. */

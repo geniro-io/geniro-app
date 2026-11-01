@@ -36,8 +36,8 @@ describe('UsageRecorderService', () => {
     agentKind: string | null;
     model: string | null;
     cwd: string | null;
-    workflowId?: string | null;
-    workflowSnapshot?: string | null;
+    teamId?: string | null;
+    teamSnapshot?: string | null;
     polledCostCents?: number | null;
     updatedAt?: Date;
   } | null;
@@ -239,7 +239,7 @@ describe('UsageRecorderService', () => {
   });
 
   it('attributes a graph node’s turn to the node’s own agent and model', async () => {
-    // A workflow run names no single agent — reading the run alone would
+    // A team run names no single agent — reading the run alone would
     // attribute every node's spend to nothing.
     run = { agentKind: null, model: null, cwd: '/work/project' };
     nodeState = { agentKind: 'cursor-agent', model: 'composer-1' };
@@ -333,8 +333,8 @@ describe('UsageRecorderService', () => {
         agentKind: 'cursor-agent',
         model: 'kimi-k3',
         cwd: '/work/project',
-        workflowId: null,
-        workflowSnapshot: null,
+        teamId: null,
+        teamSnapshot: null,
         polledCostCents: 250,
         updatedAt: new Date('2026-08-14T09:30:00.000Z'),
       };
@@ -353,8 +353,8 @@ describe('UsageRecorderService', () => {
         id: 'run-team',
         agentKind: null,
         model: null,
-        workflowId: 'team',
-        workflowSnapshot: JSON.stringify({
+        teamId: 'team',
+        teamSnapshot: JSON.stringify({
           nodes: [
             {
               id: 'qa',

@@ -235,7 +235,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Live (with its button and Dismiss), a workflow callee's stop (from its agent,
+ * Live (with its button and Dismiss), a team callee's stop (from its agent,
  * linking to its call, listing what it stops), pressed, a stop whose process
  * had already exited, removed by the agent, gone, and a command: published,
  * running, ran with output, failed with output.

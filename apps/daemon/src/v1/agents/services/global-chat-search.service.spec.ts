@@ -185,7 +185,7 @@ describe('GlobalChatSearchService (in-memory sqlite)', () => {
   it('refuses a context read for anything a search could not have returned', async () => {
     await db.run(RUN_A);
     await db.run(RUN_GONE, { deletedAt: new Date() });
-    await db.run(RUN_BUILDER, { editsWorkflowSlug: 'dev-team' });
+    await db.run(RUN_BUILDER, { editsTeamSlug: 'dev-team' });
     await db.item('tool', { runId: RUN_A, kind: 'tool_result' });
     await db.item('gone', { runId: RUN_GONE });
     await db.item('builder', { runId: RUN_BUILDER });

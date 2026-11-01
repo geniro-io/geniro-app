@@ -59,7 +59,7 @@ export function codexWindowLabel(tokens: number): string {
 /**
  * The token count a stored window names, or null for one this reader cannot
  * place. Accepts the `k`/`m` spelling {@link codexWindowLabel} writes and a
- * bare count, so a value from a hand-edited workflow still reaches the flag.
+ * bare count, so a value from a hand-edited team still reaches the flag.
  */
 export function codexWindowTokens(
   window: string | null | undefined,

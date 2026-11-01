@@ -212,7 +212,7 @@ type SegmentDraft = {
 
 /**
  * A message the user sent to the THREAD. One carrying a node id was sent
- * straight to a workflow callee mid-call — it lives inside that call's block,
+ * straight to a team callee mid-call — it lives inside that call's block,
  * so it is neither a marker of its own nor an agent message in the stretch.
  */
 function isUserMessage(row: TimelineSpineRow): boolean {

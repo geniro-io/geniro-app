@@ -52,7 +52,7 @@ describe('atomicWrite', () => {
 
   it('leaves no staging file behind on success', async () => {
     // The tmp file is a private staging name; a stray one would be picked up
-    // by any consumer that globs the directory (the workflow library does).
+    // by any consumer that globs the directory (the team library does).
     await atomicWrite(join(dir, 'store.json'), 'x');
 
     expect(await strayTmpFiles()).toEqual([]);
@@ -187,7 +187,7 @@ describe('atomicCreate', () => {
   it('refuses to overwrite an existing file', async () => {
     // This is the whole reason it exists rather than being another
     // atomicWrite: the caller allocates a slug by racing for the name, so a
-    // silent overwrite would clobber someone else's workflow.
+    // silent overwrite would clobber someone else's team.
     const path = join(dir, 'taken.yaml');
     await writeFile(path, 'original', 'utf8');
 

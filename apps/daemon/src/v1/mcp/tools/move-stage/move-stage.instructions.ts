@@ -1,6 +1,6 @@
 export function moveStageInstructions(): string {
   return (
-    "Move this workflow run's stages — the steps every run of the workflow walks, listed in your " +
+    "Move this team run's stages — the steps every run of the team walks, listed in your " +
     'instructions. Use action "complete" when the current stage\'s "done when" holds, with a one-line ' +
     'summary of what was done; "skip" when the current stage does not apply to this run, with the ' +
     'reason; "reopen" when a finished or skipped stage turns out unfinished, with the reason (every ' +

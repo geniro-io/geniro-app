@@ -21,7 +21,7 @@ export class NodeState extends TimestampsEntity {
 
   /**
    * The CLI that actually ran this node's turn, stamped at turn start. Run
-   * history must not depend on the live workflow YAML: editing a node's agent
+   * history must not depend on the live team YAML: editing a node's agent
    * after runs exist would otherwise make the terminal mirror resume a past
    * session with the wrong CLI. Null until the node's first turn starts
    * (readers then fall back to the YAML lookup).
@@ -31,9 +31,9 @@ export class NodeState extends TimestampsEntity {
 
   /**
    * The model that turn actually ran as, stamped beside the agent kind and for
-   * the same reason: run history must not depend on the live workflow YAML.
+   * the same reason: run history must not depend on the live team YAML.
    *
-   * Without it the terminal mirror of a workflow node had nothing to open on
+   * Without it the terminal mirror of a team node had nothing to open on
    * and fell back to the CLI's own default — a different model with a
    * different context window sitting beside the transcript it mirrors. Reading
    * the CURRENT definition instead is exactly the drift `agentKind` is stamped
@@ -50,7 +50,7 @@ export class NodeState extends TimestampsEntity {
    * A CHAT has had a durable reading since the live plane proved too thin to
    * draw a ring from: that plane is ephemeral, so a client that reloads,
    * reconnects, or opens the run for the first time has nothing, and a node
-   * PARKED in `await_agent` emits nothing for minutes on end. A workflow node
+   * PARKED in `await_agent` emits nothing for minutes on end. A team node
    * had no such column at all, so its ring simply went blank — reported as
    * "here i dont see manager context" over a caller blocked on its callee while
    * the callee's own ring, still streaming, sat directly beneath it.
@@ -132,7 +132,7 @@ export class NodeState extends TimestampsEntity {
 
   /**
    * This node's share of `Run.polledCostCents` — the polled price of the
-   * conversation on this row. A workflow mixes CLIs, so without a per-node
+   * conversation on this row. A team mixes CLIs, so without a per-node
    * figure a polled node's card had no cost and the run's header could not add
    * the polled bill to the self-priced turns rather than replace them. Null
    * means never priced on this row.
@@ -157,12 +157,12 @@ export class NodeState extends TimestampsEntity {
    * The last context and plan reading this node's agent gave, as JSON — the
    * per-node twin of `Run.lastMetricsReading`, and for the same reason.
    *
-   * A workflow node's process is closed for idleness like a chat's, and a
+   * A team node's process is closed for idleness like a chat's, and a
    * Manager waiting on its callees is idle for exactly the stretch in which
    * someone opens its readout. Asked only of the live process, that readout
    * was empty while a claude chat beside it showed its breakdown and its plan
-   * limits from the reading it had kept — REPORTED against a workflow whose
-   * Manager is claude. On the node rather than the run, because a workflow run
+   * limits from the reading it had kept — REPORTED against a team whose
+   * Manager is claude. On the node rather than the run, because a team run
    * holds one window per node.
    */
   @Property({ type: 'text', nullable: true })

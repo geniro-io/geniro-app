@@ -1,5 +1,5 @@
-import { CALL_MODES } from '../../../graphs/graphs.types';
-import { COLD_RESUME_CONTEXT_PERCENT } from '../../../graphs/utils/prompt-cache-standing';
+import { CALL_MODES } from '../../../teams/teams.types';
+import { COLD_RESUME_CONTEXT_PERCENT } from '../../../teams/utils/prompt-cache-standing';
 import { MAX_CALL_TITLE_LENGTH } from './call-agent.reader';
 
 /** `call_agent`'s arguments. */

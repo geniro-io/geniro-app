@@ -57,7 +57,7 @@ function formatUptime(seconds: number | null): string | null {
 }
 
 /**
- * Whose process this is: the workflow node, the callee conversation, or — for
+ * Whose process this is: the team node, the callee conversation, or — for
  * a chat, whose one agent has no name of its own — its CLI.
  */
 export function treeLabel(tree: RunProcessTree, agentName: string): string {

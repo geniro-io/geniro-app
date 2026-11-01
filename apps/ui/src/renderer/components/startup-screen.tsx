@@ -51,7 +51,7 @@ export function StartupScreen({
     ? migrating.of > 1
       ? `Step ${migrating.step} of ${migrating.of}`
       : 'Bringing your data up to this version'
-    : 'Opening your chats and workflows';
+    : 'Opening your chats and teams';
 
   return (
     <div

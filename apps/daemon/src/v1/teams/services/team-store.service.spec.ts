@@ -1,0 +1,608 @@
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@packages/common';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { agentNode } from '../__tests__/team-node';
+import type { Team } from '../teams.types';
+import { TeamStoreService } from './team-store.service';
+
+const WF: Team = {
+  name: 'Review Team',
+  nodes: [
+    { id: 'coder', kind: 'agent', agent: 'claude', approval: 'auto' },
+    { id: 'reviewer', kind: 'agent', agent: 'cursor-agent', approval: 'ask' },
+  ],
+  edges: [{ from: 'coder', to: 'reviewer', kind: 'data' as const }],
+};
+
+describe('TeamStoreService', () => {
+  let dir: string;
+  let store: TeamStoreService;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'geniro-teams-'));
+    store = new TeamStoreService({ teamsDir: dir });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('creates a team deriving the slug from its name', async () => {
+    const created = await store.create(WF);
+    expect(created.slug).toBe('review-team');
+    const listed = await store.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      slug: 'review-team',
+      name: 'Review Team',
+      nodeCount: 2,
+      edgeCount: 1,
+    });
+  });
+
+  it('refuses a save whose stages loop back, and keeps one whose hint names a deleted agent', async () => {
+    await store.create(WF, 'review-team');
+    await expect(
+      store.save('review-team', {
+        ...WF,
+        stages: [
+          { id: 'build', title: 'Build', doneWhen: 'built', next: ['check'] },
+          { id: 'check', title: 'Check', doneWhen: 'ok', next: ['fix'] },
+          { id: 'fix', title: 'Fix', doneWhen: 'fixed', next: ['check'] },
+        ],
+      }),
+    ).rejects.toMatchObject({ errorCode: 'STAGE_CYCLE' });
+
+    await store.save('review-team', {
+      ...WF,
+      stages: [
+        { id: 'build', title: 'Build', doneWhen: 'built', ownerHint: 'gone' },
+      ],
+    });
+    expect((await store.get('review-team')).team.stages?.[0]?.ownerHint).toBe(
+      'gone',
+    );
+  });
+
+  it('refuses a save made from a copy older than the file, and accepts one from the current copy', async () => {
+    const created = await store.create(WF, 'review-team');
+    const elsewhere = await store.save('review-team', {
+      ...WF,
+      description: 'changed by an analysis',
+    });
+
+    await expect(
+      store.save('review-team', { ...WF, name: 'Stale canvas' }, created.hash),
+    ).rejects.toMatchObject({ errorCode: 'TEAM_CHANGED' });
+    expect((await store.get('review-team')).team.description).toBe(
+      'changed by an analysis',
+    );
+
+    const saved = await store.save(
+      'review-team',
+      { ...WF, name: 'Fresh canvas' },
+      elsewhere.hash,
+    );
+    expect(saved.hash).toBe((await store.get('review-team')).hash);
+    expect(saved.hash).not.toBe(elsewhere.hash);
+  });
+
+  it('lets only one of two saves from the same version win, even at the same moment', async () => {
+    const created = await store.create(WF, 'review-team');
+
+    const results = await Promise.allSettled([
+      store.save('review-team', { ...WF, name: 'Builder' }, created.hash),
+      store.save('review-team', { ...WF, name: 'Analysis' }, created.hash),
+    ]);
+
+    expect(results.map((result) => result.status)).toEqual([
+      'fulfilled',
+      'rejected',
+    ]);
+    expect((await store.get('review-team')).team.name).toBe('Builder');
+  });
+
+  it('refuses a save quoting a version of a file deleted since, and does not re-create it', async () => {
+    const created = await store.create(WF, 'review-team');
+    await store.delete('review-team');
+
+    await expect(
+      store.save('review-team', WF, created.hash),
+    ).rejects.toMatchObject({ errorCode: 'TEAM_CHANGED' });
+    expect(await store.list()).toEqual([]);
+  });
+
+  it('summarizes the per-agent-kind breakdown in a stable order', async () => {
+    // The card badges read agentCounts directly — assert it is a real tally
+    // (three same-kind nodes count as 3, not deduped to 1) and that the order
+    // follows TEAM_AGENT_KINDS (claude first) regardless of declaration
+    // order, so a card's badges don't reshuffle between listings.
+    await store.create({
+      name: 'Mixed Team',
+      nodes: [
+        { id: 'a', kind: 'agent', agent: 'cursor-agent', approval: 'auto' },
+        { id: 'b', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'c', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'd', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [],
+    });
+    const [summary] = await store.list();
+    expect(summary?.agentCounts).toEqual([
+      { kind: 'claude', count: 3 },
+      { kind: 'cursor-agent', count: 1 },
+    ]);
+    expect(summary?.edgeCount).toBe(0);
+  });
+
+  it('counts trigger nodes in nodeCount but never in agentCounts', async () => {
+    await store.create({
+      name: 'Triggered',
+      nodes: [
+        { id: 't', kind: 'trigger', trigger: 'manual' },
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [{ from: 't', to: 'a', kind: 'data' as const }],
+    });
+    const [summary] = await store.list();
+    expect(summary!.nodeCount).toBe(2);
+    expect(summary!.agentCounts).toEqual([{ kind: 'claude', count: 1 }]);
+  });
+
+  it('lists teams newest-updated first', async () => {
+    // Deliberately make the ALPHABETICALLY-FIRST slug the OLDER file: an
+    // alphabetical sort would return ['alpha', 'beta'], so this only passes
+    // when the ordering truly follows the modification time.
+    await store.create({ ...WF, name: 'Alpha' });
+    await store.create({ ...WF, name: 'Beta' });
+    await utimes(
+      join(dir, 'alpha.team.yaml'),
+      new Date(),
+      new Date('2026-01-01T00:00:00Z'),
+    );
+    await utimes(
+      join(dir, 'beta.team.yaml'),
+      new Date(),
+      new Date('2026-06-01T00:00:00Z'),
+    );
+
+    const slugs = (await store.list()).map((s) => s.slug);
+    expect(slugs).toEqual(['beta', 'alpha']);
+  });
+
+  it('accepts an empty team as a library draft', async () => {
+    // "New team" persists a blank canvas (no nodes) before the builder
+    // opens — the store must round-trip it; only RUNNING it is rejected
+    // (graph-executor's GRAPH_EMPTY).
+    const created = await store.create({ name: 'Blank', nodes: [], edges: [] });
+    const { team } = await store.get(created.slug);
+    expect(team.nodes).toEqual([]);
+    const [summary] = await store.list();
+    expect(summary).toMatchObject({ nodeCount: 0, edgeCount: 0 });
+  });
+
+  it('suffixes the slug when the name collides', async () => {
+    await store.create(WF);
+    const second = await store.create(WF);
+    expect(second.slug).toBe('review-team-2');
+  });
+
+  it('names the slug a create would derive without writing a file', async () => {
+    await expect(store.freeDerivedSlug('Review Team')).resolves.toBe(
+      'review-team',
+    );
+    await expect(readdir(dir)).resolves.toEqual([]);
+    await store.create(WF);
+    await expect(store.freeDerivedSlug('Review Team')).resolves.toBe(
+      'review-team-2',
+    );
+    await expect(store.freeDerivedSlug('Runs')).resolves.toBe('runs-1');
+    expect((await store.list()).map((w) => w.slug)).toEqual(['review-team']);
+  });
+
+  it('never lets concurrent creates with the same name silently share one file', async () => {
+    // Rapid concurrent creates (e.g. a double-clicked "New team" button)
+    // race through the derive-slug → exists-check → write sequence. Every
+    // create must either succeed owning a distinct file that still holds the
+    // team it was given, or reject with the TEAM_EXISTS conflict —
+    // never silently overwrite / interleave another create's file. All
+    // violation modes of that one contract are collected into a single
+    // assertion because which mode manifests depends on fs scheduling.
+    const copies: Team[] = [1, 2, 3].map((n) => ({
+      ...WF,
+      description: `copy ${n}`,
+    }));
+    const results = await Promise.allSettled(
+      copies.map((wf) => store.create(wf)),
+    );
+    const violations: string[] = [];
+    const slugs: string[] = [];
+    for (const [i, result] of results.entries()) {
+      if (result.status === 'rejected') {
+        if (!(result.reason instanceof ConflictException)) {
+          violations.push(
+            `create of copy ${i + 1} rejected with a non-conflict error: ${String(result.reason)}`,
+          );
+        }
+        continue;
+      }
+      const { slug, team } = result.value;
+      if (slugs.includes(slug)) {
+        violations.push(`two successful creates share the slug '${slug}'`);
+      }
+      slugs.push(slug);
+      const got = await store.get(slug).catch((err: unknown) => {
+        violations.push(`get('${slug}') failed after create: ${String(err)}`);
+        return null;
+      });
+      if (got && got.team.description !== team.description) {
+        violations.push(
+          `'${slug}' holds '${String(got.team.description)}' instead of '${String(team.description)}'`,
+        );
+      }
+    }
+    if ((await store.list()).length !== slugs.length) {
+      violations.push('library file count differs from successful creates');
+    }
+    expect(slugs.length).toBeGreaterThanOrEqual(1);
+    expect(violations).toEqual([]);
+  });
+
+  it('can get() every team that list() returns, including hand-copied files with non-slug names', async () => {
+    // The teams dir is a plain folder under userData — a user can drop a
+    // hand-written file in with a name outside the slug charset. Whatever
+    // list() decides to show must be openable: a listed slug that get()
+    // rejects is a team the UI displays but can never open.
+    await store.save('good', WF);
+    await writeFile(
+      join(dir, 'My-Team.team.yaml'),
+      'name: my team\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n',
+      'utf8',
+    );
+    const listed = await store.list();
+    expect(listed.length).toBeGreaterThanOrEqual(1);
+    for (const summary of listed) {
+      const got = await store.get(summary.slug);
+      expect(got.team.name).toBe(summary.name);
+    }
+  });
+
+  describe('a slug a ROUTE owns is never handed to a team', () => {
+    // A team named "Runs" would slugify to `runs`, and
+    // `GET /v1/teams/runs` is the run list — Fastify matches the static
+    // segment first, so the team would list and could never be opened.
+    it('derives `runs-1` for a team named "Runs"', async () => {
+      const created = await store.create({ ...WF, name: 'Runs' });
+      expect(created.slug).toBe('runs-1');
+      await expect(store.get('runs-1')).resolves.toMatchObject({
+        team: { name: 'Runs' },
+      });
+    });
+
+    it('steps past a taken `runs-1` to `runs-2`, never back to `runs`', async () => {
+      const first = await store.create({ ...WF, name: 'Runs' });
+      const second = await store.create({ ...WF, name: 'runs' });
+      expect([first.slug, second.slug]).toEqual(['runs-1', 'runs-2']);
+    });
+
+    it('reserves `import` the same way', async () => {
+      const created = await store.create({ ...WF, name: 'Import' });
+      expect(created.slug).toBe('import-1');
+    });
+
+    it('imports a file named runs.team.yaml under `runs-1`', async () => {
+      const outside = await mkdtemp(join(tmpdir(), 'geniro-import-'));
+      const external = join(outside, 'runs.team.yaml');
+      await writeFile(
+        external,
+        'name: runs\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n',
+        'utf8',
+      );
+      try {
+        const imported = await store.importFrom(external);
+        expect(imported.slug).toBe('runs-1');
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('takes the slug from a file named before the rename (`*.geniro.yaml`)', async () => {
+      const outside = await mkdtemp(join(tmpdir(), 'geniro-import-'));
+      const external = join(outside, 'review-squad.geniro.yaml');
+      await writeFile(
+        external,
+        'name: Something Else\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n',
+        'utf8',
+      );
+      try {
+        const imported = await store.importFrom(external);
+        expect(imported.slug).toBe('review-squad');
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('refuses an EXPLICIT reserved slug rather than landing it elsewhere', async () => {
+      await expect(store.create(WF, 'runs')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(await readdir(dir)).toEqual([]);
+    });
+  });
+
+  // Import is how a team written by SOMEBODY ELSE arrives, which is the
+  // case the refusal exists for: a NUL in a role reaches claude's argv and
+  // node refuses to spawn, so the node would fail every run.
+  it('refuses to import a team whose agent role carries a NUL', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'geniro-import-'));
+    const external = join(outside, 'hostile.team.yaml');
+    await writeFile(
+      external,
+      'name: hostile\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n    role: "be \\0 helpful"\n',
+      'utf8',
+    );
+    try {
+      await expect(store.importFrom(external)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(await readdir(dir)).toEqual([]);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('conflicts on an explicit duplicate slug', async () => {
+    await store.create(WF, 'team');
+    await expect(store.create(WF, 'team')).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+  });
+
+  it('round-trips get after save', async () => {
+    await store.save('team', WF);
+    const got = await store.get('team');
+    expect(got.team).toEqual(WF);
+  });
+
+  it('save preserves hand-written comments in the existing file', async () => {
+    await store.save('team', WF);
+    const path = join(dir, 'team.team.yaml');
+    const annotated = `# my precious team\n${await readFile(path, 'utf8')}`;
+    await writeFile(path, annotated, 'utf8');
+
+    const updated: Team = {
+      ...WF,
+      nodes: [{ ...agentNode(WF.nodes[0]), model: 'opus' }, WF.nodes[1]!],
+    };
+    await store.save('team', updated);
+    const source = await readFile(path, 'utf8');
+    expect(source).toContain('# my precious team');
+    expect(agentNode((await store.get('team')).team.nodes[0]).model).toBe(
+      'opus',
+    );
+  });
+
+  it('rejects a cyclic team before touching disk', async () => {
+    const cyclic: Team = {
+      ...WF,
+      edges: [
+        { from: 'coder', to: 'reviewer', kind: 'data' as const },
+        { from: 'reviewer', to: 'coder', kind: 'data' as const },
+      ],
+    };
+    await expect(store.save('team', cyclic)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(store.get('team')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('rejects a path-traversal slug', async () => {
+    await expect(store.get('../evil')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it('deletes a team and 404s afterwards', async () => {
+    await store.save('team', WF);
+    await store.delete('team');
+    await expect(store.get('team')).rejects.toBeInstanceOf(NotFoundException);
+    await expect(store.delete('team')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+
+  it('skips unreadable files in list without failing the listing', async () => {
+    await store.save('good', WF);
+    await writeFile(join(dir, 'broken.team.yaml'), 'nodes: [\nname: :', 'utf8');
+    const listed = await store.list();
+    expect(listed.map((s) => s.slug)).toEqual(['good']);
+  });
+
+  it('imports an external file verbatim under a unique slug', async () => {
+    const external = join(dir, '..', `external-${Date.now()}.team.yaml`);
+    await writeFile(
+      external,
+      `# imported with comments\nname: ext\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n`,
+      'utf8',
+    );
+    try {
+      const imported = await store.importFrom(external);
+      expect(imported.team.name).toBe('ext');
+      const path = join(dir, `${imported.slug}.team.yaml`);
+      expect(await readFile(path, 'utf8')).toContain(
+        '# imported with comments',
+      );
+    } finally {
+      await rm(external, { force: true });
+    }
+  });
+
+  it('a second import of the same name lands on the next suffix, never over the first', async () => {
+    const external = join(dir, '..', `twice-${Date.now()}.team.yaml`);
+    await writeFile(
+      external,
+      `name: twice\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n`,
+      'utf8',
+    );
+    try {
+      const first = await store.importFrom(external);
+      const second = await store.importFrom(external);
+      expect(second.slug).not.toBe(first.slug);
+      expect(second.slug).toBe(`${first.slug}-2`);
+    } finally {
+      await rm(external, { force: true });
+    }
+  });
+
+  it('import commits exclusively — a taken path the stat check cannot see still yields a fresh slug', async () => {
+    // A dangling symlink occupies the slug's path but stat() (which follows
+    // symlinks) reports it absent. A check-then-rename import would "verify"
+    // the slug free and silently replace the entry; the exclusive link commit
+    // gets EEXIST and retries the next suffix instead.
+    const external = join(dir, '..', `occupied-${Date.now()}.team.yaml`);
+    await writeFile(
+      external,
+      `name: occupied\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n`,
+      'utf8',
+    );
+    try {
+      const base = external.split('/').pop()!.replace('.team.yaml', '');
+      await symlink(
+        join(dir, 'nowhere-target'),
+        join(dir, `${base}.team.yaml`),
+      );
+      const imported = await store.importFrom(external);
+      expect(imported.slug).toBe(`${base}-2`);
+    } finally {
+      await rm(external, { force: true });
+    }
+  });
+
+  it('a failed save leaves no stranded .tmp staging file behind', async () => {
+    // Force the rename to fail: the target path is an existing directory. The
+    // staged tmp has a unique per-call name, so nothing else ever reclaims it —
+    // the write path itself must clean up on failure.
+    await mkdir(join(dir, 'blocked.team.yaml'));
+
+    await expect(store.save('blocked', WF)).rejects.toThrow();
+
+    const entries = await readdir(dir);
+    expect(entries.filter((e) => e.includes('.tmp'))).toEqual([]);
+  });
+
+  it('exports a team byte-for-byte to a target path', async () => {
+    await store.save('team', WF);
+    const target = join(dir, 'exported-copy.yaml');
+    await store.exportTo('team', target);
+    expect(await readFile(target, 'utf8')).toBe(
+      await readFile(join(dir, 'team.team.yaml'), 'utf8'),
+    );
+  });
+
+  describe('legacy (pre-kind) files are rejected — no normalization (no-backcompat)', () => {
+    // A library file written before node/edge kinds existed — no `kind` on
+    // either. The store no longer normalizes these in place: the strict schema
+    // rejects them outright (parseLegacyTeamYaml + the .bak retry are gone),
+    // and no backup is ever minted.
+    const LEGACY_SOURCE = [
+      '# hand-written header comment',
+      'name: Legacy Team',
+      'nodes:',
+      '  - id: coder',
+      '    agent: claude',
+      '  - id: reviewer',
+      '    agent: cursor-agent',
+      'edges:',
+      '  - from: coder',
+      '    to: reviewer',
+      '',
+    ].join('\n');
+
+    it('get() rejects a legacy file instead of normalizing it, and mints no .bak', async () => {
+      const path = join(dir, 'legacy.team.yaml');
+      await writeFile(path, LEGACY_SOURCE, 'utf8');
+
+      await expect(store.get('legacy')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      // The file is left exactly as the user wrote it — no in-place rewrite...
+      expect(await readFile(path, 'utf8')).toBe(LEGACY_SOURCE);
+      // ...and no backup exists for a normalization that no longer happens.
+      await expect(readFile(`${path}.bak`, 'utf8')).rejects.toThrow();
+    });
+
+    it('list() skips a legacy file as unreadable and never mints a .bak', async () => {
+      await writeFile(join(dir, 'legacy.team.yaml'), LEGACY_SOURCE, 'utf8');
+
+      // A strict-rejected file is skipped from the listing (not normalized in).
+      expect((await store.list()).map((s) => s.slug)).toEqual([]);
+      await expect(
+        readFile(join(dir, 'legacy.team.yaml.bak'), 'utf8'),
+      ).rejects.toThrow();
+    });
+
+    it('importFrom rejects a legacy external file and adds nothing to the library', async () => {
+      const external = join(dir, '..', `legacy-ext-${Date.now()}.team.yaml`);
+      await writeFile(external, LEGACY_SOURCE, 'utf8');
+      try {
+        await expect(store.importFrom(external)).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+        // Nothing landed in the library, and the user's original is untouched.
+        expect((await store.list()).map((s) => s.slug)).toEqual([]);
+        expect(await readFile(external, 'utf8')).toBe(LEGACY_SOURCE);
+      } finally {
+        await rm(external, { force: true });
+      }
+    });
+  });
+});
+
+describe('TeamStoreService — locate', () => {
+  let dir: string;
+  let store: TeamStoreService;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'geniro-teams-'));
+    store = new TeamStoreService({ teamsDir: dir });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('names the library directory and the team file inside it', async () => {
+    const { slug } = await store.create(WF);
+    expect(store.locate(slug)).toEqual({
+      directory: dir,
+      path: join(dir, `${slug}.team.yaml`),
+    });
+  });
+
+  it('answers for a slug with no file yet — it is path arithmetic, not a read', () => {
+    expect(store.locate('not-created').path).toBe(
+      join(dir, 'not-created.team.yaml'),
+    );
+  });
+
+  it('refuses a slug that would escape the library directory', () => {
+    expect(() => store.locate('../../etc/passwd')).toThrow(BadRequestException);
+  });
+});

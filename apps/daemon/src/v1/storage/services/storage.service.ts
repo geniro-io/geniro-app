@@ -16,9 +16,9 @@ import {
   DEBUG_LOG_DIR_NAME,
   debugSink,
 } from '../../diagnostics/utils/debug-sink';
-import { WORKFLOW_BACKUP_DIR } from '../../graphs/utils/workflow-backup';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import { TASK_ATTACHMENTS_DIR_NAME } from '../../tasks/utils/task-attachments';
+import { TEAM_BACKUP_DIR } from '../../teams/utils/team-backup';
 import {
   type SeenInodes,
   STORAGE_GROUP_IDS,
@@ -36,7 +36,7 @@ import {
   COMPACTION_MARKER_FILE,
   RUN_FILE_DIRS,
   storageClassifier,
-  WORKFLOWS_DIR_NAME,
+  TEAMS_DIR_NAME,
 } from '../utils/storage-layout';
 import { vacuumDatabase } from '../utils/vacuum-database';
 
@@ -137,9 +137,9 @@ export class StorageService {
         unclaimed.push(name);
         continue;
       }
-      if (name === WORKFLOWS_DIR_NAME) {
-        add('workflowBackups', {
-          name: `${WORKFLOWS_DIR_NAME}/${WORKFLOW_BACKUP_DIR}`,
+      if (name === TEAMS_DIR_NAME) {
+        add('teamBackups', {
+          name: `${TEAMS_DIR_NAME}/${TEAM_BACKUP_DIR}`,
           bytes: await measurePath(this.backupsDir(), seen),
         });
       }
@@ -162,7 +162,7 @@ export class StorageService {
       ],
       chatFiles: optionOf('orphanChatFiles', await this.orphanChatFiles()),
       taskFiles: optionOf('orphanTaskFiles', await this.orphanTaskFiles()),
-      workflowBackups: optionOf('workflowBackups', await this.backupFiles()),
+      teamBackups: optionOf('teamBackups', await this.backupFiles()),
       logs: optionOf('logs', await this.closedLogs()),
       leftovers: optionOf('leftovers', await this.named(classify, 'leftovers')),
       settingsCopies: optionOf(
@@ -333,7 +333,7 @@ export class StorageService {
         return removeAll(await this.orphanChatFiles());
       case 'orphanTaskFiles':
         return removeAll(await this.orphanTaskFiles());
-      case 'workflowBackups':
+      case 'teamBackups':
         return removeAll(await this.backupFiles());
       case 'logs':
         return removeAll(await this.closedLogs());
@@ -384,7 +384,7 @@ export class StorageService {
   }
 
   private backupsDir(): string {
-    return join(this.root, WORKFLOWS_DIR_NAME, WORKFLOW_BACKUP_DIR);
+    return join(this.root, TEAMS_DIR_NAME, TEAM_BACKUP_DIR);
   }
 
   private async backupFiles(): Promise<Doomed[]> {

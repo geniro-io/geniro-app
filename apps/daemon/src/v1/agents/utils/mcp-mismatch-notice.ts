@@ -7,7 +7,7 @@ import type { McpTurnMismatch } from '../chat.types';
  *
  * Either way the session that reported it has been retired, so the next turn
  * starts a process that dials those servers again — "turn" rather than "your
- * message", since on a workflow callee the user's message goes elsewhere.
+ * message", since on a team callee the user's message goes elsewhere.
  * What differs is whether a record the CLI kept was the reason.
  */
 export function mcpMismatchNotice(seen: McpTurnMismatch): string | null {

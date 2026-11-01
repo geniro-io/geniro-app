@@ -46,7 +46,7 @@ export const InAppAction: Story = {
   render: () => (
     <PanelActionRow
       onClick={() => undefined}
-      title="Open the workflow builder"
+      title="Open the team builder"
       icon={<FileText className="size-3.5 shrink-0 text-muted-foreground" />}
       meta="⌥⌘L"
     />

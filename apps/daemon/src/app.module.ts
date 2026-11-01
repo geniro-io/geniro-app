@@ -13,7 +13,6 @@ import { AgentSessionRegistry } from './v1/agents/services/agent-session.registr
 import { ProcessRegistry } from './v1/agents/services/process-registry';
 import { AuthModule } from './v1/auth/auth.module';
 import { DiagnosticsModule } from './v1/diagnostics/diagnostics.module';
-import { GraphsModule } from './v1/graphs/graphs.module';
 import { HandoffModule } from './v1/handoff/handoff.module';
 import { McpModule } from './v1/mcp/mcp.module';
 import { MemoryModule } from './v1/memory/memory.module';
@@ -26,6 +25,7 @@ import { SharesModule } from './v1/shares/shares.module';
 import { StatsModule } from './v1/stats/stats.module';
 import { StorageModule } from './v1/storage/storage.module';
 import { TasksModule } from './v1/tasks/tasks.module';
+import { TeamsModule } from './v1/teams/teams.module';
 
 export interface AppModuleOptions {
   runtime: RuntimeInfo;
@@ -51,7 +51,7 @@ export class AppModule {
         RuntimeModule.forRoot(options.runtime),
         RunsModule,
         AgentsModule,
-        GraphsModule,
+        TeamsModule,
         McpModule,
         DiagnosticsModule,
         NotificationsModule,

@@ -10,8 +10,8 @@ import {
   clearSecrets,
   registerSecret,
 } from '../../../diagnostics/utils/redact';
-import type { WorkflowChangeService } from '../../../graphs/services/workflow-change.service';
-import type { WorkflowHistoryService } from '../../../stats/services/workflow-history.service';
+import type { TeamHistoryService } from '../../../stats/services/team-history.service';
+import type { TeamChangeService } from '../../../teams/services/team-change.service';
 import type { McpCallContext } from '../../mcp.types';
 import {
   analyzedThreadResultText,
@@ -29,10 +29,10 @@ const CONTEXT = {
 
 function tool(
   reader: Partial<ThreadReaderService>,
-  workflows: Partial<WorkflowChangeService> = {},
+  teams: Partial<TeamChangeService> = {},
   installed = true,
-  history: Partial<WorkflowHistoryService> = {},
-  workflowRuns: string[] | null = null,
+  history: Partial<TeamHistoryService> = {},
+  teamRuns: string[] | null = null,
 ) {
   const analysis = new AnalysisBroker();
   if (installed) {
@@ -42,12 +42,12 @@ function tool(
         sourceRunId: 'source',
         snapshotSeq: 9,
         sourceWorking: true,
-        ...(workflowRuns === null
+        ...(teamRuns === null
           ? {}
           : {
-              workflow: {
+              team: {
                 slug: 'dev-team',
-                runs: workflowRuns.map((runId) => ({
+                runs: teamRuns.map((runId) => ({
                   runId,
                   snapshotSeq: 9,
                   working: false,
@@ -62,8 +62,8 @@ function tool(
   return new ReadAnalyzedThreadTool(
     analysis,
     reader as ThreadReaderService,
-    workflows as WorkflowChangeService,
-    history as WorkflowHistoryService,
+    teams as TeamChangeService,
+    history as TeamHistoryService,
   );
 }
 
@@ -123,19 +123,19 @@ describe('ReadAnalyzedThreadTool', () => {
     expect(textOf(result)).not.toContain('ghp_0123456789abcdefghij');
   });
 
-  it('answers the workflow view with the hash and diff, paged when it is long', async () => {
+  it('answers the team view with the hash and diff, paged when it is long', async () => {
     const roles = 'r'.repeat(PAGE_BYTES * 2);
-    const workflows = {
+    const teams = {
       describe: (slug: string) =>
         Promise.resolve({
           slug,
           hash: 'abc123',
-          workflow: { name: 'Dev Team', role: roles },
+          team: { name: 'Dev Team', role: roles },
           changedSinceThisRun: { identical: true },
         }),
     };
     const reader = {
-      analysedWorkflowOf: () =>
+      analysedTeamOf: () =>
         Promise.resolve({
           slug: 'dev-team',
           snapshot: null,
@@ -144,9 +144,9 @@ describe('ReadAnalyzedThreadTool', () => {
     };
 
     const first = textOf(
-      await tool(reader, workflows).call(
+      await tool(reader, teams).call(
         'read_analyzed_thread',
-        { view: 'workflow' },
+        { view: 'team' },
         CONTEXT,
       ),
     );
@@ -160,7 +160,7 @@ describe('ReadAnalyzedThreadTool', () => {
     expect(page.next.offset).toBeGreaterThan(0);
   });
 
-  it("measures the workflow view's instructions with what the run itself was composed with", async () => {
+  it("measures the team view's instructions with what the run itself was composed with", async () => {
     const instructions = {
       customInstructions: 'MINE',
       projectInstructions: 'PROJECT',
@@ -168,65 +168,65 @@ describe('ReadAnalyzedThreadTool', () => {
       taskInstructions: 'CARD',
       memoryIndex: 'INDEX',
     };
-    const describeWorkflow = vi.fn<WorkflowChangeService['describe']>(() =>
+    const describeTeam = vi.fn<TeamChangeService['describe']>(() =>
       Promise.resolve({ slug: 'dev-team' }),
     );
 
     await tool(
       {
-        analysedWorkflowOf: () =>
+        analysedTeamOf: () =>
           Promise.resolve({
             slug: 'dev-team',
             snapshot: 'name: Team',
             instructions,
           }),
       },
-      { describe: describeWorkflow },
-    ).call('read_analyzed_thread', { view: 'workflow' }, CONTEXT);
+      { describe: describeTeam },
+    ).call('read_analyzed_thread', { view: 'team' }, CONTEXT);
 
-    expect(describeWorkflow).toHaveBeenCalledWith(
+    expect(describeTeam).toHaveBeenCalledWith(
       'dev-team',
       'name: Team',
       instructions,
     );
   });
 
-  it('tells a plain chat analysis there is no workflow', async () => {
+  it('tells a plain chat analysis there is no team', async () => {
     const result = await tool({
-      analysedWorkflowOf: () => Promise.resolve(null),
-    }).call('read_analyzed_thread', { view: 'workflow' }, CONTEXT);
+      analysedTeamOf: () => Promise.resolve(null),
+    }).call('read_analyzed_thread', { view: 'team' }, CONTEXT);
 
-    expect(textOf(result)).toContain('NOT_A_WORKFLOW');
+    expect(textOf(result)).toContain('NOT_A_TEAM');
   });
 
-  it('refuses a workflow view of a run the analysis does not read, reading nothing', async () => {
-    const analysedWorkflowOf = vi.fn(() =>
+  it('refuses a team view of a run the analysis does not read, reading nothing', async () => {
+    const analysedTeamOf = vi.fn(() =>
       Promise.resolve({ slug: 'dev-team', snapshot: null, instructions: null }),
     );
 
-    const result = await tool({ analysedWorkflowOf }).call(
+    const result = await tool({ analysedTeamOf }).call(
       'read_analyzed_thread',
-      { view: 'workflow', runId: 'other-run' },
+      { view: 'team', runId: 'other-run' },
       CONTEXT,
     );
 
     expect(textOf(result)).toContain('NOT_ANALYSED');
-    expect(analysedWorkflowOf).not.toHaveBeenCalled();
+    expect(analysedTeamOf).not.toHaveBeenCalled();
   });
 
-  it("answers the history view from the workflow's ledgers, scoped to the analysis's runs and naming its own chat", async () => {
+  it("answers the history view from the team's ledgers, scoped to the analysis's runs and naming its own chat", async () => {
     registerSecret('ghp_0123456789abcdefghij', 'github token');
-    const read = vi.fn<WorkflowHistoryService['read']>(() =>
+    const read = vi.fn<TeamHistoryService['read']>(() =>
       Promise.resolve({
-        workflow: 'dev-team',
+        team: 'dev-team',
         changeLog: [
           { reason: 'ghp_0123456789abcdefghij'.padEnd(PAGE_BYTES * 2, 'x') },
         ],
-      } as unknown as Awaited<ReturnType<WorkflowHistoryService['read']>>),
+      } as unknown as Awaited<ReturnType<TeamHistoryService['read']>>),
     );
     const reading = tool(
       {
-        analysedWorkflowOf: () =>
+        analysedTeamOf: () =>
           Promise.resolve({
             slug: 'dev-team',
             snapshot: null,
@@ -256,16 +256,16 @@ describe('ReadAnalyzedThreadTool', () => {
     expect(page.next.offset).toBeGreaterThan(0);
   });
 
-  it("scopes a workflow thread's history to the one thread it analyses", async () => {
-    const read = vi.fn<WorkflowHistoryService['read']>(() =>
-      Promise.resolve({ workflow: 'dev-team' } as unknown as Awaited<
-        ReturnType<WorkflowHistoryService['read']>
+  it("scopes a team thread's history to the one thread it analyses", async () => {
+    const read = vi.fn<TeamHistoryService['read']>(() =>
+      Promise.resolve({ team: 'dev-team' } as unknown as Awaited<
+        ReturnType<TeamHistoryService['read']>
       >),
     );
 
     await tool(
       {
-        analysedWorkflowOf: () =>
+        analysedTeamOf: () =>
           Promise.resolve({
             slug: 'dev-team',
             snapshot: null,
@@ -283,21 +283,21 @@ describe('ReadAnalyzedThreadTool', () => {
     });
   });
 
-  it('tells a plain chat analysis it has no workflow history, reading none', async () => {
-    const read = vi.fn<WorkflowHistoryService['read']>();
+  it('tells a plain chat analysis it has no team history, reading none', async () => {
+    const read = vi.fn<TeamHistoryService['read']>();
 
     const result = await tool(
-      { analysedWorkflowOf: () => Promise.resolve(null) },
+      { analysedTeamOf: () => Promise.resolve(null) },
       {},
       true,
       { read },
     ).call('read_analyzed_thread', { view: 'history' }, CONTEXT);
 
-    expect(textOf(result)).toContain('NOT_A_WORKFLOW');
+    expect(textOf(result)).toContain('NOT_A_TEAM');
     expect(read).not.toHaveBeenCalled();
   });
 
-  it("hands the reader the workflow's version numbers, so view=runs names each run's version", async () => {
+  it("hands the reader the team's version numbers, so view=runs names each run's version", async () => {
     const index = { current: 'v2', numbers: new Map([['v2', 2]]) };
     const versionIndex = vi.fn(() => Promise.resolve(index));
     let handed: unknown = null;

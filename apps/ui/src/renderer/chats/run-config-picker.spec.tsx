@@ -75,7 +75,7 @@ function render(
           open
           configs={[config()]}
           agentsApi={null}
-          workflows={[]}
+          teams={[]}
           cliDetections={null}
           recentFolders={[]}
           recentConfigDirsFor={() => []}
@@ -602,8 +602,8 @@ describe('RunConfigPicker — editor guards', () => {
     expect(rows.some((text) => text.includes('Claude work'))).toBe(false);
   });
 
-  it('switching to a workflow drops the model parameters with the other CLI-only choices', () => {
-    // A workflow has no CLI of its own, so every per-CLI row disappears from
+  it('switching to a team drops the model parameters with the other CLI-only choices', () => {
+    // A team has no CLI of its own, so every per-CLI row disappears from
     // the editor. A value the user can neither see nor edit must not stay in
     // the saved configuration — the same reasoning the model/effort/window
     // fields beside it already followed.
@@ -611,7 +611,7 @@ describe('RunConfigPicker — editor guards', () => {
       configs: [
         config({ model: 'opus', modelParameters: { optimize_for: 'cost' } }),
       ],
-      workflows: [
+      teams: [
         {
           slug: 'review-team',
           name: 'Review team',
@@ -620,7 +620,7 @@ describe('RunConfigPicker — editor guards', () => {
     });
     click(button('Edit Geniro app'));
 
-    click(button('Agent or workflow this configuration starts'));
+    click(button('Agent or team this configuration starts'));
     const row = [
       ...container.querySelectorAll<HTMLElement>('[role="option"]'),
     ].find((o) => o.textContent?.includes('Review team'));
@@ -632,7 +632,7 @@ describe('RunConfigPicker — editor guards', () => {
 
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({
-        target: 'wf:review-team',
+        target: 'team:review-team',
         model: null,
         modelParameters: {},
       }),

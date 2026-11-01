@@ -4,13 +4,13 @@ import { createContext } from 'react';
  * Which sign-in cures the failure one transcript row reports, or null when
  * nothing can.
  *
- * It takes the row's NODE, because on a workflow run the answer differs per
+ * It takes the row's NODE, because on a team run the answer differs per
  * node. Each agent node names its own CLI and its own config directory, and a
  * config directory is an ACCOUNT — a Manager and an Engineer routinely run
  * under two. This used to be one callback for the whole thread, bound to the
- * RUN's agent and profile, and a workflow run has neither: both are per node.
+ * RUN's agent and profile, and a team run has neither: both are per node.
  * So the one error geniro knows how to cure, a lapsed account session, was the
- * one error a workflow row offered no cure for. REPORTED as a Manager dying
+ * one error a team row offered no cure for. REPORTED as a Manager dying
  * `Failed to authenticate: OAuth session expired` eighteen hours into a run,
  * over an error row with no button on it.
  *

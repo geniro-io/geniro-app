@@ -42,8 +42,8 @@ function ProjectInstructionsForm({
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="project-instructions">Instructions</Label>
         <p className="m-0 text-xs text-muted-foreground">
-          Every chat and workflow started in this project&rsquo;s folder, or on
-          one of its cards, receives these after your own custom instructions. A
+          Every chat and team started in this project&rsquo;s folder, or on one
+          of its cards, receives these after your own custom instructions. A
           chat keeps what it started with.
         </p>
         <ExpandableTextarea

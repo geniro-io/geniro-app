@@ -377,7 +377,7 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
 
     // But a `never called` skip is an ABSENCE, and absences are not events.
     // REPORTED as "он написал, что never called engineer или researcher, и нам
-    // не нужно этого писать": a workflow whose manager routed everything to one
+    // не нужно этого писать": a team whose manager routed everything to one
     // specialist closed with two of these in the conversation, restating what
     // the agents panel says from `node_state` for every node in the graph. The
     // daemon no longer writes them; this is what makes an EXISTING transcript
@@ -671,14 +671,14 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(container.textContent).toContain('stderr tail here');
   });
 
-  it('a workflow run-level turn_complete renders by its stopReason roll-up, never a blanket ✓ done', () => {
-    // The daemon ends EVERY workflow run with a turn_complete whose
+  it('a team run-level turn_complete renders by its stopReason roll-up, never a blanket ✓ done', () => {
+    // The daemon ends EVERY team run with a turn_complete whose
     // stopReason carries the roll-up — a failed run must not read "✓ done".
     render(
       <TranscriptItem
         item={item(
           'turn_complete',
-          { usage: null, stopReason: 'workflow_failed' },
+          { usage: null, stopReason: 'team_failed' },
           null,
         )}
       />,
@@ -1394,7 +1394,7 @@ describe('TranscriptItem — run outcomes', () => {
     reviewRounds: 2,
     acceptance: 'accepted',
     questionsAsked: 1,
-    workflowSlug: 'dev-team',
+    teamSlug: 'dev-team',
     nodeId: 'orch',
     conversationId: null,
   };

@@ -52,7 +52,7 @@ import * as React from 'react';
  * **On a phone every chip gives up width, each capped at the same share.**
  * Shrinking has a floor the row cannot see: below its label a chip's icon and
  * chevron are `shrink-0` and spill out of a box narrower than themselves. At
- * 393px the workflow and trigger chips, which do not shrink on a desktop, took
+ * 393px the team and trigger chips, which do not shrink on a desktop, took
  * 302 of the 345px and squeezed the folder and branch chips under their
  * glyphs. Capping each chip at `21vw` keeps four of them inside the row
  * before any shrinking starts, so each keeps its glyphs and a few letters.

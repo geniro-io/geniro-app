@@ -1,7 +1,7 @@
 import {
   CALL_RESULT_ACTIONS,
   CALL_RESULT_PAGES,
-} from '../../../graphs/utils/callee-text';
+} from '../../../teams/utils/callee-text';
 
 /** What a model reads about `await_agent`. */
 export function awaitAgentInstructions(): string {

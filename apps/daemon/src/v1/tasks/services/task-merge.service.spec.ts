@@ -105,7 +105,7 @@ describe('TaskMergeService (in-memory sqlite)', () => {
     await tasks.moveStatus(task.id, { from: 'backlog', to: 'in_progress' });
     await runDao.create({
       id: runId,
-      workflowId: null,
+      teamId: null,
       status: 'completed',
       agentKind: 'claude',
       taskId: task.id,
@@ -154,7 +154,7 @@ describe('TaskMergeService (in-memory sqlite)', () => {
     await runDao.createMany(
       cards.map(({ runId, urls }, index) => ({
         id: runId,
-        workflowId: null,
+        teamId: null,
         status: 'completed' as const,
         agentKind: 'claude' as const,
         taskId: created[index]!.id,

@@ -6,9 +6,9 @@ import {
   Optional,
 } from '@nestjs/common';
 
-import { readWorkflowSnapshot } from '../../graphs/utils/workflow-snapshot';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
+import { readTeamSnapshot } from '../../teams/utils/team-snapshot';
 import {
   CHAT_TITLE_MAX_CHARS,
   CHAT_TITLE_UPGRADE_TURNS,
@@ -213,13 +213,13 @@ export class ChatTitleService implements OnModuleInit {
       // `nodeId` is the cheap half of the chat-run test and costs no query: the
       // chat path persists null, the graph executor persists a node's id.
       //
-      // A WORKFLOW run is the reason this is no longer an unconditional return.
+      // A TEAM run is the reason this is no longer an unconditional return.
       // Its conversation happens under its NODES, so the run's own stream holds
       // almost nothing until the whole thing settles — measured on a real run:
       // one user message, eleven `subagent_info` rows and one `turn_complete`
       // out of 573 items. Naming therefore had exactly one trigger, the run
       // ENDING, which on the work this app is for is an hour after anybody went
-      // looking for the row in the sidebar. That is the reported "for workflows
+      // looking for the row in the sidebar. That is the reported "for teams
       // title is not generating automatically": the derivation had run and its
       // result is the raw opening line, which is all `titleFromText` can make of
       // a pasted URL.
@@ -228,7 +228,7 @@ export class ChatTitleService implements OnModuleInit {
       // checked BEFORE the run is read so the cheapness this comment claims
       // stays true: `earlyAskIsDue` is a map lookup, and only a node that has
       // demonstrably started work gets past it. `name` re-reads the run and
-      // returns at once for anything that is not a workflow, so a chat whose
+      // returns at once for anything that is not a team, so a chat whose
       // item somehow carried a node id is unchanged.
       if (event.item.nodeId !== null) {
         if (agentHasStarted(event.item) && this.earlyAskIsDue(event.runId)) {
@@ -379,37 +379,37 @@ export class ChatTitleService implements OnModuleInit {
       if (!run) {
         return;
       }
-      // A WORKFLOW run is named from its seed prompt, then UPGRADED by asking
+      // A TEAM run is named from its seed prompt, then UPGRADED by asking
       // one of its own nodes' CLIs.
       //
-      // It used to be skipped outright, on the reading that the workflow's own
+      // It used to be skipped outright, on the reading that the team's own
       // name is already a true label. That holds for ONE run and fails for two:
-      // every run of one workflow then carries the identical row, so a sidebar
-      // holding three Dev Team runs says which WORKFLOW three times and which
-      // TASK not once — reported as "title generation should work for workflow
-      // as well", over exactly that. The workflow's name is not lost with it:
+      // every run of one team then carries the identical row, so a sidebar
+      // holding three Dev Team runs says which TEAM three times and which
+      // TASK not once — reported as "title generation should work for team
+      // as well", over exactly that. The team's name is not lost with it:
       // the row now carries it as its own label (`chat-list-item.tsx`), which
       // is the pairing the ask asked for — the title says what this run is
       // doing, the chip says what it is.
       //
       // It was then DERIVED-only, on the reading that the upgrade "needs one
-      // CLI to ask; a workflow is N conversations and `run.agentKind` is null
+      // CLI to ask; a team is N conversations and `run.agentKind` is null
       // for exactly that reason". The premise is true and the conclusion does
       // not follow: every node STAMPS the CLI that actually ran it
       // (`NodeState.agentKind`), so the run can name one after all — the node
       // that started FIRST, which is the one handed the user's own task. That
-      // is the reported "for workflows title is not generating automatically",
+      // is the reported "for teams title is not generating automatically",
       // against a row reading `review it https://github.com/ma…`, which is the
       // whole of what `titleFromText` can make of an opening that is a pasted
       // URL. The derivation was working; it had simply nothing to work with.
       //
       // The NATIVE read is deliberately skipped here, and that is the one place
       // this path is not the chat path. A CLI's own session title names the
-      // conversation IT holds, and for a workflow that is one NODE's
+      // conversation IT holds, and for a team that is one NODE's
       // conversation — the QA agent's name for its own thread, over a run the
       // manager is coordinating. Only the ask is given the run's own seed
       // prompt, so only the ask can answer about the run.
-      if (run.workflowId !== null) {
+      if (run.teamId !== null) {
         // `title === null` is "unnamed" here exactly as it is for a chat — the
         // executor stamps nothing — so anything already written is either this
         // derivation or the user's own rename.
@@ -512,8 +512,8 @@ export class ChatTitleService implements OnModuleInit {
      * Whether the CLI's own session title may be read first.
      *
      * True for a chat, whose one session IS the conversation. False for a
-     * workflow run, where the session belongs to one NODE and its title
-     * describes that node's thread rather than the run — see the workflow
+     * team run, where the session belongs to one NODE and its title
+     * describes that node's thread rather than the run — see the team
      * branch in {@link name}.
      */
     readNative = true,
@@ -587,9 +587,9 @@ export class ChatTitleService implements OnModuleInit {
       const latest = asked === 0 ? null : await this.latestExchange(run.id, em);
       let model = run.model;
       let configDir = run.configDir;
-      if (run.workflowId !== null) {
+      if (run.teamId !== null) {
         const profile = await this.nodeStateDao.firstAgentProfile(run.id, em);
-        const snapshot = readWorkflowSnapshot(run.workflowSnapshot);
+        const snapshot = readTeamSnapshot(run.teamSnapshot);
         const node = snapshot?.nodes.find(
           (entry) => entry.id === profile?.nodeId,
         );

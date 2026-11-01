@@ -63,7 +63,7 @@ describe('userInstructionFiles', () => {
     expect(cursor!.unavailableReason).toMatch(/account setting/);
   });
 
-  it('lists an agent and profile a workflow ran twice only once', () => {
+  it('lists an agent and profile a team ran twice only once', () => {
     expect(
       userInstructionFiles(registry, [
         { agent: 'codex', configDir: '/p' },

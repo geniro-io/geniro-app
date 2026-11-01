@@ -46,7 +46,7 @@ const row = (
 });
 
 function harness(
-  run: { workflowId: string | null; archivedAt: Date | null },
+  run: { teamId: string | null; archivedAt: Date | null },
   rows = [row(1, 'm1', 'start'), row(2, 'm1', 'end'), row(3, 'm2', 'start')],
 ) {
   const em = { fork: () => em } as unknown as EntityManager;
@@ -74,7 +74,7 @@ describe('MonitorOutcomeSweep', () => {
   });
 
   it('hands a chat the wake for the monitors left without an end, and only those, after a quit', async () => {
-    const h = harness({ workflowId: null, archivedAt: null });
+    const h = harness({ teamId: null, archivedAt: null });
     await h.sweep.sweep('quit');
     expect(h.holdInterrupted).toHaveBeenCalledTimes(1);
     expect(h.holdInterrupted).toHaveBeenCalledWith(
@@ -87,7 +87,7 @@ describe('MonitorOutcomeSweep', () => {
   it.each<InterruptCause>(['crash', 'unknown'])(
     'records the end but wakes nobody after a %s',
     async (cause) => {
-      const h = harness({ workflowId: null, archivedAt: null });
+      const h = harness({ teamId: null, archivedAt: null });
       await h.sweep.sweep(cause);
       expect(h.holdInterrupted).not.toHaveBeenCalled();
       // Not woken, but told on the chat's next turn.
@@ -106,8 +106,8 @@ describe('MonitorOutcomeSweep', () => {
     },
   );
 
-  it("owes a workflow node's own conversation a note instead of waking it", async () => {
-    const h = harness({ workflowId: 'wf', archivedAt: null });
+  it("owes a team node's own conversation a note instead of waking it", async () => {
+    const h = harness({ teamId: 'wf', archivedAt: null });
     await h.sweep.sweep('quit');
     expect(h.holdInterrupted).not.toHaveBeenCalled();
     expect(h.write).toHaveBeenCalledTimes(1);
@@ -119,7 +119,7 @@ describe('MonitorOutcomeSweep', () => {
   });
 
   it("files a callee's interrupted end under its call and owes that conversation the note", async () => {
-    const h = harness({ workflowId: 'wf', archivedAt: null }, [
+    const h = harness({ teamId: 'wf', archivedAt: null }, [
       row(1, 'm1', 'start', 'call-3', 'call-1'),
     ]);
     await h.sweep.sweep('quit');
@@ -164,7 +164,7 @@ describe('MonitorOutcomeSweep', () => {
         callId: 'call-3',
       }),
     };
-    const h = harness({ workflowId: 'wf', archivedAt: null }, [
+    const h = harness({ teamId: 'wf', archivedAt: null }, [
       row(1, 'm1', 'start', 'call-3', 'call-1'),
       delivered,
     ]);
@@ -176,7 +176,7 @@ describe('MonitorOutcomeSweep', () => {
   });
 
   it('hands the registry every id the run already used, so none is minted again', async () => {
-    const h = harness({ workflowId: null, archivedAt: null });
+    const h = harness({ teamId: null, archivedAt: null });
     await h.sweep.sweep('quit');
     expect(h.noteUsedIds).toHaveBeenCalledWith('run-1', expect.anything());
     expect([...(h.noteUsedIds.mock.calls[0]?.[1] as Iterable<string>)]).toEqual(
@@ -185,7 +185,7 @@ describe('MonitorOutcomeSweep', () => {
   });
 
   it('owes an archived run nothing', async () => {
-    const h = harness({ workflowId: null, archivedAt: new Date() });
+    const h = harness({ teamId: null, archivedAt: new Date() });
     await h.sweep.sweep('quit');
     expect(h.holdInterrupted).not.toHaveBeenCalled();
     expect(h.oweKeyNote).not.toHaveBeenCalled();

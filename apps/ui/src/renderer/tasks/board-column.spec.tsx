@@ -74,7 +74,7 @@ const armed = {
 /** Cards the daemon will not hand out, with its own reason for each. */
 const stuck = (
   count: number,
-  reason = 'no agent or workflow — set one on this task, or a default for the project',
+  reason = 'no agent or team — set one on this task, or a default for the project',
   kind: BlockedTask['kind'] = 'run-target',
 ): BlockedTask[] =>
   Array.from({ length: count }, (_unused, index) => ({
@@ -207,7 +207,7 @@ describe('BoardColumn — the autopilot banner', () => {
         // The daemon's sentence verbatim — restating it here would be a second
         // wording of one refusal, free to drift from the enforced one.
         expect(text).toContain(
-          'no agent or workflow — set one on this task, or a default for the project',
+          'no agent or team — set one on this task, or a default for the project',
         );
       });
 
@@ -233,7 +233,7 @@ describe('BoardColumn — the autopilot banner', () => {
         expect(panel()).toBeNull();
       });
 
-      it.each(['run-target', 'missing-workflow'] as const)(
+      it.each(['run-target', 'missing-team'] as const)(
         'offers the board’s settings for a %s card — the OTHER place the answer goes',
         (kind) => {
           const onFixBlocked = vi.fn();
@@ -242,7 +242,7 @@ describe('BoardColumn — the autopilot banner', () => {
             waiting: 1,
             blocked: stuck(
               1,
-              'no agent or workflow — set one on this task, or a default for the project',
+              'no agent or team — set one on this task, or a default for the project',
               kind,
             ),
             onFixBlocked,
@@ -252,7 +252,7 @@ describe('BoardColumn — the autopilot banner', () => {
             line(el)?.click();
           });
           // By its own words, not by "a button mentioning an agent" — every
-          // ROW says `no agent or workflow`, so the loose match pressed a card.
+          // ROW says `no agent or team`, so the loose match pressed a card.
           const fix = [...(panel()?.querySelectorAll('button') ?? [])].find(
             (button) => button.textContent?.startsWith('Set the board'),
           );

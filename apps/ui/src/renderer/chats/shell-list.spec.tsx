@@ -86,9 +86,9 @@ describe('ShellRows', () => {
 
   it('names the agent that started each command when the list mixes several', () => {
     // The shelf flattens every agent's shells into ONE popover, so on a
-    // workflow the rows it holds come from different agents with nothing on
+    // team the rows it holds come from different agents with nothing on
     // them saying which — asked for as "we should have labels there then for
-    // each terminal - from which agent is it (in case if we are in workflow)".
+    // each terminal - from which agent is it (in case if we are in team)".
     const el = render(
       [shell({ id: 'c1' }), shell({ id: 'c2', command: 'pnpm dev' })],
       new Map([

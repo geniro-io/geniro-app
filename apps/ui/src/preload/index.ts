@@ -87,13 +87,13 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.completeOnboarding, input) as ReturnType<
       GeniroApi['completeOnboarding']
     >,
-  pickWorkflowImport: () =>
-    ipcRenderer.invoke(IPC.pickWorkflowImport) as ReturnType<
-      GeniroApi['pickWorkflowImport']
+  pickTeamImport: () =>
+    ipcRenderer.invoke(IPC.pickTeamImport) as ReturnType<
+      GeniroApi['pickTeamImport']
     >,
-  pickWorkflowExport: (defaultName) =>
-    ipcRenderer.invoke(IPC.pickWorkflowExport, defaultName) as ReturnType<
-      GeniroApi['pickWorkflowExport']
+  pickTeamExport: (defaultName) =>
+    ipcRenderer.invoke(IPC.pickTeamExport, defaultName) as ReturnType<
+      GeniroApi['pickTeamExport']
     >,
   getUpdateState: () =>
     ipcRenderer.invoke(IPC.getUpdateState) as ReturnType<

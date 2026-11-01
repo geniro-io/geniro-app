@@ -5,7 +5,7 @@ import { randomId } from '../random-id';
 import {
   isChatApprovalMode,
   targetAgentKind,
-  workflowSlugOf,
+  teamSlugOf,
 } from './composer-values';
 
 /**
@@ -16,10 +16,10 @@ import {
  * component cycles.
  *
  * The three foreign-string readers it needs (`isChatApprovalMode`,
- * `workflowSlugOf`, `targetAgentKind`) live in `composer-values.ts` and are
+ * `teamSlugOf`, `targetAgentKind`) live in `composer-values.ts` and are
  * imported rather than restated: they were carved OUT of this file when the
  * configurations were removed, and re-inlining them here would leave the
- * composer and a saved configuration free to disagree about what `wf:` means.
+ * composer and a saved configuration free to disagree about what `team:` means.
  *
  * The values a configuration holds are OPAQUE strings on the Electron side, so
  * this is where a stored one is checked against the generated enum before it
@@ -31,7 +31,7 @@ import {
 /** Is this target one this build can actually point a run at? */
 function isKnownTarget(target: string): boolean {
   return (
-    workflowSlugOf(target) !== null ||
+    teamSlugOf(target) !== null ||
     (CLI_KINDS as readonly string[]).includes(target)
   );
 }
@@ -65,21 +65,21 @@ export function captureRunConfig(input: {
   approval: string | null;
 }): RunConfigDraft {
   const kind = targetAgentKind(input.target);
-  const workflow = workflowSlugOf(input.target) !== null;
+  const team = teamSlugOf(input.target) !== null;
   return {
     name: input.name.trim(),
     target: input.target,
     cwd: input.cwd,
     branch: input.branch,
-    // A workflow carries none of the per-CLI choices — its nodes each name
+    // A team carries none of the per-CLI choices — its nodes each name
     // their own — so they are stored absent rather than as whatever the
     // composer happened to be showing before the target was switched.
-    configDir: workflow ? null : input.configDir,
-    model: workflow ? null : (input.models[kind] ?? null),
-    effort: workflow ? null : (input.efforts[kind] ?? null),
-    contextWindow: workflow ? null : (input.contextWindows[kind] ?? null),
-    modelParameters: workflow ? {} : (input.modelParameters[kind] ?? {}),
-    approval: workflow ? null : input.approval,
+    configDir: team ? null : input.configDir,
+    model: team ? null : (input.models[kind] ?? null),
+    effort: team ? null : (input.efforts[kind] ?? null),
+    contextWindow: team ? null : (input.contextWindows[kind] ?? null),
+    modelParameters: team ? {} : (input.modelParameters[kind] ?? {}),
+    approval: team ? null : input.approval,
   };
 }
 
@@ -88,17 +88,17 @@ export interface AppliedRunConfig {
   target: string;
   agentKind: CliKind;
   /**
-   * This configuration starts a workflow, so it says NOTHING about any CLI's
+   * This configuration starts a team, so it says NOTHING about any CLI's
    * model or effort — as distinct from a CLI configuration that names none,
    * which says "use that CLI's default".
    *
    * The caller must NOT write the per-CLI choices when this is true: they are
    * remembered per CLI and shared with the composer, so writing `null` through
    * the ordinary chip callback deletes the user's remembered model for
-   * `agentKind` — which is `claude` here only because a workflow has no CLI of
+   * `agentKind` — which is `claude` here only because a team has no CLI of
    * its own to name.
    */
-  isWorkflow: boolean;
+  isTeam: boolean;
   cwd: string;
   configDir: string | null;
   /** Null means "leave the CLI's default" — the composer omits the field. */
@@ -136,8 +136,8 @@ export interface AppliedRunConfig {
  * stored value degrades to the CLI's own default instead, which is a working
  * chat rather than a refusal.
  *
- * A `wf:` target for a workflow that has since been deleted is NOT rejected
- * here: the composer already resets an unknown workflow target to `claude` once
+ * A `team:` target for a team that has since been deleted is NOT rejected
+ * here: the composer already resets an unknown team target to `claude` once
  * its list has loaded, and a second check against a list this module cannot see
  * would be free to disagree with it.
  */
@@ -145,19 +145,19 @@ export function applyRunConfig(config: RunConfig): AppliedRunConfig | null {
   if (!isKnownTarget(config.target)) {
     return null;
   }
-  const workflow = workflowSlugOf(config.target) !== null;
+  const team = teamSlugOf(config.target) !== null;
   return {
     target: config.target,
     agentKind: targetAgentKind(config.target),
-    isWorkflow: workflow,
+    isTeam: team,
     cwd: config.cwd,
-    configDir: workflow ? null : config.configDir,
-    model: workflow ? null : config.model,
-    effort: workflow ? null : config.effort,
-    contextWindow: workflow ? null : config.contextWindow,
-    modelParameters: workflow ? {} : config.modelParameters,
+    configDir: team ? null : config.configDir,
+    model: team ? null : config.model,
+    effort: team ? null : config.effort,
+    contextWindow: team ? null : config.contextWindow,
+    modelParameters: team ? {} : config.modelParameters,
     approval:
-      !workflow && isChatApprovalMode(config.approval) ? config.approval : null,
+      !team && isChatApprovalMode(config.approval) ? config.approval : null,
     branch: config.branch,
   };
 }

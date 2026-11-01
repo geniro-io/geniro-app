@@ -15,7 +15,7 @@ import { useAgentModelParameters } from '../chats/use-agent-model-parameters';
 import { useAgentModels } from '../chats/use-agent-models';
 import { Select } from '../components/ui/select';
 import type { DaemonApis } from '../daemon-api';
-import { configDirCapabilityFrom } from '../workflows/use-config-dir-capability';
+import { configDirCapabilityFrom } from '../teams/use-config-dir-capability';
 
 const NO_RECENTS: readonly string[] = [];
 

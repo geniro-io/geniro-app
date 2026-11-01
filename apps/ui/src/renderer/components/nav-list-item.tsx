@@ -5,8 +5,8 @@ import { cn } from './ui/utils';
  * activation. Content is either the default title/subtitle stack or, for
  * richer rows, custom `children`.
  *
- * Two consumers: the chat list (`chats/chat-list-item.tsx`) and the workflow
- * library (`workflows/workflow-card.tsx`). The library passes
+ * Two consumers: the chat list (`chats/chat-list-item.tsx`) and the team
+ * library (`teams/team-card.tsx`). The library passes
  * `active={false}` throughout — nothing there is "current" — and neutralizes
  * the sidebar dress (`bg-transparent`, no padding) so the `Card` nested inside
  * paints the surface, since what it needs is the a11y structure below. That structure is not optional

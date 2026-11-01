@@ -1,8 +1,8 @@
 import { Logger } from '@nestjs/common';
 
 import { HOST_MOVE_STAGE_TOOL } from '../../../agents/chat.types';
-import type { CallBroker } from '../../../graphs/services/call-broker.service';
-import type { StageService } from '../../../graphs/services/stage.service';
+import type { CallBroker } from '../../../teams/services/call-broker.service';
+import type { StageService } from '../../../teams/services/stage.service';
 import type {
   McpCallContext,
   McpListContext,
@@ -56,7 +56,7 @@ export class MoveStageTool extends BaseMcpTool {
       });
       const reply = moveStageResultText(
         result,
-        result.ok ? result.workflow.nodes : [],
+        result.ok ? result.team.nodes : [],
       );
       return this.text(reply.text, reply.isError);
     } catch (error) {

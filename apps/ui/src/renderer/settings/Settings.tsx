@@ -37,7 +37,7 @@ import type {
 import type { RunConfigDraft } from '../chats/run-config';
 import { newRunConfigId, replaceRunConfig } from '../chats/run-config';
 import { RunConfigPicker } from '../chats/run-config-picker';
-import type { TargetWorkflow } from '../chats/target-select';
+import type { TargetTeam } from '../chats/target-select';
 import { AgentConfigList } from '../components/agent-config-list';
 import { ErrorText } from '../components/error-text';
 import { ExpandableTextarea } from '../components/expandable-textarea';
@@ -59,13 +59,13 @@ import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { createDaemonApis, daemonErrorDetail } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { randomId } from '../random-id';
+import { configDirCapabilityFrom } from '../teams/use-config-dir-capability';
 import { setThemePreference } from '../theme/apply-theme';
 import { updateStatusText } from '../updates/update-status';
 import { useUpdateState } from '../updates/use-update-state';
 import { useSharedCapabilities } from '../use-capabilities';
 import { signInAfterInstall, useCliInstall } from '../use-cli-install';
 import { isLoginOver, useCliLogin } from '../use-cli-login';
-import { configDirCapabilityFrom } from '../workflows/use-config-dir-capability';
 import { ConfigProfileList } from './config-profiles';
 import { type FastActionDraft, FastActionsPane } from './fast-actions';
 import { Memory } from './memory';
@@ -332,13 +332,13 @@ export function Settings({
    */
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([]);
   /**
-   * What the run-configuration editor's own chips need: the workflow library
+   * What the run-configuration editor's own chips need: the team library
    * for the target picker, and the folder recents for the two directory
    * pickers. Read here rather than passed down, on the same terms as the
    * configurations themselves — this screen is reachable without a chat ever
    * having been opened.
    */
-  const [workflows, setWorkflows] = useState<TargetWorkflow[]>([]);
+  const [teams, setTeams] = useState<TargetTeam[]>([]);
   const [recentFolders, setRecentFolders] = useState<string[]>([]);
   /** PER CLI: each keeps a different layout in its directory. */
   const [recentConfigDirs, setRecentConfigDirs] = useState<
@@ -616,18 +616,18 @@ export function Settings({
     void window.geniro.detectClis().then(setClis);
   }, []);
 
-  // The workflow library, for the run-configuration editor's target picker. A
+  // The team library, for the run-configuration editor's target picker. A
   // failed read is the EMPTY list and never an error on this screen: the
   // picker still offers every agent, which is the answer for every configuration
-  // that does not name a workflow — and that is most of them.
+  // that does not name a team — and that is most of them.
   useEffect(() => {
     if (apis === null) {
       return;
     }
-    void apis.workflows
-      .listWorkflows()
-      .then(setWorkflows)
-      .catch(() => setWorkflows([]));
+    void apis.teams
+      .listTeams()
+      .then(setTeams)
+      .catch(() => setTeams([]));
   }, [apis]);
 
   // Pre-fill each detected binary's resolved path into its (empty) field, so a
@@ -877,7 +877,7 @@ export function Settings({
   );
 
   /**
-   * Drop the instructions every EXISTING chat and workflow run snapshotted.
+   * Drop the instructions every EXISTING chat and team run snapshotted.
    *
    * The escape hatch the snapshot design otherwise lacks: clearing the box
    * above changes only the next run, so text a user regrets keeps being sent
@@ -1398,7 +1398,7 @@ export function Settings({
             <ProjectsPane
               projects={projects}
               error={projectsError}
-              workflows={workflows}
+              teams={teams}
               cliDetections={clis}
               onCreate={createProject}
               onUpdate={updateProject}
@@ -1422,7 +1422,7 @@ export function Settings({
               open
               configs={runConfigs}
               agentsApi={apis?.agents ?? null}
-              workflows={workflows}
+              teams={teams}
               cliDetections={clis}
               recentFolders={recentFolders}
               recentConfigDirsFor={(kind) => recentConfigDirs[kind] ?? []}
@@ -1452,7 +1452,7 @@ export function Settings({
             <Memory
               api={apis?.memories ?? null}
               client={client}
-              workflows={apis?.workflows ?? null}
+              teams={apis?.teams ?? null}
               projects={projects}
               focus={memoryFocus}
               onFocusDone={onMemoryFocusDone}
@@ -1838,7 +1838,7 @@ export function Settings({
                     <div className="flex items-start justify-between gap-3">
                       <p className="min-w-0 text-xs text-muted-foreground">
                         Handed to every agent at the start of each new chat or
-                        workflow run — one already running keeps what it started
+                        team run — one already running keeps what it started
                         with.
                       </p>
                       <Button

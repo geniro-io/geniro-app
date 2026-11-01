@@ -576,7 +576,7 @@ describe('ModelSettingsSelect', () => {
   });
 
   it('does not rebuild rows when handlers and lists are new but equal', () => {
-    // The open thread and the workflow chat hand this panel a fresh arrow and
+    // The open thread and the team chat hand this panel a fresh arrow and
     // a `?? []` on every render, and the thread re-renders on each streamed
     // delta. A handler is read only to know whether its axis exists, and a
     // list only for what it contains, so a new function that is still present

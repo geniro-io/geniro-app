@@ -398,7 +398,7 @@ export interface RunStatusEvent {
    */
   holdingFor?: number;
   /**
-   * How many of this WORKFLOW run's agents are sitting inside a wait on their
+   * How many of this TEAM run's agents are sitting inside a wait on their
    * own agent-to-agent calls, or `undefined` when this event says nothing
    * about it.
    *
@@ -414,7 +414,7 @@ export interface RunStatusEvent {
    */
   awaitingCalls?: number;
   /**
-   * How many of a WORKFLOW run's trigger-fed agents — the ones a message goes
+   * How many of a TEAM run's trigger-fed agents — the ones a message goes
    * to — are inside a turn, or `undefined` when this event says nothing about
    * it. `0` means a message would be taken now, even while calls those agents
    * started are still running.
@@ -515,7 +515,7 @@ export interface RunStatusEvent {
    * past `HISTORY_PAGE` items that frozen figure outranks the renderer's own
    * windowed fold. Sent on a SETTLE alone; absent asserts nothing, and either
    * may be null beside the other — though the daemon sends nothing at all when
-   * BOTH are null, these columns only ever growing. So a workflow run, whose
+   * BOTH are null, these columns only ever growing. So a team run, whose
    * figures live per node, never carries them.
    */
   workedMs?: number | null;
@@ -602,7 +602,7 @@ export interface RunStatusEvent {
   hostTurn?: boolean;
   /**
    * True when this settle has no terminal ROW behind it (an off-turn stretch
-   * handing its badge back, a workflow woken by a call going quiet again, a
+   * handing its badge back, a team woken by a call going quiet again, a
    * send that failed while a window showed the run working), so
    * the OPEN thread's working state is this announce's to end rather than an
    * item's. Only ever `true`, on a settle.
@@ -1230,7 +1230,7 @@ export class DaemonClient {
    * Every run room this client is in, so a reconnect can re-join all of them.
    *
    * A SET rather than one id because two surfaces can each be following a run
-   * at the same time — the chat screen stays mounted while the workflow
+   * at the same time — the chat screen stays mounted while the team
    * builder's chat panel is open, and the gateway's own `join`/`leave` are
    * additive, so the socket really is in both rooms. With a single id the
    * second joiner overwrote the first and a reconnect silently re-joined only

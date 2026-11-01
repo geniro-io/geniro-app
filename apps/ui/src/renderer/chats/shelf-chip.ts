@@ -17,7 +17,7 @@
  *
  * Constants rather than components, and for the reason the first one had: the
  * chips are structurally different elements — the pull request is an anchor, the
- * workflow a button, the three counters are hover-popover triggers — so there is
+ * team a button, the three counters are hover-popover triggers — so there is
  * no one component to wrap them in without taking each one's own behaviour away.
  * They also cannot live in `composer-shelf.tsx`, which imports two of the three:
  * those would have to import it back, and a cycle through a `const` is a

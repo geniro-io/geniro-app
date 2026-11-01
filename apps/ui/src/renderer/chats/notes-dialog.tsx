@@ -21,7 +21,7 @@ export interface ThreadNotesHandle {
 
 /**
  * Every note of the thread in one popup: the user's own notes, then the
- * agents' team notes of a workflow run. Each team note shows its first lines;
+ * agents' team notes of a team run. Each team note shows its first lines;
  * a press picks it and shows it whole, with the way to its row in the
  * transcript. The kind and author filters, plus a search over the words.
  */

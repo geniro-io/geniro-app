@@ -61,7 +61,7 @@ export function waitsOnUser(state: WaitState): state is OwedState {
 
 /**
  * Most urgent first; within a state the longest wait first. Stable, so items
- * with no `since` (a workflow node has none) keep the order they came in.
+ * with no `since` (a team node has none) keep the order they came in.
  * Items with no state sink below every ranked one, also in their own order.
  */
 export function rankByUrgency<T>(

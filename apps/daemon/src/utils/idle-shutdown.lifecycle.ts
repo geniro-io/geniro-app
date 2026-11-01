@@ -30,13 +30,13 @@ export interface IdleShutdownOptions {
  * until the machine reboots, holding a port, a SQLite handle and ~150 MB.
  *
  * "Idle" is deliberately two conditions, not one. No connected client is what
- * makes it unused; no WORK in flight is what makes it safe to stop. A workflow
+ * makes it unused; no WORK in flight is what makes it safe to stop. A team
  * run keeps going after its window closes, and exiting on the first condition
  * alone would kill work the user is waiting on.
  *
  * Work is not only a turn. A kept CLI process goes on working after the turn
  * that started it settles — a continuation claude opens for itself when a
- * delegate reports back, a dev server the agent left running, a workflow
+ * delegate reports back, a dev server the agent left running, a team
  * node's process between passes — and `ProcessRegistry` counts none of that,
  * because it counts TURNS. So the session registry's own reading of "working
  * between turns" (`AgentSessionRegistry.workingOffTurn`) holds the window

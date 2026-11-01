@@ -1,4 +1,4 @@
-import type { CallEnvelope } from '../../../graphs/graphs.types';
+import type { CallEnvelope } from '../../../teams/teams.types';
 import { invalidArgsEnvelope, unknownArgsEnvelope } from '../call-mcp-tool';
 
 /**

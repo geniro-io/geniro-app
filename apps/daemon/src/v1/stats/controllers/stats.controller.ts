@@ -9,20 +9,20 @@ import {
   LineSnapshotDto,
 } from '../dto/line-snapshot.dto';
 import {
-  RestoreWorkflowVersionDto,
+  RestoreTeamVersionDto,
+  TeamVersionRestoredDto,
+  TeamVersionsDto,
+  TeamVersionsQueryDto,
   UsageStatsDto,
   UsageStatsQueryDto,
-  WorkflowVersionRestoredDto,
-  WorkflowVersionsDto,
-  WorkflowVersionsQueryDto,
 } from '../dto/stats.dto';
 import { StatsService } from '../services/stats.service';
-import { WorkflowVersionsService } from '../services/workflow-versions.service';
+import { TeamVersionsService } from '../services/team-versions.service';
 import type {
   LineBaselineWire,
+  TeamVersionRestoredWire,
+  TeamVersionsWire,
   UsageStatsWire,
-  WorkflowVersionRestoredWire,
-  WorkflowVersionsWire,
 } from '../stats.types';
 
 /**
@@ -37,7 +37,7 @@ import type {
 export class StatsController {
   constructor(
     private readonly stats: StatsService,
-    private readonly versions: WorkflowVersionsService,
+    private readonly versions: TeamVersionsService,
   ) {}
 
   @Get('usage')
@@ -47,21 +47,21 @@ export class StatsController {
     return this.stats.usage(query.from, query.to);
   }
 
-  @Get('workflow-versions')
-  @ApiOperation({ operationId: 'readWorkflowVersions' })
-  @ZodResponse({ status: 200, type: WorkflowVersionsDto })
-  readWorkflowVersions(
-    @Query() query: WorkflowVersionsQueryDto,
-  ): Promise<WorkflowVersionsWire> {
+  @Get('team-versions')
+  @ApiOperation({ operationId: 'readTeamVersions' })
+  @ZodResponse({ status: 200, type: TeamVersionsDto })
+  readTeamVersions(
+    @Query() query: TeamVersionsQueryDto,
+  ): Promise<TeamVersionsWire> {
     return this.versions.read(query.slug);
   }
 
-  @Post('workflow-versions/restore')
-  @ApiOperation({ operationId: 'restoreWorkflowVersion' })
-  @ZodResponse({ status: 201, type: WorkflowVersionRestoredDto })
-  restoreWorkflowVersion(
-    @Body() body: RestoreWorkflowVersionDto,
-  ): Promise<WorkflowVersionRestoredWire> {
+  @Post('team-versions/restore')
+  @ApiOperation({ operationId: 'restoreTeamVersion' })
+  @ZodResponse({ status: 201, type: TeamVersionRestoredDto })
+  restoreTeamVersion(
+    @Body() body: RestoreTeamVersionDto,
+  ): Promise<TeamVersionRestoredWire> {
     return this.versions.restore(body.slug, body.version, body.baseHash);
   }
 

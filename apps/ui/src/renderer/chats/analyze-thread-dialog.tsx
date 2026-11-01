@@ -1,4 +1,4 @@
-import { FolderOpen, Sparkles, Workflow as WorkflowIcon } from 'lucide-react';
+import { FolderOpen, Sparkles, Workflow as TeamIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import type {
@@ -49,35 +49,35 @@ import { useAgentModels } from './use-agent-models';
  */
 const ANALYSIS_DEFAULT_APPROVAL: ChatApprovalMode = 'auto';
 
-/** How many of a workflow's newest runs an analysis reads unless changed. */
+/** How many of a team's newest runs an analysis reads unless changed. */
 export const DEFAULT_ANALYSED_RUNS = 10;
 
 /**
- * The most runs one workflow analysis reads. Twin of the daemon's
- * `MAX_ANALYSED_WORKFLOW_RUNS` (`v1/agents/dto/chat.dto.ts`).
+ * The most runs one team analysis reads. Twin of the daemon's
+ * `MAX_ANALYSED_TEAM_RUNS` (`v1/agents/dto/chat.dto.ts`).
  */
 export const MAX_ANALYSED_RUNS = 30;
 
-/** A library workflow "Analyze & improve" is set up for. */
-export interface AnalysedWorkflowSubject {
+/** A library team "Analyze & improve" is set up for. */
+export interface AnalysedTeamSubject {
   slug: string;
   name: string;
 }
 
-/** What an analysis reads: one thread, or a workflow across its runs. */
+/** What an analysis reads: one thread, or a team across its runs. */
 export type AnalysisSubject =
   | { kind: 'thread'; run: RunDto }
   | ({
-      kind: 'workflow';
-      api: DaemonApis['workflows'];
-    } & AnalysedWorkflowSubject);
+      kind: 'team';
+      api: DaemonApis['teams'];
+    } & AnalysedTeamSubject);
 
 /**
  * "Analyze thread": who analyses the subject, and what to look at — for a
- * workflow ("Analyze & improve"), how many of its newest runs to read too.
+ * team ("Analyze & improve"), how many of its newest runs to read too.
  *
  * Starts a NEW chat linked to its subject (`POST /v1/chats/:runId/analyses`,
- * `POST /v1/workflows/:slug/analyses`); the analysis itself happens there.
+ * `POST /v1/teams/:slug/analyses`); the analysis itself happens there.
  * Opens on the last analysis choice
  * (`Settings.lastAnalysisConfig`), else the composer's own setup — except the
  * approval mode, which starts on auto-approve rather than the composer's: the
@@ -125,7 +125,7 @@ export function AnalyzeThreadDialog({
 }): React.JSX.Element {
   const open = subject !== null;
   const source = subject?.kind === 'thread' ? subject.run : null;
-  const workflow = subject?.kind === 'workflow' ? subject : null;
+  const team = subject?.kind === 'team' ? subject : null;
   const [config, setConfig] = useState<AnalysisConfig>(composerSetup);
   const [focus, setFocus] = useState('');
   const [runs, setRuns] = useState(DEFAULT_ANALYSED_RUNS);
@@ -160,7 +160,7 @@ export function AnalyzeThreadDialog({
     };
     // Only on open and a change of subject: the composer moving under an open
     // dialog must not overwrite a choice the user is making.
-  }, [open, source?.id, workflow?.slug]);
+  }, [open, source?.id, team?.slug]);
 
   const kind = config.agent;
   const profileless = configDirReasonFor(kind) !== null;
@@ -177,7 +177,7 @@ export function AnalyzeThreadDialog({
     config.model,
     configDir,
   );
-  const isWorkflow = workflow !== null || source?.workflowId != null;
+  const isTeam = team !== null || source?.teamId != null;
   const approval: ChatApprovalMode = isChatApprovalMode(config.approval)
     ? config.approval
     : ANALYSIS_DEFAULT_APPROVAL;
@@ -218,10 +218,10 @@ export function AnalyzeThreadDialog({
         ...(await runSettings()),
       };
       const run =
-        subject.kind === 'workflow'
-          ? await subject.api.analyzeWorkflow({
+        subject.kind === 'team'
+          ? await subject.api.analyzeTeam({
               slug: subject.slug,
-              analyzeWorkflowDto: { ...dto, runs },
+              analyzeTeamDto: { ...dto, runs },
             })
           : await chatApi.analyzeThread({
               runId: subject.run.id,
@@ -258,37 +258,35 @@ export function AnalyzeThreadDialog({
           onClose();
         }
       }}
-      title={workflow === null ? 'Analyze thread' : 'Analyze workflow'}>
+      title={team === null ? 'Analyze thread' : 'Analyze team'}>
       <div data-slot="analyze-thread" className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
           <p className="flex items-center gap-2 text-sm font-medium">
             <span className="min-w-0 truncate">{sourceLabel}</span>
             <Badge variant="secondary" className="shrink-0">
-              {isWorkflow ? (
-                <WorkflowIcon className="size-3" aria-hidden />
-              ) : null}
-              {isWorkflow ? 'Workflow' : 'Chat'}
+              {isTeam ? <TeamIcon className="size-3" aria-hidden /> : null}
+              {isTeam ? 'Team' : 'Chat'}
             </Badge>
           </p>
           {facts.length === 0 ? null : (
             <p className="text-xs text-muted-foreground">{facts.join(' · ')}</p>
           )}
           <p className="text-xs text-muted-foreground" data-slot="scope-note">
-            {workflow !== null
-              ? 'Reads the workflow’s latest runs, compares how its agents and their models did, and suggests workflow changes (models, roles, the graph’s structure, when to stop) and repository changes (AGENTS.md, rules, checks). You choose which to apply.'
-              : isWorkflow
-                ? 'Finds where the time went and suggests workflow changes (roles, models, parallel calls, when to stop) and repository changes (AGENTS.md, rules, checks). You choose which to apply.'
+            {team !== null
+              ? 'Reads the team’s latest runs, compares how its agents and their models did, and suggests team changes (models, roles, the graph’s structure, when to stop) and repository changes (AGENTS.md, rules, checks). You choose which to apply.'
+              : isTeam
+                ? 'Finds where the time went and suggests team changes (roles, models, parallel calls, when to stop) and repository changes (AGENTS.md, rules, checks). You choose which to apply.'
                 : 'Finds where the time went and suggests repository changes (AGENTS.md, rules, checks). You choose which to apply.'}
           </p>
           {replaces ? (
             <p className="text-xs text-warning" data-slot="replaces-note">
-              {`Starting replaces this ${workflow === null ? 'thread' : 'workflow'}'s current analysis — its conversation and card are deleted.`}
+              {`Starting replaces this ${team === null ? 'thread' : 'team'}'s current analysis — its conversation and card are deleted.`}
             </p>
           ) : null}
         </div>
 
         <div className="flex flex-col divide-y divide-border rounded-md border border-border">
-          {workflow === null ? null : (
+          {team === null ? null : (
             <SettingRow label="Runs">
               <span className="flex items-center gap-2">
                 <Stepper
@@ -308,7 +306,7 @@ export function AnalyzeThreadDialog({
             <TargetSelect
               value={kind}
               // Only CLIs: an analysis is one agent reading one thread.
-              workflows={[]}
+              teams={[]}
               cliDetections={cliDetections}
               aria-label="Agent that runs the analysis"
               onChange={(target) =>
@@ -373,7 +371,7 @@ export function AnalyzeThreadDialog({
           className="text-xs text-muted-foreground"
           data-slot="analysis-folder">
           Runs in{' '}
-          {folder === null && workflow !== null ? (
+          {folder === null && team !== null ? (
             'the newest run’s folder'
           ) : (
             <span className="font-mono">
@@ -399,7 +397,7 @@ export function AnalyzeThreadDialog({
               Choose a folder…
             </Button>
             <span className="text-xs text-muted-foreground">
-              {workflow === null
+              {team === null
                 ? 'The thread’s folder no longer exists.'
                 : 'The newest run’s folder no longer exists.'}
             </span>

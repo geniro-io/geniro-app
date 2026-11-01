@@ -391,7 +391,7 @@ describe('useLineSnapshots', () => {
     });
     await mount([THREAD]);
 
-    // A workflow ends a turn per node, a second apart. Each turn restarts the
+    // A team ends a turn per node, a second apart. Each turn restarts the
     // settle window, so none of the three is measured on its own.
     await turnEnds('run-a');
     await elapse(1_000);

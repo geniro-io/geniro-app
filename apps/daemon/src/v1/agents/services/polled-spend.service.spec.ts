@@ -71,7 +71,7 @@ function cursorRun(overrides: Partial<Run> = {}): Run {
   return {
     id: 'run-1',
     agentKind: AgentKind.CursorAgent,
-    workflowId: null,
+    teamId: null,
     polledCostCents: null,
     polledCostEvents: null,
     ...overrides,
@@ -146,7 +146,7 @@ function harness(options: {
   nodes: Record<string, NodeState[]>;
   /** Runs found through a cursor NODE rather than through their own agent. */
   cursorNodeRunIds?: string[];
-  /** A workflow node's own agent, keyed `<runId>/<nodeId>`. */
+  /** A team node's own agent, keyed `<runId>/<nodeId>`. */
   nodeAgents?: Record<string, AgentKind | null>;
   /** Each run's `call_result` records, as `rowsOfKinds` answers them. */
   calls?: Record<string, { calleeNodeId: string; sessionId: string }[]>;
@@ -169,35 +169,32 @@ function harness(options: {
       where?: {
         id?: { $in?: string[] };
         agentKind?: AgentKind;
-        workflowSnapshot?: { $like: string } | { $ne: null } | null;
-        workflowId?: { $ne: null };
+        teamSnapshot?: { $like: string } | { $ne: null } | null;
+        teamId?: { $ne: null };
         createdAt?: { $gte: Date };
       },
       opts?: unknown,
     ) => {
-      // The workflow runs with no graph copy yet, and the later re-check of
+      // The team runs with no graph copy yet, and the later re-check of
       // which of them have one now.
-      if (where?.workflowSnapshot === null) {
+      if (where?.teamSnapshot === null) {
         return options.runs.filter(
-          (run) => run.workflowId !== null && run.workflowSnapshot === null,
+          (run) => run.teamId !== null && run.teamSnapshot === null,
         );
       }
-      if (
-        where?.workflowSnapshot !== undefined &&
-        '$ne' in where.workflowSnapshot
-      ) {
+      if (where?.teamSnapshot !== undefined && '$ne' in where.teamSnapshot) {
         const ids = where.id?.$in ?? [];
         return options.runs.filter(
-          (run) => ids.includes(run.id) && run.workflowSnapshot !== null,
+          (run) => ids.includes(run.id) && run.teamSnapshot !== null,
         );
       }
       // The pool-candidate read: answered, but not counted as a listing —
       // `counts.listed` is how a spec tells that a poll ran at all.
       const like =
-        where?.workflowSnapshot !== undefined &&
-        where.workflowSnapshot !== null &&
-        '$like' in where.workflowSnapshot
-          ? where.workflowSnapshot.$like
+        where?.teamSnapshot !== undefined &&
+        where.teamSnapshot !== null &&
+        '$like' in where.teamSnapshot
+          ? where.teamSnapshot.$like
           : undefined;
       if (like !== undefined) {
         poolReads.push({ where, options: opts });
@@ -205,13 +202,13 @@ function harness(options: {
         const since = where?.createdAt?.$gte.getTime() ?? -Infinity;
         return options.runs.filter(
           (run) =>
-            (run.workflowSnapshot ?? '').includes(needle) &&
+            (run.teamSnapshot ?? '').includes(needle) &&
             (run.createdAt?.getTime() ?? 0) >= since,
         );
       }
       const ids = where?.id?.$in;
       const fields = (opts as { fields?: string[] } | undefined)?.fields;
-      if (fields?.includes('workflowSnapshot') && ids !== undefined) {
+      if (fields?.includes('teamSnapshot') && ids !== undefined) {
         snapshotReads.push(ids);
         return options.runs.filter((run) => ids.includes(run.id));
       }
@@ -496,7 +493,7 @@ describe('PolledSpendService', () => {
   });
 
   it('splits a run’s bill by the DAY and the MODEL each charge was billed under', async () => {
-    // One figure per run filed a whole month of a workflow's cursor bill under
+    // One figure per run filed a whole month of a team's cursor bill under
     // its last day and no model, so Stats drew neither the day it was spent
     // nor the model that spent it.
     at(NOW);
@@ -626,13 +623,13 @@ describe('PolledSpendService', () => {
     // sessions are on no session history — runs older than that column — but on
     // the `call_result` row every call writes.
     at(NOW);
-    const workflow = cursorRun({
+    const team = cursorRun({
       id: 'wf',
       agentKind: null,
-      workflowId: 'dev',
+      teamId: 'dev',
     });
     const h = harness({
-      runs: [workflow],
+      runs: [team],
       cursorNodeRunIds: ['wf'],
       nodes: {
         wf: [
@@ -669,8 +666,8 @@ describe('PolledSpendService', () => {
         cursorRun({
           id: 'wf',
           agentKind: null,
-          workflowId: 'dev',
-          workflowSnapshot: JSON.stringify({ nodes: [] }),
+          teamId: 'dev',
+          teamSnapshot: JSON.stringify({ nodes: [] }),
         }),
       ],
       cursorNodeRunIds: ['wf'],
@@ -696,8 +693,8 @@ describe('PolledSpendService', () => {
         cursorRun({
           id: 'wf',
           agentKind: null,
-          workflowId: 'dev',
-          workflowSnapshot: JSON.stringify({ nodes: [] }),
+          teamId: 'dev',
+          teamSnapshot: JSON.stringify({ nodes: [] }),
         }),
       ],
       cursorNodeRunIds: ['wf'],
@@ -725,8 +722,8 @@ describe('PolledSpendService', () => {
         cursorRun({
           id: 'wf',
           agentKind: null,
-          workflowId: 'dev',
-          workflowSnapshot: JSON.stringify({ nodes: [] }),
+          teamId: 'dev',
+          teamSnapshot: JSON.stringify({ nodes: [] }),
         }),
       ],
       cursorNodeRunIds: ['wf'],
@@ -818,15 +815,15 @@ describe('PolledSpendService', () => {
     ]);
   });
 
-  it('prices a cursor node inside a WORKFLOW, whose run names no agent', async () => {
+  it('prices a cursor node inside a TEAM, whose run names no agent', async () => {
     at(NOW);
-    const workflow = cursorRun({
+    const team = cursorRun({
       id: 'wf',
       agentKind: null,
-      workflowId: 'dev',
+      teamId: 'dev',
     });
     const h = harness({
-      runs: [workflow],
+      runs: [team],
       cursorNodeRunIds: ['wf'],
       nodes: {
         wf: [node({ runId: 'wf', nodeId: 'qa', agentSessionId: 'conv-wf' })],
@@ -843,13 +840,13 @@ describe('PolledSpendService', () => {
 
   it('ignores a NON-cursor node of a run it reached through a cursor one', async () => {
     at(NOW);
-    const workflow = cursorRun({
+    const team = cursorRun({
       id: 'wf',
       agentKind: null,
-      workflowId: 'dev',
+      teamId: 'dev',
     });
     const h = harness({
-      runs: [workflow],
+      runs: [team],
       cursorNodeRunIds: ['wf'],
       nodes: {
         wf: [
@@ -871,13 +868,13 @@ describe('PolledSpendService', () => {
 
   it('reads only the run columns a poll uses, past the identity map, on both of its run listings', async () => {
     at(NOW);
-    const workflow = cursorRun({
+    const team = cursorRun({
       id: 'wf',
       agentKind: null,
-      workflowId: 'dev',
+      teamId: 'dev',
     });
     const h = harness({
-      runs: [cursorRun(), workflow],
+      runs: [cursorRun(), team],
       cursorNodeRunIds: ['wf'],
       nodes: {
         'run-1': [holding('conv-1')],
@@ -907,7 +904,7 @@ describe('PolledSpendService', () => {
     expect(h.snapshotReads).toEqual([['run-1', 'wf']]);
     expect(h.poolReads).toEqual([
       {
-        where: { workflowSnapshot: { $like: '%"agent":"cursor-agent"%' } },
+        where: { teamSnapshot: { $like: '%"agent":"cursor-agent"%' } },
         options: { fields: ['id'], disableIdentityMap: true },
       },
     ]);
@@ -929,8 +926,8 @@ describe('PolledSpendService', () => {
       cursorRun({
         id: 'old',
         agentKind: null,
-        workflowId: 'dev',
-        workflowSnapshot: pooledCopy,
+        teamId: 'dev',
+        teamSnapshot: pooledCopy,
         createdAt: new Date(NOW - 24 * HOUR),
       }),
     ];
@@ -941,8 +938,8 @@ describe('PolledSpendService', () => {
       cursorRun({
         id: 'new',
         agentKind: null,
-        workflowId: 'dev',
-        workflowSnapshot: pooledCopy,
+        teamId: 'dev',
+        teamSnapshot: pooledCopy,
         createdAt: new Date(NOW + HOUR),
       }),
     );
@@ -963,14 +960,14 @@ describe('PolledSpendService', () => {
     const old = cursorRun({
       id: 'old',
       agentKind: null,
-      workflowId: 'dev',
-      workflowSnapshot: null,
+      teamId: 'dev',
+      teamSnapshot: null,
       createdAt: new Date(NOW - 90 * 24 * HOUR),
     });
     const h = harness({ runs: [old], nodes: {} });
 
     await h.service.refresh(true);
-    old.workflowSnapshot = JSON.stringify({
+    old.teamSnapshot = JSON.stringify({
       nodes: [
         {
           id: 'eng',
@@ -988,14 +985,14 @@ describe('PolledSpendService', () => {
 
   it('parses a run’s graph copy once, and keeps asking for a run that has none yet', async () => {
     at(NOW);
-    const workflow = cursorRun({
+    const team = cursorRun({
       id: 'wf',
       agentKind: null,
-      workflowId: 'dev',
-      workflowSnapshot: JSON.stringify({ nodes: [] }),
+      teamId: 'dev',
+      teamSnapshot: JSON.stringify({ nodes: [] }),
     });
     const h = harness({
-      runs: [cursorRun({ workflowSnapshot: null }), workflow],
+      runs: [cursorRun({ teamSnapshot: null }), team],
       cursorNodeRunIds: ['wf'],
       nodes: {
         'run-1': [holding('conv-1')],
@@ -1017,8 +1014,8 @@ describe('PolledSpendService', () => {
         cursorRun({
           id: 'wf',
           agentKind: null,
-          workflowId: 'dev',
-          workflowSnapshot: JSON.stringify({ nodes: [] }),
+          teamId: 'dev',
+          teamSnapshot: JSON.stringify({ nodes: [] }),
         }),
       ],
       cursorNodeRunIds: ['wf'],
@@ -1037,11 +1034,11 @@ describe('PolledSpendService', () => {
 
   it('prices a POOLED node whose cursor member held a conversation, whatever its last turn was stamped', async () => {
     at(NOW);
-    const workflow = cursorRun({
+    const team = cursorRun({
       id: 'wf',
       agentKind: null,
-      workflowId: 'dev',
-      workflowSnapshot: JSON.stringify({
+      teamId: 'dev',
+      teamSnapshot: JSON.stringify({
         nodes: [
           {
             id: 'eng',
@@ -1053,7 +1050,7 @@ describe('PolledSpendService', () => {
       }),
     });
     const h = harness({
-      runs: [workflow],
+      runs: [team],
       nodes: {
         wf: [
           node({
@@ -1144,15 +1141,15 @@ describe('PolledSpendService', () => {
     expect(h.counts.listed).toBe(1);
   });
 
-  it('polls on an item from a cursor NODE inside a workflow run, whose run row names no agent', async () => {
+  it('polls on an item from a cursor NODE inside a team run, whose run row names no agent', async () => {
     const clock = at(NOW);
-    const workflow = cursorRun({
+    const team = cursorRun({
       id: 'wf-1',
       agentKind: null,
-      workflowId: 'dev',
+      teamId: 'dev',
     });
     const h = harness({
-      runs: [cursorRun(), workflow],
+      runs: [cursorRun(), team],
       nodes: { 'run-1': [holding('conv-1')] },
       nodeAgents: {
         'wf-1/qa': AgentKind.CursorAgent,
@@ -1174,14 +1171,14 @@ describe('PolledSpendService', () => {
 
   it('asks again about a node that has not yet named its agent, rather than filing it as not cursor', async () => {
     const clock = at(NOW);
-    const workflow = cursorRun({
+    const team = cursorRun({
       id: 'wf-1',
       agentKind: null,
-      workflowId: 'dev',
+      teamId: 'dev',
     });
     const nodeAgents: Record<string, AgentKind | null> = { 'wf-1/qa': null };
     const h = harness({
-      runs: [cursorRun(), workflow],
+      runs: [cursorRun(), team],
       nodes: { 'run-1': [holding('conv-1')] },
       nodeAgents,
     });
@@ -1200,7 +1197,7 @@ describe('PolledSpendService', () => {
     expect(h.counts.listed).toBe(2);
   });
 
-  it('says a workflow run holds polled spend when any of its nodes ran on such a CLI', async () => {
+  it('says a team run holds polled spend when any of its nodes ran on such a CLI', async () => {
     const h = harness({
       runs: [],
       nodes: { 'wf-1': [node({ runId: 'wf-1', nodeId: 'qa' })] },

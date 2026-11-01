@@ -404,7 +404,7 @@ describe('foldRunDelegates', () => {
       })[0]!.status;
 
     expect(statusOf({ endings: [ending(true)] })).toBe('cancelled');
-    // A cancelled run that ended no turn of the delegate's (a workflow cancel).
+    // A cancelled run that ended no turn of the delegate's (a team cancel).
     expect(statusOf({ runSettled: true, runCancelled: true })).toBe(
       'cancelled',
     );

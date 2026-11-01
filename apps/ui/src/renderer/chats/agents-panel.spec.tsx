@@ -1780,7 +1780,7 @@ describe('AgentsPanel — per-node MCP scope', () => {
     // press working on the Workflows page, which had always passed the node's
     // profile. This panel lists a node's servers under that node's config
     // directory and handed the press the CLI KIND alone, so `Chats` fell back
-    // to the RUN's profile: null for every workflow run, whose agents carry
+    // to the RUN's profile: null for every team run, whose agents carry
     // profiles and whose run does not. The sign-in then ran under the default
     // account, where that server does not exist — the CLI failed at once and
     // the row never moved.

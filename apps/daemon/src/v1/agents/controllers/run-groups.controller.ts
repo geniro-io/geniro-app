@@ -23,7 +23,7 @@ import { RunGroupsService } from '../services/run-groups.service';
 /**
  * The sidebar's groups (token-gated by the global LoopbackTokenGuard).
  *
- * A group holds runs of BOTH kinds — the sidebar lists chats and workflow runs
+ * A group holds runs of BOTH kinds — the sidebar lists chats and team runs
  * together — which is why this is `/v1/groups` and not a branch of `/v1/chats`.
  * Filing one run is the exception and lives on the run's own route
  * (`PUT /v1/chats/:runId/group`), where the response is the run.

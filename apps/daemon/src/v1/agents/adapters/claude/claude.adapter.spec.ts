@@ -1727,7 +1727,7 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
           prompt: 'p',
           cwd: '/proj',
           instructionBlocks: 'TEAM SETTINGS',
-          stageMapPrompt: 'This workflow has stages every run walks',
+          stageMapPrompt: 'This team has stages every run walks',
           systemPrompt: 'You are the router.',
           mcpEndpoint,
         },
@@ -1737,7 +1737,7 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
       return captured.args![idx + 1]!;
     };
     expect(turn(ENDPOINT)).toBe(
-      `${HOST_BLOCK}\n\nTEAM SETTINGS\n\nThis workflow has stages every run walks\n\nYou are the router.`,
+      `${HOST_BLOCK}\n\nTEAM SETTINGS\n\nThis team has stages every run walks\n\nYou are the router.`,
     );
     expect(turn(null)).toBe(
       `${HOST_BLOCK}\n\nTEAM SETTINGS\n\nYou are the router.`,
@@ -3560,7 +3560,7 @@ describe('ClaudeAdapter — a message sent into a turn already running', () => {
       approvalMode: 'ask' as const,
       allowUserQuestions: true,
     };
-    // Run-scoped, as every chat and workflow session is: a process kept for the
+    // Run-scoped, as every chat and team session is: a process kept for the
     // conversation is the only lifetime with a "next stretch" to wait for.
     const session = new ClaudeAdapter({
       spawn,

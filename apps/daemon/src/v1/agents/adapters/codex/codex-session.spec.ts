@@ -3582,7 +3582,7 @@ describe('what a turn spends', () => {
   });
 });
 
-describe('a workflow node’s switched-off MCP servers', () => {
+describe('a team node’s switched-off MCP servers', () => {
   /** A `config/read` reply defining `playwright` in the user's config.toml. */
   const CONFIG_REPLY = {
     config: {

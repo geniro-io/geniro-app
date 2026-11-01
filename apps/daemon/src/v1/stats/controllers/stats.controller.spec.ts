@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  restoreWorkflowVersionSchema,
-  workflowVersionsQuerySchema,
+  restoreTeamVersionSchema,
+  teamVersionsQuerySchema,
 } from '../dto/stats.dto';
 import type { StatsService } from '../services/stats.service';
-import type { WorkflowVersionsService } from '../services/workflow-versions.service';
+import type { TeamVersionsService } from '../services/team-versions.service';
 import type {
+  TeamVersionRestoredWire,
+  TeamVersionsWire,
   UsageStatsWire,
-  WorkflowVersionRestoredWire,
-  WorkflowVersionsWire,
 } from '../stats.types';
 import { StatsController } from './stats.controller';
 
@@ -24,7 +24,7 @@ describe('StatsController', () => {
     return {
       route: new StatsController(
         { usage } as unknown as StatsService,
-        {} as WorkflowVersionsService,
+        {} as TeamVersionsService,
       ),
       usage,
     };
@@ -51,54 +51,52 @@ describe('StatsController', () => {
     expect(usage).toHaveBeenCalledWith(undefined, undefined);
   });
 
-  describe('readWorkflowVersions', () => {
+  describe('readTeamVersions', () => {
     it('hands the slug to the versions service and answers what it read', async () => {
       const versions = {
         slug: 'dev-team',
-      } as unknown as WorkflowVersionsWire;
+      } as unknown as TeamVersionsWire;
       const read = vi.fn(async () => versions);
       const route = new StatsController(
         {} as StatsService,
-        { read } as unknown as WorkflowVersionsService,
+        { read } as unknown as TeamVersionsService,
       );
 
-      await expect(
-        route.readWorkflowVersions({ slug: 'dev-team' }),
-      ).resolves.toBe(versions);
+      await expect(route.readTeamVersions({ slug: 'dev-team' })).resolves.toBe(
+        versions,
+      );
       expect(read).toHaveBeenCalledWith('dev-team');
     });
 
     it.each(['', '../etc', 'has space', '-leading-dash'])(
       'refuses the slug %j before it reaches the service',
       (slug) => {
-        expect(workflowVersionsQuerySchema.safeParse({ slug }).success).toBe(
-          false,
-        );
+        expect(teamVersionsQuerySchema.safeParse({ slug }).success).toBe(false);
       },
     );
 
     it('refuses a request with no slug', () => {
-      expect(workflowVersionsQuerySchema.safeParse({}).success).toBe(false);
+      expect(teamVersionsQuerySchema.safeParse({}).success).toBe(false);
     });
 
     it('accepts a library slug', () => {
       expect(
-        workflowVersionsQuerySchema.safeParse({ slug: 'dev-team_2' }).success,
+        teamVersionsQuerySchema.safeParse({ slug: 'dev-team_2' }).success,
       ).toBe(true);
     });
   });
 
-  describe('restoreWorkflowVersion', () => {
+  describe('restoreTeamVersion', () => {
     it('hands the slug, version and base hash to the versions service', async () => {
-      const answer = { slug: 'dev-team' } as WorkflowVersionRestoredWire;
+      const answer = { slug: 'dev-team' } as TeamVersionRestoredWire;
       const restore = vi.fn(async () => answer);
       const route = new StatsController(
         {} as StatsService,
-        { restore } as unknown as WorkflowVersionsService,
+        { restore } as unknown as TeamVersionsService,
       );
 
       await expect(
-        route.restoreWorkflowVersion({
+        route.restoreTeamVersion({
           slug: 'dev-team',
           version: '0123456789abcdef',
           baseHash: 'h1',
@@ -117,7 +115,7 @@ describe('StatsController', () => {
       { slug: 'dev-team', version: '0123456789ABCDEF' },
       { slug: 'dev-team' },
     ])('refuses %j before it reaches the service', (body) => {
-      expect(restoreWorkflowVersionSchema.safeParse(body).success).toBe(false);
+      expect(restoreTeamVersionSchema.safeParse(body).success).toBe(false);
     });
   });
 });

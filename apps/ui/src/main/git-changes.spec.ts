@@ -654,7 +654,7 @@ describe('readChangesSince', () => {
 
 describe('readLinkedWorktrees', () => {
   it('lists a worktree an agent nested under the checkout, by its real path, and not the checkout itself', async () => {
-    // The shape a workflow agent leaves: `git worktree add` under a gitignored
+    // The shape a team agent leaves: `git worktree add` under a gitignored
     // folder of the run's own checkout. git prints real paths, and the temp dir
     // is a symlink on macOS (/var → /private/var), so the expectation is too.
     initRepo();

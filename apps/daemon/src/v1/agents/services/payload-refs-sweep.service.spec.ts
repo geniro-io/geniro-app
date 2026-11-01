@@ -79,7 +79,7 @@ describe('PayloadRefsSweepService (in-memory sqlite)', () => {
     await new RunDao(orm.em.fork()).create({
       id,
       status: 'completed',
-      workflowId: null,
+      teamId: null,
     });
     await orm.em.fork().nativeUpdate(Run, { id }, { payloadRefsVersion });
   }

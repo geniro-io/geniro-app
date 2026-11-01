@@ -9,9 +9,9 @@ import { EffortsService } from '../../agents/services/efforts.service';
 import { ModelsService } from '../../agents/services/models.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { childProcessHandle } from '../../agents/utils/child-handle';
-import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { AgentKind } from '../../runs/runs.types';
+import { TeamStoreService } from '../../teams/services/team-store.service';
 import { LabelInstructionDao } from '../dao/label-instruction.dao';
 import { TaskDao } from '../dao/task.dao';
 import type { BoardVocabulary } from '../tasks.types';
@@ -19,11 +19,11 @@ import { parseLabels } from '../utils/task-labels';
 
 /**
  * The `board_vocabulary` answer: the card values that belong to this machine
- * — labels in use, workflows, CLIs, models, efforts, config directories — so an
+ * — labels in use, teams, CLIs, models, efforts, config directories — so an
  * agent filing a card spells them exactly instead of guessing.
  *
  * Every listing is read from where the app itself reads it (the board's rows,
- * the workflow library, each adapter's own config, the composer's cached model
+ * the team library, each adapter's own config, the composer's cached model
  * and effort listings), so the answer cannot describe a vocabulary the board
  * does not have.
  */
@@ -34,7 +34,7 @@ export class TaskBoardVocabularyService {
     private readonly taskDao: TaskDao,
     private readonly projectDao: ProjectDao,
     private readonly labelInstructionDao: LabelInstructionDao,
-    private readonly workflows: WorkflowStoreService,
+    private readonly teams: TeamStoreService,
     private readonly adapters: AgentAdapterRegistry,
     private readonly versions: AgentVersionService,
     private readonly processes: ProcessRegistry,
@@ -89,8 +89,8 @@ export class TaskBoardVocabularyService {
 
     // Independent and each possibly slow (a `--version` spawn, a CLI
     // handshake for the models), so they are awaited together.
-    const [workflows, agents, models] = await Promise.all([
-      this.workflows.list(),
+    const [teams, agents, models] = await Promise.all([
+      this.teams.list(),
       Promise.all(
         [...this.adapters.all()].map(async ([kind, adapter]) => {
           const config = adapter.getConfig();
@@ -120,10 +120,10 @@ export class TaskBoardVocabularyService {
           instructionsFor: [...found.instructionsFor].sort(),
         }))
         .sort((a, b) => b.cards - a.cards || a.label.localeCompare(b.label)),
-      workflows: workflows.map((workflow) => ({
-        slug: workflow.slug,
-        name: workflow.name,
-        description: workflow.description,
+      teams: teams.map((team) => ({
+        slug: team.slug,
+        name: team.name,
+        description: team.description,
       })),
       agents,
       configDirs: [...configDirs].sort(),

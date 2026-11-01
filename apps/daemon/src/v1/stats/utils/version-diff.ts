@@ -14,7 +14,7 @@ export function versionDiff(
   previousYaml: string,
   nextYaml: string,
 ): VersionChangesWire {
-  const file = `${slug}.geniro.yaml`;
+  const file = `${slug}.team.yaml`;
   const patch = structuredPatch(
     `a/${file}`,
     `b/${file}`,

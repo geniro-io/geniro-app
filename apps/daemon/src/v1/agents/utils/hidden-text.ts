@@ -1,7 +1,7 @@
 /**
  * Text that would show the user something other than what it holds — the one
  * rule for every short text an agent writes onto a card (an action's label and
- * message, a workflow proposal's summary): any
+ * message, a team proposal's summary): any
  * control, any format character (bidi overrides, isolates and marks,
  * zero-width characters, invisible tags), anything Unicode says to draw as
  * nothing, and the line and paragraph separators. Emoji stay usable, and only

@@ -219,7 +219,7 @@ export class ChatWaterfallService {
           ),
         this.nodeStateDao.listByRun(runId, em),
         this.itemDao.delegateToolCallSeqs(runId, em, maxSeq),
-        run.workflowId === null
+        run.teamId === null
           ? Promise.resolve([])
           : this.itemDao.poolHandOffRows(runId, em, maxSeq),
       ]);
@@ -237,10 +237,10 @@ export class ChatWaterfallService {
     // A snapshot read takes the working flag recorded when the snapshot was
     // taken, so the same snapshot always folds the same.
     const working = workingAtSnapshot ?? !isTerminalRunStatus(run.status);
-    const pooled = poolMembers(run.workflowSnapshot);
+    const pooled = poolMembers(run.teamSnapshot);
     const finished = foldTurns(payloadRows, laneRows(spine), pooled);
     const unfinished =
-      run.workflowId === null
+      run.teamId === null
         ? foldUnfinishedChatTurns(spine, working, to)
         : foldUnfinishedNodeTurns(
             [...payloadRows, ...handOffs].sort((a, b) => a.seq - b.seq),
@@ -274,14 +274,14 @@ export class ChatWaterfallService {
     // the wire, so without the run's polled bill its lane reads as costing nothing
     // under a total that carries the real figure — the exact "$0.00 about money
     // nobody measured" this card exists to refuse.
-    const isChat = run.workflowId === null;
+    const isChat = run.teamId === null;
     const agentKinds = new Map<string | null, AgentKind | null>(
       nodeStates.map((state) => [state.nodeId, state.agentKind]),
     );
 
     const pollsSpend = (kind: string | null): boolean =>
       this.polledSpend.pollsSpend(kind);
-    const poolKinds = snapshotPoolKinds(run.workflowSnapshot);
+    const poolKinds = snapshotPoolKinds(run.teamSnapshot);
     const polledByNode = new Map<string | null, PolledSpend>(
       nodeStates
         .filter(
@@ -329,7 +329,7 @@ export class ChatWaterfallService {
       // its run as costing nothing while the panel beside this card shows the
       // real figure. Which helper applies is the split `ChatMetricsService`
       // already makes: a single-CLI chat has nothing to add the bill TO, so it
-      // REPLACES, while a workflow's self-pricing nodes priced their own turns
+      // REPLACES, while a team's self-pricing nodes priced their own turns
       // and the polled node's bill goes on top.
       totals: withPolledSpend(
         sumUsagePayloads(
@@ -337,7 +337,7 @@ export class ChatWaterfallService {
             .filter((row) => carriesUsage(row.kind))
             .map((row) => row.payload),
         ),
-        // A workflow's own figure judged per TURN, as `ChatMetricsService`
+        // A team's own figure judged per TURN, as `ChatMetricsService`
         // totals it: a polled CLI's turns are its bill's to account for.
         sumUsagePayloads(
           payloadRows
@@ -431,19 +431,19 @@ function criticalPathOf(
 /**
  * The run's totals with whatever its polled-spend CLIs were charged folded in.
  *
- * A chat REPLACES and a workflow ADDS, which is not a shortcut either way: a
+ * A chat REPLACES and a team ADDS, which is not a shortcut either way: a
  * polled-spend chat's own turns report no price at all, so there is nothing to
- * add a bill to, while a workflow's other nodes priced their turns and
+ * add a bill to, while a team's other nodes priced their turns and
  * replacing would report the polled node's bill as the whole run's cost.
  */
 function withPolledSpend(
   totals: ChatTotalsWire,
-  /** The turns run on a CLI that prices itself — what a workflow's bills are added to. */
+  /** The turns run on a CLI that prices itself — what a team's bills are added to. */
   selfPriced: ChatTotalsWire,
-  run: { workflowId: string | null } & PolledSpend,
+  run: { teamId: string | null } & PolledSpend,
   perNode: readonly PolledSpend[],
 ): ChatTotalsWire {
-  if (run.workflowId === null) {
+  if (run.teamId === null) {
     return applyPolledSpend(totals, run);
   }
   return perNode.reduce(
@@ -576,7 +576,7 @@ function readModelCosts(
   return splitOf(entries, costUsd);
 }
 
-/** Each pooled node's members, read from the run's own copy of the workflow. */
+/** Each pooled node's members, read from the run's own copy of the team. */
 interface PoolMembers {
   /** Whether the node has a pool. */
   has(nodeId: string | null): boolean;
@@ -666,7 +666,7 @@ function bracketedTurn(
 }
 
 /**
- * A WORKFLOW node's turns that no `turn_complete` drew — still running, failed,
+ * A TEAM node's turns that no `turn_complete` drew — still running, failed,
  * or cancelled — read off the executor's status rows.
  *
  * A status row carries the node and, for a callee sub-turn, the call: `running`
@@ -1185,7 +1185,7 @@ function foldDelegates(rows: readonly PayloadRow[]): RunWaterfallDelegate[] {
  *
  * Only the executor writes these: measured on a real install, every chat run
  * has zero `status` rows against hundreds of `turn_complete`s, so this is a
- * count of what a WORKFLOW recorded and never the whole answer — the caller
+ * count of what a TEAM recorded and never the whole answer — the caller
  * takes whichever channel saw more of the run.
  */
 function laneTurnStarts(
@@ -1294,7 +1294,7 @@ function foldLanes(input: {
   for (const row of spine) {
     // A lane is opened by a row that IS work — a tool call or a finished turn.
     // Opening one for every row instead put a lane under the `nodeId: null` a
-    // workflow run files its own seed message and terminal row under, which
+    // team run files its own seed message and terminal row under, which
     // drew an empty lane named `agent` beside the real ones. `turn_complete`
     // has to open one too: a node that only ever called an agent, with no tool
     // call of its own, still did something.
@@ -1358,7 +1358,7 @@ function foldLanes(input: {
           // different moments — a status row when a turn OPENS (written by the
           // executor alone), a `turn_complete` when one ENDS — so neither is
           // the whole answer on its own: a chat writes no status row at all,
-          // and a cancelled workflow node writes no completion. Taking the
+          // and a cancelled team node writes no completion. Taking the
           // larger is what keeps `0 turns · 136 tools` off the card without
           // inventing a turn: both figures are counts of rows the run really
           // wrote.
@@ -1375,7 +1375,7 @@ function foldLanes(input: {
       })
       // A lane survives on EVIDENCE OF WORK — a tool call, or a turn that can
       // be placed on the clock — and never on its turn COUNT, which is now read
-      // off the rows. A workflow files its seed message and its run-level
+      // off the rows. A team files its seed message and its run-level
       // terminal row under `nodeId: null`, and that terminal row is a
       // `turn_complete` with no duration and no lane of its own: counted, it
       // put an empty lane named `agent` beside the real ones, taking the first

@@ -20,7 +20,7 @@ const PR_URL = 'https://github.com/acme/platform/pull/87';
 
 type RunColumns = Pick<
   Run,
-  'workflowId' | 'pullRequests' | 'touchedPullRequests' | 'runOutcomes'
+  'teamId' | 'pullRequests' | 'touchedPullRequests' | 'runOutcomes'
 >;
 
 interface Harness {
@@ -39,7 +39,7 @@ function setUp(): Harness {
     broker: undefined as unknown as RunOutcomeBroker,
     rows: [],
     run: {
-      workflowId: 'dev-team',
+      teamId: 'dev-team',
       pullRequests: JSON.stringify([
         { owner: 'acme', repo: 'platform', number: 87, url: PR_URL, seq: 2 },
       ]),
@@ -147,7 +147,7 @@ describe('RunOutcomeBroker', () => {
     vi.restoreAllMocks();
   });
 
-  it('records one run_outcome row with the identity read from the URL and the run’s workflow', async () => {
+  it('records one run_outcome row with the identity read from the URL and the run’s team', async () => {
     const harness = setUp();
     harness.broker.register('run-1', 'manager', sinkFor(harness));
 
@@ -177,7 +177,7 @@ describe('RunOutcomeBroker', () => {
           reviewRounds: 2,
           acceptance: 'accepted',
           questionsAsked: 0,
-          workflowSlug: 'dev-team',
+          teamSlug: 'dev-team',
           nodeId: 'manager',
           conversationId: null,
         },

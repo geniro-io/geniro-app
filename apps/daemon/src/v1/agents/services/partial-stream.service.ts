@@ -129,7 +129,7 @@ export class PartialStreamService {
    * mid-turn would see an unscaled number for the rest of it.
    *
    * Keyed by OWNER, not by run. A 1:1 chat has exactly one owner so the two are
-   * the same thing there — but a workflow run is N agents that routinely run on
+   * the same thing there — but a team run is N agents that routinely run on
    * DIFFERENT models, and a run-scoped window is whichever node reported last:
    * an opus node's 160k would have been drawn against a haiku node's 200k. The
    * owner is the thing a window belongs to.
@@ -732,7 +732,7 @@ export class PartialStreamService {
    * The (run, owner) key the window and model maps are filed under.
    *
    * NUL-joined like every other composite key in the daemon. A run id is a
-   * UUID and an owner key is either the chat sentinel or a workflow node id, so
+   * UUID and an owner key is either the chat sentinel or a team node id, so
    * neither half can contain the byte and the pair cannot be re-partitioned.
    */
   private ownerId(runId: string, ownerKey: string): string {
@@ -880,7 +880,7 @@ export class PartialStreamService {
    * A live event is published only when its figure CHANGES, and a room buffers
    * nothing for an absent member, so a client that opens a thread mid-turn
    * otherwise starts on an empty plane and stays there until the next change.
-   * For the running spend that can be a long time: REPORTED as a workflow
+   * For the running spend that can be a long time: REPORTED as a team
    * header reading $1.71 after switching away and back, where it had read ~$40
    * — the recorded turns summed to exactly $1.71, and the rest was a callee's
    * unrecorded spend that no event repeated. REPLACE semantics make this safe
@@ -989,7 +989,7 @@ export class PartialStreamService {
     try {
       this.tails.delete(runId);
       // Swept by PREFIX, because these two are keyed per (run, owner) and a
-      // workflow run has one entry per NODE. Deleting `runId` alone was correct
+      // team run has one entry per NODE. Deleting `runId` alone was correct
       // only while every run had exactly one owner; it now leaves a node's
       // window behind for the life of the process, which is a leak that no
       // later call can reach — the run it belongs to no longer exists.

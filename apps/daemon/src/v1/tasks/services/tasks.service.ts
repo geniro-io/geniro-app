@@ -335,7 +335,7 @@ export class TasksService {
     effort?: string;
     approval?: ChatApprovalMode;
     configDir?: string;
-    workflowSlug?: string;
+    teamSlug?: string;
     source?: TaskSource;
     sourceRef?: string;
   }): Promise<TaskWire> {
@@ -379,7 +379,7 @@ export class TasksService {
             input.configDir === undefined
               ? null
               : resolveTaskConfigDir(input.configDir),
-          workflowSlug: input.workflowSlug ?? null,
+          teamSlug: input.teamSlug ?? null,
           source: input.source ?? 'geniro',
           sourceRef: input.sourceRef ?? null,
           // Appended to the end of its column, never inserted: a new card is
@@ -419,7 +419,7 @@ export class TasksService {
       effort?: string | null;
       approval?: ChatApprovalMode | null;
       configDir?: string | null;
-      workflowSlug?: string | null;
+      teamSlug?: string | null;
       branch?: string | null;
       worktreePath?: string | null;
       runId?: string | null;
@@ -473,8 +473,8 @@ export class TasksService {
       task.configDir =
         patch.configDir === null ? null : resolveTaskConfigDir(patch.configDir);
     }
-    if (patch.workflowSlug !== undefined) {
-      task.workflowSlug = patch.workflowSlug;
+    if (patch.teamSlug !== undefined) {
+      task.teamSlug = patch.teamSlug;
     }
     if (patch.branch !== undefined) {
       task.branch = patch.branch;
@@ -716,7 +716,7 @@ function toWire(
     effort: task.effort,
     approval: task.approval,
     configDir: task.configDir,
-    workflowSlug: task.workflowSlug,
+    teamSlug: task.teamSlug,
     branch: task.branch,
     worktreePath: task.worktreePath,
     runId: task.runId,

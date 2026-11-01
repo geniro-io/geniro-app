@@ -298,13 +298,13 @@ export class ClaudeSessionCostLedger {
     // With no base, or a total that went DOWN, a step far past what the turn's
     // own tokens can have cost is not this turn's — it is history the ledger
     // could not subtract. Two ways that happens, both measured on the
-    // reporter's workflow run `a0877ce9`:
+    // reporter's team run `a0877ce9`:
     //
     //   - a RESUMED process starts from the session's SAVED totals (the CLI
     //     restores `costState` on `--resume`), so its first result carries every
     //     earlier turn — which this ledger, seeing the id for the first time in
     //     this process, took whole: a 12.8s call billed $0.79 for $0.47 of tokens;
-    //   - every call into a workflow node resumes that node's ONE session, so
+    //   - every call into a team node resumes that node's ONE session, so
     //     several processes report under one id and their totals interleave —
     //     a total that "dropped" was taken whole: $29.41 for $13.79 of tokens.
     //

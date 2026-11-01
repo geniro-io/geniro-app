@@ -13,15 +13,16 @@ import type {
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
-import type { Workflow } from '../../graphs/graphs.types';
-import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
-import { workflowVersionOf } from '../../graphs/utils/workflow-version';
 import type { Run } from '../../runs/entity/run.entity';
-import { WorkflowRecommendationDao } from '../dao/workflow-recommendation.dao';
-import { WorkflowRecommendation } from '../entity/workflow-recommendation.entity';
+import type { TeamStoreService } from '../../teams/services/team-store.service';
+import type { Team } from '../../teams/teams.types';
+import { teamVersionOf } from '../../teams/utils/team-version';
+import { TeamRecommendationDao } from '../dao/team-recommendation.dao';
+import { TeamRecommendation } from '../entity/team-recommendation.entity';
+import { filedRecommendationsOf } from '../utils/recommendation-ledger';
 import { RecommendationLedgerService } from './recommendation-ledger.service';
 
-const LIBRARY: Workflow = {
+const LIBRARY: Team = {
   name: 'Dev Team',
   nodes: [{ id: 'dev', kind: 'agent', agent: 'claude', approval: 'auto' }],
   edges: [],
@@ -30,11 +31,11 @@ const LIBRARY: Workflow = {
 function card(ids: string[]): RecommendationsPayload {
   return {
     sourceRunId: 'newest',
-    sourceKind: 'workflow',
+    sourceKind: 'team',
     timing: null,
     items: ids.map((id) => ({
       id,
-      target: id.startsWith('W-') ? 'workflow' : 'repo',
+      target: id.startsWith('W-') ? 'team' : 'repo',
       territory: 'process',
       kind: 'model',
       location: 'dev',
@@ -57,7 +58,7 @@ function card(ids: string[]): RecommendationsPayload {
   };
 }
 
-type ChatRun = Pick<Run, 'id' | 'analysisWorkflowSlug' | 'editsWorkflowSlug'>;
+type ChatRun = Pick<Run, 'id' | 'analysisTeamSlug' | 'editsTeamSlug'>;
 
 interface StoredRow {
   seq: number;
@@ -68,13 +69,13 @@ interface StoredRow {
 }
 
 /**
- * The copy of a workflow chat's recommendations — the cards, the Applies and the
+ * The copy of a team chat's recommendations — the cards, the Applies and the
  * marks — into the ledger that outlives the chat, live off a real bus and by the
  * boot sweep, through the real DAO.
  */
 describe('RecommendationLedgerService (in-memory sqlite)', () => {
   let orm: MikroORM;
-  let dao: WorkflowRecommendationDao;
+  let dao: TeamRecommendationDao;
   let bus: AgentEventBus;
   let chats: Map<string, ChatRun>;
   let stored: Map<string, StoredRow[]>;
@@ -84,7 +85,7 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [WorkflowRecommendation],
+        entities: [TeamRecommendation],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -100,31 +101,31 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
 
   beforeEach(async () => {
     await orm.schema.clear();
-    dao = new WorkflowRecommendationDao(orm.em.fork());
+    dao = new TeamRecommendationDao(orm.em.fork());
     bus = new AgentEventBus();
     chats = new Map([
       [
         'analysis-1',
         {
           id: 'analysis-1',
-          analysisWorkflowSlug: 'dev-team',
-          editsWorkflowSlug: null,
+          analysisTeamSlug: 'dev-team',
+          editsTeamSlug: null,
         },
       ],
       [
         'builder-1',
         {
           id: 'builder-1',
-          analysisWorkflowSlug: null,
-          editsWorkflowSlug: 'dev-team',
+          analysisTeamSlug: null,
+          editsTeamSlug: 'dev-team',
         },
       ],
       [
         'plain-chat',
         {
           id: 'plain-chat',
-          analysisWorkflowSlug: null,
-          editsWorkflowSlug: null,
+          analysisTeamSlug: null,
+          editsTeamSlug: null,
         },
       ],
     ]);
@@ -134,12 +135,11 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
       bus,
       {
         getById: (id: string) => Promise.resolve(chats.get(id) ?? null),
-        workflowRecommendationChats: () =>
+        teamRecommendationChats: () =>
           Promise.resolve(
             [...chats.values()].filter(
               (chat) =>
-                chat.analysisWorkflowSlug !== null ||
-                chat.editsWorkflowSlug !== null,
+                chat.analysisTeamSlug !== null || chat.editsTeamSlug !== null,
             ),
           ),
       } as unknown as RunDao,
@@ -155,8 +155,8 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
       } as unknown as ItemDao,
       dao,
       {
-        get: () => Promise.resolve({ slug: 'dev-team', workflow: LIBRARY }),
-      } as unknown as WorkflowStoreService,
+        get: () => Promise.resolve({ slug: 'dev-team', team: LIBRARY }),
+      } as unknown as TeamStoreService,
     );
   });
 
@@ -189,7 +189,7 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
       service.onModuleInit();
     });
 
-    it("files a workflow analysis's card with the library's version, then what the user selected and how each item was marked", async () => {
+    it("files a team analysis's card with the library's version, then what the user selected and how each item was marked", async () => {
       publish('analysis-1', 5, 'recommendations', card(['W-1', 'W-2', 'R-1']));
       publish(
         'analysis-1',
@@ -226,7 +226,7 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
         chatKind: 'analysis',
         cardSeq: 5,
         filedAt: new Date('2026-10-20T10:00:05.000Z'),
-        libraryVersion: workflowVersionOf(LIBRARY),
+        libraryVersion: teamVersionOf(LIBRARY),
         title: 'Title of W-1',
         change: 'change for W-1',
         rootCause: 'the reviewer runs the largest model',
@@ -243,7 +243,7 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
       });
     });
 
-    it("files a builder chat's card under the workflow it edits", async () => {
+    it("files a builder chat's card under the team it edits", async () => {
       publish('builder-1', 3, 'recommendations', card(['W-1']));
       await service.settled();
 
@@ -255,7 +255,7 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
       ]);
     });
 
-    it('files nothing for a chat that is not about a workflow, nor for a message that applies nothing', async () => {
+    it('files nothing for a chat that is not about a team, nor for a message that applies nothing', async () => {
       publish('plain-chat', 3, 'recommendations', card(['R-1']));
       publish('analysis-1', 4, 'message', { text: 'thanks' }, 'user');
       await service.settled();
@@ -287,7 +287,32 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
   });
 
   describe('sweep', () => {
-    it('copies what the live copy missed from every workflow chat that still exists, once', async () => {
+    it('reads an item filed before the rename, whose target says workflow, as a team item', async () => {
+      const [filed] = filedRecommendationsOf(
+        { slug: 'dev-team', chatRunId: 'analysis-1', chatKind: 'analysis' },
+        {
+          seq: 4,
+          createdAt: new Date(0),
+          payload: {
+            ...card(['W-1']),
+            sourceKind: 'workflow',
+            items: card(['W-1']).items.map((item) => ({
+              ...item,
+              target: 'workflow',
+            })),
+          },
+        },
+        null,
+      )!;
+      expect(filed?.target).toBe('team');
+      await dao.file([{ ...filed!, target: 'workflow' }]);
+
+      expect((await dao.rowsOf('dev-team')).map((row) => row.target)).toEqual([
+        'team',
+      ]);
+    });
+
+    it('copies what the live copy missed from every team chat that still exists, once', async () => {
       const row = (
         seq: number,
         kind: string,

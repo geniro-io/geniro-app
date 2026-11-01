@@ -53,5 +53,5 @@ Rules:
 - A response DTO's root schema must not carry `.meta({ id })`; `setupSwagger` fails the boot on the resulting dangling `$ref`.
 - Declare responses with `@ZodResponse({ status, type })` (nestjs-zod). No `@nestjs/swagger` CLI plugin (swc cannot run it).
 - Every controller has `@ApiTags`, `@ApiBearerAuth` and `@ApiOperation({ operationId })`; operationIds are globally unique (`setupSwagger` throws on duplicates).
-- `WorkflowSchema` stays default-free so request and response collapse to one type; YAML defaults live in `WorkflowYamlSchema` (`parseWorkflowYaml` only).
+- `TeamSchema` stays default-free so request and response collapse to one type; YAML defaults live in `TeamYamlSchema` (`parseTeamYaml` only).
 - `McpController` is `@ApiExcludeController()`.

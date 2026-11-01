@@ -1089,7 +1089,7 @@ describe('MemoryService', () => {
   });
 
   describe('actorOf', () => {
-    it('names a workflow node’s own agent over the run’s', async () => {
+    it('names a team node’s own agent over the run’s', async () => {
       const em = db.em.fork();
       em.persist(
         make(Run, {

@@ -26,9 +26,9 @@ describe('host analysis tools', () => {
     ).toBe(false);
   });
 
-  it('never approves the workflow save or the general history readers', () => {
+  it('never approves the team save or the general history readers', () => {
     expect(
-      isHostRecommendationsCall(SERVER, `mcp__${SERVER}__save_workflow_change`),
+      isHostRecommendationsCall(SERVER, `mcp__${SERVER}__save_team_change`),
     ).toBe(false);
     expect(
       isHostAnalysisReadCall(SERVER, `mcp__${SERVER}__read_chat_context`),

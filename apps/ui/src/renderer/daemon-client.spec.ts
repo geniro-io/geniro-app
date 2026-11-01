@@ -113,7 +113,7 @@ describe('DaemonClient', () => {
   });
 
   // Two surfaces can each be following a run — the chat screen stays mounted
-  // while the workflow builder's chat panel is open — and a reconnect that
+  // while the team builder's chat panel is open — and a reconnect that
   // re-joined one of them left the other live and permanently silent.
   it('re-joins EVERY joined room after a reconnect, and waits for all of them', async () => {
     const client = new DaemonClient(handle, {});

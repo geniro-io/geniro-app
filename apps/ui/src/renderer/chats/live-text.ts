@@ -19,7 +19,7 @@ import { formatTokens } from './agent-activity';
 /**
  * The map key used for a 1:1 chat's agent, whose items carry no node id.
  *
- * NUL-prefixed so it cannot collide with a real one. A workflow node id is any
+ * NUL-prefixed so it cannot collide with a real one. A team node id is any
  * non-empty string, so `agent` is a legal — and obvious — node name; while the
  * sentinel was that same word, `liveTextKey` and its inverse stopped being
  * inverses for such a node, and its streamed words were torn out of its own
@@ -285,7 +285,7 @@ export function liveTextKey(
   // two keys could never match. The context ring's live source was the quieter
   // half of the same drift.
   //
-  // The discriminator is exact rather than a guess: a workflow node's delta
+  // The discriminator is exact rather than a guess: a team node's delta
   // always carries its node id (`GraphExecutorService` passes `node.id`), so a
   // node literally named `agent` — the collision the sentinel exists for —
   // still keys as itself.

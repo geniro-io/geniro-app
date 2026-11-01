@@ -31,7 +31,7 @@ export interface PublishedActionNote {
 }
 
 /**
- * Who else is told about a publisher's buttons besides the run — a workflow
+ * Who else is told about a publisher's buttons besides the run — a team
  * callee's running calls, whose envelopes list them.
  */
 export interface ActionPublishNotes {

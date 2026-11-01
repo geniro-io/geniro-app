@@ -20,7 +20,7 @@ export interface UsageEventInput {
   agentKind: AgentKind | null;
   model: string | null;
   cwd: string | null;
-  workflowName: string | null;
+  teamName: string | null;
   costUsd: number | null;
   estimatedCostUsd: number | null;
   inputTokens: number | null;
@@ -52,7 +52,7 @@ export interface RunOutcomeLedgerRow {
   runId: string;
   sourceSeq: number;
   occurredAt: Date;
-  workflowSlug: string | null;
+  teamSlug: string | null;
   prOwner: string;
   prRepo: string;
   prNumber: number;
@@ -107,7 +107,7 @@ export interface LineSnapshotRow {
   partial: boolean;
 }
 
-/** What the workflow ledger writes on a run's thread row when the run is created. */
+/** What the team ledger writes on a run's thread row when the run is created. */
 export interface ThreadVersionStamp {
   slug: string;
   /** Null when the run kept no graph copy it can read. */
@@ -115,7 +115,7 @@ export interface ThreadVersionStamp {
   inferred: boolean | null;
 }
 
-/** One workflow run's thread row, as the versions table reads it. */
+/** One team run's thread row, as the versions table reads it. */
 export interface ThreadLedgerRow {
   runId: string;
   occurredAt: Date;
@@ -124,14 +124,14 @@ export interface ThreadLedgerRow {
   inferred: boolean | null;
 }
 
-/** Which kind of chat filed a workflow's recommendations card. */
-export type WorkflowRecommendationChat = 'analysis' | 'builder';
+/** Which kind of chat filed a team's recommendations card. */
+export type TeamRecommendationChat = 'analysis' | 'builder';
 
-/** One `workflow_recommendations` row (see the entity). */
-export interface WorkflowRecommendationRow {
+/** One `team_recommendations` row (see the entity). */
+export interface TeamRecommendationRow {
   slug: string;
   chatRunId: string;
-  chatKind: WorkflowRecommendationChat;
+  chatKind: TeamRecommendationChat;
   cardSeq: number;
   filedAt: Date;
   libraryVersion: string | null;
@@ -157,15 +157,15 @@ export interface WorkflowRecommendationRow {
 
 /** A card's item as the ledger first files it: nothing selected or marked yet. */
 export type FiledRecommendation = Omit<
-  WorkflowRecommendationRow,
+  TeamRecommendationRow,
   'selectedAt' | 'outcome' | 'outcomeNote' | 'outcomeAt' | 'outcomeSeq'
 >;
 
-/** One workflow's chat as the recommendation ledger files it. */
-export interface WorkflowRecommendationSource {
+/** One team's chat as the recommendation ledger files it. */
+export interface TeamRecommendationSource {
   chatRunId: string;
   slug: string;
-  chatKind: WorkflowRecommendationChat;
+  chatKind: TeamRecommendationChat;
 }
 
 /** A graph version as the history names it: its hash, its number once recorded, and whether it is the library's now. */
@@ -205,7 +205,7 @@ export interface HistoryVersionFigures {
   };
 }
 
-/** One logged write to the workflow, as the history shows it. */
+/** One logged write to the team, as the history shows it. */
 export interface HistoryChange {
   at: string;
   source: string;
@@ -230,9 +230,9 @@ export type HistoryRecommendationStatus =
   | 'not-selected'
   | 'unanswered';
 
-/** One workflow's history, as an analysis reads it (`read_analyzed_thread` view=history). */
-export interface WorkflowHistory {
-  workflow: string;
+/** One team's history, as an analysis reads it (`read_analyzed_thread` view=history). */
+export interface TeamHistory {
+  team: string;
   currentVersion: HistoryVersionRef | null;
   summary: {
     versions: number;
@@ -259,7 +259,7 @@ export interface WorkflowHistory {
   changeLog: HistoryChange[];
   recommendations: {
     chatRunId: string;
-    chat: WorkflowRecommendationChat;
+    chat: TeamRecommendationChat;
     byThisChat: boolean;
     chatStillExists: boolean;
     cardSeq: number;
@@ -288,8 +288,8 @@ export interface WorkflowHistory {
   }[];
 }
 
-/** One `workflow_versions` row. */
-export interface WorkflowVersionGraph {
+/** One `team_versions` row. */
+export interface TeamVersionGraph {
   version: string;
   graph: string;
   firstSeenAt: Date;
@@ -387,7 +387,7 @@ export const ActivityTotalsWireSchema = z
       .number()
       .int()
       .nonnegative()
-      .describe('threads (chats and workflow runs) created in the period'),
+      .describe('threads (chats and team runs) created in the period'),
     pullRequests: z
       .number()
       .int()
@@ -619,7 +619,7 @@ export const UsageStatsWireSchema = z.object({
     ),
   byThread: z
     .array(UsageGroupWireSchema)
-    .describe('per thread (run), keyed by run id — chats and workflow runs'),
+    .describe('per thread (run), keyed by run id — chats and team runs'),
 });
 // No `.meta({ id })`: this is a RESPONSE DTO ROOT, and nestjs-zod would then
 // register the component under the id while the route still points at the DTO
@@ -659,7 +659,7 @@ export const VersionChangesSchema = z
   .meta({ id: 'VersionChanges' });
 export type VersionChangesWire = z.infer<typeof VersionChangesSchema>;
 
-export const WorkflowVersionRowSchema = z
+export const TeamVersionRowSchema = z
   .object({
     version: z
       .string()
@@ -689,29 +689,29 @@ export const WorkflowVersionRowSchema = z
     ),
     figures: VersionFiguresSchema,
   })
-  .meta({ id: 'WorkflowVersionRow' });
-export type WorkflowVersionRowWire = z.infer<typeof WorkflowVersionRowSchema>;
+  .meta({ id: 'TeamVersionRow' });
+export type TeamVersionRowWire = z.infer<typeof TeamVersionRowSchema>;
 
-/** One workflow's runs grouped by the graph version they ran. */
-export const WorkflowVersionsWireSchema = z.object({
+/** One team's runs grouped by the graph version they ran. */
+export const TeamVersionsWireSchema = z.object({
   slug: z.string(),
   currentVersion: z
     .string()
     .nullable()
     .describe("the library graph's version; null when the file cannot be read"),
-  versions: z.array(WorkflowVersionRowSchema).describe('newest first'),
-  unversioned: WorkflowVersionRowSchema.nullable().describe(
+  versions: z.array(TeamVersionRowSchema).describe('newest first'),
+  unversioned: TeamVersionRowSchema.nullable().describe(
     'the runs that kept no graph copy, or null when there are none',
   ),
   totals: VersionFiguresSchema.describe(
-    'folded over every run of the workflow, not summed from the rows',
+    'folded over every run of the team, not summed from the rows',
   ),
 });
 // No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
-export type WorkflowVersionsWire = z.infer<typeof WorkflowVersionsWireSchema>;
+export type TeamVersionsWire = z.infer<typeof TeamVersionsWireSchema>;
 
-/** A version written back to the library as the workflow's graph. */
-export const WorkflowVersionRestoredSchema = z.object({
+/** A version written back to the library as the team's graph. */
+export const TeamVersionRestoredSchema = z.object({
   slug: z.string(),
   version: z.string().describe('the graph version the library file now holds'),
   hash: z.string().describe('the file hash the next save must quote'),
@@ -720,6 +720,4 @@ export const WorkflowVersionRestoredSchema = z.object({
     .describe('where the replaced file was copied, relative to the library'),
 });
 // No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
-export type WorkflowVersionRestoredWire = z.infer<
-  typeof WorkflowVersionRestoredSchema
->;
+export type TeamVersionRestoredWire = z.infer<typeof TeamVersionRestoredSchema>;

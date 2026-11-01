@@ -1,5 +1,5 @@
 import { MAX_ANSWER_LENGTH } from '../../../agents/chat.types';
-import type { CallEnvelope } from '../../../graphs/graphs.types';
+import type { CallEnvelope } from '../../../teams/teams.types';
 import { invalidArgsEnvelope, unknownArgsEnvelope } from '../call-mcp-tool';
 
 /** Every argument `message_agent` reads — see `call-agent.reader.ts`. */

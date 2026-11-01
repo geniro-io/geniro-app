@@ -250,9 +250,9 @@ describe('MigrationRunnerService.run', () => {
   });
 
   it("keeps a backed-up file's folder, so two files of one name never overwrite each other", async () => {
-    mkdirSync(join(userDataDir, 'workflows', 'team'), { recursive: true });
-    const flat = join(userDataDir, 'workflows', 'a.yaml');
-    const nested = join(userDataDir, 'workflows', 'team', 'a.yaml');
+    mkdirSync(join(userDataDir, 'teams', 'team'), { recursive: true });
+    const flat = join(userDataDir, 'teams', 'a.yaml');
+    const nested = join(userDataDir, 'teams', 'team', 'a.yaml');
     writeFileSync(flat, 'flat');
     writeFileSync(nested, 'nested');
     const copies: string[] = [];
@@ -272,7 +272,7 @@ describe('MigrationRunnerService.run', () => {
       'flat',
       'nested',
     ]);
-    expect(copies[1]).toMatch(/0001-yaml-[^/]+\/workflows\/team\/a\.yaml$/);
+    expect(copies[1]).toMatch(/0001-yaml-[^/]+\/teams\/team\/a\.yaml$/);
   });
 
   it('refuses a registry that names one id twice', async () => {

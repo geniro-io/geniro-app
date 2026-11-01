@@ -9,7 +9,7 @@ export const FOLDERLESS_DIR_NAME = 'mcp-folderless';
 /**
  * Where a folder-INDEPENDENT MCP command runs.
  *
- * A workflow is edited long before it runs anywhere, so the builder has no
+ * A team is edited long before it runs anywhere, so the builder has no
  * folder to ask about, and the honest answer to "which servers would this node
  * load" is the set that does not depend on one — the user's global servers plus
  * whatever the node's own profile directory brings. Running in geniro's own
@@ -25,7 +25,7 @@ export const FOLDERLESS_DIR_NAME = 'mcp-folderless';
  * What must NOT be resolved here is the on/off TOGGLE: both CLIs store that
  * per folder (claude in `projects[<cwd>].disabledMcpServers`), so switching a
  * server off against this directory would write a decision about geniro's
- * scratch folder and change nothing about the folder the workflow actually
+ * scratch folder and change nothing about the folder the team actually
  * runs in.
  */
 export function folderlessDirPath(

@@ -45,7 +45,7 @@ const context = (over: Partial<TaskFieldsContext> = {}): TaskFieldsContext => ({
     runConfig: { model: null, effort: null, approval: null },
     folder: '/repo',
   },
-  workflows: [],
+  teams: [],
   cliDetections: null,
   agentsApi: null,
   capabilitiesApi: null,
@@ -157,7 +157,7 @@ describe('the properties a draft carries', () => {
 
     const sent = onCreate.mock.calls[0]?.[0] as NewTaskInput;
     expect('agentKind' in sent).toBe(false);
-    expect('workflowSlug' in sent).toBe(false);
+    expect('teamSlug' in sent).toBe(false);
     expect('folder' in sent).toBe(false);
   });
 

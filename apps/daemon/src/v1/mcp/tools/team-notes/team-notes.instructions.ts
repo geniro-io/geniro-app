@@ -7,7 +7,7 @@ import {
 /** What a model reads about `team_notes`. */
 export function teamNotesInstructions(): string {
   return (
-    "Read this workflow run's shared team notes — the contracts, decisions, facts, pitfalls and " +
+    "Read this team run's shared team notes — the contracts, decisions, facts, pitfalls and " +
     'pointers the agents of this run wrote with team_note. Use it when you start your work, before ' +
     'you change something other agents depend on (an interface, a shared file, an agreed ' +
     'decision), and whenever a reply says team notes are unread (`unread_team_notes`). Do not use ' +

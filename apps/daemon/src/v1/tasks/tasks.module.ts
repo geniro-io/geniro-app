@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
-import { GraphsModule } from '../graphs/graphs.module';
 import { ProjectsModule } from '../projects/projects.module';
+import { TeamsModule } from '../teams/teams.module';
 import { LabelInstructionsController } from './controllers/label-instructions.controller';
 import { TaskQueueController } from './controllers/task-queue.controller';
 import { TasksController } from './controllers/tasks.controller';
@@ -34,25 +34,25 @@ import { TasksService } from './services/tasks.service';
  * It also imports `AgentsModule`, for `ChatService`: pressing Run on a card
  * starts an ORDINARY chat, so this module borrows that engine rather than
  * growing one. The import runs THIS way only — `AgentsModule` must never
- * import the tasks module back — which is the same direction `GraphsModule`
+ * import the tasks module back — which is the same direction `TeamsModule`
  * already takes to the same place, and is what keeps the graph acyclic.
  *
- * And `GraphsModule`, for `GraphExecutorService`, on exactly the same terms: a
- * card may name a WORKFLOW instead of an agent, and the second engine is
- * borrowed rather than rebuilt. Acyclic for the same reason — `GraphsModule`
+ * And `TeamsModule`, for `GraphExecutorService`, on exactly the same terms: a
+ * card may name a TEAM instead of an agent, and the second engine is
+ * borrowed rather than rebuilt. Acyclic for the same reason — `TeamsModule`
  * imports `AgentsModule` and nothing else here, so tasks → graphs → agents runs
  * one way throughout.
  *
  * `TaskQueueController` / `TaskQueueService` are the reason both imports are
  * needed TOGETHER: splitting a project's waiting cards into eligible/blocked
  * needs `ProjectQueueService`'s raw read (from `ProjectsModule`) AND the
- * workflow library (`WorkflowStoreService`, from `GraphsModule`) to check a
- * card's workflow slug still exists — a question `ProjectsModule` alone has
+ * team library (`TeamStoreService`, from `TeamsModule`) to check a
+ * card's team slug still exists — a question `ProjectsModule` alone has
  * no way to answer. The controller keeps the `v1/projects/:projectId/queue`
  * URL it has always answered on; see its own doc for why it lives here.
  */
 @Module({
-  imports: [ProjectsModule, AgentsModule, GraphsModule],
+  imports: [ProjectsModule, AgentsModule, TeamsModule],
   controllers: [
     TasksController,
     TaskQueueController,

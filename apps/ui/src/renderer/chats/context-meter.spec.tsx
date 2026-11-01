@@ -333,7 +333,7 @@ describe('where the meter lives', () => {
     render(
       <ChatHeader
         label="My chat"
-        isWorkflow={false}
+        isTeam={false}
         status="running"
         lastActivityAt={new Date().toISOString()}
       />,
@@ -371,7 +371,7 @@ describe('where the meter lives', () => {
   });
 
   it('still reads the same figures in the agents panel', () => {
-    // The panel keeps its own copy for a workflow's PER-NODE windows, which
+    // The panel keeps its own copy for a team's PER-NODE windows, which
     // the one composer meter could never show — and it renders the same
     // component, so the two cannot state a window differently.
     render(
@@ -712,8 +712,8 @@ describe('the expanded readout the meter opens onto', () => {
     expect(load).toHaveBeenCalledWith('run-1', null, null, false);
   });
 
-  it('asks about the NODE it is given — a workflow run holds one window per node', async () => {
-    // REPORTED as "i cant see full context info for workflow". The first cut
+  it('asks about the NODE it is given — a team run holds one window per node', async () => {
+    // REPORTED as "i cant see full context info for team". The first cut
     // threaded the node through every readout branch but the filled ring's,
     // which is the one a working node draws — so the request went out for the
     // run alone and came back "this run names no single agent".

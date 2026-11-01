@@ -1,4 +1,4 @@
-import { Bot, Workflow as WorkflowIcon } from 'lucide-react';
+import { Bot, Workflow as TeamIcon } from 'lucide-react';
 import { useRef } from 'react';
 
 import type {
@@ -11,11 +11,11 @@ import {
   ApprovalModeSelect,
   PLAN_WITHHELD,
 } from '../chats/approval-mode-select';
-import { workflowSlugOf } from '../chats/composer-values';
+import { teamSlugOf } from '../chats/composer-values';
 import { ConfigDirSelect } from '../chats/config-dir-select';
 import { EffortSelect } from '../chats/effort-select';
 import { ModelSelect } from '../chats/model-select';
-import { TargetSelect, type TargetWorkflow } from '../chats/target-select';
+import { TargetSelect, type TargetTeam } from '../chats/target-select';
 import { Chip, ChipChevron } from '../components/ui/chip';
 import { LoadingChip } from '../components/ui/loading-chip';
 import { Popover } from '../components/ui/popover';
@@ -26,7 +26,7 @@ import { useRunConfigVocabulary } from './use-run-config-vocabulary';
 /** What this control may change about a project — its run defaults, only. */
 export interface ProjectRunConfigPatch {
   agentKind?: ProjectDto['agentKind'];
-  workflowSlug?: string | null;
+  teamSlug?: string | null;
   model?: string | null;
   effort?: string | null;
   approval?: ChatApprovalMode | null;
@@ -43,7 +43,7 @@ export interface ProjectRunConfigPatch {
  * what decides whether the Run button on that board works at all.
  *
  * It exists because nothing in this app could set these columns. The daemon has
- * carried `agentKind` / `model` / `effort` / `workflowSlug` on a project since
+ * carried `agentKind` / `model` / `effort` / `teamSlug` on a project since
  * the board shipped and accepted them on both DTOs; the new-project dialog
  * collected a name and a folder, and no other surface wrote them — so every
  * project made in the app named no agent, and `TaskRunsService` refused every
@@ -56,7 +56,7 @@ export interface ProjectRunConfigPatch {
  */
 export function ProjectRunConfig({
   project,
-  workflows,
+  teams,
   cliDetections,
   agentsApi,
   capabilitiesApi,
@@ -67,7 +67,7 @@ export function ProjectRunConfig({
   onUpdate,
 }: {
   project: ProjectDto;
-  workflows: readonly TargetWorkflow[];
+  teams: readonly TargetTeam[];
   cliDetections: readonly CliDetection[] | null;
   /** For the model and effort vocabularies, which the CLI itself reports. */
   agentsApi: DaemonApis['agents'] | null;
@@ -98,20 +98,18 @@ export function ProjectRunConfig({
   const triggerRef = useRef<HTMLButtonElement | null>(null);
 
   const target = targetOf(project);
-  const workflowSlug = target === null ? null : workflowSlugOf(target);
-  // A workflow's nodes each name their own model and effort in the YAML, so
+  const teamSlug = target === null ? null : teamSlugOf(target);
+  // A team's nodes each name their own model and effort in the YAML, so
   // there is nothing here for a run-level answer to apply to — the same
   // subtraction `resolveRunTarget` makes on the daemon side.
   //
-  // Gated on `open` too, not merely on the workflow check: this component is
+  // Gated on `open` too, not merely on the team check: this component is
   // mounted in the board header whenever a project is open, well before its
   // chip is ever pressed, so an ungated agent here paid a real CLI vocabulary
   // handshake (models, efforts) on every board visit for a panel nobody
   // opened.
   const agentKind: CliKind | null =
-    !open || workflowSlug !== null
-      ? null
-      : ((target as CliKind | null) ?? null);
+    !open || teamSlug !== null ? null : ((target as CliKind | null) ?? null);
   // The same three questions a CARD's own overrides ask — one hook, so the two
   // forms cannot come to disagree about what a CLI offers.
   const {
@@ -130,7 +128,7 @@ export function ProjectRunConfig({
     configDir: project.configDir,
   });
 
-  const label = targetLabel(target, workflows);
+  const label = targetLabel(target, teams);
 
   return (
     <div className="relative">
@@ -150,11 +148,7 @@ export function ProjectRunConfig({
           onClick={() => {
             onOpenChange(!open);
           }}>
-          {workflowSlug !== null ? (
-            <WorkflowIcon aria-hidden />
-          ) : (
-            <Bot aria-hidden />
-          )}
+          {teamSlug !== null ? <TeamIcon aria-hidden /> : <Bot aria-hidden />}
           {/* The STATE, not the word alone — the autopilot chip's own rule. */}
           {label === null ? 'No agent' : `Agent · ${label}`}
           <ChipChevron />
@@ -180,17 +174,17 @@ export function ProjectRunConfig({
           </div>
 
           <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-            Agent or workflow
+            Agent or team
             <TargetSelect
               value={target ?? ''}
-              workflows={workflows}
+              teams={teams}
               cliDetections={cliDetections}
-              aria-label="Agent or workflow for this project"
+              aria-label="Agent or team for this project"
               {...(target === null ? { triggerLabel: 'Choose an agent…' } : {})}
               onChange={(next) => {
                 // A model, an effort level, an approval mode and a config
                 // directory each belong to the CLI that offered them, so ANY
-                // change of target clears all four — a switch to a workflow
+                // change of target clears all four — a switch to a team
                 // (whose runs are graphs) AND a switch between two CLIs alike.
                 //
                 // The two that matter most are the two the screen cannot show
@@ -210,7 +204,7 @@ export function ProjectRunConfig({
             />
           </label>
 
-          {/* Withheld for a workflow, and OMITTED rather than disabled — the
+          {/* Withheld for a team, and OMITTED rather than disabled — the
               rule the effort and context chips already follow: a control drawn
               to be refused says the feature is broken, where its absence says
               the question does not arise. */}
@@ -278,7 +272,7 @@ export function ProjectRunConfig({
                   directory mechanism, and left as no row at all while the
                   capability probe has not answered — `ConfigDirSelect`'s own
                   rule, the same one the row above already follows for a
-                  workflow target. */}
+                  team target. */}
               {configDirUnavailableReason === null ? (
                 <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                   Profile

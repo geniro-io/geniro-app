@@ -1,4 +1,4 @@
-import { Workflow as WorkflowIcon } from 'lucide-react';
+import { Workflow as TeamIcon } from 'lucide-react';
 import { useContext } from 'react';
 
 import type { CliDetection } from '../../shared/contracts';
@@ -11,27 +11,27 @@ import {
 import { AgentGlyph } from '../components/agent-glyph';
 import { Select } from '../components/ui/select';
 
-/** The workflows a target picker can offer, by the two fields it shows. */
-export interface TargetWorkflow {
+/** The teams a target picker can offer, by the two fields it shows. */
+export interface TargetTeam {
   slug: string;
   name: string;
 }
 
 /**
  * What a run is pointed at — one of the CLIs on this machine, or a library
- * workflow to run as a team. Shared by the composer and the editor behind a
+ * team to run as a team. Shared by the composer and the editor behind a
  * saved run configuration.
  */
 export function TargetSelect({
   value,
-  workflows,
+  teams,
   cliDetections,
   onChange,
   triggerLabel,
-  'aria-label': ariaLabel = 'Agent or workflow for new runs',
+  'aria-label': ariaLabel = 'Agent or team for new runs',
 }: {
   value: string;
-  workflows: readonly TargetWorkflow[];
+  teams: readonly TargetTeam[];
   /** Per-CLI detection, or null while the probe has not answered. */
   cliDetections: readonly CliDetection[] | null;
   onChange: (target: string) => void;
@@ -60,7 +60,7 @@ export function TargetSelect({
       value={value}
       {...(triggerLabel === undefined ? {} : { triggerLabel })}
       aria-label={ariaLabel}
-      searchPlaceholder="Search agents, workflows…"
+      searchPlaceholder="Search agents, teams…"
       groups={[
         {
           label: 'Agents',
@@ -86,14 +86,14 @@ export function TargetSelect({
             };
           }),
         },
-        ...(workflows.length > 0
+        ...(teams.length > 0
           ? [
               {
-                label: 'Workflows',
-                items: workflows.map((wf) => ({
-                  value: `wf:${wf.slug}`,
+                label: 'Teams',
+                items: teams.map((wf) => ({
+                  value: `team:${wf.slug}`,
                   label: wf.name,
-                  icon: <WorkflowIcon />,
+                  icon: <TeamIcon />,
                 })),
               },
             ]

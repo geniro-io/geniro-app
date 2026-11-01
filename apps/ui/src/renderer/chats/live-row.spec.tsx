@@ -266,14 +266,12 @@ describe('WorkingRow', () => {
     const container = render(
       <RunActivityContext.Provider value="running Bash">
         <WorkingRow
-          writing={{ tool: 'Geniro: Save workflow change', bytes: 86_016 }}
+          writing={{ tool: 'Geniro: Save team change', bytes: 86_016 }}
         />
       </RunActivityContext.Provider>,
     );
 
-    expect(container.textContent).toContain(
-      'Writing Geniro: Save workflow change',
-    );
+    expect(container.textContent).toContain('Writing Geniro: Save team change');
     expect(
       container.querySelector('[data-slot="live-row-progress"]')?.textContent,
     ).toBe('· 84.0 KB');

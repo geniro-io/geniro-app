@@ -21,6 +21,7 @@ vi.mock('electron', () => ({
 }));
 
 import { onSettingsWritten, readSettings, updateSettings } from './settings';
+import { SETTINGS_VERSION } from './settings-migrations';
 
 beforeEach(() => {
   mocks.userData = mkdtempSync(join(tmpdir(), 'geniro-settings-spec-'));
@@ -76,7 +77,10 @@ describe('readSettings', () => {
   it('a non-object file still falls back to full defaults', () => {
     writeRaw(['not', 'an', 'object']);
 
-    expect(readSettings()).toEqual(DEFAULT_SETTINGS);
+    expect(readSettings()).toEqual({
+      ...DEFAULT_SETTINGS,
+      settingsVersion: SETTINGS_VERSION,
+    });
   });
 
   it('a stored theme survives a read', () => {

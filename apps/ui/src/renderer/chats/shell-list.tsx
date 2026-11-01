@@ -72,7 +72,7 @@ function ShellRow({
    */
   leftRunning?: string | null;
   /**
-   * WHOSE command this is, when the list mixes several agents' — a workflow's.
+   * WHOSE command this is, when the list mixes several agents' — a team's.
    *
    * Null everywhere the answer is already known: the agents panel draws this
    * band inside one agent's card, and a 1:1 chat has one agent, so naming it on

@@ -316,11 +316,11 @@ interface Attribution {
   /** What a 1:1 chat's own rows are filed under — its agent kind. */
   mainAgent: string;
   /**
-   * Whether this is a WORKFLOW run. There, a row with no node is the RUN's own
+   * Whether this is a TEAM run. There, a row with no node is the RUN's own
    * (its pass-end roll-up), never an agent's, and naming it after the run's
    * agent kind would pin it on whichever node happened to share that CLI.
    */
-  workflow: boolean;
+  team: boolean;
   /** Each delegate's launching-call id → the name it was launched under. */
   delegates: ReadonlyMap<string, string>;
 }
@@ -365,7 +365,7 @@ function delegateNames(items: readonly ItemDto[]): Map<string, string> {
  * produced it — for the row's heading.
  *
  * The export used to name the author of a MESSAGE and nobody else, so every
- * tool call, result, reasoning block and turn ending in a workflow run was
+ * tool call, result, reasoning block and turn ending in a team run was
  * anonymous. On a run where a manager, three concurrent engineer calls and a QA
  * interleave row by row, that makes the document unanswerable on its own terms:
  * "which agent ran this 3-minute command" needed the database it was exported
@@ -383,7 +383,7 @@ function ownerOf(item: ItemDto, who: Attribution): string {
     const you = item.nodeId === null ? 'You' : `You → ${item.nodeId}`;
     return call === null ? you : `${you} · ${call}`;
   }
-  const parts = [item.nodeId ?? (who.workflow ? 'run' : who.mainAgent)];
+  const parts = [item.nodeId ?? (who.team ? 'run' : who.mainAgent)];
   if (call !== null) {
     parts.push(call);
   }
@@ -435,7 +435,7 @@ function runFacts(doc: ChatExportDto): string[] {
       'Folder was dirty at the start',
       run.startDirty === null ? null : String(run.startDirty),
     ],
-    ['Workflow', run.workflowId],
+    ['Team', run.teamId],
   ];
   return facts
     .filter(([, value]) => value !== null && value !== '')
@@ -564,7 +564,7 @@ export function chatToMarkdown(doc: ChatExportDto): string {
   const agent = doc.run.agentKind ?? 'agent';
   const who: Attribution = {
     mainAgent: agent,
-    workflow: doc.run.workflowId !== null,
+    team: doc.run.teamId !== null,
     delegates: delegateNames(doc.items),
   };
   const lines = [

@@ -98,7 +98,7 @@ export const Single: Story = { args: { initial: [LIVE[0]!] } };
 /** A command: its tooltip names the argv and folder; a press opens the confirmation. */
 export const Command: Story = { args: { initial: [LIVE[2]!] } };
 
-/** A workflow run: the manager's own button, and a callee's that says who it is. */
+/** A team run: the manager's own button, and a callee's that says who it is. */
 export const FromAnotherAgent: Story = {
   args: {
     initial: [

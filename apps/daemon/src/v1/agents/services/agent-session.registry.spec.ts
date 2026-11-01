@@ -513,7 +513,7 @@ describe('AgentSessionRegistry — ending a process', () => {
   });
 
   it('closes EVERY process one run holds — its own key and each node and conversation key — and no other run’s', () => {
-    // A workflow run keeps one process per node and per conversation, and they
+    // A team run keeps one process per node and per conversation, and they
     // outlive its passes; a delete or archive closing only the bare run key
     // would leave them, and every server they started, running for good. The
     // keys come from the executor's own builders, so a builder that stopped
@@ -927,7 +927,7 @@ describe('AgentSessionRegistry — the user’s idle window', () => {
 
   it('gives a card’s run the same window as a chat’s', async () => {
     // A card in Done can still be written to: its run is an ordinary chat run
-    // (or a workflow run), and how long its process lives does not depend on
+    // (or a team run), and how long its process lives does not depend on
     // the card's column. Nothing here knows which run is a card's.
     vi.useFakeTimers();
     const registry = new AgentSessionRegistry(CEILING);
@@ -1052,8 +1052,8 @@ describe('AgentSessionRegistry — closing an idle process gracefully', () => {
 describe('AgentSessionRegistry — telling that a run went unused', () => {
   it.each([
     ['a chat or card run', 'run-1'],
-    ['a workflow node', nodeSessionKey('run-1', 'qa')],
-    ['a workflow callee conversation', callSessionKey('run-1', 'call-1')],
+    ['a team node', nodeSessionKey('run-1', 'qa')],
+    ['a team callee conversation', callSessionKey('run-1', 'call-1')],
   ])(
     'tells the run once %s closed for going unused has exited',
     async (_what, key) => {
@@ -1182,7 +1182,7 @@ describe('AgentSessionRegistry.oweRunNote', () => {
     expect(at(prompts, 1)).toBe('p');
   });
 
-  it('carries a workflow run’s note on the first conversation’s next turn only', () => {
+  it('carries a team run’s note on the first conversation’s next turn only', () => {
     const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();
     registry.oweRunNote('run-1', 'geniro stopped `pnpm dev`');
@@ -1869,7 +1869,7 @@ describe('AgentSessionRegistry — the ceiling', () => {
 
   it.each([
     ['a chat', 'run-tagged'],
-    ['a workflow node', nodeSessionKey('run-tagged', 'dev')],
+    ['a team node', nodeSessionKey('run-tagged', 'dev')],
     ['a callee conversation', callSessionKey('run-tagged', 'call-1')],
   ])(
     'spawns %s tagged with its RUN and this geniro, whatever the caller put there',

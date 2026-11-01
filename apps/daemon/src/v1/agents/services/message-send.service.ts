@@ -5,7 +5,7 @@ import type { ItemWire } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { itemToWire } from '../utils/item-wire';
 
-/** The shared replay boundary for chat, workflow and call-message sends. */
+/** The shared replay boundary for chat, team and call-message sends. */
 @Injectable()
 export class MessageSendService {
   private readonly pending = new Map<string, Promise<void>>();

@@ -15,7 +15,7 @@ import { dirname, isAbsolute, resolve } from 'node:path';
  * How {@link atomicWrite} treats a file that already belongs to somebody else.
  *
  * Opt-in, because the default is right for every file the daemon OWNS (its
- * stores, its workflow library): a fresh file at the process umask. It is wrong
+ * stores, its team library): a fresh file at the process umask. It is wrong
  * for a file another program owns and geniro merely edits — claude's
  * `~/.claude.json` is the case that needed it — where a rename-over quietly
  * rewrites three things that file's owner decided: its permission bits (a

@@ -14,7 +14,7 @@ const OFF = '__off__';
  * The auto-compact threshold as a standalone picker: compact the conversation
  * once its context reaches this share of the window. The composer offers the
  * same choice as a row of `ModelSettingsSelect`; this is the form for a surface
- * with a label column of its own — the workflow node inspector.
+ * with a label column of its own — the team node inspector.
  *
  * A stored value outside {@link AUTO_COMPACT_PERCENTS} (a hand-edited YAML
  * node) is added back as a row rather than dropped, since it is what runs.

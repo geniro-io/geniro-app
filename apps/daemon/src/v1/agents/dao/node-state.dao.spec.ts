@@ -114,7 +114,7 @@ describe('NodeStateDao (in-memory sqlite)', () => {
 
     it('stamps the model on a row the transition CREATES', async () => {
       // `setStatus` accepted `model` and wrote it on neither path, so every
-      // workflow node read back null — Stats filed all workflow spend under
+      // team node read back null — Stats filed all team spend under
       // "no model" and a chat export named none.
       await dao.setStatus('run-1', 'node-a', {
         status: 'running',
@@ -125,7 +125,7 @@ describe('NodeStateDao (in-memory sqlite)', () => {
       expect((await stored('node-a'))?.model).toBe('claude-opus-5');
     });
 
-    it('stamps the model on the pending row a workflow start seeded', async () => {
+    it('stamps the model on the pending row a team start seeded', async () => {
       // The executor's own order: `createPending` at run start, the model at
       // the turn's running transition — the UPDATE path.
       await dao.createPending('run-1', 'node-a');

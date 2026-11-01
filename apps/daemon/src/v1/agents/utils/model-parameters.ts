@@ -24,7 +24,7 @@ const MAX_VALUE_LENGTH = 200;
 /**
  * The id half of that bound. Generous next to any real CLI parameter id — the
  * longest observed is `optimize_for` — and it exists because the count and the
- * value cap between them left the KEY unbounded, which a workflow YAML the user
+ * value cap between them left the KEY unbounded, which a team YAML the user
  * hand-edited or received is free to supply.
  */
 const MAX_ID_LENGTH = 128;
@@ -74,7 +74,7 @@ export function writeModelParameters(
  * `CustomInstructionsSchema`'s, reused rather than restated so the two cannot
  * drift about what a control character is.
  *
- * Exported for the callers whose map never was a column: a workflow node's
+ * Exported for the callers whose map never was a column: a team node's
  * parameters arrive as parsed YAML, so routing them through
  * {@link readModelParameters} would mean stringifying an object in order to
  * parse it straight back.

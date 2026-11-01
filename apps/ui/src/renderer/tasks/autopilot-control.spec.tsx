@@ -41,7 +41,7 @@ const project = (over: Partial<ProjectDto> = {}): ProjectDto =>
     effort: null,
     approval: null,
     configDir: null,
-    workflowSlug: null,
+    teamSlug: null,
     autopilotEnabled: false,
     autopilotIntakeStatus: TaskStatus.Todo,
     autopilotMaxConcurrent: 1,
@@ -231,7 +231,7 @@ describe('AutopilotControl', () => {
       Array.from({ length: count }, (_unused, index) => ({
         id: `t${index}`,
         title: `Card ${index}`,
-        reason: 'no agent or workflow',
+        reason: 'no agent or team',
         kind: 'run-target',
         retryInMs: null,
       }));
@@ -244,7 +244,7 @@ describe('AutopilotControl', () => {
 
       expect(panelText()).toContain('1 task cannot start');
       expect(panelText()).toContain('Card 0');
-      expect(panelText()).toContain('no agent or workflow');
+      expect(panelText()).toContain('no agent or team');
     });
 
     it('counts the rest rather than repeating one sentence down the panel', () => {

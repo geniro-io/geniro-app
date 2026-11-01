@@ -116,7 +116,7 @@ export interface HostedChatState {
   /**
    * Bumped once each time a turn of this chat SETTLES.
    *
-   * The builder reloads the workflow off this rather than watching the file:
+   * The builder reloads the team off this rather than watching the file:
    * nothing in either app watches one, and a turn ending is the moment the
    * agent's edits are finished being made. A message queued behind a turn is
    * sent off it too.
@@ -187,7 +187,7 @@ const ALWAYS_AT_TAIL = (): boolean => true;
 
 /**
  * ONE conversation shown outside the chat screen, on a surface of its own: the
- * workflow builder's chat dock (`useWorkflowChat`) and a thread's analysis
+ * team builder's chat dock (`useTeamChat`) and a thread's analysis
  * popup. The sidebar never lists either.
  *
  * The rows, the anchors, the live plane, the request expiry and the socket's
@@ -208,7 +208,7 @@ export function useHostedChat({
   discard: discardConversation,
 }: {
   /**
-   * What the conversation is about — a workflow slug, a thread id — or null
+   * What the conversation is about — a team slug, a thread id — or null
    * while the surface is closed. A change opens that subject's conversation.
    */
   subject: string | null;

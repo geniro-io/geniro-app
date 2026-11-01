@@ -22,7 +22,7 @@ function build(
     sessionId?: string | null;
     /** Registry keys holding a live process. */
     live?: string[];
-    /** The agent kind stamped on a workflow node's state row. */
+    /** The agent kind stamped on a team node's state row. */
     nodeAgentKind?: AgentKind;
     /** The run's `call_started` / `call_result` rows. */
     callRows?: { kind: string; payload: unknown }[];
@@ -34,7 +34,7 @@ function build(
     overrides.run === undefined
       ? {
           id: 'run-1',
-          workflowId: null,
+          teamId: null,
           agentKind: AgentKind.Claude,
           model: null,
           cwd: process.cwd(),
@@ -92,8 +92,8 @@ function build(
         ),
     } as never,
     {
-      workflowOf: () =>
-        Promise.reject(new Error("the run's workflow must not be read")),
+      teamOf: () =>
+        Promise.reject(new Error("the run's team must not be read")),
     } as never,
     { for: adapterFor } as never,
     {
@@ -108,9 +108,9 @@ function build(
   return { service, handoffTarget, adapterFor };
 }
 
-const WORKFLOW_RUN = {
+const TEAM_RUN = {
   id: 'run-1',
-  workflowId: 'dev-team',
+  teamId: 'dev-team',
   agentKind: null,
   model: null,
   cwd: process.cwd(),
@@ -126,8 +126,8 @@ describe('HandoffService — agent pool', () => {
     async ({ sessionId, configDir }) => {
       const { service, handoffTarget } = build({
         run: {
-          ...WORKFLOW_RUN,
-          workflowSnapshot: JSON.stringify({
+          ...TEAM_RUN,
+          teamSnapshot: JSON.stringify({
             nodes: [
               {
                 id: 'root',
@@ -173,7 +173,7 @@ describe('HandoffService — agent pool', () => {
       adapter: new ClaudeAdapter(),
       run: {
         id: 'run-1',
-        workflowId: null,
+        teamId: null,
         agentKind: AgentKind.Claude,
         model: 'ollama/coder:cloud',
         cwd: process.cwd(),
@@ -207,8 +207,8 @@ describe('HandoffService — agent pool', () => {
   it('reopens a pooled call thread under the member that ran it, not the node’s last stamp', async () => {
     const { service, handoffTarget, adapterFor } = build({
       run: {
-        ...WORKFLOW_RUN,
-        workflowSnapshot: JSON.stringify({
+        ...TEAM_RUN,
+        teamSnapshot: JSON.stringify({
           nodes: [
             {
               id: 'eng',
@@ -347,10 +347,10 @@ describe('HandoffService', () => {
     );
   });
 
-  it('reads a workflow node as held by its own process or any call process of the run', async () => {
+  it('reads a team node as held by its own process or any call process of the run', async () => {
     const ask = async (live: string[]): Promise<unknown> => {
       const { service, handoffTarget } = build({
-        run: WORKFLOW_RUN,
+        run: TEAM_RUN,
         nodeAgentKind: AgentKind.Codex,
         live,
       });

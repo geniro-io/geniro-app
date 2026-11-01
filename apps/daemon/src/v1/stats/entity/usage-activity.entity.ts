@@ -21,9 +21,9 @@ import type { UsageActivityKind } from '../stats.types';
  * tidies a chat away. Nothing here is written by the teardown. Four kinds share the
  * table, told apart by `kind`:
  *
- * - `thread`: a run was created. One row per run. A workflow run's row also carries
- *   the workflow ledger's version stamp (`workflowSlug`, `workflowVersion`,
- *   `workflowVersionInferred`), written in place when the run is created.
+ * - `thread`: a run was created. One row per run. A team run's row also carries
+ *   the team ledger's version stamp (`teamSlug`, `teamVersion`,
+ *   `teamVersionInferred`), written in place when the run is created.
  * - `pull_request`: a pull request a thread OPENED, from its `gh pr create` result.
  *   One row per run and pull request.
  * - `lines`: one CUMULATIVE snapshot of a folder's change totals against the folder's
@@ -41,7 +41,7 @@ import type { UsageActivityKind } from '../stats.types';
  */
 @Entity({ tableName: 'usage_activity' })
 // The idempotency key. A thread and a pull request happen once, so the database
-// refuses a second row for either; an outcome's row, and a workflow run's version
+// refuses a second row for either; an outcome's row, and a team run's version
 // stamp, are updated in place under their key. A lines snapshot gets a fresh key
 // and is never refused: a folder is measured many times over its life.
 @Unique({ properties: ['dedupKey'] })
@@ -51,8 +51,8 @@ import type { UsageActivityKind } from '../stats.types';
 @Index({ properties: ['runId', 'kind', 'occurredAt'] })
 // A line key's highest total before a period starts.
 @Index({ properties: ['lineKey', 'kind', 'occurredAt'] })
-// One workflow's thread rows, for its versions table.
-@Index({ properties: ['workflowSlug', 'kind'] })
+// One team's thread rows, for its versions table.
+@Index({ properties: ['teamSlug', 'kind'] })
 export class UsageActivity extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   id: string = randomUUID();
@@ -109,12 +109,12 @@ export class UsageActivity extends TimestampsEntity {
   partial: boolean | null = null;
 
   /**
-   * The workflow the run ran, on a `run_outcome` row and on a workflow run's `thread`
+   * The team the run ran, on a `run_outcome` row and on a team run's `thread`
    * row. Stamped at write time, like `lineKey`, because the run can be deleted while
    * the ledger stays. Null for a chat's thread and every other kind.
    */
   @Property({ type: 'string', nullable: true })
-  workflowSlug: string | null = null;
+  teamSlug: string | null = null;
 
   /** The `run_outcome` item an outcome row was copied from; a copy only moves forward. */
   @Property({ type: 'integer', nullable: true })
@@ -141,11 +141,11 @@ export class UsageActivity extends TimestampsEntity {
   @Property({ type: 'integer', nullable: true })
   outcomeMsToAccepted: number | null = null;
 
-  /** `workflowVersionOf` the run's own graph copy; null while unstamped, and for a run that kept no copy it can read. */
+  /** `teamVersionOf` the run's own graph copy; null while unstamped, and for a run that kept no copy it can read. */
   @Property({ type: 'string', nullable: true })
-  workflowVersion: string | null = null;
+  teamVersion: string | null = null;
 
   /** The version was hashed from a copy frozen AFTER the run started, so it may not be the graph the run had. */
   @Property({ type: 'boolean', nullable: true })
-  workflowVersionInferred: boolean | null = null;
+  teamVersionInferred: boolean | null = null;
 }

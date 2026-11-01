@@ -17,7 +17,7 @@ import {
 /**
  * Copies every pull request's recorded outcome (`run_outcome` items, written by
  * `record_outcome`) into the `usage_activity` ledger, which outlives the run — what a
- * per-workflow-version outcome fold reads. It OBSERVES the bus, like
+ * per-team-version outcome fold reads. It OBSERVES the bus, like
  * `UsageActivityRecorderService`: the agents module writes the row and cannot depend on
  * this module.
  *

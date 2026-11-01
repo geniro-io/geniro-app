@@ -43,7 +43,7 @@ export function previewMessageOf<
 /**
  * Whether one row may be a thread's preview: a message, and not one written
  * inside an agent-to-agent call or by a delegate — those are other
- * conversations the sidebar row cannot open. REPORTED as a workflow row
+ * conversations the sidebar row cannot open. REPORTED as a team row
  * previewing its Engineer's words instead of its Manager's. The daemon's
  * `NOT_IN_A_CALL` / `NOT_A_DELEGATE` (the list) and `threadPreviewOf` (the
  * live `run_status.preview` push, `v1/agents/utils/message-preview.ts`) are

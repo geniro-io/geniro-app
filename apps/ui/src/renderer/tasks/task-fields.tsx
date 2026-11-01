@@ -10,12 +10,12 @@ import {
   ApprovalModeSelect,
   PLAN_WITHHELD,
 } from '../chats/approval-mode-select';
-import { workflowSlugOf } from '../chats/composer-values';
+import { teamSlugOf } from '../chats/composer-values';
 import { ConfigDirSelect } from '../chats/config-dir-select';
 import { shortenPath } from '../chats/directory-select';
 import { EffortSelect } from '../chats/effort-select';
 import { ModelSelect } from '../chats/model-select';
-import { TargetSelect, type TargetWorkflow } from '../chats/target-select';
+import { TargetSelect, type TargetTeam } from '../chats/target-select';
 import { HoverPopover } from '../components/hover-popover';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -179,7 +179,7 @@ export type TaskFieldsValue = Pick<
   | 'labels'
   | 'folder'
   | 'agentKind'
-  | 'workflowSlug'
+  | 'teamSlug'
   | 'model'
   | 'effort'
   | 'approval'
@@ -201,7 +201,7 @@ export type TaskFieldsPatch = Partial<
     | 'labels'
     | 'folder'
     | 'agentKind'
-    | 'workflowSlug'
+    | 'teamSlug'
     | 'model'
     | 'effort'
     | 'approval'
@@ -212,7 +212,7 @@ export type TaskFieldsPatch = Partial<
 /** The project's own answers — what a card takes while it names none. */
 export interface ProjectDefaults {
   /**
-   * The project's own agent-or-workflow: what this card runs as while it names
+   * The project's own agent-or-team: what this card runs as while it names
    * none of its own. Null when the project names nothing either, which is a
    * real state and the one the Agent row has to say out loud — it is why
    * nothing on this board can start.
@@ -244,8 +244,8 @@ export interface ProjectDefaults {
 /** What both row groups need the daemon and the app to have answered. */
 export interface TaskFieldsContext {
   project: ProjectDefaults;
-  /** The workflow library, for the Agent picker. Empty until it is read. */
-  workflows?: readonly TargetWorkflow[];
+  /** The team library, for the Agent picker. Empty until it is read. */
+  teams?: readonly TargetTeam[];
   /** Per-CLI detection, or null while the probe has not answered. */
   cliDetections?: readonly CliDetection[] | null;
   /** For the model and effort vocabularies, which the CLI itself reports. */
@@ -522,7 +522,7 @@ export function TaskRunConfigRows({
 }): React.JSX.Element {
   const {
     project,
-    workflows = [],
+    teams = [],
     cliDetections = null,
     agentsApi = null,
     capabilitiesApi = null,
@@ -536,10 +536,10 @@ export function TaskRunConfigRows({
   const inherited = inheritsProjectRunConfig(ownTarget, project.target)
     ? project.runConfig
     : null;
-  // A workflow's nodes each name their own model and effort in the YAML, so
+  // A team's nodes each name their own model and effort in the YAML, so
   // there is nothing here for a run-level answer to apply to.
   const agentKind: CliKind | null =
-    effectiveTarget === null || workflowSlugOf(effectiveTarget) !== null
+    effectiveTarget === null || teamSlugOf(effectiveTarget) !== null
       ? null
       : (effectiveTarget as CliKind);
   const {
@@ -563,7 +563,7 @@ export function TaskRunConfigRows({
 
   return (
     <>
-      {/* WHAT works this card — an agent or a whole workflow — on the
+      {/* WHAT works this card — an agent or a whole team — on the
           Folder row's own inheritance: the card's answer if it has one,
           else the project's, and null from both is a real state rather
           than an empty control. That last case is why the row is drawn
@@ -572,17 +572,17 @@ export function TaskRunConfigRows({
       <PropertyRow name="Agent">
         <TargetSelect
           value={effectiveTarget ?? ''}
-          workflows={workflows}
+          teams={teams}
           cliDetections={cliDetections}
-          aria-label="Agent or workflow for this task"
+          aria-label="Agent or team for this task"
           {...(effectiveTarget === null
             ? { triggerLabel: 'Choose an agent…' }
             : {})}
           onChange={(target) => {
             // A model, an effort level, an approval mode and a config
             // directory each belong to the CLI that offered them, so ANY
-            // change of target — to a different agent, or to a workflow — has
-            // to drop all four, not only the workflow arm.
+            // change of target — to a different agent, or to a team — has
+            // to drop all four, not only the team arm.
             //
             // The two that bite hardest are the two the screen cannot show
             // you. `configDir`'s row is WITHHELD for a CLI that reads no
@@ -634,7 +634,7 @@ export function TaskRunConfigRows({
         ) : null}
       </PropertyRow>
 
-      {/* WITHHELD for a workflow, and omitted rather than disabled — the
+      {/* WITHHELD for a team, and omitted rather than disabled — the
           rule the effort and context chips already follow: a control drawn
           to be refused says the feature is broken, where its absence says
           the question does not arise. A graph's nodes each name their own

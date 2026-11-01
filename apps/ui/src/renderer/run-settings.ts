@@ -3,8 +3,8 @@ import { type RunSettings, runSettingsOf } from '../shared/contracts';
 /**
  * The user's custom instructions, reply language and per-CLI switches, as a
  * spreadable create-payload fragment ({@link runSettingsOf}). The one reader
- * for every run the renderer starts (a chat, a workflow run, an analysis, a
- * card's run, the workflow builder's chat); main's autopilot normalises
+ * for every run the renderer starts (a chat, a team run, an analysis, a
+ * card's run, the team builder's chat); main's autopilot normalises
  * through the same function.
  *
  * Read from settings at the moment a run is created rather than cached in

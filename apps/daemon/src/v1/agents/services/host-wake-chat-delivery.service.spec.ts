@@ -302,11 +302,11 @@ describe('HostWakeChatDelivery', () => {
     expect(options?.hostRow?.shares).toHaveLength(2);
   });
 
-  it('ignores a wake for a workflow conversation', async () => {
+  it('ignores a wake for a team conversation', async () => {
     const h = harness();
     h.delivery.startDelivering();
     const w = wake();
-    h.bus.publish({ ...w, owner: { ...w.owner, target: 'workflow' } });
+    h.bus.publish({ ...w, owner: { ...w.owner, target: 'team' } });
     await Promise.resolve();
 
     expect(h.sendMessage).not.toHaveBeenCalled();

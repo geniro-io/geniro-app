@@ -5,7 +5,7 @@ export interface InterruptedRunsDeps {
   /** Read and remove the UI's note of why the previous daemon stopped. */
   readCause: () => InterruptCause;
   chats: { reconcileOrphanedRuns: (cause: InterruptCause) => Promise<void> };
-  workflows: {
+  teams: {
     reconcileOrphanedRuns: (cause: InterruptCause) => Promise<void>;
   };
   tasks: { settleCutOffCards: (projectId: null) => Promise<void> };
@@ -27,7 +27,7 @@ export async function closeInterruptedRuns(
 ): Promise<InterruptCause> {
   const cause = deps.readCause();
   await deps.chats.reconcileOrphanedRuns(cause);
-  await deps.workflows.reconcileOrphanedRuns(cause);
+  await deps.teams.reconcileOrphanedRuns(cause);
   await deps.tasks.settleCutOffCards(null).catch((err: unknown) => {
     deps.logError(
       `boot settle of interrupted task cards failed: ${err instanceof Error ? err.message : String(err)}`,

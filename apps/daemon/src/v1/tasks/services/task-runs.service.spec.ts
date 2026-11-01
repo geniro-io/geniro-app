@@ -24,15 +24,15 @@ import { RunGroupDao } from '../../agents/dao/run-group.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ChatService } from '../../agents/services/chat.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
-import type { GraphExecutorService } from '../../graphs/services/graph-executor.service';
-import type { RunWorkflowService } from '../../graphs/services/run-workflow.service';
-import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
 import { Run } from '../../runs/entity/run.entity';
 import { RunGroup } from '../../runs/entity/run-group.entity';
+import type { GraphExecutorService } from '../../teams/services/graph-executor.service';
+import type { RunTeamService } from '../../teams/services/run-team.service';
+import type { TeamStoreService } from '../../teams/services/team-store.service';
 import { aLabelInstruction } from '../__tests__/fixtures';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
@@ -43,7 +43,7 @@ import {
 } from '../utils/run-target';
 import {
   TASK_REPORT_INSTRUCTIONS,
-  TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+  TASK_REPORT_INSTRUCTIONS_TEAM,
 } from '../utils/task-prompt';
 import type { LabelInstructionsService } from './label-instructions.service';
 import { TaskAttachmentService } from './task-attachment.service';
@@ -87,16 +87,16 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   let sendMessage: ReturnType<typeof vi.fn>;
   let updateSettings: ReturnType<typeof vi.fn>;
   let offeredApproval: ReturnType<typeof vi.fn>;
-  let startWorkflowRun: ReturnType<typeof vi.fn>;
-  let deleteWorkflowRun: ReturnType<typeof vi.fn>;
-  let sendWorkflowMessage: ReturnType<typeof vi.fn>;
-  /** What each workflow run's own SNAPSHOT says its agent nodes approve with. */
+  let startTeamRun: ReturnType<typeof vi.fn>;
+  let deleteTeamRun: ReturnType<typeof vi.fn>;
+  let sendTeamMessage: ReturnType<typeof vi.fn>;
+  /** What each team run's own SNAPSHOT says its agent nodes approve with. */
   let snapshotApprovals: Record<string, string>;
   let deleteChat: ReturnType<typeof vi.fn>;
   let resolveAutoGroupId: ReturnType<typeof vi.fn>;
   let forTask: ReturnType<typeof vi.fn>;
-  /** What the library says each workflow's agent nodes approve with. */
-  let workflowApprovals: Record<string, string>;
+  /** What the library says each team's agent nodes approve with. */
+  let teamApprovals: Record<string, string>;
 
   /**
    * A complete run row on the wire.
@@ -110,7 +110,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     taskIdentifier: null,
     analysisSourceRunId: null,
     analysisSourceSeq: null,
-    analysisWorkflowSlug: null,
+    analysisTeamSlug: null,
     awaiting: null,
     holdingFor: 0,
     awaitingCalls: 0,
@@ -120,7 +120,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     monitorsOpen: 0,
     title: null,
     agentKind: 'claude',
-    workflowId: null,
+    teamId: null,
     cwd: worktree,
     startSha: null,
     startDirty: null,
@@ -214,7 +214,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
         const id = `run-${(runSeq += 1)}`;
         await runDao.create({
           id,
-          workflowId: null,
+          teamId: null,
           status: 'running',
           agentKind: 'claude',
           cwd: worktree,
@@ -259,9 +259,9 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     } as unknown as ChatService;
     // The graph engine's double writes a real run row for `createChat`'s own
     // reason: the double-start guard asks the RUN whether it has settled, and
-    // a workflow-targeted card must be refused a second start exactly as an
+    // a team-targeted card must be refused a second start exactly as an
     // agent-targeted one is.
-    startWorkflowRun = vi.fn(
+    startTeamRun = vi.fn(
       async (
         slug: string,
         input: { taskId?: string; title?: string; groupId?: string | null },
@@ -269,7 +269,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
         const id = `wf-run-${(runSeq += 1)}`;
         await runDao.create({
           id,
-          workflowId: slug,
+          teamId: slug,
           status: 'running',
           agentKind: null,
           cwd: worktree,
@@ -280,29 +280,29 @@ describe('TaskRunsService (in-memory sqlite)', () => {
         return runWire(id);
       },
     );
-    deleteWorkflowRun = vi.fn(async () => ({ deleted: true }));
-    sendWorkflowMessage = vi.fn(async () => undefined);
+    deleteTeamRun = vi.fn(async () => ({ deleted: true }));
+    sendTeamMessage = vi.fn(async () => undefined);
     const executor = {
-      startRunBySlug: startWorkflowRun,
-      deleteRun: deleteWorkflowRun,
-      sendMessage: sendWorkflowMessage,
+      startRunBySlug: startTeamRun,
+      deleteRun: deleteTeamRun,
+      sendMessage: sendTeamMessage,
     } as unknown as GraphExecutorService;
-    // The graph each existing workflow run was STARTED with, which a continued
+    // The graph each existing team run was STARTED with, which a continued
     // run walks — told apart from the library's copy above by its own field.
     snapshotApprovals = {};
-    const runWorkflows = {
-      workflowOf: vi.fn(async (run: { workflowId: string }) => {
-        const approval = snapshotApprovals[run.workflowId];
+    const runTeams = {
+      teamOf: vi.fn(async (run: { teamId: string }) => {
+        const approval = snapshotApprovals[run.teamId];
         if (approval === undefined) {
-          throw new Error(`no snapshot for ${run.workflowId}`);
+          throw new Error(`no snapshot for ${run.teamId}`);
         }
         return {
-          name: run.workflowId,
+          name: run.teamId,
           nodes: [{ id: 'coder', kind: 'agent', agent: 'claude', approval }],
           edges: [],
         };
       }),
-    } as unknown as RunWorkflowService;
+    } as unknown as RunTeamService;
     // No sidebar rule claims anything by default; a test that needs one says so.
     resolveAutoGroupId = vi.fn(async () => null);
     // Only the project's own group exists in the sidebar by default.
@@ -328,13 +328,13 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       labelInstructions,
       {
         get: vi.fn(async (slug: string) => {
-          const approval = workflowApprovals[slug];
+          const approval = teamApprovals[slug];
           if (approval === undefined) {
-            throw new Error(`no workflow ${slug}`);
+            throw new Error(`no team ${slug}`);
           }
           return {
             slug,
-            workflow: {
+            team: {
               name: slug,
               nodes: [
                 { id: 'coder', kind: 'agent', agent: 'claude', approval },
@@ -343,12 +343,12 @@ describe('TaskRunsService (in-memory sqlite)', () => {
             },
           };
         }),
-      } as unknown as WorkflowStoreService,
-      runWorkflows,
+      } as unknown as TeamStoreService,
+      runTeams,
     );
-    // Asks by default, so a workflow card is unattended-incapable unless a test
+    // Asks by default, so a team card is unattended-incapable unless a test
     // says otherwise.
-    workflowApprovals = { 'dev-team': 'ask' };
+    teamApprovals = { 'dev-team': 'ask' };
     const project = await projectDao.create({
       name: 'Board',
       folder: '/tmp/geniro-task-runs-spec',
@@ -368,22 +368,22 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     return task;
   };
 
-  describe('the workflow arm', () => {
-    /** Point the CARD at a workflow, leaving the project's agent in place. */
-    const seedWorkflowCard = async (slug = 'dev-team') => {
+  describe('the team arm', () => {
+    /** Point the CARD at a team, leaving the project's agent in place. */
+    const seedTeamCard = async (slug = 'dev-team') => {
       const task = await seed();
       const row = await taskDao.getById(task.id);
-      (row as Task).workflowSlug = slug;
+      (row as Task).teamSlug = slug;
       await em.flush();
       return task;
     };
 
-    it('starts a graph run instead of a chat when the card names a workflow', async () => {
-      const task = await seedWorkflowCard();
+    it('starts a graph run instead of a chat when the card names a team', async () => {
+      const task = await seedTeamCard();
 
       const started = await service.start(task.id, start());
 
-      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(startTeamRun).toHaveBeenCalledTimes(1);
       expect(createChat).not.toHaveBeenCalled();
       expect(started).toMatchObject({
         status: 'in_progress',
@@ -393,11 +393,11 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
 
     it('hands the executor the card id, its title and the project’s group', async () => {
-      const task = await seedWorkflowCard();
+      const task = await seedTeamCard();
 
       await service.start(task.id, start());
 
-      expect(startWorkflowRun).toHaveBeenCalledWith(
+      expect(startTeamRun).toHaveBeenCalledWith(
         'dev-team',
         expect.objectContaining({
           taskId: task.id,
@@ -408,8 +408,8 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       );
     });
 
-    it('hands the executor the folder’s start commit, so the workflow’s lines can be measured', async () => {
-      const task = await seedWorkflowCard();
+    it('hands the executor the folder’s start commit, so the team’s lines can be measured', async () => {
+      const task = await seedTeamCard();
 
       await service.start(task.id, {
         ...start(),
@@ -417,20 +417,20 @@ describe('TaskRunsService (in-memory sqlite)', () => {
         startDirty: true,
       });
 
-      expect(startWorkflowRun.mock.calls[0]?.[1]).toMatchObject({
+      expect(startTeamRun.mock.calls[0]?.[1]).toMatchObject({
         startSha: 'd'.repeat(40),
         startDirty: true,
       });
     });
 
     it('seeds the graph with the card’s brief and sends no second message', async () => {
-      const task = await seedWorkflowCard();
+      const task = await seedTeamCard();
 
       await service.start(task.id, start());
 
       // A graph's seed prompt IS its opening message, so a NEW run is sent
       // nothing after it — a later press continues it instead (below).
-      expect(startWorkflowRun.mock.calls[0]?.[1]).toMatchObject({
+      expect(startTeamRun.mock.calls[0]?.[1]).toMatchObject({
         prompt: 'ship it',
       });
       expect(sendMessage).not.toHaveBeenCalled();
@@ -438,16 +438,16 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
 
     it('asks a graph to report through the board tool, from the node that concludes', async () => {
-      const task = await seedWorkflowCard();
+      const task = await seedTeamCard();
 
       await service.start(task.id, start());
 
-      // Every agent node of a task workflow is handed the board tools, while
+      // Every agent node of a task team is handed the board tools, while
       // the render family is registered by `ChatService` alone — so the ask
       // names `update_task`, never `report_findings`, and says which node of
       // the graph is the one to use it.
       const instructions = String(
-        startWorkflowRun.mock.calls[0]?.[1]?.taskInstructions ?? '',
+        startTeamRun.mock.calls[0]?.[1]?.taskInstructions ?? '',
       );
       expect(instructions).not.toContain('report_findings');
       expect(instructions).toContain('`update_task`');
@@ -456,7 +456,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
 
     it('deletes the GRAPH run when the start fails, not through the chat path', async () => {
-      const task = await seedWorkflowCard();
+      const task = await seedTeamCard();
       // Fail after the run exists, which is the window `abandon` is for. The
       // real method is captured BEFORE the spy replaces it: binding
       // `tasks.update` afterwards binds the SPY, so every later call re-enters
@@ -474,7 +474,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       // `chats.delete` asserts a CHAT run, so sending a graph run there throws
       // `NOT_A_CHAT_RUN` into a catch that swallows it — leaving the orphaned
       // run row this routing exists to prevent, and leaving it silently.
-      expect(deleteWorkflowRun).toHaveBeenCalledWith('wf-run-1');
+      expect(deleteTeamRun).toHaveBeenCalledWith('wf-run-1');
       expect(deleteChat).not.toHaveBeenCalled();
       // The card really did come back, which is what proves `abandon` ran to
       // completion rather than dying partway and being swallowed.
@@ -482,25 +482,25 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       update.mockRestore();
     });
 
-    it('lets the PROJECT name the workflow for every card on its board', async () => {
+    it('lets the PROJECT name the team for every card on its board', async () => {
       const project = await projectDao.getById(projectId);
       (project as Project).agentKind = null;
-      (project as Project).workflowSlug = 'board-wide';
+      (project as Project).teamSlug = 'board-wide';
       await em.flush();
       const task = await seed();
 
       await service.start(task.id, start());
 
-      expect(startWorkflowRun).toHaveBeenCalledWith(
+      expect(startTeamRun).toHaveBeenCalledWith(
         'board-wide',
         expect.anything(),
       );
     });
 
-    it('lets a CARD’s agent override a project pinned to a workflow', async () => {
+    it('lets a CARD’s agent override a project pinned to a team', async () => {
       const project = await projectDao.getById(projectId);
       (project as Project).agentKind = null;
-      (project as Project).workflowSlug = 'board-wide';
+      (project as Project).teamSlug = 'board-wide';
       await em.flush();
       const task = await seed();
       const row = await taskDao.getById(task.id);
@@ -509,40 +509,40 @@ describe('TaskRunsService (in-memory sqlite)', () => {
 
       await service.start(task.id, start());
 
-      expect(startWorkflowRun).not.toHaveBeenCalled();
+      expect(startTeamRun).not.toHaveBeenCalled();
       expect(createChat).toHaveBeenCalledWith(
         expect.objectContaining({ agentKind: 'cursor-agent' }),
       );
     });
 
-    it('hands the WORKFLOW run the user’s per-CLI switches', async () => {
+    it('hands the TEAM run the user’s per-CLI switches', async () => {
       // Snapshotted at run creation, so a press that dropped them would run
       // every node with each option at its default.
-      const task = await seedWorkflowCard();
+      const task = await seedTeamCard();
       const agentOptions = { claude: { browserTools: true } };
 
       await service.start(task.id, start({ agentOptions }));
 
-      const passed = startWorkflowRun.mock.calls[0]?.[1] as {
+      const passed = startTeamRun.mock.calls[0]?.[1] as {
         agentOptions?: unknown;
       };
       expect(passed.agentOptions).toEqual(agentOptions);
     });
 
-    it('hands the WORKFLOW run the user’s own text and the card’s instructions as separate fields', async () => {
+    it('hands the TEAM run the user’s own text and the card’s instructions as separate fields', async () => {
       // The compose specs below exercise the chat (agent) arm;
-      // `startWorkflowRun` builds its own fields off the identical
+      // `startTeamRun` builds its own fields off the identical
       // `labelInstructions` value, and this is what proves that path reads it
       // — and keeps the label block out of the user's purgeable text.
       forTask.mockResolvedValueOnce([aLabelInstruction()]);
-      const task = await seedWorkflowCard();
+      const task = await seedTeamCard();
 
       await service.start(
         task.id,
         start({ customInstructions: 'Always use pnpm.' }),
       );
 
-      const passed = startWorkflowRun.mock.calls[0]?.[1] as {
+      const passed = startTeamRun.mock.calls[0]?.[1] as {
         customInstructions?: string;
         taskInstructions?: string;
       };
@@ -554,46 +554,46 @@ describe('TaskRunsService (in-memory sqlite)', () => {
           '## Label "bug"',
           'Write a regression test.',
           '',
-          TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+          TASK_REPORT_INSTRUCTIONS_TEAM,
         ].join('\n'),
       );
     });
 
-    it('hands a workflow-targeted card’s run the user’s reply language', async () => {
-      const task = await seedWorkflowCard();
+    it('hands a team-targeted card’s run the user’s reply language', async () => {
+      const task = await seedTeamCard();
 
       await service.start(task.id, start({ replyLanguage: 'Russian' }));
 
-      const passed = startWorkflowRun.mock.calls[0]?.[1] as {
+      const passed = startTeamRun.mock.calls[0]?.[1] as {
         replyLanguage?: string;
       };
       expect(passed.replyLanguage).toBe('Russian');
     });
 
-    it('starts a workflow-targeted card unattended when every agent node is on auto', async () => {
-      workflowApprovals = { 'dev-team': 'auto' };
-      const task = await seedWorkflowCard();
+    it('starts a team-targeted card unattended when every agent node is on auto', async () => {
+      teamApprovals = { 'dev-team': 'auto' };
+      const task = await seedTeamCard();
 
       await service.start(task.id, { ...start(), startedBy: 'autopilot' });
 
-      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(startTeamRun).toHaveBeenCalledTimes(1);
     });
 
-    it('refuses to start a workflow-targeted card unattended when a node can ask', async () => {
+    it('refuses to start a team-targeted card unattended when a node can ask', async () => {
       // The resolver's own refusal is pinned in `run-target.spec.ts` and the
       // queue's handout keeps such a card out of `eligible` in
       // `task-queue.service.spec.ts` — but neither reaches this throw, which is
-      // the line: a workflow's nodes each carry their own approval mode, so
+      // the line: a team's nodes each carry their own approval mode, so
       // there is no single field to force the way an agent run's is, and an
       // autopilot start against one must never reach the executor at all.
-      const task = await seedWorkflowCard();
+      const task = await seedTeamCard();
 
       await expect(
         service.start(task.id, { ...start(), startedBy: 'autopilot' }),
       ).rejects.toMatchObject({
-        errorCode: RUN_TARGET_PROBLEM_CODE['workflow-unattended'],
+        errorCode: RUN_TARGET_PROBLEM_CODE['team-unattended'],
       });
-      expect(startWorkflowRun).not.toHaveBeenCalled();
+      expect(startTeamRun).not.toHaveBeenCalled();
     });
   });
 
@@ -644,7 +644,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
 
     expect(resolveAutoGroupId).toHaveBeenCalledWith({
       cwd: '/tmp/geniro-task-runs-loose',
-      workflowId: null,
+      teamId: null,
     });
     expect(createChat).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: task.id, groupId: 'folder-group' }),
@@ -661,7 +661,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
 
     expect(resolveAutoGroupId).toHaveBeenCalledWith({
       cwd: '/tmp/geniro-task-runs-spec',
-      workflowId: null,
+      teamId: null,
     });
     expect(createChat).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: task.id, groupId: 'folder-group' }),
@@ -1202,10 +1202,10 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     expect(stored?.status).toBe('todo');
   });
 
-  /** Run a workflow-targeted card once, settle it, and return it to `todo`. */
-  const runWorkflowAndReturn = async (taskId: string): Promise<void> => {
+  /** Run a team-targeted card once, settle it, and return it to `todo`. */
+  const runTeamAndReturn = async (taskId: string): Promise<void> => {
     const row = await taskDao.getById(taskId);
-    (row as Task).workflowSlug = 'dev-team';
+    (row as Task).teamSlug = 'dev-team';
     await em.flush();
     await service.start(taskId, start());
     const finished = await runDao.getById('wf-run-1');
@@ -1216,29 +1216,29 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     await tasks.moveStatus(taskId, { from: 'in_progress', to: 'todo' });
     createChat.mockClear();
     sendMessage.mockClear();
-    startWorkflowRun.mockClear();
+    startTeamRun.mockClear();
   };
 
-  describe('a workflow card run again', () => {
+  describe('a team card run again', () => {
     it('continues the run it already has, with the user’s own words, and makes no second run', async () => {
       // Follow up and a second Run press both say they continue the card's
       // thread. A fresh walk made a second thread for one card and a team
       // with no memory of the first pass; the executor's own follow-up path
       // walks the settled run again, every node resuming its session.
       const task = await seed();
-      await runWorkflowAndReturn(task.id);
+      await runTeamAndReturn(task.id);
 
       const continued = await service.start(
         task.id,
         start({ prompt: 'Now add the tests.', branch: 'geniro/task-1b' }),
       );
 
-      expect(sendWorkflowMessage).toHaveBeenCalledTimes(1);
-      expect(sendWorkflowMessage).toHaveBeenCalledWith(
+      expect(sendTeamMessage).toHaveBeenCalledTimes(1);
+      expect(sendTeamMessage).toHaveBeenCalledWith(
         'wf-run-1',
         'Now add the tests.',
       );
-      expect(startWorkflowRun).not.toHaveBeenCalled();
+      expect(startTeamRun).not.toHaveBeenCalled();
       expect(sendMessage).not.toHaveBeenCalled();
       expect(await runDao.count({ taskId: task.id })).toBe(1);
       // Everything else a start does still happens: the card is worked again
@@ -1261,83 +1261,83 @@ describe('TaskRunsService (in-memory sqlite)', () => {
         title: 'Fix the cap',
         description: 'Off by one.',
       });
-      await runWorkflowAndReturn(task.id);
+      await runTeamAndReturn(task.id);
 
       await service.start(task.id, start());
 
-      expect(sendWorkflowMessage).toHaveBeenCalledWith(
+      expect(sendTeamMessage).toHaveBeenCalledWith(
         'wf-run-1',
         'Fix the cap\n\nOff by one.',
       );
     });
 
-    it('starts a new run when the card has been re-pointed at ANOTHER workflow', async () => {
+    it('starts a new run when the card has been re-pointed at ANOTHER team', async () => {
       // Continuing would walk the old graph for good, with the panel showing
       // the new one and no way out short of deleting the run.
       const task = await seed();
-      await runWorkflowAndReturn(task.id);
+      await runTeamAndReturn(task.id);
       const row = await taskDao.getById(task.id);
-      (row as Task).workflowSlug = 'review-team';
+      (row as Task).teamSlug = 'review-team';
       await em.flush();
 
       const started = await service.start(task.id, start());
 
-      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
-      expect(startWorkflowRun.mock.calls[0]?.[0]).toBe('review-team');
-      expect(sendWorkflowMessage).not.toHaveBeenCalled();
+      expect(startTeamRun).toHaveBeenCalledTimes(1);
+      expect(startTeamRun.mock.calls[0]?.[0]).toBe('review-team');
+      expect(sendTeamMessage).not.toHaveBeenCalled();
       expect(started.runId).not.toBe('wf-run-1');
     });
 
-    it('starts a new run when the card held a CHAT and now names a workflow', async () => {
+    it('starts a new run when the card held a CHAT and now names a team', async () => {
       const task = await seed();
       await service.start(task.id, start());
       await settleAndReturn(task.id);
       const row = await taskDao.getById(task.id);
-      (row as Task).workflowSlug = 'dev-team';
+      (row as Task).teamSlug = 'dev-team';
       await em.flush();
 
       await service.start(task.id, start());
 
-      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
-      expect(sendWorkflowMessage).not.toHaveBeenCalled();
+      expect(startTeamRun).toHaveBeenCalledTimes(1);
+      expect(sendTeamMessage).not.toHaveBeenCalled();
     });
 
     it('starts a new run when the old one is ARCHIVED', async () => {
       // `assertRunTakesMessage` refuses an archived run with `RUN_ARCHIVED`,
       // which the board could do nothing about.
       const task = await seed();
-      await runWorkflowAndReturn(task.id);
+      await runTeamAndReturn(task.id);
       const shelved = await runDao.getById('wf-run-1');
       (shelved as Run).archivedAt = new Date();
       await em.flush();
 
       await service.start(task.id, start());
 
-      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
-      expect(sendWorkflowMessage).not.toHaveBeenCalled();
+      expect(startTeamRun).toHaveBeenCalledTimes(1);
+      expect(sendTeamMessage).not.toHaveBeenCalled();
     });
 
     it('starts a new run when the old one was DELETED', async () => {
       const task = await seed();
-      await runWorkflowAndReturn(task.id);
+      await runTeamAndReturn(task.id);
       await runDao.hardDeleteIncludingSoftDeleted({ id: 'wf-run-1' }, em);
 
       await service.start(task.id, start());
 
-      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
-      expect(sendWorkflowMessage).not.toHaveBeenCalled();
+      expect(startTeamRun).toHaveBeenCalledTimes(1);
+      expect(sendTeamMessage).not.toHaveBeenCalled();
     });
 
     it('returns the card and keeps the run when the send is refused', async () => {
       // `resume`'s rule: the run is the card's history, and a send that
       // failed (a pass still tearing down answers RUN_BUSY) destroys nothing.
       const task = await seed();
-      await runWorkflowAndReturn(task.id);
-      sendWorkflowMessage.mockRejectedValueOnce(new Error('RUN_BUSY'));
+      await runTeamAndReturn(task.id);
+      sendTeamMessage.mockRejectedValueOnce(new Error('RUN_BUSY'));
 
       await expect(service.start(task.id, start())).rejects.toThrow('RUN_BUSY');
 
-      expect(deleteWorkflowRun).not.toHaveBeenCalled();
+      expect(deleteTeamRun).not.toHaveBeenCalled();
       expect(await runDao.getById('wf-run-1')).not.toBeNull();
       const stored = await taskDao.getById(task.id, orm.em.fork());
       expect(stored?.status).toBe('todo');
@@ -1345,63 +1345,63 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
 
     it('lets the AUTOPILOT continue a run whose own graph never asks', async () => {
-      workflowApprovals = { 'dev-team': 'auto' };
+      teamApprovals = { 'dev-team': 'auto' };
       snapshotApprovals = { 'dev-team': 'auto' };
       const task = await seed();
-      await runWorkflowAndReturn(task.id);
+      await runTeamAndReturn(task.id);
 
       await service.start(task.id, start({ startedBy: 'autopilot' }));
 
-      expect(sendWorkflowMessage).toHaveBeenCalledWith('wf-run-1', 'ship it');
-      expect(startWorkflowRun).not.toHaveBeenCalled();
+      expect(sendTeamMessage).toHaveBeenCalledWith('wf-run-1', 'ship it');
+      expect(startTeamRun).not.toHaveBeenCalled();
     });
 
     it('starts the AUTOPILOT a new run when the run’s own graph can still ask', async () => {
       // The library copy was vetted as unattended; the run walks its SNAPSHOT,
-      // started before the workflow was edited, whose node would park on a
+      // started before the team was edited, whose node would park on a
       // permission card nobody is there to answer.
-      workflowApprovals = { 'dev-team': 'auto' };
+      teamApprovals = { 'dev-team': 'auto' };
       snapshotApprovals = { 'dev-team': 'ask' };
       const task = await seed();
-      await runWorkflowAndReturn(task.id);
+      await runTeamAndReturn(task.id);
 
       await service.start(task.id, start({ startedBy: 'autopilot' }));
 
-      expect(sendWorkflowMessage).not.toHaveBeenCalled();
-      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(sendTeamMessage).not.toHaveBeenCalled();
+      expect(startTeamRun).toHaveBeenCalledTimes(1);
     });
 
     it('starts the AUTOPILOT a new run when the run’s own graph cannot be read', async () => {
-      workflowApprovals = { 'dev-team': 'auto' };
+      teamApprovals = { 'dev-team': 'auto' };
       const task = await seed();
-      await runWorkflowAndReturn(task.id);
+      await runTeamAndReturn(task.id);
 
       await service.start(task.id, start({ startedBy: 'autopilot' }));
 
-      expect(sendWorkflowMessage).not.toHaveBeenCalled();
-      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(sendTeamMessage).not.toHaveBeenCalled();
+      expect(startTeamRun).toHaveBeenCalledTimes(1);
     });
   });
 
-  it('refuses to send a chat message into a WORKFLOW run', async () => {
+  it('refuses to send a chat message into a TEAM run', async () => {
     // The card is re-pointed at an agent AFTER a graph run, so the press now
-    // resolves to the agent arm while the run it holds is still a workflow
+    // resolves to the agent arm while the run it holds is still a team
     // run. `sendMessage` is guarded by `assertChatRun` and would answer
     // `NOT_A_CHAT_RUN`, leaving the card permanently un-runnable.
     //
-    // The row carries an `agentKind` as well, which a workflow run does not
+    // The row carries an `agentKind` as well, which a team run does not
     // normally have: without it the agent-match disqualifier one line below
-    // already refuses this run, and the `workflowId` clause — the one this
+    // already refuses this run, and the `teamId` clause — the one this
     // test exists for — is never reached.
     const task = await seed();
-    await runWorkflowAndReturn(task.id);
+    await runTeamAndReturn(task.id);
     const graphRun = await runDao.getById('wf-run-1');
     if (graphRun) {
       graphRun.agentKind = 'claude';
       await em.flush();
     }
     const row = await taskDao.getById(task.id);
-    (row as Task).workflowSlug = null;
+    (row as Task).teamSlug = null;
     await em.flush();
 
     await service.start(task.id, start());
@@ -1491,13 +1491,13 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   it('keeps the card’s earlier thread when a start fails before making a run', async () => {
     const task = await workedOnce();
     const row = await taskDao.getById(task.id);
-    (row as Task).workflowSlug = 'deleted-from-the-library';
+    (row as Task).teamSlug = 'deleted-from-the-library';
     await em.flush();
-    startWorkflowRun.mockRejectedValueOnce(new Error('WORKFLOW_NOT_FOUND'));
+    startTeamRun.mockRejectedValueOnce(new Error('TEAM_NOT_FOUND'));
 
     await expect(
       service.start(task.id, start({ branch: 'geniro/other' })),
-    ).rejects.toThrow('WORKFLOW_NOT_FOUND');
+    ).rejects.toThrow('TEAM_NOT_FOUND');
 
     expect(await edgeOf(task.id)).toEqual({
       status: 'todo',
@@ -1563,7 +1563,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     await tasks.moveStatus(task.id, { from: 'backlog', to: 'todo' });
 
     await expect(service.start(task.id, start())).rejects.toMatchObject({
-      message: expect.stringContaining('no agent or workflow'),
+      message: expect.stringContaining('no agent or team'),
     });
     expect(createChat).not.toHaveBeenCalled();
   });

@@ -115,7 +115,7 @@ export class UsageRecorderService implements OnModuleInit {
     if (run === null) {
       return;
     }
-    // A workflow run names no agent, so whose money this is comes off the
+    // A team run names no agent, so whose money this is comes off the
     // per-node shares the poll wrote beside the run's total.
     const shares =
       run.agentKind === null && (run.polledCostCents ?? 0) > 0

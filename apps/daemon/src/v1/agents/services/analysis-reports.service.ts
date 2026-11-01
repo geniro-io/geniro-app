@@ -15,16 +15,16 @@ import {
   type RecommendationMarks,
   type RecommendationsPayload,
   type RecommendationsReport,
+  type RecommendationsTeamStats,
   type RecommendationsTiming,
-  type RecommendationsWorkflowStats,
-  type WorkflowVersionIndexReader,
+  type TeamVersionIndexReader,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { analysedSourceOf } from '../utils/analysed-runs';
 import { readCard } from '../utils/recommendations-card';
+import { teamCardStats } from '../utils/team-runs-fold';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
-import { workflowCardStats } from '../utils/workflow-runs-fold';
 import { ThreadReaderService } from './thread-reader.service';
 import { ThreadTimelineService } from './thread-timeline.service';
 
@@ -40,9 +40,9 @@ function refused(reason: string): AnalysisFiled {
 
 /**
  * The checks between an analysis agent and its card: a recommendation must
- * cite rows that exist in the run it names (the source, or one of a workflow
+ * cite rows that exist in the run it names (the source, or one of a team
  * analysis's runs) at or below that run's snapshot, a plain chat
- * gets no workflow items, ids are unique and say their target — and the
+ * gets no team items, ids are unique and say their target — and the
  * timing strip on the card is measured here, never taken from the agent.
  */
 @Injectable()
@@ -69,11 +69,11 @@ export class AnalysisReportsService {
     turn: AnalysisTurn,
     report: RecommendationsReport,
     write: AnalysisRowWriter,
-    versionIndex: WorkflowVersionIndexReader | null,
+    versionIndex: TeamVersionIndexReader | null,
   ): Promise<AnalysisFiled> {
     const em = this.em.fork();
-    let sourceKind: AnalysedThreadKind = 'workflow';
-    if (!turn.workflow) {
+    let sourceKind: AnalysedThreadKind = 'team';
+    if (!turn.team) {
       const source = await this.runDao.getById(turn.sourceRunId, em);
       if (source === null) {
         return refused('SOURCE_GONE — the analysed thread has been deleted');
@@ -85,7 +85,7 @@ export class AnalysisReportsService {
       return refused(problem);
     }
     // Each cited row is checked against the run it names, at that run's own
-    // snapshot — a workflow analysis cites several.
+    // snapshot — a team analysis cites several.
     const cited = new Map<string, { snapshotSeq: number; seqs: Set<number> }>();
     for (const evidence of report.items.flatMap((item) => item.evidence)) {
       const source = analysedSourceOf(turn, evidence.runId);
@@ -112,12 +112,12 @@ export class AnalysisReportsService {
       const missing = wanted.filter((seq) => !existing.has(seq));
       if (missing.length > 0) {
         return refused(
-          `evidence seq ${missing.join(', ')} ${missing.length === 1 ? 'does' : 'do'} not exist in the analysed ${turn.workflow ? `run ${runId}` : 'thread'} (snapshot ends at ${snapshotSeq}) — re-read and cite real rows`,
+          `evidence seq ${missing.join(', ')} ${missing.length === 1 ? 'does' : 'do'} not exist in the analysed ${turn.team ? `run ${runId}` : 'thread'} (snapshot ends at ${snapshotSeq}) — re-read and cite real rows`,
         );
       }
     }
-    const workflowStats = await this.workflowStats(turn, versionIndex);
-    const hotspotProblem = checkHotspots(report, workflowStats);
+    const teamStats = await this.teamStats(turn, versionIndex);
+    const hotspotProblem = checkHotspots(report, teamStats);
     if (hotspotProblem !== null) {
       return refused(hotspotProblem);
     }
@@ -125,9 +125,9 @@ export class AnalysisReportsService {
       ...report,
       sourceRunId: turn.sourceRunId,
       sourceKind,
-      // One run's timing would pass for the workflow's.
-      timing: turn.workflow ? null : await this.timing(turn),
-      workflowStats,
+      // One run's timing would pass for the team's.
+      timing: turn.team ? null : await this.timing(turn),
+      teamStats,
     };
     const row = await write('recommendations', payload);
     return { status: 'recorded', seq: row.seq, count: report.items.length };
@@ -162,19 +162,19 @@ export class AnalysisReportsService {
     return { status: 'recorded', seq: row.seq, count: marks.outcomes.length };
   }
 
-  private async workflowStats(
+  private async teamStats(
     turn: AnalysisTurn,
-    versionIndex: WorkflowVersionIndexReader | null,
-  ): Promise<RecommendationsWorkflowStats | null> {
-    if (!turn.workflow) {
+    versionIndex: TeamVersionIndexReader | null,
+  ): Promise<RecommendationsTeamStats | null> {
+    if (!turn.team) {
       return null;
     }
-    const folds = await this.threads.foldRuns(turn.workflow.runs);
+    const folds = await this.threads.foldRuns(turn.team.runs);
     const index =
       versionIndex === null
         ? null
-        : await versionIndex(turn.workflow.slug).catch(() => null);
-    return workflowCardStats(
+        : await versionIndex(turn.team.slug).catch(() => null);
+    return teamCardStats(
       folds.flatMap(({ run, folded }) =>
         run === null || folded === null
           ? []
@@ -211,13 +211,13 @@ export class AnalysisReportsService {
 
 export function checkHotspots(
   report: RecommendationsReport,
-  workflowStats: RecommendationsWorkflowStats | null,
+  teamStats: RecommendationsTeamStats | null,
 ): string | null {
   const ids = new Set(report.items.map((item) => item.id));
   const nodes =
-    workflowStats === null
+    teamStats === null
       ? null
-      : new Set(workflowStats.agents.map((agent) => agent.node));
+      : new Set(teamStats.agents.map((agent) => agent.node));
   for (const hotspot of report.hotspots) {
     const unknown = hotspot.items.filter((id) => !ids.has(id));
     if (unknown.length > 0) {
@@ -253,7 +253,7 @@ export function checkItems(
     if (item.target === 'memory' && !memoryEnabled) {
       return `${item.id}: the shared memory is off, so memory recommendations cannot apply`;
     }
-    if (item.target === 'workflow' && sourceKind === 'chat') {
+    if (item.target === 'team' && sourceKind === 'chat') {
       return `${item.id}: the analysed thread is a plain chat, so only repo, user and memory recommendations apply`;
     }
   }

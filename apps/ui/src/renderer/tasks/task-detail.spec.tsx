@@ -82,13 +82,13 @@ function detailWith({
   task: over = {},
   projectFolder = null,
   projectTarget = null,
-  workflows = [],
+  teams = [],
 }: {
   onSave?: ReturnType<typeof saveSpy>;
   task?: Partial<TaskDto>;
   projectFolder?: string | null;
   projectTarget?: string | null;
-  workflows?: readonly { slug: string; name: string }[];
+  teams?: readonly { slug: string; name: string }[];
 }): HTMLDivElement {
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -101,7 +101,7 @@ function detailWith({
         onSave={onSave}
         projectFolder={projectFolder}
         projectTarget={projectTarget}
-        workflows={workflows}
+        teams={teams}
       />,
     );
   });
@@ -732,13 +732,13 @@ describe('status', () => {
   describe('the Agent row', () => {
     const agentTrigger = (el: HTMLElement): HTMLButtonElement =>
       el.querySelector<HTMLButtonElement>(
-        '[aria-label="Agent or workflow for this task"]',
+        '[aria-label="Agent or team for this task"]',
       )!;
 
     it('shows the PROJECT’s agent on a card that names none, tagged as inherited', () => {
       const el = detailWith({
         projectTarget: 'claude',
-        task: { agentKind: null, workflowSlug: null },
+        task: { agentKind: null, teamSlug: null },
       });
 
       expect(agentTrigger(el).textContent).toContain('claude');
@@ -748,10 +748,10 @@ describe('status', () => {
       expect(buttonNamed(el, 'Use project agent')).toBeUndefined();
     });
 
-    it('names a workflow by its NAME rather than the slug on the wire', () => {
+    it('names a team by its NAME rather than the slug on the wire', () => {
       const el = detailWith({
-        task: { agentKind: null, workflowSlug: 'dev-team' },
-        workflows: [{ slug: 'dev-team', name: 'Dev team' }],
+        task: { agentKind: null, teamSlug: 'dev-team' },
+        teams: [{ slug: 'dev-team', name: 'Dev team' }],
       });
 
       expect(agentTrigger(el).textContent).toContain('Dev team');
@@ -763,7 +763,7 @@ describe('status', () => {
       // option.
       const el = detailWith({
         projectTarget: null,
-        task: { agentKind: null, workflowSlug: null },
+        task: { agentKind: null, teamSlug: null },
       });
 
       expect(agentTrigger(el).textContent).toContain('Choose an agent');
@@ -774,7 +774,7 @@ describe('status', () => {
       const el = detailWith({
         onSave,
         projectTarget: 'claude',
-        task: { agentKind: 'cursor-agent', workflowSlug: null },
+        task: { agentKind: 'cursor-agent', teamSlug: null },
       });
 
       act(() => {
@@ -782,13 +782,13 @@ describe('status', () => {
       });
 
       // Every one of them, always. A reset that cleared only the agent would
-      // leave a card that had once named a workflow still running it — and one
+      // leave a card that had once named a team still running it — and one
       // that kept the model, effort, approval mode or config directory would
       // hand the project's own agent settings that belong to the CLI being
       // left behind.
       expect(onSave).toHaveBeenCalledWith({
         agentKind: null,
-        workflowSlug: null,
+        teamSlug: null,
         model: null,
         effort: null,
         approval: null,

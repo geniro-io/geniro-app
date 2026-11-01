@@ -969,7 +969,7 @@ describe('displayStatus', () => {
 
   it('reads a PARKED agent as needing input, ahead of its live turn', () => {
     // A parked node's turn IS in flight, so `activeTurns > 0` holds and the
-    // card said `running` — reported against a workflow whose header and
+    // card said `running` — reported against a team whose header and
     // sidebar row both read `needs more info` while the node card beside them
     // span a spinner. Same rank 1 `displayRunStatus` gives a run with a card
     // open: nothing advances until the user answers.
@@ -1068,7 +1068,7 @@ describe('withDurableNodeStatus — the daemon answers where the window cannot',
   });
 
   describe('off the tail — a window loaded around an old message', () => {
-    // REPORTED: an archived workflow opened at its FIRST message read as
+    // REPORTED: an archived team opened at its FIRST message read as
     // working, because the page around that message holds the Researcher's
     // `running` row and not the ending written a thousand rows below it.
     const openTurn = (): ChatItem[] => [

@@ -7,7 +7,7 @@ import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
  * One node's publisher of buttons (`publish_action` / `remove_action`). The
  * conversation it publishes as comes from the endpoint, never from the model:
  * `caller` is the MCP call's caller key, which a chat's sink may ignore and a
- * workflow node's reads to tell its own conversation from a callee's.
+ * team node's reads to tell its own conversation from a callee's.
  */
 export interface ActionSink {
   publish(

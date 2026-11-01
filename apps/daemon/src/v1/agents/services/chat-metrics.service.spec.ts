@@ -109,8 +109,8 @@ function build(opts: {
   pinFor?: (runId: string) => string | null;
   /** Which session keys hold a live process — overrides `liveSession`. */
   peek?: (sessionKey: string) => unknown;
-  /** A WORKFLOW run: its turns by node, its node kinds, its polled bill. */
-  workflow?: {
+  /** A TEAM run: its turns by node, its node kinds, its polled bill. */
+  team?: {
     rows: { nodeId: string | null; payload: string }[];
     states: { nodeId: string; agentKind: AgentKind }[];
     runPolledCents?: number;
@@ -140,10 +140,10 @@ function build(opts: {
                 configDir: opts.configDirFor
                   ? opts.configDirFor(runId)
                   : (opts.configDir ?? null),
-                workflowId: opts.workflow === undefined ? null : 'wf',
-                polledCostCents: opts.workflow?.runPolledCents ?? null,
+                teamId: opts.team === undefined ? null : 'wf',
+                polledCostCents: opts.team?.runPolledCents ?? null,
                 polledCostEvents:
-                  opts.workflow?.runPolledCents === undefined ? null : 2,
+                  opts.team?.runPolledCents === undefined ? null : 2,
               },
         ),
     } as unknown as RunDao,
@@ -151,7 +151,7 @@ function build(opts: {
       maxSeq: () => Promise.resolve(opts.maxSeq ?? 7),
     } as unknown as ItemDao,
     {
-      listByRun: () => Promise.resolve(opts.workflow?.states ?? []),
+      listByRun: () => Promise.resolve(opts.team?.states ?? []),
       getByRunNode: () =>
         Promise.resolve({
           agentSessionId:
@@ -208,7 +208,7 @@ function build(opts: {
     } as unknown as ConfigDirPinService,
     wallTurns as unknown as WallTurnDao,
     usageRowsOf(
-      opts.workflow?.rows ??
+      opts.team?.rows ??
         (opts.payloads ?? []).map((payload) => ({ nodeId: null, payload })),
       [],
       turnSpanRows,
@@ -234,10 +234,10 @@ function build(opts: {
 /** The wall ledger the totals add to the CLIs' own time. */
 const wallTurns = new FakeWallTurnDao();
 
-describe('ChatMetricsService — one workflow node', () => {
-  // A workflow run keeps a process per node, so its readout names the node:
-  // REPORTED as "i cant see full context info for workflow" while the composer
-  // ring of a workflow run offered a figure and nothing behind it.
+describe('ChatMetricsService — one team node', () => {
+  // A team run keeps a process per node, so its readout names the node:
+  // REPORTED as "i cant see full context info for team" while the composer
+  // ring of a team run offered a figure and nothing behind it.
   function buildNode(
     state: Record<string, unknown> | null,
     opts: {
@@ -277,7 +277,7 @@ describe('ChatMetricsService — one workflow node', () => {
             agentKind: null,
             lastMetricsReading: null,
             configDir: null,
-            workflowSnapshot: opts.snapshot,
+            teamSnapshot: opts.snapshot,
           }),
         rememberMetricsReading: runRemember,
       } as unknown as RunDao,
@@ -591,7 +591,7 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
             configDir: null,
             polledCostCents: null,
             polledCostEvents: null,
-            workflowSnapshot: opts.pooled
+            teamSnapshot: opts.pooled
               ? JSON.stringify({
                   nodes: [
                     {
@@ -1519,12 +1519,12 @@ describe('ChatMetricsService.readTotals', () => {
     expect((await service.readTotals('run-1')).costUsd).toBeNull();
   });
 
-  it('ADDS a workflow’s polled cursor bill to its claude turns, rather than replacing them', async () => {
+  it('ADDS a team’s polled cursor bill to its claude turns, rather than replacing them', async () => {
     // REPORTED in the real app: a Dev Team run whose claude agents spent $52.41
     // and whose cursor QA spent $7.29 showed $7.29 in the header — the cursor
     // bill overwrote the run's whole cost.
     const { service } = build({
-      workflow: {
+      team: {
         rows: [
           { nodeId: 'manager', payload: turn({ costUsd: 50, inputTokens: 1 }) },
           { nodeId: 'qa', payload: turn({ costUsd: 9, inputTokens: 1 }) },
@@ -1545,12 +1545,12 @@ describe('ChatMetricsService.readTotals', () => {
     expect(totals.turns).toBe(2);
   });
 
-  it('judges a workflow turn by the pool member that ran it, not by its node’s stamp', async () => {
+  it('judges a team turn by the pool member that ran it, not by its node’s stamp', async () => {
     // A claude node's call that ran on its cursor member is billed through the
     // polled bill, so its own figure is left out; a cursor node's call that
     // ran on its claude member priced itself, so its figure counts.
     const { service } = build({
-      workflow: {
+      team: {
         rows: [
           { nodeId: 'manager', payload: turn({ costUsd: 50, inputTokens: 1 }) },
           {
@@ -1595,7 +1595,7 @@ describe('ChatMetricsService.readTotalsResponse', () => {
   it('reads no working stretches for a chat, whose header draws its own clock', async () => {
     // The route runs on every thread open and every turn settle, and folding
     // the stretches reads every status and turn row of the run — for a figure
-    // only a WORKFLOW header draws.
+    // only a TEAM header draws.
     const { service, turnSpanRows } = build({
       payloads: [turn({ costUsd: 1 })],
     });
@@ -1607,9 +1607,9 @@ describe('ChatMetricsService.readTotalsResponse', () => {
     expect(turnSpanRows).not.toHaveBeenCalled();
   });
 
-  it('reads them for a workflow run', async () => {
+  it('reads them for a team run', async () => {
     const { service, turnSpanRows } = build({
-      workflow: { rows: [], states: [] },
+      team: { rows: [], states: [] },
     });
 
     await service.readTotalsResponse('run-1');
@@ -1636,7 +1636,7 @@ describe('ChatMetricsService.readTotalsResponse', () => {
     // JSON has no Infinity; dropped or nulled-out by accident, the live clock
     // would tick through the question it should be standing still on.
     const { service, turnSpanRows } = build({
-      workflow: { rows: [], states: [] },
+      team: { rows: [], states: [] },
     });
     const at = (s: number): Date => new Date(Date.UTC(2026, 9, 13, 10, 0, s));
     turnSpanRows.mockResolvedValue([

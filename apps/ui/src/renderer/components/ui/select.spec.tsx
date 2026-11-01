@@ -53,8 +53,8 @@ const AGENTS = [
     ],
   },
   {
-    label: 'Workflows',
-    items: [{ value: 'wf:review', label: 'Review team' }],
+    label: 'Teams',
+    items: [{ value: 'team:review', label: 'Review team' }],
   },
 ];
 
@@ -64,7 +64,7 @@ describe('Select', () => {
       <Select
         variant="ghost"
         groups={AGENTS}
-        value="wf:review"
+        value="team:review"
         onValueChange={() => {}}
       />,
     );
@@ -133,7 +133,7 @@ describe('Select', () => {
       options(el)[2]!.click();
     });
 
-    expect(onValueChange).toHaveBeenCalledWith('wf:review');
+    expect(onValueChange).toHaveBeenCalledWith('team:review');
     expect(options(el)).toHaveLength(0);
   });
 

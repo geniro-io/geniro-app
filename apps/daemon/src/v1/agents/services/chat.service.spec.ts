@@ -74,14 +74,14 @@ import {
   HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
-  HOST_PROPOSE_WORKFLOW_TOOL,
+  HOST_PROPOSE_TEAM_TOOL,
   HOST_PUBLISH_ACTION_TOOL,
   HOST_QUESTION_TOOL,
   HOST_READ_CHAT_CONTEXT_TOOL,
-  HOST_READ_WORKFLOWS_TOOL,
+  HOST_READ_TEAMS_TOOL,
   HOST_REMOVE_ACTION_TOOL,
   HOST_SEARCH_CHATS_TOOL,
-  HOST_WORKFLOW_CHANGE_TOOL,
+  HOST_TEAM_CHANGE_TOOL,
   MAX_ARTIFACT_HTML_BYTES,
   SINGLE_AGENT_NODE,
 } from '../chat.types';
@@ -141,10 +141,10 @@ import { RunTeardownService } from './run-teardown.service';
 import { RunWriteQueue } from './run-write.queue';
 import { SessionTranscriptsService } from './session-transcripts.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
+import { TeamBuilderBroker } from './team-builder.broker';
+import { TeamProposalBroker } from './team-proposal.broker';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
-import { WorkflowBuilderBroker } from './workflow-builder.broker';
-import { WorkflowProposalBroker } from './workflow-proposal.broker';
 
 const MEMORY_OFF: Pick<MemoryService, 'runSnapshot'> = {
   runSnapshot: async () => ({ nativeMemoryOff: false, memoryIndex: null }),
@@ -184,7 +184,7 @@ class FakeRunDao {
       id: randomUUID(),
       title: null,
       status: 'pending',
-      workflowId: null,
+      teamId: null,
       cwd: null,
       agentKind: null,
       model: null,
@@ -227,13 +227,13 @@ class FakeRunDao {
     run.pendingQuestion = null;
     return true;
   }
-  async setPendingWorkflowProposal(
+  async setPendingTeamProposal(
     id: string,
     value: string | null,
   ): Promise<void> {
     const run = this.runs.get(id);
     if (run) {
-      run.pendingWorkflowProposal = value;
+      run.pendingTeamProposal = value;
     }
   }
   async listRunsWithPendingQuestion(): Promise<Run[]> {
@@ -302,15 +302,15 @@ class FakeRunDao {
       .reverse();
   }
   /** Newest first, as the real one orders by `createdAt` (insertion here). */
-  async newestWorkflowRuns(slug: string, limit: number): Promise<Run[]> {
+  async newestTeamRuns(slug: string, limit: number): Promise<Run[]> {
     return [...this.runs.values()]
-      .filter((run) => run.workflowId === slug && run.archivedAt === null)
+      .filter((run) => run.teamId === slug && run.archivedAt === null)
       .reverse()
       .slice(0, limit);
   }
-  async listWorkflowAnalyses(slug: string): Promise<Run[]> {
+  async listTeamAnalyses(slug: string): Promise<Run[]> {
     return [...this.runs.values()]
-      .filter((run) => run.analysisWorkflowSlug === slug)
+      .filter((run) => run.analysisTeamSlug === slug)
       .reverse();
   }
   /**
@@ -324,7 +324,7 @@ class FakeRunDao {
   ): Promise<Run[]> {
     const listed = [...this.runs.values()].filter(
       (run) =>
-        run.workflowId === null &&
+        run.teamId === null &&
         (scope === 'all' ||
           (run.archivedAt !== null) === (scope === 'archived')) &&
         (page.runId === undefined || run.id === page.runId),
@@ -347,9 +347,9 @@ class FakeRunDao {
     return pending;
   }
   async listRunningChats(): Promise<Run[]> {
-    // Mirrors the real query's chat-only scoping (workflowId null).
+    // Mirrors the real query's chat-only scoping (teamId null).
     return [...this.runs.values()].filter(
-      (run) => run.status === 'running' && run.workflowId === null,
+      (run) => run.status === 'running' && run.teamId === null,
     );
   }
   /** The one write that DOES clear — see `RunDao.forgetContext`. */
@@ -480,7 +480,7 @@ class FakeRunDao {
    */
   async archivedRunsBefore(
     cutoff: Date,
-  ): Promise<{ id: string; workflowId: string | null }[]> {
+  ): Promise<{ id: string; teamId: string | null }[]> {
     this.sweepCutoffs.push(cutoff);
     return [...this.runs.values()]
       .filter(
@@ -492,7 +492,7 @@ class FakeRunDao {
         (a, b) =>
           (a.archivedAt?.getTime() ?? 0) - (b.archivedAt?.getTime() ?? 0),
       )
-      .map((run) => ({ id: run.id, workflowId: run.workflowId }));
+      .map((run) => ({ id: run.id, teamId: run.teamId }));
   }
 }
 
@@ -1195,8 +1195,8 @@ function setup(
   const galleries = new GalleryBroker();
   const artifacts = new ArtifactBroker();
   const actionSinks = new ActionBroker();
-  const workflowProposals = new WorkflowProposalBroker();
-  const workflowBuilders = new WorkflowBuilderBroker();
+  const teamProposals = new TeamProposalBroker();
+  const teamBuilders = new TeamBuilderBroker();
   // The REAL store, on the reasoning the patch broker's comment gives: what a
   // published artifact observably DOES is put a page on disk and hand back a
   // key that opens it, and a double would pin the double. One root shared by
@@ -1232,7 +1232,7 @@ function setup(
   // a double here would leave the duplicate-seq tests pinning the double.
   const seqs = new ItemSeqAllocator(em, itemDao as unknown as ItemDao);
   // A chat run holds no agent-to-agent calls, so this table is always empty
-  // here — the seat exists because the teardown is shared with workflow runs.
+  // here — the seat exists because the teardown is shared with team runs.
   const callContextDao = {
     async hardDeleteIncludingSoftDeleted() {
       return 0;
@@ -1356,7 +1356,7 @@ function setup(
       NO_STOPS,
       NO_COMMANDS,
     ),
-    workflowProposals,
+    teamProposals,
     artifactStore,
     notices,
     callTokens,
@@ -1379,7 +1379,7 @@ function setup(
     {
       sinkFor: opts.analysisSink ?? (() => ({})),
     } as unknown as AnalysisReportsService,
-    workflowBuilders,
+    teamBuilders,
     opts.runWrites ?? new RunWriteQueue(),
     (opts.memory ?? MEMORY_OFF) as unknown as MemoryService,
     (opts.projectScope ?? NO_PROJECT) as unknown as ProjectScopeService,
@@ -1412,8 +1412,8 @@ function setup(
     galleries,
     artifacts,
     actionSinks,
-    workflowProposals,
-    workflowBuilders,
+    teamProposals,
+    teamBuilders,
     artifactStore,
     statuses,
     deletedRuns,
@@ -1461,7 +1461,7 @@ describe('ChatService', () => {
 
   it("hands the history route's conversation to the transcript read", async () => {
     // The route's `conversation` / `call` reaches the DAO only through here;
-    // dropping it would page a workflow run's whole transcript again.
+    // dropping it would page a team run's whole transcript again.
     const read = vi.spyOn(FakeItemDao.prototype, 'getByRun');
     try {
       const { service } = setup();
@@ -2793,22 +2793,19 @@ describe('ChatService', () => {
       expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(false);
     });
 
-    it('offers the workflow tools to an ordinary chat turn only', async () => {
-      const { service, claude, runDao, workflowProposals, workflowBuilders } =
-        setup();
+    it('offers the team tools to an ordinary chat turn only', async () => {
+      const { service, claude, runDao, teamProposals, teamBuilders } = setup();
       const ordinary = await service.createChat({
         agentKind: 'claude',
         cwd: dir,
       });
       await service.sendMessage(ordinary.id, 'hello');
-      expect(workflowProposals.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
+      expect(teamProposals.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
         true,
       );
-      expect(workflowBuilders.canEdit(ordinary.id, SINGLE_AGENT_NODE)).toBe(
-        false,
-      );
+      expect(teamBuilders.canEdit(ordinary.id, SINGLE_AGENT_NODE)).toBe(false);
       await settle(claude);
-      expect(workflowProposals.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
+      expect(teamProposals.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
         false,
       );
 
@@ -2816,9 +2813,9 @@ describe('ChatService', () => {
         agentKind: 'claude',
         cwd: dir,
       });
-      runDao.runs.get(builder.id)!.editsWorkflowSlug = 'team';
+      runDao.runs.get(builder.id)!.editsTeamSlug = 'team';
       await service.sendMessage(builder.id, 'hello');
-      expect(workflowProposals.canPropose(builder.id, SINGLE_AGENT_NODE)).toBe(
+      expect(teamProposals.canPropose(builder.id, SINGLE_AGENT_NODE)).toBe(
         false,
       );
       await settle(claude);
@@ -2832,46 +2829,40 @@ describe('ChatService', () => {
         analysisSourceSeq: 0,
       });
       await service.sendMessage(analysis.id, 'hello');
-      expect(workflowProposals.canPropose(analysis.id, SINGLE_AGENT_NODE)).toBe(
+      expect(teamProposals.canPropose(analysis.id, SINGLE_AGENT_NODE)).toBe(
         false,
       );
-      expect(workflowBuilders.canEdit(analysis.id, SINGLE_AGENT_NODE)).toBe(
-        false,
-      );
+      expect(teamBuilders.canEdit(analysis.id, SINGLE_AGENT_NODE)).toBe(false);
       await settle(claude);
 
-      const workflowAnalysis = await service.createChat({
+      const teamAnalysis = await service.createChat({
         agentKind: 'claude',
         cwd: dir,
-        analysisWorkflow: {
+        analysisTeam: {
           slug: 'team',
           runs: [{ runId: ordinary.id, snapshotSeq: 0, working: false }],
         },
       });
-      await service.sendMessage(workflowAnalysis.id, 'hello');
-      expect(
-        workflowProposals.canPropose(workflowAnalysis.id, SINGLE_AGENT_NODE),
-      ).toBe(false);
+      await service.sendMessage(teamAnalysis.id, 'hello');
+      expect(teamProposals.canPropose(teamAnalysis.id, SINGLE_AGENT_NODE)).toBe(
+        false,
+      );
       await settle(claude);
     });
 
-    it('lets a builder chat turn change its own workflow, and only while the turn runs', async () => {
-      const { service, claude, runDao, workflowBuilders } = setup();
+    it('lets a builder chat turn change its own team, and only while the turn runs', async () => {
+      const { service, claude, runDao, teamBuilders } = setup();
       const builder = await service.createChat({
         agentKind: 'claude',
         cwd: dir,
       });
-      runDao.runs.get(builder.id)!.editsWorkflowSlug = 'team';
-      expect(workflowBuilders.canEdit(builder.id, SINGLE_AGENT_NODE)).toBe(
-        false,
-      );
+      runDao.runs.get(builder.id)!.editsTeamSlug = 'team';
+      expect(teamBuilders.canEdit(builder.id, SINGLE_AGENT_NODE)).toBe(false);
 
       await service.sendMessage(builder.id, 'hello');
-      expect(workflowBuilders.canEdit(builder.id, SINGLE_AGENT_NODE)).toBe(
-        true,
-      );
+      expect(teamBuilders.canEdit(builder.id, SINGLE_AGENT_NODE)).toBe(true);
       await expect(
-        workflowBuilders.workflowOf(builder.id, SINGLE_AGENT_NODE),
+        teamBuilders.teamOf(builder.id, SINGLE_AGENT_NODE),
       ).resolves.toEqual({
         slug: 'team',
         turnStartedAt: expect.any(Number),
@@ -2880,9 +2871,7 @@ describe('ChatService', () => {
       });
 
       await settle(claude);
-      expect(workflowBuilders.canEdit(builder.id, SINGLE_AGENT_NODE)).toBe(
-        false,
-      );
+      expect(teamBuilders.canEdit(builder.id, SINGLE_AGENT_NODE)).toBe(false);
     });
 
     it('stops accepting artifacts once the turn that could show them is over', async () => {
@@ -4118,7 +4107,7 @@ describe('ChatService', () => {
         await ctx.service.raiseOwnedCard(
           runId,
           'proposal-1',
-          { toolName: 'propose_workflow', input: {} },
+          { toolName: 'propose_team', input: {} },
           () => undefined,
         );
 
@@ -4311,7 +4300,7 @@ describe('ChatService', () => {
     });
 
     describe('deferred cards another module owns', () => {
-      const CARD = { toolName: 'propose_workflow', input: { slug: 'team' } };
+      const CARD = { toolName: 'propose_team', input: { slug: 'team' } };
 
       async function chat(
         service: ReturnType<typeof setup>['service'],
@@ -4349,7 +4338,7 @@ describe('ChatService', () => {
         );
         expect(JSON.parse(String(retired?.payload))).toEqual({
           id: requestId,
-          toolName: 'propose_workflow',
+          toolName: 'propose_team',
         });
       });
 
@@ -4403,7 +4392,7 @@ describe('ChatService', () => {
           (item) => item.kind === 'unanswerable',
         );
         expect(retired.map((item) => JSON.parse(item.payload))).toEqual([
-          { id: 'card-1', toolName: 'propose_workflow' },
+          { id: 'card-1', toolName: 'propose_team' },
         ]);
       });
 
@@ -4609,7 +4598,7 @@ describe('ChatService', () => {
         const { service, cursor, itemDao, runDao, approvals } = setup();
         const run = await chat(service, cursor);
         await service.raiseOwnedCard(run.id, 'card-1', CARD, () => undefined);
-        runDao.runs.get(run.id)!.pendingWorkflowProposal = JSON.stringify({
+        runDao.runs.get(run.id)!.pendingTeamProposal = JSON.stringify({
           requestId: 'card-1',
         });
 
@@ -4621,7 +4610,7 @@ describe('ChatService', () => {
             .map((i) => JSON.parse(i.payload).id),
         ).toEqual(['card-1']);
         expect(approvals.listByRun(run.id)).toEqual([]);
-        expect(runDao.runs.get(run.id)?.pendingWorkflowProposal).toBeNull();
+        expect(runDao.runs.get(run.id)?.pendingTeamProposal).toBeNull();
         expect((await service.rename(run.id, 'x')).awaiting).toBeNull();
       });
 
@@ -5688,31 +5677,31 @@ describe('ChatService', () => {
     });
   });
 
-  describe('findWorkflowAnalysis', () => {
-    it("answers the workflow's newest analysis, or the caller's own while it exists", async () => {
+  describe('findTeamAnalysis', () => {
+    it("answers the team's newest analysis, or the caller's own while it exists", async () => {
       const { service } = setup();
-      const analysisWorkflow = {
+      const analysisTeam = {
         slug: 'team',
         runs: [{ runId: 'r1', snapshotSeq: 3, working: false }],
       };
-      expect(await service.findWorkflowAnalysis('team')).toBeNull();
+      expect(await service.findTeamAnalysis('team')).toBeNull();
       const older = await service.createChat({
         agentKind: 'claude',
         cwd: dir,
-        analysisWorkflow,
+        analysisTeam,
       });
       const newer = await service.createChat({
         agentKind: 'claude',
         cwd: dir,
-        analysisWorkflow,
+        analysisTeam,
       });
 
-      expect((await service.findWorkflowAnalysis('team'))?.id).toBe(newer.id);
-      expect((await service.findWorkflowAnalysis('team', older.id))?.id).toBe(
+      expect((await service.findTeamAnalysis('team'))?.id).toBe(newer.id);
+      expect((await service.findTeamAnalysis('team', older.id))?.id).toBe(
         older.id,
       );
-      expect(await service.findWorkflowAnalysis('other')).toBeNull();
-      // The workflow's analysis is no thread's.
+      expect(await service.findTeamAnalysis('other')).toBeNull();
+      // The team's analysis is no thread's.
       expect(await service.findAnalysis('r1')).toBeNull();
     });
   });
@@ -5759,13 +5748,13 @@ describe('ChatService', () => {
       );
     });
 
-    it('shelves a WORKFLOW run too — the archive is not a chat feature', async () => {
+    it('shelves a TEAM run too — the archive is not a chat feature', async () => {
       // REPORTED against a completed `Dev Team Manifest` row, whose only row
       // action was Delete: shelving is a property of the run ROW, and the
       // sidebar that reads it lists both kinds together.
       const { service, runDao } = setup();
       const run = await runDao.create({
-        workflowId: 'wf-1',
+        teamId: 'wf-1',
         status: 'completed',
       });
 
@@ -5782,26 +5771,26 @@ describe('ChatService', () => {
       // the permanent delete from the archive must reap as well.
       const { service, runDao, reapedRuns } = setup();
       const chat = await service.createChat({ agentKind: 'claude', cwd: dir });
-      const workflow = await runDao.create({
-        workflowId: 'wf-1',
+      const team = await runDao.create({
+        teamId: 'wf-1',
         status: 'completed',
       });
 
       await service.archive(chat.id);
-      await service.archive(workflow.id);
-      expect(reapedRuns).toEqual([chat.id, workflow.id]);
+      await service.archive(team.id);
+      expect(reapedRuns).toEqual([chat.id, team.id]);
 
       await service.delete(chat.id);
-      expect(reapedRuns).toEqual([chat.id, workflow.id, chat.id]);
+      expect(reapedRuns).toEqual([chat.id, team.id, chat.id]);
     });
 
-    it('stops a RUNNING workflow run through the registry both engines share', async () => {
+    it('stops a RUNNING team run through the registry both engines share', async () => {
       // Its cancel cannot go through `ChatService.cancel`, which is kind-guarded
       // — and must still happen, or a shelved run goes on spending out of
       // sight. The registry key is the one both engines converge on.
       const { service, runDao, registry } = setup();
       const run = await runDao.create({
-        workflowId: 'wf-1',
+        teamId: 'wf-1',
         status: 'running',
       });
       registry.tryClaim(run.id);
@@ -6745,7 +6734,7 @@ describe('ChatService', () => {
     expect(analyses.canAnalyse(analysis.id, SINGLE_AGENT_NODE)).toBe(false);
   });
 
-  it('installs the analysis tools on a workflow analysis, scoped to the runs it was started on', async () => {
+  it('installs the analysis tools on a team analysis, scoped to the runs it was started on', async () => {
     const turns: unknown[] = [];
     const { service, analyses, claude } = setup({
       analysisSink: (turn) => {
@@ -6760,7 +6749,7 @@ describe('ChatService', () => {
     const analysis = await service.createChat({
       agentKind: 'claude',
       cwd: dir,
-      analysisWorkflow: { slug: 'team', runs },
+      analysisTeam: { slug: 'team', runs },
     });
 
     await service.sendMessage(analysis.id, 'analyse');
@@ -6772,14 +6761,14 @@ describe('ChatService', () => {
         sourceRunId: 'newest',
         snapshotSeq: 12,
         sourceWorking: true,
-        workflow: { slug: 'team', runs },
+        team: { slug: 'team', runs },
       },
     ]);
     claude.finish();
     await drain();
   });
 
-  it("installs the analysis tools on a builder chat's turn, over its workflow's newest runs as the turn began", async () => {
+  it("installs the analysis tools on a builder chat's turn, over its team's newest runs as the turn began", async () => {
     const turns: unknown[] = [];
     const { service, analyses, claude, runDao, itemDao } = setup({
       analysisSink: (turn) => {
@@ -6794,13 +6783,13 @@ describe('ChatService', () => {
     const other = await service.createChat({ agentKind: 'claude', cwd: dir });
     await service.sendMessage(other.id, 'elsewhere');
     await finishTurn(claude);
-    Object.assign(runDao.runs.get(older.id)!, { workflowId: 'team' });
-    Object.assign(runDao.runs.get(empty.id)!, { workflowId: 'team' });
-    Object.assign(runDao.runs.get(other.id)!, { workflowId: 'other' });
+    Object.assign(runDao.runs.get(older.id)!, { teamId: 'team' });
+    Object.assign(runDao.runs.get(empty.id)!, { teamId: 'team' });
+    Object.assign(runDao.runs.get(other.id)!, { teamId: 'other' });
     const builder = await service.createChat({
       agentKind: 'claude',
       cwd: dir,
-      editsWorkflowSlug: 'team',
+      editsTeamSlug: 'team',
     });
 
     await service.sendMessage(builder.id, 'which stages should we add?');
@@ -6814,7 +6803,7 @@ describe('ChatService', () => {
         sourceRunId: older.id,
         snapshotSeq: olderSeq,
         sourceWorking: false,
-        workflow: {
+        team: {
           slug: 'team',
           runs: [{ runId: older.id, snapshotSeq: olderSeq, working: false }],
         },
@@ -6824,14 +6813,14 @@ describe('ChatService', () => {
     expect(analyses.canAnalyse(builder.id, SINGLE_AGENT_NODE)).toBe(false);
   });
 
-  it('offers a builder chat no analysis tools while its workflow has no run', async () => {
+  it('offers a builder chat no analysis tools while its team has no run', async () => {
     const { service, analyses, claude } = setup({
       analysisSink: (turn) => ({ turn }) as never,
     });
     const builder = await service.createChat({
       agentKind: 'claude',
       cwd: dir,
-      editsWorkflowSlug: 'team',
+      editsTeamSlug: 'team',
     });
 
     await service.sendMessage(builder.id, 'hello');
@@ -7924,9 +7913,9 @@ describe('ChatService', () => {
     ).toBe(false);
   });
 
-  it('cancel() rejects a workflow run — never cancels the other kind silently', async () => {
+  it('cancel() rejects a team run — never cancels the other kind silently', async () => {
     const { service, runDao, registry } = setup();
-    const run = await runDao.create({ workflowId: 'wf-1', status: 'running' });
+    const run = await runDao.create({ teamId: 'wf-1', status: 'running' });
     registry.tryClaim(run.id);
     const cancelled = vi.fn();
     registry.register(run.id, {
@@ -8535,7 +8524,7 @@ describe('ChatService', () => {
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
     for (const [seq, payload] of [
       [0, { id: 'req-open', toolName: 'Bash' }],
-      [1, { id: 'card-1', toolName: 'propose_workflow' }],
+      [1, { id: 'card-1', toolName: 'propose_team' }],
       [2, { id: 'q-1', toolName: HOST_QUESTION_TOOL }],
     ] as const) {
       await itemDao.create({
@@ -8547,7 +8536,7 @@ describe('ChatService', () => {
     }
     await runDao.updateById(run.id, {
       status: 'running',
-      pendingWorkflowProposal: JSON.stringify({ requestId: 'card-1' }),
+      pendingTeamProposal: JSON.stringify({ requestId: 'card-1' }),
       pendingQuestion: serializePendingQuestion({
         kind: 'question',
         requestId: 'q-1',
@@ -8566,7 +8555,7 @@ describe('ChatService', () => {
 
   it('closes a stranded delegate UNDER the node that launched it', async () => {
     // REPORTED as "он пишет, что один из app-агентов активен, хотя он же должен
-    // быть закончен", over a finished workflow run whose QA card read
+    // быть закончен", over a finished team run whose QA card read
     // `11 active · 14 threads`. The repair was running and reaching nothing:
     // measured on that run's own rows, 22 opens carried `node_id = 'qa'` and
     // all 11 closes carried NULL, because this service is the chat path and a
@@ -8574,7 +8563,7 @@ describe('ChatService', () => {
     // filed at run level closes none of them.
     const { service, runDao, itemDao } = setup();
     const run = await runDao.create({
-      workflowId: 'wf-1',
+      teamId: 'wf-1',
       status: 'completed',
     });
     await itemDao.create({
@@ -8602,10 +8591,10 @@ describe('ChatService', () => {
     // call block by the payload's `callId`, so a close filed with the node and
     // no call landed in the main flow while the delegate sat in the block —
     // measured on the reporter's run, whose two boot closes carried `engineer`
-    // and nothing else, under a finished workflow still showing both at work.
+    // and nothing else, under a finished team still showing both at work.
     const { service, runDao, itemDao } = setup();
     const run = await runDao.create({
-      workflowId: 'wf-1',
+      teamId: 'wf-1',
       status: 'completed',
     });
     await itemDao.create({
@@ -8637,12 +8626,12 @@ describe('ChatService', () => {
 
   it('boot reconcile closes a detached command a dead process left running, where its open row is', async () => {
     // A command's close is announced by the CLI process's own exit, which a
-    // daemon that died never heard — and which a finished workflow's sink
-    // dropped. REPORTED as a finished workflow still listing `Terminals 1`
+    // daemon that died never heard — and which a finished team's sink
+    // dropped. REPORTED as a finished team still listing `Terminals 1`
     // under its manager, whose last `shell_open` had no close after it.
     const { service, runDao, itemDao } = setup();
     const run = await runDao.create({
-      workflowId: 'wf-1',
+      teamId: 'wf-1',
       status: 'completed',
     });
     const rows = [
@@ -8760,10 +8749,10 @@ describe('ChatService', () => {
     expect((await runDao.getById(run.id))?.title).toBe('Auth refactor');
   });
 
-  it('rename deliberately accepts a WORKFLOW run (run-level, not kind-guarded)', async () => {
+  it('rename deliberately accepts a TEAM run (run-level, not kind-guarded)', async () => {
     const { service, runDao } = setup();
     const run = await runDao.create({
-      workflowId: 'review-team',
+      teamId: 'review-team',
       status: 'completed',
     });
 
@@ -8830,29 +8819,29 @@ describe('ChatService', () => {
     });
   });
 
-  describe('refreshWorkflowInstructions', () => {
-    async function workflowChat(service: ChatService) {
+  describe('refreshTeamInstructions', () => {
+    async function teamChat(service: ChatService) {
       return service.createChat({
         agentKind: 'claude',
         cwd: dir,
-        editsWorkflowSlug: 'dev-team',
-        workflowInstructions: 'old brief',
+        editsTeamSlug: 'dev-team',
+        teamInstructions: 'old brief',
       });
     }
 
     it('rewrites a brief that changed, without activity', async () => {
       const { service, runDao } = setup();
-      const run = await workflowChat(service);
+      const run = await teamChat(service);
       const quiet = vi.spyOn(runDao, 'updateWithoutActivity');
 
-      await service.refreshWorkflowInstructions(run.id, '  new brief\n');
+      await service.refreshTeamInstructions(run.id, '  new brief\n');
 
-      expect((await runDao.getById(run.id))?.workflowInstructions).toBe(
+      expect((await runDao.getById(run.id))?.teamInstructions).toBe(
         'new brief',
       );
       expect(quiet).toHaveBeenCalledWith(
         run.id,
-        { workflowInstructions: 'new brief' },
+        { teamInstructions: 'new brief' },
         expect.anything(),
       );
     });
@@ -8862,10 +8851,10 @@ describe('ChatService', () => {
     // cost on every press of the panel.
     it('writes nothing when the brief is unchanged', async () => {
       const { service, runDao } = setup();
-      const run = await workflowChat(service);
+      const run = await teamChat(service);
       const quiet = vi.spyOn(runDao, 'updateWithoutActivity');
 
-      await service.refreshWorkflowInstructions(run.id, 'old brief\n');
+      await service.refreshTeamInstructions(run.id, 'old brief\n');
 
       expect(quiet).not.toHaveBeenCalled();
     });
@@ -8873,8 +8862,51 @@ describe('ChatService', () => {
     it('404s on an unknown run', async () => {
       const { service } = setup();
       await expect(
-        service.refreshWorkflowInstructions('nope', 'brief'),
+        service.refreshTeamInstructions('nope', 'brief'),
       ).rejects.toThrow(/RUN_NOT_FOUND|not found/);
+    });
+
+    it('re-briefs a builder chat from its team before each turn', async () => {
+      const { service, runDao, claude } = setup();
+      const run = await teamChat(service);
+      const asked: [string, string][] = [];
+      service.useTeamBrief((slug, cwd) => {
+        asked.push([slug, cwd]);
+        return Promise.resolve('brief as the team stands');
+      });
+
+      await service.sendMessage(run.id, 'go');
+
+      expect(asked).toEqual([['dev-team', realpathSync(dir)]]);
+      expect(claude.start.mock.calls[0]?.[0].teamInstructions).toBe(
+        'brief as the team stands',
+      );
+      expect((await runDao.getById(run.id))?.teamInstructions).toBe(
+        'brief as the team stands',
+      );
+    });
+
+    it('keeps the stored brief when the team cannot be read', async () => {
+      const { service, claude } = setup();
+      const run = await teamChat(service);
+      service.useTeamBrief(() => Promise.reject(new Error('TEAM_NOT_FOUND')));
+
+      await service.sendMessage(run.id, 'go');
+
+      expect(claude.start.mock.calls[0]?.[0].teamInstructions).toBe(
+        'old brief',
+      );
+    });
+
+    it('leaves an ordinary chat alone', async () => {
+      const { service } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const source = vi.fn(() => Promise.resolve('brief'));
+      service.useTeamBrief(source);
+
+      await service.sendMessage(run.id, 'go');
+
+      expect(source).not.toHaveBeenCalled();
     });
   });
 
@@ -8917,10 +8949,10 @@ describe('ChatService', () => {
     expect((await runDao.getById(run.id))?.updatedAt.getTime()).toBe(before);
   });
 
-  it('setNotes accepts a WORKFLOW run, like rename', async () => {
+  it('setNotes accepts a TEAM run, like rename', async () => {
     const { service, runDao } = setup();
     const run = await runDao.create({
-      workflowId: 'review-team',
+      teamId: 'review-team',
       status: 'completed',
     });
 
@@ -9732,7 +9764,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     // no permission flag and inherits ITS default — on claude 2.1.227 that is
     // `permissionMode: "auto"`. `undefined` here is the regression.
     const legacy = await runDao.create({
-      workflowId: null,
+      teamId: null,
       status: 'pending',
       agentKind: 'claude',
       cwd: dir,
@@ -10596,7 +10628,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(approvals.listByRun(run.id)).toEqual([]);
   });
 
-  it('auto-approves the analysis reader and card on an ASK chat, and leaves the workflow save to a card', async () => {
+  it('auto-approves the analysis reader and card on an ASK chat, and leaves the team save to a card', async () => {
     const { service, claude, approvals } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
@@ -10608,7 +10640,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     for (const [id, tool] of [
       ['p-read', 'read_analyzed_thread'],
       ['p-report', 'report_recommendations'],
-      ['p-save', 'save_workflow_change'],
+      ['p-save', 'save_team_change'],
     ] as const) {
       claude.emit({
         type: 'approval_request',
@@ -10772,7 +10804,7 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect(approvals.listByRun(run.id)).toEqual([]);
   });
 
-  it('auto-approves propose_workflow but asks before read_workflows in an `ask` chat', async () => {
+  it('auto-approves propose_team but asks before read_teams in an `ask` chat', async () => {
     // Proposing only raises its own card; reading hands the user's library to
     // the model, which is theirs to allow, like the history tools.
     const { service, claude, approvals, itemDao } = setup();
@@ -10782,7 +10814,7 @@ describe('ChatService — approval modes (parity M1)', () => {
       approval: 'ask',
     });
     await service.sendMessage(run.id, 'hi');
-    for (const tool of [HOST_PROPOSE_WORKFLOW_TOOL, HOST_READ_WORKFLOWS_TOOL]) {
+    for (const tool of [HOST_PROPOSE_TEAM_TOOL, HOST_READ_TEAMS_TOOL]) {
       claude.emit({
         type: 'approval_request',
         id: `p-${tool}`,
@@ -10793,12 +10825,12 @@ describe('ChatService — approval modes (parity M1)', () => {
     await drain();
 
     expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
-      `p-${HOST_PROPOSE_WORKFLOW_TOOL}`,
+      `p-${HOST_PROPOSE_TEAM_TOOL}`,
       true,
       {},
     );
     expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalledWith(
-      `p-${HOST_READ_WORKFLOWS_TOOL}`,
+      `p-${HOST_READ_TEAMS_TOOL}`,
       expect.anything(),
       expect.anything(),
     );
@@ -10806,9 +10838,7 @@ describe('ChatService — approval modes (parity M1)', () => {
       itemDao.items
         .filter((i) => i.kind === 'approval_request')
         .map((i) => JSON.parse(i.payload).toolName),
-    ).toEqual([
-      `mcp__${hostMcpServerName(run.id)}__${HOST_READ_WORKFLOWS_TOOL}`,
-    ]);
+    ).toEqual([`mcp__${hostMcpServerName(run.id)}__${HOST_READ_TEAMS_TOOL}`]);
     expect(approvals.listByRun(run.id)).toHaveLength(1);
   });
 
@@ -10824,13 +10854,13 @@ describe('ChatService — approval modes (parity M1)', () => {
         cwd: dir,
         approval,
       });
-      runDao.runs.get(run.id)!.editsWorkflowSlug = 'team';
+      runDao.runs.get(run.id)!.editsTeamSlug = 'team';
       await service.sendMessage(run.id, 'hi');
       const handle = claude.handles[0]!;
       for (const tool of [
-        HOST_READ_WORKFLOWS_TOOL,
-        HOST_WORKFLOW_CHANGE_TOOL,
-        HOST_PROPOSE_WORKFLOW_TOOL,
+        HOST_READ_TEAMS_TOOL,
+        HOST_TEAM_CHANGE_TOOL,
+        HOST_PROPOSE_TEAM_TOOL,
       ]) {
         claude.emit({
           type: 'approval_request',
@@ -10847,9 +10877,9 @@ describe('ChatService — approval modes (parity M1)', () => {
 
     for (const approval of ['acceptEdits', 'ask'] as const) {
       expect(await answered(approval)).toEqual([
-        `p-${HOST_READ_WORKFLOWS_TOOL}`,
-        `p-${HOST_WORKFLOW_CHANGE_TOOL}`,
-        `p-${HOST_PROPOSE_WORKFLOW_TOOL}`,
+        `p-${HOST_READ_TEAMS_TOOL}`,
+        `p-${HOST_TEAM_CHANGE_TOOL}`,
+        `p-${HOST_PROPOSE_TEAM_TOOL}`,
       ]);
     }
   });
@@ -11481,16 +11511,16 @@ describe('ChatService — delete is a one-way door', () => {
     expect(await runDao.getById(run.id)).toBeNull();
   });
 
-  it('refuses to delete a WORKFLOW run through the chat route', async () => {
+  it('refuses to delete a TEAM run through the chat route', async () => {
     // The graph executor owns its own teardown; deleting through here would
     // skip it.
     const { service, runDao } = setup();
-    const workflowRun = await runDao.create({
-      workflowId: 'wf-1',
+    const teamRun = await runDao.create({
+      teamId: 'wf-1',
       status: 'completed',
     });
-    await expect(service.delete(workflowRun.id)).rejects.toThrow();
-    expect(await runDao.getById(workflowRun.id)).not.toBeNull();
+    await expect(service.delete(teamRun.id)).rejects.toThrow();
+    expect(await runDao.getById(teamRun.id)).not.toBeNull();
   });
 
   it('404s on a run that does not exist', async () => {
@@ -11550,14 +11580,14 @@ describe('ChatService — sweeping the archive is the same one-way door', () => 
     expect(ctx.itemDao.items.map((item) => item.runId)).toEqual([fresh.id]);
   });
 
-  it('sweeps an archived WORKFLOW run, which the chat delete cannot touch', async () => {
-    // The other half of making workflow runs archivable: without it the
-    // retention window silently covered only chats, and a shelved workflow run
+  it('sweeps an archived TEAM run, which the chat delete cannot touch', async () => {
+    // The other half of making team runs archivable: without it the
+    // retention window silently covered only chats, and a shelved team run
     // was kept for the life of the install. It cannot go through `delete`,
     // which is kind-guarded — the teardown underneath both is what runs.
     const ctx = setup();
     const run = await ctx.runDao.create({
-      workflowId: 'wf-1',
+      teamId: 'wf-1',
       status: 'completed',
       archivedAt: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
     });
@@ -11640,7 +11670,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     // badge lied in every list that showed it. Cancel is the user saying it is
     // over — before, cancel wrote nothing at all.
     const { service, runDao, itemDao } = setup();
-    const run = await runDao.create({ status: 'running', workflowId: null });
+    const run = await runDao.create({ status: 'running', teamId: null });
 
     expect(await service.cancel(run.id)).toEqual({ cancelled: false });
 
@@ -13262,7 +13292,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await service.raiseOwnedCard(
       runId,
       'card-1',
-      { toolName: 'propose_workflow', input: {} },
+      { toolName: 'propose_team', input: {} },
       () => undefined,
     );
     const emit = claude.sessions[0]!.onBetweenTurnEvent!;
@@ -14056,7 +14086,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
 
   it('leaves a settled run alone — cancel is not a way to reopen it', async () => {
     const { service, runDao, itemDao } = setup();
-    const run = await runDao.create({ status: 'completed', workflowId: null });
+    const run = await runDao.create({ status: 'completed', teamId: null });
     await service.cancel(run.id);
     expect((await runDao.getById(run.id))?.status).toBe('completed');
     expect(itemDao.items).toHaveLength(0);
@@ -14279,7 +14309,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     const cancelled = setup();
     const liveRun = await cancelled.runDao.create({
       status: 'running',
-      workflowId: null,
+      teamId: null,
     });
     await cancelled.service.cancel(liveRun.id);
     expect(cancelled.statuses.at(-1)).toEqual({

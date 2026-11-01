@@ -42,7 +42,7 @@ import type {
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import {
-  type AnalysedWorkflow,
+  type AnalysedTeam,
   type AnalysisTurn,
   type AttachmentDataWire,
   BUILDER_CHAT_ANALYSED_RUNS,
@@ -54,7 +54,7 @@ import {
   type HistoryWindow,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
-  HOST_PROPOSE_WORKFLOW_TOOL,
+  HOST_PROPOSE_TEAM_TOOL,
   HOST_QUESTION_TOOL,
   type HostArtifact,
   type HostArtifactOutcome,
@@ -88,8 +88,8 @@ import {
   type SendMessageImage,
   SINGLE_AGENT_NODE,
   type StandingHostQuestion,
+  type TeamProposalOutcome,
   type UnanswerableWire,
-  type WorkflowProposalOutcome,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -103,7 +103,7 @@ import {
 import {
   analysisTurnOf,
   isAnalysisRun,
-  workflowAnalysisTurn,
+  teamAnalysisTurn,
   writeAnalysedRuns,
 } from '../utils/analysed-runs';
 import {
@@ -153,10 +153,10 @@ import {
   isHostQuestionCall,
 } from '../utils/host-question';
 import {
-  isHostBuilderWorkflowCall,
-  isHostWorkflowProposalCall,
+  isHostBuilderTeamCall,
+  isHostTeamProposalCall,
   standingProposalCardId,
-} from '../utils/host-workflows';
+} from '../utils/host-teams';
 import { itemToWire } from '../utils/item-wire';
 import { asArray, asRecord, asString } from '../utils/json-util';
 import {
@@ -188,7 +188,7 @@ import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
-import { workflowRunSnapshots } from '../utils/run-snapshots';
+import { teamRunSnapshots } from '../utils/run-snapshots';
 import { type RunStatusAnnounce, writeRunStatus } from '../utils/run-status';
 import { createSessionIdSaver } from '../utils/session-saver';
 import { StandingQuestions } from '../utils/standing-questions';
@@ -236,10 +236,10 @@ import { RunHoldRegistry } from './run-hold.registry';
 import { RunTeardownService } from './run-teardown.service';
 import { RunWriteQueue } from './run-write.queue';
 import { SkillHarvestStore } from './skill-harvest.store';
+import { TeamBuilderBroker } from './team-builder.broker';
+import { TeamProposalBroker } from './team-proposal.broker';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
-import { WorkflowBuilderBroker } from './workflow-builder.broker';
-import { WorkflowProposalBroker } from './workflow-proposal.broker';
 
 /** A deferred card another module raised — one that stands across turns. */
 /**
@@ -770,6 +770,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    */
   private readonly notifiers = new Map<string, () => void>();
 
+  private teamBrief: ((slug: string, cwd: string) => Promise<string>) | null =
+    null;
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
@@ -817,7 +820,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly artifacts: ArtifactBroker,
     private readonly actionSinks: ActionBroker,
     private readonly actionPublisher: ActionPublishService,
-    private readonly workflowProposals: WorkflowProposalBroker,
+    private readonly teamProposals: TeamProposalBroker,
     private readonly artifactStore: ArtifactStoreService,
     private readonly notices: NotifyBroker,
     private readonly callTokens: CallTokenRegistry,
@@ -826,7 +829,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly wallTurns: WallTurnDao,
     private readonly analyses: AnalysisBroker,
     private readonly analysisReports: AnalysisReportsService,
-    private readonly workflowBuilders: WorkflowBuilderBroker,
+    private readonly teamBuilders: TeamBuilderBroker,
     private readonly runWrites: RunWriteQueue,
     private readonly memory: MemoryService,
     private readonly projectScope: ProjectScopeService,
@@ -891,13 +894,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
         // Not a card that outlives its turn by design — the standing question,
-        // plan or patch, and the standing workflow proposal: each is put back
+        // plan or patch, and the standing team proposal: each is put back
         // at boot from its column, and closing it here would leave a card
         // drawn expired that the registry still holds open.
         const standing = new Set(
           [
             readPendingQuestion(run.pendingQuestion ?? null)?.requestId,
-            standingProposalCardId(run.pendingWorkflowProposal ?? null),
+            standingProposalCardId(run.pendingTeamProposal ?? null),
           ].filter((id): id is string => typeof id === 'string'),
         );
         for (const request of unansweredRequests(
@@ -1063,7 +1066,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
 
   /**
    * What the run is parked on, for the badge. A standing card another module
-   * owns (a workflow proposal) is not counted while a turn runs: the card
+   * owns (a team proposal) is not counted while a turn runs: the card
    * stands across turns by design, and the agent working on the user's typed
    * reply is working, not waiting. It counts again once the turn is over.
    */
@@ -1333,7 +1336,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   /**
    * Retire the deferred card a run is standing on, because a NEW turn has
    * superseded it — the user typed something else instead of answering. Never
-   * a standing card another module owns (a workflow proposal): only its owner
+   * a standing card another module owns (a team proposal): only its owner
    * retires that one.
    *
    * Written as `unanswerable` on `ApprovalRegistry.sweepDeferred`'s own
@@ -1413,7 +1416,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   // ── Deferred cards another module owns ──────────────────────────────────
   //
   // The same outliving card, raised for a module this one may not import (the
-  // workflow proposal, whose write lives in `v1/graphs`). The owner supplies
+  // team proposal, whose write lives in `v1/teams`). The owner supplies
   // the responder and keeps the durable half; this service writes the rows and
   // delivers the verdict, because only it can start the run's next turn.
 
@@ -1501,7 +1504,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     allow: boolean,
     message: string,
     answer?: string,
-    outcome?: WorkflowProposalOutcome,
+    outcome?: TeamProposalOutcome,
   ): Promise<void> {
     try {
       await this.persist(
@@ -1707,13 +1710,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // cancelled is the one standing now.
       const em = this.em.fork();
       const cardId = standingProposalCardId(
-        (await this.runDao.getById(runId, em))?.pendingWorkflowProposal ?? null,
+        (await this.runDao.getById(runId, em))?.pendingTeamProposal ?? null,
       );
       if (cardId === null) {
         return;
       }
-      await this.retireOwnedCard(runId, cardId, HOST_PROPOSE_WORKFLOW_TOOL);
-      await this.runDao.setPendingWorkflowProposal(runId, null, em);
+      await this.retireOwnedCard(runId, cardId, HOST_PROPOSE_TEAM_TOOL);
+      await this.runDao.setPendingTeamProposal(runId, null, em);
     } catch (err) {
       this.logger.error(
         `run ${runId} could not close its standing card on archive: ${err instanceof Error ? err.message : String(err)}`,
@@ -1988,13 +1991,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      */
     taskInstructions?: string;
     /**
-     * The library workflow this chat edits, and what the agent is told about
-     * its file — both absent for every chat outside the workflow builder's
-     * panel. Composed by `WorkflowChatService`, which is the one place that
+     * The library team this chat edits, and what the agent is told about
+     * its file — both absent for every chat outside the team builder's
+     * panel. Composed by `TeamChatService`, which is the one place that
      * knows where the library keeps its files.
      */
-    editsWorkflowSlug?: string;
-    workflowInstructions?: string;
+    editsTeamSlug?: string;
+    teamInstructions?: string;
     /**
      * The user's per-CLI switches, snapshotted like the instructions above;
      * an option absent from it reads as that option's declared default.
@@ -2034,11 +2037,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      */
     analysisSource?: { runId: string; seq: number; working: boolean };
     /**
-     * The library workflow this chat analyses and the runs it reads — set
-     * only by `ThreadAnalysisService.startWorkflow`. See
-     * `Run.analysisWorkflowSlug`.
+     * The library team this chat analyses and the runs it reads — set
+     * only by `ThreadAnalysisService.startTeam`. See
+     * `Run.analysisTeamSlug`.
      */
-    analysisWorkflow?: AnalysedWorkflow;
+    analysisTeam?: AnalysedTeam;
   }): Promise<RunWire> {
     const cwd = resolveValidCwd(input.cwd);
     this.assertApprovalSupported(input.agentKind, input.approval);
@@ -2087,7 +2090,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
-        workflowId: null,
+        teamId: null,
         status: 'pending',
         agentKind: input.agentKind,
         cwd,
@@ -2111,8 +2114,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         projectInstructions,
         ...memory,
         taskInstructions: input.taskInstructions?.trim() || null,
-        editsWorkflowSlug: input.editsWorkflowSlug ?? null,
-        workflowInstructions: input.workflowInstructions?.trim() || null,
+        editsTeamSlug: input.editsTeamSlug ?? null,
+        teamInstructions: input.teamInstructions?.trim() || null,
         agentOptions: writeAgentOptions(input.agentOptions),
         groupId,
         taskId: input.taskId ?? null,
@@ -2120,11 +2123,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         analysisSourceRunId: input.analysisSource?.runId ?? null,
         analysisSourceSeq: input.analysisSource?.seq ?? null,
         analysisSourceWorking: input.analysisSource?.working ?? null,
-        analysisWorkflowSlug: input.analysisWorkflow?.slug ?? null,
+        analysisTeamSlug: input.analysisTeam?.slug ?? null,
         analysisRuns:
-          input.analysisWorkflow === undefined
+          input.analysisTeam === undefined
             ? null
-            : writeAnalysedRuns(input.analysisWorkflow.runs),
+            : writeAnalysedRuns(input.analysisTeam.runs),
         title: input.title ?? null,
         // New chats always carry an explicit mode; only pre-selector rows
         // stay null.
@@ -2561,7 +2564,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * Asked of the adapter (`config.approval.modes`) rather than branched on the agent
    * kind, for the same reason as {@link assertEffortSupported}: which modes
    * exist is that CLI's fact. Refusing here — where the choice is made — is
-   * deliberate and differs from a workflow node's visible degrade: a chat's
+   * deliberate and differs from a team node's visible degrade: a chat's
    * mode is picked interactively, so the honest answer is "no" rather than a
    * control that silently means something else.
    */
@@ -2671,8 +2674,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * was chosen.
    *
    * REFUSES a CLI that has no such mechanism, rather than stripping the
-   * field the way the graph executor does for a workflow node. The two differ
-   * because the choice does: a workflow can be imported from YAML naming a
+   * field the way the graph executor does for a team node. The two differ
+   * because the choice does: a team can be imported from YAML naming a
    * config directory on a CLI the builder never offered the field for, so
    * dropping it with a visible notice is the only way to run the graph at all;
    * a chat's directory is picked interactively one control away from the agent
@@ -2754,7 +2757,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const cutoff = new Date(Date.now() - olderThanDays * DAY_MS);
     const runs = await this.runDao.archivedRunsBefore(cutoff, em);
     let deleted = 0;
-    for (const { id, workflowId } of runs) {
+    for (const { id, teamId } of runs) {
       try {
         // Asked again, per run, right before its purge: the list above was read
         // once and each teardown before this one can take seconds, so a thread
@@ -2770,7 +2773,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         ) {
           continue;
         }
-        const result = await this.purgeArchived(id, workflowId);
+        const result = await this.purgeArchived(id, teamId);
         if (result.deleted) {
           deleted += 1;
         }
@@ -2799,9 +2802,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    *
    * A chat goes through {@link delete}, which is that kind's whole delete.
    *
-   * A workflow run goes STRAIGHT to the shared teardown, and cannot go through
+   * A team run goes STRAIGHT to the shared teardown, and cannot go through
    * `GraphExecutorService.deleteRun` for the module reason its cancel cannot
-   * either — `GraphsModule` imports `AgentsModule`. What that service adds over
+   * either — `TeamsModule` imports `AgentsModule`. What that service adds over
    * the teardown is two things, and both are answered here rather than skipped.
    * Its call-broker cleanup now happens on the `runDeleted` broadcast the purge
    * itself publishes, which is what that stream exists for (`CallBroker`
@@ -2817,9 +2820,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    */
   private async purgeArchived(
     runId: string,
-    workflowId: string | null,
+    teamId: string | null,
   ): Promise<{ deleted: boolean }> {
-    if (workflowId === null) {
+    if (teamId === null) {
       return this.delete(runId);
     }
     return this.teardown.purge(
@@ -2830,16 +2833,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
-   * The chat opened to edit one library workflow, or null if there is none.
+   * The chat opened to edit one library team, or null if there is none.
    *
    * Newest wins where several exist: nothing creates a second one, but a
    * builder opened in two windows at once could race {@link createChat}, and
    * answering the older row would strand the conversation the user is looking
    * at.
    */
-  async findWorkflowChat(slug: string): Promise<RunWire | null> {
+  async findTeamChat(slug: string): Promise<RunWire | null> {
     const em = this.em.fork();
-    const [run] = await this.runDao.listEditingWorkflow(slug, em);
+    const [run] = await this.runDao.listEditingTeam(slug, em);
     if (!run) {
       return null;
     }
@@ -2848,15 +2851,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
-   * A library workflow's analysis, or null if it has none — newest wins, as
+   * A library team's analysis, or null if it has none — newest wins, as
    * in {@link findAnalysis}, `prefer` included.
    */
-  async findWorkflowAnalysis(
+  async findTeamAnalysis(
     slug: string,
     prefer?: string,
   ): Promise<RunWire | null> {
     const em = this.em.fork();
-    const analyses = await this.runDao.listWorkflowAnalyses(slug, em);
+    const analyses = await this.runDao.listTeamAnalyses(slug, em);
     const run =
       analyses.find((analysis) => analysis.id === prefer) ?? analyses[0];
     if (!run) {
@@ -2868,7 +2871,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
 
   /**
    * A thread's analysis, or null if it has none — newest wins, for the reason
-   * {@link findWorkflowChat} gives: two starts racing (two windows) leave two.
+   * {@link findTeamChat} gives: two starts racing (two windows) leave two.
    * `prefer` is the caller's own, answered while it still exists, so the
    * start that loses the race opens what it started.
    */
@@ -2888,19 +2891,20 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
-   * Bring an open workflow chat's brief (`Run.workflowInstructions`) up to
-   * date with the one `WorkflowChatService` composes now.
+   * Bring an open team chat's brief (`Run.teamInstructions`) up to
+   * date with the one `TeamChatService` composes now.
    *
    * The brief is snapshotted at creation, so without this every builder chat
-   * opened before an app update — or before its workflow was renamed — would
+   * opened before an app update — or before its team was renamed — would
    * go on describing a format and a name that are no longer true, with no way
    * out short of discarding the conversation. Written only when the text
    * CHANGED: the brief is part of `AgentAdapter.sessionKey`, so a write
    * respawns the kept CLI process on the next turn (resuming the same
    * conversation), which an unchanged brief must not cost. Without touching
-   * `updatedAt` — opening the panel is not activity in the thread.
+   * `updatedAt` — neither opening the panel nor a turn's re-brief is activity
+   * in the thread.
    */
-  async refreshWorkflowInstructions(
+  async refreshTeamInstructions(
     runId: string,
     instructions: string,
   ): Promise<void> {
@@ -2911,31 +2915,65 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     // Normalized as at creation, so an unchanged brief compares equal.
     const next = instructions.trim() || null;
-    if (run.workflowInstructions === next) {
+    if (run.teamInstructions === next) {
       return;
     }
     await this.runDao.updateWithoutActivity(
       runId,
-      { workflowInstructions: next },
+      { teamInstructions: next },
       em,
     );
   }
 
   /**
+   * Install where a team builder chat's brief is composed — installed rather
+   * than injected because `TeamsModule`, which owns the library, depends on
+   * this module.
+   */
+  useTeamBrief(source: (slug: string, cwd: string) => Promise<string>): void {
+    this.teamBrief = source;
+  }
+
+  /**
+   * Re-brief a builder chat from its team as it stands before each turn, so a
+   * chat created before a change to the brief's text (a renamed tool, a moved
+   * library file) is not left pointing its agent at what no longer exists.
+   */
+  private async rebriefTeamChat(
+    runId: string,
+    slug: string,
+    cwd: string,
+  ): Promise<void> {
+    if (this.teamBrief === null) {
+      return;
+    }
+    try {
+      await this.refreshTeamInstructions(
+        runId,
+        await this.teamBrief(slug, cwd),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `team chat ${runId} keeps its brief: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
    * **Destructive and irreversible**: delete every chat opened to edit one
-   * library workflow, answering with the count.
+   * library team, answering with the count.
    *
    * Each goes through {@link delete}, so a live turn is cancelled and the
    * run's rows, attachments and call tokens go with it — these are chats, so
-   * the workflow-run route is never the right one for them.
+   * the team-run route is never the right one for them.
    *
    * A failure is logged and stepped over rather than thrown, on the archive
    * sweep's reasoning: both callers are doing something else as well (a
-   * workflow delete, or the panel starting a fresh conversation), and one
+   * team delete, or the panel starting a fresh conversation), and one
    * unreadable row must not fail the thing the user actually pressed.
    */
-  async deleteWorkflowChats(slug: string): Promise<{ deleted: number }> {
-    const runs = await this.runDao.listEditingWorkflow(slug, this.em.fork());
+  async deleteTeamChats(slug: string): Promise<{ deleted: number }> {
+    const runs = await this.runDao.listEditingTeam(slug, this.em.fork());
     let deleted = 0;
     for (const run of runs) {
       try {
@@ -2945,7 +2983,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         }
       } catch (error) {
         this.logger.warn(
-          `could not delete workflow chat ${run.id} for '${slug}': ${
+          `could not delete team chat ${run.id} for '${slug}': ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -2972,7 +3010,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
 
   /**
    * Run-level rename shared by BOTH run kinds — the sidebar lists chat and
-   * workflow runs together, so this route deliberately skips the chat-kind
+   * team runs together, so this route deliberately skips the chat-kind
    * guard the message/cancel routes apply: `title` is a run-row property,
    * not an execution command that must reach the right engine.
    */
@@ -2999,7 +3037,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * Stamps `Run.seenAt` with the daemon's own clock (so it compares against
    * `attentionAt` on one clock, whatever the phone's says) and announces it on
    * `run_status`, which is what takes the mark off every OTHER device too.
-   * Kind-blind like {@link setNotes}: the sidebar marks workflow runs as well.
+   * Kind-blind like {@link setNotes}: the sidebar marks team runs as well.
    * Written without bumping `updatedAt` — reading a thread is not activity in
    * it, and must not move it up the sidebar.
    */
@@ -3066,7 +3104,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * File a run into a sidebar group, or (null) out of every group.
    *
    * Kind-blind for the same reason `rename` is: the sidebar lists chat and
-   * workflow runs together and a group holds either, so this is a run-row
+   * team runs together and a group holds either, so this is a run-row
    * property rather than an execution command that has to reach the right
    * engine.
    *
@@ -3151,7 +3189,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * Pin a run to the top of its own scope, or unpin it.
    *
    * Kind-blind like {@link setGroup} and {@link rename}, and for their reason:
-   * the sidebar lists chats and workflow runs together, so this is a run-row
+   * the sidebar lists chats and team runs together, so this is a run-row
    * property rather than a command that has to reach the right engine.
    *
    * An ARCHIVED run is refused rather than pinned. The archive is the shelf a
@@ -3237,13 +3275,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
 
   /**
    * Shelve a RUN out of the sidebar without destroying any part of it — a chat
-   * or a workflow run alike.
+   * or a team run alike.
    *
    * Kind-BLIND, like {@link rename} and {@link setGroup} and unlike
    * {@link cancel} and {@link delete}: `archivedAt` is a property of the run
    * ROW, and the sidebar that reads it lists both kinds together. It was
    * chat-only for a release, on the reading that the archive was a chat
-   * feature — which left a finished workflow run with Delete as its only row
+   * feature — which left a finished team run with Delete as its only row
    * action, so the one kind of thread whose history is most worth keeping had
    * no way off the desk but destroying it. REPORTED as exactly that, against a
    * completed `Dev Team Manifest` row. Nothing about shelving is per-kind; only
@@ -3266,7 +3304,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * `cancel()` would write the second a `cancelled` status and a
    * `turn_cancelled` row it never earned. The mid-claim case is answered by
    * {@link archiving} instead, which is the only mechanism that can see it —
-   * and it is read by the CHAT turn path alone, so a workflow walk crossing its
+   * and it is read by the CHAT turn path alone, so a team walk crossing its
    * own claim→register window can still register behind an archive. That window
    * is milliseconds at a run's very start, and the cost is a shelved run that
    * goes on working until it is cancelled by hand; closing it would mean this
@@ -3355,18 +3393,18 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * `running` by a daemon that died mid-turn — nothing else writes a chat's
    * status, so without it a shelved thread would keep a spinner for good.
    *
-   * A workflow run gets the registry cancel alone, which is the whole of
+   * A team run gets the registry cancel alone, which is the whole of
    * `GraphExecutorService.cancel` once its own kind guard has run: both engines
-   * converge on ONE registry key. It cannot call that service — `GraphsModule`
+   * converge on ONE registry key. It cannot call that service — `TeamsModule`
    * imports `AgentsModule`, so the dependency points one way — and it does not
    * need to, because cancelling the aggregate handle runs the executor's own
    * teardown and revokes the run's call tokens; its kept processes are closed
    * by the archive's teardown, as the Stop's (`noteUserStop`, the mark
-   * `GraphExecutorService.cancel` sets too). A workflow row left `running` by
+   * `GraphExecutorService.cancel` sets too). A team row left `running` by
    * a crash is that engine's boot reconcile to fix, and it does.
    */
   private async stopForArchive(run: Run): Promise<void> {
-    if (run.workflowId === null) {
+    if (run.teamId === null) {
       await this.cancel(run.id);
       return;
     }
@@ -3508,14 +3546,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
 
   /**
    * Delete a chat and everything it owns — a ONE-WAY DOOR. The teardown itself
-   * is {@link RunTeardownService}, shared with the workflow-run delete so the
+   * is {@link RunTeardownService}, shared with the team-run delete so the
    * two cannot drift; what this method owns is the chat-specific part: the
    * run-kind guard, the claim→register window, and WHICH promise counts as
    * "the run has stopped writing" (this turn's finalizer, not its handle).
    */
   async delete(runId: string): Promise<{ deleted: boolean }> {
     const em = this.em.fork();
-    // Kind-guarded like cancel and sendMessage: a workflow run deleted through
+    // Kind-guarded like cancel and sendMessage: a team run deleted through
     // the chat route would skip the graph executor's own teardown.
     assertChatRun(await this.runDao.getById(runId, em), runId);
 
@@ -4692,7 +4730,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (this.heldRuns.has(runId) && !this.registry.has(runId)) {
       this.announceRunHold(runId, 0, null);
     }
-    // A WORKFLOW's sessions reach this listener too, under the executor's
+    // A TEAM's sessions reach this listener too, under the executor's
     // composite key (`<runId>::node:…` / `<runId>::call:…`), which names no run
     // and so matches nothing below. That is the right outcome rather than a
     // lucky one: the executor numbers its run's rows with its own counter, so a
@@ -4818,7 +4856,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // A delegate is launched BY a node and every row it produces carries that
       // node's id; the closes written here used to carry null, because this
       // service is the chat path and a chat has no nodes. On a chat that is
-      // invisible — null is the right answer there — and on a WORKFLOW run it
+      // invisible — null is the right answer there — and on a TEAM run it
       // silently voided the whole repair: the renderer folds delegates per
       // agent, so eleven closes filed at run level reached none of the eleven
       // delegates sitting under `qa`, and the card went on counting them.
@@ -4933,7 +4971,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * A command's close is announced by the CLI process's own exit (`spawn-cli`),
    * so a daemon killed before that exit was heard leaves the command listed as
    * running for the life of the transcript — and before the executor wrote its
-   * own closes at a workflow's end, every finished workflow did the same to
+   * own closes at a team's end, every finished team did the same to
    * whatever its nodes still had out. No process can exist this early, so every
    * open command on disk is stranded by construction.
    */
@@ -5279,7 +5317,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       clientMessageId?: string;
       /**
        * The recommendations this message applies — persisted on the message
-       * row as `payload.apply`, the durable record `save_workflow_change`
+       * row as `payload.apply`, the durable record `save_team_change`
        * checks a write against. Refused while a turn runs.
        */
       apply?: RecommendationApply;
@@ -5318,9 +5356,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
-   * What a builder chat's turn reads of its workflow's history: its newest
+   * What a builder chat's turn reads of its team's history: its newest
    * runs, each at its snapshot as the turn begins, so the turn reads the same
-   * rows throughout. Null when the workflow has no run yet, or the read failed
+   * rows throughout. Null when the team has no run yet, or the read failed
    * — the turn then goes on without the run tools.
    */
   private async builderAnalysisTurn(
@@ -5328,12 +5366,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     slug: string,
   ): Promise<AnalysisTurn | null> {
     try {
-      const runs = await workflowRunSnapshots(
+      const runs = await teamRunSnapshots(
         { em: this.em, runDao: this.runDao, itemDao: this.itemDao },
         slug,
         BUILDER_CHAT_ANALYSED_RUNS,
       );
-      return workflowAnalysisTurn(runId, slug, runs);
+      return teamAnalysisTurn(runId, slug, runs);
     } catch (err) {
       this.logger.warn(
         `builder chat ${runId} goes without the runs of ${slug}: ${err instanceof Error ? err.message : String(err)}`,
@@ -5475,6 +5513,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const cwd = resolveValidCwd(run.cwd);
       const agentKind = run.agentKind;
 
+      // Before the settings re-read below, so the turn reads the brief it wrote.
+      if (run.editsTeamSlug !== null) {
+        await this.rebriefTeamChat(runId, run.editsTeamSlug, cwd);
+      }
+
       // Re-read the committed settings from a FRESH fork now that the claim is
       // held: a settings PATCH that flushed to its own fork between the getById
       // above and the claim never mutated `run`, so its ACKed values would
@@ -5486,7 +5529,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const settings =
         (await this.runDao.getById(runId, this.em.fork())) ?? run;
       // Every chat row is created with a mode; the column is nullable only for
-      // workflow runs. Never let a null ride through as `undefined`: a turn
+      // team runs. Never let a null ride through as `undefined`: a turn
       // with no permission flag inherits the CLI's own default, which for
       // claude (2.1.227) is now `auto` — approving every tool call unattended.
       // `ask` is the answer because "the user never chose a posture" and "do
@@ -5580,15 +5623,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // The action tools: a published button does nothing until the user
         // presses it, so the press is the gate — see `isHostActionCall`.
         isHostActionCall(hostServerName, toolName) ||
-        // A workflow proposal only raises its card — the file is written behind
+        // A team proposal only raises its card — the file is written behind
         // that card's Approve, never by the call. An ordinary chat's
-        // `read_workflows` is NOT here: like the history tools, a read of the
+        // `read_teams` is NOT here: like the history tools, a read of the
         // user's data outside this chat is the user's to allow.
-        isHostWorkflowProposalCall(hostServerName, toolName) ||
+        isHostTeamProposalCall(hostServerName, toolName) ||
         // A builder chat's own read, backup and check — see
-        // `isHostBuilderWorkflowCall`.
-        (run.editsWorkflowSlug !== null &&
-          isHostBuilderWorkflowCall(hostServerName, toolName)) ||
+        // `isHostBuilderTeamCall`.
+        (run.editsTeamSlug !== null &&
+          isHostBuilderTeamCall(hostServerName, toolName)) ||
         // The board tools: a card filed or changed is on the board in front of
         // the user and one click to undo. The writes that would hand an
         // agent's text to unattended work — a card landing in, or edited
@@ -5644,11 +5687,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // Off the row too; `TaskRunsService` rewrites it before continuing a
       // card's thread, which is the one time it is meant to change.
       const taskInstructions = settings.taskInstructions ?? undefined;
-      // Off the row for `customInstructions`' reason: re-deriving the brief per
-      // turn would respawn the CLI process of a conversation already open.
-      // `refreshWorkflowInstructions` rewrites it when the panel opens, which
-      // is the one time it is meant to change.
-      const workflowInstructions = settings.workflowInstructions ?? undefined;
+      // Off the row, as `rebriefTeamChat` left it above: rewritten only when
+      // the team's brief reads differently now, so an unchanged brief keeps
+      // the conversation's CLI process.
+      const teamInstructions = settings.teamInstructions ?? undefined;
       // Off the ROW for the same reason, and only this run's own CLI's slice —
       // an id the slice does not carry reads as that option's default, which
       // is the right reading of a run created before the option existed.
@@ -6770,8 +6812,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // Read before any host tool is registered: a failure past this point
       // must find every registration covered by `disposeHostTools`.
       const builderAnalysisTurn =
-        this.runtime.port !== null && run.editsWorkflowSlug !== null
-          ? await this.builderAnalysisTurn(runId, run.editsWorkflowSlug)
+        this.runtime.port !== null && run.editsTeamSlug !== null
+          ? await this.builderAnalysisTurn(runId, run.editsTeamSlug)
           : null;
       const questionServer = hostQuestionServer();
       // Only where there is a port to reach: a token nobody can present is a
@@ -6866,28 +6908,28 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               }),
             })
           : null;
-      // Only an ORDINARY chat proposes whole workflows: a builder chat
-      // proposes changes to its own through the `WorkflowBuilderBroker` sink
+      // Only an ORDINARY chat proposes whole teams: a builder chat
+      // proposes changes to its own through the `TeamBuilderBroker` sink
       // below, and an analysis saves the analysed one through
-      // `save_workflow_change` — see `WorkflowProposalBroker`.
-      const disposeWorkflowProposals =
-        mcpEndpoint && run.editsWorkflowSlug === null && !isAnalysisRun(run)
-          ? this.workflowProposals.register(runId, SINGLE_AGENT_NODE, {
+      // `save_team_change` — see `TeamProposalBroker`.
+      const disposeTeamProposals =
+        mcpEndpoint && run.editsTeamSlug === null && !isAnalysisRun(run)
+          ? this.teamProposals.register(runId, SINGLE_AGENT_NODE, {
               runId,
             })
           : null;
-      const editsWorkflowSlug = run.editsWorkflowSlug;
-      const disposeWorkflowBuilder =
-        mcpEndpoint && editsWorkflowSlug !== null
-          ? this.workflowBuilders.register(runId, SINGLE_AGENT_NODE, {
-              slug: editsWorkflowSlug,
+      const editsTeamSlug = run.editsTeamSlug;
+      const disposeTeamBuilder =
+        mcpEndpoint && editsTeamSlug !== null
+          ? this.teamBuilders.register(runId, SINGLE_AGENT_NODE, {
+              slug: editsTeamSlug,
               turnStartedAt: Date.now(),
               savedHash: null,
               acceptsAnyVersion: false,
             })
           : null;
       // An analysis chat reads what it was started on; a builder chat its
-      // workflow's newest runs — see `AnalysisBroker`.
+      // team's newest runs — see `AnalysisBroker`.
       const analysisTurn = analysisTurnOf(runId, run) ?? builderAnalysisTurn;
       const disposeAnalysis =
         mcpEndpoint && analysisTurn !== null
@@ -6928,8 +6970,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         disposePublisher?.();
         disposeActions?.();
         disposeMonitors?.();
-        disposeWorkflowProposals?.();
-        disposeWorkflowBuilder?.();
+        disposeTeamProposals?.();
+        disposeTeamBuilder?.();
         disposeAnalysis?.();
       };
       // ZERO the last turn's running bill before this one's first request can
@@ -6965,7 +7007,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           memoryIndex,
           nativeMemoryOff,
           taskInstructions,
-          workflowInstructions,
+          teamInstructions,
           agentOptions,
           resumeSessionId,
           // Only ever set alongside a resume id — `retry` refuses the pairing
@@ -8423,7 +8465,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     payload: unknown,
     /**
      * Which node the row belongs to. Null — the chat path's own answer — for
-     * everything but a row this service writes ON BEHALF of a workflow node,
+     * everything but a row this service writes ON BEHALF of a team node,
      * which today is a stranded delegate's close.
      */
     nodeId: string | null = null,

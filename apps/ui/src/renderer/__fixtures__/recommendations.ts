@@ -4,7 +4,7 @@ import type {
   RecommendationsLook,
   RecommendationsTimingView,
   RecommendationView,
-  WorkflowStatsView,
+  TeamStatsView,
 } from '../components/recommendations-card';
 import { categoryToken } from '../stats/charts/chart-theme';
 import { formatDuration, formatPercent } from '../stats/stats-format';
@@ -17,7 +17,7 @@ export const LOOK: RecommendationsLook = {
   sinkColor: categoryToken,
 };
 
-/** A workflow analysis's card, shared by the card's story and its spec. */
+/** A team analysis's card, shared by the card's story and its spec. */
 export const TIMING: RecommendationsTimingView = {
   wallMs: 3 * 60 * 60 * 1000,
   activeMs: 2 * 60 * 60 * 1000,
@@ -34,26 +34,26 @@ export function recommendation(
   id: string,
   over: Partial<RecommendationView> = {},
 ): RecommendationView {
-  const workflow = id.startsWith('W');
+  const team = id.startsWith('W');
   const memory = id.startsWith('M');
   return {
     id,
-    target: workflow
-      ? 'workflow'
+    target: team
+      ? 'team'
       : id.startsWith('U')
         ? 'user'
         : memory
           ? 'memory'
           : 'repo',
     territory: memory ? 'domain' : 'process',
-    kind: workflow ? 'parallelize' : memory ? 'add' : 'check',
-    location: workflow ? 'reviewer' : memory ? 'new' : 'AGENTS.md:42',
-    title: workflow
+    kind: team ? 'parallelize' : memory ? 'add' : 'check',
+    location: team ? 'reviewer' : memory ? 'new' : 'AGENTS.md:42',
+    title: team
       ? 'Run the two reviewers in parallel'
       : memory
         ? 'Remember that a sent invoice is never edited'
         : 'Say which test command to run before review',
-    change: workflow
+    change: team
       ? 'edges:\n  - from: builder\n    to: reviewer-a\n  - from: builder\n    to: reviewer-b'
       : memory
         ? 'A sent invoice is never edited; issue a credit note instead.'
@@ -62,19 +62,19 @@ export function recommendation(
       {
         seq: 1204,
         ts: '2026-10-14T10:12:00.000Z',
-        nodeId: workflow ? 'reviewer' : 'builder',
+        nodeId: team ? 'reviewer' : 'builder',
         quote: 'Waiting for reviewer-a to finish before starting reviewer-b',
       },
     ],
     rootCause: 'Serial calls with no data dependency (MAST 1.3)',
-    minutesSaved: workflow ? 22 : 8,
-    costSavedUsd: workflow ? 0.4 : null,
-    outcome: workflow
+    minutesSaved: team ? 22 : 8,
+    costSavedUsd: team ? 0.4 : null,
+    outcome: team
       ? 'Both reviews finish in ~12m instead of 34m per run'
       : 'Review rounds 3 → 1',
     basis: 'the reviewer spans on the critical path',
     confidence: 4,
-    risk: workflow ? 'medium' : 'low',
+    risk: team ? 'medium' : 'low',
     riskNote: 'reviewers stop seeing each other’s notes',
     ...over,
   };
@@ -123,7 +123,7 @@ export const ITEMS: RecommendationView[] = [
 
 const MINUTE = 60_000;
 
-export const WORKFLOW_STATS: WorkflowStatsView = {
+export const TEAM_STATS: TeamStatsView = {
   runs: 8,
   perRun: {
     wallMs: 42 * MINUTE,

@@ -138,7 +138,7 @@ interface Landing {
 
 /**
  * How a jump reaches a row a run's own window never holds — one filed under a
- * call, drawn inside that call's card (a workflow run's transcript is read one
+ * call, drawn inside that call's card (a team run's transcript is read one
  * conversation at a time).
  */
 export interface CallJumps {
@@ -258,7 +258,7 @@ export function useTranscriptJump({
    * have no box, so scrolling to one lands nowhere. It is the same condition
    * their `empty:hidden` uses, deliberately.
    *
-   * The arithmetic is `revealWorkflow`'s, for its reasons: `scrollTop` on the
+   * The arithmetic is `revealTeam`'s, for its reasons: `scrollTop` on the
    * scroller itself, never `scrollIntoView`, and the tail-follow switched off
    * so a running turn's next token does not drag the reader back down.
    */

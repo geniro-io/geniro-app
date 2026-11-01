@@ -98,7 +98,7 @@ function groupKey(item: ChatItem): string {
  * Whether a tool RESULT is one of geniro's own call envelopes.
  *
  * TWIN PARSER: `CallEnvelope` in
- * `apps/daemon/src/v1/graphs/graphs.types.ts` is what produces this shape, and
+ * `apps/daemon/src/v1/teams/teams.types.ts` is what produces this shape, and
  * `McpServerService` is what serializes it into the tool result. There is no
  * generated type spanning the seam — an item payload is `z.unknown()` on the
  * wire by design — so a field renamed there must be renamed here.
@@ -279,7 +279,7 @@ export interface CallBlockEntry {
    * prominent header line.
    *
    * TWIN PARSER: written by `CallBroker.callAgent`'s `call_started` payload —
-   * see `apps/daemon/src/v1/graphs/services/call-broker.service.ts`. Null on
+   * see `apps/daemon/src/v1/teams/services/call-broker.service.ts`. Null on
    * an older row (written before this field existed) or on a caller that
    * skipped MCP validation — never treated as "no reason", just as absent.
    */
@@ -299,7 +299,7 @@ export interface CallBlockEntry {
    *
    * TWIN PARSER: written by `CallBroker`'s silence watchdog as a `system` row
    * carrying `stalledCall: true` and this call's id — see
-   * `apps/daemon/src/v1/graphs/services/call-broker.service.ts`
+   * `apps/daemon/src/v1/teams/services/call-broker.service.ts`
    * (`announceStall`). It is a claim about the CALL, not about the run: the
    * call is still open and nothing has been cancelled, so the block goes on
    * running and only says that it has gone quiet.
@@ -319,7 +319,7 @@ export interface CallBlockEntry {
    *
    * TWIN PARSER: written by `CallBroker.holdCall` as a `system` row carrying
    * `heldCall: { waitingOn }` and this call's id — see
-   * `apps/daemon/src/v1/graphs/services/call-broker.service.ts`. Ended by the
+   * `apps/daemon/src/v1/teams/services/call-broker.service.ts`. Ended by the
    * callee being continued (its wake notice), a status row, or the call's
    * result — never by an unrelated row its process writes meanwhile.
    */
@@ -344,7 +344,7 @@ export interface CallBlockEntry {
    *
    * TWIN PARSER: written by `GraphExecutorService`'s `launchCalleeTurn` as a
    * `system` row carrying `queuedCall: { cap }` and this call's id — see
-   * `apps/daemon/src/v1/graphs/services/graph-executor.service.ts`; the
+   * `apps/daemon/src/v1/teams/services/graph-executor.service.ts`; the
    * daemon's whole-run reading of the same row is `RunCallState.queued`
    * (`ItemDao.callQueueRows`, `foldRunCalls`).
    */
@@ -2499,7 +2499,7 @@ const CALL_FOLLOWUP_KINDS = new Set<ChatItem['kind']>([
  *
  * TWIN PARSER: `callMembershipOf` in
  * apps/daemon/src/v1/agents/utils/call-membership.ts decides the same claim on
- * the daemon, which serves a workflow run's rows one conversation at a time on
+ * the daemon, which serves a team run's rows one conversation at a time on
  * its answer. A kind moved between these sets moves there too, with a bump of
  * its `CALL_MEMBERSHIP_VERSION` so the rows already stamped are stamped again
  * — unless no stored row of the kind answers differently, as the daemon's
@@ -2875,7 +2875,7 @@ export function groupTranscript(
       // nothing — so the agent's block ended and a second one opened, under a
       // fresh avatar and `name · time` line, with nothing visible between the
       // two. REPORTED for `subagent_info` as two `Engineer` blocks back to back
-      // on a workflow run, the second holding only a task card: the daemon
+      // on a team run, the second holding only a task card: the daemon
       // wrote a declaration two rows above it, and 69 of them across that run.
       continue;
     }
@@ -3134,7 +3134,7 @@ export function groupTranscript(
       }
       const thread = subagentIdOf(item);
       // Keyed by NODE and thread, the pair the cards themselves are keyed by.
-      // By thread alone every workflow node shared the main-thread history, so
+      // By thread alone every team node shared the main-thread history, so
       // an Engineer's `TaskUpdate {taskId: "1"}` ticked the Manager's task 1
       // on the Engineer's card while the side panel said otherwise.
       const historyKey = groupKey(item);
@@ -3268,7 +3268,7 @@ export function taskCardIsLive(
  * in the announcement that created it, and never again: claude's `TaskUpdate`
  * names an id and a status and nothing else. So past the window a card knew a
  * task by its number alone and drew `Task 1`, `Task 2` where the agent's own
- * words belong. REPORTED against a workflow run whose engineer created its
+ * words belong. REPORTED against a team run whose engineer created its
  * first three tasks at seq 1000–1006 of a 2,421-row transcript: all three drew
  * as bare numbers, and in first-sighting order (`Task 2` above `Task 1`, `Task
  * 3` below task 9), beside a side panel naming every one of them off this same
@@ -3472,7 +3472,7 @@ export function callResultStatus(
  * envelope carries it (`result.text`), or null.
  *
  * TWIN PARSER: the `ok` arm of `CallEnvelope` in
- * `apps/daemon/src/v1/graphs/graphs.types.ts`.
+ * `apps/daemon/src/v1/teams/teams.types.ts`.
  */
 function callEnvelopeText(payload: unknown): string | null {
   const text = recordOf(recordOf(payload)?.result)?.text;
@@ -3534,7 +3534,7 @@ function latestPoolHandOff(shell: CallShell): ChatItem | null {
  * naming the member the call moved to.
  *
  * TWIN PARSER: the row is written by the hand-off in
- * apps/daemon/src/v1/graphs/services/graph-executor.service.ts and anchored by
+ * apps/daemon/src/v1/teams/services/graph-executor.service.ts and anchored by
  * `ItemDao.callHandOffRows`.
  */
 function isPoolHandOff(item: ChatItem): boolean {
@@ -3548,7 +3548,7 @@ function isPoolHandOff(item: ChatItem): boolean {
 /**
  * TWIN PARSER: `CARD_READS` / `cardRowsFor` in
  * apps/daemon/src/v1/agents/services/chat-history.service.ts pick the rows a
- * FOLDED card is built from on a workflow run, whose window never holds a
+ * FOLDED card is built from on a team run, whose window never holds a
  * callee's rows: its status rows, turn endings of every terminal kind and
  * notices, its task lists since the newest whole one, the tool calls of a turn
  * still running, and its newest row, newest words and newest named tool calls.
@@ -3725,7 +3725,7 @@ function buildCallBlock(
  * a continuation. Every member of a chain maps to the same array.
  *
  * TWIN PARSER: `thread` is written by `CallBroker.callAgent`'s `call_started`
- * payload — see `apps/daemon/src/v1/graphs/services/call-broker.service.ts`,
+ * payload — see `apps/daemon/src/v1/teams/services/call-broker.service.ts`,
  * which accepts only a SETTLED call the same caller made to the same callee.
  *
  * **The parent is looked up in the DAEMON's record as well as in the window,

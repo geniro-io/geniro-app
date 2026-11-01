@@ -9,7 +9,7 @@
 // the Electron binary, and under host Node only where that download was blocked.
 //
 // Designed for agents: wrap in tmux, send-keys commands, capture-pane output.
-// Commands: launch, caps, nav <Chats|Workflows|Tasks|Stats|Settings>, seed-workflow,
+// Commands: launch, caps, nav <Chats|Teams|Tasks|Stats|Settings>, seed-team,
 //   fill <sel> <text…>, click <sel>, click-text <text…>, send, approve, deny,
 //   ss [name], js <expr>, text [sel], options <sel>, quit.
 import { spawn, execSync } from 'node:child_process';
@@ -137,7 +137,7 @@ function ELECTRON_BIN() {
 function startDaemon() {
   return new Promise((resolve, reject) => {
     fs.rmSync(UD, { recursive: true, force: true });
-    fs.mkdirSync(path.join(UD, 'workflows'), { recursive: true });
+    fs.mkdirSync(path.join(UD, 'teams'), { recursive: true });
     // Under ELECTRON's node, exactly as `pnpm dev` and the packaged app run it
     // — NOT host node. `better-sqlite3` is native, so it loads under one ABI or
     // the other and the repo builds it for Electron (`pnpm rebuild:native`,
@@ -236,7 +236,7 @@ function stubScript(handle) {
     // invocation here. Without the stub the button throws instead of no-opping,
     // which reads as a broken control rather than a stubbed one.
     openInTerminal: async () => ({ ok: true }),
-    pickWorkflowImport: async () => null, pickWorkflowExport: async () => null,
+    pickTeamImport: async () => null, pickTeamExport: async () => null,
     // App self-update. There is no main process here, so nothing can actually
     // update — but the shell SUBSCRIBES on mount (\`use-update-state.ts\`), so a
     // missing \`onUpdateState\` throws the whole app to its error boundary
@@ -321,7 +321,7 @@ function stubScript(handle) {
   });`;
 }
 
-const SEED_WORKFLOW = `name: Permission demo
+const SEED_TEAM = `name: Permission demo
 nodes:
   - { id: start, kind: trigger, trigger: manual, name: Start }
   - { id: reviewer, kind: agent, agent: claude, approval: acceptEdits, name: Reviewer, role: Reviews the diff and approves safe edits automatically. }
@@ -391,7 +391,7 @@ const COMMANDS = {
   },
   async caps() { const j = await (await fetch(`http://${handle.host}:${handle.port}/v1/capabilities`, { headers: { authorization: `Bearer ${handle.token}` } })).json(); log(JSON.stringify(j, null, 2)); },
   async nav(view) { log('nav', view, '→', await clickByText(view)); await sleep(700); },
-  async 'seed-workflow'() { fs.writeFileSync(path.join(UD, 'workflows', 'permission-demo.geniro.yaml'), SEED_WORKFLOW); log('seeded permission-demo.geniro.yaml (nav Workflows to see it)'); },
+  async 'seed-team'() { fs.writeFileSync(path.join(UD, 'teams', 'permission-demo.team.yaml'), SEED_TEAM); log('seeded permission-demo.team.yaml (nav Teams to see it)'); },
   async fill(rest) { const i = rest.indexOf(' '); const sel = rest.slice(0, i); const val = rest.slice(i + 1); await page.fill(sel, val); log('filled', sel); },
   async click(sel) { try { await page.click(sel, { timeout: 5000 }); log('clicked', sel); } catch { log('click via DOM', await page.evaluate((s) => { const e = document.querySelector(s); if (!e) return 'NOT_FOUND'; e.click(); return 'OK'; }, sel)); } },
   async 'click-text'(text) { log('click-text', JSON.stringify(text), '→', await clickByText(text)); },

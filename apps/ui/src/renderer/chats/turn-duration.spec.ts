@@ -177,7 +177,7 @@ describe('turnDurations', () => {
     expect(durations.get(items[3]!.id)?.ms).toBe(20_000);
   });
 
-  it("ignores a workflow node's own turn end", () => {
+  it("ignores a team node's own turn end", () => {
     // A node's `turn_complete` ends that node's work, not a turn of the
     // conversation — its cost and context live in the agents panel.
     const items = [
@@ -302,7 +302,7 @@ describe('scanTurns + openTurnWorkedMs', () => {
     expect(open[0]?.agentKey).toBe(CHAT_AGENT_KEY);
   });
 
-  it("keys each workflow node's open turn to that node, so a fan-out is separable", () => {
+  it("keys each team node's open turn to that node, so a fan-out is separable", () => {
     // The defect: the scan held this key and dropped it, so two agents working
     // at once produced two OpenTurns nothing could tell apart — and a per-agent
     // duration cannot be attributed from an unlabelled list.
@@ -626,10 +626,10 @@ describe('scanTurns + openTurnWorkedMs', () => {
   });
 });
 
-describe('scanTurns over a WORKFLOW run', () => {
+describe('scanTurns over a TEAM run', () => {
   const at = (iso: string): number => Date.parse(iso);
 
-  /** The executor's own spawn row — a workflow node's turn begins here. */
+  /** The executor's own spawn row — a team node's turn begins here. */
   const nodeRunning = (nodeId: string, iso: string): ChatItem =>
     item('status', iso, { nodeId, payload: { nodeId, status: 'running' } });
 
@@ -641,7 +641,7 @@ describe('scanTurns over a WORKFLOW run', () => {
     item('turn_complete', iso, { nodeId, payload: { usage: { durationMs } } });
 
   it('measures the turn a NODE has in flight', () => {
-    // REPORTED as "timer in header is stuck": every row of a workflow carries a
+    // REPORTED as "timer in header is stuck": every row of a team carries a
     // `nodeId`, the scan skipped all of them, and the header's live clock had
     // no open turn to tick — so the figure sat on the settled sum for the whole
     // of a turn, which for this run was 41 minutes.
@@ -689,7 +689,7 @@ describe('scanTurns over a WORKFLOW run', () => {
       { nodeScoped: true },
     );
     expect(open).toEqual([]);
-    // The per-row `took 2m 50s` a workflow node never used to get, for the same
+    // The per-row `took 2m 50s` a team node never used to get, for the same
     // reason its clock never ticked.
     expect([...durations.values()]).toEqual([{ ms: 170_000, source: 'cli' }]);
   });
@@ -863,7 +863,7 @@ describe('withDurableOpenTurns — a turn older than the loaded page', () => {
   });
 });
 
-describe('clockMs — a workflow header’s clock', () => {
+describe('clockMs — a team header’s clock', () => {
   const T = Date.UTC(2026, 8, 27, 10, 0, 0);
   const open = (agentKey: string, startedAt: number) => ({
     agentKey,

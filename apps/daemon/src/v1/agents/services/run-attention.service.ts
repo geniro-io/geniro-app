@@ -26,7 +26,7 @@ import { AgentEventBus } from './agent-events.bus';
  *
  * A SUBSCRIBER to the status broadcast rather than a call from the settle
  * paths, for the reason `PullRequestCaptureService` is one: the bus is where a
- * chat and a workflow run converge, so one subscription covers both and no
+ * chat and a team run converge, so one subscription covers both and no
  * turn path has to remember to stamp anything. Its half is `Run.attentionAt`;
  * the other half, `Run.seenAt`, is written by `ChatService.markSeen` when a
  * device opens the thread. Both are announced on the same `run_status`

@@ -18,7 +18,7 @@ const readOutcomes = async (
   (await api.readRunOutcomes({ runId })).pullRequests;
 
 /**
- * Every pull request outcome the open workflow run recorded, per pull request
+ * Every pull request outcome the open team run recorded, per pull request
  * with its whole history. Re-read on the newest outcome seq the run's
  * pull-request list carries, which every `record_outcome` that wrote a row
  * announces.

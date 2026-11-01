@@ -6,10 +6,10 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { parseJsonColumn } from '../../agents/utils/json-util';
-import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
-import { workflowVersionOf } from '../../graphs/utils/workflow-version';
-import { WorkflowRecommendationDao } from '../dao/workflow-recommendation.dao';
-import type { WorkflowRecommendationSource } from '../stats.types';
+import { TeamStoreService } from '../../teams/services/team-store.service';
+import { teamVersionOf } from '../../teams/utils/team-version';
+import { TeamRecommendationDao } from '../dao/team-recommendation.dao';
+import type { TeamRecommendationSource } from '../stats.types';
 import {
   applyIn,
   filedRecommendationsOf,
@@ -27,9 +27,9 @@ interface LedgerRow {
 }
 
 /**
- * Copies every recommendations card a workflow's analysis or builder chat
+ * Copies every recommendations card a team's analysis or builder chat
  * files, every Apply that selects from one and every mark of what became of
- * an item into `workflow_recommendations`, which outlives the chat. It
+ * an item into `team_recommendations`, which outlives the chat. It
  * OBSERVES the bus like `RunOutcomeLedgerService`: the agents module writes
  * the rows and cannot depend on this module.
  *
@@ -48,8 +48,8 @@ export class RecommendationLedgerService implements OnModuleInit {
     private readonly bus: AgentEventBus,
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
-    private readonly ledger: WorkflowRecommendationDao,
-    private readonly store: WorkflowStoreService,
+    private readonly ledger: TeamRecommendationDao,
+    private readonly store: TeamStoreService,
   ) {}
 
   onModuleInit(): void {
@@ -67,13 +67,13 @@ export class RecommendationLedgerService implements OnModuleInit {
   }
 
   /**
-   * Copy every card, Apply and mark of every workflow chat that still exists;
+   * Copy every card, Apply and mark of every team chat that still exists;
    * returns how many chats it read. Idempotent, so a launch with nothing new
    * changes nothing.
    */
   async sweep(): Promise<number> {
     const em = this.em.fork();
-    const chats = await this.runDao.workflowRecommendationChats(em);
+    const chats = await this.runDao.teamRecommendationChats(em);
     let read = 0;
     for (const chat of chats) {
       const source = recommendationSourceOf(chat);
@@ -143,7 +143,7 @@ export class RecommendationLedgerService implements OnModuleInit {
   }
 
   private async copy(
-    source: WorkflowRecommendationSource,
+    source: TeamRecommendationSource,
     row: LedgerRow,
     libraryVersion: string | null,
   ): Promise<void> {
@@ -191,7 +191,7 @@ export class RecommendationLedgerService implements OnModuleInit {
   /** The library's graph version now, or null when the file cannot be read. */
   private async libraryVersion(slug: string): Promise<string | null> {
     try {
-      return workflowVersionOf((await this.store.get(slug)).workflow);
+      return teamVersionOf((await this.store.get(slug)).team);
     } catch {
       return null;
     }

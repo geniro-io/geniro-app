@@ -14,14 +14,14 @@ import type { z } from 'zod';
 import type { ChatApprovalMode } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { isHostBoardTool } from '../../agents/utils/host-board';
-import type { TaskBoardToolAnswer } from '../../graphs/graphs.types';
-import { TaskBoardBroker } from '../../graphs/services/task-board.broker';
-import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { Project } from '../../projects/entity/project.entity';
 import { isBreakerOpen } from '../../projects/utils/breaker';
 import { taskIdentifier } from '../../projects/utils/project-key';
 import { type AgentKind, AgentKindSchema } from '../../runs/runs.types';
+import { TaskBoardBroker } from '../../teams/services/task-board.broker';
+import { TeamStoreService } from '../../teams/services/team-store.service';
+import type { TaskBoardToolAnswer } from '../../teams/teams.types';
 import { TaskDao } from '../dao/task.dao';
 import { createTaskSchema, updateTaskSchema } from '../dto/task.dto';
 import type { Task } from '../entity/task.entity';
@@ -103,7 +103,7 @@ const invalid = (reason: string): BoardAnswer =>
  * screenshots are copied onto the card.
  *
  * Installed into {@link TaskBoardBroker} at boot, since the MCP host that
- * serves the tools lives in `GraphsModule`, which this module imports and which
+ * serves the tools lives in `TeamsModule`, which this module imports and which
  * may not import it back.
  */
 @Injectable()
@@ -120,7 +120,7 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
     private readonly tasks: TasksService,
     private readonly attachments: TaskAttachmentService,
     private readonly files: TaskFilesService,
-    private readonly workflows: WorkflowStoreService,
+    private readonly teams: TeamStoreService,
     private readonly vocabulary: TaskBoardVocabularyService,
   ) {}
 
@@ -254,7 +254,7 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
     const vocabulary = await this.vocabulary.read(agentKind, model);
     return withJson(
       'Labels already on the board (a label with `instructionsFor` hands those instructions to every agent run on a card ' +
-        'carrying it), saved workflows, the CLI agents (a null `version` means that CLI did not answer — it is probably ' +
+        'carrying it), saved teams, the CLI agents (a null `version` means that CLI did not answer — it is probably ' +
         'not installed), and config directories already in use.' +
         (agentKind === null
           ? ' Pass `agentKind` to list that CLI’s model ids and effort levels.'
@@ -358,7 +358,7 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
     if (!parsed.success) {
       throw invalid(zodReason(parsed.error));
     }
-    await this.requireWorkflow(parsed.data.workflowSlug);
+    await this.requireTeam(parsed.data.teamSlug);
     await this.refuseUnattended(runId, em, {
       project,
       landing: parsed.data.status ?? 'backlog',
@@ -398,7 +398,7 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
         throw invalid(zodReason(parsed.error));
       }
       patch = parsed.data;
-      await this.requireWorkflow(patch.workflowSlug ?? undefined);
+      await this.requireTeam(patch.teamSlug ?? undefined);
     }
 
     const status = readStatus(args.status, 'status');
@@ -525,12 +525,12 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
    *   to a column that is not the intake;
    * - setting a card's approval to `auto`;
    * - changing an EXISTING card's run configuration at all — which agent,
-   *   workflow, approval and profile a person's next Run press uses is decided
+   *   team, approval and profile a person's next Run press uses is decided
    *   as much by inheritance as by the value sent.
    *
    * The board tools are auto-approved in chats, so nothing else stands between
    * an agent in an `ask` or `plan` chat and that start. A chat already in
-   * `auto` gains nothing it did not have, and a workflow node's board calls
+   * `auto` gains nothing it did not have, and a team node's board calls
    * are gated by that node's own approval mode. An open failure breaker does
    * not exempt an armed board — it only delays the start — while arming a
    * board is itself a person's act.
@@ -557,7 +557,7 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     const run = await this.runDao.getById(runId, em);
-    if (run !== null && (run.workflowId !== null || run.approval === 'auto')) {
+    if (run !== null && (run.teamId !== null || run.approval === 'auto')) {
       return;
     }
     const mode =
@@ -695,20 +695,18 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
     return project;
   }
 
-  /** A workflow slug must name a workflow the library holds. */
-  private async requireWorkflow(slug: string | undefined): Promise<void> {
+  /** A team slug must name a team the library holds. */
+  private async requireTeam(slug: string | undefined): Promise<void> {
     if (slug === undefined) {
       return;
     }
-    const known = (await this.workflows.list()).map(
-      (workflow) => workflow.slug,
-    );
+    const known = (await this.teams.list()).map((team) => team.slug);
     if (!known.includes(slug)) {
       throw invalid(
-        `'workflowSlug': no saved workflow "${slug}" — ${
+        `'teamSlug': no saved team "${slug}" — ${
           known.length === 0
             ? 'the library holds none'
-            : `the workflows are ${known.join(', ')}`
+            : `the teams are ${known.join(', ')}`
         }`,
       );
     }
@@ -946,7 +944,7 @@ function projectRunConfig(project: Project) {
 /**
  * What a new card will run as, and which of it comes from the project — read
  * through `resolveRunTarget`, the same resolution a start uses, so the answer
- * cannot name a model or workflow the card will never run with.
+ * cannot name a model or team the card will never run with.
  */
 function runTargetNote(card: TaskWire, project: Project): string {
   const folder =
@@ -954,15 +952,15 @@ function runTargetNote(card: TaskWire, project: Project): string {
   const target = resolveRunTarget([card, project]);
   if (target.kind === 'problem') {
     return (
-      `Folder: ${folder}. Neither this card nor its project names an agent or a workflow, so it cannot be ` +
-      'started until one is set (agentKind or workflowSlug).'
+      `Folder: ${folder}. Neither this card nor its project names an agent or a team, so it cannot be ` +
+      'started until one is set (agentKind or teamSlug).'
     );
   }
   const from = (
     field: Exclude<(typeof TASK_RUN_CONFIG_FIELDS)[number], 'folder'>,
   ) => (card[field] === null ? ' (from the project)' : '');
-  if (target.kind === 'workflow') {
-    return `It runs through workflow \`${target.workflowSlug}\`${from('workflowSlug')}, in folder ${folder}.`;
+  if (target.kind === 'team') {
+    return `It runs through team \`${target.teamSlug}\`${from('teamSlug')}, in folder ${folder}.`;
   }
   const trims = (['model', 'effort', 'approval', 'configDir'] as const).map(
     (field) =>

@@ -81,7 +81,7 @@ export function TaskCard({
     active === undefined
       ? null
       : active.agentKind === null
-        ? 'workflow'
+        ? 'team'
         : agentShortName(identities, active.agentKind);
   const owed = wait !== null && waitsOnUser(wait) ? wait : null;
   const created = shortDate(task.createdAt);

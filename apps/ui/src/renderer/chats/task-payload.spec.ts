@@ -323,7 +323,7 @@ describe('taskListsByThread', () => {
     ]);
   });
 
-  it('keeps one workflow node’s list apart from another’s', () => {
+  it('keeps one team node’s list apart from another’s', () => {
     const onNode = (nodeId: string, title: string): ChatItem => ({
       ...taskItem(snapshot([row('1', title, 'pending')])),
       nodeId,

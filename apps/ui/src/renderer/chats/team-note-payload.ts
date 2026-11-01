@@ -1,5 +1,5 @@
 /**
- * What a `team_note` row's payload says: one note an agent of a workflow run
+ * What a `team_note` row's payload says: one note an agent of a team run
  * wrote to the run's shared team notes.
  *
  * TWIN PARSER: `TeamNotePayloadSchema` in

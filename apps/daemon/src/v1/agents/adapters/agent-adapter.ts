@@ -2197,7 +2197,7 @@ export abstract class AgentAdapter {
 
   /**
    * The parts {@link composeSystemPrompt} joins, each named by its source —
-   * what the workflow inspector measures, so the sizes it shows are this
+   * what the team inspector measures, so the sizes it shows are this
    * CLI's real block rather than a copy of the rule.
    */
   turnInstructionParts(
@@ -2213,7 +2213,7 @@ export abstract class AgentAdapter {
       projectInstructions: input.projectInstructions,
       memoryIndex: granted ? input.memoryIndex : null,
       taskInstructions: input.taskInstructions,
-      workflowInstructions: input.workflowInstructions,
+      teamInstructions: input.teamInstructions,
       instructionBlocks: input.instructionBlocks,
       stageMapPrompt: granted ? input.stageMapPrompt : null,
       systemPrompt: input.systemPrompt,
@@ -2543,8 +2543,8 @@ export abstract class AgentAdapter {
       // this process was spawned must not be served by it.
       input.taskInstructions ?? null,
       // The same block again, and the same rule: a process spawned to edit one
-      // workflow file must not serve a turn pointed at another.
-      input.workflowInstructions ?? null,
+      // team file must not serve a turn pointed at another.
+      input.teamInstructions ?? null,
       // On the same composed block and the same reasoning: two graph nodes
       // wired to different instruction blocks must not share a process.
       input.instructionBlocks ?? null,

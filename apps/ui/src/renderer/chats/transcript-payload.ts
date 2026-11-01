@@ -17,18 +17,18 @@
  * carries a different shape — so every read here is a guard, never a cast.
  */
 
-/** What the transcript knows about a workflow node (for display only). */
+/** What the transcript knows about a team node (for display only). */
 export interface TranscriptNodeMeta {
   name: string;
   kind: 'agent' | 'trigger';
   /**
    * The CLI this node runs on (`claude`, `cursor-agent`), or null where the
-   * graph does not say — a trigger, or a node loaded from a workflow whose
+   * graph does not say — a trigger, or a node loaded from a team whose
    * agent field is unset.
    *
    * A node's NAME is the user's word for the persona and says nothing about
    * what is under it, which is the whole reason this is a separate field: a
-   * workflow routinely mixes the two CLIs, and which one answered is a fact
+   * team routinely mixes the two CLIs, and which one answered is a fact
    * about the reply that nothing else on the row carries.
    */
   agent?: string | null;

@@ -34,7 +34,7 @@ describe('isStaleBundleError', () => {
     ).toBe(true);
     expect(
       isStaleBundleError(
-        new Error('Unable to preload CSS for http://h/assets/Workflows-1.css'),
+        new Error('Unable to preload CSS for http://h/assets/Teams-1.css'),
       ),
     ).toBe(true);
   });

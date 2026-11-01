@@ -27,7 +27,7 @@ import type { ItemKind } from '../runs.types';
 // one side of a page. On `(runId, seq)` that is a walk over the whole run; on
 // `kind` alone it is a walk over every run's rows of that kind.
 @Index({ properties: ['runId', 'kind', 'seq'] })
-// A workflow run is paged one conversation at a time (`inCall`), and a page of
+// A team run is paged one conversation at a time (`inCall`), and a page of
 // its own flow asks each call it shows for the few rows of a few kinds its card
 // is drawn from.
 @Index({ properties: ['runId', 'inCall', 'seq'] })

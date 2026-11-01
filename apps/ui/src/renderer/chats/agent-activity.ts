@@ -161,7 +161,7 @@ export interface AgentCallThread {
 /**
  * The activity-map key for single-agent chat items (their nodeId is null).
  *
- * NUL-prefixed so it cannot collide with a real node id. A workflow node id is
+ * NUL-prefixed so it cannot collide with a real node id. A team node id is
  * any non-empty string, so `agent` is a legal — and obvious — node name; while
  * the sentinel was that same word, such a node was read as "the chat's agent"
  * and every site that excludes the sentinel (`nodeId !== CHAT_AGENT_KEY`)
@@ -187,14 +187,14 @@ export interface AgentWork {
 }
 
 /**
- * One agent as the agents panel displays it — workflow node metadata merged
+ * One agent as the agents panel displays it — team node metadata merged
  * with its live {@link AgentActivity}.
  */
 export interface AgentDisplay {
   /** Node id ({@link CHAT_AGENT_KEY} for a single-agent chat). */
   id: string;
   name: string;
-  /** The CLI driving it; null for a node no longer in the workflow. */
+  /** The CLI driving it; null for a node no longer in the team. */
   agent: CliKind | null;
   /**
    * The MODEL this agent is on — what its turns have actually RUN on where a
@@ -498,7 +498,7 @@ export function subagentThreadsByAgent(
  * `parked` OUTRANKS a live turn, which is the same order — and the same rank 1
  * — {@link displayRunStatus} gives a run with a card open. A parked node's turn
  * IS in flight, so `activeTurns > 0` is true and the card read `running`:
- * reported against a workflow whose header and sidebar row both said
+ * reported against a team whose header and sidebar row both said
  * `needs more info` while the node card beside them span a spinner. Nothing
  * moves until the user answers, and the one surface naming which AGENT is
  * waiting was the one claiming it was working.
@@ -581,7 +581,7 @@ export function windowHoldsStatus(
  * turn for longer than that window has its `running` row above the page, so it
  * read as having no activity at all: its card said `pending`, the transcript
  * drew no `Working…` row, and a caller parked in `await_agent` lost its
- * `waiting on …` line. REPORTED on a resumed workflow whose Manager and Engineer
+ * `waiting on …` line. REPORTED on a resumed team whose Manager and Engineer
  * had been running since 21:03 and 21:04 — seq 908 and 926 of a 2,817-row run —
  * both drawn `pending` while the daemon's `node_state` said `running`.
  *
@@ -594,15 +594,15 @@ export function windowHoldsStatus(
  *   `Working…` row under a finished run for good;
  * - a non-running row only fills in a node the window already knows, or one
  *   in `drawnNodeIds` — the nodes the panel draws a card for whatever the
- *   window holds. Any other node (a trigger, a node a since-edited workflow
+ *   window holds. Any other node (a trigger, a node a since-edited team
  *   dropped) gets no entry, since an entry is what the panel draws a card from.
- *   Without the second clause a small page left every workflow node it held
+ *   Without the second clause a small page left every team node it held
  *   no rows for reading `pending` over a `node_state` that said `completed`.
  *
  * `windowIsTail` false is the one case where the window does NOT win: a window
  * loaded around an old message (the timeline, a search hit) holds the status
  * rows of that moment, and a node whose `running` row is in it had its ending
- * written below it. Believed, a finished workflow's Manager and Researcher read
+ * written below it. Believed, a finished team's Manager and Researcher read
  * as working again — REPORTED as an archived chat opened at its first message
  * that "пишет, как будто бы он работает". Off the tail the durable row is the
  * only current answer, and a settled run working nowhere is the other half.

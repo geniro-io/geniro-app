@@ -14,7 +14,7 @@ import { conversationHead } from './transcript-groups';
  * happened inside it: the delegates it launched, the commands it has running,
  * and the checklist it keeps.
  *
- * A workflow node can be CALLED many times, and each call is a conversation of
+ * A team node can be CALLED many times, and each call is a conversation of
  * its own, running beside the others: a Manager that sends its Engineer three
  * separate briefs has three Engineers at work. A call that CONTINUES an earlier
  * call's `thread` is not another one — it resumes the same session, so its

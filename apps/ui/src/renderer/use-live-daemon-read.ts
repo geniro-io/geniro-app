@@ -5,7 +5,7 @@ import type { DaemonClient } from './daemon-client';
 
 /**
  * How long a burst of recorded turns accumulates before a live read re-reads. A
- * workflow settles its nodes within a second or two of each other, each writing a
+ * team settles its nodes within a second or two of each other, each writing a
  * ledger row, so without it the last node would be the fifth refetch of one answer.
  */
 const LIVE_REFRESH_DEBOUNCE_MS = 750;

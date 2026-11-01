@@ -173,7 +173,7 @@ describe('NotificationsGateway', () => {
   });
 
   it('hands a joining socket the live plane as it stands, before `joined`', async () => {
-    // REPORTED as a workflow header that read ~$40 and then $1.71 after
+    // REPORTED as a team header that read ~$40 and then $1.71 after
     // switching threads away and back: the running spend lives on the live
     // plane alone, a delta is published only when its figure changes, and the
     // room kept nothing for a client that was not in it — so the reopened

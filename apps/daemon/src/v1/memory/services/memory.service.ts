@@ -160,7 +160,7 @@ export class MemoryService {
 
   /**
    * Who a tool call on this run and node is: the node's own agent in a
-   * workflow, else the chat's. An analysis chat writes as `analysis`, held to
+   * team, else the chat's. An analysis chat writes as `analysis`, held to
    * the same review rule as any agent.
    */
   async actorOf(runId: string, nodeId: string): Promise<MemoryActor> {
@@ -168,9 +168,7 @@ export class MemoryService {
     const run = await this.runs.getById(runId, em);
     const node = await this.nodeStates.getByRunNode(runId, nodeId, em);
     const kind =
-      run?.analysisSourceRunId || run?.analysisWorkflowSlug
-        ? 'analysis'
-        : 'agent';
+      run?.analysisSourceRunId || run?.analysisTeamSlug ? 'analysis' : 'agent';
     return {
       kind,
       runId,

@@ -11,7 +11,7 @@ import { callSessionKey, nodeSessionKey } from '../utils/session-keys';
  * `HostWakeGraphDelivery`).
  *
  * A leaf, so a module above `v1/agents` (shares) can publish without
- * importing the graph engine that delivers to a workflow.
+ * importing the graph engine that delivers to a team.
  */
 @Injectable()
 export class HostWakeBus {

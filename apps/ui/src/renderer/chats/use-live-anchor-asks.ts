@@ -35,7 +35,7 @@ export interface LiveAnchorAsks {
  * streams a burst.
  *
  * Shared by every surface that holds a transcript WINDOW and appends live rows
- * to it (the chat screen, the workflow builder's dock), so the two cannot come
+ * to it (the chat screen, the team builder's dock), so the two cannot come
  * to disagree about which live rows need anchors.
  */
 export function useLiveAnchorAsks({

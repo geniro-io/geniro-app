@@ -3,8 +3,8 @@ import { asArray, asRecord, asString, parseJsonColumn } from './json-util';
 
 /**
  * Each agent node's config directory, read out of a run's
- * `Run.workflowSnapshot` — the copy of the workflow the run actually RAN, which
- * is where a workflow node's profile is fixed (the run row carries none of its
+ * `Run.teamSnapshot` — the copy of the team the run actually RAN, which
+ * is where a team node's profile is fixed (the run row carries none of its
  * own).
  *
  * Read here rather than through the graphs module's snapshot parser, because

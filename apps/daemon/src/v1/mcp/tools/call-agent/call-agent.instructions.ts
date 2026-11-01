@@ -3,7 +3,7 @@ import {
   ANSWERING_WITH_CALLS_OUT,
   CALL_RESULT_ACTIONS,
   CALL_RESULT_PAGES,
-} from '../../../graphs/utils/callee-text';
+} from '../../../teams/utils/callee-text';
 
 /**
  * What a model reads about `call_agent`.

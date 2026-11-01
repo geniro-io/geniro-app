@@ -10,23 +10,23 @@ import { interruptedReason } from '../../../utils/stop-cause';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
-import { assertWorkflowRun } from '../../agents/utils/run-kind';
-import { GraphExecutorService } from '../../graphs/services/graph-executor.service';
-import { RunWorkflowService } from '../../graphs/services/run-workflow.service';
-import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
-import { nodesThatAsk } from '../../graphs/utils/unattended';
+import { assertTeamRun } from '../../agents/utils/run-kind';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
 import { taskIdentifier } from '../../projects/utils/project-key';
 import { Run } from '../../runs/entity/run.entity';
 import { isTerminalRunStatus } from '../../runs/runs.types';
+import { GraphExecutorService } from '../../teams/services/graph-executor.service';
+import { RunTeamService } from '../../teams/services/run-team.service';
+import { TeamStoreService } from '../../teams/services/team-store.service';
+import { nodesThatAsk } from '../../teams/utils/unattended';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import {
   type ResolvedAgentTarget,
   type ResolvedRunTarget,
-  type ResolvedWorkflowTarget,
+  type ResolvedTeamTarget,
   type StartTaskRun,
   type TaskWire,
 } from '../tasks.types';
@@ -41,7 +41,7 @@ import { parseTaskFiles } from '../utils/task-files';
 import {
   composeTaskPrompt,
   TASK_REPORT_INSTRUCTIONS,
-  TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+  TASK_REPORT_INSTRUCTIONS_TEAM,
 } from '../utils/task-prompt';
 import { LabelInstructionsService } from './label-instructions.service';
 import { TasksService } from './tasks.service';
@@ -89,8 +89,8 @@ export class TaskRunsService {
     private readonly executor: GraphExecutorService,
     private readonly groups: RunGroupsService,
     private readonly labelInstructions: LabelInstructionsService,
-    private readonly workflows: WorkflowStoreService,
-    private readonly runWorkflows: RunWorkflowService,
+    private readonly teams: TeamStoreService,
+    private readonly runTeams: RunTeamService,
   ) {}
 
   async start(taskId: string, input: StartTaskRun): Promise<TaskWire> {
@@ -152,17 +152,17 @@ export class TaskRunsService {
   }
 
   /**
-   * The library's answer to "can this workflow run unattended", for
+   * The library's answer to "can this team run unattended", for
    * `resolveRunTarget` — asked the same way `TaskQueueService` asks it, so
    * the route never refuses a card the queue handed out, nor starts one it
    * held back.
    *
-   * Only for an autopilot start that resolves to a workflow; every other start
-   * never consults it. A workflow the library cannot read answers false: the
+   * Only for an autopilot start that resolves to a team; every other start
+   * never consults it. A team the library cannot read answers false: the
    * refusal is the safe reading, and the executor's own lookup is what reports
-   * a missing workflow on a hand press.
+   * a missing team on a hand press.
    */
-  private async unattendedWorkflow(
+  private async unattendedTeam(
     levels: Parameters<typeof resolveRunTarget>[0],
     startedBy: StartTaskRun['startedBy'],
   ): Promise<(slug: string) => boolean> {
@@ -170,15 +170,15 @@ export class TaskRunsService {
     if (
       startedBy !== 'autopilot' ||
       isRunTargetProblem(asUser) ||
-      asUser.kind !== 'workflow'
+      asUser.kind !== 'team'
     ) {
       return () => false;
     }
-    const safe = await this.workflows
-      .get(asUser.workflowSlug)
-      .then(({ workflow }) => nodesThatAsk(workflow).length === 0)
+    const safe = await this.teams
+      .get(asUser.teamSlug)
+      .then(({ team }) => nodesThatAsk(team).length === 0)
       .catch(() => false);
-    return (slug) => safe && slug === asUser.workflowSlug;
+    return (slug) => safe && slug === asUser.teamSlug;
   }
 
   private async projectIdOf(taskId: string): Promise<string> {
@@ -202,12 +202,12 @@ export class TaskRunsService {
     };
     const project = await this.requireProject(task.projectId, em);
     // Most specific first: this press, then the card, then the project. The
-    // first rung naming a target decides whether an agent or a workflow runs.
+    // first rung naming a target decides whether an agent or a team runs.
     const levels = [input, task, project];
     const target = resolveRunTarget(
       levels,
       input.startedBy,
-      await this.unattendedWorkflow(levels, input.startedBy),
+      await this.unattendedTeam(levels, input.startedBy),
     );
     if (isRunTargetProblem(target)) {
       throw new BadRequestException(
@@ -246,11 +246,11 @@ export class TaskRunsService {
     // same decision: the run this card already holds is the run it should be
     // worked in, whichever engine made it. `resumableRun` only ever hands back
     // a run of the engine AND the target this press resolved to, so a chat is
-    // never sent into a workflow run, nor the reverse.
+    // never sent into a team run, nor the reverse.
     const resumed =
       target.kind === 'agent'
         ? await this.resume(task, input, target, labelInstructions, em)
-        : await this.resumeWorkflow(task, input, target, em);
+        : await this.resumeTeam(task, input, target, em);
     if (resumed !== null) {
       return resumed;
     }
@@ -272,7 +272,7 @@ export class TaskRunsService {
       projectGroupId ??
       (await this.groups.resolveAutoGroupId({
         cwd: task.folder ?? project.folder,
-        workflowId: target.kind === 'workflow' ? target.workflowSlug : null,
+        teamId: target.kind === 'team' ? target.teamSlug : null,
       }));
 
     // Held so `abandon` can take the run down with the rest. Without it a
@@ -280,8 +280,8 @@ export class TaskRunsService {
     // no longer names it, working directory already pruned by the caller.
     let runId: string | null = null;
     try {
-      if (target.kind === 'workflow') {
-        const run = await this.startWorkflowRun(target.workflowSlug, {
+      if (target.kind === 'team') {
+        const run = await this.startTeamRun(target.teamSlug, {
           task,
           project,
           input,
@@ -292,7 +292,7 @@ export class TaskRunsService {
         // No `sendMessage` here, and that is the arm's whole difference: a
         // graph's seed prompt IS its opening message, persisted by the
         // executor before it walks. A LATER press sends into this run instead
-        // — see `resumeWorkflow`.
+        // — see `resumeTeam`.
         return await this.recordRun(taskId, run.id, input);
       }
 
@@ -344,11 +344,11 @@ export class TaskRunsService {
    * executor to do differently, and each is an answer the library route has no
    * way to give: the card's `taskId` (so `TaskSettleService` can move it when
    * the graph finishes), the card's own title (so the sidebar names the WORK
-   * rather than restating which workflow ran), and the group resolved for it
+   * rather than restating which team ran), and the group resolved for it
    * in `startClaimed` (a worktree being a path no auto-file rule has ever
    * seen).
    */
-  private startWorkflowRun(
+  private startTeamRun(
     slug: string,
     context: {
       task: Task;
@@ -367,10 +367,7 @@ export class TaskRunsService {
       agentOptions: input.agentOptions,
       startSha: input.startSha,
       startDirty: input.startDirty,
-      taskInstructions: this.composeTaskInstructions(
-        labelInstructions,
-        'workflow',
-      ),
+      taskInstructions: this.composeTaskInstructions(labelInstructions, 'team'),
       taskId: task.id,
       ...identifierOf(task, project),
       title: task.title,
@@ -385,7 +382,7 @@ export class TaskRunsService {
    * The thread is continued only when it is the thread this press RESOLVES to.
    * Continuity is worth having because the conversation is the card's history,
    * but it is worth having only for the target the card now names: a card
-   * re-pointed at another agent, or at a workflow, would otherwise go on
+   * re-pointed at another agent, or at a team, would otherwise go on
    * running the old one for good, with the panel showing the new one and no
    * way out short of deleting the run.
    *
@@ -479,7 +476,7 @@ export class TaskRunsService {
   }
 
   /**
-   * Continue the card's existing WORKFLOW run, or answer null when there is
+   * Continue the card's existing TEAM run, or answer null when there is
    * none to continue and a new one has to be made — `resume`'s twin for the
    * graph arm.
    *
@@ -490,17 +487,17 @@ export class TaskRunsService {
    * text is `continuation`'s, on the agent arm's reasoning.
    *
    * The run keeps the graph it was started with — its snapshot, never the
-   * library's current copy (`RunWorkflowService`) — and the settings it was
-   * started with: a workflow run has no settings patch to re-resolve the
+   * library's current copy (`RunTeamService`) — and the settings it was
+   * started with: a team run has no settings patch to re-resolve the
    * card's label instructions or the board's switches onto.
    *
    * Failure is handled exactly as `resume` handles it: the card goes back,
    * the run is never deleted.
    */
-  private async resumeWorkflow(
+  private async resumeTeam(
     task: Task,
     input: StartTaskRun,
-    target: ResolvedWorkflowTarget,
+    target: ResolvedTeamTarget,
     em: EntityManager,
   ): Promise<TaskWire | null> {
     const run = await this.resumableRun(task, target, em);
@@ -527,7 +524,7 @@ export class TaskRunsService {
    * Whether this press may continue `run` with nobody watching.
    *
    * A person's press always may. The autopilot's was vetted by
-   * `unattendedWorkflow` against the LIBRARY's copy, but a continued run walks
+   * `unattendedTeam` against the LIBRARY's copy, but a continued run walks
    * its own snapshot, which may still hold a node that asks — and a card the
    * autopilot holds must never reach a permission card nobody will answer. So
    * the snapshot is asked too; one that asks, or cannot be read, makes a new
@@ -541,9 +538,9 @@ export class TaskRunsService {
     if ((input.startedBy ?? 'user') !== 'autopilot') {
       return true;
     }
-    return this.runWorkflows
-      .workflowOf(assertWorkflowRun(run, run.id), em)
-      .then((workflow) => nodesThatAsk(workflow).length === 0)
+    return this.runTeams
+      .teamOf(assertTeamRun(run, run.id), em)
+      .then((team) => nodesThatAsk(team).length === 0)
       .catch(() => false);
   }
 
@@ -555,9 +552,9 @@ export class TaskRunsService {
    * user (the conversation is gone, so there is nothing to continue); its run
    * is ARCHIVED, which the daemon holds inert on purpose (`RUN_ARCHIVED`); or
    * the run is not one of the target this press resolved to — a card
-   * re-pointed at a different agent, at a different workflow, or from one
+   * re-pointed at a different agent, at a different team, or from one
    * engine to the other. Continuing then would send the new target's
-   * words into the old one: a chat into a workflow run is refused outright
+   * words into the old one: a chat into a team run is refused outright
    * (`NOT_A_CHAT_RUN`), and the rest would run the old target for good, with
    * the panel showing the new one. In every one of them the answer is the
    * same and it is not an error: make a new run.
@@ -641,7 +638,7 @@ export class TaskRunsService {
    *
    * The edge is put back to what the press FOUND (`found`), never nulled: a
    * card routinely arrives here holding the thread it was worked in before —
-   * re-pointed at a workflow the library no longer has, say — and that thread
+   * re-pointed at a team the library no longer has, say — and that thread
    * still names the card through `Run.taskId`. Nulling the card's end erased
    * its link to that conversation while the conversation went on claiming the
    * card, and the next Run opened a second thread beside it. A start that
@@ -689,13 +686,13 @@ export class TaskRunsService {
     // nothing writes.
     //
     // Routed by ENGINE, because both deletes are kind-guarded: `chats.delete`
-    // asserts a chat run and `deleteRun` asserts a workflow one, so sending a
+    // asserts a chat run and `deleteRun` asserts a team one, so sending a
     // graph run to the chat teardown throws `NOT_A_CHAT_RUN` — swallowed by
     // the catch below, leaving exactly the orphaned run row this block exists
     // to prevent, and leaving it silently.
     if (runId !== null) {
       try {
-        await (kind === 'workflow'
+        await (kind === 'team'
           ? this.executor.deleteRun(runId)
           : this.chats.delete(runId));
       } catch (error) {
@@ -725,8 +722,8 @@ export class TaskRunsService {
     kind: ResolvedRunTarget['kind'],
   ): string {
     const ask =
-      kind === 'workflow'
-        ? TASK_REPORT_INSTRUCTIONS_WORKFLOW
+      kind === 'team'
+        ? TASK_REPORT_INSTRUCTIONS_TEAM
         : TASK_REPORT_INSTRUCTIONS;
     return labelInstructions === null ? ask : `${labelInstructions}\n\n${ask}`;
   }
@@ -840,13 +837,13 @@ export class TaskRunsService {
 }
 
 /**
- * Whether `run` was made for `target`: a workflow run of the same workflow,
+ * Whether `run` was made for `target`: a team run of the same team,
  * or a chat on the same CLI.
  */
 function isRunOf(run: Run, target: ResolvedRunTarget): boolean {
-  return target.kind === 'workflow'
-    ? run.workflowId === target.workflowSlug
-    : run.workflowId === null && run.agentKind === target.agentKind;
+  return target.kind === 'team'
+    ? run.teamId === target.teamSlug
+    : run.teamId === null && run.agentKind === target.agentKind;
 }
 
 /** The card's end of the run↔task edge — the three fields a start writes. */

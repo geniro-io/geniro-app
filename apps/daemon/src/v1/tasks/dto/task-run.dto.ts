@@ -89,12 +89,12 @@ export const startTaskRunSchema = z.object({
   effort: z.string().min(1).optional(),
   approval: ChatApprovalModeSchema.optional(),
   configDir: z.string().min(1).optional(),
-  workflowSlug: z
+  teamSlug: z
     .string()
     .min(1)
     .optional()
     .describe(
-      'Run this press through a workflow instead of a single agent; outranks every agent field above',
+      'Run this press through a team instead of a single agent; outranks every agent field above',
     ),
   /**
    * The user's own standing instructions, sent by the client because they live
@@ -120,7 +120,7 @@ export const startTaskRunSchema = z.object({
    * the service however faithfully the client sends it — and three controls
    * key off this one. The concurrency cap and the failure breaker refuse an
    * unattended start; `resolveRunTarget` forces the approval mode an unattended
-   * run must have, and refuses a workflow it could not force one for. Each is
+   * run must have, and refuses a team it could not force one for. Each is
    * documented as the line the queue's own narrowing is only a convenience in
    * front of, so each is inert while this is dropped at the edge.
    */

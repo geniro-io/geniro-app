@@ -161,7 +161,7 @@ export function useAgentVocabulary<T>(
   // list on mount acted on it. Measured in the graph builder (2026-08-15): the
   // node inspector adopts the first model for a model-less node, so adding a
   // cursor node while a claude node was selected stamped the cursor node with
-  // claude's `claude-fable-5[1m]`, which then went to disk in the workflow YAML
+  // claude's `claude-fable-5[1m]`, which then went to disk in the team YAML
   // and to the CLI at run time. Both directions reproduced; the run's own
   // transcript recorded "agent does not offer the model 'claude-fable-5'".
   // Holding the previous list is not a flicker either: a cursor model probe

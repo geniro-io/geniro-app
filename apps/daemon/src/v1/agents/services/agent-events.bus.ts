@@ -122,7 +122,7 @@ export class AgentEventBus {
    * A run and everything it owned has been deleted.
    *
    * A third stream rather than a direct call, because the things that must
-   * react live in modules ABOVE this one — `GraphsModule` imports
+   * react live in modules ABOVE this one — `TeamsModule` imports
    * `AgentsModule`, so the chat service cannot inject a graph-side holder
    * without a module cycle. Announcing the deletion downward inverts that
    * dependency: anything holding per-run state subscribes and cleans up its
@@ -184,7 +184,7 @@ export class AgentEventBus {
   }
 
   /**
-   * A run row was persisted — a chat or a workflow run, at its creation. Published
+   * A run row was persisted — a chat or a team run, at its creation. Published
    * AFTER the write (persist-then-emit), so a subscriber never sees a run that does not
    * exist. The Stats ledger counts threads from here, because the module that owns the
    * ledger imports this one and not the reverse.

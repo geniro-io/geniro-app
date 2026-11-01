@@ -442,8 +442,8 @@ describe('ActionChip attribution', () => {
   });
 });
 
-describe('useChatActions on a workflow run', () => {
-  it('presses and dismisses through the workflow route, re-pressing a busy refusal on the timer', async () => {
+describe('useChatActions on a team run', () => {
+  it('presses and dismisses through the team route, re-pressing a busy refusal on the timer', async () => {
     const outcome = (seq: number) =>
       Promise.resolve({
         outcome: {
@@ -455,16 +455,14 @@ describe('useChatActions on a workflow run', () => {
         },
       });
     const api = {
-      pressWorkflowAction: vi
+      pressTeamAction: vi
         .fn((args: { seq: number }) => outcome(args.seq))
         .mockImplementationOnce(() =>
           Promise.reject(daemonError(409, 'RUN_BUSY')),
         ),
-      dismissWorkflowAction: vi.fn((args: { seq: number }) =>
-        outcome(args.seq),
-      ),
+      dismissTeamAction: vi.fn((args: { seq: number }) => outcome(args.seq)),
     };
-    // A workflow run's state never opens a turn: the busy press is asked again.
+    // A team run's state never opens a turn: the busy press is asked again.
     const state = {
       actions: [action(2, 'Merged'), action(1, 'Ping')],
       turnStartedAt: null,
@@ -480,11 +478,11 @@ describe('useChatActions on a workflow run', () => {
     await act(async () => root!.render(<Probe />));
 
     await act(async () => chat!.press(action(2, 'Merged')));
-    expect(api.pressWorkflowAction).toHaveBeenCalledTimes(1);
-    const first = api.pressWorkflowAction.mock.calls[0]![0];
+    expect(api.pressTeamAction).toHaveBeenCalledTimes(1);
+    const first = api.pressTeamAction.mock.calls[0]![0];
     await act(async () => vi.advanceTimersByTime(ACTION_RETRY_MS));
-    expect(api.pressWorkflowAction).toHaveBeenCalledTimes(2);
-    expect(api.pressWorkflowAction.mock.calls[1]![0]).toEqual(first);
+    expect(api.pressTeamAction).toHaveBeenCalledTimes(2);
+    expect(api.pressTeamAction.mock.calls[1]![0]).toEqual(first);
     expect(first).toEqual({
       runId: 'run',
       seq: 2,
@@ -492,7 +490,7 @@ describe('useChatActions on a workflow run', () => {
     });
 
     await act(async () => chat!.dismiss(action(1, 'Ping')));
-    expect(api.dismissWorkflowAction).toHaveBeenCalledWith({
+    expect(api.dismissTeamAction).toHaveBeenCalledWith({
       runId: 'run',
       seq: 1,
     });

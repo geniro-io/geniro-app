@@ -481,7 +481,7 @@ describe('RunWaterfallDialog', () => {
     expect(panelTitles()).toContain('engineer');
   });
 
-  it('gives a workflow run one lane per node', () => {
+  it('gives a team run one lane per node', () => {
     // The whole reason the fold keys on `nodeId`: a five-node Dev Team run has
     // to read as five agents on one clock, not as one merged row.
     const view = show(

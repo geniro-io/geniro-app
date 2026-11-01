@@ -1,5 +1,5 @@
 import { isHostBoardTool } from '../../../agents/utils/host-board';
-import type { TaskBoardBroker } from '../../../graphs/services/task-board.broker';
+import type { TaskBoardBroker } from '../../../teams/services/task-board.broker';
 import type {
   McpCallContext,
   McpTool,

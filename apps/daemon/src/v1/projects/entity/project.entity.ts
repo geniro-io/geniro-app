@@ -101,9 +101,9 @@ export class Project extends TimestampsEntity {
   @Property({ type: 'text', nullable: true })
   configDir: string | null = null;
 
-  /** A workflow to run a task through, instead of a single agent. */
+  /** A team to run a task through, instead of a single agent. */
   @Property({ type: 'string', nullable: true })
-  workflowSlug: string | null = null;
+  teamSlug: string | null = null;
 
   // ── Autopilot policy ────────────────────────────────────────────────────
   // Stored here from the start so the board and the conductor read one row

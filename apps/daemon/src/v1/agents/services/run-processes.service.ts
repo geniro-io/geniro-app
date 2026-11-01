@@ -63,7 +63,7 @@ export interface RunProcessesOptions {
  * adopted by launchd. That is the very attribution the run's teardown stops by,
  * so what this shows under a thread is what archiving it ends.
  *
- * Kind-blind like the waterfall beside it: a workflow run's processes are
+ * Kind-blind like the waterfall beside it: a team run's processes are
  * kept under `<runId>::…` keys and come back as one tree per node or call.
  *
  * A `monitor` command is the daemon's own child, found by its registry rather

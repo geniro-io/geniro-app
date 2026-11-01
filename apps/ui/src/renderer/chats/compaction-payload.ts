@@ -107,7 +107,7 @@ export function endsContextHistory(item: ChatItem): boolean {
  * Geniro's own compaction says so outright (`conversationReplaced`); a CLI's own
  * compaction says so when it reports no figure after it (`postTokens: null`). The
  * live plane and the run row both drop their reading on it. The chat screen and
- * the workflow dock both read it from here, so they cannot disagree about which
+ * the team dock both read it from here, so they cannot disagree about which
  * row clears a reading.
  */
 export function discardsContextReading(item: ChatItem): boolean {
@@ -171,7 +171,7 @@ export function compactionDetail(
  * Only the ROW goes. The item is untouched, so the turn still counts toward
  * the header's worked/turns totals and its usage still reaches the ledger.
  *
- * Run-level rows only (`nodeId === null`) — a workflow node's own turn end is
+ * Run-level rows only (`nodeId === null`) — a team node's own turn end is
  * a different statement, and its rows are not this turn's content.
  *
  * TWIN PARSER: `apps/daemon/src/v1/agents/services/chat.service.ts` decides the

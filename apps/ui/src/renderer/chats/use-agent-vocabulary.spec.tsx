@@ -207,7 +207,7 @@ describe('useAgentVocabulary', () => {
     // Measured in the graph builder (2026-08-15): the node inspector adopts the
     // first model for a model-less node, so adding a cursor node while a claude
     // node was selected wrote claude's `claude-fable-5[1m]` onto the cursor
-    // node — into the workflow YAML and then into the run, whose transcript
+    // node — into the team YAML and then into the run, whose transcript
     // recorded "agent does not offer the model 'claude-fable-5'".
     const seen: { kind: CliKind | null; items: string[] }[] = [];
     const fetchFor = (kind: CliKind): Promise<string[]> =>

@@ -461,7 +461,7 @@ export class ChatShellsService {
       {
         runId,
         // The node that STARTED it, carried over from the open: a close filed at
-        // the wrong node is a row the workflow's own transcript cannot show.
+        // the wrong node is a row the team's own transcript cannot show.
         nodeId: shell.nodeId,
         seq: await this.seqs.reserve(runId),
         kind: 'shell_info',

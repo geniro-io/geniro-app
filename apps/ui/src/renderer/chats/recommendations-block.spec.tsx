@@ -36,9 +36,9 @@ const ENTRY: RecommendationsEntry = {
   card: {
     summary: null,
     timing: null,
-    workflowStats: null,
+    teamStats: null,
     hotspots: [],
-    sourceKind: 'workflow',
+    sourceKind: 'team',
     items: ITEMS,
   },
   applied: null,

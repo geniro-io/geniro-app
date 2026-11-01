@@ -1,8 +1,8 @@
-import type { CallEnvelope, CallMode } from '../../../graphs/graphs.types';
+import type { CallEnvelope, CallMode } from '../../../teams/teams.types';
 import {
   CALLEE_DESCRIPTION_MAX,
   calleeSummary,
-} from '../../../graphs/utils/callee-text';
+} from '../../../teams/utils/callee-text';
 import type { McpCallContext, McpListContext } from '../../mcp.types';
 import { CallMcpTool } from '../call-mcp-tool';
 import { callAgentInstructions } from './call-agent.instructions';

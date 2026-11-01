@@ -53,7 +53,7 @@ export class RunGroupsService {
     name: string;
     color?: RunGroupColor;
     autoCwd?: string;
-    autoWorkflowId?: string;
+    autoTeamId?: string;
   }): Promise<RunGroupWire> {
     const em = this.em.fork();
     const existing = await this.groupDao.listOrdered(em);
@@ -71,7 +71,7 @@ export class RunGroupsService {
         // still gets a sidebar they can tell apart at a glance.
         color: input.color ?? nextColor(existing),
         autoCwd: resolveAutoCwd(input.autoCwd ?? null),
-        autoWorkflowId: input.autoWorkflowId ?? null,
+        autoTeamId: input.autoTeamId ?? null,
         // Appended, never inserted: a new group is the user's newest thought
         // and moving it is one click away.
         position: existing.length,
@@ -100,7 +100,7 @@ export class RunGroupsService {
       color?: RunGroupColor;
       collapsed?: boolean;
       autoCwd?: string | null;
-      autoWorkflowId?: string | null;
+      autoTeamId?: string | null;
     },
   ): Promise<RunGroupWire> {
     const em = this.em.fork();
@@ -117,11 +117,11 @@ export class RunGroupsService {
     if (patch.autoCwd !== undefined) {
       group.autoCwd = resolveAutoCwd(patch.autoCwd);
     }
-    if (patch.autoWorkflowId !== undefined) {
+    if (patch.autoTeamId !== undefined) {
       // Stored as given: a slug is the library's own identity, so there is
-      // nothing to canonicalize, and a workflow deleted later simply stops
+      // nothing to canonicalize, and a team deleted later simply stops
       // matching rather than making this group unusable.
-      group.autoWorkflowId = patch.autoWorkflowId;
+      group.autoTeamId = patch.autoTeamId;
     }
     await em.flush();
     this.bus.publishGroupsChanged();
@@ -204,7 +204,7 @@ export class RunGroupsService {
   }
 
   /**
-   * Which group, if any, claims a new run — by the WORKFLOW it runs, else by
+   * Which group, if any, claims a new run — by the TEAM it runs, else by
    * the folder it was started in.
    *
    * A folder claim covers the folder it names AND everything inside it, because
@@ -214,29 +214,29 @@ export class RunGroupsService {
    * SPECIFIC wins: a group on `~/work/app` beats one on `~/work`, which is the
    * only reading under which the two can usefully coexist.
    *
-   * A WORKFLOW claim OUTRANKS every folder claim, and that ranking is the whole
+   * A TEAM claim OUTRANKS every folder claim, and that ranking is the whole
    * reason the two rules can coexist. A team graph is run over a dozen
    * repositories, so no folder names those runs — while the folders they run in
    * are exactly the folders whose ordinary chats a user has already filed
-   * somewhere. Reading them as folder chats would put every workflow run into
+   * somewhere. Reading them as folder chats would put every team run into
    * whichever project it happened to touch, which is the arrangement the
-   * workflow rule is asked for INSTEAD of.
+   * team rule is asked for INSTEAD of.
    *
    * Sidebar order breaks a tie within either rank, so the answer is
    * deterministic rather than whatever the row order happened to be.
    */
   async resolveAutoGroupId(run: {
     cwd: string | null;
-    /** The workflow slug this run executes, or null for a 1:1 chat. */
-    workflowId?: string | null;
+    /** The team slug this run executes, or null for a 1:1 chat. */
+    teamId?: string | null;
   }): Promise<string | null> {
-    const { cwd, workflowId = null } = run;
-    if (cwd === null && workflowId === null) {
+    const { cwd, teamId = null } = run;
+    if (cwd === null && teamId === null) {
       return null;
     }
     const groups = await this.groupDao.listOrdered(this.em.fork());
-    if (workflowId !== null) {
-      const claim = groups.find((group) => group.autoWorkflowId === workflowId);
+    if (teamId !== null) {
+      const claim = groups.find((group) => group.autoTeamId === teamId);
       if (claim) {
         return claim.id;
       }
@@ -306,6 +306,6 @@ function toWire(group: RunGroup): RunGroupWire {
     position: group.position,
     collapsed: group.collapsed,
     autoCwd: group.autoCwd,
-    autoWorkflowId: group.autoWorkflowId,
+    autoTeamId: group.autoTeamId,
   };
 }

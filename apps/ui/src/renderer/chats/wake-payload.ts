@@ -14,7 +14,7 @@ export interface WakeReason {
  * the agent is not seen talking again unprompted.
  *
  * TWIN PARSER: written by `wakeNotice` in
- * `apps/daemon/src/v1/graphs/services/call-broker.service.ts`.
+ * `apps/daemon/src/v1/teams/services/call-broker.service.ts`.
  */
 export function readWakeNotice(payload: unknown): WakeReason[] | null {
   if (!payload || typeof payload !== 'object') {

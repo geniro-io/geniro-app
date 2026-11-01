@@ -32,7 +32,7 @@ export class ShowArtifactTool extends BaseMcpTool {
 
   protected instructions({ runId }: McpListContext): string {
     return showArtifactInstructions(
-      this.artifacts.inWorkflowRun(runId),
+      this.artifacts.inTeamRun(runId),
       this.shares.agentsMayShare(),
     );
   }
@@ -80,9 +80,7 @@ export class ShowArtifactTool extends BaseMcpTool {
                 nodeId,
                 conversationId,
                 caller,
-                target: this.artifacts.inWorkflowRun(runId)
-                  ? 'workflow'
-                  : 'chat',
+                target: this.artifacts.inTeamRun(runId) ? 'team' : 'chat',
               },
             },
             context.remote,

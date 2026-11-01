@@ -79,7 +79,7 @@ describe('RunStateService (in-memory sqlite)', () => {
     const shells = {
       read: () => Promise.resolve({ shells: [] }),
     } as unknown as ChatShellsService;
-    // Two CLIs, as a workflow mixes them: one names its launches, one does not.
+    // Two CLIs, as a team mixes them: one names its launches, one does not.
     const adapters = {
       all: () =>
         new Map([
@@ -133,9 +133,9 @@ describe('RunStateService (in-memory sqlite)', () => {
 
   async function createRun(
     status: RunStatus,
-    workflowId: string | null = null,
+    teamId: string | null = null,
   ): Promise<void> {
-    await runs.create({ id: 'run-a', status, workflowId });
+    await runs.create({ id: 'run-a', status, teamId });
   }
 
   async function insert(
@@ -278,7 +278,7 @@ describe('RunStateService (in-memory sqlite)', () => {
       monitor('m2', {
         nodeId: 'reviewer',
         callId: 'call-3',
-        target: 'workflow',
+        target: 'team',
       }),
       monitor('m1', { runId: 'run-b' }),
     ]).read('run-a');
@@ -740,7 +740,7 @@ describe('RunStateService (in-memory sqlite)', () => {
     expect((await service().read('run-a')).turnStartedAt).toBeNull();
   });
 
-  it('dates no turn for a running WORKFLOW run — its turns are its nodes’', async () => {
+  it('dates no turn for a running TEAM run — its turns are its nodes’', async () => {
     await createRun('running', 'dev-team');
     await insert(1, 'message', { text: 'q' }, { role: 'user', at: 1000 });
     expect((await service().read('run-a')).turnStartedAt).toBeNull();

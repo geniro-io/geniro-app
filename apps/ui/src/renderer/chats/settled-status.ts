@@ -45,16 +45,32 @@ export function settlesOnContinuation(
   );
 }
 
+const TEAM_PASS_STOP = /^(?:team|workflow)_(completed|failed|cancelled)$/;
+
+/**
+ * The status a team run's closing row names (`stopReason: team_<status>`,
+ * written by the daemon's `GraphExecutorService` finalizer), or null for any
+ * other stop reason. Rows stored before the rename say `workflow_<status>`.
+ */
+export function teamPassStatus(
+  stopReason: string | null | undefined,
+): 'completed' | 'failed' | 'cancelled' | null {
+  const status = TEAM_PASS_STOP.exec(stopReason ?? '')?.[1];
+  return status === 'completed' || status === 'failed' || status === 'cancelled'
+    ? status
+    : null;
+}
+
 /**
  * The run status a terminal transcript item implies, or null when the item is
- * not one — a run-level turn end, and never a workflow node's own.
+ * not one — a run-level turn end, and never a team node's own.
  *
  * `nodeId !== null` is refused here rather than at the call sites: a workflow's
  * per-node `turn_complete` says nothing about the RUN, and letting one through
  * re-enabled the composer while sibling branches were still running.
  *
- * A workflow run's roll-up rides the terminal item's `stopReason`, so a failed
- * or cancelled workflow is not read as `completed` just because its last item's
+ * A team run's roll-up rides the terminal item's `stopReason`, so a failed
+ * or cancelled team run is not read as `completed` just because its last item's
  * kind says so.
  *
  * Extracted because three sites need it and they must not drift: the live
@@ -73,11 +89,11 @@ export function settledRunStatus(item: ChatItem): RunDto['status'] | null {
   if (!endsRunTurn(item)) {
     return null;
   }
-  const stopReason = payloadString(item.payload, 'stopReason');
-  if (stopReason === 'workflow_failed') {
+  const pass = teamPassStatus(payloadString(item.payload, 'stopReason'));
+  if (pass === 'failed') {
     return 'failed';
   }
-  if (stopReason === 'workflow_cancelled') {
+  if (pass === 'cancelled') {
     return 'cancelled';
   }
   if (item.kind === 'turn_complete') {

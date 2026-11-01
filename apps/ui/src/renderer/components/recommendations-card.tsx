@@ -11,10 +11,10 @@ import {
   type RecommendationsLook,
   RecommendationsProjection,
   SectionTitle,
+  type TeamAgentStatsView,
+  TeamFigures,
+  type TeamStatsView,
   workedShare,
-  type WorkflowAgentStatsView,
-  WorkflowFigures,
-  type WorkflowStatsView,
 } from './recommendations-figures';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -23,7 +23,7 @@ import { OptionIndicator } from './ui/option-list';
 export type {
   RecommendationsFolds,
   RecommendationsLook,
-  WorkflowStatsView,
+  TeamStatsView,
 } from './recommendations-figures';
 
 export type RecommendationRisk = 'low' | 'medium' | 'high';
@@ -33,14 +33,14 @@ export type RecommendationOutcomeStatus = 'applied' | 'skipped' | 'failed';
 /** One recommendation as the card draws it. */
 export interface RecommendationView {
   id: string;
-  target: 'workflow' | 'repo' | 'user' | 'memory';
+  target: 'team' | 'repo' | 'user' | 'memory';
   territory: RecommendationTerritory;
   kind: string;
   location: string;
   title: string;
   change: string;
   evidence: {
-    /** The run the quote is from — a workflow analysis reads several. */
+    /** The run the quote is from — a team analysis reads several. */
     runId?: string | null;
     seq: number;
     ts: string | null;
@@ -386,8 +386,8 @@ function HotspotFigures({
   stats,
   look,
 }: {
-  agent: WorkflowAgentStatsView;
-  stats: WorkflowStatsView;
+  agent: TeamAgentStatsView;
+  stats: TeamStatsView;
   look: RecommendationsLook;
 }): React.JSX.Element {
   const share = workedShare(stats, agent);
@@ -424,7 +424,7 @@ function Hotspots({
   onToggle,
 }: {
   hotspots: readonly RecommendationHotspotView[];
-  stats: WorkflowStatsView | null;
+  stats: TeamStatsView | null;
   items: readonly RecommendationView[];
   selected: readonly string[];
   locked: boolean;
@@ -531,9 +531,9 @@ function projectionScope(
 export function RecommendationsCard({
   summary,
   timing,
-  workflowStats = null,
+  teamStats = null,
   hotspots = [],
-  workflow,
+  team,
   items,
   applied,
   outcomes,
@@ -547,10 +547,10 @@ export function RecommendationsCard({
 }: {
   summary: string | null;
   timing: RecommendationsTimingView | null;
-  workflowStats?: WorkflowStatsView | null;
+  teamStats?: TeamStatsView | null;
   hotspots?: readonly RecommendationHotspotView[];
-  /** The analysed thread is a workflow; a plain chat gets no Workflow group. */
-  workflow: boolean;
+  /** The analysed thread is a team; a plain chat gets no Team group. */
+  team: boolean;
   items: readonly RecommendationView[];
   /** The ids the Apply sent, or null while none has been. */
   applied: readonly string[] | null;
@@ -607,19 +607,19 @@ export function RecommendationsCard({
       : priced.reduce((sum, item) => sum + (item.costSavedUsd ?? 0), 0);
   const groups = (
     [
-      ['workflow', 'Workflow'],
+      ['team', 'Team'],
       ['repo', 'Repository'],
       ['user', 'Your agent instructions'],
       ['memory', 'Memory'],
     ] as const
   )
-    .filter(([target]) => target !== 'workflow' || workflow)
+    .filter(([target]) => target !== 'team' || team)
     .map(([target, label]) => ({
       label,
       items: items.filter((item) => item.target === target),
     }))
     .filter((group) => group.items.length > 0);
-  const unit: ProjectionUnit = workflow ? 'run' : 'thread';
+  const unit: ProjectionUnit = team ? 'run' : 'thread';
   const hotNodes = new Set(
     hotspots.flatMap((hotspot) =>
       hotspot.node === null ? [] : [hotspot.node],
@@ -643,11 +643,11 @@ export function RecommendationsCard({
       <div className="flex min-w-0 flex-col gap-1.5">
         <p className="m-0 flex items-center gap-1.5 text-sm font-medium">
           <Sparkles className="size-4 text-muted-foreground" aria-hidden />
-          {workflowStats !== null
-            ? `Workflow analysis · ${workflowStats.runs} run${workflowStats.runs === 1 ? '' : 's'}`
+          {teamStats !== null
+            ? `Team analysis · ${teamStats.runs} run${teamStats.runs === 1 ? '' : 's'}`
             : hotspots.length > 0
-              ? workflow
-                ? 'Workflow analysis'
+              ? team
+                ? 'Team analysis'
                 : 'Thread analysis'
               : 'Recommendations'}
         </p>
@@ -658,9 +658,9 @@ export function RecommendationsCard({
         )}
       </div>
       {timing === null ? null : <TimingStrip timing={timing} look={look} />}
-      {workflowStats === null ? null : (
-        <WorkflowFigures
-          stats={workflowStats}
+      {teamStats === null ? null : (
+        <TeamFigures
+          stats={teamStats}
           look={look}
           folds={foldsInUse}
           hotNodes={hotNodes}
@@ -669,7 +669,7 @@ export function RecommendationsCard({
       {hotspots.length === 0 ? null : (
         <Hotspots
           hotspots={hotspots}
-          stats={workflowStats}
+          stats={teamStats}
           items={items}
           selected={selected}
           locked={locked}
@@ -685,7 +685,7 @@ export function RecommendationsCard({
         </p>
       ) : (
         <div className="flex min-w-0 flex-col gap-2">
-          {workflowStats === null && hotspots.length === 0 ? null : (
+          {teamStats === null && hotspots.length === 0 ? null : (
             <SectionTitle>Recommendations</SectionTitle>
           )}
           {groups.map((group) => (
@@ -718,8 +718,8 @@ export function RecommendationsCard({
       {items.length === 0 ? null : (
         <RecommendationsProjection
           baseline={{
-            wallMs: workflowStats?.perRun.wallMs ?? timing?.wallMs ?? null,
-            costUsd: workflowStats?.perRun.costUsd ?? null,
+            wallMs: teamStats?.perRun.wallMs ?? timing?.wallMs ?? null,
+            costUsd: teamStats?.perRun.costUsd ?? null,
           }}
           minutesSaved={minutesSaved}
           costSavedUsd={costSavedUsd}

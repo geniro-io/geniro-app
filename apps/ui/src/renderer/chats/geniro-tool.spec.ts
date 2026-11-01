@@ -5,6 +5,8 @@ import {
   geniroMemoryToolOf,
   isGeniroCardKind,
   isGeniroToolName,
+  isTeamProposalTool,
+  standsAcrossTurns,
 } from './geniro-tool';
 
 const RUN = 'abc12345-0000-0000-0000-000000000000';
@@ -63,9 +65,16 @@ describe('which of them draw a card', () => {
     );
     expect(geniroCardKindOf(`mcp__${SERVER}__show_chart`, RUN)).toBe('chart');
     expect(geniroCardKindOf(`mcp__${SERVER}__propose_plan`, RUN)).toBe('plan');
+    expect(geniroCardKindOf(`mcp__${SERVER}__propose_team`, RUN)).toBe('team');
+  });
+
+  it('draws a team card for a call recorded before the rename as propose_workflow', () => {
     expect(geniroCardKindOf(`mcp__${SERVER}__propose_workflow`, RUN)).toBe(
-      'workflow',
+      'team',
     );
+    expect(standsAcrossTurns('propose_workflow')).toBe(true);
+    expect(isTeamProposalTool('propose_workflow')).toBe(true);
+    expect(isTeamProposalTool('propose_plan')).toBe(false);
   });
 
   it('answers null for one of geniro’s tools that draws NOTHING', () => {

@@ -5,7 +5,7 @@ import { Button } from './button';
 const meta = {
   title: 'Primitives/Button',
   component: Button,
-  args: { children: 'Run workflow' },
+  args: { children: 'Run team' },
   argTypes: {
     variant: {
       control: 'select',

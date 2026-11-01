@@ -11,7 +11,7 @@ import { Dialog } from '../components/ui/dialog';
 import { useLatestCallback } from '../components/use-latest-callback';
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
-import type { AnalysedWorkflowSubject } from './analyze-thread-dialog';
+import type { AnalysedTeamSubject } from './analyze-thread-dialog';
 import { HostedChat } from './hosted-chat';
 import type { RecommendationsApplier } from './recommendations-apply-context';
 import { RunStatusBadge } from './run-status';
@@ -22,7 +22,7 @@ import { useHostedChat } from './use-hosted-chat';
  *
  * The analysis is an ordinary chat the sidebar never lists — REPORTED as "I
  * should not see this thread in shared list - same as for thread with
- * changing workflow. It should be just in different popup" — so this is the
+ * changing team. It should be just in different popup" — so this is the
  * only place it is read, answered, applied and replaced. One per thread
  * (`GET /v1/chats/:runId/analysis`): New analysis opens the setup dialog
  * again, and starting there replaces this one.
@@ -30,8 +30,8 @@ import { useHostedChat } from './use-hosted-chat';
  * Closing it stops nothing: the analysis runs in the daemon, and the thread's
  * Analyze button says when it is working or waiting on you.
  *
- * A workflow's subject is that workflow's analysis across its recent runs
- * ("Analyze & improve", `GET /v1/workflows/:slug/analysis`), hosted over the
+ * A team's subject is that team's analysis across its recent runs
+ * ("Analyze & improve", `GET /v1/teams/:slug/analysis`), hosted over the
  * builder the same way.
  */
 export function AnalysisDialog({
@@ -52,7 +52,7 @@ export function AnalysisDialog({
   /** Whose analysis this is; the popup is open while it is non-null. */
   subject:
     | { kind: 'thread'; run: RunDto }
-    | ({ kind: 'workflow' } & AnalysedWorkflowSubject)
+    | ({ kind: 'team' } & AnalysedTeamSubject)
     | null;
   sourceLabel: string;
   apis: DaemonApis | null;
@@ -66,17 +66,17 @@ export function AnalysisDialog({
   applyRecommendations: RecommendationsApplier;
   /** Open the setup dialog to start a new analysis, which replaces this one. */
   onNewAnalysis: () => void;
-  /** A turn of the analysis ended — it may have changed the workflow. */
+  /** A turn of the analysis ended — it may have changed the team. */
   onTurnSettled?: () => void | Promise<void>;
   onClose: () => void;
 }): React.JSX.Element {
-  const slug = subject?.kind === 'workflow' ? subject.slug : null;
+  const slug = subject?.kind === 'team' ? subject.slug : null;
   const sourceId =
     subject === null
       ? null
       : subject.kind === 'thread'
         ? subject.run.id
-        : `workflow-analysis:${subject.slug}`;
+        : `team-analysis:${subject.slug}`;
   const open = useLatestCallback(async (): Promise<RunDto> => {
     if (apis === null || sourceId === null) {
       throw new Error('daemon unavailable');
@@ -84,12 +84,12 @@ export function AnalysisDialog({
     const { analysis } =
       slug === null
         ? await apis.chats.getThreadAnalysis({ runId: sourceId })
-        : await apis.workflows.getWorkflowAnalysis({ slug });
+        : await apis.teams.getTeamAnalysis({ slug });
     if (analysis == null) {
       throw new Error(
         slug === null
           ? 'This thread has no analysis yet.'
-          : 'This workflow has no analysis yet.',
+          : 'This team has no analysis yet.',
       );
     }
     return analysis;
@@ -126,7 +126,7 @@ export function AnalysisDialog({
             emptyText={
               slug === null
                 ? 'The analysis is starting — it reads the thread, then posts what it found and a card of changes to pick from.'
-                : 'The analysis is starting — it reads the workflow’s latest runs, then posts what it found and a card of changes to pick from.'
+                : 'The analysis is starting — it reads the team’s latest runs, then posts what it found and a card of changes to pick from.'
             }
             onTurnSettled={onTurnSettled}
             composerLabel="Message the analysis"
@@ -146,7 +146,7 @@ export function AnalysisDialog({
                   variant="ghost"
                   size="sm"
                   className="ml-auto shrink-0"
-                  title={`Set up a new analysis of this ${slug === null ? 'thread' : 'workflow'} — starting it replaces this one`}
+                  title={`Set up a new analysis of this ${slug === null ? 'thread' : 'team'} — starting it replaces this one`}
                   onClick={onNewAnalysis}>
                   <RotateCcw className="size-3.5" />
                   New analysis

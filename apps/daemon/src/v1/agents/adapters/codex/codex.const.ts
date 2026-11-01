@@ -457,7 +457,7 @@ export const CODEX_PLUGIN_TOGGLE_REASON =
 export const CODEX_PROJECT_TOGGLE_REASON =
   "defined in this project's .codex/config.toml — geniro switches servers only in codex's own config.toml";
 
-// ── A workflow node's switched-off servers (one turn) ──────────────────────
+// ── A team node's switched-off servers (one turn) ──────────────────────
 
 /**
  * The server codex builds in for ChatGPT Apps (connectors), and the feature

@@ -28,7 +28,7 @@ export interface PendingApproval {
    * a patch whose agent was told to stop and wait, because its CLI's MCP
    * client will not hold a call open for a person
    * (`AdapterConfig.hostQuestionDeferredReason`), or a card another module
-   * raised through `ChatService.raiseOwnedCard` (a workflow proposal), which
+   * raised through `ChatService.raiseOwnedCard` (a team proposal), which
    * never holds a call open at all.
    *
    * It is the one entry {@link ApprovalRegistry.sweepNode} leaves alone. Every
@@ -44,7 +44,7 @@ export interface PendingApproval {
   deferred?: boolean;
   /**
    * Whether this deferred card stands ACROSS turns — a card another module owns
-   * (`ChatService.raiseOwnedCard`, a workflow proposal), which a new turn does
+   * (`ChatService.raiseOwnedCard`, a team proposal), which a new turn does
    * not retire and which counts as `awaiting` only while no turn runs. Absent
    * means false: a question, plan or patch is retired by the next turn.
    *
@@ -93,14 +93,14 @@ export class ApprovalRegistry {
    * Never the protocol id alone, because a CLI's request ids are unique only
    * within ONE PROCESS: an ACP agent numbers its requests `n:0`, `n:1`, … per
    * connection (cursor-agent's `sendRequest` is a bare `this.#i++`). Two cursor
-   * nodes of one workflow run, or two calls to one cursor callee, both parked
+   * nodes of one team run, or two calls to one cursor callee, both parked
    * `n:1`; the second track overwrote the first and a verdict pressed on A's
    * card answered B. The renderer is keyed the same way — one verdict row
    * closes every card carrying its id — so the same reuse across a RESPAWNED
    * process, or a request a later turn re-offers after its first card was
    * retired, drew the new card already answered or already expired.
    *
-   * `scope` names the process for whoever reads the id (a workflow's session
+   * `scope` names the process for whoever reads the id (a team's session
    * key); the random tail is what makes it unique — across processes, respawns
    * and daemon restarts alike. The minting caller keeps `protocolId` to answer
    * the CLI with: only this side of the daemon ever sees a card id.
@@ -215,7 +215,7 @@ export class ApprovalRegistry {
    *
    * `only` narrows the sweep: a new turn retires the run's deferred questions,
    * plans and patches, while a {@link PendingApproval.standing} card (a
-   * workflow proposal) stays until its owner retires it.
+   * team proposal) stays until its owner retires it.
    */
   sweepDeferred(
     runId: string,

@@ -6,8 +6,8 @@ import {
   ITEMS,
   LOOK,
   recommendation,
+  TEAM_STATS,
   TIMING,
-  WORKFLOW_STATS,
 } from '../__fixtures__/recommendations';
 import { RecommendationsCard } from './recommendations-card';
 
@@ -20,9 +20,9 @@ function SelectingDemo(): React.JSX.Element {
         look={LOOK}
         summary="Most of each run goes to the reviewer: the two reviews run one after the other, and QA runs its checklist on opus."
         timing={null}
-        workflowStats={WORKFLOW_STATS}
+        teamStats={TEAM_STATS}
         hotspots={HOTSPOTS}
-        workflow
+        team
         items={ITEMS}
         applied={applied}
         outcomes={{}}
@@ -49,9 +49,9 @@ export const Applied: Story = {
         look={LOOK}
         summary={null}
         timing={null}
-        workflowStats={WORKFLOW_STATS}
+        teamStats={TEAM_STATS}
         hotspots={HOTSPOTS}
-        workflow
+        team
         items={ITEMS}
         applied={['W-1', 'R-1']}
         outcomes={{
@@ -86,7 +86,7 @@ export const PlainChat: Story = {
             items: ['R-1'],
           },
         ]}
-        workflow={false}
+        team={false}
         items={[recommendation('R-1'), recommendation('R-2')]}
         applied={null}
         outcomes={{}}
@@ -103,7 +103,7 @@ export const WithMemory: Story = {
         look={LOOK}
         summary={null}
         timing={TIMING}
-        workflow={false}
+        team={false}
         items={[
           recommendation('R-1'),
           recommendation('M-1', {
@@ -128,7 +128,7 @@ export const Empty: Story = {
         look={LOOK}
         summary={null}
         timing={TIMING}
-        workflow
+        team
         items={[]}
         applied={null}
         outcomes={{}}
@@ -145,9 +145,9 @@ export const Phone: Story = {
         look={LOOK}
         summary={null}
         timing={null}
-        workflowStats={WORKFLOW_STATS}
+        teamStats={TEAM_STATS}
         hotspots={HOTSPOTS}
-        workflow
+        team
         items={ITEMS}
         applied={null}
         outcomes={{}}

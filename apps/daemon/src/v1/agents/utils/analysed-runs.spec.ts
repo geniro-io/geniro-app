@@ -41,7 +41,7 @@ describe('analysisTurnOf', () => {
     analysisSourceRunId: null,
     analysisSourceSeq: null,
     analysisSourceWorking: null,
-    analysisWorkflowSlug: null,
+    analysisTeamSlug: null,
     analysisRuns: null,
   };
 
@@ -65,7 +65,7 @@ describe('analysisTurnOf', () => {
     });
   });
 
-  it('reads a workflow analysis as its runs, the newest standing as the source', () => {
+  it('reads a team analysis as its runs, the newest standing as the source', () => {
     const runs = [
       { runId: 'new', snapshotSeq: 12, working: true },
       { runId: 'old', snapshotSeq: 30, working: false },
@@ -74,7 +74,7 @@ describe('analysisTurnOf', () => {
     expect(
       analysisTurnOf('a', {
         ...none,
-        analysisWorkflowSlug: 'team',
+        analysisTeamSlug: 'team',
         analysisRuns: writeAnalysedRuns(runs),
       }),
     ).toEqual({
@@ -82,15 +82,15 @@ describe('analysisTurnOf', () => {
       sourceRunId: 'new',
       snapshotSeq: 12,
       sourceWorking: true,
-      workflow: { slug: 'team', runs },
+      team: { slug: 'team', runs },
     });
   });
 
-  it('answers null for a workflow analysis whose runs do not read', () => {
+  it('answers null for a team analysis whose runs do not read', () => {
     expect(
       analysisTurnOf('a', {
         ...none,
-        analysisWorkflowSlug: 'team',
+        analysisTeamSlug: 'team',
         analysisRuns: 'junk',
       }),
     ).toBeNull();

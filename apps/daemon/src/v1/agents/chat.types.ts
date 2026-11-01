@@ -61,7 +61,7 @@ export const CHAT_TITLE_UPGRADE_TURNS = 5;
 
 /**
  * Chat-level tool-approval modes. `plan` is chat-only by design decision —
- * the graph node schema stops at `acceptEdits` (graphs.types.ts
+ * the graph node schema stops at `acceptEdits` (teams.types.ts
  * ApprovalModeSchema).
  */
 export const CHAT_APPROVAL_MODES = [
@@ -385,27 +385,27 @@ export type HostFindingsOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
- * The analysis tools ("Analyze thread", a workflow's "Analyze & improve"):
+ * The analysis tools ("Analyze thread", a team's "Analyze & improve"):
  * installed for a turn only on an analysis chat, and scoped to the source run
- * it was started on, or a workflow analysis's runs.
- * `save_workflow_change` is also a workflow builder chat's one write to its
- * own workflow.
+ * it was started on, or a team analysis's runs.
+ * `save_team_change` is also a team builder chat's one write to its
+ * own team.
  */
 export const HOST_ANALYZED_THREAD_TOOL = 'read_analyzed_thread';
 export const HOST_RECOMMENDATIONS_TOOL = 'report_recommendations';
 export const HOST_RECOMMENDATION_MARKS_TOOL = 'mark_recommendations';
-export const HOST_WORKFLOW_CHANGE_TOOL = 'save_workflow_change';
-/** A workflow builder chat's own backup of its file, taken when the agent decides. */
-export const HOST_BACKUP_WORKFLOW_TOOL = 'backup_workflow';
+export const HOST_TEAM_CHANGE_TOOL = 'save_team_change';
+/** A team builder chat's own backup of its file, taken when the agent decides. */
+export const HOST_BACKUP_TEAM_TOOL = 'backup_team';
 
 /**
- * The workflow tools of an ordinary chat: read the library, and propose a whole
- * workflow on a card the user approves. The daemon writes the file, never the
- * agent. A workflow builder chat is offered the read too, ahead of its
- * `save_workflow_change`.
+ * The team tools of an ordinary chat: read the library, and propose a whole
+ * team on a card the user approves. The daemon writes the file, never the
+ * agent. A team builder chat is offered the read too, ahead of its
+ * `save_team_change`.
  */
-export const HOST_READ_WORKFLOWS_TOOL = 'read_workflows';
-export const HOST_PROPOSE_WORKFLOW_TOOL = 'propose_workflow';
+export const HOST_READ_TEAMS_TOOL = 'read_teams';
+export const HOST_PROPOSE_TEAM_TOOL = 'propose_team';
 
 /**
  * What every owned card's durable column holds at least — the card's id. The
@@ -427,41 +427,41 @@ export interface DeferredCard {
 export type DeferredCardResponder = (allow: boolean, answer?: string) => void;
 
 /**
- * How a `propose_workflow` card was answered, as the agent is told it; `note`
+ * How a `propose_team` card was answered, as the agent is told it; `note`
  * is what the user typed on either button.
  */
-export type WorkflowProposalVerdict =
+export type TeamProposalVerdict =
   | { kind: 'saved'; slug: string; backup: string | null; note: string | null }
   | { kind: 'declined'; note: string | null }
   | {
       kind: 'not-saved';
-      cause: WorkflowNotSavedCause;
+      cause: TeamNotSavedCause;
       reason: string;
       note: string | null;
     };
 
-/** Why an approved `propose_workflow` card wrote nothing. */
-export type WorkflowNotSavedCause =
+/** Why an approved `propose_team` card wrote nothing. */
+export type TeamNotSavedCause =
   'changed' | 'exists' | 'gone' | 'not-closed' | 'write-failed';
 
 /**
- * What became of an APPROVED `propose_workflow` card, on its verdict row: the
+ * What became of an APPROVED `propose_team` card, on its verdict row: the
  * card shows it at once, while the message telling the agent may wait for a
  * running turn to end. A declined card carries none.
  *
  * TWIN PARSER: `readProposalOutcome` in
- * `apps/ui/src/renderer/chats/workflow-proposal-payload.ts`.
+ * `apps/ui/src/renderer/chats/team-proposal-payload.ts`.
  */
-export type WorkflowProposalOutcome =
+export type TeamProposalOutcome =
   | { kind: 'saved'; slug: string }
-  | { kind: 'not-saved'; cause: WorkflowNotSavedCause };
+  | { kind: 'not-saved'; cause: TeamNotSavedCause };
 
 export const ANALYSIS_VIEWS = [
   'overview',
   'spans',
   'items',
   'item',
-  'workflow',
+  'team',
   'runs',
   'history',
 ] as const;
@@ -480,14 +480,14 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
   view: z
     .enum(ANALYSIS_VIEWS)
     .describe(
-      "overview: timing summary, per-node time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. workflow: the workflow as it is in the library now, its hash and how it differs from the copy this run started with (workflow threads only). runs: every run a workflow analysis reads, with its totals, outcome and graph version, the runs compared version by version, every node's totals and every node's turns per model across them, in chunks when long (workflow analyses only). history: every graph version of the workflow with what its runs did and how it differs from the one before, every change made to it with who made it and why, and every recommendation filed about it with what became of it, in chunks when long (workflow threads and analyses only)",
+      "overview: timing summary, per-node time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and graph version, the runs compared version by version, every node's totals and every node's turns per model across them, in chunks when long (team analyses only). history: every graph version of the team with what its runs did and how it differs from the one before, every change made to it with who made it and why, and every recommendation filed about it with what became of it, in chunks when long (team threads and analyses only)",
     ),
   runId: z
     .string()
     .max(200)
     .optional()
     .describe(
-      'A workflow analysis: which of its runs to read (view=runs lists them); omitted, the newest',
+      'A team analysis: which of its runs to read (view=runs lists them); omitted, the newest',
     ),
   cursor: z
     .number()
@@ -515,7 +515,7 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
     .min(0)
     .optional()
     .describe(
-      'item, runs, workflow, history: the `next.offset` the previous chunk returned',
+      'item, runs, team, history: the `next.offset` the previous chunk returned',
     ),
   nodeId: z
     .string()
@@ -540,12 +540,12 @@ export type ReadAnalyzedThreadArgs = z.infer<
 >;
 
 /**
- * What a recommendation changes: the analysed workflow, the repository it
+ * What a recommendation changes: the analysed team, the repository it
  * worked in, the user's own standing-instructions file of an agent it ran
  * (`AdapterConfig.userInstructions`), or geniro's shared memory.
  */
 export const RECOMMENDATION_TARGETS = [
-  'workflow',
+  'team',
   'repo',
   'user',
   'memory',
@@ -554,7 +554,7 @@ export type RecommendationTarget = (typeof RECOMMENDATION_TARGETS)[number];
 
 /** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`. */
 export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
-  workflow: 'W-',
+  team: 'W-',
   repo: 'R-',
   user: 'U-',
   memory: 'M-',
@@ -578,7 +578,7 @@ export const RecommendationIdSchema = z
   .string()
   .regex(
     /^[WRUM]-\d{1,3}$/,
-    'an id is W-<n> for a workflow item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry',
+    'an id is W-<n> for a team item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry',
   );
 
 export const RecommendationTargetSchema = z.enum(RECOMMENDATION_TARGETS);
@@ -591,7 +591,7 @@ export const RecommendationEvidenceSchema = z.object({
     .max(200)
     .optional()
     .describe(
-      'A workflow analysis: the run the quoted row is from (view=runs lists them); omitted, the newest',
+      'A team analysis: the run the quoted row is from (view=runs lists them); omitted, the newest',
     ),
   seq: z
     .number()
@@ -640,7 +640,7 @@ const RecommendationImpactSchema = z.object({
 
 export const RecommendationItemSchema = z.object({
   id: RecommendationIdSchema.describe(
-    'W-1, W-2… workflow; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory',
+    'W-1, W-2… team; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory',
   ),
   target: RecommendationTargetSchema,
   territory: z
@@ -653,14 +653,14 @@ export const RecommendationItemSchema = z.object({
     .min(1)
     .max(40)
     .describe(
-      'workflow: role|edge|parallelize|model|effort|termination|node|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget',
+      'team: role|edge|parallelize|model|effort|termination|node|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget',
     ),
   location: z
     .string()
     .min(1)
     .max(300)
     .describe(
-      'A workflow node id, a repo file:line, the user-instructions file path, or for memory the entry handle (m12) to update or forget, or new to add',
+      'A team node id, a repo file:line, the user-instructions file path, or for memory the entry handle (m12) to update or forget, or new to add',
     ),
   title: z.string().min(1).max(200),
   change: z
@@ -698,7 +698,7 @@ export const RecommendationHotspotSchema = z.object({
     .max(200)
     .optional()
     .describe(
-      "A workflow analysis: the node it is about, as view=runs names it — the card draws that agent's measured figures beside it",
+      "A team analysis: the node it is about, as view=runs names it — the card draws that agent's measured figures beside it",
     ),
   why: z
     .string()
@@ -809,7 +809,7 @@ export const RecommendationsCallStatsSchema = z.object({
   workedMs: msSchema.nullable().optional(),
 });
 
-export const RecommendationsWorkflowStatsSchema = z.object({
+export const RecommendationsTeamStatsSchema = z.object({
   runs: countSchema,
   perRun: z.object({
     wallMs: msSchema,
@@ -837,8 +837,8 @@ export const RecommendationsWorkflowStatsSchema = z.object({
   callEdges: countSchema,
   calls: z.array(RecommendationsCallStatsSchema).max(MAX_CARD_CALL_EDGES),
 });
-export type RecommendationsWorkflowStats = z.infer<
-  typeof RecommendationsWorkflowStatsSchema
+export type RecommendationsTeamStats = z.infer<
+  typeof RecommendationsTeamStatsSchema
 >;
 
 /** The summary strip a card opens with — measured by the daemon, never the agent. */
@@ -859,11 +859,9 @@ export const RecommendationsPayloadSchema = RecommendationsReportSchema.extend({
   hotspots: RecommendationsReportSchema.shape.hotspots.optional(),
   items: z.array(CardRecommendationItemSchema).max(MAX_RECOMMENDATIONS),
   sourceRunId: z.string(),
-  sourceKind: z.enum(['workflow', 'chat']),
+  sourceKind: z.enum(['team', 'chat']),
   timing: RecommendationsTimingSchema.nullable(),
-  workflowStats: RecommendationsWorkflowStatsSchema.nullable()
-    .optional()
-    .catch(null),
+  teamStats: RecommendationsTeamStatsSchema.nullable().optional().catch(null),
 });
 export type RecommendationsPayload = z.infer<
   typeof RecommendationsPayloadSchema
@@ -901,7 +899,7 @@ export const RecommendationMarksSchema = z.object({
           .string()
           .max(300)
           .optional()
-          .describe('The backup file name save_workflow_change returned'),
+          .describe('The backup file name save_team_change returned'),
       }),
     )
     .min(1)
@@ -911,7 +909,7 @@ export type RecommendationMarks = z.infer<typeof RecommendationMarksSchema>;
 
 /**
  * The durable record of one Apply, carried on the user message it sent
- * (`payload.apply`) — what `save_workflow_change` checks a write against.
+ * (`payload.apply`) — what `save_team_change` checks a write against.
  *
  * TWIN PARSER: apps/ui/src/renderer/chats/recommendations-payload.ts.
  */
@@ -1046,16 +1044,16 @@ export interface ThreadTimeline {
 }
 
 /** What kind of thread an analysis reads — it decides what may be recommended. */
-export type AnalysedThreadKind = 'workflow' | 'chat';
+export type AnalysedThreadKind = 'team' | 'chat';
 
 /**
- * How many of its workflow's newest runs a builder chat's turn reads — the
+ * How many of its team's newest runs a builder chat's turn reads — the
  * "Analyze & improve" dialog's default (`DEFAULT_ANALYSED_RUNS` in the
  * renderer).
  */
 export const BUILDER_CHAT_ANALYSED_RUNS = 10;
 
-/** One run a workflow analysis reads, and where its snapshot ends. */
+/** One run a team analysis reads, and where its snapshot ends. */
 export interface AnalysedRun {
   runId: string;
   snapshotSeq: number;
@@ -1063,8 +1061,8 @@ export interface AnalysedRun {
   working: boolean;
 }
 
-/** What a workflow analysis reads: the workflow, and its runs newest first. */
-export interface AnalysedWorkflow {
+/** What a team analysis reads: the team, and its runs newest first. */
+export interface AnalysedTeam {
   slug: string;
   runs: AnalysedRun[];
 }
@@ -1072,8 +1070,8 @@ export interface AnalysedWorkflow {
 /**
  * Which source an analysis turn reads, and where its snapshot ends.
  *
- * A workflow analysis reads several runs: `sourceRunId` and its snapshot are
- * then the newest of `workflow.runs`, the run a read naming none is about.
+ * A team analysis reads several runs: `sourceRunId` and its snapshot are
+ * then the newest of `team.runs`, the run a read naming none is about.
  */
 export interface AnalysisTurn {
   analysisRunId: string;
@@ -1081,8 +1079,8 @@ export interface AnalysisTurn {
   snapshotSeq: number;
   /** `Run.analysisSourceWorking`: the source was working at the snapshot. */
   sourceWorking: boolean;
-  /** Set only for a workflow analysis ("Analyze & improve"). */
-  workflow?: AnalysedWorkflow | null;
+  /** Set only for a team analysis ("Analyze & improve"). */
+  team?: AnalysedTeam | null;
 }
 
 /** What the reader needs of an analysis turn: its source and snapshot. */
@@ -1092,11 +1090,11 @@ export type AnalysisSource = Pick<
 >;
 
 /**
- * The workflow an analysis may read and change, the start copy of the run it
+ * The team an analysis may read and change, the start copy of the run it
  * is set against, and what that run's turns were composed with beside the
- * workflow — null when that run is gone.
+ * team — null when that run is gone.
  */
-export interface AnalysedWorkflowRef {
+export interface AnalysedTeamRef {
   slug: string;
   snapshot: string | null;
   instructions: {
@@ -1108,8 +1106,8 @@ export interface AnalysedWorkflowRef {
   } | null;
 }
 
-/** What one read is scoped to: the source, and for a workflow analysis its runs. */
-export type AnalysisReadScope = AnalysisSource & Pick<AnalysisTurn, 'workflow'>;
+/** What one read is scoped to: the source, and for a team analysis its runs. */
+export type AnalysisReadScope = AnalysisSource & Pick<AnalysisTurn, 'team'>;
 
 /** What "Analyze thread" starts with — `AnalyzeThreadDto`'s body. */
 export interface StartThreadAnalysis {
@@ -1126,9 +1124,9 @@ export interface StartThreadAnalysis {
   agentOptions?: AgentOptionsSnapshot;
 }
 
-/** What "Analyze & improve" on a workflow starts with — `AnalyzeWorkflowDto`'s body. */
-export interface StartWorkflowAnalysis extends StartThreadAnalysis {
-  /** How many of the workflow's newest runs to read. */
+/** What "Analyze & improve" on a team starts with — `AnalyzeTeamDto`'s body. */
+export interface StartTeamAnalysis extends StartThreadAnalysis {
+  /** How many of the team's newest runs to read. */
   runs: number;
 }
 
@@ -1178,7 +1176,7 @@ export interface FoldedRun {
   callWorkedMs: ReadonlyMap<number, number>;
   /** The run's whole bill, a polled-spend CLI's included. */
   costUsd: number | null;
-  /** The graph version its own frozen copy is (`workflowVersionOf`); null when it keeps none it can read. */
+  /** The graph version its own frozen copy is (`teamVersionOf`); null when it keeps none it can read. */
   version: string | null;
   /** The model each node recorded — what a turn that reported none ran on. */
   nodeModels: ReadonlyMap<string | null, string | null>;
@@ -1270,18 +1268,18 @@ export interface CallFigures {
 }
 
 /**
- * A workflow's recorded graph versions by number (1 for the first used), and
+ * A team's recorded graph versions by number (1 for the first used), and
  * the library's version now — what `view=runs` names each run's version by.
  * The stats module keeps it; the MCP host hands it to the reader.
  */
-export interface WorkflowVersionIndex {
+export interface TeamVersionIndex {
   current: string | null;
   numbers: ReadonlyMap<string, number>;
 }
 
-export type WorkflowVersionIndexReader = (
+export type TeamVersionIndexReader = (
   slug: string,
-) => Promise<WorkflowVersionIndex>;
+) => Promise<TeamVersionIndex>;
 
 /** A graph version as an analysis names it. */
 export interface AnalysedVersionRef {
@@ -1334,7 +1332,7 @@ export interface ModelFigures {
    * Where `model` comes from: what the CLI reported (a turn that reported
    * none counts on the model its node reported last in that run), or — for a
    * turn that ended before its node had reported any — what the node was
-   * configured with: an alias as the workflow spells it, or null for the
+   * configured with: an alias as the team spells it, or null for the
    * CLI's own default — on a pooled node, the model the member that ran it
    * was configured with. `unreported`: a pooled node's turn that reported no
    * model and wrote no row naming its member, so none is guessed.
@@ -1378,7 +1376,7 @@ export interface AnalysisSink {
   turn: AnalysisTurn;
   report(
     report: RecommendationsReport,
-    versionIndex: WorkflowVersionIndexReader | null,
+    versionIndex: TeamVersionIndexReader | null,
   ): Promise<AnalysisFiled>;
   mark(marks: RecommendationMarks): Promise<AnalysisFiled>;
 }
@@ -1966,7 +1964,7 @@ export type HostNotifyOutcome =
 /**
  * The BOARD tools — reading the task board and filing or changing cards on it.
  *
- * Served on geniro's own MCP server to every chat and every workflow node
+ * Served on geniro's own MCP server to every chat and every team node
  * holding the endpoint, and answered by the tasks module, which installs
  * itself behind the graphs module's `TaskBoardBroker`. The names live here
  * because the chat's permission gate auto-approves them, and this module may
@@ -2232,12 +2230,12 @@ export function hasControlCharacters(value: string): boolean {
  *
  * Exported as a schema rather than a rule each route re-composes: a route
  * spelling its own copy is the same silent asymmetry that already let the
- * workflow path ship wired to nothing. Both entry points say
+ * team path ship wired to nothing. Both entry points say
  * `CustomInstructionsSchema.optional()`, so a later tightening lands on both by
  * construction rather than by memory.
  *
  * There is deliberately NO length bound. Instruction text is the user's own
- * and is sent whole: a cap made a workflow whose instruction block ran past it
+ * and is sent whole: a cap made a team whose instruction block ran past it
  * fail to load at all, which cost far more than the argv room it protected.
  */
 export const CustomInstructionsSchema = z
@@ -2667,12 +2665,12 @@ export const ChatTotalsResponseSchema = z.object({
   activeSpans: z
     .array(ActiveSpanSchema)
     .describe(
-      'on a WORKFLOW run, the merged wall-clock stretches in which some agent of it was working, with every `pausedSpans` stretch already cut out — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock',
+      'on a TEAM run, the merged wall-clock stretches in which some agent of it was working, with every `pausedSpans` stretch already cut out — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock',
     ),
   pausedSpans: z
     .array(PausedSpanSchema)
     .describe(
-      'on a WORKFLOW run, where it waited on the user — an approval or question card open with no background shell or sub-agent running. The header clock stands still through them, the open one included. Always empty for a chat',
+      'on a TEAM run, where it waited on the user — an approval or question card open with no background shell or sub-agent running. The header clock stands still through them, the open one included. Always empty for a chat',
     ),
 });
 export type ChatTotalsResponse = z.infer<typeof ChatTotalsResponseSchema>;
@@ -2782,7 +2780,7 @@ export type ItemWire = z.infer<typeof ItemWireSchema>;
  * to fold as it would over the whole conversation (`utils/history-anchors.ts`):
  * the start and settle of every call the page names, with the rest of each
  * such call's conversation; a delegate's launching call, its reply and its
- * declarations; the call of a reply whose call is not in the page; a workflow's
+ * declarations; the call of a reply whose call is not in the page; a team's
  * first and newest announcement.
  *
  * Two lists rather than one, because the client pages by the first and last
@@ -2995,7 +2993,7 @@ export type RunWaterfallModelCost = z.infer<typeof RunWaterfallModelCostSchema>;
  * at all while its tools piled up beside it, and a turn that died on an error
  * vanished from the card. REPORTED against an Engineer lane reading `1 turn · 30
  * tools` over nothing but a density strip: its call was still running. Such a
- * turn is bracketed by the rows that open and close it (a workflow's status
+ * turn is bracketed by the rows that open and close it (a team's status
  * rows; a chat's user message and its `error`/`turn_cancelled`), is always
  * `derived`, and carries no figures — the CLI reports those only at the end.
  */
@@ -3397,9 +3395,7 @@ export const RunProcessTreeSchema = z
     nodeId: z
       .string()
       .nullable()
-      .describe(
-        "the workflow node whose own process this is; null for a chat's",
-      ),
+      .describe("the team node whose own process this is; null for a chat's"),
     conversationId: z
       .string()
       .nullable()
@@ -3523,7 +3519,7 @@ export const AppProcessThreadSchema = z
     agents: z
       .number()
       .int()
-      .describe('how many agent processes it keeps — several for a workflow'),
+      .describe('how many agent processes it keeps — several for a team'),
     detachedProcesses: z
       .number()
       .int()
@@ -3573,7 +3569,7 @@ export const OpenShellSchema = z
     nodeId: z
       .string()
       .nullable()
-      .describe('which workflow node started it; null for a 1:1 chat'),
+      .describe('which team node started it; null for a 1:1 chat'),
     callId: z
       .string()
       .nullable()
@@ -3594,7 +3590,7 @@ export const OpenMonitorSchema = z
     nodeId: z
       .string()
       .nullable()
-      .describe('which workflow node started it; null for a 1:1 chat'),
+      .describe('which team node started it; null for a 1:1 chat'),
     callId: z
       .string()
       .nullable()
@@ -3873,7 +3869,7 @@ export interface TeamNotesReadOutcome {
   unread: number;
 }
 
-/** geniro's own tool a workflow node records a pull request's outcome with. */
+/** geniro's own tool a team node records a pull request's outcome with. */
 export const HOST_RECORD_OUTCOME_TOOL = 'record_outcome';
 
 /** Where the user's acceptance of a pull request stands. */
@@ -3884,7 +3880,7 @@ export type RunOutcomeAcceptance = z.infer<typeof RunOutcomeAcceptanceSchema>;
 
 /**
  * The payload of a `run_outcome` row: one pull request's delivery outcome as a
- * workflow node recorded it. `questionsAsked` and `workflowSlug` are the
+ * team node recorded it. `questionsAsked` and `teamSlug` are the
  * daemon's, stamped at the write; the rest is the node's. `summary` is absent
  * when the node gave none. `nodeId` /
  * `conversationId` / `callId` name the recording conversation as on a team
@@ -3903,7 +3899,7 @@ export const RunOutcomePayloadSchema = z.object({
   acceptance: RunOutcomeAcceptanceSchema,
   questionsAsked: z.number().int(),
   summary: z.string().optional(),
-  workflowSlug: z.string().nullable(),
+  teamSlug: z.string().nullable(),
   nodeId: z.string(),
   conversationId: z.string().nullable(),
   callId: z.string().optional(),
@@ -4180,7 +4176,7 @@ export interface HostWakeOwner {
   /** `callerKey(nodeId, conversationId)`. */
   caller: string;
   /** Which kind of run delivers it — each delivery service takes its own. */
-  target: 'chat' | 'workflow';
+  target: 'chat' | 'team';
 }
 
 /**
@@ -4255,7 +4251,7 @@ export interface MonitorOwner {
   /** The call that conversation was answering when the monitor started — its rows are filed under it. */
   callId: string | null;
   /** Which kind of run delivers it — each delivery service takes its own. */
-  target: 'chat' | 'workflow';
+  target: 'chat' | 'team';
 }
 
 export interface MonitorSnapshot extends MonitorListing {
@@ -4495,7 +4491,7 @@ export type ActionPressWire = z.infer<typeof ActionPressWireSchema>;
  * A client holds a window of a long conversation, and the window is for
  * drawing: a readout folded from it — the pinned question card, the needs-input
  * badge, the Agents and Sub-agents chips, a card's sub-agent list, the
- * Workflows chip — answers about the newest page while presenting itself as
+ * Teams chip — answers about the newest page while presenting itself as
  * the run. Each of these is the run's, so each is read here.
  *
  * Rows where the client already has a reader for them (a question card, a
@@ -4601,7 +4597,7 @@ export type ShellKillWire = z.infer<typeof ShellKillWireSchema>;
  * field is removed or changes meaning; adding one does not, since a reader that
  * does not know a key ignores it.
  */
-export const CHAT_EXPORT_FORMAT_VERSION = 1;
+export const CHAT_EXPORT_FORMAT_VERSION = 2;
 
 /**
  * The run's own row in an export — every column, including the four the wire
@@ -4618,7 +4614,7 @@ export const CHAT_EXPORT_FORMAT_VERSION = 1;
 export const ChatExportRunSchema = z
   .object({
     id: z.string(),
-    workflowId: z.string().nullable(),
+    teamId: z.string().nullable(),
     status: RunStatusSchema,
     title: z.string().nullable(),
     agentKind: AgentKindSchema.nullable(),
@@ -4663,11 +4659,11 @@ export const ChatExportRunSchema = z
       .describe(
         'What the board card this run works asks of it (its label instructions and the report ask), as last written onto the run; null for a run no card started',
       ),
-    workflowInstructions: z
+    teamInstructions: z
       .string()
       .nullable()
       .describe(
-        'What a workflow-editing chat was told about the file it owns, as snapshotted onto the run; null for every chat outside the workflow builder',
+        'What a team-editing chat was told about the file it owns, as snapshotted onto the run; null for every chat outside the team builder',
       ),
     projectInstructions: z
       .string()
@@ -4709,7 +4705,7 @@ export type ChatExportRunWire = z.infer<typeof ChatExportRunSchema>;
 
 /**
  * One `node_state` row in an export — empty for a chat, one entry per node for
- * a workflow run.
+ * a team run.
  *
  * Included because it holds what the transcript cannot say: which CLI and which
  * model each node ACTUALLY ran as (stamped at turn start, so run history does
@@ -4917,7 +4913,7 @@ export const AgentMcpServerWireSchema = z
       .nullable()
       .optional()
       .describe(
-        'Why a workflow node cannot switch this server off for its own turns, or null when it can. A different capability from the folder switch above: it writes nothing the CLI keeps',
+        'Why a team node cannot switch this server off for its own turns, or null when it can. A different capability from the folder switch above: it writes nothing the CLI keeps',
       ),
     signInUnavailableReason: z
       .string()
@@ -5372,7 +5368,7 @@ export interface RunItemEvent {
 }
 
 /**
- * A run row was persisted: a single-agent chat, or a workflow run, at its creation.
+ * A run row was persisted: a single-agent chat, or a team run, at its creation.
  *
  * Published AFTER the row is written, so a subscriber never sees a run that does not
  * exist. `createdAt` is the run's own creation instant (ISO-8601): the moment the Stats
@@ -5386,7 +5382,7 @@ export interface RunCreatedEvent {
 /** A run's identity, read without its graph copy (`RunDao.runFacts`). */
 export interface RunFacts {
   id: string;
-  workflowId: string | null;
+  teamId: string | null;
   createdAt: Date;
 }
 
@@ -5460,11 +5456,11 @@ export interface RunStatusEvent {
    */
   holdingFor?: number;
   /**
-   * How many of this WORKFLOW run's agents are sitting inside a wait on their
+   * How many of this TEAM run's agents are sitting inside a wait on their
    * OWN agent-to-agent calls, or `undefined` when this event says nothing
    * about it.
    *
-   * The workflow twin of {@link holdingFor} and read for the identical
+   * The team twin of {@link holdingFor} and read for the identical
    * purpose: a manager blocked in `await_agent` is inside a turn by every
    * reading the daemon has, and it is producing nothing — the tool call it is
    * parked in cannot return until a callee it started does. Holding a message
@@ -5487,7 +5483,7 @@ export interface RunStatusEvent {
    */
   awaitingCalls?: number;
   /**
-   * How many of this WORKFLOW run's DAG agents are inside a turn right now —
+   * How many of this TEAM run's DAG agents are inside a turn right now —
    * the trigger-fed ones a user's message goes to, compacting included, and
    * any node the walk has reached downstream of them — or `undefined` when
    * this event says nothing about it. CALLS are never counted: they are what
@@ -5495,7 +5491,7 @@ export interface RunStatusEvent {
    * HELD for its background sub-agents: its reply is over, and a message
    * delivered into it ends the hold.
    *
-   * What decides whether a workflow message queues. The run's own status
+   * What decides whether a team message queues. The run's own status
    * cannot: a run stays `running` for as long as any call it started is out,
    * so a Manager that ended its turn with an Engineer still working read as
    * busy, and the queued message waited for the whole call. `0` means a
@@ -5721,7 +5717,7 @@ export interface RunStatusEvent {
   hostTurn?: boolean;
   /**
    * True when this settle has no terminal ROW behind it — an off-turn stretch
-   * handing its badge back, a workflow woken by a call going quiet again, or a
+   * handing its badge back, a team woken by a call going quiet again, or a
    * send that failed while a window showed the run working.
    *
    * A settle is otherwise the terminal item's to act on for the thread a
@@ -5821,7 +5817,7 @@ export interface RunStatusEvent {
    * tools is the ordinary case on every ACP agent — but a pair of nulls is sent
    * as ABSENT rather than as two nulls, because these columns only ever grow:
    * nothing nulls one once written, so a null could never correct a client's
-   * copy of anything. That silence covers every workflow run, whose figures
+   * copy of anything. That silence covers every team run, whose figures
    * live per NODE.
    */
   workedMs?: number | null;
@@ -5861,7 +5857,7 @@ export interface RunStatusEvent {
   /**
    * When this chat's prompt cache lapses (`Run.promptCacheExpiresAt`), sent on
    * a SETTLE alone — the only moment it moves — and absent when no lifetime is
-   * known, which is every CLI that states none and every workflow run. Two
+   * known, which is every CLI that states none and every team run. Two
    * states: once known it is only ever moved forward.
    *
    * TWIN PARSER: `parseRunStatus` in the renderer's `daemon-client.ts`.
@@ -6139,11 +6135,11 @@ export const RunGroupWireSchema = z.object({
     .describe(
       'Canonical project folder whose new chats file themselves here — a run started in it, or anywhere inside it, matches; null for a group filled by hand',
     ),
-  autoWorkflowId: z
+  autoTeamId: z
     .string()
     .nullable()
     .describe(
-      'Workflow slug whose runs file themselves here, whatever folder they run in; outranks the folder rule. Null for a group that claims no workflow',
+      'Team slug whose runs file themselves here, whatever folder they run in; outranks the folder rule. Null for a group that claims no team',
     ),
 });
 export type RunGroupWire = z.infer<typeof RunGroupWireSchema>;
@@ -6169,7 +6165,7 @@ export const ConfigDirPinSchema = z
   .meta({ id: 'ConfigDirPin' });
 export type ConfigDirPinWire = z.infer<typeof ConfigDirPinSchema>;
 
-/** A run projected to the wire (chat and workflow runs share the shape). */
+/** A run projected to the wire (chat and team runs share the shape). */
 /**
  * One pull request a run opened, as captured from the agent's own output — or,
  * on the display lists, one its CLI recorded it touching.
@@ -6350,7 +6346,7 @@ export const RunWireSchema = z.object({
       'Units of background work this run is being held for; 0 when the agent itself is working',
     ),
   /**
-   * How many of a WORKFLOW run's agents are sitting inside a wait on their own
+   * How many of a TEAM run's agents are sitting inside a wait on their own
    * agent-to-agent calls — 0 for every chat run, which has no call runtime.
    *
    * On the snapshot for exactly {@link holdingFor}'s reason: a wait begins with
@@ -6367,7 +6363,7 @@ export const RunWireSchema = z.object({
       'Agents of this run waiting on their own calls; 0 when none is waiting',
     ),
   /**
-   * How many of a WORKFLOW run's DAG agents (never its calls) are inside a
+   * How many of a TEAM run's DAG agents (never its calls) are inside a
    * turn, a trigger-fed agent whose turn is held for its background
    * sub-agents not counted — 0 for every chat run. On the snapshot for {@link awaitingCalls}'s reason: the
    * composer acts on it, and a window opened while a call runs has no other
@@ -6378,7 +6374,7 @@ export const RunWireSchema = z.object({
     .int()
     .min(0)
     .describe(
-      'DAG agents of this workflow run inside a turn (calls excluded); 0 when a message would be taken now',
+      'DAG agents of this team run inside a turn (calls excluded); 0 when a message would be taken now',
     ),
   /**
    * How many DETACHED commands this run still has out — 0 when none.
@@ -6434,10 +6430,10 @@ export const RunWireSchema = z.object({
     .describe('Monitors this run has running; 0 when none are'),
   title: z.string().nullable(),
   agentKind: AgentKindSchema.nullable(),
-  workflowId: z
+  teamId: z
     .string()
     .nullable()
-    .describe('Workflow slug for a graph run; null for a single-agent chat'),
+    .describe('Team slug for a graph run; null for a single-agent chat'),
   cwd: z.string().nullable(),
   /**
    * The commit the folder had checked out when this chat was created, and
@@ -6462,7 +6458,7 @@ export const RunWireSchema = z.object({
     ),
   model: z.string().nullable(),
   approval: ChatApprovalModeSchema.nullable().describe(
-    'Chat approval mode; null for a workflow run',
+    'Chat approval mode; null for a team run',
   ),
   effort: z
     .string()
@@ -6517,7 +6513,7 @@ export const RunWireSchema = z.object({
     .string()
     .nullable()
     .describe(
-      'Sidebar group this run is filed under; null for one sitting loose. Both run kinds carry it — the sidebar lists chats and workflow runs together',
+      'Sidebar group this run is filed under; null for one sitting loose. Both run kinds carry it — the sidebar lists chats and team runs together',
     ),
   taskId: z
     .string()
@@ -6544,11 +6540,11 @@ export const RunWireSchema = z.object({
     .describe(
       "The source run's highest seq when the analysis started — the snapshot its reads stop at; null when not an analysis",
     ),
-  analysisWorkflowSlug: z
+  analysisTeamSlug: z
     .string()
     .nullable()
     .describe(
-      'The library workflow this chat analyses across its recent runs ("Analyze & improve"); null for every chat that is not a workflow analysis',
+      'The library team this chat analyses across its recent runs ("Analyze & improve"); null for every chat that is not a team analysis',
     ),
   /**
    * Where this run sits in the pinned band at the top of its own group (or of
@@ -6671,7 +6667,7 @@ export const RunWireSchema = z.object({
       "Each agent's own task list as it stands now, folded from the whole transcript",
     ),
   stages: StageProgressSchema.nullable().describe(
-    "Where the run stands in its workflow's stage graph, folded by the daemon from every stage change; null when the workflow has no stages",
+    "Where the run stands in its team's stage graph, folded by the daemon from every stage change; null when the team has no stages",
   ),
   /**
    * This chat's worked milliseconds and tool count, TOTALLED across its turns.
@@ -6681,7 +6677,7 @@ export const RunWireSchema = z.object({
    * the transcript its loaded WINDOW holds, so past `HISTORY_PAGE` items a
    * folded total silently describes the window rather than the conversation —
    * with nothing on screen marking the difference. The `node_state` twin
-   * (`workedMs` / `toolCalls`) does the same job for a workflow node.
+   * (`workedMs` / `toolCalls`) does the same job for a team node.
    *
    * They ACCUMULATE where the context pair replaces, so `RunDao.rememberWork`
    * sums. Null means never measured, never zero, and the two are independently
@@ -6693,7 +6689,7 @@ export const RunWireSchema = z.object({
     .string()
     .nullable()
     .describe(
-      "When this chat's prompt cache lapses — the end of its newest turn plus the cache lifetime its CLI reported. Past it, the next message re-writes the whole conversation to the cache at full price. Null while no lifetime is known (a CLI that reports none, a workflow run)",
+      "When this chat's prompt cache lapses — the end of its newest turn plus the cache lifetime its CLI reported. Past it, the next message re-writes the whole conversation to the cache at full price. Null while no lifetime is known (a CLI that reports none, a team run)",
     ),
   promptCacheTtlMs: z
     .number()
@@ -6818,7 +6814,7 @@ export interface HistoryWindow {
   probe?: boolean;
 }
 
-/** One conversation of a workflow run — `HistoryQueryDto.conversation` / `.call`. */
+/** One conversation of a team run — `HistoryQueryDto.conversation` / `.call`. */
 export type HistoryConversation = { root: true } | { call: string };
 
 /** One page's first and last seq — the rows its anchors are read around. */
@@ -6924,9 +6920,9 @@ export type AgentSessionListingWire = z.infer<
  * it continued) and `call_result` (the callee's CLI session id), which are
  * already persisted for the transcript's own sake.
  *
- * Here rather than beside the call runtime in `v1/graphs` because this module
+ * Here rather than beside the call runtime in `v1/teams` because this module
  * reads them too — the context readout finds a call's conversation by them —
- * and `v1/agents` never imports `v1/graphs`.
+ * and `v1/agents` never imports `v1/teams`.
  */
 export interface CallSeedRecord {
   callId: string;
@@ -6963,7 +6959,7 @@ export interface CallSeedRecord {
 }
 
 /**
- * The AGENT-POOL member a workflow node's turn ran on, as the turn's usage rows
+ * The AGENT-POOL member a team node's turn ran on, as the turn's usage rows
  * record it (`agentKind`, `agentModel`) — written only for a member other than
  * member 1, whose CLI and model are the node's own.
  */
@@ -7073,7 +7069,7 @@ export interface CallResultPayload {
  * every reader downstream from having to wonder.
  *
  * Shared by every route that writes or names a commit — chat create, the task
- * and workflow run starts, the line baselines — so all of them state the same
+ * and team run starts, the line baselines — so all of them state the same
  * bound; two of them had drifted, with one admitting any non-empty string.
  */
 export const commitShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
@@ -7209,9 +7205,9 @@ export interface ChatTextDatabase {
     title: Run['title'];
     cwd: Run['cwd'];
     archived_at: StoredDate | null;
-    edits_workflow_slug: Run['editsWorkflowSlug'];
+    edits_team_slug: Run['editsTeamSlug'];
     analysis_source_run_id: Run['analysisSourceRunId'];
-    analysis_workflow_slug: Run['analysisWorkflowSlug'];
+    analysis_team_slug: Run['analysisTeamSlug'];
     deleted_at: StoredDate | null;
   };
   chat_text: {

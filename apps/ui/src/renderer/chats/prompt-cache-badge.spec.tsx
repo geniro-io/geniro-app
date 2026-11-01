@@ -133,7 +133,7 @@ describe('PromptCacheBadge', () => {
     const daemon = readFileSync(
       join(
         __dirname,
-        '../../../../daemon/src/v1/graphs/utils/prompt-cache-standing.ts',
+        '../../../../daemon/src/v1/teams/utils/prompt-cache-standing.ts',
       ),
       'utf8',
     );

@@ -14,7 +14,7 @@ export const MAX_ANSWER_LENGTH = 32_768;
 
 /**
  * The optional note a proposal card sends beside its verdict, on either
- * button — the plan card's and the workflow card's one contract.
+ * button — the plan card's and the team card's one contract.
  */
 export function useVerdictNote(
   respond: (allow: boolean, answer?: string) => void,

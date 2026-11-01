@@ -228,7 +228,7 @@ function add(
 }
 
 /**
- * The pool member a turn ran on, when its usage row says so — a workflow
+ * The pool member a turn ran on, when its usage row says so — a team
  * node's call that ran on another of its pool members. Null for every other
  * turn, whose CLI is its node's (or its run's) own, and for a value naming no
  * CLI.

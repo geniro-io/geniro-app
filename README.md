@@ -25,7 +25,7 @@ through their own CLIs and your own logins. No cloud, no account, no telemetry.
 
 **[Install](#-install)** ·
 **[Features](#-whats-inside)** ·
-**[Workflows](#-workflows-and-agent-teams)** ·
+**[Teams](#-teams)** ·
 **[Task board](#-task-board)** ·
 **[Artifacts](#-artifacts-and-sharing)** ·
 **[Stats](#-stats-cost-and-cpu--ram)** ·
@@ -89,7 +89,7 @@ Pick the agent, model, effort, context window and approval mode. Queue follow-up
 </td>
 <td width="33%" valign="top">
 
-<b>🧩 Workflows</b><br>
+<b>🧩 Teams</b><br>
 Drag agents onto a canvas and wire them up. Independent steps run in parallel. Agents call, message, question and cancel each other.
 
 </td>
@@ -104,7 +104,7 @@ Give one agent up to 8 setups: other accounts, models or CLIs. When one hits its
 <td valign="top">
 
 <b>📋 Task board</b><br>
-Each card gets its own worktree and branch, and runs a chat or a workflow. Autopilot works the queue, and a merged PR closes the card.
+Each card gets its own worktree and branch, and runs a chat or a team. Autopilot works the queue, and a merged PR closes the card.
 
 </td>
 <td valign="top">
@@ -124,7 +124,7 @@ Charts, comparisons, scorecards, image galleries, review findings, patches, plan
 <td valign="top">
 
 <b>🔬 Thread analyzer</b><br>
-An agent studies a finished run, or a workflow's latest runs, shows where the time and money went and why, and proposes fixes with what each should save. Tick the ones you like and press **Apply selected**.
+An agent studies a finished run, or a team's latest runs, shows where the time and money went and why, and proposes fixes with what each should save. Tick the ones you like and press **Apply selected**.
 
 </td>
 <td valign="top">
@@ -193,13 +193,13 @@ Geniro drives each agent headlessly through its own CLI. No SDKs and no API keys
 | <img src="https://img.shields.io/badge/-Codex-412991?style=flat-square" alt="Codex"> | `codex app-server` (JSON-RPC) | Runs Ollama models too |
 
 - **Install and sign in from the app.** Geniro runs each vendor's official installer when you press the button, and signs you in without opening a terminal.
-- **Several accounts per CLI.** Config profiles give each account a name and a colour. Pick one per chat, or per node in a workflow.
-- **MCP servers.** List, add, edit as JSON and toggle the servers each CLI knows, and switch them off for one workflow node.
+- **Several accounts per CLI.** Config profiles give each account a name and a colour. Pick one per chat, or per node in a team.
+- **MCP servers.** List, add, edit as JSON and toggle the servers each CLI knows, and switch them off for one team node.
 - **Your instructions, everywhere.** Write custom instructions once, and choose a language every agent replies in.
 
-## 🧩 Workflows and agent teams
+## 🧩 Teams
 
-Drag agents onto a canvas, connect them, and press run. Dependencies decide what runs first, and independent agents run **in parallel**. Workflows are plain `*.geniro.yaml` files you can export, review and share.
+Drag agents onto a canvas, connect them, and press run. Dependencies decide what runs first, and independent agents run **in parallel**. Teams are plain `*.team.yaml` files you can export, review and share.
 
 ```mermaid
 flowchart LR
@@ -217,17 +217,17 @@ flowchart LR
 - **Agents talk to each other.** An agent can `call_agent` a teammate it is wired to, `message_agent` it mid-task, `await_agent` its answer, `answer_agent` its questions, or `cancel_agent` it when plans change. Each call's card, and each of an agent's conversations in the side panel, shows how long the called agent has worked in it, ticking while it works, beside its context and cost (when the agent has ended its turn and the call waits on its monitor or its own calls, the card says `waiting` and the clock stands); an analysis reads the same figure, so it can tell a callee that worked from one that waited.
 - **Team notes:** every agent in a run can write to and read from one shared notebook.
 - **Pull request outcomes.** An agent records where each pull request stands: draft or ready, review rounds, and whether you accepted it. Geniro counts the questions it asked you. Each record shows in the chat, and the side panel lists a pull request's whole history under it: how many times it was sent back and how long it took to be accepted.
-- **Analyze & improve.** An analysis reads the workflow's latest runs and its whole history: every version with what its runs cost and took, how often its pull requests were sent back and how many questions they asked you, every change made to it with who made it and why, and what earlier analyses recommended and whether you applied, skipped or passed over each item. It compares runs within a version, says whether each earlier change helped, and proposes undoing one that made the runs worse. Its card opens with what Geniro measured over those runs: time and cost per run, failed turns, each agent's share of the working time with its model and cost, and folds for every model, run and call between agents, each call edge with how much of its time the called agent spent working. It then says what costs the most and why, beside the measured figures of the agent at fault, and projects the time and cost per run with the items you tick. It does not suggest again what you passed over unless newer runs give new evidence. Nothing changes until you tick the items and press **Apply selected**.
-- **Build it by talking.** A chat dock in the builder edits the workflow from plain-language requests. It also reads the workflow's latest runs, so you can ask it what to change ("which stages should we add?"): it answers with the same report and recommendations card as **Analyze & improve**, and each workflow change you apply comes back as a card showing the exact diff. A chat agent can also propose a whole workflow as a card for you to approve.
+- **Analyze & improve.** An analysis reads the team's latest runs and its whole history: every version with what its runs cost and took, how often its pull requests were sent back and how many questions they asked you, every change made to it with who made it and why, and what earlier analyses recommended and whether you applied, skipped or passed over each item. It compares runs within a version, says whether each earlier change helped, and proposes undoing one that made the runs worse. Its card opens with what Geniro measured over those runs: time and cost per run, failed turns, each agent's share of the working time with its model and cost, and folds for every model, run and call between agents, each call edge with how much of its time the called agent spent working. It then says what costs the most and why, beside the measured figures of the agent at fault, and projects the time and cost per run with the items you tick. It does not suggest again what you passed over unless newer runs give new evidence. Nothing changes until you tick the items and press **Apply selected**.
+- **Build it by talking.** A chat dock in the builder edits the team from plain-language requests. It also reads the team's latest runs, so you can ask it what to change ("which stages should we add?"): it answers with the same report and recommendations card as **Analyze & improve**, and each team change you apply comes back as a card showing the exact diff. A chat agent can also propose a whole team as a card for you to approve.
 
-![The workflow canvas: a trigger feeds a planner that fans out to a codex backend agent and a cursor frontend agent, both feeding a reviewer; a house-style instruction block is wired into both builders, and the planner can call a researcher](docs/screenshots/workflow-canvas.png)
+![The team canvas: a trigger feeds a planner that fans out to a codex backend agent and a cursor frontend agent, both feeding a reviewer; a house-style instruction block is wired into both builders, and the planner can call a researcher](docs/screenshots/workflow-canvas.png)
 
 ### 🏊 Agent pools
 
 Rate limits are the worst part of a long run. In an agent node's settings, add an **agent pool** with up to 8 members. Each member can have its own CLI, account profile, model, approval mode and MCP settings. A reviewer could use two Claude accounts and one Codex setup, for example.
 
 - Work goes to the first member, in pool order, that is available.
-- When a member hits a usage limit or its sign-in expires, Geniro hands the work to the next one. It remembers until when that account is spent, across every workflow run, for calls, workflow steps and direct messages alike.
+- When a member hits a usage limit or its sign-in expires, Geniro hands the work to the next one. It remembers until when that account is spent, across every team run, for calls, team steps and direct messages alike.
 - Once the limit resets, the next turn or call goes back to the first member and carries the recent conversation over.
 - Continuing a call keeps it on the member that handled it.
 
@@ -236,11 +236,11 @@ Rate limits are the worst part of a long run. In an agent node's settings, add a
 A project board for agents. Write a card and hit start, or let **autopilot** pick up cards by itself.
 
 - **Each card gets its own git worktree** and branch (`geniro/task-<id>`), so agents never step on each other or on you.
-- A card runs a single chat or a whole workflow. Agents write a report onto the card and attach the pull requests they open.
+- A card runs a single chat or a whole team. Agents write a report onto the card and attach the pull requests they open.
 - **Autopilot** starts cards from your intake columns, as many at once as you allow.
 - When a card's pull request is merged, the card moves itself to Done.
 - Agents can manage the board themselves through Geniro's board tools: list, read, create and update tasks.
-- **Project instructions.** Give a project a description and standing instructions in **Settings → Projects**. Every chat and workflow started in the project's folder, or on one of its cards, receives them after your own custom instructions; a chat keeps what it started with, so an edit reaches new chats.
+- **Project instructions.** Give a project a description and standing instructions in **Settings → Projects**. Every chat and team started in the project's folder, or on one of its cards, receives them after your own custom instructions; a chat keeps what it started with, so an edit reaches new chats.
 
 ![The tasks board with a card open: its properties, the run configuration it will use, its description and the report the agent wrote](docs/screenshots/tasks-board.png)
 
@@ -295,14 +295,14 @@ Finished a long run and wondering why it took 40 minutes? Press **Analyze thread
 
 1. Pick the agent, account, model and effort that should do the analysis.
 2. It reads a snapshot of the thread: timings, slow or failed tools, the critical path and every row.
-3. You get a **recommendations card** that explains itself: what cost the most time and money and why, then each fix with its evidence, the minutes and dollars it should save per run and what the next run looks like with it, tagged by where the fix belongs: your workflow, your repo, your own instruction files, or the shared memory.
-4. Tick what you want: the card projects the time and cost per run with exactly those fixes. Press **Apply selected**. Workflow edits are saved only if the file has not changed in the meantime, and a backup is written first.
+3. You get a **recommendations card** that explains itself: what cost the most time and money and why, then each fix with its evidence, the minutes and dollars it should save per run and what the next run looks like with it, tagged by where the fix belongs: your team, your repo, your own instruction files, or the shared memory.
+4. Tick what you want: the card projects the time and cost per run with exactly those fixes. Press **Apply selected**. Team edits are saved only if the file has not changed in the meantime, and a backup is written first.
 
 The analysis lives in a popup over the thread it analyzed, so you can come back to it, ask follow-up questions, or start a fresh one.
 
-On a workflow, **Analyze & improve** reads its latest runs together. The card opens with what Geniro measured over them: time and cost per run, failed turns, and each agent's share of the working time with its model and cost per run. Then it names what costs the most and why, next to the measured figures of the agent at fault.
+On a team, **Analyze & improve** reads its latest runs together. The card opens with what Geniro measured over them: time and cost per run, failed turns, and each agent's share of the working time with its model and cost per run. Then it names what costs the most and why, next to the measured figures of the agent at fault.
 
-![A workflow analysis over two runs: 45 seconds and $0.62 per run, the drafter agent taking 73% of the agents' time at $0.39 per run, and two numbered causes — a pointless search and rewrite pass, and a leak the checker catches but nobody fixes — each with the fixes that address it](docs/screenshots/workflow-analysis.png)
+![A team analysis over two runs: 45 seconds and $0.62 per run, the drafter agent taking 73% of the agents' time at $0.39 per run, and two numbered causes — a pointless search and rewrite pass, and a leak the checker catches but nobody fixes — each with the fixes that address it](docs/screenshots/workflow-analysis.png)
 
 Each fix shows the time and money it should save per run, or add, and what the next runs look like with it. Ticking fixes projects the time and cost per run with exactly those.
 
@@ -352,12 +352,12 @@ The memory works from your phone as well: you can read, edit, forget and approve
 ## ⚡ Fast actions, run configurations and tidy threads
 
 - **Fast actions:** your own buttons under the message box, each one a name and a snippet. A press drops the snippet into the message box. It sends nothing, so you can still edit.
-- **Run configurations:** save a new-chat setup (folder, branch, agent or workflow, model, effort, context window, approval mode and profile) under a name, and apply it by hovering the **New chat** button.
+- **Run configurations:** save a new-chat setup (folder, branch, agent or team, model, effort, context window, approval mode and profile) under a name, and apply it by hovering the **New chat** button.
 - **Folders and branches:** each chat runs in its own folder, with your recent folders one click away. Switch the branch right from the composer.
-- **Colours and groups:** give a thread one of 8 colours. File threads into colour-coded groups that you can collapse and drag into order. A group can automatically collect every new chat from a folder, or every run of a workflow.
+- **Colours and groups:** give a thread one of 8 colours. File threads into colour-coded groups that you can collapse and drag into order. A group can automatically collect every new chat from a folder, or every run of a team.
 - **Notes:** keep private notes on any thread. They are never sent to the agent.
 - **What's waiting on you:** Geniro knows which threads need you (an open question, a failed turn, an unread reply), and <kbd>⌘</kbd> <kbd>J</kbd> jumps to the next one.
-- **Storage:** Settings → Storage shows everything Geniro keeps on your Mac — the database, chat files, agent conversations, task worktrees, workflow backups, logs, caches and leftovers from older versions — each with its size. Delete the archived chats, compact the database (Geniro restarts its background service to do it, once no agent is working), remove finished task worktrees, clear the window cache, or drop old backups, logs and copies of the settings file. Every delete asks first, and nothing that holds unsaved work is removed.
+- **Storage:** Settings → Storage shows everything Geniro keeps on your Mac — the database, chat files, agent conversations, task worktrees, team backups, logs, caches and leftovers from older versions — each with its size. Delete the archived chats, compact the database (Geniro restarts its background service to do it, once no agent is working), remove finished task worktrees, clear the window cache, or drop old backups, logs and copies of the settings file. Every delete asks first, and nothing that holds unsaved work is removed.
 - **And the small stuff:** a message queue you can drag to reorder (or **Send now**), pull-request chips, a "what changed" diff view, macOS notifications, light and dark themes, archive with optional auto-cleanup, and a debug log on <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>L</kbd>.
 
 ![A new chat: hovering New chat lists three saved run configurations (Opus with high effort, Codex, Cursor), and four fast-action buttons sit under the message box](docs/screenshots/run-configs.png)
@@ -368,7 +368,7 @@ Start [Ollama](https://ollama.com) on your Mac and download a model that support
 
 ## 📱 Your phone
 
-In **Settings → Remote access**, scan the QR code and enter the pairing code shown on your Mac. Your phone opens the same live chats, workflows and board over your Wi-Fi. For access away from home, **Get an address** starts the `cloudflared` or `ngrok` you already have installed and opens a tunnel from the Mac.
+In **Settings → Remote access**, scan the QR code and enter the pairing code shown on your Mac. Your phone opens the same live chats, teams and board over your Wi-Fi. For access away from home, **Get an address** starts the `cloudflared` or `ngrok` you already have installed and opens a tunnel from the Mac.
 
 To stay quick on a phone, a long chat opens on its newest 250 items (scroll up for more), and everything the Mac sends is compressed. The row of chips above the message box scrolls sideways when it holds more than fits.
 
@@ -382,7 +382,7 @@ To stay quick on a phone, a long chat opens on its newest 250 items (scroll up f
 
 ## 🔒 Local-first, for real
 
-Geniro has **no cloud backend, no account and no telemetry**. Chats, workflows and task history live on your Mac. Your agents keep their own logins and talk to their own model providers.
+Geniro has **no cloud backend, no account and no telemetry**. Chats, teams and task history live on your Mac. Your agents keep their own logins and talk to their own model providers.
 
 - The daemon listens on loopback only, with a fresh credential every launch.
 - Remote access goes through a separate gateway and only works for devices you have paired.
@@ -393,13 +393,13 @@ Geniro has **no cloud backend, no account and no telemetry**. Chats, workflows a
 ## 📸 Gallery
 
 <details>
-<summary><b>More screenshots:</b> a full workflow run, Settings and the dark theme</summary>
+<summary><b>More screenshots:</b> a full team run, Settings and the dark theme</summary>
 
 <br>
 
 All screenshots use synthetic data from a fictional `acme-web` / `acme-api` project.
 
-![A finished workflow run: each agent's messages and tool calls in one transcript, and the agents panel with every node's model, spend, time and tool count](docs/screenshots/workflow-run.png)
+![A finished team run: each agent's messages and tool calls in one transcript, and the agents panel with every node's model, spend, time and tool count](docs/screenshots/workflow-run.png)
 
 ![Settings: the three agent CLIs detected with their versions, notification delivery, theme and archive retention](docs/screenshots/settings.png)
 

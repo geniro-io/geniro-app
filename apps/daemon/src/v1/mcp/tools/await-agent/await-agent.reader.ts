@@ -2,7 +2,7 @@ import {
   type CallEnvelope,
   MAX_AWAIT_TIMEOUT_MS,
   MIN_AWAIT_TIMEOUT_MS,
-} from '../../../graphs/graphs.types';
+} from '../../../teams/teams.types';
 import { invalidArgsEnvelope, unknownArgsEnvelope } from '../call-mcp-tool';
 
 /** Every argument `await_agent` reads — see `call-agent.reader.ts`. */

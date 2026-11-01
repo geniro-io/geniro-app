@@ -200,9 +200,9 @@ export interface AgentSubagentGroup {
 
 /**
  * Several agents' delegates, one BLOCK each under the name of the agent that
- * launched them — the shelf's Sub-agents list for a WORKFLOW run.
+ * launched them — the shelf's Sub-agents list for a TEAM run.
  *
- * REPORTED as "in workflow we should see subagents list in chip divided by
+ * REPORTED as "in team we should see subagents list in chip divided by
  * block by agent, same as for todo": the chip flattened every node's delegates
  * into one run, so a Reviewer's reviewers and an Engineer's explorers arrived
  * as one list with nothing saying whose each was. This is the task chip's

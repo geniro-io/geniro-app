@@ -320,7 +320,7 @@ describe('liveTextKey', () => {
     expect(liveTextKey(null, null)).toBe(CHAT_LIVE_KEY);
   });
 
-  it('leaves a workflow node named `agent` as itself', () => {
+  it('leaves a team node named `agent` as itself', () => {
     // The collision the sentinel was introduced for, and the reason the
     // discriminator is the NODE ID rather than the owner key's value: a node's
     // delta always carries its id, a chat's never does.

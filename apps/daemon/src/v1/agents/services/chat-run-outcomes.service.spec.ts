@@ -20,7 +20,7 @@ const outcome = (seq: number, acceptance: string) => ({
     reviewRounds: 1,
     acceptance,
     questionsAsked: 0,
-    workflowSlug: 'dev-team',
+    teamSlug: 'dev-team',
     nodeId: 'manager',
     conversationId: null,
   }),

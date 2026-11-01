@@ -1,14 +1,14 @@
 import { Injectable } from '@nestjs/common';
 
 import { interruptedReason } from '../../../utils/stop-cause';
-import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
-import { nodesThatAsk } from '../../graphs/utils/unattended';
 import type {
   BlockedTask,
   ProjectQueue,
   QueuedTask,
 } from '../../projects/projects.types';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
+import { TeamStoreService } from '../../teams/services/team-store.service';
+import { nodesThatAsk } from '../../teams/utils/unattended';
 import {
   isRunTargetProblem,
   resolveRunTarget,
@@ -16,24 +16,24 @@ import {
 } from '../utils/run-target';
 
 /**
- * Why a card naming a workflow the library no longer holds cannot be started.
+ * Why a card naming a team the library no longer holds cannot be started.
  *
  * `RunTargetProblem` / `RUN_TARGET_PROBLEM_REASON` / `RUN_TARGET_PROBLEM_CODE`
  * live in `tasks.types.ts` and `utils/run-target.ts`, and neither is this
  * service's to widen: `resolveRunTarget` answers purely from the levels it is
- * handed (a task, a project) and has no way to ask the workflow LIBRARY
+ * handed (a task, a project) and has no way to ask the team LIBRARY
  * whether a slug still exists — only a caller that also holds
- * `WorkflowStoreService` can ask that, which is exactly why this check lives
+ * `TeamStoreService` can ask that, which is exactly why this check lives
  * here rather than in `resolveRunTarget` itself. So it is its own named
  * export rather than a third member of that record.
  *
  * A function rather than a bare string, because the sentence has to NAME the
  * missing slug — a user reading "cannot run unattended" about a card whose
- * workflow no longer exists would go looking for the wrong fix (repointing it
- * at an agent, when picking a different, real workflow is just as available).
+ * team no longer exists would go looking for the wrong fix (repointing it
+ * at an agent, when picking a different, real team is just as available).
  */
-export function missingWorkflowReason(slug: string): string {
-  return `its workflow "${slug}" no longer exists in the library — point this task at a different workflow, or an agent`;
+export function missingTeamReason(slug: string): string {
+  return `its team "${slug}" no longer exists in the library — point this task at a different team, or an agent`;
 }
 
 /** Why the armed autopilot leaves a card alone after its run was stopped. */
@@ -59,32 +59,32 @@ export function worktreeUnpreparedReason(gitLine: string | null): string {
 /**
  * Splits a project's waiting cards into what the autopilot may start now and
  * what it cannot, joining `ProjectQueueService`'s raw read against the
- * workflow library.
+ * team library.
  *
  * That join is the whole reason this service exists rather than the split
  * staying inside `ProjectQueueService`: a card's run target can name a
- * WORKFLOW, and whether that workflow still exists is a question only
- * `WorkflowStoreService` (owned by `GraphsModule`) can answer.
- * `ProjectsModule` cannot import `GraphsModule` without reintroducing the
+ * TEAM, and whether that team still exists is a question only
+ * `TeamStoreService` (owned by `TeamsModule`) can answer.
+ * `ProjectsModule` cannot import `TeamsModule` without reintroducing the
  * cycle its own module doc already refuses (`TasksModule` imports
  * `ProjectsModule`, never the reverse) — but `TasksModule` already imports
- * BOTH `ProjectsModule` and `GraphsModule`, so the join belongs here.
+ * BOTH `ProjectsModule` and `TeamsModule`, so the join belongs here.
  */
 @Injectable()
 export class TaskQueueService {
   constructor(
     private readonly projectQueue: ProjectQueueService,
-    private readonly workflows: WorkflowStoreService,
+    private readonly teams: TeamStoreService,
   ) {}
 
   async read(projectId: string): Promise<ProjectQueue> {
     const raw = await this.projectQueue.readRaw(projectId);
     // One listing for the whole batch rather than a `get()` per card:
-    // `WorkflowStoreService.get()` THROWS `NotFoundException` for a slug that
+    // `TeamStoreService.get()` THROWS `NotFoundException` for a slug that
     // is not in the library, so per-card would mean a try/catch around every
-    // workflow-targeted waiting task instead of one Set membership check.
+    // team-targeted waiting task instead of one Set membership check.
     const library = new Set(
-      (await this.workflows.list()).map((summary) => summary.slug),
+      (await this.teams.list()).map((summary) => summary.slug),
     );
 
     // Split BEFORE the cap is applied, so a blocked card cannot occupy one of
@@ -92,12 +92,12 @@ export class TaskQueueService {
     // one and a misconfigured card at the head of the column would starve
     // every runnable card behind it, which is the loop from the other side.
     // Read once per slug per sweep: one board is usually pointed at one
-    // workflow, and every card on it asks the same question of the library.
+    // team, and every card on it asks the same question of the library.
     const unattended = new Map<string, boolean>();
     const runsUnattended = async (slug: string): Promise<void> => {
       if (!unattended.has(slug)) {
-        const { workflow } = await this.workflows.get(slug);
-        unattended.set(slug, nodesThatAsk(workflow).length === 0);
+        const { team } = await this.teams.get(slug);
+        unattended.set(slug, nodesThatAsk(team).length === 0);
       }
     };
 
@@ -152,40 +152,40 @@ export class TaskQueueService {
       // to an unattended run belong in `blocked` — otherwise the conductor goes
       // on cutting a worktree per tick for a card the route then declines. On a
       // DISARMED board nothing unattended will start, so asking as the autopilot
-      // would report the whole intake column of a workflow-targeted project as
+      // would report the whole intake column of a team-targeted project as
       // unstartable when a hand press starts every card in it.
       // The USER arm is resolved whatever the board's state, because it is the
-      // only one that keeps a workflow target INTACT: under 'autopilot' every
-      // workflow-named card collapses to 'workflow-unattended' and the slug is
+      // only one that keeps a team target INTACT: under 'autopilot' every
+      // team-named card collapses to 'team-unattended' and the slug is
       // discarded with it, so this is the only place the library can be asked
       // about that slug at all.
       const asUser = resolveRunTarget([task, raw], 'user');
       // A slug the library no longer holds is broken in BOTH states, which is
       // why this is asked AHEAD of the armed/disarmed split rather than inside
       // it. On an armed board it is the churn loop; on a disarmed one a hand
-      // press cuts a worktree and then 404s WORKFLOW_NOT_FOUND — the same dead
+      // press cuts a worktree and then 404s TEAM_NOT_FOUND — the same dead
       // end, reached by the only door left open there.
       //
-      // It also OUTRANKS 'workflow-unattended': a user told "cannot run
-      // unattended" about a card whose workflow is gone goes looking for the
+      // It also OUTRANKS 'team-unattended': a user told "cannot run
+      // unattended" about a card whose team is gone goes looking for the
       // wrong fix — repointing it at an agent, when picking a different, real
-      // workflow is just as available.
+      // team is just as available.
       if (
         !isRunTargetProblem(asUser) &&
-        asUser.kind === 'workflow' &&
-        !library.has(asUser.workflowSlug)
+        asUser.kind === 'team' &&
+        !library.has(asUser.teamSlug)
       ) {
         blocked.push({
           id: task.id,
           title: task.title,
-          reason: missingWorkflowReason(asUser.workflowSlug),
-          kind: 'missing-workflow',
+          reason: missingTeamReason(asUser.teamSlug),
+          kind: 'missing-team',
           retryInMs: null,
         });
         continue;
       }
-      if (raw.enabled && asUser.kind === 'workflow') {
-        await runsUnattended(asUser.workflowSlug);
+      if (raw.enabled && asUser.kind === 'team') {
+        await runsUnattended(asUser.teamSlug);
       }
       const resolution = raw.enabled
         ? resolveRunTarget(

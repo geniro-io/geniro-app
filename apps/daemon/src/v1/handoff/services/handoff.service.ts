@@ -20,7 +20,7 @@ import {
   readNodePoolMembers,
 } from '../../agents/utils/node-pool-members';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
-import { assertWorkflowRun } from '../../agents/utils/run-kind';
+import { assertTeamRun } from '../../agents/utils/run-kind';
 import {
   callSessionKeyPrefix,
   nodeSessionKey,
@@ -29,9 +29,9 @@ import {
   snapshotMemberProfile,
   snapshotNodePoolProfiles,
 } from '../../agents/utils/snapshot-config-dirs';
-import { RunWorkflowService } from '../../graphs/services/run-workflow.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
+import { RunTeamService } from '../../teams/services/run-team.service';
 import type { HandoffTarget } from '../handoff.types';
 import { shellLine } from '../utils/shell-line';
 
@@ -52,7 +52,7 @@ export class HandoffService {
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
     private readonly nodeStateDao: NodeStateDao,
-    private readonly runWorkflows: RunWorkflowService,
+    private readonly runTeams: RunTeamService,
     private readonly adapters: AgentAdapterRegistry,
     private readonly sessions: AgentSessionRegistry,
     private readonly kindRows: RunKindRowsCache,
@@ -74,13 +74,13 @@ export class HandoffService {
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${input.runId}`);
     }
-    if (!run.workflowId && input.nodeId != null) {
+    if (!run.teamId && input.nodeId != null) {
       throw new BadRequestException(
         'HANDOFF_NODE_UNEXPECTED',
         `chat run ${run.id} does not accept a nodeId`,
       );
     }
-    const nodeId = run.workflowId ? (input.nodeId ?? null) : null;
+    const nodeId = run.teamId ? (input.nodeId ?? null) : null;
     const node = await this.resolveNode(run, nodeId, em);
     const { agentKind, stateNodeId, model, configDir } =
       nodeId !== null && input.sessionId
@@ -126,7 +126,7 @@ export class HandoffService {
   /**
    * Whether geniro's own kept process may still hold the conversation being
    * handed over — which a CLI allowing one process per conversation needs to
-   * know (`handoff.heldFlag`). A chat's process is keyed exactly. A workflow
+   * know (`handoff.heldFlag`). A chat's process is keyed exactly. A team
    * node's conversation may sit in its own process or in a CALL's, and a
    * call's is keyed by its conversation's first call, which this request does
    * not name — so any live call process of the run counts too. Reading a
@@ -134,7 +134,7 @@ export class HandoffService {
    * do; the reverse hands over a command that fails.
    */
   private mayHold(run: Run, nodeId: string | null): boolean {
-    if (!run.workflowId) {
+    if (!run.teamId) {
       return this.sessions.peek(run.id) !== null;
     }
     return (
@@ -230,7 +230,7 @@ export class HandoffService {
     );
     if (
       member === null &&
-      snapshotNodePoolProfiles(run.workflowSnapshot).has(nodeId)
+      snapshotNodePoolProfiles(run.teamSnapshot).has(nodeId)
     ) {
       member = nodePoolSessionMember(
         await this.itemDao.rowsOfKinds(
@@ -246,15 +246,15 @@ export class HandoffService {
     const profile =
       member === null
         ? null
-        : snapshotMemberProfile(run.workflowSnapshot, nodeId, member);
+        : snapshotMemberProfile(run.teamSnapshot, nodeId, member);
     return profile === null ? null : { ...profile, stateNodeId: nodeId };
   }
 
   /**
    * A chat run carries its agent kind on the row and keys `node_state` under
-   * the single-agent constant; a workflow run's node kind comes from the
+   * the single-agent constant; a team run's node kind comes from the
    * `agent_kind` stamped on its `node_state` row at turn start — run history,
-   * immune to later workflow-YAML edits. Only a row not stamped yet (a node
+   * immune to later team-YAML edits. Only a row not stamped yet (a node
    * that never started a turn) falls back to the CURRENT YAML definition.
    */
   private async resolveNode(
@@ -267,13 +267,13 @@ export class HandoffService {
     model: string | null;
     /**
      * A pooled own conversation's directory comes from its member record and
-     * the run's immutable snapshot. Other workflow nodes carry null: their
+     * the run's immutable snapshot. Other team nodes carry null: their
      * state stamps no directory, and today's YAML cannot identify
      * a historical account. Chats carry their directory on the run itself.
      */
     configDir: string | null;
   }> {
-    if (!run.workflowId) {
+    if (!run.teamId) {
       if (!run.agentKind) {
         throw new BadRequestException(
           'HANDOFF_NO_AGENT',
@@ -290,23 +290,19 @@ export class HandoffService {
     if (!nodeId) {
       throw new BadRequestException(
         'HANDOFF_NODE_REQUIRED',
-        `run ${run.id} is a workflow run — pass the nodeId to open`,
+        `run ${run.id} is a team run — pass the nodeId to open`,
       );
     }
     const state = await this.nodeStateDao.getByRunNode(run.id, nodeId, em);
     const stamped = state?.agentKind;
     if (stamped) {
       let configDir: string | null = null;
-      if (snapshotNodePoolProfiles(run.workflowSnapshot).has(nodeId)) {
+      if (snapshotNodePoolProfiles(run.teamSnapshot).has(nodeId)) {
         const member =
           readNodePoolMembers(
             await this.itemDao.poolHandOffRows(run.id, em),
           ).get(nodeId) ?? 1;
-        const profile = snapshotMemberProfile(
-          run.workflowSnapshot,
-          nodeId,
-          member,
-        );
+        const profile = snapshotMemberProfile(run.teamSnapshot, nodeId, member);
         if (
           profile?.agentKind === stamped &&
           profile.model === (state.model ?? null)
@@ -315,7 +311,7 @@ export class HandoffService {
         }
       }
       // Both read from the STAMP, never from the current YAML: an edited
-      // workflow must not re-write what a finished run actually ran as.
+      // team must not re-write what a finished run actually ran as.
       return {
         agentKind: stamped,
         stateNodeId: nodeId,
@@ -324,16 +320,13 @@ export class HandoffService {
       };
     }
     // The run's OWN copy of the graph, never the library's current one — an
-    // edited workflow must not re-write what this run's node is.
-    const workflow = await this.runWorkflows.workflowOf(
-      assertWorkflowRun(run, run.id),
-      em,
-    );
-    const node = workflow.nodes.find((n) => n.id === nodeId);
+    // edited team must not re-write what this run's node is.
+    const team = await this.runTeams.teamOf(assertTeamRun(run, run.id), em);
+    const node = team.nodes.find((n) => n.id === nodeId);
     if (!node) {
       throw new NotFoundException(
         'NODE_NOT_FOUND',
-        `workflow ${run.workflowId} has no node: ${nodeId}`,
+        `team ${run.teamId} has no node: ${nodeId}`,
       );
     }
     if (node.kind !== 'agent') {

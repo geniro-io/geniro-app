@@ -98,7 +98,7 @@ export class WallTurnDao extends BaseDao<WallTurn> {
   }
 
   /**
-   * Each workflow node's recorded wall time in this run, by node id — only
+   * Each team node's recorded wall time in this run, by node id — only
    * the turns that ended at or before `throughSeq` when it is given.
    */
   async nodeSums(
@@ -127,7 +127,7 @@ export class WallTurnDao extends BaseDao<WallTurn> {
   }
 
   /**
-   * Each recorded workflow-node turn of this run, by the seq of the
+   * Each recorded team-node turn of this run, by the seq of the
    * `turn_complete` that ended it — what a call's own worked time is summed
    * from, since the ledger keys a turn by its row and that row names its call.
    */

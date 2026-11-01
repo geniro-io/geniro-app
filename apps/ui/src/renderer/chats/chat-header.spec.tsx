@@ -34,7 +34,7 @@ afterEach(() => {
 
 const baseProps = {
   label: 'Review team',
-  isWorkflow: true,
+  isTeam: true,
   status: 'running' as const,
   lastActivityAt: new Date(Date.now() - 60_000).toISOString(),
 };
@@ -322,7 +322,7 @@ describe('ChatHeader — how long this turn has been running', () => {
     const el = render(
       <ChatHeader
         {...baseProps}
-        isWorkflow={false}
+        isTeam={false}
         agentKind="claude"
         cwd={worktree}
         worktreeOf="/Users/me/Desktop/Projects/Geniro/geniro-app"
@@ -696,7 +696,7 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
     expect(metrics(el)).toContain('10m 20s');
   });
 
-  it('freezes a WORKFLOW’s clock while a card waits with nothing running, however many turns are open', () => {
+  it('freezes a TEAM’s clock while a card waits with nothing running, however many turns are open', () => {
     // A Manager awaiting its Engineer, who is parked on a question.
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-04T00:01:00Z'));

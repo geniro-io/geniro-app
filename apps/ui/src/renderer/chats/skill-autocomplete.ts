@@ -165,7 +165,7 @@ export function applySkill(skill: AgentSkill): string {
 }
 
 /**
- * Union the per-agent-kind lists (a workflow trigger can fan out to mixed
+ * Union the per-agent-kind lists (a team trigger can fan out to mixed
  * agents), de-duped by name — first list wins, mirroring the daemon's own
  * first-occurrence-wins collision rule. Order is PRESERVED, not re-sorted:
  * the daemon ranks each list (project → user → cli-reported) so the user's

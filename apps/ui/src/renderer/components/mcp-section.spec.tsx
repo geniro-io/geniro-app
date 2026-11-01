@@ -170,7 +170,7 @@ describe('McpSection', () => {
     // geniro owns, so every one of them carries a folder-scoped
     // `toggleUnavailableReason` — rendering that padlock would explain why a
     // control is unavailable on a surface where no control was ever going to
-    // appear, citing a folder the workflow does not yet have.
+    // appear, citing a folder the team does not yet have.
     const el = render({
       listing: listing({
         name: 'srv',

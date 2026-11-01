@@ -477,7 +477,7 @@ describe('readClaudeUsage — cost is this turn, not the session so far', () => 
 });
 
 /**
- * A running total the ledger CANNOT diff — measured on the reporter's workflow
+ * A running total the ledger CANNOT diff — measured on the reporter's team
  * run `a0877ce9`, where every call into the Engineer resumed one session and a
  * 12.8s call was billed $0.79 for $0.47 of tokens.
  */

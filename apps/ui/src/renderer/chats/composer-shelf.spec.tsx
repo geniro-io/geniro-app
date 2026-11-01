@@ -190,7 +190,7 @@ const monitor = (over: Partial<OpenMonitor> = {}): OpenMonitor => ({
   id: 'm1',
   description: 'CI on #42',
   command: 'gh pr checks 42 --watch',
-  nodeId: null,
+  memberId: null,
   callId: null,
   startedAt: new Date(Date.now() - 65_000).toISOString(),
   endsAt: new Date(Date.now() + 535_000).toISOString(),
@@ -208,9 +208,9 @@ describe('RunningMonitorChips', () => {
       <RunningMonitorChips
         monitors={[
           monitor(),
-          monitor({ id: 'm2', description: 'preview deploy', nodeId: 'ops' }),
+          monitor({ id: 'm2', description: 'preview deploy', memberId: 'ops' }),
         ]}
-        agentNameOf={(nodeId) => `Agent ${nodeId}`}
+        agentNameOf={(memberId) => `Agent ${memberId}`}
       />,
     );
     const chip = el.querySelector('[data-slot="running-monitors"]')!;
@@ -868,7 +868,7 @@ const pr = (number: number): PullRequestRefResult => ({
 const liveAction = (seq: number): LiveAction => ({
   seq,
   actionId: `a-${seq}`,
-  nodeId: 'agent',
+  memberId: 'agent',
   conversationId: '',
   label: `Action ${seq}`,
   once: true,
@@ -1305,7 +1305,7 @@ describe('TeamNotesChip', () => {
     seq,
     kind: 'pitfall' as const,
     text: `note ${seq}`,
-    nodeId: 'engineer',
+    memberId: 'engineer',
     conversationId: 'call-2',
     callId: 'call-2',
     createdAt: new Date().toISOString(),

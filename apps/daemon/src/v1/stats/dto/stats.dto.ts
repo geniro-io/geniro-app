@@ -52,7 +52,7 @@ export class TeamVersionsQueryDto extends createZodDto(
   teamVersionsQuerySchema,
 ) {}
 
-/** One team's runs by graph version — see {@link TeamVersionsWireSchema}. */
+/** One team's runs by team version — see {@link TeamVersionsWireSchema}. */
 export class TeamVersionsDto extends createZodDto(TeamVersionsWireSchema) {}
 
 /**

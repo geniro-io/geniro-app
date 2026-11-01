@@ -32,7 +32,7 @@ function item(
     kind,
     role: null,
     payload: null,
-    nodeId: null,
+    memberId: null,
     createdAt: at,
     ...extra,
   } as ChatItem;
@@ -183,7 +183,7 @@ describe('turnDurations', () => {
     const items = [
       userAt('2026-08-14T10:00:00.000Z'),
       item('turn_complete', '2026-08-14T10:00:05.000Z', {
-        nodeId: 'node-a',
+        memberId: 'node-a',
         payload: { usage: { durationMs: 5000 } },
       }),
     ];
@@ -309,11 +309,11 @@ describe('scanTurns + openTurnWorkedMs', () => {
     const items = [
       userAt('2026-08-14T10:00:00.000Z'),
       item('status', '2026-08-14T10:00:01.000Z', {
-        nodeId: 'reviewer',
+        memberId: 'reviewer',
         payload: { nodeId: 'reviewer', status: 'running' },
       }),
       item('status', '2026-08-14T10:00:02.000Z', {
-        nodeId: 'builder',
+        memberId: 'builder',
         payload: { nodeId: 'builder', status: 'running' },
       }),
     ];
@@ -630,15 +630,21 @@ describe('scanTurns over a TEAM run', () => {
   const at = (iso: string): number => Date.parse(iso);
 
   /** The executor's own spawn row — a team node's turn begins here. */
-  const nodeRunning = (nodeId: string, iso: string): ChatItem =>
-    item('status', iso, { nodeId, payload: { nodeId, status: 'running' } });
+  const nodeRunning = (memberId: string, iso: string): ChatItem =>
+    item('status', iso, {
+      memberId,
+      payload: { nodeId: memberId, status: 'running' },
+    });
 
   const nodeDone = (
-    nodeId: string,
+    memberId: string,
     iso: string,
     durationMs: number,
   ): ChatItem =>
-    item('turn_complete', iso, { nodeId, payload: { usage: { durationMs } } });
+    item('turn_complete', iso, {
+      memberId,
+      payload: { usage: { durationMs } },
+    });
 
   it('measures the turn a NODE has in flight', () => {
     // REPORTED as "timer in header is stuck": every row of a team carries a
@@ -726,7 +732,7 @@ describe('scanCallTurns', () => {
   const at = (iso: string): number => Date.parse(iso);
   const running = (callId: string, iso: string): ChatItem =>
     item('status', iso, {
-      nodeId: 'engineer',
+      memberId: 'engineer',
       payload: { nodeId: 'engineer', status: 'running', callId },
     });
   const done = (
@@ -735,7 +741,7 @@ describe('scanCallTurns', () => {
     usage: Record<string, unknown> = {},
   ): ChatItem =>
     item('turn_complete', iso, {
-      nodeId: 'engineer',
+      memberId: 'engineer',
       payload: { callId, usage },
     });
 
@@ -770,11 +776,11 @@ describe('scanCallTurns', () => {
     const { durations } = scanCallTurns([
       running('call-1', '2026-10-31T10:00:00.000Z'),
       item('approval_request', '2026-10-31T10:01:00.000Z', {
-        nodeId: 'engineer',
+        memberId: 'engineer',
         payload: { id: 'q1', callId: 'call-1' },
       }),
       item('approval_verdict', '2026-10-31T10:09:00.000Z', {
-        nodeId: 'engineer',
+        memberId: 'engineer',
         payload: { id: 'q1' },
       }),
       end,
@@ -786,7 +792,7 @@ describe('scanCallTurns', () => {
   it("ignores a node's own conversation", () => {
     const { durations, open } = scanCallTurns([
       item('status', '2026-10-31T10:00:00.000Z', {
-        nodeId: 'engineer',
+        memberId: 'engineer',
         payload: { nodeId: 'engineer', status: 'running' },
       }),
     ]);
@@ -819,7 +825,7 @@ describe('withDurableOpenTurns — a turn older than the loaded page', () => {
   /** What the window holds: the node's work, and not the row that opened it. */
   const windowed = (): ChatItem[] => [
     item('tool_call', '2026-09-12T22:41:24Z', {
-      nodeId: 'engineer',
+      memberId: 'engineer',
       payload: { id: 't1', name: 'Bash' },
     }),
   ];

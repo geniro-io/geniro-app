@@ -49,7 +49,7 @@ describe('UsageRecorderService', () => {
     return {
       id: 'item-1',
       runId: 'run-a',
-      nodeId: null,
+      memberId: null,
       seq: 4,
       kind: 'turn_complete',
       role: null,
@@ -76,7 +76,7 @@ describe('UsageRecorderService', () => {
 
   function start(
     shares: {
-      nodeId: string;
+      memberId: string;
       agentKind: string;
       polledCostCents: number;
     }[] = [],
@@ -130,7 +130,7 @@ describe('UsageRecorderService', () => {
     await vi.waitFor(() => expect(recorded).toHaveLength(1));
     expect(recorded[0]).toMatchObject({
       runId: 'run-a',
-      nodeId: null,
+      memberId: null,
       seq: 4,
       agentKind: 'claude',
       model: 'claude-opus-5',
@@ -160,7 +160,7 @@ describe('UsageRecorderService', () => {
     await vi.waitFor(() => expect(announced).toHaveLength(1));
     expect(announced[0]).toEqual({
       runId: 'run-a',
-      nodeId: null,
+      memberId: null,
       occurredAt: '2026-08-14T09:30:00.000Z',
       turn: true,
     });
@@ -238,21 +238,21 @@ describe('UsageRecorderService', () => {
     expect(recordOnce).not.toHaveBeenCalled();
   });
 
-  it('attributes a graph node’s turn to the node’s own agent and model', async () => {
+  it('attributes a team member’s turn to the member’s own agent and model', async () => {
     // A team run names no single agent — reading the run alone would
-    // attribute every node's spend to nothing.
+    // attribute every member's spend to nothing.
     run = { agentKind: null, model: null, cwd: '/work/project' };
     nodeState = { agentKind: 'cursor-agent', model: 'composer-1' };
     start();
 
     bus.publish({
       runId: 'run-a',
-      item: usageItem({ nodeId: 'node-7' }),
+      item: usageItem({ memberId: 'node-7' }),
     });
 
     await vi.waitFor(() => expect(recorded).toHaveLength(1));
     expect(recorded[0]).toMatchObject({
-      nodeId: 'node-7',
+      memberId: 'node-7',
       agentKind: 'cursor-agent',
       model: 'composer-1',
       // `node_state` stamps no cwd, so it still comes from the run.
@@ -260,8 +260,8 @@ describe('UsageRecorderService', () => {
     });
   });
 
-  it('files a turn another pool member ran under that member, not the node’s stamp', async () => {
-    // A pooled node is stamped with member 1; the call ran on member 2, and a
+  it('files a turn another pool member ran under that member, not the team member’s stamp', async () => {
+    // A pooled team member is stamped with member 1; the call ran on member 2, and a
     // failed one names it on its error row too.
     run = { agentKind: null, model: null, cwd: '/work/project' };
     nodeState = { agentKind: 'claude', model: 'opus' };
@@ -270,7 +270,7 @@ describe('UsageRecorderService', () => {
     bus.publish({
       runId: 'run-a',
       item: usageItem({
-        nodeId: 'node-7',
+        memberId: 'node-7',
         kind: 'error',
         payload: {
           message: 'boom',
@@ -345,8 +345,8 @@ describe('UsageRecorderService', () => {
       bus.publishRunStatus({ runId, status: null, spendUpdatedAt: 1 });
     }
 
-    it('files a POOLED node’s bill under the member that polls, not under its member-1 stamp', async () => {
-      // The node is claude (member 1) with a cursor member: its polled bill is
+    it('files a POOLED team member’s bill under the member that polls, not under its member-1 stamp', async () => {
+      // The team member is claude (member 1) with a cursor member: its polled bill is
       // cursor's, though node_state names claude.
       run = {
         ...pricedRun(),
@@ -366,7 +366,7 @@ describe('UsageRecorderService', () => {
         }),
       };
       const polls = (kind: string): boolean => kind === 'cursor-agent';
-      start([{ nodeId: 'qa', agentKind: 'claude', polledCostCents: 250 }], {
+      start([{ memberId: 'qa', agentKind: 'claude', polledCostCents: 250 }], {
         all: () =>
           new Map(
             ['claude', 'cursor-agent'].map((kind) => [
@@ -405,7 +405,7 @@ describe('UsageRecorderService', () => {
         expect(announced).toEqual([
           {
             runId: 'run-cursor',
-            nodeId: null,
+            memberId: null,
             occurredAt: '2026-08-14T09:30:00.000Z',
             turn: false,
           },

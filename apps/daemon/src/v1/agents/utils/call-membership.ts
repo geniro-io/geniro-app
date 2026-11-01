@@ -44,13 +44,13 @@ const CALL_FOLLOWUP_KINDS = new Set<ItemKind>([
 
 export interface CallMembershipRow {
   kind: ItemKind;
-  nodeId: string | null;
+  memberId: string | null;
   payload: unknown;
 }
 
 /** What the run already holds that a row's membership depends on. */
 export interface CallMembershipLookup {
-  /** The callee node of a call the run started, or undefined when it started none by that id. */
+  /** The callee member of a call the run started, or undefined when it started none by that id. */
   calleeNodeOf(callId: string): string | null | undefined;
   /** The call a delegate was launched in, from its first declaration naming one. */
   delegateCallOf(delegateId: string): string | null;
@@ -106,7 +106,7 @@ export function callMembershipLookupOf(
  *
  * TWIN PARSER: the claim pass of `groupTranscript` in
  * apps/ui/src/renderer/chats/transcript-groups.ts (`UNCLAIMABLE_KINDS`,
- * `CALL_FOLLOWUP_KINDS`, the callee-node match, `delegateCalls`). A row this
+ * `CALL_FOLLOWUP_KINDS`, the callee-member match, `delegateCalls`). A row this
  * puts inside a call is fetched only with that call's conversation, so a row the
  * renderer would draw in the main flow and this files under a call disappears
  * from the transcript. A change here bumps {@link CALL_MEMBERSHIP_VERSION}.
@@ -133,7 +133,7 @@ export function callMembershipOf(
   if (CALL_FOLLOWUP_KINDS.has(row.kind)) {
     return callId;
   }
-  return row.nodeId !== null && row.nodeId === callee
+  return row.memberId !== null && row.memberId === callee
     ? callId
     : OUTSIDE_ANY_CALL;
 }

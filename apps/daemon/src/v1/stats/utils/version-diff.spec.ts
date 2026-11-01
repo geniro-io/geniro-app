@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { member, teamOf } from '../../teams/__tests__/team-builders';
 import type { Team } from '../../teams/teams.types';
 import {
   canonicalGraphJson,
@@ -8,14 +9,7 @@ import {
 } from '../../teams/utils/team-version';
 import { versionDiff } from './version-diff';
 
-const base: Team = {
-  name: 'Dev Team',
-  nodes: [
-    { id: 'start', kind: 'trigger', trigger: 'manual' },
-    { id: 'dev', kind: 'agent', agent: 'claude', approval: 'auto' },
-  ],
-  edges: [{ from: 'start', to: 'dev', kind: 'data' }],
-};
+const base: Team = teamOf([member('dev')], { name: 'Dev Team' });
 
 function yamlOf(team: Team): string {
   return canonicalGraphYaml(canonicalGraphJson(canonicalGraphOf(team)))!;
@@ -25,8 +19,8 @@ describe('versionDiff', () => {
   it('prints a unified diff with file headers and counts the lines it adds and removes', () => {
     const next: Team = {
       ...base,
-      nodes: base.nodes.map((node) =>
-        node.id === 'dev' ? { ...node, approval: 'ask' } : node,
+      members: base.members.map((m) =>
+        m.id === 'dev' ? { ...m, approval: 'ask' as const } : m,
       ),
     };
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { member, teamOf } from '../../../teams/__tests__/team-builders';
 import { configDirToken } from '../../../teams/utils/config-dir-redaction';
 import {
   readReadTeamsArgs,
@@ -40,8 +41,8 @@ describe('read_teams result text', () => {
         slug: 'team',
         name: 'Team',
         description: null,
-        nodeCount: 3,
-        edgeCount: 2,
+        memberCount: 3,
+        stageCount: 2,
         agentCounts: [{ kind: 'claude', count: 2 }],
         updatedAt: '2026-10-20T10:00:00.000Z',
       },
@@ -52,8 +53,8 @@ describe('read_teams result text', () => {
         slug: 'team',
         name: 'Team',
         description: null,
-        nodes: 3,
-        edges: 2,
+        members: 3,
+        stages: 2,
         agents: [{ kind: 'claude', count: 2 }],
       },
     ]);
@@ -61,19 +62,9 @@ describe('read_teams result text', () => {
   });
 
   it("never shows an agent's profile path", () => {
-    const team = {
-      name: 'Team',
-      nodes: [
-        {
-          id: 'a',
-          kind: 'agent' as const,
-          agent: 'claude' as const,
-          approval: 'ask' as const,
-          configDir: '/Users/me/.claude-work',
-        },
-      ],
-      edges: [],
-    };
+    const team = teamOf([
+      member('a', { approval: 'ask', configDir: '/Users/me/.claude-work' }),
+    ]);
 
     const text = teamText({ slug: 'team', hash: 'h1', team });
     expect(text).not.toContain('/Users/me');
@@ -83,7 +74,7 @@ describe('read_teams result text', () => {
   });
 
   it('answers one team with the hash it was read at', () => {
-    const team = { name: 'Team', nodes: [], edges: [] };
+    const team = teamOf([member('a')], { name: 'Team' });
     expect(bodyOf(teamText({ slug: 'team', hash: 'h1', team }))).toEqual({
       slug: 'team',
       hash: 'h1',

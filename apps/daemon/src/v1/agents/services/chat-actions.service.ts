@@ -70,23 +70,23 @@ export class ChatActionsService {
 
   async appendAction(
     runId: string,
-    nodeId: string | null,
+    memberId: string | null,
     payload: ActionPayload,
   ): Promise<ItemWire> {
-    return this.append(runId, nodeId, 'action', payload);
+    return this.append(runId, memberId, 'action', payload);
   }
 
   async appendOutcome(
     runId: string,
-    nodeId: string | null,
+    memberId: string | null,
     payload: ActionOutcomePayload,
   ): Promise<ItemWire> {
-    return this.append(runId, nodeId, 'action_outcome', payload);
+    return this.append(runId, memberId, 'action_outcome', payload);
   }
 
   private async append(
     runId: string,
-    nodeId: string | null,
+    memberId: string | null,
     kind: 'action' | 'action_outcome',
     payload: ActionPayload | ActionOutcomePayload,
   ): Promise<ItemWire> {
@@ -100,7 +100,7 @@ export class ChatActionsService {
       this.em.fork(),
       {
         runId,
-        nodeId,
+        memberId,
         seq: await this.seqs.reserve(runId),
         kind,
         role: null,

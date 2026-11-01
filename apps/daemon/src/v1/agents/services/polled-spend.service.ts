@@ -82,8 +82,8 @@ const POOLED_RESCAN_MARGIN_MS = 10 * 60_000;
 const CALL_SESSION_WINDOW_SEQS = 2_000;
 
 /**
- * How far before its node was created a never-priced conversation's events
- * may begin. A conversation geniro holds starts with a node of geniro's, so
+ * How far before its member was created a never-priced conversation's events
+ * may begin. A conversation geniro holds starts with a member of geniro's, so
  * pricing it from there — not from the account's thirty days — keeps a new
  * conversation from turning the next poll into a month-long walk; the slack
  * covers a clock or a write that lagged the request.
@@ -93,7 +93,7 @@ const NODE_START_SLACK_MS = 60 * 60_000;
 /**
  * The columns a poll reads of a run. It writes runs only through
  * `nativeUpdate`, so the rows are read-only projections and stay out of the
- * identity map. The graph copy is left out: it runs to hundreds of KB a run and
+ * identity map. The team copy is left out: it runs to hundreds of KB a run and
  * is read once per run ({@link PolledSpendService.poolsOf}).
  */
 const RUN_READ = {
@@ -113,7 +113,7 @@ const RUN_READ = {
  */
 type PolledRun = Pick<Run, (typeof RUN_READ)['fields'][number]>;
 
-/** One node whose conversations a poll prices, and everything they are. */
+/** One member whose conversations a poll prices, and everything they are. */
 interface NodeTarget {
   run: PolledRun;
   state: NodeState;
@@ -127,7 +127,7 @@ interface NodeTarget {
  * What each conversation of a POLLED-spend CLI has cost — a CLI whose turns
  * carry no price (`AdapterConfig.usage.polledSpend`) — fetched in one batched
  * poll per CLI through that adapter's own `fetchAccountSpend`, and written onto
- * the nodes and runs holding those conversations.
+ * the members and runs holding those conversations.
  *
  * Every fact about HOW an account is asked lives in the adapter; this service
  * owns only the cadence, the ledgers and the writes. Four properties shape it:
@@ -139,12 +139,12 @@ interface NodeTarget {
  * - It **fails closed and silent**: an adapter that cannot read its account
  *   answers null, which ends as "no cost reported". A missing price is never an
  *   error strip.
- * - It **re-reads rather than accumulates**: each node keeps a per-event ledger
+ * - It **re-reads rather than accumulates**: each member keeps a per-event ledger
  *   (`NodeState.polledSpend`) and every poll REPLACES the events it reads, so a
  *   charge the vendor raised after first listing it is followed rather than
  *   frozen; only events older than {@link SETTLE_AFTER_MS} are folded into a
  *   settled sum.
- * - It prices **every conversation a node is answerable for**: the sessions it
+ * - It prices **every conversation a member is answerable for**: the sessions it
  *   ran in, the conversations callers held with it (from its `call_result`
  *   rows, which outlive the session history on runs older than that column),
  *   and every delegate those spawned (`AgentAdapter.spawnedConversations`) —
@@ -162,12 +162,12 @@ export class PolledSpendService implements OnModuleInit {
   /**
    * Which rows belong to a polled CLI, keyed `<runId>\0<nodeId>`, so the live
    * tick costs one indexed read per row and not one per item. A run's (and a
-   * node's) agent never changes once known, so an entry never goes stale; it
+   * member's) agent never changes once known, so an entry never goes stale; it
    * is dropped with its run.
    */
   private readonly polledRows = new Map<string, boolean>();
   /**
-   * Each run's pooled members, parsed from its graph copy once: the copy is
+   * Each run's pooled members, parsed from its team copy once: the copy is
    * frozen once written, so only a run that has none yet is read again.
    */
   private readonly poolsByRun = new Map<
@@ -175,7 +175,7 @@ export class PolledSpendService implements OnModuleInit {
     Map<string, (SnapshotPoolProfile | null)[]>
   >();
   /**
-   * Per CLI, the runs whose graph copy pools a member of it, and the instant
+   * Per CLI, the runs whose team copy pools a member of it, and the instant
    * that list was read from. A run's copy is frozen as it is created, so after
    * the first read only runs created since (less {@link POOLED_RESCAN_MARGIN_MS})
    * are matched against their copies — plus the team runs that had no copy
@@ -188,7 +188,7 @@ export class PolledSpendService implements OnModuleInit {
    */
   private readonly callSessions = new Map<
     string,
-    { through: number; pairs: { calleeNodeId: string; sessionId: string }[] }
+    { through: number; pairs: { calleeMemberId: string; sessionId: string }[] }
   >();
   /** Moves on every run deletion: a read that spans one keeps nothing it read. */
   private deletionEpoch = 0;
@@ -215,7 +215,7 @@ export class PolledSpendService implements OnModuleInit {
    */
   onModuleInit(): void {
     this.bus.all().subscribe((event) => {
-      void this.noteItem(event.runId, event.item.nodeId);
+      void this.noteItem(event.runId, event.item.memberId);
     });
     this.bus.allDeleted().subscribe((runId) => {
       this.deletionEpoch += 1;
@@ -241,7 +241,7 @@ export class PolledSpendService implements OnModuleInit {
 
   /**
    * Whether a run holds any polled conversation — the chat's own agent, or a
-   * polled-CLI node in a team. What a readout asks before it nudges a poll.
+   * polled-CLI member in a team. What a readout asks before it nudges a poll.
    */
   async runHoldsPolledSpend(
     runId: string,
@@ -255,7 +255,7 @@ export class PolledSpendService implements OnModuleInit {
       if (states.some((state) => this.pollsSpend(state.agentKind))) {
         return true;
       }
-      // A pooled node is stamped with member 1 while one of its other members
+      // A pooled member is stamped with pool member 1 while one of its other ones
       // may be the polled one.
       const run = await this.runDao.getById(runId, this.em.fork());
       return [...snapshotPoolKinds(run?.teamSnapshot ?? null).values()].some(
@@ -275,11 +275,14 @@ export class PolledSpendService implements OnModuleInit {
     return this.refreshWithin(force ? 0 : MIN_POLL_INTERVAL_MS);
   }
 
-  private async noteItem(runId: string, nodeId: string | null): Promise<void> {
+  private async noteItem(
+    runId: string,
+    memberId: string | null,
+  ): Promise<void> {
     if (Date.now() - this.lastAttemptAtMs < LIVE_POLL_INTERVAL_MS) {
       return;
     }
-    if (!(await this.isPolledRow(runId, nodeId))) {
+    if (!(await this.isPolledRow(runId, memberId))) {
       return;
     }
     await this.refreshWithin(LIVE_POLL_INTERVAL_MS);
@@ -288,13 +291,13 @@ export class PolledSpendService implements OnModuleInit {
   /**
    * Whether a row came from a polled CLI — the run's own agent for a chat, the
    * NODE's for a team, whose run names no agent because its agents are per
-   * node.
+   * member.
    */
   private async isPolledRow(
     runId: string,
-    nodeId: string | null,
+    memberId: string | null,
   ): Promise<boolean> {
-    const key = `${runId}\u0000${nodeId ?? ''}`;
+    const key = `${runId}\u0000${memberId ?? ''}`;
     const known = this.polledRows.get(key);
     if (known !== undefined) {
       return known;
@@ -307,24 +310,24 @@ export class PolledSpendService implements OnModuleInit {
       if (run === null) {
         return false;
       }
-      if (run.teamId === null || nodeId === null) {
+      if (run.teamId === null || memberId === null) {
         const polled = this.pollsSpend(run.agentKind);
         this.polledRows.set(key, polled);
         return polled;
       }
-      // A pooled node's row is stamped with member 1, while its calls may
+      // A pooled member's row is stamped with pool member 1, while its calls may
       // run on a polled member — the pool, fixed for the run, says so.
       if (
-        (snapshotPoolKinds(run.teamSnapshot).get(nodeId) ?? []).some((kind) =>
+        (snapshotPoolKinds(run.teamSnapshot).get(memberId) ?? []).some((kind) =>
           this.pollsSpend(kind),
         )
       ) {
         this.polledRows.set(key, true);
         return true;
       }
-      const state = await this.nodeStates.getByRunNode(runId, nodeId, em);
+      const state = await this.nodeStates.getByRunNode(runId, memberId, em);
       const kind = state?.agentKind ?? null;
-      // Filed only once the node KNOWS its agent: a pending node's row carries
+      // Filed only once the member KNOWS its agent: a pending member's row carries
       // none yet, and filing that as "not polled" would exempt it for good.
       if (kind !== null) {
         this.polledRows.set(key, this.pollsSpend(kind));
@@ -418,7 +421,7 @@ export class PolledSpendService implements OnModuleInit {
   private async callSessionsOf(
     runId: string,
     em: EntityManager,
-  ): Promise<readonly { calleeNodeId: string; sessionId: string }[]> {
+  ): Promise<readonly { calleeMemberId: string; sessionId: string }[]> {
     const deletionEpoch = this.deletionEpoch;
     const kept = this.callSessions.get(runId);
     const held = {
@@ -438,12 +441,12 @@ export class PolledSpendService implements OnModuleInit {
         em,
       )) {
         if (
-          row.calleeNodeId !== null &&
+          row.calleeMemberId !== null &&
           row.sessionId !== null &&
           row.sessionId !== ''
         ) {
           held.pairs.push({
-            calleeNodeId: row.calleeNodeId,
+            calleeMemberId: row.calleeMemberId,
             sessionId: row.sessionId,
           });
         }
@@ -514,7 +517,7 @@ export class PolledSpendService implements OnModuleInit {
     return known.ids;
   }
 
-  /** {@link poolsByRun} for these runs, reading the graph copies not parsed yet. */
+  /** {@link poolsByRun} for these runs, reading the team copies not parsed yet. */
   private async poolsOf(
     runIds: readonly string[],
     em: EntityManager,
@@ -546,13 +549,13 @@ export class PolledSpendService implements OnModuleInit {
   }
 
   /**
-   * Every node holding a conversation of this CLI, keyed `<runId>\0<nodeId>`,
+   * Every member holding a conversation of this CLI, keyed `<runId>\0<nodeId>`,
    * with each conversation it is answerable for.
    *
    * Runs whose OWN agent is this CLI (a 1:1 chat) PLUS runs merely holding a
-   * node that ran on it — every team routing work to it, whose run row
-   * names no agent at all. A conversation is claimed by ONE node, first come:
-   * the sessions nodes ran in, then the conversations callers held with them,
+   * member that ran on it — every team routing work to it, whose run row
+   * names no agent at all. A conversation is claimed by ONE member, first come:
+   * the sessions members ran in, then the conversations callers held with them,
    * then the delegates any of those spawned — so no charge is counted twice.
    */
   private async targetsFor(
@@ -563,7 +566,7 @@ export class PolledSpendService implements OnModuleInit {
     const targets = new Map<string, NodeTarget>();
     const claimed = new Set<string>();
     const runIds = new Set(await this.nodeStates.runIdsForAgent(kind, em));
-    // A pooled node's stamp is member 1's, so a run whose pool holds this CLI
+    // A pooled member's stamp is pool member 1's, so a run whose pool holds this CLI
     // is a candidate whatever it is stamped.
     for (const id of await this.pooledRunIds(kind, em)) {
       runIds.add(id);
@@ -588,13 +591,13 @@ export class PolledSpendService implements OnModuleInit {
       const nodePools =
         pools.get(row.id) ?? new Map<string, (SnapshotPoolProfile | null)[]>();
       for (const state of await this.nodeStates.listByRun(row.id, em)) {
-        // A team's node on another CLI holds a session id from THAT CLI's
+        // A team's member on another CLI holds a session id from THAT CLI's
         // store, which this account has never heard of — never offer it. A
-        // pooled node is this CLI's when any of its members is.
+        // pooled member is this CLI's when any of its pool members is.
         if (
           row.agentKind !== kind &&
           state.agentKind !== kind &&
-          !(nodePools.get(state.nodeId) ?? []).some(
+          !(nodePools.get(state.memberId) ?? []).some(
             (profile) => profile?.agentKind === kind,
           )
         ) {
@@ -606,10 +609,10 @@ export class PolledSpendService implements OnModuleInit {
           stored: readPolledSpendLedger(state.polledSpend),
           conversations: new Map(),
         };
-        targets.set(`${row.id}\u0000${state.nodeId}`, target);
-        byNode.set(state.nodeId, target);
-        // EVERY conversation the node held, not only the one it would resume:
-        // each call to a node is a conversation of its own and a compaction
+        targets.set(`${row.id}\u0000${state.memberId}`, target);
+        byNode.set(state.memberId, target);
+        // EVERY conversation the member held, not only the one it would resume:
+        // each call to a member is a conversation of its own and a compaction
         // replaces one, while `agentSessionId` is overwritten by every turn.
         const sessions = readNodeSessions(state.sessionIds);
         if (state.agentSessionId !== null && state.agentSessionId !== '') {
@@ -622,10 +625,10 @@ export class PolledSpendService implements OnModuleInit {
       if (byNode.size === 0) {
         continue;
       }
-      // The conversations callers held with a node, as its `call_result` rows
+      // The conversations callers held with a member, as its `call_result` rows
       // record them — the only record on a run older than the session history.
       for (const pair of await this.callSessionsOf(row.id, em)) {
-        const target = byNode.get(pair.calleeNodeId);
+        const target = byNode.get(pair.calleeMemberId);
         if (target !== undefined) {
           calls.push({ target, sessionId: pair.sessionId });
         }
@@ -635,7 +638,7 @@ export class PolledSpendService implements OnModuleInit {
       this.claim(target, sessionId, claimed);
     }
     // The delegates every claimed conversation launched, billed under their
-    // own ids — attributed to the node whose conversation launched them.
+    // own ids — attributed to the member whose conversation launched them.
     const parents = new Map<string, NodeTarget>();
     for (const target of targets.values()) {
       for (const conversationId of target.conversations.keys()) {
@@ -649,7 +652,7 @@ export class PolledSpendService implements OnModuleInit {
         continue;
       }
       // A delegate cannot be billed before the conversation that launched it
-      // was last open, so it starts there rather than at the node's birth —
+      // was last open, so it starts there rather than at the member's birth —
       // which, on a chat weeks old, would make every new delegate a walk
       // through weeks of the account.
       const from = target.conversations.get(parent)?.settledThroughMs;
@@ -661,9 +664,9 @@ export class PolledSpendService implements OnModuleInit {
   }
 
   /**
-   * File one conversation under a node, unless another node already has it,
+   * File one conversation under a member, unless another member already has it,
    * with its ledger entry so far — or, for one never priced, an empty entry
-   * starting at `fromMs`, else where the node did.
+   * starting at `fromMs`, else where the member did.
    */
   private claim(
     target: NodeTarget,
@@ -688,8 +691,8 @@ export class PolledSpendService implements OnModuleInit {
   }
 
   /**
-   * Rewrite each node's ledger and total, then each run's total as the sum of
-   * its nodes', and TELL every window what changed.
+   * Rewrite each member's ledger and total, then each run's total as the sum of
+   * its members', and TELL every window what changed.
    *
    * Only a figure that MOVED is written or announced: a poll covers every
    * polled conversation on the machine, and an event per thread every minute
@@ -727,7 +730,10 @@ export class PolledSpendService implements OnModuleInit {
       const { state, run } = target;
       runs.set(run.id, run);
       const perRun = nodeTotals.get(run.id) ?? new Map();
-      perRun.set(state.nodeId, { cents: totals.cents, events: totals.events });
+      perRun.set(state.memberId, {
+        cents: totals.cents,
+        events: totals.events,
+      });
       nodeTotals.set(run.id, perRun);
       const buckets = runBuckets.get(run.id) ?? new Map<string, number>();
       for (const [bucket, { cents }] of totals.buckets) {
@@ -741,7 +747,7 @@ export class PolledSpendService implements OnModuleInit {
       ) {
         await this.nodeStates.writePolledSpend(
           run.id,
-          state.nodeId,
+          state.memberId,
           { ledger: serialized, cents: totals.cents, events: totals.events },
           em,
         );

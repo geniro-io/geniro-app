@@ -10,7 +10,7 @@ import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 export interface TeamBuilderSink {
   slug: string;
   /**
-   * When the turn began (epoch ms). The canvas does not save while the chat
+   * When the turn began (epoch ms). The team editor does not save while the chat
    * works, so a file written after this, before the turn's own first check,
    * was written by something else.
    */
@@ -30,23 +30,23 @@ export interface TeamBuilderSink {
 /**
  * Gates `propose_team`, `save_team_change`, `backup_team` and
  * `read_teams` for a team's own builder chat — the chat docked under
- * the canvas. A change is written by `TeamProposalService` behind the
+ * the team editor. A change is written by `TeamProposalService` behind the
  * proposal's card; the check is `TeamChangeService`'s, under its builder
  * authority.
  */
 @Injectable()
 export class TeamBuilderBroker extends HostSinkBroker<TeamBuilderSink> {
-  canEdit(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  canEdit(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   teamOf(
     runId: string,
-    nodeId: string,
+    memberId: string,
   ): Promise<TeamBuilderSink | HostSinkUnavailable> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no builder turn is running',
       'read the team this chat edits',
       (sink) => Promise.resolve({ ...sink }),
@@ -60,13 +60,13 @@ export class TeamBuilderBroker extends HostSinkBroker<TeamBuilderSink> {
    */
   async noteVersion(
     runId: string,
-    nodeId: string,
+    memberId: string,
     turnStartedAt: number,
     known: Pick<TeamBuilderSink, 'savedHash' | 'acceptsAnyVersion'>,
   ): Promise<void> {
     await this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no builder turn is running',
       'note the team version',
       (sink) => {

@@ -30,7 +30,7 @@ export type BreakdownBy = 'agent' | 'model';
 export interface BreakdownRow {
   key: string;
   /** The lane a row is about — set on agent rows only, for focus and colour. */
-  nodeId?: string | null;
+  memberId?: string | null;
   turns: number;
   /** Time inside turns, clipped to the window. */
   workedMs: number;
@@ -60,8 +60,8 @@ function isWhole(data: RunWaterfallDto, window: ClockWindow): boolean {
 }
 
 /** A lane's key in a map — the chat's own lane is keyed null, which a string key cannot hold. */
-function laneKey(nodeId: string | null): string {
-  return nodeId ?? '\u0000';
+function laneKey(memberId: string | null): string {
+  return memberId ?? '\u0000';
 }
 
 function sumPriced(turns: readonly RunWaterfallTurn[]): number | null {
@@ -120,10 +120,10 @@ function endsIn(turn: RunWaterfallTurn, window: ClockWindow): boolean {
  */
 function calleeCost(
   data: RunWaterfallDto,
-  nodeId: string | null,
+  memberId: string | null,
   window: ClockWindow,
 ): { costUsd: number | null; estimatedCostUsd: number | null } {
-  const calls = data.calls.filter((call) => call.callerNodeId === nodeId);
+  const calls = data.calls.filter((call) => call.callerMemberId === memberId);
   const answered = new Set<RunWaterfallTurn>();
   for (const call of calls) {
     const from = Date.parse(call.startedAt);
@@ -131,8 +131,8 @@ function calleeCost(
     for (const turn of data.turns) {
       const end = endOf(turn);
       if (
-        turn.nodeId === call.calleeNodeId &&
-        turn.nodeId !== nodeId &&
+        turn.memberId === call.calleeMemberId &&
+        turn.memberId !== memberId &&
         end >= from &&
         end <= to &&
         endsIn(turn, window)
@@ -157,12 +157,12 @@ export function breakdownRows(
   const whole = isWhole(data, window);
   const inWindow = data.turns.filter(
     (turn) =>
-      (focus === undefined || turn.nodeId === focus) &&
+      (focus === undefined || turn.memberId === focus) &&
       overlapMs(Date.parse(turn.startedAt), endOf(turn), window) > 0,
   );
   const groups = new Map<string, RunWaterfallTurn[]>();
   const keyOf = (turn: RunWaterfallTurn): string =>
-    by === 'agent' ? laneKey(turn.nodeId) : (turn.model ?? '');
+    by === 'agent' ? laneKey(turn.memberId) : (turn.model ?? '');
   for (const turn of inWindow) {
     const key = keyOf(turn);
     groups.set(key, [...(groups.get(key) ?? []), turn]);
@@ -172,13 +172,13 @@ export function breakdownRows(
     return data.lanes
       .filter(
         (lane) =>
-          (focus === undefined || lane.nodeId === focus) &&
+          (focus === undefined || lane.memberId === focus) &&
           // On the whole run a lane with no drawable turn (a CLI that timed
           // nothing) still has a price and a turn count worth a row.
-          (whole || groups.has(laneKey(lane.nodeId))),
+          (whole || groups.has(laneKey(lane.memberId))),
       )
       .map((lane) => {
-        const turns = groups.get(laneKey(lane.nodeId)) ?? [];
+        const turns = groups.get(laneKey(lane.memberId)) ?? [];
         const priced = turns.filter((turn) => endsIn(turn, window));
         const own = whole ? lane.costUsd : sumPriced(priced);
         const ownEstimated = whole
@@ -187,10 +187,10 @@ export function breakdownRows(
         const callees =
           data.calls.length === 0
             ? null
-            : calleeCost(data, lane.nodeId, window);
+            : calleeCost(data, lane.memberId, window);
         return {
-          key: lane.nodeId ?? 'agent',
-          nodeId: lane.nodeId,
+          key: lane.memberId ?? 'agent',
+          memberId: lane.memberId,
           // The lane's own count on the whole run: it is the daemon's
           // reconciled figure, and a turn its CLI never timed has no span.
           turns: whole ? lane.turns : turns.length,
@@ -260,7 +260,7 @@ export function toolRows(
 ): ToolRow[] {
   const byName = new Map<string, { calls: number; delegateCalls: number }>();
   for (const use of data.toolUse) {
-    if (focus !== undefined && use.nodeId !== focus) {
+    if (focus !== undefined && use.memberId !== focus) {
       continue;
     }
     const row = byName.get(use.name) ?? { calls: 0, delegateCalls: 0 };

@@ -13,7 +13,7 @@ function row(payload: unknown): ChatItem {
   return {
     id: `i-${seq}`,
     runId: 'run-1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'workflow_info',
     role: null,

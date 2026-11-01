@@ -124,7 +124,7 @@ export class ProcessRegistry implements OnApplicationShutdown {
 
   /**
    * Resolves once the run's registered handle has settled — the wait a delete
-   * needs when finalization rides the handle itself (the graph executor's
+   * needs when finalization rides the handle itself (the team executor's
    * aggregate handle resolves only after the run's LAST write; a chat turn's
    * does NOT, which is why the chat service waits on its own finalizer map).
    *

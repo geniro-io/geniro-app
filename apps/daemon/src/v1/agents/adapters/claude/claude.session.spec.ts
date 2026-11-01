@@ -230,7 +230,7 @@ describe('a run-scoped claude session', () => {
     // Probed on 2.1.295: one --dangerously-skip-permissions process with its
     // stdin held open answered two user lines under one session id. Kept, the
     // turn is held while its background sub-agents run — the one-shot process
-    // an auto team node used to get settled on its launching result.
+    // an auto team member used to get settled on its launching result.
     const AUTO: AgentTurnInput = {
       prompt: 'first',
       cwd: '/proj',
@@ -339,7 +339,7 @@ describe('a run-scoped claude session', () => {
   });
 
   it('stops a kept auto turn in protocol too, rather than killing its process', () => {
-    // A team node in `auto` holds no dialogue but now keeps its process;
+    // A team member in `auto` holds no dialogue but now keeps its process;
     // killing it on Stop would take its MCP servers and sub-agents with it.
     const AUTO: AgentTurnInput = {
       prompt: 'first',

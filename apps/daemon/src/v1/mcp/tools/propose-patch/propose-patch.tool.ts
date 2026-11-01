@@ -18,12 +18,14 @@ export class ProposePatchTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.patches.canPropose(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.patches.canPropose(runId, memberId);
   }
 
-  protected instructions({ runId, nodeId }: McpListContext): string {
-    return proposePatchInstructions(this.patches.answersAtOnce(runId, nodeId));
+  protected instructions({ runId, memberId }: McpListContext): string {
+    return proposePatchInstructions(
+      this.patches.answersAtOnce(runId, memberId),
+    );
   }
 
   protected inputSchema(): Record<string, unknown> {
@@ -34,7 +36,7 @@ export class ProposePatchTool extends BaseMcpTool {
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId } = context;
+    const { runId, memberId } = context;
     const read = readHostPatch(args);
     // The reader answers with a SENTENCE rather than a bare null, because
     // every refusal here names something the agent can fix and retry.
@@ -46,7 +48,7 @@ export class ProposePatchTool extends BaseMcpTool {
     // when the sink answers `posted` at once and the verdict arrives as the
     // run's next message.
     const outcome = await context.whileCancellable((signal) =>
-      this.patches.propose(runId, nodeId, read.patch, signal),
+      this.patches.propose(runId, memberId, read.patch, signal),
     );
     // A rejection is not a tool failure: the user exercised the gate this
     // tool exists to offer them, and flagging it as an error is how a

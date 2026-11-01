@@ -22,7 +22,7 @@ function item(kind: ChatItem['kind'], payload: unknown): ChatItem {
   return {
     id: `i-${seq}`,
     runId: 'run-1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind,
     role: null,
@@ -196,7 +196,7 @@ describe('workflowCardStatus', () => {
     id: 'toolu_wf',
     createdAt: '2026-08-30T00:00:00.000Z',
     seq: 1,
-    nodeId: null,
+    memberId: null,
     parentToolUseId: null,
     workflow: {
       id: 'toolu_wf',

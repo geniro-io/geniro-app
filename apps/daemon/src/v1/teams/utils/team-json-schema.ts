@@ -23,9 +23,10 @@ export const TEAM_SCHEMA_FILE_NAME = '.team.schema.json';
  *
  * The STRICT schema rather than `TeamYamlSchema`: a file satisfying it is
  * always accepted by the lenient one, and it is the shape the builder writes,
- * so an agent following it never leans on a default the canvas would then
- * spell out on its next save. What JSON Schema cannot carry — the graph rules
- * over the edge list — the brief renders from `NODE_CONNECTION_RULES` instead.
+ * so an agent following it never leans on a default the team editor would then
+ * spell out on its next save. What JSON Schema cannot carry — the ids one
+ * part names in another (a trigger's member, a block's audience, a stage's
+ * responsible members) — `validateTeam` checks, and the brief states.
  */
 export function teamJsonSchema(): string {
   const schema = z.toJSONSchema(TeamSchema, { io: 'input' });

@@ -31,7 +31,7 @@ export const WALL_WORK_MARKER_FILE = 'wall-work-measured';
  * The wall-clock ledger of agents' worked time: the turns a CLI did not time
  * itself (every ACP agent), measured by the daemon from the agent's own
  * durable rows (`utils/wall-worked.ts`) and recorded one row per turn in
- * `wall_turns` (`WallTurnDao`). The figure served for a node or a chat is its
+ * `wall_turns` (`WallTurnDao`). The figure served for a member or a chat is its
  * CLI-reported total plus that ledger's sum (`servedWorkedMs`).
  *
  * Why the daemon measures them: the renderer folded them from the rows it had
@@ -64,20 +64,20 @@ export class WallWorkService {
   }
 
   /**
-   * Record every settled wall-measured turn of one team node. Idempotent
-   * and safe beside any concurrent catch-up of the same node. Throws on a
+   * Record every settled wall-measured turn of one team member. Idempotent
+   * and safe beside any concurrent catch-up of the same member. Throws on a
    * database failure; the callers decide what that costs.
    */
   async catchUpNode(
     runId: string,
-    nodeId: string,
+    memberId: string,
     txEm?: EntityManager,
   ): Promise<void> {
-    const rows = await this.itemDao.nodeWallClockRows(runId, nodeId, txEm);
+    const rows = await this.itemDao.nodeWallClockRows(runId, memberId, txEm);
     await this.wallTurns.record(runId, wallMeasuredTurns(rows, 'nodes'), txEm);
   }
 
-  /** {@link catchUpNode} for a 1:1 chat's agent (its rows with no node). */
+  /** {@link catchUpNode} for a 1:1 chat's agent (its rows with no member). */
   async catchUpChat(runId: string, txEm?: EntityManager): Promise<void> {
     const rows = await this.itemDao.chatWallClockRows(runId, txEm);
     await this.wallTurns.record(runId, wallMeasuredTurns(rows, 'chat'), txEm);
@@ -111,7 +111,7 @@ export class WallWorkService {
         await each(run.id, async () => {
           const em = this.em.fork();
           for (const node of await this.nodeStateDao.listByRun(run.id, em)) {
-            await this.catchUpNode(run.id, node.nodeId, em);
+            await this.catchUpNode(run.id, node.memberId, em);
           }
         });
       }

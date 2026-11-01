@@ -273,7 +273,7 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Who these runs are — never their graph copy, which runs to hundreds of KB a run. `'every-team-run'` reads every team run. A run that no
+   * Who these runs are — never their team copy, which runs to hundreds of KB a run. `'every-team-run'` reads every team run. A run that no
    * longer exists is absent.
    */
   async runFacts(
@@ -301,7 +301,7 @@ export class RunDao extends BaseDao<Run> {
     return facts;
   }
 
-  /** These runs' graph copies (`Run.teamSnapshot`), by run id; a run that no longer exists is absent. */
+  /** These runs' team copies (`Run.teamSnapshot`), by run id; a run that no longer exists is absent. */
   async teamSnapshots(
     runIds: readonly string[],
     txEm?: EntityManager,
@@ -1144,7 +1144,7 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Team runs (graph executions), newest first, filtered by how much of the
+   * Team runs (team executions), newest first, filtered by how much of the
    * archive the caller asked for.
    *
    * The archive predicate is {@link listChats}' own, down to `all` stating no
@@ -1179,7 +1179,7 @@ export class RunDao extends BaseDao<Run> {
 
   /**
    * Team runs left in a non-terminal state by a crash / SIGKILL — the
-   * graph executor's boot reconcile closes them (pending counts too: a
+   * team executor's boot reconcile closes them (pending counts too: a
    * team run is created `running`, so anything non-terminal is orphaned).
    */
   async listRunningTeamRuns(txEm?: EntityManager): Promise<Run[]> {

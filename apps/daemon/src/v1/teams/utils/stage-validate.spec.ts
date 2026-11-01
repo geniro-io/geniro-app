@@ -1,6 +1,7 @@
 import { BadRequestException } from '@packages/common';
 import { describe, expect, it } from 'vitest';
 
+import { member, teamOf } from '../__tests__/team-builders';
 import type { Team, TeamStage } from '../teams.types';
 import {
   assertValidStages,
@@ -16,17 +17,13 @@ const stage = (
 ): TeamStage => ({
   id,
   title: id,
-  doneWhen: `${id} is done`,
+  goal: `${id} is done`,
   ...(next ? { next } : {}),
   ...over,
 });
 
-const teamWith = (stages: TeamStage[] | undefined): Team => ({
-  name: 'w',
-  nodes: [{ id: 'lead', kind: 'agent', agent: 'claude', approval: 'auto' }],
-  edges: [],
-  ...(stages ? { stages } : {}),
-});
+const teamWith = (stages: TeamStage[] | undefined): Team =>
+  teamOf([member('lead')], stages ? { stages } : {});
 
 const codes = (stages: TeamStage[]): string[] =>
   validateStages(teamWith(stages)).errors.map((e) => e.code);
@@ -79,17 +76,23 @@ describe('validateStages', () => {
     expect(codes(many)).toEqual(['STAGE_TOO_MANY']);
   });
 
-  it('warns, not fails, on an ownerHint naming no agent', () => {
-    const result = validateStages(
-      teamWith([stage('a', undefined, { ownerHint: 'deleted-agent' })]),
-    );
+  it('warns, not fails, on a responsible id naming no member', () => {
+    const unknown = teamWith([
+      stage('a', undefined, { responsible: ['lead', 'deleted-member'] }),
+    ]);
+    const result = validateStages(unknown);
     expect(result.errors).toEqual([]);
-    expect(result.warnings.map((w) => w.code)).toEqual(['STAGE_OWNER_UNKNOWN']);
-    expect(() =>
-      assertValidStages(
-        teamWith([stage('a', undefined, { ownerHint: 'deleted-agent' })]),
-      ),
-    ).not.toThrow();
+    expect(result.warnings.map((w) => [w.code, w.stageId])).toEqual([
+      ['STAGE_RESPONSIBLE_UNKNOWN', 'a'],
+    ]);
+    expect(() => assertValidStages(unknown)).not.toThrow();
+  });
+
+  it('does not warn when every responsible id is a member', () => {
+    const result = validateStages(
+      teamWith([stage('a', undefined, { responsible: ['lead'] })]),
+    );
+    expect(result.warnings).toEqual([]);
   });
 });
 

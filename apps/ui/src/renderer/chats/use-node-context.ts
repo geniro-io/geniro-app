@@ -136,7 +136,7 @@ export function useNodeDurableReadings(
           runId,
           readings: new Map(
             nodes.map((node) => [
-              node.nodeId,
+              node.memberId,
               {
                 contextTokens: node.contextTokens,
                 ...(node.contextEstimated ? { contextEstimated: true } : {}),

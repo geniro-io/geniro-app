@@ -107,6 +107,15 @@ describe('TeamVersionsDialog', () => {
     expect(copyless!.textContent).toContain('these runs kept no graph copy');
   });
 
+  it('labels a version recorded while teams were graphs, and only those', () => {
+    render({ data: DEV_TEAM_VERSIONS });
+
+    const [current, first, inferred] = rows('version-row');
+    expect(current!.textContent).not.toContain('before teams');
+    expect(first!.textContent).toContain('before teams');
+    expect(inferred!.textContent).toContain('before teams');
+  });
+
   it('shows a version’s git diff on a press, and goes back to the list', () => {
     render({ data: DEV_TEAM_VERSIONS });
 

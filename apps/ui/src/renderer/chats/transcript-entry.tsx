@@ -100,9 +100,9 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
   // be answered per row.
   const ownNodeId =
     entry.type === 'turn-block'
-      ? entry.nodeId
+      ? entry.memberId
       : entry.type === 'item'
-        ? entry.item.nodeId
+        ? entry.item.memberId
         : null;
   /**
    * A row NO node owns is the RUN's, not an agent's. In a 1:1 chat that is
@@ -232,8 +232,8 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
   }
   return (
     <SenderRow
-      name={agentName(item.nodeId)}
-      colorKey={item.nodeId ?? undefined}
+      name={agentName(item.memberId)}
+      colorKey={item.memberId ?? undefined}
       time={time}>
       {content}
     </SenderRow>

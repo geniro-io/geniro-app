@@ -55,8 +55,8 @@ type RunEnding = RunStatus | 'interrupted';
  * which {@link TaskSettleService.interruptCauseOf} looks past to find it.
  *
  * `ChatService.reconcileOrphanedRuns` follows its error with `unanswerable`
- * rows, `GraphExecutorService.reconcileOrphanedRuns` adds a `status` per open
- * node turn and a `call_result` per open call, and the delegate and shell boot
+ * rows, `TeamExecutorService.reconcileOrphanedRuns` adds a `status` per open
+ * member turn and a `call_result` per open call, and the delegate and shell boot
  * sweeps that run after both close what the dead process left out. None of
  * them is the run carrying on; all of them are bookkeeping about how it
  * stopped.
@@ -352,7 +352,7 @@ export class TaskSettleService implements OnModuleInit {
    * Why this run was cut off, when its last word is the boot reconcile saying
    * so — the `error` row carrying `interrupted: true` (and the cause) that
    * `ChatService.reconcileOrphanedRuns` and
-   * `GraphExecutorService.reconcileOrphanedRuns` write for a run the daemon
+   * `TeamExecutorService.reconcileOrphanedRuns` write for a run the daemon
    * stopped under (a SIGKILL, or a shutdown, which leaves a working run
    * `running` on purpose so that it is closed this way).
    *

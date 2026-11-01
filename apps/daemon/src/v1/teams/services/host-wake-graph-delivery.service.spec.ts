@@ -3,11 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { HostWake } from '../../agents/chat.types';
 import type { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
-import type {
-  GraphExecutorService,
-  MonitorWake,
-} from './graph-executor.service';
 import { HostWakeGraphDelivery } from './host-wake-graph-delivery.service';
+import type { MonitorWake, TeamExecutorService } from './team-executor.service';
 
 function wake(
   onDelivered = vi.fn(),
@@ -17,7 +14,7 @@ function wake(
     key: 'share:s1',
     owner: {
       runId: 'run-1',
-      nodeId: 'manager',
+      memberId: 'manager',
       conversationId,
       caller:
         conversationId === null ? 'manager' : `manager::${conversationId}`,
@@ -38,7 +35,7 @@ function wake(
 function harness() {
   let answer: MonitorWake = 'busy';
   let turnEnded: (runId: string, caller: string) => void = () => undefined;
-  const wakeConversation = vi.fn<GraphExecutorService['wakeConversation']>(
+  const wakeConversation = vi.fn<TeamExecutorService['wakeConversation']>(
     () => answer,
   );
   const executor = {
@@ -49,7 +46,7 @@ function harness() {
       turnEnded = listener;
       return () => undefined;
     },
-  } as unknown as GraphExecutorService;
+  } as unknown as TeamExecutorService;
   const oweKeyNote = vi.fn(() => true);
   const bus = new HostWakeBus();
   new HostWakeGraphDelivery(bus, executor, {

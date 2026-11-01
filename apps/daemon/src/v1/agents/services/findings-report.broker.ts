@@ -18,20 +18,20 @@ export type FindingsReporter = (
 
 @Injectable()
 export class FindingsReportBroker extends HostSinkBroker<FindingsReporter> {
-  /** Whether this node can currently file a report — gates the tool listing. */
-  canReport(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  /** Whether this member can currently file a report — gates the tool listing. */
+  canReport(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   /** File the report and resolve with what happened. Never throws. */
   async report(
     runId: string,
-    nodeId: string,
+    memberId: string,
     report: HostFindingsReport,
   ): Promise<HostFindingsOutcome> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no turn is running that could record them',
       'record findings',
       (reporter) => reporter(report),

@@ -3582,7 +3582,7 @@ describe('what a turn spends', () => {
   });
 });
 
-describe('a team node’s switched-off MCP servers', () => {
+describe('a team member’s switched-off MCP servers', () => {
   /** A `config/read` reply defining `playwright` in the user's config.toml. */
   const CONFIG_REPLY = {
     config: {
@@ -3646,7 +3646,7 @@ describe('a team node’s switched-off MCP servers', () => {
       {
         type: 'notice',
         message: expect.stringContaining(
-          'the MCP servers switched off on this node stay on for this turn',
+          'the MCP servers switched off for this member stay on for this turn',
         ),
       },
     ]);
@@ -3655,7 +3655,7 @@ describe('a team node’s switched-off MCP servers', () => {
     });
   });
 
-  it('reads nothing first when the node switches nothing off', () => {
+  it('reads nothing first when the member switches nothing off', () => {
     const session = sessionWith([]);
     session.onStdinReady(io());
     expect(frames().map((frame) => frame.method)).toEqual([

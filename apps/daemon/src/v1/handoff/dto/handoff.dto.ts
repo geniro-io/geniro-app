@@ -12,11 +12,11 @@ export class HandoffTargetDto extends createZodDto(HandoffTargetSchema) {}
 
 export const HandoffQuerySchema = z.object({
   runId: z.string().min(1),
-  /** The graph node; omitted for a single-agent chat. */
-  nodeId: z.string().min(1).optional(),
+  /** The team member; omitted for a single-agent chat. */
+  memberId: z.string().min(1).optional(),
   /**
-   * A specific thread of that node — a call thread's own resume id. Omitted
-   * means the node's latest session.
+   * A specific thread of that member — a call thread's own resume id. Omitted
+   * means the member's latest session.
    */
   sessionId: z.string().min(1).optional(),
 });

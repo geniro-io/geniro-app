@@ -28,13 +28,13 @@ export type McpToolResult = {
   isError: boolean;
 };
 
-/** WHO a listing is for: one node of one run, in one of its conversations. */
+/** WHO a listing is for: one member of one run, in one of its conversations. */
 export interface McpListContext {
   runId: string;
-  nodeId: string;
+  memberId: string;
   /**
    * The callee conversation the asking process speaks in — the endpoint's
-   * last segment — or null for the node's own. Non-null means the asker is
+   * last segment — or null for the member's own. Non-null means the asker is
    * answering a call, which changes what some tools tell it.
    */
   conversationId: string | null;
@@ -49,8 +49,8 @@ export interface McpListContext {
  */
 export interface McpCallContext extends McpListContext {
   /**
-   * The caller key (`callerKey(nodeId, conversationId)`) — a CONVERSATION,
-   * not a node, for the call tools' ownership rules.
+   * The caller key (`callerKey(memberId, conversationId)`) — a CONVERSATION,
+   * not a member, for the call tools' ownership rules.
    */
   caller: string;
   /** The JSON-RPC id of this call, as the client numbered it. */
@@ -88,7 +88,7 @@ export interface McpCallContext extends McpListContext {
 export interface McpTool {
   /** Whether a `tools/call` of this name is this entry's to answer. */
   handles(name: string): boolean;
-  /** What this entry offers one node right now — empty when nothing. */
+  /** What this entry offers one asker right now — empty when nothing. */
   list(context: McpListContext): McpToolListing[];
   /** Answer one call. Never throws: a refusal is an answer the agent reads. */
   call(

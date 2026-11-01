@@ -1091,7 +1091,7 @@ type AgentEventBody =
       stopReason: string | null;
       /**
        * The agent's final answer text as the CLI's result line reports it —
-       * what a downstream graph node receives as its input context. Null when
+       * what a caller receives as the call's result. Null when
        * the CLI's result carries no text (callers fall back to concatenating
        * the turn's `text` events).
        */
@@ -1890,7 +1890,7 @@ type AgentEventBody =
       /**
        * The CLI flagged this request as a genuine USER QUESTION (claude sets
        * `requires_user_interaction` on AskUserQuestion), not a permission
-       * check. The graph executor routes flagged requests from call-initiated
+       * check. The team executor routes flagged requests from call-initiated
        * turns to the caller (the M4 Q&A bridge) instead of auto-approving.
        */
       requiresUserInteraction?: boolean;
@@ -2408,7 +2408,7 @@ export interface AgentMcpServer {
    */
   signInUnavailableReason?: string | null;
   /**
-   * Why THIS row cannot be switched off for one team node's turns
+   * Why THIS row cannot be switched off for one team member's turns
    * (`AgentTurnInput.mcpDisabled`), when the reason belongs to the row rather
    * than to the CLI — codex's plugin servers, which only the whole plugin
    * turns off. `AdapterConfig.mcp.turnToggleUnavailableReason` wins over it.
@@ -2440,7 +2440,7 @@ export interface AgentMcpServersInput {
    * Which servers a folder contributes is the CLI's own business: for claude,
    * a project `.mcp.json` is visible ONLY from its own folder (probe-verified
    * on 2.1.220), so listing from a folder that has none yields the
-   * folder-INDEPENDENT set — exactly what the graph builder wants, since a
+   * folder-INDEPENDENT set — exactly what the team editor wants, since a
    * team has no folder until it runs.
    */
   cwd: string;
@@ -3256,21 +3256,23 @@ export interface AgentTurnInput {
   /** Prior CLI session id to resume; null/undefined starts a fresh session. */
   resumeSessionId?: string | null;
   /**
-   * Role/system prompt for this turn (graph nodes). Claude appends it to the
+   * A team member's private instructions for this turn. Claude appends it to the
    * CLI system prompt (`--append-system-prompt`); ACP has no such parameter,
    * so its driver prepends it to the prompt text. Undefined for plain chat.
    */
   systemPrompt?: string | null;
+  /** A team member's character — its manner and tone, for its own turns only. */
+  characterPrompt?: string | null;
   /**
    * The user's own global custom instructions, as snapshotted onto the run.
    *
    * Kept SEPARATE from {@link systemPrompt} for the same reason
    * {@link callSurfacePrompt} is: the two answer different questions and rank
-   * differently. `systemPrompt` is what THIS turn is for — a graph node's role
-   * — while this is a standing preference the user set once for every agent, so
-   * a node's role has to outrank it. Folding them into one field would make
-   * that ordering the caller's problem, and the graph path would have to
-   * hand-join a string it did not author.
+   * differently. `systemPrompt` is what THIS turn is for — a team member's
+   * instructions — while this is a standing preference the user set once for
+   * every agent, so the member's instructions have to outrank it. Folding them
+   * into one field would make that ordering the caller's problem, and the team
+   * path would have to hand-join a string it did not author.
    *
    * Reaches the CLI through `AgentAdapter.composeSystemPrompt` like every other
    * part, so it needs no per-CLI delivery of its own — both shipped adapters
@@ -3321,7 +3323,7 @@ export interface AgentTurnInput {
   /**
    * What geniro tells a team-editing chat about the file it owns — where
    * it is, and what a team document may contain — as stored on
-   * `Run.teamInstructions`. Undefined for every run outside the builder's
+   * `Run.teamInstructions`. Undefined for every run outside the team builder's
    * chat panel.
    *
    * A peer of {@link taskInstructions} for that field's own reason, and the
@@ -3330,14 +3332,15 @@ export interface AgentTurnInput {
    */
   teamInstructions?: string | null;
   /**
-   * The instruction blocks wired to this graph node, already joined by the
-   * executor. Undefined for plain chat and for a node nothing is wired to.
+   * The instruction blocks addressed to this team member, already joined by
+   * the executor. Undefined for plain chat and for a member no block is
+   * addressed to.
    *
    * A THIRD peer beside {@link systemPrompt} and {@link customInstructions};
    * `turnInstructionParts` owns where it ranks between them.
    *
    * Joined by the executor rather than sent as a list, because the ORDER of
-   * several blocks is a graph fact (the wiring) that no adapter can recover.
+   * several blocks is a team fact that no adapter can recover.
    */
   instructionBlocks?: string | null;
   stageMapPrompt?: string | null;
@@ -3491,7 +3494,7 @@ export interface AgentTurnInput {
   isolateMcpServers?: boolean;
   /**
    * MCP servers this turn runs WITHOUT, by the name the CLI lists them under —
-   * a team node's own switches (`TeamAgentNode.mcpDisabled`). Absent
+   * a team member's own switches (`TeamMember.mcpDisabled`). Absent
    * or empty switches nothing off; chats never set it.
    *
    * Adapter-agnostic like {@link isolateMcpServers}: the caller says which
@@ -3527,7 +3530,7 @@ export interface AgentTurnInput {
   /**
    * Loopback MCP endpoint carrying geniro's OWN tools for this turn — whichever
    * of them the turn registered. The listing is composed per request at the
-   * endpoint, so holding this grants nothing by itself: a node with callees
+   * endpoint, so holding this grants nothing by itself: a member with callees
    * sees the agent-call tools, a turn that can put a card on screen sees
    * `ask_user_question`, a chat sees `report_findings`. Delivery is
    * adapter-specific — claude gets a per-turn config file referenced by
@@ -3567,6 +3570,7 @@ export type TurnInstructionInput = Pick<
   | 'instructionBlocks'
   | 'stageMapPrompt'
   | 'systemPrompt'
+  | 'characterPrompt'
   | 'answeringACallPrompt'
   | 'callSurfacePrompt'
 >;
@@ -3726,7 +3730,7 @@ export interface TurnIo {
  * `createTurnDriver` to return an instance holding that turn's own state.
  *
  * A per-turn object (rather than more adapter methods) is what makes this safe
- * under graph fan-out: one adapter instance drives N concurrent turns, so
+ * under team fan-out: one adapter instance drives N concurrent turns, so
  * protocol state must never live on the adapter.
  */
 export interface TurnDriver {
@@ -4152,7 +4156,7 @@ export type AgentIconName = (typeof AGENT_ICON_NAMES)[number];
  *
  * An event, not a per-conversation sum, because a vendor REVISES an event's
  * charge after first listing it: measured 2026-10-05 against a real Cursor
- * account, a node whose ten events had all been seen was recorded at $8.44
+ * account, a member whose ten events had all been seen was recorded at $8.44
  * while the same ten events summed to $134.86 — a long agent request is listed
  * early and its cost grows as it runs. Only a caller holding each event under a
  * stable {@link key} can replace a stale figure instead of freezing it.
@@ -4264,7 +4268,7 @@ export interface AdapterConfig {
     readonly shortName: string;
     /** One sentence on what this agent is, for the team palette. */
     readonly summary: string;
-    /** The palette's detail lines — how a node of this CLI behaves. */
+    /** The palette's detail lines — how a member of this CLI behaves. */
     readonly details: readonly string[];
     /**
      * Which glyph the UI draws for it — a NAME from a closed set the renderer
@@ -4307,11 +4311,11 @@ export interface AdapterConfig {
    * True for claude, where it is load-bearing: `--dangerously-skip-permissions`
    * leaves the turn no permission-prompt channel and the AskUserQuestion tool
    * is not wired without one (probe-verified on 2.1.227 across every mode), so
-   * a question-capable `auto` node has to spawn on the stdio dialogue with the
+   * a question-capable `auto` member has to spawn on the stdio dialogue with the
    * DAEMON standing in for the bypass. False for a CLI whose questions arrive
    * out-of-band — an ACP vendor request reaches the client whatever session
    * mode the agent is in — where forcing `ask` would park every ordinary
-   * permission on a human verdict in a graph nobody is watching.
+   * permission on a human verdict in a team run nobody is watching.
    *
    * Meaningless when `questionToolName` is null; declare it false there.
    */
@@ -4751,7 +4755,7 @@ export interface AdapterConfig {
     readonly toggleUnavailableReason: string | null;
     /**
      * Why NO server of this CLI can be switched off for ONE turn
-     * (`AgentTurnInput.mcpDisabled`, a team node's own switches), or null
+     * (`AgentTurnInput.mcpDisabled`, a team member's own switches), or null
      * when the adapter applies that field.
      *
      * Separate from {@link toggleUnavailableReason}: that switch writes the
@@ -4877,7 +4881,7 @@ export interface AdapterConfig {
      * timeout error while geniro still holds a waiter for a reply nobody will
      * read — a question parked meanwhile was handed to it, marked delivered and
      * later failed QUESTION_TIMEOUT unseen, and a sync call's final result was
-     * consumed by it and never collectable. So the graph runtime bounds every
+     * consumed by it and never collectable. So the team runtime bounds every
      * such wait BELOW this figure and answers `pending` with the call id
      * (`CallBroker.waitCeiling`), the call untouched and collectable.
      *
@@ -5356,7 +5360,7 @@ export interface AdapterConfig {
    *
    * geniro's own rule can only ever fire BETWEEN turns, because `/compact` is
    * itself a turn and the CLI is busy. That is too late for an agent whose one
-   * turn eats a third of the window: measured on a live run (2026-09-22, node
+   * turn eats a third of the window: measured on a live run (2026-09-22, member
    * `engineer`, threshold 80%), turns settled at 79% and 57% while the window
    * climbed to 92% INSIDE the turn after them, and the only thing that caught
    * it was claude's own compaction at ~97%. A CLI that compacts itself mid-turn

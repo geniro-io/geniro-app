@@ -28,8 +28,8 @@ export class CliAuthQueryDto extends createZodDto(AgentQuerySchema) {}
  * or none at all. OMITTING it is not "anywhere" — it is the one other folder a
  * caller can mean: geniro's own empty directory, which is where a
  * folder-independent LISTING is taken (`v1/agents/utils/folderless-dir.ts`).
- * The graph builder is that caller: a team is edited before it runs
- * anywhere, so its node inspector lists the servers that do not depend on a
+ * The team editor is that caller: a team is edited before it runs
+ * anywhere, so it lists the servers that do not depend on a
  * folder, and a name it shows resolves in that same directory and nowhere else.
  * Reading an absent `cwd` as anything the CLI happened to be started in is what
  * this must not become.

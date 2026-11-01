@@ -30,10 +30,11 @@ function render(
   act(() => {
     root.render(
       <BuilderStatusBar
-        nodeCount={props.nodeCount ?? 3}
-        edgeCount={props.edgeCount ?? 2}
+        memberCount={props.memberCount ?? 3}
+        stageCount={props.stageCount ?? 2}
         message={props.message ?? null}
         saveState={props.saveState ?? 'idle'}
+        pausedReason={props.pausedReason ?? null}
       />,
     );
   });
@@ -44,15 +45,25 @@ function saveLine(): HTMLElement {
 }
 
 describe('BuilderStatusBar', () => {
-  it('counts the canvas, pluralising per count', () => {
-    render({ nodeCount: 3, edgeCount: 2 });
-    expect(container.textContent).toContain('3 nodes · 2 edges');
+  it('counts the team, pluralising per count', () => {
+    render({ memberCount: 3, stageCount: 2 });
+    expect(container.textContent).toContain('3 members · 2 stages');
 
-    render({ nodeCount: 1, edgeCount: 1 });
-    expect(container.textContent).toContain('1 node · 1 edge');
+    render({ memberCount: 1, stageCount: 1 });
+    expect(container.textContent).toContain('1 member · 1 stage');
 
-    render({ nodeCount: 0, edgeCount: 0 });
-    expect(container.textContent).toContain('0 nodes · 0 edges');
+    render({ memberCount: 0, stageCount: 0 });
+    expect(container.textContent).toContain('0 members · 0 stages');
+  });
+
+  it('says why held edits are not written, only while paused', () => {
+    render({ saveState: 'paused', pausedReason: 'fix the problems first' });
+    expect(saveLine().textContent!.trim()).toBe(
+      'Not saved yet — fix the problems first',
+    );
+
+    render({ saveState: 'saved', pausedReason: 'fix the problems first' });
+    expect(saveLine().textContent!.trim()).toBe('Saved');
   });
 
   it('reports each save state distinctly', () => {
@@ -108,6 +119,6 @@ describe('BuilderStatusBar', () => {
   it('renders without a message', () => {
     render({ message: null });
     expect(container.querySelector('[title]')).toBeNull();
-    expect(container.textContent).toContain('3 nodes');
+    expect(container.textContent).toContain('3 members');
   });
 });

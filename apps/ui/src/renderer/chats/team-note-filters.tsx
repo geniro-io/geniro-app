@@ -25,7 +25,7 @@ export interface TeamNoteFilters {
 
 export function useTeamNoteFilters(
   notes: readonly TeamNote[],
-  agentName: (nodeId: string) => string,
+  agentName: (memberId: string) => string,
 ): TeamNoteFilters {
   const [pickedKinds, setPickedKinds] = useState<ReadonlySet<TeamNoteKind>>(
     () => new Set(),
@@ -34,7 +34,7 @@ export function useTeamNoteFilters(
     () => new Set(),
   );
   const authors = useMemo(
-    () => [...new Set(notes.map((note) => agentName(note.nodeId)))].sort(),
+    () => [...new Set(notes.map((note) => agentName(note.memberId)))].sort(),
     [notes, agentName],
   );
   const kinds = useMemo(
@@ -56,7 +56,7 @@ export function useTeamNoteFilters(
     narrowed: pickedKinds.size > 0 || pickedAuthors.size > 0,
     passes: (note) =>
       (pickedKinds.size === 0 || pickedKinds.has(note.kind)) &&
-      (pickedAuthors.size === 0 || pickedAuthors.has(agentName(note.nodeId))),
+      (pickedAuthors.size === 0 || pickedAuthors.has(agentName(note.memberId))),
     toggle: (value) => {
       if (value.startsWith('kind:')) {
         const kind = value.slice('kind:'.length) as TeamNoteKind;

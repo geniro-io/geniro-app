@@ -36,7 +36,7 @@ describe('TeamVersionDao (in-memory sqlite)', () => {
 
   const at = (iso: string): Date => new Date(iso);
 
-  it('records a version once, keeping its first graph', async () => {
+  it('records a version once, keeping its first team', async () => {
     await dao.register('dev-team', 'v1', '{"a":1}', at('2026-10-02T00:00:00Z'));
     await dao.register('dev-team', 'v1', '{"b":2}', at('2026-10-03T00:00:00Z'));
 

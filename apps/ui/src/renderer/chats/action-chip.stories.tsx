@@ -14,7 +14,7 @@ function action(
   return {
     seq,
     actionId: label.toLowerCase().replace(/\s+/g, '-'),
-    nodeId: 'agent',
+    memberId: 'agent',
     conversationId: '',
     label,
     ...(description === undefined ? {} : { description }),

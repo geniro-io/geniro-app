@@ -11,7 +11,7 @@ function item(payload: unknown): ChatItem {
   return {
     id: 'i-1',
     runId: 'run-1',
-    nodeId: null,
+    memberId: null,
     seq: 1,
     kind: 'tool_call',
     role: 'assistant',

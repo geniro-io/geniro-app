@@ -13,7 +13,7 @@ import { ProcessRegistry } from './process-registry';
 
 const chatOwner: MonitorOwner = {
   runId: 'run-1',
-  nodeId: 'agent',
+  memberId: 'agent',
   caller: 'agent',
   conversationId: null,
   callId: null,
@@ -22,7 +22,7 @@ const chatOwner: MonitorOwner = {
 
 describe('MonitorRowWriter', () => {
   let registry: MonitorRegistry;
-  let created: { nodeId: string | null; payload: string }[];
+  let created: { memberId: string | null; payload: string }[];
 
   beforeEach(() => {
     registry = new MonitorRegistry(new ProcessRegistry());
@@ -34,7 +34,7 @@ describe('MonitorRowWriter', () => {
       { getById: async () => ({ id: 'run-1' }) } as unknown as RunDao,
       {
         create: vi.fn(
-          async (row: { nodeId: string | null; payload: string }) => {
+          async (row: { memberId: string | null; payload: string }) => {
             created.push(row);
             return { id: `item-${created.length}`, createdAt: new Date() };
           },
@@ -55,7 +55,7 @@ describe('MonitorRowWriter', () => {
     await registry.settled('run-1', 5000);
   });
 
-  it("writes a chat's start and its unannounced end with no node, in the shape the boot sweep reads", async () => {
+  it("writes a chat's start and its unannounced end with no member, in the shape the boot sweep reads", async () => {
     registry.start({
       owner: chatOwner,
       command: 'while true; do sleep 1; done',
@@ -65,7 +65,7 @@ describe('MonitorRowWriter', () => {
     registry.stop('run-1', 'm1', 'agent');
     await registry.settled('run-1', 5000);
 
-    expect(created.map((row) => row.nodeId)).toEqual([null, null]);
+    expect(created.map((row) => row.memberId)).toEqual([null, null]);
     const payloads = created.map((row) => JSON.parse(row.payload));
     expect(payloads.map((p) => p.monitors[0].event)).toEqual(['start', 'end']);
     expect(payloads[1]).toMatchObject({
@@ -76,11 +76,11 @@ describe('MonitorRowWriter', () => {
     expect(created[0]?.payload).toContain('"monitors":[');
   });
 
-  it("files a team callee's rows under its node and conversation", async () => {
+  it("files a team callee's rows under its member and conversation", async () => {
     registry.start({
       owner: {
         ...chatOwner,
-        nodeId: 'dev',
+        memberId: 'dev',
         caller: 'dev::call-1',
         conversationId: 'call-1',
         callId: 'call-1',
@@ -92,7 +92,7 @@ describe('MonitorRowWriter', () => {
     });
     await registry.settled('run-1', 5000);
 
-    expect(created[0]?.nodeId).toBe('dev');
+    expect(created[0]?.memberId).toBe('dev');
     expect(JSON.parse(created[0]!.payload)).toMatchObject({
       callId: 'call-1',
       conversationId: 'call-1',

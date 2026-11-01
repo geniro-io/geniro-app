@@ -86,27 +86,27 @@ import { RunKindRowsCache } from './run-kind-rows.cache';
  * it is talking to, or how one accounts for its window.
  */
 /**
- * WHOSE readout is being taken — a chat's one agent, or one node of a team
+ * WHOSE readout is being taken — a chat's one agent, or one member of a team
  * run — with everything that differs between the two resolved once.
  *
- * One shape rather than a second copy of the read path: a team node's
+ * One shape rather than a second copy of the read path: a team member's
  * readout first shipped as its own method that asked only the live process,
  * and so it lost the stored reading, the prewarm and the farewell a chat's
  * readout had, and showed nothing about a claude Manager that had gone idle.
  */
 interface ReadingTarget {
   runId: string;
-  /** The team node, or null for a chat's own agent. */
-  nodeId: string | null;
+  /** The team member, or null for a chat's own agent. */
+  memberId: string | null;
   /**
    * Every call of the agent-to-agent CONVERSATION being read, or null for a
-   * chat's agent or a node's own turns. A call's process serves the whole
+   * chat's agent or a member's own turns. A call's process serves the whole
    * conversation, so its spend is every one of those calls' turns.
    */
   callIds: readonly string[] | null;
   /**
    * The CLI session id when the target already knows it — a call's, which its
-   * result row recorded rather than `node_state` (that row holds the node's
+   * result row recorded rather than `node_state` (that row holds the member's
    * OWN conversation). Absent reads it off `node_state`.
    */
   sessionId?: string | null;
@@ -115,12 +115,12 @@ interface ReadingTarget {
   /** The key the agent's kept process is registered under. */
   sessionKey: string;
   agentKind: AgentKind | null;
-  /** The profile a stored reading must still describe (null for a node). */
+  /** The profile a stored reading must still describe (null for a member). */
   configDir: string | null;
   /**
    * The ACCOUNT this agent runs under (`accountKeyOf`) — what its plan limits
-   * are shared across. Unlike {@link configDir} it is resolved for a node too,
-   * off the run's own team copy, since a node names its own profile.
+   * are shared across. Unlike {@link configDir} it is resolved for a member too,
+   * off the run's own team copy, since a member names its own profile.
    */
   account: string | null;
   /** The last reading filed for this agent, verbatim JSON. */
@@ -191,11 +191,11 @@ export class ChatMetricsService implements OnModuleInit {
     // user's own agent — a tax on every turn of every conversation, for a
     // readout most of them never open.
     this.bus.all().subscribe((event) => {
-      // A team node's turn belongs to that node's own readout; a chat's
-      // rows carry no node.
-      const nodeId = event.item.nodeId ?? null;
+      // A team member's turn belongs to that member's own readout; a chat's
+      // rows carry no member.
+      const memberId = event.item.memberId ?? null;
       const key =
-        nodeId === null ? event.runId : nodeSessionKey(event.runId, nodeId);
+        memberId === null ? event.runId : nodeSessionKey(event.runId, memberId);
       if (event.item.kind !== 'turn_complete' || !this.watched.has(key)) {
         return;
       }
@@ -216,7 +216,7 @@ export class ChatMetricsService implements OnModuleInit {
    */
   async read(
     runId: string,
-    nodeId: string | null = null,
+    memberId: string | null = null,
     callId: string | null = null,
     /**
      * The readout's own refresh: ask the live agent even where a stored
@@ -226,10 +226,10 @@ export class ChatMetricsService implements OnModuleInit {
      */
     refresh = false,
   ): Promise<ChatMetricsWire> {
-    if (nodeId !== null && callId !== null) {
+    if (memberId !== null && callId !== null) {
       throw new BadRequestException(
         'METRICS_TARGET_AMBIGUOUS',
-        'name a team node or a call, not both',
+        'name a team member or a call, not both',
       );
     }
     const em = this.em.fork();
@@ -238,9 +238,9 @@ export class ChatMetricsService implements OnModuleInit {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
     // A team run names the NODE: it holds one process and one window per
-    // node, so the run alone names no agent. REPORTED as "i cant see full
+    // member, so the run alone names no agent. REPORTED as "i cant see full
     // context info for team". A CALL goes one level further down, since a
-    // callee holds a process per conversation beside its node's own.
+    // callee holds a process per conversation beside its member's own.
     if (callId !== null) {
       const target = await this.callTarget(run, runId, callId, em);
       if (target === null) {
@@ -252,13 +252,13 @@ export class ChatMetricsService implements OnModuleInit {
       return this.readTarget(target, em, refresh);
     }
     const target =
-      nodeId === null
+      memberId === null
         ? await this.chatTarget(run, runId, em)
-        : await this.nodeTarget(run, runId, nodeId, em);
+        : await this.nodeTarget(run, runId, memberId, em);
     if (target === null) {
       throw new NotFoundException(
         'NODE_NOT_FOUND',
-        `node ${nodeId} has not run in run ${runId}`,
+        `member ${memberId} has not run in run ${runId}`,
       );
     }
     return this.readTarget(target, em, refresh);
@@ -438,7 +438,7 @@ export class ChatMetricsService implements OnModuleInit {
   ): Promise<ReadingTarget> {
     return {
       runId,
-      nodeId: null,
+      memberId: null,
       callIds: null,
       stateNodeId: SINGLE_AGENT_NODE,
       sessionKey: runId,
@@ -452,52 +452,52 @@ export class ChatMetricsService implements OnModuleInit {
   }
 
   /**
-   * One TEAM node as a reading target, or null for a node that has never
+   * One TEAM member as a reading target, or null for a member that has never
    * run in this run.
    *
-   * Pinned to the node's OWN newest row rather than the run's: the run's moves
-   * with every other node's work, so a Manager's reading would stop being
+   * Pinned to the member's OWN newest row rather than the run's: the run's moves
+   * with every other member's work, so a Manager's reading would stop being
    * served the moment its Engineer wrote a line — which is exactly while the
    * Manager sits idle and someone looks at it. The profile is not part of a
-   * node's key: a node's config directory is fixed by the run's team copy.
+   * member's key: a member's config directory is fixed by the run's team copy.
    */
   private async nodeTarget(
     run: Run,
     runId: string,
-    nodeId: string,
+    memberId: string,
     em: EntityManager,
   ): Promise<ReadingTarget | null> {
-    const state = await this.nodeStateDao.getByRunNode(runId, nodeId, em);
+    const state = await this.nodeStateDao.getByRunNode(runId, memberId, em);
     if (!state) {
       return null;
     }
     let configDir =
-      snapshotNodeConfigDirs(run.teamSnapshot).get(nodeId) ?? null;
-    if (snapshotNodePoolProfiles(run.teamSnapshot).has(nodeId)) {
+      snapshotNodeConfigDirs(run.teamSnapshot).get(memberId) ?? null;
+    if (snapshotNodePoolProfiles(run.teamSnapshot).has(memberId)) {
       const member =
         readNodePoolMembers(await this.itemDao.poolHandOffRows(runId, em)).get(
-          nodeId,
+          memberId,
         ) ?? 1;
-      const profile = snapshotMemberProfile(run.teamSnapshot, nodeId, member);
+      const profile = snapshotMemberProfile(run.teamSnapshot, memberId, member);
       if (profile?.agentKind === state.agentKind) {
         configDir = profile.configDir;
       }
     }
     return {
       runId,
-      nodeId,
+      memberId,
       callIds: null,
-      stateNodeId: nodeId,
-      sessionKey: nodeSessionKey(runId, nodeId),
+      stateNodeId: memberId,
+      sessionKey: nodeSessionKey(runId, memberId),
       agentKind: state.agentKind,
       configDir,
       account: this.accountKey(run, state.agentKind, configDir),
       storedReading: state.lastMetricsReading ?? null,
-      atSeq: await this.itemDao.maxSeq(runId, em, nodeId),
+      atSeq: await this.itemDao.maxSeq(runId, em, memberId),
       polled: nodePolledSpend(
         state,
         (kind) => this.polledSpend.pollsSpend(kind),
-        snapshotPoolKinds(run.teamSnapshot).get(nodeId),
+        snapshotPoolKinds(run.teamSnapshot).get(memberId),
       ),
     };
   }
@@ -536,7 +536,7 @@ export class ChatMetricsService implements OnModuleInit {
     }
     const state = await this.nodeStateDao.getByRunNode(
       runId,
-      conversation.calleeNodeId,
+      conversation.calleeMemberId,
       em,
     );
     if (!state) {
@@ -556,7 +556,7 @@ export class ChatMetricsService implements OnModuleInit {
         ? null
         : snapshotMemberProfile(
             run.teamSnapshot,
-            conversation.calleeNodeId,
+            conversation.calleeMemberId,
             member,
           );
     const agentKind = live.success
@@ -564,9 +564,9 @@ export class ChatMetricsService implements OnModuleInit {
       : (profile?.agentKind ?? state.agentKind);
     return {
       runId,
-      nodeId: conversation.calleeNodeId,
+      memberId: conversation.calleeMemberId,
       callIds: conversation.callIds,
-      stateNodeId: conversation.calleeNodeId,
+      stateNodeId: conversation.calleeMemberId,
       sessionKey,
       sessionId: conversation.sessionId,
       // The live process first: it is what the readout asks, so its CLI is
@@ -579,7 +579,7 @@ export class ChatMetricsService implements OnModuleInit {
         profile !== null
           ? this.accountKey(run, agentKind, profile.configDir)
           : agentKind === state.agentKind
-            ? this.nodeAccountKey(run, conversation.calleeNodeId, agentKind)
+            ? this.nodeAccountKey(run, conversation.calleeMemberId, agentKind)
             : null,
       storedReading: null,
       atSeq: -1,
@@ -590,20 +590,22 @@ export class ChatMetricsService implements OnModuleInit {
 
   /**
    * The `turn_complete` payloads a target's spend is summed over: the whole
-   * run for a chat, one node's for a node, and the calls of one conversation
+   * run for a chat, one member's for a member, and the calls of one conversation
    * for a call — the turns a callee ran under a call carry its `callId`.
    */
   private async turnPayloads(target: ReadingTarget): Promise<string[]> {
     const rows = await this.kindRows.rowsOf(target.runId, USAGE_ITEM_KINDS);
     if (target.callIds === null) {
       return rows
-        .filter((row) => target.nodeId === null || row.nodeId === target.nodeId)
+        .filter(
+          (row) => target.memberId === null || row.memberId === target.memberId,
+        )
         .map((row) => row.payload);
     }
     const calls = new Set(target.callIds);
     return rows
       .filter((row) => {
-        if (row.nodeId !== target.nodeId) {
+        if (row.memberId !== target.memberId) {
           return false;
         }
         const payload = parseJsonColumn(row.payload);
@@ -707,7 +709,7 @@ export class ChatMetricsService implements OnModuleInit {
     // service so a burst of opens costs one request at most. Not awaited — a
     // header must not wait on a network read, and the next look serves the
     // answer this one fetched.
-    // A TEAM run's own agentKind is null — its polled agents are nodes —
+    // A TEAM run's own agentKind is null — its polled agents are members —
     // so asking the run alone never priced a Dev Team run's cursor QA.
     if (await this.polledSpend.runHoldsPolledSpend(runId, run.agentKind)) {
       void this.polledSpend.refresh();
@@ -722,29 +724,29 @@ export class ChatMetricsService implements OnModuleInit {
         run,
       );
     }
-    // A TEAM run mixes CLIs: self-pricing nodes report their own turns, a
-    // polled node's bill lands on the run. The bill is ADDED to the other
-    // nodes' cost — replacing it showed the one polled node's price as the
-    // run's whole cost. A polled node's own turn costs are left out of the sum
+    // A TEAM run mixes CLIs: self-pricing members report their own turns, a
+    // polled member's bill lands on the run. The bill is ADDED to the other
+    // members' cost — replacing it showed the one polled member's price as the
+    // run's whole cost. A polled member's own turn costs are left out of the sum
     // so a CLI that starts reporting cannot be counted twice.
     const nodeKinds = new Map(
       (await this.nodeStateDao.listByRun(runId, em)).map((row) => [
-        row.nodeId,
+        row.memberId,
         row.agentKind,
       ]),
     );
     const rows = await this.kindRows.rowsOf(runId, USAGE_ITEM_KINDS);
     const all = sumUsagePayloads(rows.map((row) => row.payload));
-    // Judged per TURN: a pooled node's calls run on several CLIs, and its
-    // turn rows name the member's CLI where it is not the node's own.
+    // Judged per TURN: a pooled member's calls run on several CLIs, and its
+    // turn rows name the pool member's CLI where it is not the member's own.
     const priced = sumUsagePayloads(
       rows
         .filter(
           (row) =>
-            row.nodeId === null ||
+            row.memberId === null ||
             !this.polledSpend.pollsSpend(
               turnAgentKindOf(parseJsonColumn(row.payload)) ??
-                nodeKinds.get(row.nodeId) ??
+                nodeKinds.get(row.memberId) ??
                 null,
             ),
         )
@@ -963,8 +965,8 @@ export class ChatMetricsService implements OnModuleInit {
     } satisfies StoredMetricsReading);
     try {
       // On the row the reading belongs to: one per run for a chat, one per
-      // node for a team run, whose nodes each hold their own window.
-      await (target.nodeId === null
+      // member for a team run, whose members each hold their own window.
+      await (target.memberId === null
         ? this.runDao.rememberMetricsReading(
             target.runId,
             reading,
@@ -972,7 +974,7 @@ export class ChatMetricsService implements OnModuleInit {
           )
         : this.nodeStateDao.rememberMetricsReading(
             target.runId,
-            target.nodeId,
+            target.memberId,
             reading,
             this.em.fork(),
           ));
@@ -1017,10 +1019,10 @@ export class ChatMetricsService implements OnModuleInit {
       const run = await this.runDao.getById(owner.runId, em);
       if (!run) {
         target = null;
-      } else if (owner.nodeId === null) {
+      } else if (owner.memberId === null) {
         target = await this.chatTarget(run, owner.runId, em);
       } else {
-        target = await this.nodeTarget(run, owner.runId, owner.nodeId, em);
+        target = await this.nodeTarget(run, owner.runId, owner.memberId, em);
       }
       if (!target?.agentKind) {
         return;
@@ -1131,19 +1133,19 @@ export class ChatMetricsService implements OnModuleInit {
   }
 
   /**
-   * The account a team node runs under: the profile the run's own team
+   * The account a team member runs under: the profile the run's own team
    * copy names for it (none means the CLI's default), under the same folder
-   * pin a chat is — every node of a run works in the run's folder.
+   * pin a chat is — every member of a run works in the run's folder.
    */
   private nodeAccountKey(
     run: Run,
-    nodeId: string,
+    memberId: string,
     agentKind: AgentKind | null,
   ): string | null {
     return this.accountKey(
       run,
       agentKind,
-      snapshotNodeConfigDirs(run.teamSnapshot).get(nodeId) ?? null,
+      snapshotNodeConfigDirs(run.teamSnapshot).get(memberId) ?? null,
     );
   }
 
@@ -1185,7 +1187,7 @@ export class ChatMetricsService implements OnModuleInit {
     sentences: AbsenceSentences,
   ): string {
     // A run row's `agentKind` is nullable, and a team run genuinely has
-    // none — its nodes each name their own. There is nothing to ask, and no
+    // none — its members each name their own. There is nothing to ask, and no
     // adapter to ask for a sentence.
     if (agentKind === null) {
       return sentences.noSingleAgent;

@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ApprovalModeSchema,
+  InstructionBlockSchema,
   TEAM_AGENT_KINDS,
-  TeamAgentNodeSchema,
+  TEAM_MODES,
+  TEAM_TRIGGER_KINDS,
   TeamAgentPoolMemberSchema,
-  TeamEdgeSchema,
-  TeamInstructionNodeSchema,
+  TeamMemberSchema,
   TeamSchema,
   TeamStageSchema,
-  TeamTriggerNodeSchema,
-  TRIGGER_KINDS,
+  TeamTriggerSchema,
 } from '../teams.types';
 import { teamJsonSchema } from './team-json-schema';
 
@@ -27,11 +27,10 @@ describe('teamJsonSchema', () => {
   // The reason the file is generated rather than written: every field the
   // validator knows is in it, including ones added after this spec.
   it.each([
-    ['TeamAgentNode', TeamAgentNodeSchema],
-    ['TeamTriggerNode', TeamTriggerNodeSchema],
-    ['TeamInstructionNode', TeamInstructionNodeSchema],
+    ['TeamMember', TeamMemberSchema],
+    ['TeamTrigger', TeamTriggerSchema],
+    ['InstructionBlock', InstructionBlockSchema],
     ['TeamAgentPoolMember', TeamAgentPoolMemberSchema],
-    ['TeamEdge', TeamEdgeSchema],
     ['TeamStage', TeamStageSchema],
   ])('describes every field of %s', (id, schema) => {
     expect(Object.keys(SCHEMA.$defs[id]!.properties).sort()).toEqual(
@@ -48,14 +47,17 @@ describe('teamJsonSchema', () => {
   it('carries every value of the enums the validator accepts', () => {
     expect(SCHEMA.$defs.AgentKind!.enum).toEqual([...TEAM_AGENT_KINDS]);
     expect(SCHEMA.$defs.ApprovalMode!.enum).toEqual(ApprovalModeSchema.options);
-    expect(SCHEMA.$defs.TriggerKind!.enum).toEqual([...TRIGGER_KINDS]);
+    expect(SCHEMA.$defs.TeamMode!.enum).toEqual([...TEAM_MODES]);
+    expect(SCHEMA.$defs.TeamTrigger!.properties.kind).toMatchObject({
+      enum: [...TEAM_TRIGGER_KINDS],
+    });
   });
 
   // The STRICT schema: an agent following it writes `approval` itself rather
   // than leaning on the YAML reader's default.
   it('requires what the builder always writes', () => {
-    expect(SCHEMA.$defs.TeamAgentNode!.required).toEqual(
-      expect.arrayContaining(['id', 'kind', 'agent', 'approval']),
+    expect(SCHEMA.$defs.TeamMember!.required).toEqual(
+      expect.arrayContaining(['id', 'name', 'agent', 'approval']),
     );
   });
 });

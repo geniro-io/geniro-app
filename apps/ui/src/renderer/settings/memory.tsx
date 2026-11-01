@@ -231,13 +231,10 @@ export function importProfiles(
     add(profile.agent, profile.dir);
   }
   for (const team of teams) {
-    for (const node of team.nodes) {
-      if (node.kind !== 'agent') {
-        continue;
-      }
-      add(node.agent, node.configDir);
-      for (const member of node.pool ?? []) {
-        add(member.agent, member.configDir);
+    for (const member of team.members) {
+      add(member.agent, member.configDir);
+      for (const entry of member.pool ?? []) {
+        add(entry.agent, entry.configDir);
       }
     }
   }

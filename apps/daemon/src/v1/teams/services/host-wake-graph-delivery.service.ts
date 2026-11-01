@@ -8,7 +8,7 @@ import {
   joinHostWakes,
   unwithdrawn,
 } from '../../agents/services/host-wake.bus';
-import { GraphExecutorService } from './graph-executor.service';
+import { TeamExecutorService } from './team-executor.service';
 
 /**
  * Wakes a team conversation with what geniro did for it outside its turn
@@ -31,7 +31,7 @@ export class HostWakeGraphDelivery implements OnModuleInit {
 
   constructor(
     private readonly bus: HostWakeBus,
-    private readonly executor: GraphExecutorService,
+    private readonly executor: TeamExecutorService,
     private readonly sessions: AgentSessionRegistry,
   ) {}
 

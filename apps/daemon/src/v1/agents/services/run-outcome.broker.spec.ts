@@ -25,7 +25,7 @@ type RunColumns = Pick<
 
 interface Harness {
   broker: RunOutcomeBroker;
-  rows: { nodeId: string | null; kind: string; payload: RunOutcomePayload }[];
+  rows: { memberId: string | null; kind: string; payload: RunOutcomePayload }[];
   run: RunColumns | null;
   /** Each announce asked of the capture pass: the column as it stood then. */
   announced: (string | null)[];
@@ -114,18 +114,18 @@ function setUp(): Harness {
 
 function sinkFor(harness: Harness): RunOutcomeSink {
   return {
-    persistItem: async (nodeId, kind, _role, payload) => {
+    persistItem: async (memberId, kind, _role, payload) => {
       harness.rows.push({
-        nodeId,
+        memberId,
         kind,
         payload: payload as RunOutcomePayload,
       });
       return { seq: 100 + harness.rows.length } as ItemWire;
     },
     recorder: (caller) => {
-      const [nodeId, conversationId] = caller.split('/');
+      const [memberId, conversationId] = caller.split('/');
       return {
-        nodeId: nodeId!,
+        memberId: memberId!,
         conversationId: conversationId ?? null,
         callId: conversationId === undefined ? null : `call-${conversationId}`,
       };
@@ -166,7 +166,7 @@ describe('RunOutcomeBroker', () => {
     });
     expect(harness.rows).toEqual([
       {
-        nodeId: 'manager',
+        memberId: 'manager',
         kind: 'run_outcome',
         payload: {
           prOwner: 'acme',
@@ -185,7 +185,7 @@ describe('RunOutcomeBroker', () => {
     ]);
   });
 
-  it('keeps the summary the node gave on the row', async () => {
+  it('keeps the summary the member gave on the row', async () => {
     const harness = setUp();
     harness.broker.register('run-1', 'manager', sinkFor(harness));
 
@@ -512,7 +512,7 @@ describe('RunOutcomeBroker', () => {
     expect(harness.rows).toEqual([]);
   });
 
-  it('is unavailable to a node no pass registered', async () => {
+  it('is unavailable to a member no pass registered', async () => {
     const harness = setUp();
 
     expect(harness.broker.canUse('run-1', 'manager')).toBe(false);

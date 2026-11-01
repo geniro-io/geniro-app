@@ -19,7 +19,7 @@ export class AwaitAgentTool extends CallMcpTool {
 
   protected inputSchema({
     runId,
-    nodeId,
+    memberId,
   }: McpListContext): Record<string, unknown> {
     // The window THIS caller's waits actually get — below its own CLI's
     // tool-call deadline — so the listing does not promise a cursor caller
@@ -27,7 +27,7 @@ export class AwaitAgentTool extends CallMcpTool {
     // the broker caps it, and the wait simply answers `pending` sooner.
     const waitWindow = Math.min(
       MAX_AWAIT_TIMEOUT_MS,
-      this.calls.waitCeiling(runId, nodeId) ?? MAX_AWAIT_TIMEOUT_MS,
+      this.calls.waitCeiling(runId, memberId) ?? MAX_AWAIT_TIMEOUT_MS,
     );
     return awaitAgentSchema(waitWindow);
   }

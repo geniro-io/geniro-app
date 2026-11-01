@@ -29,7 +29,7 @@ import { servedWorkedMs } from './wall-worked';
 
 /**
  * The one persist-then-emit implementation both execution paths (single-agent
- * chat and the graph executor) share: write the row — allocating its place in
+ * chat and the team executor) share: write the row — allocating its place in
  * the run's monotonic `seq` order — THEN publish on the bus, so SQLite stays
  * the source of truth and a reconnecting client can replay everything it
  * missed. Also clears the forked EntityManager's identity map afterwards, so
@@ -46,7 +46,7 @@ export async function persistItemAndEmit(
   em: EntityManager,
   row: {
     runId: string;
-    nodeId: string | null;
+    memberId: string | null;
     seq: number;
     kind: ItemKind;
     role: string | null;
@@ -62,7 +62,7 @@ export async function persistItemAndEmit(
     item = await deps.itemDao.create(
       {
         runId: row.runId,
-        nodeId: row.nodeId,
+        memberId: row.memberId,
         seq: row.seq,
         kind: row.kind,
         role: row.role,
@@ -82,7 +82,7 @@ export async function persistItemAndEmit(
   const wire: ItemWire = {
     id: item.id,
     runId: row.runId,
-    nodeId: row.nodeId,
+    memberId: row.memberId,
     seq: row.seq,
     kind: row.kind,
     role: row.role,
@@ -148,8 +148,8 @@ export function runToWire(
    *
    * Passed in for the reason the two above are: this is a pure projection of a
    * row, and the answer comes from an adapter behind a cache. Defaulted to null
-   * so the callers that cannot usefully ask — a team node's own run row,
-   * whose agents are per node — say nothing rather than guessing.
+   * so the callers that cannot usefully ask — a team member's own run row,
+   * whose agents are per member — say nothing rather than guessing.
    */
   configDirPin: ConfigDirPinWire | null = null,
   /**
@@ -163,7 +163,7 @@ export function runToWire(
    *
    * It asserts nothing about the turn — a shell does not hold one open. Last in
    * the parameter list so the callers that cannot know (a run being created, a
-   * team node's row) keep saying nothing by saying nothing.
+   * team member's row) keep saying nothing by saying nothing.
    */
   shellsOpen = 0,
   /**
@@ -200,7 +200,7 @@ export function runToWire(
    * This chat's wall-measured worked time (`WallTurnDao.chatSums`), added to
    * the CLI-reported `Run.workedMs` so the row says what the agent worked
    * whatever its CLI timed. Last and defaulted to null for the team
-   * callers, whose worked time lives per node.
+   * callers, whose worked time lives per member.
    */
   wallWorkedMs: number | null = null,
   /** How many monitors the run has running, from `MonitorRegistry`. */

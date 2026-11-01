@@ -165,7 +165,7 @@ describe('DaemonClient', () => {
     const item: ChatItem = {
       id: 'i0',
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq: 0,
       kind: 'message',
       role: 'assistant',
@@ -627,13 +627,18 @@ describe('parseRunStatus — the run_status twin', () => {
       activity: null,
       taskList: [
         {
-          nodeId: 'eng',
+          memberId: 'eng',
           callId: 'call-1',
           tasks: [{ id: '1' }],
           snapshot: true,
         },
-        { nodeId: 'eng', callId: 'call-2', tasks: [{ id: '1' }], snapshot: 1 },
-        { nodeId: 'eng', callId: 'call-3', tasks: [{ id: '1' }] },
+        {
+          memberId: 'eng',
+          callId: 'call-2',
+          tasks: [{ id: '1' }],
+          snapshot: 1,
+        },
+        { memberId: 'eng', callId: 'call-3', tasks: [{ id: '1' }] },
       ],
     });
     expect(event?.taskList?.map((group) => group.snapshot)).toEqual([
@@ -992,13 +997,13 @@ describe('parseUsageRecorded — the usage_recorded twin', () => {
     expect(
       parseUsageRecorded({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         occurredAt: '2026-10-09T10:00:00.000Z',
         turn: true,
       }),
     ).toEqual({
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       occurredAt: '2026-10-09T10:00:00.000Z',
       turn: true,
     });

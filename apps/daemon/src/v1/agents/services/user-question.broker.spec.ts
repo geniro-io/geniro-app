@@ -30,7 +30,7 @@ describe('UserQuestionBroker', () => {
     expect(seen).toEqual([QUESTIONS]);
   });
 
-  it('keys by node, so one run’s node cannot answer another’s', async () => {
+  it('keys by member, so one run’s member cannot answer another’s', async () => {
     const broker = new UserQuestionBroker();
     broker.register('run-1', 'agent', async () => ({
       status: 'answered',

@@ -2,11 +2,11 @@
  * The arithmetic over a POLLED bill — money a CLI's ACCOUNT reported for a
  * conversation, which that CLI's turns do not carry (`AdapterConfig.usage
  * .polledSpend`). `PolledSpendService` stores it on the run row and on each
- * node's row; it is folded into totals here, in one place, so the thread
- * header, the waterfall and a node's readout cannot disagree about it.
+ * member's row; it is folded into totals here, in one place, so the thread
+ * header, the waterfall and a member's readout cannot disagree about it.
  */
 
-/** A polled bill as the run and node rows store it. */
+/** A polled bill as the run and member rows store it. */
 export interface PolledSpend {
   polledCostCents: number | null;
   polledCostEvents: number | null;
@@ -42,9 +42,9 @@ export function applyPolledSpend<
 
 /**
  * Put a polled bill ON TOP of turns another CLI priced — a team run, whose
- * other nodes report their cost per turn. Replacing there (as
+ * other members report their cost per turn. Replacing there (as
  * {@link applyPolledSpend} rightly does for a single-CLI chat) would report the
- * polled node's bill as the whole run's cost.
+ * polled member's bill as the whole run's cost.
  */
 export function addPolledSpendToTotals<
   T extends { costUsd: number | null; costedTurns: number },
@@ -76,14 +76,14 @@ export function pollsSpendFor(
 }
 
 /**
- * One team node's polled bill: its own row's, or none at all for a node
+ * One team member's polled bill: its own row's, or none at all for a member
  * whose CLI prices its own turns.
  */
 export function nodePolledSpend(
   state: PolledSpend & { agentKind: string | null },
   pollsSpend: (agentKind: string | null) => boolean,
   /**
-   * The CLIs of the node's AGENT-POOL members: its row is stamped with member
+   * The CLIs of the member's AGENT-POOL members: its row is stamped with member
    * 1, while a call may have run on another member that polls.
    */
   memberKinds: readonly string[] = [],
@@ -113,7 +113,7 @@ function isPriced(
  * A conversation's turn totals with its polled bill folded in, judged per TURN:
  * a priced bill stands for the turns run on a polled CLI and is ADDED to the
  * costs of the rest (`selfPriced`, the fold of those turns alone) — a pooled
- * node's calls run on several CLIs. With no other turns that is the bill alone,
+ * member's calls run on several CLIs. With no other turns that is the bill alone,
  * exactly as {@link applyPolledSpend} answers; an unpriced bill leaves every
  * turn's own figure.
  */

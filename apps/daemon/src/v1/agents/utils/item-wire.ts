@@ -12,7 +12,7 @@ export function itemToWire(item: WireRow): ItemWire {
   return {
     id: item.id,
     runId: item.runId,
-    nodeId: item.nodeId,
+    memberId: item.memberId,
     seq: item.seq,
     kind: item.kind,
     role: item.role,

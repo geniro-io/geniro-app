@@ -5,6 +5,7 @@ import {
   emptyTotals,
   type UsageFigures,
 } from '../../agents/utils/usage-figures';
+import { isLegacyCanonical } from '../../teams/utils/team-version';
 import type { UsageEvent } from '../entity/usage-event.entity';
 import type {
   TeamVersionGraph,
@@ -36,11 +37,11 @@ export interface TeamVersionsInput {
   /** The team's recorded versions, oldest first. */
   graphs: readonly TeamVersionGraph[];
   /**
-   * The library's graph when no version records it yet: edited since its last run, or
+   * The library's team when no version records it yet: edited since its last run, or
    * never run. It is the current version all the same, so it gets a row.
    */
   unrecorded: TeamVersionGraph | null;
-  /** What `next` changed against `previous`, or null when either graph no longer reads. */
+  /** What `next` changed against `previous`, or null when either team no longer reads. */
   changesOf: (
     previous: TeamVersionGraph,
     next: TeamVersionGraph,
@@ -116,6 +117,7 @@ function rowOf(
   ordinal: number | null,
   changes: VersionChangesWire | null,
   recorded = true,
+  preTeam = false,
 ): TeamVersionRowWire {
   const times = threads.map((thread) => thread.occurredAt.getTime());
   return {
@@ -126,6 +128,7 @@ function rowOf(
       version !== null &&
       threads.every((thread) => thread.inferred === true),
     recorded,
+    preTeam,
     firstRunAt:
       times.length === 0 ? null : new Date(Math.min(...times)).toISOString(),
     lastRunAt:
@@ -136,8 +139,8 @@ function rowOf(
 }
 
 /**
- * One team's runs grouped by the graph version they ran: each version's runs and
- * cost, and its graph's diff against the version recorded before it. The team's
+ * One team's runs grouped by the team version they ran: each version's runs and
+ * cost, and its team's diff against the version recorded before it. The team's
  * total is folded over every run directly. A deleted run counts through what the ledger
  * kept of it.
  */
@@ -159,7 +162,7 @@ export function foldTeamVersions(input: TeamVersionsInput): TeamVersionsWire {
     byVersion.set(thread.version, list);
   }
 
-  // A recorded version no run has stamped yet (the graph a restore replaced) is a row of
+  // A recorded version no run has stamped yet (the team a restore replaced) is a row of
   // its own, so it can be restored back.
   for (const graph of input.graphs) {
     if (!byVersion.has(graph.version)) {
@@ -178,6 +181,8 @@ export function foldTeamVersions(input: TeamVersionsInput): TeamVersionsWire {
       previous === null
         ? null
         : input.changesOf(previous, input.graphs[ordinal! - 1]!),
+      true,
+      ordinal !== null && isLegacyCanonical(input.graphs[ordinal - 1]!.graph),
     );
   });
   // Numbered versions newest first, then the unnumbered (inferred) ones by their runs.
@@ -191,7 +196,7 @@ export function foldTeamVersions(input: TeamVersionsInput): TeamVersionsWire {
       ? input.unrecorded
       : null;
   if (unrecorded !== null) {
-    // The library's graph ahead of every recorded one, against the newest of them.
+    // The library's team ahead of every recorded one, against the newest of them.
     const newest = input.graphs[input.graphs.length - 1];
     rows.unshift(
       rowOf(

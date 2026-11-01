@@ -22,7 +22,7 @@ function toolItem(
   return {
     id: `i-${seq}`,
     runId: 'run-1',
-    nodeId: 'orch',
+    memberId: 'orch',
     seq,
     kind,
     role: null,

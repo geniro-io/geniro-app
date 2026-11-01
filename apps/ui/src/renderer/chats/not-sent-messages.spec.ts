@@ -16,7 +16,7 @@ function row(
   return {
     id: `${kind}-${seq}-${JSON.stringify(payload)}`,
     runId: 'run-1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind,
     role,
@@ -114,7 +114,7 @@ describe('callTargetOf', () => {
 
     expect(callTargetOf(message, [earlierPass, thisPass, later])).toEqual({
       runId: 'run-1',
-      nodeId: 'helper',
+      memberId: 'helper',
       callId: 'call-1',
       blockId: thisPass.id,
     });

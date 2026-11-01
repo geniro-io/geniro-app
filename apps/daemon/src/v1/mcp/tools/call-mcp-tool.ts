@@ -16,7 +16,7 @@ import { BaseMcpTool } from './base-mcp-tool';
  * the MCP face of the call runtime in `CallBroker`.
  *
  * What they share, and the render family does not: they are offered only to a
- * node with callees, they answer with the broker's envelope
+ * member with teammates to call, they answer with the broker's envelope
  * (`{status, result?, error?}`) serialized as text — a contract between two
  * AGENTS — and they carry `ALWAYS_LOADED_TOOL_META` so a CLI never defers
  * their schemas.
@@ -29,9 +29,9 @@ export abstract class CallMcpTool extends BaseMcpTool {
     super();
   }
 
-  /** The call surface is offered to a node with callees, and only to one. */
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.calls.listCallees(runId, nodeId).length > 0;
+  /** The call surface is offered to a member with teammates to call, and only to one. */
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.calls.listCallees(runId, memberId).length > 0;
   }
 
   /** The broker's answer to one call. Never throws. */

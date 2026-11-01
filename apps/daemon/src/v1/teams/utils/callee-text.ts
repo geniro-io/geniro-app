@@ -1,5 +1,5 @@
 import { maskedCommand } from '../../agents/utils/command-text';
-import type { TeamAgentNode } from '../teams.types';
+import type { TeamMember } from '../teams.types';
 import { poolMemberLabel, poolMembersOf, poolSize } from './agent-pool';
 
 /**
@@ -8,7 +8,7 @@ import { poolMemberLabel, poolMembersOf, poolSize } from './agent-pool';
  * two-sentence blurb mid-clause silently deletes routing signal (it used to
  * truncate an arbitrarily long ROLE, where clipping was the point). Still
  * bounded — a runaway field must not swallow the tool description. Both
- * surfaces share the cap, so a node author tunes one length, not two.
+ * surfaces share the cap, so a team author tunes one length, not two.
  */
 export const CALLEE_DESCRIPTION_MAX = 400;
 
@@ -74,7 +74,7 @@ export function quotedCommand(command: string): string {
 }
 
 /**
- * Collapse free-form node text to a single line, capped at `max` characters
+ * Collapse free-form member text to a single line, capped at `max` characters
  * with a trailing ellipsis when longer. Every caller-facing surface embeds it
  * inline, where a newline or a runaway length would corrupt the surrounding
  * structure (a tool description, a system-prompt block, a call result's
@@ -92,38 +92,34 @@ export function flattenText(
 }
 
 /**
- * The ONE line a caller may be told about one of its callees: how to address
- * it (`call_agent` accepts either the display name or the node id) plus that
- * node's own `description`.
+ * The ONE line a caller may be told about another member: how to address it
+ * (`call_agent` accepts either the display name or the member id) plus that
+ * member's public role.
  *
- * A callee's `role` is deliberately NOT included. Role is private
- * instructions — how that agent does its job — and leaking it is what used to
- * force a caller's own role to restate its team's internals. `description` is
- * the public blurb the node author writes FOR its callers, so a caller
- * discovers who it may delegate to, and picks between them, straight from the
- * graph.
+ * A member's private instructions are deliberately NOT included — how it does
+ * its job is its own business, and leaking them is what used to force a
+ * caller's own instructions to restate its team's internals.
  *
  * Both surfaces that describe a callee — the call_agent tool description
- * (McpServerService) and the caller's "May call" awareness block
- * (GraphExecutorService) — go through here, so neither can start leaking role
- * text on its own.
+ * (McpServerService) and the caller's "May call" block (the executor) — go
+ * through here, so neither can start leaking private text on its own.
  */
-export function calleeSummary(callee: TeamAgentNode, max: number): string {
-  const name = callee.name ?? callee.id;
+export function calleeSummary(callee: TeamMember, max: number): string {
+  const name = callee.name;
   // Spell the id out only when it differs from the name — `Manager (agent id:
   // manager)` is noise in a prompt the model has to read.
   const label = name === callee.id ? name : `${name} (agent id: ${callee.id})`;
-  const description = flattenText(callee.description, max);
-  const summary = description ? `${label} — ${description}` : label;
+  const role = flattenText(callee.role, max);
+  const summary = role ? `${label} — ${role}` : label;
   return poolSize(callee) > 1 ? `${summary} ${poolListing(callee)}` : summary;
 }
 
 /**
  * A pooled callee's members, numbered as `call_agent`'s `member` takes them —
  * the CLI, model and account of each, so a caller that knows one is spent can
- * name another. Configuration only, never anything from the node's `role`.
+ * name another. Configuration only, never anything from the member's instructions.
  */
-function poolListing(callee: TeamAgentNode): string {
+function poolListing(callee: TeamMember): string {
   const members = poolMembersOf(callee)
     .map((member, index) => `${index + 1}: ${poolMemberLabel(member)}`)
     .join('; ');

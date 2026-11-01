@@ -318,7 +318,7 @@ describe('seedCursorProfile', () => {
   });
 
   it('gives each turn its own directory', () => {
-    // Two turns of one run can be in flight together under graph fan-out, and
+    // Two turns of one run can be in flight together under team fan-out, and
     // they apply DIFFERENT models — sharing a directory is the same race the
     // per-turn profile exists to remove, moved one level in.
     const base = tempDir('cursor-profiles-');

@@ -141,11 +141,11 @@ export class UsageActivity extends TimestampsEntity {
   @Property({ type: 'integer', nullable: true })
   outcomeMsToAccepted: number | null = null;
 
-  /** `teamVersionOf` the run's own graph copy; null while unstamped, and for a run that kept no copy it can read. */
+  /** `teamVersionOf` the run's own team copy; null while unstamped, and for a run that kept no copy it can read. */
   @Property({ type: 'string', nullable: true })
   teamVersion: string | null = null;
 
-  /** The version was hashed from a copy frozen AFTER the run started, so it may not be the graph the run had. */
+  /** The version was hashed from a copy frozen AFTER the run started, so it may not be the team the run had. */
   @Property({ type: 'boolean', nullable: true })
   teamVersionInferred: boolean | null = null;
 }

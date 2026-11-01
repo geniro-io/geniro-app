@@ -80,8 +80,8 @@ function chipsAsSettings(chips: ChipValues): StartTeamChatDto {
  * for the two reports it owes the builder. Unmounted, a turn still running
  * when the dock was closed would take its `working` report and its settle
  * with it: the builder's autosave would stay suspended for good (every later
- * canvas edit lost on leaving) and the agent's own edit would never be
- * reloaded, so the next canvas save would write over it.
+ * editor edit lost on leaving) and the agent's own edit would never be
+ * reloaded, so the next editor save would write over it.
  */
 export function TeamChatPanel({
   slug,
@@ -127,13 +127,13 @@ export function TeamChatPanel({
   onClose: () => void;
   /**
    * Run before a message is handed to the daemon — the builder writes any
-   * pending canvas edit first, so the agent reads the graph the user is
+   * pending editor edit first, so the agent reads the team the user is
    * looking at rather than the one last autosaved.
    */
   onBeforeSend: () => Promise<unknown>;
   /**
    * A turn started or ended. The builder suspends its autosave while one runs,
-   * so the agent's write and the canvas cannot overwrite each other.
+   * so the agent's write and the editor cannot overwrite each other.
    */
   onWorkingChange: (working: boolean) => void;
   /**
@@ -201,7 +201,7 @@ export function TeamChatPanel({
         active={active}
         applyRecommendations={applyRecommendations}
         transcriptSlot="team-chat-transcript"
-        emptyText="Ask for a change — agents, wiring or the stages every run walks — or for an analysis of its latest runs. The agent edits this team's file and the canvas reloads when it is done."
+        emptyText="Ask for a change — members, instruction blocks or the stages every run walks — or for an analysis of its latest runs. The agent edits this team's file and the editor reloads when it is done."
         composerLabel="Ask for a team change"
         composerPlaceholder="Describe the change, or ask what its latest runs suggest…"
         onBeforeSend={onBeforeSend}

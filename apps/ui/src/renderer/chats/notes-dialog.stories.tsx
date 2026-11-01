@@ -14,7 +14,7 @@ function note(seq: number, over: Partial<TeamNote>): TeamNote {
     seq,
     kind: 'fact',
     text: '',
-    nodeId: 'backend',
+    memberId: 'backend',
     conversationId: null,
     callId: null,
     createdAt: new Date(Date.now() - (300 - seq) * 60_000).toISOString(),
@@ -38,14 +38,14 @@ const NOTES: TeamNote[] = [
       '',
       'Tried first: `npm ci --legacy-peer-deps`; it installs but the build breaks.',
     ].join('\n'),
-    nodeId: 'frontend',
+    memberId: 'frontend',
     callId: 'call-2',
     conversationId: 'call-2',
   }),
   note(190, {
     kind: 'decision',
     text: 'Orders are paged by cursor, not offset — the list is append-heavy and offsets drift under inserts.',
-    nodeId: 'manager',
+    memberId: 'manager',
     supersedes: 120,
   }),
   note(171, {
@@ -61,7 +61,7 @@ const NOTES: TeamNote[] = [
   note(120, {
     kind: 'decision',
     text: 'Orders are paged by offset.',
-    nodeId: 'manager',
+    memberId: 'manager',
     supersededBy: 190,
   }),
 ];
@@ -78,7 +78,7 @@ const meta = {
       onSave: async () => {},
     },
     teamNotes: NOTES,
-    agentName: (nodeId: string) => NAMES[nodeId] ?? nodeId,
+    agentName: (memberId: string) => NAMES[memberId] ?? memberId,
     onJump: () => {},
   },
   decorators: [(story) => <div className="h-[720px]">{story()}</div>],

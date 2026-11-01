@@ -15,7 +15,7 @@ import { hasHiddenText } from './utils/hidden-text';
 import { RUN_PROCESS_CAP } from './utils/run-process-scan';
 
 /**
- * The single-agent chat has exactly one node; its CLI session id is keyed
+ * The single-agent chat has exactly one agent; its CLI session id is keyed
  * under this constant in `node_state` (whose PK is runId+nodeId). `Item.nodeId`
  * stays null for single-agent transcript rows, per the entity contract. Shared
  * with the terminals module, which resolves the same key to `--resume` the
@@ -61,7 +61,7 @@ export const CHAT_TITLE_UPGRADE_TURNS = 5;
 
 /**
  * Chat-level tool-approval modes. `plan` is chat-only by design decision —
- * the graph node schema stops at `acceptEdits` (teams.types.ts
+ * the team member schema stops at `acceptEdits` (teams.types.ts
  * ApprovalModeSchema).
  */
 export const CHAT_APPROVAL_MODES = [
@@ -111,7 +111,7 @@ export const ProbeStatusSchema = z
  * binary it tested — a field named after one CLI is one every consumer would
  * have to know to read. Declared in THIS module rather than beside the
  * capabilities row that publishes it, so the adapter layer can derive its own
- * type from it: the graphs module imports this one, never the reverse.
+ * type from it: the teams module imports this one, never the reverse.
  */
 export const AgentApprovalProbeSchema = z
   .object({
@@ -141,7 +141,7 @@ export const AgentApprovalProbeSchema = z
     reason: z
       .string()
       .nullable()
-      .describe('One-liner for the degrade system item / builder warning'),
+      .describe('One-liner for the degrade system item / team editor warning'),
   })
   .meta({ id: 'AgentApprovalProbe' });
 
@@ -480,7 +480,7 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
   view: z
     .enum(ANALYSIS_VIEWS)
     .describe(
-      "overview: timing summary, per-node time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and graph version, the runs compared version by version, every node's totals and every node's turns per model across them, in chunks when long (team analyses only). history: every graph version of the team with what its runs did and how it differs from the one before, every change made to it with who made it and why, and every recommendation filed about it with what became of it, in chunks when long (team threads and analyses only)",
+      "overview: timing summary, per-member time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and team version, the runs compared version by version, every member's totals and every member's turns per model across them, in chunks when long (team analyses only). history: every version of the team with what its runs did and how it differs from the one before, every change made to it with who made it and why, and every recommendation filed about it with what became of it, in chunks when long (team threads and analyses only)",
     ),
   runId: z
     .string()
@@ -517,11 +517,11 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
     .describe(
       'item, runs, team, history: the `next.offset` the previous chunk returned',
     ),
-  nodeId: z
+  memberId: z
     .string()
     .max(200)
     .optional()
-    .describe('spans / items: one node only ("agent" is a chat’s own lane)'),
+    .describe('spans / items: one member only ("agent" is a chat’s own lane)'),
   kinds: z
     .array(z.string().max(40))
     .max(12)
@@ -599,7 +599,7 @@ export const RecommendationEvidenceSchema = z.object({
     .min(0)
     .describe('The source item seq the quote is from'),
   ts: z.string().max(40).optional().describe('That item’s timestamp, ISO'),
-  nodeId: z.string().max(200).optional().describe('The node that wrote it'),
+  nodeId: z.string().max(200).optional().describe('The member that wrote it'),
   quote: z
     .string()
     .min(1)
@@ -653,14 +653,14 @@ export const RecommendationItemSchema = z.object({
     .min(1)
     .max(40)
     .describe(
-      'team: role|edge|parallelize|model|effort|termination|node|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget',
+      'team: role|instructions|stage|parallelize|model|effort|termination|member|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget',
     ),
   location: z
     .string()
     .min(1)
     .max(300)
     .describe(
-      'A team node id, a repo file:line, the user-instructions file path, or for memory the entry handle (m12) to update or forget, or new to add',
+      'A team member id, a repo file:line, the user-instructions file path, or for memory the entry handle (m12) to update or forget, or new to add',
     ),
   title: z.string().min(1).max(200),
   change: z
@@ -698,7 +698,7 @@ export const RecommendationHotspotSchema = z.object({
     .max(200)
     .optional()
     .describe(
-      "A team analysis: the node it is about, as view=runs names it — the card draws that agent's measured figures beside it",
+      "A team analysis: the member it is about, as view=runs names it — the card draws that agent's measured figures beside it",
     ),
   why: z
     .string()
@@ -925,7 +925,7 @@ export type RecommendationApply = z.infer<typeof RecommendationApplySchema>;
 export interface ToolCallTime {
   seq: number;
   kind: 'tool_call' | 'tool_result';
-  nodeId: string | null;
+  memberId: string | null;
   inCall: string | null;
   /** The row's persist time, epoch ms. */
   at: number;
@@ -939,7 +939,7 @@ export interface ToolCallTime {
 
 /** One agent's own tool calls inside one call — `ItemDao.ownToolCallsByCall`. */
 export interface OwnToolCallCount {
-  nodeId: string;
+  memberId: string;
   callId: string;
   calls: number;
   /** The newest counted row's seq. */
@@ -950,14 +950,14 @@ export interface OwnToolCallCount {
 export interface ToolSpan {
   seq: number;
   resultSeq: number | null;
-  nodeId: string | null;
+  memberId: string | null;
   name: string;
   startMs: number;
   /** Null when no result was ever written and the run is no longer working. */
   durationMs: number | null;
   /** True when it was still unanswered at the last row of a working run. */
   open: boolean;
-  /** Made by one of the node's CLI sub-agents rather than the node itself. */
+  /** Made by one of the member's CLI sub-agents rather than the member itself. */
   delegate: boolean;
   /** Its result was marked an error by the CLI. */
   failed: boolean;
@@ -968,36 +968,36 @@ export interface TimelineSpans {
   from: number;
   to: number;
   turns: readonly {
-    nodeId: string | null;
+    memberId: string | null;
     startedAt: string;
     durationMs: number;
   }[];
   calls: readonly {
-    callerNodeId: string | null;
-    calleeNodeId: string | null;
+    callerMemberId: string | null;
+    calleeMemberId: string | null;
     mode: string | null;
     startedAt: string;
     durationMs: number;
   }[];
   waits: readonly {
-    nodeId: string | null;
+    memberId: string | null;
     startedAt: string;
     durationMs: number;
   }[];
 }
 
 export interface NodeTime {
-  nodeId: string | null;
-  /** Wall time inside the node's turns, overlaps counted once. */
+  memberId: string | null;
+  /** Wall time inside the member's turns, overlaps counted once. */
   inTurnsMs: number;
   /** Inside a turn, blocked on a synchronous call it made. */
   waitingOnCalleeMs: number;
   /** Inside a turn, blocked on a card for the user. */
   waitingOnUserMs: number;
-  /** In a turn and blocked on neither — the node's own work. */
+  /** In a turn and blocked on neither — the member's own work. */
   busyMs: number;
   turns: number;
-  /** The node's OWN tool calls. */
+  /** The member's OWN tool calls. */
   toolCalls: number;
   /** Tool calls its CLI sub-agents made. */
   delegateToolCalls: number;
@@ -1009,15 +1009,15 @@ export interface NodeTime {
 
 export interface CriticalSegment {
   kind: 'work' | 'waiting_on_user' | 'idle';
-  nodeId: string | null;
+  memberId: string | null;
   startMs: number;
   durationMs: number;
 }
 
 export interface ToolTotal {
-  nodeId: string | null;
+  memberId: string | null;
   name: string;
-  /** The row counts the node's CLI sub-agents' calls, not its own. */
+  /** The row counts the member's CLI sub-agents' calls, not its own. */
   delegate: boolean;
   calls: number;
   totalMs: number;
@@ -1030,14 +1030,14 @@ export interface ThreadTimeline {
   from: number;
   to: number;
   wallMs: number;
-  /** Some node was doing its own work. */
+  /** Some member was doing its own work. */
   activeMs: number;
   /** A card was waiting on the user. */
   waitingOnUserMs: number;
   criticalPathMs: number;
   criticalPath: CriticalSegment[];
-  /** The nodes holding most of the critical path, largest first. */
-  sinks: { nodeId: string | null; ms: number }[];
+  /** The members holding most of the critical path, largest first. */
+  sinks: { memberId: string | null; ms: number }[];
   nodes: NodeTime[];
   tools: ToolSpan[];
   toolTotals: ToolTotal[];
@@ -1135,7 +1135,7 @@ export interface FoldedRun {
   runId: string;
   turns: readonly Pick<
     RunWaterfallTurn,
-    | 'nodeId'
+    | 'memberId'
     | 'startedAt'
     | 'model'
     | 'member'
@@ -1150,18 +1150,18 @@ export interface FoldedRun {
   >[];
   lanes: readonly Pick<
     RunWaterfallLane,
-    'nodeId' | 'agentKind' | 'turns' | 'workedMs' | 'toolCalls' | 'costUsd'
+    'memberId' | 'agentKind' | 'turns' | 'workedMs' | 'toolCalls' | 'costUsd'
   >[];
   /**
-   * Each node's turns its CLI did not time, as the wall-clock ledger measured
+   * Each member's turns its CLI did not time, as the wall-clock ledger measured
    * them (`wall_turns`) through the run's snapshot — what a lane's CLI-only
    * `workedMs` lacks.
    */
   wallWorkedMs: ReadonlyMap<string | null, number>;
   calls: readonly Pick<
     RunWaterfallCall,
-    | 'callerNodeId'
-    | 'calleeNodeId'
+    | 'callerMemberId'
+    | 'calleeMemberId'
     | 'status'
     | 'running'
     | 'durationMs'
@@ -1176,11 +1176,11 @@ export interface FoldedRun {
   callWorkedMs: ReadonlyMap<number, number>;
   /** The run's whole bill, a polled-spend CLI's included. */
   costUsd: number | null;
-  /** The graph version its own frozen copy is (`teamVersionOf`); null when it keeps none it can read. */
+  /** The team version its own frozen copy is (`teamVersionOf`); null when it keeps none it can read. */
   version: string | null;
-  /** The model each node recorded — what a turn that reported none ran on. */
+  /** The model each member recorded — what a turn that reported none ran on. */
   nodeModels: ReadonlyMap<string | null, string | null>;
-  /** Nodes with a pool: their turns are compared per member (`RunWaterfallTurn.member`). */
+  /** Members with a pool: their turns are compared per pool member (`RunWaterfallTurn.member`). */
   pooledNodes: ReadonlySet<string | null>;
   timeline: Pick<
     ThreadTimeline,
@@ -1215,7 +1215,7 @@ export interface RunFigures {
   costUsd: number | null;
 }
 
-/** One node's work in ONE analysed run. */
+/** One member's work in ONE analysed run. */
 export interface RunNodeFigures {
   node: string;
   agent: AgentKind | null;
@@ -1237,7 +1237,7 @@ export interface RunNodeFigures {
   waitingOnCalleeMs: number | null;
   /** Wall time in its turns blocked on a card for the user. */
   waitingOnUserMs: number | null;
-  /** How much of the run's critical path was this node's work. */
+  /** How much of the run's critical path was this member's work. */
   criticalPathMs: number | null;
   toolCalls: number;
   failedToolCalls: number;
@@ -1246,7 +1246,7 @@ export interface RunNodeFigures {
   maxContextTokens: number | null;
 }
 
-/** One caller→callee edge's calls, summed over every analysed run. */
+/** One caller→callee pair's calls, summed over every analysed run. */
 export interface CallFigures {
   caller: string;
   callee: string;
@@ -1268,7 +1268,7 @@ export interface CallFigures {
 }
 
 /**
- * A team's recorded graph versions by number (1 for the first used), and
+ * A team's recorded versions by number (1 for the first used), and
  * the library's version now — what `view=runs` names each run's version by.
  * The stats module keeps it; the MCP host hands it to the reader.
  */
@@ -1281,16 +1281,16 @@ export type TeamVersionIndexReader = (
   slug: string,
 ) => Promise<TeamVersionIndex>;
 
-/** A graph version as an analysis names it. */
+/** A team version as an analysis names it. */
 export interface AnalysedVersionRef {
   version: string | null;
   /** Null for a version no run or restore has recorded yet, and for a run that kept no copy. */
   number: number | null;
-  /** The library's graph is this version now. */
+  /** The library's team is this version now. */
   current: boolean;
 }
 
-/** The analysed runs of one graph version, compared as a group. */
+/** The analysed runs of one team version, compared as a group. */
 export interface VersionRunFigures extends AnalysedVersionRef {
   runIds: string[];
   avgWallMs: number;
@@ -1306,10 +1306,10 @@ export interface VersionRunFigures extends AnalysedVersionRef {
   avgCostUsd: number | null;
 }
 
-/** One node's work summed over every analysed run, from its lanes. */
+/** One member's work summed over every analysed run, from its lanes. */
 export interface NodeFigures {
   node: string;
-  /** The node's own agent — a pool's first member. */
+  /** The member's own agent — its pool's first member. */
   agent: AgentKind | null;
   runs: number;
   turns: number;
@@ -1322,23 +1322,23 @@ export interface NodeFigures {
   costPerRunUsd: number | null;
 }
 
-/** One node's turns on one model, summed over every analysed run. */
+/** One member's turns on one model, summed over every analysed run. */
 export interface ModelFigures {
   node: string;
-  /** The CLI that ran them — on a pooled node, the member's own. */
+  /** The CLI that ran them — on a pooled member, the pool member's own. */
   agent: AgentKind | null;
   model: string | null;
   /**
    * Where `model` comes from: what the CLI reported (a turn that reported
-   * none counts on the model its node reported last in that run), or — for a
-   * turn that ended before its node had reported any — what the node was
+   * none counts on the model its member reported last in that run), or — for a
+   * turn that ended before its member had reported any — what the member was
    * configured with: an alias as the team spells it, or null for the
-   * CLI's own default — on a pooled node, the model the member that ran it
-   * was configured with. `unreported`: a pooled node's turn that reported no
-   * model and wrote no row naming its member, so none is guessed.
+   * CLI's own default — on a pooled member, the model the pool member that ran
+   * it was configured with. `unreported`: a pooled member's turn that reported
+   * no model and wrote no row naming its pool member, so none is guessed.
    */
   modelSource: 'reported' | 'configured' | 'unreported';
-  /** How many of the analysed runs this node took a turn in on this model. */
+  /** How many of the analysed runs this member took a turn in on this model. */
   runs: number;
   turns: number;
   failedTurns: number;
@@ -1964,9 +1964,9 @@ export type HostNotifyOutcome =
 /**
  * The BOARD tools — reading the task board and filing or changing cards on it.
  *
- * Served on geniro's own MCP server to every chat and every team node
+ * Served on geniro's own MCP server to every chat and every team member
  * holding the endpoint, and answered by the tasks module, which installs
- * itself behind the graphs module's `TaskBoardBroker`. The names live here
+ * itself behind the teams module's `TaskBoardBroker`. The names live here
  * because the chat's permission gate auto-approves them, and this module may
  * import neither of the other two.
  */
@@ -2609,7 +2609,7 @@ export const ChatTotalsWireSchema = z
 export type ChatTotalsWire = z.infer<typeof ChatTotalsWireSchema>;
 
 /**
- * One context reading as the run, node and call rows file it. Each half may be
+ * One context reading as the run, member and call rows file it. Each half may be
  * absent — a reading that omits one says nothing about it — and
  * `contextEstimated` travels with the count (`AgentUsage.contextEstimated`).
  */
@@ -2756,7 +2756,7 @@ export interface AttachmentDataWire extends SendMessageImage {
 export const ItemWireSchema = z.object({
   id: z.string(),
   runId: z.string(),
-  nodeId: z.string().nullable().describe('Graph node id; null for a chat'),
+  memberId: z.string().nullable().describe('Team member id; null for a chat'),
   seq: z
     .number()
     .int()
@@ -2979,7 +2979,7 @@ export type RunWaterfallModelCost = z.infer<typeof RunWaterfallModelCostSchema>;
  * a defect rather than a degradation: every ACP agent reports no timing at all
  * (`AdapterConfig` says so outright), so a cursor callee's turns vanished from
  * the picture AND from the count, and its lane read `0 turns · 130 tools` —
- * measured on a real run whose `qa` node holds two `turn_complete` rows, both
+ * measured on a real run whose `qa` member holds two `turn_complete` rows, both
  * with `durationMs: null`. Reporting undrawable work as work that never
  * happened is the same class of lie as pricing an unmeasured turn at $0.00.
  *
@@ -2989,7 +2989,7 @@ export type RunWaterfallModelCost = z.infer<typeof RunWaterfallModelCostSchema>;
  *
  * A turn that has NOT finished is drawn too, and that is what `outcome` is for.
  * Only `completed` turns ever carried a span, because a span was read off the
- * `turn_complete` that ends one — so a node working its first call drew no bar
+ * `turn_complete` that ends one — so a member working its first call drew no bar
  * at all while its tools piled up beside it, and a turn that died on an error
  * vanished from the card. REPORTED against an Engineer lane reading `1 turn · 30
  * tools` over nothing but a density strip: its call was still running. Such a
@@ -2999,7 +2999,7 @@ export type RunWaterfallModelCost = z.infer<typeof RunWaterfallModelCostSchema>;
  */
 export const RunWaterfallTurnSchema = z
   .object({
-    nodeId: z.string().nullable(),
+    memberId: z.string().nullable(),
     startedAt: z.string(),
     seq: z
       .number()
@@ -3072,7 +3072,7 @@ export const RunWaterfallTurnSchema = z
       })
       .nullable()
       .describe(
-        "on a node with an agent pool: the member that ran the turn — its CLI and the model it was configured with (null: that CLI's default), as the turn's own usage row names it; null on a node without a pool, and for a pooled turn that wrote no usage row",
+        "on a member with an agent pool: the pool member that ran the turn — its CLI and the model it was configured with (null: that CLI's default), as the turn's own usage row names it; null on a member without a pool, and for a pooled turn that wrote no usage row",
       ),
     inputTokens: z.number().nullable(),
     outputTokens: z.number().nullable(),
@@ -3086,8 +3086,8 @@ export type RunWaterfallTurn = z.infer<typeof RunWaterfallTurnSchema>;
 /** One agent-to-agent call, from the caller's dispatch to the callee's answer. */
 export const RunWaterfallCallSchema = z
   .object({
-    callerNodeId: z.string().nullable(),
-    calleeNodeId: z.string().nullable(),
+    callerMemberId: z.string().nullable(),
+    calleeMemberId: z.string().nullable(),
     mode: z.string().max(MAX_WATERFALL_LABEL_CHARS).nullable(),
     status: z
       .string()
@@ -3121,7 +3121,7 @@ export type RunWaterfallCall = z.infer<typeof RunWaterfallCallSchema>;
  */
 export const RunWaterfallWaitSchema = z
   .object({
-    nodeId: z.string().nullable(),
+    memberId: z.string().nullable(),
     question: z
       .boolean()
       .describe(
@@ -3142,7 +3142,7 @@ export type RunWaterfallWait = z.infer<typeof RunWaterfallWaitSchema>;
 /** One background delegate, from the launch that opened it to its outcome. */
 export const RunWaterfallDelegateSchema = z
   .object({
-    nodeId: z.string().nullable(),
+    memberId: z.string().nullable(),
     startedAt: z.string(),
     seq: z
       .number()
@@ -3154,7 +3154,7 @@ export const RunWaterfallDelegateSchema = z
 export type RunWaterfallDelegate = z.infer<typeof RunWaterfallDelegateSchema>;
 
 /**
- * One row of the waterfall: an agent node, or the single unnamed lane a chat
+ * One row of the waterfall: a team member, or the single unnamed lane a chat
  * run has.
  *
  * It carried a tool DENSITY once — one count per slice of the run, drawn as a
@@ -3166,7 +3166,7 @@ export type RunWaterfallDelegate = z.infer<typeof RunWaterfallDelegateSchema>;
  */
 export const RunWaterfallLaneSchema = z
   .object({
-    nodeId: z.string().nullable(),
+    memberId: z.string().nullable(),
     agentKind: AgentKindSchema.nullable(),
     costUsd: z.number().nullable(),
     estimatedCostUsd: z
@@ -3234,7 +3234,7 @@ export type RunWaterfallLane = z.infer<typeof RunWaterfallLaneSchema>;
  */
 export const RunWaterfallToolUseSchema = z
   .object({
-    nodeId: z.string().nullable(),
+    memberId: z.string().nullable(),
     name: z.string().max(MAX_WATERFALL_LABEL_CHARS),
     calls: z.number().int().describe("the lane agent's OWN calls of this tool"),
     delegateCalls: z
@@ -3254,7 +3254,7 @@ export type RunWaterfallToolUse = z.infer<typeof RunWaterfallToolUseSchema>;
 export const RunWaterfallCriticalSegmentSchema = z
   .object({
     kind: z.enum(['work', 'waiting_on_user', 'idle']),
-    nodeId: z
+    memberId: z
       .string()
       .nullable()
       .describe('whose work it was — null for a wait on the user or idle time'),
@@ -3392,10 +3392,10 @@ export type RunProcess = z.infer<typeof RunProcessSchema>;
 export const RunProcessTreeSchema = z
   .object({
     sessionKey: z.string(),
-    nodeId: z
+    memberId: z
       .string()
       .nullable()
-      .describe("the team node whose own process this is; null for a chat's"),
+      .describe("the team member whose own process this is; null for a chat's"),
     conversationId: z
       .string()
       .nullable()
@@ -3566,15 +3566,15 @@ export const OpenShellSchema = z
         'the tool call that detached it — the id a kill is addressed to',
       ),
     command: z.string(),
-    nodeId: z
+    memberId: z
       .string()
       .nullable()
-      .describe('which team node started it; null for a 1:1 chat'),
+      .describe('which team member started it; null for a 1:1 chat'),
     callId: z
       .string()
       .nullable()
       .describe(
-        'the agent-to-agent call it was started in — which INSTANCE of the node; null for its own conversation',
+        'the agent-to-agent call it was started in — which INSTANCE of the member; null for its own conversation',
       ),
     startedAt: z.number(),
   })
@@ -3587,10 +3587,10 @@ export const OpenMonitorSchema = z
     id: z.string().describe('the id the agent knows it by, e.g. `m1`'),
     description: z.string(),
     command: z.string(),
-    nodeId: z
+    memberId: z
       .string()
       .nullable()
-      .describe('which team node started it; null for a 1:1 chat'),
+      .describe('which team member started it; null for a 1:1 chat'),
     callId: z
       .string()
       .nullable()
@@ -3637,8 +3637,8 @@ export type RunWorkStatus = z.infer<typeof RunWorkStatusSchema>;
 export const RunCallStateSchema = z
   .object({
     callId: z.string(),
-    callerNodeId: z.string().nullable(),
-    calleeNodeId: z.string().nullable(),
+    callerMemberId: z.string().nullable(),
+    calleeMemberId: z.string().nullable(),
     title: z.string().nullable(),
     brief: z
       .string()
@@ -3681,11 +3681,11 @@ export const RunDelegateStatusSchema = z
 export const RunDelegateStateSchema = z
   .object({
     id: z.string().describe('the launching tool call — the block id'),
-    nodeId: z.string().nullable(),
+    memberId: z.string().nullable(),
     callId: z
       .string()
       .nullable()
-      .describe('the call it was launched in; null for its node’s own'),
+      .describe('the call it was launched in; null for its member’s own'),
     label: z.string().nullable(),
     kind: z.string().nullable(),
     status: RunDelegateStatusSchema,
@@ -3791,11 +3791,11 @@ export const TeamNoteSchema = z
     seq: z.number().int().describe('the row that holds it; its id'),
     kind: TeamNoteKindSchema,
     text: z.string(),
-    nodeId: z.string().describe('the agent that wrote it'),
+    memberId: z.string().describe('the agent that wrote it'),
     conversationId: z
       .string()
       .nullable()
-      .describe("the writing conversation; null for the node's own"),
+      .describe("the writing conversation; null for the member's own"),
     callId: z
       .string()
       .nullable()
@@ -3838,7 +3838,7 @@ export interface TeamNoteWriteInput {
 export interface TeamNotesQuery {
   /** Empty = every kind. */
   kinds: TeamNoteKind[];
-  /** An agent's name or node id; null = every author. */
+  /** An agent's name or member id; null = every author. */
   author: string | null;
   /** Only notes after this seq. */
   since: number | null;
@@ -3869,7 +3869,7 @@ export interface TeamNotesReadOutcome {
   unread: number;
 }
 
-/** geniro's own tool a team node records a pull request's outcome with. */
+/** geniro's own tool a team member records a pull request's outcome with. */
 export const HOST_RECORD_OUTCOME_TOOL = 'record_outcome';
 
 /** Where the user's acceptance of a pull request stands. */
@@ -3880,9 +3880,9 @@ export type RunOutcomeAcceptance = z.infer<typeof RunOutcomeAcceptanceSchema>;
 
 /**
  * The payload of a `run_outcome` row: one pull request's delivery outcome as a
- * team node recorded it. `questionsAsked` and `teamSlug` are the
- * daemon's, stamped at the write; the rest is the node's. `summary` is absent
- * when the node gave none. `nodeId` /
+ * team member recorded it. `questionsAsked` and `teamSlug` are the
+ * daemon's, stamped at the write; the rest is the member's. `summary` is absent
+ * when the member gave none. `nodeId` /
  * `conversationId` / `callId` name the recording conversation as on a team
  * note.
  *
@@ -4170,8 +4170,8 @@ export type HostWakeOpener = 'monitor' | 'host';
 /** The conversation a host wake is for: the one whose agent asked. */
 export interface HostWakeOwner {
   runId: string;
-  nodeId: string;
-  /** The callee conversation it speaks in, or null for the node's own. */
+  memberId: string;
+  /** The callee conversation it speaks in, or null for the member's own. */
   conversationId: string | null;
   /** `callerKey(nodeId, conversationId)`. */
   caller: string;
@@ -4243,10 +4243,10 @@ export type MonitorStopCause = 'user' | 'agent' | 'thread-stop' | 'teardown';
 /** Where a monitor's output goes: the conversation that started it. */
 export interface MonitorOwner {
   runId: string;
-  nodeId: string;
+  memberId: string;
   /** The conversation's caller key (`callerKey(nodeId, conversationId)`). */
   caller: string;
-  /** The callee conversation it speaks in, or null for the node's own. */
+  /** The callee conversation it speaks in, or null for the member's own. */
   conversationId: string | null;
   /** The call that conversation was answering when the monitor started — its rows are filed under it. */
   callId: string | null;
@@ -4462,7 +4462,7 @@ export const LiveActionSchema = z
   .object({
     seq: z.number().int().describe('the publish row — what a press addresses'),
     actionId: z.string(),
-    nodeId: z.string(),
+    memberId: z.string(),
     conversationId: z.string(),
     label: z.string(),
     description: z.string().optional(),
@@ -4704,17 +4704,17 @@ export const ChatExportRunSchema = z
 export type ChatExportRunWire = z.infer<typeof ChatExportRunSchema>;
 
 /**
- * One `node_state` row in an export — empty for a chat, one entry per node for
+ * One `node_state` row in an export — empty for a chat, one entry per member for
  * a team run.
  *
  * Included because it holds what the transcript cannot say: which CLI and which
- * model each node ACTUALLY ran as (stamped at turn start, so run history does
+ * model each member ACTUALLY ran as (stamped at turn start, so run history does
  * not depend on the live YAML), the session id that turn resumed by, and the
  * error that ended it.
  */
 export const ChatExportNodeSchema = z
   .object({
-    nodeId: z.string(),
+    memberId: z.string(),
     status: z.string(),
     agentKind: AgentKindSchema.nullable(),
     model: z.string().nullable(),
@@ -4728,7 +4728,7 @@ export type ChatExportNodeWire = z.infer<typeof ChatExportNodeSchema>;
 
 /**
  * One whole conversation as a file — the thread's settings, its complete
- * transcript with every tool call and result verbatim, its per-node execution
+ * transcript with every tool call and result verbatim, its per-member execution
  * state and what it cost.
  *
  * Assembled by the DAEMON rather than from what a client holds, and that is the
@@ -4913,7 +4913,7 @@ export const AgentMcpServerWireSchema = z
       .nullable()
       .optional()
       .describe(
-        'Why a team node cannot switch this server off for its own turns, or null when it can. A different capability from the folder switch above: it writes nothing the CLI keeps',
+        'Why a team member cannot switch this server off for its own turns, or null when it can. A different capability from the folder switch above: it writes nothing the CLI keeps',
       ),
     signInUnavailableReason: z
       .string()
@@ -5310,7 +5310,7 @@ export type AgentModelParameterListingWire = z.infer<
  * parameters of the model named.
  *
  * One answer rather than four routes because every picker asks all four at
- * once — the composer, the builder's inspector, the board's run settings — and
+ * once — the composer, the team editor's inspector, the board's run settings — and
  * over the LAN gateway or a tunnel each request is a real round trip, queued
  * behind a browser's six connections per host.
  *
@@ -5379,7 +5379,7 @@ export interface RunCreatedEvent {
   createdAt: string;
 }
 
-/** A run's identity, read without its graph copy (`RunDao.runFacts`). */
+/** A run's identity, read without its team copy (`RunDao.runFacts`). */
 export interface RunFacts {
   id: string;
   teamId: string | null;
@@ -5483,11 +5483,11 @@ export interface RunStatusEvent {
    */
   awaitingCalls?: number;
   /**
-   * How many of this TEAM run's DAG agents are inside a turn right now —
-   * the trigger-fed ones a user's message goes to, compacting included, and
-   * any node the walk has reached downstream of them — or `undefined` when
-   * this event says nothing about it. CALLS are never counted: they are what
-   * runs on past an idle Manager. Nor is a trigger-fed agent whose turn is
+   * How many of this TEAM run's trigger members — the ones a user's message
+   * goes to — are inside a turn right now, compacting included, or
+   * `undefined` when this event says nothing about it. CALLS are never
+   * counted: they are what runs on past an idle Manager. Nor is a trigger
+   * member whose turn is
    * HELD for its background sub-agents: its reply is over, and a message
    * delivered into it ends the hold.
    *
@@ -5904,14 +5904,14 @@ export interface SettleFigures {
  */
 export interface RunDeltaEvent {
   runId: string;
-  /** Owning graph node; null for a 1:1 chat's single agent. */
-  nodeId: string | null;
+  /** Owning team member; null for a 1:1 chat's single agent. */
+  memberId: string | null;
   /**
-   * Which CONVERSATION of that node this is — the node's id for its own turn,
+   * Which CONVERSATION of that member this is — the member's id for its own turn,
    * `<nodeId>::<callId>` for one of its call threads, and the sentinel for a
    * 1:1 chat's single agent.
    *
-   * On the wire because a node can hold several conversations at once and each
+   * On the wire because a member can hold several conversations at once and each
    * has its own window: keyed by `nodeId`, a caller running two of the same
    * callee had both turns' readings land in one client-side entry, last writer
    * winning, so the panel counted "2 active · 2 threads" honestly above a
@@ -6241,7 +6241,7 @@ export type RunResetWake = z.infer<typeof RunResetWakeSchema>;
 /**
  * The same promise as the daemon keeps it on the run row (`Run.resetWakes`) —
  * the wire shape plus WHO is continued, which a restart needs to deliver it.
- * An owner is a caller key (`utils/caller-key.ts` in the graphs module).
+ * An owner is a caller key (`utils/caller-key.ts` in the teams module).
  */
 export interface PersistedResetWake {
   instant: number;
@@ -6268,17 +6268,17 @@ export const RunTaskRowSchema = z
 export type RunTaskRow = z.infer<typeof RunTaskRowSchema>;
 
 /**
- * One CONVERSATION's own task list — keyed by node id (`null` for a 1:1 chat's
- * one agent) and, within a node, by the call thread it was kept in. A
+ * One CONVERSATION's own task list — keyed by member id (`null` for a 1:1 chat's
+ * one agent) and, within a member, by the call thread it was kept in. A
  * delegate's rows are excluded upstream: its list belongs to its own block, and
  * both CLIs number tasks from 1.
  */
 export const RunTaskGroupSchema = z
   .object({
-    nodeId: z.string().nullable(),
+    memberId: z.string().nullable(),
     /**
-     * The `call_agent` thread this list was kept in, or null for the node's own
-     * conversation. A node called several times runs one conversation per call,
+     * The `call_agent` thread this list was kept in, or null for the member's own
+     * conversation. A member called several times runs one conversation per call,
      * each numbering its tasks from 1 — so without this two instances of one
      * agent would share one list.
      */
@@ -6363,8 +6363,8 @@ export const RunWireSchema = z.object({
       'Agents of this run waiting on their own calls; 0 when none is waiting',
     ),
   /**
-   * How many of a TEAM run's DAG agents (never its calls) are inside a
-   * turn, a trigger-fed agent whose turn is held for its background
+   * How many of a TEAM run's trigger members (never its calls) are inside a
+   * turn, a trigger member whose turn is held for its background
    * sub-agents not counted — 0 for every chat run. On the snapshot for {@link awaitingCalls}'s reason: the
    * composer acts on it, and a window opened while a call runs has no other
    * way to learn that the Manager itself is idle.
@@ -6374,7 +6374,7 @@ export const RunWireSchema = z.object({
     .int()
     .min(0)
     .describe(
-      'DAG agents of this team run inside a turn (calls excluded); 0 when a message would be taken now',
+      'Trigger members of this team run inside a turn (calls excluded); 0 when a message would be taken now',
     ),
   /**
    * How many DETACHED commands this run still has out — 0 when none.
@@ -6433,14 +6433,14 @@ export const RunWireSchema = z.object({
   teamId: z
     .string()
     .nullable()
-    .describe('Team slug for a graph run; null for a single-agent chat'),
+    .describe('Team slug for a team run; null for a single-agent chat'),
   cwd: z.string().nullable(),
   /**
    * The commit the folder had checked out when this chat was created, and
    * whether it already had uncommitted changes — the fixed point the "what
    * changed since this conversation started" view measures against.
    *
-   * Both null for a graph run, a folder that is not a repository, and every row
+   * Both null for a team run, a folder that is not a repository, and every row
    * predating the stamp; `startDirty` null is "never measured" rather than
    * clean. See {@link Run.startSha}.
    */
@@ -6677,7 +6677,7 @@ export const RunWireSchema = z.object({
    * the transcript its loaded WINDOW holds, so past `HISTORY_PAGE` items a
    * folded total silently describes the window rather than the conversation —
    * with nothing on screen marking the difference. The `node_state` twin
-   * (`workedMs` / `toolCalls`) does the same job for a team node.
+   * (`workedMs` / `toolCalls`) does the same job for a team member.
    *
    * They ACCUMULATE where the context pair replaces, so `RunDao.rememberWork`
    * sums. Null means never measured, never zero, and the two are independently
@@ -6833,7 +6833,7 @@ export type SeqRange =
 /** Where a turn ended — the agent and the call whose turn it was. */
 export interface TurnEnding {
   seq: number;
-  nodeId: string | null;
+  memberId: string | null;
   callId: string | null;
   /** The turn was stopped (`turn_cancelled`) rather than finished or failed. */
   cancelled: boolean;
@@ -6926,15 +6926,15 @@ export type AgentSessionListingWire = z.infer<
  */
 export interface CallSeedRecord {
   callId: string;
-  callerNodeId: string;
+  callerMemberId: string;
   /**
    * The callee conversation the caller made this call FROM, when it was one —
-   * a node answering a call has calls of its own, owned by that conversation
-   * (`utils/caller-key.ts`). Absent for a call from the node's own
+   * a member answering a call has calls of its own, owned by that conversation
+   * (`utils/caller-key.ts`). Absent for a call from the member's own
    * conversation, and for rows written before the field existed.
    */
   callerConversationId?: string | null;
-  calleeNodeId: string;
+  calleeMemberId: string;
   /** The call this one continued (`thread:`), or null for a fresh one. */
   thread: string | null;
   /** The callee's CLI session id its result recorded; null = not resumable. */
@@ -6959,9 +6959,9 @@ export interface CallSeedRecord {
 }
 
 /**
- * The AGENT-POOL member a team node's turn ran on, as the turn's usage rows
+ * The AGENT-POOL member a team member's turn ran on, as the turn's usage rows
  * record it (`agentKind`, `agentModel`) — written only for a member other than
- * member 1, whose CLI and model are the node's own.
+ * member 1, whose CLI and model are the team member's own.
  */
 export interface TurnMember {
   agentKind: AgentKind;
@@ -6973,7 +6973,7 @@ export interface TurnMember {
 export interface CallConversation {
   /** The first call of the lineage — what the callee's kept process is keyed by. */
   conversationId: string;
-  calleeNodeId: string;
+  calleeMemberId: string;
   /** Every call of the conversation, in transcript order. */
   callIds: string[];
   /** The newest callee session any of those calls recorded, or null. */
@@ -7020,7 +7020,7 @@ export interface CallStartedPayload {
   callerNodeId: string;
   /**
    * The conversation of the caller's that made the call, when the caller is
-   * itself a callee; absent for a call made from a node's own conversation.
+   * itself a callee; absent for a call made from a member's own conversation.
    */
   callerConversationId?: string;
   calleeNodeId: string;
@@ -7105,7 +7105,7 @@ export const GlobalChatSearchHitSchema = ChatSearchHitSchema.extend({
   itemId: z
     .string()
     .describe('The matched row — what `read_chat_context` reads around'),
-  nodeId: z.string().nullable(),
+  memberId: z.string().nullable(),
   title: z.string().nullable(),
   cwd: z.string().nullable(),
   archived: z.boolean(),
@@ -7147,7 +7147,7 @@ export const ChatContextItemSchema = z.object({
   seq: z.number().int(),
   kind: ItemKindSchema,
   role: z.string().nullable(),
-  nodeId: z.string().nullable(),
+  memberId: z.string().nullable(),
   text: z.string(),
   /** The text was cut at {@link MAX_CONTEXT_ITEM_CHARS}. */
   truncated: z.boolean(),
@@ -7186,7 +7186,7 @@ export interface ChatTextDatabase {
     rowid: number;
     id: Item['id'];
     run_id: Item['runId'];
-    node_id: Item['nodeId'];
+    member_id: Item['memberId'];
     seq: Item['seq'];
     kind: Item['kind'];
     role: Item['role'];
@@ -7228,7 +7228,7 @@ export type ChatContextRow = Pick<
   ChatTextDatabase['items'],
   | 'id'
   | 'run_id'
-  | 'node_id'
+  | 'member_id'
   | 'seq'
   | 'kind'
   | 'role'
@@ -7287,7 +7287,7 @@ export type WireRow = Pick<
   Item,
   | 'id'
   | 'runId'
-  | 'nodeId'
+  | 'memberId'
   | 'seq'
   | 'kind'
   | 'role'

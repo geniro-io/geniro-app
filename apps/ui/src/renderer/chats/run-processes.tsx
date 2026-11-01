@@ -61,8 +61,8 @@ function formatUptime(seconds: number | null): string | null {
  * a chat, whose one agent has no name of its own — its CLI.
  */
 export function treeLabel(tree: RunProcessTree, agentName: string): string {
-  if (tree.nodeId !== null) {
-    return tree.nodeId;
+  if (tree.memberId !== null) {
+    return tree.memberId;
   }
   if (tree.conversationId !== null) {
     return `call ${tree.conversationId}`;

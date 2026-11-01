@@ -2,31 +2,30 @@ import { createHash } from 'node:crypto';
 
 import { Document } from 'yaml';
 
-import { type Team, TeamSchema } from '../teams.types';
+import { type LegacyTeamGraph, type Team, TeamSchema } from '../teams.types';
+import {
+  isLegacyTeamGraph,
+  teamFromLegacyDocument,
+} from './team-from-workflow';
 
 /**
- * The part of a team that decides how a run executes: every node field
- * (a node's name and description reach callee prompts), the edges without
- * their label (nothing that runs reads it), the active-turn cap and the stage
- * graph in its authored order. The team's own name, description and canvas
- * layout are left out, so editing them never makes a new version.
+ * The part of a team that decides how a run executes: the coordination mode,
+ * the members, the trigger, the instruction blocks and the stage graph, each
+ * list in its authored order (member and block order shape every prompt), and
+ * the active-turn cap. The team's own name and description are left out, so
+ * editing them never makes a new version.
  */
-export interface CanonicalGraph {
+export interface CanonicalTeam {
   maxActiveTurns: number | null;
-  nodes: Team['nodes'];
-  edges: Omit<Team['edges'][number], 'label'>[];
+  mode: Team['mode'];
+  members: Team['members'];
+  triggers: Team['triggers'];
+  instructionBlocks: Team['instructionBlocks'];
   stages?: Team['stages'];
 }
 
 function byText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/** An edge's identity — its ends and kind; JSON keeps free-form node ids unambiguous. */
-export function edgeIdentity(
-  edge: Pick<Team['edges'][number], 'from' | 'to' | 'kind'>,
-): string {
-  return JSON.stringify([edge.from, edge.to, edge.kind]);
 }
 
 /** Plain JSON with object keys sorted at every depth and undefined keys dropped. */
@@ -50,23 +49,23 @@ function sortKeys(value: unknown): unknown {
  * through `TeamYamlSchema`'s defaults — so a field the YAML left to its
  * default and the same field written out hash alike.
  */
-export function canonicalGraphOf(team: Team): CanonicalGraph {
+export function canonicalGraphOf(team: Team): CanonicalTeam {
   return {
     maxActiveTurns: team.maxActiveTurns ?? null,
-    nodes: [...team.nodes].sort((a, b) => byText(a.id, b.id)),
-    edges: team.edges
-      .map(({ label: _label, ...edge }) => edge)
-      .sort((a, b) => byText(edgeIdentity(a), edgeIdentity(b))),
+    mode: team.mode,
+    members: team.members,
+    triggers: team.triggers,
+    instructionBlocks: team.instructionBlocks,
     stages: team.stages?.length ? team.stages : undefined,
   };
 }
 
-export function canonicalGraphJson(graph: CanonicalGraph): string {
+export function canonicalGraphJson(graph: CanonicalTeam): string {
   return JSON.stringify(sortKeys(graph));
 }
 
 /**
- * A run's graph version: 16 hex of the canonical graph's sha256. A stored
+ * A run's team version: 16 hex of the canonical team's sha256. A stored
  * version is never recomputed, so a schema default added later changes the
  * version only of runs made after it.
  */
@@ -78,8 +77,38 @@ export function teamVersionOf(team: Team): string {
 }
 
 /**
- * A stored canonical graph read back as a `Team` (under a placeholder
- * name, which the schema requires), or null when it no longer parses.
+ * The version a node graph was recorded under while teams were graphs: the
+ * same hash over its nodes sorted by id, its edges without their label sorted
+ * by ends and kind, the cap and the stages — so a run started then still
+ * finds its recorded version.
+ */
+export function legacyGraphVersionOf(graph: LegacyTeamGraph): string {
+  return createHash('sha256')
+    .update(legacyCanonicalJson(graph))
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/** The canonical JSON {@link legacyGraphVersionOf} hashes — what a version row of that time holds. */
+export function legacyCanonicalJson(graph: LegacyTeamGraph): string {
+  const edgeKey = (edge: { from: string; to: string; kind: string }): string =>
+    JSON.stringify([edge.from, edge.to, edge.kind]);
+  return JSON.stringify(
+    sortKeys({
+      maxActiveTurns: graph.maxActiveTurns ?? null,
+      nodes: [...graph.nodes].sort((a, b) => byText(a.id, b.id)),
+      edges: graph.edges
+        .map(({ label: _label, ...edge }) => edge)
+        .sort((a, b) => byText(edgeKey(a), edgeKey(b))),
+      stages: graph.stages?.length ? graph.stages : undefined,
+    }),
+  );
+}
+
+/**
+ * A stored canonical team read back as a `Team` (under a placeholder name,
+ * which the schema requires), or null when it no longer parses. A version
+ * recorded while teams were node graphs is converted (`teamFromWorkflow`).
  */
 export function teamOfCanonical(json: string): Team | null {
   let parsed: unknown;
@@ -91,27 +120,51 @@ export function teamOfCanonical(json: string): Team | null {
   if (parsed === null || typeof parsed !== 'object') {
     return null;
   }
-  const { maxActiveTurns, ...graph } = parsed as Record<string, unknown>;
-  const result = TeamSchema.safeParse({
-    ...graph,
+  const { maxActiveTurns, ...rest } = parsed as Record<string, unknown>;
+  const document = {
+    ...rest,
     name: 'version',
     ...(typeof maxActiveTurns === 'number' ? { maxActiveTurns } : {}),
-  });
+  };
+  if (isLegacyTeamGraph(document)) {
+    const legacy = teamFromLegacyDocument(document);
+    return legacy.success ? legacy.converted.team : null;
+  }
+  const result = TeamSchema.safeParse(document);
   return result.success ? result.data : null;
 }
 
+/** Whether a stored canonical team was recorded while teams were node graphs. */
+export function isLegacyCanonical(json: string): boolean {
+  try {
+    return isLegacyTeamGraph(JSON.parse(json));
+  } catch {
+    return false;
+  }
+}
+
 /**
- * A stored canonical graph as YAML in the library file's field order — what a version's
- * diff is taken over — or null when it no longer parses.
+ * A stored canonical team as YAML in the library file's field order — what a
+ * version's diff is taken over — or null when it no longer parses.
  */
 export function canonicalGraphYaml(json: string): string | null {
   const team = teamOfCanonical(json);
   if (team === null) {
     return null;
   }
-  const { maxActiveTurns, nodes, edges, stages } = team;
+  const { maxActiveTurns, mode, members, triggers, instructionBlocks, stages } =
+    team;
   // The JSON round trip drops undefined fields, as the library writer does.
   return new Document(
-    JSON.parse(JSON.stringify({ maxActiveTurns, nodes, edges, stages })),
+    JSON.parse(
+      JSON.stringify({
+        maxActiveTurns,
+        mode,
+        members,
+        triggers,
+        instructionBlocks,
+        stages,
+      }),
+    ),
   ).toString();
 }

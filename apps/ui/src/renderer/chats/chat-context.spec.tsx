@@ -30,7 +30,7 @@ function systemRow(payload: Record<string, unknown>): ChatItem {
   return {
     id: 's1',
     runId: 'run-1',
-    nodeId: null,
+    memberId: null,
     seq: 1,
     kind: 'system',
     role: null,

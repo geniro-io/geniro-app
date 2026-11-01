@@ -14,6 +14,7 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { teamSnapshotOf } from '../../teams/utils/team-snapshot';
 import { LineBaselineDao } from '../dao/line-baseline.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
@@ -99,7 +100,7 @@ describe('StatsService (in-memory sqlite)', () => {
     nextSeq += 1;
     await dao.recordOnce({
       runId: 'run-a',
-      nodeId: null,
+      memberId: null,
       seq: nextSeq,
       occurredAt,
       agentKind: 'claude',
@@ -264,11 +265,9 @@ describe('StatsService (in-memory sqlite)', () => {
           agentKind: null,
           model: null,
           teamId: 'dev-team',
-          teamSnapshot: teamSnapshotOf({
-            name: 'Dev Team',
-            nodes: [],
-            edges: [],
-          }),
+          teamSnapshot: teamSnapshotOf(
+            teamOf([member('dev')], { name: 'Dev Team' }),
+          ),
         }),
         AgentKind.CursorAgent,
       );
@@ -286,15 +285,15 @@ describe('StatsService (in-memory sqlite)', () => {
     });
 
     it('divides a team’s polled money over the turns of the CLI that polls, not over an unpriced turn of one that does not', async () => {
-      // A cursor node, whose money reaches this app through an account poll, and
-      // a codex node, whose turns carry no cost and which no poll covers. Both
+      // A cursor member, whose money reaches this app through an account poll, and
+      // a codex member, whose turns carry no cost and which no poll covers. Both
       // leave unpriced turns in the ledger, but the run's polled bill is for
       // cursor's alone — counting codex's as costed would spread cursor's money
       // over turns it never paid for.
       //
       // Shaped as the recorder writes a team: the run names no agent, model
-      // or folder of its own (each node names its agent and model; `cwd` lives
-      // on the run and is null for a graph), so the polled fold files the run
+      // or folder of its own (each member names its agent and model; `cwd` lives
+      // on the run and is null for a team), so the polled fold files the run
       // under the NULL model and project buckets.
       const when = new Date(2026, 7, 10, 9);
       const unpriced: Partial<UsageEventInput> = {
@@ -357,7 +356,7 @@ describe('StatsService (in-memory sqlite)', () => {
     });
 
     it('leaves an unpriced turn whose agent the ledger does not know out of a polled run’s share', async () => {
-      // A row naming no agent — a turn recorded with neither a node nor a run to
+      // A row naming no agent — a turn recorded with neither a member nor a run to
       // say which CLI ran it — cannot be shown to belong to one whose money is
       // polled, so the run's polled bill is not spread over it.
       const when = new Date(2026, 7, 10, 9);

@@ -1,20 +1,18 @@
 import { BaseException } from '@packages/common';
 
 import { type Team, TeamSchema } from '../teams.types';
-import { computeRunOrder } from './graph-order';
-import { validateTeamGraph } from './graph-validate';
-import { assertValidStages } from './stage-validate';
+import { assertValidTeam } from './team-validate';
 
 export type TeamCheck =
   | { ok: true; team: Team }
-  /** `code` is the graph rule's own (`GRAPH_…`), or `INVALID_TEAM`. */
+  /** `code` is the team rule's own (`TEAM_…`, `STAGE_…`), or `INVALID_TEAM`. */
   | { ok: false; code: string; message: string };
 
 /**
  * An agent's team JSON read as a library file would have to be: the
  * default-free `TeamSchema` (never `TeamYamlSchema`, whose defaults would
- * quietly give an agent node `approval: 'auto'`), the graph rules, and a run
- * order. The message names at most five schema issues.
+ * quietly give a member `approval: 'auto'`) and the team rules. The message
+ * names at most five schema issues.
  */
 export function checkTeam(input: unknown): TeamCheck {
   const parsed = TeamSchema.safeParse(input);
@@ -29,9 +27,7 @@ export function checkTeam(input: unknown): TeamCheck {
     };
   }
   try {
-    validateTeamGraph(parsed.data.nodes, parsed.data.edges);
-    computeRunOrder(parsed.data.nodes, parsed.data.edges);
-    assertValidStages(parsed.data);
+    assertValidTeam(parsed.data);
   } catch (error) {
     return {
       ok: false,

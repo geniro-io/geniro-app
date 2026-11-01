@@ -34,7 +34,7 @@ export abstract class MemoryMcpTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId }: McpCallContext,
+    { runId, memberId }: McpCallContext,
   ): Promise<McpToolResult> {
     if (!this.memory.enabled) {
       return this.text(
@@ -44,7 +44,7 @@ export abstract class MemoryMcpTool extends BaseMcpTool {
     }
     const [projectId, actor] = await Promise.all([
       this.memory.scopeOf(runId),
-      this.memory.actorOf(runId, nodeId),
+      this.memory.actorOf(runId, memberId),
     ]);
     return this.answer(args, { projectId, actor });
   }

@@ -33,15 +33,15 @@ export class ReadTeamsTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
     return (
-      this.gate.canPropose(runId, nodeId) ||
-      this.builders.canEdit(runId, nodeId)
+      this.gate.canPropose(runId, memberId) ||
+      this.builders.canEdit(runId, memberId)
     );
   }
 
-  protected instructions({ runId, nodeId }: McpListContext): string {
-    return readTeamsInstructions(this.builders.canEdit(runId, nodeId));
+  protected instructions({ runId, memberId }: McpListContext): string {
+    return readTeamsInstructions(this.builders.canEdit(runId, memberId));
   }
 
   protected inputSchema(): Record<string, unknown> {

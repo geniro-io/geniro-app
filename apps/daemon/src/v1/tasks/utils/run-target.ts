@@ -64,7 +64,7 @@ export const RUN_TARGET_PROBLEM_REASON: Record<RunTargetProblemReason, string> =
   {
     'no-target': NO_RUN_TARGET_REASON,
     'team-unattended':
-      'this team cannot run unattended — an agent node whose approval is not "auto" would park on a request nobody is there to answer; set every agent node to auto, point this task at an agent, or start it yourself',
+      'this team cannot run unattended — a member whose approval is not "auto" would park on a request nobody is there to answer; set every member to auto, point this task at an agent, or start it yourself',
   };
 
 /**
@@ -129,8 +129,8 @@ export function resolveRunTarget(
   levels: readonly RunTargetLevel[],
   startedBy: TaskRunStarter = 'user',
   /**
-   * Whether the named team can run with nobody watching — every agent node
-   * on `auto` (`nodesThatAsk`). A question about the LIBRARY, which this pure
+   * Whether the named team can run with nobody watching — every member
+   * on `auto` (`membersThatAsk`). A question about the LIBRARY, which this pure
    * function cannot read, so the caller answers it; absent, no team is
    * trusted to, which is the refusal this parameter narrows.
    */
@@ -147,20 +147,15 @@ export function resolveRunTarget(
   const teamSlug = nonEmpty(deciding.teamSlug);
   if (teamSlug !== null) {
     // The agent arm below can force ONE approval mode for an unattended run; a
-    // team has no such field to force, since `approval` is per NODE in the
-    // YAML and a node that asks is a legitimate thing to author. So a team
-    // with such a node is refused here rather than started and left to park —
-    // and one whose every agent node is already `auto` is not.
-    //
-    // It refused EVERY team for a release, which is the reported "the
-    // automatic taking of tasks doesn't work": a board pointed at a team
-    // whose four agent nodes were all `auto` — nothing in it could park —
-    // reported its whole intake column as "cannot start".
+    // team has no such field to force, since `approval` is per MEMBER in the
+    // YAML and a member that asks is a legitimate thing to author. So a team
+    // with such a member is refused here rather than started and left to park —
+    // and one whose every member is already `auto` is not.
     if (startedBy === 'autopilot' && !runsUnattended(teamSlug)) {
       return { kind: 'problem', reason: 'team-unattended' };
     }
     // The CLI-only fields are deliberately dropped rather than carried: a
-    // team's nodes each name their own agent, model and approval in the
+    // team's members each name their own agent, model and approval in the
     // YAML, so there is nothing here for a run-level answer to apply to.
     return { kind: 'team', teamSlug };
   }

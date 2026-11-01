@@ -17,13 +17,13 @@ import { ChatTitleService } from './chat-title.service';
 
 /** One bus item, defaulting to the settled turn that triggers naming. */
 function item(
-  nodeId: string | null = null,
+  memberId: string | null = null,
   kind: ItemWire['kind'] = 'turn_complete',
 ): ItemWire {
   return {
     id: 'i1',
     runId: 'run-a',
-    nodeId,
+    memberId,
     seq: 4,
     kind,
     role: null,
@@ -49,12 +49,12 @@ function build(opts: {
   generatedTitle?: string | null;
   agentSessionId?: string | null;
   /**
-   * The CLI stamped by the node that started FIRST — which is the only way a
+   * The CLI stamped by the member that started FIRST — which is the only way a
    * TEAM run can name a CLI at all, its own `agentKind` being null.
-   * `null` models a run no node has taken a turn on yet.
+   * `null` models a run no member has taken a turn on yet.
    */
   firstNodeAgentKind?: AgentKind | null;
-  firstNodeProfile?: { nodeId: string; model: string | null };
+  firstNodeProfile?: { memberId: string; model: string | null };
 }) {
   const items = new Subject<RunItemEvent>();
   const deleted = new Subject<string>();
@@ -124,7 +124,7 @@ function build(opts: {
   // Records its arguments rather than asserting inside them: this runs within
   // `readNativeTitle`'s try/catch, so a failed `expect` there would surface as a
   // swallowed warning and a confusing downstream mismatch instead of naming the
-  // wrong node key.
+  // wrong member key.
   const getByRunNode = vi.fn(() =>
     Promise.resolve(
       opts.agentSessionId === undefined
@@ -132,7 +132,7 @@ function build(opts: {
         : { agentSessionId: opts.agentSessionId },
     ),
   );
-  // The stamp the first node left behind — a team run's only route to a CLI.
+  // The stamp the first member left behind — a team run's only route to a CLI.
   const firstAgentKind = vi.fn(() =>
     Promise.resolve(
       opts.firstNodeAgentKind === undefined
@@ -142,7 +142,7 @@ function build(opts: {
   );
   const firstAgentProfile = vi.fn(() =>
     Promise.resolve(
-      opts.firstNodeProfile ?? { nodeId: 'agent-a', model: null },
+      opts.firstNodeProfile ?? { memberId: 'agent-a', model: null },
     ),
   );
 
@@ -197,8 +197,8 @@ function build(opts: {
   const drain = (): Promise<unknown> =>
     new Promise((resolve) => setTimeout(resolve, 0));
 
-  const settle = async (nodeId: string | null = null): Promise<void> => {
-    items.next({ runId: 'run-a', item: item(nodeId) });
+  const settle = async (memberId: string | null = null): Promise<void> => {
+    items.next({ runId: 'run-a', item: item(memberId) });
     await drain();
   };
 
@@ -242,11 +242,11 @@ function build(opts: {
   };
 
   /**
-   * A graph NODE reaching for a tool.
+   * A team MEMBER reaching for a tool.
    *
    * The earliest moment a team run can be named by anything: its own
    * run-level stream carries one user message and then nothing until the whole
-   * run settles, so every naming opportunity in between belongs to a node.
+   * run settles, so every naming opportunity in between belongs to a member.
    */
   const nodeToolCall = async (): Promise<void> => {
     items.next({ runId: 'run-a', item: item('node-1', 'tool_call') });
@@ -324,7 +324,7 @@ describe('ChatTitleService', () => {
     );
   });
 
-  it('uses the team node’s actual local model for its title', async () => {
+  it('uses the team member’s actual local model for its title', async () => {
     const { settle, generateTitle } = build({
       run: {
         teamId: 'wf-local',
@@ -332,7 +332,7 @@ describe('ChatTitleService', () => {
         model: null,
         title: 'implement local coding',
       },
-      firstNodeProfile: { nodeId: 'agent-a', model: 'ollama/pool-model' },
+      firstNodeProfile: { memberId: 'agent-a', model: 'ollama/pool-model' },
       firstUserMessageText: 'implement local coding',
       generatedTitle: 'Local Coding',
     });
@@ -691,13 +691,13 @@ describe('ChatTitleService', () => {
     expect(readSessionTitle).not.toHaveBeenCalled();
   });
 
-  it('upgrades a team run by asking the CLI of the node that ran FIRST', async () => {
+  it('upgrades a team run by asking the CLI of the member that ran FIRST', async () => {
     // The report: "for teams title is not generating automatically", over a
     // row reading `review it https://github.com/ma…`. The derivation had run —
     // that IS what `titleFromText` makes of an opening that is a pasted URL —
     // and nothing ever improved on it, because the upgrade was skipped on the
-    // reading that a team has no CLI to ask. It has: every node stamps the
-    // CLI that ran it, and the node that started first is the one handed the
+    // reading that a team has no CLI to ask. It has: every member stamps the
+    // CLI that ran it, and the member that started first is the one handed the
     // user's own task.
     // The stored title has to be exactly what the deriver would write today —
     // that is the ownership check, and it is what makes a user's rename
@@ -729,7 +729,7 @@ describe('ChatTitleService', () => {
 
   it('never reads a NODE’s own session title to name the whole run', async () => {
     // A CLI's session title names the conversation IT holds, which for a
-    // team is one node's thread — the QA agent's name for its own work,
+    // team is one member's thread — the QA agent's name for its own work,
     // over a run the manager is coordinating. Only the ask is handed the run's
     // own seed prompt, so only the ask can answer about the run.
     const { settle, readSessionTitle, retitle } = build({
@@ -751,7 +751,7 @@ describe('ChatTitleService', () => {
     );
   });
 
-  it('names a team run while it is STILL RUNNING, on a node’s first tool call', async () => {
+  it('names a team run while it is STILL RUNNING, on a member’s first tool call', async () => {
     // The whole point of the fix. A team's run-level stream holds one user
     // message and then nothing until the run settles — measured on a real run,
     // 3 run-level rows out of 573 — so naming had exactly one trigger, the run
@@ -775,8 +775,8 @@ describe('ChatTitleService', () => {
     );
   });
 
-  it('leaves a team run alone until one of its nodes has actually run', async () => {
-    // No node has started, so there is no stamp to read and no CLI to ask. The
+  it('leaves a team run alone until one of its members has actually run', async () => {
+    // No member has started, so there is no stamp to read and no CLI to ask. The
     // derived title stands rather than a model call being spent on a run that
     // has produced nothing to name it after.
     const { settle, retitle, generateTitle, firstAgentKind } = build({
@@ -807,9 +807,9 @@ describe('ChatTitleService', () => {
     expect(retitle).not.toHaveBeenCalled();
   });
 
-  it('ignores a graph node’s turn ENDING without reading the run at all', async () => {
-    // A node's own terminal is not the RUN's terminal — the run gets one of its
-    // own — so it names nothing. Narrower than it used to be: a node's tool call
+  it('ignores a team member’s turn ENDING without reading the run at all', async () => {
+    // A member's own terminal is not the RUN's terminal — the run gets one of its
+    // own — so it names nothing. Narrower than it used to be: a member's tool call
     // now DOES reach the naming, which is the only way a team run can be
     // named while it is still running (see the team tests above).
     const { settle, retitle, readSessionTitle } = build({

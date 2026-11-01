@@ -9,7 +9,6 @@ import { DEV_TEAM_VERSIONS } from '../__fixtures__/team-versions';
 import { withVocabulary } from '../__tests__/agent-vocabulary-api';
 import { withHistoryPages } from '../__tests__/history-page';
 import { emptyRunState } from '../__tests__/run-state';
-import { settleStageGraphs } from '../__tests__/settle-stage-graphs';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import type {
   ItemDto as ChatItem,
@@ -40,7 +39,26 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
-const EMPTY: Team = { name: 'Dev Team', nodes: [], edges: [] };
+const LEAD = {
+  id: 'lead',
+  name: 'Lead',
+  agent: 'claude',
+  approval: 'auto',
+} as const;
+
+/** A team the daemon accepts as it stands: one member, handling the first message. */
+function teamOf(fields: Partial<Team> = {}): Team {
+  return {
+    name: 'Dev Team',
+    mode: 'lead',
+    members: [{ ...LEAD }],
+    triggers: [{ kind: 'first-message', member: 'lead' }],
+    instructionBlocks: [],
+    ...fields,
+  };
+}
+
+const EMPTY: Team = teamOf();
 
 const {
   createTeam,
@@ -74,17 +92,12 @@ const {
   deleteTeam: vi.fn(),
 }));
 
-// The REAL canvas: node state, selection and React Flow's own document-wide
-// Delete/Backspace handler are what several of these cases are about, and a
-// mocked `useNodesState` froze every one of them. Only the stylesheet goes.
-vi.mock('@xyflow/react/dist/style.css', () => ({}));
-
 vi.mock('../daemon-api', async (importOriginal) => ({
   // The real reader of a refusal's code — the builder branches on it.
   daemonErrorCode: (await importOriginal<typeof import('../daemon-api')>())
     .daemonErrorCode,
   describeDaemonError: (err: unknown) => String(err),
-  // Read by the MCP listing a selected agent node asks for.
+  // Read by the MCP listing a selected member asks for.
   MCP_ROUTE_TIMEOUT_MS: 60_000,
   createDaemonApis: () => ({
     teams: {
@@ -183,7 +196,7 @@ async function endTurn(id: string, runId = 'run-1'): Promise<void> {
         seq: 1,
         kind: 'turn_complete',
         role: 'assistant',
-        nodeId: null,
+        memberId: null,
         payload: {},
         createdAt: '2026-09-01T00:00:00.000Z',
       } as ChatItem);
@@ -196,8 +209,8 @@ function summary(slug: string, name: string): TeamSummaryDto {
     slug,
     name,
     description: null,
-    nodeCount: 0,
-    edgeCount: 0,
+    memberCount: 1,
+    stageCount: 0,
     agentCounts: [],
     updatedAt: '2026-09-01T00:00:00.000Z',
   } as unknown as TeamSummaryDto;
@@ -205,11 +218,6 @@ function summary(slug: string, name: string): TeamSummaryDto {
 
 beforeEach(() => {
   stubResizeObserver();
-  // React Flow reads the pane's zoom off a DOMMatrix, which jsdom lacks.
-  (window as unknown as { DOMMatrixReadOnly: unknown }).DOMMatrixReadOnly =
-    class {
-      m22 = 1;
-    };
   window.localStorage.clear();
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -220,7 +228,7 @@ beforeEach(() => {
   getCapabilities.mockReset().mockImplementation(async () => ({}));
   measureInstructionSizes
     .mockReset()
-    .mockImplementation(async () => ({ nodes: [] }));
+    .mockImplementation(async () => ({ members: [] }));
   listAgentMcpServers.mockReset().mockImplementation(async () => ({
     servers: [],
     plugins: [],
@@ -321,18 +329,53 @@ async function press(label: string): Promise<void> {
   });
 }
 
-/** Add a node the keyboard way: its palette tile, then "Add to canvas". */
-async function addFromPalette(tile: string): Promise<void> {
-  const control = [
-    ...document.body.querySelectorAll<HTMLButtonElement>('button'),
-  ].find((button) => button.textContent?.includes(tile));
-  if (control === undefined) {
-    throw new Error(`no palette tile ${tile}`);
+/** One edit to the open team: a member added. */
+async function edit(): Promise<void> {
+  await press('Add member');
+}
+
+/** Pick a row of the open picker or menu by its text. */
+async function pickOption(label: string): Promise<void> {
+  const row = [
+    ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((option) => option.textContent?.includes(label));
+  if (row === undefined) {
+    throw new Error(`no option ${label}`);
   }
   await act(async () => {
-    control.click();
+    row.click();
   });
-  await press('Add to canvas');
+}
+
+/** Select a member in the outline, opening it in the inspector. */
+async function selectMember(id: string): Promise<void> {
+  const row = container.querySelector<HTMLButtonElement>(
+    `[data-slot="member-row"][data-member-id="${id}"] button`,
+  );
+  if (row === null) {
+    throw new Error(`no member ${id}`);
+  }
+  await act(async () => {
+    row.click();
+  });
+}
+
+/** Type into a field the way React hears it. */
+async function type(
+  field: HTMLInputElement | HTMLTextAreaElement | null,
+  text: string,
+): Promise<void> {
+  if (field === null) {
+    throw new Error('no field');
+  }
+  const proto =
+    field instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(field, text);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  });
 }
 
 /** Pick a row of the builder's overflow menu. */
@@ -362,9 +405,9 @@ const panel = (): HTMLElement | null =>
 const statusLine = (): string =>
   container.querySelector('[role="status"]')?.textContent?.trim() ?? '';
 
-const canvasNodeIds = (): (string | null)[] =>
-  [...container.querySelectorAll('.react-flow__node')].map((node) =>
-    node.getAttribute('data-id'),
+const memberIds = (): (string | undefined)[] =>
+  [...container.querySelectorAll<HTMLElement>('[data-slot="member-row"]')].map(
+    (row) => row.dataset.memberId,
   );
 
 const savedRequests = (): SaveRequest[] =>
@@ -373,6 +416,8 @@ const savedRequests = (): SaveRequest[] =>
 /** Whether the builder (rather than the library grid) is on screen. */
 const inBuilder = (): boolean =>
   container.querySelector('[aria-label="Back to library"]') !== null;
+
+const lastSaved = (): Team => savedRequests().at(-1)!.saveTeamDto.team;
 
 describe('Teams — the library list', () => {
   /**
@@ -519,11 +564,9 @@ describe('Teams — reloading after the agent edits the file', () => {
   });
 
   /**
-   * This is the ONLY path an agent's edit takes to the canvas: nothing in
+   * This is the ONLY path an agent's edit takes to the editor: nothing in
    * either app watches a file, so a turn ending is when the builder re-reads
-   * the team. Breaking the chain anywhere — the panel not reporting the
-   * settle, the builder not re-reading — leaves the graph on screen describing
-   * a file that has moved on.
+   * the team.
    */
   it('re-reads the team when the chat agent finishes a turn', async () => {
     await openBuilder();
@@ -561,7 +604,7 @@ describe('Teams — reloading after the agent edits the file', () => {
     expect(getTeam.mock.calls.length).toBe(readsBefore + 2);
   });
 
-  // Re-reading NOTHING once the dock is closed would let the next canvas save
+  // Re-reading NOTHING once the dock is closed would let the next save
   // silently overwrite the edit of an agent that finished after the user hid
   // the dock.
   it('still re-reads when a turn ends after the dock was closed', async () => {
@@ -575,20 +618,19 @@ describe('Teams — reloading after the agent edits the file', () => {
     expect(getTeam.mock.calls.length).toBe(readsBefore + 1);
   });
 
-  it('replaces the canvas with what the agent wrote, and says so', async () => {
+  it('replaces the editor with what the agent wrote, and says so', async () => {
     await openBuilder();
     await press('Change with chat');
     getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
       slug,
-      team: {
-        ...EMPTY,
-        nodes: [{ id: 'start', kind: 'trigger', trigger: 'manual' }],
-      },
+      team: teamOf({
+        members: [{ ...LEAD }, { ...LEAD, id: 'qa', name: 'QA' }],
+      }),
     }));
 
     await endTurn('done-1');
 
-    expect(canvasNodeIds()).toEqual(['start']);
+    expect(memberIds()).toEqual(['lead', 'qa']);
     expect(container.textContent).toContain(
       'Reloaded — the agent changed this team',
     );
@@ -600,7 +642,7 @@ describe('Teams — reloading after the agent edits the file', () => {
  * file. Closing the dock mid-turn must not leave that suspension on for good,
  * with the status bar saying "Up to date" over edits nothing will ever write.
  */
-describe('Teams — canvas edits made while the chat agent works', () => {
+describe('Teams — edits made while the chat agent works', () => {
   beforeEach(() => {
     client = fakeClient();
     openTeamChat.mockImplementation(async () => ({
@@ -621,29 +663,30 @@ describe('Teams — canvas edits made while the chat agent works', () => {
         await press('Change with chat');
       }
 
-      await addFromPalette('Manual');
+      await edit();
       await wait(900);
 
       expect(saveTeam).not.toHaveBeenCalled();
       expect(statusLine()).toBe('Not saved yet');
 
       // The agent changed nothing on disk — its turn was a question and an
-      // answer — so the canvas keeps the user's edit and autosave writes it.
+      // answer — so the editor keeps the user's edit and autosave writes it.
       await endTurn('done-1');
       await wait(900);
 
-      expect(canvasNodeIds()).toEqual(['trigger-1']);
+      expect(memberIds()).toEqual(['lead', 'member-1']);
       expect(savedRequests()).toHaveLength(1);
-      expect(
-        savedRequests()[0]!.saveTeamDto.team.nodes.map((n) => n.id),
-      ).toEqual(['trigger-1']);
+      expect(lastSaved().members.map((m) => m.id)).toEqual([
+        'lead',
+        'member-1',
+      ]);
     },
   );
 
   it('does not leave over held-back edits — it asks, and leaves only on Discard', async () => {
     await openBuilder();
     await press('Change with chat');
-    await addFromPalette('Manual');
+    await edit();
 
     await press('Back to library');
 
@@ -663,23 +706,21 @@ describe('Teams — canvas edits made while the chat agent works', () => {
 describe('Teams — leaving the builder', () => {
   it('stays, with the reason on screen, when the last save was refused', async () => {
     saveTeam.mockRejectedValue(
-      new Error(
-        'daemon PUT failed (400): Graph contains circular dependencies',
-      ),
+      new Error('daemon PUT failed (400): the disk is full'),
     );
     await openBuilder();
-    await addFromPalette('Manual');
+    await edit();
 
     await press('Back to library');
 
     expect(inBuilder()).toBe(true);
-    expect(container.textContent).toContain('circular dependencies');
+    expect(container.textContent).toContain('the disk is full');
     expect(container.textContent).toContain('Leave without saving?');
   });
 
-  it('leaves at once when the canvas is saved', async () => {
+  it('leaves at once when the team is saved', async () => {
     await openBuilder();
-    await addFromPalette('Manual');
+    await edit();
 
     await press('Back to library');
     await wait(0);
@@ -690,18 +731,18 @@ describe('Teams — leaving the builder', () => {
 
   /**
    * A flush that RETURNS when a write is already out lets a leave during one
-   * clear the canvas while the edits made after that write started are
+   * clear the editor while the edits made after that write started are
    * written by nothing.
    */
   it('waits out a save in flight, then writes the edits made during it before leaving', async () => {
     const first = deferred<{ slug: string; team: Team }>();
     saveTeam.mockImplementationOnce(async () => first.promise);
     await openBuilder();
-    await addFromPalette('Manual');
+    await edit();
     await wait(900);
     expect(saveTeam).toHaveBeenCalledTimes(1);
 
-    await addFromPalette('Instructions');
+    await edit();
     await act(async () => {
       [
         ...container.querySelectorAll<HTMLButtonElement>(
@@ -720,21 +761,22 @@ describe('Teams — leaving the builder', () => {
     await wait(0);
 
     expect(savedRequests()).toHaveLength(2);
-    expect(savedRequests()[1]!.saveTeamDto.team.nodes.map((n) => n.id)).toEqual(
-      ['trigger-1', 'instruction-1'],
-    );
+    expect(lastSaved().members.map((m) => m.id)).toEqual([
+      'lead',
+      'member-1',
+      'member-2',
+    ]);
     expect(inBuilder()).toBe(false);
   });
 });
 
 describe('Teams — an answer that arrives after the builder moved on', () => {
-  const ALPHA: Team = { name: 'Alpha', nodes: [], edges: [] };
-  const BETA: Team = {
+  const ALPHA: Team = teamOf({ name: 'Alpha' });
+  const BETA: Team = teamOf({
     name: 'Beta',
-    nodes: [{ id: 'b-start', kind: 'trigger', trigger: 'manual' }],
-    edges: [],
-    layout: { 'b-start': { x: 0, y: 0 } },
-  };
+    members: [{ ...LEAD, id: 'b-lead' }],
+    triggers: [{ kind: 'first-message', member: 'b-lead' }],
+  });
 
   beforeEach(() => {
     listTeams.mockImplementation(async () => [
@@ -749,14 +791,14 @@ describe('Teams — an answer that arrives after the builder moved on', () => {
 
   /**
    * A save for A resolving after B was opened set the open slug back to A
-   * under B's graph — and the next autosave wrote B into A.
+   * under B's team — and the next autosave wrote B into A.
    */
   it('drops a late save answer for a team that has since been deleted', async () => {
     const alphaSave = deferred<{ slug: string; team: Team }>();
     saveTeam.mockImplementationOnce(async () => alphaSave.promise);
     await paint(true);
     await press('Open Alpha');
-    await addFromPalette('Manual');
+    await edit();
     await wait(900);
     expect(savedRequests().map((r) => r.slug)).toEqual(['alpha']);
 
@@ -771,10 +813,10 @@ describe('Teams — an answer that arrives after the builder moved on', () => {
     });
     await wait(900);
 
-    // Nothing was written into Alpha from Beta's canvas…
+    // Nothing was written into Alpha from Beta's editor…
     expect(savedRequests().map((r) => r.slug)).toEqual(['alpha']);
     // …and an edit on Beta lands in Beta.
-    await addFromPalette('Instructions');
+    await edit();
     await wait(900);
     expect(savedRequests().map((r) => r.slug)).toEqual(['alpha', 'beta']);
   });
@@ -793,108 +835,286 @@ describe('Teams — an answer that arrives after the builder moved on', () => {
     await act(async () => {
       reread.resolve({
         slug: 'alpha',
-        team: {
-          ...ALPHA,
-          nodes: [{ id: 'a-start', kind: 'trigger', trigger: 'manual' }],
-        },
+        team: teamOf({
+          name: 'Alpha',
+          members: [{ ...LEAD }, { ...LEAD, id: 'a-qa', name: 'QA' }],
+        }),
       });
     });
 
-    expect(canvasNodeIds()).toEqual(['b-start']);
+    expect(memberIds()).toEqual(['b-lead']);
   });
 });
 
-/**
- * React Flow listens for Delete/Backspace on the whole DOCUMENT and ignores
- * only text fields, and the builder stays mounted while another screen is on
- * view — so a key pressed anywhere in the app reached the canvas.
- */
-describe('Teams — Delete and Backspace', () => {
+describe('Teams — the members', () => {
+  const STAGES = [
+    {
+      id: 'plan',
+      title: 'Plan',
+      goal: 'Plan agreed',
+      responsible: ['qa', 'lead'],
+      next: ['build'],
+    },
+    { id: 'build', title: 'Build', goal: 'Built', responsible: ['qa'] },
+  ];
+
   beforeEach(() => {
     getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
       slug,
-      team: {
-        ...EMPTY,
-        nodes: [{ id: 'trigger-1', kind: 'trigger', trigger: 'manual' }],
-        layout: { 'trigger-1': { x: 0, y: 0 } },
-      },
+      team: teamOf({
+        members: [{ ...LEAD }, { ...LEAD, id: 'qa', name: 'QA' }],
+        triggers: [{ kind: 'first-message', member: 'qa' }],
+        instructionBlocks: [
+          { id: 'b1', title: 'For QA', text: 'x', audience: ['qa', 'lead'] },
+          { id: 'b2', title: 'All', text: 'y', audience: 'everyone' },
+        ],
+        stages: STAGES,
+      }),
+      hash: 'loaded-1',
     }));
   });
 
-  async function selectOnCanvas(id: string): Promise<void> {
-    const node = container.querySelector<HTMLElement>(
-      `.react-flow__node[data-id="${id}"]`,
-    );
-    if (node === null) {
-      throw new Error(`no canvas node ${id}`);
-    }
-    await act(async () => {
-      node.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-  }
-
-  async function backspaceOn(target: HTMLElement): Promise<void> {
-    target.focus();
-    await act(async () => {
-      target.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          key: 'Backspace',
-          code: 'Backspace',
-          bubbles: true,
-        }),
-      );
-    });
-    await act(async () => {
-      target.dispatchEvent(
-        new KeyboardEvent('keyup', {
-          key: 'Backspace',
-          code: 'Backspace',
-          bubbles: true,
-        }),
-      );
-    });
-  }
-
-  // The control: gating the key on visibility must not switch it off.
-  it('deletes the selected node while the builder is on view', async () => {
+  it('adds a member on the default CLI, selects it, and saves it', async () => {
     await openBuilder();
-    await selectOnCanvas('trigger-1');
 
-    await backspaceOn(document.body);
-
-    expect(canvasNodeIds()).toEqual([]);
-  });
-
-  it('deletes nothing when Backspace is pressed on another screen', async () => {
-    await openBuilder();
-    await selectOnCanvas('trigger-1');
-    await paint(false);
-    const chatRow = document.createElement('button');
-    chatRow.textContent = 'a chat row';
-    document.body.appendChild(chatRow);
-
-    await backspaceOn(chatRow);
+    await press('Add member');
     await wait(900);
 
-    expect(canvasNodeIds()).toEqual(['trigger-1']);
-    expect(saveTeam).not.toHaveBeenCalled();
+    expect(memberIds()).toEqual(['lead', 'qa', 'member-1']);
+    expect(
+      container.querySelector<HTMLInputElement>('#member-name')!.value,
+    ).toBe('Member 3');
+    expect(lastSaved().members.at(-1)).toEqual({
+      id: 'member-1',
+      name: 'Member 3',
+      agent: 'claude',
+      approval: 'auto',
+    });
   });
 
-  it('deletes the node just ADDED — the one the inspector shows — not the one selected before', async () => {
+  it('removes a member from every block audience and stage, and hands its first message on', async () => {
     await openBuilder();
-    await selectOnCanvas('trigger-1');
-    await addFromPalette('Instructions');
-    expect(container.querySelector('aside p.truncate')?.textContent).toBe(
-      'instruction-1',
-    );
 
-    await backspaceOn(document.body);
+    await press('Options for QA');
+    await pickOption('Remove');
+    await wait(900);
 
-    expect(canvasNodeIds()).toEqual(['trigger-1']);
+    expect(memberIds()).toEqual(['lead']);
+    const saved = lastSaved();
+    expect(saved.members.map((m) => m.id)).toEqual(['lead']);
+    expect(saved.triggers).toEqual([{ kind: 'first-message', member: 'lead' }]);
+    expect(saved.instructionBlocks.map((b) => b.audience)).toEqual([
+      ['lead'],
+      'everyone',
+    ]);
+    expect(saved.stages).toEqual([
+      { ...STAGES[0], responsible: ['lead'] },
+      { id: 'build', title: 'Build', goal: 'Built' },
+    ]);
+  });
+
+  it('never offers to remove the last member', async () => {
+    getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      team: EMPTY,
+    }));
+    await openBuilder();
+
+    await press('Options for Lead');
+    const remove = [
+      ...document.body.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ].find((option) => option.textContent?.includes('Remove'));
+    expect(remove?.disabled).toBe(true);
+  });
+
+  it('reorders members from a row’s menu', async () => {
+    await openBuilder();
+
+    await press('Options for QA');
+    await pickOption('Move up');
+    await wait(900);
+
+    expect(memberIds()).toEqual(['qa', 'lead']);
+    expect(lastSaved().members.map((m) => m.id)).toEqual(['qa', 'lead']);
+  });
+
+  it('edits a member’s name, public role and private instructions', async () => {
+    await openBuilder();
+    await selectMember('qa');
+
+    await type(container.querySelector('#member-name'), 'Tester');
+    await type(container.querySelector('#member-role'), 'Tests changes.');
+    await type(container.querySelector('#member-instructions'), 'Be thorough.');
+    await wait(900);
+
+    expect(lastSaved().members[1]).toMatchObject({
+      id: 'qa',
+      name: 'Tester',
+      role: 'Tests changes.',
+      instructions: 'Be thorough.',
+    });
+    expect(memberIds()).toEqual(['lead', 'qa']);
+    expect(
+      container.querySelector('[data-member-id="qa"]')!.textContent,
+    ).toContain('Tester');
   });
 });
 
-describe('Teams — an agent node’s CLI', () => {
+describe('Teams — who handles the first message', () => {
+  beforeEach(() => {
+    getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      team: teamOf({
+        members: [{ ...LEAD }, { ...LEAD, id: 'qa', name: 'QA' }],
+      }),
+      hash: 'loaded-1',
+    }));
+  });
+
+  it('hands the trigger to the member picked', async () => {
+    await openBuilder();
+    expect(
+      container.querySelector('[data-member-id="lead"]')!.textContent,
+    ).toContain('first message');
+
+    await press('Member that handles the first message');
+    await pickOption('QA');
+    await wait(900);
+
+    expect(lastSaved().triggers).toEqual([
+      { kind: 'first-message', member: 'qa' },
+    ]);
+    expect(
+      container.querySelector('[data-member-id="qa"]')!.textContent,
+    ).toContain('first message');
+  });
+});
+
+describe('Teams — the team mode', () => {
+  it('offers One lead, and shows Relay as coming soon but never pickable', async () => {
+    await openBuilder();
+
+    await press('Team mode');
+    const options = [
+      ...document.body.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ];
+    const relay = options.find((option) =>
+      option.textContent?.includes('Relay'),
+    );
+    expect(relay?.textContent).toContain('coming soon');
+    expect(relay?.disabled).toBe(true);
+    expect(
+      options.find((option) => option.textContent?.includes('One lead'))
+        ?.disabled,
+    ).toBe(false);
+  });
+});
+
+describe('Teams — instruction blocks', () => {
+  beforeEach(() => {
+    getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      team: teamOf({
+        members: [{ ...LEAD }, { ...LEAD, id: 'qa', name: 'QA' }],
+      }),
+      hash: 'loaded-1',
+    }));
+  });
+
+  it('adds a block for everyone, then narrows it to the members picked', async () => {
+    await openBuilder();
+
+    await press('Add instruction block');
+    await type(container.querySelector('#block-block-1-title'), 'Checklist');
+    await type(container.querySelector('#block-block-1-text'), 'Run tests.');
+    await wait(900);
+    expect(lastSaved().instructionBlocks).toEqual([
+      {
+        id: 'block-1',
+        title: 'Checklist',
+        text: 'Run tests.',
+        audience: 'everyone',
+      },
+    ]);
+
+    await press('Only the members picked below');
+    await press('QA');
+    await wait(900);
+
+    expect(lastSaved().instructionBlocks[0]!.audience).toEqual(['qa']);
+    expect(
+      container.querySelector('[data-slot="block-row"]')!.textContent,
+    ).toContain('QA');
+  });
+
+  it('removes a block', async () => {
+    await openBuilder();
+    await press('Add instruction block');
+    await wait(900);
+    expect(lastSaved().instructionBlocks).toHaveLength(1);
+
+    await press('Remove block');
+    await wait(900);
+
+    expect(lastSaved().instructionBlocks).toEqual([]);
+  });
+});
+
+describe('Teams — a team the daemon would refuse', () => {
+  it('holds autosave while a member has no name, says why, and saves once it has one', async () => {
+    await openBuilder();
+    await selectMember('lead');
+
+    await type(container.querySelector('#member-name'), '');
+    await wait(900);
+
+    expect(saveTeam).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('A member needs a name.');
+    expect(statusLine()).toBe('Not saved yet — fix the problems listed first');
+
+    await type(container.querySelector('#member-name'), 'Boss');
+    await wait(900);
+
+    expect(savedRequests()).toHaveLength(1);
+    expect(lastSaved().members[0]!.name).toBe('Boss');
+  });
+
+  it('names a team with no members as a problem, and the first member added fixes it', async () => {
+    getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      team: teamOf({ members: [], triggers: [] }),
+      hash: 'loaded-1',
+    }));
+    await openBuilder();
+
+    const alert = container.querySelector('[data-slot="team-problems"]');
+    expect(alert?.textContent).toContain('A team needs at least one member');
+
+    await press('Add member');
+    await wait(900);
+
+    expect(container.querySelector('[data-slot="team-problems"]')).toBeNull();
+    expect(lastSaved().triggers).toEqual([
+      { kind: 'first-message', member: 'member-1' },
+    ]);
+  });
+
+  it('asks before leaving over edits held back for a problem', async () => {
+    await openBuilder();
+    await selectMember('lead');
+    await type(container.querySelector('#member-name'), '');
+
+    await press('Back to library');
+
+    expect(inBuilder()).toBe(true);
+    expect(container.textContent).toContain(
+      'This team has problems the save would refuse',
+    );
+    expect(saveTeam).not.toHaveBeenCalled();
+  });
+});
+
+describe('Teams — a member’s CLI', () => {
   const identity = (agent: string, displayName: string): unknown => ({
     agent,
     displayName,
@@ -917,61 +1137,42 @@ describe('Teams — an agent node’s CLI', () => {
     }));
     getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
       slug,
-      team: {
-        ...EMPTY,
-        nodes: [
+      team: teamOf({
+        members: [
           {
-            id: 'eng',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
+            ...LEAD,
             model: 'opus',
             effort: 'high',
             configDir: '/profiles/work',
           },
         ],
-        layout: { eng: { x: 0, y: 0 } },
-      },
+      }),
     }));
   });
 
-  it('is switched in its settings, starting it from the new CLI’s defaults — and the next agent added starts on it', async () => {
+  it('is switched in its settings, starting it from the new CLI’s defaults — and the next member added starts on it', async () => {
     await openBuilder();
-    const node = container.querySelector<HTMLElement>(
-      '.react-flow__node[data-id="eng"]',
-    );
-    await act(async () => {
-      node?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    await press('CLI for this node');
-    const codex = [
-      ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
-    ].find((option) => option.textContent?.includes('Codex'));
-    if (codex === undefined) {
-      throw new Error('no Codex option');
-    }
-    await act(async () => {
-      codex.click();
-    });
-    await addFromPalette('Agent');
+    await selectMember('lead');
+    await press('CLI for this member');
+    await pickOption('Codex');
+    await press('Add member');
     await wait(900);
 
-    const saved = savedRequests().at(-1)?.saveTeamDto.team.nodes;
+    const saved = lastSaved().members;
     // Model, effort and profile were claude's; codex starts from its own.
-    expect(saved?.find((n) => n.id === 'eng')).toEqual({
-      id: 'eng',
-      kind: 'agent',
+    expect(saved.find((m) => m.id === 'lead')).toEqual({
+      id: 'lead',
+      name: 'Lead',
       agent: 'codex',
       approval: 'auto',
     });
-    expect(saved?.find((n) => n.id !== 'eng')).toMatchObject({
-      kind: 'agent',
+    expect(saved.find((m) => m.id !== 'lead')).toMatchObject({
       agent: 'codex',
     });
   });
 });
 
-describe('Teams — an agent node’s profile', () => {
+describe('Teams — a member’s profile', () => {
   beforeEach(() => {
     getCapabilities.mockImplementation(async () => ({
       agents: [],
@@ -984,27 +1185,13 @@ describe('Teams — an agent node’s profile', () => {
     }));
     getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
       slug,
-      team: {
-        ...EMPTY,
-        nodes: [
-          { id: 'eng', kind: 'agent', agent: 'claude', approval: 'auto' },
-          { id: 'qa', kind: 'agent', agent: 'claude', approval: 'auto' },
-        ],
-        layout: { eng: { x: 0, y: 0 }, qa: { x: 400, y: 0 } },
-      },
+      team: teamOf({
+        members: [{ ...LEAD }, { ...LEAD, id: 'qa', name: 'QA' }],
+      }),
     }));
   });
 
-  const clickNode = async (id: string): Promise<void> => {
-    const node = container.querySelector<HTMLElement>(
-      `.react-flow__node[data-id="${id}"]`,
-    );
-    await act(async () => {
-      node?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-  };
-
-  it('lands a browsed profile on the node it was chosen for, though another was selected meanwhile', async () => {
+  it('lands a browsed profile on the member it was chosen for, though another was selected meanwhile', async () => {
     let pickFolder: (path: string) => void = () => {};
     window.geniro = createPreloadStub({
       pickProjectFolder: () =>
@@ -1013,57 +1200,20 @@ describe('Teams — an agent node’s profile', () => {
         }),
     });
     await openBuilder();
-    await clickNode('eng');
-    await press('Agent config directory for this node');
-    const browse = [
-      ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
-    ].find((option) => option.textContent?.includes('Choose config directory'));
-    if (browse === undefined) {
-      throw new Error('no browse row');
-    }
-    await act(async () => {
-      browse.click();
-    });
-    await clickNode('qa');
+    await selectMember('lead');
+    await press('Agent config directory for this member');
+    await pickOption('Choose config directory');
+    await selectMember('qa');
     await act(async () => {
       pickFolder('/profiles/picked');
     });
     await wait(900);
 
-    const saved = savedRequests().at(-1)?.saveTeamDto.team.nodes;
-    expect(saved?.find((n) => n.id === 'eng')).toMatchObject({
+    const saved = lastSaved().members;
+    expect(saved.find((m) => m.id === 'lead')).toMatchObject({
       configDir: '/profiles/picked',
     });
-    expect(saved?.find((n) => n.id === 'qa')).not.toHaveProperty('configDir');
-  });
-});
-
-describe('Teams — the profiles an agent node is offered', () => {
-  beforeEach(() => {
-    getCapabilities.mockImplementation(async () => ({
-      agents: [],
-      approvals: [],
-      configDirs: [{ agent: 'cursor-agent', unavailableReason: null }],
-      interactiveTerminals: [],
-      modelEfforts: [],
-      options: [],
-      followUps: [],
-    }));
-    getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
-      slug,
-      team: {
-        ...EMPTY,
-        nodes: [
-          {
-            id: 'eng',
-            kind: 'agent',
-            agent: 'cursor-agent',
-            approval: 'auto',
-          },
-        ],
-        layout: { eng: { x: 0, y: 0 } },
-      },
-    }));
+    expect(saved.find((m) => m.id === 'qa')).not.toHaveProperty('configDir');
   });
 
   it('offers a profile named in Settings while the builder was hidden', async () => {
@@ -1074,30 +1224,26 @@ describe('Teams — the profiles an agent node is offered', () => {
         configProfiles: [
           {
             id: 'p1',
-            name: 'cursor-pf',
-            agent: 'cursor-agent',
-            dir: '/profiles/cursor-pf',
+            name: 'claude-pf',
+            agent: 'claude',
+            dir: '/profiles/claude-pf',
             color: 'green',
           },
         ],
       });
     });
     await paint(true);
-    await act(async () => {
-      container
-        .querySelector<HTMLElement>('.react-flow__node[data-id="eng"]')
-        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    await press('Agent config directory for this node');
+    await selectMember('lead');
+    await press('Agent config directory for this member');
 
     const rows = [
       ...document.body.querySelectorAll<HTMLElement>('[role="option"]'),
     ].map((option) => option.textContent ?? '');
-    expect(rows.some((row) => row.includes('cursor-pf'))).toBe(true);
+    expect(rows.some((row) => row.includes('claude-pf'))).toBe(true);
   });
 });
 
-describe('Teams — an agent node’s MCP switches', () => {
+describe('Teams — a member’s MCP switches', () => {
   /** One listing row as the daemon answers it for a profile. */
   const mcpRow = (name: string, turnReason: string | null = null): unknown => ({
     name,
@@ -1108,7 +1254,7 @@ describe('Teams — an agent node’s MCP switches', () => {
     scope: 'user',
     shadowsUser: false,
     disabled: false,
-    // The FOLDER switch's reason, which never decides a node's switch.
+    // The FOLDER switch's reason, which never decides a member's switch.
     toggleUnavailableReason: 'a per-folder reason',
     signInUnavailableReason: null,
     approveUnavailableReason: null,
@@ -1129,30 +1275,15 @@ describe('Teams — an agent node’s MCP switches', () => {
     }));
     getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
       slug,
-      team: {
-        ...EMPTY,
-        nodes: [
-          {
-            id: 'eng',
-            kind: 'agent',
-            agent: 'codex',
-            approval: 'auto',
-            mcpDisabled: ['linear'],
-          },
-        ],
-        layout: { eng: { x: 0, y: 0 } },
-      },
+      team: teamOf({
+        members: [{ ...LEAD, agent: 'codex', mcpDisabled: ['linear'] }],
+      }),
     }));
   });
 
-  async function openNodeMcp(): Promise<void> {
+  async function openMemberMcp(): Promise<void> {
     await openBuilder();
-    const node = container.querySelector<HTMLElement>(
-      '.react-flow__node[data-id="eng"]',
-    );
-    await act(async () => {
-      node?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await selectMember('lead');
     // The listing is debounced behind a selection.
     await wait(700);
     await press('MCP servers');
@@ -1161,22 +1292,21 @@ describe('Teams — an agent node’s MCP switches', () => {
   const switchFor = (server: string): HTMLElement | null =>
     document.body.querySelector<HTMLElement>(`[aria-label="Load ${server}"]`);
 
-  it('draws the node’s own list as the switches, and a switch edits that list', async () => {
-    await openNodeMcp();
+  it('draws the member’s own list as the switches, and a switch edits that list', async () => {
+    await openMemberMcp();
     expect(switchFor('linear')?.getAttribute('aria-checked')).toBe('false');
     expect(switchFor('codegraph')?.getAttribute('aria-checked')).toBe('true');
 
     await press('Load codegraph');
     await wait(900);
 
-    const saved = savedRequests().at(-1)?.saveTeamDto.team.nodes;
-    expect(saved?.find((n) => n.id === 'eng')).toMatchObject({
+    expect(lastSaved().members[0]).toMatchObject({
       mcpDisabled: ['linear', 'codegraph'],
     });
   });
 
-  it('shows the daemon’s reason, not a switch, on a server the node cannot switch', async () => {
-    await openNodeMcp();
+  it('shows the daemon’s reason, not a switch, on a server the member cannot switch', async () => {
+    await openMemberMcp();
     expect(switchFor('cua_repl')).toBeNull();
     expect(
       document.body.querySelector(
@@ -1186,57 +1316,29 @@ describe('Teams — an agent node’s MCP switches', () => {
   });
 });
 
-describe('Teams — a graph the daemon would refuse', () => {
-  /**
-   * The library's read checks shape only, so a hand-written file (or one the
-   * chat's agent wrote) can carry a wire to a node that is not there: nothing
-   * drew it, the status bar counted it, and every save was refused for it.
-   */
-  it('drops a wire to a missing node on open, says which, and saves without it', async () => {
-    getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
-      slug,
-      team: {
-        ...EMPTY,
-        nodes: [{ id: 'trigger-1', kind: 'trigger', trigger: 'manual' }],
-        edges: [{ from: 'trigger-1', to: 'reviewer', kind: 'data' }],
-        layout: { 'trigger-1': { x: 0, y: 0 } },
-      },
-    }));
-    await openBuilder();
-
-    expect(container.textContent).toContain('1 node · 0 edges');
-    expect(container.textContent).toContain('trigger-1 → reviewer');
-
-    await addFromPalette('Instructions');
-    await wait(900);
-    expect(savedRequests()[0]!.saveTeamDto.team.edges).toEqual([]);
-  });
-});
-
 describe('Teams — a team’s stages', () => {
   const STAGES = [
-    { id: 'plan', title: 'Plan', doneWhen: 'Plan agreed', next: ['build'] },
-    { id: 'build', title: 'Build', doneWhen: 'Built' },
+    { id: 'plan', title: 'Plan', goal: 'Plan agreed', next: ['build'] },
+    { id: 'build', title: 'Build', goal: 'Built' },
   ];
 
   function opens(stages: unknown): void {
     getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
       slug,
       team: {
-        ...EMPTY,
-        nodes: [{ id: 'trigger-1', kind: 'trigger', trigger: 'manual' }],
-        edges: [],
-        layout: { 'trigger-1': { x: 0, y: 0 } },
+        ...teamOf({
+          members: [{ ...LEAD }, { ...LEAD, id: 'qa', name: 'QA' }],
+        }),
         ...(stages === undefined ? {} : { stages }),
       },
     }));
   }
 
-  it('rides every save of the canvas', async () => {
+  it('rides every save', async () => {
     opens(STAGES);
     await openBuilder();
 
-    await addFromPalette('Instructions');
+    await edit();
     await wait(900);
 
     expect(savedRequests()[0]!.saveTeamDto.team.stages).toEqual(STAGES);
@@ -1246,91 +1348,58 @@ describe('Teams — a team’s stages', () => {
     opens([]);
     await openBuilder();
 
-    await addFromPalette('Instructions');
+    await edit();
     await wait(900);
     expect('stages' in savedRequests()[0]!.saveTeamDto.team).toBe(false);
   });
 
-  const canvasStages = (): HTMLElement | null =>
-    container.querySelector('[data-slot="canvas-stages"]');
-
-  async function pressInStages(label: string): Promise<void> {
-    const control = [
-      ...canvasStages()!.querySelectorAll<HTMLButtonElement>('button'),
-    ].find((button) => button.getAttribute('aria-label') === label);
-    if (control === undefined) {
-      throw new Error(`no stages control named ${label}`);
-    }
-    await act(async () => {
-      control.click();
-    });
-  }
-
-  it('draws the stage graph over the canvas', async () => {
+  it('counts the stages in the outline, and offers to add them when there are none', async () => {
     opens(STAGES);
     await openBuilder();
-    await settleStageGraphs(container);
-
     expect(
-      canvasStages()
-        ?.querySelector('[data-slot="stage-graph-canvas"]')
-        ?.getAttribute('aria-label'),
-    ).toBe('Stages: Plan → Build');
-    expect(canvasStages()!.textContent).toContain('2 stages');
-  });
+      container.querySelector('[data-slot="team-stages-count"]')!.textContent,
+    ).toBe('2 stages');
 
-  it('draws nothing over the canvas for a team without stages', async () => {
     opens(undefined);
-    await openBuilder();
-
-    expect(canvasStages()).toBeNull();
+    await press('Back to library');
+    await press('Open Dev Team');
+    expect(
+      container.querySelector('[data-slot="team-stages-count"]')!.textContent,
+    ).toBe('No stages');
+    expect(
+      [...container.querySelectorAll('button')].some(
+        (button) => button.textContent?.trim() === 'Add stages',
+      ),
+    ).toBe(true);
   });
 
-  it('folds the stage graph away and remembers it', async () => {
+  it('offers the team’s members as a stage’s Responsible', async () => {
     opens(STAGES);
     await openBuilder();
-    await act(async () => {
-      canvasStages()!
-        .querySelector<HTMLButtonElement>('button[aria-expanded]')!
-        .click();
-    });
+
+    await press('Edit stages');
+    await press('Add a responsible member');
 
     expect(
-      canvasStages()!.querySelector('[data-slot="stage-graph"]'),
-    ).toBeNull();
-    expect(window.localStorage.getItem('geniro.builder.stagesOpen')).toBe('0');
+      [...document.body.querySelectorAll('[role="option"]')].map(
+        (option) => option.textContent,
+      ),
+    ).toEqual(['Lead', 'QA']);
   });
 
-  it('leaves the chat to the header toggle: the stage panel has no chat button', async () => {
-    client = fakeClient();
+  it('saves stages edited in the editor through autosave', async () => {
     opens(STAGES);
     await openBuilder();
 
-    const labels = [...canvasStages()!.querySelectorAll('button')].map(
-      (button) => button.getAttribute('aria-label') ?? button.textContent,
-    );
-    expect(labels).toEqual(['Edit stages', 'Hide the stage graph']);
-  });
-
-  it('opens the stage editor on the stage pressed in the graph', async () => {
-    opens(STAGES);
-    await openBuilder();
-    await settleStageGraphs(container);
-
-    await act(async () => {
-      canvasStages()!
-        .querySelector<HTMLElement>(
-          '[data-slot="stage-pill"][data-stage-id="build"]',
-        )!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
+    await press('Edit stages');
     const htmlFor = [...document.querySelectorAll('label')].find(
       (label) => label.textContent === 'Title',
     )!.htmlFor;
-    expect((document.getElementById(htmlFor) as HTMLInputElement).value).toBe(
-      'Build',
-    );
+    await type(document.getElementById(htmlFor) as HTMLInputElement, 'Plan it');
+    await press('Done');
+    await wait(900);
+
+    expect(lastSaved().stages?.[0]?.title).toBe('Plan it');
   });
 
   it('keeps what the user already typed and puts the stage request after it', async () => {
@@ -1342,13 +1411,7 @@ describe('Teams — a team’s stages', () => {
     const composer = panel()!.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Ask for a team change"]',
     )!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        'value',
-      )!.set!.call(composer, 'Rename the coder. ');
-      composer.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    await type(composer, 'Rename the coder. ');
 
     await menuRow('Edit name and description');
     const dialogAsk = [
@@ -1379,34 +1442,161 @@ describe('Teams — a team’s stages', () => {
     expect(composer.value).toBe('Add stages every run of this team walks: ');
     expect(document.activeElement).toBe(composer);
   });
+});
 
-  it('saves stages edited from the canvas through autosave', async () => {
-    opens(STAGES);
+describe('Teams — a member’s always-on instruction size', () => {
+  beforeEach(() => {
+    getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      team: teamOf({
+        members: [
+          { ...LEAD },
+          { ...LEAD, id: 'manager', name: 'Manager', role: 'ROLE' },
+        ],
+        instructionBlocks: [
+          {
+            id: 'settings',
+            title: 'Team Settings',
+            text: 'TEAM',
+            audience: ['manager'],
+          },
+        ],
+      }),
+      hash: 'loaded-1',
+    }));
+    measureInstructionSizes.mockImplementation(async () => ({
+      members: [
+        {
+          memberId: 'manager',
+          agent: 'claude',
+          turn: 'own',
+          totalChars: 2_412,
+          approxTokens: 603,
+          separatorChars: 4,
+          parts: [
+            { source: 'preamble', chars: 2_400, approxTokens: 600 },
+            {
+              source: 'instructionBlocks',
+              blockId: 'settings',
+              chars: 4,
+              approxTokens: 1,
+            },
+            { source: 'instructions', chars: 4, approxTokens: 1 },
+          ],
+        },
+      ],
+    }));
+  });
+
+  async function selectManager(): Promise<void> {
     await openBuilder();
+    await selectMember('manager');
+    // The measurement is debounced behind a change.
+    await wait(700);
+  }
 
-    await pressInStages('Edit stages');
-    const htmlFor = [...document.querySelectorAll('label')].find(
-      (label) => label.textContent === 'Title',
-    )!.htmlFor;
-    const title = document.getElementById(htmlFor) as HTMLInputElement;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        'value',
-      )!.set!.call(title, 'Plan it');
-      title.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    await press('Done');
-    await wait(900);
+  it('measures the team and shows the daemon’s figure for the selected member', async () => {
+    await selectManager();
 
-    expect(savedRequests().at(-1)!.saveTeamDto.team.stages?.[0]?.title).toBe(
-      'Plan it',
+    const [request] = measureInstructionSizes.mock.calls.at(-1) as [
+      { measureInstructionSizesDto: { team: Team } },
+    ];
+    expect(
+      request.measureInstructionSizesDto.team.members.map((m) => m.id),
+    ).toEqual(['lead', 'manager']);
+    const card = container.querySelector('[data-slot="instruction-size"]');
+    expect(card?.textContent).toContain('~603 tokens');
+    expect(card?.textContent).toContain('2,412 characters');
+    // A block's row is named by the block's own title.
+    expect(card?.textContent).toContain('Team Settings4~1');
+  });
+
+  const lastRequest = () =>
+    (
+      measureInstructionSizes.mock.calls.at(-1) as [
+        {
+          measureInstructionSizesDto: {
+            team: Team;
+            customInstructions?: string;
+          };
+        },
+      ]
+    )[0].measureInstructionSizesDto;
+
+  it('measures an unsaved edit, and keeps the last figures up when the daemon refuses one', async () => {
+    await selectManager();
+    measureInstructionSizes.mockRejectedValueOnce(
+      new Error(
+        'daemon POST /v1/teams/instruction-sizes failed (400): {"code":"VALIDATION","message":"role is invalid"}',
+      ),
     );
+
+    await type(container.querySelector('#member-role'), 'A NEW ROLE');
+    await wait(700);
+
+    const manager = lastRequest().team.members.find(
+      (member) => member.id === 'manager',
+    );
+    expect(manager?.role).toBe('A NEW ROLE');
+    const card = container.querySelector('[data-slot="instruction-size"]');
+    expect(card?.textContent).toContain('~603 tokens');
+    expect(card?.textContent).toContain('Not measured:');
+    expect(card?.textContent).toContain('role is invalid');
+  });
+
+  it('measures again with the Settings as they now stand when the screen comes back', async () => {
+    await selectManager();
+    const asked = measureInstructionSizes.mock.calls.length;
+    await window.geniro.updateSettings({ customInstructions: 'NEW RULES' });
+
+    await paint(false);
+    await paint(true);
+    await wait(700);
+
+    expect(measureInstructionSizes.mock.calls.length).toBe(asked + 1);
+    expect(lastRequest().customInstructions).toBe('NEW RULES');
+  });
+
+  it('measures again when main announces a settings write, with the Settings as they now stand', async () => {
+    let announce: (() => void) | null = null;
+    window.geniro = createPreloadStub({
+      onSettingsChanged: (listener) => {
+        announce = listener;
+        return () => {
+          announce = null;
+        };
+      },
+    });
+    await selectManager();
+    const asked = measureInstructionSizes.mock.calls.length;
+    // Written by a paired phone: the Mac window never loses focus.
+    await window.geniro.updateSettings({ replyLanguage: 'Russian' });
+
+    await act(async () => {
+      announce?.();
+    });
+    await wait(700);
+
+    expect(measureInstructionSizes.mock.calls.length).toBe(asked + 1);
+    expect(
+      (
+        measureInstructionSizes.mock.calls.at(-1) as [
+          { measureInstructionSizesDto: { replyLanguage?: string } },
+        ]
+      )[0].measureInstructionSizesDto.replyLanguage,
+    ).toBe('Russian');
+  });
+
+  it('asks nothing while no member is selected', async () => {
+    await openBuilder();
+    await wait(700);
+
+    expect(measureInstructionSizes).not.toHaveBeenCalled();
   });
 });
 
 describe('Teams — deleting from the builder', () => {
-  // The delete cleared the canvas and nothing else: the dock stayed open, so
+  // The delete cleared the editor and nothing else: the dock stayed open, so
   // the next team opened with it drawn — and a conversation about it
   // started that nobody asked for.
   it('leaves no chat dock behind for the next team opened', async () => {
@@ -1433,9 +1623,8 @@ describe('Teams — the builder header', () => {
 
   it('shows TWO controls — the chat toggle, and one overflow', async () => {
     // REPORTED as "они сейчас какие-то большие, их слишком много… сделать их
-    // какими-то отдельными иконками или более понятными". Auto-layout, Export,
-    // rename and delete were five labelled outline buttons across the header;
-    // four of them are commands pressed once a session.
+    // какими-то отдельными иконками или более понятными": the commands are
+    // pressed once a session.
     await openBuilder();
 
     const header = container.querySelector('h2')!.parentElement!;
@@ -1460,7 +1649,6 @@ describe('Teams — the builder header', () => {
     await press('Team actions');
 
     expect(menuRows()).toEqual([
-      'Auto-layout',
       'Export…',
       'Edit name and description',
       'Versions…',
@@ -1532,7 +1720,7 @@ describe('Teams — the builder header', () => {
     expect(document.body.textContent).toContain("This team hasn't run yet");
   });
 
-  it('restores a version quoting the hash the canvas was read at, then reads the file back', async () => {
+  it('restores a version quoting the hash the team was read at, then reads the file back', async () => {
     readTeamVersions.mockImplementation(async () => DEV_TEAM_VERSIONS);
     restoreTeamVersion.mockReset().mockImplementation(async () => ({
       slug: 'dev-team',
@@ -1557,11 +1745,11 @@ describe('Teams — the builder header', () => {
     });
     expect(getTeam.mock.calls.length).toBe(readsBefore + 1);
     expect(container.querySelector('footer')?.textContent).toContain(
-      'Restored version #1. The graph it replaced is backed up at .backups/dev-team.2026-10-27T10-00-00.yaml.',
+      'Restored version #1. The team it replaced is backed up at .backups/dev-team.2026-10-27T10-00-00.yaml.',
     );
   });
 
-  it('raises the stale-copy banner when a restore meets a file changed since the canvas read it', async () => {
+  it('raises the stale-copy banner when a restore meets a file changed since the team was read', async () => {
     readTeamVersions.mockImplementation(async () => DEV_TEAM_VERSIONS);
     restoreTeamVersion.mockReset().mockImplementation(async () => {
       throw new Error(
@@ -1600,7 +1788,7 @@ describe('Teams — the builder header', () => {
 });
 
 describe('first team from onboarding', () => {
-  it('creates the example once, then opens its graph without starting a run', async () => {
+  it('creates the example once, then opens it without starting a run', async () => {
     const launch: TeamLaunch = {
       route: 'team',
       agent: 'codex',
@@ -1619,10 +1807,10 @@ describe('first team from onboarding', () => {
     expect(openTeamChat).not.toHaveBeenCalled();
   });
 
-  it('opens an empty graph for manual setup and waits until the view is active', async () => {
+  it('creates a one-member team for manual setup, on the chosen CLI, once the view is active', async () => {
     const launch: TeamLaunch = {
       route: 'team',
-      agent: 'claude',
+      agent: 'codex',
       teamMethod: 'graph',
       brief: '',
     };
@@ -1631,7 +1819,15 @@ describe('first team from onboarding', () => {
     await paint(true, launch);
     expect(createTeam).toHaveBeenCalledWith({
       createTeamDto: {
-        team: { name: 'My first team', nodes: [], edges: [] },
+        team: {
+          name: 'My first team',
+          mode: 'lead',
+          members: [
+            { id: 'member-1', name: 'Lead', agent: 'codex', approval: 'auto' },
+          ],
+          triggers: [{ kind: 'first-message', member: 'member-1' }],
+          instructionBlocks: [],
+        },
       },
     });
     expect(openTeamChat).not.toHaveBeenCalled();
@@ -1643,8 +1839,8 @@ describe('Teams — a team another screen asked to open', () => {
     slug: 'review-pair',
     name: 'Review Pair',
     description: null,
-    nodeCount: 3,
-    edgeCount: 2,
+    memberCount: 3,
+    stageCount: 2,
     agentCounts: [],
     updatedAt: '2026-10-21T10:00:00.000Z',
   };
@@ -1674,9 +1870,9 @@ describe('Teams — a team another screen asked to open', () => {
       );
     });
     await openBuilder();
-    await addFromPalette('Manual');
+    await edit();
     await wait(900);
-    const nodesBefore = canvasNodeIds();
+    const membersBefore = memberIds();
     listTeams.mockImplementation(async () => [
       summary('dev-team', 'Dev Team'),
       SAVED,
@@ -1688,9 +1884,9 @@ describe('Teams — a team another screen asked to open', () => {
       onHandled,
     });
 
-    // The held edit is still on the canvas, behind the leave question.
+    // The held edit is still in the editor, behind the leave question.
     expect(document.body.textContent).toContain('Leave without saving?');
-    expect(canvasNodeIds()).toEqual(nodesBefore);
+    expect(memberIds()).toEqual(membersBefore);
     expect(getTeam).not.toHaveBeenCalledWith({ slug: 'review-pair' });
 
     await press('Discard changes');
@@ -1770,7 +1966,7 @@ describe('Teams — a team another screen asked to open', () => {
       );
     });
     await openBuilder();
-    await addFromPalette('Manual');
+    await edit();
     await wait(900);
     listTeams.mockImplementation(async () => [summary('dev-team', 'Dev Team')]);
     await paint(true, undefined, undefined, {
@@ -1852,7 +2048,7 @@ describe('Teams — a team another screen asked to open', () => {
 /**
  * An analysis can save the team the builder has open. The builder's saves
  * quote the version they were made from, and one made from a stale copy is
- * refused rather than writing the old canvas back over the applied change.
+ * refused rather than writing the old copy back over the applied change.
  */
 describe('Teams — a save over a file changed outside the builder', () => {
   beforeEach(() => {
@@ -1867,7 +2063,7 @@ describe('Teams — a save over a file changed outside the builder', () => {
     });
     await openBuilder();
 
-    await addFromPalette('Manual');
+    await edit();
     await wait(900);
 
     expect(savedRequests()).toHaveLength(1);
@@ -1876,7 +2072,7 @@ describe('Teams — a save over a file changed outside the builder', () => {
       'This team changed outside the builder',
     );
 
-    await addFromPalette('Manual');
+    await edit();
     await wait(900);
     expect(savedRequests()).toHaveLength(1);
 
@@ -1891,9 +2087,9 @@ describe('Teams — a save over a file changed outside the builder', () => {
   it('quotes the version its own last save returned on the next save', async () => {
     await openBuilder();
 
-    await addFromPalette('Manual');
+    await edit();
     await wait(900);
-    await addFromPalette('Manual');
+    await edit();
     await wait(900);
 
     expect(savedRequests().map((r) => r.saveTeamDto.baseHash)).toEqual([
@@ -1915,186 +2111,10 @@ describe('Teams — a save over a file changed outside the builder', () => {
       hash: 'reread-2',
     }));
 
-    await addFromPalette('Manual');
+    await edit();
     await endTurn('done-1');
     await wait(900);
 
     expect(savedRequests().at(-1)!.saveTeamDto.baseHash).toBe('reread-2');
-  });
-});
-
-describe('Teams — an agent node’s always-on instruction size', () => {
-  beforeEach(() => {
-    getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
-      slug,
-      team: {
-        ...EMPTY,
-        nodes: [
-          {
-            id: 'settings',
-            name: 'Team Settings',
-            kind: 'instruction',
-            instructions: 'TEAM',
-          },
-          {
-            id: 'manager',
-            name: 'Manager',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
-            role: 'ROLE',
-          },
-        ],
-        edges: [{ from: 'settings', to: 'manager', kind: 'instruction' }],
-        layout: { settings: { x: 0, y: 200 }, manager: { x: 0, y: 0 } },
-      },
-      hash: 'loaded-1',
-    }));
-    measureInstructionSizes.mockImplementation(async () => ({
-      nodes: [
-        {
-          nodeId: 'manager',
-          agent: 'claude',
-          turn: 'own',
-          totalChars: 2_412,
-          approxTokens: 603,
-          separatorChars: 4,
-          parts: [
-            { source: 'preamble', chars: 2_400, approxTokens: 600 },
-            {
-              source: 'instructionBlocks',
-              instructionNodeId: 'settings',
-              chars: 4,
-              approxTokens: 1,
-            },
-            { source: 'role', chars: 4, approxTokens: 1 },
-          ],
-        },
-      ],
-    }));
-  });
-
-  async function selectManager(): Promise<void> {
-    await openBuilder();
-    const node = container.querySelector<HTMLElement>(
-      '.react-flow__node[data-id="manager"]',
-    );
-    await act(async () => {
-      node?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    // The measurement is debounced behind a canvas change.
-    await wait(700);
-  }
-
-  it('measures the team and shows the daemon’s figure for the selected agent', async () => {
-    await selectManager();
-
-    const [request] = measureInstructionSizes.mock.calls.at(-1) as [
-      { measureInstructionSizesDto: { team: Team } },
-    ];
-    expect(
-      request.measureInstructionSizesDto.team.nodes.map((n) => n.id),
-    ).toEqual(['settings', 'manager']);
-    const card = container.querySelector('[data-slot="instruction-size"]');
-    expect(card?.textContent).toContain('~603 tokens');
-    expect(card?.textContent).toContain('2,412 characters');
-    // A wired block's row is named by the canvas's instruction node.
-    expect(card?.textContent).toContain('Team Settings4~1');
-  });
-
-  /** Type into the selected node's role box the way React hears it. */
-  async function typeRole(text: string): Promise<void> {
-    const area = container.querySelector<HTMLTextAreaElement>('#node-role');
-    const setValue = Object.getOwnPropertyDescriptor(
-      HTMLTextAreaElement.prototype,
-      'value',
-    )!.set!;
-    await act(async () => {
-      setValue.call(area, text);
-      area?.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-  }
-
-  const lastRequest = () =>
-    (
-      measureInstructionSizes.mock.calls.at(-1) as [
-        {
-          measureInstructionSizesDto: {
-            team: Team;
-            customInstructions?: string;
-          };
-        },
-      ]
-    )[0].measureInstructionSizesDto;
-
-  it('measures an unsaved edit, and keeps the last figures up when the daemon refuses one', async () => {
-    await selectManager();
-    measureInstructionSizes.mockRejectedValueOnce(
-      new Error(
-        'daemon POST /v1/teams/instruction-sizes failed (400): {"code":"VALIDATION","message":"role is invalid"}',
-      ),
-    );
-
-    await typeRole('A NEW ROLE');
-    await wait(700);
-
-    const manager = lastRequest().team.nodes.find(
-      (node) => node.id === 'manager',
-    );
-    expect(manager?.kind === 'agent' ? manager.role : null).toBe('A NEW ROLE');
-    const card = container.querySelector('[data-slot="instruction-size"]');
-    expect(card?.textContent).toContain('~603 tokens');
-    expect(card?.textContent).toContain('Not measured:');
-    expect(card?.textContent).toContain('role is invalid');
-  });
-
-  it('measures again with the Settings as they now stand when the screen comes back', async () => {
-    await selectManager();
-    const asked = measureInstructionSizes.mock.calls.length;
-    await window.geniro.updateSettings({ customInstructions: 'NEW RULES' });
-
-    await paint(false);
-    await paint(true);
-    await wait(700);
-
-    expect(measureInstructionSizes.mock.calls.length).toBe(asked + 1);
-    expect(lastRequest().customInstructions).toBe('NEW RULES');
-  });
-
-  it('measures again when main announces a settings write, with the Settings as they now stand', async () => {
-    let announce: (() => void) | null = null;
-    window.geniro = createPreloadStub({
-      onSettingsChanged: (listener) => {
-        announce = listener;
-        return () => {
-          announce = null;
-        };
-      },
-    });
-    await selectManager();
-    const asked = measureInstructionSizes.mock.calls.length;
-    // Written by a paired phone: the Mac window never loses focus.
-    await window.geniro.updateSettings({ replyLanguage: 'Russian' });
-
-    await act(async () => {
-      announce?.();
-    });
-    await wait(700);
-
-    expect(measureInstructionSizes.mock.calls.length).toBe(asked + 1);
-    expect(
-      (
-        measureInstructionSizes.mock.calls.at(-1) as [
-          { measureInstructionSizesDto: { replyLanguage?: string } },
-        ]
-      )[0].measureInstructionSizesDto.replyLanguage,
-    ).toBe('Russian');
-  });
-
-  it('asks nothing while no agent is selected', async () => {
-    await openBuilder();
-    await wait(700);
-
-    expect(measureInstructionSizes).not.toHaveBeenCalled();
   });
 });

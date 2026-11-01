@@ -15,8 +15,8 @@ const state = (calls: number): RunStateDto => ({
   openRequests: [],
   calls: Array.from({ length: calls }, (_, index) => ({
     callId: `call-${index}`,
-    callerNodeId: null,
-    calleeNodeId: null,
+    callerMemberId: null,
+    calleeMemberId: null,
     title: null,
     brief: null,
     mode: null,
@@ -203,7 +203,7 @@ describe('useRunState', () => {
       delegates: [
         {
           id: 'toolu_d',
-          nodeId: null,
+          memberId: null,
           callId: null,
           label: null,
           kind: null,
@@ -248,7 +248,7 @@ describe('useRunState', () => {
         {
           id: 'row-sh',
           runId: 'r1',
-          nodeId: null,
+          memberId: null,
           seq: 9,
           kind: 'tool_call',
           role: null,
@@ -273,7 +273,7 @@ describe('useRunState', () => {
     const listedRow = (id: string, name: string): ChatItem => ({
       id: `row-${id}`,
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq: 1,
       kind: 'tool_call',
       role: null,
@@ -312,7 +312,7 @@ describe('useRunState', () => {
     // lists every delegate), so only the reset on asking ends the re-reads.
     const delegate = {
       id: 'toolu_d',
-      nodeId: null,
+      memberId: null,
       callId: null,
       label: null,
       kind: null,
@@ -352,7 +352,7 @@ describe('useRunState', () => {
         delegates: [
           {
             id: 'toolu_d',
-            nodeId: null,
+            memberId: null,
             callId: null,
             label: null,
             kind: null,

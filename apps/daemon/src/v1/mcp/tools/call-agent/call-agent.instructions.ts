@@ -8,8 +8,8 @@ import {
 /**
  * What a model reads about `call_agent`.
  *
- * `callable` is the one-line roster of this node's callees
- * (`calleeSummary`, joined) — each callee's own description is the routing
+ * `callable` is the one-line roster of this member's callees
+ * (`calleeSummary`, joined) — each callee's public role is the routing
  * signal, so no role has to carry a hand-written roster. `answeringACall` is
  * true when the asker is itself a callee, answering a call.
  */
@@ -18,7 +18,7 @@ export function callAgentInstructions(
   answeringACall: boolean,
 ): string {
   return (
-    `Invoke one of your call-wired agents and get its result envelope. Callable now: ${callable}. ` +
+    `Invoke another member of your team and get its result envelope. Callable now: ${callable}. A member waiting on your own answer cannot be called. ` +
     'Choose by what each agent says it does; when none of them fits the task, do it yourself or ask the user rather than forcing it on the closest one. ' +
     'PREFER mode "async" for any task that is not a quick lookup: a sync call blocks you for the whole of the callee\'s work, and you are the one the user and your other callees are waiting on. ' +
     'After an async call you do NOT wait for it: carry on with other work, launch more calls in parallel, or END YOUR TURN — when a callee finishes or asks you a question after your turn has ended, you are started again with a message naming the call, and you collect it with await_agent. ' +

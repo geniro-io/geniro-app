@@ -109,12 +109,12 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     });
 
     /** Read back through a FRESH fork, so the answer is the stored row. */
-    const stored = (nodeId: string): Promise<NodeState | null> =>
-      new NodeStateDao(orm.em.fork()).getByRunNode('run-1', nodeId);
+    const stored = (memberId: string): Promise<NodeState | null> =>
+      new NodeStateDao(orm.em.fork()).getByRunNode('run-1', memberId);
 
     it('stamps the model on a row the transition CREATES', async () => {
       // `setStatus` accepted `model` and wrote it on neither path, so every
-      // team node read back null — Stats filed all team spend under
+      // team member read back null — Stats filed all team spend under
       // "no model" and a chat export named none.
       await dao.setStatus('run-1', 'node-a', {
         status: 'running',
@@ -180,7 +180,7 @@ describe('NodeStateDao (in-memory sqlite)', () => {
 
       expect(nativeUpdateSpy).toHaveBeenCalledTimes(1);
       expect(nativeUpdateSpy).toHaveBeenCalledWith(
-        { runId: 'run-1', nodeId: 'node-a' },
+        { runId: 'run-1', memberId: 'node-a' },
         {
           contextTokens: 500,
           contextEstimated: null,
@@ -264,10 +264,10 @@ describe('NodeStateDao (in-memory sqlite)', () => {
   });
 
   describe('saveSessionId', () => {
-    // `agentSessionId` is overwritten by every turn, and a node answers each
+    // `agentSessionId` is overwritten by every turn, and a member answers each
     // call in a conversation of its own — the history is the only record of
     // the earlier ones, which the polled-spend poll prices from.
-    it('keeps every session the node has run in, not only the latest', async () => {
+    it('keeps every session the member has run in, not only the latest', async () => {
       await dao.saveSessionId('run-1', 'node-a', 'conv-1');
       await dao.saveSessionId('run-1', 'node-a', 'conv-2');
       await dao.saveSessionId('run-1', 'node-a', 'conv-1');
@@ -283,10 +283,10 @@ describe('NodeStateDao (in-memory sqlite)', () => {
       ]);
     });
 
-    // Two calls to one node run in parallel and each saves its own session;
+    // Two calls to one member run in parallel and each saves its own session;
     // a read-then-write per save let the second drop the first — and that
     // conversation is then never priced, the saver never saving it again.
-    it('loses neither session when two saves for one node land together', async () => {
+    it('loses neither session when two saves for one member land together', async () => {
       await dao.createPending('run-1', 'node-a');
 
       await Promise.all([
@@ -312,7 +312,7 @@ describe('NodeStateDao (in-memory sqlite)', () => {
       new NodeStateDao(orm.em.fork()).getByRunNode('run-1', 'node-a');
 
     it('REPLACES the ledger and its totals rather than adding to them', async () => {
-      // The ledger is the whole truth about the node's conversations, re-read
+      // The ledger is the whole truth about the member's conversations, re-read
       // from the account each poll; an add would count a revised charge twice.
       await dao.createPending('run-1', 'node-a');
 
@@ -350,7 +350,7 @@ describe('NodeStateDao (in-memory sqlite)', () => {
   });
 
   describe('polledSharesForRuns', () => {
-    it('answers only the priced nodes of the runs asked about', async () => {
+    it('answers only the priced members of the runs asked about', async () => {
       await dao.createPending('run-1', 'node-a');
       await dao.createPending('run-1', 'node-b');
       await dao.createPending('run-2', 'node-c');
@@ -372,7 +372,7 @@ describe('NodeStateDao (in-memory sqlite)', () => {
       expect(
         shares.map((share) => [
           share.runId,
-          share.nodeId,
+          share.memberId,
           share.polledCostCents,
         ]),
       ).toEqual([['run-1', 'node-a', 40]]);
@@ -383,7 +383,7 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     it('SUMS across turns rather than replacing — the whole difference from rememberContext', async () => {
       // The one assertion that separates an accumulator from the last-write-wins
       // shape beside it: under a `data.workedMs = workedMs` writer this reads
-      // 300/2 — the last turn's work reported as the node's whole history.
+      // 300/2 — the last turn's work reported as the member's whole history.
       await dao.createPending('run-1', 'node-a');
 
       await dao.rememberWork('run-1', 'node-a', 500, 3);
@@ -400,7 +400,7 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     it('a turn reporting no timing leaves the time already counted alone', async () => {
       // Every ACP agent reports no duration, so this is the ordinary case rather
       // than a degenerate one: the tool count must still accumulate while the
-      // clock stands, or a cursor node would show neither figure.
+      // clock stands, or a cursor member would show neither figure.
       await dao.createPending('run-1', 'node-a');
       await dao.rememberWork('run-1', 'node-a', 500, 3);
 

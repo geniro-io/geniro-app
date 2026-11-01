@@ -7,7 +7,7 @@ import { foldActions } from './action-fold';
 function publish(
   seq: number,
   actionId: string,
-  extra: { once?: boolean; nodeId?: string; label?: string } = {},
+  extra: { once?: boolean; memberId?: string; label?: string } = {},
 ): { kind: 'action'; seq: number; payload: string } {
   return {
     kind: 'action',
@@ -17,7 +17,7 @@ function publish(
       label: extra.label ?? actionId,
       once: extra.once ?? true,
       spec: { kind: 'message', text: `${actionId} pressed` },
-      publisher: { nodeId: extra.nodeId ?? 'agent', conversationId: '' },
+      publisher: { nodeId: extra.memberId ?? 'agent', conversationId: '' },
     }),
   };
 }
@@ -66,8 +66,8 @@ describe('foldActions', () => {
 
   it('scopes an id to its publishing conversation', () => {
     const { live } = foldActions([
-      publish(1, 'deploy', { nodeId: 'agent' }),
-      publish(2, 'deploy', { nodeId: 'reviewer' }),
+      publish(1, 'deploy', { memberId: 'agent' }),
+      publish(2, 'deploy', { memberId: 'reviewer' }),
     ]);
 
     expect(live).toHaveLength(2);

@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { RunDao } from '../../agents/dao/run.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { TeamChangeLogDao } from '../../teams/dao/team-change-log.dao';
 import { TeamChangeLogEntry } from '../../teams/entity/team-change-log-entry.entity';
 import { TeamChangeLogService } from '../../teams/services/team-change-log.service';
@@ -29,14 +30,10 @@ import type { FiledRecommendation, UsageEventInput } from '../stats.types';
 import { TeamHistoryService } from './team-history.service';
 import { TeamVersionsService } from './team-versions.service';
 
-const FIRST: Team = {
-  name: 'Dev Team',
-  nodes: [{ id: 'dev', kind: 'agent', agent: 'claude', approval: 'auto' }],
-  edges: [],
-};
+const FIRST: Team = teamOf([member('dev')], { name: 'Dev Team' });
 const SECOND: Team = {
   ...FIRST,
-  nodes: [{ ...FIRST.nodes[0]!, model: 'sonnet' } as Team['nodes'][number]],
+  members: [{ ...FIRST.members[0]!, model: 'sonnet' }],
 };
 const V1 = teamVersionOf(FIRST);
 const V2 = teamVersionOf(SECOND);
@@ -142,7 +139,7 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
     for (const [index, turn] of turns.entries()) {
       const event: UsageEventInput = {
         runId,
-        nodeId: 'dev',
+        memberId: 'dev',
         seq: index + 1,
         occurredAt: new Date(at),
         agentKind: 'claude',

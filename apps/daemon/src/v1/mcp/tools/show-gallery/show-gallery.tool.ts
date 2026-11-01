@@ -22,8 +22,8 @@ export class ShowGalleryTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.galleries.canDraw(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.galleries.canDraw(runId, memberId);
   }
 
   protected instructions(): string {
@@ -38,7 +38,7 @@ export class ShowGalleryTool extends BaseMcpTool {
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId } = context;
+    const { runId, memberId } = context;
     const requested = readHostGallery(args);
     // Null is the reader saying no entry named a file. Answered as a
     // malformed call on the chart's rule: a gallery of no pictures is only
@@ -50,7 +50,7 @@ export class ShowGalleryTool extends BaseMcpTool {
     }
     // Asked before anything is downloaded: a call that arrives after its turn
     // ended would otherwise fetch every URL for a card nobody draws.
-    if (!this.galleries.canDraw(runId, nodeId)) {
+    if (!this.galleries.canDraw(runId, memberId)) {
       return this.text(
         hostGalleryResultText({
           status: 'unavailable',
@@ -89,7 +89,7 @@ export class ShowGalleryTool extends BaseMcpTool {
         }),
       );
     }
-    const outcome = await this.galleries.draw(runId, nodeId, gallery);
+    const outcome = await this.galleries.draw(runId, memberId, gallery);
     if (outcome.status === 'unavailable') {
       this.images.discard(runId, gallery);
     }

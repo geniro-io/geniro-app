@@ -211,7 +211,7 @@ export class ChatTitleService implements OnModuleInit {
   onModuleInit(): void {
     this.bus.all().subscribe((event) => {
       // `nodeId` is the cheap half of the chat-run test and costs no query: the
-      // chat path persists null, the graph executor persists a node's id.
+      // chat path persists null, the team executor persists a member's id.
       //
       // A TEAM run is the reason this is no longer an unconditional return.
       // Its conversation happens under its NODES, so the run's own stream holds
@@ -226,11 +226,11 @@ export class ChatTitleService implements OnModuleInit {
       //
       // The gate is the same one the chat path uses one branch down, and it is
       // checked BEFORE the run is read so the cheapness this comment claims
-      // stays true: `earlyAskIsDue` is a map lookup, and only a node that has
+      // stays true: `earlyAskIsDue` is a map lookup, and only a member that has
       // demonstrably started work gets past it. `name` re-reads the run and
       // returns at once for anything that is not a team, so a chat whose
-      // item somehow carried a node id is unchanged.
-      if (event.item.nodeId !== null) {
+      // item somehow carried a member id is unchanged.
+      if (event.item.memberId !== null) {
         if (agentHasStarted(event.item) && this.earlyAskIsDue(event.runId)) {
           this.lastEarlyAskAt.set(event.runId, this.now());
           void this.name(event.runId).catch((err) => {
@@ -380,7 +380,7 @@ export class ChatTitleService implements OnModuleInit {
         return;
       }
       // A TEAM run is named from its seed prompt, then UPGRADED by asking
-      // one of its own nodes' CLIs.
+      // one of its own members' CLIs.
       //
       // It used to be skipped outright, on the reading that the team's own
       // name is already a true label. That holds for ONE run and fails for two:
@@ -395,8 +395,8 @@ export class ChatTitleService implements OnModuleInit {
       // It was then DERIVED-only, on the reading that the upgrade "needs one
       // CLI to ask; a team is N conversations and `run.agentKind` is null
       // for exactly that reason". The premise is true and the conclusion does
-      // not follow: every node STAMPS the CLI that actually ran it
-      // (`NodeState.agentKind`), so the run can name one after all — the node
+      // not follow: every member STAMPS the CLI that actually ran it
+      // (`NodeState.agentKind`), so the run can name one after all — the member
       // that started FIRST, which is the one handed the user's own task. That
       // is the reported "for teams title is not generating automatically",
       // against a row reading `review it https://github.com/ma…`, which is the
@@ -434,8 +434,8 @@ export class ChatTitleService implements OnModuleInit {
           return;
         }
         const nodeAgent = await this.nodeStateDao.firstAgentKind(run.id, em);
-        // No node has taken a turn yet, so there is no CLI to ask and nothing
-        // for one to read — the derived title stands until a node starts.
+        // No member has taken a turn yet, so there is no CLI to ask and nothing
+        // for one to read — the derived title stands until a member starts.
         if (nodeAgent === null) {
           return;
         }
@@ -513,7 +513,7 @@ export class ChatTitleService implements OnModuleInit {
      *
      * True for a chat, whose one session IS the conversation. False for a
      * team run, where the session belongs to one NODE and its title
-     * describes that node's thread rather than the run — see the team
+     * describes that member's thread rather than the run — see the team
      * branch in {@link name}.
      */
     readNative = true,
@@ -590,17 +590,15 @@ export class ChatTitleService implements OnModuleInit {
       if (run.teamId !== null) {
         const profile = await this.nodeStateDao.firstAgentProfile(run.id, em);
         const snapshot = readTeamSnapshot(run.teamSnapshot);
-        const node = snapshot?.nodes.find(
-          (entry) => entry.id === profile?.nodeId,
+        const node = snapshot?.members.find(
+          (entry) => entry.id === profile?.memberId,
         );
         if (!profile) {
           return null;
         }
-        model =
-          profile.model ??
-          (node?.kind === 'agent' ? (node.model ?? null) : null);
+        model = profile.model ?? node?.model ?? null;
         configDir =
-          node?.kind === 'agent' ? (node.configDir ?? null) : run.configDir;
+          node === undefined ? run.configDir : (node.configDir ?? null);
       }
       const title = await this.adapters.for(agentKind).generateTitle({
         opening,

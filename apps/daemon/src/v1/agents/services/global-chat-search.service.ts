@@ -48,7 +48,7 @@ export class GlobalChatSearchService {
       hits: rows.slice(0, options.limit).map((row) => ({
         runId: row.run_id,
         itemId: row.id,
-        nodeId: row.node_id,
+        memberId: row.member_id,
         title: row.title,
         cwd: row.cwd,
         archived: row.archived_at !== null,
@@ -163,7 +163,7 @@ function contextItem(row: ChatContextRow, target: boolean): ChatContextItem {
     seq: row.seq,
     kind: row.kind,
     role: row.role,
-    nodeId: row.node_id,
+    memberId: row.member_id,
     text: text.slice(0, MAX_CONTEXT_ITEM_CHARS),
     truncated: text.length > MAX_CONTEXT_ITEM_CHARS,
     createdAt: new Date(row.created_at).toISOString(),

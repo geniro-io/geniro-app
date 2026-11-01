@@ -12,7 +12,7 @@ import { McpServerService } from '../services/mcp-server.service';
  * tool dispatch, in-protocol error mapping) lives in McpServerService.
  *
  * Kept OUT of the OpenAPI document: this is a JSON-RPC channel spoken by
- * caller agents over a per-node token, not a REST resource the renderer's
+ * caller agents over a per-member token, not a REST resource the renderer's
  * generated client should ever see. Its payloads are the MCP wire protocol and
  * its handlers write through `@Res()`, so there is no response shape for
  * swagger to describe either.
@@ -22,32 +22,38 @@ import { McpServerService } from '../services/mcp-server.service';
 export class McpController {
   constructor(private readonly mcpServer: McpServerService) {}
 
-  @Post(':runId/:nodeId')
+  @Post(':runId/:memberId')
   async handle(
     @Param('runId') runId: string,
-    @Param('nodeId') nodeId: string,
+    @Param('memberId') memberId: string,
     @Req() req: FastifyRequest,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    await this.mcpServer.handlePost(runId, nodeId, req, reply);
+    await this.mcpServer.handlePost(runId, memberId, req, reply);
   }
 
   /**
-   * The same endpoint for one CONVERSATION of the node — what every turn that
+   * The same endpoint for one CONVERSATION of the member — what every turn that
    * answers a call is handed, so the calls it makes are owned by that call's
-   * conversation rather than by the node. The per-node call token opens it
-   * exactly as it opens the node's own route (the guard binds the first two
+   * conversation rather than by the member. The per-member call token opens it
+   * exactly as it opens the member's own route (the guard binds the first two
    * segments).
    */
-  @Post(':runId/:nodeId/:conversationId')
+  @Post(':runId/:memberId/:conversationId')
   async handleConversation(
     @Param('runId') runId: string,
-    @Param('nodeId') nodeId: string,
+    @Param('memberId') memberId: string,
     @Param('conversationId') conversationId: string,
     @Req() req: FastifyRequest,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    await this.mcpServer.handlePost(runId, nodeId, req, reply, conversationId);
+    await this.mcpServer.handlePost(
+      runId,
+      memberId,
+      req,
+      reply,
+      conversationId,
+    );
   }
 
   /**
@@ -58,25 +64,25 @@ export class McpController {
    * filter. `@All` is worse — it re-registers POST and trips Fastify's
    * duplicate-route check.
    */
-  @Get(':runId/:nodeId')
+  @Get(':runId/:memberId')
   getNotAllowed(@Res() reply: FastifyReply): void {
     this.mcpServer.methodNotAllowed(reply);
   }
 
   /** DELETE (session teardown) is 405 — a stateless server has no session. */
-  @Delete(':runId/:nodeId')
+  @Delete(':runId/:memberId')
   deleteNotAllowed(@Res() reply: FastifyReply): void {
     this.mcpServer.methodNotAllowed(reply);
   }
 
-  /** GET on a conversation's endpoint — 405, on the node route's terms. */
-  @Get(':runId/:nodeId/:conversationId')
+  /** GET on a conversation's endpoint — 405, on the member route's terms. */
+  @Get(':runId/:memberId/:conversationId')
   getConversationNotAllowed(@Res() reply: FastifyReply): void {
     this.mcpServer.methodNotAllowed(reply);
   }
 
-  /** DELETE on a conversation's endpoint — 405, on the node route's terms. */
-  @Delete(':runId/:nodeId/:conversationId')
+  /** DELETE on a conversation's endpoint — 405, on the member route's terms. */
+  @Delete(':runId/:memberId/:conversationId')
   deleteConversationNotAllowed(@Res() reply: FastifyReply): void {
     this.mcpServer.methodNotAllowed(reply);
   }

@@ -15,7 +15,7 @@ function note(seq: number, over: Partial<TeamNote> = {}): TeamNote {
     seq,
     kind: 'fact',
     text: `note ${seq}`,
-    nodeId: 'backend',
+    memberId: 'backend',
     conversationId: null,
     callId: null,
     createdAt: '2026-10-26T09:00:00.000Z',
@@ -29,14 +29,14 @@ const NAMES: Record<string, string> = {
   backend: 'Backend',
   manager: 'Manager',
 };
-const agentName = (nodeId: string): string => NAMES[nodeId] ?? nodeId;
+const agentName = (memberId: string): string => NAMES[memberId] ?? memberId;
 
 const LONG = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join('\n');
 const NOTES = [
   note(9, { kind: 'pitfall', text: LONG }),
   note(7, {
     kind: 'decision',
-    nodeId: 'manager',
+    memberId: 'manager',
     text: 'page by cursor',
     supersedes: 4,
   }),

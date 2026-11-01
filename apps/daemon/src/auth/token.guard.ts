@@ -52,20 +52,20 @@ function isPublic(path: string): boolean {
 }
 
 /**
- * The `(runId, nodeId)` of an MCP route (`/v1/mcp/<runId>/<nodeId>`, or one of
- * that node's conversation routes, `…/<nodeId>/<conversationId>` — the same
- * node's process, so the same token opens it), or null off that namespace /
+ * The `(runId, memberId)` of an MCP route (`/v1/mcp/<runId>/<memberId>`, or one
+ * of that member's conversation routes, `…/<memberId>/<conversationId>` — the
+ * same member's process, so the same token opens it), or null off that namespace /
  * when either segment is missing. Fastify hands the path
  * percent-encoded; decode both so the registry lookup sees the same ids the
- * executor issued the token under. Binding to the nodeId (not just the runId)
+ * executor issued the token under. Binding to the memberId (not just the runId)
  * is what stops one caller's token from opening another caller's route.
  *
  * The conversation segment is deliberately NOT checked. Every conversation of
- * one node is served by that node's own processes under the one token, so they
+ * one member is served by that member's own processes under the one token, so they
  * share one trust level: the segment keeps two conversations' calls apart for
  * CORRECTNESS (`caller-key.ts`), and is no security boundary between them.
  */
-function mcpTarget(path: string): { runId: string; nodeId: string } | null {
+function mcpTarget(path: string): { runId: string; memberId: string } | null {
   if (!path.startsWith(MCP_PREFIX)) {
     return null;
   }
@@ -77,7 +77,7 @@ function mcpTarget(path: string): { runId: string; nodeId: string } | null {
   try {
     return {
       runId: decodeURIComponent(rawRun),
-      nodeId: decodeURIComponent(rawNode),
+      memberId: decodeURIComponent(rawNode),
     };
   } catch {
     return null;
@@ -92,10 +92,10 @@ function mcpTarget(path: string): { runId: string; nodeId: string } | null {
  * other non-HTTP transport is refused). OIDC auth from @packages/http-server
  * stays dormant; this is the local single-user gate.
  *
- * The `/v1/mcp/<runId>/<nodeId>` namespace additionally accepts that caller
- * node's own call token (minted when the run starts, revoked when it settles)
+ * The `/v1/mcp/<runId>/<memberId>` namespace additionally accepts that caller
+ * member's own call token (minted when the run starts, revoked when it settles)
  * — a caller agent's credential opens exactly its own MCP route and nothing
- * else (not another node's, not another run's, not the REST API), while the
+ * else (not another member's, not another run's, not the REST API), while the
  * launch token stays the master key everywhere.
  */
 @Injectable()
@@ -133,7 +133,7 @@ export class LoopbackTokenGuard implements CanActivate {
     if (target === null) {
       return false;
     }
-    const callToken = this.callTokens.get(target.runId, target.nodeId);
+    const callToken = this.callTokens.get(target.runId, target.memberId);
     return callToken !== null && safeEqual(header, `Bearer ${callToken}`);
   }
 }

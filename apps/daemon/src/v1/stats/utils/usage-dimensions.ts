@@ -18,7 +18,7 @@ export type UsageDimensions = Pick<
 >;
 
 /**
- * What a turn ran as, read off the run and (for a graph turn) its node.
+ * What a turn ran as, read off the run and (for a team turn) its member.
  *
  * Shared by the live recorder and the boot backfill, which must produce
  * identical rows for the same turn — the backfill's whole job is to fill holes
@@ -31,14 +31,14 @@ export type UsageDimensions = Pick<
  * run: a chat delete hard-deletes the run, and a join added later would find
  * nothing.
  *
- * A graph node's own `node_state` wins over the run's fields where it has them:
- * a team run names no single agent (its `agentKind` is null) and each node
- * names its own, so reading the run alone would attribute every node's spend to
+ * A team member's own `node_state` wins over the run's fields where it has them:
+ * a team run names no single agent (its `agentKind` is null) and each member
+ * names its own, so reading the run alone would attribute every member's spend to
  * nothing. `cwd` only ever lives on the run — `node_state` stamps none — so it
  * comes from there for both shapes.
  *
  * The MODEL is the one the CLI REPORTED running the turn on, when the caller
- * has it ({@link reportedModelOf}), and the one the run or node ASKED for only
+ * has it ({@link reportedModelOf}), and the one the run or member ASKED for only
  * otherwise. The setting is null whenever a run leaves the choice to the CLI,
  * which filed 18% of a real ledger's spend under a "CLI default" row naming
  * no model at all — REPORTED as "we don't have such model". It is also an
@@ -47,15 +47,15 @@ export type UsageDimensions = Pick<
  */
 export function usageDimensions(
   run: UsageDimensionRun | null,
-  node: NodeState | null,
+  state: NodeState | null,
   reportedModel: string | null = null,
   /** The pool member the turn ran on, when its row names one (`turnMemberOf`). */
   member: TurnMember | null = null,
 ): UsageDimensions {
   return forTurn(
     {
-      agentKind: node?.agentKind ?? run?.agentKind ?? null,
-      model: node?.model ?? run?.model ?? null,
+      agentKind: state?.agentKind ?? run?.agentKind ?? null,
+      model: state?.model ?? run?.model ?? null,
       cwd: run?.cwd ?? null,
       teamName: teamNameOf(run),
     },
@@ -65,9 +65,9 @@ export function usageDimensions(
 }
 
 /**
- * One turn's dimensions over its run's or node's: the model its CLI reported,
+ * One turn's dimensions over its run's or member's: the model its CLI reported,
  * and for a turn another AGENT-POOL member ran, that member's CLI and its own
- * configured model — never member 1's, which the node row carries.
+ * configured model — never member 1's, which the member's state row carries.
  */
 export function forTurn(
   dimensions: UsageDimensions,
@@ -95,7 +95,7 @@ export function forTurn(
  * about, so one team's spend scattered into a row per conversation — and
  * into its slug for the turns before the name landed. The snapshot is taken at
  * run start, so it names the team as it was when the run ran, and it is
- * read through the graph module's own reader rather than a second parser of the
+ * read through the teams module's own reader rather than a second parser of the
  * column. The slug is the fallback for a run with no readable snapshot.
  *
  * The consequence worth knowing: renaming a team splits its history at the

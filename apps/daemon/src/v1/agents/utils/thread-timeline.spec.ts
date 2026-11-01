@@ -12,7 +12,7 @@ function tool(
   kind: ToolCallTime['kind'],
   toolId: string,
   seconds: number,
-  nodeId: string | null = 'lead',
+  memberId: string | null = 'lead',
   name: string | null = 'Bash',
   isError = false,
   delegate = false,
@@ -20,7 +20,7 @@ function tool(
   return {
     seq,
     kind,
-    nodeId,
+    memberId,
     inCall: null,
     at: s(seconds),
     toolId,
@@ -93,32 +93,32 @@ describe('foldThreadTimeline', () => {
     from: s(0),
     to: s(80),
     turns: [
-      { nodeId: 'lead', startedAt: iso(0), durationMs: 80_000 },
-      { nodeId: 'worker-a', startedAt: iso(10), durationMs: 15_000 },
-      { nodeId: 'worker-b', startedAt: iso(10), durationMs: 28_000 },
+      { memberId: 'lead', startedAt: iso(0), durationMs: 80_000 },
+      { memberId: 'worker-a', startedAt: iso(10), durationMs: 15_000 },
+      { memberId: 'worker-b', startedAt: iso(10), durationMs: 28_000 },
     ],
     calls: [
       {
-        callerNodeId: 'lead',
-        calleeNodeId: 'worker-a',
+        callerMemberId: 'lead',
+        calleeMemberId: 'worker-a',
         mode: 'sync',
         startedAt: iso(10),
         durationMs: 16_000,
       },
       {
-        callerNodeId: 'lead',
-        calleeNodeId: 'worker-b',
+        callerMemberId: 'lead',
+        calleeMemberId: 'worker-b',
         mode: 'sync',
         startedAt: iso(10),
         durationMs: 30_000,
       },
     ],
-    waits: [{ nodeId: 'lead', startedAt: iso(45), durationMs: 20_000 }],
+    waits: [{ memberId: 'lead', startedAt: iso(45), durationMs: 20_000 }],
   };
 
-  it("splits each node's turn time into its own work, callee waits and user waits", () => {
+  it("splits each member's turn time into its own work, callee waits and user waits", () => {
     const timeline = foldThreadTimeline(spans, []);
-    const lead = timeline.nodes.find((node) => node.nodeId === 'lead');
+    const lead = timeline.nodes.find((node) => node.memberId === 'lead');
 
     expect(lead).toMatchObject({
       inTurnsMs: 80_000,
@@ -136,7 +136,7 @@ describe('foldThreadTimeline', () => {
     expect(
       timeline.criticalPath.map((segment) => [
         segment.kind,
-        segment.nodeId,
+        segment.memberId,
         segment.durationMs,
       ]),
     ).toEqual([
@@ -149,12 +149,12 @@ describe('foldThreadTimeline', () => {
     ]);
     expect(timeline.criticalPathMs).toBe(58_000);
     expect(timeline.sinks).toEqual([
-      { nodeId: 'lead', ms: 30_000 },
-      { nodeId: 'worker-b', ms: 28_000 },
+      { memberId: 'lead', ms: 30_000 },
+      { memberId: 'worker-b', ms: 28_000 },
     ]);
   });
 
-  it('totals tool time per node and tool, longest first', () => {
+  it('totals tool time per member and tool, longest first', () => {
     const timeline = foldThreadTimeline(
       spans,
       pairToolCalls(
@@ -172,7 +172,7 @@ describe('foldThreadTimeline', () => {
     );
 
     expect(timeline.toolTotals[0]).toEqual({
-      nodeId: 'worker-b',
+      memberId: 'worker-b',
       name: 'Bash',
       delegate: false,
       calls: 2,
@@ -181,16 +181,16 @@ describe('foldThreadTimeline', () => {
       failed: 1,
     });
     expect(
-      timeline.nodes.find((node) => node.nodeId === 'worker-b'),
+      timeline.nodes.find((node) => node.memberId === 'worker-b'),
     ).toMatchObject({ toolCalls: 2, toolMs: 23_000 });
   });
 
-  it('counts a node’s sub-agent tool calls apart from its own', () => {
+  it('counts a member’s sub-agent tool calls apart from its own', () => {
     const timeline = foldThreadTimeline(
       {
         from: s(0),
         to: s(60),
-        turns: [{ nodeId: 'lead', startedAt: iso(0), durationMs: 60_000 }],
+        turns: [{ memberId: 'lead', startedAt: iso(0), durationMs: 60_000 }],
         calls: [],
         waits: [],
       },
@@ -237,18 +237,18 @@ describe('thread timeline edge cases', () => {
       {
         from: s(0),
         to: s(60),
-        turns: [{ nodeId: 'lead', startedAt: iso(0), durationMs: 60_000 }],
+        turns: [{ memberId: 'lead', startedAt: iso(0), durationMs: 60_000 }],
         calls: [
           {
-            callerNodeId: 'lead',
-            calleeNodeId: 'worker',
+            callerMemberId: 'lead',
+            calleeMemberId: 'worker',
             mode: null,
             startedAt: iso(10),
             durationMs: 20_000,
           },
           {
-            callerNodeId: 'lead',
-            calleeNodeId: 'other',
+            callerMemberId: 'lead',
+            calleeMemberId: 'other',
             mode: 'async',
             startedAt: iso(30),
             durationMs: 20_000,
@@ -260,7 +260,8 @@ describe('thread timeline edge cases', () => {
     );
 
     expect(
-      timeline.nodes.find((node) => node.nodeId === 'lead')?.waitingOnCalleeMs,
+      timeline.nodes.find((node) => node.memberId === 'lead')
+        ?.waitingOnCalleeMs,
     ).toBe(20_000);
   });
 
@@ -271,7 +272,7 @@ describe('thread timeline edge cases', () => {
       {
         from: s(0),
         to: s(10),
-        turns: [{ nodeId: null, startedAt: iso(-50), durationMs: 60_000 }],
+        turns: [{ memberId: null, startedAt: iso(-50), durationMs: 60_000 }],
         calls: [],
         waits: [],
       },
@@ -282,7 +283,7 @@ describe('thread timeline edge cases', () => {
     expect(timeline.criticalPath[0]?.startMs).toBe(s(0));
   });
 
-  it('pairs a tool id two nodes both used within each node only', () => {
+  it('pairs a tool id two members both used within each member only', () => {
     const spans = pairToolCalls(
       [
         tool(1, 'tool_call', 'call_1', 0, 'a'),
@@ -294,7 +295,7 @@ describe('thread timeline edge cases', () => {
       false,
     );
 
-    expect(spans.map((span) => [span.nodeId, span.durationMs])).toEqual([
+    expect(spans.map((span) => [span.memberId, span.durationMs])).toEqual([
       ['a', 5_000],
       ['b', 29_000],
     ]);
@@ -308,14 +309,14 @@ describe('thread timeline edge cases', () => {
         from: s(0),
         to: s(100),
         turns: [
-          { nodeId: 'lead', startedAt: iso(0), durationMs: 30_000 },
-          { nodeId: 'worker', startedAt: iso(5), durationMs: 85_000 },
-          { nodeId: 'lead', startedAt: iso(91), durationMs: 9_000 },
+          { memberId: 'lead', startedAt: iso(0), durationMs: 30_000 },
+          { memberId: 'worker', startedAt: iso(5), durationMs: 85_000 },
+          { memberId: 'lead', startedAt: iso(91), durationMs: 9_000 },
         ],
         calls: [
           {
-            callerNodeId: 'lead',
-            calleeNodeId: 'worker',
+            callerMemberId: 'lead',
+            calleeMemberId: 'worker',
             mode: 'async',
             startedAt: iso(5),
             durationMs: 85_000,
@@ -329,7 +330,7 @@ describe('thread timeline edge cases', () => {
     expect(
       timeline.criticalPath.map((segment) => [
         segment.kind,
-        segment.nodeId,
+        segment.memberId,
         segment.durationMs,
       ]),
     ).toEqual([
@@ -346,13 +347,13 @@ describe('thread timeline edge cases', () => {
         from: s(0),
         to: s(80),
         turns: [
-          { nodeId: 'lead', startedAt: iso(0), durationMs: 80_000 },
-          { nodeId: 'worker', startedAt: iso(10), durationMs: 31_000 },
+          { memberId: 'lead', startedAt: iso(0), durationMs: 80_000 },
+          { memberId: 'worker', startedAt: iso(10), durationMs: 31_000 },
         ],
         calls: [
           {
-            callerNodeId: 'lead',
-            calleeNodeId: 'worker',
+            callerMemberId: 'lead',
+            calleeMemberId: 'worker',
             mode: 'sync',
             startedAt: iso(10),
             durationMs: 30_000,
@@ -363,13 +364,13 @@ describe('thread timeline edge cases', () => {
       [],
     );
 
-    expect(timeline.sinks.map((sink) => sink.nodeId)).toContain('worker');
+    expect(timeline.sinks.map((sink) => sink.memberId)).toContain('worker');
     expect(
       timeline.criticalPath.filter((segment) => segment.kind === 'idle'),
     ).toEqual([]);
   });
 
-  it('pairs a tool id one node reused in two calls within each call only', () => {
+  it('pairs a tool id one member reused in two calls within each call only', () => {
     const row = (
       seq: number,
       kind: ToolCallTime['kind'],

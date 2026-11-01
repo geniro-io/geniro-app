@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 /**
  * The persisted enum shapes for the SQLite entities — and, since every one of
- * them also travels to the UI on a run / item / node projection, the wire
+ * them also travels to the UI on a run / item / member projection, the wire
  * contract for those enums too.
  *
  * Declared as zod enums carrying `.meta({ id })` so they land as NAMED
@@ -40,31 +40,29 @@ export function isTerminalRunStatus(status: RunStatus): boolean {
   return !LIVE_RUN_STATUSES.has(status);
 }
 
-/** A node may additionally be `skipped` — an upstream node failed. */
+/** A member may additionally be `skipped` — it was never started before the run settled. */
 export const NodeStatusSchema = z
   .enum([...RUN_STATUSES, 'skipped'])
   .meta({ id: 'NodeStatus' });
 export type NodeStatus = z.infer<typeof NodeStatusSchema>;
 
 /**
- * Conversation item kind — the normalized transcript taxonomy. M1 shipped the
- * first 6; M2 widened it to 11; M3 adds the two approval kinds (a plain TEXT
+ * Conversation item kind — the normalized transcript taxonomy (a plain TEXT
  * column, so the `safe: true` schema sync needs no migration). `message`
  * carries user and assistant text (disambiguated by `Item.role`);
  * `usage`/`status`/`attachment` are defined here for the event model and
  * forward-compat though only a subset is emitted. `approval_request` is an
- * `ask`-node's paused tool call awaiting a verdict; `approval_verdict` records
+ * `ask`-mode agent's paused tool call awaiting a verdict; `approval_verdict` records
  * the user's answer, closing the pair for reconnect replay.
  *
- * The agent-calls milestone adds the three call kinds: `call_started` (a
- * caller invoked call_agent — attributed to the CALLER node), `call_result`
- * (the call's envelope settled — also the caller's), and `await_collected`
- * (an async result was picked up via await_agent). The callee's own turn
- * streams as regular items under the callee's nodeId. The Q&A bridge (M4)
- * adds `call_question` (a call-initiated callee raised AskUserQuestion —
- * parked, awaiting the caller) and `call_answer` (how it resolved: answered
- * via answer_agent, TTL timeout, or orphaned by the caller ending) — both
- * attributed to the CALLER node like the other call kinds. `call_answer`
+ * The call kinds: `call_started` (a caller invoked call_agent — attributed to
+ * the CALLER member), `call_result` (the call's envelope settled — also the
+ * caller's), and `await_collected` (an async result was picked up via
+ * await_agent). The callee's own turn streams as regular items under the
+ * callee's member id. `call_question` (a call-initiated callee raised
+ * AskUserQuestion — parked, awaiting the caller) and `call_answer` (how it
+ * resolved: answered via answer_agent, TTL timeout, or orphaned by the caller
+ * ending) are attributed to the CALLER member like the other call kinds. `call_answer`
  * with `outcome: 'message'` is the caller's `message_agent`: a message sent
  * into a RUNNING call with no question behind it.
  *
@@ -173,7 +171,7 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * older one's seq in `supersedes`, and readers fold the pair.
  *
  * `run_outcome` is where one pull request of a team run ended up, recorded
- * by a node (`record_outcome`). Append-only per pull request: the newest row
+ * by a member (`record_outcome`). Append-only per pull request: the newest row
  * naming a pull request is its outcome, and an earlier one stays as history.
  */
 export const ItemKindSchema = z

@@ -14,8 +14,8 @@ const SUMMARY: TeamSummary = {
   slug: 'review-team',
   name: 'Review Team',
   description: 'Coder then reviewer',
-  nodeCount: 3,
-  edgeCount: 2,
+  memberCount: 3,
+  stageCount: 2,
   agentCounts: [
     { kind: 'claude', count: 2 },
     { kind: 'cursor-agent', count: 1 },
@@ -86,17 +86,17 @@ describe('TeamCard', () => {
     expect(container.querySelector('[data-slot="card"]')).not.toBeNull();
   });
 
-  it('shows the name, description, agent breakdown, and node/edge counts', () => {
+  it('shows the name, description, agent breakdown, and member/stage counts', () => {
     render(SUMMARY);
     const text = container.textContent ?? '';
     expect(text).toContain('Review Team');
     expect(text).toContain('Coder then reviewer');
     // The agent breakdown is the "how many agents" signal — a real tally per
-    // kind, not just the node count.
+    // kind, not just the member count.
     expect(text).toContain('claude ×2');
     expect(text).toContain('cursor-agent ×1');
-    expect(text).toContain('3 nodes');
-    expect(text).toContain('2 edges');
+    expect(text).toContain('3 members');
+    expect(text).toContain('2 stages');
   });
 
   it('lets the description WRAP across a few lines rather than truncating to one', () => {
@@ -120,25 +120,25 @@ describe('TeamCard', () => {
     expect(footer).not.toBeNull();
     const footerText = footer?.textContent ?? '';
     expect(footerText).toContain('claude ×2');
-    expect(footerText).toContain('3 nodes');
-    expect(footerText).toContain('2 edges');
+    expect(footerText).toContain('3 members');
+    expect(footerText).toContain('2 stages');
 
     // And the header holds only the name and description — not the facts.
     const header = container.querySelector('[data-slot="card-header"]');
     const headerText = header?.textContent ?? '';
-    expect(headerText).not.toContain('nodes');
-    expect(headerText).not.toContain('edges');
+    expect(headerText).not.toContain('members');
+    expect(headerText).not.toContain('stages');
   });
 
-  it('pluralizes a single node/edge without a trailing "s"', () => {
+  it('pluralizes a single member/stage without a trailing "s"', () => {
     // Read the whole card, not `render`'s return: that is the ACTIVATION
     // button, which is layered under the content and holds no text of its own.
-    render({ ...SUMMARY, nodeCount: 1, edgeCount: 1 });
+    render({ ...SUMMARY, memberCount: 1, stageCount: 1 });
     const text = container.textContent ?? '';
-    expect(text).toContain('1 node');
-    expect(text).not.toContain('1 nodes');
-    expect(text).toContain('1 edge');
-    expect(text).not.toContain('1 edges');
+    expect(text).toContain('1 member');
+    expect(text).not.toContain('1 members');
+    expect(text).toContain('1 stage');
+    expect(text).not.toContain('1 stages');
   });
 
   it('falls back to "No description" when there is none', () => {

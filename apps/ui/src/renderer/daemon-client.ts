@@ -100,7 +100,7 @@ function readTaskGroups(groups: readonly unknown[]): RunTaskGroup[] {
     if (group === null || typeof group !== 'object') {
       continue;
     }
-    const { nodeId, callId, tasks, snapshot } = group as Record<
+    const { memberId, callId, tasks, snapshot } = group as Record<
       string,
       unknown
     >;
@@ -130,7 +130,7 @@ function readTaskGroups(groups: readonly unknown[]): RunTaskGroup[] {
       });
     }
     out.push({
-      nodeId: typeof nodeId === 'string' ? nodeId : null,
+      memberId: typeof memberId === 'string' ? memberId : null,
       // Which of that node's CONVERSATIONS kept the list — a node called several
       // times keeps one per call. Absent or blank reads as the node's own.
       callId: typeof callId === 'string' && callId !== '' ? callId : null,
@@ -1010,7 +1010,7 @@ export function parseDebugEntry(data: unknown): DebugLogEntry | null {
  */
 export interface UsageRecordedEvent {
   runId: string;
-  nodeId: string | null;
+  memberId: string | null;
   occurredAt: string;
   /** True for a finished turn; false for a poll's spend or a lines snapshot. */
   turn: boolean;
@@ -1026,13 +1026,13 @@ export function parseUsageRecorded(data: unknown): UsageRecordedEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;
   }
-  const { runId, nodeId, occurredAt, turn } = data as Record<string, unknown>;
+  const { runId, memberId, occurredAt, turn } = data as Record<string, unknown>;
   if (typeof runId !== 'string' || typeof occurredAt !== 'string') {
     return null;
   }
   return {
     runId,
-    nodeId: typeof nodeId === 'string' ? nodeId : null,
+    memberId: typeof memberId === 'string' ? memberId : null,
     occurredAt,
     turn: turn === true,
   };

@@ -8,31 +8,31 @@ import type {
   CalleePoolAttempt,
   CalleeTurnOutcome,
   PoolStanding,
-  TeamAgentNode,
   TeamAgentPoolMember,
+  TeamMember,
 } from '../teams.types';
 
 /**
- * An agent node's POOL — the configurations a call to it may run under.
+ * A team member's POOL — the configurations a call to it may run under.
  *
- * Member 1 is the node's own settings and members 2… are `node.pool`, so a
- * node with no pool is a pool of one and every reader below answers for it
+ * Member 1 is the team member's own settings and members 2… are its `pool`,
+ * so a team member with no pool is a pool of one and every reader below answers for it
  * without a special case.
  */
 
 /** How many members `node` holds, its own configuration included. */
-export function poolSize(node: TeamAgentNode): number {
+export function poolSize(node: TeamMember): number {
   return 1 + (node.pool?.length ?? 0);
 }
 
 /** Every member's CLI settings, member 1 first. */
-export function poolMembersOf(node: TeamAgentNode): TeamAgentPoolMember[] {
+export function poolMembersOf(node: TeamMember): TeamAgentPoolMember[] {
   return [memberSettingsOf(node), ...(node.pool ?? [])];
 }
 
 /**
  * The settings a member carries besides its `agent` that it REPLACES on the
- * node — omitted means that setting's own default, never member 1's value.
+ * team member — omitted means that setting's own default, never member 1's value.
  * `MemberFieldsAreComplete` below makes a field added to the member schema and
  * missing from both lists a compile error: a member would otherwise silently
  * inherit member 1's value for it.
@@ -51,7 +51,7 @@ const MEMBER_FIELDS = [
 
 /**
  * The settings a member OVERRIDES when it states them and otherwise takes
- * from the node — those the node requires, so "omitted" has no default of its
+ * from the team member — those it requires, so "omitted" has no default of its
  * own to fall back to.
  */
 const INHERITED_FIELDS = ['approval'] as const satisfies readonly Exclude<
@@ -69,7 +69,7 @@ type MemberFieldsAreComplete = [MissingMemberField] extends [never]
 const _memberFieldsAreComplete: MemberFieldsAreComplete = true;
 void _memberFieldsAreComplete;
 
-function memberSettingsOf(node: TeamAgentNode): TeamAgentPoolMember {
+function memberSettingsOf(node: TeamMember): TeamAgentPoolMember {
   const settings: TeamAgentPoolMember = { agent: node.agent };
   for (const field of [...MEMBER_FIELDS, ...INHERITED_FIELDS]) {
     if (node[field] !== undefined) {
@@ -81,19 +81,19 @@ function memberSettingsOf(node: TeamAgentNode): TeamAgentPoolMember {
 
 /**
  * `node` running as member `member` (1-based), or null for a number the pool
- * does not have. The member's settings REPLACE the node's whole — an omitted
+ * does not have. The member's settings REPLACE the team member's whole — an omitted
  * model is that CLI's default, never member 1's — except the INHERITED ones,
- * which the node's own value fills when the member states none. The view holds
- * no pool of its own, so nothing downstream can mistake it for the node.
+ * which the team member's own value fills when the member states none. The view holds
+ * no pool of its own, so nothing later can mistake it for the team member.
  */
 export function poolMemberNode(
-  node: TeamAgentNode,
+  node: TeamMember,
   member: number,
-): TeamAgentNode | null {
+): TeamMember | null {
   if (!Number.isInteger(member) || member < 1 || member > poolSize(node)) {
     return null;
   }
-  const shared: TeamAgentNode = { ...node };
+  const shared: TeamMember = { ...node };
   delete shared.pool;
   for (const field of MEMBER_FIELDS) {
     delete shared[field];
@@ -108,7 +108,7 @@ export function poolMemberNode(
 
 /** The members to try, in `order`, resolved. */
 export function poolAttempts(
-  node: TeamAgentNode,
+  node: TeamMember,
   order: readonly number[],
 ): CalleePoolAttempt[] {
   return order.flatMap((member) => {
@@ -134,7 +134,7 @@ export function poolAttemptOrder(
 }
 
 /**
- * The member a pooled conversation's next turn starts on — a node's own, or a
+ * The member a pooled conversation's next turn starts on — a team member's own, or a
  * call thread being continued. Its session stays with the member it was
  * opened on, so a conversation that has one moves only when it gains
  * something: off a member a limit spent (unless every other member is limited
@@ -213,7 +213,7 @@ export function poolHandOffNotice(
 }
 
 /**
- * The transcript sentence for a node turn that starts on another member than
+ * The transcript sentence for a turn that starts on another pool member than
  * the one its conversation last ran on: an earlier member is available again,
  * or the one it ran on is not.
  */
@@ -252,12 +252,12 @@ export function poolHandOffPrompt(
   ].join('\n');
 }
 
-/** Carry a node's work into a fresh account without reusing its CLI session. */
+/** Carry a team member's work into a fresh account without reusing its CLI session. */
 export function nodePoolHandOffPrompt(
   prompt: string,
-  nodeId: string,
+  memberId: string,
   rows: readonly {
-    nodeId: string | null;
+    memberId: string | null;
     kind: string;
     role: string | null;
     payload: string;
@@ -267,7 +267,8 @@ export function nodePoolHandOffPrompt(
     prompt,
     rows.filter(
       (row) =>
-        row.nodeId === nodeId || (row.nodeId === null && row.role === 'user'),
+        row.memberId === memberId ||
+        (row.memberId === null && row.role === 'user'),
     ),
   );
 }

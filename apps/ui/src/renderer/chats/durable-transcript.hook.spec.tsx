@@ -14,7 +14,7 @@ import type { TranscriptEntry } from './transcript-groups';
 const launch: ChatItem = {
   id: 'launch',
   runId: 'run-1',
-  nodeId: null,
+  memberId: null,
   seq: 1,
   kind: 'tool_call',
   role: null,
@@ -33,7 +33,7 @@ function stateOf(
     delegates: [
       {
         id: 'delegate',
-        nodeId: null,
+        memberId: null,
         callId: null,
         label: 'Review',
         kind: null,

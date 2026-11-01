@@ -27,8 +27,8 @@ export class FakeWallTurnDao {
   async nodeSums(runId: string): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     for (const row of this.rows.values()) {
-      if (row.runId === runId && row.nodeId !== null) {
-        out.set(row.nodeId, (out.get(row.nodeId) ?? 0) + row.ms);
+      if (row.runId === runId && row.memberId !== null) {
+        out.set(row.memberId, (out.get(row.memberId) ?? 0) + row.ms);
       }
     }
     return out;
@@ -36,7 +36,7 @@ export class FakeWallTurnDao {
   async nodeTurnsBySeq(runId: string): Promise<Map<number, number>> {
     const out = new Map<number, number>();
     for (const row of this.rows.values()) {
-      if (row.runId === runId && row.nodeId !== null) {
+      if (row.runId === runId && row.memberId !== null) {
         out.set(row.seq, row.ms);
       }
     }
@@ -45,7 +45,7 @@ export class FakeWallTurnDao {
   async chatSums(runIds: readonly string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     for (const row of this.rows.values()) {
-      if (runIds.includes(row.runId) && row.nodeId === null) {
+      if (runIds.includes(row.runId) && row.memberId === null) {
         out.set(row.runId, (out.get(row.runId) ?? 0) + row.ms);
       }
     }

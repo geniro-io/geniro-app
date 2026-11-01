@@ -4,7 +4,7 @@ import { foldToolUsage, toolLabel, type ToolUsageGroup } from './tool-usage';
 
 function group(over: Partial<ToolUsageGroup> = {}): ToolUsageGroup {
   return {
-    nodeId: 'engineer',
+    memberId: 'engineer',
     name: 'Bash',
     toolKind: 'execute',
     delegate: false,
@@ -61,17 +61,22 @@ describe('foldToolUsage', () => {
     // busiest thing the agent did by the whole of it.
     const { toolUse } = foldToolUsage(
       [
-        group({ nodeId: 'qa', name: '`pnpm build`', calls: 1 }),
-        group({ nodeId: 'qa', name: '`git status`', calls: 1 }),
-        group({ nodeId: 'qa', name: '`kill 4821`', calls: 1 }),
-        group({ nodeId: 'qa', name: 'Read File', toolKind: 'read', calls: 40 }),
+        group({ memberId: 'qa', name: '`pnpm build`', calls: 1 }),
+        group({ memberId: 'qa', name: '`git status`', calls: 1 }),
+        group({ memberId: 'qa', name: '`kill 4821`', calls: 1 }),
+        group({
+          memberId: 'qa',
+          name: 'Read File',
+          toolKind: 'read',
+          calls: 40,
+        }),
       ],
       10,
     );
 
     expect(toolUse).toEqual([
-      { nodeId: 'qa', name: 'Read File', calls: 40, delegateCalls: 0 },
-      { nodeId: 'qa', name: 'execute', calls: 3, delegateCalls: 0 },
+      { memberId: 'qa', name: 'Read File', calls: 40, delegateCalls: 0 },
+      { memberId: 'qa', name: 'execute', calls: 3, delegateCalls: 0 },
     ]);
   });
 
@@ -80,15 +85,15 @@ describe('foldToolUsage', () => {
     // folded on the name alone, one agent's work would be billed to the other.
     const { toolUse } = foldToolUsage(
       [
-        group({ nodeId: 'engineer', calls: 86 }),
-        group({ nodeId: 'qa', calls: 4 }),
+        group({ memberId: 'engineer', calls: 86 }),
+        group({ memberId: 'qa', calls: 4 }),
       ],
       10,
     );
 
     expect(toolUse).toEqual([
-      { nodeId: 'engineer', name: 'Bash', calls: 86, delegateCalls: 0 },
-      { nodeId: 'qa', name: 'Bash', calls: 4, delegateCalls: 0 },
+      { memberId: 'engineer', name: 'Bash', calls: 86, delegateCalls: 0 },
+      { memberId: 'qa', name: 'Bash', calls: 4, delegateCalls: 0 },
     ]);
   });
 
@@ -104,8 +109,8 @@ describe('foldToolUsage', () => {
 
     // Ordered by both together: Read's 12 outranks Bash's 10.
     expect(toolUse).toEqual([
-      { nodeId: 'engineer', name: 'Read', calls: 5, delegateCalls: 7 },
-      { nodeId: 'engineer', name: 'Bash', calls: 0, delegateCalls: 10 },
+      { memberId: 'engineer', name: 'Read', calls: 5, delegateCalls: 7 },
+      { memberId: 'engineer', name: 'Bash', calls: 0, delegateCalls: 10 },
     ]);
   });
 
@@ -116,8 +121,8 @@ describe('foldToolUsage', () => {
 
     expect(foldToolUsage(groups, 2)).toEqual({
       toolUse: [
-        { nodeId: 'engineer', name: 'Tool3', calls: 4, delegateCalls: 0 },
-        { nodeId: 'engineer', name: 'Tool2', calls: 3, delegateCalls: 0 },
+        { memberId: 'engineer', name: 'Tool3', calls: 4, delegateCalls: 0 },
+        { memberId: 'engineer', name: 'Tool2', calls: 3, delegateCalls: 0 },
       ],
       capped: true,
     });

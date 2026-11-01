@@ -18,7 +18,7 @@ export const TERMINAL_KINDS: ReadonlySet<string> = new Set([
  */
 function endsRunTurn(item: ChatItem): boolean {
   return (
-    item.nodeId === null &&
+    item.memberId === null &&
     TERMINAL_KINDS.has(item.kind) &&
     payloadBoolean(item.payload, 'insideTurn') !== true
   );

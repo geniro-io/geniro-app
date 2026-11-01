@@ -8,17 +8,17 @@ const S: TeamStage[] = [
   {
     id: 'investigation',
     title: 'Investigation',
-    doneWhen: 'cause known',
+    goal: 'cause known',
     next: ['implementation', 'fix'],
   },
   {
     id: 'implementation',
     title: 'Implementation',
-    doneWhen: 'built',
+    goal: 'built',
     next: ['review'],
   },
-  { id: 'fix', title: 'Fix', doneWhen: 'fixed', next: ['review'] },
-  { id: 'review', title: 'Review', doneWhen: 'approved' },
+  { id: 'fix', title: 'Fix', goal: 'fixed', next: ['review'] },
+  { id: 'review', title: 'Review', goal: 'approved' },
 ];
 
 const AGENT = { kind: 'agent', nodeId: 'lead' } as const;

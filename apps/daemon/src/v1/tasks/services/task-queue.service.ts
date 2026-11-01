@@ -8,7 +8,7 @@ import type {
 } from '../../projects/projects.types';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
 import { TeamStoreService } from '../../teams/services/team-store.service';
-import { nodesThatAsk } from '../../teams/utils/unattended';
+import { membersThatAsk } from '../../teams/utils/unattended';
 import {
   isRunTargetProblem,
   resolveRunTarget,
@@ -97,7 +97,7 @@ export class TaskQueueService {
     const runsUnattended = async (slug: string): Promise<void> => {
       if (!unattended.has(slug)) {
         const { team } = await this.teams.get(slug);
-        unattended.set(slug, nodesThatAsk(team).length === 0);
+        unattended.set(slug, membersThatAsk(team).length === 0);
       }
     };
 

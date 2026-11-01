@@ -19,15 +19,15 @@ import { MCP_TOOLS } from '../tools/mcp-tools';
 
 /**
  * The MCP protocol host behind the per-run endpoint
- * (`POST /v1/mcp/<runId>/<nodeId>`, see McpController), serving the tools THIS
- * node can use over the streamable-http transport: the call surface
- * (call_agent / await_agent / answer_agent) to a node with callees,
+ * (`POST /v1/mcp/<runId>/<memberId>`, see McpController), serving the tools THIS
+ * member can use over the streamable-http transport: the call surface
+ * (call_agent / await_agent / answer_agent) to a member with teammates to call,
  * `ask_user_question` to a turn whose CLI cannot ask its user anything on its
  * own, and the RENDER family — `report_findings`, `show_chart`, `show_metrics`,
  * `show_comparison`, `show_gallery`, `propose_patch` and `propose_plan` — to a
  * turn whose transcript can draw them.
  * The listing is composed per request rather than fixed, so a chat is
- * never offered agents to call and a graph node is never offered a card
+ * never offered agents to call and a team member is never offered a card
  * nobody is watching. Stateless by design: every POST builds a fresh
  * SDK `Server` + transport pair (no session ids, plain JSON responses), so
  * nothing leaks between requests and the per-run call token in the guard is
@@ -54,7 +54,7 @@ export class McpServerService {
   private readonly logger = new Logger(McpServerService.name);
 
   /**
-   * The PARKING tool calls currently in flight, keyed by (run, node, JSON-RPC
+   * The PARKING tool calls currently in flight, keyed by (run, caller, JSON-RPC
    * request id), so a cancellation can reach the one it names.
    *
    * The SDK's own `notifications/cancelled` handling cannot reach it, and that
@@ -77,17 +77,17 @@ export class McpServerService {
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
-  /** Serve one stateless MCP request for `(run, caller node)`. */
+  /** Serve one stateless MCP request for `(run, caller member)`. */
   async handlePost(
     runId: string,
-    nodeId: string,
+    memberId: string,
     req: FastifyRequest,
     reply: FastifyReply,
     /**
      * The callee conversation the asking process speaks in — the endpoint's
      * last segment, handed to every turn that answers a call — or null for
-     * the node's own. What makes the caller of the call tools a CONVERSATION
-     * rather than a node (`utils/caller-key.ts`).
+     * the member's own. What makes the caller of the call tools a CONVERSATION
+     * rather than a member (`utils/caller-key.ts`).
      */
     conversationId: string | null = null,
   ): Promise<void> {
@@ -106,7 +106,7 @@ export class McpServerService {
     try {
       const server = this.buildServer(
         runId,
-        nodeId,
+        memberId,
         gone.signal,
         conversationId,
         cameViaRemote(req.headers),
@@ -130,7 +130,7 @@ export class McpServerService {
       // the caller a fixed JSON-RPC error (never the Nest ExceptionsFilter's
       // {statusCode, code, …} body, which an MCP client can't parse).
       this.logger.error(
-        `MCP request failed for run ${runId}/${nodeId}: ${err instanceof Error ? err.message : String(err)}`,
+        `MCP request failed for run ${runId}/${memberId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       if (!res.headersSent) {
         res.writeHead(500, { 'content-type': 'application/json' });
@@ -161,12 +161,16 @@ export class McpServerService {
 
   /**
    * The key one in-flight parking call is tracked and cancelled under —
-   * `nodeId` being a caller key, since two processes of one node number their
+   * `nodeId` being a caller key, since two processes of one member number their
    * requests independently, and a cancellation from one must not reach the
    * other's call that happens to share its id.
    */
-  private callKey(runId: string, nodeId: string, requestId: RequestId): string {
-    return `${runId}::${nodeId}::${String(requestId)}`;
+  private callKey(
+    runId: string,
+    memberId: string,
+    requestId: RequestId,
+  ): string {
+    return `${runId}::${memberId}::${String(requestId)}`;
   }
 
   /**
@@ -181,11 +185,11 @@ export class McpServerService {
    */
   private async whileCancellable<TOutcome>(
     runId: string,
-    nodeId: string,
+    memberId: string,
     requestId: RequestId,
     call: (signal: AbortSignal) => Promise<TOutcome>,
   ): Promise<TOutcome> {
-    const key = this.callKey(runId, nodeId, requestId);
+    const key = this.callKey(runId, memberId, requestId);
     const controller = new AbortController();
     this.inFlightCalls.set(key, controller);
     try {
@@ -204,37 +208,37 @@ export class McpServerService {
   /** Trip the signal of one in-flight parking call, if it is still running. */
   private cancelCall(
     runId: string,
-    nodeId: string,
+    memberId: string,
     requestId: RequestId,
   ): void {
-    const key = this.callKey(runId, nodeId, requestId);
+    const key = this.callKey(runId, memberId, requestId);
     const controller = this.inFlightCalls.get(key);
     if (controller === undefined) {
       return;
     }
     this.inFlightCalls.delete(key);
     this.logger.log(
-      `run ${runId}/${nodeId}: the agent cancelled request ${String(requestId)} — closing the card it was parked on`,
+      `run ${runId}/${memberId}: the agent cancelled request ${String(requestId)} — closing the card it was parked on`,
     );
     controller.abort();
   }
 
-  /** One fresh, stateless SDK server scoped to (run, caller node). */
+  /** One fresh, stateless SDK server scoped to (run, caller member). */
   private buildServer(
     runId: string,
-    nodeId: string,
+    memberId: string,
     /**
      * Trips when the HTTP request being served goes away. Optional so a caller
      * that builds a server outside a request (a test) needs no controller.
      */
     gone?: AbortSignal,
-    /** See `handlePost` — null for the node's own conversation. */
+    /** See `handlePost` — null for the member's own conversation. */
     conversationId: string | null = null,
     /** Whether the gateway proxied the request from a paired device. */
     remote = false,
   ): Server {
-    // WHO calls, for the call tools: this node, in this conversation.
-    const caller = callerKey(nodeId, conversationId);
+    // WHO calls, for the call tools: this member, in this conversation.
+    const caller = callerKey(memberId, conversationId);
     const server = new Server(
       { name: 'geniro-daemon', version: this.runtime.version },
       { capabilities: { tools: {} } },
@@ -262,13 +266,13 @@ export class McpServerService {
     );
 
     server.setRequestHandler(ListToolsRequestSchema, async () => {
-      // Composed per request from what this node can actually DO rather than
-      // fixed: each tool decides whether it is offered (a caller node has
+      // Composed per request from what this member can actually DO rather than
+      // fixed: each tool decides whether it is offered (a team member has
       // callees to reach, a chat on a CLI that cannot ask its user anything
-      // has a question to put). A node with neither is a node that should not
+      // has a question to put). An asker with neither should not
       // have been handed an endpoint at all, and an empty list says so
       // honestly.
-      const context = { runId, nodeId, conversationId };
+      const context = { runId, memberId, conversationId };
       return { tools: this.tools.flatMap((tool) => tool.list(context)) };
     });
 
@@ -279,7 +283,7 @@ export class McpServerService {
       if (tool === undefined) {
         const envelope: CallEnvelope = {
           status: 'error',
-          error: `UNKNOWN_TOOL: '${name}' — this endpoint serves whatever tools/list reported for this node`,
+          error: `UNKNOWN_TOOL: '${name}' — this endpoint serves whatever tools/list reported for this agent`,
         };
         return {
           content: [{ type: 'text', text: JSON.stringify(envelope) }],
@@ -288,7 +292,7 @@ export class McpServerService {
       }
       const context: McpCallContext = {
         runId,
-        nodeId,
+        memberId,
         conversationId,
         caller,
         requestId: extra.requestId,

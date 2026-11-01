@@ -20,7 +20,7 @@ const FULL_VIEW_HEADING = 'Who worked when, and what it cost';
 
 function lane(over: Partial<RunWaterfallLane> = {}): RunWaterfallLane {
   return {
-    nodeId: 'engineer',
+    memberId: 'engineer',
     agentKind: 'claude',
     costUsd: 12.5,
     estimatedCostUsd: null,

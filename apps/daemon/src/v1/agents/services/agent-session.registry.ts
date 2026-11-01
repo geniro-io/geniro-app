@@ -505,7 +505,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
 
   /**
    * Owe one conversation's next turn a prompt line: `key` is its session key
-   * (a team node's own, or a chat's run id). False when it was not kept —
+   * (a team member's own, or a chat's run id). False when it was not kept —
    * the daemon is shutting down, so no next turn will carry it.
    */
   oweKeyNote(key: string, prompt: string): boolean {
@@ -653,7 +653,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
               offTurn.current?.(event);
             },
       onHeldApproval,
-      // The RUN, not this key: a team files each node and conversation
+      // The RUN, not this key: a team files each member and conversation
       // under its own key, and the run's teardown searches by the run alone.
       runTag: runTagEnv(runIdOfSessionKey(runId), this.runOwner),
     });
@@ -715,7 +715,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
-   * Close EVERY process one run holds — its own key, and every per-node and
+   * Close EVERY process one run holds — its own key, and every per-member and
    * per-conversation key a team run opens under it (`<runId>::…`).
    *
    * A team run's processes outlive each reply, as a chat's do, so a

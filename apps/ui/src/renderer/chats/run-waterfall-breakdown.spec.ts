@@ -154,9 +154,9 @@ describe('toolRows', () => {
   it('folds the same tool across agents into one row, busiest counting sub-agents first', () => {
     const data = wfDto(100, {
       toolUse: [
-        { nodeId: 'mgr', name: 'Read', calls: 3, delegateCalls: 0 },
-        { nodeId: 'eng', name: 'Bash', calls: 2, delegateCalls: 7 },
-        { nodeId: 'eng', name: 'Read', calls: 4, delegateCalls: 1 },
+        { memberId: 'mgr', name: 'Read', calls: 3, delegateCalls: 0 },
+        { memberId: 'eng', name: 'Bash', calls: 2, delegateCalls: 7 },
+        { memberId: 'eng', name: 'Read', calls: 4, delegateCalls: 1 },
       ],
     });
 
@@ -213,7 +213,7 @@ describe('breakdownRows estimated cost', () => {
     });
 
     const mgr = breakdownRows(data, whole(100), 'agent', undefined).find(
-      (row) => row.nodeId === 'mgr',
+      (row) => row.memberId === 'mgr',
     );
 
     expect(mgr?.withCalleesUsd).toBe(5);

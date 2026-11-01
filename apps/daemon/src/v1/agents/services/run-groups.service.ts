@@ -215,7 +215,7 @@ export class RunGroupsService {
    * only reading under which the two can usefully coexist.
    *
    * A TEAM claim OUTRANKS every folder claim, and that ranking is the whole
-   * reason the two rules can coexist. A team graph is run over a dozen
+   * reason the two rules can coexist. A team is run over a dozen
    * repositories, so no folder names those runs — while the folders they run in
    * are exactly the folders whose ordinary chats a user has already filed
    * somewhere. Reading them as folder chats would put every team run into

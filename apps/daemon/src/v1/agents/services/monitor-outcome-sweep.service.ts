@@ -21,7 +21,7 @@ const INTERRUPTED: MonitorEnd = { kind: 'interrupted' };
 interface CutOff {
   id: string;
   description: string;
-  nodeId: string | null;
+  memberId: string | null;
   callId: string | null;
   conversationId: string | null;
 }
@@ -106,7 +106,7 @@ export class MonitorOutcomeSweep {
           cutOff: first ?? {
             id: entry.id,
             description: String(entry.description ?? entry.id),
-            nodeId: row.nodeId,
+            memberId: row.memberId,
             callId: typeof payload.callId === 'string' ? payload.callId : null,
             conversationId:
               typeof payload.conversationId === 'string'
@@ -136,11 +136,11 @@ export class MonitorOutcomeSweep {
     isChat: boolean,
     monitor: CutOff,
   ): string {
-    if (isChat || monitor.nodeId === null) {
+    if (isChat || monitor.memberId === null) {
       return runId;
     }
     return monitor.conversationId === null
-      ? nodeSessionKey(runId, monitor.nodeId)
+      ? nodeSessionKey(runId, monitor.memberId)
       : callSessionKey(runId, monitor.conversationId);
   }
 
@@ -165,7 +165,7 @@ export class MonitorOutcomeSweep {
       this.chats.holdInterrupted(
         {
           runId,
-          nodeId: first?.nodeId ?? null,
+          memberId: first?.memberId ?? null,
           callId: null,
           conversationId: null,
         },
@@ -177,7 +177,7 @@ export class MonitorOutcomeSweep {
       await this.rows.write(
         {
           runId,
-          nodeId: monitor.nodeId,
+          memberId: monitor.memberId,
           callId: monitor.callId,
           conversationId: monitor.conversationId,
         },

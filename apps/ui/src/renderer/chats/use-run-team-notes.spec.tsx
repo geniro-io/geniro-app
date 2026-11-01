@@ -15,7 +15,7 @@ function note(seq: number, text: string): TeamNote {
     seq,
     kind: 'fact',
     text,
-    nodeId: 'engineer',
+    memberId: 'engineer',
     conversationId: null,
     callId: null,
     createdAt: '2026-10-26T09:00:00.000Z',

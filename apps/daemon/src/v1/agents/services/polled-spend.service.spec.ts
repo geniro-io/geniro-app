@@ -78,8 +78,8 @@ function cursorRun(overrides: Partial<Run> = {}): Run {
   } as Run;
 }
 
-/** One node row, as `listByRun` answers it. */
-function node(overrides: Partial<NodeState> & { nodeId: string }): NodeState {
+/** One member row, as `listByRun` answers it. */
+function node(overrides: Partial<NodeState> & { memberId: string }): NodeState {
   return {
     runId: 'run-1',
     agentKind: AgentKind.CursorAgent,
@@ -93,12 +93,12 @@ function node(overrides: Partial<NodeState> & { nodeId: string }): NodeState {
   } as NodeState;
 }
 
-/** A node whose single conversation is `sessionId`. */
+/** A member whose single conversation is `sessionId`. */
 function holding(
   sessionId: string,
   overrides: Partial<NodeState> = {},
 ): NodeState {
-  return node({ nodeId: 'node-0', agentSessionId: sessionId, ...overrides });
+  return node({ memberId: 'node-0', agentSessionId: sessionId, ...overrides });
 }
 
 /** A stored ledger, as the column holds it. */
@@ -109,11 +109,11 @@ function ledger(entries: Record<string, ConversationSpend>): string {
 /** The slice of an `AgentEventBus` item event the service reads. */
 interface ItemEvent {
   runId: string;
-  item: { nodeId: string | null };
+  item: { memberId: string | null };
 }
 
-function itemOn(runId: string, nodeId: string | null = null): ItemEvent {
-  return { runId, item: { nodeId } };
+function itemOn(runId: string, memberId: string | null = null): ItemEvent {
+  return { runId, item: { memberId } };
 }
 
 interface Harness {
@@ -122,7 +122,7 @@ interface Harness {
   runWrites: { id: string; data: Partial<Run> }[];
   nodeWrites: {
     runId: string;
-    nodeId: string;
+    memberId: string;
     ledger: string | null;
     cents: number;
     events: number;
@@ -133,7 +133,7 @@ interface Harness {
   reads: { where: unknown; options: unknown }[];
   /** The read for runs whose agent pool holds the polled CLI. */
   poolReads: { where: unknown; options: unknown }[];
-  /** The reads of runs' graph copies, by the run ids each asked for. */
+  /** The reads of runs' team copies, by the run ids each asked for. */
   snapshotReads: string[][];
   /** The `call_result` reads, each from the seq it read past. */
   callReads: { runId: string; afterSeq: number }[];
@@ -146,10 +146,10 @@ function harness(options: {
   nodes: Record<string, NodeState[]>;
   /** Runs found through a cursor NODE rather than through their own agent. */
   cursorNodeRunIds?: string[];
-  /** A team node's own agent, keyed `<runId>/<nodeId>`. */
+  /** A team member's own agent, keyed `<runId>/<nodeId>`. */
   nodeAgents?: Record<string, AgentKind | null>;
   /** Each run's `call_result` records, as `rowsOfKinds` answers them. */
-  calls?: Record<string, { calleeNodeId: string; sessionId: string }[]>;
+  calls?: Record<string, { calleeMemberId: string; sessionId: string }[]>;
   delegates?: Record<string, string[]>;
 }): Harness {
   const runWrites: Harness['runWrites'] = [];
@@ -164,7 +164,7 @@ function harness(options: {
 
   const runDao = {
     // Honours the FILTER: the service makes two different reads, the 1:1
-    // cursor chats and then the runs merely holding a cursor node.
+    // cursor chats and then the runs merely holding a cursor member.
     getAll: async (
       where?: {
         id?: { $in?: string[] };
@@ -175,7 +175,7 @@ function harness(options: {
       },
       opts?: unknown,
     ) => {
-      // The team runs with no graph copy yet, and the later re-check of
+      // The team runs with no team copy yet, and the later re-check of
       // which of them have one now.
       if (where?.teamSnapshot === null) {
         return options.runs.filter(
@@ -229,20 +229,20 @@ function harness(options: {
 
   const nodeStates = {
     runIdsForAgent: async () => options.cursorNodeRunIds ?? [],
-    getByRunNode: async (runId: string, nodeId: string) => {
+    getByRunNode: async (runId: string, memberId: string) => {
       counts.nodeReads += 1;
-      const kind = options.nodeAgents?.[`${runId}/${nodeId}`];
+      const kind = options.nodeAgents?.[`${runId}/${memberId}`];
       return kind === undefined
         ? null
-        : ({ nodeId, agentKind: kind } as NodeState);
+        : ({ memberId, agentKind: kind } as NodeState);
     },
     listByRun: async (runId: string) => options.nodes[runId] ?? [],
     writePolledSpend: async (
       runId: string,
-      nodeId: string,
+      memberId: string,
       spend: { ledger: string | null; cents: number; events: number },
     ) => {
-      nodeWrites.push({ runId, nodeId, ...spend });
+      nodeWrites.push({ runId, memberId, ...spend });
     },
   } as unknown as NodeStateDao;
 
@@ -388,7 +388,7 @@ describe('PolledSpendService', () => {
       { id: 'run-1', data: { polledCostCents: 488.8, polledCostEvents: 1 } },
     ]);
     expect(h.nodeWrites).toMatchObject([
-      { runId: 'run-1', nodeId: 'node-0', cents: 488.8, events: 1 },
+      { runId: 'run-1', memberId: 'node-0', cents: 488.8, events: 1 },
     ]);
     expect(h.published).toEqual([
       { runId: 'run-1', status: null, spendUpdatedAt: NOW },
@@ -553,7 +553,7 @@ describe('PolledSpendService', () => {
     expect(h.nodeWrites[0]?.cents).toBe(30);
   });
 
-  it('starts the window at the oldest open boundary, and a new conversation where its node began', async () => {
+  it('starts the window at the oldest open boundary, and a new conversation where its member began', async () => {
     at(NOW);
     const settledAt = NOW - 30 * HOUR;
     const h = harness({
@@ -572,7 +572,7 @@ describe('PolledSpendService', () => {
             }),
           }),
           node({
-            nodeId: 'node-1',
+            memberId: 'node-1',
             agentSessionId: 'conv-new',
             createdAt: new Date(NOW - 5 * HOUR),
           }),
@@ -585,13 +585,13 @@ describe('PolledSpendService', () => {
 
     expect(windows).toEqual([{ start: settledAt, end: NOW }]);
 
-    // Alone, the new conversation is asked about from an hour before its node.
+    // Alone, the new conversation is asked about from an hour before its member.
     const fresh = harness({
       runs: [cursorRun()],
       nodes: {
         'run-1': [
           node({
-            nodeId: 'node-1',
+            memberId: 'node-1',
             agentSessionId: 'conv-new',
             createdAt: new Date(NOW - 5 * HOUR),
           }),
@@ -618,7 +618,7 @@ describe('PolledSpendService', () => {
     expect(windows[0]?.start).toBe(NOW - 30 * DAY);
   });
 
-  it('prices the conversations CALLERS held with a node, from its call records', async () => {
+  it('prices the conversations CALLERS held with a member, from its call records', async () => {
     // The $657 a real account billed to sixty-one call conversations whose
     // sessions are on no session history — runs older than that column — but on
     // the `call_result` row every call writes.
@@ -633,16 +633,20 @@ describe('PolledSpendService', () => {
       cursorNodeRunIds: ['wf'],
       nodes: {
         wf: [
-          node({ runId: 'wf', nodeId: 'qa' }),
-          node({ runId: 'wf', nodeId: 'manager', agentKind: AgentKind.Claude }),
+          node({ runId: 'wf', memberId: 'qa' }),
+          node({
+            runId: 'wf',
+            memberId: 'manager',
+            agentKind: AgentKind.Claude,
+          }),
         ],
       },
       calls: {
         wf: [
-          { calleeNodeId: 'qa', sessionId: 'call-conv' },
-          // A call to a node of another CLI names a session this account has
+          { calleeMemberId: 'qa', sessionId: 'call-conv' },
+          // A call to a member of another CLI names a session this account has
           // never heard of.
-          { calleeNodeId: 'manager', sessionId: 'claude-conv' },
+          { calleeMemberId: 'manager', sessionId: 'claude-conv' },
         ],
       },
     });
@@ -650,7 +654,7 @@ describe('PolledSpendService', () => {
 
     await h.service.refresh(true);
 
-    expect(h.nodeWrites).toMatchObject([{ nodeId: 'qa', cents: 145.25 }]);
+    expect(h.nodeWrites).toMatchObject([{ memberId: 'qa', cents: 145.25 }]);
     expect(h.runWrites).toMatchObject([
       { id: 'wf', data: { polledCostCents: 145.25, polledCostEvents: 1 } },
     ]);
@@ -659,7 +663,7 @@ describe('PolledSpendService', () => {
   it('reads each run’s call results once, then only the rows written since', async () => {
     at(NOW);
     const calls = {
-      wf: [{ calleeNodeId: 'qa', sessionId: 'call-conv' }],
+      wf: [{ calleeMemberId: 'qa', sessionId: 'call-conv' }],
     };
     const h = harness({
       runs: [
@@ -671,13 +675,13 @@ describe('PolledSpendService', () => {
         }),
       ],
       cursorNodeRunIds: ['wf'],
-      nodes: { wf: [node({ runId: 'wf', nodeId: 'qa' })] },
+      nodes: { wf: [node({ runId: 'wf', memberId: 'qa' })] },
       calls,
     });
     answerWith(event('call-conv', 10));
 
     await h.service.refresh(true);
-    calls.wf.push({ calleeNodeId: 'qa', sessionId: 'later-conv' });
+    calls.wf.push({ calleeMemberId: 'qa', sessionId: 'later-conv' });
     await h.service.refresh(true);
 
     expect(h.callReads).toEqual([
@@ -698,10 +702,10 @@ describe('PolledSpendService', () => {
         }),
       ],
       cursorNodeRunIds: ['wf'],
-      nodes: { wf: [node({ runId: 'wf', nodeId: 'qa' })] },
+      nodes: { wf: [node({ runId: 'wf', memberId: 'qa' })] },
       calls: {
         wf: Array.from({ length: 4_500 }, (_, n) => ({
-          calleeNodeId: 'qa',
+          calleeMemberId: 'qa',
           sessionId: `conv-${n}`,
         })),
       },
@@ -727,8 +731,8 @@ describe('PolledSpendService', () => {
         }),
       ],
       cursorNodeRunIds: ['wf'],
-      nodes: { wf: [node({ runId: 'wf', nodeId: 'qa' })] },
-      calls: { wf: [{ calleeNodeId: 'qa', sessionId: 'call-conv' }] },
+      nodes: { wf: [node({ runId: 'wf', memberId: 'qa' })] },
+      calls: { wf: [{ calleeMemberId: 'qa', sessionId: 'call-conv' }] },
     });
     answerWith(event('call-conv', 10));
 
@@ -739,7 +743,7 @@ describe('PolledSpendService', () => {
     expect(h.callReads.map((read) => read.afterSeq)).toEqual([-1, -1]);
   });
 
-  it('prices every DELEGATE a conversation spawned, on the node that launched it', async () => {
+  it('prices every DELEGATE a conversation spawned, on the member that launched it', async () => {
     // The largest share of the reported gap: each cursor sub-agent is billed
     // under its own conversation id, which no turn ever names.
     at(NOW);
@@ -758,12 +762,12 @@ describe('PolledSpendService', () => {
 
     expect(h.adapter.spawnAsks).toEqual([['parent']]);
     expect(h.nodeWrites).toMatchObject([
-      { nodeId: 'node-0', cents: 142, events: 3 },
+      { memberId: 'node-0', cents: 142, events: 3 },
     ]);
   });
 
-  it('starts a newly found delegate where its parent is still open, not where the node began', async () => {
-    // On a chat weeks old, starting from the node would make every new delegate
+  it('starts a newly found delegate where its parent is still open, not where the member began', async () => {
+    // On a chat weeks old, starting from the member would make every new delegate
     // a walk through weeks of the account.
     at(NOW);
     const parentOpenFrom = NOW - 26 * HOUR;
@@ -792,8 +796,8 @@ describe('PolledSpendService', () => {
     expect(windows).toEqual([{ start: parentOpenFrom, end: NOW }]);
   });
 
-  it('counts a conversation on ONE node, however many name it', async () => {
-    // A delegate id can also turn up as a session another node resumed; billing
+  it('counts a conversation on ONE member, however many name it', async () => {
+    // A delegate id can also turn up as a session another member resumed; billing
     // it to both would double the figure the user checks against their bill.
     at(NOW);
     const h = harness({
@@ -801,7 +805,7 @@ describe('PolledSpendService', () => {
       nodes: {
         'run-1': [
           holding('parent'),
-          node({ nodeId: 'node-1', agentSessionId: 'shared' }),
+          node({ memberId: 'node-1', agentSessionId: 'shared' }),
         ],
       },
       delegates: { parent: ['shared'] },
@@ -815,7 +819,7 @@ describe('PolledSpendService', () => {
     ]);
   });
 
-  it('prices a cursor node inside a TEAM, whose run names no agent', async () => {
+  it('prices a cursor member inside a TEAM, whose run names no agent', async () => {
     at(NOW);
     const team = cursorRun({
       id: 'wf',
@@ -826,7 +830,7 @@ describe('PolledSpendService', () => {
       runs: [team],
       cursorNodeRunIds: ['wf'],
       nodes: {
-        wf: [node({ runId: 'wf', nodeId: 'qa', agentSessionId: 'conv-wf' })],
+        wf: [node({ runId: 'wf', memberId: 'qa', agentSessionId: 'conv-wf' })],
       },
     });
     answerWith(event('conv-wf', 1_234.5));
@@ -838,7 +842,7 @@ describe('PolledSpendService', () => {
     ]);
   });
 
-  it('ignores a NON-cursor node of a run it reached through a cursor one', async () => {
+  it('ignores a NON-cursor member of a run it reached through a cursor one', async () => {
     at(NOW);
     const team = cursorRun({
       id: 'wf',
@@ -852,7 +856,7 @@ describe('PolledSpendService', () => {
         wf: [
           node({
             runId: 'wf',
-            nodeId: 'engineer',
+            memberId: 'engineer',
             agentKind: AgentKind.Claude,
             agentSessionId: 'claude-conv',
           }),
@@ -878,7 +882,7 @@ describe('PolledSpendService', () => {
       cursorNodeRunIds: ['wf'],
       nodes: {
         'run-1': [holding('conv-1')],
-        wf: [node({ runId: 'wf', nodeId: 'qa', agentSessionId: 'conv-wf' })],
+        wf: [node({ runId: 'wf', memberId: 'qa', agentSessionId: 'conv-wf' })],
       },
     });
     answerWith(event('conv-1', 10), event('conv-wf', 20));
@@ -910,7 +914,7 @@ describe('PolledSpendService', () => {
     ]);
   });
 
-  it('matches every run’s graph copy against the pooled CLI once, then only the runs created since', async () => {
+  it('matches every run’s team copy against the pooled CLI once, then only the runs created since', async () => {
     const move = at(NOW);
     const pooledCopy = JSON.stringify({
       nodes: [
@@ -955,7 +959,7 @@ describe('PolledSpendService', () => {
     expect(h.reads.at(-1)?.where).toEqual({ id: { $in: ['old', 'new'] } });
   });
 
-  it('finds an older run whose pooled graph copy was frozen after the first read', async () => {
+  it('finds an older run whose pooled team copy was frozen after the first read', async () => {
     const move = at(NOW);
     const old = cursorRun({
       id: 'old',
@@ -983,7 +987,7 @@ describe('PolledSpendService', () => {
     expect(h.reads.at(-1)?.where).toEqual({ id: { $in: ['old'] } });
   });
 
-  it('parses a run’s graph copy once, and keeps asking for a run that has none yet', async () => {
+  it('parses a run’s team copy once, and keeps asking for a run that has none yet', async () => {
     at(NOW);
     const team = cursorRun({
       id: 'wf',
@@ -996,7 +1000,7 @@ describe('PolledSpendService', () => {
       cursorNodeRunIds: ['wf'],
       nodes: {
         'run-1': [holding('conv-1')],
-        wf: [node({ runId: 'wf', nodeId: 'qa', agentSessionId: 'conv-wf' })],
+        wf: [node({ runId: 'wf', memberId: 'qa', agentSessionId: 'conv-wf' })],
       },
     });
     answerWith(event('conv-1', 10), event('conv-wf', 20));
@@ -1007,7 +1011,7 @@ describe('PolledSpendService', () => {
     expect(h.snapshotReads).toEqual([['run-1', 'wf'], ['run-1']]);
   });
 
-  it('reads a deleted run’s graph copy afresh, should its id come back', async () => {
+  it('reads a deleted run’s team copy afresh, should its id come back', async () => {
     at(NOW);
     const h = harness({
       runs: [
@@ -1020,7 +1024,7 @@ describe('PolledSpendService', () => {
       ],
       cursorNodeRunIds: ['wf'],
       nodes: {
-        wf: [node({ runId: 'wf', nodeId: 'qa', agentSessionId: 'conv-wf' })],
+        wf: [node({ runId: 'wf', memberId: 'qa', agentSessionId: 'conv-wf' })],
       },
     });
     answerWith(event('conv-wf', 20));
@@ -1032,7 +1036,7 @@ describe('PolledSpendService', () => {
     expect(h.snapshotReads).toEqual([['wf'], ['wf']]);
   });
 
-  it('prices a POOLED node whose cursor member held a conversation, whatever its last turn was stamped', async () => {
+  it('prices a POOLED member whose cursor pool member held a conversation, whatever its last turn was stamped', async () => {
     at(NOW);
     const team = cursorRun({
       id: 'wf',
@@ -1055,7 +1059,7 @@ describe('PolledSpendService', () => {
         wf: [
           node({
             runId: 'wf',
-            nodeId: 'eng',
+            memberId: 'eng',
             agentKind: AgentKind.Claude,
             agentSessionId: 'conv-cursor',
           }),
@@ -1066,10 +1070,10 @@ describe('PolledSpendService', () => {
 
     await h.service.refresh(true);
 
-    expect(h.nodeWrites.map((write) => write.nodeId)).toEqual(['eng']);
+    expect(h.nodeWrites.map((write) => write.memberId)).toEqual(['eng']);
   });
 
-  it('sums EVERY conversation a node held rather than keeping the last', async () => {
+  it('sums EVERY conversation a member held rather than keeping the last', async () => {
     at(NOW);
     const h = harness({
       runs: [cursorRun()],
@@ -1169,7 +1173,7 @@ describe('PolledSpendService', () => {
     expect(h.counts.listed).toBe(2);
   });
 
-  it('asks again about a node that has not yet named its agent, rather than filing it as not cursor', async () => {
+  it('asks again about a member that has not yet named its agent, rather than filing it as not cursor', async () => {
     const clock = at(NOW);
     const team = cursorRun({
       id: 'wf-1',
@@ -1197,10 +1201,10 @@ describe('PolledSpendService', () => {
     expect(h.counts.listed).toBe(2);
   });
 
-  it('says a team run holds polled spend when any of its nodes ran on such a CLI', async () => {
+  it('says a team run holds polled spend when any of its members ran on such a CLI', async () => {
     const h = harness({
       runs: [],
-      nodes: { 'wf-1': [node({ runId: 'wf-1', nodeId: 'qa' })] },
+      nodes: { 'wf-1': [node({ runId: 'wf-1', memberId: 'qa' })] },
     });
     expect(await h.service.runHoldsPolledSpend('wf-1', null)).toBe(true);
     expect(await h.service.runHoldsPolledSpend('wf-2', null)).toBe(false);
@@ -1254,7 +1258,7 @@ describe('PolledSpendService — which CLIs it asks', () => {
         runIdsForAgent: async () => [],
         listByRun: async () => [
           node({
-            nodeId: 'agent',
+            memberId: 'agent',
             agentKind: AgentKind.Claude,
             agentSessionId: 'sess-1',
           }),

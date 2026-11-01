@@ -38,8 +38,8 @@ import { checkTeam } from '../utils/team-check';
 import { diffTeams } from '../utils/team-diff';
 import { parseTeamYaml } from '../utils/team-yaml';
 import { agentsThatRunAuto } from '../utils/unattended';
-import { GraphExecutorService } from './graph-executor.service';
 import { TeamChangeLogService } from './team-change-log.service';
+import { TeamExecutorService } from './team-executor.service';
 import { TeamStoreService } from './team-store.service';
 
 export type PreparedProposal =
@@ -85,7 +85,7 @@ export class TeamProposalService {
 
   constructor(
     private readonly store: TeamStoreService,
-    private readonly executor: GraphExecutorService,
+    private readonly executor: TeamExecutorService,
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
@@ -443,7 +443,7 @@ export class TeamProposalService {
     try {
       await this.executor.assertRunnable(team);
     } catch (error) {
-      // The graph checks refuse with geniro's exceptions; the model check
+      // The team checks refuse with geniro's exceptions; the model check
       // (`AgentAdapter.validateModel`) throws plain errors, in geniro's own
       // words and quoting at most the local Ollama server's answer — its
       // reason is what lets the agent pick another model.
@@ -491,7 +491,7 @@ export class TeamProposalService {
 
   /**
    * A builder chat's edits, applied to the library file as it stands and
-   * checked as its own save would be — the schema and the graph rules, not
+   * checked as its own save would be — the schema and the team rules, not
    * whether it could run yet: a team is built up over several changes. The
    * card is a replacement pinned to the version the edits were applied to.
    */

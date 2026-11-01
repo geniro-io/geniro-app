@@ -18,8 +18,8 @@ export class TeamNotesTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.notes.canUse(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.notes.canUse(runId, memberId);
   }
 
   protected instructions(): string {
@@ -32,14 +32,16 @@ export class TeamNotesTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId, caller }: McpCallContext,
+    { runId, memberId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
     const query = readTeamNotes(args);
     if ('error' in query) {
       return this.invalidArgs(query.error);
     }
     return this.text(
-      teamNotesResultText(await this.notes.read(runId, nodeId, caller, query)),
+      teamNotesResultText(
+        await this.notes.read(runId, memberId, caller, query),
+      ),
     );
   }
 }

@@ -1996,7 +1996,7 @@ export interface CallStartReading {
      * @type {string}
      * @memberof CallStartReading
      */
-    callerNodeId: string | null;
+    callerMemberId: string | null;
     /**
      * 
      * @type {string}
@@ -2206,7 +2206,7 @@ export interface ChatExportNode {
      * @type {string}
      * @memberof ChatExportNode
      */
-    nodeId: string;
+    memberId: string;
     /**
      * 
      * @type {string}
@@ -2483,7 +2483,7 @@ export interface ChatHistoryDtoItemsInner {
      * @type {string}
      * @memberof ChatHistoryDtoItemsInner
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * Monotonic per-run sequence — the replay cursor
      * @type {number}
@@ -3913,18 +3913,6 @@ export interface DisplayedPullRequest {
      */
     outcome?: PullRequestOutcome | null;
 }
-
-/**
- * 
- * @export
- */
-export const EdgeKind = {
-    Data: 'data',
-    Call: 'call',
-    Instruction: 'instruction'
-} as const;
-export type EdgeKind = typeof EdgeKind[keyof typeof EdgeKind];
-
 /**
  * 
  * @export
@@ -4056,7 +4044,7 @@ export interface GlobalChatSearchHit {
      * @type {string}
      * @memberof GlobalChatSearchHit
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * 
      * @type {string}
@@ -4236,6 +4224,44 @@ export interface ImportTeamDto {
 /**
  * 
  * @export
+ * @interface InstructionBlock
+ */
+export interface InstructionBlock {
+    /**
+     * Unique block id within the team
+     * @type {string}
+     * @memberof InstructionBlock
+     */
+    id: string;
+    /**
+     * Short name shown in the editor
+     * @type {string}
+     * @memberof InstructionBlock
+     */
+    title: string;
+    /**
+     * Instruction text composed into every audience member’s turns
+     * @type {string}
+     * @memberof InstructionBlock
+     */
+    text: string;
+    /**
+     * 
+     * @type {InstructionBlockAudience}
+     * @memberof InstructionBlock
+     */
+    audience: InstructionBlockAudience;
+}
+/**
+ * 'everyone', or the ids of the members it applies to
+ * @export
+ * @interface InstructionBlockAudience
+ */
+export interface InstructionBlockAudience {
+}
+/**
+ * 
+ * @export
  * @interface InstructionSizePart
  */
 export interface InstructionSizePart {
@@ -4246,11 +4272,11 @@ export interface InstructionSizePart {
      */
     source: InstructionSizeSource;
     /**
-     * For an instructionBlocks part: the instruction node whose text it is (one part per wired block)
+     * For an instructionBlocks part: the block whose text it is (one part per block addressed to the member)
      * @type {string}
      * @memberof InstructionSizePart
      */
-    instructionNodeId?: string;
+    blockId?: string;
     /**
      * 
      * @type {number}
@@ -4282,7 +4308,8 @@ export const InstructionSizeSource = {
     TeamInstructions: 'teamInstructions',
     InstructionBlocks: 'instructionBlocks',
     StageMap: 'stageMap',
-    Role: 'role',
+    Instructions: 'instructions',
+    Character: 'character',
     AnsweringACall: 'answeringACall',
     CallSurface: 'callSurface'
 } as const;
@@ -4296,10 +4323,10 @@ export type InstructionSizeSource = typeof InstructionSizeSource[keyof typeof In
 export interface InstructionSizesDto {
     /**
      * 
-     * @type {Array<NodeInstructionSize>}
+     * @type {Array<MemberInstructionSize>}
      * @memberof InstructionSizesDto
      */
-    nodes: Array<NodeInstructionSize>;
+    members: Array<MemberInstructionSize>;
 }
 /**
  * 
@@ -4324,7 +4351,7 @@ export interface ItemDto {
      * @type {string}
      * @memberof ItemDto
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * Monotonic per-run sequence — the replay cursor
      * @type {number}
@@ -4635,7 +4662,7 @@ export interface LiveAction {
      * @type {string}
      * @memberof LiveAction
      */
-    nodeId: string;
+    memberId: string;
     /**
      * 
      * @type {string}
@@ -4829,6 +4856,103 @@ export interface MeasureInstructionSizesDto {
      */
     replyLanguage?: string;
 }
+/**
+ * 
+ * @export
+ * @interface MemberAvatar
+ */
+export interface MemberAvatar {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAvatar
+     */
+    kind: MemberAvatarKindEnum;
+    /**
+     * The initials, the emoji, or the stored picture’s id
+     * @type {string}
+     * @memberof MemberAvatar
+     */
+    value?: string;
+    /**
+     * Colour token the avatar is drawn in
+     * @type {string}
+     * @memberof MemberAvatar
+     */
+    tone?: string;
+}
+
+
+/**
+ * @export
+ */
+export const MemberAvatarKindEnum = {
+    Initials: 'initials',
+    Emoji: 'emoji',
+    Picture: 'picture'
+} as const;
+export type MemberAvatarKindEnum = typeof MemberAvatarKindEnum[keyof typeof MemberAvatarKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemberInstructionSize
+ */
+export interface MemberInstructionSize {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberInstructionSize
+     */
+    memberId: string;
+    /**
+     * The CLI measured — the member’s own, a pool’s first member
+     * @type {AgentKind}
+     * @memberof MemberInstructionSize
+     */
+    agent: AgentKind;
+    /**
+     * Which turn was measured: the member’s own turn, or — for a member only ever called — a turn answering a call
+     * @type {string}
+     * @memberof MemberInstructionSize
+     */
+    turn: MemberInstructionSizeTurnEnum;
+    /**
+     * Length of the composed block, exactly
+     * @type {number}
+     * @memberof MemberInstructionSize
+     */
+    totalChars: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberInstructionSize
+     */
+    approxTokens: number;
+    /**
+     * The paragraph breaks between parts — totalChars less the parts
+     * @type {number}
+     * @memberof MemberInstructionSize
+     */
+    separatorChars: number;
+    /**
+     * 
+     * @type {Array<InstructionSizePart>}
+     * @memberof MemberInstructionSize
+     */
+    parts: Array<InstructionSizePart>;
+}
+
+
+/**
+ * @export
+ */
+export const MemberInstructionSizeTurnEnum = {
+    Own: 'own',
+    Call: 'call'
+} as const;
+export type MemberInstructionSizeTurnEnum = typeof MemberInstructionSizeTurnEnum[keyof typeof MemberInstructionSizeTurnEnum];
+
 /**
  * 
  * @export
@@ -5612,85 +5736,6 @@ export interface NamedPathsResultDto {
 /**
  * 
  * @export
- * @interface NodeInstructionSize
- */
-export interface NodeInstructionSize {
-    /**
-     * 
-     * @type {string}
-     * @memberof NodeInstructionSize
-     */
-    nodeId: string;
-    /**
-     * The CLI measured — the node’s own, a pool’s first member
-     * @type {AgentKind}
-     * @memberof NodeInstructionSize
-     */
-    agent: AgentKind;
-    /**
-     * Which turn was measured: the node’s own turn, or — for a node only ever called — a turn answering a call
-     * @type {string}
-     * @memberof NodeInstructionSize
-     */
-    turn: NodeInstructionSizeTurnEnum;
-    /**
-     * Length of the composed block, exactly
-     * @type {number}
-     * @memberof NodeInstructionSize
-     */
-    totalChars: number;
-    /**
-     * 
-     * @type {number}
-     * @memberof NodeInstructionSize
-     */
-    approxTokens: number;
-    /**
-     * The paragraph breaks between parts — totalChars less the parts
-     * @type {number}
-     * @memberof NodeInstructionSize
-     */
-    separatorChars: number;
-    /**
-     * 
-     * @type {Array<InstructionSizePart>}
-     * @memberof NodeInstructionSize
-     */
-    parts: Array<InstructionSizePart>;
-}
-
-
-/**
- * @export
- */
-export const NodeInstructionSizeTurnEnum = {
-    Own: 'own',
-    Call: 'call'
-} as const;
-export type NodeInstructionSizeTurnEnum = typeof NodeInstructionSizeTurnEnum[keyof typeof NodeInstructionSizeTurnEnum];
-
-/**
- * 
- * @export
- * @interface NodePosition
- */
-export interface NodePosition {
-    /**
-     * 
-     * @type {number}
-     * @memberof NodePosition
-     */
-    x: number;
-    /**
-     * 
-     * @type {number}
-     * @memberof NodePosition
-     */
-    y: number;
-}
-/**
- * 
- * @export
  * @interface NodeStateDto
  */
 export interface NodeStateDto {
@@ -5705,7 +5750,7 @@ export interface NodeStateDto {
      * @type {string}
      * @memberof NodeStateDto
      */
-    nodeId: string;
+    memberId: string;
     /**
      * 
      * @type {NodeStatus}
@@ -5843,7 +5888,7 @@ export interface OpenMonitor {
      * @type {string}
      * @memberof OpenMonitor
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * 
      * @type {string}
@@ -5886,7 +5931,7 @@ export interface OpenShell {
      * @type {string}
      * @memberof OpenShell
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * 
      * @type {string}
@@ -6689,13 +6734,13 @@ export interface RunCallState {
      * @type {string}
      * @memberof RunCallState
      */
-    callerNodeId: string | null;
+    callerMemberId: string | null;
     /**
      * 
      * @type {string}
      * @memberof RunCallState
      */
-    calleeNodeId: string | null;
+    calleeMemberId: string | null;
     /**
      * 
      * @type {string}
@@ -6776,7 +6821,7 @@ export interface RunDelegateState {
      * @type {string}
      * @memberof RunDelegateState
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * 
      * @type {string}
@@ -6879,7 +6924,7 @@ export interface RunDto {
      */
     awaitingCalls: number;
     /**
-     * DAG agents of this team run inside a turn (calls excluded); 0 when a message would be taken now
+     * Trigger members of this team run inside a turn (calls excluded); 0 when a message would be taken now
      * @type {number}
      * @memberof RunDto
      */
@@ -7478,7 +7523,7 @@ export interface RunProcessTree {
      * @type {string}
      * @memberof RunProcessTree
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * 
      * @type {string}
@@ -7831,7 +7876,7 @@ export interface RunTaskGroup {
      * @type {string}
      * @memberof RunTaskGroup
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * 
      * @type {string}
@@ -7986,13 +8031,13 @@ export interface RunWaterfallCall {
      * @type {string}
      * @memberof RunWaterfallCall
      */
-    callerNodeId: string | null;
+    callerMemberId: string | null;
     /**
      * 
      * @type {string}
      * @memberof RunWaterfallCall
      */
-    calleeNodeId: string | null;
+    calleeMemberId: string | null;
     /**
      * 
      * @type {string}
@@ -8047,7 +8092,7 @@ export interface RunWaterfallCriticalSegment {
      * @type {string}
      * @memberof RunWaterfallCriticalSegment
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * 
      * @type {string}
@@ -8084,7 +8129,7 @@ export interface RunWaterfallDelegate {
      * @type {string}
      * @memberof RunWaterfallDelegate
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * 
      * @type {string}
@@ -8194,7 +8239,7 @@ export interface RunWaterfallLane {
      * @type {string}
      * @memberof RunWaterfallLane
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * 
      * @type {AgentKind}
@@ -8270,7 +8315,7 @@ export interface RunWaterfallToolUse {
      * @type {string}
      * @memberof RunWaterfallToolUse
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * 
      * @type {string}
@@ -8301,7 +8346,7 @@ export interface RunWaterfallTurn {
      * @type {string}
      * @memberof RunWaterfallTurn
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * 
      * @type {string}
@@ -8483,7 +8528,7 @@ export interface RunWaterfallWait {
      * @type {string}
      * @memberof RunWaterfallWait
      */
-    nodeId: string | null;
+    memberId: string | null;
     /**
      * a question put to the user, as against a permission the CLI asked for
      * @type {boolean}
@@ -10445,136 +10490,37 @@ export interface Team {
      */
     maxActiveTurns?: number;
     /**
-     * 
-     * @type {Array<TeamNode>}
+     * How the team coordinates: 'lead' (the trigger's member runs the work) or 'relay' (stages pass between their responsible members)
+     * @type {TeamMode}
      * @memberof Team
      */
-    nodes: Array<TeamNode>;
+    mode: TeamMode;
     /**
      * 
-     * @type {Array<TeamEdge>}
+     * @type {Array<TeamMember>}
      * @memberof Team
      */
-    edges: Array<TeamEdge>;
+    members: Array<TeamMember>;
+    /**
+     * What starts a run — exactly one, the first message
+     * @type {Array<TeamTrigger>}
+     * @memberof Team
+     */
+    triggers: Array<TeamTrigger>;
     /**
      * 
-     * @type {{ [key: string]: NodePosition; }}
+     * @type {Array<InstructionBlock>}
      * @memberof Team
      */
-    layout?: { [key: string]: NodePosition; };
+    instructionBlocks: Array<InstructionBlock>;
     /**
-     * The team's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review. Every agent of a run sees it and moves it with move_stage. Omitted = the team has no stages
+     * The team's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review. Every member of a run sees it and moves it with move_stage. Omitted = the team has no stages
      * @type {Array<TeamStage>}
      * @memberof Team
      */
     stages?: Array<TeamStage>;
 }
-/**
- * 
- * @export
- * @interface TeamAgentNode
- */
-export interface TeamAgentNode {
-    /**
-     * Unique node id within the team
-     * @type {string}
-     * @memberof TeamAgentNode
-     */
-    id: string;
-    /**
-     * Display name (defaults to id)
-     * @type {string}
-     * @memberof TeamAgentNode
-     */
-    name?: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof TeamAgentNode
-     */
-    kind: TeamAgentNodeKindEnum;
-    /**
-     * CLI agent that runs this node
-     * @type {AgentKind}
-     * @memberof TeamAgentNode
-     */
-    agent: AgentKind;
-    /**
-     * Model alias; omitted = CLI default
-     * @type {string}
-     * @memberof TeamAgentNode
-     */
-    model?: string;
-    /**
-     * Reasoning-effort level; omitted = CLI default
-     * @type {string}
-     * @memberof TeamAgentNode
-     */
-    effort?: string;
-    /**
-     * Context-window size; omitted = the model's own default
-     * @type {string}
-     * @memberof TeamAgentNode
-     */
-    contextWindow?: string;
-    /**
-     * Auto-compact threshold (% of the context window); omitted = never
-     * @type {number}
-     * @memberof TeamAgentNode
-     */
-    autoCompactPercent?: number;
-    /**
-     * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
-     * @type {{ [key: string]: string; }}
-     * @memberof TeamAgentNode
-     */
-    modelParameters?: { [key: string]: string; };
-    /**
-     * What this agent does — shown to agents wired to call it
-     * @type {string}
-     * @memberof TeamAgentNode
-     */
-    description?: string;
-    /**
-     * Role/system prompt prepended to the node turn
-     * @type {string}
-     * @memberof TeamAgentNode
-     */
-    role?: string;
-    /**
-     * Tool-approval mode for this node
-     * @type {ApprovalMode}
-     * @memberof TeamAgentNode
-     */
-    approval: ApprovalMode;
-    /**
-     * Absolute path to the agent config directory this node runs under
-     * @type {string}
-     * @memberof TeamAgentNode
-     */
-    configDir?: string;
-    /**
-     * MCP servers this node’s turns run without, by name; omitted = none switched off
-     * @type {Array<string>}
-     * @memberof TeamAgentNode
-     */
-    mcpDisabled?: Array<string>;
-    /**
-     * Further agent configurations a turn of this node can run under (members 2, 3, …); the node’s own settings are member 1
-     * @type {Array<TeamAgentPoolMember>}
-     * @memberof TeamAgentNode
-     */
-    pool?: Array<TeamAgentPoolMember>;
-}
 
-
-/**
- * @export
- */
-export const TeamAgentNodeKindEnum = {
-    Agent: 'agent'
-} as const;
-export type TeamAgentNodeKindEnum = typeof TeamAgentNodeKindEnum[keyof typeof TeamAgentNodeKindEnum];
 
 /**
  * 
@@ -10589,7 +10535,7 @@ export interface TeamAgentPoolMember {
      */
     agent: AgentKind;
     /**
-     * Tool-approval mode for this member; omitted = the node's own
+     * Tool-approval mode for this member; omitted = the member's own
      * @type {ApprovalMode}
      * @memberof TeamAgentPoolMember
      */
@@ -10668,39 +10614,6 @@ export interface TeamDeletedDto {
 /**
  * 
  * @export
- * @interface TeamEdge
- */
-export interface TeamEdge {
-    /**
-     * Source node id
-     * @type {string}
-     * @memberof TeamEdge
-     */
-    from: string;
-    /**
-     * Target node id
-     * @type {string}
-     * @memberof TeamEdge
-     */
-    to: string;
-    /**
-     * Edge kind — 'data' feeds output text; 'call' grants the call_agent tool; 'instruction' appends instruction text
-     * @type {EdgeKind}
-     * @memberof TeamEdge
-     */
-    kind: EdgeKind;
-    /**
-     * Optional edge label
-     * @type {string}
-     * @memberof TeamEdge
-     */
-    label?: string;
-}
-
-
-/**
- * 
- * @export
  * @interface TeamFileDto
  */
 export interface TeamFileDto {
@@ -10726,50 +10639,119 @@ export interface TeamFileDto {
 /**
  * 
  * @export
- * @interface TeamInstructionNode
+ * @interface TeamMember
  */
-export interface TeamInstructionNode {
+export interface TeamMember {
     /**
-     * Unique node id within the team
+     * Unique member id within the team
      * @type {string}
-     * @memberof TeamInstructionNode
+     * @memberof TeamMember
      */
     id: string;
     /**
-     * Display name (defaults to id)
+     * Display name, and how other members address it
      * @type {string}
-     * @memberof TeamInstructionNode
+     * @memberof TeamMember
      */
-    name?: string;
+    name: string;
+    /**
+     * Manner and tone; only this member’s own prompt carries it
+     * @type {string}
+     * @memberof TeamMember
+     */
+    character?: string;
     /**
      * 
-     * @type {string}
-     * @memberof TeamInstructionNode
+     * @type {MemberAvatar}
+     * @memberof TeamMember
      */
-    kind: TeamInstructionNodeKindEnum;
+    avatar?: MemberAvatar;
     /**
-     * Instruction text appended to every wired agent’s turn
+     * What this member does — shown to every other member
      * @type {string}
-     * @memberof TeamInstructionNode
+     * @memberof TeamMember
      */
-    instructions: string;
+    role?: string;
+    /**
+     * How this member works — only its own turns carry it
+     * @type {string}
+     * @memberof TeamMember
+     */
+    instructions?: string;
+    /**
+     * CLI agent this member runs
+     * @type {AgentKind}
+     * @memberof TeamMember
+     */
+    agent: AgentKind;
+    /**
+     * Model alias; omitted = CLI default
+     * @type {string}
+     * @memberof TeamMember
+     */
+    model?: string;
+    /**
+     * Reasoning-effort level; omitted = CLI default
+     * @type {string}
+     * @memberof TeamMember
+     */
+    effort?: string;
+    /**
+     * Context-window size; omitted = the model's own default
+     * @type {string}
+     * @memberof TeamMember
+     */
+    contextWindow?: string;
+    /**
+     * Auto-compact threshold (% of the context window); omitted = never
+     * @type {number}
+     * @memberof TeamMember
+     */
+    autoCompactPercent?: number;
+    /**
+     * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
+     * @type {{ [key: string]: string; }}
+     * @memberof TeamMember
+     */
+    modelParameters?: { [key: string]: string; };
+    /**
+     * Tool-approval mode for this member
+     * @type {ApprovalMode}
+     * @memberof TeamMember
+     */
+    approval: ApprovalMode;
+    /**
+     * Absolute path to the agent config directory this member runs under
+     * @type {string}
+     * @memberof TeamMember
+     */
+    configDir?: string;
+    /**
+     * MCP servers this member’s turns run without, by name; omitted = none switched off
+     * @type {Array<string>}
+     * @memberof TeamMember
+     */
+    mcpDisabled?: Array<string>;
+    /**
+     * Further agent configurations a turn of this member can run under (members 2, 3, …); the member’s own settings are member 1
+     * @type {Array<TeamAgentPoolMember>}
+     * @memberof TeamMember
+     */
+    pool?: Array<TeamAgentPoolMember>;
 }
 
 
-/**
- * @export
- */
-export const TeamInstructionNodeKindEnum = {
-    Instruction: 'instruction'
-} as const;
-export type TeamInstructionNodeKindEnum = typeof TeamInstructionNodeKindEnum[keyof typeof TeamInstructionNodeKindEnum];
 
 /**
- * @type TeamNode
  * 
  * @export
  */
-export type TeamNode = TeamAgentNode | TeamInstructionNode | TeamTriggerNode;
+export const TeamMode = {
+    Lead: 'lead',
+    Relay: 'relay'
+} as const;
+export type TeamMode = typeof TeamMode[keyof typeof TeamMode];
+
 /**
  * 
  * @export
@@ -10799,7 +10781,7 @@ export interface TeamNote {
      * @type {string}
      * @memberof TeamNote
      */
-    nodeId: string;
+    memberId: string;
     /**
      * 
      * @type {string}
@@ -10860,29 +10842,29 @@ export interface TeamStage {
      */
     id: string;
     /**
-     * Short stage name shown to agents and the user
+     * Short stage name shown to members and the user
      * @type {string}
      * @memberof TeamStage
      */
     title: string;
     /**
-     * What to do in this stage, in plain language
+     * How to work in this stage, in plain language
      * @type {string}
      * @memberof TeamStage
      */
-    instructions?: string;
+    howToWork?: string;
     /**
-     * The condition that makes this stage finished
+     * The condition that makes this stage done
      * @type {string}
      * @memberof TeamStage
      */
-    doneWhen: string;
+    goal: string;
     /**
-     * Id of the agent node that usually does this stage — a hint, never a permission
-     * @type {string}
+     * Ids of the members responsible for this stage; the first one leads it
+     * @type {Array<string>}
      * @memberof TeamStage
      */
-    ownerHint?: string;
+    responsible?: Array<string>;
     /**
      * Ids of the stages that may follow; two or more = the run takes ONE of them; omitted = a final stage
      * @type {Array<string>}
@@ -10919,15 +10901,15 @@ export interface TeamSummaryDto {
      * @type {number}
      * @memberof TeamSummaryDto
      */
-    nodeCount: number;
+    memberCount: number;
     /**
      * 
      * @type {number}
      * @memberof TeamSummaryDto
      */
-    edgeCount: number;
+    stageCount: number;
     /**
-     * Per-agent-kind node counts, only kinds present, stable order
+     * Per-agent-kind member counts, only kinds present, stable order
      * @type {Array<AgentCount>}
      * @memberof TeamSummaryDto
      */
@@ -10942,43 +10924,31 @@ export interface TeamSummaryDto {
 /**
  * 
  * @export
- * @interface TeamTriggerNode
+ * @interface TeamTrigger
  */
-export interface TeamTriggerNode {
-    /**
-     * Unique node id within the team
-     * @type {string}
-     * @memberof TeamTriggerNode
-     */
-    id: string;
-    /**
-     * Display name (defaults to id)
-     * @type {string}
-     * @memberof TeamTriggerNode
-     */
-    name?: string;
+export interface TeamTrigger {
     /**
      * 
      * @type {string}
-     * @memberof TeamTriggerNode
+     * @memberof TeamTrigger
      */
-    kind: TeamTriggerNodeKindEnum;
+    kind: TeamTriggerKindEnum;
     /**
-     * How this trigger fires
-     * @type {TriggerKind}
-     * @memberof TeamTriggerNode
+     * Id of the member that handles the first message
+     * @type {string}
+     * @memberof TeamTrigger
      */
-    trigger: TriggerKind;
+    member: string;
 }
 
 
 /**
  * @export
  */
-export const TeamTriggerNodeKindEnum = {
-    Trigger: 'trigger'
+export const TeamTriggerKindEnum = {
+    FirstMessage: 'first-message'
 } as const;
-export type TeamTriggerNodeKindEnum = typeof TeamTriggerNodeKindEnum[keyof typeof TeamTriggerNodeKindEnum];
+export type TeamTriggerKindEnum = typeof TeamTriggerKindEnum[keyof typeof TeamTriggerKindEnum];
 
 /**
  * 
@@ -10993,7 +10963,7 @@ export interface TeamVersionRestoredDto {
      */
     slug: string;
     /**
-     * the graph version the library file now holds
+     * the team version the library file now holds
      * @type {string}
      * @memberof TeamVersionRestoredDto
      */
@@ -11030,17 +11000,23 @@ export interface TeamVersionRow {
      */
     ordinal: number | null;
     /**
-     * every run of it predates graph copies, so the graph was frozen after the run started
+     * every run of it predates team copies, so the team was frozen after the run started
      * @type {boolean}
      * @memberof TeamVersionRow
      */
     inferred: boolean;
     /**
-     * false only for the library graph before its first run or restore records it
+     * false only for the library team before its first run or restore records it
      * @type {boolean}
      * @memberof TeamVersionRow
      */
     recorded: boolean;
+    /**
+     * recorded while teams were node graphs; its diff is taken over the graph converted to a team
+     * @type {boolean}
+     * @memberof TeamVersionRow
+     */
+    preTeam: boolean;
     /**
      * 
      * @type {string}
@@ -11203,7 +11179,7 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      */
     awaitingCalls: number;
     /**
-     * DAG agents of this team run inside a turn (calls excluded); 0 when a message would be taken now
+     * Trigger members of this team run inside a turn (calls excluded); 0 when a message would be taken now
      * @type {number}
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
@@ -11623,16 +11599,6 @@ export interface ThreadOverviewDtoTotals {
      */
     pausedSpans: Array<PausedSpan>;
 }
-
-/**
- * 
- * @export
- */
-export const TriggerKind = {
-    Manual: 'manual'
-} as const;
-export type TriggerKind = typeof TriggerKind[keyof typeof TriggerKind];
-
 /**
  * 
  * @export

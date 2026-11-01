@@ -29,17 +29,17 @@ import { Button } from '../components/ui/button';
 import { Select } from '../components/ui/select';
 import type { DaemonApis } from '../daemon-api';
 import { randomId } from '../random-id';
+import { modelChangePatch } from './member-schema';
 import { ModelSettingsRows } from './model-settings-rows';
 import {
   nextMcpDisabled,
   nodeMcpHint,
   withNodeSwitches,
 } from './node-mcp-switches';
-import { modelChangePatch } from './node-schema';
 import { useNodeMcp } from './use-node-mcp';
 
 /**
- * Members a pool may hold BESIDES the node's own.
+ * Members a pool may hold BESIDES the team member's own.
  *
  * TWIN: the daemon's `MAX_AGENT_POOL_EXTRA_MEMBERS` (`teams.types.ts`), which
  * refuses a longer pool on save. Change one, change the other.
@@ -47,20 +47,20 @@ import { useNodeMcp } from './use-node-mcp';
 const MAX_POOL_EXTRA_MEMBERS = 7;
 
 /**
- * The node's AGENT POOL: further configurations a CALL to this node can run
+ * A team member's AGENT POOL: further configurations a turn of that member can run
  * under — another account, another model, another CLI.
  *
- * The node's own settings above are member 1, so this lists members 2, 3, …
+ * The member's own settings above are member 1, so this lists members 2, 3, …
  * and says so; the numbers are the ones a calling agent picks a member by.
  * Each row asks its OWN CLI for its models, efforts and MCP servers, under its
  * own profile, because a member is a different account as often as a different
  * CLI. A row offers every setting the card above does: its own approval mode
- * (the node's until it picks one) and its own auto-compact threshold (never
- * until it picks one — a new member starts from the node's).
+ * (the team member's until it picks one) and its own auto-compact threshold (never
+ * until it picks one — a new member starts from the team member's).
  */
 /**
  * Signing a member's MCP server in — the builder's ONE sign-in controller
- * (`useCliLogin`), shared with the node's own MCP dialog: one browser
+ * (`useCliLogin`), shared with the team member's own MCP dialog: one browser
  * challenge at a time, since a second invalidates the first.
  */
 export interface PoolMcpSignIn {
@@ -94,15 +94,15 @@ export function AgentPoolEditor({
   /** Every CLI the daemon can run, for the member's CLI picker. */
   agents: readonly AgentIdentityCapability[];
   agentsApi: DaemonApis['agents'] | null;
-  /** The CLI a newly added member starts on — the node's own. */
+  /** The CLI a newly added member starts on — the team member's own. */
   defaultAgent: AgentKind;
   /** Whether a CLI can be pointed at a config directory at all. */
   configDirAvailable: (agent: AgentKind) => boolean;
   /** Every CLI's approval modes (`GET /v1/capabilities` `approvals[]`). */
   approvals: readonly AgentApprovalCapability[];
-  /** The node's own mode — what a member that names none runs. */
+  /** The team member's own mode — what a pool member that names none runs. */
   nodeApproval: TeamApproval;
-  /** The node's own threshold, which a NEW member starts from. */
+  /** The team member's own threshold, which a NEW pool member starts from. */
   nodeAutoCompactPercent: number | undefined;
   recentConfigDirs: Partial<Record<AgentKind, string[]>>;
   configProfiles: readonly ConfigProfile[];
@@ -116,7 +116,7 @@ export function AgentPoolEditor({
   // A row key per member, moved WITH it: a member has no id of its own, and
   // keyed by position a reorder hands each row the other's fetched lists and
   // open picker. Rebuilt only when the list arrives from elsewhere (another
-  // node selected, the YAML replaced) at a different length.
+  // team member selected, the YAML replaced) at a different length.
   const keys = useRef<string[]>([]);
   if (keys.current.length !== members.length) {
     keys.current = members.map((_, i) => keys.current[i] ?? randomId());

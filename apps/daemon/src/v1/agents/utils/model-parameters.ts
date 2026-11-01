@@ -74,7 +74,7 @@ export function writeModelParameters(
  * `CustomInstructionsSchema`'s, reused rather than restated so the two cannot
  * drift about what a control character is.
  *
- * Exported for the callers whose map never was a column: a team node's
+ * Exported for the callers whose map never was a column: a team member's
  * parameters arrive as parsed YAML, so routing them through
  * {@link readModelParameters} would mean stringifying an object in order to
  * parse it straight back.

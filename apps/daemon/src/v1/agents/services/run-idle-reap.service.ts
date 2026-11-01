@@ -122,7 +122,7 @@ export class RunIdleReapService implements OnModuleInit, OnApplicationShutdown {
       em,
       {
         runId,
-        nodeId: null,
+        memberId: null,
         seq: await this.seqs.reserve(runId),
         kind: row.kind,
         role: row.role,

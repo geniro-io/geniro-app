@@ -135,7 +135,7 @@ function monitorOf(pid: number): MonitorSnapshot {
     pid,
     owner: {
       runId: 'run-1',
-      nodeId: 'agent',
+      memberId: 'agent',
       caller: 'agent',
       conversationId: null,
       callId: null,
@@ -273,7 +273,7 @@ describe('RunProcessesService', () => {
 
     expect(reading.trees).toMatchObject([
       {
-        nodeId: 'qa',
+        memberId: 'qa',
         conversationId: null,
         agentKind: 'cursor-agent',
         rootPid: 100,
@@ -281,7 +281,7 @@ describe('RunProcessesService', () => {
         rssBytes: 5_000,
       },
       {
-        nodeId: null,
+        memberId: null,
         conversationId: 'call-3',
         agentKind: 'claude',
         rootPid: 200,

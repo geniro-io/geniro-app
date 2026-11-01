@@ -30,9 +30,11 @@ import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
 import { Run } from '../../runs/entity/run.entity';
 import { RunGroup } from '../../runs/entity/run-group.entity';
-import type { GraphExecutorService } from '../../teams/services/graph-executor.service';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
 import type { RunTeamService } from '../../teams/services/run-team.service';
+import type { TeamExecutorService } from '../../teams/services/team-executor.service';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
+import type { TeamMember } from '../../teams/teams.types';
 import { aLabelInstruction } from '../__tests__/fixtures';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
@@ -90,12 +92,12 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   let startTeamRun: ReturnType<typeof vi.fn>;
   let deleteTeamRun: ReturnType<typeof vi.fn>;
   let sendTeamMessage: ReturnType<typeof vi.fn>;
-  /** What each team run's own SNAPSHOT says its agent nodes approve with. */
+  /** What each team run's own SNAPSHOT says its members approve with. */
   let snapshotApprovals: Record<string, string>;
   let deleteChat: ReturnType<typeof vi.fn>;
   let resolveAutoGroupId: ReturnType<typeof vi.fn>;
   let forTask: ReturnType<typeof vi.fn>;
-  /** What the library says each team's agent nodes approve with. */
+  /** What the library says each team's members approve with. */
   let teamApprovals: Record<string, string>;
 
   /**
@@ -257,7 +259,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       offeredApproval,
       delete: deleteChat,
     } as unknown as ChatService;
-    // The graph engine's double writes a real run row for `createChat`'s own
+    // The team engine's double writes a real run row for `createChat`'s own
     // reason: the double-start guard asks the RUN whether it has settled, and
     // a team-targeted card must be refused a second start exactly as an
     // agent-targeted one is.
@@ -286,9 +288,9 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       startRunBySlug: startTeamRun,
       deleteRun: deleteTeamRun,
       sendMessage: sendTeamMessage,
-    } as unknown as GraphExecutorService;
-    // The graph each existing team run was STARTED with, which a continued
-    // run walks — told apart from the library's copy above by its own field.
+    } as unknown as TeamExecutorService;
+    // The team each existing team run was STARTED with, which a continued
+    // run uses — told apart from the library's copy above by its own field.
     snapshotApprovals = {};
     const runTeams = {
       teamOf: vi.fn(async (run: { teamId: string }) => {
@@ -296,11 +298,14 @@ describe('TaskRunsService (in-memory sqlite)', () => {
         if (approval === undefined) {
           throw new Error(`no snapshot for ${run.teamId}`);
         }
-        return {
-          name: run.teamId,
-          nodes: [{ id: 'coder', kind: 'agent', agent: 'claude', approval }],
-          edges: [],
-        };
+        return teamOf(
+          [
+            member('coder', {
+              approval: approval as TeamMember['approval'],
+            }),
+          ],
+          { name: run.teamId },
+        );
       }),
     } as unknown as RunTeamService;
     // No sidebar rule claims anything by default; a test that needs one says so.
@@ -334,13 +339,14 @@ describe('TaskRunsService (in-memory sqlite)', () => {
           }
           return {
             slug,
-            team: {
-              name: slug,
-              nodes: [
-                { id: 'coder', kind: 'agent', agent: 'claude', approval },
+            team: teamOf(
+              [
+                member('coder', {
+                  approval: approval as TeamMember['approval'],
+                }),
               ],
-              edges: [],
-            },
+              { name: slug },
+            ),
           };
         }),
       } as unknown as TeamStoreService,
@@ -378,7 +384,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       return task;
     };
 
-    it('starts a graph run instead of a chat when the card names a team', async () => {
+    it('starts a team run instead of a chat when the card names a team', async () => {
       const task = await seedTeamCard();
 
       const started = await service.start(task.id, start());
@@ -423,12 +429,12 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       });
     });
 
-    it('seeds the graph with the card’s brief and sends no second message', async () => {
+    it('seeds the team run with the card’s brief and sends no second message', async () => {
       const task = await seedTeamCard();
 
       await service.start(task.id, start());
 
-      // A graph's seed prompt IS its opening message, so a NEW run is sent
+      // A team's seed prompt IS its opening message, so a NEW run is sent
       // nothing after it — a later press continues it instead (below).
       expect(startTeamRun.mock.calls[0]?.[1]).toMatchObject({
         prompt: 'ship it',
@@ -437,15 +443,15 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       void task;
     });
 
-    it('asks a graph to report through the board tool, from the node that concludes', async () => {
+    it('asks a team to report through the board tool, from the member that concludes', async () => {
       const task = await seedTeamCard();
 
       await service.start(task.id, start());
 
-      // Every agent node of a task team is handed the board tools, while
+      // Every member of a task team is handed the board tools, while
       // the render family is registered by `ChatService` alone — so the ask
-      // names `update_task`, never `report_findings`, and says which node of
-      // the graph is the one to use it.
+      // names `update_task`, never `report_findings`, and says which member
+      // is the one to use it.
       const instructions = String(
         startTeamRun.mock.calls[0]?.[1]?.taskInstructions ?? '',
       );
@@ -471,7 +477,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
 
       await expect(service.start(task.id, start())).rejects.toThrow(boom);
 
-      // `chats.delete` asserts a CHAT run, so sending a graph run there throws
+      // `chats.delete` asserts a CHAT run, so sending a team run there throws
       // `NOT_A_CHAT_RUN` into a catch that swallows it — leaving the orphaned
       // run row this routing exists to prevent, and leaving it silently.
       expect(deleteTeamRun).toHaveBeenCalledWith('wf-run-1');
@@ -517,7 +523,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
 
     it('hands the TEAM run the user’s per-CLI switches', async () => {
       // Snapshotted at run creation, so a press that dropped them would run
-      // every node with each option at its default.
+      // every member with each option at its default.
       const task = await seedTeamCard();
       const agentOptions = { claude: { browserTools: true } };
 
@@ -570,7 +576,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       expect(passed.replyLanguage).toBe('Russian');
     });
 
-    it('starts a team-targeted card unattended when every agent node is on auto', async () => {
+    it('starts a team-targeted card unattended when every member is on auto', async () => {
       teamApprovals = { 'dev-team': 'auto' };
       const task = await seedTeamCard();
 
@@ -579,11 +585,11 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       expect(startTeamRun).toHaveBeenCalledTimes(1);
     });
 
-    it('refuses to start a team-targeted card unattended when a node can ask', async () => {
+    it('refuses to start a team-targeted card unattended when a member can ask', async () => {
       // The resolver's own refusal is pinned in `run-target.spec.ts` and the
       // queue's handout keeps such a card out of `eligible` in
       // `task-queue.service.spec.ts` — but neither reaches this throw, which is
-      // the line: a team's nodes each carry their own approval mode, so
+      // the line: a team's members each carry their own approval mode, so
       // there is no single field to force the way an agent run's is, and an
       // autopilot start against one must never reach the executor at all.
       const task = await seedTeamCard();
@@ -1222,9 +1228,10 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   describe('a team card run again', () => {
     it('continues the run it already has, with the user’s own words, and makes no second run', async () => {
       // Follow up and a second Run press both say they continue the card's
-      // thread. A fresh walk made a second thread for one card and a team
+      // thread. A fresh run would make a second thread for one card and a team
       // with no memory of the first pass; the executor's own follow-up path
-      // walks the settled run again, every node resuming its session.
+      // starts the settled run's trigger member again, every member resuming
+      // its session.
       const task = await seed();
       await runTeamAndReturn(task.id);
 
@@ -1272,7 +1279,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
 
     it('starts a new run when the card has been re-pointed at ANOTHER team', async () => {
-      // Continuing would walk the old graph for good, with the panel showing
+      // Continuing would run the old team for good, with the panel showing
       // the new one and no way out short of deleting the run.
       const task = await seed();
       await runTeamAndReturn(task.id);
@@ -1344,7 +1351,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       expect(stored?.runId).toBe('wf-run-1');
     });
 
-    it('lets the AUTOPILOT continue a run whose own graph never asks', async () => {
+    it('lets the AUTOPILOT continue a run whose own team never asks', async () => {
       teamApprovals = { 'dev-team': 'auto' };
       snapshotApprovals = { 'dev-team': 'auto' };
       const task = await seed();
@@ -1356,9 +1363,9 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       expect(startTeamRun).not.toHaveBeenCalled();
     });
 
-    it('starts the AUTOPILOT a new run when the run’s own graph can still ask', async () => {
-      // The library copy was vetted as unattended; the run walks its SNAPSHOT,
-      // started before the team was edited, whose node would park on a
+    it('starts the AUTOPILOT a new run when the run’s own team can still ask', async () => {
+      // The library copy was vetted as unattended; the run uses its SNAPSHOT,
+      // started before the team was edited, whose member would park on a
       // permission card nobody is there to answer.
       teamApprovals = { 'dev-team': 'auto' };
       snapshotApprovals = { 'dev-team': 'ask' };
@@ -1371,7 +1378,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       expect(startTeamRun).toHaveBeenCalledTimes(1);
     });
 
-    it('starts the AUTOPILOT a new run when the run’s own graph cannot be read', async () => {
+    it('starts the AUTOPILOT a new run when the run’s own team cannot be read', async () => {
       teamApprovals = { 'dev-team': 'auto' };
       const task = await seed();
       await runTeamAndReturn(task.id);
@@ -1384,7 +1391,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   });
 
   it('refuses to send a chat message into a TEAM run', async () => {
-    // The card is re-pointed at an agent AFTER a graph run, so the press now
+    // The card is re-pointed at an agent AFTER a team run, so the press now
     // resolves to the agent arm while the run it holds is still a team
     // run. `sendMessage` is guarded by `assertChatRun` and would answer
     // `NOT_A_CHAT_RUN`, leaving the card permanently un-runnable.

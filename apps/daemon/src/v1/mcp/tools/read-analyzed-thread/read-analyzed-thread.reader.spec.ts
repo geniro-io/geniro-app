@@ -21,7 +21,7 @@ import { ReadAnalyzedThreadTool } from './read-analyzed-thread.tool';
 
 const CONTEXT = {
   runId: 'analysis',
-  nodeId: 'agent',
+  memberId: 'agent',
   conversationId: null,
   caller: 'agent',
   requestId: 1,
@@ -325,7 +325,7 @@ describe('ReadAnalyzedThreadTool', () => {
     expect(
       reading.list({
         runId: 'analysis',
-        nodeId: 'agent',
+        memberId: 'agent',
         conversationId: null,
       }),
     ).toEqual([]);

@@ -105,7 +105,7 @@ describe('SubagentRecoveryService (SQLite)', () => {
     const mapped = mapEventToItem(delegateCloseEvent('child'))!;
     return items.create({
       runId: 'run',
-      nodeId: 'node-a',
+      memberId: 'node-a',
       seq,
       kind: 'subagent_info',
       role: null,
@@ -126,7 +126,7 @@ describe('SubagentRecoveryService (SQLite)', () => {
     await declare(2);
   }
 
-  it('appends an authoritative recovered outcome under the original node and call exactly once', async () => {
+  it('appends an authoritative recovered outcome under the original member and call exactly once', async () => {
     await lost();
     const recover = vi
       .spyOn(adapter, 'recoverSubagent')
@@ -136,7 +136,7 @@ describe('SubagentRecoveryService (SQLite)', () => {
     expect(recover).toHaveBeenCalledWith(ref);
     const rows = await items.rowsOfKinds('run', ['subagent_info']);
     expect(rows).toHaveLength(3);
-    expect(rows[2]?.nodeId).toBe('node-a');
+    expect(rows[2]?.memberId).toBe('node-a');
     expect(JSON.parse(rows[2]!.payload)).toMatchObject({
       id: 'child',
       callId: 'call-a',
@@ -307,7 +307,7 @@ describe('SubagentRecoveryService (SQLite)', () => {
     });
     await items.create({
       runId: 'run',
-      nodeId: 'node-a',
+      memberId: 'node-a',
       seq: 2,
       kind: 'tool_result',
       role: null,
@@ -361,7 +361,7 @@ describe('SubagentRecoveryService (SQLite)', () => {
     await runs.create({ id: 'old', status: 'completed' });
     await items.create({
       runId: 'old',
-      nodeId: 'node-a',
+      memberId: 'node-a',
       seq: 1,
       kind: 'subagent_info',
       role: null,

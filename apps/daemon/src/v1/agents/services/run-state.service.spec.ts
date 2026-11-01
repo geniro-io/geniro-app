@@ -143,7 +143,7 @@ describe('RunStateService (in-memory sqlite)', () => {
     kind: ItemKind,
     payload: unknown,
     extra: {
-      nodeId?: string | null;
+      memberId?: string | null;
       role?: string;
       at?: number;
       inCall?: string;
@@ -153,7 +153,7 @@ describe('RunStateService (in-memory sqlite)', () => {
       runId: 'run-a',
       seq,
       kind,
-      nodeId: extra.nodeId ?? null,
+      memberId: extra.memberId ?? null,
       role: extra.role ?? null,
       ...(extra.inCall === undefined ? {} : { inCall: extra.inCall }),
       payload: JSON.stringify(payload),
@@ -204,18 +204,18 @@ describe('RunStateService (in-memory sqlite)', () => {
       await createRun('running', 'dev-team');
       const status = (
         seq: number,
-        nodeId: string,
+        memberId: string,
         inCall: string,
         value: string,
       ): Promise<void> =>
-        insert(seq, 'status', { status: value }, { nodeId, inCall });
+        insert(seq, 'status', { status: value }, { memberId, inCall });
       const call = (
         seq: number,
         id: string,
-        nodeId: string,
+        memberId: string,
         inCall: string,
       ): Promise<void> =>
-        insert(seq, 'tool_call', { id, name: 'Bash' }, { nodeId, inCall });
+        insert(seq, 'tool_call', { id, name: 'Bash' }, { memberId, inCall });
       await status(1, 'manager', '', 'running');
       await call(2, 'own', 'manager', '');
       await status(3, 'engineer', 'call-1', 'running');
@@ -249,7 +249,7 @@ describe('RunStateService (in-memory sqlite)', () => {
     await expect(service().read('nope')).rejects.toThrow(/not found/);
   });
 
-  it("lists every conversation's running monitors, a chat's with no node", async () => {
+  it("lists every conversation's running monitors, a chat's with no member", async () => {
     await createRun('completed');
     const monitor = (
       id: string,
@@ -265,7 +265,7 @@ describe('RunStateService (in-memory sqlite)', () => {
       pid: 4242,
       owner: {
         runId: 'run-a',
-        nodeId: 'chat',
+        memberId: 'chat',
         caller: 'chat',
         conversationId: null,
         callId: null,
@@ -276,7 +276,7 @@ describe('RunStateService (in-memory sqlite)', () => {
     const state = await service([
       monitor('m1', {}),
       monitor('m2', {
-        nodeId: 'reviewer',
+        memberId: 'reviewer',
         callId: 'call-3',
         target: 'team',
       }),
@@ -287,7 +287,7 @@ describe('RunStateService (in-memory sqlite)', () => {
         id: 'm1',
         description: 'watch m1',
         command: 'gh pr checks m1 --watch',
-        nodeId: null,
+        memberId: null,
         callId: null,
         startedAt: '2026-10-27T10:00:00.000Z',
         endsAt: '2026-10-27T10:10:00.000Z',
@@ -296,7 +296,7 @@ describe('RunStateService (in-memory sqlite)', () => {
         id: 'm2',
         description: 'watch m2',
         command: 'gh pr checks m2 --watch',
-        nodeId: 'reviewer',
+        memberId: 'reviewer',
         callId: 'call-3',
         startedAt: '2026-10-27T10:00:00.000Z',
         endsAt: '2026-10-27T10:10:00.000Z',
@@ -310,7 +310,7 @@ describe('RunStateService (in-memory sqlite)', () => {
     await insert(2, 'approval_request', { id: 'req-open', toolName: 'Bash' });
     approvals.track({
       runId: 'run-a',
-      nodeId: 'agent',
+      memberId: 'agent',
       requestId: 'req-open',
       toolName: 'Bash',
       input: {},
@@ -368,7 +368,7 @@ describe('RunStateService (in-memory sqlite)', () => {
         seq,
         'system',
         { callId, severity: 'info', queuedCall: { cap: 1 } },
-        { nodeId: 'qa', inCall: callId },
+        { memberId: 'qa', inCall: callId },
       );
     }
     // call-1 started; call-3 was cancelled while it waited.
@@ -376,7 +376,7 @@ describe('RunStateService (in-memory sqlite)', () => {
       7,
       'status',
       { nodeId: 'qa', status: 'running', callId: 'call-1' },
-      { nodeId: 'qa', inCall: 'call-1' },
+      { memberId: 'qa', inCall: 'call-1' },
     );
     await insert(8, 'call_result', { callId: 'call-3', status: 'error' });
 
@@ -565,18 +565,18 @@ describe('RunStateService (in-memory sqlite)', () => {
     );
   });
 
-  it('ends a delegate only on ITS parent turn’s ending — same node, same call, a real end', async () => {
+  it('ends a delegate only on ITS parent turn’s ending — same member, same call, a real end', async () => {
     await createRun('running', 'dev-team');
-    const qa = { nodeId: 'qa' };
+    const qa = { memberId: 'qa' };
     await insert(
       1,
       'tool_call',
       { id: 'toolu_a', name: 'Task', input: {}, callId: 'call-3' },
       qa,
     );
-    // Not its turn: another node, another call, and a continuation that
+    // Not its turn: another member, another call, and a continuation that
     // finished inside the turn.
-    await insert(2, 'turn_complete', {}, { nodeId: 'manager' });
+    await insert(2, 'turn_complete', {}, { memberId: 'manager' });
     await insert(3, 'turn_complete', { callId: 'call-9' }, qa);
     await insert(
       4,
@@ -740,7 +740,7 @@ describe('RunStateService (in-memory sqlite)', () => {
     expect((await service().read('run-a')).turnStartedAt).toBeNull();
   });
 
-  it('dates no turn for a running TEAM run — its turns are its nodes’', async () => {
+  it('dates no turn for a running TEAM run — its turns are its members’', async () => {
     await createRun('running', 'dev-team');
     await insert(1, 'message', { text: 'q' }, { role: 'user', at: 1000 });
     expect((await service().read('run-a')).turnStartedAt).toBeNull();

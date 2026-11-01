@@ -557,7 +557,7 @@ const fixtureId = (name: string): string => `${FIXTURE_ID_PREFIX}${name}`;
  * The other tables are deliberately LEFT ALONE — the same repo's rule that
  * runtime state is not a seed's to touch. `usage_events` is an append-only
  * spend ledger the Stats page reads and is exempt even from run teardown;
- * `node_state` belongs to the graph executor. Neither has anything to do with
+ * `node_state` belongs to the team executor. Neither has anything to do with
  * these chats.
  */
 async function clearPreviousFixtures(em: EntityManager): Promise<void> {

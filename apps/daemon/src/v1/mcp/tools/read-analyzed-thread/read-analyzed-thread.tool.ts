@@ -48,8 +48,8 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.analysis.canAnalyse(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.analysis.canAnalyse(runId, memberId);
   }
 
   protected instructions(): string {
@@ -62,13 +62,13 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId }: McpCallContext,
+    { runId, memberId }: McpCallContext,
   ): Promise<McpToolResult> {
     const read = readAnalyzedThreadArgs(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
-    const turn = await this.analysis.turnOf(runId, nodeId);
+    const turn = await this.analysis.turnOf(runId, memberId);
     if ('status' in turn) {
       return this.text(`Nothing to read: ${turn.reason}.`, true);
     }

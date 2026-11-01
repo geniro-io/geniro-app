@@ -46,7 +46,7 @@ export function withDurableDelegates(
     if (held.has(delegate.id)) {
       continue;
     }
-    const key = delegate.nodeId ?? chatAgentKey;
+    const key = delegate.memberId ?? chatAgentKey;
     const threads = added.get(key) ?? [];
     threads.push({
       id: delegate.id,
@@ -92,7 +92,7 @@ export function withDurableShells(
     if (known.has(shell.id)) {
       continue;
     }
-    const list = merged.get(shell.nodeId) ?? [];
+    const list = merged.get(shell.memberId) ?? [];
     list.push({
       id: shell.id,
       command: shell.command,
@@ -106,10 +106,10 @@ export function withDurableShells(
       startedAt: new Date(shell.startedAt).toISOString(),
       launchSeq: null,
       trackedSeq: null,
-      agentId: shell.nodeId,
+      agentId: shell.memberId,
       callId: shell.callId,
     });
-    merged.set(shell.nodeId, list);
+    merged.set(shell.memberId, list);
   }
   for (const [key, shells] of byAgent) {
     merged.set(key, [...(merged.get(key) ?? []), ...shells]);

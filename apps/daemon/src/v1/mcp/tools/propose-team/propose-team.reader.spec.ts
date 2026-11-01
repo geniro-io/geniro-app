@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import { member, teamOf } from '../../../teams/__tests__/team-builders';
 import {
   proposeTeamResultText,
   readProposeTeamArgs,
   readProposeTeamChangeArgs,
 } from './propose-team.reader';
 
-const TEAM = { name: 'Team', nodes: [], edges: [] };
+const TEAM = teamOf([member('lead')], { name: 'Team' });
 
 describe('readProposeTeamArgs', () => {
   it('reads a team with an optional target, summary and reason', () => {
@@ -62,7 +63,7 @@ describe('readProposeTeamArgs', () => {
 });
 
 describe('readProposeTeamChangeArgs', () => {
-  const EDITS = [{ path: 'nodes/reviewer/model', value: 'sonnet' }];
+  const EDITS = [{ path: 'members/reviewer/model', value: 'sonnet' }];
 
   it("reads a builder chat's edits with what they change and why", () => {
     expect(
@@ -136,11 +137,11 @@ describe('proposeTeamResultText', () => {
     expect(
       proposeTeamResultText({
         status: 'refused',
-        code: 'GRAPH_NO_TRIGGER',
+        code: 'TEAM_TRIGGER_COUNT',
         message: 'add a trigger',
       }),
     ).toBe(
-      'Not proposed — GRAPH_NO_TRIGGER: add a trigger. No card was shown.',
+      'Not proposed — TEAM_TRIGGER_COUNT: add a trigger. No card was shown.',
     );
   });
 });

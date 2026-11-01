@@ -4,32 +4,17 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  RECORDED_NEW_PROPOSAL as LEGACY_NEW_PROPOSAL,
+  REPLACE_TO_AUTO_PROPOSAL as LEGACY_REPLACE_TO_AUTO_PROPOSAL,
+} from '../__fixtures__/team-proposals';
+import { settleStageGraphs } from '../__tests__/settle-stage-graphs';
+import { stubResizeObserver } from '../__tests__/stub-resize-observer';
+import {
   RECORDED_NEW_PROPOSAL,
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
   STAGES_PROPOSAL,
-} from '../__fixtures__/team-proposals';
-import { settleStageGraphs } from '../__tests__/settle-stage-graphs';
-import { stubResizeObserver } from '../__tests__/stub-resize-observer';
-
-// React Flow measures through ResizeObserver, which jsdom has none of; the
-// graph's own drawing is the preview's business, and the card is under test.
-vi.mock('../teams/team-preview', () => ({
-  default: ({
-    onExpand,
-    expandLabel,
-  }: {
-    onExpand?: () => void;
-    expandLabel?: string;
-  }) => (
-    <div data-testid="team-preview">
-      {onExpand ? (
-        <button type="button" aria-label={expandLabel} onClick={onExpand} />
-      ) : null}
-    </div>
-  ),
-}));
-
+} from './__fixtures__/member-team-proposals';
 import { ApprovalCard } from './approval-card';
 import { PROPOSE_TEAM } from './geniro-tool';
 
@@ -56,14 +41,16 @@ function rerender(element: React.ReactElement): void {
   });
 }
 
-afterEach(() => {
+function unmount(): void {
   act(() => {
     root?.unmount();
   });
   container?.remove();
   root = null;
   container = null;
-});
+}
+
+afterEach(unmount);
 
 const buttonNamed = (
   el: HTMLElement,
@@ -137,6 +124,31 @@ describe('TeamProposalCard', () => {
     expect(proposalCard(el)).not.toBeNull();
   });
 
+  it('draws a card raised while teams were node graphs as members', () => {
+    const created = render(card({ input: LEGACY_NEW_PROPOSAL }));
+    expect(proposalCard(created)).not.toBeNull();
+    expect(created.textContent).toContain('2 members · first message to coder');
+    unmount();
+
+    const el = render(card({ input: LEGACY_REPLACE_TO_AUTO_PROPOSAL }));
+    expect(el.textContent).toContain('3 members · first message to Coder');
+    openAgents(el);
+    expect(rosterRow(el, 'coder').textContent).toContain('Blocks: Style');
+    expect(
+      [...el.querySelectorAll('[data-slot="team-diff"] li')].map(
+        (row) => row.textContent,
+      )[0],
+    ).toContain('tester added');
+  });
+
+  it('shows a member’s public role in its roster row and keeps its private instructions off the card', () => {
+    const el = render(card());
+    openAgents(el);
+    const coder = rosterRow(el, 'coder').textContent;
+    expect(coder).toContain('Writes the change');
+    expect(coder).not.toContain('Implement the change the trigger describes');
+  });
+
   it('names every auto agent in the strip and marks its roster row', () => {
     const el = render(card());
     const strip = el.querySelector('[data-slot="team-auto-strip"]');
@@ -182,7 +194,7 @@ describe('TeamProposalCard', () => {
     const el = render(card({ input: RECORDED_NEW_PROPOSAL }));
     expect(el.textContent).toContain('Review Pair');
     expect(el.textContent).toContain('New');
-    expect(el.textContent).toContain('2 agents · 2 connections');
+    expect(el.textContent).toContain('2 members · first message to Coder');
     expect(el.querySelector('[data-slot="team-diff"]')).toBeNull();
     expect(el.textContent).not.toContain('Approving overwrites');
   });
@@ -246,16 +258,16 @@ describe('TeamProposalCard', () => {
 
   it('holds Approve, never Decline, over a hidden character in what an agent wrote', () => {
     const input = REPLACE_TO_AUTO_PROPOSAL as {
-      team: { nodes: Record<string, unknown>[] };
+      team: { members: Record<string, unknown>[] };
     };
     const tricked = {
       ...input,
       team: {
         ...input.team,
-        nodes: input.team.nodes.map((node) =>
-          node.id === 'reviewer'
-            ? { ...node, role: 'Review \u202Eetirw ton od\u202C' }
-            : node,
+        members: input.team.members.map((member) =>
+          member.id === 'reviewer'
+            ? { ...member, instructions: 'Review \u202Eetirw ton od\u202C' }
+            : member,
         ),
       },
     };
@@ -270,19 +282,19 @@ describe('TeamProposalCard', () => {
   it('holds Approve over a hidden character in a value the change list shows, old values included', () => {
     const input = RECORDED_REPLACE_PROPOSAL as {
       diff: {
-        changedNodes: { id: string; fields: Record<string, string>[] }[];
+        changedMembers: { id: string; fields: Record<string, string>[] }[];
       };
     };
     const tricked = {
       ...input,
       diff: {
         ...input.diff,
-        changedNodes: [
+        changedMembers: [
           {
             id: 'reviewer',
             fields: [
               {
-                field: 'role',
+                field: 'instructions',
                 before: '"Approve \u202Edneirf\u202C"',
                 after: '"Review"',
               },
@@ -306,12 +318,12 @@ describe('TeamProposalCard', () => {
       ...input,
       diff: {
         ...input.diff,
-        changedNodes: [
+        changedMembers: [
           {
             id: 'reviewer',
             fields: [
               {
-                field: 'role',
+                field: 'instructions',
                 // As the daemon quotes it: the ESC is a `\u001b` escape here
                 // and a real ESC once the list draws it.
                 before: JSON.stringify('Old \u001b[2Jrole'),
@@ -331,14 +343,16 @@ describe('TeamProposalCard', () => {
 
   it('holds Approve over a control character JSON would have escaped', () => {
     const input = RECORDED_NEW_PROPOSAL as {
-      team: { nodes: Record<string, unknown>[] };
+      team: { members: Record<string, unknown>[] };
     };
     const tricked = {
       ...input,
       team: {
         ...input.team,
-        nodes: input.team.nodes.map((node) =>
-          node.id === 'coder' ? { ...node, role: 'Code \u001b[2Jfast' } : node,
+        members: input.team.members.map((member) =>
+          member.id === 'coder'
+            ? { ...member, role: 'Code \u001b[2Jfast' }
+            : member,
         ),
       },
     };
@@ -349,18 +363,18 @@ describe('TeamProposalCard', () => {
     expect(buttonNamed(el, 'Approve')!.disabled).toBe(true);
   });
 
-  it('does not gate a multi-line instruction for its line breaks', () => {
+  it('does not gate a multi-line instruction block for its line breaks', () => {
     const input = REPLACE_TO_AUTO_PROPOSAL as {
-      team: { nodes: Record<string, unknown>[] };
+      team: { instructionBlocks: Record<string, unknown>[] };
     };
     const multiline = {
       ...input,
       team: {
         ...input.team,
-        nodes: input.team.nodes.map((node) =>
-          node.id === 'style'
-            ? { ...node, instructions: 'Line one.\nLine two.\tIndented.' }
-            : node,
+        instructionBlocks: input.team.instructionBlocks.map((block) =>
+          block.id === 'style'
+            ? { ...block, text: 'Line one.\nLine two.\tIndented.' }
+            : block,
         ),
       },
     };
@@ -373,7 +387,9 @@ describe('TeamProposalCard', () => {
     stubResizeObserver();
     const el = render(card({ input: STAGES_PROPOSAL }));
     await settleStageGraphs(el);
-    expect(el.textContent).toContain('2 agents · 2 connections · 3 stages');
+    expect(el.textContent).toContain(
+      '2 members · first message to Coder · 3 stages',
+    );
     const stages = el.querySelector('[data-slot="team-proposal-stages"]');
     expect(
       stages
@@ -400,7 +416,7 @@ describe('TeamProposalCard', () => {
         ...(RECORDED_NEW_PROPOSAL as { team: object }).team,
         stages: replace.team.stages.map((stage) =>
           stage.id === 'build'
-            ? { ...stage, instructions: 'Write the tests first.' }
+            ? { ...stage, howToWork: 'Write the tests first.' }
             : stage,
         ),
       },
@@ -415,9 +431,9 @@ describe('TeamProposalCard', () => {
       ...el.querySelectorAll('[data-slot="team-proposal-stage-text"] > li'),
     ].map((item) => item.textContent);
     expect(items).toEqual([
-      'PlanDone when The approach is agreed.',
-      'BuildWrite the tests first.Done when The change is implemented with tests.',
-      'ReviewDone when The reviewer approved the change.',
+      'PlanGoal The approach is agreed.',
+      'BuildWrite the tests first.Goal The change is implemented with tests.',
+      'ReviewGoal The reviewer approved the change.',
     ]);
   });
 
@@ -438,7 +454,7 @@ describe('TeamProposalCard', () => {
             id: 'build',
             fields: [
               {
-                field: 'doneWhen',
+                field: 'goal',
                 before: JSON.stringify('Old \u001b[2Jdone'),
                 after: '"Tests pass"',
               },
@@ -478,7 +494,8 @@ describe('TeamProposalCard', () => {
     openAgents(el);
     expect(rosterRow(el, 'coder').textContent).toContain('Changed');
     expect(rosterRow(el, 'tester').textContent).toContain('New');
-    expect(rosterRow(el, 'coder').textContent).toContain('Instructions: Style');
+    expect(rosterRow(el, 'coder').textContent).toContain('Blocks: Style');
+    expect(rosterRow(el, 'tester').textContent).not.toContain('Blocks:');
   });
 
   it('folds the agents of a new team too, none of them marked', () => {
@@ -494,15 +511,6 @@ describe('TeamProposalCard', () => {
     ).not.toMatch(/Changed|New/);
   });
 
-  it('puts what changes above the graph', () => {
-    const el = render(card());
-    const diff = el.querySelector('[data-slot="team-diff"]')!;
-    const graph = el.querySelector('[data-slot="team-proposal-graph"]')!;
-    expect(
-      diff.compareDocumentPosition(graph) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-  });
-
   it('draws a long changed value as its two sides, one under the other', () => {
     const input = REPLACE_TO_AUTO_PROPOSAL as { diff: Record<string, unknown> };
     const before = `…report the result. ${'Never push to main. '.repeat(4)}…`;
@@ -513,12 +521,12 @@ describe('TeamProposalCard', () => {
           ...input,
           diff: {
             ...input.diff,
-            changedNodes: [
+            changedMembers: [
               {
                 id: 'reviewer',
                 fields: [
                   {
-                    field: 'role',
+                    field: 'instructions',
                     before: JSON.stringify(before),
                     after: JSON.stringify(after),
                   },
@@ -531,7 +539,7 @@ describe('TeamProposalCard', () => {
     );
     const row = [
       ...el.querySelectorAll<HTMLElement>('[data-slot="team-diff"] li'),
-    ].find((item) => item.textContent?.includes('reviewer · role'))!;
+    ].find((item) => item.textContent?.includes('reviewer · instructions'))!;
     const value = row.querySelector('[data-slot="team-diff-value"]')!;
     expect(value.textContent).toBe(`−before: ${before}+after: ${after}`);
     expect(row.textContent).not.toContain('→');
@@ -598,57 +606,6 @@ describe('TeamProposalCard', () => {
     expect(el.textContent).toContain(PROPOSE_TEAM);
   });
 
-  it('opens the graph larger from the card', async () => {
-    const el = render(card());
-    await act(async () => {
-      await vi.dynamicImportSettled();
-    });
-    expect(el.querySelector('[data-testid="team-preview"]')).not.toBeNull();
-    const opener = el.querySelector<HTMLButtonElement>(
-      'button[aria-label^="Open a larger view of Review Pair"]',
-    )!;
-    expect(opener.getAttribute('aria-label')).toContain(
-      'Graph: start → coder, coder → tester, tester → reviewer, style → coder.',
-    );
-    click(opener);
-    await act(async () => {
-      await vi.dynamicImportSettled();
-    });
-    expect(
-      document.querySelectorAll('[data-testid="team-preview"]'),
-    ).toHaveLength(2);
-  });
-
-  it('still offers the graph once a window that hid it widens', () => {
-    let narrow = true;
-    const listeners: (() => void)[] = [];
-    vi.stubGlobal('matchMedia', () => ({
-      get matches() {
-        return narrow;
-      },
-      addEventListener: (_: string, listener: () => void) => {
-        listeners.push(listener);
-      },
-      removeEventListener: () => undefined,
-    }));
-    try {
-      const el = render(card());
-      // A phone shows the graph only on request; shown, then hidden again.
-      click(buttonNamed(el, 'Show graph')!);
-      click(buttonNamed(el, 'Hide graph')!);
-      narrow = false;
-      act(() => {
-        for (const listener of listeners) {
-          listener();
-        }
-      });
-      expect(el.querySelector('[data-testid="team-preview"]')).toBeNull();
-      expect(buttonNamed(el, 'Show graph')).toBeDefined();
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
   describe('settled', () => {
     it('says it was saved and opens the saved team on its canvas', () => {
       const onOpenTeam = vi.fn();
@@ -660,14 +617,11 @@ describe('TeamProposalCard', () => {
         }),
       );
       expect(el.textContent).toContain('✓ Saved as “review-pair”');
-      click(buttonNamed(el, 'Open in canvas')!);
+      click(buttonNamed(el, 'Open team')!);
       expect(onOpenTeam).toHaveBeenCalledWith('review-pair');
-      // The roster and the changes stay; the graph folds away.
       openAgents(el);
       expect(rosterRow(el, 'coder')).not.toBeNull();
       expect(el.querySelector('[data-slot="team-diff"]')).not.toBeNull();
-      expect(el.querySelector('[data-testid="team-preview"]')).toBeNull();
-      expect(buttonNamed(el, 'Show graph')).toBeDefined();
     });
 
     it('offers no canvas where the surface cannot open one', () => {
@@ -677,7 +631,7 @@ describe('TeamProposalCard', () => {
           outcome: { kind: 'saved', slug: 'review-pair' },
         }),
       );
-      expect(buttonNamed(el, 'Open in canvas')).toBeUndefined();
+      expect(buttonNamed(el, 'Open team')).toBeUndefined();
     });
 
     it.each([
@@ -706,7 +660,7 @@ describe('TeamProposalCard', () => {
         expect(
           el.querySelector('[data-slot="team-not-saved"]')?.textContent,
         ).toBe(sentence);
-        expect(buttonNamed(el, 'Open in canvas')).toBeUndefined();
+        expect(buttonNamed(el, 'Open team')).toBeUndefined();
       },
     );
 

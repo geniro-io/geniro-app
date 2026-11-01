@@ -6,35 +6,35 @@ function memberOf(value: unknown): number | null {
     : null;
 }
 
-/** The last explicit hand-off of each node's own conversation, in row order. */
+/** The last explicit hand-off of each member's own conversation, in row order. */
 export function readNodePoolMembers(
-  rows: readonly { nodeId: string | null; payload: string }[],
+  rows: readonly { memberId: string | null; payload: string }[],
 ): Map<string, number> {
   const members = new Map<string, number>();
   for (const row of rows) {
     const payload = asRecord(parseJsonColumn(row.payload));
     const member = memberOf(payload?.member);
     if (
-      row.nodeId !== null &&
+      row.memberId !== null &&
       payload?.nodePoolHandOff === true &&
       payload.callId === undefined &&
       member !== null
     ) {
-      members.set(row.nodeId, member);
+      members.set(row.memberId, member);
     }
   }
   return members;
 }
 
-/** A historical own session can belong to a member the node no longer uses. */
+/** A historical own session can belong to a pool member the member no longer uses. */
 export function nodePoolSessionMember(
-  rows: readonly { nodeId: string | null; payload: string }[],
-  nodeId: string,
+  rows: readonly { memberId: string | null; payload: string }[],
+  memberId: string,
   sessionId: string,
 ): number | null {
   let member: number | null = null;
   for (const row of rows) {
-    if (row.nodeId !== nodeId) {
+    if (row.memberId !== memberId) {
       continue;
     }
     const payload = asRecord(parseJsonColumn(row.payload));

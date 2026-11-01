@@ -28,23 +28,23 @@ export interface ShellRow {
   kind: string;
   /** The column as stored — JSON text. */
   payload: unknown;
-  nodeId: string | null;
+  memberId: string | null;
 }
 
 /**
  * A detached command still declared running, and where its close has to be
- * filed — the same node and call as its open row, for the reason
+ * filed — the same member and call as its open row, for the reason
  * `StrandedDelegate` spells out.
  */
 export interface StrandedShell {
   toolCallId: string | null;
   workId: string;
-  nodeId: string | null;
+  memberId: string | null;
   callId: string | null;
 }
 
 export function strandedShells(rows: readonly ShellRow[]): StrandedShell[] {
-  // Keyed by node and work id, which every open carries — a work id is the
+  // Keyed by member and work id, which every open carries — a work id is the
   // CLI's per-process counter, as `BackgroundWorkCounts` keys it too. The
   // launching call is an alias a close may name instead.
   const open = new Map<string, StrandedShell>();
@@ -56,7 +56,7 @@ export function strandedShells(rows: readonly ShellRow[]): StrandedShell[] {
     }
     const toolCallId = asString(record.id) || null;
     const workId = asString(record.workId) || null;
-    const key = (id: string): string => `${row.nodeId ?? ''}\u0000${id}`;
+    const key = (id: string): string => `${row.memberId ?? ''}\u0000${id}`;
     if (row.kind === 'shell_open') {
       if (workId === null) {
         continue;
@@ -64,7 +64,7 @@ export function strandedShells(rows: readonly ShellRow[]): StrandedShell[] {
       open.set(key(workId), {
         toolCallId,
         workId,
-        nodeId: row.nodeId,
+        memberId: row.memberId,
         callId: asString(record.callId) || null,
       });
       if (toolCallId !== null) {
@@ -99,18 +99,18 @@ export function shellCommandOf(toolCallPayload: unknown): string | null {
 
 /**
  * The tool call that launched a shell, from the run's calls oldest first: the
- * newest with the shell's call id under the same node and team call. An
+ * newest with the shell's call id under the same member and team call. An
  * ACP CLI numbers its calls from one in every session, so another
  * conversation can reuse the id; a delegate's call is taken only when no call
  * of the agent's own matches. Every reader that pairs a shell with its call
  * goes through here.
  */
 export function launchingCallOf<
-  T extends { payload: unknown; nodeId: string | null },
+  T extends { payload: unknown; memberId: string | null },
 >(
   shell: {
     toolCallId: string | null;
-    nodeId: string | null;
+    memberId: string | null;
     callId: string | null;
   },
   calls: readonly T[],
@@ -121,7 +121,7 @@ export function launchingCallOf<
   const matching = calls.filter((row) => {
     const payload = asRecord(parseJsonColumn(row.payload));
     return (
-      row.nodeId === shell.nodeId &&
+      row.memberId === shell.memberId &&
       asString(payload?.id) === shell.toolCallId &&
       (asString(payload?.callId) || null) === shell.callId
     );

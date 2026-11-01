@@ -10,14 +10,13 @@ import { parseTeamSnapshot, teamSnapshotOf } from '../utils/team-snapshot';
 import { TeamStoreService } from './team-store.service';
 
 /**
- * The ONE answer to "which graph does this existing run run" — its snapshot,
+ * The ONE answer to "which team does this existing run run" — its snapshot,
  * never the library's current copy.
  *
- * Asked for as "old teams chats should not be changed if i change current
- * team. They should use snapshots". Every reader of an existing run's graph
- * goes through here — a follow-up pass, the agents panel, the terminal handoff,
- * a task's settle — because each one that read the library on its own was a
- * place an edit reached a run it must not.
+ * Every reader of an existing run's team goes through here — a follow-up pass,
+ * the agents panel, the terminal handoff, a task's settle — because each one
+ * that read the library on its own was a place an edit reached a run it must
+ * not.
  *
  * A run made before runs kept a copy is FROZEN on its first read: the library
  * copy as it is at that moment is written onto the run and used from then on.
@@ -27,8 +26,8 @@ import { TeamStoreService } from './team-store.service';
  *
  * Only an EMPTY column is frozen. A copy this build cannot read is refused
  * with `TEAM_SNAPSHOT_UNREADABLE` rather than re-frozen: it is still the
- * graph the run started with, and overwriting it with today's library copy
- * would run a different graph under the old run's name — and destroy the only
+ * team the run started with, and overwriting it with today's library copy
+ * would run a different team under the old run's name — and destroy the only
  * record of the original while doing it.
  */
 @Injectable()
@@ -40,7 +39,7 @@ export class RunTeamService {
   ) {}
 
   /**
-   * The graph a team run runs. The run object passed in is updated too
+   * The team a run runs. The run object passed in is updated too
    * when this freezes it, so a caller holding it sees the same copy.
    */
   async teamOf(
@@ -54,7 +53,7 @@ export class RunTeamService {
     if (kept.state === 'unreadable') {
       throw new ConflictException(
         'TEAM_SNAPSHOT_UNREADABLE',
-        `The copy of the team run ${run.id} started with cannot be read by this version (${kept.reason}). It is left as it is rather than replaced by the library's current '${run.teamId}', which may not be the graph this run ran.`,
+        `The copy of the team run ${run.id} started with cannot be read by this version (${kept.reason}). It is left as it is rather than replaced by the library's current '${run.teamId}', which may not be the team this run ran.`,
       );
     }
     const { team } = await this.store.get(run.teamId);

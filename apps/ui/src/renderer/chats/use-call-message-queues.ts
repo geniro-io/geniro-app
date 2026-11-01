@@ -9,7 +9,7 @@ import type { QueuedStripMessage } from './queued-strip';
 /** Which call a message is addressed to. */
 export interface CallTarget {
   runId: string;
-  nodeId: string;
+  memberId: string;
   callId: string;
   /**
    * The call block's own id (its `call_started` row). Call ids are numbered

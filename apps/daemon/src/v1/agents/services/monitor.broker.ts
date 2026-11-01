@@ -11,7 +11,7 @@ import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 import { MonitorRegistry } from './monitor.registry';
 
 /**
- * What a node's turn tells the monitor tools: whose a monitor started by
+ * What a member's turn tells the monitor tools: whose a monitor started by
  * `caller` is, and the folder it runs in. `caller` is the MCP call's caller
  * key, never the model's word, so a callee conversation's monitor is its own.
  */
@@ -20,7 +20,7 @@ export interface MonitorSink {
 }
 
 /**
- * The `monitor`, `stop_monitor` and `list_monitors` tools' way in. A node is
+ * The `monitor`, `stop_monitor` and `list_monitors` tools' way in. A member is
  * offered them only while its turn has registered a sink — and the turn
  * registers one only where the call is put to the user first or the mode is
  * `auto` (`AdapterConfig.hostToolCallUngatedReason`), since the command runs
@@ -32,20 +32,20 @@ export class MonitorBroker extends HostSinkBroker<MonitorSink> {
     super();
   }
 
-  /** Whether this node is offered the monitor tools right now. */
-  canMonitor(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  /** Whether this member is offered the monitor tools right now. */
+  canMonitor(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   start(
     runId: string,
-    nodeId: string,
+    memberId: string,
     input: MonitorStartInput,
     caller: string,
   ): Promise<MonitorStartOutcome | HostSinkUnavailable> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no turn is running that could own it',
       'start a monitor',
       (sink) => {
@@ -65,13 +65,13 @@ export class MonitorBroker extends HostSinkBroker<MonitorSink> {
 
   stop(
     runId: string,
-    nodeId: string,
+    memberId: string,
     id: string,
     caller: string,
   ): Promise<MonitorStopOutcome | HostSinkUnavailable> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no turn is running that could stop it',
       'stop a monitor',
       () => Promise.resolve(this.monitors.stop(runId, id, 'agent', caller)),
@@ -80,12 +80,12 @@ export class MonitorBroker extends HostSinkBroker<MonitorSink> {
 
   list(
     runId: string,
-    nodeId: string,
+    memberId: string,
     caller: string,
   ): Promise<MonitorListing[] | HostSinkUnavailable> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no turn is running that could list them',
       'list monitors',
       () =>

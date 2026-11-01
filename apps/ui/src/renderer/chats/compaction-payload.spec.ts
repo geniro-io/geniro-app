@@ -85,7 +85,7 @@ describe('endsContextHistory', () => {
   const row = (kind: ChatItem['kind'], payload: unknown): ChatItem => ({
     id: 'i1',
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq: 1,
     kind,
     role: null,
@@ -143,7 +143,7 @@ describe('compactionOnlyTurnEnds', () => {
     return {
       id: `i${seq}`,
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq,
       kind,
       role,
@@ -222,7 +222,7 @@ describe('discardsContextReading', () => {
   const row = (kind: ChatItem['kind'], payload: unknown): ChatItem => ({
     id: 'x',
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq: 1,
     kind,
     role: null,

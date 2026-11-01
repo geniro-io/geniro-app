@@ -116,7 +116,7 @@ export interface CodexTurnOptions {
    */
   autoCompactTokens: number | null;
   /**
-   * The MCP servers this turn runs without — a team node's own switches,
+   * The MCP servers this turn runs without — a team member's own switches,
    * geniro's own server already left out. Non-empty makes the thread's opening
    * read codex's config first (`config/read`), because which override reaches
    * a server depends on where codex defines it (`codexTurnMcpOverrides`).
@@ -229,7 +229,7 @@ export class CodexTurnDriver {
    *  next wait, a message the agent took, or the turn's ending. */
   private waitGap: symbol | null = null;
   /**
-   * The thread config that leaves this node's switched-off MCP servers out,
+   * The thread config that leaves this member's switched-off MCP servers out,
    * once codex's own config has been read — null until then (and for good on a
    * turn that switches nothing off, which never reads it).
    */
@@ -618,7 +618,7 @@ export class CodexTurnDriver {
         const events: AgentEvent[] = [
           {
             type: 'notice',
-            message: `codex could not read its own config (${message}), so the MCP servers switched off on this node stay on for this turn.`,
+            message: `codex could not read its own config (${message}), so the MCP servers switched off for this member stay on for this turn.`,
           },
         ];
         this.openThread(events);

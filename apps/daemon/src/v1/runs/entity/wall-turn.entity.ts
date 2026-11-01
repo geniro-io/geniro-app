@@ -14,7 +14,7 @@ import { TimestampsEntity } from '@packages/mikroorm';
  *
  * What a reader is served as an agent's worked time is the CLI-reported total
  * (`NodeState.workedMs` / `Run.workedMs`, CLI-only) plus the sum of these rows
- * — the node's for a team node, the `nodeId: null` ones for a 1:1 chat.
+ * — the member's for a team member, the `memberId: null` ones for a 1:1 chat.
  * Run-scoped: dropped with the run by `RunTeardownService`, unlike the usage
  * ledgers that outlive teardown.
  */
@@ -27,9 +27,9 @@ export class WallTurn extends TimestampsEntity {
   @PrimaryKey({ type: 'integer' })
   seq!: number;
 
-  /** The team node that took the turn, or null for a 1:1 chat's agent. */
+  /** The team member that took the turn, or null for a 1:1 chat's agent. */
   @Property({ type: 'string', nullable: true })
-  nodeId: string | null = null;
+  memberId: string | null = null;
 
   /** How long the turn worked, parked approval stretches excluded. Always > 0. */
   @Property({ type: 'integer' })

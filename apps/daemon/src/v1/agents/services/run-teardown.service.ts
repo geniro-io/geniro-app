@@ -33,7 +33,7 @@ const COMMAND_SETTLE_MS = 15_000;
 
 /**
  * The teardown behind EVERY run delete — a single-agent chat
- * (`ChatService.delete`) and a team run (`GraphExecutorService.deleteRun`)
+ * (`ChatService.delete`) and a team run (`TeamExecutorService.deleteRun`)
  * alike. Extracted rather than mirrored: the two kinds of run own the same
  * stores, so a second copy is how one of them silently keeps leaking a store
  * the other learned to clear.
@@ -56,7 +56,7 @@ const COMMAND_SETTLE_MS = 15_000;
  * What it deliberately does NOT do is decide WHICH runs may be deleted, or wait
  * for the caller's own notion of "finished": the run-kind guard and the settle
  * promise both come from the caller, because a chat waits on its turn finalizer
- * while a team waits on its aggregate DAG handle.
+ * while a team waits on its executor's in-flight work.
  */
 @Injectable()
 export class RunTeardownService {
@@ -87,7 +87,7 @@ export class RunTeardownService {
   /**
    * End every process the run holds, for a run being archived or deleted.
    *
-   * EVERY CLI of it — a team run keeps one per node and per conversation
+   * EVERY CLI of it — a team run keeps one per member and per conversation
    * under `<runId>::…`, and they outlive each of its passes — and then what its
    * agents started to outlive a turn: a detached dev server, a watcher, a
    * browser, which closing the CLI does not reach. The second half runs in the

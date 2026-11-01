@@ -60,7 +60,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       Partial<UsageEventInput>,
   ): UsageEventInput {
     return {
-      nodeId: null,
+      memberId: null,
       agentKind: 'claude',
       model: 'claude-opus-5',
       cwd: '/work/project',
@@ -519,7 +519,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       expect(announced).toEqual([
         {
           runId: 'run-a',
-          nodeId: null,
+          memberId: null,
           occurredAt: day(10, 9).toISOString(),
           turn: false,
         },

@@ -17,14 +17,14 @@ function at(seconds: number): string {
 }
 
 function lane(
-  nodeId: string,
+  memberId: string,
   agentKind: RunWaterfallLane['agentKind'],
   costUsd: number | null,
   turns: number,
   toolCalls: number,
 ): RunWaterfallLane {
   return {
-    nodeId,
+    memberId,
     agentKind,
     costUsd,
     estimatedCostUsd: null,
@@ -38,13 +38,13 @@ function lane(
 let nextSeq = 1;
 
 function turn(
-  nodeId: string,
+  memberId: string,
   start: number,
   end: number,
   over: Partial<RunWaterfallTurn> = {},
 ): RunWaterfallTurn {
   return {
-    nodeId,
+    memberId,
     startedAt: at(start),
     seq: nextSeq++,
     timingSource: 'cli',
@@ -71,14 +71,14 @@ function turn(
 }
 
 function call(
-  calleeNodeId: string,
+  calleeMemberId: string,
   start: number,
   end: number,
   over: Partial<RunWaterfallCall> = {},
 ): RunWaterfallCall {
   return {
-    callerNodeId: 'manager',
-    calleeNodeId,
+    callerMemberId: 'manager',
+    calleeMemberId,
     mode: 'async',
     status: 'ok',
     running: false,
@@ -91,13 +91,13 @@ function call(
 
 function segment(
   kind: RunWaterfallCriticalSegment['kind'],
-  nodeId: string | null,
+  memberId: string | null,
   start: number,
   end: number,
 ): RunWaterfallCriticalSegment {
   return {
     kind,
-    nodeId,
+    memberId,
     startedAt: at(start),
     durationMs: (end - start) * SECOND,
   };
@@ -119,12 +119,12 @@ const fanOut: RunWaterfallDto = {
     lane('reviewer', 'cursor-agent', 1.1, 2, 21),
   ],
   toolUse: [
-    { nodeId: 'engineer', name: 'Bash', calls: 28, delegateCalls: 0 },
-    { nodeId: 'researcher', name: 'Read', calls: 24, delegateCalls: 0 },
-    { nodeId: 'researcher', name: 'Grep', calls: 16, delegateCalls: 0 },
-    { nodeId: 'manager', name: 'Read', calls: 12, delegateCalls: 0 },
-    { nodeId: 'engineer', name: 'Edit', calls: 12, delegateCalls: 0 },
-    { nodeId: 'reviewer', name: 'Read', calls: 6, delegateCalls: 0 },
+    { memberId: 'engineer', name: 'Bash', calls: 28, delegateCalls: 0 },
+    { memberId: 'researcher', name: 'Read', calls: 24, delegateCalls: 0 },
+    { memberId: 'researcher', name: 'Grep', calls: 16, delegateCalls: 0 },
+    { memberId: 'manager', name: 'Read', calls: 12, delegateCalls: 0 },
+    { memberId: 'engineer', name: 'Edit', calls: 12, delegateCalls: 0 },
+    { memberId: 'reviewer', name: 'Read', calls: 6, delegateCalls: 0 },
   ],
   turns: [
     turn('manager', 0, 345, {
@@ -189,7 +189,7 @@ const fanOut: RunWaterfallDto = {
   ],
   waits: [
     {
-      nodeId: 'reviewer',
+      memberId: 'reviewer',
       question: false,
       toolName: 'Edit',
       allowed: true,
@@ -198,7 +198,7 @@ const fanOut: RunWaterfallDto = {
       durationMs: 11 * SECOND,
     },
     {
-      nodeId: 'engineer',
+      memberId: 'engineer',
       question: false,
       toolName: 'Bash',
       allowed: true,
@@ -209,13 +209,13 @@ const fanOut: RunWaterfallDto = {
   ],
   delegates: [
     {
-      nodeId: 'manager',
+      memberId: 'manager',
       startedAt: at(8),
       seq: nextSeq++,
       durationMs: 36 * SECOND,
     },
     {
-      nodeId: 'manager',
+      memberId: 'manager',
       startedAt: at(14),
       seq: nextSeq++,
       durationMs: 35 * SECOND,

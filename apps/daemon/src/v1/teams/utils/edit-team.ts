@@ -17,7 +17,7 @@ export type EditedTeam =
 
 /**
  * `edits` carried out on `current` and the result held to the schema and the
- * graph rules — what `save_team_change` and a builder chat's
+ * team rules — what `save_team_change` and a builder chat's
  * `propose_team` both write. With `restoreTokens`, a `configDir` written
  * back as a `read_teams` token gets its path back from `current`.
  */

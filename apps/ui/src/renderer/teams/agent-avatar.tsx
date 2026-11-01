@@ -1,7 +1,7 @@
 import { cn } from '../components/ui/utils';
 
 /**
- * Up-to-two-letter initials for a node avatar — first letters of the first two
+ * Up-to-two-letter initials for a member avatar — first letters of the first two
  * words, or the first two characters of a single word. Mirrors geniro's agent
  * avatars so the desktop builder reads the same.
  */
@@ -21,7 +21,7 @@ export function agentInitials(label: string): string {
 }
 
 /**
- * The round initials chip shown on an agent node and in the node inspector.
+ * The round initials chip shown for a team member in the editor and its previews.
  * One component so both surfaces stay visually identical (design-system reuse).
  */
 export function AgentAvatar({

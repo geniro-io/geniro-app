@@ -33,12 +33,12 @@ function isInputRefusal(message: string): boolean {
   return status !== undefined && status.startsWith('4');
 }
 
-/** One node's servers, as the inspector reads them. */
+/** One member's servers, as the inspector reads them. */
 export interface NodeMcpState {
-  /** Undefined until something has answered for this node. */
+  /** Undefined until something has answered for this member. */
   listing: AgentMcpListing | undefined;
   /**
-   * Why the config directory this node names cannot be used, or null.
+   * Why the config directory this member names cannot be used, or null.
    *
    * Split OUT of {@link listing}'s `unavailableReason`, which also carries
    * "this CLI is not installed" and raw transport failures. Rendering those
@@ -52,7 +52,7 @@ export interface NodeMcpState {
    * Re-read health from the CLI, bypassing the daemon's cached reading.
    *
    * The automatic read is deliberately CACHED — it exists to populate the
-   * section when a node is selected or its config-directory path changes, and it must
+   * section when a member is selected or its config-directory path changes, and it must
    * not re-launch the user's MCP servers to do that. RE-DIALLING a server the
    * daemon has already read is an explicit act, which is what this is: the
    * only thing that can tell a user whose server has since come back up.
@@ -61,19 +61,19 @@ export interface NodeMcpState {
 }
 
 /**
- * The MCP servers one agent node would load, independent of any folder.
+ * The MCP servers one team member would load, independent of any folder.
  *
  * A team is edited long before it runs anywhere, so the builder has no
  * folder to ask about — and the honest answer is the set that does not depend
- * on one: the user's global servers plus whatever this node's own profile
+ * on one: the user's global servers plus whatever this member's own profile
  * directory brings. The project servers of whichever folder the run lands in
  * are added by the CLI itself at run time. Omitting `cwd` is how the daemon is
  * asked for exactly that.
  *
  * Separate from the chat panel's `useAgentMcp` because the question differs in
  * every dimension: one agent rather than a map of CLI kinds, a config
- * directory rather than a folder, and no write path of its own — a node's
- * switches are a NODE field (`mcpDisabled`, laid over this listing by
+ * directory rather than a folder, and no write path of its own — a member's
+ * switches are a MEMBER field (`mcpDisabled`, laid over this listing by
  * `node-mcp-switches.ts`) that the daemon applies per turn, while switching a
  * server off in the CLI's own config stays in the chat panel.
  *
@@ -87,8 +87,8 @@ export function useNodeMcp(
   configDir: string | null,
 ): NodeMcpState {
   // Stored WITH the question it answers. Without that pairing, clicking from
-  // one node to another leaves the previous node's rows on screen until the
-  // new read resolves — stating node A's servers as node B's, which is wrong
+  // one member to another leaves the previous member's rows on screen until the
+  // new read resolves — stating member A's servers as member B's, which is wrong
   // rather than merely stale.
   const [answered, setAnswered] = useState<{
     scope: string;
@@ -99,7 +99,7 @@ export function useNodeMcp(
   // Bumped by refresh; the effect keys on it, so a bump re-runs the read.
   const [reloadToken, setReloadToken] = useState(0);
   // The token the last read already spent. Refresh is a ONE-SHOT intent about
-  // the node on screen, so it must be consumed rather than latched: the effect
+  // the member on screen, so it must be consumed rather than latched: the effect
   // also re-runs when the selection or the config-directory path changes, and a
   // monotonic `reloadToken > 0` would make every later click re-dial the
   // user's own MCP servers for the rest of the session.
@@ -130,7 +130,7 @@ export function useNodeMcp(
     const isPoll = rereadToken > consumedReread.current;
     consumedReread.current = rereadToken;
     // Spent even when there is nothing to ask, so a refresh raised with no
-    // node selected is not banked and then applied to whichever node the user
+    // member selected is not banked and then applied to whichever member the user
     // clicks next — re-dialling a read nobody asked to refresh.
     consumedToken.current = reloadToken;
     if (agentsApi === null || agent === null) {

@@ -7,17 +7,17 @@ const STAGES: TeamStage[] = [
   {
     id: 'investigation',
     title: 'Investigation',
-    doneWhen: 'The cause is written down',
+    goal: 'The cause is written down',
     next: ['implementation', 'fix'],
   },
   {
     id: 'implementation',
     title: 'Implementation',
-    doneWhen: 'Built',
+    goal: 'Built',
     next: ['review'],
   },
-  { id: 'fix', title: 'Fix', doneWhen: 'Repaired', next: ['review'] },
-  { id: 'review', title: 'Review', doneWhen: 'Approved' },
+  { id: 'fix', title: 'Fix', goal: 'Repaired', next: ['review'] },
+  { id: 'review', title: 'Review', goal: 'Approved' },
 ];
 
 const meta = {
@@ -30,7 +30,10 @@ const meta = {
     submitLabel: 'Save',
     busyLabel: 'Saving…',
     maxActiveTurnsCeiling: 8,
-    agentIds: ['coder', 'reviewer'],
+    members: [
+      { id: 'coder', name: 'Coder' },
+      { id: 'reviewer', name: 'Reviewer' },
+    ],
     onClose: () => undefined,
     onSubmit: () => undefined,
   },

@@ -457,7 +457,7 @@ export function subagentThreadsByAgent(
   const byAgent = new Map<string, AgentThread[]>();
   for (const block of blocks) {
     const status = subagentBlockStatus(block);
-    const key = block.nodeId ?? chatAgentKey;
+    const key = block.memberId ?? chatAgentKey;
     const threads = byAgent.get(key) ?? [];
     threads.push({
       id: block.id,
@@ -566,9 +566,9 @@ export interface DurableNodeStatus {
  */
 export function windowHoldsStatus(
   activity: ReadonlyMap<string, AgentActivity>,
-  nodeId: string,
+  memberId: string,
 ): boolean {
-  return (activity.get(nodeId)?.lastStatus ?? null) !== null;
+  return (activity.get(memberId)?.lastStatus ?? null) !== null;
 }
 
 /**
@@ -615,30 +615,32 @@ export function withDurableNodeStatus(
   drawnNodeIds: ReadonlySet<string> = new Set(),
 ): Map<string, AgentActivity> {
   let out: Map<string, AgentActivity> | null = null;
-  for (const [nodeId, row] of durable) {
-    if (windowIsTail && windowHoldsStatus(activity, nodeId)) {
+  for (const [memberId, row] of durable) {
+    if (windowIsTail && windowHoldsStatus(activity, memberId)) {
       continue;
     }
-    const existing = activity.get(nodeId);
+    const existing = activity.get(memberId);
     const running = row.status === 'running';
     if (
-      running ? runSettled : existing === undefined && !drawnNodeIds.has(nodeId)
+      running
+        ? runSettled
+        : existing === undefined && !drawnNodeIds.has(memberId)
     ) {
       continue;
     }
     out ??= new Map(activity);
     const { mainTurnLive: _fromRows, ...rest } = existing ?? emptyActivity();
-    out.set(nodeId, {
+    out.set(memberId, {
       ...rest,
       lastStatus: row.status,
       activeTurns: running ? 1 : 0,
     });
   }
   if (!windowIsTail && runSettled) {
-    for (const [nodeId, entry] of out ?? activity) {
+    for (const [memberId, entry] of out ?? activity) {
       if (entry.activeTurns > 0) {
         out ??= new Map(activity);
-        out.set(nodeId, { ...entry, activeTurns: 0, mainTurnLive: false });
+        out.set(memberId, { ...entry, activeTurns: 0, mainTurnLive: false });
       }
     }
   }
@@ -692,7 +694,7 @@ export function computeAgentActivity(
     return open;
   };
   for (const item of items) {
-    const key = item.nodeId ?? CHAT_AGENT_KEY;
+    const key = item.memberId ?? CHAT_AGENT_KEY;
     if (endsContextHistory(item)) {
       // A compaction empties the window, so every reading above this row was
       // taken on a conversation that is over — carrying one past it is what
@@ -757,12 +759,12 @@ export function computeAgentActivity(
     if (item.kind === 'call_started') {
       const payload = asRecord(item.payload);
       const callId = payload?.callId;
-      const calleeNodeId = payload?.calleeNodeId;
-      if (typeof callId !== 'string' || typeof calleeNodeId !== 'string') {
+      const calleeMemberId = payload?.calleeNodeId;
+      if (typeof callId !== 'string' || typeof calleeMemberId !== 'string') {
         continue;
       }
       const message = payload?.message;
-      entry(calleeNodeId).callThreads.push({
+      entry(calleeMemberId).callThreads.push({
         callId,
         callIds: [callId],
         openCallIds: [callId],
@@ -775,11 +777,11 @@ export function computeAgentActivity(
     if (item.kind === 'call_result') {
       const payload = asRecord(item.payload);
       const callId = payload?.callId;
-      const calleeNodeId = payload?.calleeNodeId;
-      if (typeof callId !== 'string' || typeof calleeNodeId !== 'string') {
+      const calleeMemberId = payload?.calleeNodeId;
+      if (typeof callId !== 'string' || typeof calleeMemberId !== 'string') {
         continue;
       }
-      const thread = entry(calleeNodeId).callThreads.find(
+      const thread = entry(calleeMemberId).callThreads.find(
         (t) => t.callId === callId,
       );
       if (!thread) {

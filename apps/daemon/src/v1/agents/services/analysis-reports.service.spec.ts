@@ -168,7 +168,7 @@ function folded(runId: string): FoldedRun {
     runId,
     turns: [
       {
-        nodeId: 'reviewer',
+        memberId: 'reviewer',
         startedAt: new Date(1_000).toISOString(),
         model: 'opus',
         member: null,
@@ -184,7 +184,7 @@ function folded(runId: string): FoldedRun {
     ],
     lanes: [
       {
-        nodeId: 'reviewer',
+        memberId: 'reviewer',
         agentKind: 'claude',
         turns: 1,
         workedMs: 1_800_000,
@@ -329,7 +329,7 @@ describe('AnalysisReportsService — a team card', () => {
     ).toEqual([null, null]);
   });
 
-  it('refuses a hotspot naming an item the card lacks, or a node that took no turn', async () => {
+  it('refuses a hotspot naming an item the card lacks, or a member that took no turn', async () => {
     const { report, written } = teamReporter();
 
     expect(
@@ -354,7 +354,7 @@ describe('AnalysisReportsService — a team card', () => {
       ),
     ).toMatchObject({
       status: 'refused',
-      reason: expect.stringContaining('node qa, which took no turn'),
+      reason: expect.stringContaining('member qa, which took no turn'),
     });
     expect(written).toEqual([]);
   });

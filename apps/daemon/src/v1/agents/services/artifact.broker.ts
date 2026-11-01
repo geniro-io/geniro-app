@@ -17,7 +17,7 @@ export type ArtifactPublisher = (
   artifact: HostArtifact,
   /**
    * The caller key of the conversation that published it — which call of a
-   * team node it came from.
+   * team member it came from.
    */
   caller: string,
 ) => Promise<HostArtifactOutcome>;
@@ -27,9 +27,9 @@ export class ArtifactBroker extends HostSinkBroker<ArtifactPublisher> {
   /** Runs whose publishers a team executor installed, by their mark. */
   private readonly teamRuns = new Map<string, symbol>();
 
-  /** Whether this node can currently publish — gates the tool listing. */
-  canPublish(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  /** Whether this member can currently publish — gates the tool listing. */
+  canPublish(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   /**
@@ -55,13 +55,13 @@ export class ArtifactBroker extends HostSinkBroker<ArtifactPublisher> {
   /** Publish the page and resolve with what happened. Never throws. */
   async publish(
     runId: string,
-    nodeId: string,
+    memberId: string,
     artifact: HostArtifact,
     caller: string,
   ): Promise<HostArtifactOutcome> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no turn is running that could show it',
       'publish an artifact',
       (publisher) => publisher(artifact, caller),

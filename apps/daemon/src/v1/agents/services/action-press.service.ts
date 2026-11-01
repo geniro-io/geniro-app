@@ -386,7 +386,7 @@ export class ActionPressService {
     const outcome: ActionOutcomePayload = {
       actionSeq: action.seq,
       actionId: action.actionId,
-      nodeId: action.nodeId,
+      nodeId: action.memberId,
       conversationId: action.conversationId,
       ...result,
       via,

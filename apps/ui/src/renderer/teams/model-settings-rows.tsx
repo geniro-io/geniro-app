@@ -15,7 +15,7 @@ import {
 import { ModelSettingsPendingRow } from '../chats/model-settings-pending-row';
 import { SettingRow } from '../components/setting-row';
 
-/** The per-model settings one configuration holds — the node's own or a pool member's. */
+/** The per-model settings one configuration holds — the team member's own or a pool member's. */
 type ModelSettings = Pick<
   TeamAgentPoolMember,
   'model' | 'effort' | 'contextWindow' | 'modelParameters'
@@ -24,7 +24,7 @@ type ModelSettings = Pick<
 /**
  * The labelled rows for whatever a configuration's MODEL offers: its effort,
  * its context window, and one row per other setting it enumerates. Shared by
- * the node's own settings card and each pool member, so a rule about when a
+ * the team member's own settings card and each pool member, so a rule about when a
  * row shows is written once.
  *
  * The ROW goes with its control: each chip renders nothing when the model

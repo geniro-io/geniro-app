@@ -4,10 +4,10 @@ import type { ActionPublishInput, ActionToolOutcome } from '../chat.types';
 import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 
 /**
- * One node's publisher of buttons (`publish_action` / `remove_action`). The
+ * One member's publisher of buttons (`publish_action` / `remove_action`). The
  * conversation it publishes as comes from the endpoint, never from the model:
  * `caller` is the MCP call's caller key, which a chat's sink may ignore and a
- * team node's reads to tell its own conversation from a callee's.
+ * team member's reads to tell its own conversation from a callee's.
  */
 export interface ActionSink {
   publish(
@@ -23,20 +23,20 @@ export interface ActionSink {
  */
 @Injectable()
 export class ActionBroker extends HostSinkBroker<ActionSink> {
-  /** Whether this node can currently publish — gates both tools' listing. */
-  canPublish(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  /** Whether this member can currently publish — gates both tools' listing. */
+  canPublish(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   async publish(
     runId: string,
-    nodeId: string,
+    memberId: string,
     input: ActionPublishInput,
     caller: string,
   ): Promise<ActionToolOutcome | HostSinkUnavailable> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no turn is running that could show it',
       'publish an action',
       (sink) => sink.publish(input, caller),
@@ -45,13 +45,13 @@ export class ActionBroker extends HostSinkBroker<ActionSink> {
 
   async remove(
     runId: string,
-    nodeId: string,
+    memberId: string,
     actionId: string,
     caller: string,
   ): Promise<ActionToolOutcome | HostSinkUnavailable> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no turn is running that could remove it',
       'remove an action',
       (sink) => sink.remove(actionId, caller),

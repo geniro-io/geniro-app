@@ -15,7 +15,7 @@ interface WallTurnDatabase {
   wall_turns: {
     run_id: WallTurn['runId'];
     seq: WallTurn['seq'];
-    node_id: WallTurn['nodeId'];
+    member_id: WallTurn['memberId'];
     ms: WallTurn['ms'];
     created_at: number;
     updated_at: number;
@@ -29,10 +29,10 @@ const CHAT_SUM_BATCH = 500;
 /** Turns per {@link WallTurnDao.record} insert — 7 bound values each. */
 const RECORD_BATCH = 500;
 
-/** One measured turn to record — the fold's answer for one node or chat. */
+/** One measured turn to record — the fold's answer for one member or chat. */
 export interface WallTurnRecord {
   seq: number;
-  nodeId: string | null;
+  memberId: string | null;
   ms: number;
 }
 
@@ -71,7 +71,7 @@ export class WallTurnDao extends BaseDao<WallTurn> {
           measured.slice(at, at + RECORD_BATCH).map((turn) => ({
             run_id: runId,
             seq: turn.seq,
-            node_id: turn.nodeId,
+            member_id: turn.memberId,
             ms: Math.round(turn.ms),
             created_at: now,
             updated_at: now,
@@ -85,7 +85,7 @@ export class WallTurnDao extends BaseDao<WallTurn> {
     }
   }
 
-  /** The run's whole recorded wall time — every node's and a chat's alike. */
+  /** The run's whole recorded wall time — every member's and a chat's alike. */
   async runSum(runId: string, txEm?: EntityManager): Promise<number> {
     const row = await (txEm ?? this.em.fork())
       .getKysely<WallTurnDatabase>({ convertValues: false })
@@ -98,7 +98,7 @@ export class WallTurnDao extends BaseDao<WallTurn> {
   }
 
   /**
-   * Each team node's recorded wall time in this run, by node id — only
+   * Each team member's recorded wall time in this run, by member id — only
    * the turns that ended at or before `throughSeq` when it is given.
    */
   async nodeSums(
@@ -109,25 +109,25 @@ export class WallTurnDao extends BaseDao<WallTurn> {
     let query = (txEm ?? this.em.fork())
       .getKysely<WallTurnDatabase>({ convertValues: false })
       .selectFrom('wall_turns')
-      .select((eb) => ['node_id', eb.fn.sum<number>('ms').as('ms')])
+      .select((eb) => ['member_id', eb.fn.sum<number>('ms').as('ms')])
       .where('run_id', '=', runId)
-      .where('node_id', 'is not', null)
+      .where('member_id', 'is not', null)
       .where('deleted_at', 'is', null);
     if (throughSeq !== undefined) {
       query = query.where('seq', '<=', throughSeq);
     }
-    const rows = await query.groupBy('node_id').execute();
+    const rows = await query.groupBy('member_id').execute();
     const out = new Map<string, number>();
     for (const row of rows) {
-      if (row.node_id !== null) {
-        out.set(row.node_id, Number(row.ms));
+      if (row.member_id !== null) {
+        out.set(row.member_id, Number(row.ms));
       }
     }
     return out;
   }
 
   /**
-   * Each recorded team-node turn of this run, by the seq of the
+   * Each recorded team-member turn of this run, by the seq of the
    * `turn_complete` that ended it — what a call's own worked time is summed
    * from, since the ledger keys a turn by its row and that row names its call.
    */
@@ -140,14 +140,14 @@ export class WallTurnDao extends BaseDao<WallTurn> {
       .selectFrom('wall_turns')
       .select(['seq', 'ms'])
       .where('run_id', '=', runId)
-      .where('node_id', 'is not', null)
+      .where('member_id', 'is not', null)
       .where('deleted_at', 'is', null)
       .execute();
     return new Map(rows.map((row) => [Number(row.seq), Number(row.ms)]));
   }
 
   /**
-   * Each of these runs' 1:1-chat wall time (the rows with no node), by run id
+   * Each of these runs' 1:1-chat wall time (the rows with no member), by run id
    * — one query, for a listing of many.
    */
   async chatSums(
@@ -164,7 +164,7 @@ export class WallTurnDao extends BaseDao<WallTurn> {
         .selectFrom('wall_turns')
         .select((eb) => ['run_id', eb.fn.sum<number>('ms').as('ms')])
         .where('run_id', 'in', runIds.slice(at, at + CHAT_SUM_BATCH))
-        .where('node_id', 'is', null)
+        .where('member_id', 'is', null)
         .where('deleted_at', 'is', null)
         .groupBy('run_id')
         .execute();

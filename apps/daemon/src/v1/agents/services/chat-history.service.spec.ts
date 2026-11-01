@@ -148,49 +148,49 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
         runId: 'run-a',
         seq: 1,
         kind: 'message',
-        nodeId: 'manager',
+        memberId: 'manager',
         payload: JSON.stringify({ text: 'splitting the work' }),
       });
       await dao.create({
         runId: 'run-a',
         seq: 2,
         kind: 'call_started',
-        nodeId: 'manager',
+        memberId: 'manager',
         payload: JSON.stringify({ callId: 'call-1', calleeNodeId: 'eng' }),
       });
       await dao.create({
         runId: 'run-a',
         seq: 3,
         kind: 'tool_call',
-        nodeId: 'eng',
+        memberId: 'eng',
         payload: JSON.stringify({ id: 't1', callId: 'call-1' }),
       });
       await dao.create({
         runId: 'run-a',
         seq: 4,
         kind: 'approval_request',
-        nodeId: 'eng',
+        memberId: 'eng',
         payload: JSON.stringify({ callId: 'call-1', requestId: 'r1' }),
       });
       await dao.create({
         runId: 'run-a',
         seq: 5,
         kind: 'call_started',
-        nodeId: 'manager',
+        memberId: 'manager',
         payload: JSON.stringify({ callId: 'call-2', calleeNodeId: 'qa' }),
       });
       await dao.create({
         runId: 'run-a',
         seq: 6,
         kind: 'message',
-        nodeId: 'qa',
+        memberId: 'qa',
         payload: JSON.stringify({ text: 'checked', callId: 'call-2' }),
       });
       await dao.create({
         runId: 'run-a',
         seq: 7,
         kind: 'call_started',
-        nodeId: 'manager',
+        memberId: 'manager',
         payload: JSON.stringify({
           callId: 'call-3',
           calleeNodeId: 'eng',
@@ -201,7 +201,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
         runId: 'run-a',
         seq: 8,
         kind: 'message',
-        nodeId: 'eng',
+        memberId: 'eng',
         payload: JSON.stringify({ text: 'continued', callId: 'call-3' }),
       });
     }
@@ -237,7 +237,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       const row = (
         seq: number,
         kind: ItemKind,
-        nodeId: string,
+        memberId: string,
         payload: unknown,
         role: string | null = null,
       ) =>
@@ -245,7 +245,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
           runId: 'run-a',
           seq,
           kind,
-          nodeId,
+          memberId,
           role,
           payload: JSON.stringify(payload),
         });
@@ -315,7 +315,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
           runId: 'run-a',
           seq,
           kind: 'tool_call',
-          nodeId: 'qa',
+          memberId: 'qa',
           payload: JSON.stringify({ ...payload, callId: 'call-2' }),
         });
       await row(9, { id: 't1', name: 'Bash' });
@@ -344,14 +344,14 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     const row = (
       seq: number,
       kind: ItemKind,
-      nodeId: string,
+      memberId: string,
       payload: unknown,
     ): Promise<unknown> =>
       dao.create({
         runId: 'run-a',
         seq,
         kind,
-        nodeId,
+        memberId,
         payload: JSON.stringify(payload),
       });
 

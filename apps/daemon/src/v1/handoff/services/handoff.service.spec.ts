@@ -22,11 +22,11 @@ function build(
     sessionId?: string | null;
     /** Registry keys holding a live process. */
     live?: string[];
-    /** The agent kind stamped on a team node's state row. */
+    /** The agent kind stamped on a team member's state row. */
     nodeAgentKind?: AgentKind;
     /** The run's `call_started` / `call_result` rows. */
     callRows?: { kind: string; payload: unknown }[];
-    nodeRows?: { nodeId: string; payload: string }[];
+    nodeRows?: { memberId: string; payload: string }[];
   } = {},
 ) {
   const live = new Set(overrides.live ?? []);
@@ -142,11 +142,11 @@ describe('HandoffService — agent pool', () => {
         nodeAgentKind: AgentKind.Claude,
         nodeRows: [
           {
-            nodeId: 'root',
+            memberId: 'root',
             payload: '{"sessionId":"older-root","nodePoolMember":1}',
           },
           {
-            nodeId: 'root',
+            memberId: 'root',
             payload: JSON.stringify({
               nodePoolHandOff: true,
               member: 2,
@@ -154,11 +154,11 @@ describe('HandoffService — agent pool', () => {
               previousSessionId: 'old-root',
             }),
           },
-          { nodeId: 'root', payload: 'null' },
-          { nodeId: 'root', payload: 'not-json' },
+          { memberId: 'root', payload: 'null' },
+          { memberId: 'root', payload: 'not-json' },
         ],
       });
-      await service.resolve({ runId: 'run-1', nodeId: 'root', sessionId });
+      await service.resolve({ runId: 'run-1', memberId: 'root', sessionId });
       expect(handoffTarget).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionId: sessionId ?? 'current-root',
@@ -204,7 +204,7 @@ describe('HandoffService — agent pool', () => {
     }
   });
 
-  it('reopens a pooled call thread under the member that ran it, not the node’s last stamp', async () => {
+  it('reopens a pooled call thread under the pool member that ran it, not the member’s last stamp', async () => {
     const { service, handoffTarget, adapterFor } = build({
       run: {
         ...TEAM_RUN,
@@ -238,7 +238,7 @@ describe('HandoffService — agent pool', () => {
 
     await service.resolve({
       runId: 'run-1',
-      nodeId: 'eng',
+      memberId: 'eng',
       sessionId: 'thread-codex',
     });
 
@@ -321,14 +321,14 @@ describe('HandoffService', () => {
     );
   });
 
-  it('rejects a nodeId on a chat run instead of quietly ignoring it', async () => {
-    // A chat has one agent and no nodes; accepting a node id would answer for
+  it('rejects a memberId on a chat run instead of quietly ignoring it', async () => {
+    // A chat has one agent and no members; accepting a member id would answer for
     // a conversation the caller did not ask about.
     const { service } = build();
 
     await expect(
-      service.resolve({ runId: 'run-1', nodeId: 'worker' }),
-    ).rejects.toThrow(/HANDOFF_NODE_UNEXPECTED|does not accept a nodeId/);
+      service.resolve({ runId: 'run-1', memberId: 'worker' }),
+    ).rejects.toThrow(/HANDOFF_NODE_UNEXPECTED|does not accept a memberId/);
   });
 
   it('tells the adapter the conversation is held while the chat keeps its process', async () => {
@@ -347,14 +347,14 @@ describe('HandoffService', () => {
     );
   });
 
-  it('reads a team node as held by its own process or any call process of the run', async () => {
+  it('reads a team member as held by its own process or any call process of the run', async () => {
     const ask = async (live: string[]): Promise<unknown> => {
       const { service, handoffTarget } = build({
         run: TEAM_RUN,
         nodeAgentKind: AgentKind.Codex,
         live,
       });
-      await service.resolve({ runId: 'run-1', nodeId: 'engineer' });
+      await service.resolve({ runId: 'run-1', memberId: 'engineer' });
       return (handoffTarget.mock.calls[0] as unknown[])[0];
     };
     expect(await ask(['run-1::node:engineer'])).toMatchObject({ held: true });
@@ -365,8 +365,8 @@ describe('HandoffService', () => {
     expect(await ask([])).toMatchObject({ held: false });
   });
 
-  it('prefers an explicitly requested thread over the node’s latest session', async () => {
-    // One agent node can hold several threads (a call thread has its own
+  it('prefers an explicitly requested thread over the member’s latest session', async () => {
+    // One member can hold several threads (a call thread has its own
     // resume id); the caller naming one must not be overridden by the latest.
     const { service, handoffTarget } = build();
 

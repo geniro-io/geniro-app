@@ -389,7 +389,7 @@ export const CURSOR_COMPILE_CACHE_PATH = [
   'cursor-compile-cache',
 ] as const;
 
-// ── The per-turn DATA directory (a node's switched-off MCP servers) ───────
+// ── The per-turn DATA directory (a member's switched-off MCP servers) ───────
 //
 // `utils/cursor-data-dir.utils.ts` carries the bundle reading and the probe.
 
@@ -668,7 +668,7 @@ export const CURSOR_PROJECT_ROOT_MARKER = '.git';
  * (`aK.init(J,D.projectRoot,D.projectDir,!1,Z,…)`) and contains no plugin code
  * at all — plugin servers are loaded by the chat and TUI paths alone (`8134`,
  * `9969`). Cursor's own ACP page says the same ("ACP supports MCP servers defined
- * in a project-level or user-level `.cursor/mcp.json`"), and a live cursor node
+ * in a project-level or user-level `.cursor/mcp.json`"), and a live cursor member
  * found no datadog tool in its catalog with the datadog plugin enabled. Nor can
  * the CLI's subcommands reach them: `mcp list` omits them and `mcp list-tools` /
  * `login` / `enable` answer `MCP client "plugin-datadog-datadog" not found in

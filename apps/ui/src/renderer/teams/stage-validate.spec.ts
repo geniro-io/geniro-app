@@ -9,11 +9,7 @@ import {
   validateStages,
 } from './stage-validate';
 
-const NODES = [
-  { id: 'coder', kind: 'agent' as const },
-  { id: 'reviewer', kind: 'agent' as const },
-  { id: 'brief', kind: 'instruction' as const },
-];
+const MEMBERS = [{ id: 'coder' }, { id: 'reviewer' }];
 
 function stage(
   id: string,
@@ -23,7 +19,7 @@ function stage(
   return {
     id,
     title: id.toUpperCase(),
-    doneWhen: `${id} is done`,
+    goal: `${id} is done`,
     ...(next ? { next } : {}),
     ...extra,
   };
@@ -34,11 +30,11 @@ const codes = (issues: { code: string }[]): string[] =>
 
 describe('validateStages (twin of the daemon validator)', () => {
   it('has nothing to say about no stages or an empty list', () => {
-    expect(validateStages({ nodes: NODES })).toEqual({
+    expect(validateStages({ members: MEMBERS })).toEqual({
       errors: [],
       warnings: [],
     });
-    expect(validateStages({ stages: [], nodes: NODES })).toEqual({
+    expect(validateStages({ stages: [], members: MEMBERS })).toEqual({
       errors: [],
       warnings: [],
     });
@@ -52,7 +48,7 @@ describe('validateStages (twin of the daemon validator)', () => {
       stage('review', ['done']),
       stage('done'),
     ];
-    expect(validateStages({ stages: fork, nodes: NODES })).toEqual({
+    expect(validateStages({ stages: fork, members: MEMBERS })).toEqual({
       errors: [],
       warnings: [],
     });
@@ -61,7 +57,7 @@ describe('validateStages (twin of the daemon validator)', () => {
   it('refuses a stage graph that loops back', () => {
     const { errors } = validateStages({
       stages: [stage('a', ['b']), stage('b', ['c']), stage('c', ['b'])],
-      nodes: NODES,
+      members: MEMBERS,
     });
     expect(codes(errors)).toEqual(['STAGE_CYCLE']);
     expect(errors[0]!.message).toContain('b → c → b');
@@ -72,7 +68,7 @@ describe('validateStages (twin of the daemon validator)', () => {
       codes(
         validateStages({
           stages: [stage('a', ['b']), stage('b', ['a'])],
-          nodes: NODES,
+          members: MEMBERS,
         }).errors,
       ),
     ).toEqual(['STAGE_NO_START']);
@@ -81,7 +77,7 @@ describe('validateStages (twin of the daemon validator)', () => {
   it('refuses more than one start, naming them', () => {
     const { errors } = validateStages({
       stages: [stage('a', ['c']), stage('b', ['c']), stage('c')],
-      nodes: NODES,
+      members: MEMBERS,
     });
     expect(codes(errors)).toEqual(['STAGE_MULTIPLE_STARTS']);
     expect(errors[0]!.message).toContain("'a', 'b'");
@@ -92,12 +88,13 @@ describe('validateStages (twin of the daemon validator)', () => {
       codes(
         validateStages({
           stages: [stage('a', ['b']), stage('a')],
-          nodes: NODES,
+          members: MEMBERS,
         }).errors,
       ),
     ).toContain('STAGE_DUPLICATE_ID');
     expect(
-      validateStages({ stages: [stage('a', ['ghost'])], nodes: NODES }).errors,
+      validateStages({ stages: [stage('a', ['ghost'])], members: MEMBERS })
+        .errors,
     ).toEqual([
       expect.objectContaining({ code: 'STAGE_NEXT_UNKNOWN', stageId: 'a' }),
     ]);
@@ -105,7 +102,7 @@ describe('validateStages (twin of the daemon validator)', () => {
       codes(
         validateStages({
           stages: [stage('a', ['b', 'b']), stage('b')],
-          nodes: NODES,
+          members: MEMBERS,
         }).errors,
       ),
     ).toEqual(['STAGE_NEXT_DUPLICATE']);
@@ -116,27 +113,34 @@ describe('validateStages (twin of the daemon validator)', () => {
       stage(`s${i}`, i < 20 ? [`s${i + 1}`] : undefined),
     );
     expect(
-      codes(validateStages({ stages: many, nodes: NODES }).errors),
+      codes(validateStages({ stages: many, members: MEMBERS }).errors),
     ).toEqual(['STAGE_TOO_MANY']);
   });
 
-  it('warns, never refuses, about an owner hint that is not an agent of the team', () => {
+  it('warns, never refuses, about a responsible id that is no member of the team', () => {
     const result = validateStages({
       stages: [
-        stage('a', ['b'], { ownerHint: 'ghost' }),
-        stage('b', undefined, { ownerHint: 'brief' }),
+        stage('a', ['b'], { responsible: ['coder', 'ghost'] }),
+        stage('b', undefined, { responsible: ['brief'] }),
       ],
-      nodes: NODES,
+      members: MEMBERS,
     });
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([
-      expect.objectContaining({ code: 'STAGE_OWNER_UNKNOWN', stageId: 'a' }),
-      expect.objectContaining({ code: 'STAGE_OWNER_UNKNOWN', stageId: 'b' }),
+      expect.objectContaining({
+        code: 'STAGE_RESPONSIBLE_UNKNOWN',
+        stageId: 'a',
+        message: expect.stringContaining("'ghost'"),
+      }),
+      expect.objectContaining({
+        code: 'STAGE_RESPONSIBLE_UNKNOWN',
+        stageId: 'b',
+      }),
     ]);
     expect(
       validateStages({
-        stages: [stage('a', undefined, { ownerHint: 'coder' })],
-        nodes: NODES,
+        stages: [stage('a', undefined, { responsible: ['coder', 'reviewer'] })],
+        members: MEMBERS,
       }).warnings,
     ).toEqual([]);
   });
@@ -148,8 +152,8 @@ describe('validateStageFields', () => {
       validateStageFields([
         stage('a', undefined, {
           title: 'x'.repeat(80),
-          instructions: 'y'.repeat(4000),
-          doneWhen: 'z'.repeat(300),
+          howToWork: 'y'.repeat(4000),
+          goal: 'z'.repeat(300),
         }),
       ]),
     ).toEqual([]);
@@ -160,22 +164,22 @@ describe('validateStageFields', () => {
       stage('ok'),
       stage('bad', undefined, {
         title: '   ',
-        doneWhen: '',
+        goal: '',
       }),
       stage('long', undefined, {
         title: 'x'.repeat(81),
-        instructions: 'y'.repeat(4001),
-        doneWhen: 'z'.repeat(301),
+        howToWork: 'y'.repeat(4001),
+        goal: 'z'.repeat(301),
       }),
       stage('123'),
       stage('Has Caps'),
     ]);
     expect(issues.map((i) => `${i.stageId}:${i.code}`)).toEqual([
       'bad:STAGE_TITLE_REQUIRED',
-      'bad:STAGE_DONE_WHEN_REQUIRED',
+      'bad:STAGE_GOAL_REQUIRED',
       'long:STAGE_TITLE_TOO_LONG',
-      'long:STAGE_INSTRUCTIONS_TOO_LONG',
-      'long:STAGE_DONE_WHEN_TOO_LONG',
+      'long:STAGE_HOW_TO_WORK_TOO_LONG',
+      'long:STAGE_GOAL_TOO_LONG',
       '123:STAGE_ID_INVALID',
       'Has Caps:STAGE_ID_INVALID',
     ]);
@@ -183,9 +187,9 @@ describe('validateStageFields', () => {
 
   it.each<[string, Partial<TeamStage>]>([
     ['title', { title: 'Re\u0000view' }],
-    ['instructions', { instructions: 'Read\u0000 it' }],
-    ['doneWhen', { doneWhen: 'It is\u0000 done' }],
-    ['ownerHint', { ownerHint: 'cod\u0000er' }],
+    ['howToWork', { howToWork: 'Read\u0000 it' }],
+    ['goal', { goal: 'It is\u0000 done' }],
+    ['responsible', { responsible: ['cod\u0000er'] }],
   ])('reports a NUL in a stage’s %s as STAGE_TEXT_NUL', (_field, extra) => {
     expect(
       validateStageFields([stage('a'), stage('nul', undefined, extra)]),

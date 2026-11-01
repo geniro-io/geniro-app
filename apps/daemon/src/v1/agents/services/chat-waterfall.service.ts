@@ -64,7 +64,7 @@ import { RunKindRowsCache } from './run-kind-rows.cache';
  * What remains is the handful of kinds whose span cannot be reconstructed
  * without reading what they say: a turn's figures, a delegate's open/close
  * flags, a call's participants and status, the id pairing an approval request
- * to its verdict, and a node's own status — the only trace of a turn a cancel
+ * to its verdict, and a member's own status — the only trace of a turn a cancel
  * cut off before it could write a `turn_complete`. None of them is rewritten
  * once written, so they are read through `RunKindRowsCache`.
  */
@@ -111,7 +111,7 @@ const MAX_TOOL_NAMES = 60;
  *
  * A separate and much larger bound than the one above, because the two count
  * different things: SQLite groups by the raw `payload.name`, and on the ACP
- * transport that is a per-CALL title — so a cursor node running a thousand
+ * transport that is a per-CALL title — so a cursor member running a thousand
  * shell commands produces a thousand groups that fold into ONE row. The bound
  * is on the query's own answer, and tripping it says so like every other cap
  * here.
@@ -276,7 +276,7 @@ export class ChatWaterfallService {
     // nobody measured" this card exists to refuse.
     const isChat = run.teamId === null;
     const agentKinds = new Map<string | null, AgentKind | null>(
-      nodeStates.map((state) => [state.nodeId, state.agentKind]),
+      nodeStates.map((state) => [state.memberId, state.agentKind]),
     );
 
     const pollsSpend = (kind: string | null): boolean =>
@@ -287,11 +287,11 @@ export class ChatWaterfallService {
         .filter(
           (state) =>
             pollsSpend(state.agentKind) ||
-            (poolKinds.get(state.nodeId) ?? []).some(pollsSpend),
+            (poolKinds.get(state.memberId) ?? []).some(pollsSpend),
         )
         .map((state) => [
-          state.nodeId,
-          nodePolledSpend(state, pollsSpend, poolKinds.get(state.nodeId)),
+          state.memberId,
+          nodePolledSpend(state, pollsSpend, poolKinds.get(state.memberId)),
         ]),
     );
     // A chat produces exactly ONE lane, so the run row answers for it whatever
@@ -325,12 +325,12 @@ export class ChatWaterfallService {
       waits,
       delegates,
       // A polled-spend CLI prices no turn on its own wire — its only price is
-      // the one polled onto the run and node rows — so the raw sum would report
+      // the one polled onto the run and member rows — so the raw sum would report
       // its run as costing nothing while the panel beside this card shows the
       // real figure. Which helper applies is the split `ChatMetricsService`
       // already makes: a single-CLI chat has nothing to add the bill TO, so it
-      // REPLACES, while a team's self-pricing nodes priced their own turns
-      // and the polled node's bill goes on top.
+      // REPLACES, while a team's self-pricing members priced their own turns
+      // and the polled member's bill goes on top.
       totals: withPolledSpend(
         sumUsagePayloads(
           payloadRows
@@ -344,10 +344,10 @@ export class ChatWaterfallService {
             .filter(
               (row) =>
                 carriesUsage(row.kind) &&
-                (row.nodeId === null ||
+                (row.memberId === null ||
                   !pollsSpend(
                     turnAgentKindOf(parsed(row.payload)) ??
-                      agentKinds.get(row.nodeId) ??
+                      agentKinds.get(row.memberId) ??
                       null,
                   )),
             )
@@ -368,7 +368,7 @@ type PayloadRow = {
   seq: number;
   kind: string;
   payload: string;
-  nodeId: string | null;
+  memberId: string | null;
   createdAt: Date;
 };
 
@@ -376,8 +376,8 @@ type SpineRow = {
   seq: number;
   kind: string;
   role: string | null;
-  nodeId: string | null;
-  /** The call whose card the row is drawn in — `''` for the node's own flow, null when not stamped yet. */
+  memberId: string | null;
+  /** The call whose card the row is drawn in — `''` for the member's own flow, null when not stamped yet. */
   inCall?: string | null;
   createdAt: Date;
 };
@@ -405,7 +405,7 @@ function empty(): RunWaterfallWire {
  *
  * Read off the UNCAPPED fold, for the reason `fold` exists: a path computed
  * over a capped tail would start halfway through a long run. Tool spans are
- * not needed — they refine an analysis's per-node figures, never the path.
+ * not needed — they refine an analysis's per-member figures, never the path.
  */
 function criticalPathOf(
   folded: RunWaterfallFold,
@@ -422,7 +422,7 @@ function criticalPathOf(
   );
   return timeline.criticalPath.map((segment) => ({
     kind: segment.kind,
-    nodeId: segment.nodeId,
+    memberId: segment.memberId,
     startedAt: new Date(segment.startMs).toISOString(),
     durationMs: Math.round(segment.durationMs),
   }));
@@ -433,8 +433,8 @@ function criticalPathOf(
  *
  * A chat REPLACES and a team ADDS, which is not a shortcut either way: a
  * polled-spend chat's own turns report no price at all, so there is nothing to
- * add a bill to, while a team's other nodes priced their turns and
- * replacing would report the polled node's bill as the whole run's cost.
+ * add a bill to, while a team's other members priced their turns and
+ * replacing would report the polled member's bill as the whole run's cost.
  */
 function withPolledSpend(
   totals: ChatTotalsWire,
@@ -479,7 +479,7 @@ function foldTurns(
   pooled: PoolMembers,
 ): { turns: RunWaterfallTurn[]; ends: Map<string, number[]> } {
   const out: RunWaterfallTurn[] = [];
-  // Where each DRAWN turn ended, per (node, call) — what the unfinished fold
+  // Where each DRAWN turn ended, per (member, call) — what the unfinished fold
   // checks a status-bracketed stretch against, so a turn the CLI reported is
   // never drawn a second time as a derived one.
   const ends = new Map<string, number[]>();
@@ -511,13 +511,13 @@ function foldTurns(
     if (durationMs === null) {
       continue;
     }
-    const key = turnKey(row.nodeId, asString(body?.callId));
+    const key = turnKey(row.memberId, asString(body?.callId));
     ends.set(key, [...(ends.get(key) ?? []), endedMs]);
     out.push({
-      nodeId: row.nodeId,
+      memberId: row.memberId,
       startedAt: new Date(endedMs - durationMs).toISOString(),
       seq: firstSeqWithin(
-        laneRows.get(row.nodeId),
+        laneRows.get(row.memberId),
         endedMs - durationMs,
         endedMs,
         row.seq,
@@ -536,7 +536,7 @@ function foldTurns(
       estimatedCostUsd: asNumber(usage.estimatedCostUsd),
       modelCosts: readModelCosts(usage.modelCosts, asNumber(usage.costUsd)),
       model: asString(usage.contextModel),
-      member: poolMemberOf(pooled, row.nodeId, body),
+      member: poolMemberOf(pooled, row.memberId, body),
       inputTokens: asNumber(usage.inputTokens),
       outputTokens: asNumber(usage.outputTokens),
       cacheReadTokens: asNumber(usage.cacheReadTokens),
@@ -576,23 +576,23 @@ function readModelCosts(
   return splitOf(entries, costUsd);
 }
 
-/** Each pooled node's members, read from the run's own copy of the team. */
+/** Each pooled member's pool members, read from the run's own copy of the team. */
 interface PoolMembers {
-  /** Whether the node has a pool. */
-  has(nodeId: string | null): boolean;
-  /** Member `n` (1-based) of the node's pool — its CLI and configured model. */
-  member(nodeId: string | null, n: number | null): TurnMember | null;
+  /** Whether the member has a pool. */
+  has(memberId: string | null): boolean;
+  /** Member `n` (1-based) of the member's pool — its CLI and configured model. */
+  member(memberId: string | null, n: number | null): TurnMember | null;
 }
 
 function poolMembers(snapshot: string | null): PoolMembers {
   const profiles = snapshotNodePoolProfiles(snapshot);
   return {
-    has: (nodeId) => nodeId !== null && profiles.has(nodeId),
-    member: (nodeId, n) => {
+    has: (memberId) => memberId !== null && profiles.has(memberId),
+    member: (memberId, n) => {
       const profile =
-        nodeId === null || n === null
+        memberId === null || n === null
           ? null
-          : (profiles.get(nodeId)?.[n - 1] ?? null);
+          : (profiles.get(memberId)?.[n - 1] ?? null);
       return profile === null
         ? null
         : { agentKind: profile.agentKind, model: profile.model };
@@ -601,22 +601,23 @@ function poolMembers(snapshot: string | null): PoolMembers {
 }
 
 /**
- * The pool member a usage row names, or — on a pooled node, for a row naming
- * none — member 1 (whose rows are left unnamed); null on a node without a pool.
+ * The pool member a usage row names, or — on a pooled member, for a row naming
+ * none — pool member 1 (whose rows are left unnamed); null on a member without a
+ * pool.
  */
 function poolMemberOf(
   pooled: PoolMembers,
-  nodeId: string | null,
+  memberId: string | null,
   body: Record<string, unknown> | null,
 ): TurnMember | null {
-  return pooled.has(nodeId)
-    ? (turnMemberOf(body) ?? pooled.member(nodeId, 1))
+  return pooled.has(memberId)
+    ? (turnMemberOf(body) ?? pooled.member(memberId, 1))
     : null;
 }
 
-/** One (node, call) conversation — the grain a turn opens and closes on. */
-function turnKey(nodeId: string | null, callId: string | null): string {
-  return `${nodeId ?? ''}\u0000${callId ?? ''}`;
+/** One (member, call) conversation — the grain a turn opens and closes on. */
+function turnKey(memberId: string | null, callId: string | null): string {
+  return `${memberId ?? ''}\u0000${callId ?? ''}`;
 }
 
 /**
@@ -627,7 +628,7 @@ function turnKey(nodeId: string | null, callId: string | null): string {
  * Null for a span past what the card will draw, on `foldTurns`' own bound.
  */
 function bracketedTurn(
-  nodeId: string | null,
+  memberId: string | null,
   startMs: number,
   endMs: number,
   outcome: RunWaterfallTurn['outcome'],
@@ -640,7 +641,7 @@ function bracketedTurn(
     return null;
   }
   return {
-    nodeId,
+    memberId,
     startedAt: new Date(startMs).toISOString(),
     seq,
     timingSource: 'derived',
@@ -666,10 +667,10 @@ function bracketedTurn(
 }
 
 /**
- * A TEAM node's turns that no `turn_complete` drew — still running, failed,
+ * A TEAM member's turns that no `turn_complete` drew — still running, failed,
  * or cancelled — read off the executor's status rows.
  *
- * A status row carries the node and, for a callee sub-turn, the call: `running`
+ * A status row carries the member and, for a callee sub-turn, the call: `running`
  * opens that conversation's turn and the next status for it closes the turn.
  * The pair is drawn only when no reported turn ENDED inside it, which is what
  * keeps a finished turn from appearing twice. One still open at the last row is
@@ -685,7 +686,7 @@ function foldUnfinishedNodeTurns(
 ): RunWaterfallTurn[] {
   const open = new Map<
     string,
-    { nodeId: string | null; startMs: number; seq: number }
+    { memberId: string | null; startMs: number; seq: number }
   >();
   // The pool member running each conversation's open attempt: the one its
   // own usage rows (its `error`, its `turn_cancelled`) name, else the one the
@@ -696,7 +697,7 @@ function foldUnfinishedNodeTurns(
   const out: RunWaterfallTurn[] = [];
   const settle = (
     key: string,
-    started: { nodeId: string | null; startMs: number; seq: number },
+    started: { memberId: string | null; startMs: number; seq: number },
     endMs: number,
     outcome: RunWaterfallTurn['outcome'],
   ): void => {
@@ -707,7 +708,7 @@ function foldUnfinishedNodeTurns(
       return;
     }
     const turn = bracketedTurn(
-      started.nodeId,
+      started.memberId,
       started.startMs,
       endMs,
       outcome,
@@ -723,8 +724,8 @@ function foldUnfinishedNodeTurns(
       // A hand-off ends the member's attempt as failed — the pool hands on
       // only on a failure — and the turn goes on under the member it names.
       const body = parsed(row.payload);
-      const key = turnKey(row.nodeId, asString(body?.callId));
-      const to = pooled.member(row.nodeId, asNumber(body?.member));
+      const key = turnKey(row.memberId, asString(body?.callId));
+      const to = pooled.member(row.memberId, asNumber(body?.member));
       handedTo.set(key, to);
       const started = open.get(key);
       if (started !== undefined) {
@@ -732,10 +733,14 @@ function foldUnfinishedNodeTurns(
         members.set(
           key,
           members.get(key) ??
-            pooled.member(row.nodeId, asNumber(body?.fromMember)),
+            pooled.member(row.memberId, asNumber(body?.fromMember)),
         );
         settle(key, started, atMs, 'failed');
-        open.set(key, { nodeId: started.nodeId, startMs: atMs, seq: row.seq });
+        open.set(key, {
+          memberId: started.memberId,
+          startMs: atMs,
+          seq: row.seq,
+        });
         members.set(key, to);
       }
       continue;
@@ -743,28 +748,28 @@ function foldUnfinishedNodeTurns(
     if (row.kind !== 'status') {
       if (carriesUsage(row.kind)) {
         const body = parsed(row.payload);
-        const key = turnKey(row.nodeId, asString(body?.callId));
+        const key = turnKey(row.memberId, asString(body?.callId));
         if (open.has(key)) {
-          members.set(key, poolMemberOf(pooled, row.nodeId, body));
+          members.set(key, poolMemberOf(pooled, row.memberId, body));
         }
       }
       continue;
     }
     const body = parsed(row.payload);
     const status = asString(body?.status);
-    const nodeId = row.nodeId ?? asString(body?.nodeId);
-    const key = turnKey(nodeId, asString(body?.callId));
+    const memberId = row.memberId ?? asString(body?.nodeId);
+    const key = turnKey(memberId, asString(body?.callId));
     const atMs = row.createdAt.getTime();
     if (status === 'running') {
       // The EARLIEST open is the start: a pass re-announcing `running` for a
       // turn already under way must not shrink it to its tail.
       if (!open.has(key)) {
-        open.set(key, { nodeId, startMs: atMs, seq: row.seq });
+        open.set(key, { memberId, startMs: atMs, seq: row.seq });
         members.set(
           key,
           handedTo.get(key) ??
-            (nodeId !== null && asString(body?.callId) === null
-              ? pooled.member(nodeId, 1)
+            (memberId !== null && asString(body?.callId) === null
+              ? pooled.member(memberId, 1)
               : null),
         );
       }
@@ -817,7 +822,7 @@ function foldUnfinishedChatTurns(
     }
   };
   for (const row of spine) {
-    if (row.nodeId !== null) {
+    if (row.memberId !== null) {
       continue;
     }
     const atMs = row.createdAt.getTime();
@@ -841,7 +846,7 @@ function foldUnfinishedChatTurns(
  * own apart from its CLI sub-agents' (`delegated`, by seq).
  *
  * A delegate's calls land in the lane, and so the turn, that launched it. Two
- * concurrent calls on one node overlap, and a tool call inside both is counted
+ * concurrent calls on one member overlap, and a tool call inside both is counted
  * in both: the spine names no call, and the figure says what happened while the
  * turn ran rather than claiming an owner.
  */
@@ -857,9 +862,9 @@ function withToolCounts(
       continue;
     }
     const byLane = delegated.has(row.seq) ? delegates : own;
-    const times = byLane.get(row.nodeId);
+    const times = byLane.get(row.memberId);
     if (times === undefined) {
-      byLane.set(row.nodeId, [row.createdAt.getTime()]);
+      byLane.set(row.memberId, [row.createdAt.getTime()]);
     } else {
       times.push(row.createdAt.getTime());
     }
@@ -884,8 +889,8 @@ function withToolCounts(
   };
   return turns.map((turn) => ({
     ...turn,
-    toolCalls: inside(own.get(turn.nodeId), turn),
-    delegateToolCalls: inside(delegates.get(turn.nodeId), turn),
+    toolCalls: inside(own.get(turn.memberId), turn),
+    delegateToolCalls: inside(delegates.get(turn.memberId), turn),
   }));
 }
 
@@ -921,9 +926,9 @@ function laneRows(spine: readonly SpineRow[]): Map<string | null, LaneRow[]> {
       seq: row.seq,
       inCall: row.inCall ?? null,
     };
-    const own = byLane.get(row.nodeId);
+    const own = byLane.get(row.memberId);
     if (own === undefined) {
-      byLane.set(row.nodeId, [entry]);
+      byLane.set(row.memberId, [entry]);
     } else {
       own.push(entry);
     }
@@ -941,10 +946,10 @@ type LaneRow = { at: number; seq: number; inCall: string | null };
  * always exists. (A derived span starts AT the lane's previous row, so a
  * derived turn lands on the row its bar is drawn from.)
  *
- * Matched on the turn's CONVERSATION as well as its node: one node can answer
+ * Matched on the turn's CONVERSATION as well as its member: one member can answer
  * two calls at once, and the other call's row inside the same stretch would
  * open the wrong card. A row not stamped with its call yet (`inCall` null)
- * still counts — it is the node's, and the closing row is no closer.
+ * still counts — it is the member's, and the closing row is no closer.
  */
 function firstSeqWithin(
   rows: readonly LaneRow[] | undefined,
@@ -979,7 +984,7 @@ function derivedSpan(
   laneRows: ReadonlyMap<string | null, readonly LaneRow[]>,
   row: PayloadRow,
 ): number | null {
-  const rows = laneRows.get(row.nodeId);
+  const rows = laneRows.get(row.memberId);
   if (rows === undefined) {
     return null;
   }
@@ -1034,8 +1039,8 @@ function foldCalls(
     }
     open.delete(callId);
     out.push({
-      callerNodeId: asString(started.body.callerNodeId),
-      calleeNodeId: asString(started.body.calleeNodeId),
+      callerMemberId: asString(started.body.callerNodeId),
+      calleeMemberId: asString(started.body.calleeNodeId),
       mode: asString(started.body.mode),
       status: asString(body.status),
       running: false,
@@ -1050,8 +1055,8 @@ function foldCalls(
   if (working) {
     for (const started of open.values()) {
       out.push({
-        callerNodeId: asString(started.body.callerNodeId),
-        calleeNodeId: asString(started.body.calleeNodeId),
+        callerMemberId: asString(started.body.callerNodeId),
+        calleeMemberId: asString(started.body.calleeNodeId),
         mode: asString(started.body.mode),
         status: null,
         running: true,
@@ -1096,7 +1101,7 @@ function foldWaits(rows: readonly PayloadRow[]): RunWaterfallWait[] {
     }
     open.delete(id);
     out.push({
-      nodeId: started.row.nodeId,
+      memberId: started.row.memberId,
       // TWO ways a card is a question, because the two channels state it
       // differently: a CLI with a question tool of its own sets the flag, while
       // a question raised through geniro's own `ask_user_question` names that
@@ -1163,7 +1168,7 @@ function foldDelegates(rows: readonly PayloadRow[]): RunWaterfallDelegate[] {
     }
     open.delete(id);
     out.push({
-      nodeId: started.nodeId,
+      memberId: started.memberId,
       startedAt: started.createdAt.toISOString(),
       seq: started.seq,
       durationMs: Math.max(
@@ -1199,14 +1204,14 @@ function laneTurnStarts(
     if (asString(parsed(row.payload)?.status) !== 'running') {
       continue;
     }
-    starts.set(row.nodeId, (starts.get(row.nodeId) ?? 0) + 1);
+    starts.set(row.memberId, (starts.get(row.memberId) ?? 0) + 1);
   }
   return starts;
 }
 
 /**
  * Per lane, the cost of the turns run on a CLI that prices itself — what a
- * priced polled bill is ADDED to. Judged per TURN: a pooled node's calls run on
+ * priced polled bill is ADDED to. Judged per TURN: a pooled member's calls run on
  * several CLIs, and a turn another member ran names its own (`turnAgentKindOf`).
  */
 function selfPricedCost(
@@ -1223,11 +1228,11 @@ function selfPricedCost(
     const cost = asNumber(asRecord(body?.usage)?.costUsd);
     if (
       cost === null ||
-      pollsSpend(turnAgentKindOf(body) ?? agentKinds.get(row.nodeId) ?? null)
+      pollsSpend(turnAgentKindOf(body) ?? agentKinds.get(row.memberId) ?? null)
     ) {
       continue;
     }
-    costs.set(row.nodeId, (costs.get(row.nodeId) ?? 0) + cost);
+    costs.set(row.memberId, (costs.get(row.memberId) ?? 0) + cost);
   }
   return costs;
 }
@@ -1245,7 +1250,7 @@ function laneCost(
 }
 
 /**
- * One lane per node that did anything, in the order the run first reached it.
+ * One lane per member that did anything, in the order the run first reached it.
  *
  * The tool count is read off the SPINE, which carries no payload — which is
  * what makes a lane affordable on a run holding thousands of tool calls.
@@ -1281,13 +1286,13 @@ function foldLanes(input: {
     turnRows: number;
   };
   const lanes = new Map<string | null, LaneCounts>();
-  const laneFor = (nodeId: string | null): LaneCounts => {
-    const existing = lanes.get(nodeId);
+  const laneFor = (memberId: string | null): LaneCounts => {
+    const existing = lanes.get(memberId);
     if (existing !== undefined) {
       return existing;
     }
     const fresh = { toolCalls: 0, delegateToolCalls: 0, turnRows: 0 };
-    lanes.set(nodeId, fresh);
+    lanes.set(memberId, fresh);
     return fresh;
   };
 
@@ -1296,12 +1301,12 @@ function foldLanes(input: {
     // Opening one for every row instead put a lane under the `nodeId: null` a
     // team run files its own seed message and terminal row under, which
     // drew an empty lane named `agent` beside the real ones. `turn_complete`
-    // has to open one too: a node that only ever called an agent, with no tool
+    // has to open one too: a member that only ever called an agent, with no tool
     // call of its own, still did something.
     if (row.kind !== 'tool_call' && row.kind !== 'turn_complete') {
       continue;
     }
-    const lane = laneFor(row.nodeId);
+    const lane = laneFor(row.memberId);
     if (row.kind !== 'tool_call') {
       // Counted HERE, off the row, and never from the drawable spans: a CLI
       // that reports no timing has no span, and counting spans is what made a
@@ -1321,31 +1326,31 @@ function foldLanes(input: {
   // run most recently reached.
   for (const turn of turns) {
     if (turn.outcome === 'running') {
-      laneFor(turn.nodeId);
+      laneFor(turn.memberId);
     }
   }
 
   return (
     [...lanes.entries()]
-      .map(([nodeId, lane]) => {
-        const own = turns.filter((turn) => turn.nodeId === nodeId);
+      .map(([memberId, lane]) => {
+        const own = turns.filter((turn) => turn.memberId === memberId);
         const costed = own.filter((turn) => turn.costUsd !== null);
         const estimated = own.filter((turn) => turn.estimatedCostUsd !== null);
         const timed = own.filter((turn) => turn.timingSource === 'cli');
         return {
-          nodeId,
-          agentKind: agentKinds.get(nodeId) ?? null,
+          memberId,
+          agentKind: agentKinds.get(memberId) ?? null,
           // A polled-spend lane's price is the POLLED one — that CLI reports none
           // per turn — plus any turn a self-pricing pool member ran, and
           // otherwise the lane's own turns. Null, not 0, when neither exists:
           // reporting unmeasured work as free is a claim about money nothing
           // made.
           costUsd: laneCost(
-            polledDollars(polledByNode.get(nodeId)),
+            polledDollars(polledByNode.get(memberId)),
             costed.length === 0
               ? null
               : costed.reduce((sum, turn) => sum + (turn.costUsd ?? 0), 0),
-            selfPricedCost.get(nodeId) ?? null,
+            selfPricedCost.get(memberId) ?? null,
           ),
           estimatedCostUsd:
             estimated.length === 0
@@ -1358,11 +1363,11 @@ function foldLanes(input: {
           // different moments — a status row when a turn OPENS (written by the
           // executor alone), a `turn_complete` when one ENDS — so neither is
           // the whole answer on its own: a chat writes no status row at all,
-          // and a cancelled team node writes no completion. Taking the
+          // and a cancelled team member writes no completion. Taking the
           // larger is what keeps `0 turns · 136 tools` off the card without
           // inventing a turn: both figures are counts of rows the run really
           // wrote.
-          turns: Math.max(lane.turnRows, turnStarts.get(nodeId) ?? 0),
+          turns: Math.max(lane.turnRows, turnStarts.get(memberId) ?? 0),
           toolCalls: lane.toolCalls,
           delegateToolCalls: lane.delegateToolCalls,
           // The CLI's OWN time only. A derived span is drawn so the lane is
@@ -1384,7 +1389,7 @@ function foldLanes(input: {
       .filter(
         (lane) =>
           lane.toolCalls + lane.delegateToolCalls > 0 ||
-          turns.some((turn) => turn.nodeId === lane.nodeId),
+          turns.some((turn) => turn.memberId === lane.memberId),
       )
   );
 }

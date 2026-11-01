@@ -2769,7 +2769,7 @@ describe('geniroCommandFor', () => {
 });
 
 describe('AgentAdapter sessions separate on the instruction blocks', () => {
-  /** {@link sessionAfterFirstTurn}'s twin for the graph-node instruction text. */
+  /** {@link sessionAfterFirstTurn}'s twin for the team member instruction text. */
   async function sessionAfterBlocks(
     instructionBlocks: string,
   ): Promise<ReturnType<AgentAdapter['startSession']>> {
@@ -2790,11 +2790,11 @@ describe('AgentAdapter sessions separate on the instruction blocks', () => {
   }
 
   it('refuses to serve a turn whose instruction blocks differ from the spawn’s', async () => {
-    // The blocks ride the same composed block as the role and the user's own
-    // instructions, so they belong to the SPAWN. No graph path uses a kept
+    // The blocks ride the same composed block as the member's instructions and
+    // the user's own, so they belong to the SPAWN. No team path uses a kept
     // session today — the executor calls `start()` — which is what makes this
     // a guard rather than a live path, and why it is pinned now: the moment
-    // one does, two nodes wired to different blocks would share a process and
+    // one does, two members given different blocks would share a process and
     // the second would run on the first's instructions.
     const session = await sessionAfterBlocks('BLOCK A');
 

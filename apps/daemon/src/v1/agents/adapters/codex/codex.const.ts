@@ -457,7 +457,7 @@ export const CODEX_PLUGIN_TOGGLE_REASON =
 export const CODEX_PROJECT_TOGGLE_REASON =
   "defined in this project's .codex/config.toml — geniro switches servers only in codex's own config.toml";
 
-// ── A team node's switched-off servers (one turn) ──────────────────────
+// ── A team member's switched-off servers (one turn) ──────────────────────
 
 /**
  * The server codex builds in for ChatGPT Apps (connectors), and the feature
@@ -515,7 +515,7 @@ export const CODEX_MEMORY_HANDBOOK_FILE = 'MEMORY.md';
 export const CODEX_MEMORY_ENTRY_HEADING = /^#\s+Task Group:\s*(.*\S)\s*$/;
 
 /**
- * Why a node cannot switch off a plugin's server for its own turns. MEASURED
+ * Why a member cannot switch off a plugin's server for its own turns. MEASURED
  * on 0.161.0: `plugins.<id>.enabled = false` in the thread config does remove
  * the plugin's server (`cua_repl` of `unified-computer-use@openai-bundled`) —
  * by turning the WHOLE plugin off, everything else it ships with it, so it is
@@ -524,11 +524,11 @@ export const CODEX_MEMORY_ENTRY_HEADING = /^#\s+Task Group:\s*(.*\S)\s*$/;
 export const CODEX_PLUGIN_TURN_TOGGLE_REASON =
   'comes with the codex plugin %s — codex can leave it out of a turn only by turning the whole plugin off, so it is not switched here';
 
-/** Why a node cannot switch off a server codex builds in, other than Apps. */
+/** Why a member cannot switch off a server codex builds in, other than Apps. */
 export const CODEX_BUILTIN_TURN_TOGGLE_REASON =
   'built into codex rather than defined in its config.toml, and codex has no per-turn switch for it';
 
-/** Why a node cannot switch off a server whose name is no single config key. */
+/** Why a member cannot switch off a server whose name is no single config key. */
 export const CODEX_UNSAFE_NAME_TURN_TOGGLE_REASON =
   'its name cannot be written as one codex config key, so a turn cannot switch it off';
 

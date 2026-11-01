@@ -477,7 +477,7 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
   }
 
   /**
-   * Stamp a team run's thread row with its team and graph version, writing the row
+   * Stamp a team run's thread row with its team and team version, writing the row
    * first when the recorder has not yet. Both writers insert through the unique key, so
    * either may go first.
    */

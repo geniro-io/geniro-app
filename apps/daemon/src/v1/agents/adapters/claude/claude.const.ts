@@ -337,7 +337,7 @@ export const CLAUDE_MCP_CONFIG_FLAG = '--mcp-config';
 
 /**
  * Tools the CLI withholds from the model for this process — claude's own
- * tools geniro replaces ({@link CLAUDE_WITHHELD_TOOLS}) and a team node's
+ * tools geniro replaces ({@link CLAUDE_WITHHELD_TOOLS}) and a team member's
  * switched-off MCP servers (`AgentTurnInput.mcpDisabled`). Variadic: one flag
  * followed by every rule. A rule naming a server alone (`mcp__<server>`) is
  * server-level and takes every tool of that server — see

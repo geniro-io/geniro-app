@@ -364,7 +364,7 @@ function treeFor(
   const kind = AgentKindSchema.safeParse(root.agent);
   return {
     sessionKey: root.key,
-    nodeId: parseSessionKey(root.key)?.nodeId ?? null,
+    memberId: parseSessionKey(root.key)?.memberId ?? null,
     conversationId: callConversationOf(root.key),
     agentKind: kind.success ? kind.data : null,
     cwd: root.cwd,

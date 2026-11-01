@@ -7,7 +7,7 @@ import type { RunAwaiting } from '../chat.types';
 /** One paused tool call waiting on a user verdict. */
 export interface PendingApproval {
   runId: string;
-  nodeId: string;
+  memberId: string;
   requestId: string;
   toolName: string;
   input: unknown;
@@ -70,9 +70,9 @@ export interface PendingApproval {
 
 /**
  * In-flight approval requests across all runs, keyed by (runId, requestId).
- * The graph executor tracks a request when an `ask` node pauses; the WS
+ * The team executor tracks a request when an `ask` member pauses; the WS
  * gateway resolves it when the user's verdict arrives. Entries are dropped on
- * resolve and swept when their node's turn settles (a turn that dies with a
+ * resolve and swept when their member's turn settles (a turn that dies with a
  * pending approval must not leak it — resolve() on a swept entry is a no-op,
  * reported back to the gateway as `false`).
  */
@@ -93,7 +93,7 @@ export class ApprovalRegistry {
    * Never the protocol id alone, because a CLI's request ids are unique only
    * within ONE PROCESS: an ACP agent numbers its requests `n:0`, `n:1`, … per
    * connection (cursor-agent's `sendRequest` is a bare `this.#i++`). Two cursor
-   * nodes of one team run, or two calls to one cursor callee, both parked
+   * members of one team run, or two calls to one cursor callee, both parked
    * `n:1`; the second track overwrote the first and a verdict pressed on A's
    * card answered B. The renderer is keyed the same way — one verdict row
    * closes every card carrying its id — so the same reuse across a RESPAWNED
@@ -120,8 +120,8 @@ export class ApprovalRegistry {
       // and the card it displaces stays on screen with buttons that now answer
       // THIS request. Nothing else would notice, so it is said.
       this.logger.warn(
-        `run ${approval.runId}: approval ${approval.requestId} for '${approval.toolName}' on ${approval.nodeId} ` +
-          `replaced one still pending for '${displaced.toolName}' on ${displaced.nodeId} — a verdict on either card now answers the new request`,
+        `run ${approval.runId}: approval ${approval.requestId} for '${approval.toolName}' on ${approval.memberId} ` +
+          `replaced one still pending for '${displaced.toolName}' on ${displaced.memberId} — a verdict on either card now answers the new request`,
       );
     }
     this.pending.set(key, approval);
@@ -178,7 +178,7 @@ export class ApprovalRegistry {
   }
 
   /**
-   * Drop every pending approval of one node's turn (turn settled or died) and
+   * Drop every pending approval of one member's turn (turn settled or died) and
    * return what was dropped.
    *
    * The caller MUST record each returned entry as an `unanswerable` transcript
@@ -187,11 +187,15 @@ export class ApprovalRegistry {
    * silently. Returning the entries rather than void is what lets every settle
    * path close its cards from the same data the sweep acted on.
    */
-  sweepNode(runId: string, nodeId: string): PendingApproval[] {
+  sweepNode(runId: string, memberId: string): PendingApproval[] {
     const swept: PendingApproval[] = [];
     for (const [key, entry] of this.pending) {
       // A DEFERRED card is not this turn's to retire — see `PendingApproval`.
-      if (entry.runId === runId && entry.nodeId === nodeId && !entry.deferred) {
+      if (
+        entry.runId === runId &&
+        entry.memberId === memberId &&
+        !entry.deferred
+      ) {
         this.pending.delete(key);
         swept.push(entry);
       }

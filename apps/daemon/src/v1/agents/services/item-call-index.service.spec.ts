@@ -65,7 +65,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
   async function legacy(
     seq: number,
     kind: ItemKind,
-    nodeId: string | null,
+    memberId: string | null,
     payload: Record<string, unknown>,
     runId = 'run-1',
   ): Promise<void> {
@@ -73,7 +73,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       runId,
       seq,
       kind,
-      nodeId,
+      memberId,
       payload: JSON.stringify(payload),
     });
   }
@@ -87,7 +87,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
     count: number,
     row: (seq: number) => {
       kind: ItemKind;
-      nodeId: string;
+      memberId: string;
       payload: Record<string, unknown>;
     },
     runId = 'run-1',
@@ -95,12 +95,12 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
     await dao.createMany(
       Array.from({ length: count }, (_, index) => {
         const seq = index + 1;
-        const { kind, nodeId, payload } = row(seq);
+        const { kind, memberId, payload } = row(seq);
         return {
           runId,
           seq,
           kind,
-          nodeId,
+          memberId,
           payload: JSON.stringify(payload),
         };
       }),
@@ -143,7 +143,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       runId: 'run-1',
       seq: 1,
       kind: 'call_started',
-      nodeId: 'manager',
+      memberId: 'manager',
       payload: JSON.stringify({ callId: 'call-1', calleeNodeId: 'engineer' }),
       inCall: '',
     });
@@ -163,7 +163,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
     expect(
       await index.inCallOf('run-1', {
         kind: 'message',
-        nodeId: 'engineer',
+        memberId: 'engineer',
         payload: { text: 'done', callId: 'call-1' },
       }),
     ).toBe('call-1');
@@ -172,14 +172,14 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
   it('learns a start it is asked to stamp, for the rows written after it', async () => {
     await index.inCallOf('run-1', {
       kind: 'call_started',
-      nodeId: 'manager',
+      memberId: 'manager',
       payload: { callId: 'call-2', calleeNodeId: 'qa' },
     });
 
     expect(
       await index.inCallOf('run-1', {
         kind: 'tool_call',
-        nodeId: 'qa',
+        memberId: 'qa',
         payload: { id: 't1', callId: 'call-2' },
       }),
     ).toBe('call-2');
@@ -191,7 +191,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
     expect(
       await index.inCallOf('run-1', {
         kind: 'message',
-        nodeId: 'manager',
+        memberId: 'manager',
         payload: { text: 'plan' },
       }),
     ).toBe('');
@@ -205,7 +205,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
     });
     await legacyRun(600, (seq) => ({
       kind: 'tool_call',
-      nodeId: 'engineer',
+      memberId: 'engineer',
       payload: { id: `t${seq}`, callId: 'call-1' },
     }));
 
@@ -275,7 +275,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
         runId: 'run-1',
         seq: 1,
         kind: 'message',
-        nodeId: 'manager',
+        memberId: 'manager',
         payload: JSON.stringify({ text: 'a' }),
         inCall: 'call-stale',
       });
@@ -300,7 +300,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
         600,
         (seq) => ({
           kind: 'message',
-          nodeId: 'manager',
+          memberId: 'manager',
           payload: { text: `m${seq}` },
         }),
         'run-2',
@@ -347,7 +347,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
       await legacyRun(600, (seq) => ({
         kind: 'message',
-        nodeId: 'manager',
+        memberId: 'manager',
         payload: { text: `m${seq}` },
       }));
 

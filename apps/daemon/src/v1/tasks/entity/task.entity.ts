@@ -115,7 +115,7 @@ export class Task extends TimestampsEntity {
   //
   // A card names an agent OR a team, never both: `teamSlug` wins where
   // a task sets one, and the CLI-only fields beside it are meaningless to a
-  // graph, whose nodes carry their own. Nothing here is enforced at the column
+  // team, whose members carry their own. Nothing here is enforced at the column
   // level, because the inheritance makes "both set" reachable without either
   // row being wrong on its own — a project pinning an agent and a card pinning
   // a team is exactly the override this exists for.

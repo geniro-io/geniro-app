@@ -28,7 +28,7 @@ import {
  *
  * Everything here is a PURE function of one payload — no correlation state, no
  * memory of earlier calls — which is what keeps it testable without a process
- * and safe under graph fan-out, where one adapter serves many turns. The price
+ * and safe under team fan-out, where one adapter serves many turns. The price
  * is paid in exactly one place, named at {@link claudeTaskEventFromToolUse}:
  * a created task's `activeForm` cannot be attached to it, because the id it
  * would attach to arrives in a later message.

@@ -33,7 +33,7 @@ function proc(over: Partial<RunProcess> = {}): RunProcess {
 function tree(over: Partial<RunProcessTree> = {}): RunProcessTree {
   return {
     sessionKey: 'run-1',
-    nodeId: null,
+    memberId: null,
     conversationId: null,
     agentKind: 'claude',
     cwd: '/proj',
@@ -549,7 +549,7 @@ describe('RunProcesses — several agents', () => {
     return mount({
       data: reading({
         trees: [
-          tree({ sessionKey: 'run-1::node:qa', nodeId: 'qa', rssBytes: 300 }),
+          tree({ sessionKey: 'run-1::node:qa', memberId: 'qa', rssBytes: 300 }),
           tree({
             sessionKey: 'run-1::call:call-2',
             conversationId: 'call-2',
@@ -577,7 +577,7 @@ describe('RunProcesses — several agents', () => {
     const el = mount({
       data: reading({
         trees: [
-          tree({ sessionKey: 'run-1::node:qa', nodeId: 'qa', rssBytes: 300 }),
+          tree({ sessionKey: 'run-1::node:qa', memberId: 'qa', rssBytes: 300 }),
           tree({
             sessionKey: 'run-1::call:call-2',
             conversationId: 'call-2',
@@ -622,7 +622,7 @@ describe('RunProcesses — several agents', () => {
 
 describe('treeLabel', () => {
   it('names a node, then a callee conversation, then the chat’s CLI', () => {
-    expect(treeLabel(tree({ nodeId: 'qa' }), 'claude')).toBe('qa');
+    expect(treeLabel(tree({ memberId: 'qa' }), 'claude')).toBe('qa');
     expect(treeLabel(tree({ conversationId: 'call-3' }), 'claude')).toBe(
       'call call-3',
     );

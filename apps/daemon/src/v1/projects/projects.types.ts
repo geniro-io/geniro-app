@@ -200,7 +200,7 @@ export const ActiveTaskSchema = z
     id: z.string().describe('The task'),
     runId: z.string().describe('The live run working it'),
     agentKind: AgentKindSchema.nullable().describe(
-      'The CLI actually running it — null for a team run, whose agents are per node',
+      'The CLI actually running it — null for a team run, whose agents are per member',
     ),
   })
   .meta({ id: 'ActiveTask' });

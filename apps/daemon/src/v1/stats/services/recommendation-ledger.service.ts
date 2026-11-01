@@ -188,7 +188,7 @@ export class RecommendationLedgerService implements OnModuleInit {
     }
   }
 
-  /** The library's graph version now, or null when the file cannot be read. */
+  /** The library's team version now, or null when the file cannot be read. */
   private async libraryVersion(slug: string): Promise<string | null> {
     try {
       return teamVersionOf((await this.store.get(slug)).team);

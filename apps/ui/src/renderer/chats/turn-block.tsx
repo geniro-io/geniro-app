@@ -57,9 +57,9 @@ export const TurnBlock = memo(function TurnBlock({
 }): React.JSX.Element {
   const nested = useContext(NestedThreadContext);
   const name =
-    (block.nodeId === null
+    (block.memberId === null
       ? (chatAgentName ?? null)
-      : (nodes?.get(block.nodeId)?.name ?? block.nodeId)) ?? 'agent';
+      : (nodes?.get(block.memberId)?.name ?? block.memberId)) ?? 'agent';
   /**
    * A delegate's work, said out loud on the BLOCK.
    *
@@ -224,7 +224,7 @@ export const TurnBlock = memo(function TurnBlock({
       data-role="turn-block"
       data-subagent={block.subagentId ?? undefined}
       className="flex w-full gap-3">
-      <InitialsAvatar name={name} colorKey={block.nodeId ?? name} />
+      <InitialsAvatar name={name} colorKey={block.memberId ?? name} />
       <div className="flex min-w-0 flex-1 flex-col gap-2.5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-relaxed">
         <div
           data-slot="turn-block-header"

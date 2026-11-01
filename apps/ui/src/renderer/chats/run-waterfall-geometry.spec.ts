@@ -26,7 +26,7 @@ const SPAN_MS = 60 * 60 * 1000;
 
 function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
   return {
-    nodeId: 'engineer',
+    memberId: 'engineer',
     startedAt: new Date(FROM).toISOString(),
     seq: 1,
     timingSource: 'cli',
@@ -52,9 +52,9 @@ function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
   };
 }
 
-function lane(nodeId: string | null): RunWaterfallLane {
+function lane(memberId: string | null): RunWaterfallLane {
   return {
-    nodeId,
+    memberId,
     agentKind: 'claude',
     costUsd: 1,
     estimatedCostUsd: null,
@@ -65,11 +65,11 @@ function lane(nodeId: string | null): RunWaterfallLane {
   };
 }
 
-function dto(nodeIds: (string | null)[]): RunWaterfallDto {
+function dto(memberIds: (string | null)[]): RunWaterfallDto {
   return {
     from: new Date(FROM).toISOString(),
     to: new Date(FROM + SPAN_MS).toISOString(),
-    lanes: nodeIds.map(lane),
+    lanes: memberIds.map(lane),
     toolUse: [],
     turns: [],
     calls: [],
@@ -333,8 +333,8 @@ describe('placeIn', () => {
 describe('blocksCaller', () => {
   it("holds a caller for anything not explicitly async, as the daemon's path does", () => {
     const call = (mode: string | null) => ({
-      callerNodeId: 'a',
-      calleeNodeId: 'b',
+      callerMemberId: 'a',
+      calleeMemberId: 'b',
       mode,
       status: 'ok',
       running: false,
@@ -369,7 +369,7 @@ describe('onCriticalPath', () => {
   const path = [
     {
       kind: 'work' as const,
-      nodeId: 'eng',
+      memberId: 'eng',
       startedAt: new Date(FROM).toISOString(),
       durationMs: 60_000,
     },

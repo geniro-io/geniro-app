@@ -14,20 +14,20 @@ export type Notifier = (message: string) => Promise<HostNotifyOutcome>;
 
 @Injectable()
 export class NotifyBroker extends HostSinkBroker<Notifier> {
-  /** Whether this node can currently notify — gates the tool listing. */
-  canNotify(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  /** Whether this member can currently notify — gates the tool listing. */
+  canNotify(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   /** Send the notification and resolve with what happened. Never throws. */
   async notify(
     runId: string,
-    nodeId: string,
+    memberId: string,
     message: string,
   ): Promise<HostNotifyOutcome> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no turn is running that could send it',
       'send a notification',
       (notifier) => notifier(message),

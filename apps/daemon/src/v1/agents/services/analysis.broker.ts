@@ -19,18 +19,18 @@ import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
  */
 @Injectable()
 export class AnalysisBroker extends HostSinkBroker<AnalysisSink> {
-  /** Whether this node is an analysis turn right now — gates the tool listing. */
-  canAnalyse(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  /** Whether this member is an analysis turn right now — gates the tool listing. */
+  canAnalyse(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   turnOf(
     runId: string,
-    nodeId: string,
+    memberId: string,
   ): Promise<AnalysisTurn | HostSinkUnavailable> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no analysis turn is running',
       'read the analysed thread',
       (sink) => Promise.resolve(sink.turn),
@@ -39,13 +39,13 @@ export class AnalysisBroker extends HostSinkBroker<AnalysisSink> {
 
   report(
     runId: string,
-    nodeId: string,
+    memberId: string,
     report: RecommendationsReport,
     versionIndex: TeamVersionIndexReader | null = null,
   ): Promise<AnalysisFiled | HostSinkUnavailable> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no analysis turn is running that could record them',
       'record recommendations',
       (sink) => sink.report(report, versionIndex),
@@ -54,12 +54,12 @@ export class AnalysisBroker extends HostSinkBroker<AnalysisSink> {
 
   mark(
     runId: string,
-    nodeId: string,
+    memberId: string,
     marks: RecommendationMarks,
   ): Promise<AnalysisFiled | HostSinkUnavailable> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no analysis turn is running that could record them',
       'record recommendation outcomes',
       (sink) => sink.mark(marks),

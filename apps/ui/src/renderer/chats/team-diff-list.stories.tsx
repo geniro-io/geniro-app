@@ -4,7 +4,7 @@ import {
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
   STAGES_PROPOSAL,
-} from '../__fixtures__/team-proposals';
+} from './__fixtures__/member-team-proposals';
 import { TeamDiffList } from './team-diff-list';
 import { diffRows, readTeamProposal } from './team-proposal-payload';
 
@@ -45,7 +45,7 @@ export const LongText: Story = {
       {
         key: 'changed:manager:role',
         marker: 'changed',
-        scope: 'node',
+        scope: 'member',
         subject: 'manager',
         detail: {
           field: 'role',

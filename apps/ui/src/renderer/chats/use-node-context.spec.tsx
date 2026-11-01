@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 function node(
-  nodeId: string,
+  memberId: string,
   tokens: number | null,
   window: number | null,
   calls: NodeStateDto['calls'] = [],
@@ -30,7 +30,7 @@ function node(
 ) {
   return {
     runId: 'run-1',
-    nodeId,
+    memberId,
     status: 'running',
     contextTokens: tokens,
     contextWindowTokens: window,

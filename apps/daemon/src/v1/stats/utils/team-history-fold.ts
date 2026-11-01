@@ -180,7 +180,7 @@ function statusOf(
 
 /**
  * One team's history for an analysis: every version with what its runs
- * did and how its graph differs from the version before it, every logged write
+ * did and how its team differs from the version before it, every logged write
  * with who made it and why, and every recommendation filed about it with what
  * became of it — so an analysis can judge its earlier changes by their runs.
  * Newest first throughout.

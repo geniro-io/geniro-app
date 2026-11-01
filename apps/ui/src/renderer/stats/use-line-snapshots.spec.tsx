@@ -115,7 +115,7 @@ async function turnEnds(runId: string): Promise<void> {
   await act(async () => {
     listener?.({
       runId,
-      nodeId: null,
+      memberId: null,
       occurredAt: new Date().toISOString(),
       turn: true,
     });
@@ -664,7 +664,7 @@ describe('useLineSnapshots', () => {
     await act(async () => {
       listener?.({
         runId: 'run-a',
-        nodeId: null,
+        memberId: null,
         occurredAt: new Date().toISOString(),
         turn: false,
       });

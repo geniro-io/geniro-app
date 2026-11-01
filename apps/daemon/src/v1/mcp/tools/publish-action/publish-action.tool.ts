@@ -21,8 +21,8 @@ export class PublishActionTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.actions.canPublish(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.actions.canPublish(runId, memberId);
   }
 
   protected instructions(): string {
@@ -35,13 +35,13 @@ export class PublishActionTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId, caller }: McpCallContext,
+    { runId, memberId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
     const input = readPublishAction(args);
     if ('error' in input) {
       return this.invalidArgs(input.error);
     }
-    const outcome = await this.actions.publish(runId, nodeId, input, caller);
+    const outcome = await this.actions.publish(runId, memberId, input, caller);
     // A refusal is the call's own fault (a cap, a character, a missing kind),
     // so it reads as one; an unavailable channel is an answer to carry on from.
     return outcome.status === 'refused'

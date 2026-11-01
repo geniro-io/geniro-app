@@ -21,15 +21,15 @@ import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 
 /** The conversation behind a call: who writes a note, and who reads them. */
 export interface TeamNoteWriter {
-  nodeId: string;
-  /** Null for the node's own conversation. */
+  memberId: string;
+  /** Null for the member's own conversation. */
   conversationId: string | null;
   /** The call that conversation is answering right now, if any. */
   callId: string | null;
 }
 
 /**
- * One team node's end of the team-note tools, installed by the pass that
+ * One team member's end of the team-note tools, installed by the pass that
  * runs it. The broker owns validation, the cap, the fold and the record of
  * what each conversation was shown; the sink owns what only the run knows —
  * its seq-allocating write, which conversation a caller key is, and what each
@@ -37,13 +37,13 @@ export interface TeamNoteWriter {
  */
 export interface TeamNoteSink {
   persistItem(
-    nodeId: string | null,
+    memberId: string | null,
     kind: ItemKind,
     role: string | null,
     payload: unknown,
   ): Promise<ItemWire>;
   writer(caller: string): TeamNoteWriter;
-  agentName(nodeId: string): string;
+  agentName(memberId: string): string;
 }
 
 /** A run's notes as the unread figure needs them: seq and author, oldest first. */
@@ -60,8 +60,8 @@ interface RunNoteIndex {
 /** A per-note allowance for what a reply prints around the text. */
 const NOTE_OVERHEAD_CHARS = 200;
 
-function authorKey(nodeId: string, conversationId: string | null): string {
-  return `${nodeId}\u0000${conversationId ?? ''}`;
+function authorKey(memberId: string, conversationId: string | null): string {
+  return `${memberId}\u0000${conversationId ?? ''}`;
 }
 
 /**
@@ -95,9 +95,9 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
     super();
   }
 
-  /** Whether this node is offered the team-note tools. */
-  canUse(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  /** Whether this member is offered the team-note tools. */
+  canUse(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   /**
@@ -116,31 +116,31 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
 
   async write(
     runId: string,
-    nodeId: string,
+    memberId: string,
     caller: string,
     input: TeamNoteWriteInput,
   ): Promise<TeamNoteWriteOutcome | HostSinkUnavailable> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no team pass is running that could record it',
       'write a team note',
       (sink) =>
         this.writes.run(runId, () =>
-          this.writeNow(runId, nodeId, caller, input, sink),
+          this.writeNow(runId, memberId, caller, input, sink),
         ),
     );
   }
 
   async read(
     runId: string,
-    nodeId: string,
+    memberId: string,
     caller: string,
     query: TeamNotesQuery,
   ): Promise<TeamNotesReadOutcome | HostSinkUnavailable> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no team pass is running that could read them',
       'read the team notes',
       (sink) => this.readNow(runId, caller, query, sink),
@@ -153,7 +153,7 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
    */
   unreadCount(
     runId: string,
-    writer: { nodeId: string; conversationId: string | null },
+    writer: { memberId: string; conversationId: string | null },
   ): number {
     const index = this.indexes.get(runId);
     if (index === undefined) {
@@ -163,7 +163,7 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
     return this.unreadIn(
       index,
       runId,
-      authorKey(writer.nodeId, writer.conversationId),
+      authorKey(writer.memberId, writer.conversationId),
     );
   }
 
@@ -176,7 +176,7 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
 
   private async writeNow(
     runId: string,
-    nodeId: string,
+    memberId: string,
     caller: string,
     input: TeamNoteWriteInput,
     sink: TeamNoteSink,
@@ -212,12 +212,12 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
       ...(input.supersedes === undefined
         ? {}
         : { supersedes: input.supersedes }),
-      nodeId: writer.nodeId,
+      nodeId: writer.memberId,
       conversationId: writer.conversationId,
       ...(writer.callId === null ? {} : { callId: writer.callId }),
     };
-    const item = await sink.persistItem(nodeId, 'team_note', null, payload);
-    const author = authorKey(writer.nodeId, writer.conversationId);
+    const item = await sink.persistItem(memberId, 'team_note', null, payload);
+    const author = authorKey(writer.memberId, writer.conversationId);
     index.seqs.add(item.seq);
     index.notes.push({ seq: item.seq, author });
     if (input.supersedes !== undefined) {
@@ -237,7 +237,7 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
     sink: TeamNoteSink,
   ): Promise<TeamNotesReadOutcome> {
     const writer = sink.writer(caller);
-    const author = authorKey(writer.nodeId, writer.conversationId);
+    const author = authorKey(writer.memberId, writer.conversationId);
     const index = await this.indexOf(runId);
     const wanted = query.author?.trim().toLowerCase() ?? null;
     const matching = foldTeamNotes(
@@ -250,8 +250,8 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
           (query.since === null || note.seq > query.since) &&
           (query.before === null || note.seq < query.before) &&
           (wanted === null ||
-            note.nodeId.toLowerCase() === wanted ||
-            sink.agentName(note.nodeId).toLowerCase() === wanted),
+            note.memberId.toLowerCase() === wanted ||
+            sink.agentName(note.memberId).toLowerCase() === wanted),
       )
       .reverse();
 
@@ -265,7 +265,7 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
       ) {
         break;
       }
-      shown.push({ ...note, author: sink.agentName(note.nodeId) });
+      shown.push({ ...note, author: sink.agentName(note.memberId) });
       spent += cost;
     }
 
@@ -334,7 +334,7 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
         seqs: new Set(notes.map((note) => note.seq)),
         notes: notes.map((note) => ({
           seq: note.seq,
-          author: authorKey(note.nodeId, note.conversationId),
+          author: authorKey(note.memberId, note.conversationId),
         })),
         superseded: new Set(
           notes.filter((note) => note.supersededBy !== null).map((n) => n.seq),

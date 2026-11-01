@@ -153,7 +153,7 @@ describe('RunOutcomeLedgerService (in-memory sqlite)', () => {
       item: {
         id: `item-${seq}`,
         runId,
-        nodeId: 'manager',
+        memberId: 'manager',
         seq,
         kind,
         role: null,

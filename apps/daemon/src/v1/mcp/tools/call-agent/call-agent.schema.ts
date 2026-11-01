@@ -10,12 +10,12 @@ export function callAgentSchema(): Record<string, unknown> {
       agent: {
         type: 'string',
         description:
-          'The callee — its node id or display name from your "May call" list.',
+          'The callee — its member id or display name from your "May call" list.',
       },
       message: {
         type: 'string',
         description:
-          'The task for the callee. Without `thread` it starts a FRESH conversation seeing only this text (plus its own role) — include all context it needs.',
+          'The task for the callee. Without `thread` it starts a FRESH conversation seeing only this text (plus its own instructions) — include all context it needs.',
       },
       title: {
         type: 'string',

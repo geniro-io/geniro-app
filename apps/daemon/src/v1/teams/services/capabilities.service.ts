@@ -74,7 +74,7 @@ export class CapabilitiesService {
   /**
    * Every registered CLI's identity. A caller escalates a callee's question
    * only through a question tool its own model has — geniro supplies its own
-   * (`hostQuestionToolReason`) in chats alone, never to a team node.
+   * (`hostQuestionToolReason`) in chats alone, never to a team member.
    */
   private identityCapabilities(): AgentIdentityCapability[] {
     return [...this.adapters.all()].map(([agent, adapter]) => {

@@ -21,14 +21,14 @@ let seq = 0;
 function item(
   kind: ChatItem['kind'],
   payload: unknown,
-  nodeId: string | null,
+  memberId: string | null,
   role: string | null = null,
 ): ChatItem {
   seq += 1;
   return {
     id: `i-${seq}`,
     runId: 'run-1',
-    nodeId,
+    memberId,
     seq,
     kind,
     role,
@@ -54,16 +54,16 @@ afterEach(() => {
 /** Render one agent turn — an assistant message plus a tool call. */
 function renderTurn(
   soloAgent: boolean,
-  nodeId: string | null,
+  memberId: string | null,
   soloNodeId: string | null = null,
 ): void {
   const entries = buildTurnBlocks(
     groupTranscript([
-      item('message', { text: 'Working on it.' }, nodeId, 'assistant'),
+      item('message', { text: 'Working on it.' }, memberId, 'assistant'),
       item(
         'tool_call',
         { id: 't1', name: 'Bash', input: { command: 'ls' } },
-        nodeId,
+        memberId,
       ),
     ]),
   );

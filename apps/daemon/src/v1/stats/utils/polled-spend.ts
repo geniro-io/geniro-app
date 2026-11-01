@@ -58,7 +58,7 @@ export type PolledSpendRun = Pick<
  * - A row the account named no model for is filed under `reportedModel`.
  * - `agentKind` is the CLI whose money this is, resolved by the caller
  *   (`polledAgentKind`) and never read off the run alone: a TEAM run — where
- *   a polled node's spend comes from — has no agent of its own.
+ *   a polled member's spend comes from — has no agent of its own.
  * - Every figure but the cost is null — the poll measures money and nothing
  *   else, and null means NOT MEASURED here as everywhere in this table.
  */
@@ -90,7 +90,7 @@ export function polledSpendRows(
         });
   return entries.map((entry, index) => ({
     runId: run.id,
-    nodeId: null,
+    memberId: null,
     seq: POLLED_SPEND_SEQ - index,
     occurredAt: entry.occurredAt,
     ...usageDimensions(run, null, entry.model ?? reportedModel),
@@ -216,18 +216,18 @@ export class PolledTurnCredit {
 
 /**
  * The CLI a run's polled money belongs to. A chat's is its own agent's. A
- * team run names no agent, so its bill is the CLI of the node holding the
- * largest polled share — the per-node figures the poll records beside the run's
- * total — or null when no node carries one.
+ * team run names no agent, so its bill is the CLI of the member holding the
+ * largest polled share — the per-member figures the poll records beside the run's
+ * total — or null when no member carries one.
  *
- * A POOLED node's stamp is member 1's, so where that CLI polls nothing the
- * bill is its polling member's, read off the run's snapshot (`pollsSpend`).
+ * A POOLED member's stamp is pool member 1's, so where that CLI polls nothing the
+ * bill is its polling pool member's, read off the run's snapshot (`pollsSpend`).
  */
 export function polledAgentKind(
   run: Pick<Run, 'agentKind' | 'teamSnapshot'>,
   shares: readonly Pick<
     NodeState,
-    'nodeId' | 'agentKind' | 'polledCostCents'
+    'memberId' | 'agentKind' | 'polledCostCents'
   >[],
   pollsSpend: (kind: AgentKind) => boolean = () => false,
 ): AgentKind | null {
@@ -242,7 +242,7 @@ export function polledAgentKind(
     const billed =
       share.agentKind !== null && pollsSpend(share.agentKind)
         ? share.agentKind
-        : (poolKinds.get(share.nodeId)?.find(pollsSpend) ?? share.agentKind);
+        : (poolKinds.get(share.memberId)?.find(pollsSpend) ?? share.agentKind);
     if (billed !== null && cents > largest) {
       kind = billed;
       largest = cents;

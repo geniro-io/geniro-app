@@ -6,13 +6,13 @@ import { CONFIG_DIR_TOKEN_PREFIX } from '../../../teams/utils/config-dir-redacti
 
 const WHAT_IT_ANSWERS =
   "Read the user's geniro team library — the saved teams of agents they run from the Teams " +
-  'screen. With no argument it lists every team (slug, name, description, node and edge counts, ' +
+  'screen. With no argument it lists every team (slug, name, description, member and stage counts, ' +
   "agents by CLI); with `slug` it answers that one team in full, as JSON — an agent's config " +
   `directory reads as a token, "${CONFIG_DIR_TOKEN_PREFIX}…>": `;
 
 /**
  * What a model reads about `read_teams` — in an ordinary chat, or in the
- * builder chat docked under one team's canvas.
+ * builder chat docked under one team.
  */
 export function readTeamsInstructions(forBuilder: boolean): string {
   if (forBuilder) {

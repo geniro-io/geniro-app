@@ -202,7 +202,7 @@ export class AnalysisReportsService {
       waitingMs: timeline.waitingOnUserMs,
       criticalPathMs: timeline.criticalPathMs,
       sinks: timeline.sinks.map((sink) => ({
-        label: sink.nodeId ?? 'agent',
+        label: sink.memberId ?? 'agent',
         ms: sink.ms,
       })),
     };
@@ -228,7 +228,7 @@ export function checkHotspots(
       hotspot.node !== undefined &&
       !nodes.has(hotspot.node)
     ) {
-      return `hotspot "${hotspot.title}" names node ${hotspot.node}, which took no turn in the analysed runs — name a node view=runs lists, or leave node out`;
+      return `hotspot "${hotspot.title}" names member ${hotspot.node}, which took no turn in the analysed runs — name a member view=runs lists, or leave node out`;
     }
   }
   return null;

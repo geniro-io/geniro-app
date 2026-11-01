@@ -44,7 +44,7 @@ export function claudeMcpServerRule(server: string): string {
 
 /**
  * The argv that withholds claude's own replaced tools
- * (`CLAUDE_WITHHELD_TOOLS`) and a team node's switched-off MCP servers
+ * (`CLAUDE_WITHHELD_TOOLS`) and a team member's switched-off MCP servers
  * from one claude process — always at least the replaced tools.
  *
  * MEASURED on 2.1.284 (`claude -p --output-format stream-json --verbose`, read
@@ -53,10 +53,10 @@ export function claudeMcpServerRule(server: string): string {
  * mcp__plugin_playwright_playwright` → 96, every `mcp__codegraph__*` and
  * `mcp__plugin_playwright_playwright__*` gone, both servers still listed
  * `connected`. The CLI still DIALS a disallowed server; the model is never
- * offered its tools, which is the switch the node asked for.
+ * offered its tools, which is the switch the member asked for.
  *
  * geniro's OWN server (`ownServer`, the per-run endpoint) is never withheld,
- * whatever the node lists: a node switching it off would lose its call surface
+ * whatever the member lists: a member switching it off would lose its call surface
  * while its instructions still told it to use it. Duplicates are dropped.
  */
 export function claudeDisallowedToolArgs(

@@ -352,12 +352,12 @@ describe('AnalysisDialog', () => {
     const live = {
       seq: 9,
       actionId: 'go',
-      nodeId: 'agent',
+      memberId: 'agent',
       conversationId: '',
       label: 'Go on',
       once: true,
       spec: { kind: 'message' as const, text: 'continue' },
-      publisher: { nodeId: 'agent', conversationId: '' },
+      publisher: { memberId: 'agent', conversationId: '' },
       pending: false,
     };
     const chats = APIS.chats as unknown as {
@@ -373,7 +373,7 @@ describe('AnalysisDialog', () => {
       outcome: {
         actionSeq: 9,
         actionId: 'go',
-        nodeId: 'agent',
+        memberId: 'agent',
         conversationId: '',
         state: 'succeeded',
       },

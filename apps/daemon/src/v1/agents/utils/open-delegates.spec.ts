@@ -116,7 +116,7 @@ describe('openDelegateIds', () => {
 });
 
 describe('strandedDelegates', () => {
-  it('pairs each open delegate with the node and CALL its launch was filed under', () => {
+  it('pairs each open delegate with the member and CALL its launch was filed under', () => {
     // A callee's rows are nested under its call block by the payload's
     // `callId`, so a close written without it never reaches the delegate —
     // the pairing is read off the LAUNCH, the first row naming the id.
@@ -126,27 +126,27 @@ describe('strandedDelegates', () => {
           ...(info('in-call', { backgroundOpen: true }) as object),
           callId: 'call-7',
         }),
-        nodeId: 'engineer',
+        memberId: 'engineer',
       },
       {
         payload: JSON.stringify(info('own-turn', { backgroundOpen: true })),
-        nodeId: 'manager',
+        memberId: 'manager',
       },
       {
         payload: JSON.stringify(info('done', { backgroundOpen: true })),
-        nodeId: 'manager',
+        memberId: 'manager',
       },
       {
         payload: JSON.stringify(
           info('done', { backgroundOutcome: 'completed' }),
         ),
-        nodeId: 'manager',
+        memberId: 'manager',
       },
     ];
 
     expect(strandedDelegates(rows)).toEqual([
-      { id: 'in-call', nodeId: 'engineer', callId: 'call-7' },
-      { id: 'own-turn', nodeId: 'manager', callId: null },
+      { id: 'in-call', memberId: 'engineer', callId: 'call-7' },
+      { id: 'own-turn', memberId: 'manager', callId: null },
     ]);
   });
 });
@@ -175,11 +175,11 @@ describe('delegateCloseEvent', () => {
     const rows = [
       {
         payload: JSON.stringify(info('d1', { backgroundOpen: true })),
-        nodeId: null,
+        memberId: null,
       },
       {
         payload: JSON.stringify(info('d1', { backgroundOpen: false })),
-        nodeId: null,
+        memberId: null,
       },
     ];
 

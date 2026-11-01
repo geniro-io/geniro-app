@@ -34,7 +34,7 @@ export function stageTitleOf(
 
 export function stageActorLabel(
   by: StageActor,
-  agentName: (nodeId: string) => string,
+  agentName: (memberId: string) => string,
 ): string {
   switch (by.kind) {
     case 'agent':

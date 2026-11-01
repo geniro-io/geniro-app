@@ -30,7 +30,7 @@ const ENTRY: RecommendationsEntry = {
   id: 'i5',
   createdAt: '2026-10-14T10:00:00.000Z',
   seq: 5,
-  nodeId: null,
+  memberId: null,
   parentToolUseId: null,
   runId: 'analysis',
   card: {

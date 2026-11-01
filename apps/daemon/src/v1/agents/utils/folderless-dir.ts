@@ -10,9 +10,9 @@ export const FOLDERLESS_DIR_NAME = 'mcp-folderless';
  * Where a folder-INDEPENDENT MCP command runs.
  *
  * A team is edited long before it runs anywhere, so the builder has no
- * folder to ask about, and the honest answer to "which servers would this node
+ * folder to ask about, and the honest answer to "which servers would this member
  * load" is the set that does not depend on one — the user's global servers plus
- * whatever the node's own profile directory brings. Running in geniro's own
+ * whatever the member's own profile directory brings. Running in geniro's own
  * empty directory is how that set is obtained: no project `.mcp.json` can
  * reach it, so nothing a folder would contribute is counted.
  *

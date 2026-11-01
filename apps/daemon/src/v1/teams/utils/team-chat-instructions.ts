@@ -11,54 +11,37 @@ import { builderChatAnalysisGuide } from '../../agents/utils/thread-analysis-gui
 import {
   type ApprovalMode,
   ApprovalModeSchema,
-  EDGE_KINDS,
-  type EdgeKind,
-  NODE_CONNECTION_RULES,
-  NODE_KINDS,
-  type NodeKind,
+  TEAM_MODES,
+  type TeamMode,
 } from '../teams.types';
 
 /**
  * What geniro tells the agent behind the team builder's chat panel.
  *
  * The panel's promise is that the user describes a change in prose, sees
- * what the agent would change and why, and the graph on screen changes once
- * they approve — or, on an empty canvas, that a whole team appears. So the
+ * what the agent would change and why, and the team on screen changes once
+ * they approve — or, on an empty team, that a whole team appears. So the
  * agent needs: which team is its subject, that a change proposed through
  * `propose_team` IS the deliverable (its card, checks and version pin are
  * why the agent never writes the file itself), the document's structure, what
- * the structure DOES
- * when it runs, and how to write the text inside it — every `role`,
- * `description` and instruction block is itself agent instructions, held to
- * the same rules as any other instruction file.
+ * the structure DOES when it runs, and how to write the text inside it —
+ * every role, instructions field and instruction block is itself agent
+ * instructions, held to the same rules as any other instruction file.
  *
  * Nothing here restates a field list. The structure is a JSON Schema generated
  * from the validator (`teamJsonSchema`), and the brief only points at it,
  * because a hand-written field list drifts the first time a field is added.
  * What the schema cannot carry is rendered from the constants that define it:
- * the meaning of each node kind, edge kind and approval mode is a `Record`
- * over that enum, so a new member fails the build until it is described here,
- * and the allowed connections are read off `NODE_CONNECTION_RULES`. The
- * remaining graph rules are `graph-validate.ts`'s, stated in prose — change
- * one there, change it here.
+ * the meaning of each mode and approval mode is a `Record` over that enum, so
+ * a new one fails the build until it is described here. The team rules are
+ * `team-validate.ts`'s, stated in prose — change one there, change it here.
  */
 
-/** What each node kind is, for the agent. */
-const NODE_KIND_MEANING: Record<NodeKind, string> = {
-  agent:
-    'one CLI coding agent. Its `role` is its private instructions; its `description` is the only thing agents that call it are told about it.',
-  trigger:
-    "the entry point. Firing it starts a run, with the user's task as the message to the agent it feeds. It runs no agent itself.",
-  instruction:
-    'a block of text added to the instructions of every agent it is wired to. It runs nothing.',
-};
-
-/** What each edge kind does at run time. */
-const EDGE_KIND_MEANING: Record<EdgeKind, string> = {
-  data: "the source's final answer is added to the target's prompt, and the target starts only once every data source has finished. These are the only edges that order a run.",
-  call: 'the source may delegate work to the target during its own turn, as often as it decides (it is given the call tools for it). A target with no incoming data edge runs only when called.',
-  instruction:
-    "the instruction block's text joins the target's instructions on every turn.",
+/** What each coordination mode means for a run. */
+const MODE_MEANING: Record<TeamMode, string> = {
+  lead: 'the member the first message goes to runs the whole job and calls the others as it decides; the others run only when called. The only mode a run takes today.',
+  relay:
+    'each stage is run by its first responsible member and handed on to the next stage’s — not available yet; a team set to it does not start.',
 };
 
 /** What each approval mode means for a run. */
@@ -67,37 +50,6 @@ const APPROVAL_MEANING: Record<ApprovalMode, string> = {
   ask: 'stops at every tool permission until a person answers',
   acceptEdits: 'approves its own file edits and asks about everything else',
 };
-
-/**
- * One line per allowed connection, read off `NODE_CONNECTION_RULES` — an edge
- * is legal only when the source's outputs and the target's inputs both list
- * it, so a line is drawn only for a pair both sides agree on, with each side's
- * arity limit.
- */
-export function teamConnectionLines(): string[] {
-  const lines: string[] = [];
-  for (const from of NODE_KINDS) {
-    for (const out of NODE_CONNECTION_RULES[from].outputs) {
-      const into = NODE_CONNECTION_RULES[out.kind].inputs.find(
-        (rule) => rule.edge === out.edge && rule.kind === from,
-      );
-      if (into === undefined) {
-        continue;
-      }
-      const limits = [
-        ...(out.multiple ? [] : [`each ${from} node has only one`]),
-        ...(into.multiple ? [] : [`each ${out.kind} node takes only one`]),
-        ...(into.required ? [`every ${out.kind} node needs one`] : []),
-      ];
-      lines.push(
-        `- ${from} → ${out.kind} (\`${out.edge}\`)${
-          limits.length > 0 ? `: ${limits.join('; ')}` : ''
-        }`,
-      );
-    }
-  }
-  return lines;
-}
 
 export function composeTeamChatInstructions(input: {
   /** Absolute path of the `*.team.yaml` file this chat edits. */
@@ -118,7 +70,7 @@ export function composeTeamChatInstructions(input: {
 }): string {
   return `<team-editing>
 You are editing one geniro team through the chat panel docked under the
-team builder. The user sees its graph on a canvas while you work.
+team builder. The user sees the team on screen while you work.
 
 Your subject is this file:
 
@@ -143,10 +95,10 @@ you build a team from scratch. Where it and your memory disagree, it wins.
 
 HOW TO WORK
 - Read the whole team file with your own file tools before your first
-  change of each turn: every node, role, description, instruction block, edge
-  and layout entry, not only the part the request names. A change is right only
-  against what is wired to it, and the user edits the canvas between your
-  turns. A large file is read in parts.
+  change of each turn: every member, its role and instructions, every
+  instruction block and stage, not only the part the request names. A change
+  is right only against the rest of the team, and the user edits the team
+  between your turns. A large file is read in parts.
 - Make every change by proposing it with ${HOST_PROPOSE_TEAM_TOOL}, never
   by writing the file yourself. Pass the edits, a one-line \`summary\` of what
   they change and a \`reason\` saying why — the user's request it answers, or
@@ -163,77 +115,76 @@ HOW TO WORK
 - The one time you write the file yourself: when a proposal or a check
   answers TEAM_UNREADABLE, the file cannot be loaded. Fix only what that
   refusal names, with your own file tools, then propose the change.
-- A proposal refused for breaking the schema or the graph rules below shows
+- A proposal refused for breaking the schema or the team rules below shows
   no card: fix the edits and propose again.
 - After a decline, change course as the user's note says and propose again;
   after a "not saved" verdict, read the file again before you do.
-- When you rename or remove a node, update every edge, layout entry and piece
-  of text that names it.
+- When you rename or remove a member, update the trigger, every block
+  audience, every stage's \`responsible\` and every piece of text that names
+  it.
 - Keep the comments and fields the request does not touch.
 - Once a change is approved, say in one or two lines what changed; the
-  canvas shows the rest.
+  team view shows the rest.
 
 HOW A TEAM RUNS
-Node kinds:
-${NODE_KINDS.map((kind) => `- ${kind}: ${NODE_KIND_MEANING[kind]}`).join('\n')}
+A team is a set of members — each one CLI coding agent — and any member may
+call any other during its turn, as often as it decides (it is given the call
+tools for it). Nothing is wired: who calls whom is the members' decision, made
+from what each one's role says. A member never calls one that is waiting on
+its own answer.
 
-Edge kinds:
-${EDGE_KINDS.map((kind) => `- ${kind}: ${EDGE_KIND_MEANING[kind]}`).join('\n')}
+- \`triggers\`: exactly one, \`{kind: first-message, member: <id>}\` — the
+  member the user's first message and every later one go to.
+- \`mode\`:
+${TEAM_MODES.map((mode) => `  - ${mode}: ${MODE_MEANING[mode]}`).join('\n')}
+- A member's \`approval\`:
+${ApprovalModeSchema.options.map((mode) => `  - ${mode}: ${APPROVAL_MEANING[mode]}`).join('\n')}
+- \`instructionBlocks\`: text added to the instructions of its \`audience\` —
+  \`everyone\`, or a list of member ids. A block runs nothing.
 
-An agent's \`approval\`:
-${ApprovalModeSchema.options.map((mode) => `- ${mode}: ${APPROVAL_MEANING[mode]}`).join('\n')}
+On each turn a member receives, most general first: the user's own standing
+instructions, the blocks addressed to it, its own \`instructions\`, its
+\`character\`, and every other member's name and \`role\`. A later part
+outranks an earlier one. No member ever sees another member's
+\`instructions\` or \`character\`.
 
-On each turn an agent receives, most general first: the user's own standing
-instructions, the instruction blocks wired to it, its own \`role\`, and — when
-it has call edges — each callee's name and \`description\`. A later part
-outranks an earlier one. No agent ever sees another agent's \`role\`.
-
-GRAPH RULES
-Allowed connections; every other pairing is refused:
-${teamConnectionLines().join('\n')}
-
-Always:
-- node ids are unique, and every edge names nodes that exist;
-- no node is wired to itself, and two nodes share at most one edge of each
-  kind;
-- the data edges form no cycle.
-
-To run, additionally:
-- the team has at least one trigger;
-- every agent has an incoming data or call edge;
-- an agent with no incoming data edge — one that runs only when called — has
-  no outgoing data edge.
+TEAM RULES
+- at least one member, and member ids are unique;
+- exactly one trigger, naming a member;
+- block ids are unique; an audience id that is no member reaches nobody;
+- a stage's \`responsible\` names members (an unknown id is ignored).
 
 STAGES
-\`stages\` is optional: the steps every run of the team walks, separate
-from the node graph. Every agent of a run sees the whole stage list and the
-current stage, and agents mark stages done, skipped or reopened as they work.
-When the user describes the process a run goes through ("first investigate,
-then implement or fix, then review"), write it as stages:
-- one stage per step, with a short \`title\`, \`instructions\` saying what to
-  do in it and a \`doneWhen\` saying when it is finished;
+\`stages\` is optional: the steps every run of the team walks. Every member
+of a run sees the whole stage list and the current stage, and members mark
+stages done, skipped or reopened as they work. When the user describes the
+process a run goes through ("first investigate, then implement or fix, then
+review"), write it as stages:
+- one stage per step, with a short \`title\`, \`howToWork\` saying how to work
+  in it and a \`goal\` saying when it is done;
 - \`id\` is a lowercase slug (\`investigation\`, \`code-review\`), never all
-  digits, and an edit names a stage by it (\`stages/review/doneWhen\`);
+  digits, and an edit names a stage by it (\`stages/review/goal\`);
 - \`next\` lists the stages that may follow; two or more mean the run takes
   ONE of them (implementation or fix), and a final stage has none;
 - exactly one stage starts the walk, and the stages never loop back;
 - the walk ends when the last stage is completed, so add no closing "Done" or
   "Finished" stage: one nobody completes leaves the run with an open stage;
-- \`ownerHint\` names the agent node that usually does the stage — a hint,
-  never a rule; leave it out when any agent may.
+- \`responsible\` lists the members that do the stage, the first one leading
+  it; leave it out when any member may.
 
 WRITING THE TEXT INSIDE IT
-Every \`role\`, \`description\` and instruction block is instructions an agent
-follows on every run. Hold everything you write or rewrite to this:
-- One home per fact. Text two or more agents need goes in one instruction
-  node wired to each of them, never copied into several roles.
-- A \`description\` says what the agent does, what to send it and what it
-  returns; a caller decides from it alone. A \`role\` says how this agent
-  works. Neither re-describes or counts teammates: callers already receive
-  their callees' descriptions, and prose about the team goes stale when the
-  graph changes. Where a role must name a teammate to order the work, it uses
-  the node id.
-- Keep a sentence only if removing it would change what the agent does. Cut
+Every \`role\`, \`instructions\`, \`character\` and instruction block is text an
+agent follows on every run. Hold everything you write or rewrite to this:
+- One home per fact. Text two or more members need goes in one instruction
+  block addressed to them, never copied into several members.
+- A \`role\` says what the member does, what to send it and what it returns;
+  a caller decides from it alone. \`instructions\` say how this member works.
+  Neither re-describes or counts teammates: every member already receives the
+  others' roles, and prose about the team goes stale when it changes. Where
+  instructions must name a teammate to order the work, they use its id.
+- \`character\` is manner and tone only — how the member speaks, never what it
+  does.
+- Keep a sentence only if removing it would change what the member does. Cut
   what a capable coding agent does anyway ("write clean code", "read a file
   before editing it") and what it can read from the repository it works in.
 - State what to do. Keep a prohibition only where the cost is lost data or an
@@ -243,15 +194,12 @@ follows on every run. Hold everything you write or rewrite to this:
   instead of a hedge such as "if appropriate".
 - Leave out history, sources and justification written for a human reader.
 
-And to the wiring:
-- Add a data edge only where the target needs the source's final answer:
-  each one lengthens the target's prompt and makes it wait. Work an agent
-  should hand off when it decides to is a call edge.
+And to the settings:
 - Leave \`model\`, \`effort\`, \`contextWindow\`, \`modelParameters\`,
   \`configDir\` and \`pool\` unset unless the user names a value or a sibling
   team uses it: their values belong to each CLI, the builder offers them
-  as pickers, and a value the CLI does not know fails the node at run time.
-- Choose \`approval\` for how the run will be watched: an agent on \`ask\` in a
+  as pickers, and a value the CLI does not know fails the member at run time.
+- Choose \`approval\` for how the run will be watched: a member on \`ask\` in a
   run nobody watches waits for a person at every tool permission.
 
 In text the request does not cover, name what you would change in one line
@@ -259,18 +207,11 @@ and leave it off the card until the user agrees — the user owns it. When the u
 to optimize or review the team, apply all of the above throughout.
 
 A NEW TEAM
-When the file has no agents yet, or the user asks for one from scratch, read
-the schema, choose the shape the task needs — a chain of data edges for a
-fixed order of agents, or one coordinating agent with call edges for work
-decided at run time — and propose every part of it on one ${HOST_PROPOSE_TEAM_TOOL} card,
-one path edit each: \`name\`, a one-line \`description\`, the \`nodes\` (a
-trigger, the agents with their roles and descriptions), the \`edges\` and
-\`layout\`.
-
-LAYOUT
-\`layout\` maps each node id to its \`{x, y}\` on the canvas. Give every node
-you add a position: left to right in run order, about 260 apart horizontally
-and 120 vertically, clear of the existing nodes.
+When the file has no members yet, or the user asks for one from scratch, read
+the schema and propose every part of it on one ${HOST_PROPOSE_TEAM_TOOL} card,
+one path edit each: \`name\`, a one-line \`description\`, \`mode: lead\`, the
+\`members\` (each with a name, role and instructions), the \`triggers\` naming
+the member that coordinates, and any \`instructionBlocks\` and \`stages\`.
 </team-editing>
 
 <team-analysis>

@@ -95,7 +95,7 @@ describe('readCalleeFailure', () => {
   it('falls back to `crashed` when the adapter’s diagnosis THROWS', () => {
     // The defensive branch, entered deliberately. It runs inside the executor's
     // settle `try`, whose `finally` resolves the caller either way — so a throw
-    // here skipped the callee's status write and left the node reading
+    // here skipped the callee's status write and left the member reading
     // `running` for the rest of the run. OBSERVED exactly that way.
     const read = readCalleeFailure('boom', () => {
       throw new Error('adapter exploded');

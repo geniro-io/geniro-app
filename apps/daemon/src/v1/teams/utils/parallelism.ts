@@ -10,7 +10,7 @@ const MIN_PARALLEL_AGENTS = 4;
 
 /**
  * How many agents one team run drives at once, for a machine of this size
- * — the size of EACH of the executor's two pools (DAG nodes, callee sub-turns).
+ * — the size of EACH of the executor's two pools (members' own turns, callee turns).
  *
  * It was a flat `4`, which is right for a 16GB laptop and absurd on the 128GB
  * machine it was reported from: a Manager fanning out to five workers ran four

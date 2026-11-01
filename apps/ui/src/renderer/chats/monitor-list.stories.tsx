@@ -8,7 +8,7 @@ function monitor(over: Partial<OpenMonitor>): OpenMonitor {
     id: 'm1',
     description: 'CI on #42',
     command: 'gh pr checks 42 --watch',
-    nodeId: null,
+    memberId: null,
     callId: null,
     startedAt: new Date(Date.now() - 95_000).toISOString(),
     endsAt: new Date(Date.now() + 505_000).toISOString(),
@@ -26,18 +26,18 @@ const meta = {
   component: MonitorRows,
   args: {
     monitors: [
-      monitor({ nodeId: 'reviewer' }),
+      monitor({ memberId: 'reviewer' }),
       monitor({
         id: 'm2',
         description: 'Preview sandbox deploy',
         command:
           'until curl -fsS https://preview.example.test/health; do sleep 10; done',
-        nodeId: 'ops',
+        memberId: 'ops',
         startedAt: new Date(Date.now() - 12_000).toISOString(),
         endsAt: new Date(Date.now() + 1_788_000).toISOString(),
       }),
     ],
-    agentNameOf: (nodeId: string) => NAMES[nodeId] ?? nodeId,
+    agentNameOf: (memberId: string) => NAMES[memberId] ?? memberId,
     onStop: () => {},
   },
   decorators: [

@@ -57,8 +57,8 @@ export class CallContextDao extends BaseDao<CallContext> {
    * `NodeStateDao.rememberContext`, and it follows that method's rules.
    *
    * It differs in one forced way: this one CREATES the row when none exists. A
-   * node has its `createPending` row before any reading arrives, so the node
-   * twin can be a bare `nativeUpdate` that writes nothing for an unknown node;
+   * member has its `createPending` row before any reading arrives, so the member
+   * twin can be a bare `nativeUpdate` that writes nothing for an unknown member;
    * a call has no such seed, so that shape here would match nothing and discard
    * every per-call reading ever taken.
    *
@@ -70,13 +70,13 @@ export class CallContextDao extends BaseDao<CallContext> {
    * The create is also gated on the calling NODE still having a `node_state`
    * row, which is what keeps a write straggling past a run teardown from
    * INSERTING an orphan where the node twin's update would simply have matched
-   * nothing. The node is the right thing to ask about rather than the run, on
+   * nothing. The member is the right thing to ask about rather than the run, on
    * two counts. It is the stricter question — `RunTeardownService.purge`
    * destroys node states BEFORE call contexts, so there is a window where the
    * `runs` row still stands and a row written against it is already dead. And
-   * it is the honest one: `GraphExecutorService.getNodeStates` builds its
+   * it is the honest one: `TeamExecutorService.getNodeStates` builds its
    * response by mapping over node-state rows and looking calls up beside them,
-   * so a call row whose node has no state row is unreachable BY CONSTRUCTION,
+   * so a call row whose member has no state row is unreachable BY CONSTRUCTION,
    * not merely by accident of what else was deleted.
    *
    * It narrows rather than closes: a teardown landing between this check and
@@ -87,7 +87,7 @@ export class CallContextDao extends BaseDao<CallContext> {
   async rememberContext(
     runId: string,
     callId: string,
-    nodeId: string,
+    memberId: string,
     reading: ContextLevel,
     txEm?: EntityManager,
   ): Promise<void> {
@@ -111,10 +111,10 @@ export class CallContextDao extends BaseDao<CallContext> {
     }
     // The call's FIRST reading, and the only branch that can insert. Paid once
     // per call rather than per reading, which is why the check sits here.
-    if ((await em.count(NodeState, { runId, nodeId })) === 0) {
+    if ((await em.count(NodeState, { runId, memberId })) === 0) {
       return;
     }
-    repo.create({ runId, callId, nodeId, ...data }, { partial: true });
+    repo.create({ runId, callId, memberId, ...data }, { partial: true });
     await em.flush();
   }
 
@@ -123,7 +123,7 @@ export class CallContextDao extends BaseDao<CallContext> {
    * compaction of that call's conversation leaves behind. The call twin of
    * `NodeStateDao.forgetContext`: a callee's call is its own conversation, and
    * clearing the NODE's figure instead would leave this row reading full while
-   * wiping the node's own, untouched conversation.
+   * wiping the member's own, untouched conversation.
    */
   async forgetContext(
     runId: string,

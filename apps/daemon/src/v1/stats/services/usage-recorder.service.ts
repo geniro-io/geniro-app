@@ -33,7 +33,7 @@ import { UsageEventBus } from './usage-events.bus';
  *
  * **It observes the agent plane and never drives it** — the same direction, and
  * for the same reason, as `DiagnosticsModule`: the bus is where BOTH execution
- * paths converge (a chat turn and the graph executor publish through the one
+ * paths converge (a chat turn and the team executor publish through the one
  * `persistItemAndEmit`), so a single subscription covers both and neither has to
  * remember that a ledger exists. Nothing in `v1/agents` imports this module, so
  * the dependency is one-way — though not zero: `ItemDao.allUsageRows` and
@@ -116,7 +116,7 @@ export class UsageRecorderService implements OnModuleInit {
       return;
     }
     // A team run names no agent, so whose money this is comes off the
-    // per-node shares the poll wrote beside the run's total.
+    // per-member shares the poll wrote beside the run's total.
     const shares =
       run.agentKind === null && (run.polledCostCents ?? 0) > 0
         ? await this.nodeStateDao.polledSharesForRuns([runId], em)
@@ -138,7 +138,7 @@ export class UsageRecorderService implements OnModuleInit {
     if (await this.usageDao.recordPolledSpend(runId, rows, em)) {
       this.usageBus.publish({
         runId,
-        nodeId: null,
+        memberId: null,
         occurredAt: newest.occurredAt.toISOString(),
         turn: false,
       });
@@ -161,12 +161,12 @@ export class UsageRecorderService implements OnModuleInit {
     const em = this.em.fork();
     const row: UsageEventInput = {
       runId,
-      nodeId: item.nodeId,
+      memberId: item.memberId,
       seq: item.seq,
       occurredAt: new Date(item.createdAt),
       ...(await this.dimensions(
         runId,
-        item.nodeId,
+        item.memberId,
         reportedModelOf(item.payload),
         turnMemberOf(item.payload),
         em,
@@ -180,7 +180,7 @@ export class UsageRecorderService implements OnModuleInit {
     if (written) {
       this.usageBus.publish({
         runId,
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         occurredAt: row.occurredAt.toISOString(),
         turn: true,
       });
@@ -190,16 +190,16 @@ export class UsageRecorderService implements OnModuleInit {
   /** See {@link usageDimensions} — one reading, shared with the boot sweep. */
   private async dimensions(
     runId: string,
-    nodeId: string | null,
+    memberId: string | null,
     reportedModel: string | null,
     member: TurnMember | null,
     em: EntityManager,
   ): Promise<UsageDimensions> {
     const run = await this.runDao.getById(runId, em);
     const node =
-      nodeId === null
+      memberId === null
         ? null
-        : await this.nodeStateDao.getByRunNode(runId, nodeId, em);
+        : await this.nodeStateDao.getByRunNode(runId, memberId, em);
     return usageDimensions(run, node, reportedModel, member);
   }
 }

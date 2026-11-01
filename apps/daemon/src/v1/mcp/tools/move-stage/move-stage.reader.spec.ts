@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { member, teamOf } from '../../../teams/__tests__/team-builders';
 import type { TeamStage } from '../../../teams/teams.types';
 import { moveStageResultText, readMoveStage } from './move-stage.reader';
 
@@ -41,24 +42,26 @@ describe('moveStageResultText', () => {
     {
       id: 'investigation',
       title: 'Investigation',
-      doneWhen: 'cause known',
+      goal: 'cause known',
       next: ['implementation', 'fix'],
     },
-    { id: 'implementation', title: 'Implementation', doneWhen: 'built' },
+    { id: 'implementation', title: 'Implementation', goal: 'built' },
     {
       id: 'fix',
       title: 'Fix',
-      instructions: 'Patch the cause.',
-      doneWhen: 'tests pass',
-      ownerHint: 'coder',
+      howToWork: 'Patch the cause.',
+      goal: 'tests pass',
+      responsible: ['coder'],
     },
   ];
+
+  const coder = member('coder', { name: 'Coder' });
 
   it('says which branch was taken and what is next', () => {
     const reply = moveStageResultText(
       {
         ok: true,
-        team: { name: 'w', nodes: [], edges: [] },
+        team: teamOf([coder]),
         stages,
         progress: {
           rev: 1,
@@ -77,16 +80,16 @@ describe('moveStageResultText', () => {
           by: { kind: 'agent', nodeId: 'lead' },
         },
       },
-      [{ id: 'coder', kind: 'agent', agent: 'claude', approval: 'auto' }],
+      [coder],
     );
     expect(reply).toEqual({
       isError: false,
       text: [
         'Done: Investigation → took Fix (Implementation not taken).',
         'Now: Fix (fix) (2/2).',
-        'What to do: Patch the cause.',
-        'Done when: tests pass',
-        'Usually done by: coder.',
+        'How to work: Patch the cause.',
+        'Goal: tests pass',
+        'Responsible: Coder.',
       ].join('\n'),
     });
   });

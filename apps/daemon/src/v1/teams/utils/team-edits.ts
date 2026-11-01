@@ -3,20 +3,20 @@
  *
  * The tool took the whole edited team once, and that is what made an
  * analysis look hung: a library team runs to 250KB, so a one-paragraph
- * change had the model re-emit every node as tool arguments — measured at
+ * change had the model re-emit every member as tool arguments — measured at
  * 9m42s of generation with nothing on screen, twice in one chat. An edit costs
  * what it changes.
  *
  * - `find`/`replace`: exact text inside one of the team's string values (a
- *   role, the team instructions). `find` must occur exactly once across all of
+ *   member's role or instructions, a block's text). `find` must occur exactly once across all of
  *   them, the rule an editor's string replace follows, so an edit can never
  *   land somewhere the agent did not read.
  * - `path`/`value`: set one field, adding it if absent.
  * - `path`/`remove`: delete one field, or one array element.
  *
- * A path is `/`-separated keys (`nodes/reviewer/model`). In an array a
- * segment is an index, the `id` of the element carrying it (`nodes/reviewer`
- * — a node is named, never counted), or `-` to append when setting.
+ * A path is `/`-separated keys (`members/reviewer/model`). In an array a
+ * segment is an index, the `id` of the element carrying it (`members/reviewer`
+ * — a member is named, never counted), or `-` to append when setting.
  */
 export type TeamEdit =
   | { find: string; replace: string }

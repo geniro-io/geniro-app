@@ -6,23 +6,22 @@ import {
   joinTurnInstructionParts,
 } from '../../agents/utils/agent-instructions';
 import type {
-  InstructionBlock,
+  ComposedInstructionBlock,
   InstructionSizePart,
   InstructionSizesWire,
-  NodeInstructionSize,
+  MemberInstructionSize,
   Team,
-  TeamAgentNode,
+  TeamMember,
 } from '../teams.types';
-import { onDemandNodeIds } from '../utils/graph-order';
 import {
-  calleesByNode,
-  instructionBlocksByNode,
-  nodeInstructionFields,
-} from '../utils/node-instructions';
+  instructionBlocksByMember,
+  memberInstructionFields,
+} from '../utils/member-instructions';
 import { stageMapOf } from '../utils/stage-text';
+import { calleesOf, onDemandMemberIds } from '../utils/team-roster';
 
 export interface InstructionSizesInput {
-  team: Pick<Team, 'nodes' | 'edges' | 'stages'>;
+  team: Pick<Team, 'members' | 'triggers' | 'instructionBlocks' | 'stages'>;
   customInstructions?: string;
   replyLanguage?: string;
   /** A board card's instructions — known only when measuring for one run. */
@@ -34,10 +33,10 @@ export interface InstructionSizesInput {
 }
 
 /**
- * Measures the always-on instruction block each agent node's turns carry — the
+ * Measures the always-on instruction block each member's turns carry — the
  * text paid for on every turn before the prompt itself. The block is composed
- * by the node's own adapter (`AgentAdapter.turnInstructionParts`) from the same
- * graph helpers the executor uses, so the total is the block a run sends.
+ * by the member's own adapter (`AgentAdapter.turnInstructionParts`) from the
+ * same team helpers the executor uses, so the total is the block a run sends.
  *
  * What a saved team cannot know is left out: a board card's instructions,
  * the project's instructions and the memory index belong to one run (measured only when the caller names
@@ -51,20 +50,17 @@ export class InstructionSizesService {
 
   measure(input: InstructionSizesInput): InstructionSizesWire {
     const { team } = input;
-    const blocksOf = instructionBlocksByNode(team);
-    const calleesOf = calleesByNode(team);
-    const onDemand = onDemandNodeIds(team.nodes, team.edges);
+    const blocksOf = instructionBlocksByMember(team);
+    const callees = calleesOf(team.members);
+    const onDemand = onDemandMemberIds(team);
     const stageMap = stageMapOf(team);
-    const nodes: NodeInstructionSize[] = [];
-    for (const node of team.nodes) {
-      if (node.kind !== 'agent') {
-        continue;
-      }
-      nodes.push(
-        this.measureNode(node, {
-          blocks: blocksOf.get(node.id) ?? [],
-          callees: calleesOf.get(node.id),
-          answeringACall: onDemand.has(node.id),
+    const members: MemberInstructionSize[] = [];
+    for (const member of team.members) {
+      members.push(
+        this.measureMember(member, {
+          blocks: blocksOf.get(member.id) ?? [],
+          callees: callees.get(member.id),
+          answeringACall: onDemand.has(member.id),
           customInstructions: input.customInstructions,
           replyLanguage: input.replyLanguage,
           taskInstructions: input.taskInstructions,
@@ -74,14 +70,14 @@ export class InstructionSizesService {
         }),
       );
     }
-    return { nodes };
+    return { members };
   }
 
-  private measureNode(
-    node: TeamAgentNode,
+  private measureMember(
+    member: TeamMember,
     context: {
-      blocks: readonly InstructionBlock[];
-      callees: readonly TeamAgentNode[] | undefined;
+      blocks: readonly ComposedInstructionBlock[];
+      callees: readonly TeamMember[] | undefined;
       answeringACall: boolean;
       customInstructions: string | undefined;
       replyLanguage: string | undefined;
@@ -90,8 +86,8 @@ export class InstructionSizesService {
       memoryIndex: string | undefined;
       stageMap: string | null;
     },
-  ): NodeInstructionSize {
-    const adapter = this.adapters.for(node.agent);
+  ): MemberInstructionSize {
+    const adapter = this.adapters.for(member.agent);
     const parts = adapter.turnInstructionParts(
       {
         customInstructions: context.customInstructions,
@@ -99,7 +95,7 @@ export class InstructionSizesService {
         taskInstructions: context.taskInstructions,
         projectInstructions: context.projectInstructions,
         memoryIndex: context.memoryIndex,
-        ...nodeInstructionFields(node, {
+        ...memberInstructionFields(member, {
           blocks: context.blocks,
           callees: context.callees,
           answeringACall: context.answeringACall,
@@ -113,19 +109,19 @@ export class InstructionSizesService {
     );
     const totalChars = joinTurnInstructionParts(parts).length;
     const measured = parts.flatMap((part): InstructionSizePart[] =>
-      // One row per wired block: the joined part is those blocks and the
-      // breaks between them, so the breaks move to `separatorChars`.
+      // One row per block: the joined part is those blocks and the breaks
+      // between them, so the breaks move to `separatorChars`.
       part.source === 'instructionBlocks'
         ? context.blocks.map((block) => ({
             source: part.source,
-            instructionNodeId: block.nodeId,
+            blockId: block.blockId,
             ...sizeOf(block.text.length),
           }))
         : [{ source: part.source, ...sizeOf(part.text.length) }],
     );
     return {
-      nodeId: node.id,
-      agent: node.agent,
+      memberId: member.id,
+      agent: member.agent,
       turn: context.answeringACall ? 'call' : 'own',
       totalChars,
       approxTokens: sizeOf(totalChars).approxTokens,

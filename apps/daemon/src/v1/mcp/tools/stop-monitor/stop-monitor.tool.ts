@@ -18,8 +18,8 @@ export class StopMonitorTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.monitors.canMonitor(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.monitors.canMonitor(runId, memberId);
   }
 
   protected instructions(): string {
@@ -32,13 +32,13 @@ export class StopMonitorTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId, caller }: McpCallContext,
+    { runId, memberId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
     const input = readStopMonitor(args);
     if ('error' in input) {
       return this.invalidArgs(input.error);
     }
-    const outcome = await this.monitors.stop(runId, nodeId, input.id, caller);
+    const outcome = await this.monitors.stop(runId, memberId, input.id, caller);
     return outcome.status === 'refused'
       ? this.invalidArgs(outcome.reason)
       : this.text(stopMonitorResultText(outcome, input.id));

@@ -30,7 +30,7 @@ export const CHAT_LIVE_KEY = '\u0000chat';
 /** One `agent_delta` payload, as read defensively off an untyped WS event. */
 export interface LiveTextEvent {
   runId: string;
-  nodeId: string | null;
+  memberId: string | null;
   /**
    * Which CONVERSATION of that node this is — see {@link liveTextKey}. Null
    * from a daemon predating the per-call key, where the node WAS the key.
@@ -141,14 +141,14 @@ export function parseLiveText(data: unknown): LiveTextEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;
   }
-  const { runId, nodeId, ownerKey, text } = data as Record<string, unknown>;
+  const { runId, memberId, ownerKey, text } = data as Record<string, unknown>;
   if (typeof runId !== 'string' || typeof text !== 'string') {
     return null;
   }
   const record = data as Record<string, unknown>;
   return {
     runId,
-    nodeId: typeof nodeId === 'string' ? nodeId : null,
+    memberId: typeof memberId === 'string' ? memberId : null,
     // Absent on an event from a daemon older than the per-call key, where the
     // node WAS the key — so falling back to it is the honest reading of that
     // wire rather than a guess.
@@ -264,7 +264,7 @@ function nonNegativeNumber(value: unknown): number | null {
  * counting two threads.
  */
 export function liveTextKey(
-  nodeId: string | null,
+  memberId: string | null,
   ownerKey: string | null = null,
 ): string {
   // NO NODE ID means the 1:1 chat, whatever owner key rides with it — and one
@@ -289,10 +289,10 @@ export function liveTextKey(
   // always carries its node id (`GraphExecutorService` passes `node.id`), so a
   // node literally named `agent` — the collision the sentinel exists for —
   // still keys as itself.
-  if (nodeId === null) {
+  if (memberId === null) {
     return CHAT_LIVE_KEY;
   }
-  return ownerKey ?? nodeId;
+  return ownerKey ?? memberId;
 }
 
 /**
@@ -309,8 +309,13 @@ export function liveTextKey(
 export const OWNER_KEY_SEPARATOR = '::';
 
 /** The live-plane owner key for one node's turn, or one of its CALL threads. */
-export function partialOwnerKey(nodeId: string, callId: string | null): string {
-  return callId === null ? nodeId : `${nodeId}${OWNER_KEY_SEPARATOR}${callId}`;
+export function partialOwnerKey(
+  memberId: string,
+  callId: string | null,
+): string {
+  return callId === null
+    ? memberId
+    : `${memberId}${OWNER_KEY_SEPARATOR}${callId}`;
 }
 
 /**
@@ -344,7 +349,7 @@ export function applyLiveText(
   event: LiveTextEvent,
 ): Map<string, LiveState> {
   const next = new Map(current);
-  const key = liveTextKey(event.nodeId, event.ownerKey);
+  const key = liveTextKey(event.memberId, event.ownerKey);
   // A context figure alone is NOT "doing something" — it keeps arriving after
   // a block goes durable — so the entry is KEPT (the meter still needs the
   // number) while `withLiveText` declines to draw a bubble for it. Only an

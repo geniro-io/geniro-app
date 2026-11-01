@@ -3,7 +3,7 @@ import {
   type StageMoveAction,
   type StageProgress,
 } from '../../agents/chat.types';
-import type { Team, TeamNode, TeamStage } from '../teams.types';
+import type { Team, TeamMember, TeamStage } from '../teams.types';
 import { walkableStages } from './stage-validate';
 
 export const MAX_AGENT_STAGE_TEXT_LINES = 3;
@@ -17,19 +17,25 @@ function named(stages: readonly TeamStage[], id: string): string {
   return `${titleOf(stages, id)} (${id})`;
 }
 
-function ownerOf(stage: TeamStage, nodes: readonly TeamNode[]): string | null {
-  if (stage.ownerHint === undefined) {
+/** The stage's responsible members by name, the first marked as leading; null when it names none of the team's. */
+function responsibleOf(
+  stage: TeamStage,
+  members: readonly TeamMember[],
+): string | null {
+  const named = (stage.responsible ?? []).flatMap((id) => {
+    const member = members.find((m) => m.id === id);
+    return member === undefined ? [] : [member.name];
+  });
+  if (named.length === 0) {
     return null;
   }
-  const node = nodes.find(
-    (n) => n.id === stage.ownerHint && n.kind === 'agent',
-  );
-  return node === undefined ? null : node.id;
+  const [lead, ...rest] = named;
+  return [named.length > 1 ? `${lead} (leads)` : lead, ...rest].join(', ');
 }
 
 export function stageMapPrompt(
   stages: readonly TeamStage[],
-  nodes: readonly TeamNode[],
+  members: readonly TeamMember[],
 ): string {
   const lines = stages.map((stage, i) => {
     const parts = [`${i + 1}. ${named(stages, stage.id)}`];
@@ -43,16 +49,16 @@ export function stageMapPrompt(
     } else {
       parts.push('final stage');
     }
-    const owner = ownerOf(stage, nodes);
-    if (owner !== null) {
-      parts.push(`usually done by ${owner}`);
+    const responsible = responsibleOf(stage, members);
+    if (responsible !== null) {
+      parts.push(`responsible: ${responsible}`);
     }
     const head = parts.join(' — ');
     const body = [
-      stage.instructions?.trim()
-        ? `   What to do: ${stage.instructions.trim()}`
+      stage.howToWork?.trim()
+        ? `   How to work: ${stage.howToWork.trim()}`
         : null,
-      `   Done when: ${stage.doneWhen.trim()}`,
+      `   Goal: ${stage.goal.trim()}`,
     ].filter((line): line is string => line !== null);
     return [head, ...body].join('\n');
   });
@@ -60,16 +66,16 @@ export function stageMapPrompt(
     'This team has stages every run walks, in order:',
     ...lines,
     '',
-    `Each of your turns starts with the current stage. When the current stage's "done when" holds, mark it with ${HOST_MOVE_STAGE_TOOL} (action "complete", a one-line summary). Skip a stage that does not apply with action "skip" and the reason; at a stage with ONE-of branches, name the branch you take as "next". If an earlier stage turns out unfinished, reopen it with action "reopen" and the reason — that also reopens every stage after it.`,
-    'Any agent of the run may move a stage; "usually done by" is a hint, not a rule. Move only the stage you finished, and only when it is the current one.',
+    `Each of your turns starts with the current stage. When the current stage's goal is met, mark it with ${HOST_MOVE_STAGE_TOOL} (action "complete", a one-line summary). Skip a stage that does not apply with action "skip" and the reason; at a stage with ONE-of branches, name the branch you take as "next". If an earlier stage turns out unfinished, reopen it with action "reopen" and the reason — that also reopens every stage after it.`,
+    'Any member of the run may move a stage; the responsible members are who usually do it, not the only ones allowed to. Move only the stage you finished, and only when it is the current one.',
   ].join('\n');
 }
 
 export function stageMapOf(
-  team: Pick<Team, 'stages' | 'nodes'>,
+  team: Pick<Team, 'stages' | 'members'>,
 ): string | null {
   const stages = walkableStages(team);
-  return stages === null ? null : stageMapPrompt(stages, team.nodes);
+  return stages === null ? null : stageMapPrompt(stages, team.members);
 }
 
 export function stageNotice(
@@ -81,9 +87,8 @@ export function stageNotice(
     return `<stage>Every stage of this run is done (${index}/${total}).</stage>`;
   }
   const stage = stages.find((s) => s.id === progress.current);
-  const doneWhen =
-    stage === undefined ? '' : ` — done when: ${stage.doneWhen.trim()}`;
-  return `<stage>Current stage: ${named(stages, progress.current)} (${index}/${total})${doneWhen}</stage>`;
+  const goal = stage === undefined ? '' : ` — goal: ${stage.goal.trim()}`;
+  return `<stage>Current stage: ${named(stages, progress.current)} (${index}/${total})${goal}</stage>`;
 }
 
 export function stageLabel(
@@ -98,7 +103,7 @@ export function stageLabel(
 
 export function currentStageBrief(
   stages: readonly TeamStage[],
-  nodes: readonly TeamNode[],
+  members: readonly TeamMember[],
   progress: StageProgress,
 ): string {
   const { index, total } = progress.position;
@@ -110,19 +115,19 @@ export function currentStageBrief(
     return `Now: ${progress.current} (${index}/${total}).`;
   }
   const lines = [`Now: ${named(stages, stage.id)} (${index}/${total}).`];
-  if (stage.instructions?.trim()) {
-    lines.push(`What to do: ${stage.instructions.trim()}`);
+  if (stage.howToWork?.trim()) {
+    lines.push(`How to work: ${stage.howToWork.trim()}`);
   }
-  lines.push(`Done when: ${stage.doneWhen.trim()}`);
+  lines.push(`Goal: ${stage.goal.trim()}`);
   const next = stage.next ?? [];
   if (next.length > 1) {
     lines.push(
       `Then ONE of: ${next.map((id) => named(stages, id)).join(' | ')} — name it as "next" when you complete or skip this stage.`,
     );
   }
-  const owner = ownerOf(stage, nodes);
-  if (owner !== null) {
-    lines.push(`Usually done by: ${owner}.`);
+  const responsible = responsibleOf(stage, members);
+  if (responsible !== null) {
+    lines.push(`Responsible: ${responsible}.`);
   }
   return lines.join('\n');
 }
@@ -135,7 +140,7 @@ const VERB: Record<StageMoveAction, string> = {
 
 export function moveReply(
   stages: readonly TeamStage[],
-  nodes: readonly TeamNode[],
+  members: readonly TeamMember[],
   move: { action: StageMoveAction; stageId: string; next?: string },
   progress: StageProgress,
   resets: readonly string[],
@@ -149,7 +154,7 @@ export function moveReply(
   if (move.action === 'reopen' && resets.length > 0) {
     what += ` (back to pending: ${resets.map((id) => titleOf(stages, id)).join(', ')})`;
   }
-  return `${what}.\n${currentStageBrief(stages, nodes, progress)}`;
+  return `${what}.\n${currentStageBrief(stages, members, progress)}`;
 }
 
 const USER_VERB: Record<StageMoveAction, string> = {
@@ -160,7 +165,7 @@ const USER_VERB: Record<StageMoveAction, string> = {
 
 export function userMoveWake(
   stages: readonly TeamStage[],
-  nodes: readonly TeamNode[],
+  members: readonly TeamMember[],
   move: {
     action: StageMoveAction;
     stageId: string;
@@ -179,6 +184,6 @@ export function userMoveWake(
   }
   return [
     `[geniro] ${head}. Their reason: "${move.text}"`,
-    currentStageBrief(stages, nodes, progress),
+    currentStageBrief(stages, members, progress),
   ].join('\n');
 }

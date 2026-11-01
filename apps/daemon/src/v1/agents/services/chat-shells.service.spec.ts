@@ -42,7 +42,7 @@ interface Row {
   seq: number;
   kind: string;
   payload: string;
-  nodeId: string | null;
+  memberId: string | null;
   createdAt: Date;
 }
 
@@ -50,14 +50,14 @@ function lifecycle(
   seq: number,
   kind: 'shell_open' | 'shell_info',
   id: string,
-  nodeId: string | null = null,
+  memberId: string | null = null,
   callId: string | null = null,
 ): Row {
   return {
     seq,
     kind,
     payload: JSON.stringify({ id, workId: `w-${id}`, callId }),
-    nodeId,
+    memberId,
     createdAt: new Date(seq * 1000),
   };
 }
@@ -65,7 +65,7 @@ function lifecycle(
 /** Every row `close` wrote — the `shell_info` a killed command owes. */
 interface WrittenRow {
   runId: string;
-  nodeId: string | null;
+  memberId: string | null;
   seq: number;
   kind: string;
   payload: unknown;
@@ -118,11 +118,11 @@ function service(
           }),
           // Filed where the shell it launched was: a call and its shell are
           // the same conversation's rows.
-          nodeId:
+          memberId:
             rows.find(
               (row) =>
                 (JSON.parse(row.payload) as { id?: string }).id === call.id,
-            )?.nodeId ?? null,
+            )?.memberId ?? null,
           createdAt: new Date(0),
         }));
     },
@@ -171,15 +171,15 @@ function service(
   const uncounted: {
     runId: string;
     workId: string | null;
-    nodeId: string | null;
+    memberId: string | null;
   }[] = [];
   const chats = {
     noteShellClosed: (
       runId: string,
       workId: string | null,
-      nodeId: string | null,
+      memberId: string | null,
     ) => {
-      uncounted.push({ runId, workId, nodeId });
+      uncounted.push({ runId, workId, memberId });
     },
   } as unknown as ChatService;
   return {
@@ -257,7 +257,7 @@ describe('ChatShellsService', () => {
       {
         id: 'call-old',
         command: 'pnpm dev',
-        nodeId: null,
+        memberId: null,
         callId: null,
         startedAt: 1000,
       },
@@ -294,7 +294,7 @@ describe('ChatShellsService', () => {
       {
         id: 'ghost',
         command: 'ghost',
-        nodeId: null,
+        memberId: null,
         callId: null,
         startedAt: 1000,
       },
@@ -311,7 +311,7 @@ describe('ChatShellsService', () => {
 
     const answer = await svc.read('run-1');
 
-    expect(answer.shells[0]?.nodeId).toBe('qa');
+    expect(answer.shells[0]?.memberId).toBe('qa');
   });
 
   it('leaves out a command a DELEGATE started — the list is the agent’s own', async () => {
@@ -329,7 +329,7 @@ describe('ChatShellsService', () => {
   });
 
   it('carries the agent CALL whose turn started it', async () => {
-    // A node called several times files each command under its conversation,
+    // A member called several times files each command under its conversation,
     // and a command started above the loaded window has no other row to say
     // which one.
     const { service: svc } = service(
@@ -445,9 +445,9 @@ describe('ChatShellsService.kill', () => {
     expect(written).toEqual([
       {
         runId: 'run-1',
-        // The node that STARTED it, carried over from the open — a close filed
-        // at the wrong node is the defect item 5 fixed one level up.
-        nodeId: 'qa',
+        // The member that STARTED it, carried over from the open — a close filed
+        // at the wrong member is the defect item 5 fixed one level up.
+        memberId: 'qa',
         seq: 99,
         kind: 'shell_info',
         role: null,
@@ -469,9 +469,9 @@ describe('ChatShellsService.kill', () => {
     // down: the count is kept off the CLI's own brackets and the CLI already
     // answered this command's launch, so without this the badge reads
     // `working · waiting on background work` for the rest of the session.
-    // Under the node that opened it: the count is keyed by node and work id.
+    // Under the member that opened it: the count is keyed by member and work id.
     expect(uncounted).toEqual([
-      { runId: 'run-1', workId: 'w-call-1', nodeId: 'qa' },
+      { runId: 'run-1', workId: 'w-call-1', memberId: 'qa' },
     ]);
   });
 

@@ -43,8 +43,8 @@ const done = (groups: ReturnType<typeof foldTaskLists>): string =>
 describe('foldTaskLists', () => {
   it('folds a snapshot then patches into the whole list', () => {
     const groups = foldTaskLists([
-      { nodeId: null, payload: snapshot([{ id: '1' }, { id: '2' }]) },
-      { nodeId: null, payload: patch('1', 'completed') },
+      { memberId: null, payload: snapshot([{ id: '1' }, { id: '2' }]) },
+      { memberId: null, payload: patch('1', 'completed') },
     ]);
     expect(done(groups)).toBe('1/2');
   });
@@ -53,9 +53,9 @@ describe('foldTaskLists', () => {
     // No snapshot anywhere — the measured claude shape. A fold that required
     // one would report an empty list for every claude conversation.
     const groups = foldTaskLists([
-      { nodeId: null, payload: patch('1', 'in_progress') },
-      { nodeId: null, payload: patch('2', 'pending') },
-      { nodeId: null, payload: patch('1', 'completed') },
+      { memberId: null, payload: patch('1', 'in_progress') },
+      { memberId: null, payload: patch('2', 'pending') },
+      { memberId: null, payload: patch('1', 'completed') },
     ]);
     expect(done(groups)).toBe('1/2');
   });
@@ -64,8 +64,11 @@ describe('foldTaskLists', () => {
     // claude's `TaskUpdate` sends `{taskId, status}` and no text, so a
     // replacing merge would blank every title the moment work started.
     const groups = foldTaskLists([
-      { nodeId: null, payload: snapshot([{ id: '1', title: 'write specs' }]) },
-      { nodeId: null, payload: patch('1', 'completed') },
+      {
+        memberId: null,
+        payload: snapshot([{ id: '1', title: 'write specs' }]),
+      },
+      { memberId: null, payload: patch('1', 'completed') },
     ]);
     expect(groups[0]!.tasks[0]!.title).toBe('write specs');
   });
@@ -75,11 +78,11 @@ describe('foldTaskLists', () => {
     // status, the row stayed in the list and the total never shrank.
     const groups = foldTaskLists([
       {
-        nodeId: null,
+        memberId: null,
         payload: snapshot([{ id: '1' }, { id: '2' }, { id: '3' }]),
       },
       {
-        nodeId: null,
+        memberId: null,
         payload: {
           mode: 'patch',
           tasks: [
@@ -93,7 +96,7 @@ describe('foldTaskLists', () => {
           ],
         },
       },
-      { nodeId: null, payload: patch('1', 'completed') },
+      { memberId: null, payload: patch('1', 'completed') },
     ]);
     expect(done(groups)).toBe('1/2');
     expect(groups[0]!.tasks.map((task) => task.id)).toEqual(['1', '3']);
@@ -104,11 +107,11 @@ describe('foldTaskLists', () => {
     // keep its tick, and the stored row must not carry the patch-only flag.
     const groups = foldTaskLists([
       {
-        nodeId: null,
+        memberId: null,
         payload: snapshot([{ id: '1', title: 'old', status: 'completed' }]),
       },
       {
-        nodeId: null,
+        memberId: null,
         payload: {
           mode: 'patch',
           tasks: [
@@ -135,29 +138,32 @@ describe('foldTaskLists', () => {
     // The fail-safe direction: a patch mistaken for a snapshot deletes every
     // task it did not name, turning a list of six into the one that just moved.
     const groups = foldTaskLists([
-      { nodeId: null, payload: snapshot([{ id: '1' }, { id: '2' }]) },
-      { nodeId: null, payload: { tasks: [{ id: '1', status: 'completed' }] } },
+      { memberId: null, payload: snapshot([{ id: '1' }, { id: '2' }]) },
+      {
+        memberId: null,
+        payload: { tasks: [{ id: '1', status: 'completed' }] },
+      },
     ]);
     expect(done(groups)).toBe('1/2');
   });
 
   it('keeps each agent’s list apart, since both CLIs number tasks from 1', () => {
     const groups = foldTaskLists([
-      { nodeId: null, payload: snapshot([{ id: '1' }]) },
-      { nodeId: 'reviewer', payload: snapshot([{ id: '1' }, { id: '2' }]) },
-      { nodeId: 'reviewer', payload: patch('1', 'completed') },
+      { memberId: null, payload: snapshot([{ id: '1' }]) },
+      { memberId: 'reviewer', payload: snapshot([{ id: '1' }, { id: '2' }]) },
+      { memberId: 'reviewer', payload: patch('1', 'completed') },
     ]);
     expect(done(groups)).toBe('0/1,1/2');
   });
 
-  it('leaves a DELEGATE’s list out of its launcher’s — they share a node id', () => {
+  it('leaves a DELEGATE’s list out of its launcher’s — they share a member id', () => {
     // A delegate's rows carry the launching agent's `nodeId`, so a fold keyed
-    // by node alone would let the delegate's task `1` rename and complete the
+    // by member alone would let the delegate's task `1` rename and complete the
     // agent's own.
     const groups = foldTaskLists([
-      { nodeId: null, payload: snapshot([{ id: '1', title: 'Main' }]) },
+      { memberId: null, payload: snapshot([{ id: '1', title: 'Main' }]) },
       {
-        nodeId: null,
+        memberId: null,
         payload: {
           ...(snapshot([
             { id: '1', title: 'Delegate', status: 'completed' },
@@ -168,7 +174,7 @@ describe('foldTaskLists', () => {
     ]);
     expect(groups).toEqual([
       {
-        nodeId: null,
+        memberId: null,
         callId: null,
         tasks: [
           { id: '1', title: 'Main', status: 'pending', activeForm: null },
@@ -178,9 +184,9 @@ describe('foldTaskLists', () => {
     ]);
   });
 
-  it('keeps each CALL of one node apart, since every call numbers from 1 too', () => {
+  it('keeps each CALL of one member apart, since every call numbers from 1 too', () => {
     // Two instances of one Engineer, each called with its own brief. Keyed by
-    // node alone the second call's `1 in_progress` patched over the first
+    // member alone the second call's `1 in_progress` patched over the first
     // call's `1 completed`, and the panel showed one list belonging to neither.
     const inCall = (callId: string, payload: unknown): unknown => ({
       ...(payload as Record<string, unknown>),
@@ -188,18 +194,18 @@ describe('foldTaskLists', () => {
     });
     const groups = foldTaskLists([
       {
-        nodeId: 'engineer',
+        memberId: 'engineer',
         payload: inCall('call-1', snapshot([{ id: '1' }, { id: '2' }])),
       },
       {
-        nodeId: 'engineer',
+        memberId: 'engineer',
         payload: inCall('call-2', snapshot([{ id: '1' }])),
       },
       {
-        nodeId: 'engineer',
+        memberId: 'engineer',
         payload: inCall('call-1', patch('1', 'completed')),
       },
-      { nodeId: 'engineer', payload: snapshot([{ id: '1' }]) },
+      { memberId: 'engineer', payload: snapshot([{ id: '1' }]) },
     ]);
     expect(groups.map((group) => group.callId)).toEqual([
       'call-1',
@@ -217,7 +223,7 @@ describe('foldTaskLists', () => {
     // windowed one — a total that SHRANK rather than one obviously missing.
     const rows = [
       {
-        nodeId: null,
+        memberId: null,
         payload: snapshot([
           { id: '1' },
           { id: '2' },
@@ -227,9 +233,9 @@ describe('foldTaskLists', () => {
           { id: '6' },
         ]),
       },
-      { nodeId: null, payload: patch('1', 'completed') },
-      { nodeId: null, payload: patch('2', 'completed') },
-      { nodeId: null, payload: patch('3', 'in_progress') },
+      { memberId: null, payload: patch('1', 'completed') },
+      { memberId: null, payload: patch('2', 'completed') },
+      { memberId: null, payload: patch('3', 'in_progress') },
     ];
     expect(done(foldTaskLists(rows))).toBe('2/6');
     // What a window that lost the opening announcement would have reported.
@@ -245,14 +251,14 @@ describe('foldTaskLists', () => {
       callId,
     });
     const groups = foldTaskLists([
-      { nodeId: 'eng', payload: inCall('call-1', patch('1', 'pending')) },
-      { nodeId: 'eng', payload: inCall('call-1', patch('2', 'pending')) },
+      { memberId: 'eng', payload: inCall('call-1', patch('1', 'pending')) },
+      { memberId: 'eng', payload: inCall('call-1', patch('2', 'pending')) },
       {
-        nodeId: 'eng',
+        memberId: 'eng',
         payload: inCall('call-2', snapshot([{ id: '1' }, { id: '2' }])),
       },
       // A patch after the restatement does not un-state the list.
-      { nodeId: 'eng', payload: inCall('call-2', patch('1', 'completed')) },
+      { memberId: 'eng', payload: inCall('call-2', patch('1', 'completed')) },
     ]);
     expect(groups.map((group) => [group.callId, group.snapshot])).toEqual([
       ['call-1', false],
@@ -262,9 +268,9 @@ describe('foldTaskLists', () => {
 
   it('skips a row whose payload does not read as an announcement', () => {
     const groups = foldTaskLists([
-      { nodeId: null, payload: snapshot([{ id: '1' }]) },
-      { nodeId: null, payload: null },
-      { nodeId: null, payload: { tasks: 'not an array' } },
+      { memberId: null, payload: snapshot([{ id: '1' }]) },
+      { memberId: null, payload: null },
+      { memberId: null, payload: { tasks: 'not an array' } },
     ]);
     expect(done(groups)).toBe('0/1');
   });
@@ -291,8 +297,8 @@ describe('readTaskAnnouncement', () => {
 describe('readRunTaskList / writeRunTaskList', () => {
   it('round-trips a fold', () => {
     const groups = foldTaskLists([
-      { nodeId: null, payload: snapshot([{ id: '1', title: 'a' }]) },
-      { nodeId: 'n', payload: snapshot([{ id: '1', status: 'completed' }]) },
+      { memberId: null, payload: snapshot([{ id: '1', title: 'a' }]) },
+      { memberId: 'n', payload: snapshot([{ id: '1', status: 'completed' }]) },
     ]);
     expect(readRunTaskList(writeRunTaskList(groups))).toEqual(groups);
   });
@@ -301,14 +307,14 @@ describe('readRunTaskList / writeRunTaskList', () => {
     expect(writeRunTaskList([])).toBeNull();
     expect(
       writeRunTaskList([
-        { nodeId: null, callId: null, tasks: [], snapshot: false },
+        { memberId: null, callId: null, tasks: [], snapshot: false },
       ]),
     ).toBeNull();
   });
 
   it('keeps whether a list was stated whole through the round trip, and reads a row stored without it as patched', () => {
     const groups = foldTaskLists([
-      { nodeId: 'n', payload: { ...(snapshot([{ id: '1' }]) as object) } },
+      { memberId: 'n', payload: { ...(snapshot([{ id: '1' }]) as object) } },
     ]);
     expect(readRunTaskList(writeRunTaskList(groups))[0]?.snapshot).toBe(true);
     const stored = JSON.stringify([
@@ -321,7 +327,7 @@ describe('readRunTaskList / writeRunTaskList', () => {
     expect(readRunTaskList(stored)[0]?.snapshot).toBe(false);
   });
 
-  it('reads a row stored before lists were kept per call as the node’s own', () => {
+  it('reads a row stored before lists were kept per call as the member’s own', () => {
     const stored = JSON.stringify([
       {
         nodeId: 'engineer',
@@ -332,7 +338,7 @@ describe('readRunTaskList / writeRunTaskList', () => {
     // …and a per-call row keeps its call through the round trip.
     const perCall = foldTaskLists([
       {
-        nodeId: 'engineer',
+        memberId: 'engineer',
         payload: { ...(snapshot([{ id: '1' }]) as object), callId: 'call-7' },
       },
     ]);

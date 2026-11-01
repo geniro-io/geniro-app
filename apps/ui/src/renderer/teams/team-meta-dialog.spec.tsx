@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { settleStageGraphs } from '../__tests__/settle-stage-graphs';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
-import type { TeamMeta } from './graph-doc';
+import type { TeamMeta } from './team-doc';
 import { TeamMetaDialog } from './team-meta-dialog';
 
 (
@@ -56,7 +56,7 @@ function render(
             ? 8
             : props.maxActiveTurnsCeiling
         }
-        agentIds={['coder']}
+        members={[{ id: 'coder', name: 'Coder' }]}
         onClose={onClose}
         onSubmit={onSubmit}
         {...(props.onAskChat ? { onAskChat: props.onAskChat } : {})}
@@ -268,11 +268,11 @@ describe('TeamMetaDialog', () => {
       {
         id: 'investigate',
         title: 'Investigation',
-        doneWhen: 'Cause found',
+        goal: 'Cause found',
         next: ['implement', 'fix'],
       },
-      { id: 'implement', title: 'Implementation', doneWhen: 'Built' },
-      { id: 'fix', title: 'Fix', doneWhen: 'Fixed' },
+      { id: 'implement', title: 'Implementation', goal: 'Built' },
+      { id: 'fix', title: 'Fix', goal: 'Fixed' },
     ];
 
     async function graphColumns(): Promise<string[][] | null> {
@@ -302,9 +302,9 @@ describe('TeamMetaDialog', () => {
 
     const FORK_COLUMNS = [['Investigation'], ['Implementation', 'Fix']];
 
-    function fillDoneWhen(text: string): void {
+    function fillGoal(text: string): void {
       const htmlFor = Array.from(container.querySelectorAll('label')).find(
-        (l) => l.textContent === 'Done when',
+        (l) => l.textContent === 'Goal',
       )!.htmlFor;
       type(document.getElementById(htmlFor) as HTMLInputElement, text);
     }
@@ -350,8 +350,8 @@ describe('TeamMetaDialog', () => {
         initial: {
           name: 'Team',
           stages: [
-            { id: 'a', title: 'A', doneWhen: 'a', next: ['b'] },
-            { id: 'b', title: 'B', doneWhen: 'b' },
+            { id: 'a', title: 'A', goal: 'a', next: ['b'] },
+            { id: 'b', title: 'B', goal: 'b' },
           ],
         },
       });
@@ -378,7 +378,7 @@ describe('TeamMetaDialog', () => {
         container.querySelector('[data-slot="stage-schema-editor"]'),
       ).not.toBeNull();
       pressText('Add stage');
-      fillDoneWhen('It works');
+      fillGoal('It works');
       pressText('Done');
 
       expect(
@@ -389,7 +389,7 @@ describe('TeamMetaDialog', () => {
       submit();
       expect(onSubmit).toHaveBeenCalledWith({
         name: 'Team',
-        stages: [{ id: 'stage-1', title: 'Stage 1', doneWhen: 'It works' }],
+        stages: [{ id: 'stage-1', title: 'Stage 1', goal: 'It works' }],
       });
     });
 
@@ -407,7 +407,7 @@ describe('TeamMetaDialog', () => {
       render({
         initial: {
           name: 'Team',
-          stages: [{ id: 'only', title: 'Only', doneWhen: 'Done' }],
+          stages: [{ id: 'only', title: 'Only', goal: 'Done' }],
         },
       });
       pressText('Edit stages');
@@ -438,7 +438,7 @@ describe('TeamMetaDialog', () => {
       render({ initial: copy() });
       pressText('Edit stages');
       pressText('Add stage');
-      fillDoneWhen('Shipped');
+      fillGoal('Shipped');
       pressText('Done');
       expect((await graphColumns())!.flat()).toHaveLength(4);
 

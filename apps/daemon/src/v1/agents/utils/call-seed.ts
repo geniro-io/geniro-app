@@ -117,24 +117,24 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
     if (row.kind === 'call_answer' && delivery.outcome === 'undelivered') {
       const deliveryId = readString(delivery.deliveryId);
       const callId = readString(delivery.callId);
-      const callerNodeId = readString(delivery.callerNodeId);
-      const calleeNodeId = readString(delivery.calleeNodeId);
+      const callerMemberId = readString(delivery.callerNodeId);
+      const calleeMemberId = readString(delivery.calleeNodeId);
       const message = readString(delivery.message);
       const reason = readString(delivery.reason);
       const conversation = readString(delivery.callerConversationId);
       if (
         deliveryId &&
         callId &&
-        callerNodeId &&
-        calleeNodeId &&
+        callerMemberId &&
+        calleeMemberId &&
         message &&
         reason
       ) {
         messageFailures.set(deliveryId, {
           deliveryId,
           callId,
-          callerNodeId,
-          calleeNodeId,
+          callerNodeId: callerMemberId,
+          calleeNodeId: calleeMemberId,
           message,
           reason,
           ...(conversation !== null
@@ -148,10 +148,10 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
       Record<keyof CallStartedPayload | keyof CallResultPayload, unknown>
     >;
     const callId = readString(fields.callId);
-    const callerNodeId = readString(fields.callerNodeId);
+    const callerMemberId = readString(fields.callerNodeId);
     const callerConversationId = readString(fields.callerConversationId);
-    const calleeNodeId = readString(fields.calleeNodeId);
-    if (callId === null || callerNodeId === null || calleeNodeId === null) {
+    const calleeMemberId = readString(fields.calleeNodeId);
+    if (callId === null || callerMemberId === null || calleeMemberId === null) {
       continue;
     }
     const number = callNumber(callId);
@@ -161,9 +161,9 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
     if (row.kind === 'call_started') {
       records.set(callId, {
         callId,
-        callerNodeId,
+        callerMemberId,
         ...(callerConversationId !== null ? { callerConversationId } : {}),
-        calleeNodeId,
+        calleeMemberId,
         thread: readString(fields.thread),
         sessionId: null,
       });
@@ -188,9 +188,9 @@ export function readCallSeed(rows: readonly CallSeedRow[]): RunCallSeed {
         // build) is still a settled call — resumable when it says so.
         records.set(callId, {
           callId,
-          callerNodeId,
+          callerMemberId,
           ...(callerConversationId !== null ? { callerConversationId } : {}),
-          calleeNodeId,
+          calleeMemberId,
           thread: null,
           sessionId,
           ...member,
@@ -249,7 +249,7 @@ export function callConversation(
   }
   return {
     conversationId,
-    calleeNodeId: own.calleeNodeId,
+    calleeMemberId: own.calleeMemberId,
     callIds: members.map((member) => member.callId),
     sessionId,
   };

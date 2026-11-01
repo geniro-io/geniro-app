@@ -28,7 +28,7 @@ function row(
   return {
     id,
     runId,
-    nodeId: null,
+    memberId: null,
     seq,
     kind: kind as ChatItem['kind'],
     role: null,
@@ -139,7 +139,7 @@ describe('foldDurableTranscript', () => {
     );
     const runTasks: RunDto['taskList'] = [
       {
-        nodeId: null,
+        memberId: null,
         callId: null,
         snapshot: true,
         tasks: [
@@ -209,7 +209,7 @@ describe('daemon subagent lifecycle', () => {
       delegates: [
         {
           id: 'delegate',
-          nodeId: null,
+          memberId: null,
           callId: null,
           label: 'Review',
           kind: null,
@@ -312,7 +312,7 @@ function delegateState(
 ): RunDelegateState {
   return {
     id: 'delegate',
-    nodeId: null,
+    memberId: null,
     callId: null,
     label: 'Review',
     kind: null,
@@ -339,7 +339,7 @@ describe('withDaemonStartedCalls', () => {
             },
             1,
           ),
-          nodeId: 'orch',
+          memberId: 'orch',
         },
         {
           ...row(
@@ -352,7 +352,7 @@ describe('withDaemonStartedCalls', () => {
             },
             2,
           ),
-          nodeId: 'poet',
+          memberId: 'poet',
         },
       ],
       false,

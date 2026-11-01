@@ -16,6 +16,7 @@ import type { ItemSeqAllocator } from '../../agents/services/item-seq.allocator'
 import type { MonitorRegistry } from '../../agents/services/monitor.registry';
 import { RunWriteQueue } from '../../agents/services/run-write.queue';
 import { readRunStageProgress } from '../../agents/utils/stage-progress';
+import { member, teamOf } from '../__tests__/team-builders';
 import type { Team, TeamStage } from '../teams.types';
 import type { RunTeamService } from './run-team.service';
 import { STAGE_COLUMN_RETRY_MS, StageService } from './stage.service';
@@ -24,17 +25,17 @@ const STAGES: TeamStage[] = [
   {
     id: 'investigation',
     title: 'Investigation',
-    doneWhen: 'cause known',
+    goal: 'cause known',
     next: ['implementation', 'fix'],
   },
   {
     id: 'implementation',
     title: 'Implementation',
-    doneWhen: 'built',
+    goal: 'built',
     next: ['review'],
   },
-  { id: 'fix', title: 'Fix', doneWhen: 'fixed', next: ['review'] },
-  { id: 'review', title: 'Review', doneWhen: 'approved' },
+  { id: 'fix', title: 'Fix', goal: 'fixed', next: ['review'] },
+  { id: 'review', title: 'Review', goal: 'approved' },
 ];
 
 const AGENT = { kind: 'agent', nodeId: 'lead' } as const;
@@ -79,26 +80,10 @@ function setUp(
     changed: new Subject<RunWire[]>(),
     fresh: () => undefined as unknown as StageService,
   };
-  const team: Team = {
-    name: 'w',
-    nodes: [
-      ...(options.withLead === true
-        ? [
-            {
-              id: 'start',
-              kind: 'trigger' as const,
-              trigger: 'manual' as const,
-            },
-          ]
-        : []),
-      { id: 'lead', kind: 'agent', agent: 'claude', approval: 'auto' },
-    ],
-    edges:
-      options.withLead === true
-        ? [{ from: 'start', to: 'lead', kind: 'data' }]
-        : [],
+  const team: Team = teamOf([member('lead')], {
+    ...(options.withLead === true ? {} : { triggers: [] }),
     ...(stages !== null ? { stages } : {}),
-  };
+  });
   let seq = 0;
   let reads = 0;
   let archived = options.archived === true;

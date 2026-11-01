@@ -9,19 +9,19 @@ export const OPEN_WORK_KINDS = [
 ] as const satisfies readonly ItemKind[];
 
 /**
- * A node turn the transcript opened (`status: running`) and never settled.
+ * A member turn the transcript opened (`status: running`) and never settled.
  * `callId` is set when the turn was a callee's sub-turn for that call.
  */
 export interface OpenNodeTurn {
-  nodeId: string;
+  memberId: string;
   callId: string | null;
 }
 
 /** A call the broker announced (`call_started`) and never settled (`call_result`). */
 export interface OpenCall {
   callId: string;
-  callerNodeId: string | null;
-  calleeNodeId: string | null;
+  callerMemberId: string | null;
+  calleeMemberId: string | null;
   mode: string | null;
 }
 
@@ -53,18 +53,18 @@ function stringField(
 }
 
 /**
- * The node turns a transcript leaves open, paired per (node, call) the way the
+ * The member turns a transcript leaves open, paired per (member, call) the way the
  * renderer counts them: every `running` row opens one, every terminal row
  * settles one, and a terminal row with nothing open settles nothing.
  *
- * The renderer reads a node's liveness off these rows BEFORE the daemon's
+ * The renderer reads a member's liveness off these rows BEFORE the daemon's
  * `node_state` row, so a turn a killed daemon never settled here keeps its
  * card spinning under a run the boot reconcile already failed.
  */
 export function openNodeTurns(items: readonly Item[]): OpenNodeTurn[] {
   const open = new Map<string, { turn: OpenNodeTurn; count: number }>();
   for (const item of items) {
-    if (item.kind !== 'status' || item.nodeId === null) {
+    if (item.kind !== 'status' || item.memberId === null) {
       continue;
     }
     const payload = payloadOf(item);
@@ -73,9 +73,9 @@ export function openNodeTurns(items: readonly Item[]): OpenNodeTurn[] {
       continue;
     }
     const callId = stringField(payload, 'callId');
-    const key = JSON.stringify([item.nodeId, callId]);
+    const key = JSON.stringify([item.memberId, callId]);
     const entry = open.get(key) ?? {
-      turn: { nodeId: item.nodeId, callId },
+      turn: { memberId: item.memberId, callId },
       count: 0,
     };
     if (status === 'running') {
@@ -116,8 +116,8 @@ export function openCalls(items: readonly Item[]): OpenCall[] {
     }
     open.set(callId, {
       callId,
-      callerNodeId: stringField(payload, 'callerNodeId') ?? item.nodeId,
-      calleeNodeId: stringField(payload, 'calleeNodeId'),
+      callerMemberId: stringField(payload, 'callerNodeId') ?? item.memberId,
+      calleeMemberId: stringField(payload, 'calleeNodeId'),
       mode: stringField(payload, 'mode'),
     });
   }

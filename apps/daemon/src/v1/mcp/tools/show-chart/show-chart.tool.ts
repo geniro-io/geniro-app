@@ -18,8 +18,8 @@ export class ShowChartTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.charts.canDraw(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.charts.canDraw(runId, memberId);
   }
 
   protected instructions(): string {
@@ -34,7 +34,7 @@ export class ShowChartTool extends BaseMcpTool {
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId } = context;
+    const { runId, memberId } = context;
     const chart = readHostChart(args);
     // Null is the reader saying there is nothing plottable here at all.
     // Unlike an empty findings report — which is a real review outcome — a
@@ -45,7 +45,7 @@ export class ShowChartTool extends BaseMcpTool {
         "nothing plottable — 'labels' must be a non-empty array, and 'series' must hold at least one entry with a 'name' and one measured number in 'values'.",
       );
     }
-    const outcome = await this.charts.draw(runId, nodeId, chart);
+    const outcome = await this.charts.draw(runId, memberId, chart);
     // Same reading as the findings tool: an unavailable channel is an
     // answer, not a failure — the agent still holds the numbers.
     return this.text(hostChartResultText(outcome));

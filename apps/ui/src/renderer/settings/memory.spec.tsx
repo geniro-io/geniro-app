@@ -600,13 +600,13 @@ describe('Memory', () => {
   it('reads the profiles of every library team’s agents and pool members', async () => {
     const api = fakeApi();
     const team = {
-      nodes: [
+      members: [
         {
-          kind: 'agent',
           id: 'a',
+          name: 'A',
           agent: 'claude',
           approval: 'auto',
-          configDir: '/p/node',
+          configDir: '/p/member',
           pool: [{ agent: 'codex', configDir: '/c/member' }],
         },
       ],
@@ -631,7 +631,7 @@ describe('Memory', () => {
     expect(api.previewMemoryImport).toHaveBeenCalledWith({
       memoryImportPreviewRequestDto: {
         profiles: [
-          { agentKind: 'claude', dir: '/p/node' },
+          { agentKind: 'claude', dir: '/p/member' },
           { agentKind: 'codex', dir: '/c/member' },
         ],
       },
@@ -859,11 +859,10 @@ describe('importProfiles', () => {
 
   it('adds every team agent’s and pool member’s profile after the settings ones', () => {
     const team = {
-      nodes: [
-        { kind: 'trigger', id: 't' },
+      members: [
         {
-          kind: 'agent',
           id: 'a',
+          name: 'A',
           agent: 'claude',
           configDir: '/p/work',
           pool: [{ agent: 'codex', configDir: '/c/pool' }, { agent: 'codex' }],

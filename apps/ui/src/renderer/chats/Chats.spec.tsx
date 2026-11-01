@@ -219,7 +219,7 @@ function msg(seq: number, role: 'user' | 'assistant', text: string): ChatItem {
   return {
     id: `i${seq}`,
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'message',
     role,
@@ -233,7 +233,7 @@ function authError(seq: number): ChatItem {
   return {
     id: `i${seq}`,
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'error',
     role: null,
@@ -250,7 +250,7 @@ function terminal(seq: number): ChatItem {
   return {
     id: `i${seq}`,
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'turn_complete',
     role: null,
@@ -263,7 +263,7 @@ function approval(runId: string, seq: number, requestId: string): ChatItem {
   return {
     id: `${runId}-approval-${seq}`,
     runId,
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'approval_request',
     role: null,
@@ -937,7 +937,13 @@ beforeEach(() => {
   teamApi.listTeams.mockReset().mockResolvedValue([]);
   teamApi.getTeam.mockReset().mockResolvedValue({
     slug: 'review-team',
-    team: { name: 'Review team', nodes: [], edges: [] },
+    team: {
+      name: 'Review team',
+      mode: 'lead',
+      members: [],
+      triggers: [],
+      instructionBlocks: [],
+    },
   });
   // By default a run's copy IS the library copy a test stubbed, which is what
   // every run started before the library changed holds — so the cases that
@@ -1267,7 +1273,7 @@ describe('Chats — searching one conversation', () => {
     ): ChatItem => ({
       id: `i${seq}`,
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq,
       kind,
       role: null,
@@ -1980,7 +1986,7 @@ describe('Chats transcript auto-scroll', () => {
     const settled: ChatItem = {
       id: 'compacted-turn',
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq: 1,
       kind: 'turn_complete',
       role: null,
@@ -2020,7 +2026,7 @@ describe('Chats transcript auto-scroll', () => {
     const inWindow: ChatItem = {
       id: 'recent-turn',
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq: 1,
       kind: 'turn_complete',
       role: null,
@@ -2074,7 +2080,7 @@ describe('Chats transcript auto-scroll', () => {
     const settled: ChatItem = {
       id: 'i-settled',
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq: 1,
       kind: 'turn_complete',
       role: null,
@@ -2152,7 +2158,7 @@ describe('Chats transcript auto-scroll', () => {
     const settled: ChatItem = {
       id: 'pre-compaction-turn',
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq: 1,
       kind: 'turn_complete',
       role: null,
@@ -2169,7 +2175,7 @@ describe('Chats transcript auto-scroll', () => {
     const compacted: ChatItem = {
       id: 'compaction-row',
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq: 2,
       kind: 'system',
       role: null,
@@ -2225,7 +2231,7 @@ describe('Chats transcript auto-scroll', () => {
     const usageItem = (runId: string, tokens: number): ChatItem => ({
       id: `${runId}-turn`,
       runId,
-      nodeId: null,
+      memberId: null,
       seq: 1,
       kind: 'turn_complete',
       role: null,
@@ -2353,7 +2359,7 @@ describe('Chats transcript auto-scroll', () => {
     await act(async () => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: 'streaming words',
         ownerKey: null,
         thinkingTokens: null,
@@ -3453,7 +3459,7 @@ describe('Chats reconnect seam', () => {
       await act(async () => {
         emitLiveText({
           runId: 'r1',
-          nodeId: null,
+          memberId: null,
           text: 'a',
           ownerKey: null,
           thinkingTokens: null,
@@ -3468,7 +3474,7 @@ describe('Chats reconnect seam', () => {
         await act(async () => {
           emitLiveText({
             runId: 'r1',
-            nodeId: null,
+            memberId: null,
             text: `a${'b'.repeat(i + 1)}`,
             ownerKey: null,
             thinkingTokens: null,
@@ -3536,7 +3542,7 @@ describe('Chats reconnect seam', () => {
     await act(async () => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: 'The sea',
         ownerKey: null,
         thinkingTokens: null,
@@ -3549,7 +3555,7 @@ describe('Chats reconnect seam', () => {
     await act(async () => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: 'The sea is wide.',
         ownerKey: null,
         thinkingTokens: null,
@@ -3571,7 +3577,7 @@ describe('Chats reconnect seam', () => {
     await act(async () => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: 'The sea is wide.',
         ownerKey: null,
         thinkingTokens: null,
@@ -3583,7 +3589,7 @@ describe('Chats reconnect seam', () => {
       emitItem(msg(1, 'assistant', 'The sea is wide.'));
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: '',
         ownerKey: null,
         thinkingTokens: null,
@@ -3608,7 +3614,7 @@ describe('Chats reconnect seam', () => {
     await act(async () => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: '',
         ...LIVE_DELTA_REST,
         ownerKey: null,
@@ -3645,7 +3651,7 @@ describe('Chats reconnect seam', () => {
       await act(async () => {
         emitLiveText({
           runId: 'r1',
-          nodeId: null,
+          memberId: null,
           text,
           ownerKey: null,
           thinkingTokens: null,
@@ -3715,7 +3721,7 @@ describe('Chats reconnect seam', () => {
     await act(async () => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: '',
         ...LIVE_DELTA_REST,
         ownerKey: null,
@@ -3731,7 +3737,7 @@ describe('Chats reconnect seam', () => {
     await act(async () => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: '',
         ...LIVE_DELTA_REST,
         ownerKey: null,
@@ -3769,7 +3775,7 @@ describe('Chats reconnect seam', () => {
     await act(async () => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: '',
         ownerKey: null,
         thinkingTokens: 300,
@@ -3779,7 +3785,7 @@ describe('Chats reconnect seam', () => {
     await act(async () => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: 'The sea',
         ownerKey: null,
         thinkingTokens: null,
@@ -3800,7 +3806,7 @@ describe('Chats reconnect seam', () => {
     await act(async () => {
       emitLiveText({
         runId: 'other-run',
-        nodeId: null,
+        memberId: null,
         text: 'not yours',
         ownerKey: null,
         thinkingTokens: null,
@@ -3821,7 +3827,7 @@ describe('Chats reconnect seam', () => {
     await act(async () => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: 'half a thou',
         ownerKey: null,
         thinkingTokens: null,
@@ -4150,7 +4156,7 @@ describe('Chats — the daemon closes a dead approval card', () => {
       {
         id: 'r1-unanswerable-2',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 2,
         kind: 'unanswerable' as const,
         role: null,
@@ -4190,7 +4196,7 @@ describe('Chats — a team run’s rows that live in a call', () => {
       emitItem({
         id: 'r1-unanswerable-1',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 1,
         kind: 'unanswerable' as const,
         role: null,
@@ -4235,7 +4241,7 @@ describe('Chats — what the transcript says the agent is doing', () => {
       {
         id: 'r1-verdict-1',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 1,
         kind: 'approval_verdict' as const,
         role: null,
@@ -4262,7 +4268,7 @@ describe('Chats — what the transcript says the agent is doing', () => {
       {
         id: 'r1-verdict-1',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 1,
         kind: 'approval_verdict' as const,
         role: null,
@@ -4336,7 +4342,7 @@ describe('Chats — an answered question keeps the answer on screen', () => {
       {
         id: 'r1-ask-0',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 0,
         kind: 'approval_request' as const,
         role: null,
@@ -4363,7 +4369,7 @@ describe('Chats — an answered question keeps the answer on screen', () => {
       {
         id: 'r1-verdict-1',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 1,
         kind: 'approval_verdict' as const,
         role: null,
@@ -4390,7 +4396,7 @@ describe('Chats — an answered question keeps the answer on screen', () => {
       {
         id: 'r1-proposal-0',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 0,
         kind: 'approval_request' as const,
         role: null,
@@ -4404,7 +4410,7 @@ describe('Chats — an answered question keeps the answer on screen', () => {
       {
         id: 'r1-verdict-1',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 1,
         kind: 'approval_verdict' as const,
         role: null,
@@ -4423,7 +4429,7 @@ describe('Chats — an answered question keeps the answer on screen', () => {
 
     expect(container.textContent).toContain('✓ Saved as “review-pair”');
     const open = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === 'Open in canvas',
+      (button) => button.textContent === 'Open team',
     )!;
     await act(async () => {
       open.click();
@@ -4436,7 +4442,7 @@ describe('Chats — a standing team proposal', () => {
   const proposal = (runId: string): ChatItem => ({
     id: `${runId}-proposal-0`,
     runId,
-    nodeId: null,
+    memberId: null,
     seq: 0,
     kind: 'approval_request',
     role: null,
@@ -4479,7 +4485,7 @@ describe("Chats — a permission card offers the agent's remembering answers", (
   const request = {
     id: 'r1-ask-0',
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq: 0,
     kind: 'approval_request' as const,
     role: null,
@@ -4529,7 +4535,7 @@ describe("Chats — a permission card offers the agent's remembering answers", (
       {
         id: 'r1-verdict-1',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 1,
         kind: 'approval_verdict' as const,
         role: null,
@@ -4694,12 +4700,12 @@ describe('Chats team runs', () => {
   function wfItem(
     seq: number,
     kind: ChatItem['kind'],
-    nodeId: string | null,
+    memberId: string | null,
   ): ChatItem {
     return {
       id: `w-i${seq}`,
       runId: 'w1',
-      nodeId,
+      memberId,
       seq,
       kind,
       role: null,
@@ -4931,7 +4937,7 @@ describe('Chats team runs', () => {
       });
       emitLiveText({
         runId: 'w1',
-        nodeId: 'helper',
+        memberId: 'helper',
         text: 'working',
         // The per-CALL key, which is what the daemon publishes under.
         ownerKey: 'helper::call-5',
@@ -4983,7 +4989,7 @@ describe('Chats team runs', () => {
       });
       emitLiveText({
         runId: 'w1',
-        nodeId: 'helper',
+        memberId: 'helper',
         text: 'working',
         // The node's own key, which is what its own turn publishes under.
         ownerKey: 'helper',
@@ -5013,7 +5019,7 @@ describe('Chats team runs', () => {
       {
         promptCacheExpiresAt: null,
         runId: 'w1',
-        nodeId: 'helper',
+        memberId: 'helper',
         status: 'running',
         contextTokens: null,
         contextEstimated: false,
@@ -5026,7 +5032,7 @@ describe('Chats team runs', () => {
             contextEstimated: false,
             contextWindowTokens: null,
             start: {
-              callerNodeId: 'orch',
+              callerMemberId: 'orch',
               title: 'Capture the visuals',
               message: null,
               mode: 'async',
@@ -5060,8 +5066,8 @@ describe('Chats team runs', () => {
       calls: [
         {
           callId: 'call-5',
-          callerNodeId: 'orch',
-          calleeNodeId: 'helper',
+          callerMemberId: 'orch',
+          calleeMemberId: 'helper',
           title: 'Capture the visuals',
           brief: null,
           mode: 'async',
@@ -5143,8 +5149,8 @@ describe('Chats team runs', () => {
     startSeq: number,
   ) => ({
     callId,
-    callerNodeId: 'orch',
-    calleeNodeId: 'helper',
+    callerMemberId: 'orch',
+    calleeMemberId: 'helper',
     title: 'Old work',
     brief: null,
     mode: 'async',
@@ -5427,7 +5433,7 @@ describe('Chats team runs', () => {
       {
         promptCacheExpiresAt: null,
         runId: 'w1',
-        nodeId: 'helper',
+        memberId: 'helper',
         status: 'running',
         contextTokens: 201_788,
         contextEstimated: false,
@@ -5485,7 +5491,7 @@ describe('Chats team runs', () => {
       {
         promptCacheExpiresAt: null,
         runId: 'w1',
-        nodeId: 'helper',
+        memberId: 'helper',
         status: 'running',
         contextTokens: 201_788,
         contextEstimated: false,
@@ -5553,7 +5559,7 @@ describe('Chats team runs', () => {
       {
         promptCacheExpiresAt: null,
         runId: 'w1',
-        nodeId: 'helper',
+        memberId: 'helper',
         status: 'running',
         contextTokens: null,
         contextEstimated: false,
@@ -5601,7 +5607,7 @@ describe('Chats team runs', () => {
       {
         promptCacheExpiresAt: null,
         runId: 'w1',
-        nodeId: 'helper',
+        memberId: 'helper',
         status: 'running',
         contextTokens: null,
         contextEstimated: false,
@@ -5666,7 +5672,7 @@ describe('Chats team runs', () => {
       {
         promptCacheExpiresAt: null,
         runId: 'w1',
-        nodeId: 'helper',
+        memberId: 'helper',
         status: 'running',
         contextTokens: null,
         contextEstimated: false,
@@ -5754,7 +5760,7 @@ describe('Chats team runs', () => {
       {
         promptCacheExpiresAt: null,
         runId: 'w1',
-        nodeId: 'helper',
+        memberId: 'helper',
         status: 'running',
         contextTokens: null,
         contextEstimated: false,
@@ -5830,7 +5836,7 @@ describe('Chats team runs', () => {
       {
         promptCacheExpiresAt: null,
         runId: 'w1',
-        nodeId: 'helper',
+        memberId: 'helper',
         status: 'completed',
         contextTokens: null,
         contextEstimated: false,
@@ -5931,7 +5937,7 @@ describe('Chats team runs', () => {
       {
         promptCacheExpiresAt: null,
         runId: 'w1',
-        nodeId: 'helper',
+        memberId: 'helper',
         status: 'running',
         contextTokens: 12_000,
         contextEstimated: false,
@@ -6167,7 +6173,7 @@ describe('Chats team runs', () => {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -6216,7 +6222,7 @@ describe('Chats team runs', () => {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -6272,7 +6278,7 @@ describe('Chats team runs', () => {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -6330,7 +6336,7 @@ describe('Chats team runs', () => {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -6369,7 +6375,7 @@ describe('Chats team runs', () => {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -6426,7 +6432,7 @@ describe('Chats team runs', () => {
         slug: 'demo-duo',
         name: 'demo-duo',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -6485,7 +6491,7 @@ describe('Chats team runs', () => {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -6493,11 +6499,12 @@ describe('Chats team runs', () => {
       slug: 'review-team',
       team: {
         name: 'Review team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
-          { id: 'a1', kind: 'agent', agent: 'claude', approval: 'auto' },
+        mode: 'lead',
+        members: [
+          { id: 'a1', name: 'Reviewer', agent: 'claude', approval: 'auto' },
         ],
-        edges: [],
+        triggers: [{ kind: 'first-message', member: 'a1' }],
+        instructionBlocks: [],
       },
     });
     const { client } = makeClient();
@@ -6513,7 +6520,7 @@ describe('Chats team runs', () => {
     const triggerSelect = container.querySelector(
       '[aria-label="Trigger the run starts from"]',
     )!;
-    expect(triggerSelect.textContent).toContain('Start · manual trigger');
+    expect(triggerSelect.textContent).toContain('Reviewer · first message');
   });
 
   it('routes Stop on a team run to the team cancel endpoint', async () => {
@@ -6594,7 +6601,7 @@ describe('Chats — handing a conversation to the user', () => {
     });
   });
 
-  it('names the node when the run is a team', async () => {
+  it('names the member when the run is a team', async () => {
     const wfRun: ChatRun = {
       id: 'w1',
       status: 'running',
@@ -6653,15 +6660,12 @@ describe('Chats — handing a conversation to the user', () => {
       slug: 'review-team',
       team: {
         name: 'Review team',
-        nodes: [
-          {
-            id: 'agent-1',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
-          },
+        mode: 'lead',
+        members: [
+          { id: 'agent-1', name: 'agent-1', agent: 'claude', approval: 'auto' },
         ],
-        edges: [],
+        triggers: [{ kind: 'first-message', member: 'agent-1' }],
+        instructionBlocks: [],
       },
     });
     api.listRunItems.mockResolvedValue([
@@ -6670,7 +6674,7 @@ describe('Chats — handing a conversation to the user', () => {
       {
         id: 'w-s1',
         runId: 'w1',
-        nodeId: 'agent-1',
+        memberId: 'agent-1',
         seq: 0,
         kind: 'status',
         role: null,
@@ -6687,7 +6691,7 @@ describe('Chats — handing a conversation to the user', () => {
 
     expect(handoffApi.resolveHandoff).toHaveBeenCalledWith({
       runId: 'w1',
-      nodeId: 'agent-1',
+      memberId: 'agent-1',
     });
   });
 
@@ -6781,7 +6785,7 @@ describe('Chats composer memory & suggestions', () => {
     slug: 'review-team',
     name: 'Review team',
     description: null,
-    nodeCount: 2,
+    memberCount: 2,
     updatedAt: 'now',
   };
 
@@ -7722,7 +7726,7 @@ describe('Chats composer memory & suggestions', () => {
   });
 
   it('hides the whole model panel for a team target', async () => {
-    // A team's nodes carry their own settings in its YAML — a composer
+    // A team's members carry their own settings in its YAML — a composer
     // effort would silently apply to none of them, exactly like the model.
     // They are ONE control now, so this is one absence rather than several.
     stubSettings({ lastChatTarget: 'team:review-team' });
@@ -7741,7 +7745,7 @@ describe('Chats composer memory & suggestions', () => {
   });
 
   it('hides the model chip for a team target', async () => {
-    // A team's nodes each name their own model in its YAML — a composer
+    // A team's members each name their own model in its YAML — a composer
     // model would silently apply to none of them.
     stubSettings({ lastChatTarget: 'team:review-team' });
     teamApi.listTeams.mockResolvedValue([reviewTeamSummary]);
@@ -8112,7 +8116,7 @@ describe('Chats queued messages', () => {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -8567,7 +8571,7 @@ describe('Chats queued messages', () => {
     const callRow = (seq: number): ChatItem => ({
       id: `c${seq}`,
       runId: 'r1',
-      nodeId: 'engineer',
+      memberId: 'engineer',
       seq,
       kind: 'message',
       role: 'assistant',
@@ -8578,7 +8582,7 @@ describe('Chats queued messages', () => {
       {
         id: 's2000',
         runId: 'r1',
-        nodeId: 'manager',
+        memberId: 'manager',
         seq: 2000,
         kind: 'call_started',
         role: null,
@@ -8771,7 +8775,7 @@ describe('Chats queued messages', () => {
     const toolItem = (seq: number, name: string, input: unknown): ChatItem => ({
       id: `t${seq}`,
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq,
       kind: 'tool_call',
       role: 'assistant',
@@ -9517,7 +9521,7 @@ describe('Chats queued messages', () => {
     return {
       id: `${runId}-cancel-${seq}`,
       runId,
-      nodeId: null,
+      memberId: null,
       seq,
       kind: 'turn_cancelled',
       role: null,
@@ -10722,7 +10726,7 @@ describe('Chats run composer chips', () => {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -10730,11 +10734,12 @@ describe('Chats run composer chips', () => {
       slug: 'review-team',
       team: {
         name: 'Review team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
-          { id: 'a1', kind: 'agent', agent: 'claude', approval: 'auto' },
+        mode: 'lead',
+        members: [
+          { id: 'a1', name: 'Reviewer', agent: 'claude', approval: 'auto' },
         ],
-        edges: [],
+        triggers: [{ kind: 'first-message', member: 'a1' }],
+        instructionBlocks: [],
       },
     });
     const { client } = makeClient();
@@ -10751,7 +10756,7 @@ describe('Chats run composer chips', () => {
         ?.textContent,
     ).toContain('proj');
     const trigger = chips(container).find((chip) =>
-      chip.textContent?.includes('Start · manual trigger'),
+      chip.textContent?.includes('Reviewer · first message'),
     );
     expect(trigger).toBeDefined();
     // And it is INSIDE the card, in the slot a chat's model chip holds —
@@ -10772,7 +10777,7 @@ describe('Chats run composer chips', () => {
         (b) => b.disabled && b.className.includes('rounded-lg'),
       ),
     ).toEqual([]);
-    // No model chip: each agent node names its own model in the YAML.
+    // No model chip: each member names its own model in the YAML.
     expect(modelTrigger(container)).toBeUndefined();
 
     // A follow-up is a message like any other — REPORTED as "i should be able
@@ -10825,7 +10830,7 @@ describe('Chats run composer chips', () => {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -10842,7 +10847,7 @@ describe('Chats run composer chips', () => {
         runId: 'w1',
         kind: 'call_started',
         role: null,
-        nodeId: 'lead',
+        memberId: 'lead',
         payload: {
           callId: 'call-1',
           callerNodeId: 'lead',
@@ -10857,7 +10862,7 @@ describe('Chats run composer chips', () => {
         runId: 'w1',
         kind: 'action',
         role: null,
-        nodeId: 'eng',
+        memberId: 'eng',
         payload: {
           actionId: 'pr-merged',
           label: 'PR merged',
@@ -10874,7 +10879,7 @@ describe('Chats run composer chips', () => {
         {
           seq: 5,
           actionId: 'pr-merged',
-          nodeId: 'eng',
+          memberId: 'eng',
           conversationId: 'call-1',
           label: 'PR merged',
           once: true,
@@ -10886,8 +10891,8 @@ describe('Chats run composer chips', () => {
       calls: [
         {
           callId: 'call-1',
-          callerNodeId: 'lead',
-          calleeNodeId: 'eng',
+          callerMemberId: 'lead',
+          calleeMemberId: 'eng',
           title: 'Open the PR',
           brief: null,
           mode: 'async',
@@ -10904,7 +10909,7 @@ describe('Chats run composer chips', () => {
       outcome: {
         actionSeq: 5,
         actionId: 'pr-merged',
-        nodeId: 'eng',
+        memberId: 'eng',
         conversationId: 'call-1',
         state: 'succeeded',
       },
@@ -10969,7 +10974,7 @@ describe('Chats run composer chips', () => {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -10986,7 +10991,7 @@ describe('Chats run composer chips', () => {
         runId: 'w1',
         kind: 'call_started',
         role: null,
-        nodeId: 'lead',
+        memberId: 'lead',
         payload: {
           callId: 'call-1',
           callerNodeId: 'lead',
@@ -11001,7 +11006,7 @@ describe('Chats run composer chips', () => {
         runId: 'w1',
         kind: 'action',
         role: null,
-        nodeId: 'eng',
+        memberId: 'eng',
         payload: {
           actionId: 'pr-merged',
           label: 'PR merged',
@@ -11030,7 +11035,7 @@ describe('Chats run composer chips', () => {
         {
           seq: 5,
           actionId: 'pr-merged',
-          nodeId: 'eng',
+          memberId: 'eng',
           conversationId: 'call-1',
           label: 'PR merged',
           once: true,
@@ -11042,8 +11047,8 @@ describe('Chats run composer chips', () => {
       calls: [
         {
           callId: 'call-1',
-          callerNodeId: 'lead',
-          calleeNodeId: 'eng',
+          callerMemberId: 'lead',
+          calleeMemberId: 'eng',
           title: 'Open the PR',
           brief: null,
           mode: 'async',
@@ -11060,7 +11065,7 @@ describe('Chats run composer chips', () => {
       outcome: {
         actionSeq: 5,
         actionId: 'pr-merged',
-        nodeId: 'eng',
+        memberId: 'eng',
         conversationId: 'call-1',
         state: 'succeeded',
       },
@@ -11139,11 +11144,12 @@ describe('Chats queued messages — a team run', () => {
       slug: 'review-team',
       team: {
         name: 'Review team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
-          { id: 'manager', kind: 'agent', agent: 'claude', approval: 'auto' },
+        mode: 'lead',
+        members: [
+          { id: 'manager', name: 'manager', agent: 'claude', approval: 'auto' },
         ],
-        edges: [{ from: 'start', to: 'manager', kind: 'data' }],
+        triggers: [{ kind: 'first-message', member: 'manager' }],
+        instructionBlocks: [],
       },
     });
     teamApi.listTeams.mockResolvedValue([
@@ -11151,7 +11157,7 @@ describe('Chats queued messages — a team run', () => {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -11203,11 +11209,12 @@ describe('Chats queued messages — a team run', () => {
       slug: 'review-team',
       team: {
         name: 'Review team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
-          { id: 'manager', kind: 'agent', agent: 'claude', approval: 'auto' },
+        mode: 'lead',
+        members: [
+          { id: 'manager', name: 'manager', agent: 'claude', approval: 'auto' },
         ],
-        edges: [{ from: 'start', to: 'manager', kind: 'data' }],
+        triggers: [{ kind: 'first-message', member: 'manager' }],
+        instructionBlocks: [],
       },
     });
     teamApi.listTeams.mockResolvedValue([
@@ -11215,7 +11222,7 @@ describe('Chats queued messages — a team run', () => {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
+        memberCount: 2,
         updatedAt: 'now',
       },
     ]);
@@ -11262,7 +11269,7 @@ describe('Chats sidebar list', () => {
     slug: 'review-team',
     name: 'Review team',
     description: null,
-    nodeCount: 2,
+    memberCount: 2,
     updatedAt: 'now',
   };
 
@@ -12620,11 +12627,10 @@ describe('Chats sidebar list', () => {
     ]);
     const graphWith = (name: string) => ({
       name: 'Dev team',
-      nodes: [
-        { id: 'start', kind: 'trigger', trigger: 'manual' },
-        { id: 'eng', kind: 'agent', name, agent: 'claude', approval: 'auto' },
-      ],
-      edges: [],
+      mode: 'lead',
+      members: [{ id: 'eng', name, agent: 'claude', approval: 'auto' }],
+      triggers: [{ kind: 'first-message', member: 'eng' }],
+      instructionBlocks: [],
     });
     // The library has since been edited; the run kept what it started with.
     teamApi.getTeam.mockResolvedValue({
@@ -12676,38 +12682,20 @@ describe('Chats sidebar list', () => {
       slug: 'big-team',
       team: {
         name: 'Big team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual' },
+        mode: 'lead',
+        members: [
           {
             id: 'orch',
-            kind: 'agent',
             name: 'Orchestrator',
             agent: 'claude',
             approval: 'auto',
           },
-          {
-            id: 'w-a',
-            kind: 'agent',
-            name: 'Worker A',
-            agent: 'claude',
-            approval: 'auto',
-          },
-          {
-            id: 'w-b',
-            kind: 'agent',
-            name: 'Worker B',
-            agent: 'claude',
-            approval: 'auto',
-          },
-          {
-            id: 'w-c',
-            kind: 'agent',
-            name: 'Worker C',
-            agent: 'claude',
-            approval: 'auto',
-          },
+          { id: 'w-a', name: 'Worker A', agent: 'claude', approval: 'auto' },
+          { id: 'w-b', name: 'Worker B', agent: 'claude', approval: 'auto' },
+          { id: 'w-c', name: 'Worker C', agent: 'claude', approval: 'auto' },
         ],
-        edges: [],
+        triggers: [{ kind: 'first-message', member: 'orch' }],
+        instructionBlocks: [],
       },
     });
     const { client, emitItem, emitLiveText } = makeClient();
@@ -12723,7 +12711,7 @@ describe('Chats sidebar list', () => {
       emitItem({
         id: 's1',
         runId: 'w1',
-        nodeId: 'w-a',
+        memberId: 'w-a',
         seq: 10,
         kind: 'status',
         role: null,
@@ -12733,7 +12721,7 @@ describe('Chats sidebar list', () => {
       emitItem({
         id: 's2',
         runId: 'w1',
-        nodeId: 'w-a',
+        memberId: 'w-a',
         seq: 11,
         kind: 'status',
         role: null,
@@ -12759,7 +12747,7 @@ describe('Chats sidebar list', () => {
       emitItem({
         id: 't1',
         runId: 'w1',
-        nodeId: 'w-a',
+        memberId: 'w-a',
         seq: 12,
         kind: 'turn_complete',
         role: null,
@@ -12776,7 +12764,7 @@ describe('Chats sidebar list', () => {
       emitItem({
         id: 's3',
         runId: 'w1',
-        nodeId: 'w-a',
+        memberId: 'w-a',
         seq: 13,
         kind: 'status',
         role: null,
@@ -12809,7 +12797,7 @@ describe('Chats sidebar list', () => {
     await act(async () => {
       emitLiveText({
         runId: 'w1',
-        nodeId: 'w-b',
+        memberId: 'w-b',
         text: '',
         ownerKey: null,
         thinkingTokens: null,
@@ -12880,24 +12868,19 @@ describe('Chats sidebar list', () => {
       slug: 'big-team',
       team: {
         name: 'Big team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual' },
-          {
-            id: 'w-a',
-            kind: 'agent',
-            name: 'Worker A',
-            agent: 'claude',
-            approval: 'auto',
-          },
+        mode: 'lead',
+        members: [
+          { id: 'w-a', name: 'Worker A', agent: 'claude', approval: 'auto' },
         ],
-        edges: [],
+        triggers: [{ kind: 'first-message', member: 'w-a' }],
+        instructionBlocks: [],
       },
     });
     teamApi.listTeamRunNodes.mockResolvedValue([
       {
         promptCacheExpiresAt: null,
         runId: 'w1',
-        nodeId: 'w-a',
+        memberId: 'w-a',
         status: 'running',
         contextTokens: 90_000,
         contextEstimated: false,
@@ -12929,7 +12912,7 @@ describe('Chats sidebar list', () => {
     await act(async () => {
       emitLiveText({
         runId: 'w1',
-        nodeId: 'w-a',
+        memberId: 'w-a',
         text: '',
         ownerKey: null,
         thinkingTokens: null,
@@ -12982,27 +12965,19 @@ describe('Chats sidebar list', () => {
       slug: 'big-team',
       team: {
         name: 'Big team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual' },
-          {
-            id: 'w-a',
-            kind: 'agent',
-            name: 'Worker A',
-            agent: 'claude',
-            approval: 'auto',
-          },
+        mode: 'lead',
+        members: [
+          { id: 'w-a', name: 'Worker A', agent: 'claude', approval: 'auto' },
         ],
-        // The trigger EDGE is what makes `w-a` the root — `rootAgentOf` reads
-        // the graph's routes, not its node list, so a team whose agent the
-        // trigger does not feed has no root at all.
-        edges: [{ from: 'start', to: 'w-a', kind: 'data' }],
+        triggers: [{ kind: 'first-message', member: 'w-a' }],
+        instructionBlocks: [],
       },
     });
     teamApi.listTeamRunNodes.mockResolvedValue([
       {
         promptCacheExpiresAt: null,
         runId: 'w1',
-        nodeId: 'w-a',
+        memberId: 'w-a',
         status: 'running',
         contextTokens: 90_000,
         contextEstimated: false,
@@ -13032,10 +13007,10 @@ describe('Chats sidebar list', () => {
     ).toHaveLength(2);
   });
 
-  it('withholds the composer ring when the graph has no single root', async () => {
-    // `rootAgentOf` answers null for a graph with no root and for one with
-    // several, and both mean the same thing here: there is no node whose window
-    // is the RUN's. A figure invented for them would be about nothing.
+  it('withholds the composer ring when the trigger names no member of the team', async () => {
+    // `rootAgentOf` answers null for a team whose trigger names no member, and
+    // there is then no member whose window is the RUN's. A figure invented for
+    // it would be about nothing.
     teamApi.listTeamRuns.mockResolvedValue([
       {
         id: 'w1',
@@ -13059,35 +13034,20 @@ describe('Chats sidebar list', () => {
       slug: 'big-team',
       team: {
         name: 'Big team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual' },
-          {
-            id: 'w-a',
-            kind: 'agent',
-            name: 'Worker A',
-            agent: 'claude',
-            approval: 'auto',
-          },
-          {
-            id: 'w-b',
-            kind: 'agent',
-            name: 'Worker B',
-            agent: 'claude',
-            approval: 'auto',
-          },
+        mode: 'lead',
+        members: [
+          { id: 'w-a', name: 'Worker A', agent: 'claude', approval: 'auto' },
+          { id: 'w-b', name: 'Worker B', agent: 'claude', approval: 'auto' },
         ],
-        // A trigger feeding TWO agents: two conversations at the top level.
-        edges: [
-          { from: 'start', to: 'w-a', kind: 'data' },
-          { from: 'start', to: 'w-b', kind: 'data' },
-        ],
+        triggers: [{ kind: 'first-message', member: 'gone' }],
+        instructionBlocks: [],
       },
     });
     teamApi.listTeamRunNodes.mockResolvedValue([
       {
         promptCacheExpiresAt: null,
         runId: 'w1',
-        nodeId: 'w-a',
+        memberId: 'w-a',
         status: 'running',
         contextTokens: 90_000,
         contextEstimated: false,
@@ -13242,15 +13202,14 @@ describe('Chats skill autocomplete', () => {
     expect(container.querySelector('[role="listbox"]')).toBeNull();
   });
 
-  it("resolves a team target's skills through the selected trigger's downstream agents", async () => {
+  it("resolves a team target's skills through the selected trigger's member", async () => {
     agentsApi.listAgentSkills.mockResolvedValue([]);
     teamApi.listTeams.mockResolvedValue([
       {
         slug: 'review-team',
         name: 'Review team',
         description: null,
-        nodeCount: 2,
-        edgeCount: 1,
+        memberCount: 2,
         agentCounts: [],
         updatedAt: 'now',
       },
@@ -13259,16 +13218,17 @@ describe('Chats skill autocomplete', () => {
       slug: 'review-team',
       team: {
         name: 'Review team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual' },
+        mode: 'lead',
+        members: [
           {
             id: 'coder',
-            kind: 'agent',
+            name: 'coder',
             agent: 'cursor-agent',
             approval: 'auto',
           },
         ],
-        edges: [{ from: 'start', to: 'coder', kind: 'data' }],
+        triggers: [{ kind: 'first-message', member: 'coder' }],
+        instructionBlocks: [],
       },
     });
     const { client } = makeClient();
@@ -13276,7 +13236,7 @@ describe('Chats skill autocomplete', () => {
 
     await pickMenuRow(container, targetTrigger(container), 'Review team');
 
-    // The skills fetched are the TRIGGER's downstream agent's, not the
+    // The skills fetched are the TRIGGER's member's, not the
     // composer's bare-agent default.
     expect(agentsApi.listAgentSkills).toHaveBeenCalledWith({
       agent: 'cursor-agent',
@@ -13310,26 +13270,19 @@ describe('Chats skill autocomplete', () => {
     teamApi.getTeamRunSnapshot.mockResolvedValue({
       team: {
         name: 'Dev team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual' },
+        mode: 'lead',
+        members: [
           {
             id: 'manager',
-            kind: 'agent',
+            name: 'manager',
             agent: 'claude',
             approval: 'auto',
             configDir: '/profiles/lab',
           },
-          {
-            id: 'qa',
-            kind: 'agent',
-            agent: 'cursor-agent',
-            approval: 'auto',
-          },
+          { id: 'qa', name: 'qa', agent: 'cursor-agent', approval: 'auto' },
         ],
-        edges: [
-          { from: 'start', to: 'manager', kind: 'data' },
-          { from: 'manager', to: 'qa', kind: 'call' },
-        ],
+        triggers: [{ kind: 'first-message', member: 'manager' }],
+        instructionBlocks: [],
       },
     });
     const { client } = makeClient();
@@ -13578,7 +13531,7 @@ describe('Chats — the composer’s context readout', () => {
     await act(async () => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: 'working',
         ownerKey: null,
         thinkingTokens: null,
@@ -14585,7 +14538,7 @@ describe('Chats — what the status badge says the run is doing', () => {
       delegates: [
         {
           id: 'toolu_early',
-          nodeId: null,
+          memberId: null,
           callId: null,
           label: 'Reviewer',
           kind: null,
@@ -14613,7 +14566,7 @@ describe('Chats — what the status badge says the run is doing', () => {
       delegates: [
         {
           id: 'toolu_early',
-          nodeId: null,
+          memberId: null,
           callId: null,
           label: 'Reviewer',
           kind: null,
@@ -14687,7 +14640,7 @@ describe('Chats — what the status badge says the run is doing', () => {
       {
         id: 'v1',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 2,
         kind: 'approval_verdict',
         role: null,
@@ -14833,7 +14786,7 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
       {
         id: 'v1',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 2,
         kind: 'approval_verdict',
         role: null,
@@ -14974,7 +14927,7 @@ describe('Chats — a screenshot pasted into a question answer', () => {
   const question = (requestId: string): ChatItem => ({
     id: `r1-q-${requestId}`,
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq: 1,
     kind: 'approval_request',
     role: null,
@@ -15078,7 +15031,7 @@ describe('Chats — running shells', () => {
     return {
       id: `i${seq}`,
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq,
       kind: 'tool_call',
       role: 'assistant',
@@ -15092,7 +15045,7 @@ describe('Chats — running shells', () => {
     return {
       id: `i${seq}`,
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq,
       kind: 'tool_result',
       role: 'tool',
@@ -15141,7 +15094,7 @@ describe('Chats — running shells', () => {
         {
           id: 'c-early',
           command: 'pnpm dev',
-          nodeId: null,
+          memberId: null,
           callId: null,
           startedAt: Date.now() - 60_000,
         },
@@ -15204,7 +15157,7 @@ describe('Chats — running shells', () => {
     const launch: ChatItem = {
       id: 'i1',
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq: 1,
       kind: 'tool_call',
       role: 'assistant',
@@ -15218,7 +15171,7 @@ describe('Chats — running shells', () => {
       delegates: [
         {
           id: 'd1',
-          nodeId: null,
+          memberId: null,
           callId: null,
           label: 'review',
           kind: null,
@@ -15239,10 +15192,10 @@ describe('Chats — running shells', () => {
   });
 
   it("counts only the root agent's own sub-agents on a team's shelf, never a callee's", async () => {
-    const delegate = (id: string, nodeId: string, label: string) => ({
+    const delegate = (id: string, memberId: string, label: string) => ({
       id,
-      nodeId,
-      callId: nodeId === 'eng' ? 'call-1' : null,
+      memberId,
+      callId: memberId === 'eng' ? 'call-1' : null,
       label,
       kind: null,
       status: 'running' as const,
@@ -15263,24 +15216,13 @@ describe('Chats — running shells', () => {
       slug: 'dev-team',
       team: {
         name: 'Dev team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
-          {
-            id: 'mgr',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
-            name: 'Manager',
-          },
-          {
-            id: 'eng',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
-            name: 'Engineer',
-          },
+        mode: 'lead',
+        members: [
+          { id: 'mgr', agent: 'claude', approval: 'auto', name: 'Manager' },
+          { id: 'eng', agent: 'claude', approval: 'auto', name: 'Engineer' },
         ],
-        edges: [{ from: 'start', to: 'mgr', kind: 'data' }],
+        triggers: [{ kind: 'first-message', member: 'mgr' }],
+        instructionBlocks: [],
       },
     });
     api.listRunItems.mockResolvedValue([]);
@@ -15325,24 +15267,13 @@ describe('Chats — running shells', () => {
       slug: 'dev-team',
       team: {
         name: 'Dev team',
-        nodes: [
-          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
-          {
-            id: 'mgr',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
-            name: 'Manager',
-          },
-          {
-            id: 'eng',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
-            name: 'Engineer',
-          },
+        mode: 'lead',
+        members: [
+          { id: 'mgr', agent: 'claude', approval: 'auto', name: 'Manager' },
+          { id: 'eng', agent: 'claude', approval: 'auto', name: 'Engineer' },
         ],
-        edges: [{ from: 'start', to: 'mgr', kind: 'data' }],
+        triggers: [{ kind: 'first-message', member: 'mgr' }],
+        instructionBlocks: [],
       },
     });
     api.listRunItems.mockResolvedValue([]);
@@ -15351,7 +15282,7 @@ describe('Chats — running shells', () => {
       delegates: [
         {
           id: 'd-eng',
-          nodeId: 'eng',
+          memberId: 'eng',
           callId: 'call-1',
           label: 'Read the adapters',
           kind: null,
@@ -15415,7 +15346,7 @@ describe('Chats — running shells', () => {
       {
         id: 'i3',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 3,
         kind: 'shell_info' as const,
         role: null,
@@ -15489,31 +15420,21 @@ describe('Chats — running shells', () => {
       slug: 'dev-team',
       team: {
         name: 'Dev team',
-        nodes: [
-          {
-            id: 'mgr',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
-            name: 'Manager',
-          },
-          {
-            id: 'eng',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
-            name: 'Engineer',
-          },
+        mode: 'lead',
+        members: [
+          { id: 'mgr', agent: 'claude', approval: 'auto', name: 'Manager' },
+          { id: 'eng', agent: 'claude', approval: 'auto', name: 'Engineer' },
         ],
-        edges: [],
+        triggers: [{ kind: 'first-message', member: 'mgr' }],
+        instructionBlocks: [],
       },
     });
     api.listRunItems.mockResolvedValue([
-      { ...bashCall(1, 'pnpm build'), runId: 'w9', nodeId: 'eng' },
+      { ...bashCall(1, 'pnpm build'), runId: 'w9', memberId: 'eng' },
       {
         ...bashCall(2, 'gh pr list', 'sh-2'),
         runId: 'w9',
-        nodeId: 'mgr',
+        memberId: 'mgr',
       },
     ]);
     const wf = makeClient();
@@ -15543,14 +15464,14 @@ describe('Chats — running shells', () => {
     let emitItem: (item: ChatItem) => void = () => undefined;
     const row = (
       kind: ChatItem['kind'],
-      nodeId: string,
+      memberId: string,
       payload: Record<string, unknown>,
     ): ChatItem => {
       seq += 1;
       return {
         id: `cc-${seq}`,
         runId: 'w9',
-        nodeId,
+        memberId,
         seq,
         kind,
         role: null,
@@ -15614,23 +15535,13 @@ describe('Chats — running shells', () => {
         slug: 'dev-team',
         team: {
           name: 'Dev team',
-          nodes: [
-            {
-              id: 'mgr',
-              kind: 'agent',
-              agent: 'claude',
-              approval: 'auto',
-              name: 'Manager',
-            },
-            {
-              id: 'eng',
-              kind: 'agent',
-              agent: 'claude',
-              approval: 'auto',
-              name: 'Engineer',
-            },
+          mode: 'lead',
+          members: [
+            { id: 'mgr', agent: 'claude', approval: 'auto', name: 'Manager' },
+            { id: 'eng', agent: 'claude', approval: 'auto', name: 'Engineer' },
           ],
-          edges: [],
+          triggers: [{ kind: 'first-message', member: 'mgr' }],
+          instructionBlocks: [],
         },
       });
       api.listRunItems.mockResolvedValue(items);
@@ -15847,13 +15758,13 @@ describe('Chats — running shells', () => {
       ],
       [
         {
-          nodeId: 'eng',
+          memberId: 'eng',
           callId: 'call-22',
           tasks: [task('1'), task('2')],
           snapshot: true,
         },
         {
-          nodeId: 'eng',
+          memberId: 'eng',
           callId: 'call-23',
           tasks: [task('1')],
           snapshot: true,
@@ -16031,7 +15942,7 @@ describe('Chats — background sub-agents', () => {
     return {
       id: `i${seq}`,
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq,
       kind: 'message',
       role: 'assistant',
@@ -16045,7 +15956,7 @@ describe('Chats — background sub-agents', () => {
     return {
       id: `i${seq}`,
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq,
       kind: 'tool_call',
       role: 'assistant',
@@ -16067,7 +15978,7 @@ describe('Chats — background sub-agents', () => {
     return {
       id: `i${seq}`,
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq,
       kind: 'subagent_info',
       role: null,
@@ -16186,7 +16097,7 @@ describe('Chats — background sub-agents', () => {
       {
         id: 'i3',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 3,
         kind: 'tool_result',
         role: 'tool',
@@ -16293,7 +16204,7 @@ describe('Chats — background sub-agents', () => {
       delegates: [
         {
           id: 'task-1',
-          nodeId: null,
+          memberId: null,
           callId: null,
           label: 'Review the diff',
           kind: 'code-reviewer',
@@ -16327,7 +16238,7 @@ describe('Chats — background sub-agents', () => {
       delegates: [
         {
           id: 'task-1',
-          nodeId: null,
+          memberId: null,
           callId: null,
           label: 'Review the diff',
           kind: 'code-reviewer',
@@ -17167,7 +17078,7 @@ describe('Chats — the pages a thread publishes', () => {
     return {
       id: `ac${seq}`,
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq,
       kind: 'tool_call',
       role: null,
@@ -17184,7 +17095,7 @@ describe('Chats — the pages a thread publishes', () => {
     return {
       id: `ar${seq}`,
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq,
       kind: 'tool_result',
       role: null,
@@ -17390,7 +17301,7 @@ describe('Chats — a compaction ends on its own row', () => {
   const compacted = (seq: number): ChatItem => ({
     id: `i${seq}`,
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'system',
     role: null,
@@ -19445,7 +19356,7 @@ describe('Chats — searching every chat', () => {
     return {
       runId,
       itemId: `${runId}-${seq}`,
-      nodeId: null,
+      memberId: null,
       seq,
       kind: 'message' as const,
       role: 'assistant',

@@ -47,7 +47,7 @@ import {
  * what turns the ladder back into steps.
  *
  * **Keyed by claude's own `session_id`, which is what makes it safe on a shared
- * adapter.** One adapter instance serves N concurrent turns under graph
+ * adapter.** One adapter instance serves N concurrent turns under team
  * fan-out, but a session id belongs to exactly one CLI process, and a run's
  * turns are serialized behind RUN_BUSY — so two turns can never be reading and
  * writing the same entry.
@@ -304,7 +304,7 @@ export class ClaudeSessionCostLedger {
     //     restores `costState` on `--resume`), so its first result carries every
     //     earlier turn — which this ledger, seeing the id for the first time in
     //     this process, took whole: a 12.8s call billed $0.79 for $0.47 of tokens;
-    //   - every call into a team node resumes that node's ONE session, so
+    //   - every call into a team member resumes that member's ONE session, so
     //     several processes report under one id and their totals interleave —
     //     a total that "dropped" was taken whole: $29.41 for $13.79 of tokens.
     //

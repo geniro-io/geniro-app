@@ -29,7 +29,7 @@ const CHIPS: TeamChatSettings = { agentKind: 'claude' };
 function live(overrides: Partial<LiveTextEvent> = {}): LiveTextEvent {
   return {
     runId: 'run-1',
-    nodeId: null,
+    memberId: null,
     ownerKey: null,
     text: '',
     thinkingTokens: null,
@@ -57,7 +57,7 @@ function item(overrides: Partial<ChatItem> = {}): ChatItem {
     seq: 1,
     kind: 'message',
     role: 'assistant',
-    nodeId: null,
+    memberId: null,
     payload: { text: 'hi' },
     createdAt: new Date().toISOString(),
     ...overrides,
@@ -381,7 +381,7 @@ describe('useTeamChat', () => {
       item({
         id: 'callee',
         seq: 300,
-        nodeId: 'qa',
+        memberId: 'qa',
         payload: { text: 'still at it', callId: 'call-7' },
       }),
     );
@@ -403,7 +403,7 @@ describe('useTeamChat', () => {
     expect(state().items.some((row) => row.id === 'other')).toBe(false);
   });
 
-  // This count is what the builder reloads its canvas on.
+  // This count is what the builder reloads its editor on.
   it('counts a turn settling, and reports the agent as no longer working', async () => {
     await mount();
     await act(async () => {
@@ -894,7 +894,7 @@ describe('useTeamChat', () => {
   });
 
   it('counts a turn ending once when the socket and the replay both deliver it', async () => {
-    // Each count re-reads the builder's canvas.
+    // Each count re-reads the builder's editor.
     await mount();
     const end = { ...turnComplete('end-1'), seq: 2 };
     await emitItem(end);

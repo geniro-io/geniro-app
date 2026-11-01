@@ -3,27 +3,27 @@ import { TimestampsEntity } from '@packages/mikroorm';
 
 import type { AgentKind, NodeStatus } from '../runs.types';
 
-/** Per-node execution status within a run (composite PK: runId + nodeId). */
+/** Per-member execution status within a run (composite PK: runId + memberId). */
 @Entity({ tableName: 'node_state' })
 export class NodeState extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   runId!: string;
 
   @PrimaryKey({ type: 'string' })
-  nodeId!: string;
+  memberId!: string;
 
   @Property({ type: 'string' })
   status: NodeStatus = 'pending';
 
-  /** Underlying CLI session id, for resume/inspection (populated in M2). */
+  /** Underlying CLI session id, for resume/inspection. */
   @Property({ type: 'string', nullable: true })
   agentSessionId: string | null = null;
 
   /**
-   * The CLI that actually ran this node's turn, stamped at turn start. Run
-   * history must not depend on the live team YAML: editing a node's agent
+   * The CLI that actually ran this member's turn, stamped at turn start. Run
+   * history must not depend on the live team YAML: editing a member's agent
    * after runs exist would otherwise make the terminal mirror resume a past
-   * session with the wrong CLI. Null until the node's first turn starts
+   * session with the wrong CLI. Null until the member's first turn starts
    * (readers then fall back to the YAML lookup).
    */
   @Property({ type: 'string', nullable: true })
@@ -33,24 +33,24 @@ export class NodeState extends TimestampsEntity {
    * The model that turn actually ran as, stamped beside the agent kind and for
    * the same reason: run history must not depend on the live team YAML.
    *
-   * Without it the terminal mirror of a team node had nothing to open on
+   * Without it the terminal mirror of a team member had nothing to open on
    * and fell back to the CLI's own default — a different model with a
    * different context window sitting beside the transcript it mirrors. Reading
    * the CURRENT definition instead is exactly the drift `agentKind` is stamped
-   * to prevent. Null on a pre-existing row, and null for a node that names no
+   * to prevent. Null on a pre-existing row, and null for a member that names no
    * model (the CLI's default is then the honest answer).
    */
   @Property({ type: 'string', nullable: true })
   model: string | null = null;
 
   /**
-   * The last context reading this node reported, and the window it was scaled
-   * against — the per-node twin of `Run.contextTokens`.
+   * The last context reading this member reported, and the window it was scaled
+   * against — the per-member twin of `Run.contextTokens`.
    *
    * A CHAT has had a durable reading since the live plane proved too thin to
    * draw a ring from: that plane is ephemeral, so a client that reloads,
-   * reconnects, or opens the run for the first time has nothing, and a node
-   * PARKED in `await_agent` emits nothing for minutes on end. A team node
+   * reconnects, or opens the run for the first time has nothing, and a member
+   * PARKED in `await_agent` emits nothing for minutes on end. A team member
    * had no such column at all, so its ring simply went blank — reported as
    * "here i dont see manager context" over a caller blocked on its callee while
    * the callee's own ring, still streaming, sat directly beneath it.
@@ -74,8 +74,8 @@ export class NodeState extends TimestampsEntity {
   contextWindowTokens: number | null = null;
 
   /**
-   * How long this node's agent has WORKED and how many tool calls it has made,
-   * both totalled across every turn the node has taken.
+   * How long this member's agent has WORKED and how many tool calls it has made,
+   * both totalled across every turn the member has taken.
    *
    * They are durable for the reason the pair above is — `HISTORY_PAGE` bounds
    * the transcript a client loads, so any figure folded from loaded items
@@ -97,7 +97,7 @@ export class NodeState extends TimestampsEntity {
   toolCalls: number | null = null;
 
   /**
-   * What each of this node's polled CONVERSATIONS has cost, as the account
+   * What each of this member's polled CONVERSATIONS has cost, as the account
    * last reported it — JSON, conversation id (for cursor, the ACP session id,
    * a callee conversation or a delegate's own conversation) → a
    * `ConversationSpend` (`utils/polled-spend-ledger.ts`): a settled sum plus
@@ -106,22 +106,22 @@ export class NodeState extends TimestampsEntity {
    * Per EVENT rather than a watermark, because a vendor revises a charge after
    * listing it. The watermark it replaced counted each event the first time it
    * was seen and never again, which froze a long agent request at whatever it
-   * had cost when first listed — measured on a real account, a node recorded
+   * had cost when first listed — measured on a real account, a member recorded
    * $8.44 for ten events that summed to $134.86. {@link polledCostCents} is
    * this ledger's sum, rewritten whole on every poll.
    *
    * Null, or a conversation missing from it, means never priced: the next poll
-   * prices it from the node's start.
+   * prices it from the member's start.
    */
   @Property({ type: 'text', nullable: true })
   polledSpend: string | null = null;
 
   /**
-   * EVERY CLI session this node has run in, oldest first — JSON, an array of
+   * EVERY CLI session this member has run in, oldest first — JSON, an array of
    * session ids, written beside {@link agentSessionId} by `saveSessionId`.
    *
    * `agentSessionId` is the one to RESUME, and every turn overwrites it: each
-   * call to the node is a conversation of its own, and a compaction replaces
+   * call to the member is a conversation of its own, and a compaction replaces
    * one. What a session COST outlives that — a polled account bills a
    * conversation's requests after the fact — so the usage poll prices every
    * session here, not only the latest. Written by the turn path alone, so it
@@ -131,9 +131,9 @@ export class NodeState extends TimestampsEntity {
   sessionIds: string | null = null;
 
   /**
-   * This node's share of `Run.polledCostCents` — the polled price of the
-   * conversation on this row. A team mixes CLIs, so without a per-node
-   * figure a polled node's card had no cost and the run's header could not add
+   * This member's share of `Run.polledCostCents` — the polled price of the
+   * conversation on this row. A team mixes CLIs, so without a per-member
+   * figure a polled member's card had no cost and the run's header could not add
    * the polled bill to the self-priced turns rather than replace them. Null
    * means never priced on this row.
    */
@@ -154,15 +154,15 @@ export class NodeState extends TimestampsEntity {
   error: string | null = null;
 
   /**
-   * The last context and plan reading this node's agent gave, as JSON — the
-   * per-node twin of `Run.lastMetricsReading`, and for the same reason.
+   * The last context and plan reading this member's agent gave, as JSON — the
+   * per-member twin of `Run.lastMetricsReading`, and for the same reason.
    *
-   * A team node's process is closed for idleness like a chat's, and a
+   * A team member's process is closed for idleness like a chat's, and a
    * Manager waiting on its callees is idle for exactly the stretch in which
    * someone opens its readout. Asked only of the live process, that readout
    * was empty while a claude chat beside it showed its breakdown and its plan
    * limits from the reading it had kept — REPORTED against a team whose
-   * Manager is claude. On the node rather than the run, because a team run
+   * Manager is claude. On the member rather than the run, because a team run
    * holds one window per node.
    */
   @Property({ type: 'text', nullable: true })

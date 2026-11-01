@@ -55,27 +55,27 @@ const PROGRESS: StageProgress = {
 };
 
 const DEFINITIONS: TeamStage[] = [
-  { id: 'plan', title: 'Plan', doneWhen: 'A plan exists.', next: ['build'] },
+  { id: 'plan', title: 'Plan', goal: 'A plan exists.', next: ['build'] },
   {
     id: 'build',
     title: 'Build',
-    doneWhen: 'It compiles.',
+    goal: 'It compiles.',
     next: ['review', 'docs'],
   },
   {
     id: 'review',
     title: 'Review',
-    instructions: 'Read the diff against the README.',
-    doneWhen: 'Every finding is answered.',
-    ownerHint: 'reviewer',
+    howToWork: 'Read the diff against the README.',
+    goal: 'Every finding is answered.',
+    responsible: ['reviewer'],
     next: ['ship'],
   },
-  { id: 'docs', title: 'Docs', doneWhen: 'Docs updated.' },
-  { id: 'ship', title: 'Ship', doneWhen: 'Merged.' },
+  { id: 'docs', title: 'Docs', goal: 'Docs updated.' },
+  { id: 'ship', title: 'Ship', goal: 'Merged.' },
 ];
 
 const NAMES: Record<string, string> = { lead: 'Lead', reviewer: 'Reviewer' };
-const agentName = (nodeId: string): string => NAMES[nodeId] ?? nodeId;
+const agentName = (memberId: string): string => NAMES[memberId] ?? memberId;
 
 function mount(over: Partial<RunStages> = {}): HTMLDivElement {
   container = document.createElement('div');
@@ -144,19 +144,52 @@ describe('StagesSection', () => {
     const el = mount();
     const current = row(el, 'review');
     expect(
-      current.querySelector('[data-slot="stage-instructions"]')?.textContent,
+      current.querySelector('[data-slot="stage-how-to-work"]')?.textContent,
     ).toBe('Read the diff against the README.');
+    expect(current.querySelector('[data-slot="stage-goal"]')?.textContent).toBe(
+      'Goal Every finding is answered.',
+    );
     expect(
-      current.querySelector('[data-slot="stage-done-when"]')?.textContent,
-    ).toBe('Done when Every finding is answered.');
-    expect(
-      current.querySelector('[data-slot="stage-owner"]')?.textContent,
-    ).toBe('Usually done by Reviewer');
+      current.querySelector('[data-slot="stage-responsible"]')?.textContent,
+    ).toBe('Responsible Reviewer');
     expect(buttonNamed(current, 'Mark done…')).toBeDefined();
     expect(buttonNamed(current, 'Skip…')).toBeDefined();
     expect(
       el.querySelectorAll('[data-slot="stage-entry-details"]'),
     ).toHaveLength(1);
+  });
+
+  it('names every responsible member of the current stage, the first as the one who leads', () => {
+    const el = mount({
+      definitions: DEFINITIONS.map((stage) =>
+        stage.id === 'review'
+          ? { ...stage, responsible: ['reviewer', 'lead'] }
+          : stage,
+      ),
+    });
+    expect(
+      row(el, 'review').querySelector('[data-slot="stage-responsible"]')
+        ?.textContent,
+    ).toBe('Responsible Reviewer (leads), Lead');
+  });
+
+  it('draws no how-to-work, goal or responsible line for a stage that defines none', () => {
+    const el = mount({
+      definitions: DEFINITIONS.map((stage) =>
+        stage.id === 'review'
+          ? { id: stage.id, title: stage.title, goal: '' }
+          : stage,
+      ),
+    });
+    const current = row(el, 'review');
+    for (const slot of [
+      'stage-how-to-work',
+      'stage-goal',
+      'stage-responsible',
+    ]) {
+      expect(current.querySelector(`[data-slot="${slot}"]`)).toBeNull();
+    }
+    expect(buttonNamed(current, 'Mark done…')).toBeDefined();
   });
 
   it('offers Reopen on a finished or skipped stage only', () => {
@@ -207,8 +240,8 @@ describe('StagesSection', () => {
 
   it('draws an archived run’s stages without a single action', () => {
     const el = mount({ archived: true });
-    expect(el.querySelector('[data-slot="stage-done-when"]')?.textContent).toBe(
-      'Done when Every finding is answered.',
+    expect(el.querySelector('[data-slot="stage-goal"]')?.textContent).toBe(
+      'Goal Every finding is answered.',
     );
     expect(el.querySelectorAll('section button')).toHaveLength(0);
   });

@@ -482,7 +482,7 @@ describe('CliAuthService — where a server sign-in runs', () => {
   });
 
   it('runs an unfoldered sign-in where the folderless LISTING is taken', async () => {
-    // The graph builder's case. Its node inspector lists the servers that do
+    // The team editor's case. It lists the servers that do
     // not depend on a folder, which the daemon reads in its own empty
     // directory — so a name shown there resolves in that directory and nowhere
     // else. Signing in anywhere else authenticates a different server or none,

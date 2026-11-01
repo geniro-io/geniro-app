@@ -6,15 +6,15 @@ import type { NodeStateDao } from '../dao/node-state.dao';
  * Changed-only persister for the CLI session id. Some CLIs repeat the session
  * id on every stream-json line, and `saveSessionId` costs a findOne+flush —
  * one DB round-trip per NDJSON chunk without this dedupe. Shared by the chat
- * turn and every graph node — extracted, never mirrored.
+ * turn and every team member — extracted, never mirrored.
  */
 export function createSessionIdSaver(
   dao: NodeStateDao,
   runId: string,
-  nodeId: string,
+  memberId: string,
   initial: string | null,
   em?: EntityManager,
-  /** Record the session in the node's history only, never as its own. */
+  /** Record the session in the member's history only, never as its own. */
   historyOnly = false,
 ): (sessionId: string) => Promise<void> {
   let saved = initial;
@@ -24,7 +24,7 @@ export function createSessionIdSaver(
     }
     saved = sessionId;
     await (historyOnly
-      ? dao.recordSessionHistory(runId, nodeId, sessionId, em)
-      : dao.saveSessionId(runId, nodeId, sessionId, em));
+      ? dao.recordSessionHistory(runId, memberId, sessionId, em)
+      : dao.saveSessionId(runId, memberId, sessionId, em));
   };
 }

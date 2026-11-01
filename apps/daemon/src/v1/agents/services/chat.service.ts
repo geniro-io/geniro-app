@@ -1126,7 +1126,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const question = snapshot.kind === 'question';
     this.approvals.track({
       runId,
-      nodeId: SINGLE_AGENT_NODE,
+      memberId: SINGLE_AGENT_NODE,
       requestId: snapshot.requestId,
       toolName: deferredCardTool(snapshot),
       input: deferredCardInput(snapshot),
@@ -1468,7 +1468,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   ): void {
     this.approvals.track({
       runId,
-      nodeId: SINGLE_AGENT_NODE,
+      memberId: SINGLE_AGENT_NODE,
       requestId,
       toolName: card.toolName,
       input: card.input,
@@ -2564,7 +2564,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * Asked of the adapter (`config.approval.modes`) rather than branched on the agent
    * kind, for the same reason as {@link assertEffortSupported}: which modes
    * exist is that CLI's fact. Refusing here — where the choice is made — is
-   * deliberate and differs from a team node's visible degrade: a chat's
+   * deliberate and differs from a team member's visible degrade: a chat's
    * mode is picked interactively, so the honest answer is "no" rather than a
    * control that silently means something else.
    */
@@ -2674,10 +2674,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * was chosen.
    *
    * REFUSES a CLI that has no such mechanism, rather than stripping the
-   * field the way the graph executor does for a team node. The two differ
+   * field the way the team executor does for a team member. The two differ
    * because the choice does: a team can be imported from YAML naming a
-   * config directory on a CLI the builder never offered the field for, so
-   * dropping it with a visible notice is the only way to run the graph at all;
+   * config directory on a CLI the team editor never offered the field for, so
+   * dropping it with a visible notice is the only way to run the team at all;
    * a chat's directory is picked interactively one control away from the agent
    * picker, so the honest answer is "no" — the same reasoning as
    * {@link assertApprovalSupported}.
@@ -2803,7 +2803,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * A chat goes through {@link delete}, which is that kind's whole delete.
    *
    * A team run goes STRAIGHT to the shared teardown, and cannot go through
-   * `GraphExecutorService.deleteRun` for the module reason its cancel cannot
+   * `TeamExecutorService.deleteRun` for the module reason its cancel cannot
    * either — `TeamsModule` imports `AgentsModule`. What that service adds over
    * the teardown is two things, and both are answered here rather than skipped.
    * Its call-broker cleanup now happens on the `runDeleted` broadcast the purge
@@ -3394,13 +3394,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * status, so without it a shelved thread would keep a spinner for good.
    *
    * A team run gets the registry cancel alone, which is the whole of
-   * `GraphExecutorService.cancel` once its own kind guard has run: both engines
+   * `TeamExecutorService.cancel` once its own kind guard has run: both engines
    * converge on ONE registry key. It cannot call that service — `TeamsModule`
    * imports `AgentsModule`, so the dependency points one way — and it does not
    * need to, because cancelling the aggregate handle runs the executor's own
    * teardown and revokes the run's call tokens; its kept processes are closed
    * by the archive's teardown, as the Stop's (`noteUserStop`, the mark
-   * `GraphExecutorService.cancel` sets too). A team row left `running` by
+   * `TeamExecutorService.cancel` sets too). A team row left `running` by
    * a crash is that engine's boot reconcile to fix, and it does.
    */
   private async stopForArchive(run: Run): Promise<void> {
@@ -3449,7 +3449,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
 
   async cancel(runId: string): Promise<{ cancelled: boolean }> {
     const em = this.em.fork();
-    // Kind-guarded like sendMessage: this cancel and the graph executor's
+    // Kind-guarded like sendMessage: this cancel and the team executor's
     // converge on the same registry key, so a wrong-endpoint call must 400
     // instead of silently cancelling the other kind's run.
     let run = assertChatRun(await this.runDao.getById(runId, em), runId);
@@ -3554,7 +3554,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   async delete(runId: string): Promise<{ deleted: boolean }> {
     const em = this.em.fork();
     // Kind-guarded like cancel and sendMessage: a team run deleted through
-    // the chat route would skip the graph executor's own teardown.
+    // the chat route would skip the team executor's own teardown.
     assertChatRun(await this.runDao.getById(runId, em), runId);
 
     // Claimed BEFORE the cancel, so a turn still crossing the claim→register
@@ -3804,7 +3804,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       }
       this.approvals.track({
         runId,
-        nodeId: SINGLE_AGENT_NODE,
+        memberId: SINGLE_AGENT_NODE,
         requestId: cardId,
         toolName: event.toolName,
         input: event.input,
@@ -4736,7 +4736,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // lucky one: the executor numbers its run's rows with its own counter, so a
     // close written from here with this service's allocator could collide with
     // them. The executor states those endings itself
-    // (`GraphExecutorService.sessionClosers`).
+    // (`TeamExecutorService.sessionClosers`).
     //
     // AHEAD of the early return below, which is about the off-turn BADGE and
     // asks a question this does not share: a run that never took an off-turn
@@ -4850,12 +4850,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   ): Promise<void> {
     try {
       const em = this.em.fork();
-      // WHERE each delegate belongs, taken from its own rows — the node, and the
+      // WHERE each delegate belongs, taken from its own rows — the member, and the
       // call when a callee sub-turn launched it.
       //
-      // A delegate is launched BY a node and every row it produces carries that
-      // node's id; the closes written here used to carry null, because this
-      // service is the chat path and a chat has no nodes. On a chat that is
+      // A delegate is launched BY a member and every row it produces carries that
+      // member's id; the closes written here used to carry null, because this
+      // service is the chat path and a chat has no members. On a chat that is
       // invisible — null is the right answer there — and on a TEAM run it
       // silently voided the whole repair: the renderer folds delegates per
       // agent, so eleven closes filed at run level reached none of the eleven
@@ -4889,7 +4889,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             ...(mapped.payload as Record<string, unknown>),
             ...ownerFields(delegate),
           },
-          delegate.nodeId,
+          delegate.memberId,
         );
       }
       if (stranded.length > 0) {
@@ -4972,7 +4972,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * so a daemon killed before that exit was heard leaves the command listed as
    * running for the life of the transcript — and before the executor wrote its
    * own closes at a team's end, every finished team did the same to
-   * whatever its nodes still had out. No process can exist this early, so every
+   * whatever its members still had out. No process can exist this early, so every
    * open command on disk is stranded by construction.
    */
   async reconcileStrandedShells(): Promise<void> {
@@ -5005,7 +5005,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               ...(mapped.payload as Record<string, unknown>),
               ...ownerFields(shell),
             },
-            shell.nodeId,
+            shell.memberId,
           );
         }
         if (stranded.length > 0) {
@@ -5146,9 +5146,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   noteShellClosed(
     runId: string,
     workId: string | null,
-    nodeId: string | null = null,
+    memberId: string | null = null,
   ): void {
-    this.backgroundWork.noteShellClosed(runId, workId, nodeId);
+    this.backgroundWork.noteShellClosed(runId, workId, memberId);
   }
 
   /**
@@ -5760,8 +5760,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       await adapter.validateModel(model);
 
       // The mode this turn actually runs under is the ADAPTER's answer, and any
-      // degrade is persisted so the user sees it — the same seam the graph
-      // executor uses for a node, so a fix here cannot miss that path. The
+      // degrade is persisted so the user sees it — the same seam the team
+      // executor uses for a member, so a fix here cannot miss that path. The
       // probe is awaited only for a mode whose support is empirical, so a turn
       // that never asks for one never pays for it.
       const resolved = adapter.resolveApprovalMode(
@@ -6242,7 +6242,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           const record = standingQuestions.open(key, requestId, resolve);
           this.approvals.track({
             runId,
-            nodeId: SINGLE_AGENT_NODE,
+            memberId: SINGLE_AGENT_NODE,
             requestId,
             toolName: HOST_QUESTION_TOOL,
             input,
@@ -6633,7 +6633,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           outstandingPatches.add(settle);
           this.approvals.track({
             runId,
-            nodeId: SINGLE_AGENT_NODE,
+            memberId: SINGLE_AGENT_NODE,
             requestId,
             toolName: HOST_PATCH_TOOL,
             input,
@@ -6750,7 +6750,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           outstandingPlans.add(settle);
           this.approvals.track({
             runId,
-            nodeId: SINGLE_AGENT_NODE,
+            memberId: SINGLE_AGENT_NODE,
             requestId,
             toolName: HOST_PLAN_TOOL,
             input,
@@ -6898,7 +6898,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               ownerOf: (caller) => ({
                 owner: {
                   runId,
-                  nodeId: SINGLE_AGENT_NODE,
+                  memberId: SINGLE_AGENT_NODE,
                   caller,
                   conversationId: null,
                   callId: null,
@@ -7030,7 +7030,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             mediaType: attachment.mediaType,
           })),
           // Tee this turn's raw stdio for the live terminal mirror. Keyed by
-          // the same single-agent node the rest of a chat's per-node state is.
+          // the same single agent the rest of a chat's per-member state is.
         },
         (event) => {
           // Serialize handling so seq allocation and writes stay ordered even
@@ -7269,7 +7269,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               //
               // Filed under the turn's OWN profile. This passed `null` on the
               // reasoning that "a chat turn carries no config directory (only a
-              // graph node does)", which stopped being true when chats gained
+              // team member does)", which stopped being true when chats gained
               // the profile chip — and a profile is a separate ACCOUNT with a
               // different set of servers, so the null was wrong in both
               // directions: the profile's own panel found no harvest and paid
@@ -7522,7 +7522,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               }
               // The CLI is now parked waiting for a verdict. Persist the card
               // first (persist-then-emit, so the user sees it), then track it
-              // under the chat's one synthetic node so the WS verdict
+              // under the chat's one synthetic member so the WS verdict
               // round-trip resolves it. If persisting the card FAILS the user
               // will never see it — so deny to unblock the parked CLI, letting
               // handle.done resolve and the finalizer record a clean failure
@@ -7557,7 +7557,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               }
               this.approvals.track({
                 runId,
-                nodeId: SINGLE_AGENT_NODE,
+                memberId: SINGLE_AGENT_NODE,
                 requestId: cardId,
                 toolName: event.toolName,
                 input: event.input,
@@ -8464,11 +8464,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     role: string | null,
     payload: unknown,
     /**
-     * Which node the row belongs to. Null — the chat path's own answer — for
-     * everything but a row this service writes ON BEHALF of a team node,
+     * Which member the row belongs to. Null — the chat path's own answer — for
+     * everything but a row this service writes ON BEHALF of a team member,
      * which today is a stranded delegate's close.
      */
-    nodeId: string | null = null,
+    memberId: string | null = null,
   ): Promise<ItemWire> {
     return persistItemAndEmit(
       {
@@ -8480,7 +8480,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       em,
       {
         runId,
-        nodeId,
+        memberId,
         seq,
         kind,
         role,

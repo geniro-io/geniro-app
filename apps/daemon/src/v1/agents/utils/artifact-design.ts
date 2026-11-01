@@ -1,5 +1,5 @@
 /**
- * Shared by every agent receiving the artifact tool, including team nodes.
+ * Shared by every agent receiving the artifact tool, including team members.
  * Installing a CLI-specific skill would leave other agents and profiles out.
  *
  * Original Geniro guidance informed by Anthropic's frontend-design and

@@ -169,7 +169,7 @@ export class ActionPublishService {
       const { live } = await this.actions.fold(ctx.runId);
       const own = live.filter(
         (action) =>
-          action.nodeId === ctx.publisher.nodeId &&
+          action.memberId === ctx.publisher.nodeId &&
           action.conversationId === ctx.publisher.conversationId,
       );
       const target = own.find((action) => action.actionId === actionId);
@@ -183,7 +183,7 @@ export class ActionPublishService {
         await this.actions.appendOutcome(ctx.runId, ctx.rowNodeId, {
           actionSeq: target.seq,
           actionId,
-          nodeId: target.nodeId,
+          nodeId: target.memberId,
           conversationId: target.conversationId,
           state: 'removed',
         });
@@ -203,7 +203,7 @@ export class ActionPublishService {
 }
 
 function keyOf(action: LiveAction): string {
-  return actionKey(action.nodeId, action.conversationId, action.actionId);
+  return actionKey(action.memberId, action.conversationId, action.actionId);
 }
 
 type CheckedInput = {

@@ -38,7 +38,7 @@ const ITEMS: ItemWire[] = [
   {
     id: 'i-1',
     runId: 'run-1',
-    nodeId: null,
+    memberId: null,
     seq: 0,
     kind: 'message',
     role: 'user',
@@ -48,7 +48,7 @@ const ITEMS: ItemWire[] = [
   {
     id: 'i-2',
     runId: 'run-1',
-    nodeId: null,
+    memberId: null,
     seq: 1,
     kind: 'tool_call',
     role: 'assistant',
@@ -58,7 +58,7 @@ const ITEMS: ItemWire[] = [
   {
     id: 'i-3',
     runId: 'run-1',
-    nodeId: null,
+    memberId: null,
     seq: 2,
     kind: 'tool_result',
     role: 'assistant',
@@ -128,7 +128,7 @@ function build(
         Promise.resolve(
           opts.nodes ?? [
             {
-              nodeId: 'agent',
+              memberId: 'agent',
               status: 'completed',
               agentKind: AgentKind.Claude,
               model: 'claude-opus-5',

@@ -184,7 +184,7 @@ describe('RunGroupsService', () => {
       name: 'Dev team',
       autoTeamId: 'dev-team',
     });
-    // No folder rule anywhere: a graph runs over many repositories, so the
+    // No folder rule anywhere: a team runs over many repositories, so the
     // folder is exactly what cannot identify these runs.
     expect(
       await service.resolveAutoGroupId({

@@ -3,7 +3,7 @@ import { memo } from 'react';
 
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
-import { RUNS_UNASKED_LABEL } from '../teams/node-schema';
+import { RUNS_UNASKED_LABEL } from '../teams/member-schema';
 import type { DiffMarker, DiffRow } from './team-proposal-payload';
 import { useThreadFlag } from './thread-ui-memory';
 
@@ -26,10 +26,10 @@ function subjectText(row: DiffRow): string {
   switch (row.scope) {
     case 'team':
       return `team ${row.subject}`;
-    case 'wire':
-      return `wire ${row.subject}`;
-    case 'node':
+    case 'member':
       return row.subject;
+    case 'block':
+      return `block ${row.subject}`;
     case 'stage':
       return `stage ${row.subject}`;
   }

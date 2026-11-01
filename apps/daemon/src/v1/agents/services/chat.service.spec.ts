@@ -562,7 +562,7 @@ class FakeItemDao {
     }
     const item = {
       id: `item-${this.items.length}`,
-      nodeId: null,
+      memberId: null,
       role: null,
       createdAt: new Date(0),
       ...data,
@@ -609,7 +609,7 @@ class FakeItemDao {
       .filter(
         (i) =>
           i.runId === runId &&
-          i.nodeId === null &&
+          i.memberId === null &&
           (CHAT_WALL_CLOCK_ROW_KINDS as readonly string[]).includes(i.kind) &&
           (i.kind !== 'message' || i.role === 'user'),
       )
@@ -617,7 +617,7 @@ class FakeItemDao {
       .map((i) => ({
         seq: i.seq,
         kind: i.kind,
-        nodeId: i.nodeId,
+        memberId: i.memberId,
         role: i.role,
         createdAt: i.createdAt,
         payload: i.payload,
@@ -636,11 +636,11 @@ class FakeItemDao {
   }
   async subagentInfoRows(
     runId: string,
-  ): Promise<Pick<Item, 'payload' | 'nodeId'>[]> {
+  ): Promise<Pick<Item, 'payload' | 'memberId'>[]> {
     return this.items
       .filter((i) => i.runId === runId && i.kind === 'subagent_info')
       .sort((a, b) => a.seq - b.seq)
-      .map((i) => ({ payload: i.payload, nodeId: i.nodeId }));
+      .map((i) => ({ payload: i.payload, memberId: i.memberId }));
   }
   async allSubagentInfoRows(): Promise<Pick<Item, 'runId' | 'payload'>[]> {
     return this.items
@@ -649,7 +649,7 @@ class FakeItemDao {
       .map((i) => ({ runId: i.runId, payload: i.payload }));
   }
   async allShellRows(): Promise<
-    Pick<Item, 'runId' | 'kind' | 'payload' | 'nodeId'>[]
+    Pick<Item, 'runId' | 'kind' | 'payload' | 'memberId'>[]
   > {
     return this.items
       .filter((i) => i.kind === 'shell_open' || i.kind === 'shell_info')
@@ -658,7 +658,7 @@ class FakeItemDao {
         runId: i.runId,
         kind: i.kind,
         payload: i.payload,
-        nodeId: i.nodeId,
+        memberId: i.memberId,
       }));
   }
   // Mirrors the real DAO (pinned by item.dao.spec.ts): per run, ONLY the
@@ -730,20 +730,20 @@ class FakeNodeStateDao {
    * than only that one did — `saved` above keeps its bare-id shape so the
    * turn-lifecycle tests read as they did.
    */
-  readonly savedFor: { runId: string; nodeId: string; sessionId: string }[] =
+  readonly savedFor: { runId: string; memberId: string; sessionId: string }[] =
     [];
   async saveSessionId(
     runId: string,
-    nodeId: string,
+    memberId: string,
     sessionId: string,
   ): Promise<void> {
-    this.savedFor.push({ runId, nodeId, sessionId });
+    this.savedFor.push({ runId, memberId, sessionId });
     this.saved.push(sessionId);
     this.state = { agentSessionId: sessionId } as unknown as NodeState;
   }
-  readonly cleared: { runId: string; nodeId: string }[] = [];
-  async clearSessionId(runId: string, nodeId: string): Promise<void> {
-    this.cleared.push({ runId, nodeId });
+  readonly cleared: { runId: string; memberId: string }[] = [];
+  async clearSessionId(runId: string, memberId: string): Promise<void> {
+    this.cleared.push({ runId, memberId });
     this.state = null;
   }
 }
@@ -1697,7 +1697,7 @@ describe('ChatService', () => {
       });
 
       expect(nodeDao.savedFor).toEqual([
-        { runId: run.id, nodeId: SINGLE_AGENT_NODE, sessionId: 'sess-1' },
+        { runId: run.id, memberId: SINGLE_AGENT_NODE, sessionId: 'sess-1' },
       ]);
     });
 
@@ -5208,7 +5208,7 @@ describe('ChatService', () => {
       await turn(cursor, 'we agreed on plan B');
 
       expect(nodeDao.cleared).toEqual([
-        { runId: run.id, nodeId: SINGLE_AGENT_NODE },
+        { runId: run.id, memberId: SINGLE_AGENT_NODE },
       ]);
       expect((await runDao.getById(run.id))?.pendingContext).toBe(
         'we agreed on plan B',
@@ -8553,13 +8553,13 @@ describe('ChatService', () => {
     expect(dead).toEqual([{ id: 'req-open', toolName: 'Bash' }]);
   });
 
-  it('closes a stranded delegate UNDER the node that launched it', async () => {
+  it('closes a stranded delegate UNDER the member that launched it', async () => {
     // REPORTED as "он пишет, что один из app-агентов активен, хотя он же должен
     // быть закончен", over a finished team run whose QA card read
     // `11 active · 14 threads`. The repair was running and reaching nothing:
     // measured on that run's own rows, 22 opens carried `node_id = 'qa'` and
     // all 11 closes carried NULL, because this service is the chat path and a
-    // chat has no nodes. The renderer folds delegates per AGENT, so a close
+    // chat has no members. The renderer folds delegates per AGENT, so a close
     // filed at run level closes none of them.
     const { service, runDao, itemDao } = setup();
     const run = await runDao.create({
@@ -8568,7 +8568,7 @@ describe('ChatService', () => {
     });
     await itemDao.create({
       runId: run.id,
-      nodeId: 'qa',
+      memberId: 'qa',
       seq: 0,
       kind: 'subagent_info',
       payload: JSON.stringify({ id: 'Task_92', backgroundOpen: true }),
@@ -8583,12 +8583,12 @@ describe('ChatService', () => {
     );
     expect(closes).toHaveLength(1);
     // The whole of the fix: the close has to land where the opens are.
-    expect(closes[0]!.nodeId).toBe('qa');
+    expect(closes[0]!.memberId).toBe('qa');
   });
 
   it('stamps a stranded delegate close with the CALL its launch was made in', async () => {
     // The same defect one level down. A callee's rows are nested under its
-    // call block by the payload's `callId`, so a close filed with the node and
+    // call block by the payload's `callId`, so a close filed with the member and
     // no call landed in the main flow while the delegate sat in the block —
     // measured on the reporter's run, whose two boot closes carried `engineer`
     // and nothing else, under a finished team still showing both at work.
@@ -8599,7 +8599,7 @@ describe('ChatService', () => {
     });
     await itemDao.create({
       runId: run.id,
-      nodeId: 'engineer',
+      memberId: 'engineer',
       seq: 0,
       kind: 'subagent_info',
       payload: JSON.stringify({
@@ -8635,17 +8635,29 @@ describe('ChatService', () => {
       status: 'completed',
     });
     const rows = [
-      ['shell_open', { id: 'toolu_left', workId: 'b-left', nodeId: 'manager' }],
-      ['shell_open', { id: 'toolu_done', workId: 'b-done', nodeId: 'manager' }],
-      ['shell_info', { id: 'toolu_done', workId: 'b-done', nodeId: 'manager' }],
+      [
+        'shell_open',
+        { id: 'toolu_left', workId: 'b-left', memberId: 'manager' },
+      ],
+      [
+        'shell_open',
+        { id: 'toolu_done', workId: 'b-done', memberId: 'manager' },
+      ],
+      [
+        'shell_info',
+        { id: 'toolu_done', workId: 'b-done', memberId: 'manager' },
+      ],
       // A close naming only the work id still closes its shell.
-      ['shell_open', { id: 'toolu_byid', workId: 'b-byid', nodeId: 'manager' }],
-      ['shell_info', { id: null, workId: 'b-byid', nodeId: 'manager' }],
+      [
+        'shell_open',
+        { id: 'toolu_byid', workId: 'b-byid', memberId: 'manager' },
+      ],
+      ['shell_info', { id: null, workId: 'b-byid', memberId: 'manager' }],
     ] as const;
     for (const [seq, [kind, payload]] of rows.entries()) {
       await itemDao.create({
         runId: run.id,
-        nodeId: 'manager',
+        memberId: 'manager',
         seq,
         kind,
         payload: JSON.stringify(payload),
@@ -8658,7 +8670,7 @@ describe('ChatService', () => {
       (i) => i.kind === 'shell_info' && i.seq >= rows.length,
     );
     expect(closes).toHaveLength(1);
-    expect(closes[0]!.nodeId).toBe('manager');
+    expect(closes[0]!.memberId).toBe('manager');
     expect(JSON.parse(closes[0]!.payload)).toEqual({
       id: 'toolu_left',
       workId: 'b-left',
@@ -9809,7 +9821,7 @@ describe('ChatService — approval modes (parity M1)', () => {
   });
 
   it("keeps a plan chat on 'plan' under the SAME failing verdict — one policy, both paths", async () => {
-    // The chat mirror of the graph executor's plan test: identical probe
+    // The chat mirror of the team executor's plan test: identical probe
     // verdict, opposite outcome from acceptEdits above. Both paths now read one
     // adapter answer, so a policy change cannot land on one and miss the other
     // — which is exactly the divergence this fold removed.
@@ -11512,7 +11524,7 @@ describe('ChatService — delete is a one-way door', () => {
   });
 
   it('refuses to delete a TEAM run through the chat route', async () => {
-    // The graph executor owns its own teardown; deleting through here would
+    // The team executor owns its own teardown; deleting through here would
     // skip it.
     const { service, runDao } = setup();
     const teamRun = await runDao.create({
@@ -15746,7 +15758,7 @@ describe('ChatService — turns geniro starts for a monitor', () => {
     monitors.start({
       owner: {
         runId: run.id,
-        nodeId: SINGLE_AGENT_NODE,
+        memberId: SINGLE_AGENT_NODE,
         caller: SINGLE_AGENT_NODE,
         conversationId: null,
         callId: null,

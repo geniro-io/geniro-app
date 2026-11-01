@@ -72,7 +72,7 @@ function wireItem(runId: string, seq: number): ItemWire {
   return {
     id: `i-${seq}`,
     runId,
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'message',
     role: 'assistant',
@@ -207,13 +207,13 @@ describe('NotificationsGateway', () => {
       expect.objectContaining({
         runId: 'r1',
         ownerKey: 'engineer::call-1',
-        nodeId: 'engineer',
+        memberId: 'engineer',
         spentCostUsd: 38.5,
       }),
       expect.objectContaining({
         runId: 'r1',
         ownerKey: 'manager',
-        nodeId: 'manager',
+        memberId: 'manager',
         text: 'While that runs',
       }),
     ]);
@@ -365,7 +365,7 @@ describe('NotificationsGateway', () => {
 
     const event = {
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       occurredAt: '2026-08-17T00:00:00.000Z',
       turn: true,
     };
@@ -617,7 +617,7 @@ describe('verdict round-trip', () => {
     const respond = vi.fn(() => true);
     approvals.track({
       runId: 'r1',
-      nodeId: 'n1',
+      memberId: 'n1',
       requestId: 'req-1',
       toolName: 'Write',
       input: {},
@@ -652,7 +652,7 @@ describe('verdict round-trip', () => {
     const track = (requestId: string): void =>
       approvals.track({
         runId: 'r1',
-        nodeId: 'n1',
+        memberId: 'n1',
         requestId,
         toolName: 'Bash',
         input: {},
@@ -727,7 +727,7 @@ describe('verdict round-trip', () => {
     const track = (requestId: string): void =>
       approvals.track({
         runId: 'r1',
-        nodeId: 'n1',
+        memberId: 'n1',
         requestId,
         toolName: 'AskUserQuestion',
         input: {},

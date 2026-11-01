@@ -64,13 +64,13 @@ const entryMetaVariants = cva(
 export function StageEntry({
   stage,
   progress,
-  agentName = (nodeId) => nodeId,
+  agentName = (memberId) => memberId,
   action,
   children,
 }: {
   stage: StageProgressEntry;
   progress: StageProgress;
-  agentName?: (nodeId: string) => string;
+  agentName?: (memberId: string) => string;
   action?: ReactNode;
   children?: ReactNode;
 }): React.JSX.Element {

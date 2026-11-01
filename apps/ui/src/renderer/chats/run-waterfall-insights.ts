@@ -48,7 +48,7 @@ const IDLE_SHARE = 0.25;
 /** How many a reader is shown — past this they stop being "what stands out". */
 const MAX_INSIGHTS = 6;
 
-const laneName = (nodeId: string | null): string => nodeId ?? 'agent';
+const laneName = (memberId: string | null): string => memberId ?? 'agent';
 
 export function waterfallInsights(data: RunWaterfallDto): Insight[] {
   const wallMs = Math.max(1, Date.parse(data.to) - Date.parse(data.from));
@@ -80,12 +80,12 @@ export function waterfallInsights(data: RunWaterfallDto): Insight[] {
     if (!blocksCaller(call)) {
       return;
     }
-    const best = longestBlock.get(call.callerNodeId);
+    const best = longestBlock.get(call.callerMemberId);
     if (
       best === undefined ||
       call.durationMs > (data.calls[best]?.durationMs ?? 0)
     ) {
-      longestBlock.set(call.callerNodeId, index);
+      longestBlock.set(call.callerMemberId, index);
     }
   });
   for (const [caller, index] of longestBlock) {
@@ -100,7 +100,7 @@ export function waterfallInsights(data: RunWaterfallDto): Insight[] {
     out.push({
       id: `blocked-${index}`,
       tone: 'neutral',
-      title: `${laneName(caller)} waited ${formatDuration(call.durationMs)} on ${laneName(call.calleeNodeId)}`,
+      title: `${laneName(caller)} waited ${formatDuration(call.durationMs)} on ${laneName(call.calleeMemberId)}`,
       detail: `a call that held it still — ${formatPercent((call.durationMs / wallMs) * 100)} of the wall clock`,
       target: { kind: 'blocked', index },
     });
@@ -113,7 +113,7 @@ export function waterfallInsights(data: RunWaterfallDto): Insight[] {
     out.push({
       id: `failed-turn-${index}`,
       tone: 'danger',
-      title: `${laneName(turn.nodeId)}: a turn failed`,
+      title: `${laneName(turn.memberId)}: a turn failed`,
       detail:
         turn.costUsd === null
           ? `${formatDuration(turn.durationMs)} of work with no result`
@@ -129,8 +129,8 @@ export function waterfallInsights(data: RunWaterfallDto): Insight[] {
     out.push({
       id: `failed-call-${index}`,
       tone: 'danger',
-      title: `a call to ${laneName(call.calleeNodeId)} failed`,
-      detail: `${laneName(call.callerNodeId)} asked, and it came back ${call.status ?? 'without a status'}`,
+      title: `a call to ${laneName(call.calleeMemberId)} failed`,
+      detail: `${laneName(call.callerMemberId)} asked, and it came back ${call.status ?? 'without a status'}`,
       target: { kind: 'call', index },
     });
   });
@@ -159,7 +159,7 @@ export function waterfallInsights(data: RunWaterfallDto): Insight[] {
       out.push({
         id: `expensive-${priciest}`,
         tone: 'warning',
-        title: `${laneName(turn.nodeId)}: one turn cost ${formatPercent((turn.costUsd / total) * 100)} of the run`,
+        title: `${laneName(turn.memberId)}: one turn cost ${formatPercent((turn.costUsd / total) * 100)} of the run`,
         detail: `${markEstimate(formatUsd(turn.costUsd), turn.estimatedCostUsd)} of ${markEstimate(formatUsd(total), data.totals.estimatedCostUsd)}`,
         target: { kind: 'turn', index: priciest },
       });
@@ -174,15 +174,15 @@ export function waterfallInsights(data: RunWaterfallDto): Insight[] {
     if (share === null) {
       return;
     }
-    const was = lastShare.get(turn.nodeId);
-    lastShare.set(turn.nodeId, share);
+    const was = lastShare.get(turn.memberId);
+    lastShare.set(turn.memberId, share);
     if (was === undefined || was < CACHE_WAS || share >= CACHE_NOW) {
       return;
     }
     out.push({
       id: `cache-${index}`,
       tone: 'danger',
-      title: `${laneName(turn.nodeId)}: cache fell to ${formatPercent(share)}`,
+      title: `${laneName(turn.memberId)}: cache fell to ${formatPercent(share)}`,
       detail: `it was ${formatPercent(was)} the turn before`,
       target: { kind: 'turn', index },
     });
@@ -195,13 +195,13 @@ export function waterfallInsights(data: RunWaterfallDto): Insight[] {
     if (fill === null || fill < CONTEXT_PRESSURE) {
       return;
     }
-    const best = fullest.get(turn.nodeId);
+    const best = fullest.get(turn.memberId);
     const bestTurn = best === undefined ? undefined : data.turns[best];
     if (bestTurn === undefined || fill > (turnContextFill(bestTurn) ?? 0)) {
-      fullest.set(turn.nodeId, index);
+      fullest.set(turn.memberId, index);
     }
   });
-  for (const [nodeId, index] of fullest) {
+  for (const [memberId, index] of fullest) {
     const turn = data.turns[index];
     const fill = turn === undefined ? null : turnContextFill(turn);
     if (turn === undefined || fill === null) {
@@ -210,7 +210,7 @@ export function waterfallInsights(data: RunWaterfallDto): Insight[] {
     out.push({
       id: `context-${index}`,
       tone: 'warning',
-      title: `${laneName(nodeId)}: context at ${formatPercent(fill * 100)}`,
+      title: `${laneName(memberId)}: context at ${formatPercent(fill * 100)}`,
       detail: `${formatTokens(turn.contextTokens ?? 0)} of a ${formatTokens(turn.contextWindowTokens ?? 0)} window`,
       target: { kind: 'turn', index },
     });

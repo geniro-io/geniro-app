@@ -19,7 +19,7 @@
  *
  * REGISTER AT THE MINT SITE, not at boot, for anything minted later. The two
  * launch-time credentials are registered in `main.ts`; a call token is minted
- * per caller node while a run starts, long after boot, so `CallTokenRegistry`
+ * per caller member while a run starts, long after boot, so `CallTokenRegistry`
  * registers each one as it issues it. That is not a stylistic choice — this
  * block claimed coverage of the call token for a full release while nothing
  * registered it, and the gap was invisible precisely because the claim read as

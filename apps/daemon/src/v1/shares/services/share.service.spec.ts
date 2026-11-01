@@ -68,7 +68,7 @@ const REVOKED = ok({
 
 const ASKER: ShareAsker = {
   runId: '11111111-2222-4333-8444-555555555555',
-  nodeId: 'agent',
+  memberId: 'agent',
   conversationId: null,
   caller: 'agent',
   target: 'chat',
@@ -1170,7 +1170,7 @@ describe('ShareService', () => {
       await agent();
       const other: ShareAsker = {
         ...ASKER,
-        nodeId: 'reviewer',
+        memberId: 'reviewer',
         caller: 'reviewer',
         target: 'team',
       };
@@ -1201,7 +1201,7 @@ describe('ShareService', () => {
       await agent();
       const other: ShareAsker = {
         ...ASKER,
-        nodeId: 'reviewer',
+        memberId: 'reviewer',
         caller: 'reviewer',
         target: 'team',
       };

@@ -20,7 +20,7 @@ function wake(onDelivered = vi.fn(), key = 'share:s1'): HostWake {
     key,
     owner: {
       runId: 'run-1',
-      nodeId: 'agent',
+      memberId: 'agent',
       conversationId: null,
       caller: 'agent',
       target: 'chat',

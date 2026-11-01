@@ -34,22 +34,28 @@ const LINE: TeamStage[] = [
   {
     id: 'investigate',
     title: 'Investigate',
-    doneWhen: 'Cause found',
+    goal: 'Cause found',
     next: ['fix'],
   },
-  { id: 'fix', title: 'Fix', doneWhen: 'Fix merged' },
+  { id: 'fix', title: 'Fix', goal: 'Fix merged' },
+];
+
+const MEMBERS = [
+  { id: 'coder', name: 'Coder' },
+  { id: 'reviewer', name: 'Reviewer' },
+  { id: 'tester', name: 'Tester' },
 ];
 
 function render(
   stages: TeamStage[] | undefined,
-  agentIds: string[] = ['coder', 'reviewer'],
+  members: { id: string; name: string }[] = MEMBERS,
 ): void {
   act(() => {
     root.render(
       <StageSchemaEditor
         open
         stages={stages}
-        agentIds={agentIds}
+        members={members}
         onClose={onClose}
         onSave={onSave}
       />,
@@ -129,9 +135,9 @@ describe('StageSchemaEditor', () => {
 
     click(button('Add stage'));
     type(field('Title') as HTMLInputElement, 'Fix the Build');
-    type(field('Done when') as HTMLInputElement, 'Build is green');
+    type(field('Goal') as HTMLInputElement, 'Build is green');
     click(button('Add stage'));
-    type(field('Done when') as HTMLInputElement, 'Merged');
+    type(field('Goal') as HTMLInputElement, 'Merged');
     expect(rowTitles()).toEqual(['Fix the Build', 'Stage 2']);
 
     click(doneButton());
@@ -139,10 +145,10 @@ describe('StageSchemaEditor', () => {
       {
         id: 'stage-1',
         title: 'Fix the Build',
-        doneWhen: 'Build is green',
+        goal: 'Build is green',
         next: ['stage-2'],
       },
-      { id: 'stage-2', title: 'Stage 2', doneWhen: 'Merged' },
+      { id: 'stage-2', title: 'Stage 2', goal: 'Merged' },
     ]);
   });
 
@@ -150,39 +156,72 @@ describe('StageSchemaEditor', () => {
     render(LINE);
     click(rows()[1]!.querySelector('button'));
     type(field('Title') as HTMLInputElement, '  Repair  ');
-    type(field('Instructions') as HTMLTextAreaElement, '   ');
-    type(field('Done when') as HTMLInputElement, ' Repair merged ');
+    type(field('How to work') as HTMLTextAreaElement, '   ');
+    type(field('Goal') as HTMLInputElement, ' Repair merged ');
     click(doneButton());
 
     expect(lastSaved()[1]).toEqual({
       id: 'fix',
       title: 'Repair',
-      doneWhen: 'Repair merged',
+      goal: 'Repair merged',
     });
     expect(rowTitles()).toEqual(['Investigate', 'Repair']);
   });
 
-  it('sets the "usually done by" agent, and "Any agent" takes it away again', () => {
+  it('builds an ordered Responsible list whose first member leads, and clears it', () => {
     render(LINE);
-    const owner = (): HTMLElement =>
-      container.querySelector<HTMLElement>('button[role="combobox"]')!;
-    click(owner());
-    click(
-      [...document.querySelectorAll('[role="option"]')].find(
-        (o) => o.textContent === 'reviewer',
-      ) ?? null,
-    );
-    click(doneButton());
-    expect(lastSaved()[0]!.ownerHint).toBe('reviewer');
+    const addMember = (name: string): void => {
+      click(
+        container.querySelector<HTMLElement>(
+          'button[aria-label="Add a responsible member"]',
+        ),
+      );
+      click(
+        [...document.querySelectorAll('[role="option"]')].find(
+          (o) => o.textContent === name,
+        ) ?? null,
+      );
+    };
+    const listed = (): (string | undefined)[] =>
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          '[data-slot="responsible-row"]',
+        ),
+      ].map((row) => row.dataset.memberId);
+    expect(container.textContent).toContain('No one in particular');
 
-    click(owner());
-    click(
-      [...document.querySelectorAll('[role="option"]')].find(
-        (o) => o.textContent === 'Any agent',
-      ) ?? null,
-    );
+    addMember('Reviewer');
+    addMember('Coder');
+    expect(listed()).toEqual(['reviewer', 'coder']);
+    expect(
+      container.querySelector('[data-slot="responsible-row"]')!.textContent,
+    ).toContain('leads');
+    expect(rowWords('investigate')).toBe('start · Reviewer');
+
+    click(container.querySelector('button[aria-label="Move Coder up"]'));
+    expect(listed()).toEqual(['coder', 'reviewer']);
+    expect(rowWords('investigate')).toBe('start · Coder');
     click(doneButton());
-    expect('ownerHint' in lastSaved()[0]!).toBe(false);
+    expect(lastSaved()[0]!.responsible).toEqual(['coder', 'reviewer']);
+
+    click(container.querySelector('button[aria-label="Remove Coder"]'));
+    click(container.querySelector('button[aria-label="Remove Reviewer"]'));
+    click(doneButton());
+    expect('responsible' in lastSaved()[0]!).toBe(false);
+  });
+
+  it('offers only the members not already responsible', () => {
+    render([{ ...LINE[0]!, responsible: ['coder'] }, LINE[1]!]);
+    click(
+      container.querySelector<HTMLElement>(
+        'button[aria-label="Add a responsible member"]',
+      ),
+    );
+    expect(
+      [...document.querySelectorAll('[role="option"]')].map(
+        (o) => o.textContent,
+      ),
+    ).toEqual(['Reviewer', 'Tester']);
   });
 
   it('moves a stage up and down from its menu, and offers neither past the ends', () => {
@@ -201,7 +240,7 @@ describe('StageSchemaEditor', () => {
 
   it('deletes a stage and takes it out of every next list', () => {
     render(
-      [...LINE, { id: 'ship', title: 'Ship', doneWhen: 'Shipped' }].map((s) =>
+      [...LINE, { id: 'ship', title: 'Ship', goal: 'Shipped' }].map((s) =>
         s.id === 'fix' ? { ...s, next: ['ship'] } : s,
       ),
     );
@@ -211,15 +250,15 @@ describe('StageSchemaEditor', () => {
     click(doneButton());
     expect(lastSaved()).toEqual([
       LINE[0],
-      { id: 'fix', title: 'Fix', doneWhen: 'Fix merged' },
+      { id: 'fix', title: 'Fix', goal: 'Fix merged' },
     ]);
   });
 
   it('says in the hint line where the run goes: one stage, a fork, or the end', () => {
     render([
-      { id: 'a', title: 'A', doneWhen: 'a', next: ['b'] },
-      { id: 'b', title: 'B', doneWhen: 'b' },
-      { id: 'c', title: 'C', doneWhen: 'c' },
+      { id: 'a', title: 'A', goal: 'a', next: ['b'] },
+      { id: 'b', title: 'B', goal: 'b' },
+      { id: 'c', title: 'C', goal: 'c' },
     ]);
     const hint = (): string =>
       container.querySelector('[data-slot="stage-next-hint"]')!.textContent!;
@@ -244,7 +283,7 @@ describe('StageSchemaEditor', () => {
   });
 
   it('names a next stage that does not exist by its id', () => {
-    render([{ id: 'a', title: 'A', doneWhen: 'a', next: ['ghost'] }]);
+    render([{ id: 'a', title: 'A', goal: 'a', next: ['ghost'] }]);
     expect(
       container.querySelector('[data-slot="stage-next-hint"]')!.textContent,
     ).toBe('Then ghost');
@@ -257,9 +296,9 @@ describe('StageSchemaEditor', () => {
   it('refuses Done while the stages loop back, and says why in words', async () => {
     stubResizeObserver();
     render([
-      { id: 'a', title: 'A', doneWhen: 'a', next: ['b'] },
-      { id: 'b', title: 'B', doneWhen: 'b', next: ['c'] },
-      { id: 'c', title: 'C', doneWhen: 'c', next: ['b'] },
+      { id: 'a', title: 'A', goal: 'a', next: ['b'] },
+      { id: 'b', title: 'B', goal: 'b', next: ['c'] },
+      { id: 'c', title: 'C', goal: 'c', next: ['b'] },
     ]);
     expect(container.querySelector('[data-slot="stage-errors"]')).toBeNull();
     expect(rowWords('b')).toBeUndefined();
@@ -294,8 +333,8 @@ describe('StageSchemaEditor', () => {
     expect(lastSaved()).toHaveLength(3);
   });
 
-  it('refuses Done for a stage without a title or a done-when, and for a second start', () => {
-    render([{ id: 'a', title: 'A', doneWhen: 'a' }]);
+  it('refuses Done for a stage without a title or a goal, and for a second start', () => {
+    render([{ id: 'a', title: 'A', goal: 'a' }]);
     click(doneButton());
     expect(onSave).toHaveBeenCalledTimes(1);
 
@@ -306,16 +345,14 @@ describe('StageSchemaEditor', () => {
     type(field('Title') as HTMLInputElement, 'A');
     expect(fieldIssues('error')).toEqual([]);
 
-    type(field('Done when') as HTMLInputElement, '');
-    expect(fieldIssues('error')).toEqual([
-      'Error: A stage needs a "done when" condition',
-    ]);
+    type(field('Goal') as HTMLInputElement, '');
+    expect(fieldIssues('error')).toEqual(['Error: A stage needs a goal']);
     click(doneButton());
     expect(onSave).toHaveBeenCalledTimes(1);
-    type(field('Done when') as HTMLInputElement, 'a');
+    type(field('Goal') as HTMLInputElement, 'a');
 
     click(button('Add stage'));
-    type(field('Done when') as HTMLInputElement, 'b');
+    type(field('Goal') as HTMLInputElement, 'b');
     click(rows()[0]!.querySelector('button'));
     click(
       [
@@ -333,7 +370,7 @@ describe('StageSchemaEditor', () => {
 
   it('shows no error and no alert for a stage just added, however often', async () => {
     stubResizeObserver();
-    render([{ id: 'a', title: 'A', doneWhen: 'a' }]);
+    render([{ id: 'a', title: 'A', goal: 'a' }]);
     click(button('Add stage'));
     click(button('Add stage'));
     expect(rows().length).toBe(3);
@@ -345,16 +382,14 @@ describe('StageSchemaEditor', () => {
   });
 
   it('shows a field’s error once the field is edited or left, and the rest only after Done is pressed', () => {
-    render([{ id: 'a', title: 'A', doneWhen: 'a' }]);
+    render([{ id: 'a', title: 'A', goal: 'a' }]);
     click(button('Add stage'));
-    const doneWhen = field('Done when') as HTMLInputElement;
+    const goal = field('Goal') as HTMLInputElement;
     expect(fieldIssues('error')).toEqual([]);
 
-    act(() => doneWhen.focus());
-    act(() => doneWhen.blur());
-    expect(fieldIssues('error')).toEqual([
-      'Error: A stage needs a "done when" condition',
-    ]);
+    act(() => goal.focus());
+    act(() => goal.blur());
+    expect(fieldIssues('error')).toEqual(['Error: A stage needs a goal']);
     expect(errorAlert()).toBeNull();
   });
 
@@ -367,25 +402,23 @@ describe('StageSchemaEditor', () => {
     click(doneButton());
     expect(onSave).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
-    expect(fieldIssues('error')).toEqual([
-      'Error: A stage needs a "done when" condition',
-    ]);
+    expect(fieldIssues('error')).toEqual(['Error: A stage needs a goal']);
     const alert = errorAlert()!;
     expect(alert).toBe(container.querySelector('[data-slot="stage-errors"]'));
     expect(alert.textContent).toContain('Stage 3');
     expect(rowWords('stage-3')).toContain('error');
     expect(rowWords('stage-4')).toContain('error');
 
-    type(field('Done when') as HTMLInputElement, 'Shipped');
+    type(field('Goal') as HTMLInputElement, 'Shipped');
     click(rows()[2]!.querySelector('button'));
-    type(field('Done when') as HTMLInputElement, 'Reviewed');
+    type(field('Goal') as HTMLInputElement, 'Reviewed');
     expect(errorAlert()).toBeNull();
     click(doneButton());
     expect(lastSaved()).toHaveLength(4);
   });
 
   it('starts every open without the previous visit’s attempt', () => {
-    render([{ id: 'a', title: 'A', doneWhen: '' }]);
+    render([{ id: 'a', title: 'A', goal: '' }]);
     click(doneButton());
     expect(errorAlert()).not.toBeNull();
 
@@ -394,32 +427,32 @@ describe('StageSchemaEditor', () => {
         <StageSchemaEditor
           open={false}
           stages={LINE}
-          agentIds={[]}
+          members={[]}
           onClose={onClose}
           onSave={onSave}
         />,
       ),
     );
-    render([{ id: 'a', title: 'A', doneWhen: '' }]);
+    render([{ id: 'a', title: 'A', goal: '' }]);
     expect(errorAlert()).toBeNull();
     expect(fieldIssues('error')).toEqual([]);
   });
 
-  it('writes the instructions from the expandable field', () => {
+  it('writes how to work from the expandable field', () => {
     render(LINE);
     expect(
-      container.querySelector('button[aria-label="Expand Instructions"]'),
+      container.querySelector('button[aria-label="Expand How to work"]'),
     ).not.toBeNull();
-    type(field('Instructions') as HTMLTextAreaElement, ' Find it ');
+    type(field('How to work') as HTMLTextAreaElement, ' Find it ');
     click(doneButton());
-    expect(lastSaved()[0]!.instructions).toBe('Find it');
+    expect(lastSaved()[0]!.howToWork).toBe('Find it');
   });
 
   it('keeps the stored next as ids and tells apart stages that share a title', () => {
     render([
-      { id: 'a', title: 'A', doneWhen: 'a', next: ['twin-1'] },
-      { id: 'twin-1', title: 'Twin', doneWhen: 't' },
-      { id: 'twin-2', title: 'Twin', doneWhen: 't' },
+      { id: 'a', title: 'A', goal: 'a', next: ['twin-1'] },
+      { id: 'twin-1', title: 'Twin', goal: 't' },
+      { id: 'twin-2', title: 'Twin', goal: 't' },
     ]);
     const options = (): string[] =>
       [...container.querySelectorAll('[aria-pressed]')].map(
@@ -435,36 +468,41 @@ describe('StageSchemaEditor', () => {
     expect(lastSaved()[0]!.next).toEqual(['twin-1', 'twin-2']);
   });
 
-  it('shows a hint naming an agent the team lacks as a warning that does not block Done', () => {
+  it('shows a responsible id the team lacks as a warning that does not block Done', () => {
     render([
-      { id: 'a', title: 'A', doneWhen: 'a', next: ['b'] },
-      { id: 'b', title: 'B', doneWhen: 'b', ownerHint: 'ghost' },
+      { id: 'a', title: 'A', goal: 'a', next: ['b'] },
+      { id: 'b', title: 'B', goal: 'b', responsible: ['ghost'] },
     ]);
     const warning = container.querySelector('[data-slot="stage-warnings"]')!;
     expect(warning.textContent).toContain('Warning');
     expect(warning.textContent).toContain(
-      "B: Stage 'b' is usually done by 'ghost'",
+      "B: Stage 'b' names 'ghost' as responsible",
     );
     expect(rowWords('b')).toBe('warning · final · ghost');
     expect(fieldIssues('warning')).toEqual([]);
 
     click(rows()[1]!.querySelector('button'));
     expect(fieldIssues('warning')).toEqual([
-      expect.stringContaining("Warning: Stage 'b' is usually done by 'ghost'"),
+      expect.stringContaining(
+        "Warning: Stage 'b' names 'ghost' as responsible",
+      ),
     ]);
+    expect(
+      container.querySelector('[data-slot="responsible-row"]')!.textContent,
+    ).toContain('ghost (not in this team)');
     expect(container.querySelector('[data-slot="stage-warnings"]')).toBeNull();
     expect(container.querySelector('[data-slot="stage-errors"]')).toBeNull();
     click(doneButton());
-    expect(lastSaved()[1]!.ownerHint).toBe('ghost');
+    expect(lastSaved()[1]!.responsible).toEqual(['ghost']);
   });
 
   it('draws the draft as the stage graph: a pill per stage, a line per next', async () => {
     stubResizeObserver();
     render([
-      { id: 'a', title: 'Investigation', doneWhen: 'a', next: ['b', 'c'] },
-      { id: 'b', title: 'Implementation', doneWhen: 'b', next: ['d'] },
-      { id: 'c', title: '  ', doneWhen: 'c', next: ['d'] },
-      { id: 'd', title: 'Review', doneWhen: 'd' },
+      { id: 'a', title: 'Investigation', goal: 'a', next: ['b', 'c'] },
+      { id: 'b', title: 'Implementation', goal: 'b', next: ['d'] },
+      { id: 'c', title: '  ', goal: 'c', next: ['d'] },
+      { id: 'd', title: 'Review', goal: 'd' },
     ]);
     await settleStageGraphs(container);
     expect(
@@ -485,9 +523,9 @@ describe('StageSchemaEditor', () => {
   it('selects a stage for editing when its pill in the preview is pressed', async () => {
     stubResizeObserver();
     render([
-      { id: 'a', title: 'Investigation', doneWhen: 'a', next: ['b', 'c'] },
-      { id: 'b', title: 'Implementation', doneWhen: 'b' },
-      { id: 'c', title: 'Fix', doneWhen: 'c' },
+      { id: 'a', title: 'Investigation', goal: 'a', next: ['b', 'c'] },
+      { id: 'b', title: 'Implementation', goal: 'b' },
+      { id: 'c', title: 'Fix', goal: 'c' },
     ]);
     expect((field('Title') as HTMLInputElement).value).toBe('Investigation');
     await settleStageGraphs(container);
@@ -510,7 +548,7 @@ describe('StageSchemaEditor', () => {
     render([
       LINE[0]!,
       { ...LINE[1]!, next: ['ship'] },
-      { id: 'ship', title: 'Ship', doneWhen: 'Shipped' },
+      { id: 'ship', title: 'Ship', goal: 'Shipped' },
     ]);
     const rect = vi
       .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
@@ -578,7 +616,7 @@ describe('StageSchemaEditor', () => {
         <StageSchemaEditor
           open={false}
           stages={LINE}
-          agentIds={[]}
+          members={[]}
           onClose={onClose}
           onSave={onSave}
         />,
@@ -611,7 +649,7 @@ describe('StageSchemaEditor', () => {
         <StageSchemaEditor
           open={false}
           stages={LINE}
-          agentIds={[]}
+          members={[]}
           onClose={onClose}
           onSave={onSave}
         />,

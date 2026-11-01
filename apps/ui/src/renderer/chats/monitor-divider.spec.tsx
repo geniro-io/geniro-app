@@ -36,7 +36,7 @@ function mount(item: ChatItem): HTMLElement {
 const row = (payload: Record<string, unknown>): ChatItem => ({
   id: 'i1',
   runId: 'r1',
-  nodeId: 'manager',
+  memberId: 'manager',
   seq: 1,
   kind: 'system',
   role: null,

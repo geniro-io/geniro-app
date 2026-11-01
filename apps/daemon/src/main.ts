@@ -61,7 +61,7 @@ import { ShareService } from './v1/shares/services/share.service';
 import { TeamLedgerService } from './v1/stats/services/team-ledger.service';
 import { StorageService } from './v1/storage/services/storage.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
-import { GraphExecutorService } from './v1/teams/services/graph-executor.service';
+import { TeamExecutorService } from './v1/teams/services/team-executor.service';
 import { TeamProposalService } from './v1/teams/services/team-proposal.service';
 
 /**
@@ -279,7 +279,7 @@ bootstrapper.addExtension(
       const stopCause = await closeInterruptedRuns({
         readCause: () => consumeStopCause(environment.userDataDir),
         chats: app.get(ChatService),
-        teams: app.get(GraphExecutorService),
+        teams: app.get(TeamExecutorService),
         tasks: app.get(TaskSettleService),
         logError: (message) => new Logger('TaskSettleService').error(message),
       });
@@ -314,7 +314,7 @@ bootstrapper.addExtension(
       // usage-limit reset. Its agents were told to wait for it rather than set
       // a timer of their own, so without this a restart in those hours leaves
       // a team waiting on a promise nothing is keeping any more.
-      await app.get(GraphExecutorService).rehydrateResetWakes();
+      await app.get(TeamExecutorService).rehydrateResetWakes();
 
       // Put back what every agent had spent and no row records yet. Without it
       // a restart mid-turn made the header read the recorded total as the

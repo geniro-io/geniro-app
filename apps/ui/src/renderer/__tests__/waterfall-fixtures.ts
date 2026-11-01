@@ -19,11 +19,11 @@ export function atSecond(seconds: number): string {
 }
 
 export function wfLane(
-  nodeId: string | null,
+  memberId: string | null,
   over: Partial<RunWaterfallLane> = {},
 ): RunWaterfallLane {
   return {
-    nodeId,
+    memberId,
     agentKind: 'claude',
     costUsd: null,
     estimatedCostUsd: null,
@@ -36,13 +36,13 @@ export function wfLane(
 }
 
 export function wfTurn(
-  nodeId: string | null,
+  memberId: string | null,
   start: number,
   end: number,
   over: Partial<RunWaterfallTurn> = {},
 ): RunWaterfallTurn {
   return {
-    nodeId,
+    memberId,
     startedAt: atSecond(start),
     seq: 1,
     timingSource: 'cli',
@@ -69,15 +69,15 @@ export function wfTurn(
 }
 
 export function wfCall(
-  callerNodeId: string,
-  calleeNodeId: string,
+  callerMemberId: string,
+  calleeMemberId: string,
   start: number,
   end: number,
   over: Partial<RunWaterfallCall> = {},
 ): RunWaterfallCall {
   return {
-    callerNodeId,
-    calleeNodeId,
+    callerMemberId,
+    calleeMemberId,
     mode: 'async',
     status: 'ok',
     running: false,
@@ -89,12 +89,12 @@ export function wfCall(
 }
 
 export function wfWait(
-  nodeId: string | null,
+  memberId: string | null,
   start: number,
   end: number,
 ): RunWaterfallWait {
   return {
-    nodeId,
+    memberId,
     question: false,
     toolName: 'Bash',
     allowed: true,

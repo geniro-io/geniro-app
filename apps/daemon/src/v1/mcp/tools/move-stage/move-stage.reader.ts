@@ -4,7 +4,7 @@ import { StageMoveActionSchema } from '../../../agents/chat.types';
 import type {
   StageMoveRequest,
   StageMoveResult,
-  TeamNode,
+  TeamMember,
 } from '../../../teams/teams.types';
 import { moveReply } from '../../../teams/utils/stage-text';
 import { readToolArgs } from '../tool-args';
@@ -35,7 +35,7 @@ export function readMoveStage(
 
 export function moveStageResultText(
   result: StageMoveResult,
-  nodes: readonly TeamNode[],
+  members: readonly TeamMember[],
 ): { text: string; isError: boolean } {
   if (!result.ok) {
     return { text: `${result.code}: ${result.message}`, isError: true };
@@ -43,7 +43,7 @@ export function moveStageResultText(
   return {
     text: moveReply(
       result.stages,
-      nodes,
+      members,
       {
         action: result.payload.action as StageMoveRequest['action'],
         stageId: result.payload.stageId,

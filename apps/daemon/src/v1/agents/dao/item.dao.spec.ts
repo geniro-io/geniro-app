@@ -127,7 +127,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         seq,
         kind,
         payload,
-        nodeId: 'qa',
+        memberId: 'qa',
         inCall: 'call-1',
         createdAt: at,
         updatedAt: at,
@@ -374,7 +374,7 @@ describe('ItemDao (in-memory sqlite)', () => {
     it('selects a root hand-off history before limiting, excluding its callees and incoming calls', async () => {
       const add = (
         seq: number,
-        nodeId: string | null,
+        memberId: string | null,
         kind: ItemKind,
         payload: unknown,
         role: 'user' | null = null,
@@ -382,7 +382,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         dao.create({
           runId: 'run-a',
           seq,
-          nodeId,
+          memberId,
           kind,
           role,
           payload: JSON.stringify(payload),
@@ -1036,7 +1036,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         seq: 3,
         kind: 'message',
         role: 'user',
-        nodeId: 'engineer',
+        memberId: 'engineer',
         payload: JSON.stringify({ text: 'to the callee' }),
       });
       await say('run-b', 0, 'user', 'another run');
@@ -1046,7 +1046,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       // `nodeId` is what tells a message to the thread from one sent straight
       // to a team callee, so the projection has to carry it.
       expect(
-        spine.map((row) => [row.seq, row.kind, row.role, row.nodeId]),
+        spine.map((row) => [row.seq, row.kind, row.role, row.memberId]),
       ).toEqual([
         [0, 'message', 'user', null],
         [1, 'message', 'assistant', null],
@@ -1296,11 +1296,11 @@ describe('ItemDao (in-memory sqlite)', () => {
     );
 
     expect(await dao.callResultSessions('run-a', 0, 2)).toEqual([
-      { calleeNodeId: 'qa', sessionId: 'sess-1' },
-      { calleeNodeId: 'qa', sessionId: null },
+      { calleeMemberId: 'qa', sessionId: 'sess-1' },
+      { calleeMemberId: 'qa', sessionId: null },
     ]);
     expect(await dao.callResultSessions('run-a', 3, 4)).toEqual([
-      { calleeNodeId: 'dev', sessionId: 'sess-2' },
+      { calleeMemberId: 'dev', sessionId: 'sess-2' },
     ]);
   });
 
@@ -1374,22 +1374,22 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
   });
 
-  it("reads a run's shell rows in seq order, with the node each was filed under", async () => {
+  it("reads a run's shell rows in seq order, with the member each was filed under", async () => {
     // What the stranded-command repair folds: the open and the close are both
-    // needed, in the order they happened, and the node is where the close has
+    // needed, in the order they happened, and the member is where the close has
     // to be filed. Inserted out of order so the ordering has to be the query's.
     await dao.create({
       runId: 'run-a',
       seq: 2,
       kind: 'shell_info',
-      nodeId: 'manager',
+      memberId: 'manager',
       payload: JSON.stringify({ id: 't1', workId: 'b1' }),
     });
     await dao.create({
       runId: 'run-a',
       seq: 0,
       kind: 'shell_open',
-      nodeId: 'manager',
+      memberId: 'manager',
       payload: JSON.stringify({ id: 't1', workId: 'b1' }),
     });
     await insert('run-a', 1);
@@ -1401,7 +1401,7 @@ describe('ItemDao (in-memory sqlite)', () => {
     });
 
     expect(
-      (await dao.shellRows('run-a')).map((row) => [row.kind, row.nodeId]),
+      (await dao.shellRows('run-a')).map((row) => [row.kind, row.memberId]),
     ).toEqual([
       ['shell_open', 'manager'],
       ['shell_info', 'manager'],
@@ -1428,7 +1428,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         runId,
         seq,
         kind,
-        nodeId: 'callee',
+        memberId: 'callee',
         payload: JSON.stringify({ id, name: 'Bash', input: { command: id } }),
       });
     await call('run-a', 2, 'toolu_b');
@@ -1449,7 +1449,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       rows.map((row) => JSON.parse(String(row.payload)).id);
     const found = await dao.toolCallsByIds('run-a', ['toolu_a', 'toolu_b']);
     expect(ids(found)).toEqual(['toolu_a', 'toolu_b']);
-    expect(found.map((row) => [row.nodeId, row.createdAt])).toEqual([
+    expect(found.map((row) => [row.memberId, row.createdAt])).toEqual([
       ['callee', expect.any(Date)],
       ['callee', expect.any(Date)],
     ]);
@@ -1459,14 +1459,14 @@ describe('ItemDao (in-memory sqlite)', () => {
   describe('toolUsage and delegateToolCallSeqs', () => {
     const call = (
       seq: number,
-      nodeId: string | null,
+      memberId: string | null,
       payload: Record<string, unknown> | string,
     ) =>
       dao.create({
         runId: 'run-a',
         seq,
         kind: 'tool_call',
-        nodeId,
+        memberId,
         payload:
           typeof payload === 'string' ? payload : JSON.stringify(payload),
       });
@@ -1491,7 +1491,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         runId: 'other-run',
         seq: 0,
         kind: 'tool_call',
-        nodeId: 'eng',
+        memberId: 'eng',
         payload: JSON.stringify({ name: 'Bash', parentToolUseId: 'x' }),
       });
     });
@@ -1507,21 +1507,21 @@ describe('ItemDao (in-memory sqlite)', () => {
         ),
       ).toEqual([
         {
-          nodeId: 'eng',
+          memberId: 'eng',
           name: 'Bash',
           toolKind: 'execute',
           delegate: false,
           calls: 2,
         },
         {
-          nodeId: 'eng',
+          memberId: 'eng',
           name: 'Bash',
           toolKind: 'execute',
           delegate: true,
           calls: 1,
         },
         {
-          nodeId: 'eng',
+          memberId: 'eng',
           name: 'Read',
           toolKind: 'read',
           delegate: true,
@@ -1534,7 +1534,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       const groups = await dao.toolUsage('run-a', 1);
       expect(groups).toEqual([
         {
-          nodeId: 'eng',
+          memberId: 'eng',
           name: 'Bash',
           toolKind: 'execute',
           delegate: false,
@@ -1554,7 +1554,7 @@ describe('ItemDao (in-memory sqlite)', () => {
   it('counts each agent’s own tool calls per call, with the newest counted seq', async () => {
     const call = (
       seq: number,
-      nodeId: string,
+      memberId: string,
       inCall: string | null,
       payload: Record<string, unknown> | string = { name: 'Bash' },
     ) =>
@@ -1562,7 +1562,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         runId: 'run-a',
         seq,
         kind: 'tool_call',
-        nodeId,
+        memberId,
         inCall,
         payload:
           typeof payload === 'string' ? payload : JSON.stringify(payload),
@@ -1585,7 +1585,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       runId: 'run-a',
       seq: 11,
       kind: 'tool_call',
-      nodeId: null,
+      memberId: null,
       inCall: 'call-1',
       payload: JSON.stringify({ name: 'Bash' }),
     });
@@ -1599,7 +1599,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       runId: 'other-run',
       seq: 8,
       kind: 'tool_call',
-      nodeId: 'qa',
+      memberId: 'qa',
       inCall: 'call-1',
       payload: JSON.stringify({ name: 'Bash' }),
     });
@@ -1609,12 +1609,13 @@ describe('ItemDao (in-memory sqlite)', () => {
     expect(
       counts.sort(
         (a, b) =>
-          a.callId.localeCompare(b.callId) || a.nodeId.localeCompare(b.nodeId),
+          a.callId.localeCompare(b.callId) ||
+          a.memberId.localeCompare(b.memberId),
       ),
     ).toEqual([
-      { nodeId: 'qa', callId: 'call-1', calls: 3, lastSeq: 9 },
-      { nodeId: 'eng', callId: 'call-2', calls: 1, lastSeq: 5 },
-      { nodeId: 'qa', callId: 'call-2', calls: 1, lastSeq: 4 },
+      { memberId: 'qa', callId: 'call-1', calls: 3, lastSeq: 9 },
+      { memberId: 'eng', callId: 'call-2', calls: 1, lastSeq: 5 },
+      { memberId: 'qa', callId: 'call-2', calls: 1, lastSeq: 4 },
     ]);
   });
 
@@ -1731,13 +1732,13 @@ describe('ItemDao (in-memory sqlite)', () => {
         seq: number,
         kind: ItemKind,
         payload: Record<string, unknown>,
-        nodeId: string | null = null,
+        memberId: string | null = null,
       ): Promise<Item> =>
         dao.create({
           runId,
           seq,
           kind,
-          nodeId,
+          memberId,
           payload: JSON.stringify(payload),
         });
       await ending('run-t', 6, 'turn_complete', { usage: {} }, 'n1');
@@ -1758,7 +1759,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       const rows = await dao.turnEndingsAfter('run-t', 1);
 
       expect(
-        rows.map((row) => [row.seq, row.nodeId, row.kind, row.payload]),
+        rows.map((row) => [row.seq, row.memberId, row.kind, row.payload]),
       ).toEqual([
         [3, null, 'turn_cancelled', '{}'],
         [4, null, 'error', '{"insideTurn":false}'],
@@ -1768,21 +1769,21 @@ describe('ItemDao (in-memory sqlite)', () => {
   });
 
   describe('openTurnStartedAt', () => {
-    /** One row of a 1:1 chat (no node unless named), written at `ms`. */
+    /** One row of a 1:1 chat (no member unless named), written at `ms`. */
     const chatRow = (
       runId: string,
       seq: number,
       kind: ItemKind,
       ms: number,
       payload: Record<string, unknown> = {},
-      extra: { role?: string; nodeId?: string } = {},
+      extra: { role?: string; memberId?: string } = {},
     ): Promise<Item> =>
       dao.create({
         runId,
         seq,
         kind,
         role: extra.role ?? null,
-        nodeId: extra.nodeId ?? null,
+        memberId: extra.memberId ?? null,
         payload: JSON.stringify(payload),
         createdAt: new Date(ms),
       });
@@ -1802,9 +1803,9 @@ describe('ItemDao (in-memory sqlite)', () => {
       await chatRow('run-o', 3, 'message', 4_000, {}, { role: 'user' });
       // Each of these, read as an ending, would leave no message after it
       // and the answer null: a continuation that finished inside the turn, a
-      // team node's ending, another run's ending.
+      // team member's ending, another run's ending.
       await chatRow('run-o', 4, 'turn_complete', 5_000, { insideTurn: true });
-      await chatRow('run-o', 5, 'error', 5_500, {}, { nodeId: 'n1' });
+      await chatRow('run-o', 5, 'error', 5_500, {}, { memberId: 'n1' });
       await chatRow('run-other', 6, 'turn_complete', 6_000);
       // Measured inside the turn, but on a clock behind the opener's: the
       // opener's time stands.
@@ -1837,14 +1838,14 @@ describe('ItemDao (in-memory sqlite)', () => {
           insideTurn: true,
           usage: { durationMs: '7' },
         });
-        // Newer, but a team node's.
+        // Newer, but a team member's.
         await chatRow(
           'run-o',
           6,
           'turn_complete',
           7_000,
           { insideTurn: true, usage: { durationMs: 7 } },
-          { nodeId: 'n1' },
+          { memberId: 'n1' },
         );
 
         expect(await dao.openTurnStartedAt('run-o')).toEqual(new Date(5_000));
@@ -1855,7 +1856,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       await chatRow('run-o', 0, 'message', 1_000, {}, { role: 'user' });
       await chatRow('run-o', 1, 'turn_complete', 2_000);
       // None of these is the main agent working: a background command's end,
-      // a delegate's own call, a team node's reply, another run's reply.
+      // a delegate's own call, a team member's reply, another run's reply.
       await chatRow('run-o', 2, 'shell_info', 2_500, { id: 'call-1' });
       await chatRow(
         'run-o',
@@ -1873,7 +1874,7 @@ describe('ItemDao (in-memory sqlite)', () => {
         {},
         {
           role: 'assistant',
-          nodeId: 'n1',
+          memberId: 'n1',
         },
       );
       await chatRow(

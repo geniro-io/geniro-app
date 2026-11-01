@@ -26,7 +26,7 @@ import type {
   PoolSkipWire,
   ResetWakeHooks,
   RunCallCapability,
-  TeamAgentNode,
+  TeamMember,
 } from '../teams.types';
 import {
   conversationStartMember,
@@ -66,7 +66,7 @@ const RUN_NOT_ACTIVE: CallEnvelope = {
 };
 
 /**
- * Call-chain depth cap: a DAG-launched caller sits at depth 0, its callee at
+ * Call-chain depth cap: a member a pass started sits at depth 0, its callee at
  * 1, a call made BY that callee lands at 2… — 3 keeps A→B→C legal while
  * braking runaway mutual-call loops. There is deliberately NO cap on how many
  * calls a run makes in total: a long-lived team's coordinator works by
@@ -181,8 +181,8 @@ const USER_MESSAGE_NOTE =
 interface AsyncCallEntry {
   /**
    * The caller that started the call — only it may collect the result. A
-   * caller KEY (`utils/caller-key.ts`): a node in one conversation, never a
-   * node across all of them.
+   * caller KEY (`utils/caller-key.ts`): a member in one conversation, never a
+   * member across all of them.
    */
   owner: string;
   /**
@@ -352,7 +352,7 @@ interface ActiveCall {
   hold: { release: (release: CallHoldRelease) => void } | null;
   /**
    * The call its OWNER was answering when it made this one, or null for a call
-   * made from a node's own conversation. A conversation outlives its calls — a
+   * made from a member's own conversation. A conversation outlives its calls — a
    * `thread:` continuation is a later call of it — so this, not the owner key,
    * is what says which call's cancel this one goes down with.
    */
@@ -478,12 +478,12 @@ interface RunCallState {
   /**
    * What each caller is blocked on right now, as a set of names (caller key →
    * blockers) — the owner-side twin of {@link ActiveCall.blockedOnVerdicts}.
-   * Per CONVERSATION: a card up in one of a node's conversations blocks the
-   * questions put to that conversation, not to the node's others.
-   * While a node holds any, every question ITS callees park has its TTL
+   * Per CONVERSATION: a card up in one of a member's conversations blocks the
+   * questions put to that conversation, not to the member's others.
+   * While a member holds any, every question ITS callees park has its TTL
    * suspended: see {@link ParkedQuestion.timer}.
    *
-   * Two kinds of blocker, because a node can be stuck two ways: a CARD it
+   * Two kinds of blocker, because a member can be stuck two ways: a CARD it
    * raised (its own question to the user, a permission in ask mode), named by
    * the executor; and a question it PARKED on its own caller, named here
    * ({@link parkBlocker}). A callee that is itself a caller — Manager →
@@ -492,7 +492,7 @@ interface RunCallState {
    * A SET rather than a count: spawn-cli re-offers a request its turn settled
    * without an answer to the next turn of the same process, so one card can
    * arrive twice, and a count then needed two answers to that one card before
-   * the node's callees' questions resumed.
+   * the member's callees' questions resumed.
    */
   blockedOwners: Map<string, Set<string>>;
   /**
@@ -500,15 +500,15 @@ interface RunCallState {
    * → count) — a sync `call_agent`, an `await_agent` for one call, an
    * `await_agent` for all of them.
    *
-   * A node in here is inside a tool call that cannot return until a callee it
+   * A member in here is inside a tool call that cannot return until a callee it
    * started does: it is in a turn by every reading the daemon has, and it is
    * producing nothing. That is what the composer needs to know before it
    * queues a message — see {@link RunStatusEvent.awaitingCalls}, which this
    * map's SIZE is announced as.
    *
-   * A COUNT per node rather than a flag, on {@link blockedOwners}' reasoning
+   * A COUNT per member rather than a flag, on {@link blockedOwners}' reasoning
    * one step over: a caller can hold a sync call open and start a collection
-   * beside it, and the node stops waiting only when the last of them returns.
+   * beside it, and the member stops waiting only when the last of them returns.
    */
   waitingOwners: Map<string, number>;
   /**
@@ -534,7 +534,7 @@ interface RunCallState {
    * yet said it took the message. The CLI takes a mid-turn message at its next
    * tool boundary, so a caller that goes on to start a wait would sit on the
    * message for the whole of it: the next wait it starts returns at once
-   * instead. Cleared when the CLI reports the message consumed or the node's
+   * instead. Cleared when the CLI reports the message consumed or the member's
    * turn ends ({@link CallBroker.forgetUserMessage}).
    */
   unreadUserMessages: Set<string>;
@@ -583,7 +583,7 @@ interface WakeResult {
 /** One caller's calls a single usage-limit reset will reopen. */
 interface ResetWake {
   timer: ReturnType<typeof setTimeout>;
-  /** Owner node → the calls of its that limit stopped, with their callees. */
+  /** Owner member → the calls of its that limit stopped, with their callees. */
   owners: Map<string, WakeResult[]>;
   /** The CLI's own words for when, verbatim — what the caller is told. */
   resetsAt: string;
@@ -786,8 +786,8 @@ export class CallBroker implements OnModuleInit {
 
   /**
    * Which pool members are spent, for every run. The executor records every
-   * attempt into it — a call's as well as a node's own turn — and reads it for
-   * node turns; the broker only reads it, to pick a new call's first member.
+   * attempt into it — a call's as well as a member's own turn — and reads it for
+   * member turns; the broker only reads it, to pick a new call's first member.
    */
   readonly poolCooldowns: PoolCooldowns;
 
@@ -837,7 +837,7 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
-   * The executor announces a run whose team carries call edges.
+   * The executor announces a run whose members can call each other.
    *
    * `seed` is what an earlier pass of this run left in the transcript — see
    * {@link RunCallSeed}. Call ids continue past it, and every settled call it
@@ -856,10 +856,10 @@ export class CallBroker implements OnModuleInit {
     for (const record of seed?.records ?? []) {
       threads.set(record.callId, {
         owner: callerKey(
-          record.callerNodeId,
+          record.callerMemberId,
           record.callerConversationId ?? null,
         ),
-        calleeId: record.calleeNodeId,
+        calleeId: record.calleeMemberId,
         sessionId: record.sessionId,
         conversationId:
           (record.thread === null
@@ -968,7 +968,7 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
-   * The CLI has taken the user's message, or the node's turn has ended — a
+   * The CLI has taken the user's message, or the member's turn has ended — a
    * later wait no longer has a message to make way for.
    */
   forgetUserMessage(
@@ -1013,7 +1013,7 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
-   * One node has entered a wait on its own calls; announce if it is the first.
+   * One member has entered a wait on its own calls; announce if it is the first.
    *
    * The announce is per RUN and carries the number of waiting NODES, so a
    * caller opening a second wait beside its first says nothing new — the fact
@@ -1031,12 +1031,12 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
-   * One node's wait has returned — by a result, a question, a timeout or an
+   * One member's wait has returned — by a result, a question, a timeout or an
    * abandonment, all of which end the tool call it was parked in. With `gap`,
    * the last of them opens the gap before its next wait.
    *
    * Every call site pairs this with {@link beginOwnerWait} in a `finally`: a
-   * wait that threw its way out would otherwise leave the node counted as
+   * wait that threw its way out would otherwise leave the member counted as
    * waiting for the life of the run, and the composer would go on sending
    * messages straight into turns that really are working.
    */
@@ -1088,7 +1088,7 @@ export class CallBroker implements OnModuleInit {
    *
    * A helper rather than a begin/finally pair at each of the three wait sites,
    * because the pairing is the whole invariant: a site that begins and does not
-   * end leaves the node counted as waiting for the life of the run.
+   * end leaves the member counted as waiting for the life of the run.
    */
   private async whileWaiting<T>(
     state: RunCallState,
@@ -1188,8 +1188,8 @@ export class CallBroker implements OnModuleInit {
   }
 
   /** Callees `callerNodeId` may invoke — [] when unknown or unwired. */
-  listCallees(runId: string, callerNodeId: string): readonly TeamAgentNode[] {
-    return this.runs.get(runId)?.capability.calleesOf.get(callerNodeId) ?? [];
+  listCallees(runId: string, callerMemberId: string): readonly TeamMember[] {
+    return this.runs.get(runId)?.capability.calleesOf.get(callerMemberId) ?? [];
   }
 
   /** True while the run is registered (its MCP endpoint is live). */
@@ -1199,13 +1199,13 @@ export class CallBroker implements OnModuleInit {
 
   /**
    * The longest ONE wait of `nodeId`'s may block before it answers `pending`
-   * — below the tool-call deadline of the CLI that node runs — or null when
+   * — below the tool-call deadline of the CLI that member runs — or null when
    * nothing bounds it (an unknown run, a caller with no CLI behind it). What
    * `await_agent`'s listing tells the model its window is.
    */
-  waitCeiling(runId: string, nodeId: string): number | null {
+  waitCeiling(runId: string, memberId: string): number | null {
     const state = this.runs.get(runId);
-    return state ? this.ceilingFor(state, nodeId) : null;
+    return state ? this.ceilingFor(state, memberId) : null;
   }
 
   private ceilingFor(state: RunCallState, owner: string): number | null {
@@ -1225,8 +1225,8 @@ export class CallBroker implements OnModuleInit {
   async callAgent(
     runId: string,
     /**
-     * WHO is calling — a caller key (`utils/caller-key.ts`): the node id for a
-     * node's own conversation, node + conversation for one answering a call.
+     * WHO is calling — a caller key (`utils/caller-key.ts`): the member id for a
+     * member's own conversation, member + conversation for one answering a call.
      */
     caller: string,
     args: {
@@ -1374,7 +1374,7 @@ export class CallBroker implements OnModuleInit {
     const refuse = (error: string): { refused: CallEnvelope } => ({
       refused: { status: 'error', error },
     });
-    const callerNodeId = callerNodeOf(caller);
+    const callerMemberId = callerNodeOf(caller);
     if (state.capability.isCancelled()) {
       return refuse('RUN_CANCELLED: the run was cancelled — no new calls');
     }
@@ -1386,13 +1386,17 @@ export class CallBroker implements OnModuleInit {
         'RUN_BUSY: a new message is starting this run’s next pass — make the call again in a moment',
       );
     }
-    const callees = state.capability.calleesOf.get(callerNodeId) ?? [];
+    const callees = state.capability.calleesOf.get(callerMemberId) ?? [];
     const callee = resolveCallee(callees, args.agent);
     if (!callee) {
-      const wired = callees.map((c) => c.name ?? c.id).join(', ') || 'none';
+      const callable = callees.map((c) => c.name).join(', ') || 'none';
       return refuse(
-        `UNKNOWN_AGENT: '${args.agent}' is not call-wired to you (callable: ${wired})`,
+        `UNKNOWN_AGENT: '${args.agent}' is not a member of this team you can call (callable: ${callable})`,
       );
+    }
+    const upTheChain = this.callUpTheChain(state, caller, callee);
+    if (upTheChain !== null) {
+      return refuse(upTheChain);
     }
     const depth = this.callerDepth(state, caller) + 1;
     if (depth > MAX_CALL_DEPTH) {
@@ -1458,7 +1462,7 @@ export class CallBroker implements OnModuleInit {
       memberPinned ||= thread.memberPinned;
     }
     const selected = this.selectPoolMember(
-      { cwd: state.capability.cwd ?? null, runId, nodeId: callee.id },
+      { cwd: state.capability.cwd ?? null, runId, memberId: callee.id },
       callee,
       args.member ?? null,
       continuedMember,
@@ -1511,11 +1515,11 @@ export class CallBroker implements OnModuleInit {
     //
     // `callerConversationId` names the conversation a callee made this call
     // from; `utils/call-seed.ts` reads it back so a restart keeps the call
-    // owned by that conversation rather than by its node.
+    // owned by that conversation rather than by its member.
     const callerConversationId = callerConversationOf(caller);
-    state.capability.persistItem(callerNodeId, 'call_started', null, {
+    state.capability.persistItem(callerMemberId, 'call_started', null, {
       callId,
-      callerNodeId,
+      callerNodeId: callerMemberId,
       ...(callerConversationId !== null ? { callerConversationId } : {}),
       calleeNodeId: callee.id,
       mode,
@@ -1623,9 +1627,9 @@ export class CallBroker implements OnModuleInit {
         this.dropPendingMessages(state, callId, call);
         state.settledMadeIn.set(callId, call.madeIn);
         state.activeCalls.delete(callId);
-        state.capability.persistItem(callerNodeId, 'call_result', null, {
+        state.capability.persistItem(callerMemberId, 'call_result', null, {
           callId,
-          callerNodeId,
+          callerNodeId: callerMemberId,
           ...(callerConversationId !== null ? { callerConversationId } : {}),
           calleeNodeId: callee.id,
           mode,
@@ -2660,7 +2664,7 @@ export class CallBroker implements OnModuleInit {
     state: RunCallState,
     callId: string,
     caller: string,
-    calleeNodeId: string,
+    calleeMemberId: string,
     message: string,
     reason: string,
     followUpId?: string,
@@ -2671,7 +2675,7 @@ export class CallBroker implements OnModuleInit {
       callId,
       callerNodeId: callerNodeOf(caller),
       ...(conversation !== null ? { callerConversationId: conversation } : {}),
-      calleeNodeId,
+      calleeNodeId: calleeMemberId,
       message,
       reason,
     };
@@ -2863,7 +2867,7 @@ export class CallBroker implements OnModuleInit {
 
   /**
    * The answer_agent tool (M4): deliver the caller's answer into its parked
-   * callee turn. Ownership is per caller node — a callee child can never
+   * callee turn. Ownership is per caller member — a callee child can never
    * answer a question it did not cause its own callee to raise.
    */
   answerAgent(
@@ -3091,7 +3095,7 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
-   * A caller node's LAST live turn has settled (the executor calls this next
+   * A caller member's LAST live turn has settled (the executor calls this next
    * to its approval sweep): wake it ONCE with whatever it left open — the
    * questions its callees are blocked on, and the async results nothing has
    * collected — so the conversation it started can finish.
@@ -3106,7 +3110,7 @@ export class CallBroker implements OnModuleInit {
     runId: string,
     /**
      * The CONVERSATION whose turn ended — a caller key. The executor drains
-     * each conversation as its own turn ends, so a node's own conversation and
+     * each conversation as its own turn ends, so a member's own conversation and
      * each call it serves are drained apart.
      */
     caller: string,
@@ -3507,7 +3511,7 @@ export class CallBroker implements OnModuleInit {
    * The state is the run's CURRENT one, read at fire time rather than the one
    * the call settled in: a pass started meanwhile registered its own, and only
    * that one's capability reaches the live agents — the previous pass's would
-   * wake a node through a walk that is over. Nor is it checked against the
+   * wake a member through a walk that is over. Nor is it checked against the
    * captured state: that identity check would bail on every reset that
    * outlives a pass, and the caller told to wait for it would never hear.
    */
@@ -3995,9 +3999,9 @@ export class CallBroker implements OnModuleInit {
    * Start `owner` talking again with `prompt` — or null when that cannot be
    * done. The call id is the call that now carries the turn, when it is one.
    *
-   * A node's OWN conversation is woken by the executor, as another turn of it.
+   * A member's OWN conversation is woken by the executor, as another turn of it.
    * A CALLEE conversation has no turn of its own outside the calls it answers,
-   * and waking the NODE instead would open a turn in the node's own
+   * and waking the MEMBER instead would open a turn in the member's own
    * conversation, in a new process with none of the callee's context, whose
    * identity owns none of the calls it is being told about — so whatever it
    * then did would reach nobody: with Manager → Engineer → Researcher, all
@@ -4032,12 +4036,12 @@ export class CallBroker implements OnModuleInit {
     // record alone can have no session — a continuation stopped before it ever
     // ran — and continuing from it is THREAD_UNAVAILABLE, which lost the very
     // result this wake exists to deliver.
-    const nodeId = callerNodeOf(owner);
+    const memberId = callerNodeOf(owner);
     let last: [string, ThreadRecord] | undefined;
     for (const entry of state.threads) {
       if (
         entry[1].conversationId === conversationId &&
-        entry[1].calleeId === nodeId &&
+        entry[1].calleeId === memberId &&
         entry[1].sessionId !== null
       ) {
         last = entry;
@@ -4079,14 +4083,14 @@ export class CallBroker implements OnModuleInit {
    */
   private selectPoolMember(
     site: PoolSite,
-    callee: TeamAgentNode,
+    callee: TeamMember,
     requested: number | null,
     threadMember: number | null,
     memberPinned: boolean,
     holdsWork: () => boolean,
   ):
     | { refused: CallEnvelope }
-    | { node: TeamAgentNode; plan: CalleePoolPlan | null } {
+    | { node: TeamMember; plan: CalleePoolPlan | null } {
     const size = poolSize(callee);
     const refuse = (error: string): { refused: CallEnvelope } => ({
       refused: { status: 'error', error },
@@ -4179,7 +4183,7 @@ export class CallBroker implements OnModuleInit {
     this.failParked(state, callId, call, reason, 'orphaned');
   }
 
-  /** A callee by the name its caller knows it by, else its node id. */
+  /** A callee by the name its caller knows it by, else its member id. */
   private calleeName(
     state: RunCallState,
     owner: string,
@@ -4188,7 +4192,7 @@ export class CallBroker implements OnModuleInit {
     return (
       state.capability.calleesOf
         .get(callerNodeOf(owner))
-        ?.find((node) => node.id === calleeId)?.name ?? calleeId
+        ?.find((member) => member.id === calleeId)?.name ?? calleeId
     );
   }
 
@@ -4418,7 +4422,7 @@ export class CallBroker implements OnModuleInit {
 
   /**
    * The call `caller`'s conversation is answering right now, or null when it
-   * answers none — a node's own conversation, or a callee carrying on after
+   * answers none — a member's own conversation, or a callee carrying on after
    * its call settled.
    */
   callAnsweredBy(runId: string, caller: string): string | null {
@@ -4430,7 +4434,7 @@ export class CallBroker implements OnModuleInit {
    * The call a page or button `caller` publishes is named from: the one it
    * answers, else — a callee carrying on after its call settled — the newest
    * call its conversation answered, whose ancestors may still be running
-   * (the notes walk up past a settled call). Null for a node's own
+   * (the notes walk up past a settled call). Null for a member's own
    * conversation.
    */
   callToNoteOn(runId: string, caller: string): string | null {
@@ -4525,25 +4529,45 @@ export class CallBroker implements OnModuleInit {
    */
   private runningCallsUpFrom(runId: string, callId: string): ActiveCall[] {
     const state = this.runs.get(runId);
-    if (!state) {
-      return [];
+    return state ? runningCallsUpFrom(state, callId) : [];
+  }
+
+  /**
+   * Refuses a call to a member that is waiting on this caller: the owner of
+   * any running call in the chain the caller's conversation answers. Its turn
+   * is blocked on this caller's answer, so the call could only wait on itself.
+   * The refusal names the chain, so the caller knows who waits on it.
+   */
+  private callUpTheChain(
+    state: RunCallState,
+    caller: string,
+    callee: TeamMember,
+  ): string | null {
+    const answering = callEntryInConversation(state, caller)?.[0];
+    if (answering === undefined) {
+      return null;
     }
-    const calls: ActiveCall[] = [];
-    // `madeIn` cannot loop — a call is made inside one already live — but a
-    // walk over shared state stays bounded regardless.
-    const seen = new Set<string>();
-    let next: string | null = callId;
-    while (next !== null && !seen.has(next)) {
-      seen.add(next);
-      const call = state.activeCalls.get(next);
-      if (call) {
-        calls.push(call);
-        next = call.madeIn;
-      } else {
-        next = state.settledMadeIn.get(next) ?? null;
-      }
+    const walked = runningCallEntriesUpFrom(state, answering);
+    const unheard = walked.findIndex(
+      ([, call]) => call.mode === 'fire_and_forget',
+    );
+    const chain = unheard === -1 ? walked : walked.slice(0, unheard);
+    const waiting = chain.find(
+      ([, call]) => callerNodeOf(call.owner) === callee.id,
+    );
+    if (waiting === undefined) {
+      return null;
     }
-    return calls;
+    const nameOf = (id: string): string =>
+      state.capability.calleesOf
+        .get(callerNodeOf(caller))
+        ?.find((member) => member.id === id)?.name ?? id;
+    const path = [...chain]
+      .reverse()
+      .map(([, call]) => nameOf(callerNodeOf(call.owner)))
+      .concat('you')
+      .join(' → ');
+    return `CALL_UP_THE_CHAIN: ${callee.name} is waiting on your answer (${path}; ${waiting[0]}), so calling it now would wait on itself. Answer by finishing this turn — put what you need from ${callee.name} in your reply.`;
   }
 
   /**
@@ -4663,12 +4687,12 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
-   * A card went up for a node — its own AskUserQuestion to the user, or a
+   * A card went up for a member — its own AskUserQuestion to the user, or a
    * permission it holds in ask mode — so it cannot answer anything until a
    * person does. Suspend the TTL of every question its callees have parked,
    * and of any they park meanwhile ({@link ParkedQuestion.timer}).
    *
-   * Any node, not only a DAG caller: a callee that is itself a caller is
+   * Any member, not only the one a pass started: a callee that is itself a caller is
    * blocked by its cards on the same terms.
    *
    * The owner-side twin of {@link noteCalleeBlocked}, called from the same
@@ -4689,9 +4713,9 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
-   * A card this node was blocked on has been answered (or has gone away) —
+   * A card this member was blocked on has been answered (or has gone away) —
    * once the LAST of its blockers is, every question its callees have parked
-   * gets its full window again, counted from now: the node has only now been
+   * gets its full window again, counted from now: the member has only now been
    * able to read it.
    *
    * A card it never noted is a no-op rather than an error: a settle sweeps
@@ -4710,7 +4734,7 @@ export class CallBroker implements OnModuleInit {
     }
   }
 
-  /** Add one blocker to a node, suspending its callees' questions on the first. */
+  /** Add one blocker to a member, suspending its callees' questions on the first. */
   private blockOwner(
     state: RunCallState,
     owner: string,
@@ -5087,13 +5111,13 @@ export class CallBroker implements OnModuleInit {
   /**
    * The caller's own chain depth. A callee CONVERSATION inherits the depth of
    * the call it is answering, read per conversation — taking the deepest live
-   * turn of the whole node charged one conversation for another's chain. One
+   * turn of the whole member charged one conversation for another's chain. One
    * with no call live (its kept process calling off-turn) falls back to the
-   * node's deepest, and never below 1.
+   * member's deepest, and never below 1.
    *
-   * A node's OWN conversation keeps the node-wide reading: 0 for a
-   * DAG-launched node, else the deepest live callee turn of that node — which
-   * over-counts a node serving calls beside its own turn, the conservative
+   * A member's OWN conversation keeps the member-wide reading: 0 for a
+   * member a pass started, else the deepest live callee turn of that member — which
+   * over-counts a member serving calls beside its own turn, the conservative
    * direction for a cap that exists to brake runaway loops.
    */
   private callerDepth(state: RunCallState, caller: string): number {
@@ -5139,6 +5163,33 @@ function callInConversation(
   return callEntryInConversation(state, caller)?.[1];
 }
 
+/** The running calls from `callId` up the chain it was made in, settled ones skipped. */
+function runningCallsUpFrom(state: RunCallState, callId: string): ActiveCall[] {
+  return runningCallEntriesUpFrom(state, callId).map(([, call]) => call);
+}
+
+function runningCallEntriesUpFrom(
+  state: RunCallState,
+  callId: string,
+): [string, ActiveCall][] {
+  const calls: [string, ActiveCall][] = [];
+  // `madeIn` cannot loop — a call is made inside one already live — but a
+  // walk over shared state stays bounded regardless.
+  const seen = new Set<string>();
+  let next: string | null = callId;
+  while (next !== null && !seen.has(next)) {
+    seen.add(next);
+    const call = state.activeCalls.get(next);
+    if (call) {
+      calls.push([next, call]);
+      next = call.madeIn;
+    } else {
+      next = state.settledMadeIn.get(next) ?? null;
+    }
+  }
+  return calls;
+}
+
 /** The call a callee conversation is answering, with its id, if any. */
 function callEntryInConversation(
   state: RunCallState,
@@ -5156,7 +5207,7 @@ function callEntryInConversation(
  * Files a note about `owner`'s turn inside the call its conversation answers.
  * Call membership places a row by its `callId`, so a note without one is drawn
  * in the run's own flow — REPORTED (run `99ac3def`): a Senior Engineer told
- * mid-call-10 showed up there as a stray block of its own. A node's own
+ * mid-call-10 showed up there as a stray block of its own. A member's own
  * conversation answers no call, and its note stays in the run's flow.
  */
 function inAnsweredCall(
@@ -5276,11 +5327,11 @@ function stopQuestionTimer(parked: ParkedQuestion): void {
   }
 }
 
-/** Resolve a callee by node id first, then by display name (trimmed). */
+/** Resolve a callee by member id first, then by display name (trimmed). */
 function resolveCallee(
-  callees: readonly TeamAgentNode[],
+  callees: readonly TeamMember[],
   ref: string,
-): TeamAgentNode | null {
+): TeamMember | null {
   const wanted = ref.trim();
   const byId = callees.find((c) => c.id === wanted);
   if (byId) {

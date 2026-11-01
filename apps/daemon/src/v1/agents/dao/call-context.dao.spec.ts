@@ -15,22 +15,22 @@ import {
 /**
  * Real-driver DAO spec (see item.dao.spec for the harness rationale). What it
  * pins is the reason this table exists at all: a reading is keyed by CALL, so
- * two calls a node holds at once keep separate figures instead of overwriting
+ * two calls a member holds at once keep separate figures instead of overwriting
  * one row.
  *
  * `NodeState` is registered beside it because the DAO asks about the calling
- * node before it creates anything — see `rememberContext`.
+ * member before it creates anything — see `rememberContext`.
  */
 describe('CallContextDao (in-memory sqlite)', () => {
   let orm: MikroORM;
   let dao: CallContextDao;
 
-  /** The `node_state` row a real run seeds before any node executes. */
-  async function seedNode(runId: string, nodeId: string): Promise<void> {
+  /** The `node_state` row a real run seeds before any member executes. */
+  async function seedNode(runId: string, memberId: string): Promise<void> {
     const em = orm.em.fork();
     em.create(
       NodeState,
-      { runId, nodeId, status: 'pending' },
+      { runId, memberId, status: 'pending' },
       { partial: true },
     );
     await em.flush();
@@ -72,7 +72,7 @@ describe('CallContextDao (in-memory sqlite)', () => {
     expect(rows[0]).toMatchObject({
       runId: 'run-1',
       callId: 'call-1',
-      nodeId: 'node-a',
+      memberId: 'node-a',
       contextTokens: 4200,
       contextWindowTokens: 200000,
     });
@@ -104,7 +104,7 @@ describe('CallContextDao (in-memory sqlite)', () => {
     });
   });
 
-  it('keeps one row per CALL when a single node holds several at once', async () => {
+  it('keeps one row per CALL when a single member holds several at once', async () => {
     await dao.rememberContext('run-1', 'call-1', 'node-a', {
       contextTokens: 4200,
       contextWindowTokens: 200000,
@@ -209,11 +209,11 @@ describe('CallContextDao (in-memory sqlite)', () => {
     expect(rows[0]!.contextTokens).toBe(4200);
   });
 
-  it('creates nothing for a node whose state row is already gone', async () => {
+  it('creates nothing for a member whose state row is already gone', async () => {
     // The straggler case: a run teardown destroys node states BEFORE call
     // contexts, so a reading arriving in that window would otherwise insert a
     // row that `getNodeStates` can never return — it maps over node states and
-    // looks calls up beside them, so a call with no node is unreachable.
+    // looks calls up beside them, so a call with no member is unreachable.
     await dao.rememberContext('run-1', 'call-1', 'node-torn-down', {
       contextTokens: 4200,
       contextWindowTokens: 200000,
@@ -222,7 +222,7 @@ describe('CallContextDao (in-memory sqlite)', () => {
     expect(await dao.listByRun('run-1')).toHaveLength(0);
   });
 
-  it('still records a call on a node that DOES have a state row', async () => {
+  it('still records a call on a member that DOES have a state row', async () => {
     // The other side of the guard, so a refusal that swallowed everything could
     // not pass the test above.
     await seedNode('run-1', 'node-b');
@@ -247,7 +247,7 @@ describe('CallContextDao (in-memory sqlite)', () => {
         {
           runId: 'run-1',
           callId: `call-${String(i).padStart(4, '0')}`,
-          nodeId: 'node-a',
+          memberId: 'node-a',
           contextTokens: 1000 + i,
           createdAt: new Date(1_000_000 + i * 1_000),
         },

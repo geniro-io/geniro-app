@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { TeamAgentNode } from '../teams.types';
+import { member } from '../__tests__/team-builders';
+import type { TeamMember } from '../teams.types';
 import {
   ANSWERING_A_CALL,
   ANSWERING_WITH_CALLS_OUT,
@@ -8,14 +9,8 @@ import {
   flattenText,
 } from './callee-text';
 
-function agent(patch: Partial<TeamAgentNode> = {}): TeamAgentNode {
-  return {
-    id: 'reviewer',
-    kind: 'agent',
-    agent: 'claude',
-    approval: 'auto',
-    ...patch,
-  };
+function agent(patch: Partial<TeamMember> = {}): TeamMember {
+  return member('reviewer', patch);
 }
 
 describe('flattenText', () => {
@@ -43,7 +38,7 @@ describe('calleeSummary — agent pool', () => {
       calleeSummary(
         agent({
           name: 'Reviewer',
-          description: 'Reviews a diff.',
+          role: 'Reviews a diff.',
           model: 'opus',
           configDir: '/profiles/work',
           pool: [{ agent: 'codex', model: 'gpt-5.5' }],
@@ -63,53 +58,55 @@ describe('calleeSummary — agent pool', () => {
 });
 
 describe('calleeSummary', () => {
-  it('carries the callee description', () => {
+  it('carries the callee role', () => {
     expect(
-      calleeSummary(
-        agent({ name: 'Reviewer', description: 'Reviews a diff.' }),
-        200,
-      ),
+      calleeSummary(agent({ name: 'Reviewer', role: 'Reviews a diff.' }), 200),
     ).toBe('Reviewer (agent id: reviewer) — Reviews a diff.');
   });
 
-  it('NEVER leaks the callee role — that is private instruction text', () => {
-    // The isolation guarantee: a caller learns what a callee is FOR
-    // (description), never how it works (role). If role text ever reaches a
-    // caller again, this fails.
+  it('NEVER leaks the callee instructions or character — that is private text', () => {
+    // The isolation guarantee: a caller learns what a callee is FOR (its
+    // public role), never how it works. If private text ever reaches a caller,
+    // this fails.
     const summary = calleeSummary(
       agent({
         name: 'Reviewer',
-        description: 'Reviews a diff.',
-        role: 'Run the geniro:review skill and write a handoff file.',
+        role: 'Reviews a diff.',
+        instructions: 'Run the geniro:review skill and write a handoff file.',
+        character: 'Blunt and terse.',
       }),
       200,
     );
     expect(summary).toContain('Reviews a diff.');
     expect(summary).not.toContain('geniro:review');
     expect(summary).not.toContain('handoff');
+    expect(summary).not.toContain('Blunt');
   });
 
-  it('falls back to the bare label when a callee has no description', () => {
-    // A describe-less callee is still addressable — the caller just gets no
+  it('falls back to the bare label when a callee has no role', () => {
+    // A role-less callee is still addressable — the caller just gets no
     // routing signal for it (which the builder warns about).
     expect(calleeSummary(agent({ name: 'Reviewer' }), 200)).toBe(
       'Reviewer (agent id: reviewer)',
     );
     expect(
-      calleeSummary(agent({ name: 'Reviewer', role: 'Secret role.' }), 200),
-    ).not.toContain('Secret role.');
+      calleeSummary(
+        agent({ name: 'Reviewer', instructions: 'Secret instructions.' }),
+        200,
+      ),
+    ).not.toContain('Secret instructions.');
   });
 
   it('drops the redundant id when the name IS the id', () => {
-    expect(calleeSummary(agent({ description: 'Reviews a diff.' }), 200)).toBe(
+    expect(calleeSummary(agent({ role: 'Reviews a diff.' }), 200)).toBe(
       'reviewer — Reviews a diff.',
     );
     expect(calleeSummary(agent(), 200)).toBe('reviewer');
   });
 
-  it('flattens and caps a long multi-line description', () => {
+  it('flattens and caps a long multi-line role', () => {
     const summary = calleeSummary(
-      agent({ name: 'Reviewer', description: 'Reviews\ncode\nand diffs.' }),
+      agent({ name: 'Reviewer', role: 'Reviews\ncode\nand diffs.' }),
       10,
     );
     expect(summary).toBe('Reviewer (agent id: reviewer) — Reviews co…');

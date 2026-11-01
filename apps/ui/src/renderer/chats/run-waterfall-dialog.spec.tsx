@@ -22,7 +22,7 @@ const TO = '2026-09-07T13:00:00.000Z';
 
 function lane(over: Partial<RunWaterfallLane> = {}): RunWaterfallLane {
   return {
-    nodeId: 'engineer',
+    memberId: 'engineer',
     agentKind: 'claude',
     costUsd: 12.5,
     estimatedCostUsd: null,
@@ -36,7 +36,7 @@ function lane(over: Partial<RunWaterfallLane> = {}): RunWaterfallLane {
 
 function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
   return {
-    nodeId: 'engineer',
+    memberId: 'engineer',
     startedAt: FROM,
     seq: 1,
     timingSource: 'cli',
@@ -246,7 +246,7 @@ describe('RunWaterfallDialog', () => {
       dto({
         waits: [
           {
-            nodeId: null,
+            memberId: null,
             question: true,
             toolName: 'AskUserQuestion',
             allowed: true,
@@ -364,11 +364,14 @@ describe('RunWaterfallDialog', () => {
     // call was a filled bar in the callee's colour with nothing saying so.
     const view = show(
       dto({
-        lanes: [lane({ nodeId: 'manager' }), lane({ nodeId: 'researcher' })],
+        lanes: [
+          lane({ memberId: 'manager' }),
+          lane({ memberId: 'researcher' }),
+        ],
         calls: [
           {
-            callerNodeId: 'manager',
-            calleeNodeId: 'researcher',
+            callerMemberId: 'manager',
+            calleeMemberId: 'researcher',
             mode: 'async',
             status: 'ok',
             running: false,
@@ -392,8 +395,8 @@ describe('RunWaterfallDialog', () => {
       dto({
         calls: [
           {
-            callerNodeId: 'manager',
-            calleeNodeId: 'engineer',
+            callerMemberId: 'manager',
+            calleeMemberId: 'engineer',
             mode: 'async',
             status: null,
             running: true,
@@ -414,9 +417,9 @@ describe('RunWaterfallDialog', () => {
   it('puts calls that overlap in time on separate rows instead of over one another', () => {
     // REPORTED as a usage page with "→ engineer" and "researcher" printed on
     // top of each other: a manager's concurrent calls all sat on one line.
-    const call = (calleeNodeId: string, minutes: number) => ({
-      callerNodeId: 'manager',
-      calleeNodeId,
+    const call = (calleeMemberId: string, minutes: number) => ({
+      callerMemberId: 'manager',
+      calleeMemberId,
       mode: 'async' as const,
       status: 'ok' as const,
       running: false,
@@ -427,9 +430,9 @@ describe('RunWaterfallDialog', () => {
     const view = show(
       dto({
         lanes: [
-          lane({ nodeId: 'manager' }),
-          lane({ nodeId: 'engineer' }),
-          lane({ nodeId: 'researcher' }),
+          lane({ memberId: 'manager' }),
+          lane({ memberId: 'engineer' }),
+          lane({ memberId: 'researcher' }),
         ],
         calls: [
           call('engineer', 5),
@@ -457,7 +460,7 @@ describe('RunWaterfallDialog', () => {
     // Most of a lane is the space BETWEEN its marks, so the TRACK itself has
     // to say which agent the row is and where on the clock the pointer sits —
     // otherwise that space explains nothing.
-    const view = show(dto({ lanes: [lane({ nodeId: 'engineer' })] }));
+    const view = show(dto({ lanes: [lane({ memberId: 'engineer' })] }));
 
     const track = view.querySelector('[data-lane-track]');
     expect(track).not.toBeNull();
@@ -487,9 +490,9 @@ describe('RunWaterfallDialog', () => {
     const view = show(
       dto({
         lanes: [
-          lane({ nodeId: 'manager' }),
-          lane({ nodeId: 'engineer' }),
-          lane({ nodeId: 'qa', agentKind: 'cursor-agent', costUsd: null }),
+          lane({ memberId: 'manager' }),
+          lane({ memberId: 'engineer' }),
+          lane({ memberId: 'qa', agentKind: 'cursor-agent', costUsd: null }),
         ],
       }),
     );
@@ -508,8 +511,8 @@ describe('RunWaterfallDialog', () => {
     const view = show(
       dto({
         lanes: [
-          lane({ nodeId: 'manager', turns: 1 }),
-          lane({ nodeId: 'engineer', turns: 3 }),
+          lane({ memberId: 'manager', turns: 1 }),
+          lane({ memberId: 'engineer', turns: 3 }),
         ],
         totals: { ...dto().totals, turns: 0, costedTurns: 0 },
       }),
@@ -526,10 +529,10 @@ describe('RunWaterfallDialog', () => {
     // tool on a real run — 352 calls of 520 — was reported as `1%`.
     const view = show(
       dto({
-        lanes: [lane({ nodeId: 'eng', toolCalls: 520 })],
+        lanes: [lane({ memberId: 'eng', toolCalls: 520 })],
         toolUse: [
-          { nodeId: 'eng', name: 'Bash', calls: 352, delegateCalls: 0 },
-          { nodeId: 'eng', name: 'Read', calls: 168, delegateCalls: 0 },
+          { memberId: 'eng', name: 'Bash', calls: 352, delegateCalls: 0 },
+          { memberId: 'eng', name: 'Read', calls: 168, delegateCalls: 0 },
         ],
       }),
     );
@@ -548,11 +551,11 @@ describe('RunWaterfallDialog', () => {
     const view = show(
       dto({
         lanes: [
-          lane({ nodeId: 'middle', toolCalls: 400, delegateToolCalls: 600 }),
+          lane({ memberId: 'middle', toolCalls: 400, delegateToolCalls: 600 }),
         ],
         toolUse: [
-          { nodeId: 'middle', name: 'Read', calls: 100, delegateCalls: 600 },
-          { nodeId: 'middle', name: 'Bash', calls: 300, delegateCalls: 0 },
+          { memberId: 'middle', name: 'Read', calls: 100, delegateCalls: 600 },
+          { memberId: 'middle', name: 'Bash', calls: 300, delegateCalls: 0 },
         ],
       }),
     );
@@ -600,13 +603,13 @@ describe('RunWaterfallDialog', () => {
     const view = show(
       dto({
         lanes: [
-          lane({ nodeId: 'a', toolCalls: 10, delegateToolCalls: 50 }),
-          lane({ nodeId: 'b', toolCalls: 5, delegateToolCalls: 20 }),
+          lane({ memberId: 'a', toolCalls: 10, delegateToolCalls: 50 }),
+          lane({ memberId: 'b', toolCalls: 5, delegateToolCalls: 20 }),
         ],
         toolUse: [
-          { nodeId: 'a', name: 'Read', calls: 10, delegateCalls: 50 },
-          { nodeId: 'b', name: 'Read', calls: 5, delegateCalls: 20 },
-          { nodeId: 'b', name: 'Bash', calls: 15, delegateCalls: 0 },
+          { memberId: 'a', name: 'Read', calls: 10, delegateCalls: 50 },
+          { memberId: 'b', name: 'Read', calls: 5, delegateCalls: 20 },
+          { memberId: 'b', name: 'Bash', calls: 15, delegateCalls: 0 },
         ],
       }),
     );
@@ -734,9 +737,9 @@ describe('RunWaterfallDialog', () => {
   });
 
   it('draws the part of a turn a sync call held still, and never an async one', () => {
-    const call = (mode: string, calleeNodeId: string) => ({
-      callerNodeId: 'manager',
-      calleeNodeId,
+    const call = (mode: string, calleeMemberId: string) => ({
+      callerMemberId: 'manager',
+      calleeMemberId,
       mode,
       status: 'ok',
       running: false,
@@ -747,9 +750,9 @@ describe('RunWaterfallDialog', () => {
     const view = show(
       dto({
         lanes: [
-          lane({ nodeId: 'manager' }),
-          lane({ nodeId: 'engineer' }),
-          lane({ nodeId: 'researcher' }),
+          lane({ memberId: 'manager' }),
+          lane({ memberId: 'engineer' }),
+          lane({ memberId: 'researcher' }),
         ],
         calls: [call('sync', 'engineer'), call('async', 'researcher')],
       }),
@@ -767,8 +770,8 @@ describe('RunWaterfallDialog', () => {
   it('focuses an agent from its lane name, narrowing the table to it', () => {
     const view = show(
       dto({
-        lanes: [lane({ nodeId: 'manager' }), lane({ nodeId: 'engineer' })],
-        turns: [turn({ nodeId: 'manager' }), turn({ nodeId: 'engineer' })],
+        lanes: [lane({ memberId: 'manager' }), lane({ memberId: 'engineer' })],
+        turns: [turn({ memberId: 'manager' }), turn({ memberId: 'engineer' })],
       }),
     );
     const foldRows = (): string[] =>
@@ -806,15 +809,15 @@ describe('RunWaterfallDialog', () => {
   it('lights the critical path and fades the work off it', () => {
     const view = show(
       dto({
-        lanes: [lane({ nodeId: 'manager' }), lane({ nodeId: 'engineer' })],
+        lanes: [lane({ memberId: 'manager' }), lane({ memberId: 'engineer' })],
         turns: [
-          turn({ nodeId: 'manager', startedAt: FROM, durationMs: 60_000 }),
-          turn({ nodeId: 'engineer', startedAt: FROM, durationMs: 30_000 }),
+          turn({ memberId: 'manager', startedAt: FROM, durationMs: 60_000 }),
+          turn({ memberId: 'engineer', startedAt: FROM, durationMs: 30_000 }),
         ],
         criticalPath: [
           {
             kind: 'work',
-            nodeId: 'manager',
+            memberId: 'manager',
             startedAt: FROM,
             durationMs: 60_000,
           },
@@ -926,7 +929,7 @@ describe('the rest of the view answering the pointer', () => {
     const onClose = vi.fn();
     const view = show(
       dto({
-        lanes: [lane({ nodeId: 'manager' }), lane({ nodeId: 'engineer' })],
+        lanes: [lane({ memberId: 'manager' }), lane({ memberId: 'engineer' })],
       }),
       { onClose },
     );
@@ -942,7 +945,7 @@ describe('the rest of the view answering the pointer', () => {
   it('clears a focus from its own button', () => {
     const view = show(
       dto({
-        lanes: [lane({ nodeId: 'manager' }), lane({ nodeId: 'engineer' })],
+        lanes: [lane({ memberId: 'manager' }), lane({ memberId: 'engineer' })],
       }),
     );
     press(view.querySelector('[data-slot="waterfall-lane-label"]'));
@@ -959,12 +962,12 @@ describe('the rest of the view answering the pointer', () => {
   it('draws arrows for a selected call to the work that answered it, and none for a turn', () => {
     const view = show(
       dto({
-        lanes: [lane({ nodeId: 'manager' }), lane({ nodeId: 'engineer' })],
-        turns: [turn({ nodeId: 'engineer', durationMs: 5 * 60_000 })],
+        lanes: [lane({ memberId: 'manager' }), lane({ memberId: 'engineer' })],
+        turns: [turn({ memberId: 'engineer', durationMs: 5 * 60_000 })],
         calls: [
           {
-            callerNodeId: 'manager',
-            calleeNodeId: 'engineer',
+            callerMemberId: 'manager',
+            calleeMemberId: 'engineer',
             mode: 'sync',
             status: 'ok',
             running: false,
@@ -993,7 +996,7 @@ describe('the rest of the view answering the pointer', () => {
         criticalPath: [
           {
             kind: 'idle',
-            nodeId: null,
+            memberId: null,
             startedAt: FROM,
             durationMs: 50 * 60_000,
           },

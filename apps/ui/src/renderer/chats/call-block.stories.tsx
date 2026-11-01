@@ -24,12 +24,12 @@ function row(
   seq: number,
   kind: ItemDto['kind'],
   payload: unknown,
-  nodeId = 'engineer',
+  memberId = 'engineer',
 ): ItemDto {
   return {
     id: `pool-story-${seq}`,
     runId: 'pool-preview',
-    nodeId,
+    memberId,
     seq,
     kind,
     role: null,

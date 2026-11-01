@@ -236,7 +236,7 @@ describe('codexMcpRow', () => {
   });
 });
 
-describe('a node’s per-turn switch (codexTurnMcpOverrides / codexTurnToggleReason)', () => {
+describe('a member’s per-turn switch (codexTurnMcpOverrides / codexTurnToggleReason)', () => {
   it('switches a config server off by its own key, Apps by the feature flag, and nothing else', () => {
     expect(
       codexTurnMcpOverrides(CONFIG_RESULT, [

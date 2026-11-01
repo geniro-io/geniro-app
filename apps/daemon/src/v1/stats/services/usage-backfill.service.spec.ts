@@ -22,6 +22,7 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { teamSnapshotOf } from '../../teams/utils/team-snapshot';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
@@ -100,11 +101,11 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
     runId: string,
     seq: number,
     payload: unknown = USAGE,
-    nodeId: string | null = null,
+    memberId: string | null = null,
   ): Promise<Item> {
     return itemDao.create({
       runId,
-      nodeId,
+      memberId,
       seq,
       kind: 'turn_complete',
       payload: typeof payload === 'string' ? payload : JSON.stringify(payload),
@@ -188,7 +189,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
     // the daemon died between the second turn's item write and its ledger write.
     await usageDao.recordOnce({
       runId: 'run-a',
-      nodeId: null,
+      memberId: null,
       seq: 0,
       occurredAt: new Date('2026-08-01T00:00:00.000Z'),
       agentKind: 'claude',
@@ -248,9 +249,9 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
     expect((await usageDao.getAll({})).map((row) => row.seq)).toEqual([2]);
   });
 
-  it('attributes a team node’s turn to the node’s own agent and model', async () => {
+  it('attributes a team member’s turn to the member’s own agent and model', async () => {
     // A team run names no single agent; reading the run alone would leave
-    // every node's spend unattributed.
+    // every member's spend unattributed.
     await runDao.create({
       id: 'run-w',
       teamId: 'wf-1',
@@ -260,7 +261,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
     });
     await nodeStateDao.create({
       runId: 'run-w',
-      nodeId: 'node-2',
+      memberId: 'node-2',
       agentKind: 'cursor-agent',
       model: 'composer-1',
     });
@@ -269,7 +270,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
     await service.backfill();
 
     expect((await usageDao.getAll({}))[0]).toMatchObject({
-      nodeId: 'node-2',
+      memberId: 'node-2',
       agentKind: 'cursor-agent',
       model: 'composer-1',
       cwd: '/work/project',
@@ -286,7 +287,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
     });
     await nodeStateDao.create({
       runId: 'run-w',
-      nodeId: 'node-2',
+      memberId: 'node-2',
       agentKind: 'claude',
       model: 'opus',
     });
@@ -451,11 +452,9 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
         agentKind: null,
         model: 'gpt-5.6-sol',
         teamId: 'dev-team',
-        teamSnapshot: teamSnapshotOf({
-          name: 'Dev Team',
-          nodes: [],
-          edges: [],
-        }),
+        teamSnapshot: teamSnapshotOf(
+          teamOf([member('dev')], { name: 'Dev Team' }),
+        ),
         polledCostCents: 729,
       });
 

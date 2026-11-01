@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Team, TeamAgentNode } from '../teams.types';
+import { member, teamOf } from '../__tests__/team-builders';
+import type { Team, TeamMember } from '../teams.types';
 import {
   configDirToken,
   firstLineOf,
@@ -13,29 +14,21 @@ const WORK = '/Users/me/.claude-work';
 const SPARE = '/Users/me/.claude-spare';
 const CODEX = '/Users/me/.codex-b';
 
-const CURRENT: Team = {
-  name: 'team',
-  nodes: [
-    {
-      id: 'coder',
-      kind: 'agent',
-      agent: 'claude',
-      approval: 'ask',
-      configDir: WORK,
-      pool: [
-        { agent: 'claude', configDir: SPARE },
-        { agent: 'codex', configDir: CODEX },
-      ],
-    },
-    { id: 'start', kind: 'trigger', trigger: 'manual' },
-  ],
-  edges: [],
-};
+const CURRENT: Team = teamOf([
+  member('coder', {
+    approval: 'ask',
+    configDir: WORK,
+    pool: [
+      { agent: 'claude', configDir: SPARE },
+      { agent: 'codex', configDir: CODEX },
+    ],
+  }),
+]);
 
-const coderOf = (team: Team): TeamAgentNode => team.nodes[0] as TeamAgentNode;
+const coderOf = (team: Team): TeamMember => team.members[0]!;
 
-function proposing(node: Partial<TeamAgentNode>): Team {
-  return { ...CURRENT, nodes: [{ ...coderOf(CURRENT), ...node }] };
+function proposing(overrides: Partial<TeamMember>): Team {
+  return { ...CURRENT, members: [{ ...coderOf(CURRENT), ...overrides }] };
 }
 
 describe('config-dir redaction', () => {
@@ -62,7 +55,7 @@ describe('config-dir redaction', () => {
   });
 
   it('follows a token wherever the edit moved its agent', () => {
-    // The spare claude account promoted to the node, the node's own moved into
+    // The spare claude account promoted to the member, the member's own moved into
     // the pool, the codex member dropped: positions all changed.
     const promoted = proposing({
       configDir: configDirToken(SPARE),
@@ -74,7 +67,7 @@ describe('config-dir redaction', () => {
     expect(restored).toMatchObject({
       ok: true,
       team: {
-        nodes: [{ configDir: SPARE, pool: [{ configDir: WORK }] }],
+        members: [{ configDir: SPARE, pool: [{ configDir: WORK }] }],
       },
     });
   });
@@ -115,7 +108,7 @@ describe('config-dir redaction', () => {
 
     expect(restoreConfigDirs(named, CURRENT)).toMatchObject({
       ok: true,
-      team: { nodes: [{ configDir: '/Users/me/.other' }] },
+      team: { members: [{ configDir: '/Users/me/.other' }] },
     });
   });
 

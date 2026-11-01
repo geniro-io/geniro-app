@@ -13,7 +13,7 @@ function command(
   return {
     seq: 7,
     actionId: 'run-e2e',
-    nodeId: 'agent',
+    memberId: 'agent',
     conversationId: '',
     label: 'Run e2e',
     once: false,

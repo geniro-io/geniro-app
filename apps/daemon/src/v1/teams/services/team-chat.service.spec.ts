@@ -9,16 +9,13 @@ import type { RunWire } from '../../agents/chat.types';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { ThreadAnalysisService } from '../../agents/services/thread-analysis.service';
 import type { MemoryService } from '../../memory/services/memory.service';
+import { member, teamOf } from '../__tests__/team-builders';
 import type { StartTeamChatInput, Team } from '../teams.types';
 import { teamJsonSchema } from '../utils/team-json-schema';
 import { TeamChatService } from './team-chat.service';
 import { TeamStoreService } from './team-store.service';
 
-const WF: Team = {
-  name: 'Dev Team',
-  nodes: [{ id: 'start', kind: 'trigger', trigger: 'manual' }],
-  edges: [],
-};
+const WF: Team = teamOf([member('lead')], { name: 'Dev Team' });
 
 const CHIPS: StartTeamChatInput = {
   agentKind: 'claude',

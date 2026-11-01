@@ -793,7 +793,7 @@ describe('CursorAcpAdapter keeps ONE process for the whole conversation', () => 
 });
 
 describe('CursorAcpAdapter turn shaping', () => {
-  it('carries a graph node role in the prompt, ACP having no system-prompt field', () => {
+  it('carries a team member’s instructions in the prompt, ACP having no system-prompt field', () => {
     const { spawn, child } = fakeSpawn();
     new CursorAcpAdapter({
       vocabularyStore: freshVocabularyStore(),
@@ -809,7 +809,7 @@ describe('CursorAcpAdapter turn shaping', () => {
     const prompt = framesOn(child).find(
       (frame) => frame.method === 'session/prompt',
     )?.params as { prompt: { text: string }[] };
-    // The node role still leads the user's message; the host preamble sits
+    // The member's instructions still lead the user's message; the host preamble sits
     // ahead of both, per turnInstructionParts' general → specific order.
     expect(prompt.prompt[0]?.text).toBe(
       `ship it\n\n${hostBlock(`${HOST_BLOCK}\n\nYou are a reviewer.`)}`,
@@ -844,7 +844,7 @@ describe('CursorAcpAdapter turn shaping', () => {
     );
   });
 
-  it('carries a graph node’s instruction blocks into the prompt text', () => {
+  it('carries a team member’s instruction blocks into the prompt text', () => {
     // The ACP half of the claude argv case: one seam composes the block, so a
     // field that reaches one transport and not the other is the drift both
     // these tests exist to catch.
@@ -1421,7 +1421,7 @@ describe('CursorAcpAdapter turn shaping', () => {
   });
 
   it('lets a caller’s explicit config dir win over the throwaway one', () => {
-    // A node pointed at a profile must not be silently overridden by the
+    // A member pointed at a profile must not be silently overridden by the
     // per-turn directory — that would disable the feature from underneath it.
     const { spawn, captured } = fakeSpawn();
     const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
@@ -1613,7 +1613,7 @@ describe('CursorAcpAdapter turn shaping', () => {
     });
   });
 
-  it('runs a node’s switched-off MCP servers under a data dir whose disabled list adds them, and drops it with the session', async () => {
+  it('runs a member’s switched-off MCP servers under a data dir whose disabled list adds them, and drops it with the session', async () => {
     const { spawn, captured, child } = fakeSpawn();
     const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
     const home = mkdtempSync(join(tmpdir(), 'cursor-home-spec-'));
@@ -1853,7 +1853,7 @@ describe('CursorAcpAdapter permission round-trip', () => {
   });
 
   it('approves a request itself in auto mode, with no card', () => {
-    // An unattended node runs in `auto`; a request parked on a card there would
+    // An unattended member runs in `auto`; a request parked on a card there would
     // wait for a person who is not coming.
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
@@ -2334,7 +2334,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
 
   describe('a background delegate’s ending, read off its own transcript', () => {
     /**
-     * REPORTED: nine reviewers a QA node launched in the background rendered
+     * REPORTED: nine reviewers a QA member launched in the background rendered
      * as nine green checks the moment its turn ended — the turn closed them,
      * with no outcome claimed, which the transcript draws as finished — while
      * every one was still working; the Manager then had to send the QA back to
@@ -2768,7 +2768,7 @@ ${RESUMED}
     });
 
     it('does not settle a held turn because the machine slept through the window', async () => {
-      // node's timers count through a macOS sleep: the hold ran out at the
+      // member's timers count through a macOS sleep: the hold ran out at the
       // wake and the turn ended on its partial answer, over delegates that had
       // been asleep with the machine, not idle.
       const { child, events, warn } = launchInBackground();
@@ -3667,8 +3667,8 @@ describe('CursorAcpAdapter misuse', () => {
 
   it('keeps two interleaved turns of ONE adapter instance on separate protocol state', () => {
     // Production has exactly one CursorAcpAdapter — a default-scope Nest
-    // provider, held as a single `cursor` by the graph executor — serving
-    // every node of a fanned-out graph. State that must not cross-wire
+    // provider, held as a single `cursor` by the team executor — serving
+    // every member of a fanned-out team. State that must not cross-wire
     // (session id, the request-id counter, the stdin writer) is only
     // exercised when both turns come from the SAME instance.
     const childA = new FakeChild();

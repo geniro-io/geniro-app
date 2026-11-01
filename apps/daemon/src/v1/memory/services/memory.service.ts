@@ -159,21 +159,21 @@ export class MemoryService {
   }
 
   /**
-   * Who a tool call on this run and node is: the node's own agent in a
+   * Who a tool call on this run and member is: the member's own agent in a
    * team, else the chat's. An analysis chat writes as `analysis`, held to
    * the same review rule as any agent.
    */
-  async actorOf(runId: string, nodeId: string): Promise<MemoryActor> {
+  async actorOf(runId: string, memberId: string): Promise<MemoryActor> {
     const em = this.em.fork();
     const run = await this.runs.getById(runId, em);
-    const node = await this.nodeStates.getByRunNode(runId, nodeId, em);
+    const state = await this.nodeStates.getByRunNode(runId, memberId, em);
     const kind =
       run?.analysisSourceRunId || run?.analysisTeamSlug ? 'analysis' : 'agent';
     return {
       kind,
       runId,
-      agentKind: node?.agentKind ?? run?.agentKind ?? null,
-      model: node?.model ?? run?.model ?? null,
+      agentKind: state?.agentKind ?? run?.agentKind ?? null,
+      model: state?.model ?? run?.model ?? null,
     };
   }
 

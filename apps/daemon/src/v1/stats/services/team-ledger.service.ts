@@ -6,17 +6,18 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import type { RunFacts } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
-import { parseTeamSnapshot } from '../../teams/utils/team-snapshot';
+import { TeamChangeLogService } from '../../teams/services/team-change-log.service';
 import {
-  canonicalGraphJson,
-  canonicalGraphOf,
-  teamVersionOf,
-} from '../../teams/utils/team-version';
+  parseTeamSnapshot,
+  snapshotCanonicalJson,
+  snapshotVersionOf,
+} from '../../teams/utils/team-snapshot';
+import { isLegacyCanonical } from '../../teams/utils/team-version';
 import { TeamVersionDao } from '../dao/team-version.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 
 /**
- * Runs created before this instant got no graph copy when they started; theirs was
+ * Runs created before this instant got no team copy when they started; theirs was
  * frozen from the library on a later read, so their version is marked inferred. It is
  * the release that started keeping copies (v1.93.0, 2026-09-13), so on an install
  * updated later a run made in between is not marked, though its copy is as late.
@@ -28,7 +29,7 @@ const SWEEP_WINDOW = 25;
 
 /**
  * The team ledger: stamps each team run's `usage_activity` thread row with its
- * graph version when it is created, and records each version's graph in
+ * team version when it is created, and records each version's team in
  * `team_versions`. Both survive the run's deletion, which is what lets the Teams
  * screen count a version's runs and cost after its chats are gone.
  *
@@ -47,6 +48,7 @@ export class TeamLedgerService implements OnModuleInit {
     private readonly runDao: RunDao,
     private readonly activityDao: UsageActivityDao,
     private readonly versionDao: TeamVersionDao,
+    private readonly changeLog: TeamChangeLogService,
   ) {}
 
   onModuleInit(): void {
@@ -127,12 +129,12 @@ export class TeamLedgerService implements OnModuleInit {
   }
 
   /**
-   * Stamp a run's team and version, once. A run with no graph copy it can read is
+   * Stamp a run's team and version, once. A run with no team copy it can read is
    * stamped with its team alone and stays that way, even when a later read freezes
-   * the library's graph into it: that graph is not the one it ran.
+   * the library's team into it: that team is not the one it ran.
    *
-   * An inferred version is not registered. Its graph was frozen at some later, unknown
-   * time, so its run's creation date says nothing about when the graph was first used,
+   * An inferred version is not registered. Its team was frozen at some later, unknown
+   * time, so its run's creation date says nothing about when that version was first used,
    * and registering it would number it, and diff its neighbours, out of order.
    */
   private async stampVersion(
@@ -153,15 +155,18 @@ export class TeamLedgerService implements OnModuleInit {
       );
       return;
     }
-    const version = teamVersionOf(reading.team);
+    const version = snapshotVersionOf(reading);
     const inferred =
       run.createdAt.getTime() < SNAPSHOT_AT_CREATION_SINCE.getTime();
+    if (!inferred && reading.legacy === null) {
+      await this.noteMigration(run.teamId, version, em);
+    }
     if (!inferred) {
-      // The graph first, so a stamped version always has its graph to show.
+      // The team first, so a stamped version always has its team to show.
       await this.versionDao.register(
         run.teamId,
         version,
-        canonicalGraphJson(canonicalGraphOf(reading.team)),
+        snapshotCanonicalJson(reading),
         run.createdAt,
         em,
       );
@@ -172,6 +177,27 @@ export class TeamLedgerService implements OnModuleInit {
       { slug: run.teamId, version, inferred },
       em,
     );
+  }
+
+  /**
+   * Logs the team's conversion from a node graph once, at the first team-shaped
+   * version recorded after only graph-shaped ones.
+   */
+  private async noteMigration(
+    slug: string,
+    version: string,
+    em: EntityManager,
+  ): Promise<void> {
+    const recorded = await this.versionDao.graphsOf(slug, em);
+    const latest = recorded.at(-1);
+    if (
+      latest === undefined ||
+      latest.version === version ||
+      recorded.some((entry) => !isLegacyCanonical(entry.graph))
+    ) {
+      return;
+    }
+    await this.changeLog.recordMigration(slug, latest.version, version);
   }
 
   /**

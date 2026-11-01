@@ -231,7 +231,7 @@ function initializeReply(
   };
 }
 
-/** A caller node's call surface, which is what puts a real entry in `mcpServers`. */
+/** A caller member's call surface, which is what puts a real entry in `mcpServers`. */
 const MCP_ENDPOINT = {
   url: 'http://127.0.0.1:1/v1/mcp/run-1/node-1',
   token: 'tok-1',
@@ -420,7 +420,7 @@ describe('the request shapes this client sends', () => {
       expect(conformanceErrors(defName, params)).toEqual([]);
     });
 
-    it('conforms on session/new carrying a caller node’s MCP server', () => {
+    it('conforms on session/new carrying a caller member’s MCP server', () => {
       // Needs the capability AND the endpoint: either missing and the list is
       // empty, which the cases above already validate.
       const driven = drive({

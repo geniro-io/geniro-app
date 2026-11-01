@@ -26,7 +26,7 @@ function proc(
 function tree(processes: RunProcess[]): RunProcessTree {
   return {
     sessionKey: 'run-1',
-    nodeId: null,
+    memberId: null,
     conversationId: null,
     agentKind: 'claude',
     cwd: '/p',

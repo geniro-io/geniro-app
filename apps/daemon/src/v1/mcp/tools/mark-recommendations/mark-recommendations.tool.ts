@@ -21,8 +21,8 @@ export class MarkRecommendationsTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.analysis.canAnalyse(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.analysis.canAnalyse(runId, memberId);
   }
 
   protected instructions(): string {
@@ -35,14 +35,14 @@ export class MarkRecommendationsTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId }: McpCallContext,
+    { runId, memberId }: McpCallContext,
   ): Promise<McpToolResult> {
     const read = readRecommendationMarks(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
     const result = marksResultText(
-      await this.analysis.mark(runId, nodeId, read.query),
+      await this.analysis.mark(runId, memberId, read.query),
     );
     return this.text(result.text, result.isError);
   }

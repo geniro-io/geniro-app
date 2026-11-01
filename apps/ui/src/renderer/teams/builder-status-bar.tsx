@@ -5,10 +5,10 @@ import type { AutosaveState } from './use-autosave';
 
 /**
  * The builder's bottom status bar — a slim, always-present strip replacing the
- * old top notice line and the Save button. It reports what the canvas holds
+ * old top notice line and the Save button. It reports what the team holds
  * (left), the last transient outcome such as an export path (middle), and the
  * autosave state (right). Being always-present means it never reflows the
- * canvas by appearing/disappearing the way the top notice did.
+ * editor by appearing/disappearing the way the top notice did.
  */
 
 const SAVE_LABEL = {
@@ -49,22 +49,25 @@ function SaveIcon({ state }: { state: AutosaveState }): React.JSX.Element {
 }
 
 export function BuilderStatusBar({
-  nodeCount,
-  edgeCount,
+  memberCount,
+  stageCount,
   message,
   saveState,
+  pausedReason = null,
 }: {
-  nodeCount: number;
-  edgeCount: number;
+  memberCount: number;
+  stageCount: number;
   /** Transient outcome of the last explicit action (e.g. an export path). */
   message: string | null;
   saveState: AutosaveState;
+  /** Why held edits are not being written, shown beside a `paused` state. */
+  pausedReason?: string | null;
 }): React.JSX.Element {
   return (
     <footer className="flex shrink-0 items-center gap-3 border-t border-border bg-card px-3 py-1.5 text-xs text-muted-foreground">
       <span className="shrink-0 tabular-nums">
-        {nodeCount} {nodeCount === 1 ? 'node' : 'nodes'} · {edgeCount}{' '}
-        {edgeCount === 1 ? 'edge' : 'edges'}
+        {memberCount} {memberCount === 1 ? 'member' : 'members'} · {stageCount}{' '}
+        {stageCount === 1 ? 'stage' : 'stages'}
       </span>
       {message ? (
         <span className="min-w-0 flex-1 truncate" title={message}>
@@ -83,7 +86,9 @@ export function BuilderStatusBar({
           SAVE_TONE[saveState],
         )}>
         <SaveIcon state={saveState} />
-        {SAVE_LABEL[saveState]}
+        {saveState === 'paused' && pausedReason !== null
+          ? `${SAVE_LABEL.paused} — ${pausedReason}`
+          : SAVE_LABEL[saveState]}
       </span>
     </footer>
   );

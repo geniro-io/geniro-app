@@ -14,6 +14,7 @@ import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { Run } from '../../runs/entity/run.entity';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { Team } from '../../teams/teams.types';
 import { teamVersionOf } from '../../teams/utils/team-version';
@@ -22,11 +23,7 @@ import { TeamRecommendation } from '../entity/team-recommendation.entity';
 import { filedRecommendationsOf } from '../utils/recommendation-ledger';
 import { RecommendationLedgerService } from './recommendation-ledger.service';
 
-const LIBRARY: Team = {
-  name: 'Dev Team',
-  nodes: [{ id: 'dev', kind: 'agent', agent: 'claude', approval: 'auto' }],
-  edges: [],
-};
+const LIBRARY: Team = teamOf([member('dev')], { name: 'Dev Team' });
 
 function card(ids: string[]): RecommendationsPayload {
   return {
@@ -173,7 +170,7 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
       item: {
         id: `${runId}-${seq}`,
         runId,
-        nodeId: null,
+        memberId: null,
         seq,
         kind,
         role,

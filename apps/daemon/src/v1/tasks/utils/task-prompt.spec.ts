@@ -52,8 +52,8 @@ describe('the report instructions — the board tool', () => {
     }
   });
 
-  it('tells a team node to leave the card to the agent that concludes', () => {
-    // Every node of a task team holds the tool; without this each one
+  it('tells a team member to leave the card to the agent that concludes', () => {
+    // Every member of a task team holds the tool; without this each one
     // replaces the card's report with its own slice.
     expect(TASK_REPORT_INSTRUCTIONS_TEAM).toMatch(/leaves the card alone/);
     expect(TASK_REPORT_INSTRUCTIONS).not.toMatch(/leaves the card alone/);

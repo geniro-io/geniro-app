@@ -6,10 +6,10 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
 import type { StageMoveRequest } from '../teams.types';
 import { callerKey } from '../utils/caller-key';
-import { leadAgentId } from '../utils/graph-order';
 import { userMoveWake } from '../utils/stage-text';
-import { GraphExecutorService } from './graph-executor.service';
+import { triggerMemberId } from '../utils/team-roster';
 import { StageService } from './stage.service';
+import { TeamExecutorService } from './team-executor.service';
 
 export interface UserStageMove {
   progress: StageProgress;
@@ -23,7 +23,7 @@ export class StageWakeService implements OnModuleInit {
 
   constructor(
     private readonly stages: StageService,
-    private readonly executor: GraphExecutorService,
+    private readonly executor: TeamExecutorService,
     private readonly wakes: HostWakeBus,
     private readonly bus: AgentEventBus,
   ) {}
@@ -110,10 +110,10 @@ export class StageWakeService implements OnModuleInit {
       }
       throw new BadRequestException(result.code, result.message);
     }
-    const lead = leadAgentId(result.team.nodes, result.team.edges);
+    const lead = triggerMemberId(result.team);
     const text = userMoveWake(
       result.stages,
-      result.team.nodes,
+      result.team.members,
       {
         action: request.action,
         stageId: result.payload.stageId,
@@ -169,7 +169,7 @@ export class StageWakeService implements OnModuleInit {
       key,
       owner: {
         runId,
-        nodeId: lead,
+        memberId: lead,
         conversationId: null,
         caller: callerKey(lead, null),
         target: 'team',
@@ -184,6 +184,6 @@ export class StageWakeService implements OnModuleInit {
   }
 }
 
-function stageBriefLine(stage: { doneWhen: string }): string {
-  return `Done when: ${stage.doneWhen.trim()}`;
+function stageBriefLine(stage: { goal: string }): string {
+  return `Goal: ${stage.goal.trim()}`;
 }

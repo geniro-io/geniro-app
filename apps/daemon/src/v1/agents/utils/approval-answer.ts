@@ -5,7 +5,7 @@ import { asksForSecret, secretAnswerParts } from './card-questions';
 
 /**
  * The question/answer seam shared by the two approval-card producers (the
- * graph executor and the chat service).
+ * team executor and the chat service).
  *
  * None of these helpers knows a CLI's tool names or payload shapes: the caller
  * passes the question tool its adapter declares

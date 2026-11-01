@@ -47,7 +47,7 @@ export function proposeTeamSchema(
     properties: {
       team: {
         ...team,
-        description: `The whole team, as the library file would hold it. Every agent node states its own \`approval\`. A \`configDir\` read from ${HOST_READ_TEAMS_TOOL} as "${CONFIG_DIR_TOKEN_PREFIX}…>" is sent back as that token (only when replacing that team); never guess a path.`,
+        description: `The whole team, as the library file would hold it. Every member states its own \`approval\`. A \`configDir\` read from ${HOST_READ_TEAMS_TOOL} as "${CONFIG_DIR_TOKEN_PREFIX}…>" is sent back as that token (only when replacing that team); never guess a path.`,
       },
       replaces: {
         type: 'string',

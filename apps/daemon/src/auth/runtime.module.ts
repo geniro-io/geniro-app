@@ -8,8 +8,8 @@ import { RUNTIME_TOKEN, type RuntimeInfo } from './runtime';
  * startedAt) app-wide. Global so any feature module — the HTTP token guard, the
  * notifications gateway — can inject `RUNTIME_TOKEN` without re-declaring it.
  * The value is minted in `main.ts` and handed in via `forRoot`. Also hosts the
- * {@link CallTokenRegistry}: the guard (auth) reads it and the graph executor
- * (graphs) writes it, so it lives below both to avoid a module cycle.
+ * {@link CallTokenRegistry}: the guard (auth) reads it and the team executor
+ * (teams) writes it, so it lives below both to avoid a module cycle.
  */
 @Global()
 @Module({})

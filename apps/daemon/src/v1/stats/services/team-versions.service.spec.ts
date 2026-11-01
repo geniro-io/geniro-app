@@ -20,14 +20,17 @@ import {
 } from 'vitest';
 
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { TeamChangeLogDao } from '../../teams/dao/team-change-log.dao';
 import { TeamChangeLogEntry } from '../../teams/entity/team-change-log-entry.entity';
 import { TeamChangeLogService } from '../../teams/services/team-change-log.service';
 import { TeamStoreService } from '../../teams/services/team-store.service';
-import type { Team } from '../../teams/teams.types';
+import type { LegacyTeamGraph, Team } from '../../teams/teams.types';
 import {
   canonicalGraphJson,
   canonicalGraphOf,
+  legacyCanonicalJson,
+  legacyGraphVersionOf,
   teamVersionOf,
 } from '../../teams/utils/team-version';
 import { TeamVersionDao } from '../dao/team-version.dao';
@@ -39,11 +42,7 @@ import { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageEventInput } from '../stats.types';
 import { TeamVersionsService } from './team-versions.service';
 
-const graph: Team = {
-  name: 'Dev Team',
-  nodes: [{ id: 'start', kind: 'trigger', trigger: 'manual' }],
-  edges: [],
-};
+const graph: Team = teamOf([member('lead')], { name: 'Dev Team' });
 const VERSION = teamVersionOf(graph);
 
 /** Real DAOs on an in-memory database: what this service adds is which rows it reads. */
@@ -110,7 +109,7 @@ describe('TeamVersionsService (in-memory sqlite)', () => {
   function turn(runId: string, costUsd: number): UsageEventInput {
     return {
       runId,
-      nodeId: 'start',
+      memberId: 'lead',
       seq: 1,
       occurredAt: created,
       agentKind: 'claude',
@@ -163,10 +162,7 @@ describe('TeamVersionsService (in-memory sqlite)', () => {
   it('diffs a version’s graph against the one recorded before it', async () => {
     const next: Team = {
       ...graph,
-      nodes: [
-        ...graph.nodes,
-        { id: 'qa', kind: 'agent', agent: 'claude', approval: 'auto' },
-      ],
+      members: [...graph.members, member('qa')],
     };
     const NEXT = teamVersionOf(next);
     for (const [team, version, at] of [
@@ -202,32 +198,26 @@ describe('TeamVersionsService (in-memory sqlite)', () => {
     let store: TeamStoreService;
     let restoring: TeamVersionsService;
 
-    const older: Team = {
+    const older: Team = teamOf([member('lead'), member('dev')], {
       name: 'Old name',
-      nodes: [
-        { id: 'start', kind: 'trigger', trigger: 'manual' },
-        { id: 'dev', kind: 'agent', agent: 'claude', approval: 'auto' },
+    });
+    const newer: Team = teamOf(
+      [
+        member('lead', { instructions: 'Lead the work' }),
+        member('dev'),
+        member('qa', { agent: 'codex' }),
       ],
-      edges: [{ from: 'start', to: 'dev', kind: 'data' }],
-    };
-    const newer: Team = {
-      name: 'Dev Team',
-      description: 'Ships things',
-      maxActiveTurns: 2,
-      nodes: [
-        ...older.nodes,
-        { id: 'qa', kind: 'agent', agent: 'codex', approval: 'auto' },
-      ],
-      edges: [
-        { from: 'start', to: 'dev', kind: 'data', label: 'brief' },
-        { from: 'dev', to: 'qa', kind: 'call' },
-      ],
-      layout: {
-        start: { x: 0, y: 0 },
-        dev: { x: 100, y: 0 },
-        qa: { x: 200, y: 0 },
+      {
+        name: 'Dev Team',
+        description: 'Ships things',
+        maxActiveTurns: 2,
+        mode: 'lead',
+        triggers: [{ kind: 'first-message', member: 'dev' }],
+        instructionBlocks: [
+          { id: 'style', title: 'Style', text: 'Be brief', audience: ['qa'] },
+        ],
       },
-    };
+    );
     const OLDER = teamVersionOf(older);
 
     beforeEach(async () => {
@@ -255,7 +245,7 @@ describe('TeamVersionsService (in-memory sqlite)', () => {
       await rm(dir, { recursive: true, force: true });
     });
 
-    it('writes the version’s graph, keeping the name, description, places and labels, and backs the old file up', async () => {
+    it('writes the version’s team, keeping the name and description, and backs the old file up', async () => {
       const before = await readFile(join(dir, 'dev-team.team.yaml'), 'utf8');
       const { hash } = await store.get('dev-team');
 
@@ -267,14 +257,94 @@ describe('TeamVersionsService (in-memory sqlite)', () => {
       expect(team).toMatchObject({
         name: 'Dev Team',
         description: 'Ships things',
-        layout: { start: { x: 0, y: 0 }, dev: { x: 100, y: 0 } },
-        edges: [{ from: 'start', to: 'dev', kind: 'data', label: 'brief' }],
+        mode: 'lead',
+        members: older.members,
+        triggers: [{ kind: 'first-message', member: 'lead' }],
+        instructionBlocks: [],
       });
       expect(team.maxActiveTurns).toBeUndefined();
-      expect(team.layout).not.toHaveProperty('qa');
       expect(restored.hash).toBe((await store.get('dev-team')).hash);
       expect(restored.backup).toMatch(/^\.backups\/dev-team\..+\.yaml$/);
       expect(await readFile(join(dir, restored.backup), 'utf8')).toBe(before);
+    });
+
+    it('restores the mode, cap, trigger and blocks of a version over a file that differs in each', async () => {
+      const differingFile: Team = {
+        ...newer,
+        mode: 'relay',
+        maxActiveTurns: undefined,
+        instructionBlocks: [],
+      };
+      const target = {
+        ...newer,
+        maxActiveTurns: 5,
+        triggers: [{ kind: 'first-message' as const, member: 'qa' }],
+      };
+      const TARGET = teamVersionOf(target);
+      await versionDao.register(
+        'dev-team',
+        TARGET,
+        canonicalGraphJson(canonicalGraphOf(target)),
+        created,
+      );
+      await store.save('dev-team', differingFile);
+      const { hash } = await store.get('dev-team');
+
+      await restoring.restore('dev-team', TARGET, hash);
+
+      const { team } = await store.get('dev-team');
+      expect(team).toMatchObject({
+        mode: 'lead',
+        maxActiveTurns: 5,
+        triggers: [{ kind: 'first-message', member: 'qa' }],
+        instructionBlocks: newer.instructionBlocks,
+        members: newer.members,
+      });
+      expect(teamVersionOf(team)).toBe(TARGET);
+    });
+
+    it('restores a version recorded while teams were node graphs as the team it converts to', async () => {
+      const legacy: LegacyTeamGraph = {
+        name: 'Old graph',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual' },
+          {
+            id: 'dev',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            description: 'Writes code',
+            role: 'Write carefully',
+          },
+        ],
+        edges: [{ from: 'start', to: 'dev', kind: 'data' }],
+      };
+      const LEGACY = legacyGraphVersionOf(legacy);
+      await versionDao.register(
+        'dev-team',
+        LEGACY,
+        legacyCanonicalJson(legacy),
+        created,
+      );
+      const { hash } = await store.get('dev-team');
+
+      const restored = await restoring.restore('dev-team', LEGACY, hash);
+
+      const { team } = await store.get('dev-team');
+      expect(team).toMatchObject({
+        name: 'Dev Team',
+        description: 'Ships things',
+        members: [
+          member('dev', {
+            role: 'Writes code',
+            instructions: 'Write carefully',
+          }),
+        ],
+        triggers: [{ kind: 'first-message', member: 'dev' }],
+        instructionBlocks: [],
+      });
+      expect(restored.version).toBe(teamVersionOf(team));
+      expect(restored.version).not.toBe(LEGACY);
     });
 
     it('logs the restore with the version it replaced and the one it wrote back', async () => {
@@ -308,13 +378,13 @@ describe('TeamVersionsService (in-memory sqlite)', () => {
         {
           id: 'build',
           title: 'Build',
-          doneWhen: 'It compiles',
+          goal: 'It compiles',
           next: ['ship'],
         },
-        { id: 'ship', title: 'Ship', doneWhen: 'It is released' },
+        { id: 'ship', title: 'Ship', goal: 'It is released' },
       ];
       const newerStages: NonNullable<Team['stages']> = [
-        { id: 'plan', title: 'Plan', doneWhen: 'A plan exists' },
+        { id: 'plan', title: 'Plan', goal: 'A plan exists' },
       ];
 
       it('writes the version’s own stages over the file’s different ones', async () => {
@@ -385,7 +455,7 @@ describe('TeamVersionsService (in-memory sqlite)', () => {
       });
     });
 
-    it('records the graph it replaces when no run stamped it, so it can be restored back', async () => {
+    it('records the team it replaces when no run stamped it, so it can be restored back', async () => {
       const { hash } = await store.get('dev-team');
 
       await restoring.restore('dev-team', OLDER, hash);
@@ -408,7 +478,7 @@ describe('TeamVersionsService (in-memory sqlite)', () => {
       );
     });
 
-    it('records nothing new for a replaced graph a run already stamped', async () => {
+    it('records nothing new for a replaced team a run already stamped', async () => {
       await teamThread('ran-newer', teamVersionOf(newer));
       const { hash } = await store.get('dev-team');
 
@@ -419,7 +489,7 @@ describe('TeamVersionsService (in-memory sqlite)', () => {
       ).toEqual([OLDER]);
     });
 
-    it('shows the library graph before its first run as the current row', async () => {
+    it('shows the library team before its first run as the current row', async () => {
       const read = await restoring.read('dev-team');
 
       expect(read.versions[0]).toMatchObject({

@@ -163,7 +163,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     );
   });
 
-  /** A run holding one node, two of its call threads, and a transcript row. */
+  /** A run holding one member, two of its call threads, and a transcript row. */
   const seedRun = async (runId: string): Promise<void> => {
     await runDao.create({ id: runId, agentKind: 'claude', cwd: '/work' });
     await nodeStateDao.createPending(runId, 'node-a');
@@ -212,7 +212,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     });
     const owner = {
       runId: 'run-a',
-      nodeId: 'agent',
+      memberId: 'agent',
       caller: 'agent',
       conversationId: null,
       callId: null,
@@ -321,8 +321,10 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     // the table for good and be summed into nothing anyone can see.
     await seedRun('run-a');
     await seedRun('run-b');
-    await wallTurnDao.record('run-a', [{ seq: 3, nodeId: 'node-a', ms: 900 }]);
-    await wallTurnDao.record('run-b', [{ seq: 3, nodeId: null, ms: 700 }]);
+    await wallTurnDao.record('run-a', [
+      { seq: 3, memberId: 'node-a', ms: 900 },
+    ]);
+    await wallTurnDao.record('run-b', [{ seq: 3, memberId: null, ms: 700 }]);
 
     await teardown.purge(orm.em.fork(), 'run-a', undefined);
 
@@ -549,7 +551,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       ]);
     });
 
-    it('deletes a team node’s sessions under the profile its snapshot names', async () => {
+    it('deletes a team member’s sessions under the profile its snapshot names', async () => {
       await runDao.create({
         id: 'run-w',
         teamId: 'dev-team',
@@ -566,13 +568,13 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       await nodeStateDao.saveSessionId('run-w', 'qa', 'q-1');
 
       const em = orm.em.fork();
-      for (const [nodeId, agentKind] of [
+      for (const [memberId, agentKind] of [
         ['manager', 'claude'],
         ['qa', 'cursor-agent'],
       ] as const) {
         await em.nativeUpdate(
           NodeState,
-          { runId: 'run-w', nodeId },
+          { runId: 'run-w', memberId },
           { agentKind },
         );
       }
@@ -593,7 +595,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       ]);
     });
 
-    it('looks for a POOLED node’s session under every member’s CLI and profile', async () => {
+    it('looks for a POOLED member’s session under every pool member’s CLI and profile', async () => {
       await runDao.create({
         id: 'run-p',
         teamId: 'dev-team',
@@ -619,7 +621,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
         .fork()
         .nativeUpdate(
           NodeState,
-          { runId: 'run-p', nodeId: 'engineer' },
+          { runId: 'run-p', memberId: 'engineer' },
           { agentKind: 'codex' },
         );
 

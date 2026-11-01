@@ -4,12 +4,13 @@ import { registerSecret } from '../v1/diagnostics/utils/redact';
 import { mintToken } from './mint-token';
 
 /**
- * Per-caller-node MCP call tokens. The graph executor mints one token per
- * claude caller node of a run; the loopback guard accepts it ONLY on that
- * node's own `/v1/mcp/<runId>/<nodeId>` route; the executor revokes the whole
- * run's set when it settles. Keying by (runId, nodeId) — not just runId —
- * binds the credential to a single caller identity, so one callee child that
- * holds its own token cannot claim another node's route in the same run.
+ * Per-member MCP call tokens. The team executor mints one token per
+ * call-capable member of a run; the loopback guard accepts it ONLY on that
+ * member's own `/v1/mcp/<runId>/<memberId>` route; the executor revokes the
+ * whole run's set when it settles. Keying by (runId, memberId) — not just
+ * runId — binds the credential to a single caller identity, so one callee
+ * child that holds its own token cannot claim another member's route in the
+ * same run.
  *
  * In-memory by design — a call token must never outlive the daemon launch,
  * and a restart invalidates every outstanding one (callee children die with
@@ -20,7 +21,7 @@ export class CallTokenRegistry {
   private readonly byRun = new Map<string, Map<string, string>>();
 
   /**
-   * Store `token` as the credential for `nodeId`'s MCP route in `runId`.
+   * Store `token` as the credential for `memberId`'s MCP route in `runId`.
    *
    * Registered for redaction HERE, at the one place every call token passes
    * through, so no caller has to remember to. `utils/redact.ts` already states
@@ -33,21 +34,21 @@ export class CallTokenRegistry {
    * paste into a bug report. The registry is idempotent per (value, label), so
    * re-issuing the same token costs nothing.
    */
-  issue(runId: string, nodeId: string, token: string): void {
+  issue(runId: string, memberId: string, token: string): void {
     registerSecret(token, 'call token');
-    let nodes = this.byRun.get(runId);
-    if (!nodes) {
-      nodes = new Map();
-      this.byRun.set(runId, nodes);
+    let members = this.byRun.get(runId);
+    if (!members) {
+      members = new Map();
+      this.byRun.set(runId, members);
     }
-    nodes.set(nodeId, token);
+    members.set(memberId, token);
   }
 
   /**
-   * The token for `nodeId`'s route in `runId`, minting one only if it has none.
+   * The token for `memberId`'s route in `runId`, minting one only if it has none.
    *
    * The ONE way a run start should reach for a token, and it exists because
-   * re-minting is invisible until it is not: a node's CLI process is kept
+   * re-minting is invisible until it is not: a member's CLI process is kept
    * between passes and presents the token it spawned with, so a fresh token
    * here locks that process out of its own endpoint for the rest of the run —
    * every `call_agent`, `await_agent` and board-tool call answered 403 by the
@@ -61,19 +62,19 @@ export class CallTokenRegistry {
    * guard and the board-task loop beside it did not, which is exactly the shape
    * that made a task run the one that broke.
    */
-  ensure(runId: string, nodeId: string): string {
-    const existing = this.get(runId, nodeId);
+  ensure(runId: string, memberId: string): string {
+    const existing = this.get(runId, memberId);
     if (existing !== null) {
       return existing;
     }
     const token = mintToken();
-    this.issue(runId, nodeId, token);
+    this.issue(runId, memberId, token);
     return token;
   }
 
-  /** The token authorizing `nodeId`'s route in `runId`, or null. */
-  get(runId: string, nodeId: string): string | null {
-    return this.byRun.get(runId)?.get(nodeId) ?? null;
+  /** The token authorizing `memberId`'s route in `runId`, or null. */
+  get(runId: string, memberId: string): string | null {
+    return this.byRun.get(runId)?.get(memberId) ?? null;
   }
 
   /** Drop every token minted for a settled run. */

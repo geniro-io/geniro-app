@@ -19,15 +19,15 @@ import {
  * the cached health reading; it is what the panel's Refresh control sets, and
  * the only way a server that has since recovered is re-dialled.
  *
- * `cwd` is OPTIONAL because the graph builder genuinely has no folder — a
+ * `cwd` is OPTIONAL because the team editor genuinely has no folder — a
  * team is edited long before it runs in one. Omitting it asks for the set
  * that does not depend on a folder (the user's global servers, plus whatever
  * `configDir` brings); the project-scope servers of whichever folder the run
  * lands in are added by the CLI itself at run time.
  *
- * `configDir` is a node's own agent config directory (validated server-side by
+ * `configDir` is a member's own agent config directory (validated server-side by
  * `resolveValidConfigDir`). A profile carries its own MCP servers, which is what
- * makes two agent nodes' listings genuinely differ.
+ * makes two team members' listings genuinely differ.
  */
 export const listMcpServersQuerySchema = z.object({
   agent: AgentKindSchema,

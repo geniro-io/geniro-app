@@ -133,29 +133,29 @@ describe('LoopbackTokenGuard', () => {
     });
   });
 
-  describe('per-node call token (MCP namespace)', () => {
+  describe('per-member call token (MCP namespace)', () => {
     const CALL = 'orch-call-token';
 
     function registryWith(
       runId: string,
-      nodeId: string,
+      memberId: string,
       token: string,
     ): CallTokenRegistry {
       const registry = new CallTokenRegistry();
-      registry.issue(runId, nodeId, token);
+      registry.issue(runId, memberId, token);
       return registry;
     }
 
-    it("opens exactly the issuing node's MCP route", () => {
+    it("opens exactly the issuing member's MCP route", () => {
       const g = guard(registryWith('run-1', 'orch', CALL));
       expect(
         g.canActivate(httpContext('/v1/mcp/run-1/orch', `Bearer ${CALL}`)),
       ).toBe(true);
     });
 
-    it("opens the issuing node's CONVERSATION routes, and no other node's", () => {
-      // A turn answering a call is handed `/v1/mcp/<run>/<node>/<conversation>`
-      // — the node's own process, on the node's own token.
+    it("opens the issuing member's CONVERSATION routes, and no other member's", () => {
+      // A turn answering a call is handed `/v1/mcp/<run>/<member>/<conversation>`
+      // — the member's own process, on the member's own token.
       const g = guard(registryWith('run-1', 'orch', CALL));
       expect(
         g.canActivate(
@@ -169,7 +169,7 @@ describe('LoopbackTokenGuard', () => {
       ).toBe(false);
     });
 
-    it("rejects the token on ANOTHER node's route in the same run (no nodeId spoof)", () => {
+    it("rejects the token on ANOTHER member's route in the same run (no memberId spoof)", () => {
       const g = guard(registryWith('run-1', 'orch', CALL));
       expect(
         g.canActivate(httpContext('/v1/mcp/run-1/helper', `Bearer ${CALL}`)),
@@ -210,7 +210,7 @@ describe('LoopbackTokenGuard', () => {
       ).toBe(false);
     });
 
-    it('decodes percent-encoded run/node segments before the lookup', () => {
+    it('decodes percent-encoded run/member segments before the lookup', () => {
       const g = guard(registryWith('run 1', 'node/x', CALL));
       expect(
         g.canActivate(
@@ -219,9 +219,9 @@ describe('LoopbackTokenGuard', () => {
       ).toBe(true);
     });
 
-    it('rejects a missing node segment and malformed encoding without throwing', () => {
+    it('rejects a missing member segment and malformed encoding without throwing', () => {
       const g = guard(registryWith('run-1', 'orch', CALL));
-      // runId present, nodeId missing.
+      // runId present, memberId missing.
       expect(
         g.canActivate(httpContext('/v1/mcp/run-1', `Bearer ${CALL}`)),
       ).toBe(false);

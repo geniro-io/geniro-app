@@ -13,11 +13,11 @@ import { parseJsonColumn } from './json-util';
  * chose, so two agents of one run may both call a button `deploy`.
  */
 export function actionKey(
-  nodeId: string,
+  memberId: string,
   conversationId: string,
   actionId: string,
 ): string {
-  return `${nodeId}|${conversationId}|${actionId}`;
+  return `${memberId}|${conversationId}|${actionId}`;
 }
 
 /** A press under way: the button shows a spinner and refuses another. */
@@ -81,7 +81,7 @@ export function foldActions(
       byKey.set(key, {
         seq: row.seq,
         actionId: action.actionId,
-        nodeId: action.publisher.nodeId,
+        memberId: action.publisher.nodeId,
         conversationId: action.publisher.conversationId,
         label: action.label,
         ...(action.description === undefined

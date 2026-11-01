@@ -1089,7 +1089,7 @@ describe('MemoryService', () => {
   });
 
   describe('actorOf', () => {
-    it('names a team node’s own agent over the run’s', async () => {
+    it('names a team member’s own agent over the run’s', async () => {
       const em = db.em.fork();
       em.persist(
         make(Run, {
@@ -1102,7 +1102,7 @@ describe('MemoryService', () => {
       em.persist(
         make(NodeState, {
           runId: 'wf',
-          nodeId: 'coder',
+          memberId: 'coder',
           agentKind: 'codex',
           model: 'gpt-5',
         }),

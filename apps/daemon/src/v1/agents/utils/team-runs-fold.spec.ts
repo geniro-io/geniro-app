@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { TeamSchema } from '../../teams/teams.types';
 import { teamVersionOf } from '../../teams/utils/team-version';
 import type { FoldedRun } from '../chat.types';
@@ -23,7 +24,7 @@ let clock = 0;
 function turn(patch: Partial<Turn>): Turn {
   clock += 1_000;
   return {
-    nodeId: 'dev',
+    memberId: 'dev',
     startedAt: new Date(clock).toISOString(),
     model: 'sonnet',
     member: null,
@@ -41,7 +42,7 @@ function turn(patch: Partial<Turn>): Turn {
 
 function lane(patch: Partial<Lane>): Lane {
   return {
-    nodeId: 'dev',
+    memberId: 'dev',
     agentKind: 'claude',
     turns: 1,
     workedMs: 1_000,
@@ -59,7 +60,7 @@ function run(
   return {
     runId,
     turns,
-    lanes: [lane({}), lane({ nodeId: 'qa', agentKind: 'cursor-agent' })],
+    lanes: [lane({}), lane({ memberId: 'qa', agentKind: 'cursor-agent' })],
     calls: [],
     wallWorkedMs: new Map(),
     callWorkedMs: new Map(),
@@ -86,7 +87,7 @@ function tool(patch: Partial<Tool>): Tool {
   return {
     seq: 1,
     resultSeq: 2,
-    nodeId: 'dev',
+    memberId: 'dev',
     name: 'Bash',
     startMs: 0,
     durationMs: 1,
@@ -101,7 +102,7 @@ type NodeTime = FoldedRun['timeline']['nodes'][number];
 
 function nodeTime(patch: Partial<NodeTime>): NodeTime {
   return {
-    nodeId: 'dev',
+    memberId: 'dev',
     inTurnsMs: 0,
     waitingOnCalleeMs: 0,
     waitingOnUserMs: 0,
@@ -119,8 +120,8 @@ type Call = FoldedRun['calls'][number];
 
 function call(patch: Partial<Call>): Call {
   return {
-    callerNodeId: 'lead',
-    calleeNodeId: 'dev',
+    callerMemberId: 'lead',
+    calleeMemberId: 'dev',
     status: 'ok',
     running: false,
     durationMs: 1_000,
@@ -130,15 +131,15 @@ function call(patch: Partial<Call>): Call {
 }
 
 describe('modelFigures', () => {
-  it('sums every turn of every run per node and model', () => {
+  it('sums every turn of every run per member and model', () => {
     // Many turns per run, so a fold over any window of them would differ.
     const first = run('r1', [
       ...Array.from({ length: 30 }, () => turn({})),
-      turn({ nodeId: 'qa', model: 'gpt-5', durationMs: 4_000 }),
+      turn({ memberId: 'qa', model: 'gpt-5', durationMs: 4_000 }),
     ]);
     const second = run('r2', [
       turn({ model: 'opus', costUsd: 2, durationMs: 3_000 }),
-      turn({ nodeId: 'qa', model: 'gpt-5', outcome: 'completed' }),
+      turn({ memberId: 'qa', model: 'gpt-5', outcome: 'completed' }),
     ]);
 
     const rows = modelFigures([first, second]);
@@ -164,7 +165,7 @@ describe('modelFigures', () => {
     expect(rows[2]).toMatchObject({ runs: 2, turns: 2, avgTurnMs: 2_500 });
   });
 
-  it('counts a turn that reported no model against the model its node last reported', () => {
+  it('counts a turn that reported no model against the model its member last reported', () => {
     const rows = modelFigures([
       run('r1', [
         turn({ model: 'claude-opus-4' }),
@@ -188,14 +189,14 @@ describe('modelFigures', () => {
 
   // A pool hands on when a member fails before reporting, so the next model
   // reported is another member's: such a failure is never filed under it.
-  it('files a turn that ended before its node reported any model under the configured model, marked so', () => {
+  it('files a turn that ended before its member reported any model under the configured model, marked so', () => {
     const rows = modelFigures([
       run(
         'r1',
         [
           turn({ outcome: 'failed', model: null, costUsd: null }),
           turn({ model: 'gpt-5' }),
-          turn({ nodeId: 'qa', outcome: 'running', model: null }),
+          turn({ memberId: 'qa', outcome: 'running', model: null }),
         ],
         {
           nodeModels: new Map([
@@ -216,9 +217,9 @@ describe('modelFigures', () => {
     expect(rows[1]!.failedTurns).toBe(0);
   });
 
-  // A pool hands a node from member to member between turns, and a turn
+  // A pool hands a member from pool member to pool member between turns, and a turn
   // names no member: a model guessed for it could be another member's.
-  it("leaves a pooled node's turn that reported no model unattributed", () => {
+  it("leaves a pooled member's turn that reported no model unattributed", () => {
     const rows = modelFigures([
       run(
         'r1',
@@ -243,7 +244,7 @@ describe('modelFigures', () => {
 
   // A pool hands on when a member fails, so the model reported before or
   // after may be another member's: each member is followed on its own.
-  it("follows a pooled node's members apart, by the member each turn's row names", () => {
+  it("follows a pooled member's pool members apart, by the pool member each turn's row names", () => {
     const claude = { agentKind: 'claude' as const, model: 'opus' };
     const codex = { agentKind: 'codex' as const, model: null };
     const rows = modelFigures([
@@ -317,14 +318,14 @@ describe('modelFigures', () => {
 });
 
 describe('nodeFigures', () => {
-  it("sums each node's lanes over the runs — its own turn count and bill, a polled one included", () => {
+  it("sums each member's lanes over the runs — its own turn count and bill, a polled one included", () => {
     const rows = nodeFigures([
       run('r1', [turn({ outcome: 'failed' })], {
         lanes: [
           lane({ turns: 7, costUsd: 3, workedMs: 9_000 }),
           // A polled-spend CLI prices no turn; its lane carries the bill.
           lane({
-            nodeId: 'qa',
+            memberId: 'qa',
             agentKind: 'cursor-agent',
             costUsd: 4,
             workedMs: null,
@@ -361,7 +362,7 @@ describe('nodeFigures', () => {
     ]);
   });
 
-  it('prices a node per run over the runs that reported its cost, never the unpriced ones as free', () => {
+  it('prices a member per run over the runs that reported its cost, never the unpriced ones as free', () => {
     const [dev] = nodeFigures([
       run('r1', [], { lanes: [lane({ costUsd: 6 })] }),
       run('r2', [], { lanes: [lane({ costUsd: null })] }),
@@ -383,7 +384,7 @@ describe('runFigures', () => {
             turn({ outcome: 'cancelled', costUsd: null }),
           ],
           {
-            lanes: [lane({ turns: 4 }), lane({ nodeId: 'qa', turns: 2 })],
+            lanes: [lane({ turns: 4 }), lane({ memberId: 'qa', turns: 2 })],
             calls: [call({}), call({ status: 'failed' })],
             timeline: {
               wallMs: 60_000,
@@ -413,7 +414,7 @@ describe('runFigures', () => {
 });
 
 describe('runNodeFigures', () => {
-  it("states each node's own share of one run: its time working and blocked, its critical path, tools and bill", () => {
+  it("states each member's own share of one run: its time working and blocked, its critical path, tools and bill", () => {
     const rows = runNodeFigures(
       run(
         'r1',
@@ -421,13 +422,13 @@ describe('runNodeFigures', () => {
           // More turns than any page of rows holds.
           ...Array.from({ length: 45 }, () => turn({ contextTokens: 10_000 })),
           turn({ outcome: 'failed', contextTokens: 80_000 }),
-          turn({ nodeId: 'qa', outcome: 'cancelled' }),
+          turn({ memberId: 'qa', outcome: 'cancelled' }),
         ],
         {
           lanes: [
             lane({ turns: 46, workedMs: 300_000, toolCalls: 90, costUsd: 7 }),
             lane({
-              nodeId: 'qa',
+              memberId: 'qa',
               agentKind: 'cursor-agent',
               workedMs: null,
               costUsd: null,
@@ -439,22 +440,27 @@ describe('runNodeFigures', () => {
             waitingOnUserMs: 30_000,
             criticalPathMs: 400_000,
             criticalPath: [
-              { kind: 'work', nodeId: 'dev', startMs: 0, durationMs: 250_000 },
+              {
+                kind: 'work',
+                memberId: 'dev',
+                startMs: 0,
+                durationMs: 250_000,
+              },
               {
                 kind: 'waiting_on_user',
-                nodeId: 'dev',
+                memberId: 'dev',
                 startMs: 250_000,
                 durationMs: 30_000,
               },
               {
                 kind: 'work',
-                nodeId: 'qa',
+                memberId: 'qa',
                 startMs: 280_000,
                 durationMs: 20_000,
               },
               {
                 kind: 'work',
-                nodeId: 'dev',
+                memberId: 'dev',
                 startMs: 300_000,
                 durationMs: 100_000,
               },
@@ -470,7 +476,7 @@ describe('runNodeFigures', () => {
             tools: [
               tool({ failed: true }),
               tool({ failed: true, delegate: true }),
-              tool({ nodeId: 'qa', failed: true }),
+              tool({ memberId: 'qa', failed: true }),
               tool({}),
             ],
           },
@@ -516,14 +522,14 @@ describe('runNodeFigures', () => {
 
   // cursor reports no timing: the wall clock's ledger times its turns, and
   // the waterfall draws each completed one from its lane's previous row.
-  it("times a node its CLI did not time by the wall clock, and leaves the drawn spans' figures unmeasured", () => {
+  it("times a member its CLI did not time by the wall clock, and leaves the drawn spans' figures unmeasured", () => {
     const [qa] = runNodeFigures(
       run(
         'r1',
         [
-          turn({ nodeId: 'qa', timingSource: 'derived', durationMs: 2 }),
+          turn({ memberId: 'qa', timingSource: 'derived', durationMs: 2 }),
           turn({
-            nodeId: 'qa',
+            memberId: 'qa',
             timingSource: 'derived',
             outcome: 'failed',
             durationMs: 9_000,
@@ -532,7 +538,7 @@ describe('runNodeFigures', () => {
         {
           lanes: [
             lane({
-              nodeId: 'qa',
+              memberId: 'qa',
               agentKind: 'cursor-agent',
               turns: 2,
               workedMs: null,
@@ -545,10 +551,10 @@ describe('runNodeFigures', () => {
             waitingOnUserMs: 0,
             criticalPathMs: 9_002,
             criticalPath: [
-              { kind: 'work', nodeId: 'qa', startMs: 0, durationMs: 9_002 },
+              { kind: 'work', memberId: 'qa', startMs: 0, durationMs: 9_002 },
             ],
             nodes: [
-              nodeTime({ nodeId: 'qa', inTurnsMs: 9_002, busyMs: 9_002 }),
+              nodeTime({ memberId: 'qa', inTurnsMs: 9_002, busyMs: 9_002 }),
             ],
             tools: [],
           },
@@ -575,7 +581,7 @@ describe('callFigures', () => {
         calls: [
           ...Array.from({ length: 40 }, () => call({ durationMs: 2_000 })),
           call({ status: 'failed', durationMs: 9_000 }),
-          call({ calleeNodeId: 'qa', durationMs: 500 }),
+          call({ calleeMemberId: 'qa', durationMs: 500 }),
         ],
       }),
       run('r2', [], {
@@ -611,13 +617,13 @@ describe('callFigures', () => {
     ]);
   });
 
-  it('sums how long the callees worked inside each edge’s calls, matched by their start row', () => {
+  it('sums how long the callees worked inside each caller→callee pair’s calls, matched by their start row', () => {
     const rows = callFigures([
       run('r1', [], {
         calls: [
           call({ seq: 10, durationMs: 60_000 }),
           call({ seq: 20, durationMs: 30_000 }),
-          call({ seq: 30, calleeNodeId: 'qa', durationMs: 5_000 }),
+          call({ seq: 30, calleeMemberId: 'qa', durationMs: 5_000 }),
         ],
         callWorkedMs: new Map([
           [10, 40_000],
@@ -683,17 +689,12 @@ describe('configuredModels', () => {
 });
 
 describe('snapshotVersion', () => {
-  it('is the graph version the team ledger stamps the run with', () => {
-    const team = {
-      name: 'Team',
-      nodes: [{ id: 'dev', kind: 'agent', agent: 'claude', approval: 'auto' }],
-      edges: [],
-    } as const;
+  it('is the team version the team ledger stamps the run with', () => {
+    const team = teamOf([member('dev')], { name: 'Team' });
     const renamed = { ...team, name: 'Renamed team' };
-    const changed = {
-      ...team,
-      nodes: [{ ...team.nodes[0], model: 'opus' }],
-    };
+    const changed = teamOf([member('dev', { model: 'opus' })], {
+      name: 'Team',
+    });
 
     const version = snapshotVersion(JSON.stringify(team));
 
@@ -819,7 +820,7 @@ describe('teamCardStats', () => {
     [
       ...Array.from({ length: 45 }, () => turn({})),
       turn({ outcome: 'failed', model: 'opus' }),
-      turn({ nodeId: 'qa', model: 'gpt' }),
+      turn({ memberId: 'qa', model: 'gpt' }),
     ],
     {
       version: 'v-b',
@@ -827,7 +828,7 @@ describe('teamCardStats', () => {
       lanes: [
         lane({ turns: 46, workedMs: 600_000, toolCalls: 90, costUsd: 11 }),
         lane({
-          nodeId: 'qa',
+          memberId: 'qa',
           agentKind: 'cursor-agent',
           workedMs: 60_000,
           costUsd: 1,
@@ -835,7 +836,7 @@ describe('teamCardStats', () => {
       ],
       calls: Array.from({ length: 7 }, (_, at) =>
         call({
-          calleeNodeId: `n${at}`,
+          calleeMemberId: `n${at}`,
           durationMs: (at + 1) * 1_000,
           seq: at + 1,
         }),
@@ -847,11 +848,11 @@ describe('teamCardStats', () => {
         waitingOnUserMs: 60_000,
         criticalPathMs: 800_000,
         criticalPath: [
-          { kind: 'work', nodeId: 'dev', startMs: 0, durationMs: 500_000 },
+          { kind: 'work', memberId: 'dev', startMs: 0, durationMs: 500_000 },
         ],
         nodes: [
           nodeTime({ busyMs: 500_000, waitingOnCalleeMs: 100_000 }),
-          nodeTime({ nodeId: 'qa', busyMs: 60_000 }),
+          nodeTime({ memberId: 'qa', busyMs: 60_000 }),
         ],
         tools: [tool({ failed: true })],
       },

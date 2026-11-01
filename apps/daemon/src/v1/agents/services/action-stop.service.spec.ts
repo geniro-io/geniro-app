@@ -70,12 +70,12 @@ function table(
 const shellOpen = (
   id: string,
   workId: string,
-  nodeId: string | null = null,
+  memberId: string | null = null,
   callId: string | null = null,
 ) => ({
   kind: 'shell_open',
   payload: JSON.stringify({ id, workId, callId }),
-  nodeId,
+  memberId,
 });
 
 function setup(
@@ -86,7 +86,7 @@ function setup(
     calls?: {
       id: string;
       command?: string;
-      nodeId?: string | null;
+      memberId?: string | null;
       callId?: string;
       parentToolUseId?: string;
     }[];
@@ -145,7 +145,7 @@ function setup(
                 ? {}
                 : { parentToolUseId: call.parentToolUseId }),
             }),
-            nodeId: call.nodeId ?? null,
+            memberId: call.memberId ?? null,
             createdAt: new Date(0),
           })),
       ),
@@ -233,12 +233,12 @@ describe('ActionStopService.resolve', () => {
     });
   });
 
-  it("reads the command from this node's newest call by that id", async () => {
+  it("reads the command from this member's newest call by that id", async () => {
     const { service } = setup({
       calls: [
         { id: 'call-1', command: 'pnpm old-server' },
         { id: 'call-1', command: SERVER },
-        { id: 'call-1', command: 'pnpm other-node', nodeId: 'reviewer' },
+        { id: 'call-1', command: 'pnpm other-node', memberId: 'reviewer' },
       ],
     });
     expect(await service.resolve(RUN, null, { shell: 'bg1' })).toMatchObject({
@@ -247,7 +247,7 @@ describe('ActionStopService.resolve', () => {
   });
 
   it('pairs a shell with the call of its own conversation, never a reused id elsewhere', async () => {
-    // ACP numbers calls per session: another call of this node and a
+    // ACP numbers calls per session: another call of this member and a
     // delegate's call reuse the id after the shell was launched.
     const { service } = setup({
       shells: [shellOpen('call-1', 'bg1', null, 'call-A')],

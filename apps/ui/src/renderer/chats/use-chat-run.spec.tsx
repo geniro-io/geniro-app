@@ -106,7 +106,7 @@ function msg(
   return {
     id: `${runId}-i${seq}`,
     runId,
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'message',
     role,
@@ -124,7 +124,7 @@ function turnEnd(
   return {
     id: `${runId}-t${seq}`,
     runId,
-    nodeId: null,
+    memberId: null,
     seq,
     kind,
     role: null,
@@ -1720,7 +1720,7 @@ describe('useChatRun', () => {
     const compaction = (seq: number): ChatItem => ({
       id: `r1-c${seq}`,
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       seq,
       kind: 'system',
       role: null,
@@ -1804,7 +1804,7 @@ describe('useChatRun', () => {
     await open(harness, 'r1');
     const taskList = [
       {
-        nodeId: null,
+        memberId: null,
         callId: null,
         tasks: [
           {
@@ -2087,7 +2087,7 @@ describe('useChatRun', () => {
       {
         id: 'r1-s3',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 3,
         kind: 'shell_info',
         role: null,
@@ -2653,7 +2653,7 @@ describe('useChatRun', () => {
     await act(async () => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: 'working',
         ownerKey: null,
         thinkingTokens: null,
@@ -2740,7 +2740,7 @@ describe('useChatRun', () => {
 
     const reading = {
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       text: 'working',
       ownerKey: null,
       thinkingTokens: null,
@@ -2790,7 +2790,7 @@ describe('useChatRun', () => {
 
     const reading = {
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       text: 'working',
       ownerKey: null,
       thinkingTokens: null,
@@ -2819,7 +2819,7 @@ describe('useChatRun', () => {
       emitItem({
         id: 'r1-i9',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 9,
         kind: 'message',
         role: 'assistant',
@@ -2834,7 +2834,7 @@ describe('useChatRun', () => {
       emitItem({
         id: 'r1-i10',
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq: 10,
         kind: 'system',
         role: null,
@@ -2865,7 +2865,7 @@ describe('useChatRun', () => {
       emitItem({
         id: `r1-i${seq}`,
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         seq,
         kind: 'system',
         role: null,
@@ -2879,7 +2879,7 @@ describe('useChatRun', () => {
     const seed = (): void => {
       emitLiveText({
         runId: 'r1',
-        nodeId: null,
+        memberId: null,
         text: 'working',
         ownerKey: null,
         thinkingTokens: null,
@@ -3416,7 +3416,7 @@ describe('useChatRun — anchors', () => {
   const callStarted = (seq: number, callId: string): ChatItem => ({
     id: `r1-c${seq}`,
     runId: 'r1',
-    nodeId: 'manager',
+    memberId: 'manager',
     seq,
     kind: 'call_started',
     role: null,
@@ -3426,7 +3426,7 @@ describe('useChatRun — anchors', () => {
   const calleeStatus = (seq: number, callId: string): ChatItem => ({
     id: `r1-s${seq}`,
     runId: 'r1',
-    nodeId: 'qa',
+    memberId: 'qa',
     seq,
     kind: 'status',
     role: null,
@@ -3502,7 +3502,7 @@ describe('useChatRun — anchors', () => {
     ): ChatItem => ({
       id: `r1-x${seq}`,
       runId: 'r1',
-      nodeId: 'qa',
+      memberId: 'qa',
       seq,
       kind,
       role: null,

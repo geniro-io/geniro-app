@@ -9,36 +9,40 @@ const TEAM: TeamStage[] = [
   {
     id: 'investigation',
     title: 'Investigation',
-    instructions: 'Reproduce the problem and find its cause.',
-    doneWhen: 'The cause is written down',
-    ownerHint: 'investigator',
+    howToWork: 'Reproduce the problem and find its cause.',
+    goal: 'The cause is written down',
+    responsible: ['investigator'],
     next: ['implementation', 'fix'],
   },
   {
     id: 'implementation',
     title: 'Implementation',
-    doneWhen: 'The change is built',
-    ownerHint: 'coder',
+    goal: 'The change is built',
+    responsible: ['coder'],
     next: ['review'],
   },
   {
     id: 'fix',
     title: 'Fix',
-    doneWhen: 'The defect is repaired',
-    ownerHint: 'coder',
+    goal: 'The defect is repaired',
+    responsible: ['coder'],
     next: ['review'],
   },
   {
     id: 'review',
     title: 'Review',
-    doneWhen: 'The change is approved',
-    ownerHint: 'reviewer',
+    goal: 'The change is approved',
+    responsible: ['reviewer', 'coder'],
     next: ['done'],
   },
-  { id: 'done', title: 'Done', doneWhen: 'The change is merged' },
+  { id: 'done', title: 'Done', goal: 'The change is merged' },
 ];
 
-const AGENTS = ['investigator', 'coder', 'reviewer'];
+const MEMBERS = [
+  { id: 'investigator', name: 'Investigator' },
+  { id: 'coder', name: 'Coder' },
+  { id: 'reviewer', name: 'Reviewer' },
+];
 
 const meta = {
   title: 'Teams/StageSchemaEditor',
@@ -46,7 +50,7 @@ const meta = {
   args: {
     open: true,
     stages: TEAM,
-    agentIds: AGENTS,
+    members: MEMBERS,
     onClose: () => undefined,
     onSave: () => undefined,
   },
@@ -79,26 +83,26 @@ export const Empty: Story = { args: { stages: undefined } };
 export const Loop: Story = {
   args: {
     stages: [
-      { id: 'a', title: 'A', doneWhen: 'a', next: ['b'] },
-      { id: 'b', title: 'B', doneWhen: 'b', next: ['c'] },
-      { id: 'c', title: 'C', doneWhen: 'c', next: ['b'] },
+      { id: 'a', title: 'A', goal: 'a', next: ['b'] },
+      { id: 'b', title: 'B', goal: 'b', next: ['c'] },
+      { id: 'c', title: 'C', goal: 'c', next: ['b'] },
     ],
   },
 };
 
-export const UnknownAgent: Story = {
+export const UnknownMember: Story = {
   args: {
     stages: [
-      { id: 'a', title: 'A', doneWhen: 'a', ownerHint: 'retired-agent' },
+      { id: 'a', title: 'A', goal: 'a', responsible: ['retired-member'] },
     ],
   },
 };
 
-export const MissingDoneWhen: Story = {
+export const MissingGoal: Story = {
   args: {
     stages: [
-      { id: 'plan', title: 'Plan', doneWhen: 'Agreed', next: ['build'] },
-      { id: 'build', title: 'Build', doneWhen: '', ownerHint: 'coder' },
+      { id: 'plan', title: 'Plan', goal: 'Agreed', next: ['build'] },
+      { id: 'build', title: 'Build', goal: '', responsible: ['coder'] },
     ],
   },
 };

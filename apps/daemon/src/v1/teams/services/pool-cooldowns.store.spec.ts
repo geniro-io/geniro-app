@@ -12,10 +12,10 @@ import {
 } from './pool-cooldowns.store';
 
 const OPUS = { agent: 'claude' as const, model: 'opus' };
-const at = (cwd: string, nodeId = 'node'): PoolSite => ({
+const at = (cwd: string, memberId = 'node'): PoolSite => ({
   cwd,
   runId: 'run',
-  nodeId,
+  memberId,
 });
 const FOLDER = at('/work/app');
 
@@ -193,7 +193,7 @@ describe('PoolCooldowns', () => {
     ).toBe('limit');
   });
 
-  it('keeps an ordinary failure to the node that met it, and a limit for everyone', () => {
+  it('keeps an ordinary failure to the team member that met it, and a limit for everyone', () => {
     const { cooldowns } = clocked(0);
     const crashed = failed({ failureClass: 'crashed' });
     cooldowns.record(OPUS, at('/work/app', 'a'), crashed, true);
@@ -205,7 +205,7 @@ describe('PoolCooldowns', () => {
 
     cooldowns.record(OPUS, at('/work/app', 'a'), failed(), false);
     expect(cooldowns.standing(OPUS, at('/work/app', 'b'))).toBe('limit');
-    // An answer anywhere reopens the account; another node's own mark stays.
+    // An answer anywhere reopens the account; another team member's own mark stays.
     cooldowns.record(OPUS, at('/work/app', 'c'), crashed, true);
     cooldowns.record(
       OPUS,

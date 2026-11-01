@@ -137,7 +137,7 @@ export interface TeamsApiSaveTeamRequest {
 
 export interface TeamsApiSendTeamCallMessageRequest {
     runId: string;
-    nodeId: string;
+    memberId: string;
     callId: string;
     sendMessageDto: SendMessageDto;
 }
@@ -1199,10 +1199,10 @@ export class TeamsApi extends runtime.BaseAPI {
             );
         }
 
-        if (requestParameters['nodeId'] == null) {
+        if (requestParameters['memberId'] == null) {
             throw new runtime.RequiredError(
-                'nodeId',
-                'Required parameter "nodeId" was null or undefined when calling sendTeamCallMessage().'
+                'memberId',
+                'Required parameter "memberId" was null or undefined when calling sendTeamCallMessage().'
             );
         }
 
@@ -1235,9 +1235,9 @@ export class TeamsApi extends runtime.BaseAPI {
             }
         }
 
-        let urlPath = `/v1/teams/runs/{runId}/nodes/{nodeId}/calls/{callId}/messages`;
+        let urlPath = `/v1/teams/runs/{runId}/nodes/{memberId}/calls/{callId}/messages`;
         urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
-        urlPath = urlPath.replace(`{${"nodeId"}}`, encodeURIComponent(String(requestParameters['nodeId'])));
+        urlPath = urlPath.replace(`{${"memberId"}}`, encodeURIComponent(String(requestParameters['memberId'])));
         urlPath = urlPath.replace(`{${"callId"}}`, encodeURIComponent(String(requestParameters['callId'])));
 
         const response = await this.request({

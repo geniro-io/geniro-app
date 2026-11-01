@@ -364,7 +364,7 @@ export class StatsService {
     // shows the new lines without being reopened.
     this.usageBus.publish({
       runId: input.runId,
-      nodeId: null,
+      memberId: null,
       occurredAt: occurredAt.toISOString(),
       turn: false,
     });

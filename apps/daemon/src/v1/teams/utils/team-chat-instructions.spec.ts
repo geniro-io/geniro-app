@@ -9,12 +9,7 @@ import {
   HOST_RECOMMENDATIONS_TOOL,
   HOST_TEAM_CHANGE_TOOL,
 } from '../../agents/chat.types';
-import {
-  ApprovalModeSchema,
-  EDGE_KINDS,
-  NODE_CONNECTION_RULES,
-  NODE_KINDS,
-} from '../teams.types';
+import { ApprovalModeSchema, TEAM_MODES } from '../teams.types';
 import { composeTeamChatInstructions } from './team-chat-instructions';
 
 const LIBRARY = '/Users/x/Library/Application Support/Geniro/teams';
@@ -104,46 +99,27 @@ describe('composeTeamChatInstructions', () => {
 
   // Each meaning is a `Record` over its enum, so a new member fails the build;
   // these pin that the rendered brief carries every one of them.
-  it('explains every node kind the schema accepts', () => {
-    for (const kind of NODE_KINDS) {
-      expect(BRIEF).toMatch(new RegExp(`^- ${kind}: \\S`, 'm'));
-    }
-  });
-
-  it('explains every edge kind the schema accepts', () => {
-    for (const kind of EDGE_KINDS) {
-      expect(BRIEF).toMatch(new RegExp(`^- ${kind}: \\S`, 'm'));
+  it('explains every coordination mode the schema accepts', () => {
+    for (const mode of TEAM_MODES) {
+      expect(BRIEF).toMatch(new RegExp(`^\\s*- ${mode}: \\S`, 'm'));
     }
   });
 
   it('explains every approval mode the schema accepts', () => {
     for (const mode of ApprovalModeSchema.options) {
-      expect(BRIEF).toMatch(new RegExp(`^- ${mode}: \\S`, 'm'));
+      expect(BRIEF).toMatch(new RegExp(`^\\s*- ${mode}: \\S`, 'm'));
     }
   });
 
-  // Read off NODE_CONNECTION_RULES rather than typed out, so a rule added
-  // there reaches the brief with no edit to it.
-  it('lists exactly the connections NODE_CONNECTION_RULES allows', () => {
-    const listed = [...BRIEF.matchAll(/^- (\w+) → (\w+) \(`(\w+)`\)/gm)]
-      .map(([, from, to, edge]) => `${from}->${to}:${edge}`)
-      .sort();
-    const allowed = NODE_KINDS.flatMap((from) =>
-      NODE_CONNECTION_RULES[from].outputs
-        .filter((out) =>
-          NODE_CONNECTION_RULES[out.kind].inputs.some(
-            (rule) => rule.edge === out.edge && rule.kind === from,
-          ),
-        )
-        .map((out) => `${from}->${out.kind}:${out.edge}`),
-    ).sort();
-    expect(listed).toEqual(allowed);
+  it('describes a team as members and blocks, not a wired graph', () => {
+    expect(BRIEF).toMatch(/Nothing is wired/);
+    const editing = BRIEF.slice(0, BRIEF.indexOf('<team-analysis>'));
+    expect(editing).not.toMatch(/\b(?:nodes?|edges?)\b/i);
   });
 
-  it('states the arity limits of a single-edge rule', () => {
-    // A trigger feeds one agent, and an agent takes one trigger.
-    expect(BRIEF).toContain(
-      '- trigger → agent (`data`): each trigger node has only one; each agent node takes only one',
+  it('tells the builder what each member is shown of the others', () => {
+    expect(BRIEF).toMatch(
+      /every other member's name and `role`[\s\S]*No member ever sees another member's\s+`instructions` or `character`/,
     );
   });
 

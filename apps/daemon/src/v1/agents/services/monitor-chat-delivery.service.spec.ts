@@ -16,7 +16,7 @@ import { ProcessRegistry } from './process-registry';
 
 const owner: MonitorOwner = {
   runId: 'run-1',
-  nodeId: 'agent',
+  memberId: 'agent',
   caller: 'agent',
   conversationId: null,
   callId: null,
@@ -306,7 +306,7 @@ describe('MonitorChatDelivery', () => {
       chat.sendMessage.mockRejectedValueOnce(new Error('a write failed'));
       const { service } = delivery(chat, false);
       service.holdInterrupted(
-        { runId: 'run-1', nodeId: null, callId: null, conversationId: null },
+        { runId: 'run-1', memberId: null, callId: null, conversationId: null },
         [
           {
             id: 'm4',
@@ -488,7 +488,7 @@ describe('MonitorChatDelivery', () => {
     const chat = fakeChat();
     const { service } = delivery(chat, false);
     service.holdInterrupted(
-      { runId: 'run-1', nodeId: 'agent', callId: null, conversationId: null },
+      { runId: 'run-1', memberId: 'agent', callId: null, conversationId: null },
       [
         {
           id: 'm3',

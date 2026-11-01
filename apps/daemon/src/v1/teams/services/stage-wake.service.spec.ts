@@ -7,27 +7,18 @@ import type {
 } from '../../agents/chat.types';
 import type { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { HostWakeBus } from '../../agents/services/host-wake.bus';
+import { member, teamOf } from '../__tests__/team-builders';
 import type { StageMoveResult, Team } from '../teams.types';
-import type { GraphExecutorService } from './graph-executor.service';
 import type { StageService } from './stage.service';
 import { StageWakeService } from './stage-wake.service';
+import type { TeamExecutorService } from './team-executor.service';
 
-const TEAM: Team = {
-  name: 'w',
-  nodes: [
-    { id: 'trigger', kind: 'trigger', trigger: 'manual' },
-    { id: 'lead', kind: 'agent', agent: 'claude', approval: 'auto' },
-    { id: 'helper', kind: 'agent', agent: 'claude', approval: 'auto' },
-  ],
-  edges: [
-    { from: 'trigger', to: 'lead', kind: 'data' },
-    { from: 'lead', to: 'helper', kind: 'call' },
-  ],
+const TEAM: Team = teamOf([member('lead'), member('helper')], {
   stages: [
-    { id: 'build', title: 'Build', doneWhen: 'built', next: ['review'] },
-    { id: 'review', title: 'Review', doneWhen: 'approved' },
+    { id: 'build', title: 'Build', goal: 'built', next: ['review'] },
+    { id: 'review', title: 'Review', goal: 'approved' },
   ],
-};
+});
 
 const PROGRESS: StageProgress = {
   rev: 3,
@@ -67,7 +58,7 @@ function setUp(options: {
 }): {
   service: StageWakeService;
   published: HostWake[];
-  continued: { nodeId: string; text: string }[];
+  continued: { memberId: string; text: string }[];
   moves: unknown[];
   notes: Note[];
   notified: RunStatusEvent[];
@@ -81,7 +72,7 @@ function setUp(options: {
   const notified: RunStatusEvent[] = [];
   const settled: ((runId: string) => void)[] = [];
   const published: HostWake[] = [];
-  const continued: { nodeId: string; text: string }[] = [];
+  const continued: { memberId: string; text: string }[] = [];
   const moves: unknown[] = [];
   const stages = {
     move: async (...args: unknown[]) => {
@@ -124,11 +115,11 @@ function setUp(options: {
       settled.push(listener);
       return () => undefined;
     },
-    continueAsHost: async (_runId: string, nodeId: string, text: string) => {
-      continued.push({ nodeId, text });
+    continueAsHost: async (_runId: string, memberId: string, text: string) => {
+      continued.push({ memberId, text });
       return options.continues === true;
     },
-  } as unknown as GraphExecutorService;
+  } as unknown as TeamExecutorService;
   const bus = {
     publish: (wake: HostWake) => published.push(wake),
   } as unknown as HostWakeBus;
@@ -173,7 +164,7 @@ describe('StageWakeService.userMove', () => {
     const [wake] = h.published;
     expect(wake!.owner).toEqual({
       runId: 'run-1',
-      nodeId: 'lead',
+      memberId: 'lead',
       conversationId: null,
       caller: 'lead',
       target: 'team',
@@ -189,7 +180,7 @@ describe('StageWakeService.userMove', () => {
     const h = setUp({ canWake: false, continues: true });
     const answer = await h.service.userMove('run-1', REQUEST, 'desktop', 2);
     expect(answer.woke).toBe(true);
-    expect(h.continued.map((c) => c.nodeId)).toEqual(['lead']);
+    expect(h.continued.map((c) => c.memberId)).toEqual(['lead']);
     expect(h.published).toEqual([]);
   });
 
@@ -201,15 +192,12 @@ describe('StageWakeService.userMove', () => {
     expect(h.published).toHaveLength(1);
   });
 
-  it('says there is no lead to tell when the trigger starts no agent, and wakes nobody', async () => {
+  it('says there is no lead to tell when the team has no trigger, and wakes nobody', async () => {
     const h = setUp({
       canWake: true,
       result: {
         ...REOPENED,
-        team: {
-          ...TEAM,
-          edges: [{ from: 'lead', to: 'helper', kind: 'call' }],
-        },
+        team: { ...TEAM, triggers: [] },
       },
     });
     const answer = await h.service.userMove('run-1', REQUEST, 'desktop', 2);

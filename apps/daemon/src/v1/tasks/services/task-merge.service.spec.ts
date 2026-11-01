@@ -14,6 +14,7 @@ import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { fakeLiveWork } from '../__tests__/fake-live-work';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import { TASKS_AWAITING_MERGE_MAX } from '../tasks.types';
@@ -76,6 +77,7 @@ describe('TaskMergeService (in-memory sqlite)', () => {
       new TaskEventBus(),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
       runDao,
+      fakeLiveWork().liveWork,
     );
     service = new TaskMergeService(em, taskDao, runDao, tasks);
     const project = await projectDao.create({

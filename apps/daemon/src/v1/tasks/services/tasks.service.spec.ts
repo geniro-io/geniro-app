@@ -15,12 +15,21 @@ import {
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { RunDao } from '../../agents/dao/run.dao';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { fakeLiveWork } from '../__tests__/fake-live-work';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import type { TaskChangedEvent } from '../tasks.types';
@@ -68,6 +77,7 @@ describe('TasksService (in-memory sqlite)', () => {
   let worktree: string;
   let events: TaskEventBus;
   let changes: TaskChangedEvent[];
+  let live: ReturnType<typeof fakeLiveWork>;
 
   beforeAll(async () => {
     worktree = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-worktree-')));
@@ -97,6 +107,7 @@ describe('TasksService (in-memory sqlite)', () => {
     events = new TaskEventBus();
     changes = [];
     events.allChanges().subscribe((e) => changes.push(e));
+    live = fakeLiveWork();
     service = new TasksService(
       em,
       taskDao,
@@ -104,7 +115,9 @@ describe('TasksService (in-memory sqlite)', () => {
       events,
       new TaskAttachmentService(ATTACHMENTS_ROOT),
       new RunDao(em),
+      live.liveWork,
     );
+    service.onModuleInit();
     const project = await projectDao.create({
       name: 'Board',
       folder: '/tmp/geniro-tasks-spec',
@@ -360,6 +373,33 @@ describe('TasksService (in-memory sqlite)', () => {
     expect(changes).toEqual([{ taskId: task.id, projectId, status: 'done' }]);
   });
 
+  it('keeps a Done card unfinished while its settled run holds live work, and finishes it once that ends', async () => {
+    const task = await cardWithRun('in_review', 'completed', 'run-m');
+    live.hold('run-m', 'monitor');
+    changes.length = 0;
+
+    await service.moveStatus(task.id, { from: 'in_review', to: 'done' });
+    expect(changes).toEqual([{ taskId: task.id, projectId, status: 'done' }]);
+
+    live.release('run-m');
+    await vi.waitFor(() =>
+      expect(changes).toEqual([
+        { taskId: task.id, projectId, status: 'done' },
+        { taskId: task.id, projectId, status: 'done', reason: 'work-finished' },
+      ]),
+    );
+  });
+
+  it('withholds the settle of a Done card while live work holds its run', async () => {
+    const task = await cardWithRun('done', 'completed', 'run-s');
+    live.hold('run-s', 'command action');
+    changes.length = 0;
+
+    await service.finishWhenFree({ ...task, runId: 'run-s' });
+    await service.recheckFinish('run-s');
+    expect(changes).toEqual([]);
+  });
+
   it('marks nothing finished on a move anywhere but Done, however its run ended', async () => {
     const task = await cardWithRun('in_review', 'completed');
     changes.length = 0;
@@ -377,6 +417,8 @@ describe('TasksService (in-memory sqlite)', () => {
     });
     const reviewed = await cardWithRun('in_review', 'completed', 'run-1');
     const doneWorking = await cardWithRun('done', 'running', 'run-2');
+    const doneWatching = await cardWithRun('done', 'completed', 'run-3');
+    live.hold('run-3', 'monitor');
     const deleted = await service.create({ projectId, title: 'gone' });
     await service.remove(deleted.id);
 
@@ -385,13 +427,14 @@ describe('TasksService (in-memory sqlite)', () => {
         doneIdle.id,
         reviewed.id,
         doneWorking.id,
+        doneWatching.id,
         deleted.id,
         'never-a-card',
       ]),
     ).resolves.toEqual({
       // In review is not finished, whatever its run did; Done with a run still
-      // working is not finished yet. Nothing will ever run in the worktree of
-      // a card that is gone.
+      // working, or a settled run still holding a monitor, is not finished
+      // yet. Nothing will ever run in the worktree of a card that is gone.
       taskIds: [doneIdle.id, deleted.id, 'never-a-card'],
     });
   });
@@ -946,6 +989,7 @@ describe('TasksService — card numbering (in-memory sqlite)', () => {
       new TaskEventBus(),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
       new RunDao(em),
+      fakeLiveWork().liveWork,
     );
     const project = await projectDao.create({
       name: 'Geniro',

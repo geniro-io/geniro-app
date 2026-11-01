@@ -50,6 +50,14 @@ export class MonitorGraphDelivery implements OnModuleInit {
     );
   }
 
+  /** Whether any conversation of the run has monitor output waiting for it. */
+  owesOutput(runId: string): boolean {
+    const prefix = heldKey(runId, '');
+    return [...this.held].some(
+      ([key, held]) => key.startsWith(prefix) && held.messages.size > 0,
+    );
+  }
+
   private receive(event: MonitorEvent): void {
     const { monitor } = event;
     const { runId, caller, target } = monitor.owner;

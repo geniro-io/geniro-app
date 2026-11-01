@@ -17,14 +17,21 @@ import type { TaskStatus } from '../tasks.types';
  * finished while its agent is still working: the board writes the column the
  * moment a card is dragged.
  *
- * So the user has called the card Done AND nothing is working in it.
- * `runStatus` is null for a card with no run, or one whose run row is gone.
+ * So the user has called the card Done AND nothing is working in it: no turn,
+ * and no work outside one (`RunLiveWork` — a monitor, a command action, a
+ * detached command, output waiting to wake the agent). A settled run with a
+ * monitor still watching CI is the same live conversation: its output wakes
+ * the agent in this very directory. `runStatus` is null for a card with no
+ * run, or one whose run row is gone.
  */
 export function isWorkFinished(
   status: TaskStatus,
   runStatus: RunStatus | null,
+  holdsLiveWork: boolean,
 ): boolean {
   return (
-    status === 'done' && (runStatus === null || isTerminalRunStatus(runStatus))
+    status === 'done' &&
+    (runStatus === null || isTerminalRunStatus(runStatus)) &&
+    !holdsLiveWork
   );
 }

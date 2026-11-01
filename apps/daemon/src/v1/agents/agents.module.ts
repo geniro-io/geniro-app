@@ -114,7 +114,9 @@ import { RunGroupsService } from './services/run-groups.service';
 import { RunHoldRegistry } from './services/run-hold.registry';
 import { RunIdleReapService } from './services/run-idle-reap.service';
 import { RunKindRowsCache } from './services/run-kind-rows.cache';
+import { RunLiveWork } from './services/run-live-work.service';
 import { RunNamedPathsService } from './services/run-named-paths.service';
+import { RunNoticeWriter } from './services/run-notice.writer';
 import { RunOutcomeBroker } from './services/run-outcome.broker';
 import { RunOutcomeHistoryService } from './services/run-outcome-history.service';
 import {
@@ -260,6 +262,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunOutcomeHistoryService,
     HostWakeBus,
     HostWakeChatDelivery,
+    RunNoticeWriter,
+    RunLiveWork,
     ArtifactPageService,
     PlanBroker,
     NotifyBroker,
@@ -599,6 +603,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     // For the share service, which wakes the agent that asked once a share
     // waiting on the user's sign-in lands, and the team delivery of it.
     HostWakeBus,
+    // For the task board, which keeps a card's worktree while its run works
+    // outside a turn, and the team module, which adds its own sources.
+    RunLiveWork,
     // What a team member's button tools and the team press route reuse:
     // the publish (over `ChatActionsService`, the rows' one writer) and the
     // press beside it.

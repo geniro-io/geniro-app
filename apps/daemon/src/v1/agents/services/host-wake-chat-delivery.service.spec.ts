@@ -10,6 +10,7 @@ import {
   HOST_WAKE_SEND_RETRY_MS,
   HostWakeChatDelivery,
 } from './host-wake-chat-delivery.service';
+import type { RunNoticeWriter } from './run-notice.writer';
 
 type Send = ChatService['sendMessage'];
 
@@ -59,15 +60,29 @@ function harness() {
   } as unknown as ChatService;
   const oweKeyNote = vi.fn(() => true);
   const bus = new HostWakeBus();
-  const delivery = new HostWakeChatDelivery(bus, chats, {
-    oweKeyNote,
-  } as unknown as AgentSessionRegistry);
+  const warnings: { message: string; owedWhenWritten: boolean }[] = [];
+  let delivery: HostWakeChatDelivery | null = null;
+  const notices = {
+    warn: async (_runId: string, message: string) => {
+      warnings.push({
+        message,
+        owedWhenWritten: delivery?.owesWake('run-1') ?? false,
+      });
+    },
+  } as unknown as RunNoticeWriter;
+  delivery = new HostWakeChatDelivery(
+    bus,
+    chats,
+    { oweKeyNote } as unknown as AgentSessionRegistry,
+    notices,
+  );
   delivery.onModuleInit();
   return {
     bus,
     delivery,
     sendMessage,
     oweKeyNote,
+    warnings,
     setHold: (next: typeof hold) => {
       hold = next;
     },
@@ -173,6 +188,13 @@ describe('HostWakeChatDelivery', () => {
     // The owed note is the wake's last attempt: it is settled, so a boot does
     // not send it again.
     expect(delivered).toHaveBeenCalledTimes(1);
+    expect(h.warnings).toEqual([
+      {
+        message: expect.stringContaining(': folder gone.'),
+        owedWhenWritten: false,
+      },
+    ]);
+    expect(h.delivery.owesWake('run-1')).toBe(false);
   });
 
   it('owes the note without a turn when the chat is being archived or deleted', async () => {
@@ -268,6 +290,7 @@ describe('HostWakeChatDelivery', () => {
 
     await expect.poll(() => h.oweKeyNote.mock.calls.length).toBe(1);
     expect(h.sendMessage).toHaveBeenCalledTimes(1);
+    expect(h.warnings).toEqual([]);
   });
 
   it('starts no turn after the user’s Stop: what it held becomes a note', async () => {

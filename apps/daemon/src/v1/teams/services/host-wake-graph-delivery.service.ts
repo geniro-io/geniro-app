@@ -56,6 +56,16 @@ export class HostWakeGraphDelivery implements OnModuleInit {
     });
   }
 
+  /** Whether any conversation of the run has a wake waiting or in flight. */
+  owesWake(runId: string): boolean {
+    const prefix = heldKey(runId, '');
+    return (
+      [...this.held].some(
+        ([key, held]) => key.startsWith(prefix) && held.size > 0,
+      ) || [...this.inFlight.keys()].some((key) => key.startsWith(prefix))
+    );
+  }
+
   private release(runId: string, caller: string): void {
     const key = heldKey(runId, caller);
     const held = this.held.get(key);

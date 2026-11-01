@@ -29,6 +29,7 @@ import {
 import { RunDao } from '../../agents/dao/run.dao';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
+import { fakeLiveWork } from '../__tests__/fake-live-work';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import { TASK_FILES_MAX } from '../tasks.types';
@@ -95,6 +96,7 @@ describe('TaskFilesService (in-memory sqlite)', () => {
       new TaskEventBus(),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
       new RunDao(em),
+      fakeLiveWork().liveWork,
     );
     service = new TaskFilesService(em, taskDao, tasks);
     const project = await projectDao.create({ name: 'B', folder: dir });

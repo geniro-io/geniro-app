@@ -35,6 +35,7 @@ import type { RunTeamService } from '../../teams/services/run-team.service';
 import type { TeamExecutorService } from '../../teams/services/team-executor.service';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { TeamMember } from '../../teams/teams.types';
+import { fakeLiveWork } from '../__tests__/fake-live-work';
 import { aLabelInstruction } from '../__tests__/fixtures';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
@@ -200,6 +201,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       new TaskEventBus(),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
       runDao,
+      fakeLiveWork().liveWork,
     );
     // The fake writes a REAL run row, because the double-start guard asks the
     // run whether it has settled — against a stub it would find nothing and

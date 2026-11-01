@@ -7,11 +7,14 @@ import {
   type MonitorMessage,
   monitorMessageOf,
   monitorWake,
+  undeliveredMonitorNote,
+  undeliveredMonitorNotice,
 } from '../utils/monitor-text';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ChatService } from './chat.service';
 import { MonitorRegistry } from './monitor.registry';
 import { type MonitorRowOwner, MonitorRowWriter } from './monitor-row.writer';
+import { RunNoticeWriter } from './run-notice.writer';
 
 interface HeldOutput {
   owner: MonitorRowOwner;
@@ -46,7 +49,8 @@ interface SendFailures {
  * a fault that clears on its own costs nothing and one that does not cannot
  * retry on every batch. A failure after the row was written (a model refused)
  * is not retried: the transcript already shows the output, and a retry would
- * show it twice.
+ * show it twice. Giving up writes a warning row naming why, and owes the
+ * agent's next turn the output it never got.
  */
 @Injectable()
 export class MonitorChatDelivery implements OnModuleInit {
@@ -67,6 +71,7 @@ export class MonitorChatDelivery implements OnModuleInit {
     private readonly chats: ChatService,
     private readonly rows: MonitorRowWriter,
     private readonly sessions: AgentSessionRegistry,
+    private readonly notices: RunNoticeWriter,
   ) {}
 
   onModuleInit(): void {
@@ -187,6 +192,7 @@ export class MonitorChatDelivery implements OnModuleInit {
     // The opening row carries the messages' ends: once written, a failure
     // after it must not record them a second time.
     let opened = false;
+    let undelivered: string | null = null;
     const stopsBefore = this.stops.get(runId) ?? 0;
     this.sending.add(runId);
     try {
@@ -234,10 +240,10 @@ export class MonitorChatDelivery implements OnModuleInit {
       const stopped = this.monitors.list(runId);
       this.monitors.stopRun(runId, 'teardown');
       if (!archived) {
+        const reason = err instanceof Error ? err.message : String(err);
         this.logger.error(
-          `run ${runId} could not deliver monitor output, stopping its monitors: ${err instanceof Error ? err.message : String(err)}`,
+          `run ${runId} could not deliver monitor output, stopping its monitors: ${reason}`,
         );
-        // The chat lives on: its next turn hears what became of them.
         const named = [
           ...new Map(
             [...sent, ...stopped].map((m) => [
@@ -248,8 +254,9 @@ export class MonitorChatDelivery implements OnModuleInit {
         ];
         this.sessions.oweKeyNote(
           runId,
-          `[geniro] A turn could not be started to deliver the output of your monitor${named.length === 1 ? '' : 's'} ${named.join(', ')}, so ${named.length === 1 ? 'it was' : 'they were'} stopped. Start one again with monitor if you still need it.`,
+          undeliveredMonitorNote(named, opened ? null : prompt),
         );
+        undelivered = undeliveredMonitorNotice(named, reason);
       }
       if (!opened) {
         await this.rows.writeEnds(held.owner, sent);
@@ -257,6 +264,24 @@ export class MonitorChatDelivery implements OnModuleInit {
     } finally {
       this.sending.delete(runId);
     }
+    // After the send is over, so whoever re-reads the run on this row finds
+    // nothing owed.
+    if (undelivered !== null) {
+      await this.notices.warn(
+        runId,
+        undelivered,
+        'monitor output not delivered',
+      );
+    }
+  }
+
+  /** Whether the run has monitor output waiting for a turn, or a send of it under way. */
+  owesOutput(runId: string): boolean {
+    return (
+      (this.held.get(runId)?.messages.size ?? 0) > 0 ||
+      this.failures.has(runId) ||
+      this.sending.has(runId)
+    );
   }
 
   private forgetFailures(runId: string): void {

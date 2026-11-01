@@ -23,6 +23,7 @@ import { TeamChangeService } from './services/team-change.service';
 import { TeamChangeLogService } from './services/team-change-log.service';
 import { TeamChatService } from './services/team-chat.service';
 import { TeamExecutorService } from './services/team-executor.service';
+import { TeamLiveWorkSources } from './services/team-live-work.service';
 import { TeamProposalService } from './services/team-proposal.service';
 import { TeamStoreService } from './services/team-store.service';
 
@@ -49,6 +50,7 @@ import { TeamStoreService } from './services/team-store.service';
     InstructionSizesService,
     MonitorGraphDelivery,
     HostWakeGraphDelivery,
+    TeamLiveWorkSources,
     {
       // One record for the daemon: a limit belongs to an account, whichever
       // run met it.

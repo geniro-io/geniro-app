@@ -1474,6 +1474,14 @@ export class TeamExecutorService
     );
   }
 
+  /** Whether any member still has a detached command or a background sub-agent out. */
+  holdsBackgroundWork(runId: string): boolean {
+    return (
+      this.backgroundWork.shellsOpen(runId) > 0 ||
+      this.backgroundWork.subagentsOut(runId) > 0
+    );
+  }
+
   canWake(runId: string): boolean {
     return (
       this.monitorWakers.has(runId) && this.wakerStopped.get(runId)?.() !== true

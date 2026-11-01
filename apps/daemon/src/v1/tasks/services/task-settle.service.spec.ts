@@ -27,6 +27,7 @@ import { isBreakerOpen } from '../../projects/utils/breaker';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { RunStatus } from '../../runs/runs.types';
+import { fakeLiveWork } from '../__tests__/fake-live-work';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import type { TaskChangedEvent } from '../tasks.types';
@@ -46,6 +47,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let service: TaskSettleService;
   let tasks: TasksService;
+  let live: ReturnType<typeof fakeLiveWork>;
   let taskDao: TaskDao;
   let projectDao: ProjectDao;
   let runDao: RunDao;
@@ -84,6 +86,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     taskEvents = new TaskEventBus();
     changes = [];
     taskEvents.allChanges().subscribe((event) => changes.push(event));
+    live = fakeLiveWork();
     tasks = new TasksService(
       em,
       taskDao,
@@ -91,7 +94,9 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       taskEvents,
       new TaskAttachmentService(ATTACHMENTS_ROOT),
       runDao,
+      live.liveWork,
     );
+    tasks.onModuleInit();
     bus = new AgentEventBus();
     service = new TaskSettleService(
       em,
@@ -926,6 +931,24 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       reason: 'work-finished',
     });
     expect((await taskDao.getById(task.id))?.status).toBe('done');
+  });
+
+  it('waits for a monitor still running when the run settles under a Done card', async () => {
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+    live.hold('run-1', 'monitor');
+
+    await settleRun('run-1', 'completed');
+    expect(changes.at(-1)?.reason).toBeUndefined();
+
+    live.release('run-1');
+    await vi.waitFor(() =>
+      expect(changes.at(-1)).toMatchObject({
+        taskId: task.id,
+        status: 'done',
+        reason: 'work-finished',
+      }),
+    );
   });
 
   it('marks the work finished when a settled card is moved to Done', async () => {

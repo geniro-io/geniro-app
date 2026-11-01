@@ -127,6 +127,31 @@ export function monitorRowPayload(
   };
 }
 
+/**
+ * What the agent's next turn is owed when no turn could be started for its
+ * monitors' output: that they were stopped, and the output itself when the
+ * transcript row that would have carried it was never written.
+ */
+export function undeliveredMonitorNote(
+  named: readonly string[],
+  output: string | null,
+): string {
+  const one = named.length === 1;
+  const head = `[geniro] A turn could not be started to deliver the output of your monitor${one ? '' : 's'} ${named.join(', ')}, so ${one ? 'it was' : 'they were'} stopped. Start one again with monitor if you still need it.`;
+  return output === null
+    ? head
+    : `${head} What ${one ? 'it' : 'they'} printed before that follows.\n\n${output}`;
+}
+
+/** The transcript's warning for the same give-up, naming why no turn started. */
+export function undeliveredMonitorNotice(
+  named: readonly string[],
+  reason: string,
+): string {
+  const one = named.length === 1;
+  return `Could not start a turn to give the agent the output of monitor${one ? '' : 's'} ${named.join(', ')}: ${reason}. ${one ? 'It was' : 'They were'} stopped, and the agent is told on its next turn.`;
+}
+
 /** What held messages wake an agent with: the prompt, and the row its turn opens on. */
 export function monitorWake(messages: readonly MonitorMessage[]): {
   prompt: string;

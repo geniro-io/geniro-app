@@ -10,6 +10,7 @@ import {
   joinHostWakes,
   unwithdrawn,
 } from './host-wake.bus';
+import { RunNoticeWriter } from './run-notice.writer';
 
 /** Sends in a row that may fail before the wakes become notes for the next turn. */
 export const HOST_WAKE_SEND_ATTEMPTS = 3;
@@ -48,6 +49,7 @@ export class HostWakeChatDelivery implements OnModuleInit {
     private readonly bus: HostWakeBus,
     private readonly chats: ChatService,
     private readonly sessions: AgentSessionRegistry,
+    private readonly notices: RunNoticeWriter,
   ) {}
 
   onModuleInit(): void {
@@ -105,6 +107,7 @@ export class HostWakeChatDelivery implements OnModuleInit {
     }
     const { prompt, row } = joinHostWakes(wakes);
     let opened = false;
+    let gaveUpOn: string | null = null;
     const stopsBefore = this.stops.get(runId) ?? 0;
     this.sending.set(runId, (this.sending.get(runId) ?? 0) + 1);
     try {
@@ -149,6 +152,9 @@ export class HostWakeChatDelivery implements OnModuleInit {
       }
       this.putBack(runId, wakes);
       this.owe(runId);
+      if (!archived) {
+        gaveUpOn = err instanceof Error ? err.message : String(err);
+      }
     } finally {
       // Cleared only with the run's last send, so an overlapping one keeps
       // the Stop count it still compares against.
@@ -160,6 +166,22 @@ export class HostWakeChatDelivery implements OnModuleInit {
         this.stops.delete(runId);
       }
     }
+    if (gaveUpOn !== null) {
+      await this.notices.warn(
+        runId,
+        `Could not start a turn to tell the agent what geniro did for it: ${gaveUpOn}. The agent is told on its next turn.`,
+        'agent not woken',
+      );
+    }
+  }
+
+  /** Whether the run has a wake waiting for a turn, or a send of one under way. */
+  owesWake(runId: string): boolean {
+    return (
+      (this.held.get(runId)?.size ?? 0) > 0 ||
+      this.failures.has(runId) ||
+      this.sending.has(runId)
+    );
   }
 
   /**

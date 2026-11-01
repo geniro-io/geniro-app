@@ -13,6 +13,7 @@ import {
 } from './monitor-chat-delivery.service';
 import type { MonitorRowOwner, MonitorRowWriter } from './monitor-row.writer';
 import { ProcessRegistry } from './process-registry';
+import type { RunNoticeWriter } from './run-notice.writer';
 
 const owner: MonitorOwner = {
   runId: 'run-1',
@@ -112,14 +113,28 @@ describe('MonitorChatDelivery', () => {
   function delivery(chat: ReturnType<typeof fakeChat>, listening = true) {
     const { rows, ends } = fakeRows();
     const oweKeyNote = vi.fn();
-    const service = new MonitorChatDelivery(registry, chat.chats, rows, {
-      oweKeyNote,
-    } as unknown as AgentSessionRegistry);
+    const warnings: { message: string; owedWhenWritten: boolean }[] = [];
+    let service: MonitorChatDelivery | null = null;
+    const notices = {
+      warn: async (_runId: string, message: string) => {
+        warnings.push({
+          message,
+          owedWhenWritten: service?.owesOutput('run-1') ?? false,
+        });
+      },
+    } as unknown as RunNoticeWriter;
+    service = new MonitorChatDelivery(
+      registry,
+      chat.chats,
+      rows,
+      { oweKeyNote } as unknown as AgentSessionRegistry,
+      notices,
+    );
     service.onModuleInit();
     if (listening) {
       service.startDelivering();
     }
-    return { service, ends, oweKeyNote };
+    return { service, ends, oweKeyNote, warnings };
   }
 
   it('starts an own turn on an idle chat whose opening row is the monitor row, not a user message', async () => {
@@ -331,7 +346,7 @@ describe('MonitorChatDelivery', () => {
   it(`stops the monitors of a chat whose turn cannot start ${MONITOR_SEND_ATTEMPTS} times in a row, and tells its next turn`, async () => {
     const chat = fakeChat();
     chat.sendMessage.mockRejectedValue(new Error('the folder is gone'));
-    const { oweKeyNote } = delivery(chat);
+    const { service, oweKeyNote, warnings } = delivery(chat);
     const stoppedBy: (string | null)[] = [];
     registry.subscribe((event: MonitorEvent) => {
       if (event.type === 'end') {
@@ -348,16 +363,27 @@ describe('MonitorChatDelivery', () => {
       await until(() => chat.sendMessage.mock.calls.length === attempt);
       expect(stoppedBy).toEqual([]);
       if (attempt < MONITOR_SEND_ATTEMPTS) {
+        expect(service.owesOutput('run-1')).toBe(true);
         chat.settle();
       }
     }
     await registry.settled(owner.runId, 5000);
+    await until(() => warnings.length === 1);
     expect(stoppedBy).toEqual(['teardown']);
     expect(chat.sendMessage).toHaveBeenCalledTimes(MONITOR_SEND_ATTEMPTS);
+    // The agent never got the output, so its next turn carries it.
     expect(oweKeyNote).toHaveBeenCalledWith(
       'run-1',
-      expect.stringContaining('m1 (loop)'),
+      expect.stringMatching(/m1 \(loop\)[\s\S]*first/),
     );
+    // The user sees why, written once nothing is owed any more.
+    expect(warnings).toEqual([
+      {
+        message: expect.stringContaining('m1 (loop): the folder is gone'),
+        owedWhenWritten: false,
+      },
+    ]);
+    expect(service.owesOutput('run-1')).toBe(false);
   });
 
   it('does not retry a send that failed after writing its opening row, so the output is shown once', async () => {
@@ -385,6 +411,11 @@ describe('MonitorChatDelivery', () => {
     expect(oweKeyNote).toHaveBeenCalledWith(
       'run-1',
       expect.stringContaining('m1 (loop)'),
+    );
+    // The row already showed the output; the note does not repeat it.
+    expect(oweKeyNote).not.toHaveBeenCalledWith(
+      'run-1',
+      expect.stringContaining('first'),
     );
   });
 

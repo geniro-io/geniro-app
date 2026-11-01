@@ -15710,6 +15710,81 @@ describe('ChatService — turns geniro starts for a monitor', () => {
     expect(settle?.hostTurn).toBe(true);
   });
 
+  const hostRow = {
+    severity: 'info' as const,
+    message: 'CI · monitor m1: 1 line.',
+    monitors: [],
+    woke: true,
+  };
+
+  const settledChat = async (
+    harness: ReturnType<typeof setup>,
+    cwd: string,
+  ) => {
+    const run = await harness.service.createChat({
+      agentKind: 'cursor-agent',
+      cwd,
+    });
+    await harness.service.sendMessage(run.id, 'first');
+    harness.cursor.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    harness.cursor.finish();
+    await drain();
+    await drain();
+    return run;
+  };
+
+  it('leaves a settled run as it was when a host turn finds its folder gone', async () => {
+    const harness = setup();
+    const gone = mkdtempSync(join(tmpdir(), 'chat-host-gone-'));
+    const run = await settledChat(harness, gone);
+    rmSync(gone, { recursive: true, force: true });
+    const before = harness.statuses.length;
+
+    await expect(
+      harness.service.sendMessage(run.id, 'CI output', [], {
+        ownTurn: true,
+        hostRow,
+      }),
+    ).rejects.toThrow();
+
+    expect(
+      harness.statuses
+        .slice(before)
+        .filter((event) => event.runId === run.id && event.status !== null),
+    ).toEqual([]);
+    expect((await harness.runDao.getById(run.id))?.status).toBe('completed');
+  });
+
+  it('puts a settled run back as it was when a host turn fails after announcing it working', async () => {
+    const harness = setup();
+    const run = await settledChat(harness, dir);
+    harness.cursor.start.mockImplementationOnce(() => {
+      throw new Error('spawn failed');
+    });
+
+    await expect(
+      harness.service.sendMessage(run.id, 'CI output', [], {
+        ownTurn: true,
+        hostRow,
+      }),
+    ).rejects.toThrow('spawn failed');
+
+    const settle = harness.statuses
+      .filter((event) => event.runId === run.id && event.status !== null)
+      .at(-1);
+    expect(settle).toMatchObject({
+      status: 'completed',
+      noTerminalItem: true,
+      hostTurn: true,
+    });
+    expect((await harness.runDao.getById(run.id))?.status).toBe('completed');
+  });
+
   it('announces the settle of a host turn as one, so no banner is posted for it', async () => {
     const { service, cursor, statuses } = setup();
     const run = await chat(service);

@@ -20,6 +20,7 @@ import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { TaskBoardBroker } from '../../teams/services/task-board.broker';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
+import { fakeLiveWork } from '../__tests__/fake-live-work';
 import { LabelInstructionDao } from '../dao/label-instruction.dao';
 import { TaskDao } from '../dao/task.dao';
 import { LabelInstruction } from '../entity/label-instruction.entity';
@@ -88,6 +89,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
       events,
       attachments,
       runDao,
+      fakeLiveWork().liveWork,
     );
     const teams = {
       list: async () => [

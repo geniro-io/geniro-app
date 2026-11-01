@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
 import type {
@@ -8,10 +8,15 @@ import type {
   TaskStageLine,
 } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
+import { RunLiveWork } from '../../agents/services/run-live-work.service';
 import { resolveValidDirectory } from '../../agents/utils/resolve-directory';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
-import type { AgentKind, RunStatus } from '../../runs/runs.types';
+import {
+  type AgentKind,
+  isTerminalRunStatus,
+  type RunStatus,
+} from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import {
@@ -36,7 +41,7 @@ import { TaskEventBus } from './task-events.bus';
  * the DAO it needs is provided rather than imported.
  */
 @Injectable()
-export class TasksService {
+export class TasksService implements OnModuleInit {
   private readonly logger = new Logger(TasksService.name);
 
   /**
@@ -68,6 +73,15 @@ export class TasksService {
   /** What `releaseStart` calls for an owed reconcile — the settle's own. */
   private owedReconcile: ((taskId: string) => void) | null = null;
 
+  /**
+   * Done cards whose settled run still had live work when they would have
+   * finished, by run id: asked again whenever that work may have ended. In
+   * memory: a restart ends monitors and command actions, and main's reaper
+   * asks `finishedAmong` at every daemon start.
+   */
+  private readonly finishWithheld = new Map<string, string>();
+  private readonly finishChecks = new Map<string, Promise<void>>();
+
   constructor(
     private readonly em: EntityManager,
     private readonly taskDao: TaskDao,
@@ -75,7 +89,16 @@ export class TasksService {
     private readonly events: TaskEventBus,
     private readonly attachments: TaskAttachmentService,
     private readonly runDao: RunDao,
+    private readonly liveWork: RunLiveWork,
   ) {}
+
+  onModuleInit(): void {
+    this.liveWork.changes().subscribe((runId) => {
+      if (this.finishWithheld.has(runId)) {
+        void this.recheckFinish(runId);
+      }
+    });
+  }
 
   /** Claim `taskId`'s start; false when one is already in flight. */
   claimStart(taskId: string): boolean {
@@ -137,10 +160,7 @@ export class TasksService {
     const finished: string[] = [];
     for (const taskId of new Set(taskIds)) {
       const task = await this.taskDao.getById(taskId, em);
-      if (
-        task === null ||
-        isWorkFinished(task.status, await this.runStatusOf(task.runId, em))
-      ) {
+      if (task === null || (await this.isFinished(task, em))) {
         finished.push(taskId);
       }
     }
@@ -148,17 +168,92 @@ export class TasksService {
   }
 
   /**
-   * Tell every board a card's work has just become finished, without moving
-   * the card — its run has settled under a card the user had already called
-   * Done. See `TaskChangedEvent.reason`.
+   * A Done card's run has settled: tell every board its work is finished,
+   * without moving the card (`TaskChangedEvent.reason`) — or, while the run
+   * still has live work, once that work ends.
    */
-  announceWorkFinished(task: Pick<Task, 'id' | 'projectId' | 'status'>): void {
+  async finishWhenFree(
+    task: Pick<Task, 'id' | 'projectId' | 'status' | 'runId'>,
+  ): Promise<void> {
+    if (await this.judgeFinish(task, this.em.fork())) {
+      this.announceFinished(task);
+    }
+  }
+
+  private announceFinished(
+    task: Pick<Task, 'id' | 'projectId' | 'status'>,
+  ): void {
     this.events.publishTaskChanged({
       taskId: task.id,
       projectId: task.projectId,
       status: task.status,
       reason: 'work-finished',
     });
+  }
+
+  /** Ask again whether the withheld card of this run is finished now. */
+  async recheckFinish(runId: string): Promise<void> {
+    const previous = this.finishChecks.get(runId) ?? Promise.resolve();
+    const check = previous.then(async () => {
+      const taskId = this.finishWithheld.get(runId);
+      if (taskId === undefined) {
+        return;
+      }
+      const em = this.em.fork();
+      const task = await this.taskDao.getById(taskId, em);
+      if (task === null || task.runId !== runId || task.status !== 'done') {
+        this.finishWithheld.delete(runId);
+        return;
+      }
+      if (await this.judgeFinish(task, em)) {
+        this.announceFinished(task);
+      }
+    });
+    const settled = check.catch((error: unknown) => {
+      this.logger.warn(
+        `could not re-check whether run ${runId}'s card is finished: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+    this.finishChecks.set(runId, settled);
+    await settled;
+    if (this.finishChecks.get(runId) === settled) {
+      this.finishChecks.delete(runId);
+    }
+  }
+
+  /**
+   * Whether a card's work is finished now; a Done card whose settled run
+   * still holds live work is withheld, to be asked again when that work ends.
+   */
+  private async judgeFinish(
+    task: Pick<Task, 'id' | 'status' | 'runId'>,
+    em: EntityManager,
+  ): Promise<boolean> {
+    const { status, heldBy } = await this.workOf(task.runId, em);
+    const wasWithheld =
+      task.runId !== null && this.finishWithheld.delete(task.runId);
+    if (isWorkFinished(task.status, status, heldBy !== null)) {
+      return true;
+    }
+    if (
+      task.status === 'done' &&
+      task.runId !== null &&
+      heldBy !== null &&
+      (status === null || isTerminalRunStatus(status))
+    ) {
+      this.finishWithheld.set(task.runId, task.id);
+      if (!wasWithheld) {
+        this.logger.log(
+          `card ${task.id} is done but its run ${task.runId} still holds ${heldBy}: its worktree is kept until that ends`,
+        );
+      }
+    }
+    return false;
+  }
+
+  private async isFinished(task: Task, em: EntityManager): Promise<boolean> {
+    const { status, heldBy } = await this.workOf(task.runId, em);
+    return isWorkFinished(task.status, status, heldBy !== null);
   }
 
   async listForProject(projectId: string): Promise<TaskWire[]> {
@@ -596,9 +691,7 @@ export class TasksService {
     // the board may collect its worktree. One called Done while its agent is
     // still working finishes when that run settles, and `TaskSettleService`
     // says so then — the column alone is written the moment a card is dragged.
-    const finished =
-      move.to === 'done' &&
-      isWorkFinished(move.to, await this.runStatusOf(task.runId, em));
+    const finished = move.to === 'done' && (await this.judgeFinish(task, em));
     this.events.publishTaskChanged({
       taskId: task.id,
       projectId: task.projectId,
@@ -608,15 +701,21 @@ export class TasksService {
     return this.wireOf(task, em);
   }
 
-  /** The status of the run working a card, or null when it has none left. */
-  private async runStatusOf(
+  /**
+   * The status of the run working a card (null when it has none left), and
+   * what live work still holds it outside a turn.
+   */
+  private async workOf(
     runId: string | null,
     em: EntityManager,
-  ): Promise<RunStatus | null> {
+  ): Promise<{ status: RunStatus | null; heldBy: string | null }> {
     if (runId === null) {
-      return null;
+      return { status: null, heldBy: null };
     }
-    return (await this.runDao.getById(runId, em))?.status ?? null;
+    return {
+      status: (await this.runDao.getById(runId, em))?.status ?? null,
+      heldBy: this.liveWork.heldBy(runId),
+    };
   }
 
   async remove(taskId: string): Promise<{ deleted: boolean }> {

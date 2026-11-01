@@ -305,11 +305,10 @@ export class TaskSettleService implements OnModuleInit {
       );
     }
     // A card in Done — the user's drag, or the agent's own `update_task` —
-    // becomes FINISHED now: the run settling is the second of
-    // `isWorkFinished`'s two conditions, and the first was met at the move,
-    // which could not release the worktree while the agent still worked.
+    // becomes FINISHED now, or once the run's live work outside a turn ends:
+    // the move could not release the worktree while the agent still worked.
     if (task.status === 'done') {
-      this.tasks.announceWorkFinished(task);
+      await this.tasks.finishWhenFree(task);
       return;
     }
     // Only a card still reading as worked is moved. The run is an ordinary

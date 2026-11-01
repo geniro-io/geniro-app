@@ -1587,6 +1587,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     return this.mustHoldVerdict(runId) ? 'wait' : null;
   }
 
+  /** Whether the chat still has a detached command or a background sub-agent out. */
+  holdsBackgroundWork(runId: string): boolean {
+    return (
+      this.backgroundWork.shellsOpen(runId) > 0 ||
+      this.backgroundWork.subagentsOut(runId) > 0
+    );
+  }
+
   /** Whether a verdict has to wait: a turn runs, or a question card stands. */
   private mustHoldVerdict(runId: string): boolean {
     return (
@@ -5509,6 +5517,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // off-turn stretch when the send claimed it, or announced so below. Only
     // then does a failure owe the windows a settle that ends that state.
     let shownWorking = run.status === 'running';
+    const statusBefore = run.status;
+    let wroteRunning = false;
     try {
       const cwd = resolveValidCwd(run.cwd);
       const agentKind = run.agentKind;
@@ -5837,6 +5847,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       this.holds.forget(runId);
       await this.setRunStatus(em, runId, 'running');
       shownWorking = true;
+      wroteRunning = true;
 
       let chain: Promise<void> = Promise.resolve();
       let sawTerminal = false;
@@ -8061,16 +8072,26 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // run working, the flag is what ends that state in every window, not
       // only the one that sent; a send refused over a settled run changed no
       // window's state and is answered by its own error.
-      // A host turn that could not start is no news the user asked for: its
-      // delivery tries again, and names what it stopped if it gives up.
-      await this.setRunStatus(em, runId, 'failed', {
-        ...(shownWorking ? { noTerminalItem: true } : {}),
-        ...(options.hostRow !== undefined ? { hostTurn: true } : {}),
-      }).catch((statusErr: unknown) => {
-        this.logger.error(
-          `run ${runId} start-failure status write failed: ${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
-        );
-      });
+      // A host turn that never started leaves the run as it found it: its
+      // delivery tries again, and says in the transcript if it gives up.
+      const hostTurn = options.hostRow !== undefined;
+      const settleTo = !hostTurn
+        ? 'failed'
+        : !wroteRunning
+          ? null
+          : isTerminalRunStatus(statusBefore)
+            ? statusBefore
+            : 'failed';
+      if (settleTo !== null) {
+        await this.setRunStatus(em, runId, settleTo, {
+          ...(shownWorking ? { noTerminalItem: true } : {}),
+          ...(hostTurn ? { hostTurn: true } : {}),
+        }).catch((statusErr: unknown) => {
+          this.logger.error(
+            `run ${runId} start-failure status write failed: ${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
+          );
+        });
+      }
       // A Stop pressed while this turn was only CLAIMED has no terminal event
       // left to consume it; dropped here, before the claim is, so it cannot be
       // mistaken for a Stop of the next turn.

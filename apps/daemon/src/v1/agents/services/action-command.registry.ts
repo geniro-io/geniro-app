@@ -35,6 +35,7 @@ interface RunningCommand {
 export class ActionCommandRegistry implements BeforeApplicationShutdown {
   private readonly running = new Map<string, Set<RunningCommand>>();
   private readonly abortedAt = new Map<string, number>();
+  private readonly idleListeners = new Set<(runId: string) => void>();
   private stopping = false;
 
   start(runId: string): ActionCommandSlot {
@@ -57,12 +58,25 @@ export class ActionCommandRegistry implements BeforeApplicationShutdown {
     return {
       signal: controller.signal,
       release: () => {
-        entries.delete(entry);
+        const removed = entries.delete(entry);
         if (entries.size === 0 && this.running.get(runId) === entries) {
           this.running.delete(runId);
         }
         release();
+        if (removed && !this.isRunning(runId)) {
+          for (const listener of this.idleListeners) {
+            listener(runId);
+          }
+        }
       },
+    };
+  }
+
+  /** Be told when a run's last command action has let go of its slot. */
+  onIdle(listener: (runId: string) => void): () => void {
+    this.idleListeners.add(listener);
+    return () => {
+      this.idleListeners.delete(listener);
     };
   }
 

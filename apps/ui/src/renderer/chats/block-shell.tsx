@@ -18,7 +18,7 @@ import { useThreadFlag, useThreadOverride } from './thread-ui-memory';
  * translates it before anything is drawn.
  */
 export type BlockStatus =
-  'queued' | 'running' | 'done' | 'error' | 'stopped' | 'untracked';
+  'queued' | 'running' | 'waiting' | 'done' | 'error' | 'stopped' | 'untracked';
 
 /**
  * How the body of an OPEN collapsible {@link BlockShell} folds its card back —
@@ -45,6 +45,7 @@ export const REVEALABLE_CARD_CLASS =
 const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
   queued: 'bg-muted text-muted-foreground',
   running: 'bg-primary/10 text-primary',
+  waiting: 'bg-primary/10 text-primary',
   done: 'bg-success/15 text-success',
   error: 'bg-destructive/10 text-destructive',
   stopped: 'bg-muted text-muted-foreground',
@@ -63,6 +64,7 @@ const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
 const RUN_STATUS_OF: Record<BlockStatus, RunStatusKind> = {
   queued: 'queued',
   running: 'running',
+  waiting: 'monitoring',
   done: 'completed',
   error: 'failed',
   stopped: 'cancelled',
@@ -152,6 +154,7 @@ function BlockStatusMark({
 }): React.JSX.Element {
   if (
     status === 'queued' ||
+    status === 'waiting' ||
     status === 'error' ||
     status === 'stopped' ||
     status === 'untracked'

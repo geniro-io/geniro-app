@@ -967,6 +967,157 @@ describe('CallBlock', () => {
     expect(blockOf(continued).heldOn).toBe(1);
   });
 
+  it('marks a call WAITING, not running, while its callee has ended its turn on a monitor, until the monitor wakes it', () => {
+    const started = [
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Run the tests.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'system',
+        {
+          callId: 'call-1',
+          severity: 'info',
+          message: 'Started pnpm test · monitor m1.',
+          monitors: [
+            {
+              id: 'm1',
+              description: 'pnpm test',
+              event: 'start',
+              lines: [],
+              omitted: 0,
+            },
+          ],
+          woke: false,
+        },
+        'poet',
+      ),
+      item(
+        'message',
+        { text: 'Started the run; I report when it ends.', callId: 'call-1' },
+        'poet',
+      ),
+    ];
+    expect(blockOf(started).waiting).toBeUndefined();
+    act(() =>
+      root.render(<CallBlock block={blockOf(started)} nodes={NODES} />),
+    );
+    expect(
+      container.querySelector('[data-slot="block-status-badge"]'),
+    ).toBeNull();
+
+    const ended = [
+      ...started,
+      item(
+        'turn_complete',
+        { callId: 'call-1', usage: { inputTokens: 1, outputTokens: 1 } },
+        'poet',
+      ),
+    ];
+    expect(blockOf(ended).waiting).toEqual({ monitors: ['pnpm test'] });
+    act(() => root.render(<CallBlock block={blockOf(ended)} nodes={NODES} />));
+    const badge = container.querySelector('[data-slot="block-status-badge"]');
+    expect(badge?.textContent).toBe('waiting');
+    expect(badge?.getAttribute('title')).toBe(
+      'Poet ended its turn and is waiting for its monitor: pnpm test. Nothing runs until one reports.',
+    );
+
+    const woken = [
+      ...ended,
+      item(
+        'system',
+        {
+          callId: 'call-1',
+          severity: 'info',
+          message: 'pnpm test · monitor m1 ended: exit code 0.',
+          monitors: [
+            {
+              id: 'm1',
+              description: 'pnpm test',
+              event: 'end',
+              end: { kind: 'exit', code: 0 },
+              lines: [],
+              omitted: 0,
+            },
+          ],
+          woke: true,
+        },
+        'poet',
+      ),
+    ];
+    expect(blockOf(woken).waiting).toBeUndefined();
+    act(() => root.render(<CallBlock block={blockOf(woken)} nodes={NODES} />));
+    expect(
+      container.querySelector('[data-slot="block-status-badge"]'),
+    ).toBeNull();
+  });
+
+  it('reads a user message to a waiting callee as a turn of its own, and its ending as waiting again', () => {
+    const base = [
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Run the tests.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item('turn_complete', { callId: 'call-1' }, 'poet'),
+      item('shell_info', { callId: 'call-1', toolCallId: 'sh-1' }, 'poet'),
+    ];
+    expect(blockOf(base).waiting).toEqual({ monitors: [] });
+    const asked = [
+      ...base,
+      {
+        ...item('message', { text: 'status?', callId: 'call-1' }, 'poet'),
+        role: 'user',
+      },
+    ];
+    expect(blockOf(asked).waiting).toBeUndefined();
+    const answered = [
+      ...asked,
+      item('message', { text: 'Still running.', callId: 'call-1' }, 'poet'),
+      item('turn_complete', { callId: 'call-1', insideTurn: true }, 'poet'),
+    ];
+    expect(blockOf(answered).waiting).toBeUndefined();
+    expect(
+      blockOf([
+        ...answered,
+        item('turn_complete', { callId: 'call-1' }, 'poet'),
+      ]).waiting,
+    ).toEqual({ monitors: [] });
+  });
+
+  it('never marks a settled call waiting', () => {
+    const block = blockOf([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Run the tests.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item('turn_complete', { callId: 'call-1' }, 'poet'),
+      item(
+        'status',
+        { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    expect(block.waiting).toBeUndefined();
+  });
+
   it('draws the band for a stalled call that has NOTHING else to show', () => {
     // `hasSummary`'s stalled arm. The card is running with a message already
     // spoken — so `pending` is false and every other source is empty — and the

@@ -597,6 +597,15 @@ export const CallBlock = memo(function CallBlock({
    * because of THEM, so neither "thinking" nor "gone quiet" is true of it.
    */
   const heldOn = status === 'running' ? (block.heldOn ?? null) : null;
+  const waiting = status === 'running' ? (block.waiting ?? null) : null;
+  const waitingTitle =
+    waiting === null
+      ? undefined
+      : waiting.monitors.length > 0
+        ? `${callee} ended its turn and is waiting for ${waiting.monitors.length === 1 ? 'its monitor' : 'its monitors'}: ${waiting.monitors.join('; ')}. Nothing runs until one reports.`
+        : heldOn !== null
+          ? `${callee} ended its turn and is waiting for ${heldOn} call${heldOn === 1 ? '' : 's'} it started. Nothing of it runs until they report.`
+          : `${callee} ended its turn. The call stays open until ${callee} is continued.`;
   const heldCalls =
     heldOn === null
       ? null
@@ -629,7 +638,7 @@ export const CallBlock = memo(function CallBlock({
     <CallFigures
       slot={slot}
       tasks={tasks}
-      live={status === 'running'}
+      live={status === 'running' && waiting === null}
       callee={callee}
       runId={runId}
       callId={block.callId}
@@ -677,7 +686,8 @@ export const CallBlock = memo(function CallBlock({
       <BlockShell
         eyebrow="Agent communication"
         eyebrowIcon={<ArrowRightLeft aria-hidden="true" className="size-3" />}
-        status={status}
+        status={waiting === null ? status : 'waiting'}
+        statusTitle={waitingTitle}
         collapsible
         memoryKey={`call:${block.id}`}
         toggleLabel={toggleLabel}

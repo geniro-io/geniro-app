@@ -29,6 +29,7 @@ import {
   ownerOfKey,
 } from './live-text';
 import { type MetricsSpec, readMetrics } from './metrics-payload';
+import { readMonitorNotice } from './monitor-payload';
 import {
   type PublishedArtifact,
   readPublishedArtifact,
@@ -39,6 +40,7 @@ import {
   readRecommendations,
   type RecommendationsCardData,
 } from './recommendations-payload';
+import { TERMINAL_KINDS } from './settled-status';
 import {
   type BackgroundOutcome,
   mergeSubagentDeclarations,
@@ -322,6 +324,19 @@ export interface CallBlockEntry {
    * result — never by an unrelated row its process writes meanwhile.
    */
   heldOn?: number;
+  /**
+   * The callee ended its turn while its call stays open, so nothing of it runs
+   * until what the call is held for reports: calls of its own ({@link heldOn})
+   * or monitors it started, listed here by description while their start is on
+   * the page and their end is not. Absent while the callee is mid-turn.
+   *
+   * Read from the call's own rows: its newest row is anchored on every page, so
+   * a turn still running always shows a row after its last ending. TWIN PARSER:
+   * the daemon's hold is `CallBroker.holdCall` (calls) and `monitorsOwed`
+   * (monitors), which writes no row of its own for a monitor; the monitor rows
+   * are `readMonitorNotice`'s.
+   */
+  waiting?: { monitors: readonly string[] };
   /**
    * The LATEST call is waiting for room under its run's active-turn cap
    * (`Workflow.maxActiveTurns`): asked for, not started. Set only while the
@@ -3649,6 +3664,7 @@ function buildCallBlock(
   const handOff = latestPoolHandOff(shell);
   const handOffMessage = payloadString(handOff?.payload, 'message');
   const member = callMemberOf(shell, settle, handOff);
+  const waiting = status === 'running' ? calleeWaitingIn(shell.bucket) : null;
   return {
     type: 'call-block',
     id: shell.started.id,
@@ -3667,6 +3683,7 @@ function buildCallBlock(
     result,
     stalled,
     ...(heldOn !== null && OPEN_CALL_STATUSES.has(status) ? { heldOn } : {}),
+    ...(waiting !== null ? { waiting } : {}),
     ...(queuedSeq !== null && status === 'pending'
       ? { queued: true as const, queuedSeq }
       : {}),
@@ -3904,6 +3921,59 @@ function isHeldCountUpdate(item: ChatItem): boolean {
   );
 }
 
+/**
+ * Rows that neither open nor end a callee turn: the call's own envelope, and a
+ * background unit closing after the turn ended.
+ */
+const WAIT_NEUTRAL_KINDS: ReadonlySet<string> = new Set([
+  'call_started',
+  'call_result',
+  'shell_open',
+  'shell_info',
+  'subagent_info',
+]);
+
+/**
+ * Whether the callee's turn in one call's rows has ended, and the monitors of
+ * that call still running — see {@link CallBlockEntry.waiting}. Null while the
+ * callee is mid-turn or has not ended a turn yet.
+ */
+function calleeWaitingIn(
+  rows: readonly ChatItem[],
+): { monitors: readonly string[] } | null {
+  let turnEnded = false;
+  const monitors = new Map<string, string>();
+  for (const item of rows) {
+    if (item.kind === 'system') {
+      const notice = readMonitorNotice(item.payload);
+      for (const monitor of notice?.monitors ?? []) {
+        if (monitor.event === 'end' || monitor.end !== null) {
+          monitors.delete(monitor.id);
+        } else {
+          monitors.set(monitor.id, monitor.description);
+        }
+      }
+      if (notice?.woke === true || endsHeldWait(item)) {
+        turnEnded = false;
+      }
+      continue;
+    }
+    if (WAIT_NEUTRAL_KINDS.has(item.kind)) {
+      continue;
+    }
+    if (item.kind === 'status') {
+      if (payloadString(item.payload, 'status') === 'running') {
+        turnEnded = false;
+      }
+      continue;
+    }
+    turnEnded =
+      TERMINAL_KINDS.has(item.kind) &&
+      payloadBoolean(item.payload, 'insideTurn') !== true;
+  }
+  return turnEnded ? { monitors: [...monitors.values()] } : null;
+}
+
 /** Whether `item` ends a call's wait — see the `heldCalls` fold. */
 function endsHeldWait(item: ChatItem): boolean {
   if (item.kind === 'status' || item.kind === 'call_result') {
@@ -3985,8 +4055,14 @@ function buildConversationBlock(
   const {
     queued: _latestQueued,
     queuedSeq: _latestQueuedSeq,
+    waiting: _latestWaiting,
     ...latestRest
   } = latest;
+  const running = open.filter((block) => block.status === 'running');
+  const waiting =
+    running.length > 0 && running.every((block) => block.waiting !== undefined)
+      ? running[running.length - 1]!.waiting
+      : undefined;
   const queuedBlock =
     status === 'pending'
       ? open.find((block) => block.queued === true)
@@ -4009,6 +4085,7 @@ function buildConversationBlock(
       : {}),
     stalled: open.some((block) => block.stalled),
     ...(heldOn !== null ? { heldOn } : {}),
+    ...(waiting !== undefined ? { waiting } : {}),
     entries: blocks.flatMap((block, index): TranscriptEntry[] =>
       index === 0
         ? block.entries

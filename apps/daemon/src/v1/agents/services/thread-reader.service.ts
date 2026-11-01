@@ -418,6 +418,7 @@ export class ThreadReaderService {
         customInstructions: run.customInstructions,
         replyLanguage: run.replyLanguage,
         taskInstructions: run.taskInstructions,
+        projectInstructions: run.projectInstructions,
         memoryIndex: run.memoryIndex,
       },
     };

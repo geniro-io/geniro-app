@@ -6,6 +6,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { app } from 'electron';
 
@@ -29,6 +30,7 @@ import {
   shareDestinationSchema,
   shareSignInSchema,
 } from './ipc-schemas';
+import { SETTINGS_VERSION, storedSettingsVersion } from './settings-migrations';
 
 /**
  * Non-secret app settings, persisted as a plain JSON file in Electron's
@@ -63,13 +65,14 @@ function parseSettingsObject(text: string): Record<string, unknown> | null {
 
 export function readSettings(): Settings {
   const path = settingsPath();
+  const defaults = { ...DEFAULT_SETTINGS, settingsVersion: SETTINGS_VERSION };
   if (!existsSync(path)) {
-    return { ...DEFAULT_SETTINGS };
+    return defaults;
   }
   try {
     const record = parseSettingsObject(readFileSync(path, 'utf8'));
     if (record === null) {
-      return { ...DEFAULT_SETTINGS };
+      return defaults;
     }
     // Salvage per key. The strict schema keeps renderer WRITES honest (ipc.ts
     // validates every patch), but the on-disk file can be newer than this
@@ -139,9 +142,13 @@ export function readSettings(): Settings {
         salvaged[key] = field.data;
       }
     }
-    return { ...DEFAULT_SETTINGS, ...salvaged } as Settings;
+    return {
+      ...DEFAULT_SETTINGS,
+      ...salvaged,
+      settingsVersion: storedSettingsVersion(record),
+    } as Settings;
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return defaults;
   }
 }
 
@@ -357,11 +364,47 @@ export function onSettingsWritten(listener: SettingsListener): () => void {
   return () => settingsListeners.delete(listener);
 }
 
-export function writeSettings(next: Settings): Settings {
+/**
+ * What a write puts in a file still below {@link SETTINGS_VERSION}: the raw file
+ * with only the keys this write changes replaced. A migration that failed at
+ * launch is tried again at the next one, and it needs every value it reshapes
+ * or carries over still in its old form, not the salvaged default.
+ */
+function unmigratedFile(
+  path: string,
+  next: Settings,
+  written: ReadonlySet<string>,
+): Record<string, unknown> | null {
+  let record: Record<string, unknown> | null;
+  try {
+    record = parseSettingsObject(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (record === null || storedSettingsVersion(record) >= SETTINGS_VERSION) {
+    return null;
+  }
+  const current: Record<string, unknown> = { ...readSettings() };
+  const changed = Object.entries(next).filter(
+    ([key, value]) =>
+      written.has(key) || !isDeepStrictEqual(value, current[key]),
+  );
+  return { ...record, ...Object.fromEntries(changed) };
+}
+
+/** `written`: the keys the caller set on purpose, kept even where they equal what was read. */
+export function writeSettings(
+  next: Settings,
+  written: ReadonlySet<string> = new Set(),
+): Settings {
   const path = settingsPath();
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf8');
+  writeFileSync(
+    tmp,
+    JSON.stringify(unmigratedFile(path, next, written) ?? next, null, 2),
+    'utf8',
+  );
   preserveUnparseableSettings(path);
   renameSync(tmp, path);
   for (const listener of settingsListeners) {
@@ -371,5 +414,8 @@ export function writeSettings(next: Settings): Settings {
 }
 
 export function updateSettings(patch: Partial<Settings>): Settings {
-  return writeSettings({ ...readSettings(), ...patch });
+  return writeSettings(
+    { ...readSettings(), ...patch },
+    new Set(Object.keys(patch)),
+  );
 }

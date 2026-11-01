@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { PROJECT_MAX_CONCURRENT_CEILING } from '../projects.types';
+import {
+  PROJECT_DESCRIPTION_MAX,
+  PROJECT_INSTRUCTIONS_MAX,
+  PROJECT_MAX_CONCURRENT_CEILING,
+} from '../projects.types';
 import { createProjectSchema, updateProjectSchema } from './project.dto';
 
 /**
@@ -81,5 +85,75 @@ describe('project input schemas — the autopilot policy', () => {
     expect(
       updateProjectSchema.safeParse({ autopilotIntakeStatus: null }).success,
     ).toBe(false);
+  });
+});
+
+describe('project input schemas — description and instructions', () => {
+  it('accepts both on create, and null clears them on a patch', () => {
+    expect(
+      createProjectSchema.parse({
+        name: 'geniro-app',
+        folder: '/tmp/x',
+        description: 'what it is',
+        instructions: 'line one\nline two\ttabbed',
+      }),
+    ).toMatchObject({ description: 'what it is' });
+    expect(
+      updateProjectSchema.parse({ description: null, instructions: null }),
+    ).toEqual({ description: null, instructions: null });
+  });
+
+  it('refuses a null on create, where the key is only ever omitted', () => {
+    expect(
+      createProjectSchema.safeParse({
+        name: 'x',
+        folder: '/tmp/x',
+        description: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('bounds each field at its limit', () => {
+    expect(
+      updateProjectSchema.safeParse({
+        description: 'a'.repeat(PROJECT_DESCRIPTION_MAX),
+      }).success,
+    ).toBe(true);
+    expect(
+      updateProjectSchema.safeParse({
+        description: 'a'.repeat(PROJECT_DESCRIPTION_MAX + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      updateProjectSchema.safeParse({
+        instructions: 'a'.repeat(PROJECT_INSTRUCTIONS_MAX),
+      }).success,
+    ).toBe(true);
+    expect(
+      updateProjectSchema.safeParse({
+        instructions: 'a'.repeat(PROJECT_INSTRUCTIONS_MAX + 1),
+      }).success,
+    ).toBe(false);
+  });
+
+  it('refuses a control character, which would brick every turn spawned with it', () => {
+    const withNul = `bad${String.fromCharCode(0)}text`;
+    expect(
+      updateProjectSchema.safeParse({ instructions: withNul }).success,
+    ).toBe(false);
+    expect(
+      createProjectSchema.safeParse({
+        name: 'x',
+        folder: '/tmp/x',
+        description: withNul,
+      }).success,
+    ).toBe(false);
+    expect(
+      createProjectSchema.safeParse({ name: withNul, folder: '/tmp/x' })
+        .success,
+    ).toBe(false);
+    expect(updateProjectSchema.safeParse({ name: withNul }).success).toBe(
+      false,
+    );
   });
 });

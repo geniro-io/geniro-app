@@ -8,10 +8,11 @@
     "geniro-daemon": "dist/main.js"
   },
   "scripts": {
-    "build": "swc src -d dist --config-file ../../.swcrc --strip-leading-paths --ignore '**/*.spec.ts' --ignore '**/__tests__/**' --ignore '**/db/seed.ts' --ignore '**/db/seeders/**'",
+    "build": "swc src -d dist --config-file ../../.swcrc --strip-leading-paths --ignore '**/*.spec.ts' --ignore '**/__tests__/**' --ignore '**/db/seed.ts' --ignore '**/db/migrate-down.ts' --ignore '**/db/seeders/**'",
     "prebuild": "rm -rf ./dist || true",
     "dev": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron --watch -r @swc-node/register -r tsconfig-paths/register ./src/main.ts",
     "seed": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron -r @swc-node/register -r tsconfig-paths/register ./src/db/seed.ts",
+    "migrate:down": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron -r @swc-node/register -r tsconfig-paths/register ./src/db/migrate-down.ts",
     "start": "node dist/main.js",
     "check-types": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src",

@@ -18,13 +18,19 @@ import {
   consumeCrashMark,
   DAEMON_COMPACTION_MARK_NAME,
   DAEMON_CRASH_MARK_NAME,
+  DAEMON_MIGRATION_ERROR_NAME,
+  DAEMON_MIGRATION_EXIT_CODE,
   DAEMON_STOP_CAUSE_NAME,
   type DaemonInfo,
+  type DaemonMigrationError,
+  type DaemonMigrationProgress,
   type DaemonQuitCause,
   type DaemonStopCause,
   isPlausiblePid,
+  parseMigratingLine,
   PIDFILE_NAME,
   readDaemonInfo,
+  readMigrationError,
   stampEntry,
   writeStopCause,
 } from './daemon-pidfile';
@@ -346,6 +352,14 @@ export interface DaemonSupervisorOptions {
   writeStopCause?: (cause: DaemonStopCause) => void;
   /** Whether the next start compacts the database first (`DAEMON_COMPACTION_MARK_NAME`). */
   compactionPending?: () => boolean;
+  /** The daemon's report of the migration that failed (`DAEMON_MIGRATION_ERROR_NAME`). */
+  readMigrationError?: () => DaemonMigrationError | null;
+  /**
+   * Told each migration step a starting daemon reports, and null once that
+   * start has settled either way — what the startup screen's "Updating your
+   * data…" follows.
+   */
+  onMigrating?: (progress: DaemonMigrationProgress | null) => void;
   pollIntervalMs?: number;
   startTimeoutMs?: number;
   shutdownGraceMs?: number;
@@ -386,6 +400,36 @@ export function cliPathsEnv(
   return Object.keys(map).length === 0
     ? {}
     : { GENIRO_CLI_PATHS: JSON.stringify(map) };
+}
+
+function migrationFailureText(report: DaemonMigrationError | null): string {
+  if (report === null) {
+    return `updating your data failed — the daemon left no report (exit code ${DAEMON_MIGRATION_EXIT_CODE})`;
+  }
+  const at = `updating your data failed at ${report.id} (step ${report.step} of ${report.of})`;
+  const copies = report.backupDir
+    ? ` — copies of the files it touched are in ${report.backupDir}`
+    : '';
+  if (report.kind === 'database') {
+    return `${at} and nothing was changed: ${report.message}`;
+  }
+  if (report.kind === 'files') {
+    return `${at}; the steps before it were kept: ${report.message}${copies}`;
+  }
+  return `${at}: ${report.message}${copies}`;
+}
+
+/**
+ * A start the daemon refused because a migration of the user's data failed — a
+ * database step rolled back, or a file step stopped after the database
+ * committed. Starting it again would fail the same step, so nothing
+ * respawns after it; the startup screen's Retry is still the user's to press.
+ */
+export class DaemonMigrationFailedError extends Error {
+  constructor(readonly report: DaemonMigrationError | null) {
+    super(migrationFailureText(report));
+    this.name = 'DaemonMigrationFailedError';
+  }
 }
 
 /**
@@ -433,6 +477,11 @@ export class DaemonSupervisor {
   private readonly consumeCrashMark: (pid: number) => boolean;
   private readonly writeStopCause: (cause: DaemonStopCause) => void;
   private readonly compactionPending: () => boolean;
+  private readonly readMigrationError: () => DaemonMigrationError | null;
+  private readonly onMigrating: (
+    progress: DaemonMigrationProgress | null,
+  ) => void;
+  private migration: DaemonMigrationProgress | null = null;
   private readonly pollIntervalMs: number;
   private readonly startTimeoutMs: number;
   private readonly shutdownGraceMs: number;
@@ -477,6 +526,13 @@ export class DaemonSupervisor {
       options.compactionPending ??
       (() =>
         existsSync(join(app.getPath('userData'), DAEMON_COMPACTION_MARK_NAME)));
+    this.readMigrationError =
+      options.readMigrationError ??
+      (() =>
+        readMigrationError(
+          join(app.getPath('userData'), DAEMON_MIGRATION_ERROR_NAME),
+        ));
+    this.onMigrating = options.onMigrating ?? (() => undefined);
     this.pollIntervalMs = options.pollIntervalMs ?? HEALTH_POLL_INTERVAL_MS;
     this.startTimeoutMs = options.startTimeoutMs ?? START_TIMEOUT_MS;
     this.shutdownGraceMs = options.shutdownGraceMs ?? SHUTDOWN_GRACE_MS;
@@ -773,6 +829,9 @@ export class DaemonSupervisor {
           'error',
           `respawning the daemon failed: ${err instanceof Error ? err.message : String(err)}`,
         );
+        if (err instanceof DaemonMigrationFailedError) {
+          return;
+        }
         this.scheduleRespawn();
       });
     }, wait);
@@ -948,9 +1007,27 @@ export class DaemonSupervisor {
     });
     this.child = child;
     this.owned = true;
-    child.stdout?.on('data', (b: Buffer) =>
-      process.stdout.write(`[daemon] ${b}`),
-    );
+    let deadline =
+      Date.now() +
+      (this.compactionPending()
+        ? Math.max(this.startTimeoutMs, COMPACTING_START_TIMEOUT_MS)
+        : this.startTimeoutMs);
+    // Chunks do not follow line boundaries, so heartbeats are read from whole
+    // lines only; the echo stays chunk by chunk.
+    let pending = '';
+    child.stdout?.on('data', (b: Buffer) => {
+      process.stdout.write(`[daemon] ${b}`);
+      pending += b.toString('utf8');
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        const progress = parseMigratingLine(line.trimEnd());
+        if (progress !== null && this.child === child && this.handle === null) {
+          deadline = Math.max(deadline, Date.now() + this.startTimeoutMs);
+          this.noteMigration(progress);
+        }
+      }
+    });
     child.stderr?.on('data', (b: Buffer) =>
       process.stderr.write(`[daemon] ${b}`),
     );
@@ -1002,12 +1079,31 @@ export class DaemonSupervisor {
       this.scheduleRespawn();
     });
 
-    const deadline =
-      Date.now() +
-      (this.compactionPending()
-        ? Math.max(this.startTimeoutMs, COMPACTING_START_TIMEOUT_MS)
-        : this.startTimeoutMs);
-    while (Date.now() < deadline) {
+    try {
+      return await this.awaitHealthy(child, () => deadline);
+    } finally {
+      this.noteMigration(null);
+    }
+  }
+
+  /** What a start shows while the daemon migrates the user's data; null otherwise. */
+  getMigration(): DaemonMigrationProgress | null {
+    return this.migration;
+  }
+
+  private noteMigration(progress: DaemonMigrationProgress | null): void {
+    if (progress === null && this.migration === null) {
+      return;
+    }
+    this.migration = progress;
+    this.onMigrating(progress);
+  }
+
+  private async awaitHealthy(
+    child: ChildProcess,
+    deadline: () => number,
+  ): Promise<DaemonHandle> {
+    while (Date.now() < deadline()) {
       if (this.stopping) {
         await this.stopChild(child);
         throw new Error('daemon supervisor stopped during daemon startup');
@@ -1024,6 +1120,9 @@ export class DaemonSupervisor {
         this.currentPid = info.pid;
         this.servingSince = Date.now();
         return this.handle;
+      }
+      if (child.exitCode === DAEMON_MIGRATION_EXIT_CODE) {
+        throw new DaemonMigrationFailedError(this.readMigrationError());
       }
       if (child.exitCode !== null) {
         throw new Error(

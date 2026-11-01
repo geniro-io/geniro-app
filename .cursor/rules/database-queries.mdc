@@ -22,6 +22,7 @@ Every daemon query goes through MikroORM's QueryBuilder or its typed Kysely buil
 - Every statement there is built from constants only, and it is DDL only — every query against either index uses the Kysely builder.
 - Change a statement only by bumping that file's version (see its doc block).
 - The FTS tables are listed in `schemaGenerator.skipTables` (`CHAT_TEXT_TABLES`, `MEMORY_TEXT_TABLES`); keep each in step with its table on a rename.
+- The migration journal (`app_migrations`) is created by `MigrationRunnerService` through the Kysely schema builder, not hand-written DDL, and sits in `skipTables` too (`APP_MIGRATIONS_TABLES`). Migration steps express their DDL through the same builder (`apps/daemon/AGENTS.md` → *Migrations*).
 - Any other need for raw SQL needs its own reason recorded here, or a typed way to say it.
 
 ## Recorded exception: compacting the database

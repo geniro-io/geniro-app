@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { CliKind } from '../shared/contracts';
-import type { DaemonHandle } from '../shared/contracts';
+import type { DaemonHandle, DaemonMigration } from '../shared/contracts';
 import { AgentIdentityContext } from './agent-identity';
 import { Chats } from './chats/Chats';
 import { REMOTE_HISTORY_PAGE } from './chats/use-chat-run';
@@ -194,6 +194,8 @@ export function App(): React.JSX.Element {
   const [startError, setStartError] = useState<string | null>(null);
   /** When the shell began waiting for a daemon — the startup screen's clock. */
   const [waitingSince, setWaitingSince] = useState(() => Date.now());
+  /** The data migration a starting daemon is running, as the supervisor reports it. */
+  const [migrating, setMigrating] = useState<DaemonMigration | null>(null);
   const handleRef = useRef<DaemonHandle | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
@@ -327,6 +329,7 @@ export function App(): React.JSX.Element {
     }
     handleRef.current = daemonHandle;
     setStartError(null);
+    setMigrating(null);
     // Published for the DevTools extension's Geniro panel, which runs in an
     // extension origin with no preload and no module graph of ours — its only
     // channel to this page is `inspectedWindow.eval`, so the host, port and
@@ -390,10 +393,12 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     let cancelled = false;
     const unsubscribeRestart = window.geniro.onDaemonRestarted(attachDaemon);
+    const unsubscribeMigrating = window.geniro.onDaemonMigrating(setMigrating);
     void window.geniro.getStatus().then((status) => {
       if (cancelled) {
         return;
       }
+      setMigrating(status.daemon.migrating);
       if (status.onboardingComplete) {
         setPhase('ready');
       } else {
@@ -404,6 +409,7 @@ export function App(): React.JSX.Element {
     return () => {
       cancelled = true;
       unsubscribeRestart();
+      unsubscribeMigrating();
       clientRef.current?.close();
     };
   }, [attachDaemon, connectDaemon]);
@@ -558,7 +564,7 @@ export function App(): React.JSX.Element {
     return (
       <>
         <WindowDragStrip />
-        <StartupScreen since={waitingSince} />
+        <StartupScreen since={waitingSince} migrating={migrating} />
       </>
     );
   }
@@ -686,6 +692,7 @@ export function App(): React.JSX.Element {
                 <StartupScreen
                   since={waitingSince}
                   reason={startError}
+                  migrating={migrating}
                   onRetry={() => {
                     // Back to the starting view, clock and all: this is a
                     // fresh start, and its failure brings the reason back.

@@ -1,6 +1,7 @@
 import { PlugZap, RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
+import type { DaemonMigration } from '../../shared/contracts';
 import { Logo } from './logo';
 import { Button } from './ui/button';
 import { ProgressBar } from './ui/progress-bar';
@@ -28,6 +29,7 @@ const EXPLAIN_AFTER_MS = 12_000;
 export function StartupScreen({
   since,
   reason = null,
+  migrating = null,
   onRetry,
   className,
 }: {
@@ -35,6 +37,8 @@ export function StartupScreen({
   since: number;
   /** The supervisor's own words for why the start failed; null while starting. */
   reason?: string | null;
+  /** The data migration the starting engine is running; null for an ordinary start. */
+  migrating?: DaemonMigration | null;
   /** Starts again; the caller puts the screen back in its starting state. */
   onRetry?: () => void;
   className?: string;
@@ -42,6 +46,12 @@ export function StartupScreen({
   const failed = reason !== null;
   const now = useNow(!failed);
   const elapsedMs = Math.max(0, now - since);
+  const title = migrating ? 'Updating your data…' : 'Starting Geniro';
+  const detail = migrating
+    ? migrating.of > 1
+      ? `Step ${migrating.step} of ${migrating.of}`
+      : 'Bringing your data up to this version'
+    : 'Opening your chats and workflows';
 
   return (
     <div
@@ -83,18 +93,12 @@ export function StartupScreen({
           </>
         ) : (
           <>
-            <ProgressBar
-              fraction={null}
-              label="Starting Geniro"
-              className="mt-10 w-48"
-            />
-            <p className="mt-5 text-sm font-medium text-foreground">
-              Starting Geniro
-            </p>
+            <ProgressBar fraction={null} label={title} className="mt-10 w-48" />
+            <p className="mt-5 text-sm font-medium text-foreground">{title}</p>
             <p className="mt-1.5 min-h-[1lh] text-xs text-muted-foreground tabular-nums">
               {elapsedMs >= SHOW_ELAPSED_AFTER_MS
-                ? `Opening your chats and workflows · ${Math.floor(elapsedMs / 1000)}s`
-                : 'Opening your chats and workflows'}
+                ? `${detail} · ${Math.floor(elapsedMs / 1000)}s`
+                : detail}
             </p>
             <p
               className={cn(
@@ -102,8 +106,9 @@ export function StartupScreen({
                 elapsedMs >= EXPLAIN_AFTER_MS ? 'opacity-100' : 'opacity-0',
               )}
               aria-hidden={elapsedMs < EXPLAIN_AFTER_MS}>
-              Still working. A large history takes longer to open, most of all
-              on the first launch after a restart.
+              {migrating
+                ? 'This runs once, on the first launch of a new version. Keep Geniro open until it finishes.'
+                : 'Still working. A large history takes longer to open, most of all on the first launch after a restart.'}
             </p>
           </>
         )}

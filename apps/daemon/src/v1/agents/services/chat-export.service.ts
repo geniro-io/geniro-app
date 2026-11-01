@@ -106,6 +106,7 @@ function exportRun(run: Run): ChatExportRunWire {
     replyLanguage: run.replyLanguage,
     taskInstructions: run.taskInstructions,
     workflowInstructions: run.workflowInstructions,
+    projectInstructions: run.projectInstructions,
     memoryIndex: run.memoryIndex,
     nativeMemoryOff: run.nativeMemoryOff,
     agentOptions:

@@ -10,6 +10,7 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import type { ProjectRootsService } from '../../projects/services/project-roots.service';
+import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { TaskDao } from '../../tasks/dao/task.dao';
@@ -52,9 +53,8 @@ export async function memoryDb() {
     new MemoryDao(em),
     new RunDao(em),
     new NodeStateDao(em),
-    new TaskDao(em),
     new ProjectDao(em),
-    roots,
+    new ProjectScopeService(em, new TaskDao(em), new ProjectDao(em), roots),
     events,
   );
   return { orm, em, service, events, index };

@@ -7,8 +7,7 @@ import { chatTextMatchQuery } from '../../agents/utils/chat-text-query';
 import { hasHiddenText } from '../../agents/utils/hidden-text';
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import { ProjectDao } from '../../projects/dao/project.dao';
-import { ProjectRootsService } from '../../projects/services/project-roots.service';
-import { TaskDao } from '../../tasks/dao/task.dao';
+import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { MemoryDao } from '../dao/memory.dao';
 import { Memory } from '../entity/memory.entity';
 import {
@@ -93,9 +92,8 @@ export class MemoryService {
     private readonly memories: MemoryDao,
     private readonly runs: RunDao,
     private readonly nodeStates: NodeStateDao,
-    private readonly tasks: TaskDao,
     private readonly projects: ProjectDao,
-    private readonly roots: ProjectRootsService,
+    private readonly scope: ProjectScopeService,
     private readonly events: MemoryEventBus,
   ) {}
 
@@ -120,20 +118,8 @@ export class MemoryService {
   }
 
   /** {@link scopeOf} for a run whose row does not exist yet. */
-  async scopeFor({ taskId, cwd }: MemoryScopeFacts): Promise<string | null> {
-    const em = this.em.fork();
-    if (taskId !== null) {
-      const task = await this.tasks.getById(taskId, em);
-      if (task && (await this.projects.getById(task.projectId, em))) {
-        return task.projectId;
-      }
-    }
-    if (cwd === null) {
-      return null;
-    }
-    const root = (await this.roots.rootsOf([cwd])).get(cwd) ?? cwd;
-    const project = await this.projects.findAnyByFolder(root, em);
-    return project?.id ?? null;
+  async scopeFor(facts: MemoryScopeFacts): Promise<string | null> {
+    return (await this.scope.projectOf(facts))?.id ?? null;
   }
 
   /**

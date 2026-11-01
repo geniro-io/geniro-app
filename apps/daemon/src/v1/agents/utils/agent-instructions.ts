@@ -165,6 +165,11 @@ export interface TurnInstructionParts {
   /** The user's own global custom instructions, as snapshotted onto the run. */
   customInstructions?: string | null;
   /**
+   * What the run's project says to its agents, as snapshotted onto
+   * `Run.projectInstructions`: the project's name, description and instructions.
+   */
+  projectInstructions?: string | null;
+  /**
    * The shared memory's title index, as snapshotted onto `Run.memoryIndex`:
    * entries the user wrote, imported or approved, led by a line saying it is
    * data.
@@ -230,6 +235,7 @@ export const TURN_INSTRUCTION_SOURCES = [
   'backgroundWorkNote',
   'replyLanguage',
   'customInstructions',
+  'projectInstructions',
   'memoryIndex',
   'taskInstructions',
   'workflowInstructions',
@@ -263,7 +269,8 @@ export const TURN_INSTRUCTION_SEPARATOR = '\n\n';
  * follows it: another fact about the host, this one per CLI. The user's reply
  * language comes next, ahead of their free text, so their own words can still
  * qualify it. The user's global
- * instructions come next, then the shared memory's index — notes the user
+ * instructions come next, then the run's project's own, then the shared
+ * memory's index — notes the user
  * wrote or approved, which their standing instructions outrank — then what a board
  * card asks of the run working it —
  * its label instructions, written for a class of card, and the report ask that
@@ -295,6 +302,7 @@ export function turnInstructionParts(
       preamble ? replyLanguageInstruction(parts.replyLanguage) : null,
     ],
     ['customInstructions', parts.customInstructions],
+    ['projectInstructions', parts.projectInstructions],
     // Masked again on every turn: a secret registered after the run started
     // never rides a later turn's instructions.
     [

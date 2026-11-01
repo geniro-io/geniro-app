@@ -12,6 +12,7 @@ type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, IpcHandler>();
   const settings: Settings = {
+    settingsVersion: 0,
     onboardingComplete: false,
     onboardingProgress: null,
     projectFolder: null,

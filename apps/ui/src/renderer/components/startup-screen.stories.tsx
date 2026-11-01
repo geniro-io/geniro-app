@@ -23,6 +23,13 @@ export const SlowStart: Story = {
   },
 };
 
+export const UpdatingData: Story = {
+  args: {
+    since: Date.now() - 6_000,
+    migrating: { id: '0002-rename-workflows', step: 1, of: 2 },
+  },
+};
+
 export const Failed: Story = {
   args: {
     reason: 'daemon exited during startup (code 1)',

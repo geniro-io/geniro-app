@@ -312,6 +312,17 @@ export class Run extends TimestampsEntity {
   customInstructions: string | null = null;
 
   /**
+   * What the run's project told its agents when the run was created
+   * (`ProjectScopeService.instructionsSnapshot`: the name, description and
+   * instructions), composed right after {@link customInstructions}; null when
+   * the run is in no project or its project says nothing. A snapshot for
+   * {@link customInstructions}' reason: editing the project must not respawn a
+   * kept CLI.
+   */
+  @Property({ type: 'text', nullable: true })
+  projectInstructions: string | null = null;
+
+  /**
    * The language the user wanted replies in when this run was created
    * (`Settings.replyLanguage`); null when none was set, and for every row
    * predating the setting. A snapshot for {@link customInstructions}' reason:
@@ -324,7 +335,7 @@ export class Run extends TimestampsEntity {
   /**
    * The shared memory's title index this run's agents were given
    * (`MemoryService.runSnapshot`), composed right after
-   * {@link customInstructions}; null when memory was off or held nothing the
+   * {@link projectInstructions}; null when memory was off or held nothing the
    * run may see. A snapshot for {@link customInstructions}' reason: a live read
    * would respawn the kept CLI whenever any agent saved a note.
    */

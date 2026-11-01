@@ -9,10 +9,15 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { defineConfig, MikroORM } from '@mikro-orm/sqlite';
 import { io, type Socket } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { DAEMON_STOP_CAUSE_NAME, type DaemonInfo } from './utils/handshake';
+import {
+  APP_MIGRATIONS_TABLE,
+  MIGRATING_LINE_PREFIX,
+} from './v1/migrations/migrations.types';
 
 /**
  * Boots the REAL daemon — the whole Nest container, from source, exactly as
@@ -187,6 +192,42 @@ describe('the daemon boots and serves', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ hits: [], partialReason: null });
+  });
+
+  it('runs the migrations before the schema sync', async () => {
+    expect(output).toContain(
+      `${MIGRATING_LINE_PREFIX} {"id":"0001-app-migrations-journal","step":1,"of":1}`,
+    );
+    const orm = await MikroORM.init(
+      defineConfig({
+        dbName: join(userData, 'geniro.db'),
+        entities: [],
+        discovery: { warnWhenNoEntities: false },
+      }),
+    );
+    const db = orm.em.fork().getKysely<{
+      sqlite_master: { name: string; type: string; rowid: number };
+      app_migrations: { id: string };
+    }>();
+    try {
+      // sqlite_master rows are appended as tables are created, so on this
+      // fresh profile the journal coming first means it predates the sync.
+      const tables = await db
+        .selectFrom('sqlite_master')
+        .select('name')
+        .where('type', '=', 'table')
+        .orderBy('rowid')
+        .execute();
+      expect(tables[0]?.name).toBe(APP_MIGRATIONS_TABLE);
+      expect(tables.map((table) => table.name)).toContain('runs');
+      const applied = await db
+        .selectFrom('app_migrations')
+        .select('id')
+        .execute();
+      expect(applied).toEqual([{ id: '0001-app-migrations-journal' }]);
+    } finally {
+      await orm.close(true);
+    }
   });
 
   it('switches its database to WAL at boot', () => {

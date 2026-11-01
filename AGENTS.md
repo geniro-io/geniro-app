@@ -195,7 +195,9 @@ pnpm commit             # conventional commit via commitizen
 
 ### Database schema
 
-- The daemon syncs the SQLite schema additively at launch (`orm.schema.update({ safe: true })`). There is no Migrator; never hand-write migrations.
+- The daemon syncs the SQLite schema additively at launch (`orm.schema.update({ safe: true })`). A new column or table needs nothing more.
+- What the sync cannot express (a rename, a data or YAML rewrite) is a step in the daemon's journaled runner (`apps/daemon/src/v1/migrations/`, `apps/daemon/AGENTS.md` → *Migrations*), run BEFORE the sync and recorded in `app_migrations`. Never MikroORM's Migrator, never a raw-SQL migration.
+- A `settings.json` key rename or reshape is a step in `apps/ui/src/main/settings-migrations.ts`, applied to the raw file before `readSettings` (`settingsVersion`).
 
 ---
 

@@ -31,6 +31,13 @@ const api: GeniroApi = {
     ipcRenderer.on(IPC.onDaemonRestarted, handler);
     return () => ipcRenderer.removeListener(IPC.onDaemonRestarted, handler);
   },
+  onDaemonMigrating: (listener) => {
+    const handler = (_event: IpcRendererEvent, migration: unknown): void => {
+      listener(migration as Parameters<typeof listener>[0]);
+    };
+    ipcRenderer.on(IPC.onDaemonMigrating, handler);
+    return () => ipcRenderer.removeListener(IPC.onDaemonMigrating, handler);
+  },
   onClearAgentCaches: (listener) => {
     const handler = (): void => listener();
     ipcRenderer.on(IPC.onClearAgentCaches, handler);

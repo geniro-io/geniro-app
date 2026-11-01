@@ -23,6 +23,7 @@ import {
   interruptCauseClause,
 } from '../../../utils/stop-cause';
 import { MemoryService } from '../../memory/services/memory.service';
+import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { Run } from '../../runs/entity/run.entity';
 import {
   type AgentKind,
@@ -828,6 +829,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly workflowBuilders: WorkflowBuilderBroker,
     private readonly runWrites: RunWriteQueue,
     private readonly memory: MemoryService,
+    private readonly projectScope: ProjectScopeService,
     private readonly holds: RunHoldRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     @Optional() private readonly agentMcp?: AgentMcpService,
@@ -2078,10 +2080,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         configDir,
       );
     }
-    const memory = await this.memory.runSnapshot({
-      taskId: input.taskId ?? null,
-      cwd,
-    });
+    const scopeFacts = { taskId: input.taskId ?? null, cwd };
+    const memory = await this.memory.runSnapshot(scopeFacts);
+    const projectInstructions =
+      await this.projectScope.instructionsSnapshot(scopeFacts);
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -2106,6 +2108,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // adapter an empty string to compose around.
         customInstructions: input.customInstructions?.trim() || null,
         replyLanguage: input.replyLanguage?.trim() || null,
+        projectInstructions,
         ...memory,
         taskInstructions: input.taskInstructions?.trim() || null,
         editsWorkflowSlug: input.editsWorkflowSlug ?? null,
@@ -4886,9 +4889,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * needs no liveness test of its own.
    *
    * Called from `main.ts` after the schema sync, beside the other boot
-   * reconciles and for the same reason: an `OnApplicationBootstrap` hook fires
-   * before the additive `schema.update` and would query tables a fresh install
-   * does not have yet.
+   * reconciles and in their order, before listen: an `OnApplicationBootstrap`
+   * hook would fire later, inside `listen()`, unordered against them.
    */
   async reconcileStrandedDelegates(): Promise<void> {
     try {
@@ -5636,6 +5638,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // (`AgentAdapter.sessionKey` hashes it).
       const customInstructions = settings.customInstructions ?? undefined;
       const replyLanguage = settings.replyLanguage ?? undefined;
+      const projectInstructions = settings.projectInstructions ?? undefined;
       const memoryIndex = settings.memoryIndex ?? undefined;
       const nativeMemoryOff = settings.nativeMemoryOff === true;
       // Off the row too; `TaskRunsService` rewrites it before continuing a
@@ -6958,6 +6961,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           configDir,
           customInstructions,
           replyLanguage,
+          projectInstructions,
           memoryIndex,
           nativeMemoryOff,
           taskInstructions,

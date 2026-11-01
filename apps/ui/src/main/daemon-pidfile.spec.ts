@@ -16,11 +16,16 @@ import {
   consumeCrashMark,
   DAEMON_CRASH_MARK_NAME,
   DAEMON_LOOPBACK_HOST,
+  DAEMON_MIGRATING_PREFIX,
+  DAEMON_MIGRATION_ERROR_NAME,
+  DAEMON_MIGRATION_EXIT_CODE,
   DAEMON_STOP_CAUSE_NAME,
   type DaemonInfo,
   type DaemonStopCause,
   parseDaemonInfo,
+  parseMigratingLine,
   readDaemonInfo,
+  readMigrationError,
   stampEntry,
   writeStopCause,
 } from './daemon-pidfile';
@@ -316,5 +321,101 @@ describe('DAEMON_STOP_CAUSE_NAME', () => {
     for (const cause of Object.keys(written)) {
       expect(causes).toContain(`'${cause}',`);
     }
+  });
+});
+
+describe('the migration handshake', () => {
+  it('names the prefix, exit code and report file the daemon uses', () => {
+    // No shared module: a rename on one side leaves a long migration killed at
+    // the start deadline, or a failing one respawned, with both suites green.
+    const daemon = readFileSync(
+      join(__dirname, '../../../daemon/src/v1/migrations/migrations.types.ts'),
+      'utf8',
+    );
+    expect(daemon).toContain(
+      `export const MIGRATING_LINE_PREFIX = '${DAEMON_MIGRATING_PREFIX}';`,
+    );
+    expect(daemon).toContain(
+      `export const MIGRATION_FAILED_EXIT_CODE = ${DAEMON_MIGRATION_EXIT_CODE};`,
+    );
+    expect(daemon).toContain(
+      `export const MIGRATION_ERROR_FILE = '${DAEMON_MIGRATION_ERROR_NAME}';`,
+    );
+  });
+});
+
+describe('parseMigratingLine', () => {
+  it('reads a step line', () => {
+    expect(
+      parseMigratingLine(
+        'GENIRO_DAEMON_MIGRATING {"id":"0002-x","step":1,"of":2}',
+      ),
+    ).toEqual({ id: '0002-x', step: 1, of: 2 });
+  });
+
+  it('reads nothing from any other line', () => {
+    for (const line of [
+      'GENIRO_DAEMON_READY {"port":1}',
+      'GENIRO_DAEMON_MIGRATING {"id":"0002-x",',
+      'GENIRO_DAEMON_MIGRATING {"id":"0002-x","step":3,"of":2}',
+      'GENIRO_DAEMON_MIGRATING {"id":"0002-x","step":0,"of":2}',
+      'GENIRO_DAEMON_MIGRATING ["0002-x",1,2]',
+      ' GENIRO_DAEMON_MIGRATING {"id":"0002-x","step":1,"of":2}',
+    ]) {
+      expect(parseMigratingLine(line)).toBeNull();
+    }
+  });
+});
+
+describe('readMigrationError', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'geniro-migration-error-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reads the daemon's report", () => {
+    const path = join(dir, DAEMON_MIGRATION_ERROR_NAME);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        id: '0002-x',
+        step: 2,
+        of: 2,
+        kind: 'files',
+        message: 'EACCES',
+        backupDir: '/b',
+        appVersion: '1.0.0',
+        at: '2026-11-01T00:00:00.000Z',
+      }),
+    );
+
+    expect(readMigrationError(path)).toEqual({
+      id: '0002-x',
+      step: 2,
+      of: 2,
+      kind: 'files',
+      message: 'EACCES',
+      backupDir: '/b',
+    });
+  });
+
+  it('fills what a report leaves out, and reads nothing from an unreadable one', () => {
+    const path = join(dir, DAEMON_MIGRATION_ERROR_NAME);
+    writeFileSync(path, JSON.stringify({ id: '0002-x', step: 1, of: 1 }));
+    expect(readMigrationError(path)).toEqual({
+      id: '0002-x',
+      step: 1,
+      of: 1,
+      kind: null,
+      message: '',
+      backupDir: null,
+    });
+
+    writeFileSync(path, '{ torn');
+    expect(readMigrationError(path)).toBeNull();
+    expect(readMigrationError(join(dir, 'missing.json'))).toBeNull();
   });
 });

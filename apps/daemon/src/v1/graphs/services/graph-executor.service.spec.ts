@@ -110,6 +110,7 @@ import {
 } from '../../agents/utils/wall-worked';
 import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
 import type { MemoryService } from '../../memory/services/memory.service';
+import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
@@ -1117,6 +1118,8 @@ function setup(
     claudeSpawn?: SpawnFn;
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot'>;
+    /** What the run's project tells it; no project when absent. */
+    projectScope?: Pick<ProjectScopeService, 'instructionsSnapshot'>;
   } = {},
 ): {
   service: GraphExecutorService;
@@ -1533,6 +1536,9 @@ function setup(
     (opts.memory ?? {
       runSnapshot: async () => ({ nativeMemoryOff: false, memoryIndex: null }),
     }) as unknown as MemoryService,
+    (opts.projectScope ?? {
+      instructionsSnapshot: async () => null,
+    }) as unknown as ProjectScopeService,
     artifacts,
     // A stub store: the real one refuses the short run ids these fakes mint,
     // and what it writes is pinned in its own spec.
@@ -7210,6 +7216,66 @@ describe('GraphExecutorService — agent calls', () => {
         nativeMemoryOff: true,
       });
     }
+  });
+
+  it('startRunBySlug snapshots the project’s instructions onto the run row and every node, whatever the project says later', async () => {
+    const asked: unknown[] = [];
+    let text: string | null = 'Project: Billing\n\nUse pnpm.';
+    const { service, claude, runDao, storeGet } = setup(4870, {
+      projectScope: {
+        instructionsSnapshot: async (facts) => {
+          asked.push(facts);
+          return text;
+        },
+      },
+    });
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+
+    const run = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      taskId: 'task-9',
+    });
+    text = 'Project: Billing\n\nEdited since.';
+    await drain();
+
+    expect(asked).toEqual([{ taskId: 'task-9', cwd: run.cwd }]);
+    expect(runDao.runs.get(run.id)?.projectInstructions).toBe(
+      'Project: Billing\n\nUse pnpm.',
+    );
+    expect(claude.starts.length).toBeGreaterThan(0);
+    for (const start of claude.starts) {
+      expect(start.input.projectInstructions).toBe(
+        'Project: Billing\n\nUse pnpm.',
+      );
+    }
+  });
+
+  it('a follow-up pass on a settled run carries the project snapshot, never a fresh one', async () => {
+    let asked = 0;
+    const { service, claude, storeGet } = setup(4870, {
+      projectScope: {
+        instructionsSnapshot: async () => {
+          asked += 1;
+          return `Project: Billing (read ${asked})`;
+        },
+      },
+    });
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+    const run = await service.startRunBySlug('lin', { cwd: dir, prompt: 'go' });
+    await drain();
+    completeTurn(claude.starts[0]!, 'A done');
+    await drain();
+    completeTurn(claude.starts[1]!, 'B done');
+    await drain();
+
+    await service.sendMessage(run.id, 'one more thing');
+    await drain();
+
+    expect(asked).toBe(1);
+    expect(claude.starts[2]!.input.projectInstructions).toBe(
+      'Project: Billing (read 1)',
+    );
   });
 
   it('startRunBySlug carries the reply language through to the run row and every node', async () => {

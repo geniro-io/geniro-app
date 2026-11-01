@@ -58,6 +58,8 @@ export class ProjectsService {
     name: string;
     folder: string;
     groupId?: string;
+    description?: string;
+    instructions?: string;
     agentKind?: Project['agentKind'];
     model?: string;
     effort?: string;
@@ -92,6 +94,8 @@ export class ProjectsService {
         taskKey: await this.freeTaskKey(input.name, em),
         folder,
         groupId: input.groupId ?? null,
+        description: blankToNull(input.description),
+        instructions: blankToNull(input.instructions),
         agentKind: input.agentKind ?? null,
         model: input.model ?? null,
         effort: input.effort ?? null,
@@ -132,6 +136,8 @@ export class ProjectsService {
       name?: string;
       folder?: string;
       groupId?: string | null;
+      description?: string | null;
+      instructions?: string | null;
       agentKind?: Project['agentKind'];
       model?: string | null;
       effort?: string | null;
@@ -162,6 +168,12 @@ export class ProjectsService {
         await this.refuseUnknownGroup(patch.groupId, em);
       }
       project.groupId = patch.groupId;
+    }
+    if (patch.description !== undefined) {
+      project.description = blankToNull(patch.description);
+    }
+    if (patch.instructions !== undefined) {
+      project.instructions = blankToNull(patch.instructions);
     }
     if (patch.agentKind !== undefined) {
       project.agentKind = patch.agentKind;
@@ -379,6 +391,11 @@ export class ProjectsService {
   }
 }
 
+function blankToNull(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
 function toWire(project: Project): ProjectWire {
   return {
     id: project.id,
@@ -386,6 +403,8 @@ function toWire(project: Project): ProjectWire {
     taskKey: project.taskKey,
     folder: project.folder,
     groupId: project.groupId,
+    description: project.description,
+    instructions: project.instructions,
     agentKind: project.agentKind,
     model: project.model,
     effort: project.effort,

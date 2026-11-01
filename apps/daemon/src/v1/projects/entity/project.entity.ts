@@ -75,6 +75,12 @@ export class Project extends TimestampsEntity {
   @Property({ type: 'string', nullable: true })
   groupId: string | null = null;
 
+  @Property({ type: 'text', nullable: true })
+  description: string | null = null;
+
+  @Property({ type: 'text', nullable: true })
+  instructions: string | null = null;
+
   // ── Run configuration ───────────────────────────────────────────────────
   // Null throughout, and null means "unset — use whatever the composer would
   // have". A project that has never been configured must not pin an agent or a

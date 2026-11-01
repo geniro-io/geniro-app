@@ -240,6 +240,7 @@ A project board for agents. Write a card and hit start, or let **autopilot** pic
 - **Autopilot** starts cards from your intake columns, as many at once as you allow.
 - When a card's pull request is merged, the card moves itself to Done.
 - Agents can manage the board themselves through Geniro's board tools: list, read, create and update tasks.
+- **Project instructions.** Give a project a description and standing instructions in **Settings → Projects**. Every chat and workflow started in the project's folder, or on one of its cards, receives them after your own custom instructions; a chat keeps what it started with, so an edit reaches new chats.
 
 ![The tasks board with a card open: its properties, the run configuration it will use, its description and the report the agent wrote](docs/screenshots/tasks-board.png)
 

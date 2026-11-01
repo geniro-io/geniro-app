@@ -284,6 +284,7 @@ export function registerIpc(
       daemon: {
         connected: supervisor.isConnected(),
         handle: supervisor.getHandle(),
+        migrating: supervisor.getMigration(),
       },
       isPackaged: app.isPackaged,
     };

@@ -1103,6 +1103,7 @@ export interface AnalysedWorkflowRef {
     customInstructions: string | null;
     replyLanguage: string | null;
     taskInstructions: string | null;
+    projectInstructions: string | null;
     memoryIndex: string | null;
   } | null;
 }
@@ -4667,6 +4668,12 @@ export const ChatExportRunSchema = z
       .nullable()
       .describe(
         'What a workflow-editing chat was told about the file it owns, as snapshotted onto the run; null for every chat outside the workflow builder',
+      ),
+    projectInstructions: z
+      .string()
+      .nullable()
+      .describe(
+        "What this run's project told its agents (name, description and instructions), as snapshotted at creation; null when the run was in no project or its project said nothing",
       ),
     memoryIndex: z
       .string()

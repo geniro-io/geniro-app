@@ -731,6 +731,7 @@ describe('WorkflowChangeService', () => {
         customInstructions: 'MINE',
         replyLanguage: null,
         taskInstructions: 'CARD',
+        projectInstructions: 'PROJECT',
         memoryIndex: 'INDEX',
       },
     );
@@ -748,6 +749,7 @@ describe('WorkflowChangeService', () => {
       expect.arrayContaining([
         expect.objectContaining({ source: 'customInstructions', chars: 4 }),
         expect.objectContaining({ source: 'taskInstructions', chars: 4 }),
+        expect.objectContaining({ source: 'projectInstructions', chars: 7 }),
         expect.objectContaining({ source: 'memoryIndex', chars: 5 }),
         expect.objectContaining({ source: 'role', chars: 9 }),
       ]),

@@ -1275,6 +1275,75 @@ describe('AgentAdapter sessions separate on the custom instructions', () => {
   });
 });
 
+describe('AgentAdapter sessions and the project instructions', () => {
+  async function sessionAfterFirstTurn(): Promise<
+    ReturnType<AgentAdapter['startSession']>
+  > {
+    const { spawn, child } = fakeSpawn();
+    const first: AgentTurnInput = {
+      prompt: 'first',
+      cwd: '/proj',
+      projectInstructions: 'Project: Billing\n\nUse pnpm.',
+    };
+    const session = new SessionWithoutModeChangeAdapter(spawn).startSession(
+      first,
+      { runScoped: true },
+    );
+    const turn = session.startTurn(first, () => {});
+    child.stdout.emitData('{"done":true}\n');
+    await turn?.done;
+    return session;
+  }
+
+  it('refuses a turn whose project instructions differ from the spawn’s', async () => {
+    const session = await sessionAfterFirstTurn();
+
+    expect(
+      session.startTurn(
+        {
+          prompt: 'second',
+          cwd: '/proj',
+          projectInstructions: 'Project: Billing\n\nEdited.',
+        },
+        () => {},
+      ),
+    ).toBeNull();
+    expect(
+      session.startTurn({ prompt: 'second', cwd: '/proj' }, () => {}),
+    ).toBeNull();
+  });
+
+  it('reuses the process for a turn carrying the same project instructions', async () => {
+    const session = await sessionAfterFirstTurn();
+
+    expect(
+      session.startTurn(
+        {
+          prompt: 'second',
+          cwd: '/proj',
+          projectInstructions: 'Project: Billing\n\nUse pnpm.',
+        },
+        () => {},
+      ),
+    ).not.toBeNull();
+  });
+
+  it('composes them whether or not the turn’s MCP tools were delivered, since they name none', () => {
+    const adapter = new SessionWithoutModeChangeAdapter(fakeSpawn().spawn);
+    const input: AgentTurnInput = {
+      prompt: 'p',
+      cwd: '/proj',
+      projectInstructions: 'Project: Billing',
+    };
+
+    for (const granted of [true, false]) {
+      expect(
+        adapter.turnInstructionParts(input, granted).map((part) => part.source),
+      ).toContain('projectInstructions');
+    }
+  });
+});
+
 describe('AgentAdapter sessions and the shared memory', () => {
   const FIRST: AgentTurnInput = {
     prompt: 'first',

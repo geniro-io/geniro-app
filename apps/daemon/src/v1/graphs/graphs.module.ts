@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AgentsModule } from '../agents/agents.module';
 import { ConfigDirPinService } from '../agents/services/config-dir-pin.service';
 import { MemoryModule } from '../memory/memory.module';
+import { ProjectsModule } from '../projects/projects.module';
 import { CapabilitiesController } from './controllers/capabilities.controller';
 import { WorkflowsController } from './controllers/workflows.controller';
 import { WorkflowChangeLogDao } from './dao/workflow-change-log.dao';
@@ -38,7 +39,7 @@ import { WorkflowStoreService } from './services/workflow-store.service';
  * `AgentAdapterRegistry` that {@link AgentsModule} exports.
  */
 @Module({
-  imports: [AgentsModule, MemoryModule],
+  imports: [AgentsModule, MemoryModule, ProjectsModule],
   controllers: [WorkflowsController, CapabilitiesController],
   providers: [
     {

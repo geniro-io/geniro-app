@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, UnderscoreNamingStrategy } from '@mikro-orm/sqlite';
 
 import { environment } from '../environments';
+import { APP_MIGRATIONS_TABLES } from '../v1/migrations/migrations.types';
 import { CHAT_TEXT_TABLES } from './chat-text-index.ddl';
 import { MEMORY_TEXT_TABLES } from './memory-text-index.ddl';
 import { NulSafeSqliteDriver } from './nul-safe-sqlite.driver';
@@ -29,9 +30,11 @@ export default defineConfig({
   allowGlobalContext: true,
   namingStrategy: UnderscoreNamingStrategy,
   discovery: { checkDuplicateFieldNames: false },
-  // The full-text indexes are not entities and must stay invisible to the
-  // schema sync — see CHAT_TEXT_TABLES.
-  schemaGenerator: { skipTables: [CHAT_TEXT_TABLES, MEMORY_TEXT_TABLES] },
+  // The full-text indexes and the migration journal are not entities and must
+  // stay invisible to the schema sync — see CHAT_TEXT_TABLES.
+  schemaGenerator: {
+    skipTables: [CHAT_TEXT_TABLES, MEMORY_TEXT_TABLES, APP_MIGRATIONS_TABLES],
+  },
   // NO `extensions` and no `seeder` block, unlike the sibling's config, and
   // the omission is load-bearing twice over.
   //
@@ -44,7 +47,8 @@ export default defineConfig({
   //
   // The sibling also carries `Migrator`, which this repo deliberately does not
   // have: the schema is synced additively on launch (`orm.schema.update({ safe:
-  // true })`) and the versioned migration workflow stays deferred past v1.
+  // true })`), and what a sync cannot express runs first through geniro's own
+  // journaled runner (`v1/migrations`).
   //
   // mikro-orm v7 discovers entities via dynamic import() and emits file:// URLs;
   // turn them back into paths so the swc CJS transform's require() shim accepts

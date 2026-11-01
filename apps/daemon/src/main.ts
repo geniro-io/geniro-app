@@ -56,6 +56,9 @@ import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 import { WorkflowProposalService } from './v1/graphs/services/workflow-proposal.service';
 import { MemoryTextIndexService } from './v1/memory/services/memory-text-index.service';
+import { MIGRATION_FAILED_EXIT_CODE } from './v1/migrations/migrations.types';
+import { MigrationRunnerService } from './v1/migrations/services/migration-runner.service';
+import { MigrationFailedError } from './v1/migrations/utils/migration-failed-error';
 import { ShareService } from './v1/shares/services/share.service';
 import { WorkflowLedgerService } from './v1/stats/services/workflow-ledger.service';
 import { StorageService } from './v1/storage/services/storage.service';
@@ -215,10 +218,6 @@ bootstrapper.addExtension(
       },
     },
     async (app: INestApplication) => {
-      // Migrate-on-launch: additively sync the SQLite schema from the entities
-      // before the server accepts traffic. `safe: true` never emits destructive
-      // DDL — a removed/renamed column won't drop user data; the full versioned
-      // Migrator workflow lands in M2.
       // FIRST, ahead of every other reconcile: a previous launch's SIGKILL
       // leaves detached agent groups reparented to launchd, still holding the
       // session files the reconciles below are about to reason over. Kill them
@@ -226,6 +225,13 @@ bootstrapper.addExtension(
       // server listens, so no new turn can race the sweep.
       app.get(StrandedChildReaper).reap();
 
+      // The journaled migrations, BEFORE the schema sync: a rename must run
+      // before the sync can add the new name beside the old one. A failure
+      // exits with MIGRATION_FAILED_EXIT_CODE (the catch below).
+      await app.get(MigrationRunnerService).run();
+
+      // Then the additive sync from the entities. `safe: true` never emits
+      // destructive DDL, so a removed or renamed column keeps its data.
       const orm = app.get(MikroORM) as unknown as SqliteMikroOrm;
       await orm.schema.update({ safe: true });
       // WAL, so a process READING the database cannot make this daemon's
@@ -267,9 +273,9 @@ bootstrapper.addExtension(
       await app.get(MemoryTextIndexService).ensure();
 
       // Reconcile chat runs left `running` by a prior crash / SIGKILL. Runs HERE
-      // (after the schema sync, before listen) — not via an OnApplicationBootstrap
-      // hook, which fires before this sync and would hit not-yet-created tables on
-      // a fresh install, so a logged reconcile error always means a real failure.
+      // (after the schema sync, before listen), in this explicit order. Nest's
+      // OnApplicationBootstrap hooks fire later, inside `listen()`, with no
+      // order among them that this sequence could rely on.
       const stopCause = await closeInterruptedRuns({
         readCause: () => consumeStopCause(environment.userDataDir),
         chats: app.get(ChatService),
@@ -394,6 +400,12 @@ acquireInstanceLock(join(environment.userDataDir, DAEMON_LOCK_FILE_NAME))
     await bootstrapper.init();
   })
   .catch((err: unknown) => {
+    if (err instanceof MigrationFailedError) {
+      // Its own code, so the desktop app reads `migration-error.json` and stops
+      // respawning a daemon that would fail the same step again.
+      console.error(err.message);
+      process.exit(MIGRATION_FAILED_EXIT_CODE);
+    }
     if (err instanceof DaemonAlreadyRunningError) {
       // Not a crash: the app already has a daemon. Say so plainly rather than
       // burying it in a stack trace — this is the message a developer sees

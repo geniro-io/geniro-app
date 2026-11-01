@@ -4,7 +4,6 @@ import { DesktopOnlyGuard } from '../../auth/desktop-only.guard';
 import { NodeStateDao } from '../agents/dao/node-state.dao';
 import { RunDao } from '../agents/dao/run.dao';
 import { ProjectsModule } from '../projects/projects.module';
-import { TaskDao } from '../tasks/dao/task.dao';
 import { MemoriesController } from './controllers/memories.controller';
 import { MemoryConfigController } from './controllers/memory-config.controller';
 import { MemoryDao } from './dao/memory.dao';
@@ -17,7 +16,7 @@ import { MemoryTextIndexService } from './services/memory-text-index.service';
  * geniro's own MCP tools.
  *
  * Its rows sit outside run teardown: a memory outlives the chat that wrote it.
- * It provides the run, node and task DAOs it reads rather than importing
+ * It provides the run and node DAOs it reads rather than importing
  * `AgentsModule`, and imports only `ProjectsModule`, so `AgentsModule`,
  * `GraphsModule`, `McpModule` and `NotificationsModule` can import it without
  * a cycle.
@@ -30,7 +29,6 @@ import { MemoryTextIndexService } from './services/memory-text-index.service';
     MemoryDao,
     RunDao,
     NodeStateDao,
-    TaskDao,
     MemoryService,
     MemoryEventBus,
     MemoryTextIndexService,

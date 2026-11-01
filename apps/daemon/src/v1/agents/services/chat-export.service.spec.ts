@@ -109,6 +109,7 @@ function build(
                 replyLanguage: 'Russian',
                 taskInstructions: 'label block and report ask',
                 workflowInstructions: null,
+                projectInstructions: 'Project: Billing\n\nUse pnpm.',
                 memoryIndex: 'Memory index …\n- m1 [user] Terse (global)',
                 nativeMemoryOff: false,
                 agentOptions: null,
@@ -201,6 +202,7 @@ describe('ChatExportService', () => {
     expect(doc.run.customInstructions).toBe('always answer in Russian');
     expect(doc.run.replyLanguage).toBe('Russian');
     expect(doc.run.taskInstructions).toBe('label block and report ask');
+    expect(doc.run.projectInstructions).toBe('Project: Billing\n\nUse pnpm.');
     expect(doc.run.memoryIndex).toBe(
       'Memory index …\n- m1 [user] Terse (global)',
     );

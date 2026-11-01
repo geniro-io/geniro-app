@@ -27,6 +27,8 @@ export interface InstructionSizesInput {
   replyLanguage?: string;
   /** A board card's instructions — known only when measuring for one run. */
   taskInstructions?: string;
+  /** The run's project's instructions — known only when measuring for one run. */
+  projectInstructions?: string;
   /** The shared memory's index — known only when measuring for one run. */
   memoryIndex?: string;
 }
@@ -37,8 +39,8 @@ export interface InstructionSizesInput {
  * by the node's own adapter (`AgentAdapter.turnInstructionParts`) from the same
  * graph helpers the executor uses, so the total is the block a run sends.
  *
- * What a saved workflow cannot know is left out: a board card's instructions
- * and the memory index belong to one run (measured only when the caller names
+ * What a saved workflow cannot know is left out: a board card's instructions,
+ * the project's instructions and the memory index belong to one run (measured only when the caller names
  * that run's), the
  * builder chat's brief to one chat, and ACP's `<host-context>` wrapper is
  * added after composition.
@@ -66,6 +68,7 @@ export class InstructionSizesService {
           customInstructions: input.customInstructions,
           replyLanguage: input.replyLanguage,
           taskInstructions: input.taskInstructions,
+          projectInstructions: input.projectInstructions,
           memoryIndex: input.memoryIndex,
           stageMap,
         }),
@@ -83,6 +86,7 @@ export class InstructionSizesService {
       customInstructions: string | undefined;
       replyLanguage: string | undefined;
       taskInstructions: string | undefined;
+      projectInstructions: string | undefined;
       memoryIndex: string | undefined;
       stageMap: string | null;
     },
@@ -93,6 +97,7 @@ export class InstructionSizesService {
         customInstructions: context.customInstructions,
         replyLanguage: context.replyLanguage,
         taskInstructions: context.taskInstructions,
+        projectInstructions: context.projectInstructions,
         memoryIndex: context.memoryIndex,
         ...nodeInstructionFields(node, {
           blocks: context.blocks,

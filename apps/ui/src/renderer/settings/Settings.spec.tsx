@@ -81,6 +81,9 @@ const projectsApi = vi.hoisted(() => ({
   createProject: vi.fn((): Promise<ProjectDto> =>
     Promise.reject(new Error('not stubbed')),
   ),
+  updateProject: vi.fn((): Promise<ProjectDto> =>
+    Promise.reject(new Error('not stubbed')),
+  ),
 }));
 vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
@@ -190,7 +193,7 @@ beforeEach(() => {
   // unchosen state resolve to on — the specs below assert on that.
   geniro.getStatus.mockReset().mockResolvedValue({
     onboardingComplete: true,
-    daemon: { connected: true, handle: null },
+    daemon: { connected: true, handle: null, migrating: null },
     isPackaged: false,
   });
   geniro.getSettings.mockReset().mockResolvedValue(settings);
@@ -1221,7 +1224,7 @@ describe('Settings diagnostics section', () => {
   it('shows the same unchosen inspector as OFF once packaged', async () => {
     geniro.getStatus.mockResolvedValue({
       onboardingComplete: true,
-      daemon: { connected: true, handle: null },
+      daemon: { connected: true, handle: null, migrating: null },
       isPackaged: true,
     });
     geniro.getSettings.mockResolvedValue({ ...settings, daemonInspect: null });
@@ -1727,6 +1730,53 @@ describe('the Projects pane', () => {
       }) as unknown,
     });
     expect(container.textContent).toContain('Mobile');
+  });
+
+  it("saves a project's description and instructions through the daemon and shows the saved description", async () => {
+    projectsApi.listProjects.mockResolvedValue([aProject({ name: 'Geniro' })]);
+    projectsApi.updateProject.mockResolvedValue(
+      aProject({
+        name: 'Geniro',
+        description: 'The desktop app.',
+        instructions: 'Use pnpm.',
+      }),
+    );
+    await mount('projects');
+
+    const edit = [...container.querySelectorAll('button')].find(
+      (node) =>
+        node.getAttribute('aria-label') === 'Edit instructions for Geniro',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      edit.click();
+    });
+    const typeInto = (id: string, value: string): void => {
+      const field = document.getElementById(id) as HTMLTextAreaElement;
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(field, value);
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    await act(async () => {
+      typeInto('project-description', 'The desktop app.');
+      typeInto('project-instructions', 'Use pnpm.');
+    });
+    const save = [...document.body.querySelectorAll('button')].find(
+      (node) => node.textContent === 'Save',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      save.click();
+    });
+
+    expect(projectsApi.updateProject).toHaveBeenCalledWith({
+      projectId: 'p1',
+      updateProjectDto: {
+        description: 'The desktop app.',
+        instructions: 'Use pnpm.',
+      },
+    });
+    expect(container.textContent).toContain('The desktop app.');
   });
 });
 

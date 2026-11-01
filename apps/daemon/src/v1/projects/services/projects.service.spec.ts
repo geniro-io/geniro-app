@@ -357,6 +357,57 @@ describe('ProjectsService (in-memory sqlite)', () => {
     expect(updated.workflowSlug).toBe('ship-it');
   });
 
+  it('stores a trimmed description and instructions, and returns them on the wire', async () => {
+    const created = await service.create({
+      name: 'Board',
+      folder,
+      description: '  A billing service  ',
+      instructions: '\nUse pnpm.\n',
+    });
+    expect(created.description).toBe('A billing service');
+    expect(created.instructions).toBe('Use pnpm.');
+
+    const row = await projectDao.getById(created.id);
+    expect(row?.description).toBe('A billing service');
+    expect(row?.instructions).toBe('Use pnpm.');
+  });
+
+  it('defaults description and instructions to null, and a blank one normalizes to null', async () => {
+    const created = await service.create({
+      name: 'Board',
+      folder,
+      description: '   ',
+    });
+    expect(created.description).toBeNull();
+    expect(created.instructions).toBeNull();
+
+    const updated = await service.update(created.id, {
+      instructions: ' \n ',
+    });
+    expect(updated.instructions).toBeNull();
+  });
+
+  it('leaves them alone when omitted from a patch, and clears them on an explicit null', async () => {
+    const created = await service.create({
+      name: 'Board',
+      folder,
+      description: 'desc',
+      instructions: 'rules',
+    });
+
+    const renamed = await service.update(created.id, { name: 'Renamed' });
+    expect(renamed.description).toBe('desc');
+    expect(renamed.instructions).toBe('rules');
+
+    const cleared = await service.update(created.id, {
+      description: null,
+      instructions: null,
+    });
+    expect(cleared.description).toBeNull();
+    expect(cleared.instructions).toBeNull();
+    expect((await projectDao.getById(created.id))?.instructions).toBeNull();
+  });
+
   // Re-arming is its own press rather than a field on the patch: the breaker
   // opened because runs kept failing, so resuming is presumed deliberate.
   it('clears the failure streak on a re-arm, and a second press is a no-op', async () => {

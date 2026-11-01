@@ -163,6 +163,7 @@ describe('ReadAnalyzedThreadTool', () => {
   it("measures the workflow view's instructions with what the run itself was composed with", async () => {
     const instructions = {
       customInstructions: 'MINE',
+      projectInstructions: 'PROJECT',
       replyLanguage: 'Russian',
       taskInstructions: 'CARD',
       memoryIndex: 'INDEX',

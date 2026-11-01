@@ -105,7 +105,7 @@ export function createPreloadStub(
       note('getStatus');
       return Promise.resolve({
         onboardingComplete: settings.onboardingComplete,
-        daemon: { connected: false, handle: null },
+        daemon: { connected: false, handle: null, migrating: null },
         isPackaged: false,
       });
     },
@@ -120,6 +120,7 @@ export function createPreloadStub(
       return Promise.reject(new Error('the component catalog runs no daemon'));
     },
     onDaemonRestarted: () => noSubscription('onDaemonRestarted'),
+    onDaemonMigrating: () => noSubscription('onDaemonMigrating'),
     onClearAgentCaches: () => noSubscription('onClearAgentCaches'),
     onFlushLineMeasurements: () => noSubscription('onFlushLineMeasurements'),
     onSettingsChanged: () => noSubscription('onSettingsChanged'),

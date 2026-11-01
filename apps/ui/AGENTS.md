@@ -347,6 +347,7 @@ One home for each concern:
 
 **Settings keys (`settings.json`).** `main/settings.ts` owns the file, and `shared/contracts.ts` holds `Settings`. Values whose vocabulary is the daemon's stay opaque strings here. The renderer validates them against the generated enum. `interface Settings` in `shared/contracts.ts` is the authoritative key list; this list covers the keys with special rules.
 
+- `settingsVersion`: the last settings migration the file was brought up to (`main/settings-migrations.ts`), 0 for a file that predates it; a file written by a newer build keeps its higher number. Main's alone: `settingsPatchSchema` does not carry it, and `readSettings` reads it outside the salvage loop. A key rename or reshape is a step in `SETTINGS_MIGRATIONS`, applied to the raw JSON at launch before the first `readSettings` (the salvage drops a key this build does not know), after copying the file to `<userData>/backups/<id>-<ISO>/`. A step that throws leaves the file and its version as they were, the app reads it as it stands, and while the file is below the current version a write replaces only the keys it changes (`unmigratedFile`), so the next launch can retry; a step therefore leaves a key already in the new shape alone and never overwrites a target key already present.
 - Composer memory: `lastChatTarget`, `lastApprovalMode`, `lastAutoCompactPercent`, `projectFolder`/`recentFolders`. The Analyze thread dialog's last choice: `lastAnalysisConfig` (agent, profile, model, effort, approval — null and a choice saved before it had one read as auto-approve, never the composer's mode). The memory import's Sort with AI last choice: `lastMemoryTriage` (agent, profile, model, effort, context window, model parameters). `lastModels`, `lastEfforts`, `lastContextWindows`, `lastModelParameters` (`{parameterId: value}`), `configDirs` and `recentConfigDirs` are keyed per CLI.
 - Hand-managed lists, three different features: `fastActions`, `runConfigs` and `configProfiles`. Never fold any two together, or into `recentConfigDirs`.
   - Nothing adds or evicts an entry, and order is preserved.
@@ -376,7 +377,7 @@ One home for each concern:
 
 Data-loss rules:
 
-- Removing or renaming a key destroys what it held. `readSettings` keeps only known keys, and `writeSettings` rewrites the whole file. Migrate or export first.
+- Removing or renaming a key destroys what it held. `readSettings` keeps only known keys, and `writeSettings` rewrites the whole file. Migrate (`settings-migrations.ts`) or export first.
 - An unparseable file is copied aside to `settings.json.corrupt-<timestamp>` (0600) before any write. A file that cannot be read is never overwritten.
 - Two clean breaks are on record: `agentOptions`, and question cards' `questions`. The next break migrates or exports first.
 

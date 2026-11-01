@@ -16,6 +16,16 @@ import {
 /** A project's name — non-blank after trimming, sanely bounded. */
 export const PROJECT_NAME_MAX = 120;
 
+/** Bounds on a project's description and instructions; twinned in the renderer's `project-instructions-dialog.tsx`. */
+export const PROJECT_DESCRIPTION_MAX = 2000;
+export const PROJECT_INSTRUCTIONS_MAX = 20_000;
+
+/** What a run is known by before its row exists: the facts its project follows from. */
+export interface RunProjectFacts {
+  taskId: string | null;
+  cwd: string | null;
+}
+
 /**
  * How many tasks one project may run at once, at most.
  *
@@ -69,6 +79,16 @@ export const ProjectWireSchema = z.object({
     .nullable()
     .describe(
       'The short prefix this board’s cards are numbered under — the GEN of GEN-12',
+    ),
+  description: z
+    .string()
+    .nullable()
+    .describe('What the project is, in the user’s words; null when unset'),
+  instructions: z
+    .string()
+    .nullable()
+    .describe(
+      'Standing instructions every run in this project receives, after the user’s custom instructions; null when unset',
     ),
   agentKind: AgentKindSchema.nullable(),
   model: z.string().nullable(),

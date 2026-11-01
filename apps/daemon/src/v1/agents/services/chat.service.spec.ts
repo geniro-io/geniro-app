@@ -28,6 +28,7 @@ import {
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
 import type { MemoryService } from '../../memory/services/memory.service';
+import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
@@ -147,6 +148,10 @@ import { WorkflowProposalBroker } from './workflow-proposal.broker';
 
 const MEMORY_OFF: Pick<MemoryService, 'runSnapshot'> = {
   runSnapshot: async () => ({ nativeMemoryOff: false, memoryIndex: null }),
+};
+
+const NO_PROJECT: Pick<ProjectScopeService, 'instructionsSnapshot'> = {
+  instructionsSnapshot: async () => null,
 };
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
@@ -1105,6 +1110,8 @@ function setup(
     runWrites?: RunWriteQueue;
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot'>;
+    /** What the run's project tells it; no project when absent. */
+    projectScope?: Pick<ProjectScopeService, 'instructionsSnapshot'>;
     holds?: RunHoldRegistry;
     /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
     contextWindows?: Record<string, number>;
@@ -1375,6 +1382,7 @@ function setup(
     workflowBuilders,
     opts.runWrites ?? new RunWriteQueue(),
     (opts.memory ?? MEMORY_OFF) as unknown as MemoryService,
+    (opts.projectScope ?? NO_PROJECT) as unknown as ProjectScopeService,
     opts.holds ?? new RunHoldRegistry(),
     {
       token: 'launch',
@@ -8178,6 +8186,48 @@ describe('ChatService', () => {
         nativeMemoryOff: true,
       });
     }
+  });
+
+  it('snapshots the project’s instructions onto the run row and spawns every turn with them, whatever the project says later', async () => {
+    const asked: unknown[] = [];
+    let text: string | null = 'Project: Billing\n\nUse pnpm.';
+    const { service, claude, runDao } = setup({
+      projectScope: {
+        instructionsSnapshot: async (facts) => {
+          asked.push(facts);
+          return text;
+        },
+      },
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      taskId: 'task-7',
+    });
+    text = 'Project: Billing\n\nEdited since.';
+
+    await service.sendMessage(run.id, 'go');
+    claude.finish();
+    await drain();
+    await service.sendMessage(run.id, 'again');
+
+    expect(asked).toEqual([{ taskId: 'task-7', cwd: run.cwd }]);
+    expect(runDao.runs.get(run.id)?.projectInstructions).toBe(
+      'Project: Billing\n\nUse pnpm.',
+    );
+    expect(claude.start).toHaveBeenCalledTimes(2);
+    for (const [input] of claude.start.mock.calls) {
+      expect(input.projectInstructions).toBe('Project: Billing\n\nUse pnpm.');
+    }
+  });
+
+  it('leaves a run in no project with no project instructions on the row or the turn', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'go');
+    expect(runDao.runs.get(run.id)?.projectInstructions).toBeNull();
+    expect(claude.start.mock.calls[0]?.[0].projectInstructions).toBeUndefined();
   });
 
   it('leaves a run created while memory is off with no index and the CLI’s own memory alone', async () => {

@@ -15,6 +15,7 @@ const SOURCE_LABEL: Record<InstructionSizeSource, string> = {
   backgroundWorkNote: 'Background-work note',
   replyLanguage: 'Reply language',
   customInstructions: 'Your custom instructions',
+  projectInstructions: 'Project instructions',
   memoryIndex: 'Memory index',
   taskInstructions: 'Task card instructions',
   workflowInstructions: 'Workflow builder brief',

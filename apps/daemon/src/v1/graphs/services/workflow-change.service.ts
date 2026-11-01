@@ -172,6 +172,7 @@ export class WorkflowChangeService {
       customInstructions: instructions?.customInstructions ?? undefined,
       replyLanguage: instructions?.replyLanguage ?? undefined,
       taskInstructions: instructions?.taskInstructions ?? undefined,
+      projectInstructions: instructions?.projectInstructions ?? undefined,
       memoryIndex: instructions?.memoryIndex ?? undefined,
     };
     const inThisRun = new Map(

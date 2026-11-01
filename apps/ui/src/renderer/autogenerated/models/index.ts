@@ -2395,6 +2395,12 @@ export interface ChatExportRun {
      * @type {string}
      * @memberof ChatExportRun
      */
+    projectInstructions: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
     memoryIndex: string | null;
     /**
      * 
@@ -3282,6 +3288,18 @@ export interface CreateProjectDto {
      * @memberof CreateProjectDto
      */
     groupId?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateProjectDto
+     */
+    description?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateProjectDto
+     */
+    instructions?: string;
     /**
      * 
      * @type {AgentKind}
@@ -4258,6 +4276,7 @@ export const InstructionSizeSource = {
     BackgroundWorkNote: 'backgroundWorkNote',
     ReplyLanguage: 'replyLanguage',
     CustomInstructions: 'customInstructions',
+    ProjectInstructions: 'projectInstructions',
     MemoryIndex: 'memoryIndex',
     TaskInstructions: 'taskInstructions',
     WorkflowInstructions: 'workflowInstructions',
@@ -6061,6 +6080,18 @@ export interface ProjectDto {
      * @memberof ProjectDto
      */
     taskKey: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    description: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    instructions: string | null;
     /**
      * 
      * @type {AgentKind}
@@ -11194,6 +11225,18 @@ export interface UpdateProjectDto {
      * @memberof UpdateProjectDto
      */
     groupId?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateProjectDto
+     */
+    description?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateProjectDto
+     */
+    instructions?: string | null;
     /**
      * 
      * @type {AgentKind}

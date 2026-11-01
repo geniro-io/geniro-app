@@ -74,6 +74,7 @@ function doc(items: ItemDto[]): ChatExportDto {
       configDir: null,
       groupId: null,
       customInstructions: null,
+      projectInstructions: null,
       replyLanguage: null,
       workflowInstructions: null,
       memoryIndex: null,

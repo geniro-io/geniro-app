@@ -87,6 +87,8 @@ Smaller rules:
 - A crash leaves its pid in `<userData>/daemon-crashed` (`consumeCrashMark`).
 - Before signalling a daemon, write the cause to `<userData>/daemon-stop-cause` (`quit`, `self-update`, `restart`, `crash`). The daemon's boot reconcile reads it. Write it only for a daemon seen serving (`handle !== null`): one still booting has not read the previous note, and overwriting an unread `crash` lets the autopilot restart crash-cut cards unattended.
 - `start()` joins an in-flight restart rather than racing it.
+- A starting daemon prints `GENIRO_DAEMON_MIGRATING {…}` before each data migration step (`parseMigratingLine`, twin of the daemon's `MIGRATING_LINE_PREFIX`). stdout is line-buffered for it (chunks do not follow lines; the echo stays chunk by chunk), each line moves the start deadline to at least `START_TIMEOUT_MS` from now, and the step is pushed to the renderer (`onDaemonMigrating`, also on `getStatus`'s `daemon.migrating`) for the startup screen's "Updating your data…", cleared when the start settles.
+- An exit with `DAEMON_MIGRATION_EXIT_CODE` (78) is a failed migration step (rolled back for a database step, stopped after the commit for a file step): the start fails with `DaemonMigrationFailedError` built from `<userData>/migration-error.json`, and the respawn loop stops on it. The startup screen's Retry still starts one.
 - A start with `<userData>/compact-on-start` present (`DAEMON_COMPACTION_MARK_NAME`, twin of the daemon's `COMPACTION_MARKER_FILE`) waits `COMPACTING_START_TIMEOUT_MS` instead of `START_TIMEOUT_MS`: the daemon compacts the database before it listens.
 - `before-quit` runs each step isolated through `quit-teardown.ts`, with `app.quit()` in a `finally`.
 

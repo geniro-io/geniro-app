@@ -3290,8 +3290,14 @@ export interface AgentTurnInput {
    */
   replyLanguage?: string | null;
   /**
+   * What the run's project says to its agents, as snapshotted onto
+   * `Run.projectInstructions`; composed right after {@link customInstructions}.
+   * Not gated on the MCP tools: it names none.
+   */
+  projectInstructions?: string | null;
+  /**
    * The shared memory's title index, as snapshotted onto `Run.memoryIndex`;
-   * composed right after {@link customInstructions}, and only where the turn's
+   * composed right after {@link projectInstructions}, and only where the turn's
    * MCP tools were delivered, since it sends the agent to `memory_read`.
    */
   memoryIndex?: string | null;
@@ -3554,6 +3560,7 @@ export type TurnInstructionInput = Pick<
   | 'internalProbe'
   | 'replyLanguage'
   | 'customInstructions'
+  | 'projectInstructions'
   | 'memoryIndex'
   | 'taskInstructions'
   | 'workflowInstructions'

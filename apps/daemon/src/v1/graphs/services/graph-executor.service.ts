@@ -182,6 +182,7 @@ import {
   servedWorkedMs,
 } from '../../agents/utils/wall-worked';
 import { MemoryService } from '../../memory/services/memory.service';
+import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import {
   AgentKind,
   type ItemKind,
@@ -475,6 +476,8 @@ interface RunContext {
   customInstructions: string | null;
   /** The run's snapshotted reply language; every node composes it. */
   replyLanguage: string | null;
+  /** The run's snapshotted project instructions; every node composes them. */
+  projectInstructions: string | null;
   /** The run's snapshotted memory index; every node composes it. */
   memoryIndex: string | null;
   /** Whether the run switches each CLI's own memory off (`Run.nativeMemoryOff`). */
@@ -778,6 +781,7 @@ export class GraphExecutorService
     private readonly wallTurns: WallTurnDao,
     private readonly kindRows: RunKindRowsCache,
     private readonly memory: MemoryService,
+    private readonly projectScope: ProjectScopeService,
     /**
      * The page tool (`show_artifact`) for workflow agents. Optional only so the
      * executor's specs, which construct it positionally, need not supply it.
@@ -1345,10 +1349,10 @@ export class GraphExecutorService
             cwd,
             workflowId: input.slug,
           });
-    const memory = await this.memory.runSnapshot({
-      taskId: input.taskId ?? null,
-      cwd,
-    });
+    const scopeFacts = { taskId: input.taskId ?? null, cwd };
+    const memory = await this.memory.runSnapshot(scopeFacts);
+    const projectInstructions =
+      await this.projectScope.instructionsSnapshot(scopeFacts);
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -1367,6 +1371,7 @@ export class GraphExecutorService
         // state. Every node of this run then composes the same text.
         customInstructions: input.customInstructions?.trim() || null,
         replyLanguage: input.replyLanguage?.trim() || null,
+        projectInstructions,
         ...memory,
         taskInstructions: input.taskInstructions?.trim() || null,
         agentOptions: writeAgentOptions(input.agentOptions),
@@ -1446,6 +1451,7 @@ export class GraphExecutorService
         seedPrompt: input.prompt,
         customInstructions: run.customInstructions,
         replyLanguage: run.replyLanguage,
+        projectInstructions: run.projectInstructions,
         memoryIndex: run.memoryIndex,
         nativeMemoryOff: run.nativeMemoryOff === true,
         taskInstructions: run.taskInstructions,
@@ -1841,6 +1847,7 @@ export class GraphExecutorService
         seedPrompt: text,
         customInstructions: run.customInstructions,
         replyLanguage: run.replyLanguage,
+        projectInstructions: run.projectInstructions,
         memoryIndex: run.memoryIndex,
         nativeMemoryOff: run.nativeMemoryOff === true,
         taskInstructions: run.taskInstructions,
@@ -2862,6 +2869,7 @@ export class GraphExecutorService
       seedPrompt,
       customInstructions,
       replyLanguage,
+      projectInstructions,
       memoryIndex,
       nativeMemoryOff,
       taskInstructions,
@@ -4384,6 +4392,7 @@ export class GraphExecutorService
         // the executor and leave the chat path free to disagree about it.
         customInstructions,
         replyLanguage,
+        projectInstructions,
         memoryIndex,
         nativeMemoryOff,
         // A peer on the same terms; ranked right after the user's own text.

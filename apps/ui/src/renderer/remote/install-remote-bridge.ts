@@ -185,6 +185,7 @@ export function installRemoteBridge(): void {
     ensureDaemon: async () =>
       gatewayHandle((await invoke(IPC.ensureDaemon)) as DaemonHandle),
     onDaemonRestarted: () => noSubscription(),
+    onDaemonMigrating: () => noSubscription(),
     onClearAgentCaches: () => noSubscription(),
     onFlushLineMeasurements: () => noSubscription(),
     onSettingsChanged: () => noSubscription(),

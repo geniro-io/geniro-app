@@ -294,6 +294,46 @@ describe('the composed block', () => {
     }
   });
 
+  it('joins projectInstructions right after customInstructions', () => {
+    const parts = turnInstructionParts({
+      customInstructions: 'GLOBAL',
+      projectInstructions: '  PROJECT\n',
+      memoryIndex: 'MEMORY',
+      taskInstructions: 'CARD',
+    });
+
+    expect(parts.map((part) => part.source)).toEqual([
+      'preamble',
+      'customInstructions',
+      'projectInstructions',
+      'memoryIndex',
+      'taskInstructions',
+    ]);
+    expect(parts.find((part) => part.source === 'projectInstructions')).toEqual(
+      { source: 'projectInstructions', text: 'PROJECT' },
+    );
+    expect(
+      composed({
+        customInstructions: 'GLOBAL',
+        projectInstructions: 'PROJECT',
+      }),
+    ).toBe(`${GENIRO_UI_PREAMBLE}\n\nGLOBAL\n\nPROJECT`);
+  });
+
+  it('drops a blank projectInstructions rather than joining an empty paragraph', () => {
+    const sources = turnInstructionParts({
+      customInstructions: 'GLOBAL',
+      projectInstructions: '  \n',
+    }).map((part) => part.source);
+
+    expect(sources).not.toContain('projectInstructions');
+    expect(
+      turnInstructionParts({ projectInstructions: null }).map(
+        (part) => part.source,
+      ),
+    ).not.toContain('projectInstructions');
+  });
+
   it('puts the memory index right after the user’s own instructions, ahead of a card’s', () => {
     const parts = turnInstructionParts({
       customInstructions: 'GLOBAL',

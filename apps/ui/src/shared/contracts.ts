@@ -51,10 +51,20 @@ export interface DaemonHandle {
   startedAt: string;
 }
 
+/** One step of the data migration a starting daemon runs before it serves. */
+export interface DaemonMigration {
+  id: string;
+  /** 1-based, among this start's pending migrations. */
+  step: number;
+  of: number;
+}
+
 /** Live status the renderer polls/subscribes to for the connection banner. */
 export interface DaemonStatus {
   connected: boolean;
   handle: DaemonHandle | null;
+  /** The step a starting daemon is migrating the user's data through; null otherwise. */
+  migrating: DaemonMigration | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -362,6 +372,12 @@ export const DEFAULT_MEMORY: MemorySettings = {
 };
 
 export interface Settings {
+  /**
+   * The settings migration this file was last brought up to
+   * (`main/settings-migrations.ts`); 0 for a file that predates versioning.
+   * Main's alone: the renderer's patch schema refuses it.
+   */
+  settingsVersion: number;
   /** First-run onboarding finished (gates the renderer's initial route). */
   onboardingComplete: boolean;
   /** Resumable setup choices; contains no credentials. */
@@ -744,6 +760,7 @@ export function runSettingsOf(
 
 /** Default settings written on first launch when no settings file exists. */
 export const DEFAULT_SETTINGS: Settings = {
+  settingsVersion: 0,
   onboardingComplete: false,
   onboardingProgress: null,
   projectFolder: null,
@@ -1593,6 +1610,13 @@ export interface GeniroApi {
   /** Subscribe to daemon restarts that rotate the loopback handle/token. */
   onDaemonRestarted(listener: (handle: DaemonHandle) => void): () => void;
   /**
+   * Subscribe to the data migration a starting daemon reports, step by step,
+   * and null once that start has settled.
+   */
+  onDaemonMigrating(
+    listener: (migration: DaemonMigration | null) => void,
+  ): () => void;
+  /**
    * Subscribe to the menu bar's Clear Agent Cache.
    *
    * A PUSH from the main process rather than a renderer control, because the
@@ -2105,6 +2129,7 @@ export const IPC = {
   getDaemonHandle: 'geniro:getDaemonHandle',
   ensureDaemon: 'geniro:ensureDaemon',
   onDaemonRestarted: 'geniro:onDaemonRestarted',
+  onDaemonMigrating: 'geniro:onDaemonMigrating',
   onClearAgentCaches: 'geniro:onClearAgentCaches',
   onFlushLineMeasurements: 'geniro:onFlushLineMeasurements',
   onSettingsChanged: 'geniro:onSettingsChanged',

@@ -61,6 +61,8 @@ export function aProject(over: Partial<ProjectDto> = {}): ProjectDto {
     taskKey: 'ONE',
     folder: '/w',
     groupId: null,
+    description: null,
+    instructions: null,
     agentKind: null,
     model: null,
     effort: null,

@@ -1161,6 +1161,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       newest.customInstructions = 'MINE';
       newest.replyLanguage = 'Russian';
       newest.taskInstructions = 'CARD';
+      newest.projectInstructions = 'PROJECT';
       newest.memoryIndex = 'INDEX';
       await fork.flush();
 
@@ -1171,6 +1172,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           customInstructions: 'MINE',
           replyLanguage: 'Russian',
           taskInstructions: 'CARD',
+          projectInstructions: 'PROJECT',
           memoryIndex: 'INDEX',
         },
       });
@@ -1194,6 +1196,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           customInstructions: null,
           replyLanguage: null,
           taskInstructions: null,
+          projectInstructions: null,
           memoryIndex: null,
         },
       });

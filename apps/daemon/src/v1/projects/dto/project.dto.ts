@@ -1,10 +1,15 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
-import { ChatApprovalModeSchema } from '../../agents/chat.types';
+import {
+  ChatApprovalModeSchema,
+  hasControlCharacters,
+} from '../../agents/chat.types';
 import { AgentKindSchema } from '../../runs/runs.types';
 import { TaskSourceSchema, TaskStatusSchema } from '../../tasks/tasks.types';
 import {
+  PROJECT_DESCRIPTION_MAX,
+  PROJECT_INSTRUCTIONS_MAX,
   PROJECT_MAX_CONCURRENT_CEILING,
   PROJECT_NAME_MAX,
   ProjectQueueSchema,
@@ -22,8 +27,25 @@ import {
  * `.meta({ id })` — see `chat.dto.ts` for why.
  */
 
-/** A project's name — non-blank after trimming, sanely bounded. */
-const projectNameSchema = z.string().trim().min(1).max(PROJECT_NAME_MAX);
+const noControlCharacters = (value: string) => !hasControlCharacters(value);
+
+/** A project's name — non-blank after trimming, sanely bounded; composed into every run's instructions. */
+const projectNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(PROJECT_NAME_MAX)
+  .refine(noControlCharacters, 'must not contain control characters');
+
+const projectDescriptionSchema = z
+  .string()
+  .max(PROJECT_DESCRIPTION_MAX)
+  .refine(noControlCharacters, 'must not contain control characters');
+
+const projectInstructionsSchema = z
+  .string()
+  .max(PROJECT_INSTRUCTIONS_MAX)
+  .refine(noControlCharacters, 'must not contain control characters');
 
 /**
  * The autopilot POLICY — what the user decides, and the whole of what a client
@@ -59,6 +81,8 @@ export const createProjectSchema = z.object({
    */
   folder: z.string().min(1),
   groupId: z.string().min(1).optional(),
+  description: projectDescriptionSchema.optional(),
+  instructions: projectInstructionsSchema.optional(),
   agentKind: AgentKindSchema.optional(),
   model: z.string().min(1).optional(),
   effort: z.string().min(1).optional(),
@@ -82,6 +106,8 @@ export const updateProjectSchema = z
      * for `autoCwd`. Every nullable field below reads the same way.
      */
     groupId: z.string().min(1).nullable().optional(),
+    description: projectDescriptionSchema.nullable().optional(),
+    instructions: projectInstructionsSchema.nullable().optional(),
     agentKind: AgentKindSchema.nullable().optional(),
     model: z.string().min(1).nullable().optional(),
     effort: z.string().min(1).nullable().optional(),

@@ -12,7 +12,10 @@ import { AutopilotConductor } from './autopilot-conductor';
 import { installContextMenu } from './context-menu';
 import { DaemonKeepAlive } from './daemon-keepalive';
 import type { DaemonQuitCause } from './daemon-pidfile';
-import { notifyDaemonReady } from './daemon-ready-notify';
+import {
+  notifyDaemonMigrating,
+  notifyDaemonReady,
+} from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
 import { installFetchDispatcher } from './fetch-dispatcher';
 import { readFinishedTasks } from './finished-tasks';
@@ -38,6 +41,7 @@ import { teardownThenQuit } from './quit-teardown';
 import { RemoteAccess } from './remote/remote-access';
 import { onSettingsWritten, readSettings } from './settings';
 import { notifySettingsChanged } from './settings-changed-notify';
+import { migrateSettingsFile } from './settings-migrations';
 import { ShareConfigPush } from './share-config-push';
 import { TerminalSessions } from './terminal-sessions';
 import { reportUncaughtErrors } from './uncaught-error-report';
@@ -120,6 +124,7 @@ const supervisor = new DaemonSupervisor({
   // banner's Retry, or respawned after one this app owned died — is announced
   // from here, so no caller of `start()` has to remember to.
   onStarted: (handle) => daemonCameUp(handle),
+  onMigrating: (migration) => notifyDaemonMigrating(mainWindow, migration),
   // Buffered until a daemon exists, which is exactly when these matter: a
   // daemon that died is reported to the one that replaces it.
   log: (level, message) => {
@@ -647,6 +652,27 @@ function ensureDaemon(): void {
   });
 }
 
+function migrateSettingsOnLaunch(): void {
+  try {
+    const result = migrateSettingsFile(app.getPath('userData'));
+    if (result !== null) {
+      void reportMainLog(
+        null,
+        'info',
+        `settings.json migrated from version ${result.from} to ${result.to}; the previous file is at ${result.backup}`,
+        { source: 'settings-migrations' },
+      );
+    }
+  } catch (err) {
+    void reportMainLog(
+      null,
+      'error',
+      `settings.json was not migrated and is read as it stands: ${err instanceof Error ? err.message : String(err)}`,
+      { source: 'settings-migrations' },
+    );
+  }
+}
+
 function focusMainWindow(): void {
   if (!mainWindow) {
     return;
@@ -665,6 +691,9 @@ function main(): void {
   app.on('second-instance', focusMainWindow);
 
   void app.whenReady().then(async () => {
+    // Before the first `readSettings`, which keeps only the keys this build
+    // knows: a key a migration carries over must still be in the raw file.
+    migrateSettingsOnLaunch();
     // Started first and never awaited here: CLI detection and the daemon spawn
     // each wait for it themselves, and the window has no reason to.
     if (app.isPackaged) {

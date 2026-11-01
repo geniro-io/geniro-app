@@ -6,6 +6,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 
+import type { DaemonMigration } from '../shared/contracts';
+
 /**
  * Reader side of the daemon handshake. The daemon (apps/daemon) is the
  * source of truth — it owns the bind defaults, writes this file, and stamps the
@@ -213,6 +215,93 @@ export function readDaemonInfo(path: string): DaemonInfo | null {
   }
   try {
     return parseDaemonInfo(JSON.parse(readFileSync(path, 'utf8')));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The daemon prints this before each migration step, followed by a JSON
+ * {@link DaemonMigrationProgress}: each line is a heartbeat of a start that is
+ * still moving.
+ *
+ * TWIN PARSER: the daemon's `MIGRATING_LINE_PREFIX` in
+ * `apps/daemon/src/v1/migrations/migrations.types.ts`.
+ */
+export const DAEMON_MIGRATING_PREFIX = 'GENIRO_DAEMON_MIGRATING';
+
+/**
+ * The daemon's exit code when a migration step failed.
+ *
+ * TWIN: the daemon's `MIGRATION_FAILED_EXIT_CODE`.
+ */
+export const DAEMON_MIGRATION_EXIT_CODE = 78;
+
+/**
+ * `<userData>/` file the daemon writes when a migration failed.
+ *
+ * TWIN PARSER: the daemon's `MIGRATION_ERROR_FILE` and `MigrationErrorReport`.
+ */
+export const DAEMON_MIGRATION_ERROR_NAME = 'migration-error.json';
+
+export type DaemonMigrationProgress = DaemonMigration;
+
+export interface DaemonMigrationError extends DaemonMigrationProgress {
+  /** `database` was rolled back whole; `files` ran after the database committed. Null when the report did not say. */
+  kind: 'database' | 'files' | null;
+  message: string;
+  backupDir: string | null;
+}
+
+function isProgress(raw: unknown): raw is DaemonMigrationProgress {
+  if (typeof raw !== 'object' || raw === null) {
+    return false;
+  }
+  const { id, step, of } = raw as Record<string, unknown>;
+  return (
+    typeof id === 'string' &&
+    Number.isInteger(step) &&
+    Number.isInteger(of) &&
+    (step as number) >= 1 &&
+    (step as number) <= (of as number)
+  );
+}
+
+/** The progress a stdout line carries, or null for any other line. */
+export function parseMigratingLine(
+  line: string,
+): DaemonMigrationProgress | null {
+  const prefix = `${DAEMON_MIGRATING_PREFIX} `;
+  if (!line.startsWith(prefix)) {
+    return null;
+  }
+  try {
+    const raw: unknown = JSON.parse(line.slice(prefix.length));
+    return isProgress(raw) ? { id: raw.id, step: raw.step, of: raw.of } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The daemon's report of its failed migration, or null when it left none it could read. */
+export function readMigrationError(path: string): DaemonMigrationError | null {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    if (!isProgress(raw)) {
+      return null;
+    }
+    const { kind, message, backupDir } = raw as unknown as Record<
+      string,
+      unknown
+    >;
+    return {
+      id: raw.id,
+      step: raw.step,
+      of: raw.of,
+      kind: kind === 'database' || kind === 'files' ? kind : null,
+      message: typeof message === 'string' ? message : '',
+      backupDir: typeof backupDir === 'string' ? backupDir : null,
+    };
   } catch {
     return null;
   }

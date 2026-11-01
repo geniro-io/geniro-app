@@ -15,6 +15,10 @@ import { CHILD_JOURNAL_FILE_NAME } from '../../agents/utils/child-journal';
 import { FOLDERLESS_DIR_NAME } from '../../agents/utils/folderless-dir';
 import { DEBUG_LOG_DIR_NAME } from '../../diagnostics/utils/debug-sink';
 import { WORKFLOWS_DIR_NAME } from '../../graphs/services/workflow-store.service';
+import {
+  MIGRATION_BACKUPS_DIR,
+  MIGRATION_ERROR_FILE,
+} from '../../migrations/migrations.types';
 import { TASK_ATTACHMENTS_DIR_NAME } from '../../tasks/utils/task-attachments';
 import type { StorageClassifier, StorageGroupId } from '../storage.types';
 
@@ -65,6 +69,8 @@ const NAMED: Readonly<Record<string, StorageGroupId>> = {
   [CALL_MEMBERSHIP_MARKER_FILE]: 'appState',
   [WALL_WORK_MARKER_FILE]: 'appState',
   [COMPACTION_MARKER_FILE]: 'appState',
+  [MIGRATION_ERROR_FILE]: 'appState',
+  [MIGRATION_BACKUPS_DIR]: 'appState',
   'task-reports': 'leftovers',
   'task-artifacts': 'leftovers',
   'review-artifacts': 'leftovers',

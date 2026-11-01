@@ -2210,6 +2210,7 @@ export abstract class AgentAdapter {
       backgroundWorkNote: this.getConfig().backgroundWork.agentNote,
       replyLanguage: input.replyLanguage,
       customInstructions: input.customInstructions,
+      projectInstructions: input.projectInstructions,
       memoryIndex: granted ? input.memoryIndex : null,
       taskInstructions: input.taskInstructions,
       workflowInstructions: input.workflowInstructions,
@@ -2528,6 +2529,9 @@ export abstract class AgentAdapter {
       // share one CLI process, and the second would silently run on the
       // first's.
       input.customInstructions ?? null,
+      // The same block again, snapshotted on the run: editing the project
+      // restarts nothing.
+      input.projectInstructions ?? null,
       // The same block again, and argv on claude besides.
       input.replyLanguage ?? null,
       // The same block again; snapshotted on the run, so a note saved while

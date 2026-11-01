@@ -31,7 +31,9 @@ vi.mock('./login-shell-path', () => ({
 vi.mock('./settings', () => ({ readSettings: mocks.readSettings }));
 
 import type { DaemonInfo, DaemonStopCause } from './daemon-pidfile';
+import { DAEMON_MIGRATION_EXIT_CODE } from './daemon-pidfile';
 import {
+  DaemonMigrationFailedError,
   DaemonSupervisor,
   type DaemonSupervisorOptions,
   defaultCheckHealth,
@@ -114,6 +116,7 @@ function harness(opts: {
   startTime?: (pid: number) => number | null;
   stopWaitMs?: number;
   onStarted?: DaemonSupervisorOptions['onStarted'];
+  extra?: Partial<DaemonSupervisorOptions>;
 }): Harness {
   let pidfile = opts.pidfile;
   const child = new FakeChild();
@@ -163,6 +166,7 @@ function harness(opts: {
     readStartTime: opts.startTime ?? (() => RECORDED_START),
     ...(opts.stopWaitMs === undefined ? {} : { stopWaitMs: opts.stopWaitMs }),
     ...(opts.onStarted ? { onStarted: opts.onStarted } : {}),
+    ...opts.extra,
   };
   return {
     supervisor: new DaemonSupervisor(options),
@@ -521,6 +525,74 @@ describe('DaemonSupervisor.start', () => {
       await vi.advanceTimersByTimeAsync(30 * 60_000);
       await started;
       expect(h.child.signals[0]).toBe('SIGTERM');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('extends the start deadline on each GENIRO_DAEMON_MIGRATING line', async () => {
+    vi.useFakeTimers();
+    try {
+      let ready = false;
+      const progress: unknown[] = [];
+      const h = harness({
+        pidfile: null,
+        healthy: () => ready,
+        graceMs: 50,
+        pollMs: 1_000,
+        extra: { onMigrating: (step) => progress.push(step) },
+      });
+
+      let settled = false;
+      const started = h.supervisor.start().finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(80_000);
+      // Split mid-line, as a pipe may deliver it.
+      h.child.stdout.emit(
+        'data',
+        Buffer.from('booting\nGENIRO_DAEMON_MIGRATING {"id":"0002-x",'),
+      );
+      h.child.stdout.emit('data', Buffer.from('"step":1,"of":2}\n'));
+      expect(h.supervisor.getMigration()).toEqual({
+        id: '0002-x',
+        step: 1,
+        of: 2,
+      });
+      await vi.advanceTimersByTimeAsync(80_000);
+
+      expect(settled).toBe(false);
+      expect(h.child.signals).toEqual([]);
+      ready = true;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await started;
+      expect(progress).toEqual([{ id: '0002-x', step: 1, of: 2 }, null]);
+      expect(h.supervisor.getMigration()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still times out a start whose last heartbeat is older than the deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({
+        pidfile: null,
+        healthy: false,
+        graceMs: 50,
+        pollMs: 1_000,
+      });
+      const started = h.supervisor.start().catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(10_000);
+      h.child.stdout.emit(
+        'data',
+        Buffer.from(
+          'GENIRO_DAEMON_MIGRATING {"id":"0002-x","step":1,"of":1}\n',
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(95_000);
+
+      expect(String(await started)).toMatch(/did not become healthy/);
     } finally {
       vi.useRealTimers();
     }
@@ -1330,6 +1402,9 @@ function respawner(
     stableMs?: number;
     /** Children (by spawn index) that die before they ever answer. */
     bootFails?: (index: number) => boolean;
+    /** The code a child that dies at boot exits with; 1 unless a test says. */
+    bootExitCode?: number;
+    readMigrationError?: DaemonSupervisorOptions['readMigrationError'];
     /** Pids whose daemon left a crash mark on its way out. */
     crashMarks?: Set<number>;
   } = {},
@@ -1378,7 +1453,7 @@ function respawner(
       children.push(child);
       pidfile = info({ pid: child.pid, port: 5_000 + index, version: '0.2.0' });
       if (opts.bootFails?.(index)) {
-        child.exitCode = 1;
+        child.exitCode = opts.bootExitCode ?? 1;
         dead.add(child);
       }
       return child;
@@ -1411,6 +1486,9 @@ function respawner(
     respawnStableMs: opts.stableMs ?? 60_000,
     onStarted: (handle) => started.push(handle),
     log: (_level, message) => logs.push(message),
+    ...(opts.readMigrationError
+      ? { readMigrationError: opts.readMigrationError }
+      : {}),
   });
   return { supervisor, children, causes, started, logs, die, exit };
 }
@@ -1574,6 +1652,35 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
     r.die(r.children[3]!);
     await settleRespawns();
     expect(r.children).toHaveLength(5);
+  });
+
+  it('stops retrying on the migration exit code', async () => {
+    const r = respawner({
+      delays: [5, 5, 5],
+      bootFails: (index) => index >= 1,
+      bootExitCode: DAEMON_MIGRATION_EXIT_CODE,
+      readMigrationError: () => ({
+        id: '0002-rename',
+        step: 1,
+        of: 1,
+        kind: 'database',
+        message: 'no such table: workflows',
+        backupDir: null,
+      }),
+    });
+    await r.supervisor.start();
+
+    r.die(r.children[0]!);
+    await settleRespawns();
+    await settleRespawns();
+
+    expect(r.children).toHaveLength(2);
+    expect(r.logs.join('\n')).toMatch(
+      /updating your data failed at 0002-rename .*no such table: workflows/,
+    );
+    await expect(r.supervisor.start()).rejects.toBeInstanceOf(
+      DaemonMigrationFailedError,
+    );
   });
 
   it('starts a fresh budget for a daemon that had been serving long enough', async () => {

@@ -8,6 +8,7 @@ import { ProjectsController } from './controllers/projects.controller';
 import { ProjectDao } from './dao/project.dao';
 import { ProjectQueueService } from './services/project-queue.service';
 import { ProjectRootsService } from './services/project-roots.service';
+import { ProjectScopeService } from './services/project-scope.service';
 import { ProjectsService } from './services/projects.service';
 
 /**
@@ -45,7 +46,13 @@ import { ProjectsService } from './services/projects.service';
     ProjectsService,
     ProjectQueueService,
     ProjectRootsService,
+    ProjectScopeService,
   ],
-  exports: [ProjectDao, ProjectQueueService, ProjectRootsService],
+  exports: [
+    ProjectDao,
+    ProjectQueueService,
+    ProjectRootsService,
+    ProjectScopeService,
+  ],
 })
 export class ProjectsModule {}

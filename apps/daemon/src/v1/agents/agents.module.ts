@@ -9,6 +9,7 @@ import { DAEMON_VERSION } from '../../utils/daemon-version';
 import { createTeeingSpawn } from '../diagnostics/utils/teeing-spawn';
 import { MemoryModule } from '../memory/memory.module';
 import { ProjectDao } from '../projects/dao/project.dao';
+import { ProjectsModule } from '../projects/projects.module';
 import type { AdapterDaemonDeps } from './adapters/adapter.types';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { CodexAdapter } from './adapters/codex/codex.adapter';
@@ -163,7 +164,7 @@ import { defaultSpawn } from './utils/spawn-cli';
  * consumer reaches an adapter through `AgentAdapterRegistry`.
  */
 @Module({
-  imports: [MemoryModule],
+  imports: [MemoryModule, ProjectsModule],
   controllers: [
     ArtifactsController,
     ChatController,

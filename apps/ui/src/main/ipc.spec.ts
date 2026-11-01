@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => {
   // built inside vi.hoisted(), which runs BEFORE module imports initialize —
   // referencing the import there throws at load.
   const settings: Settings = {
+    settingsVersion: 0,
     onboardingComplete: false,
     onboardingProgress: null,
     projectFolder: null,

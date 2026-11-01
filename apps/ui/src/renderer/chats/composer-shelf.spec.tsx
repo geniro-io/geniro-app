@@ -941,10 +941,13 @@ describe('the shelf — separate chips, ONE joined group', () => {
     );
     const shelf = el.querySelector('[data-slot="composer-shelf"]')!;
     expect(shelf.className).toContain('gap-1.5');
-    // Clipped, never a scroll container: a hidden overflow could still be
-    // swiped sideways on a phone.
-    expect(shelf.className.split(' ')).toContain('overflow-clip');
-    expect(shelf.className.split(' ')).not.toContain('overflow-hidden');
+    // Clipped on a desktop; on a phone a real scroller, whose chips keep their
+    // width so the ones past the edge are reached by a swipe.
+    const classes = shelf.className.split(' ');
+    expect(classes).toContain('overflow-clip');
+    expect(classes).not.toContain('overflow-hidden');
+    expect(classes).toContain('max-sm:overflow-x-auto');
+    expect(classes).toContain('max-sm:*:shrink-0');
     // The row itself wears NO card — that belongs to each chip.
     expect(shelf.className).not.toContain('divide-x');
     expect(shelf.className).not.toContain('shadow-panel-sm');

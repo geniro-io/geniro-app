@@ -74,6 +74,7 @@ import { WorkflowChip, workflowShellStatus } from './workflow-block';
  * wrapped would push the textarea down by however much the thread happened to
  * produce, so each chip takes a bounded width and gives the rest back: what
  * truncates is the TITLE, never the number, since the number identifies it.
+ * On a phone the row scrolls sideways instead, each chip at its own width.
  *
  * The chips stay SEPARATE, with gaps — a row of distinct readings, each its own
  * object. The whole row was joined into one segmented bar for a moment and that
@@ -114,7 +115,7 @@ export function ComposerShelf({
     <div
       data-slot="composer-shelf"
       className={cn(
-        'flex min-h-7 items-center gap-1.5 overflow-clip px-1',
+        'flex min-h-7 items-center gap-1.5 overflow-clip px-1 max-sm:overflow-x-auto max-sm:overscroll-x-contain max-sm:[scrollbar-width:none] max-sm:*:shrink-0',
         inline && '-ml-2 min-w-0 [&:not(:has(>:not(:empty)))]:hidden',
       )}>
       {children}

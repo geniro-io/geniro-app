@@ -53,6 +53,11 @@ export function moveStageResultText(
       },
       result.progress,
       result.resets,
+      {
+        mode: result.team.mode,
+        lead: result.lead,
+        previousLead: result.previousLead,
+      },
     ),
     isError: false,
   };

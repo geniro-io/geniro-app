@@ -991,7 +991,7 @@ describe('Teams — who handles the first message', () => {
 });
 
 describe('Teams — the team mode', () => {
-  it('offers One lead, and shows Relay as coming soon but never pickable', async () => {
+  it('offers One lead and Relay, and saves Relay when it is picked', async () => {
     await openBuilder();
 
     await press('Team mode');
@@ -1001,12 +1001,22 @@ describe('Teams — the team mode', () => {
     const relay = options.find((option) =>
       option.textContent?.includes('Relay'),
     );
-    expect(relay?.textContent).toContain('coming soon');
-    expect(relay?.disabled).toBe(true);
+    expect(relay?.disabled).toBe(false);
     expect(
       options.find((option) => option.textContent?.includes('One lead'))
         ?.disabled,
     ).toBe(false);
+    expect(document.querySelector('[data-slot="relay-note"]')).toBeNull();
+
+    await act(async () => {
+      relay!.click();
+    });
+    await wait(900);
+
+    expect(lastSaved().mode).toBe('relay');
+    expect(
+      document.querySelector('[data-slot="relay-note"]')?.textContent,
+    ).toContain('your messages go to whoever leads now');
   });
 });
 

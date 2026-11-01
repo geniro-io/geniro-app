@@ -114,6 +114,24 @@ export const Stalled: Story = {
   },
 };
 
+export const HandedToTheNextLead: Story = {
+  args: {
+    actor: 'geniro',
+    nextTitle: undefined,
+    leadName: 'Reviewer',
+    change: {
+      ...meta.args.change,
+      action: 'handoff',
+      stageId: 'review',
+      stageTitle: 'Review',
+      next: undefined,
+      text: 'Reviewer leads Review now.',
+      by: { kind: 'system' },
+      lead: 'reviewer',
+    },
+  },
+};
+
 export const InATranscript: Story = {
   render: (args) => (
     <div className="flex flex-col gap-1">

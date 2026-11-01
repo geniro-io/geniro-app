@@ -7,11 +7,14 @@ export function followUpPlaceholder({
   working,
   team,
   narrow,
+  lead = null,
 }: {
   archived: boolean;
   working: boolean;
   team: boolean;
   narrow: boolean;
+  /** A relay run's current lead, by name: the member a message goes to. */
+  lead?: string | null;
 }): string {
   if (archived) {
     return narrow
@@ -27,9 +30,12 @@ export function followUpPlaceholder({
       : 'Agent is working — your message will queue…';
   }
   if (team) {
-    return narrow
-      ? 'Message the team…'
-      : 'Message the team — it goes to the same trigger…';
+    if (narrow) {
+      return 'Message the team…';
+    }
+    return lead === null
+      ? 'Message the team — it goes to the same trigger…'
+      : `Message the team — it goes to ${lead}, who leads now…`;
   }
   return 'Message the agent…';
 }

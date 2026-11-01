@@ -241,6 +241,7 @@ import { stageLabel, stageMapOf, stageNotice } from '../utils/stage-text';
 import {
   calleesOf as calleesOfTeam,
   onDemandMemberIds,
+  startingLeadOf,
   triggerMemberId,
 } from '../utils/team-roster';
 import { teamSnapshotOf } from '../utils/team-snapshot';
@@ -357,11 +358,8 @@ export interface StartTeamRunInput {
   groupId?: string | null;
 }
 
-/** Where a run's seed and every user message go: the member the trigger names. */
-function triggerFedAgentIds(team: Team): Set<string> {
-  const id = triggerMemberId(team);
-  return new Set(id === null ? [] : [id]);
-}
+/** How long a message waits for a relay hand-off's turn to open before it goes to the new lead anyway. */
+export const HANDOFF_START_GRACE_MS = 15_000;
 
 /**
  * What each of the team's CLIs has proved about its approval modes, keyed
@@ -463,6 +461,8 @@ interface RunContext {
   cwd: string;
   /** The user's task — seeds every member's prompt. */
   seedPrompt: string;
+  /** The member this pass starts and a message goes to: the run's lead as the pass begins. */
+  lead: string | null;
   /** The run's snapshotted global instructions; every member composes it. */
   customInstructions: string | null;
   /** The run's snapshotted reply language; every member composes it. */
@@ -940,7 +940,7 @@ export class TeamExecutorService
   );
 
   /**
-   * Per run, the trigger-fed agents inside a turn right now — what
+   * Per run, the lead (or leads) inside a turn right now — what
    * `RunWire.rootsWorking` counts. Service-scoped rather than inside the walk
    * because the runs LISTING answers it too.
    */
@@ -979,10 +979,26 @@ export class TeamExecutorService
    * arriving between that status and the root's turn starting would otherwise
    * read the Manager as idle and bounce off "the team is still starting".
    */
-  private markRootsStarting(runId: string, team: Team): void {
-    for (const memberId of triggerFedAgentIds(team)) {
-      this.setRootWorking(runId, memberId, true);
+  private markRootsStarting(runId: string, lead: string | null): void {
+    if (lead !== null) {
+      this.setRootWorking(runId, lead, true);
     }
+  }
+
+  /** Each live pass's hook for the run's lead changing, by run. */
+  private readonly leadWatchers = new Map<string, (lead: string) => void>();
+
+  /**
+   * Who leads a run now — the member a message, a press and a pass go to:
+   * the trigger's member in `lead` mode, the current stage's lead in `relay`
+   * mode (`StageService` holds it with the progress).
+   */
+  private async leadNow(runId: string, team: Team): Promise<string | null> {
+    if (team.mode !== 'relay') {
+      return triggerMemberId(team);
+    }
+    const loaded = await this.stages?.current(runId);
+    return loaded?.leadId ?? startingLeadOf(team);
   }
 
   onModuleInit(): void {
@@ -992,11 +1008,17 @@ export class TeamExecutorService
     this.bus.allDeleted().subscribe((runId) => {
       this.forgetCompactions(runId);
       this.workingRoots.delete(runId);
+      this.leadWatchers.delete(runId);
       this.disposeHostPublishers(runId);
       // `deleteRun` forgets these itself; the archive sweep reaches this run
       // only through the shared teardown, so without this line a swept run's
       // detached commands stayed counted for the life of the daemon.
       this.backgroundWork.forget(runId);
+    });
+    this.stages?.onMoved((runId, moved) => {
+      if (moved.lead !== null) {
+        this.leadWatchers.get(runId)?.(moved.lead);
+      }
     });
     this.sessions.onClosed((key, _interrupted, _exited, cause) => {
       const closer = this.sessionClosers.get(key);
@@ -1194,12 +1216,11 @@ export class TeamExecutorService
         return;
       }
       const team = await this.runTeams.teamOf(assertTeamRun(run, runId), em);
-      const roots = new Set(triggerFedAgentIds(team));
+      const lead = await this.leadNow(runId, team);
       if (
         !wake.owners.every(
           (owner) =>
-            callerConversationOf(owner.owner) === null &&
-            roots.has(owner.owner),
+            callerConversationOf(owner.owner) === null && owner.owner === lead,
         )
       ) {
         await unreachable(
@@ -1291,6 +1312,7 @@ export class TeamExecutorService
     // (probe-verified), which reads as "this member has no MCP servers".
     const { team, dropped } = await this.assertRunnable(input.team);
     const cwd = resolveValidCwd(input.cwd);
+    const lead = startingLeadOf(team);
 
     // Which sidebar group claims this run — by the TEAM first, which is the
     // rule a team exists for: one team runs over a dozen repositories,
@@ -1321,6 +1343,7 @@ export class TeamExecutorService
         // library team must not reach this run (`Run.teamSnapshot`).
         teamSnapshot: teamSnapshotOf(input.team),
         stageProgress: initialStageProgress(input.team),
+        currentLead: lead,
         groupId,
         status: 'running',
         agentKind: null,
@@ -1395,7 +1418,7 @@ export class TeamExecutorService
         'daemon shutdown started before the team could launch',
       );
     }
-    this.markRootsStarting(run.id, team);
+    this.markRootsStarting(run.id, lead);
     this.drive(
       em,
       run.id,
@@ -1403,6 +1426,7 @@ export class TeamExecutorService
       {
         cwd,
         seedPrompt: input.prompt,
+        lead,
         customInstructions: run.customInstructions,
         replyLanguage: run.replyLanguage,
         projectInstructions: run.projectInstructions,
@@ -1506,11 +1530,7 @@ export class TeamExecutorService
       }
       const run = assertTeamRun(found, runId);
       const team = await this.runTeams.teamOf(run, em);
-      const onDemand = onDemandMemberIds(team);
-      const scheduled = team.members.filter(
-        (member) => !onDemand.has(member.id),
-      );
-      if (scheduled.length !== 1 || scheduled[0]!.id !== memberId) {
+      if ((await this.leadNow(runId, team)) !== memberId) {
         return false;
       }
       await this.walkAgain(em, run, text, [], row);
@@ -1767,10 +1787,10 @@ export class TeamExecutorService
     // A CALL-ONLY member that already has a row keeps it. A pass never starts
     // it, so `pending` there would promise a turn no pass gives it, and erase
     // how its last call ended.
-    const onDemand = onDemandMemberIds(team);
+    const lead = await this.leadNow(run.id, team);
     const hasRow = new Set(states.map((state) => state.memberId));
     for (const node of team.members) {
-      if (onDemand.has(node.id) && hasRow.has(node.id)) {
+      if (node.id !== lead && hasRow.has(node.id)) {
         continue;
       }
       await this.nodeStateDao.setStatus(
@@ -1793,7 +1813,7 @@ export class TeamExecutorService
       seedRow === null ? 'user' : null,
       seedRow ?? messagePayload(text, storedImages),
     );
-    this.markRootsStarting(run.id, team);
+    this.markRootsStarting(run.id, lead);
     await this.setRunStatus(em, run.id, 'running');
     return {
       team,
@@ -1802,6 +1822,7 @@ export class TeamExecutorService
       context: {
         cwd,
         seedPrompt: text,
+        lead,
         customInstructions: run.customInstructions,
         replyLanguage: run.replyLanguage,
         projectInstructions: run.projectInstructions,
@@ -2725,12 +2746,6 @@ export class TeamExecutorService
     team: Team,
   ): Promise<{ team: Team; dropped: DroppedNodeSetting[] }> {
     assertValidTeam(team);
-    if (team.mode !== 'lead') {
-      throw new BadRequestException(
-        'TEAM_MODE_UNAVAILABLE',
-        `This team is set to run in ${team.mode} mode, which is not available yet — set it to one lead`,
-      );
-    }
     const resolved = withResolvedNodeSettings(team, (kind) =>
       this.adapterFor(kind),
     );
@@ -2839,12 +2854,15 @@ export class TeamExecutorService
     } = run;
     const nodes = team.members;
     const nodesById = new Map(nodes.map((n) => [n.id, n]));
-    // Call-only members run per CallBroker call — never started by the pass,
-    // never in the settled denominator (an uncalled one settles 'skipped' at
-    // run end).
+    // What a pass starts: the run's lead as the pass begins, and only it.
+    // Every other member runs per CallBroker call or, in `relay` mode, in its
+    // own conversation once the run is handed to it — never in the settled
+    // denominator (an uncalled one settles 'skipped' at run end).
+    const passMembers = nodes.filter((n) => n.id === run.lead);
+    const passMemberIds = new Set(passMembers.map((n) => n.id));
+    // A member that may lead keeps its call turns' session and readings apart
+    // from its own conversation.
     const onDemand = onDemandMemberIds(team);
-    // What a pass starts: the member the trigger names, and only it.
-    const passMembers = nodes.filter((n) => !onDemand.has(n.id));
     const blocksOf = instructionBlocksByMember(team);
     // A mid-run change to an instruction part changes sessionKey; the stage rides each prompt.
     const stageMap = stageMapOf(team);
@@ -3006,9 +3024,21 @@ export class TeamExecutorService
      * Bounded by the per-run turn cap and freed with the run's closure.
      */
     const cancelledCalls = new Set<string>();
-    // The agents a trigger feeds — where the seed goes, and where a follow-up
-    // goes while the run is live.
-    const triggerFed = triggerFedAgentIds(team);
+    // The run's lead — where the seed goes, and where a follow-up goes while
+    // the run is live. A relay hand-off moves it mid-pass.
+    const leadIds = new Set<string>(run.lead === null ? [] : [run.lead]);
+    /**
+     * Leads the run was just handed to, until their hand-off turn opens: a
+     * message waits (RUN_BUSY) so the brief reaches the new lead first.
+     * Bounded, so a hand-off wake that never arrives holds nothing for good.
+     */
+    const handingOver = new Map<string, ReturnType<typeof setTimeout>>();
+    /** Members whose own turn is HELD for background sub-agents right now. */
+    const heldOwnTurns = new Set<string>();
+    const tookOver = (memberId: string): void => {
+      clearTimeout(handingOver.get(memberId));
+      handingOver.delete(memberId);
+    };
     // Every turn the pass started counts: a message sent while the pass is
     // still under way waits for it — only CALLS run on past an idle Manager.
     // Going idle during a cancel is recorded silently: an idle announce is
@@ -3649,7 +3679,7 @@ export class TeamExecutorService
       }
       runFinished = true;
       // A root the pass never got to launch (cancelled while queued) is idle.
-      for (const memberId of triggerFed) {
+      for (const memberId of leadIds) {
         markRootWorking(memberId, false);
       }
       // Captured BEFORE the body: from here on a call can wake the run, and a
@@ -3676,7 +3706,7 @@ export class TeamExecutorService
         // uncalled member is nothing.
         for (const node of nodes) {
           if (
-            !onDemand.has(node.id) ||
+            passMemberIds.has(node.id) ||
             (calleeTurnCounts.get(node.id) ?? 0) > 0
           ) {
             continue;
@@ -4368,7 +4398,7 @@ export class TeamExecutorService
         if (ended) {
           outcome = arrived;
         }
-        // A trigger-fed agent whose turn is HELD has finished its reply and
+        // A lead whose turn is HELD has finished its reply and
         // waits only on its background sub-agents; a message delivered into it
         // ends the hold, so it stops counting in `rootsWorking` until the hold
         // ends. A hold can also end with no `open: 0` (the silence deadline, an
@@ -4376,15 +4406,18 @@ export class TeamExecutorService
         // compaction that may follow is work, and the walk's own idle mark is
         // what announces the end. Only the agents a message goes to, and not
         // their compaction turns: a compacting agent refuses messages.
-        if (
-          callContext === undefined &&
-          !extras.compaction &&
-          triggerFed.has(node.id)
-        ) {
-          if (event.type === 'turn_held') {
-            markRootWorking(node.id, event.open === 0);
-          } else if (ended) {
-            markRootWorking(node.id, true);
+        if (callContext === undefined && !extras.compaction) {
+          if (event.type === 'turn_held' && event.open > 0) {
+            heldOwnTurns.add(node.id);
+          } else if (event.type === 'turn_held' || ended) {
+            heldOwnTurns.delete(node.id);
+          }
+          if (leadIds.has(node.id)) {
+            if (event.type === 'turn_held') {
+              markRootWorking(node.id, event.open === 0);
+            } else if (ended) {
+              markRootWorking(node.id, true);
+            }
           }
         }
         enqueue(async () => {
@@ -5939,7 +5972,7 @@ export class TeamExecutorService
           // An earlier pass of this run left this member a conversation; a
           // follow-up's pass carries it on rather than starting it over.
           resumeSessionId: run.resumeSessions.get(node.id) ?? null,
-          images: triggerFed.has(node.id) ? run.seedImages : [],
+          images: node.id === run.lead ? run.seedImages : [],
         }));
       } catch (err) {
         startingPassMembers.delete(node.id);
@@ -6912,7 +6945,10 @@ export class TeamExecutorService
         wokenOnlyByMonitors = false;
       }
       const starting = reserveContinuation(node.id);
-      markRootWorking(node.id, true);
+      tookOver(node.id);
+      if (leadIds.has(node.id)) {
+        markRootWorking(node.id, true);
+      }
       liveSubTurns += 1;
       retainNodeTurn(node.id);
       retainConversation(node.id);
@@ -7109,17 +7145,31 @@ export class TeamExecutorService
       if (cancelRequested) {
         throw busy('this run is stopping');
       }
-      const roots = nodes.filter((node) => triggerFed.has(node.id));
+      const roots = nodes.filter((node) => leadIds.has(node.id));
       // A root the pass's cap has held back has no conversation to carry on yet,
-      // and its own turn is about to start from the seed.
+      // and its own turn is about to start from the seed. A lead the run was
+      // handed to mid-pass is no pass member: it has a turn or takes one now.
       if (
         roots.some(
           (root) =>
-            (!settled.has(root.id) && !runningHandles.has(root.id)) ||
+            (passMemberIds.has(root.id) &&
+              !settled.has(root.id) &&
+              !runningHandles.has(root.id)) ||
             startingContinuations.has(root.id),
         )
       ) {
         throw busy('the team is still starting');
+      }
+      const takingOver = roots.find(
+        (root) =>
+          handingOver.has(root.id) &&
+          !runningHandles.has(root.id) &&
+          !continuationHandles.has(root.id),
+      );
+      if (takingOver) {
+        throw busy(
+          `${takingOver.name ?? takingOver.id} is taking over the run`,
+        );
       }
       // Never delivered into a compaction: on a CLI whose compaction replaces
       // the session, a message landing in it would be summarised away.
@@ -7365,7 +7415,52 @@ export class TeamExecutorService
       hostToolNodes.map((node) => node.id),
       persistItem,
     );
-    this.registerActionPublishers(runId, hostToolNodes, triggerFed);
+    // A relay run's press goes to whoever leads at the press, so every
+    // publisher says who it is.
+    this.registerActionPublishers(
+      runId,
+      hostToolNodes,
+      team.mode === 'relay' ? new Set() : leadIds,
+    );
+    const watchLead = (lead: string): void => {
+      if (leadIds.has(lead) || !nodesById.has(lead)) {
+        return;
+      }
+      for (const previous of leadIds) {
+        markRootWorking(previous, false);
+      }
+      leadIds.clear();
+      leadIds.add(lead);
+      if (cancelRequested || (runFinished && !reopened)) {
+        return;
+      }
+      if (
+        runningHandles.has(lead) ||
+        continuationHandles.has(lead) ||
+        startingContinuations.has(lead)
+      ) {
+        if (!heldOwnTurns.has(lead)) {
+          markRootWorking(lead, true);
+        }
+        return;
+      }
+      markRootWorking(lead, true);
+      tookOver(lead);
+      const timer = setTimeout(() => {
+        if (
+          !handingOver.delete(lead) ||
+          this.leadWatchers.get(runId) !== watchLead
+        ) {
+          return;
+        }
+        if (!continuationHandles.has(lead) && !runningHandles.has(lead)) {
+          markRootWorking(lead, false);
+        }
+      }, HANDOFF_START_GRACE_MS);
+      timer.unref();
+      handingOver.set(lead, timer);
+    };
+    this.leadWatchers.set(runId, watchLead);
     this.registerMonitorSinks(
       runId,
       hostToolNodes,
@@ -7502,7 +7597,7 @@ export class TeamExecutorService
         {
           calleesOf,
           cwd,
-          messageTargets: triggerFed,
+          messageTargets: leadIds,
           launchCalleeTurn,
           persistItem: (memberId, kind, role, payload) => {
             enqueue(async () => {

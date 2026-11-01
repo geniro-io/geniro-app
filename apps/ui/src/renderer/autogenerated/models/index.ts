@@ -7171,6 +7171,12 @@ export interface RunDto {
     stages: StageProgress | null;
     /**
      * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    currentLead: string | null;
+    /**
+     * 
      * @type {number}
      * @memberof RunDto
      */
@@ -11424,6 +11430,12 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
     stages: StageProgress | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    currentLead: string | null;
     /**
      * 
      * @type {number}

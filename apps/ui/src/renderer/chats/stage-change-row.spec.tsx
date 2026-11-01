@@ -158,6 +158,24 @@ describe('stageChangeSuperseded', () => {
     }
   });
 
+  it('never supersedes a hand-off: it records who led from then on', () => {
+    const handoff: StageChangePayload = {
+      ...CHANGE,
+      action: 'handoff',
+      rev: 1,
+      by: { kind: 'system' },
+      lead: 'ada',
+    };
+    expect(
+      stageChangeSuperseded(handoff, {
+        rev: 5,
+        current: null,
+        position: { index: 3, total: 3 },
+        stages: [],
+      }),
+    ).toBe(false);
+  });
+
   it('supersedes nothing while the run’s progress is unknown', () => {
     for (const action of [
       'complete',
@@ -194,6 +212,7 @@ describe('StageChangeRow', () => {
       nextTitle?: string;
       time?: string;
       superseded?: boolean;
+      leadName?: string;
     } = {},
     runId: string | null = null,
   ): HTMLElement {
@@ -210,6 +229,9 @@ describe('StageChangeRow', () => {
             {...(props.superseded === undefined
               ? {}
               : { superseded: props.superseded })}
+            {...(props.leadName === undefined
+              ? {}
+              : { leadName: props.leadName })}
           />
         </ThreadUiMemoryContext.Provider>,
       ),
@@ -230,6 +252,20 @@ describe('StageChangeRow', () => {
         ?.getAttribute('data-actor'),
     ).toBe('agent');
     expect(container.querySelector('time')?.textContent).toBe('14:07');
+  });
+
+  it('names the member a hand-off gives the run to, falling back to its id', () => {
+    const handoff = {
+      action: 'handoff' as const,
+      stageTitle: 'Build',
+      text: 'Ada leads Build now.',
+      by: { kind: 'system' as const },
+      lead: 'ada',
+    };
+    render(handoff, { actor: 'geniro', leadName: 'Ada' });
+    expect(part('stage-headline')).toBe('Build handed to Ada');
+    render(handoff, { actor: 'geniro' });
+    expect(part('stage-lead')).toBe('ada');
   });
 
   it('quotes the summary under the headline, and draws none when it is empty', () => {

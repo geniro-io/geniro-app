@@ -17,7 +17,7 @@ describe('readStageChangePayload', () => {
     expect(readStageChangePayload(PAYLOAD)).toEqual(PAYLOAD);
   });
 
-  it.each(['complete', 'skip', 'reopen', 'nudge', 'stalled'])(
+  it.each(['complete', 'skip', 'reopen', 'nudge', 'stalled', 'handoff'])(
     'admits the %s action',
     (action) => {
       expect(readStageChangePayload({ ...PAYLOAD, action })?.action).toBe(
@@ -25,6 +25,18 @@ describe('readStageChangePayload', () => {
       );
     },
   );
+
+  it('reads a hand-off’s new lead, and refuses one that is not a string', () => {
+    const handoff = {
+      ...PAYLOAD,
+      action: 'handoff',
+      by: { kind: 'system' },
+      lead: 'reviewer',
+    };
+    expect(readStageChangePayload(handoff)?.lead).toBe('reviewer');
+    expect(readStageChangePayload({ ...handoff, lead: 7 })).toBeNull();
+    expect(readStageChangePayload(PAYLOAD)).not.toHaveProperty('lead');
+  });
 
   it('leaves `next` out when the move named none', () => {
     const { next: _next, ...bare } = PAYLOAD;

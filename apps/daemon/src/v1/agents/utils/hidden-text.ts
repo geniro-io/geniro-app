@@ -25,3 +25,10 @@ export function hasHiddenText(value: string, lineBreaks: boolean): boolean {
     lineBreaks ? visible.replace(/[\t\n\r]/g, '') : visible,
   );
 }
+
+const HIDDEN_TEXT_EVERYWHERE = new RegExp(HIDDEN_TEXT.source, 'gu');
+
+/** `value` with every hidden character (see {@link hasHiddenText}) turned into a space. */
+export function hiddenTextAsSpaces(value: string): string {
+  return value.replace(HIDDEN_TEXT_EVERYWHERE, ' ');
+}

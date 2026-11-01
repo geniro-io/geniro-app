@@ -14,6 +14,7 @@ export const STAGE_CHANGE_ACTIONS = [
   'reopen',
   'nudge',
   'stalled',
+  'handoff',
 ] as const;
 export type StageChangeAction = (typeof STAGE_CHANGE_ACTIONS)[number];
 
@@ -25,6 +26,8 @@ export interface StageChangePayload {
   text: string;
   rev: number;
   by: StageActor;
+  /** A hand-off: the member that leads the run from this move on. */
+  lead?: string;
 }
 
 const ACTIONS: ReadonlySet<string> = new Set(STAGE_CHANGE_ACTIONS);
@@ -81,7 +84,8 @@ export function readStageChangePayload(
     typeof bag.rev !== 'number' ||
     !Number.isInteger(bag.rev) ||
     by === null ||
-    (bag.next !== undefined && typeof bag.next !== 'string')
+    (bag.next !== undefined && typeof bag.next !== 'string') ||
+    (bag.lead !== undefined && typeof bag.lead !== 'string')
   ) {
     return null;
   }
@@ -93,5 +97,6 @@ export function readStageChangePayload(
     text: bag.text,
     rev: bag.rev,
     by,
+    ...(bag.lead === undefined ? {} : { lead: bag.lead as string }),
   };
 }

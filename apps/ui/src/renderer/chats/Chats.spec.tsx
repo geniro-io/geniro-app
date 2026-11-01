@@ -324,6 +324,7 @@ const run1: ChatRun = {
   taskList: [],
   stages: null,
   resetWakes: [],
+  currentLead: null,
 };
 
 // A fake DaemonClient whose item/reconnect listeners the test can fire.
@@ -4695,6 +4696,7 @@ describe('Chats team runs', () => {
     taskList: [],
     stages: null,
     resetWakes: [],
+    currentLead: null,
   };
 
   function wfItem(
@@ -6654,6 +6656,7 @@ describe('Chats — handing a conversation to the user', () => {
       taskList: [],
       stages: null,
       resetWakes: [],
+      currentLead: null,
     };
     teamApi.listTeamRuns.mockResolvedValue([wfRun]);
     teamApi.getTeam.mockResolvedValue({
@@ -13303,6 +13306,98 @@ describe('Chats skill autocomplete', () => {
     expect(container.querySelector('[role="listbox"]')?.textContent).toContain(
       '/deploy',
     );
+  });
+
+  it('shows who leads an open relay run, follows a hand-off, and asks the lead’s CLI for skills', async () => {
+    agentsApi.listAgentSkills.mockResolvedValue(SKILLS);
+    teamApi.listTeamRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'completed',
+        awaiting: null,
+        holdingFor: 0,
+        awaitingCalls: 0,
+        shellsOpen: 0,
+        subagentsOut: 0,
+        title: 'Relay run',
+        agentKind: null,
+        teamId: 'relay-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+        currentLead: 'qa',
+      },
+    ]);
+    teamApi.getTeamRunSnapshot.mockResolvedValue({
+      team: {
+        name: 'Relay team',
+        mode: 'relay',
+        members: [
+          { id: 'manager', name: 'Manager', agent: 'claude', approval: 'auto' },
+          { id: 'qa', name: 'QA', agent: 'cursor-agent', approval: 'auto' },
+        ],
+        triggers: [{ kind: 'first-message', member: 'manager' }],
+        instructionBlocks: [],
+      },
+    });
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Relay run');
+
+    const chip = () =>
+      container.querySelector('[data-slot="lead-chip"]')?.textContent ?? null;
+    expect(chip()).toBe('Now leading:QA');
+    expect(agentsApi.listAgentSkills).toHaveBeenCalledWith({
+      agent: 'cursor-agent',
+      cwd: '/proj',
+    });
+
+    await act(async () => {
+      emitRunStatus({ runId: 'w1', status: null, currentLead: 'manager' });
+    });
+    expect(chip()).toBe('Now leading:Manager');
+  });
+
+  it('shows no lead chip on a one-lead team run', async () => {
+    teamApi.listTeamRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'completed',
+        awaiting: null,
+        holdingFor: 0,
+        awaitingCalls: 0,
+        shellsOpen: 0,
+        subagentsOut: 0,
+        title: 'Lead run',
+        agentKind: null,
+        teamId: 'lead-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+        currentLead: 'manager',
+      },
+    ]);
+    teamApi.getTeamRunSnapshot.mockResolvedValue({
+      team: {
+        name: 'Lead team',
+        mode: 'lead',
+        members: [
+          { id: 'manager', name: 'Manager', agent: 'claude', approval: 'auto' },
+        ],
+        triggers: [{ kind: 'first-message', member: 'manager' }],
+        instructionBlocks: [],
+      },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Lead run');
+
+    expect(container.querySelector('[data-slot="agent-cards"]')).not.toBeNull();
+    expect(container.querySelector('[data-slot="lead-chip"]')).toBeNull();
   });
 });
 

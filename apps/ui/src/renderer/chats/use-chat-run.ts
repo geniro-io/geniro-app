@@ -2543,6 +2543,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // "tasks wasnt synced" — a chip reading 1/11 under a card at 11/12.
         tasks !== undefined ||
         event.stages !== undefined ||
+        event.currentLead !== undefined ||
         // Same for a usage-limit continue: its announce carries nothing else.
         resetWakes !== undefined ||
         workedMs !== undefined ||

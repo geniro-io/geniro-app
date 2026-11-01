@@ -808,6 +808,9 @@ export const TranscriptItem = memo(function TranscriptItem({
         <StageChangeItem
           change={change}
           actor={stageActorLabel(change.by, (id) => nodeName(id) ?? id)}
+          {...(change.lead === undefined
+            ? {}
+            : { leadName: nodeName(change.lead) ?? change.lead })}
           time={formatClockTime(item.createdAt)}
           memoryKey={`stage:${item.id}`}
         />
@@ -821,11 +824,13 @@ export const TranscriptItem = memo(function TranscriptItem({
 function StageChangeItem({
   change,
   actor,
+  leadName,
   time,
   memoryKey,
 }: {
   change: StageChangePayload;
   actor: string;
+  leadName?: string;
   time: string;
   memoryKey: string;
 }): React.JSX.Element {
@@ -834,6 +839,7 @@ function StageChangeItem({
     <StageChangeRow
       change={change}
       actor={actor}
+      {...(leadName === undefined ? {} : { leadName })}
       {...(change.next === undefined
         ? {}
         : { nextTitle: stageTitleOf(runStages, change.next) })}

@@ -74,7 +74,7 @@ The issue-heading and PR-heading lists above are twins of the forms and the temp
 
 ## Project Overview
 
-geniro-app is a local-first macOS desktop app for composing and running a DAG of CLI coding agents as a team. Everything runs on the user's machine; there is no cloud.
+geniro-app is a local-first macOS desktop app for composing and running teams of CLI coding agents. Everything runs on the user's machine; there is no cloud.
 
 - An Electron UI (`apps/ui`) supervises a bundled NestJS daemon (`apps/daemon`) that listens on loopback only.
 - The daemon is built on packages vendored from the sibling Geniro monorepo, adapted for local use (SQLite, no Sentry/Redis/cloud).
@@ -209,7 +209,7 @@ pnpm commit             # conventional commit via commitizen
 - Import shared packages as `@packages/*`.
 - Daemon modules and entities: `.claude/rules/daemon-module-structure.md`.
 - CLI agent adapters: `.claude/rules/agent-adapters.md`. geniro's MCP tools: `.claude/rules/mcp-tools.md`.
-- "Team" is the thing, in code, wire, storage and copy (`Team`, `TeamsApi`, `TeamStoreService`, the daemon's `v1/teams/`); "graph" is only its DAG shape (executor, validator, edges, canvas). "Workflow" stays only where it is someone else's word: Claude Code's own dynamic workflows (`workflow_info`, `workflow-block.tsx`), GitHub Actions, and the readers of rows stored before the rename.
+- "Team" is the thing, in code, wire, storage and copy (`Team`, `TeamsApi`, `TeamStoreService`, the daemon's `v1/teams/`). A team is members (each with a public `role`, private `instructions` and an optional `character`), one first-message trigger naming a member, instruction blocks addressed to an audience, optional stages with responsible members, and a coordination mode; nothing is wired — any member may call any other. New code says "member". "Graph" and "node" survive for teams written before that (the legacy reader, `teamFromWorkflow`), the stage graph, the stored payload keys `nodeId` / `callerNodeId` / `calleeNodeId`, and the run-state code over the `node_state` table (`NodeStateDao`, `NodeStateWire`, the `runs/:runId/nodes` route). "Workflow" stays only where it is someone else's word: Claude Code's own dynamic workflows (`workflow_info`, `workflow-block.tsx`), GitHub Actions, and the readers of rows stored before the rename.
 - Renderer UI follows the design system (see _Design system (renderer)_).
 
 ---
@@ -322,7 +322,7 @@ Daemon side of the contract (zod wire schemas, `@ZodResponse`, operationIds, `se
 
 ### Storage split
 
-- **Team (graph) definitions → YAML.** Never in SQLite.
+- **Team definitions → YAML.** Never in SQLite.
   - Team backups → `<userData>/teams/.backups/<slug>.<YYYY-MM-DDTHH-mm-ss>.yaml`, written before every save an analysis applies and whenever a builder chat's agent calls `backup_team` (`TeamChangeService`) before an approved `propose_team` replaces a file (`TeamProposalService`), and before a version restore (`TeamVersionsService.restore`). Never named `*.team.yaml`, so the library never lists them; restore by copying one over `<slug>.team.yaml`.
   - The library lived in `<userData>/workflows/` as `*.geniro.yaml` before the rename; migration `0003-team-library-files` moved it and keeps the originals in `<userData>/workflows/.migrated/`.
 - **Settings → `settings.json`** in the Electron userData dir. The key list is `apps/ui/AGENTS.md` → **Settings keys (`settings.json`).**
@@ -340,7 +340,7 @@ Daemon side of the contract (zod wire schemas, `@ZodResponse`, operationIds, `se
   - `team_change_log` and `team_recommendations` are exempt too: a team analysis reads every change made to its team and every recommendation the analyses it replaced filed (`apps/daemon/AGENTS.md` → *Thread analysis*).
   - `artifact_shares` is exempt from run teardown too: a shared link outlives its chat, and the row is the only way to revoke it. Only a share never uploaded (waiting on sign-in, or failed after it) is dropped with its run. Its key is in the Keychain, never the row. Accepted exception: an agent's `show_artifact(share: true)` receipt (or, after a sign-in wait, its `HostWakeBus` wake prompt) carries the whole link, so the key is also in that agent's transcript: the receipt's `items` row (readable from a paired device), the CLI's session file and the provider's copy. `shares_changed` and the sign-in notification never carry it.
   - `memories` (the shared agent memory, `v1/memory`, with its FTS index `memories_fts`) is exempt from run teardown too: a memory outlives the chat that wrote it. geniro never writes into any CLI's own memory store.
-- **Persist-then-emit** for streamed, replayable data (chat and graph-node items): allocate the monotonic `seq`, write the row, then publish. Clients replay through an `afterSeq` cursor, so nothing is emitted before it is durable.
+- **Persist-then-emit** for streamed, replayable data (chat and team-member items): allocate the monotonic `seq`, write the row, then publish. Clients replay through an `afterSeq` cursor, so nothing is emitted before it is durable.
 - **Debug log → 0600 JSONL** under `<userData>/logs/`, rotated. Every entry is scrubbed of registered secrets (`v1/diagnostics/utils/redact.ts`).
   - Redaction is by registration, never by pattern: register a new credential at its mint site, before it can be logged (the launch token in `main.ts`, inherited CLI credentials in `AgentAdapterRegistry`, call tokens in `CallTokenRegistry.issue()`, share keys in `ShareKeychain` and the artifact key in `ArtifactStoreService`).
   - The `agent-stdio` channel records the user's raw CLI conversation, so it stays off unless switched on.

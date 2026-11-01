@@ -54,9 +54,9 @@ export class UsageEvent extends TimestampsEntity {
   @Property({ type: 'string' })
   runId!: string;
 
-  /** Graph node that produced the turn; null for a single-agent chat. */
+  /** Team member that produced the turn; null for a single-agent chat. */
   @Property({ type: 'string', nullable: true })
-  nodeId: string | null = null;
+  memberId: string | null = null;
 
   /** The source `turn_complete` item's seq — half the idempotency key. */
   @Property({ type: 'integer' })

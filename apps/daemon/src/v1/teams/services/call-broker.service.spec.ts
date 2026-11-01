@@ -7,11 +7,12 @@ import { readCallSeed } from '../../agents/utils/call-seed';
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import type { ItemKind } from '../../runs/runs.types';
 import { errorOf } from '../__tests__/call-envelope';
+import { member } from '../__tests__/team-builders';
 import type {
   CalleePoolPlan,
   CalleeTurnOutcome,
   RunCallCapability,
-  TeamAgentNode,
+  TeamMember,
 } from '../teams.types';
 import { poolMemberNode } from '../utils/agent-pool';
 import {
@@ -23,24 +24,15 @@ import { callerKey } from '../utils/caller-key';
 import { AWAIT_GAP_GRACE_MS, CallBroker } from './call-broker.service';
 import { PoolCooldowns } from './pool-cooldowns.store';
 
-const HELPER: TeamAgentNode = {
-  id: 'helper',
-  kind: 'agent',
+const HELPER: TeamMember = member('helper', {
   name: 'Helper',
-  agent: 'claude',
-  approval: 'auto',
-  role: 'You help.',
-};
+  instructions: 'You help.',
+});
 
-const WRITER: TeamAgentNode = {
-  id: 'writer',
-  kind: 'agent',
-  agent: 'claude',
-  approval: 'auto',
-};
+const WRITER: TeamMember = member('writer');
 
 interface RecordedItem {
-  nodeId: string | null;
+  memberId: string | null;
   kind: ItemKind;
   payload: Record<string, unknown>;
 }
@@ -51,16 +43,16 @@ interface Deferred {
 }
 
 function harness(options?: {
-  calleesOf?: Map<string, TeamAgentNode[]>;
+  calleesOf?: Map<string, TeamMember[]>;
   cancelled?: boolean;
   /** 'defer' keeps every launch pending until resolved by the test. */
   launch?: 'instant' | 'defer' | 'throw';
-  /** Node-liveness override; default: every node has a live turn. */
-  isNodeLive?: (nodeId: string) => boolean;
+  /** Node-liveness override; default: every member has a live turn. */
+  isNodeLive?: (memberId: string) => boolean;
   /** Instant turns record no resumable session (thread continuation off). */
   noSession?: boolean;
   /** Whether a caller can be woken; default: never (the pre-wake behaviour). */
-  wakeNode?: (nodeId: string, prompt: string) => boolean;
+  wakeNode?: (memberId: string, prompt: string) => boolean;
   /** Whether a working caller takes a message; default: never. */
   tellLiveNode?: RunCallCapability['tellLiveNode'];
   /** The agents a user's message goes to — `orch` unless named. */
@@ -87,7 +79,7 @@ function harness(options?: {
   capability: RunCallCapability;
   items: RecordedItem[];
   launches: {
-    callee: TeamAgentNode;
+    callee: TeamMember;
     message: string;
     callId: string;
     resumeSessionId: string | null;
@@ -106,7 +98,7 @@ function harness(options?: {
 } {
   const items: RecordedItem[] = [];
   const launches: {
-    callee: TeamAgentNode;
+    callee: TeamMember;
     message: string;
     callId: string;
     resumeSessionId: string | null;
@@ -159,9 +151,9 @@ function harness(options?: {
         ...options?.instantOutcome,
       });
     },
-    persistItem: (nodeId, kind, _role, payload) => {
+    persistItem: (memberId, kind, _role, payload) => {
       items.push({
-        nodeId,
+        memberId,
         kind,
         payload: payload as Record<string, unknown>,
       });
@@ -251,8 +243,8 @@ describe('CallBroker', () => {
         conversationId: 'call-1',
       },
     ]);
-    // Transcript: call_started then call_result, both on the CALLER's node.
-    expect(items.map((i) => [i.kind, i.nodeId])).toEqual([
+    // Transcript: call_started then call_result, both on the CALLER's member.
+    expect(items.map((i) => [i.kind, i.memberId])).toEqual([
       ['call_started', 'orch'],
       ['call_result', 'orch'],
     ]);
@@ -297,12 +289,12 @@ describe('CallBroker', () => {
     });
     expect(unknown.status).toBe('error');
     expect(errorOf(unknown)).toContain('UNKNOWN_AGENT');
-    expect(errorOf(unknown)).toContain('Helper'); // the wired list is named back
+    expect(errorOf(unknown)).toContain('Helper'); // the callable members are named back
   });
 
   it('an ambiguous display name resolves nothing instead of guessing', async () => {
-    const twin: TeamAgentNode = { ...WRITER, id: 'writer-2', name: 'Twin' };
-    const twin2: TeamAgentNode = {
+    const twin: TeamMember = { ...WRITER, id: 'writer-2', name: 'Twin' };
+    const twin2: TeamMember = {
       ...WRITER,
       id: 'writer-3',
       name: 'Twin',
@@ -326,7 +318,144 @@ describe('CallBroker', () => {
     expect(byId.status).toBe('ok');
   });
 
-  it('a caller with no call edges gets UNKNOWN_AGENT (callable: none)', async () => {
+  it('lets any member call any other', async () => {
+    const orch = member('orch', { name: 'Manager' });
+    const team = [orch, HELPER, WRITER];
+    const { broker, launches } = harness({
+      calleesOf: new Map(
+        team.map((m) => [m.id, team.filter((other) => other.id !== m.id)]),
+      ),
+    });
+
+    for (const [caller, agent] of [
+      ['orch', 'writer'],
+      ['helper', 'writer'],
+      ['writer', 'helper'],
+    ] as const) {
+      const envelope = await broker.callAgent('run-1', caller, {
+        title: 'ask',
+        agent,
+        message: 'm',
+      });
+      expect(envelope.status, `${caller} → ${agent}`).toBe('ok');
+    }
+    expect(launches.map((l) => l.callee.id)).toEqual([
+      'writer',
+      'writer',
+      'helper',
+    ]);
+  });
+
+  it('refuses a call to a member already waiting in the caller chain', async () => {
+    const orch = member('orch', { name: 'Manager' });
+    const team = [orch, HELPER, WRITER];
+    const { broker, launches } = harness({
+      launch: 'defer',
+      calleesOf: new Map(
+        team.map((m) => [m.id, team.filter((other) => other.id !== m.id)]),
+      ),
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'build',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    await broker.callAgent('run-1', callerKey('helper', 'call-1'), {
+      title: 'research',
+      agent: 'writer',
+      message: 'm',
+      mode: 'async',
+    });
+
+    const toManager = await broker.callAgent(
+      'run-1',
+      callerKey('writer', 'call-2'),
+      { title: 'ask', agent: 'orch', message: 'm' },
+    );
+    const toHelper = await broker.callAgent(
+      'run-1',
+      callerKey('writer', 'call-2'),
+      { title: 'ask', agent: 'helper', message: 'm' },
+    );
+
+    expect(errorOf(toManager)).toBe(
+      'CALL_UP_THE_CHAIN: Manager is waiting on your answer (Manager → Helper → you; call-1), so calling it now would wait on itself. Answer by finishing this turn — put what you need from Manager in your reply.',
+    );
+    expect(errorOf(toHelper)).toContain(
+      'CALL_UP_THE_CHAIN: Helper is waiting on your answer',
+    );
+    expect(launches.map((l) => l.callId)).toEqual(['call-1', 'call-2']);
+  });
+
+  it('lets a member briefed fire-and-forget call the one that briefed it, and those above', async () => {
+    const orch = member('orch', { name: 'Manager' });
+    const team = [orch, HELPER, WRITER];
+    const { broker, launches } = harness({
+      launch: 'defer',
+      calleesOf: new Map(
+        team.map((m) => [m.id, team.filter((other) => other.id !== m.id)]),
+      ),
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'build',
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    await broker.callAgent('run-1', callerKey('helper', 'call-1'), {
+      title: 'notes',
+      agent: 'writer',
+      message: 'm',
+      mode: 'fire_and_forget',
+    });
+
+    const toHelper = await broker.callAgent(
+      'run-1',
+      callerKey('writer', 'call-2'),
+      { title: 'ask', agent: 'helper', message: 'm', mode: 'async' },
+    );
+    const toManager = await broker.callAgent(
+      'run-1',
+      callerKey('writer', 'call-2'),
+      { title: 'ask', agent: 'orch', message: 'm', mode: 'async' },
+    );
+
+    expect(toHelper.status).toBe('ok');
+    expect(toManager.status).toBe('ok');
+    expect(launches.map((l) => l.callId)).toEqual([
+      'call-1',
+      'call-2',
+      'call-3',
+      'call-4',
+    ]);
+  });
+
+  it('lets a member call one that waited on it once that call has settled', async () => {
+    const orch = member('orch', { name: 'Manager' });
+    const team = [orch, HELPER];
+    const { broker } = harness({
+      calleesOf: new Map(
+        team.map((m) => [m.id, team.filter((other) => other.id !== m.id)]),
+      ),
+    });
+    const first = await broker.callAgent('run-1', 'orch', {
+      title: 'build',
+      agent: 'helper',
+      message: 'm',
+    });
+    expect(first.status).toBe('ok');
+
+    const back = await broker.callAgent('run-1', 'helper', {
+      title: 'ask',
+      agent: 'orch',
+      message: 'm',
+    });
+
+    expect(back.status).toBe('ok');
+  });
+
+  it('a caller with no other member to call gets UNKNOWN_AGENT (callable: none)', async () => {
     const { broker } = harness();
     const envelope = await broker.callAgent('run-1', 'lonely', {
       title: 'why',
@@ -634,12 +763,7 @@ describe('CallBroker', () => {
 
   it('caps the call chain at depth 3', async () => {
     // a→b→c→d is depth 3 (legal); d calling e would be depth 4.
-    const node = (id: string): TeamAgentNode => ({
-      id,
-      kind: 'agent',
-      agent: 'claude',
-      approval: 'auto',
-    });
+    const node = (id: string): TeamMember => member(id);
     const { broker, deferred } = harness({
       launch: 'defer',
       calleesOf: new Map([
@@ -1003,11 +1127,11 @@ describe('CallBroker — parked questions (M4)', () => {
   });
 
   it('a working caller waiting on no call is handed the question in its running turn', async () => {
-    const prompts: { nodeId: string; prompt: string }[] = [];
+    const prompts: { memberId: string; prompt: string }[] = [];
     const { broker, items } = harness({
       launch: 'defer',
-      tellLiveNode: (nodeId, prompt) => {
-        prompts.push({ nodeId, prompt });
+      tellLiveNode: (memberId, prompt) => {
+        prompts.push({ memberId, prompt });
         return true;
       },
     });
@@ -1019,7 +1143,7 @@ describe('CallBroker — parked questions (M4)', () => {
     });
     park(broker);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]!.nodeId).toBe('orch');
+    expect(prompts[0]!.memberId).toBe('orch');
     expect(prompts[0]!.prompt).toContain('while you work');
     expect(prompts[0]!.prompt).toContain(
       'answer_agent(call_id: "call-1", answer: ...)',
@@ -1400,7 +1524,7 @@ describe('CallBroker — parked questions (M4)', () => {
     });
     expect(errorOf(early)).toContain('NO_QUESTION');
     park(broker);
-    // Another node must not answer a call it does not own.
+    // Another member must not answer a call it does not own.
     const stolen = broker.answerAgent('run-1', 'writer', {
       call_id: 'call-1',
       answer: 'a',
@@ -1609,12 +1733,12 @@ describe('CallBroker — parked questions (M4)', () => {
     // a Manager ended its turn, its Engineer asked something, and the park
     // orphaned the question — cancelling the Engineer — while the run closed
     // as completed. With a turn to give, the caller is woken instead.
-    const wakes: { nodeId: string; prompt: string }[] = [];
+    const wakes: { memberId: string; prompt: string }[] = [];
     const { broker, items, deferred } = harness({
       launch: 'defer',
       isNodeLive: () => false,
-      wakeNode: (nodeId, prompt) => {
-        wakes.push({ nodeId, prompt });
+      wakeNode: (memberId, prompt) => {
+        wakes.push({ memberId, prompt });
         return true;
       },
     });
@@ -1628,13 +1752,13 @@ describe('CallBroker — parked questions (M4)', () => {
 
     expect(failed.count).toBe(0);
     expect(wakes).toHaveLength(1);
-    expect(wakes[0]!.nodeId).toBe('orch');
+    expect(wakes[0]!.memberId).toBe('orch');
     expect(wakes[0]!.prompt).toContain('"Which color?"');
     expect(wakes[0]!.prompt).toContain('answer_agent(call_id: "call-1"');
     // The transcript says why the caller is talking again — naming the call,
     // so the renderer can draw a divider that opens its card.
     const notice = items.find(
-      (i) => i.kind === 'system' && i.nodeId === 'orch',
+      (i) => i.kind === 'system' && i.memberId === 'orch',
     );
     expect(notice?.payload).toMatchObject({
       severity: 'info',
@@ -1662,8 +1786,8 @@ describe('CallBroker — parked questions (M4)', () => {
     const wakes: string[] = [];
     const { broker, items, deferred } = harness({
       launch: 'defer',
-      wakeNode: (nodeId) => {
-        wakes.push(nodeId);
+      wakeNode: (memberId) => {
+        wakes.push(memberId);
         return true;
       },
     });
@@ -1701,13 +1825,13 @@ describe('CallBroker — parked questions (M4)', () => {
   });
 
   it('wakes a caller whose async result landed after its turn ended — once', async () => {
-    const wakes: { nodeId: string; prompt: string }[] = [];
+    const wakes: { memberId: string; prompt: string }[] = [];
     let live = true;
     const { broker, deferred } = harness({
       launch: 'defer',
       isNodeLive: () => live,
-      wakeNode: (nodeId, prompt) => {
-        wakes.push({ nodeId, prompt });
+      wakeNode: (memberId, prompt) => {
+        wakes.push({ memberId, prompt });
         return true;
       },
     });
@@ -1725,7 +1849,7 @@ describe('CallBroker — parked questions (M4)', () => {
     // The callee lands: THAT is when the caller is owed a turn.
     broker.noteCalleeSettling('run-1', 'call-1');
     expect(wakes).toHaveLength(1);
-    expect(wakes[0]!.nodeId).toBe('orch');
+    expect(wakes[0]!.memberId).toBe('orch');
     expect(wakes[0]!.prompt).toContain('await_agent(call_id: "call-1")');
     broker.noteCalleeSettling('run-1', 'call-1');
     expect(wakes).toHaveLength(1);
@@ -1749,12 +1873,12 @@ describe('CallBroker — parked questions (M4)', () => {
     // Manager sat on its user's question card, nothing told the Manager, and
     // it then steered the finished call as though it still ran.
     const wakeNode = vi.fn(() => true);
-    const told: { nodeId: string; prompt: string }[] = [];
+    const told: { memberId: string; prompt: string }[] = [];
     const { broker, deferred, items } = harness({
       launch: 'defer',
       wakeNode,
-      tellLiveNode: (nodeId, prompt) => {
-        told.push({ nodeId, prompt });
+      tellLiveNode: (memberId, prompt) => {
+        told.push({ memberId, prompt });
         return true;
       },
     });
@@ -1768,7 +1892,7 @@ describe('CallBroker — parked questions (M4)', () => {
 
     expect(wakeNode).not.toHaveBeenCalled();
     expect(told).toHaveLength(1);
-    expect(told[0]!.nodeId).toBe('orch');
+    expect(told[0]!.memberId).toBe('orch');
     expect(told[0]!.prompt).toContain('has finished call-1');
     expect(told[0]!.prompt).toContain('await_agent(call_id: "call-1")');
     expect(items.find((item) => item.kind === 'system')?.payload).toMatchObject(
@@ -2285,9 +2409,9 @@ describe('CallBroker — a call whose callee goes quiet', () => {
       const stalls = items.filter((i) => i.payload.stalledCall === true);
       expect(stalls).toHaveLength(1);
       expect(stalls[0]!.kind).toBe('system');
-      // On the CALLER's node — it is the caller's transcript that had no way
+      // On the CALLER's member — it is the caller's transcript that had no way
       // to say anything about a callee that had stopped.
-      expect(stalls[0]!.nodeId).toBe('orch');
+      expect(stalls[0]!.memberId).toBe('orch');
       expect(stalls[0]!.payload).toMatchObject({
         callId: 'call-1',
         calleeNodeId: 'helper',
@@ -2999,22 +3123,22 @@ describe('CallBroker — seeded from an earlier daemon', () => {
     records: [
       {
         callId: 'call-1',
-        callerNodeId: 'orch',
-        calleeNodeId: 'helper',
+        callerMemberId: 'orch',
+        calleeMemberId: 'helper',
         thread: null,
         sessionId: 'sess-old',
       },
       {
         callId: 'call-2',
-        callerNodeId: 'orch',
-        calleeNodeId: 'writer',
+        callerMemberId: 'orch',
+        calleeMemberId: 'writer',
         thread: null,
         sessionId: null,
       },
       {
         callId: 'call-3',
-        callerNodeId: 'orch',
-        calleeNodeId: 'helper',
+        callerMemberId: 'orch',
+        calleeMemberId: 'helper',
         thread: 'call-1',
         sessionId: 'sess-old',
       },
@@ -3023,15 +3147,15 @@ describe('CallBroker — seeded from an earlier daemon', () => {
 
   it('refuses to continue a thread on a pool member the callee no longer has', async () => {
     // The session belongs to member 3's CLI and account; resuming it as the
-    // node itself would hand another CLI a session id it has never seen.
+    // member itself would hand another CLI a session id it has never seen.
     const { broker, launches } = harness({
       seed: {
         callSeq: 1,
         records: [
           {
             callId: 'call-1',
-            callerNodeId: 'orch',
-            calleeNodeId: 'helper',
+            callerMemberId: 'orch',
+            calleeMemberId: 'helper',
             thread: null,
             sessionId: 'sess-codex',
             member: 3,
@@ -3428,7 +3552,7 @@ describe('CallBroker — a caller waiting on its own calls', () => {
 });
 
 describe('CallBroker — message_agent', () => {
-  it('keeps failure notices separate for two conversations of the same node', () => {
+  it('keeps failure notices separate for two conversations of the same member', () => {
     const { broker } = harness({
       seed: {
         callSeq: 2,
@@ -3489,7 +3613,7 @@ describe('CallBroker — message_agent', () => {
     // Filed as the CALLER's row carrying the call id, which is what puts it
     // inside that call's block rather than in the main flow.
     expect(items.find((item) => item.kind === 'call_answer')).toEqual({
-      nodeId: 'orch',
+      memberId: 'orch',
       kind: 'call_answer',
       payload: {
         callId: 'call-1',
@@ -3521,7 +3645,7 @@ describe('CallBroker — message_agent', () => {
     expect(envelope.result.note).toContain('stopped what it was doing');
   });
 
-  it('refuses a call the asking node does not own, as UNKNOWN_CALL', async () => {
+  it('refuses a call the asking member does not own, as UNKNOWN_CALL', async () => {
     const { broker, messages } = harness({ launch: 'defer' });
     void broker.callAgent('run-1', 'orch', {
       title: 'why',
@@ -3884,17 +4008,12 @@ describe('CallBroker — message_agent', () => {
   });
 });
 
-describe('CallBroker — every conversation of a node is a caller of its own', () => {
+describe('CallBroker — every conversation of a member is a caller of its own', () => {
   // Manager → two async Engineer calls (features A and B), each Engineer
-  // delegating to a Researcher. PROBED on the node-keyed broker: conversation
+  // delegating to a Researcher. PROBED on the member-keyed broker: conversation
   // A's `await_agent()` returned "RESULT FOR FEATURE B", and B was then told
   // UNKNOWN_CALL for its own call.
-  const RESEARCHER: TeamAgentNode = {
-    id: 'res',
-    kind: 'agent',
-    agent: 'claude',
-    approval: 'auto',
-  };
+  const RESEARCHER: TeamMember = member('res');
   const engineerIn = (call: string): string => callerKey('helper', call);
 
   async function twoConversations() {
@@ -4209,7 +4328,7 @@ describe('CallBroker — every conversation of a node is a caller of its own', (
     ).toContain('UNKNOWN_CALL');
     expect(cancelledTurns).toEqual([]);
     expect(messages.map((m) => m.text)).not.toContain('change of plan');
-    // The node as a whole owns none of them either.
+    // The member as a whole owns none of them either.
     expect(
       errorOf(
         await broker.awaitAgent('run-1', 'helper', { call_id: 'call-3' }),
@@ -4275,12 +4394,12 @@ describe('CallBroker — every conversation of a node is a caller of its own', (
       expect.stringContaining('finished call-2'),
     ]);
     for (const note of notes) {
-      expect(note.nodeId).toBe('helper');
+      expect(note.memberId).toBe('helper');
       expect(note.payload.callId).toBe('call-1');
     }
   });
 
-  it('keeps the notes told to a node’s OWN working conversation in the run’s flow', async () => {
+  it('keeps the notes told to a member’s OWN working conversation in the run’s flow', async () => {
     const { broker, items } = harness({
       launch: 'defer',
       tellLiveNode: () => true,
@@ -4651,12 +4770,7 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
     // (call-3) is still waiting for a slot, so the conversation is not live.
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-22T17:00:00Z'));
-    const researcher: TeamAgentNode = {
-      id: 'res',
-      kind: 'agent',
-      agent: 'claude',
-      approval: 'auto',
-    };
+    const researcher: TeamMember = member('res');
     const { broker, deferred, launches, items } = harness({
       launch: 'defer',
       isNodeLive: () => false,
@@ -4793,7 +4907,7 @@ describe('CallBroker — waking a caller when a usage limit resets', () => {
         (item.payload.resetWake as { phase?: string } | undefined)?.phase ===
           'scheduled',
     );
-    expect(said?.nodeId).toBe('orch');
+    expect(said?.memberId).toBe('orch');
     expect(said?.payload.message).toContain(
       'call-1 stopped at the usage limit — geniro continues it',
     );
@@ -4989,7 +5103,7 @@ describe('CallBroker — cancel_agent', () => {
     );
   });
 
-  it('refuses a call the asking node does not own, as UNKNOWN_CALL', async () => {
+  it('refuses a call the asking member does not own, as UNKNOWN_CALL', async () => {
     // A callee is handed the same endpoint SHAPE as its caller, so without the
     // broker's own ownership check a nested agent could stop a sibling's work.
     // UNKNOWN_CALL rather than a refusal on `answerAgent`'s rule: a caller has
@@ -5357,7 +5471,7 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
     ).toEqual({ status: 'pending', call_id: 'call-1', agent: 'helper' });
   });
 
-  it("releases only the addressed node's waits", async () => {
+  it("releases only the addressed member's waits", async () => {
     const { broker } = harness({ launch: 'defer' });
     await started(broker);
     const waiting = broker.awaitAgent('run-1', 'orch', {
@@ -5377,13 +5491,13 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
 describe('CallBroker — agent pool', () => {
   // A pool of two on different CLIs, so a launch's `agent` says which member
   // the broker picked.
-  const POOLED: TeamAgentNode = {
+  const POOLED: TeamMember = {
     ...HELPER,
     pool: [{ agent: 'codex' }],
   };
   const pooledCallees = (
-    node: TeamAgentNode = POOLED,
-  ): Map<string, TeamAgentNode[]> => new Map([['orch', [node]]]);
+    node: TeamMember = POOLED,
+  ): Map<string, TeamMember[]> => new Map([['orch', [node]]]);
 
   it('defaults to member 1 after an explicit selection and across run passes', async () => {
     const { broker, launches, capability } = harness({
@@ -5448,14 +5562,14 @@ describe('CallBroker — agent pool', () => {
     // Any run's attempt may have written it — the record is the daemon's.
     broker.poolCooldowns.record(
       memberOne,
-      { cwd: null, runId: 'run-1', nodeId: 'helper' },
+      { cwd: null, runId: 'run-1', memberId: 'helper' },
       { status: 'failed', failureClass: 'auth_expired', resetsAt: null },
       true,
     );
     await call('a');
     broker.poolCooldowns.record(
       memberOne,
-      { cwd: null, runId: 'run-1', nodeId: 'helper' },
+      { cwd: null, runId: 'run-1', memberId: 'helper' },
       { status: 'completed', failureClass: null, resetsAt: null },
       false,
     );
@@ -5467,7 +5581,7 @@ describe('CallBroker — agent pool', () => {
   });
 
   describe('a continued thread', () => {
-    const SITE = { cwd: null, runId: 'run-1', nodeId: 'helper' };
+    const SITE = { cwd: null, runId: 'run-1', memberId: 'helper' };
     const spend = (broker: CallBroker, member: number): void => {
       broker.poolCooldowns.record(
         poolMemberNode(POOLED, member)!,
@@ -5618,7 +5732,7 @@ describe('CallBroker — agent pool', () => {
     // Spent under the pinned profile, as a member naming it outright ran.
     poolCooldowns.record(
       { ...poolMemberNode(POOLED, 1)!, configDir: '/profiles/pinned' },
-      { cwd: '/work/elsewhere', runId: 'run-0', nodeId: 'helper' },
+      { cwd: '/work/elsewhere', runId: 'run-0', memberId: 'helper' },
       { status: 'failed', failureClass: 'rate_limited', resetsAt: null },
       false,
     );
@@ -5686,12 +5800,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
   // delegates from inside call-1 and ends its turn: REPORTED as the Manager
   // being told "Senior Engineer finished call-4" while the Middle Engineers it
   // had started were still working, then woken a second time when they did.
-  const RESEARCHER: TeamAgentNode = {
-    id: 'res',
-    kind: 'agent',
-    agent: 'claude',
-    approval: 'auto',
-  };
+  const RESEARCHER: TeamMember = member('res');
   const ENGINEER = callerKey('helper', 'call-1');
   const DONE = (text: string): CalleeTurnOutcome => ({
     status: 'completed',
@@ -6079,12 +6188,7 @@ describe('CallBroker — a call waits for the calls its callee made', () => {
   });
 
   it('stops the calls their callees made, at every depth, when a call is cancelled', async () => {
-    const LIB: TeamAgentNode = {
-      id: 'lib',
-      kind: 'agent',
-      agent: 'claude',
-      approval: 'auto',
-    };
+    const LIB: TeamMember = member('lib');
     const h = harness({
       launch: 'defer',
       isNodeLive: (caller) => caller === 'orch',
@@ -7258,12 +7362,7 @@ describe('CallBroker — pages published inside a call', () => {
     sessionId: 'sess-call-1',
     ...extra,
   });
-  const node = (id: string): TeamAgentNode => ({
-    id,
-    kind: 'agent',
-    agent: 'claude',
-    approval: 'auto',
-  });
+  const node = (id: string): TeamMember => member(id);
 
   it('names every page the callee published in its envelope and its call_result row, each at its newest version', async () => {
     const { broker, deferred, items } = harness({ launch: 'defer' });
@@ -7648,7 +7747,7 @@ describe('CallBroker — pages published inside a call', () => {
     });
   });
 
-  it('a node’s own conversation answers no call', async () => {
+  it('a member’s own conversation answers no call', async () => {
     const { broker, deferred } = harness({ launch: 'defer' });
     const pending = broker.callAgent('run-1', 'orch', {
       title: 'why',
@@ -7752,12 +7851,7 @@ describe('CallBroker — buttons published inside a call', () => {
     resetsAt: null,
     sessionId: 'sess-call-1',
   });
-  const node = (id: string): TeamAgentNode => ({
-    id,
-    kind: 'agent',
-    agent: 'claude',
-    approval: 'auto',
-  });
+  const node = (id: string): TeamMember => member(id);
   const merged = {
     action_id: 'pr-merged',
     label: 'PR merged',

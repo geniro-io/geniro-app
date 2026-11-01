@@ -193,7 +193,7 @@ export class RunStateService {
       ...rowsWithId(replies, artifactIds),
     ].sort((a, b) => a.seq - b.seq);
 
-    // A team's turns belong to its nodes, each with a clock of its own on
+    // A team's turns belong to its members, each with a clock of its own on
     // `node_state`; only a chat's turn is the RUN's.
     const chatTurnOpen = run.teamId === null && run.status === 'running';
     const hold = chatTurnOpen ? this.holds.read(runId) : null;
@@ -244,7 +244,7 @@ export class RunStateService {
       // says — a cancelled chat still answers off-turn.
       return this.itemDao.openTurnToolCalls(
         runId,
-        { nodeId: null, inCall: null },
+        { memberId: null, inCall: null },
         em,
       );
     }
@@ -321,8 +321,8 @@ function openMonitor(monitor: MonitorSnapshot): OpenMonitor {
     id: monitor.id,
     description: monitor.description,
     command: monitor.command,
-    // A chat's own rows carry no node.
-    nodeId: monitor.owner.target === 'chat' ? null : monitor.owner.nodeId,
+    // A chat's own rows carry no member.
+    memberId: monitor.owner.target === 'chat' ? null : monitor.owner.memberId,
     callId: monitor.owner.callId,
     startedAt: monitor.startedAt,
     endsAt: monitor.endsAt,

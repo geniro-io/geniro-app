@@ -15,20 +15,20 @@ export type ChartDrawer = (chart: HostChart) => Promise<HostChartOutcome>;
 
 @Injectable()
 export class ChartBroker extends HostSinkBroker<ChartDrawer> {
-  /** Whether this node can currently draw — gates the tool listing. */
-  canDraw(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  /** Whether this member can currently draw — gates the tool listing. */
+  canDraw(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   /** Draw the chart and resolve with what happened. Never throws. */
   async draw(
     runId: string,
-    nodeId: string,
+    memberId: string,
     chart: HostChart,
   ): Promise<HostChartOutcome> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no turn is running that could draw it',
       'draw a chart',
       (drawer) => drawer(chart),

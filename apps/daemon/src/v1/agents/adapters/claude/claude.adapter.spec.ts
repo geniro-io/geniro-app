@@ -786,14 +786,14 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     );
   });
 
-  it('carries a graph node’s instruction blocks into argv, between the user’s text and the role', () => {
+  it('carries a team member’s instruction blocks into argv, between the user’s text and the role', () => {
     // The ONE line that delivers an instruction block to a CLI is
     // `instructionBlocks: input.instructionBlocks` inside composeSystemPrompt.
     // Every other test of the feature observes the AgentTurnInput object or
     // the pure joiner, one layer below it — delete that line and they all stay
     // green while no agent ever receives a block. This is the assertion that
     // fails, and the order it pins is the precedence: a block is written once
-    // for several agents, so the node's own role still outranks it.
+    // for several agents, so the member's own instructions still outrank it.
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       {
@@ -816,7 +816,7 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     // `taskInstructions: input.taskInstructions` inside composeSystemPrompt is
     // the one line delivering a card's label block and report ask to a CLI;
     // the specs above it observe only the turn input or the pure joiner. The
-    // order pinned is user's own → the card's → the node's blocks.
+    // order pinned is user's own → the card's → the member's blocks.
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       {
@@ -1495,7 +1495,7 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     const configPath = captured.args![idx + 1]!;
     // NOT strict: an agent must see the same MCP servers a fresh claude
     // session in that folder sees, PLUS geniro's call surface. Restricting the
-    // turn to our own config would also leave a caller node with no project
+    // turn to our own config would also leave a caller member with no project
     // servers to switch off, making the MCP toggle meaningless there.
     expect(captured.args).not.toContain(CLAUDE_STRICT_MCP_CONFIG_FLAG);
     expect(configPath.startsWith(dir)).toBe(true);
@@ -1674,10 +1674,10 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
   it('withholds the "May call" block from a turn that got no MCP endpoint', () => {
     // `callSurfacePrompt` is only true while the call tools are registered,
     // and the tools ride `mcpEndpoint`. The executor hands out no endpoint
-    // when the run's per-node call token is already revoked or the server has
+    // when the run's per-member call token is already revoked or the server has
     // no bound port yet — a turn carrying the block but no `--mcp-config` is
     // instructed to route work through `call_agent` tools it does not have,
-    // so its callees never run while the node still reports success.
+    // so its callees never run while the member still reports success.
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(
       {
@@ -1719,7 +1719,7 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     );
   });
 
-  it("sends the run's stage map between the wired blocks and the role, and withholds it without an endpoint", () => {
+  it("sends the run's stage map between the member's blocks and its instructions, and withholds it without an endpoint", () => {
     const turn = (mcpEndpoint: typeof ENDPOINT | null): string => {
       const { spawn, captured } = fakeSpawn();
       new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(
@@ -1744,7 +1744,7 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     );
   });
 
-  it('sends the call block alone when a caller node has no role of its own', () => {
+  it('sends the call block alone when a caller member has no instructions of its own', () => {
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn, mcpConfigDir: mcpDir() }).start(
       {
@@ -1965,7 +1965,7 @@ describe('ClaudeAdapter — the AskUserQuestion channel', () => {
   };
 
   it('projects the tool input into the CLI-agnostic question shape', () => {
-    // The consumers (the graph executor's Q&A bridge) hold this projection,
+    // The consumers (the team executor's Q&A bridge) hold this projection,
     // never claude's payload — so the header qualification and the FLAT option
     // list are the adapter's promise, not the executor's.
     expect(new ClaudeAdapter().questionFrom(QUESTION_INPUT)).toEqual({
@@ -2964,7 +2964,7 @@ describe('ClaudeAdapter — fast mode', () => {
     expect(session.startTurn({ ...input }, () => {})).not.toBeNull();
   });
 
-  it('withholds claude’s own Monitor and a node’s switched-off MCP servers with one --disallowedTools, never geniro’s own', () => {
+  it('withholds claude’s own Monitor and a member’s switched-off MCP servers with one --disallowedTools, never geniro’s own', () => {
     const { spawn, captured } = fakeSpawn();
     new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
       {

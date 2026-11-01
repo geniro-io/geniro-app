@@ -17,7 +17,7 @@ function call(
   return {
     id: `c${seq}`,
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'tool_call',
     role: null,
@@ -30,7 +30,7 @@ function result(seq: number, id: string, text: string): ChatItem {
   return {
     id: `r${seq}`,
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'tool_result',
     role: null,

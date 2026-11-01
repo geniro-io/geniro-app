@@ -11,24 +11,24 @@ describe('CallTokenRegistry', () => {
     clearSecrets();
   });
 
-  it('keys a token by (runId, nodeId) so one node cannot claim another’s route', () => {
+  it('keys a token by (runId, memberId) so one member cannot claim another’s route', () => {
     const registry = new CallTokenRegistry();
-    registry.issue('run-1', 'node-a', TOKEN);
+    registry.issue('run-1', 'member-a', TOKEN);
 
-    expect(registry.get('run-1', 'node-a')).toBe(TOKEN);
-    expect(registry.get('run-1', 'node-b')).toBeNull();
-    expect(registry.get('run-2', 'node-a')).toBeNull();
+    expect(registry.get('run-1', 'member-a')).toBe(TOKEN);
+    expect(registry.get('run-1', 'member-b')).toBeNull();
+    expect(registry.get('run-2', 'member-a')).toBeNull();
   });
 
   it('revokes a settled run’s whole set', () => {
     const registry = new CallTokenRegistry();
-    registry.issue('run-1', 'node-a', TOKEN);
-    registry.issue('run-1', 'node-b', `${TOKEN}-other`);
+    registry.issue('run-1', 'member-a', TOKEN);
+    registry.issue('run-1', 'member-b', `${TOKEN}-other`);
 
     registry.revokeRun('run-1');
 
-    expect(registry.get('run-1', 'node-a')).toBeNull();
-    expect(registry.get('run-1', 'node-b')).toBeNull();
+    expect(registry.get('run-1', 'member-a')).toBeNull();
+    expect(registry.get('run-1', 'member-b')).toBeNull();
   });
 
   it('registers every minted token for redaction, so it cannot reach the debug log', () => {
@@ -43,7 +43,7 @@ describe('CallTokenRegistry', () => {
     // Drop the `registerSecret` call from `issue()` and this fails: the raw
     // token survives the scrub.
     const registry = new CallTokenRegistry();
-    registry.issue('run-1', 'node-a', TOKEN);
+    registry.issue('run-1', 'member-a', TOKEN);
 
     const frame = `{"headers":[{"name":"Authorization","value":"Bearer ${TOKEN}"}]}`;
     const scrubbed = redactSecrets(frame);
@@ -57,7 +57,7 @@ describe('CallTokenRegistry', () => {
     // cannot turn every log line into a mask. Asserted because the alternative
     // failure is silent and total.
     const registry = new CallTokenRegistry();
-    registry.issue('run-1', 'node-a', '');
+    registry.issue('run-1', 'member-a', '');
 
     expect(redactSecrets('an ordinary log line')).toBe('an ordinary log line');
   });

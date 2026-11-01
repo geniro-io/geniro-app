@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Team } from '../../teams/teams.types';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
+import type { LegacyTeamGraph, Team } from '../../teams/teams.types';
 import {
   canonicalGraphJson,
   canonicalGraphOf,
+  legacyCanonicalJson,
+  legacyGraphVersionOf,
   teamVersionOf,
 } from '../../teams/utils/team-version';
 import {
@@ -17,20 +20,10 @@ import {
   type UsageLedgerRow,
 } from './team-versions-fold';
 
-const v1: Team = {
-  name: 'Dev Team',
-  nodes: [
-    { id: 'start', kind: 'trigger', trigger: 'manual' },
-    { id: 'dev', kind: 'agent', agent: 'claude', approval: 'auto' },
-  ],
-  edges: [{ from: 'start', to: 'dev', kind: 'data' }],
-};
+const v1: Team = teamOf([member('dev')], { name: 'Dev Team' });
 const v2: Team = {
   ...v1,
-  nodes: [
-    ...v1.nodes,
-    { id: 'qa', kind: 'agent', agent: 'cursor-agent', approval: 'auto' },
-  ],
+  members: [...v1.members, member('qa', { agent: 'cursor-agent' })],
 };
 const V1 = teamVersionOf(v1);
 const V2 = teamVersionOf(v2);
@@ -251,6 +244,60 @@ describe('an inferred version, which is never registered', () => {
   });
 });
 
+describe('a version recorded while teams were node graphs', () => {
+  const oldGraph: LegacyTeamGraph = {
+    name: 'Dev Team',
+    nodes: [
+      { id: 'start', kind: 'trigger', trigger: 'manual' },
+      { id: 'dev', kind: 'agent', agent: 'claude', approval: 'auto' },
+    ],
+    edges: [{ from: 'start', to: 'dev', kind: 'data' }],
+  };
+  const OLD = legacyGraphVersionOf(oldGraph);
+  const oldRow = {
+    version: OLD,
+    graph: legacyCanonicalJson(oldGraph),
+    firstSeenAt: new Date('2026-08-01T00:00:00Z'),
+  };
+
+  it('is marked preTeam when numbered, and the team-shaped versions after it are not', () => {
+    const result = foldTeamVersions(
+      input({
+        graphs: [oldRow, graphs[0]!],
+        currentVersion: V1,
+        threads: [
+          thread('old', OLD, '2026-08-02T00:00:00Z'),
+          thread('new', V1, '2026-09-02T00:00:00Z'),
+        ],
+      }),
+    );
+
+    expect(
+      result.versions.map((row) => [row.version, row.ordinal, row.preTeam]),
+    ).toEqual([
+      [V1, 2, false],
+      [OLD, 1, true],
+    ]);
+  });
+
+  it('is not marked preTeam when no recorded team backs it', () => {
+    const result = foldTeamVersions(
+      input({
+        graphs: [graphs[0]!],
+        currentVersion: V1,
+        threads: [
+          thread('old', OLD, '2026-08-02T00:00:00Z', true),
+          thread('new', V1, '2026-09-02T00:00:00Z'),
+        ],
+      }),
+    );
+
+    expect(result.versions.find((row) => row.version === OLD)!.preTeam).toBe(
+      false,
+    );
+  });
+});
+
 describe('versions no run has stamped', () => {
   it('keeps a recorded version with no runs as a row, numbered, with no dates', () => {
     const result = foldTeamVersions(
@@ -270,7 +317,7 @@ describe('versions no run has stamped', () => {
     expect(result.totals.runs).toBe(1);
   });
 
-  it('shows the library graph before its first run, first, diffed against the newest recorded version', () => {
+  it('shows the library team before its first run, first, diffed against the newest recorded version', () => {
     const v3: Team = { ...v2, maxActiveTurns: 4 };
     const edited = {
       version: teamVersionOf(v3),
@@ -299,7 +346,7 @@ describe('versions no run has stamped', () => {
     expect(changesOf).toHaveBeenCalledWith(graphs[1], edited);
   });
 
-  it('gives no second row to a library graph an inferred version already shows', () => {
+  it('gives no second row to a library team an inferred version already shows', () => {
     const result = foldTeamVersions(
       input({
         graphs: [],

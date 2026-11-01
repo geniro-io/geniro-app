@@ -135,7 +135,7 @@ interface HarnessOptions {
    */
   approveUnavailableReason?: string | null;
   /**
-   * Why no server can be switched off for one team node's turns. Defaults
+   * Why no server can be switched off for one team member's turns. Defaults
    * to null — the CLI that can.
    */
   turnToggleUnavailableReason?: string | null;
@@ -351,7 +351,7 @@ const DATADOG_PLUGIN = {
 };
 
 describe('AgentMcpService.list', () => {
-  it('answers every row whether a team node can switch it off for its own turns — the CLI’s reason first, else the row’s', async () => {
+  it('answers every row whether a team member can switch it off for its own turns — the CLI’s reason first, else the row’s', async () => {
     const cwd = realDir();
     const rows = (): Promise<AgentMcpServer[]> =>
       Promise.resolve([
@@ -398,8 +398,8 @@ describe('AgentMcpService.list', () => {
 
   it('does NOT serve one config directory’s rows for another', async () => {
     // The configDir half of the key, and the whole reason the dimension
-    // exists: two agent nodes pointed at different plugin directories are
-    // MEANT to differ, so sharing a cache entry would show one node's tools
+    // exists: two team members pointed at different plugin directories are
+    // MEANT to differ, so sharing a cache entry would show one member's tools
     // under the other's name — wrong, not merely stale.
     const cwd = realDir();
     const pluginA = realDir();
@@ -424,7 +424,7 @@ describe('AgentMcpService.list', () => {
 
   it('does NOT serve a plugin-less listing for one carrying a plugin', async () => {
     // The absent case specifically: `undefined` and a real path must not
-    // collapse onto one key, or the inspector's first node would poison the
+    // collapse onto one key, or the inspector's first member would poison the
     // panel's own folder listing.
     const cwd = realDir();
     const plugin = realDir();
@@ -445,7 +445,7 @@ describe('AgentMcpService.list', () => {
   it('REFUSES an unusable config directory instead of asking the CLI', async () => {
     // The whole point of validating: the CLI ignores a bad --plugin-dir
     // silently (exit 0, "No MCP servers configured"), so passing it through
-    // would render as "this node has no MCP servers" — indistinguishable from
+    // would render as "this member has no MCP servers" — indistinguishable from
     // the truth. Delete the guard in `list` and this is what stops being true.
     const { service, listMcpServers } = harness(() =>
       Promise.resolve([server('a')]),
@@ -472,7 +472,7 @@ describe('AgentMcpService.list', () => {
   });
 
   it('answers a null cwd in its own empty folder, not the daemon’s', async () => {
-    // The graph builder has no folder. A null cwd must still reach the
+    // The team editor has no folder. A null cwd must still reach the
     // adapter with a REAL directory — one geniro owns and keeps empty, so the
     // answer is the folder-independent set rather than whatever project
     // config happens to sit in the daemon's own working directory.

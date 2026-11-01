@@ -59,13 +59,13 @@ let seq = 0;
 function item(
   kind: ChatItem['kind'],
   payload: unknown,
-  nodeId: string,
+  memberId: string,
 ): ChatItem {
   seq += 1;
   return {
     id: `i-${seq}`,
     runId: 'run-1',
-    nodeId,
+    memberId,
     seq,
     kind,
     role: null,

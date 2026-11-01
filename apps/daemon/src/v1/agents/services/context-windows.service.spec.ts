@@ -94,7 +94,7 @@ describe('ContextWindowsService', () => {
   });
 
   it('asks ONCE when two screens ask at the same instant', async () => {
-    // The listing spawns a CLI handshake; the composer and the graph inspector
+    // The listing spawns a CLI handshake; the composer and the team inspector
     // both mount their chip the moment a model is picked.
     const { windows, cursor } = service();
     let resolve!: (listing: AgentContextWindowListing) => void;

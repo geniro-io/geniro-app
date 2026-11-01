@@ -331,7 +331,7 @@ describe('AcpSession MCP delivery', () => {
     h.feed(initializeReply(1, { http: false }));
     h.feed({ id: 2, result: { sessionId: 's' } });
     // Telling an agent to route work through `call_agent` when no such tool is
-    // registered makes its callees silently never run while the node still
+    // registered makes its callees silently never run while the member still
     // reports success. The role survives; only the false affordance goes.
     expect(promptText(h)).toBe(
       `do the thing\n\n${hostBlock('You orchestrate.')}`,
@@ -339,7 +339,7 @@ describe('AcpSession MCP delivery', () => {
     expect(promptText(h)).not.toContain('call_agent');
   });
 
-  it('carries a graph node role in the prompt, ACP having no system-prompt field', () => {
+  it('carries a team member’s instructions in the prompt, ACP having no system-prompt field', () => {
     const h = harness({ input: { ...BASE_INPUT, systemPrompt: 'Be terse.' } });
     h.feed(initializeReply(1));
     h.feed({ id: 2, result: { sessionId: 's' } });
@@ -2918,7 +2918,7 @@ describe('AcpSession turn completion', () => {
   });
 
   it('keeps the failure OUT of the answer the turn reports', () => {
-    // `finalText` is what a downstream graph node consumes as this node's
+    // `finalText` is what a caller consumes as this member's
     // output. A turn that produced no answer must not hand one the transport
     // error as one — which is what pushing the chunk onto `textChunks` would
     // do, silently, since the row it also draws would look right.
@@ -3571,7 +3571,7 @@ describe('AcpSession — a parameter the turn must not start without', () => {
   it('sends each frame only once the one before it is answered', () => {
     // THE REPORTED DEFECT. cursor handles each set_config_option as its own
     // async read-modify-write of the model's whole parameter list, so frames in
-    // flight together overwrite each other: a Grok 4.7 node set to 500K ran at
+    // flight together overwrite each other: a Grok 4.7 member set to 500K ran at
     // 256K "only sometimes". Probed on cursor-agent 2026.09.10-fd3934a, the
     // pipelined frames landed right one run in three; one at a time, three of
     // three. The order is the adapter's: effort first, the context window
@@ -4811,7 +4811,7 @@ describe('AcpSession — a message delivered into the running turn', () => {
     // A second `session/prompt` sent straight away is what this replaced, and
     // MEASURED on cursor-agent 2026.09.10-fd3934a it is wrong: a prompt that was
     // itself sent to interrupt another can never be stopped, and runs on beside
-    // the one that replaced it — a QA node's seven reviewers became fourteen.
+    // the one that replaced it — a QA member's seven reviewers became fourteen.
     const h = running();
     expect(h.driver.sendFollowUp({ text: 'actually, do X instead' })).toBe(
       true,
@@ -5409,8 +5409,8 @@ describe('AcpSession — a SECOND turn on the same process', () => {
 
   it('sends the instructions ONCE per session, not once per turn', () => {
     // Prompt text is part of the conversation here, so a block one turn
-    // carries stays in the window for every turn after it. Sending the role,
-    // the wired blocks and the user's instructions with every message put a
+    // carries stays in the window for every turn after it. Sending the member's
+    // instructions, its blocks and the user's instructions with every message put a
     // full copy of all of it into the window per turn.
     const h = afterFirstTurn({ composeSystemPrompt: () => 'THE BLOCK' });
     h.openTurn({ prompt: 'second', cwd: '/work' });

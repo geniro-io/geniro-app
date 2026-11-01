@@ -25,7 +25,7 @@ function item(kind: 'tool_call' | 'tool_result', payload: unknown): ChatItem {
   return {
     id: `i-${Math.random()}`,
     runId: RUN_ID,
-    nodeId: 'orch',
+    memberId: 'orch',
     seq: 1,
     kind,
     role: null,

@@ -9,7 +9,7 @@ import { servedWorkedMs } from './wall-worked';
 
 /**
  * The one write-then-announce implementation both execution paths (single-agent
- * chat and the graph executor) share: persist the run's status, THEN publish it
+ * chat and the team executor) share: persist the run's status, THEN publish it
  * so every connected client updates that run's badge — not just whichever run
  * the user happens to have open.
  *
@@ -96,7 +96,7 @@ export async function writeRunStatus(
   // stated once for both paths' many settle branches.
   //
   // It holds because a status write and an open card are mutually exclusive by
-  // construction: every settle path sweeps its node's pending approvals (and
+  // construction: every settle path sweeps its member's pending approvals (and
   // records each as `unanswerable`) BEFORE rolling the status up, and the only
   // non-terminal write is the `running` a fresh turn starts with, which no card
   // can predate. So a run whose status just changed is a run parked on nothing,

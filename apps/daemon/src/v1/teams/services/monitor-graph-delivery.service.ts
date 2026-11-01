@@ -12,7 +12,7 @@ import {
   monitorMessageOf,
   monitorWake,
 } from '../../agents/utils/monitor-text';
-import { GraphExecutorService } from './graph-executor.service';
+import { TeamExecutorService } from './team-executor.service';
 
 interface HeldOutput {
   owner: MonitorRowOwner;
@@ -24,7 +24,7 @@ interface HeldOutput {
  * of `MonitorChatDelivery`, on the same rule: never into a running turn.
  * Output that arrives while the conversation works is held, one message per
  * monitor, and goes out when its turn ends (`onConversationTurnEnded`) — for a
- * node's own conversation as a turn of its own, for a callee as a wake inside
+ * member's own conversation as a turn of its own, for a callee as a wake inside
  * the call its monitors hold open.
  */
 @Injectable()
@@ -35,7 +35,7 @@ export class MonitorGraphDelivery implements OnModuleInit {
 
   constructor(
     private readonly monitors: MonitorRegistry,
-    private readonly executor: GraphExecutorService,
+    private readonly executor: TeamExecutorService,
     private readonly rows: MonitorRowWriter,
   ) {}
 
@@ -66,7 +66,7 @@ export class MonitorGraphDelivery implements OnModuleInit {
     const held = this.held.get(key) ?? {
       owner: {
         runId,
-        nodeId: monitor.owner.nodeId,
+        memberId: monitor.owner.memberId,
         callId: monitor.owner.callId,
         conversationId: monitor.owner.conversationId,
       },

@@ -145,7 +145,7 @@ export interface ChatsApiReadChatAttachmentRequest {
 
 export interface ChatsApiReadChatMetricsRequest {
     runId: string;
-    nodeId?: string;
+    memberId?: string;
     callId?: string;
     refresh?: string;
 }
@@ -1150,8 +1150,8 @@ export class ChatsApi extends runtime.BaseAPI {
 
         const queryParameters: any = {};
 
-        if (requestParameters['nodeId'] != null) {
-            queryParameters['nodeId'] = requestParameters['nodeId'];
+        if (requestParameters['memberId'] != null) {
+            queryParameters['memberId'] = requestParameters['memberId'];
         }
 
         if (requestParameters['callId'] != null) {

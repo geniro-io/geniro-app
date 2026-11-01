@@ -437,7 +437,7 @@ describe('readClaudeUsage — cost is this turn, not the session so far', () => 
   it('keeps two concurrent sessions off each other s books', () => {
     const ledger = new ClaudeSessionCostLedger();
     readClaudeUsage(TURN_ONE, ledger);
-    // A different process, mid-flight under graph fan-out. Its own first turn
+    // A different process, mid-flight under team fan-out. Its own first turn
     // must not be discounted by the other session's total.
     expect(
       readClaudeUsage(

@@ -76,14 +76,14 @@ export function readActionPayload(item: ChatItem): ActionCardView | null {
   const actionId = text(payload?.actionId);
   const label = text(payload?.label);
   const kind = spec?.kind;
-  const nodeId = text(publisher?.nodeId);
+  const memberId = text(publisher?.nodeId);
   const conversationId = publisher?.conversationId;
   if (
     actionId === null ||
     label === null ||
     typeof kind !== 'string' ||
     !KINDS.has(kind) ||
-    nodeId === null ||
+    memberId === null ||
     typeof conversationId !== 'string'
   ) {
     return null;
@@ -111,7 +111,7 @@ export function readActionPayload(item: ChatItem): ActionCardView | null {
       : [],
     cwd: text(spec?.cwd),
     once: payload?.once !== false,
-    nodeId,
+    nodeId: memberId,
     conversationId,
     agentLabel: text(publisher?.agentLabel),
     callId: text(publisher?.callId),

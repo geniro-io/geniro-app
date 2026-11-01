@@ -8,12 +8,12 @@ function row(
   seq: number,
   kind: ItemKind,
   payload: unknown,
-  nodeId: string | null = 'manager',
+  memberId: string | null = 'manager',
 ): ItemWire {
   return {
     id: `i${seq}`,
     runId: 'run',
-    nodeId,
+    memberId,
     seq,
     kind,
     role: null,
@@ -54,7 +54,7 @@ describe('foldRunCalls', () => {
         thread: 'call-0',
       }),
     ]);
-    expect(call!.callerNodeId).toBe('lead');
+    expect(call!.callerMemberId).toBe('lead');
     expect(call!.brief).toHaveLength(RUN_CALL_BRIEF_MAX);
     expect(call!.thread).toBe('call-0');
   });
@@ -116,8 +116,8 @@ describe('foldRunDelegates', () => {
   const info = (
     seq: number,
     payload: Record<string, unknown>,
-    nodeId = 'manager',
-  ): ItemWire => row(seq, 'subagent_info', payload, nodeId);
+    memberId = 'manager',
+  ): ItemWire => row(seq, 'subagent_info', payload, memberId);
 
   it('names a delegate from its launch and reads a returned one as completed', () => {
     const [delegate] = foldRunDelegates({
@@ -169,7 +169,7 @@ describe('foldRunDelegates', () => {
     });
     expect(delegate).toMatchObject({
       id: 'cursor-1',
-      nodeId: 'qa',
+      memberId: 'qa',
       label: 'Review PR 6287',
       status: 'completed',
     });
@@ -390,7 +390,7 @@ describe('foldRunDelegates', () => {
     const launches = [task(1, 'toolu_a', 'A')];
     const ending = (cancelled: boolean) => ({
       seq: 2,
-      nodeId: 'manager',
+      memberId: 'manager',
       callId: null,
       cancelled,
     });

@@ -212,7 +212,7 @@ export const TranscriptItem = memo(function TranscriptItem({
   // Team-run items carry the node that produced them; tag each row so
   // parallel branches stay readable in the interleaved transcript.
   const tag = (label: string): string => {
-    const name = nodeName(item.nodeId);
+    const name = nodeName(item.memberId);
     return name ? `${name} · ${label}` : label;
   };
   switch (item.kind) {
@@ -374,7 +374,7 @@ export const TranscriptItem = memo(function TranscriptItem({
           // account to sign in.
           recovery={errorRecovery(
             errorRecoveryOf(item),
-            resolveSignIn?.(item.nodeId) ?? null,
+            resolveSignIn?.(item.memberId) ?? null,
             retry,
           )}
         />
@@ -382,7 +382,7 @@ export const TranscriptItem = memo(function TranscriptItem({
     case 'turn_cancelled':
       // A node's cancel already lands as its "<Name> cancelled" status row —
       // only the run-level cancel note remains.
-      return item.nodeId !== null ? null : (
+      return item.memberId !== null ? null : (
         <MessageBubble variant="note">⊘ cancelled</MessageBubble>
       );
     case 'turn_complete': {
@@ -390,7 +390,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       // row (its cost/context live in the agents panel) — only the run-level
       // note renders. That note carries the team roll-up in stopReason:
       // a failed/cancelled team must not read "✓ done".
-      if (item.nodeId !== null) {
+      if (item.memberId !== null) {
         return null;
       }
       // The turn's footer is the continuation row just above, which carries
@@ -456,7 +456,10 @@ export const TranscriptItem = memo(function TranscriptItem({
       }
       // A trigger firing is not news — the user's own message sits right
       // above it. Only agent nodes narrate their lifecycle.
-      if (item.nodeId !== null && nodes?.get(item.nodeId)?.kind === 'trigger') {
+      if (
+        item.memberId !== null &&
+        nodes?.get(item.memberId)?.kind === 'trigger'
+      ) {
         return null;
       }
       // Starts and clean finishes are not news — the blocks, spinners and
@@ -465,7 +468,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (status === 'running' || status === 'completed') {
         return null;
       }
-      const name = nodeName(item.nodeId) ?? 'run';
+      const name = nodeName(item.memberId) ?? 'run';
       const reason = payloadString(item.payload, 'reason');
       // NEVER CALLED is an absence, not an event.
       //
@@ -516,7 +519,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       // calls open their cards, rather than as a sentence about the engine.
       const wake = readWakeNotice(item.payload);
       if (wake !== null) {
-        return <WakeDivider caller={nodeName(item.nodeId)} reasons={wake} />;
+        return <WakeDivider caller={nodeName(item.memberId)} reasons={wake} />;
       }
       // A monitor's output, or its end: a divider where it started a turn of the
       // agent's own, a quiet note where it did not.
@@ -525,7 +528,7 @@ export const TranscriptItem = memo(function TranscriptItem({
         return (
           <MonitorNoticeRow
             notice={monitor}
-            agent={nodeName(item.nodeId)}
+            agent={nodeName(item.memberId)}
             memoryKey={`monitor:${item.id}`}
           />
         );
@@ -772,7 +775,7 @@ export const TranscriptItem = memo(function TranscriptItem({
         <TeamNoteRow
           seq={item.seq}
           note={note}
-          author={nodeName(item.nodeId)}
+          author={nodeName(item.memberId)}
         />
       );
     }
@@ -790,7 +793,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       return (
         <RunOutcomeRow
           outcome={outcome}
-          author={nodeName(item.nodeId)}
+          author={nodeName(item.memberId)}
           superseded={newest !== undefined && newest.seq > item.seq}
           showRepo={runOutcomes.showRepo}
           pullRequest={runOutcomes.resolved.get(key) ?? null}

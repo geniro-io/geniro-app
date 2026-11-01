@@ -6,7 +6,7 @@ import { ApprovalRegistry, type PendingApproval } from './approval-registry';
 function pending(over: Partial<PendingApproval> = {}): PendingApproval {
   return {
     runId: 'r1',
-    nodeId: 'n1',
+    memberId: 'n1',
     requestId: 'req-1',
     toolName: 'Write',
     input: {},
@@ -137,10 +137,10 @@ describe('ApprovalRegistry card ids', () => {
       .mockImplementation(() => undefined);
     try {
       const registry = new ApprovalRegistry();
-      registry.track(pending({ nodeId: 'a', toolName: 'Write' }));
+      registry.track(pending({ memberId: 'a', toolName: 'Write' }));
       expect(warn).not.toHaveBeenCalled();
 
-      registry.track(pending({ nodeId: 'b', toolName: 'Bash' }));
+      registry.track(pending({ memberId: 'b', toolName: 'Bash' }));
 
       expect(warn).toHaveBeenCalledTimes(1);
       expect(String(warn.mock.calls[0]![0])).toMatch(
@@ -154,7 +154,7 @@ describe('ApprovalRegistry card ids', () => {
 });
 
 describe('ApprovalRegistry deferred cards', () => {
-  it('leaves a deferred card alone when its node\u2019s turn settles', () => {
+  it('leaves a deferred card alone when its member\u2019s turn settles', () => {
     const registry = new ApprovalRegistry();
     registry.track(pending({ requestId: 'parked' }));
     registry.track(pending({ requestId: 'standing', deferred: true }));

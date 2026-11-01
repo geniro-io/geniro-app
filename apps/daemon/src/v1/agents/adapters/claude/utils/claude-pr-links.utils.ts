@@ -18,7 +18,7 @@ const MAX_REMEMBERED_SESSIONS = 2_000;
 
 /**
  * How long a session the profile does NOT hold is answered as absent without
- * looking again. A pooled node's sessions are asked about under every member's
+ * looking again. A pooled member's sessions are asked about under every pool member's
  * profile and exist under one, and each look is a stat in every project
  * directory; it is a time rather than forever because a session can be carried
  * into another profile later (`carrySessionToConfigDir`).

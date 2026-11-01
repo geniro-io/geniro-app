@@ -4,15 +4,12 @@ import type { MonitorOwner } from '../../agents/chat.types';
 import { MonitorRegistry } from '../../agents/services/monitor.registry';
 import type { MonitorRowWriter } from '../../agents/services/monitor-row.writer';
 import { ProcessRegistry } from '../../agents/services/process-registry';
-import type {
-  GraphExecutorService,
-  MonitorWake,
-} from './graph-executor.service';
 import { MonitorGraphDelivery } from './monitor-graph-delivery.service';
+import type { MonitorWake, TeamExecutorService } from './team-executor.service';
 
 const owner: MonitorOwner = {
   runId: 'run-1',
-  nodeId: 'dev',
+  memberId: 'dev',
   caller: 'dev',
   conversationId: null,
   callId: null,
@@ -24,7 +21,7 @@ function fakeExecutor() {
   let answer: MonitorWake = 'busy';
   let turnEnded: (runId: string, caller: string) => void = () => undefined;
   let outputHeld: (runId: string, caller: string) => boolean = () => false;
-  const wakeConversation = vi.fn<GraphExecutorService['wakeConversation']>(
+  const wakeConversation = vi.fn<TeamExecutorService['wakeConversation']>(
     () => answer,
   );
   const reviewMonitorHold = vi.fn();
@@ -40,7 +37,7 @@ function fakeExecutor() {
     setMonitorOutputHeld: (check: typeof outputHeld) => {
       outputHeld = check;
     },
-  } as unknown as GraphExecutorService;
+  } as unknown as TeamExecutorService;
   return {
     executor,
     wakeConversation,
@@ -114,7 +111,7 @@ describe('MonitorGraphDelivery', () => {
     });
     await registry.settled(owner.runId, 5000);
     expect(writeEnds).toHaveBeenCalledWith(
-      { runId: 'run-1', nodeId: 'dev', callId: null, conversationId: null },
+      { runId: 'run-1', memberId: 'dev', callId: null, conversationId: null },
       [expect.objectContaining({ id: 'm1', end: { kind: 'exit', code: 0 } })],
     );
   });
@@ -137,7 +134,7 @@ describe('MonitorGraphDelivery', () => {
     // The run was stopped before the turn could start.
     call![4]!(false);
     expect(writeEnds).toHaveBeenCalledWith(
-      { runId: 'run-1', nodeId: 'dev', callId: null, conversationId: null },
+      { runId: 'run-1', memberId: 'dev', callId: null, conversationId: null },
       [expect.objectContaining({ id: 'm1', end: { kind: 'exit', code: 0 } })],
     );
   });

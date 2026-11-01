@@ -62,11 +62,11 @@ export class HandoffService {
    * A refusal is a 200 carrying a reason, not an error status: "this CLI cannot
    * reopen its conversations" is the ANSWER to the question, and the button
    * renders it as a disabled control with the reason on hover. Only a
-   * malformed request — an unknown run, a node that is not an agent — is a 4xx.
+   * malformed request — an unknown run or member — is a 4xx.
    */
   async resolve(input: {
     runId: string;
-    nodeId?: string | null;
+    memberId?: string | null;
     sessionId?: string | null;
   }): Promise<HandoffTarget> {
     const em = this.em.fork();
@@ -74,18 +74,18 @@ export class HandoffService {
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${input.runId}`);
     }
-    if (!run.teamId && input.nodeId != null) {
+    if (!run.teamId && input.memberId != null) {
       throw new BadRequestException(
         'HANDOFF_NODE_UNEXPECTED',
-        `chat run ${run.id} does not accept a nodeId`,
+        `chat run ${run.id} does not accept a memberId`,
       );
     }
-    const nodeId = run.teamId ? (input.nodeId ?? null) : null;
-    const node = await this.resolveNode(run, nodeId, em);
+    const memberId = run.teamId ? (input.memberId ?? null) : null;
+    const own = await this.resolveNode(run, memberId, em);
     const { agentKind, stateNodeId, model, configDir } =
-      nodeId !== null && input.sessionId
-        ? ((await this.poolMemberOf(run, nodeId, input.sessionId, em)) ?? node)
-        : node;
+      memberId !== null && input.sessionId
+        ? ((await this.poolMemberOf(run, memberId, input.sessionId, em)) ?? own)
+        : own;
     const sessionId =
       input.sessionId ??
       (await this.nodeStateDao.getByRunNode(run.id, stateNodeId, em))
@@ -100,7 +100,7 @@ export class HandoffService {
         sessionId,
         model,
         configDir,
-        held: this.mayHold(run, nodeId),
+        held: this.mayHold(run, memberId),
       });
     } catch (error) {
       return this.unavailable(
@@ -127,19 +127,19 @@ export class HandoffService {
    * Whether geniro's own kept process may still hold the conversation being
    * handed over — which a CLI allowing one process per conversation needs to
    * know (`handoff.heldFlag`). A chat's process is keyed exactly. A team
-   * node's conversation may sit in its own process or in a CALL's, and a
+   * member's conversation may sit in its own process or in a CALL's, and a
    * call's is keyed by its conversation's first call, which this request does
    * not name — so any live call process of the run counts too. Reading a
    * conversation nobody holds as held costs only a copy where a resume would
    * do; the reverse hands over a command that fails.
    */
-  private mayHold(run: Run, nodeId: string | null): boolean {
+  private mayHold(run: Run, memberId: string | null): boolean {
     if (!run.teamId) {
       return this.sessions.peek(run.id) !== null;
     }
     return (
-      (nodeId !== null &&
-        this.sessions.peek(nodeSessionKey(run.id, nodeId)) !== null) ||
+      (memberId !== null &&
+        this.sessions.peek(nodeSessionKey(run.id, memberId)) !== null) ||
       this.sessions.holdsAnyUnder(callSessionKeyPrefix(run.id))
     );
   }
@@ -207,13 +207,13 @@ export class HandoffService {
   }
 
   /**
-   * The pool member a call thread's session ran on, when its node has a pool:
-   * the node's `node_state` stamp is member 1's, and resuming a session under
+   * The pool member a call thread's session ran on, when its member has a pool:
+   * the member's `node_state` stamp is member 1's, and resuming a session under
    * another member's CLI or profile finds no such conversation.
    */
   private async poolMemberOf(
     run: Run,
-    nodeId: string,
+    memberId: string,
     sessionId: string,
     em: EntityManager,
   ): Promise<{
@@ -230,7 +230,7 @@ export class HandoffService {
     );
     if (
       member === null &&
-      snapshotNodePoolProfiles(run.teamSnapshot).has(nodeId)
+      snapshotNodePoolProfiles(run.teamSnapshot).has(memberId)
     ) {
       member = nodePoolSessionMember(
         await this.itemDao.rowsOfKinds(
@@ -239,27 +239,27 @@ export class HandoffService {
           undefined,
           em,
         ),
-        nodeId,
+        memberId,
         sessionId,
       );
     }
     const profile =
       member === null
         ? null
-        : snapshotMemberProfile(run.teamSnapshot, nodeId, member);
-    return profile === null ? null : { ...profile, stateNodeId: nodeId };
+        : snapshotMemberProfile(run.teamSnapshot, memberId, member);
+    return profile === null ? null : { ...profile, stateNodeId: memberId };
   }
 
   /**
    * A chat run carries its agent kind on the row and keys `node_state` under
-   * the single-agent constant; a team run's node kind comes from the
+   * the single-agent constant; a team member's agent kind comes from the
    * `agent_kind` stamped on its `node_state` row at turn start — run history,
-   * immune to later team-YAML edits. Only a row not stamped yet (a node
+   * immune to later team-YAML edits. Only a row not stamped yet (a member
    * that never started a turn) falls back to the CURRENT YAML definition.
    */
   private async resolveNode(
     run: Run,
-    nodeId: string | null,
+    memberId: string | null,
     em: EntityManager,
   ): Promise<{
     agentKind: AgentKind;
@@ -267,7 +267,7 @@ export class HandoffService {
     model: string | null;
     /**
      * A pooled own conversation's directory comes from its member record and
-     * the run's immutable snapshot. Other team nodes carry null: their
+     * the run's immutable snapshot. Other team members carry null: their
      * state stamps no directory, and today's YAML cannot identify
      * a historical account. Chats carry their directory on the run itself.
      */
@@ -287,22 +287,26 @@ export class HandoffService {
         configDir: run.configDir,
       };
     }
-    if (!nodeId) {
+    if (!memberId) {
       throw new BadRequestException(
         'HANDOFF_NODE_REQUIRED',
-        `run ${run.id} is a team run — pass the nodeId to open`,
+        `run ${run.id} is a team run — pass the memberId to open`,
       );
     }
-    const state = await this.nodeStateDao.getByRunNode(run.id, nodeId, em);
+    const state = await this.nodeStateDao.getByRunNode(run.id, memberId, em);
     const stamped = state?.agentKind;
     if (stamped) {
       let configDir: string | null = null;
-      if (snapshotNodePoolProfiles(run.teamSnapshot).has(nodeId)) {
+      if (snapshotNodePoolProfiles(run.teamSnapshot).has(memberId)) {
         const member =
           readNodePoolMembers(
             await this.itemDao.poolHandOffRows(run.id, em),
-          ).get(nodeId) ?? 1;
-        const profile = snapshotMemberProfile(run.teamSnapshot, nodeId, member);
+          ).get(memberId) ?? 1;
+        const profile = snapshotMemberProfile(
+          run.teamSnapshot,
+          memberId,
+          member,
+        );
         if (
           profile?.agentKind === stamped &&
           profile.model === (state.model ?? null)
@@ -314,31 +318,25 @@ export class HandoffService {
       // team must not re-write what a finished run actually ran as.
       return {
         agentKind: stamped,
-        stateNodeId: nodeId,
+        stateNodeId: memberId,
         model: state?.model ?? null,
         configDir,
       };
     }
-    // The run's OWN copy of the graph, never the library's current one — an
-    // edited team must not re-write what this run's node is.
+    // The run's OWN copy of the team, never the library's current one — an
+    // edited team must not re-write what this run's member is.
     const team = await this.runTeams.teamOf(assertTeamRun(run, run.id), em);
-    const node = team.nodes.find((n) => n.id === nodeId);
-    if (!node) {
+    const teamMember = team.members.find((member) => member.id === memberId);
+    if (!teamMember) {
       throw new NotFoundException(
         'NODE_NOT_FOUND',
-        `team ${run.teamId} has no node: ${nodeId}`,
-      );
-    }
-    if (node.kind !== 'agent') {
-      throw new BadRequestException(
-        'HANDOFF_NODE_NOT_AGENT',
-        `node ${nodeId} is a ${node.kind} node — only agent nodes have a session`,
+        `team ${run.teamId} has no member: ${memberId}`,
       );
     }
     return {
-      agentKind: node.agent,
-      stateNodeId: nodeId,
-      model: node.model ?? null,
+      agentKind: teamMember.agent,
+      stateNodeId: memberId,
+      model: teamMember.model ?? null,
       configDir: null,
     };
   }

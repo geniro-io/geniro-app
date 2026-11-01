@@ -130,8 +130,8 @@ export class PartialStreamService {
    *
    * Keyed by OWNER, not by run. A 1:1 chat has exactly one owner so the two are
    * the same thing there — but a team run is N agents that routinely run on
-   * DIFFERENT models, and a run-scoped window is whichever node reported last:
-   * an opus node's 160k would have been drawn against a haiku node's 200k. The
+   * DIFFERENT models, and a run-scoped window is whichever member reported last:
+   * an opus member's 160k would have been drawn against a haiku member's 200k. The
    * owner is the thing a window belongs to.
    */
   private readonly windows = new Map<string, number>();
@@ -187,7 +187,7 @@ export class PartialStreamService {
   append(
     runId: string,
     ownerKey: string,
-    nodeId: string | null,
+    memberId: string | null,
     delta: string,
   ): void {
     try {
@@ -216,12 +216,12 @@ export class PartialStreamService {
         // a byte-identical 64 KB event on the wire for every remaining delta of
         // the turn, which is the exact traffic the cap exists to stop.
         if (endedAStretch) {
-          this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+          this.publish(this.eventOf(runId, ownerKey, memberId, state));
         }
         return;
       }
       state.text = (state.text + delta).slice(0, MAX_TAIL_CHARS);
-      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, memberId, state));
     } catch (err) {
       this.warn('append', err);
     }
@@ -231,7 +231,7 @@ export class PartialStreamService {
   thinking(
     runId: string,
     ownerKey: string,
-    nodeId: string | null,
+    memberId: string | null,
     tokens: number,
   ): void {
     try {
@@ -247,7 +247,7 @@ export class PartialStreamService {
         state.thinkingSince = Date.now();
       }
       state.thinkingCurrent = tokens;
-      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, memberId, state));
     } catch (err) {
       this.warn('thinking', err);
     }
@@ -271,7 +271,7 @@ export class PartialStreamService {
   reasoning(
     runId: string,
     ownerKey: string,
-    nodeId: string | null,
+    memberId: string | null,
     delta: string,
   ): void {
     try {
@@ -292,7 +292,7 @@ export class PartialStreamService {
         0,
         MAX_TAIL_CHARS,
       );
-      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, memberId, state));
     } catch (err) {
       this.warn('reasoning', err);
     }
@@ -318,7 +318,7 @@ export class PartialStreamService {
   composing(
     runId: string,
     ownerKey: string,
-    nodeId: string | null,
+    memberId: string | null,
     frame: { tool: string | null; bytes: number; done: boolean },
   ): void {
     try {
@@ -361,7 +361,7 @@ export class PartialStreamService {
           return;
         }
       }
-      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, memberId, state));
     } catch (err) {
       this.warn('composing', err);
     }
@@ -397,7 +397,7 @@ export class PartialStreamService {
    * before it is over. Idempotent — a stretch that is already closed publishes
    * nothing, so calling it per event costs no traffic.
    */
-  endThinking(runId: string, ownerKey: string, nodeId: string | null): void {
+  endThinking(runId: string, ownerKey: string, memberId: string | null): void {
     try {
       const state = this.stateOf(runId, ownerKey);
       if (!this.isReasoning(state)) {
@@ -405,7 +405,7 @@ export class PartialStreamService {
       }
       state.thinkingCurrent = null;
       state.thinkingText = '';
-      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, memberId, state));
     } catch (err) {
       this.warn('endThinking', err);
     }
@@ -421,13 +421,13 @@ export class PartialStreamService {
   context(
     runId: string,
     ownerKey: string,
-    nodeId: string | null,
+    memberId: string | null,
     contextTokens: number,
   ): void {
     try {
       const state = this.stateOf(runId, ownerKey);
       state.contextTokens = contextTokens;
-      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, memberId, state));
     } catch (err) {
       this.warn('context', err);
     }
@@ -448,7 +448,7 @@ export class PartialStreamService {
   spend(
     runId: string,
     ownerKey: string,
-    nodeId: string | null,
+    memberId: string | null,
     parts: {
       inputTokens?: number | null;
       outputTokens?: number | null;
@@ -469,7 +469,7 @@ export class PartialStreamService {
         state.spentCacheReadTokens,
         parts.cacheReadTokens,
       );
-      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, memberId, state));
     } catch (err) {
       this.warn('spend', err);
     }
@@ -488,7 +488,7 @@ export class PartialStreamService {
   cost(
     runId: string,
     ownerKey: string,
-    nodeId: string | null,
+    memberId: string | null,
     costUsd: number,
     estimatedCostUsd: number | null = null,
   ): void {
@@ -503,7 +503,7 @@ export class PartialStreamService {
       state.spentCostUsd = costUsd;
       state.spentEstimatedCostUsd = estimatedCostUsd;
       this.spendStore.set(runId, ownerKey, costUsd, estimatedCostUsd);
-      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, memberId, state));
     } catch (err) {
       this.warn('cost', err);
     }
@@ -520,7 +520,7 @@ export class PartialStreamService {
    * time beside it, by every reader that adds the live plane to the recorded
    * totals. Published only when there was a figure to take down.
    */
-  retireCost(runId: string, ownerKey: string, nodeId: string | null): void {
+  retireCost(runId: string, ownerKey: string, memberId: string | null): void {
     try {
       // The row first and unconditionally: a figure seeded at boot for an
       // owner this process never published for is still owed a retirement.
@@ -531,7 +531,7 @@ export class PartialStreamService {
       }
       state.spentCostUsd = null;
       state.spentEstimatedCostUsd = null;
-      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, memberId, state));
     } catch (err) {
       this.warn('retireCost', err);
     }
@@ -732,7 +732,7 @@ export class PartialStreamService {
    * The (run, owner) key the window and model maps are filed under.
    *
    * NUL-joined like every other composite key in the daemon. A run id is a
-   * UUID and an owner key is either the chat sentinel or a team node id, so
+   * UUID and an owner key is either the chat sentinel or a team member id, so
    * neither half can contain the byte and the pair cannot be re-partitioned.
    */
   private ownerId(runId: string, ownerKey: string): string {
@@ -765,7 +765,7 @@ export class PartialStreamService {
   private eventOf(
     runId: string,
     ownerKey: string,
-    nodeId: string | null,
+    memberId: string | null,
     state: LiveState,
   ): RunDeltaEvent {
     // EVERY reasoning field is null while NOT reasoning — that is what hides
@@ -774,7 +774,7 @@ export class PartialStreamService {
     const reasoning = this.isReasoning(state);
     return {
       runId,
-      nodeId,
+      memberId,
       ownerKey,
       text: state.text,
       thinkingTokens: state.thinkingCurrent,
@@ -813,7 +813,7 @@ export class PartialStreamService {
    * figure belong to the turn, not to one block of its text, and a turn
    * routinely lands several messages. `clearRun` is what ends the turn.
    */
-  retire(runId: string, ownerKey: string, nodeId: string | null): void {
+  retire(runId: string, ownerKey: string, memberId: string | null): void {
     try {
       const state = this.tails.get(runId)?.get(ownerKey);
       if (!state) {
@@ -824,7 +824,7 @@ export class PartialStreamService {
       state.thinkingText = '';
       state.composingTool = null;
       state.composingBytes = 0;
-      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+      this.publish(this.eventOf(runId, ownerKey, memberId, state));
     } catch (err) {
       this.warn('retire', err);
     }
@@ -839,7 +839,7 @@ export class PartialStreamService {
   takeTail(
     runId: string,
     ownerKey: string,
-    nodeId: string | null,
+    memberId: string | null,
   ): string | null {
     try {
       const state = this.tails.get(runId)?.get(ownerKey);
@@ -855,7 +855,7 @@ export class PartialStreamService {
       // half-sentence twice — once as the tail they watched appear, once as the
       // row written to replace it.
       this.publish(
-        this.eventOf(runId, ownerKey, nodeId, {
+        this.eventOf(runId, ownerKey, memberId, {
           ...state,
           text: '',
           thinkingCurrent: null,
@@ -990,7 +990,7 @@ export class PartialStreamService {
       this.tails.delete(runId);
       // Swept by PREFIX, because these two are keyed per (run, owner) and a
       // team run has one entry per NODE. Deleting `runId` alone was correct
-      // only while every run had exactly one owner; it now leaves a node's
+      // only while every run had exactly one owner; it now leaves a member's
       // window behind for the life of the process, which is a leak that no
       // later call can reach — the run it belongs to no longer exists.
       const prefix = this.ownerId(runId, '');
@@ -1021,13 +1021,13 @@ export class PartialStreamService {
 }
 
 /**
- * The NODE an owner key belongs to — the key itself for a node's own turn, and
+ * The MEMBER an owner key belongs to — the key itself for a member's own turn, and
  * the part before `::` for a callee turn's per-call key.
  *
- * The two used to be the same string, and that is exactly what made a node's
+ * The two used to be the same string, and that is exactly what made a member's
  * concurrent calls share one reading: the last writer won, so a caller running
  * two of the same callee saw one ring flickering between two unrelated
- * conversations. The key is per CALL now and this is the one place the node is
+ * conversations. The key is per CALL now and this is the one place the member is
  * read back out of it.
  */
 export function ownerOfKey(ownerKey: string): string {
@@ -1036,7 +1036,7 @@ export function ownerOfKey(ownerKey: string): string {
 }
 
 /**
- * Separator between a node id and the call id in a per-call owner key.
+ * Separator between a member id and the call id in a per-call owner key.
  *
  * TWIN PARSER: `apps/ui/src/renderer/chats/live-text.ts` re-implements this
  * constant and both directions around it. The key rides `agent_delta`, which is
@@ -1046,15 +1046,20 @@ export function ownerOfKey(ownerKey: string): string {
  */
 export const OWNER_KEY_SEPARATOR = '::';
 
-/** The live-plane owner key for one node's turn, or one of its CALL threads. */
-export function partialOwnerKey(nodeId: string, callId: string | null): string {
-  return callId === null ? nodeId : `${nodeId}${OWNER_KEY_SEPARATOR}${callId}`;
+/** The live-plane owner key for one member's turn, or one of its CALL threads. */
+export function partialOwnerKey(
+  memberId: string,
+  callId: string | null,
+): string {
+  return callId === null
+    ? memberId
+    : `${memberId}${OWNER_KEY_SEPARATOR}${callId}`;
 }
 
 /**
  * The `nodeId` an event for this owner carries: null for the chat's single
- * agent (the sentinel), else the node the key belongs to — a graph node's own
- * id, or the node part of a CALLEE turn's `<nodeId>::<callId>`.
+ * agent (the sentinel), else the member the key belongs to — a team member's own
+ * id, or the member part of a CALLEE turn's `<nodeId>::<callId>`.
  */
 function nodeIdOfOwner(ownerKey: string): string | null {
   return ownerKey === SINGLE_AGENT_NODE ? null : ownerOfKey(ownerKey);

@@ -20,7 +20,7 @@ import type {
 
 export interface HandoffApiResolveHandoffRequest {
     runId: string;
-    nodeId?: string;
+    memberId?: string;
     sessionId?: string;
 }
 
@@ -46,8 +46,8 @@ export class HandoffApi extends runtime.BaseAPI {
             queryParameters['runId'] = requestParameters['runId'];
         }
 
-        if (requestParameters['nodeId'] != null) {
-            queryParameters['nodeId'] = requestParameters['nodeId'];
+        if (requestParameters['memberId'] != null) {
+            queryParameters['memberId'] = requestParameters['memberId'];
         }
 
         if (requestParameters['sessionId'] != null) {

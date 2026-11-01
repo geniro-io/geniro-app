@@ -103,6 +103,7 @@ import type { ShareService } from '../../shares/services/share.service';
 import type { AgentShareOutcome } from '../../shares/shares.types';
 import type { TeamHistoryService } from '../../stats/services/team-history.service';
 import { BOARD_TOOLS } from '../../tasks/utils/board-tools';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { CallBroker } from '../../teams/services/call-broker.service';
 import type { StageService } from '../../teams/services/stage.service';
 import { TaskBoardBroker } from '../../teams/services/task-board.broker';
@@ -116,7 +117,7 @@ import {
   MIN_AWAIT_TIMEOUT_MS,
   type RunCallCapability,
   type TaskBoardHandler,
-  type TeamAgentNode,
+  type TeamMember,
 } from '../../teams/teams.types';
 import {
   ANSWERING_A_CALL,
@@ -136,16 +137,13 @@ type ToolListing = {
   inputSchema: { properties: Record<string, { description?: string }> };
 };
 
-const HELPER: TeamAgentNode = {
-  id: 'helper',
-  kind: 'agent',
+const HELPER: TeamMember = member('helper', {
   name: 'Helper',
-  agent: 'claude',
-  approval: 'auto',
-  description: 'Researches a topic and reports what it found.',
+  role: 'Researches a topic and reports what it found.',
   // Private instructions — a caller must never be shown this (see below).
-  role: 'You help with research. Always start by reading SECRET_PLAYBOOK.md.',
-};
+  instructions:
+    'You help with research. Always start by reading SECRET_PLAYBOOK.md.',
+});
 
 function broker(
   unreadTeamNotes?: (caller: string) => number,
@@ -347,7 +345,7 @@ async function everyHostTool(): Promise<ToolListing[]> {
       teamNotes,
       undefined,
       runOutcomes,
-      stageService({ runId: 'run-1', nodeId: 'agent' }),
+      stageService({ runId: 'run-1', memberId: 'agent' }),
       undefined,
       fakeMemory(true).service,
     ),
@@ -359,16 +357,16 @@ async function everyHostTool(): Promise<ToolListing[]> {
 }
 
 function stageService(
-  staged?: { runId: string; nodeId: string },
+  staged?: { runId: string; memberId: string },
   move: StageService['move'] = async () => {
     throw new Error('not called');
   },
 ): StageService {
   return {
-    canUse: (runId: string, nodeId: string) =>
+    canUse: (runId: string, memberId: string) =>
       staged !== undefined &&
       staged.runId === runId &&
-      staged.nodeId === nodeId,
+      staged.memberId === memberId,
     move,
   } as unknown as StageService;
 }
@@ -399,7 +397,7 @@ function teamNoteBroker(
   return new TeamNoteBroker(em, items);
 }
 
-/** A monitor broker with run-1's `agent` node registered, over a real registry. */
+/** A monitor broker with run-1's `agent` registered, over a real registry. */
 function monitorBroker(): { broker: MonitorBroker; registry: MonitorRegistry } {
   const registry = new MonitorRegistry(new ProcessRegistry());
   const broker = new MonitorBroker(registry);
@@ -407,7 +405,7 @@ function monitorBroker(): { broker: MonitorBroker; registry: MonitorRegistry } {
     ownerOf: (caller) => ({
       owner: {
         runId: 'run-1',
-        nodeId: 'agent',
+        memberId: 'agent',
         caller,
         conversationId: null,
         callId: null,
@@ -587,7 +585,7 @@ function artifactService(
 async function post(
   target: McpServerService,
   runId: string,
-  nodeId: string,
+  memberId: string,
   payload: unknown,
   /** The route's conversation segment, for a turn answering a call. */
   conversationId: string | null = null,
@@ -611,7 +609,7 @@ async function post(
       } as unknown as FastifyReply;
       void target.handlePost(
         runId,
-        nodeId,
+        memberId,
         fastifyReq,
         fastifyReply,
         conversationId,
@@ -624,7 +622,7 @@ async function post(
   const port = (server.address() as AddressInfo).port;
   try {
     const res = await fetch(
-      `http://127.0.0.1:${port}/v1/mcp/${runId}/${nodeId}`,
+      `http://127.0.0.1:${port}/v1/mcp/${runId}/${memberId}`,
       {
         method: 'POST',
         headers: {
@@ -859,8 +857,8 @@ describe('McpServerService', () => {
     expect(tools[0]!.description).toContain(
       'Researches a topic and reports what it found.',
     );
-    // ...and its ROLE stays private. Leaking it is what forced every caller's
-    // role to restate its team's internals.
+    // ...and its private instructions stay private. Leaking them is what forced
+    // every caller's instructions to restate its team's internals.
     expect(tools[0]!.description).not.toContain('SECRET_PLAYBOOK');
     // The question-envelope guidance rides the descriptions: confident-answer
     // vs escalate, and the await_agent follow-up.
@@ -1172,7 +1170,7 @@ describe('McpServerService', () => {
     }
   });
 
-  it('withholds ask_user_question from a node no turn can ask through', async () => {
+  it('withholds ask_user_question from an agent no turn can ask through', async () => {
     const { json } = await post(
       service(),
       'run-1',
@@ -1183,13 +1181,13 @@ describe('McpServerService', () => {
     expect(tools.map((t) => t.name)).not.toContain(HOST_QUESTION_TOOL);
   });
 
-  it('offers the registered question tool and history search to a chat node with no callees', async () => {
+  it('offers the registered question tool and history search to a chat agent with no callees', async () => {
     const questions = new UserQuestionBroker();
     questions.register('run-1', 'agent', async () => ({
       status: 'answered',
       answer: 'Postgres',
     }));
-    // A CHAT's node: it is registered with no call capability at all, so
+    // A CHAT's agent: it is registered with no call capability at all, so
     // `listCallees` is empty and the call surface would be three tools naming
     // nobody.
     const { json } = await post(
@@ -1641,9 +1639,9 @@ describe('McpServerService', () => {
   });
 
   it('calls as the CONVERSATION a callee turn answers in, named by its route', async () => {
-    // Two calls to one node are two processes, each handed its own route; the
+    // Two calls to one member are two processes, each handed its own route; the
     // broker keys ownership by what arrives here, so a route that dropped the
-    // conversation would make every conversation of the node one caller again.
+    // conversation would make every conversation of the member one caller again.
     const callBroker = broker();
     const callSpy = vi.spyOn(callBroker, 'callAgent');
     const awaitSpy = vi.spyOn(callBroker, 'awaitAgent');
@@ -1664,7 +1662,7 @@ describe('McpServerService', () => {
       'orch',
       rpc('tools/call', { name: 'await_agent', arguments: {} }),
     );
-    // The node's own route is its own conversation — the bare node id.
+    // The member's own route is its own conversation — the bare member id.
     expect(awaitSpy.mock.calls[0]![1]).toBe('orch');
   });
 
@@ -2046,7 +2044,7 @@ describe('McpServerService', () => {
       options: ['Red', 'Blue'],
     });
 
-    // Ownership is enforced across the endpoint: another node may not answer.
+    // Ownership is enforced across the endpoint: another member may not answer.
     const stolen = await post(
       target,
       'run-1',
@@ -2120,7 +2118,7 @@ describe('McpServerService', () => {
     expect(JSON.parse(result.content[0]!.text).error).toContain('INVALID_ARGS');
   });
 
-  it('does not offer report_findings to a node with nowhere to draw a card', async () => {
+  it('does not offer report_findings to an agent with nowhere to draw a card', async () => {
     const { json } = await post(
       service(new CallBroker(), new UserQuestionBroker()),
       'run-1',
@@ -2320,7 +2318,7 @@ describe('McpServerService', () => {
     expect(result.content[0]!.text).toContain('in your reply');
   });
 
-  it('does not offer show_chart to a node with nowhere to draw one', async () => {
+  it('does not offer show_chart to an agent with nowhere to draw one', async () => {
     const { json } = await post(
       service(new CallBroker(), new UserQuestionBroker()),
       'run-1',
@@ -2564,7 +2562,7 @@ describe('McpServerService', () => {
     expect(drawn).toEqual([]);
   });
 
-  it('does not offer show_gallery to a node with nowhere to show one', async () => {
+  it('does not offer show_gallery to an agent with nowhere to show one', async () => {
     const { json } = await post(
       service(new CallBroker(), new UserQuestionBroker()),
       'run-1',
@@ -2737,7 +2735,7 @@ describe('McpServerService', () => {
       { images: ['https://cdn.example/a.png'] },
       {
         runId: 'run-1',
-        nodeId: 'agent',
+        memberId: 'agent',
         whileCancellable: (call: (signal: AbortSignal) => Promise<unknown>) =>
           call(new AbortController().signal),
       } as unknown as Parameters<typeof tool.call>[2],
@@ -2751,7 +2749,7 @@ describe('McpServerService', () => {
     ]);
   });
 
-  it('does not offer show_artifact to a node with nowhere to publish one', async () => {
+  it('does not offer show_artifact to an agent with nowhere to publish one', async () => {
     const { json } = await post(
       service(new CallBroker(), new UserQuestionBroker()),
       'run-1',
@@ -2828,7 +2826,7 @@ describe('McpServerService', () => {
         version: 1,
       }));
       if (inTeam) {
-        // What the executor does for every team run, call edges or none.
+        // What the executor does for every team run.
         artifacts.markTeamRun('run-1');
       }
       const { json } = await post(
@@ -2938,7 +2936,7 @@ describe('McpServerService', () => {
       expect(shares.askers).toEqual([
         {
           runId: 'run-1',
-          nodeId: 'agent',
+          memberId: 'agent',
           conversationId: null,
           caller: 'agent',
           target: 'chat',
@@ -2955,7 +2953,7 @@ describe('McpServerService', () => {
         shareCall(true),
       );
       expect(inTeam.askers).toEqual([
-        expect.objectContaining({ target: 'team', nodeId: 'agent' }),
+        expect.objectContaining({ target: 'team', memberId: 'agent' }),
       ]);
     });
 
@@ -3217,7 +3215,7 @@ describe('McpServerService', () => {
     expect(result.content[0]!.text).toContain('in your reply');
   });
 
-  it('does not offer propose_patch to a node with nobody to accept it', async () => {
+  it('does not offer propose_patch to an agent with nobody to accept it', async () => {
     const { json } = await post(
       service(new CallBroker(), new UserQuestionBroker()),
       'run-1',
@@ -3381,10 +3379,10 @@ describe('McpServerService', () => {
  * below with the reason something else tells the agent.
  */
 const PREAMBLE_EXEMPT: Readonly<Record<string, string>> = {
-  [HOST_TEAM_NOTE_TOOL]: 'team nodes only; their own descriptions carry it',
-  [HOST_TEAM_NOTES_TOOL]: 'team nodes only; their own descriptions carry it',
+  [HOST_TEAM_NOTE_TOOL]: 'team members only; their own descriptions carry it',
+  [HOST_TEAM_NOTES_TOOL]: 'team members only; their own descriptions carry it',
   [HOST_RECORD_OUTCOME_TOOL]:
-    'team nodes only; their own descriptions carry it',
+    'team members only; their own descriptions carry it',
   [HOST_MOVE_STAGE_TOOL]: 'staged team runs only; the stage map names it',
   [HOST_QUESTION_TOOL]:
     'the CLI’s own question tool comes first; the preamble words every question',
@@ -3618,12 +3616,12 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(find(tools, HOST_METRICS_TOOL)).toContain('show_chart');
   });
 
-  it('offers record_outcome only to a node a team pass registered, never to a chat', async () => {
+  it('offers record_outcome only to a member a team pass registered, never to a chat', async () => {
     const runOutcomes = runOutcomeBroker();
     runOutcomes.register('run-1', 'manager', (async () => {
       throw new Error('not called');
     }) as never);
-    const list = async (nodeId: string): Promise<string[]> => {
+    const list = async (memberId: string): Promise<string[]> => {
       const { json } = await post(
         // Every other broker left to its default; `runOutcomes` is the last.
         service(
@@ -3633,7 +3631,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
           ] as unknown as Parameters<typeof service>),
         ),
         'run-1',
-        nodeId,
+        memberId,
         rpc('tools/list', {}),
       );
       return (json().result as { tools: ToolListing[] }).tools.map(
@@ -3668,7 +3666,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     }).find((t) => t.handles(HOST_RECORD_OUTCOME_TOOL))!;
     const ctx = {
       runId: 'run-1',
-      nodeId: 'manager',
+      memberId: 'manager',
       caller: 'manager',
     } as Parameters<typeof tool.call>[2];
     const args = {
@@ -3702,7 +3700,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(recordOutcome).toContain('geniro counts the questions');
   });
 
-  it('lists move_stage right after record_outcome, and only to a node of a staged run', async () => {
+  it('lists move_stage right after record_outcome, and only to a member of a staged run', async () => {
     const names = (await everyHostTool()).map((t) => t.name);
     const at = names.indexOf(HOST_RECORD_OUTCOME_TOOL);
     expect(names.slice(at, at + 2)).toEqual([
@@ -3711,11 +3709,11 @@ describe('McpServerService — what the descriptions tell a model', () => {
     ]);
 
     const tool = new MoveStageTool(
-      stageService({ runId: 'run-1', nodeId: 'lead' }),
+      stageService({ runId: 'run-1', memberId: 'lead' }),
       new CallBroker(),
     );
-    const listed = (nodeId: string) =>
-      tool.list({ runId: 'run-1', nodeId, conversationId: null }).length;
+    const listed = (memberId: string) =>
+      tool.list({ runId: 'run-1', memberId, conversationId: null }).length;
     expect(listed('lead')).toBe(1);
     expect(listed('other')).toBe(0);
   });
@@ -3732,12 +3730,12 @@ describe('McpServerService — what the descriptions tell a model', () => {
 
   it('answers a move with the stage to work on next, and a refusal with its fix', async () => {
     const moved = new MoveStageTool(
-      stageService({ runId: 'run-1', nodeId: 'lead' }, async () => ({
+      stageService({ runId: 'run-1', memberId: 'lead' }, async () => ({
         ok: true,
-        team: { name: 'w', nodes: [], edges: [] },
+        team: teamOf([member('lead')], { name: 'w' }),
         stages: [
-          { id: 'build', title: 'Build', doneWhen: 'built', next: ['review'] },
-          { id: 'review', title: 'Review', doneWhen: 'approved' },
+          { id: 'build', title: 'Build', goal: 'built', next: ['review'] },
+          { id: 'review', title: 'Review', goal: 'approved' },
         ],
         progress: {
           rev: 1,
@@ -3759,7 +3757,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     );
     const ctx = {
       runId: 'run-1',
-      nodeId: 'lead',
+      memberId: 'lead',
       conversationId: null,
       caller: 'lead',
     } as Parameters<typeof moved.call>[2];
@@ -3770,11 +3768,11 @@ describe('McpServerService — what the descriptions tell a model', () => {
     );
     expect(ok.isError).toBe(false);
     expect(ok.content[0]!.text).toBe(
-      'Done: Build.\nNow: Review (review) (2/2).\nDone when: approved',
+      'Done: Build.\nNow: Review (review) (2/2).\nGoal: approved',
     );
 
     const refused = new MoveStageTool(
-      stageService({ runId: 'run-1', nodeId: 'lead' }, async () => ({
+      stageService({ runId: 'run-1', memberId: 'lead' }, async () => ({
         ok: false,
         code: 'NEXT_REQUIRED',
         message: 'name one of: implementation, fix',
@@ -3798,10 +3796,10 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(bad.content[0]!.text).toContain('INVALID_ARGS');
   });
 
-  it('refuses a move from a node that cannot use stages, even though the call was not listed', async () => {
+  it('refuses a move from a member that cannot use stages, even though the call was not listed', async () => {
     let moved = false;
     const tool = new MoveStageTool(
-      stageService({ runId: 'run-1', nodeId: 'lead' }, async () => {
+      stageService({ runId: 'run-1', memberId: 'lead' }, async () => {
         moved = true;
         throw new Error('not called');
       }),
@@ -3812,7 +3810,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       { action: 'complete', stage: 'build', text: 'built' },
       {
         runId: 'run-1',
-        nodeId: 'other',
+        memberId: 'other',
         conversationId: null,
         caller: 'other',
       } as Parameters<typeof tool.call>[2],
@@ -3830,7 +3828,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       .mockImplementation(() => {});
     try {
       const tool = new MoveStageTool(
-        stageService({ runId: 'run-1', nodeId: 'lead' }, async () => {
+        stageService({ runId: 'run-1', memberId: 'lead' }, async () => {
           throw new Error('SQLITE_BUSY at /Users/someone/geniro.db');
         }),
         new CallBroker(),
@@ -3840,7 +3838,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         { action: 'complete', stage: 'build', text: 'built' },
         {
           runId: 'run-1',
-          nodeId: 'lead',
+          memberId: 'lead',
           conversationId: null,
           caller: 'lead',
         } as Parameters<typeof tool.call>[2],
@@ -4148,7 +4146,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       'agent',
       rpc('tools/call', {
         name: HOST_PROPOSE_TEAM_TOOL,
-        arguments: { team: { name: 'x', nodes: [], edges: [] } },
+        arguments: { team: teamOf([member('lead')], { name: 'x' }) },
       }),
     );
     expect(json().result).toEqual({
@@ -4220,7 +4218,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       stages: stageService(),
     } as Parameters<typeof createMcpTools>[0]);
     const listing = tools.flatMap((tool) =>
-      tool.list({ runId: 'run-1', nodeId: 'agent', conversationId: null }),
+      tool.list({ runId: 'run-1', memberId: 'agent', conversationId: null }),
     );
     const teamTools = listing
       .map((tool) => tool.name)
@@ -4273,7 +4271,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         Promise.resolve({
           slug,
           hash: 'h1',
-          team: { name: 'Team', nodes: [], edges: [] },
+          team: teamOf([member('agent')], { name: 'Team' }),
         }),
     } as unknown as TeamStoreService;
     const tool = createMcpTools({
@@ -4310,7 +4308,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
 
     const result = await tool.call(HOST_READ_TEAMS_TOOL, { slug: 'team' }, {
       runId: 'run-1',
-      nodeId: 'agent',
+      memberId: 'agent',
     } as Parameters<typeof tool.call>[2]);
 
     expect(result.isError).toBe(false);
@@ -4336,7 +4334,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
           baseHash: 'h1',
           diff: {} as never,
           autoAgents: [],
-          team: { name: 'Team', nodes: [], edges: [] },
+          team: teamOf([member('agent')], { name: 'Team' }),
         },
       }),
     );
@@ -4376,7 +4374,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     }).find((t) => t.handles(HOST_PROPOSE_TEAM_TOOL))!;
     const context = {
       runId: 'run-1',
-      nodeId: 'agent',
+      memberId: 'agent',
     } as Parameters<typeof tool.call>[2];
     const edits = [{ path: 'name', value: 'Team 2' }];
 
@@ -4409,11 +4407,11 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const propose = vi.fn(() =>
       Promise.resolve({
         status: 'refused' as const,
-        code: 'GRAPH_NO_TRIGGER',
+        code: 'TEAM_TRIGGER_COUNT',
         message: 'add a trigger',
       }),
     );
-    const team = { name: 'x', nodes: [], edges: [] };
+    const team = teamOf([member('lead')], { name: 'x' });
     const tools = createMcpTools({
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
@@ -4446,7 +4444,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const result = await tool.call(
       HOST_PROPOSE_TEAM_TOOL,
       { team, replaces: 'team' },
-      { runId: 'run-1', nodeId: 'agent' } as Parameters<typeof tool.call>[2],
+      { runId: 'run-1', memberId: 'agent' } as Parameters<typeof tool.call>[2],
     );
 
     expect(propose).toHaveBeenCalledWith('run-1', {
@@ -4457,7 +4455,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       content: [
         {
           type: 'text',
-          text: 'Not proposed — GRAPH_NO_TRIGGER: add a trigger. No card was shown.',
+          text: 'Not proposed — TEAM_TRIGGER_COUNT: add a trigger. No card was shown.',
         },
       ],
       isError: true,
@@ -5043,7 +5041,7 @@ describe('McpServerService — the monitor tools', () => {
       broker,
     );
 
-  it('withholds all three from a node whose turn registered no monitor sink', async () => {
+  it('withholds all three from an agent whose turn registered no monitor sink', async () => {
     const { json } = await post(
       service(),
       'run-1',
@@ -5198,11 +5196,11 @@ describe('McpServerService — the team-note tools', () => {
       return Promise.resolve({ seq } as never);
     },
     writer: (caller) => ({
-      nodeId: caller,
+      memberId: caller,
       conversationId: null,
       callId: null,
     }),
-    agentName: (nodeId) => (nodeId === 'agent' ? 'Writer' : 'Reader'),
+    agentName: (memberId) => (memberId === 'agent' ? 'Writer' : 'Reader'),
   });
 
   const teamService = (teamNotes: TeamNoteBroker): McpServerService =>
@@ -5231,17 +5229,17 @@ describe('McpServerService — the team-note tools', () => {
       teamNotes,
     );
 
-  const names = async (subject: McpServerService, nodeId: string) => {
+  const names = async (subject: McpServerService, memberId: string) => {
     const { json } = await post(
       subject,
       'run-1',
-      nodeId,
+      memberId,
       rpc('tools/list', {}),
     );
     return (json().result as { tools: ToolListing[] }).tools.map((t) => t.name);
   };
 
-  it('lists both tools to a node with a sink and neither to an endpoint without one', async () => {
+  it('lists both tools to an agent with a sink and neither to an endpoint without one', async () => {
     const teamNotes = teamNoteBroker();
     teamNotes.register('run-1', 'agent', sinkOf([]));
     const subject = teamService(teamNotes);
@@ -5255,7 +5253,7 @@ describe('McpServerService — the team-note tools', () => {
     expect(chat).not.toContain(HOST_TEAM_NOTES_TOOL);
   });
 
-  it('writes a note through tools/call and reads it back from another node', async () => {
+  it('writes a note through tools/call and reads it back from another member', async () => {
     const rows: { seq: number; payload: string; createdAt: Date }[] = [];
     const teamNotes = teamNoteBroker(rows);
     teamNotes.register('run-1', 'agent', sinkOf(rows));

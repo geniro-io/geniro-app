@@ -2,8 +2,8 @@ import type { AgentKind } from '../../runs/runs.types';
 import {
   parseTeamSnapshot,
   readTeamSnapshot,
+  snapshotVersionOf,
 } from '../../teams/utils/team-snapshot';
-import { teamVersionOf } from '../../teams/utils/team-version';
 import {
   type AnalysedVersionRef,
   type CallFigures,
@@ -24,30 +24,29 @@ import { snapshotNodePoolProfiles } from './snapshot-config-dirs';
 import { servedWorkedMs } from './wall-worked';
 
 /**
- * What the run's own frozen copy configured each agent node with — the model
- * as the team spells it (null: the CLI's default) — and which nodes have a
- * pool, whose turns name no member.
+ * What the run's own frozen copy configured each member with — the model as
+ * the team spells it (null: the CLI's default) — and which members have a
+ * pool, whose turns name no pool member.
  */
 export function configuredModels(
   snapshot: string | null,
 ): Pick<FoldedRun, 'nodeModels' | 'pooledNodes'> {
-  const nodes =
-    readTeamSnapshot(snapshot)?.nodes.flatMap((node) =>
-      node.kind === 'agent' ? [node] : [],
-    ) ?? [];
+  const members = readTeamSnapshot(snapshot)?.members ?? [];
   return {
-    nodeModels: new Map(nodes.map((node) => [node.id, node.model ?? null])),
+    nodeModels: new Map(
+      members.map((member) => [member.id, member.model ?? null]),
+    ),
     pooledNodes: new Set(snapshotNodePoolProfiles(snapshot).keys()),
   };
 }
 
 /**
- * The graph version a run's frozen copy is — the version the team ledger
+ * The team version a run's frozen copy is — the version the team ledger
  * stamps the run with — or null when it keeps no copy the schema can read.
  */
 export function snapshotVersion(snapshot: string | null): string | null {
   const reading = parseTeamSnapshot(snapshot);
-  return reading.state === 'readable' ? teamVersionOf(reading.team) : null;
+  return reading.state === 'readable' ? snapshotVersionOf(reading) : null;
 }
 
 /** A version named by its number in `index`; without an index, by its hash alone. */
@@ -71,7 +70,7 @@ function median(values: readonly number[]): number {
 }
 
 /**
- * The analysed runs grouped by the graph version they ran, each group's
+ * The analysed runs grouped by the team version they ran, each group's
  * figures averaged per run — what tells a change's effect from the runs on
  * either side of it. Newest version first: numbered ones by number, then the
  * rest by their newest run.
@@ -155,7 +154,7 @@ function workedOf(
   run: FoldedRun,
   lane: FoldedRun['lanes'][number],
 ): number | null {
-  return servedWorkedMs(lane.workedMs, run.wallWorkedMs.get(lane.nodeId));
+  return servedWorkedMs(lane.workedMs, run.wallWorkedMs.get(lane.memberId));
 }
 
 function outcomes(turns: FoldedRun['turns']): {
@@ -188,29 +187,31 @@ export function runFigures(run: FoldedRun): RunFigures {
 }
 
 /**
- * Every node's work in one run: its lane's turns, working time, tool calls and
+ * Every member's work in one run: its lane's turns, working time, tool calls and
  * bill, and — when every one of its turns has a measured span — from the
  * timeline the wall time its turns spent working or blocked, and its share of
- * the critical path. Ordered by node.
+ * the critical path. Ordered by member.
  */
 export function runNodeFigures(run: FoldedRun): RunNodeFigures[] {
-  const times = new Map(run.timeline.nodes.map((node) => [node.nodeId, node]));
+  const times = new Map(
+    run.timeline.nodes.map((node) => [node.memberId, node]),
+  );
   const critical = new Map<string | null, number>();
   for (const segment of run.timeline.criticalPath) {
     if (segment.kind === 'work') {
       critical.set(
-        segment.nodeId,
-        (critical.get(segment.nodeId) ?? 0) + segment.durationMs,
+        segment.memberId,
+        (critical.get(segment.memberId) ?? 0) + segment.durationMs,
       );
     }
   }
   return run.lanes
     .map((lane): RunNodeFigures => {
-      const turns = run.turns.filter((turn) => turn.nodeId === lane.nodeId);
+      const turns = run.turns.filter((turn) => turn.memberId === lane.memberId);
       const measured = turns.every(timed);
-      const time = measured ? times.get(lane.nodeId) : undefined;
+      const time = measured ? times.get(lane.memberId) : undefined;
       return {
-        node: laneOf(lane.nodeId),
+        node: laneOf(lane.memberId),
         agent: lane.agentKind,
         turns: lane.turns,
         ...outcomes(turns),
@@ -221,11 +222,11 @@ export function runNodeFigures(run: FoldedRun): RunNodeFigures[] {
         waitingOnUserMs:
           time === undefined ? null : Math.round(time.waitingOnUserMs),
         criticalPathMs: measured
-          ? Math.round(critical.get(lane.nodeId) ?? 0)
+          ? Math.round(critical.get(lane.memberId) ?? 0)
           : null,
         toolCalls: lane.toolCalls,
         failedToolCalls: run.timeline.tools.filter(
-          (tool) => tool.nodeId === lane.nodeId && tool.failed,
+          (tool) => tool.memberId === lane.memberId && tool.failed,
         ).length,
         costUsd: lane.costUsd === null ? null : roundUsd(lane.costUsd),
         maxContextTokens: turns.reduce<number | null>(
@@ -241,7 +242,7 @@ export function runNodeFigures(run: FoldedRun): RunNodeFigures[] {
 }
 
 /**
- * Every caller→callee edge's agent-to-agent calls over every analysed run:
+ * Every caller→callee pair's agent-to-agent calls over every analysed run:
  * how many, how many failed or were still out, and how long they took.
  * Ordered by total time, longest first.
  */
@@ -249,8 +250,8 @@ export function callFigures(runs: readonly FoldedRun[]): CallFigures[] {
   const rows = new Map<string, CallFigures & { runIds: Set<string> }>();
   for (const run of runs) {
     for (const call of run.calls) {
-      const caller = laneOf(call.callerNodeId);
-      const callee = laneOf(call.calleeNodeId);
+      const caller = laneOf(call.callerMemberId);
+      const callee = laneOf(call.calleeMemberId);
       const key = JSON.stringify([caller, callee]);
       const row = rows.get(key) ?? {
         caller,
@@ -285,7 +286,7 @@ export function callFigures(runs: readonly FoldedRun[]): CallFigures[] {
 }
 
 /**
- * Every node's work summed over every analysed run, from its lanes: turns,
+ * Every member's work summed over every analysed run, from its lanes: turns,
  * worked time, tool calls and cost as the run's own figures state them.
  */
 export function nodeFigures(runs: readonly FoldedRun[]): NodeFigures[] {
@@ -293,7 +294,7 @@ export function nodeFigures(runs: readonly FoldedRun[]): NodeFigures[] {
   const pricedRuns = new Map<string, number>();
   for (const run of runs) {
     for (const lane of run.lanes) {
-      const node = laneOf(lane.nodeId);
+      const node = laneOf(lane.memberId);
       const key = JSON.stringify([node, lane.agentKind]);
       const row = rows.get(key) ?? {
         node,
@@ -308,7 +309,7 @@ export function nodeFigures(runs: readonly FoldedRun[]): NodeFigures[] {
         costPerRunUsd: null,
       };
       const own = outcomes(
-        run.turns.filter((turn) => turn.nodeId === lane.nodeId),
+        run.turns.filter((turn) => turn.memberId === lane.memberId),
       );
       row.runs += 1;
       row.turns += lane.turns;
@@ -344,17 +345,19 @@ interface TurnIdentity {
 
 /**
  * The CLI and model each turn ran on. A turn that ended without reporting a
- * model — a failure, a Stop, one still running — ran on the model its node
+ * model — a failure, a Stop, one still running — ran on the model its member
  * last reported in that run; one before any report is filed under the model
- * the node was configured with, marked so.
+ * the member was configured with, marked so.
  *
- * A pooled node is followed per MEMBER, as the turn's own usage row names it:
+ * A pooled member is followed per POOL MEMBER, as the turn's own usage row names it:
  * a pool hands work on exactly when a member fails, so the model reported
  * before or after may be another member's. A pooled turn naming no member is
  * left unattributed.
  */
 function turnIdentities(run: FoldedRun): TurnIdentity[] {
-  const lanes = new Map(run.lanes.map((lane) => [lane.nodeId, lane.agentKind]));
+  const lanes = new Map(
+    run.lanes.map((lane) => [lane.memberId, lane.agentKind]),
+  );
   const ordered = run.turns
     .map((turn, index) => ({ turn, index }))
     .sort(
@@ -369,12 +372,12 @@ function turnIdentities(run: FoldedRun): TurnIdentity[] {
   }));
   const last = new Map<string, string>();
   for (const { turn, index } of ordered) {
-    const pooled = run.pooledNodes.has(turn.nodeId);
+    const pooled = run.pooledNodes.has(turn.memberId);
     const agent = pooled
       ? (turn.member?.agentKind ?? null)
-      : (lanes.get(turn.nodeId) ?? null);
+      : (lanes.get(turn.memberId) ?? null);
     const runner = JSON.stringify([
-      turn.nodeId,
+      turn.memberId,
       pooled ? (turn.member ?? null) : null,
     ]);
     if (turn.model !== null) {
@@ -393,7 +396,7 @@ function turnIdentities(run: FoldedRun): TurnIdentity[] {
             agent,
             model: pooled
               ? (turn.member?.model ?? null)
-              : (run.nodeModels.get(turn.nodeId) ?? null),
+              : (run.nodeModels.get(turn.memberId) ?? null),
             source: 'configured',
           };
   }
@@ -401,19 +404,19 @@ function turnIdentities(run: FoldedRun): TurnIdentity[] {
 }
 
 /**
- * Every node's turns per model, summed over every analysed run — the
+ * Every member's turns per model, summed over every analysed run — the
  * comparison a team analysis judges each agent's model by. The figures
  * are the CLI's own per turn: a polled-spend CLI prices no turn, so its cost
- * here is null and its bill is the node's ({@link nodeFigures}), and a turn
+ * here is null and its bill is the member's ({@link nodeFigures}), and a turn
  * its CLI did not time is counted but not timed — its working time is the
- * node's. Ordered by node, then by turns, most first.
+ * member's. Ordered by member, then by turns, most first.
  */
 export function modelFigures(runs: readonly FoldedRun[]): ModelFigures[] {
   const rows = new Map<string, ModelFigures & { runIds: Set<string> }>();
   for (const run of runs) {
     const identities = turnIdentities(run);
     run.turns.forEach((turn, index) => {
-      const node = laneOf(turn.nodeId);
+      const node = laneOf(turn.memberId);
       const { agent, model, source } = identities[index]!;
       const key = JSON.stringify([node, agent, model, source]);
       const row = rows.get(key) ?? {

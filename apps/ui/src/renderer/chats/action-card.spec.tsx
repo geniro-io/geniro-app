@@ -30,7 +30,7 @@ const entry = (
   id: `i-${seq}`,
   createdAt: 'now',
   seq,
-  nodeId: null,
+  memberId: null,
   parentToolUseId: null,
   action: {
     actionId: 'merged',
@@ -56,7 +56,7 @@ const entry = (
 const live = (seq: number): LiveAction => ({
   seq,
   actionId: 'merged',
-  nodeId: 'agent',
+  memberId: 'agent',
   conversationId: '',
   label: 'Merged',
   once: true,

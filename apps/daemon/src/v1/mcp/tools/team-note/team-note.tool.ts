@@ -18,8 +18,8 @@ export class TeamNoteTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.notes.canUse(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.notes.canUse(runId, memberId);
   }
 
   protected instructions(): string {
@@ -32,13 +32,13 @@ export class TeamNoteTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId, caller }: McpCallContext,
+    { runId, memberId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
     const input = readTeamNote(args);
     if ('error' in input) {
       return this.invalidArgs(input.error);
     }
-    const outcome = await this.notes.write(runId, nodeId, caller, input);
+    const outcome = await this.notes.write(runId, memberId, caller, input);
     return outcome.status === 'refused'
       ? this.invalidArgs(outcome.reason)
       : this.text(teamNoteResultText(outcome));

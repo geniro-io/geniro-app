@@ -289,7 +289,7 @@ export function RunWaterfallDialog({
       topTurns(
         data.turns.filter(
           (turn) =>
-            (focus === undefined || turn.nodeId === focus) &&
+            (focus === undefined || turn.memberId === focus) &&
             endOf(turn) >= view.from &&
             endOf(turn) <= view.to,
         ),
@@ -770,7 +770,7 @@ function Breakdown({
   view: ClockWindow;
   zoomed: boolean;
   focus: string | null | undefined;
-  onFocus: (nodeId: string | null | undefined) => void;
+  onFocus: (memberId: string | null | undefined) => void;
 }): React.JSX.Element {
   const [tab, setTab] = useState<BreakdownTab>('agent');
   const scope = [
@@ -831,7 +831,7 @@ function FoldTable({
   rows: readonly BreakdownRow[];
   by: BreakdownBy;
   focus: string | null | undefined;
-  onFocus: (nodeId: string | null | undefined) => void;
+  onFocus: (memberId: string | null | undefined) => void;
 }): React.JSX.Element {
   const showCallees = by === 'agent' && data.calls.length > 0;
   const sorted = [...rows].sort(
@@ -882,12 +882,12 @@ function FoldTable({
         </thead>
         <tbody>
           {sorted.map((row) => {
-            const nodeId = row.nodeId;
-            const focusable = by === 'agent' && nodeId !== undefined;
+            const memberId = row.memberId;
+            const focusable = by === 'agent' && memberId !== undefined;
             const colour =
-              nodeId === undefined
+              memberId === undefined
                 ? undefined
-                : categoryToken(laneIndexOf(data, nodeId));
+                : categoryToken(laneIndexOf(data, memberId));
             return (
               <tr
                 key={row.key}
@@ -895,11 +895,11 @@ function FoldTable({
                 className={cn(
                   'border-t border-border/60',
                   focusable && 'cursor-pointer hover:bg-muted/40',
-                  focusable && focus === nodeId && 'bg-muted/50',
+                  focusable && focus === memberId && 'bg-muted/50',
                 )}
                 onClick={
                   focusable
-                    ? () => onFocus(focus === nodeId ? undefined : nodeId)
+                    ? () => onFocus(focus === memberId ? undefined : memberId)
                     : undefined
                 }>
                 <td className="h-9 px-3">
@@ -914,11 +914,11 @@ function FoldTable({
                     {focusable ? (
                       <button
                         type="button"
-                        aria-pressed={focus === nodeId}
+                        aria-pressed={focus === memberId}
                         className="cursor-pointer truncate text-left text-xs text-foreground hover:underline"
                         onClick={(event) => {
                           event.stopPropagation();
-                          onFocus(focus === nodeId ? undefined : nodeId);
+                          onFocus(focus === memberId ? undefined : memberId);
                         }}>
                         {row.key}
                       </button>
@@ -1276,7 +1276,7 @@ function TopTurns({
         </thead>
         <tbody>
           {turns.map((turn) => {
-            const colour = categoryToken(laneIndexOf(data, turn.nodeId));
+            const colour = categoryToken(laneIndexOf(data, turn.memberId));
             const index = data.turns.indexOf(turn);
             const mark: WaterfallMark = { kind: 'turn', index };
             const share = turnCacheShare(turn);
@@ -1310,7 +1310,7 @@ function TopTurns({
                         event.stopPropagation();
                         onSelect(sameMark(selected, mark) ? null : mark);
                       }}>
-                      {turn.nodeId ?? 'agent'}
+                      {turn.memberId ?? 'agent'}
                     </button>
                   </span>
                 </td>

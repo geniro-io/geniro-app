@@ -246,7 +246,7 @@ import { ClaudeSessionCostLedger } from './utils/claude-usage.utils';
  * stream-json output. Resume passes the prior `session_id` via `--resume`.
  *
  * `--append-system-prompt` carries the whole composed instruction block —
- * host preamble, the user's custom instructions, a graph node's `systemPrompt`
+ * host preamble, the user's custom instructions, a team member's `systemPrompt`
  * role, then the call surface — joined by `AgentAdapter.composeSystemPrompt`.
  * It is present on EVERY user-facing turn, plain chat included, because the
  * preamble always leads; only an `internalProbe` turn composes to `''` and so
@@ -314,9 +314,9 @@ export class ClaudeAdapter extends AgentAdapter {
         shortName: 'claude',
         summary: 'Anthropic Claude, driven headlessly via the claude CLI.',
         details: [
-          'Runs one turn per node, headlessly through the claude CLI.',
-          'Tool approvals are per-node — set the node to auto or ask.',
-          'Model is configurable per node (empty = the CLI default).',
+          'Runs one turn per member, headlessly through the claude CLI.',
+          'Tool approvals are per member — set the member to auto or ask.',
+          'Model is configurable per member (empty = the CLI default).',
         ],
         icon: 'bot',
       },
@@ -622,7 +622,7 @@ export class ClaudeAdapter extends AgentAdapter {
          */
         toggleUnavailableReason: null,
         /**
-         * Null: a team node's switched-off servers ride
+         * Null: a team member's switched-off servers ride
          * `--disallowedTools mcp__<server>` (`claudeDisallowedToolArgs`).
          * MEASURED on 2.1.284: `--disallowedTools mcp__codegraph
          * mcp__plugin_playwright_playwright` took the turn's `system/init`
@@ -1014,7 +1014,7 @@ export class ClaudeAdapter extends AgentAdapter {
    * claude's question channel is the AskUserQuestion tool
    * (`config.questionToolName`), whose input carries the questions, their
    * headers and their option labels. Projecting it is the adapter's job, so
-   * the graph executor can bridge a callee's question to its caller without
+   * the team executor can bridge a callee's question to its caller without
    * ever holding claude's payload shape.
    *
    * Null for a payload that carries no readable question, as for every other
@@ -2268,7 +2268,7 @@ export class ClaudeAdapter extends AgentAdapter {
     } else if (input.approvalMode === 'auto') {
       args.push(CLAUDE_SKIP_PERMISSIONS_FLAG);
     }
-    // claude's own tools geniro replaces, and a team node's switched-off
+    // claude's own tools geniro replaces, and a team member's switched-off
     // servers, ride one variadic `--disallowedTools`; geniro's own server is
     // filtered out inside.
     args.push(
@@ -2290,7 +2290,7 @@ export class ClaudeAdapter extends AgentAdapter {
       // Deliberately WITHOUT `--strict-mcp-config`. An agent must see the same
       // MCP servers a fresh claude session in that folder sees, PLUS geniro's
       // call surface — they combine. Restricting the turn to our config alone
-      // would also make the MCP switch meaningless for a caller node, since
+      // would also make the MCP switch meaningless for a caller member, since
       // there would be no project servers loaded to switch off. What keeps the
       // two unambiguous is the NAME: geniro's server carries this run's id, so
       // it cannot be one the user has already given a server of their own.
@@ -2383,7 +2383,7 @@ export class ClaudeAdapter extends AgentAdapter {
    * Every turn that carries the dialogue, and every `auto` turn without it:
    * a kept process is what holds a turn — and the call it answers — while its
    * background sub-agents run, which is what the background-work note tells
-   * the agent to rely on. An `auto` team node spawned one-shot with its
+   * the agent to rely on. An `auto` team member spawned one-shot with its
    * stdin closed got none of that: it settled on its launching result and
    * passed "the reviewers are running" downstream. Its stdin carries no
    * dialogue, so the base serves a later turn in another mode on a fresh
@@ -2585,7 +2585,7 @@ export class ClaudeAdapter extends AgentAdapter {
    * subtracts span TURNS (they live as long as the CLI process, which
    * `AgentSessionRegistry` now keeps between messages), so per-turn state could
    * not hold them — the second turn would see an empty ledger and re-report the
-   * running total, which is the defect. It stays safe under graph fan-out
+   * running total, which is the defect. It stays safe under team fan-out
    * because every entry is keyed by claude's own `session_id`, and a session id
    * belongs to exactly one process; see {@link ClaudeSessionCostLedger}.
    */
@@ -2629,7 +2629,7 @@ export class ClaudeAdapter extends AgentAdapter {
    * cost are recorded at `CLAUDE_MCP_STATUS_SUBTYPE` in `claude.const.ts`.
    *
    * Per turn, not per adapter, because the gate holds the poll in flight, and
-   * one adapter instance drives N concurrent turns under graph fan-out.
+   * one adapter instance drives N concurrent turns under team fan-out.
    */
   protected override createTurnDriver(input: AgentTurnInput): TurnDriver {
     if (input.commandListProbe === true) {

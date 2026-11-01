@@ -179,8 +179,8 @@ function costRow(
  * A lane's React key. The chat's own lane is keyed null, and spelling that as
  * a word collided with a node of the same name.
  */
-function laneKey(nodeId: string | null): string {
-  return nodeId === null ? '\u0000chat' : `node:${nodeId}`;
+function laneKey(memberId: string | null): string {
+  return memberId === null ? '\u0000chat' : `node:${memberId}`;
 }
 
 /** The DOM key of a mark, which the arrows find their ends by. */
@@ -219,7 +219,7 @@ export interface GanttProps {
   selected: WaterfallMark | null;
   onSelect: (mark: WaterfallMark | null) => void;
   focus: string | null | undefined;
-  onFocus: (nodeId: string | null | undefined) => void;
+  onFocus: (memberId: string | null | undefined) => void;
   /** Light the critical path and fade everything off it. */
   critical: boolean;
 }
@@ -250,10 +250,10 @@ export function Gantt({
   );
   const lanes = useMemo(
     () => ({
-      turns: byLane(data.turns, (turn) => turn.nodeId),
-      calls: byLane(data.calls, (call) => call.callerNodeId),
-      served: byLane(data.calls, (call) => call.calleeNodeId),
-      delegates: byLane(data.delegates, (delegate) => delegate.nodeId),
+      turns: byLane(data.turns, (turn) => turn.memberId),
+      calls: byLane(data.calls, (call) => call.callerMemberId),
+      served: byLane(data.calls, (call) => call.calleeMemberId),
+      delegates: byLane(data.delegates, (delegate) => delegate.memberId),
     }),
     [data],
   );
@@ -307,26 +307,26 @@ export function Gantt({
         </div>
 
         {data.lanes.map((lane, index) => {
-          const faded = focus !== undefined && focus !== lane.nodeId;
+          const faded = focus !== undefined && focus !== lane.memberId;
           return (
-            <Fragment key={laneKey(lane.nodeId)}>
+            <Fragment key={laneKey(lane.memberId)}>
               <LaneLabel
                 lane={lane}
                 index={index}
-                focused={focus === lane.nodeId}
+                focused={focus === lane.memberId}
                 faded={faded}
                 onFocus={() =>
-                  onFocus(focus === lane.nodeId ? undefined : lane.nodeId)
+                  onFocus(focus === lane.memberId ? undefined : lane.memberId)
                 }
               />
               <LaneTrack
                 data={data}
                 lane={lane}
                 index={index}
-                turns={lanes.turns.get(lane.nodeId) ?? []}
-                calls={lanes.calls.get(lane.nodeId) ?? []}
-                served={lanes.served.get(lane.nodeId) ?? []}
-                delegates={lanes.delegates.get(lane.nodeId) ?? []}
+                turns={lanes.turns.get(lane.memberId) ?? []}
+                calls={lanes.calls.get(lane.memberId) ?? []}
+                served={lanes.served.get(lane.memberId) ?? []}
+                delegates={lanes.delegates.get(lane.memberId) ?? []}
                 runFrom={runFrom}
                 view={view}
                 faded={faded}
@@ -406,7 +406,7 @@ function LaneLabel({
           style={{ backgroundColor: categoryToken(index) }}
         />
         <span className="truncate text-sm font-medium text-foreground">
-          {lane.nodeId ?? 'agent'}
+          {lane.memberId ?? 'agent'}
         </span>
         <span
           className="ml-auto shrink-0 text-sm tabular-nums text-foreground"
@@ -536,7 +536,7 @@ function LaneTrack({
   atOf: (pct: number | null) => string;
 }): React.JSX.Element {
   const colour = categoryToken(index);
-  const laneName = lane.nodeId ?? 'agent';
+  const laneName = lane.memberId ?? 'agent';
   const path = data.criticalPath;
   const total = data.totals.costUsd;
 
@@ -559,7 +559,7 @@ function LaneTrack({
       : CALL_TOP + (callRows.count - 1) * CALL_STEP + CALL_HEIGHT;
   const trackHeight = Math.max(TRACK_MIN_HEIGHT, lowestMark + TRACK_PAD_BOTTOM);
   const onPath = (start: number, end: number): boolean =>
-    onCriticalPath(path, 'work', lane.nodeId, start, end);
+    onCriticalPath(path, 'work', lane.memberId, start, end);
 
   /**
    * Every mark answers the pointer the same way.
@@ -669,9 +669,9 @@ function LaneTrack({
         // own colour would say only "this node made a call", where the point is
         // which agent it handed the work to.
         const calleeColour = categoryToken(
-          laneIndexOf(data, call.calleeNodeId),
+          laneIndexOf(data, call.calleeMemberId),
         );
-        const callee = call.calleeNodeId ?? 'agent';
+        const callee = call.calleeMemberId ?? 'agent';
         const failed = callFailed(call);
         return (
           <button
@@ -745,7 +745,7 @@ function LaneTrack({
           return null;
         }
         const callerColour = categoryToken(
-          laneIndexOf(data, call.callerNodeId),
+          laneIndexOf(data, call.callerMemberId),
         );
         return (
           <span
@@ -761,7 +761,7 @@ function LaneTrack({
             )}
             style={spot(placed)}
             onMouseMove={marked({
-              title: `${laneName} · working for ${call.callerNodeId ?? 'agent'}`,
+              title: `${laneName} · working for ${call.callerMemberId ?? 'agent'}`,
               rows: [
                 { label: 'mode', value: call.mode ?? '—', color: callerColour },
                 { label: 'outcome', value: call.status ?? '—' },
@@ -857,7 +857,7 @@ function LaneTrack({
           return null;
         }
         const mark: WaterfallMark = { kind: 'blocked', index: at };
-        const callee = call.calleeNodeId ?? 'agent';
+        const callee = call.calleeMemberId ?? 'agent';
         return (
           <button
             type="button"
@@ -902,7 +902,7 @@ function LaneTrack({
         <PathUnderline
           path={path}
           kind="work"
-          nodeId={lane.nodeId}
+          memberId={lane.memberId}
           view={view}
         />
       ) : null}
@@ -920,12 +920,12 @@ function LaneTrack({
 function PathUnderline({
   path,
   kind,
-  nodeId,
+  memberId,
   view,
 }: {
   path: RunWaterfallDto['criticalPath'];
   kind: 'work' | 'waiting_on_user';
-  nodeId: string | null;
+  memberId: string | null;
   view: ClockWindow;
 }): React.JSX.Element {
   return (
@@ -933,7 +933,7 @@ function PathUnderline({
       {path.map((segment, index) => {
         if (
           segment.kind !== kind ||
-          (kind === 'work' && segment.nodeId !== nodeId)
+          (kind === 'work' && segment.memberId !== memberId)
         ) {
           return null;
         }
@@ -1098,7 +1098,7 @@ function WaitLane({
           <PathUnderline
             path={data.criticalPath}
             kind="waiting_on_user"
-            nodeId={null}
+            memberId={null}
             view={view}
           />
         ) : null}
@@ -1161,7 +1161,7 @@ function CallArrows({
       .map((turn, index) => ({ turn, index }))
       .filter(
         ({ turn }) =>
-          turn.nodeId === call.calleeNodeId &&
+          turn.memberId === call.calleeMemberId &&
           Date.parse(turn.startedAt) < to &&
           endOf(turn) > from,
       );
@@ -1204,7 +1204,7 @@ function CallArrows({
         a.right - box.left - 4,
         (down ? a.bottom : a.top) - box.top,
       ),
-      colour: categoryToken(laneIndexOf(data, call.calleeNodeId)),
+      colour: categoryToken(laneIndexOf(data, call.calleeMemberId)),
     });
   }, [data, gridRef, selected, view, measure]);
 
@@ -1445,12 +1445,12 @@ export function WaterfallOverview({
       onDoubleClick={() => onWindow(full)}>
       {data.lanes.map((lane, row) => (
         <span
-          key={laneKey(lane.nodeId)}
+          key={laneKey(lane.memberId)}
           aria-hidden="true"
           className="absolute inset-x-0"
           style={{ top: 4 + row * (rowHeight + 1), height: rowHeight }}>
           {data.turns.map((turn, index) => {
-            if (turn.nodeId !== lane.nodeId) {
+            if (turn.memberId !== lane.memberId) {
               return null;
             }
             const placed = placeIn(turn.startedAt, turn.durationMs, full);
@@ -1466,7 +1466,7 @@ export function WaterfallOverview({
                   backgroundColor:
                     turn.outcome === 'failed'
                       ? undefined
-                      : categoryToken(laneIndexOf(data, lane.nodeId)),
+                      : categoryToken(laneIndexOf(data, lane.memberId)),
                 }}
               />
             );

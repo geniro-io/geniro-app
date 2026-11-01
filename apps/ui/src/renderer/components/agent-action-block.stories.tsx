@@ -19,7 +19,7 @@ function item(
   return {
     id: `${kind}-${id}`,
     runId: RUN,
-    nodeId: 'manager',
+    memberId: 'manager',
     seq: 1,
     kind,
     role: null,
@@ -67,7 +67,7 @@ function group(id: string, pairs: ToolPair[], closed = false): ToolGroupEntry {
   return {
     type: 'tools',
     id,
-    nodeId: 'manager',
+    memberId: 'manager',
     parentToolUseId: null,
     closed,
     pairs,

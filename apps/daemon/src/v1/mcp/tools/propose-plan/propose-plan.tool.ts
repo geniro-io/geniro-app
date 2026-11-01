@@ -18,12 +18,12 @@ export class ProposePlanTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.plans.canPropose(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.plans.canPropose(runId, memberId);
   }
 
-  protected instructions({ runId, nodeId }: McpListContext): string {
-    return proposePlanInstructions(this.plans.answersAtOnce(runId, nodeId));
+  protected instructions({ runId, memberId }: McpListContext): string {
+    return proposePlanInstructions(this.plans.answersAtOnce(runId, memberId));
   }
 
   protected inputSchema(): Record<string, unknown> {
@@ -34,7 +34,7 @@ export class ProposePlanTool extends BaseMcpTool {
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId } = context;
+    const { runId, memberId } = context;
     const read = readHostPlan(args);
     // A sentence, like the patch reader's: every refusal here names
     // something the agent can fix and send again.
@@ -46,7 +46,7 @@ export class ProposePlanTool extends BaseMcpTool {
     // will not hold the call open, when the sink answers `posted` at once and
     // the verdict arrives as the run's next message.
     const outcome = await context.whileCancellable((signal) =>
-      this.plans.propose(runId, nodeId, read.plan, signal),
+      this.plans.propose(runId, memberId, read.plan, signal),
     );
     // A rejection is not a tool failure: the user exercised the gate this
     // tool exists to offer them, and flagging it as an error is how a

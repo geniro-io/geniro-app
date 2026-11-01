@@ -14,7 +14,7 @@ function findingsItem(payload: unknown): ChatItem {
   return {
     id: `i-${seq}`,
     runId: 'run-1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'report_findings',
     role: null,

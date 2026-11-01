@@ -18,20 +18,20 @@ export type GalleryDrawer = (
 
 @Injectable()
 export class GalleryBroker extends HostSinkBroker<GalleryDrawer> {
-  /** Whether this node can currently draw — gates the tool listing. */
-  canDraw(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  /** Whether this member can currently draw — gates the tool listing. */
+  canDraw(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   /** Show the gallery and resolve with what happened. Never throws. */
   async draw(
     runId: string,
-    nodeId: string,
+    memberId: string,
     gallery: HostGallery,
   ): Promise<HostGalleryOutcome> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no turn is running that could show it',
       'show a gallery',
       (drawer) => drawer(gallery),

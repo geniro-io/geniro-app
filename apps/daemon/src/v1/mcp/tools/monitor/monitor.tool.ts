@@ -18,8 +18,8 @@ export class MonitorTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.monitors.canMonitor(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.monitors.canMonitor(runId, memberId);
   }
 
   protected instructions(): string {
@@ -32,13 +32,13 @@ export class MonitorTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId, caller }: McpCallContext,
+    { runId, memberId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
     const input = readMonitor(args);
     if ('error' in input) {
       return this.invalidArgs(input.error);
     }
-    const outcome = await this.monitors.start(runId, nodeId, input, caller);
+    const outcome = await this.monitors.start(runId, memberId, input, caller);
     return outcome.status === 'refused'
       ? this.invalidArgs(outcome.reason)
       : this.text(monitorResultText(outcome));

@@ -254,7 +254,7 @@ function settleDeps(): {
   captured: PullRequestsCapturedEvent[];
   listeners: ((event: {
     runId: string;
-    item: { nodeId: string | null; kind: string };
+    item: { memberId: string | null; kind: string };
   }) => void)[];
   deleted: ((runId: string) => void)[];
 } {
@@ -262,7 +262,7 @@ function settleDeps(): {
   const captured: PullRequestsCapturedEvent[] = [];
   const listeners: ((event: {
     runId: string;
-    item: { nodeId: string | null; kind: string };
+    item: { memberId: string | null; kind: string };
   }) => void)[] = [];
   const deleted: ((runId: string) => void)[] = [];
   const bus = {
@@ -838,7 +838,7 @@ describe('PullRequestCaptureService', () => {
   });
 
   it('keeps only the touched pull requests the thread itself names, never one claude read off the branch its folder had checked out', async () => {
-    // A team node pushes a worktree's branch with `git -C`, from a shared
+    // A team member pushes a worktree's branch with `git -C`, from a shared
     // checkout that sits on ANOTHER pull request's head branch. claude 2.1.295
     // answers every push with `gh pr view --json url` in its own folder, so its
     // record names that other pull request (#7207) — which nothing in this
@@ -1417,7 +1417,7 @@ describe('PullRequestCaptureService', () => {
     // A turn's end starts a capture pass that holds at its write…
     await deps.listeners[0]?.({
       runId: 'run-1',
-      item: { nodeId: null, kind: 'turn_complete' },
+      item: { memberId: null, kind: 'turn_complete' },
     });
     await vi.waitFor(() => expect(landWrite).not.toBe(noWrite));
     // …an outcome queues its announce behind it…
@@ -2172,7 +2172,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
 
     await deps.listeners[0]?.({
       runId: 'run-1',
-      item: { nodeId: null, kind: 'turn_complete' },
+      item: { memberId: null, kind: 'turn_complete' },
     });
     await settled();
 
@@ -2230,7 +2230,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
 
     await deps.listeners[0]?.({
       runId: 'run-1',
-      item: { nodeId: null, kind: 'turn_complete' },
+      item: { memberId: null, kind: 'turn_complete' },
     });
     await settled();
 
@@ -2265,7 +2265,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
 
     await deps.listeners[0]?.({
       runId: 'run-1',
-      item: { nodeId: 'engineer', kind: 'turn_complete' },
+      item: { memberId: 'engineer', kind: 'turn_complete' },
     });
     await settled();
 
@@ -2301,7 +2301,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
     await service.sync([run], em);
     await deps.listeners[0]?.({
       runId: 'run-1',
-      item: { nodeId: 'engineer', kind: 'turn_complete' },
+      item: { memberId: 'engineer', kind: 'turn_complete' },
     });
     await settled();
 
@@ -2343,16 +2343,16 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
 
     await deps.listeners[0]?.({
       runId: 'run-1',
-      item: { nodeId: null, kind: 'turn_complete' },
+      item: { memberId: null, kind: 'turn_complete' },
     });
     await settled();
 
     expect(deps.published).toEqual([]);
   });
 
-  it('captures a TEAM node’s turn, exactly as a chat’s', async () => {
+  it('captures a TEAM member’s turn, exactly as a chat’s', async () => {
     // REPORTED as a shelf with no chip over a transcript reading "Draft PR
-    // #5303 is open". Every row of a team run carries a node id, and this
+    // #5303 is open". Every row of a team run carries a member id, and this
     // subscriber required `nodeId === null` — so it never fired for one, while
     // the other trigger (the chat listing) filters `teamId: null`. Two
     // gates, and a team's pull requests were captured on no path at all.
@@ -2374,7 +2374,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
 
     await deps.listeners[0]?.({
       runId: 'run-1',
-      item: { nodeId: 'engineer', kind: 'turn_complete' },
+      item: { memberId: 'engineer', kind: 'turn_complete' },
     });
     await settled();
 
@@ -2419,11 +2419,11 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
 
     await deps.listeners[0]?.({
       runId: 'run-1',
-      item: { nodeId: null, kind: 'tool_call' },
+      item: { memberId: null, kind: 'tool_call' },
     });
     await deps.listeners[0]?.({
       runId: 'run-1',
-      item: { nodeId: 'engineer', kind: 'tool_result' },
+      item: { memberId: 'engineer', kind: 'tool_result' },
     });
     await settled();
 
@@ -2450,7 +2450,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
 
     await deps.listeners[0]?.({
       runId: 'run-1',
-      item: { nodeId: null, kind: 'turn_complete' },
+      item: { memberId: null, kind: 'turn_complete' },
     });
     await settled();
 

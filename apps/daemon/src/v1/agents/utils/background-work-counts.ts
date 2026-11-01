@@ -17,12 +17,12 @@ export type BackgroundCountsPatch =
  * knowable for the thread a window has open and for no other: a settled chat
  * with a `sleep` still out read `working` while selected and `completed` the
  * moment it was not. And shared by BOTH owners — `ChatService` and
- * `GraphExecutorService` — because a team run is listed in the same sidebar
+ * `TeamExecutorService` — because a team run is listed in the same sidebar
  * and was reporting 0 for both figures by default, so its badge could never
  * reach the held state and its shelf never saw a delegate launched earlier than
  * the loaded page.
  *
- * Shells are keyed by the node that opened them as well: a work id is the CLI's
+ * Shells are keyed by the member that opened them as well: a work id is the CLI's
  * per-process counter (`bash_1`), so two agents of one team can each have
  * the same id out. Delegate ids are tool-use ids and unique.
  *
@@ -47,16 +47,20 @@ export class BackgroundWorkCounts {
 
   /**
    * Apply one agent event; anything that is not a bracket is ignored. `nodeId`
-   * is the team node the event came from, null for a chat.
+   * is the team member the event came from, null for a chat.
    */
-  record(runId: string, event: AgentEvent, nodeId: string | null = null): void {
+  record(
+    runId: string,
+    event: AgentEvent,
+    memberId: string | null = null,
+  ): void {
     if (event.type === 'shell_open') {
-      add(this.shells, runId, shellKey(nodeId, event.workId));
+      add(this.shells, runId, shellKey(memberId, event.workId));
       this.announce(runId, { shellsOpen: this.shellsOpen(runId) });
       return;
     }
     if (event.type === 'shell_info') {
-      this.noteShellClosed(runId, event.workId, nodeId);
+      this.noteShellClosed(runId, event.workId, memberId);
       return;
     }
     if (event.type !== 'subagent_info' || event.backgroundOpen === null) {
@@ -80,11 +84,11 @@ export class BackgroundWorkCounts {
   noteShellClosed(
     runId: string,
     workId: string | null,
-    nodeId: string | null = null,
+    memberId: string | null = null,
   ): void {
     if (
       workId !== null &&
-      remove(this.shells, runId, shellKey(nodeId, workId))
+      remove(this.shells, runId, shellKey(memberId, workId))
     ) {
       this.announce(runId, { shellsOpen: this.shellsOpen(runId) });
     }
@@ -120,8 +124,8 @@ export class BackgroundWorkCounts {
   }
 }
 
-function shellKey(nodeId: string | null, workId: string): string {
-  return `${nodeId ?? ''}\u0000${workId}`;
+function shellKey(memberId: string | null, workId: string): string {
+  return `${memberId ?? ''}\u0000${workId}`;
 }
 
 function add(map: Map<string, Set<string>>, runId: string, id: string): void {

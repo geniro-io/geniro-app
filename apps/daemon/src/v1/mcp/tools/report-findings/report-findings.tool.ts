@@ -21,8 +21,8 @@ export class ReportFindingsTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.findings.canReport(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.findings.canReport(runId, memberId);
   }
 
   protected instructions(): string {
@@ -37,7 +37,7 @@ export class ReportFindingsTool extends BaseMcpTool {
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId } = context;
+    const { runId, memberId } = context;
     // Its own shape, for the question tool's reason: a card drawn in this
     // app's transcript has no status and nothing to collect later.
     if (!Array.isArray(args.findings)) {
@@ -55,7 +55,7 @@ export class ReportFindingsTool extends BaseMcpTool {
         "no finding could be read — each entry needs a 'file' and a 'summary' string.",
       );
     }
-    const outcome = await this.findings.report(runId, nodeId, report);
+    const outcome = await this.findings.report(runId, memberId, report);
     // An unavailable channel is an answer the agent carries on from —
     // it still holds the findings and can write them in its reply.
     return this.text(hostFindingsResultText(outcome));

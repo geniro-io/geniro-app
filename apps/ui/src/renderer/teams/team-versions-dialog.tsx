@@ -109,6 +109,13 @@ function VersionTitle({
       ) : null}
       {current ? <Badge variant="success">current</Badge> : null}
       {row.inferred ? <Badge variant="outline">inferred</Badge> : null}
+      {row.preTeam ? (
+        <Badge
+          variant="outline"
+          title="Recorded while teams were graphs; its diff is taken over the graph converted to a team">
+          before teams
+        </Badge>
+      ) : null}
     </span>
   );
 }
@@ -335,7 +342,7 @@ export function TeamVersionsDialog({
   error: string | null;
   onRetry: () => void;
   /**
-   * Writes the version back as the team's graph and resolves once the canvas shows
+   * Writes the version back as the team's graph and resolves once the editor shows
    * it; a rejection's message is shown beside the button. Absent, nothing is offered.
    */
   onRestore?: (row: TeamVersionRow) => Promise<void>;

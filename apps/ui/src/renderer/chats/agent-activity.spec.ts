@@ -18,14 +18,14 @@ import type { SubagentBlockEntry } from './transcript-groups';
 let seq = 0;
 function item(
   kind: ChatItem['kind'],
-  nodeId: string | null,
+  memberId: string | null,
   payload: unknown,
 ): ChatItem {
   seq += 1;
   return {
     id: `i${seq}`,
     runId: 'r1',
-    nodeId,
+    memberId,
     seq,
     kind,
     role: null,
@@ -34,9 +34,9 @@ function item(
   };
 }
 
-function status(nodeId: string, value: string, callId?: string): ChatItem {
-  return item('status', nodeId, {
-    nodeId,
+function status(memberId: string, value: string, callId?: string): ChatItem {
+  return item('status', memberId, {
+    nodeId: memberId,
     status: value,
     ...(callId === undefined ? {} : { callId }),
   });
@@ -819,7 +819,7 @@ describe('subagentThreadsByAgent', () => {
       type: 'subagent-block',
       id: 'task-1',
       createdAt: 'now',
-      nodeId: null,
+      memberId: null,
       callId: null,
       kind: 'code-reviewer',
       label: 'Review the diff',
@@ -847,9 +847,9 @@ describe('subagentThreadsByAgent', () => {
   it('files each delegate under the agent that launched it', () => {
     const byAgent = subagentThreadsByAgent(
       [
-        block({ id: 'a', nodeId: null }),
-        block({ id: 'b', nodeId: 'coder' }),
-        block({ id: 'c', nodeId: 'coder' }),
+        block({ id: 'a', memberId: null }),
+        block({ id: 'b', memberId: 'coder' }),
+        block({ id: 'c', memberId: 'coder' }),
       ],
       CHAT_AGENT_KEY,
     );

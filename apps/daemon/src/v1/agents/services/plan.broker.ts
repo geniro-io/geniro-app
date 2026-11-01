@@ -18,17 +18,17 @@ export type PlanProposer = (
 
 @Injectable()
 export class PlanBroker extends HostSinkBroker<PlanProposer> {
-  /** Whether this node can currently propose — gates the tool listing. */
-  canPropose(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  /** Whether this member can currently propose — gates the tool listing. */
+  canPropose(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   /**
-   * Whether the listing for this node says the call returns at once — set by
+   * Whether the listing for this member says the call returns at once — set by
    * `register`'s `answersAtOnce`, and gone with the sink.
    */
-  answersAtOnce(runId: string, nodeId: string): boolean {
-    return this.sinkAnswersAtOnce(runId, nodeId);
+  answersAtOnce(runId: string, memberId: string): boolean {
+    return this.sinkAnswersAtOnce(runId, memberId);
   }
 
   /**
@@ -40,13 +40,13 @@ export class PlanBroker extends HostSinkBroker<PlanProposer> {
    */
   async propose(
     runId: string,
-    nodeId: string,
+    memberId: string,
     plan: HostPlan,
     signal?: AbortSignal,
   ): Promise<HostPlanOutcome> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no turn is running that could put it on screen',
       'propose a plan',
       (proposer) => proposer(plan, signal),

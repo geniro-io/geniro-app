@@ -233,10 +233,10 @@ describe('TeamChatPanel', () => {
     });
   }
 
-  // The agent reads the FILE, so a canvas edit still sitting in the autosave
+  // The agent reads the FILE, so an editor edit still sitting in the autosave
   // debounce is invisible to the turn about to start — and would then be
   // written over whatever that turn produced.
-  it('writes pending canvas edits before the message reaches the daemon', async () => {
+  it('writes pending editor edits before the message reaches the daemon', async () => {
     await paint();
     await type('rename the reviewer');
 
@@ -256,7 +256,7 @@ describe('TeamChatPanel', () => {
     );
   });
 
-  it('writes pending canvas edits before an action press reaches the daemon', async () => {
+  it('writes pending editor edits before an action press reaches the daemon', async () => {
     const chats = APIS.chats as unknown as {
       readRunState: ReturnType<typeof vi.fn>;
       pressChatAction?: ReturnType<typeof vi.fn>;
@@ -267,12 +267,12 @@ describe('TeamChatPanel', () => {
         {
           seq: 4,
           actionId: 'go',
-          nodeId: 'agent',
+          memberId: 'agent',
           conversationId: '',
           label: 'Go on',
           once: true,
           spec: { kind: 'message', text: 'continue' },
-          publisher: { nodeId: 'agent', conversationId: '' },
+          publisher: { memberId: 'agent', conversationId: '' },
           pending: false,
         },
       ],
@@ -330,12 +330,12 @@ describe('TeamChatPanel', () => {
         {
           seq: 4,
           actionId: 'go',
-          nodeId: 'agent',
+          memberId: 'agent',
           conversationId: '',
           label: 'Go on',
           once: true,
           spec: { kind: 'message', text: 'continue' },
-          publisher: { nodeId: 'agent', conversationId: '' },
+          publisher: { memberId: 'agent', conversationId: '' },
           pending: false,
         },
       ],
@@ -482,9 +482,9 @@ describe('TeamChatPanel', () => {
   });
 
   // The chat screen's own queue: a message typed while the agent works waits in
-  // the strip, and goes out only once the turn has settled AND the canvas has
-  // re-read what it wrote — the send flushes the canvas first.
-  it('queues a message typed during a turn and sends it after the canvas reloads', async () => {
+  // the strip, and goes out only once the turn has settled AND the editor has
+  // re-read what it wrote — the send flushes the editor first.
+  it('queues a message typed during a turn and sends it after the editor reloads', async () => {
     const post = vi.fn(async () => {});
     chat.current = chatState({ working: true, post });
     await paint();
@@ -566,7 +566,7 @@ describe('TeamChatPanel', () => {
     });
     await paint();
 
-    // The canvas still re-reads what the stopped turn wrote.
+    // The editor still re-reads what the stopped turn wrote.
     expect(onTurnSettled).toHaveBeenCalledTimes(1);
     expect(post).not.toHaveBeenCalled();
     expect(container.textContent).toContain(
@@ -639,7 +639,7 @@ describe('TeamChatPanel', () => {
     expect(onWorkingChange).toHaveBeenLastCalledWith(false);
   });
 
-  // Keyed on the COUNT, so a second turn reloads the canvas a second time —
+  // Keyed on the COUNT, so a second turn reloads the editor a second time —
   // a boolean going false cannot tell one settle from the next.
   it('asks the builder to reload once per settled turn', async () => {
     await paint();
@@ -814,7 +814,7 @@ describe('TeamChatPanel — the transcript is the chat screen’s own', () => {
       seq: Number(id.replace(/\D/g, '')) || 1,
       kind,
       role,
-      nodeId: null,
+      memberId: null,
       payload,
       createdAt: '2026-09-01T00:00:00.000Z',
     }) as TeamChatState['items'][number];

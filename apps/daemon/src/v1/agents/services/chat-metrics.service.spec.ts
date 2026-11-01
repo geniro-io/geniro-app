@@ -53,7 +53,7 @@ const BREAKDOWN: AgentContextUsage = {
 
 /** The run's usage rows and call records, as `RunKindRowsCache` hands them out. */
 function usageRowsOf(
-  rows: readonly { nodeId: string | null; payload: string }[],
+  rows: readonly { memberId: string | null; payload: string }[],
   callRecords: readonly unknown[] = [],
   spanRows: (
     runId: string,
@@ -109,10 +109,10 @@ function build(opts: {
   pinFor?: (runId: string) => string | null;
   /** Which session keys hold a live process — overrides `liveSession`. */
   peek?: (sessionKey: string) => unknown;
-  /** A TEAM run: its turns by node, its node kinds, its polled bill. */
+  /** A TEAM run: its turns by member, its member kinds, its polled bill. */
   team?: {
-    rows: { nodeId: string | null; payload: string }[];
-    states: { nodeId: string; agentKind: AgentKind }[];
+    rows: { memberId: string | null; payload: string }[];
+    states: { memberId: string; agentKind: AgentKind }[];
     runPolledCents?: number;
   };
 }) {
@@ -209,7 +209,7 @@ function build(opts: {
     wallTurns as unknown as WallTurnDao,
     usageRowsOf(
       opts.team?.rows ??
-        (opts.payloads ?? []).map((payload) => ({ nodeId: null, payload })),
+        (opts.payloads ?? []).map((payload) => ({ memberId: null, payload })),
       [],
       turnSpanRows,
     ),
@@ -234,30 +234,30 @@ function build(opts: {
 /** The wall ledger the totals add to the CLIs' own time. */
 const wallTurns = new FakeWallTurnDao();
 
-describe('ChatMetricsService — one team node', () => {
-  // A team run keeps a process per node, so its readout names the node:
+describe('ChatMetricsService — one team member', () => {
+  // A team run keeps a process per member, so its readout names the member:
   // REPORTED as "i cant see full context info for team" while the composer
   // ring of a team run offered a figure and nothing behind it.
   function buildNode(
     state: Record<string, unknown> | null,
     opts: {
-      /** What the node's agent answers when asked now. */
+      /** What the member's agent answers when asked now. */
       breakdown?: AgentContextUsage | null;
       /** Where the NODE's own transcript stands. */
       maxSeq?: number;
       snapshot?: string;
-      nodeRows?: { nodeId: string; payload: string }[];
+      nodeRows?: { memberId: string; payload: string }[];
     } = {},
   ) {
     const peek = vi.fn().mockReturnValue(null);
     const getByRunNode = vi.fn().mockResolvedValue(state);
     const usageRows = [
       {
-        nodeId: 'manager',
+        memberId: 'manager',
         payload: turn({ inputTokens: 10, outputTokens: 5 }),
       },
       {
-        nodeId: 'engineer',
+        memberId: 'engineer',
         payload: turn({ inputTokens: 900, outputTokens: 1 }),
       },
     ];
@@ -332,10 +332,10 @@ describe('ChatMetricsService — one team node', () => {
       /** Fire what the registry fires on an idle close of the process under `key`. */
       farewell: (key: string) => farewell!(key),
       /** Play a settled turn of `nodeId` onto the agent bus. */
-      settleTurn: (nodeId: string) =>
+      settleTurn: (memberId: string) =>
         turns.next({
           runId: 'run-1',
-          item: { kind: 'turn_complete', nodeId, seq: 2 },
+          item: { kind: 'turn_complete', memberId, seq: 2 },
         } as unknown as RunItemEvent),
     };
   }
@@ -365,7 +365,10 @@ describe('ChatMetricsService — one team node', () => {
           ],
         }),
         nodeRows: [
-          { nodeId: 'manager', payload: '{"nodePoolHandOff":true,"member":2}' },
+          {
+            memberId: 'manager',
+            payload: '{"nodePoolHandOff":true,"member":2}',
+          },
         ],
       },
     );
@@ -375,7 +378,7 @@ describe('ChatMetricsService — one team node', () => {
     ).toMatchObject({ configDir: '/profiles/backup' });
   });
 
-  it('serves the node’s LAST reading once its process is gone, dated when it was taken', async () => {
+  it('serves the member’s LAST reading once its process is gone, dated when it was taken', async () => {
     // A claude Manager waits idle while its callees work, its process is closed
     // for idleness, and a live-only readout then had nothing — while a claude
     // chat beside it showed its breakdown from the reading it had kept.
@@ -402,7 +405,7 @@ describe('ChatMetricsService — one team node', () => {
     expect(metrics.takenAt).toBe('2026-09-14T10:00:00.000Z');
   });
 
-  it('drops a node’s reading once that node has written a row since', async () => {
+  it('drops a member’s reading once that member has written a row since', async () => {
     const built = buildNode(
       {
         agentKind: AgentKind.Claude,
@@ -418,7 +421,7 @@ describe('ChatMetricsService — one team node', () => {
     expect(metrics.takenAt).toBeNull();
   });
 
-  it('takes a node’s reading on its way out and files it on the NODE, never the run', async () => {
+  it('takes a member’s reading on its way out and files it on the MEMBER, never the run', async () => {
     const built = buildNode({
       agentKind: AgentKind.Claude,
       agentSessionId: 'sess-manager',
@@ -448,7 +451,7 @@ describe('ChatMetricsService — one team node', () => {
     expect(built.nodeRemember).not.toHaveBeenCalled();
   });
 
-  it('prewarms a node’s reading when THAT node’s turn settles after its readout was opened', async () => {
+  it('prewarms a member’s reading when THAT member’s turn settles after its readout was opened', async () => {
     const built = buildNode({
       agentKind: AgentKind.Claude,
       agentSessionId: 'sess-manager',
@@ -470,7 +473,7 @@ describe('ChatMetricsService — one team node', () => {
     );
   });
 
-  it('asks the NODE’s own process and session, and totals that node’s turns alone', async () => {
+  it('asks the MEMBER’s own process and session, and totals that member’s turns alone', async () => {
     const built = buildNode({
       agentKind: AgentKind.CursorAgent,
       agentSessionId: 'sess-manager',
@@ -478,7 +481,7 @@ describe('ChatMetricsService — one team node', () => {
 
     const metrics = await built.service.read('run-1', 'manager');
 
-    // The key the executor keeps that node's process under — not the run's.
+    // The key the executor keeps that member's process under — not the run's.
     expect(built.peek).toHaveBeenCalledWith('run-1::node:manager');
     expect(built.getByRunNode).toHaveBeenCalledWith(
       'run-1',
@@ -494,7 +497,7 @@ describe('ChatMetricsService — one team node', () => {
     expect(metrics.context).toEqual(BREAKDOWN);
     expect(ChatMetricsWireSchema.parse(metrics)).toEqual(metrics);
     // Filed on the NODE for the next open; the run row holds one reading per
-    // RUN and a node's must not overwrite it.
+    // RUN and a member's must not overwrite it.
     await vi.waitFor(() =>
       expect(built.nodeRemember).toHaveBeenCalledWith(
         'run-1',
@@ -506,7 +509,7 @@ describe('ChatMetricsService — one team node', () => {
     expect(built.runRemember).not.toHaveBeenCalled();
   });
 
-  it('refuses a node that has never run in this run', async () => {
+  it('refuses a member that has never run in this run', async () => {
     const built = buildNode(null);
 
     await expect(built.service.read('run-1', 'ghost')).rejects.toBeInstanceOf(
@@ -521,18 +524,22 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
   // only restate that one figure: REPORTED as "when hovering to context in
   // footer - i wanna see full details with subscription and so on, same as in
   // main chat".
-  const started = (callId: string, calleeNodeId: string, thread?: string) => ({
+  const started = (
+    callId: string,
+    calleeMemberId: string,
+    thread?: string,
+  ) => ({
     kind: 'call_started',
     payload: JSON.stringify({
       callId,
       callerNodeId: 'manager',
-      calleeNodeId,
+      calleeNodeId: calleeMemberId,
       ...(thread === undefined ? {} : { thread }),
     }),
   });
   const result = (
     callId: string,
-    calleeNodeId: string,
+    calleeMemberId: string,
     sessionId: string,
     member?: number,
   ) => ({
@@ -540,13 +547,17 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
     payload: JSON.stringify({
       callId,
       callerNodeId: 'manager',
-      calleeNodeId,
+      calleeNodeId: calleeMemberId,
       sessionId,
       ...(member === undefined ? {} : { member }),
     }),
   });
-  const callTurn = (nodeId: string, callId: string | null, input: number) => ({
-    nodeId,
+  const callTurn = (
+    memberId: string,
+    callId: string | null,
+    input: number,
+  ) => ({
+    memberId,
     payload: JSON.stringify({
       usage: { inputTokens: input, outputTokens: 1 },
       ...(callId === null ? {} : { callId }),
@@ -569,9 +580,9 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
     const agentOf = vi.fn().mockReturnValue(opts.liveAgent ?? null);
     const getByRunNode = vi
       .fn()
-      .mockImplementation((_run: string, nodeId: string) =>
+      .mockImplementation((_run: string, memberId: string) =>
         Promise.resolve(
-          nodeId === 'engineer'
+          memberId === 'engineer'
             ? { agentKind: AgentKind.Claude, agentSessionId: 'sess-own' }
             : null,
         ),
@@ -683,7 +694,7 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
 
   const PLAN: PlanLimitsWire = { plan: 'max', windows: [], estimated: false };
 
-  it('asks a POOLED callee’s conversation of the member that held it, not the node’s last stamp', async () => {
+  it('asks a POOLED callee’s conversation of the pool member that held it, not the member’s last stamp', async () => {
     const built = buildCall({ live: {}, pooled: true });
 
     await built.service.read('run-1', null, 'call-3');
@@ -693,7 +704,7 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
   });
 
   it('asks a call still RUNNING on another member of the CLI its live process runs', async () => {
-    // No result names the member yet, so the node's stamp — member 1, claude —
+    // No result names the pool member yet, so the member's stamp — pool member 1, claude —
     // was the only answer, and a claude control request went to codex's stdin.
     const built = buildCall({
       live: {},
@@ -724,7 +735,7 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
     expect(metrics.planReason).toBeNull();
   });
 
-  it('totals that conversation’s calls alone — not the node’s own turns, not another callee’s', async () => {
+  it('totals that conversation’s calls alone — not the member’s own turns, not another callee’s', async () => {
     const built = buildCall();
 
     const metrics = await built.service.read('run-1', null, 'call-1');
@@ -756,7 +767,7 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
     expect(built.readContextUsage).not.toHaveBeenCalled();
   });
 
-  it('refuses a request naming a node AND a call', async () => {
+  it('refuses a request naming a member AND a call', async () => {
     const built = buildCall();
 
     await expect(
@@ -1501,8 +1512,10 @@ describe('ChatMetricsService.readTotals', () => {
     // A cursor turn reports no duration; without the ledger the header totals
     // only what the loaded page holds, and moves as the reader pages back.
     wallTurns.rows.clear();
-    await wallTurns.record('run-1', [{ seq: 9, nodeId: null, ms: 3_000 }]);
-    await wallTurns.record('run-other', [{ seq: 9, nodeId: null, ms: 7_000 }]);
+    await wallTurns.record('run-1', [{ seq: 9, memberId: null, ms: 3_000 }]);
+    await wallTurns.record('run-other', [
+      { seq: 9, memberId: null, ms: 7_000 },
+    ]);
     const { service } = build({
       payloads: [turn({ inputTokens: 1, durationMs: 2_000 })],
     });
@@ -1526,12 +1539,15 @@ describe('ChatMetricsService.readTotals', () => {
     const { service } = build({
       team: {
         rows: [
-          { nodeId: 'manager', payload: turn({ costUsd: 50, inputTokens: 1 }) },
-          { nodeId: 'qa', payload: turn({ costUsd: 9, inputTokens: 1 }) },
+          {
+            memberId: 'manager',
+            payload: turn({ costUsd: 50, inputTokens: 1 }),
+          },
+          { memberId: 'qa', payload: turn({ costUsd: 9, inputTokens: 1 }) },
         ],
         states: [
-          { nodeId: 'manager', agentKind: AgentKind.Claude },
-          { nodeId: 'qa', agentKind: AgentKind.CursorAgent },
+          { memberId: 'manager', agentKind: AgentKind.Claude },
+          { memberId: 'qa', agentKind: AgentKind.CursorAgent },
         ],
         runPolledCents: 729,
       },
@@ -1539,29 +1555,32 @@ describe('ChatMetricsService.readTotals', () => {
 
     const totals = await service.readTotals('run-1');
 
-    // The cursor node's own turn cost is left out, so a CLI that starts
+    // The cursor member's own turn cost is left out, so a CLI that starts
     // reporting a price cannot be counted twice beside the polled bill.
     expect(totals.costUsd).toBeCloseTo(57.29, 10);
     expect(totals.turns).toBe(2);
   });
 
-  it('judges a team turn by the pool member that ran it, not by its node’s stamp', async () => {
-    // A claude node's call that ran on its cursor member is billed through the
-    // polled bill, so its own figure is left out; a cursor node's call that
+  it('judges a team turn by the pool member that ran it, not by its member’s stamp', async () => {
+    // A claude member's call that ran on its cursor pool member is billed through the
+    // polled bill, so its own figure is left out; a cursor member's call that
     // ran on its claude member priced itself, so its figure counts.
     const { service } = build({
       team: {
         rows: [
-          { nodeId: 'manager', payload: turn({ costUsd: 50, inputTokens: 1 }) },
           {
-            nodeId: 'manager',
+            memberId: 'manager',
+            payload: turn({ costUsd: 50, inputTokens: 1 }),
+          },
+          {
+            memberId: 'manager',
             payload: JSON.stringify({
               ...JSON.parse(turn({ costUsd: 9, inputTokens: 1 })),
               agentKind: AgentKind.CursorAgent,
             }),
           },
           {
-            nodeId: 'qa',
+            memberId: 'qa',
             payload: JSON.stringify({
               ...JSON.parse(turn({ costUsd: 3, inputTokens: 1 })),
               agentKind: AgentKind.Claude,
@@ -1569,8 +1588,8 @@ describe('ChatMetricsService.readTotals', () => {
           },
         ],
         states: [
-          { nodeId: 'manager', agentKind: AgentKind.Claude },
-          { nodeId: 'qa', agentKind: AgentKind.CursorAgent },
+          { memberId: 'manager', agentKind: AgentKind.Claude },
+          { memberId: 'qa', agentKind: AgentKind.CursorAgent },
         ],
         runPolledCents: 729,
       },
@@ -1642,13 +1661,13 @@ describe('ChatMetricsService.readTotalsResponse', () => {
     turnSpanRows.mockResolvedValue([
       {
         kind: 'status',
-        nodeId: 'engineer',
+        memberId: 'engineer',
         createdAt: at(0),
         payload: JSON.stringify({ status: 'running' }),
       },
       {
         kind: 'approval_request',
-        nodeId: 'engineer',
+        memberId: 'engineer',
         createdAt: at(20),
         payload: JSON.stringify({ id: 'q1' }),
       },

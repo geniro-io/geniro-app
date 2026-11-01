@@ -3,13 +3,13 @@
  *
  * A built-in preamble describing the surface the reply is rendered on, the
  * user's own custom instructions, what a board card asks of the run working it,
- * and whatever the turn itself has to say (a graph node's instruction blocks
- * and role, the call surface). Reached only through `AgentAdapter`
+ * and whatever the turn itself has to say (the instruction blocks addressed to
+ * a team member and its own instructions, the call surface). Reached only through `AgentAdapter`
  * (`composeSystemPrompt`, and `turnInstructionParts` for the team
  * inspector's size readout) — adapters never join these fields themselves
  * (`.claude/rules/agent-adapters.md`).
  *
- * Shared by the chat and graph paths through that one seam, which is the
+ * Shared by the chat and team paths through that one seam, which is the
  * convention this directory exists for: execution logic both paths need lives
  * here rather than being mirrored into each.
  */
@@ -40,7 +40,7 @@ import { redactSecrets } from '../../diagnostics/utils/redact';
  *   `![](out/ci723-assignee-rail.png)` and the transcript drew
  *   `could not read out/ci723-assignee-rail.png`, because the base a relative
  *   reference is measured against is the RUN's cwd and the agent had written
- *   the file somewhere else — routinely, since a delegate, a team node or
+ *   the file somewhere else — routinely, since a delegate, a team member or
  *   a command run in a subdirectory all write relative to their own place. The
  *   route still accepts a relative path (old transcripts are full of them, and
  *   it is right when the two agree); the instruction simply stops recommending
@@ -58,7 +58,7 @@ import { redactSecrets } from '../../diagnostics/utils/redact';
  * stack, so its phrasing is the default habit, and a default that competes with
  * a tool wins by being read first. Every tool it names is named conditionally:
  * this text is not gated on the MCP endpoint having been delivered (on ACP it
- * is said once per session and never repeated), and a team node is offered
+ * is said once per session and never repeated), and a team member is offered
  * only some of them, so it must stay true on a turn where none of them is
  * registered — hence "where a tool is offered" and "a tool missing from your
  * list is not offered", conditions the agent can check and geniro cannot.
@@ -188,13 +188,15 @@ export interface TurnInstructionParts {
    */
   teamInstructions?: string | null;
   /**
-   * The instruction blocks wired to this graph node, already joined. Absent
-   * for plain chat, which has no canvas to wire one on.
+   * The team's instruction blocks addressed to this member, already joined.
+   * Absent for plain chat.
    */
   instructionBlocks?: string | null;
   stageMapPrompt?: string | null;
-  /** This turn's own role text — a graph node's `role`. Absent for plain chat. */
+  /** This turn's own instructions — a team member's private ones. Absent for plain chat. */
   systemPrompt?: string | null;
+  /** The member's character, after its instructions. Absent for plain chat. */
+  characterPrompt?: string | null;
   /**
    * What a turn answering a call is told about where its answer goes — every
    * callee, whether or not it may call anyone itself. Not gated on the call
@@ -241,7 +243,8 @@ export const TURN_INSTRUCTION_SOURCES = [
   'teamInstructions',
   'instructionBlocks',
   'stageMap',
-  'role',
+  'instructions',
+  'character',
   'answeringACall',
   'callSurface',
 ] as const;
@@ -278,12 +281,13 @@ export const TURN_INSTRUCTION_SEPARATOR = '\n\n';
  * A team-editing chat's brief sits beside that one: same kind of claim (the
  * job geniro opened this run for), and a run is only ever one of the two, so
  * their relative order decides nothing.
- * The instruction blocks wired to this node follow — written for a
- * handful of agents rather than for every one of them, but not for this node
- * alone. A graph node's own role comes after all of it, because a node
- * authored for one job is the most specific instruction in the stack. A
- * callee's word on where its answer goes follows the role, and the call
- * surface stays last — its calls-specific half of that rule reads on from it.
+ * The team's instruction blocks addressed to this member follow — written for
+ * some or all of the team, but not for this member alone. A member's own
+ * instructions come after all of it, because they are the most specific
+ * instruction in the stack, and its character follows them: how it speaks,
+ * never what it does. A callee's word on where its answer goes follows, and
+ * the call surface stays last — its calls-specific half of that rule reads on
+ * from it.
  *
  * Blank parts are dropped rather than joined as empty paragraphs — a user who
  * has typed nothing into the settings box must not cost the turn a stray blank
@@ -313,7 +317,8 @@ export function turnInstructionParts(
     ['teamInstructions', parts.teamInstructions],
     ['instructionBlocks', parts.instructionBlocks],
     ['stageMap', parts.stageMapPrompt],
-    ['role', parts.systemPrompt],
+    ['instructions', parts.systemPrompt],
+    ['character', parts.characterPrompt],
     ['answeringACall', parts.answeringACallPrompt],
     ['callSurface', parts.callSurfacePrompt],
   ];

@@ -1,98 +1,57 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Team } from '../teams.types';
-import { agentsThatRunAuto, nodesThatAsk } from './unattended';
+import { member, teamOf } from '../__tests__/team-builders';
+import { agentsThatRunAuto, membersThatAsk } from './unattended';
 
-const team = (nodes: Team['nodes']): Team => ({
-  name: 'Team',
-  nodes,
-  edges: [],
-});
-
-describe('nodesThatAsk', () => {
-  it('is empty when every agent node runs on auto — the team can run unattended', () => {
+describe('membersThatAsk', () => {
+  it('is empty when every member runs on auto — the team can run unattended', () => {
     expect(
-      nodesThatAsk(
-        team([
-          { id: 'trigger-1', kind: 'trigger', trigger: 'manual' },
-          { id: 'manager', kind: 'agent', agent: 'claude', approval: 'auto' },
-          {
-            id: 'engineer',
-            kind: 'agent',
-            agent: 'cursor-agent',
-            approval: 'auto',
-          },
-        ] as Team['nodes']),
+      membersThatAsk(
+        teamOf([
+          member('manager'),
+          member('engineer', { agent: 'cursor-agent' }),
+        ]),
       ),
     ).toEqual([]);
   });
 
-  it('names every agent node that can stop on an approval, by its display name', () => {
+  it('names every member that can stop on an approval, by its display name', () => {
     expect(
-      nodesThatAsk(
-        team([
-          {
-            id: 'manager',
-            name: 'Manager',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'ask',
-          },
-          { id: 'qa', kind: 'agent', agent: 'claude', approval: 'acceptEdits' },
-          { id: 'coder', kind: 'agent', agent: 'claude', approval: 'auto' },
-        ] as Team['nodes']),
+      membersThatAsk(
+        teamOf([
+          member('manager', { name: 'Manager', approval: 'ask' }),
+          member('qa', { approval: 'acceptEdits' }),
+          member('coder', { approval: 'auto' }),
+        ]),
       ),
     ).toEqual(['Manager', 'qa']);
   });
 
-  it('names a node on auto whose pool holds a member that asks', () => {
+  it('names a member on auto whose pool holds a member that asks', () => {
     expect(
-      nodesThatAsk(
-        team([
-          {
-            id: 'engineer',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
+      membersThatAsk(
+        teamOf([
+          member('engineer', {
             pool: [{ agent: 'codex' }, { agent: 'codex', approval: 'ask' }],
-          },
-          {
-            id: 'qa',
-            kind: 'agent',
-            agent: 'claude',
-            approval: 'auto',
-            pool: [{ agent: 'codex' }],
-          },
-        ] as Team['nodes']),
+          }),
+          member('qa', { pool: [{ agent: 'codex' }] }),
+        ]),
       ),
     ).toEqual(['engineer']);
   });
 });
 
 describe('agentsThatRunAuto', () => {
-  it('names each auto agent by its unique id, and a pool member by its number', () => {
-    const team: Team = {
-      name: 'team',
-      nodes: [
-        {
-          id: 'a',
-          kind: 'agent',
-          agent: 'claude',
-          approval: 'ask',
-          name: 'Reviewer',
-          pool: [{ agent: 'codex', approval: 'auto' }, { agent: 'claude' }],
-        },
-        {
-          id: 'b',
-          kind: 'agent',
-          agent: 'claude',
-          approval: 'auto',
-          name: 'Reviewer',
-        },
-        { id: 'c', kind: 'agent', agent: 'claude', approval: 'auto' },
-      ],
-      edges: [],
-    };
+  it('names each auto member by its unique id, and a pool member by its number', () => {
+    const team = teamOf([
+      member('a', {
+        name: 'Reviewer',
+        approval: 'ask',
+        pool: [{ agent: 'codex', approval: 'auto' }, { agent: 'claude' }],
+      }),
+      member('b', { name: 'Reviewer' }),
+      member('c'),
+    ]);
 
     expect(agentsThatRunAuto(team)).toEqual([
       'Reviewer (a) — pool member 2',

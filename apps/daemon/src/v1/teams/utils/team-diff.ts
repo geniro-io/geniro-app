@@ -5,17 +5,17 @@ const MAX_QUOTED_CHARS = 400;
 /** How much unchanged text a quoted excerpt keeps on each side of a change. */
 const EXCERPT_CONTEXT_CHARS = 80;
 
-/** One node or stage whose definition differs, and which of its fields did. */
+/** One member, block or stage whose definition differs, and which of its fields did. */
 export interface ChangedEntry {
   id: string;
   fields: { field: string; before: string; after: string }[];
 }
 
 /**
- * What changed between two teams, by node id, stage id and edge —
+ * What changed between two teams, by member, instruction block and stage id —
  * structural rather than a text diff of the YAML, which reports a reordered
- * list as a rewrite and says nothing about which node a changed line belongs
- * to.
+ * list as a rewrite and says nothing about which member a changed line belongs
+ * to. A list whose kept entries moved is named in `teamFields`.
  *
  * TWIN PARSER: `readDiff` / `diffRows` in
  * `apps/ui/src/renderer/chats/team-proposal-payload.ts`, which reads the
@@ -24,11 +24,12 @@ export interface ChangedEntry {
 export interface TeamDiff {
   identical: boolean;
   teamFields: string[];
-  addedNodes: string[];
-  removedNodes: string[];
-  changedNodes: ChangedEntry[];
-  addedEdges: string[];
-  removedEdges: string[];
+  addedMembers: string[];
+  removedMembers: string[];
+  changedMembers: ChangedEntry[];
+  addedBlocks: string[];
+  removedBlocks: string[];
+  changedBlocks: ChangedEntry[];
   addedStages: string[];
   removedStages: string[];
   changedStages: ChangedEntry[];
@@ -98,10 +99,6 @@ function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function edgeKey(edge: Team['edges'][number]): string {
-  return `${edge.from} → ${edge.to} (${edge.kind})`;
-}
-
 function diffById<T extends { id: string }>(
   before: readonly T[],
   after: readonly T[],
@@ -141,8 +138,8 @@ function diffById<T extends { id: string }>(
   };
 }
 
-/** Whether the stages both sides keep are listed in another order. */
-function stagesReordered(
+/** Whether the entries both sides keep are listed in another order. */
+function reordered(
   before: readonly { id: string }[],
   after: readonly { id: string }[],
 ): boolean {
@@ -153,33 +150,35 @@ function stagesReordered(
   return was.some((id, index) => now[index] !== id);
 }
 
+const LISTS = ['members', 'instructionBlocks', 'stages'] as const;
+
 export function diffTeams(before: Team, after: Team): TeamDiff {
   const teamFields = [
     ...new Set([...Object.keys(before), ...Object.keys(after)]),
   ].filter(
     (field) =>
-      field !== 'nodes' &&
-      field !== 'edges' &&
-      field !== 'stages' &&
+      !(LISTS as readonly string[]).includes(field) &&
       !same(
         (before as Record<string, unknown>)[field],
         (after as Record<string, unknown>)[field],
       ),
   );
-  if (stagesReordered(before.stages ?? [], after.stages ?? [])) {
-    teamFields.push('stages');
+  for (const list of LISTS) {
+    if (reordered(before[list] ?? [], after[list] ?? [])) {
+      teamFields.push(list);
+    }
   }
-  const nodes = diffById(before.nodes, after.nodes);
+  const members = diffById(before.members, after.members);
+  const blocks = diffById(before.instructionBlocks, after.instructionBlocks);
   const stages = diffById(before.stages ?? [], after.stages ?? []);
-  const beforeEdges = new Set(before.edges.map(edgeKey));
-  const afterEdges = new Set(after.edges.map(edgeKey));
   const diff = {
     teamFields,
-    addedNodes: nodes.added,
-    removedNodes: nodes.removed,
-    changedNodes: nodes.changed,
-    addedEdges: [...afterEdges].filter((edge) => !beforeEdges.has(edge)),
-    removedEdges: [...beforeEdges].filter((edge) => !afterEdges.has(edge)),
+    addedMembers: members.added,
+    removedMembers: members.removed,
+    changedMembers: members.changed,
+    addedBlocks: blocks.added,
+    removedBlocks: blocks.removed,
+    changedBlocks: blocks.changed,
     addedStages: stages.added,
     removedStages: stages.removed,
     changedStages: stages.changed,

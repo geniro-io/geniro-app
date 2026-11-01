@@ -259,20 +259,20 @@ export function heldSinceOf(iso: string | null): number | undefined {
 export function withDurableOpenTurns(
   open: readonly OpenTurn[],
   durable: ReadonlyMap<string, { status: string; startedAt: number | null }>,
-  windowHoldsStatus: (nodeId: string) => boolean,
+  windowHoldsStatus: (memberId: string) => boolean,
 ): readonly OpenTurn[] {
   let out: OpenTurn[] | null = null;
-  for (const [nodeId, row] of durable) {
+  for (const [memberId, row] of durable) {
     if (
       row.status !== 'running' ||
       row.startedAt === null ||
-      windowHoldsStatus(nodeId) ||
-      open.some((turn) => turn.agentKey === nodeId)
+      windowHoldsStatus(memberId) ||
+      open.some((turn) => turn.agentKey === memberId)
     ) {
       continue;
     }
     (out ??= [...open]).push({
-      agentKey: nodeId,
+      agentKey: memberId,
       startedAt: row.startedAt,
       parkedMs: 0,
       openSince: [],
@@ -586,10 +586,10 @@ export function scanTurns(
 
   for (const item of items) {
     // Each mode reads its own rows and never the other's — see the doc above.
-    if (nodeScoped !== (item.nodeId !== null)) {
+    if (nodeScoped !== (item.memberId !== null)) {
       continue;
     }
-    const state = stateOf(item.nodeId);
+    const state = stateOf(item.memberId);
     const rowAt = parsedAt(item.createdAt);
     // A turn the daemon closed at BOOT ends where its work last showed, not at
     // the row: that row is written when the daemon next starts, which can be
@@ -714,11 +714,11 @@ export function scanTurns(
   // `.entries()` rather than `.values()`: the thread key IS the agent, and a
   // chat's null key is the sentinel rather than an absence — the same mapping
   // `Chats.tsx` already spells where it folds these by agent.
-  for (const [nodeId, state] of threads.entries()) {
+  for (const [memberId, state] of threads.entries()) {
     const startedAt = state.startedAt ?? state.offTurnSince;
     if (startedAt !== null) {
       open.push({
-        agentKey: nodeId ?? CHAT_AGENT_KEY,
+        agentKey: memberId ?? CHAT_AGENT_KEY,
         startedAt,
         parkedMs: state.parkedMs,
         openSince: [...state.parkedSince.values()],
@@ -756,11 +756,11 @@ export function scanCallTurns(items: readonly ChatItem[]): {
   open: ReadonlyMap<string, OpenTurn>;
 } {
   const durations = new Map<string, CallTurnDuration[]>();
-  const clocks = new Map<string, TurnState & { nodeId: string }>();
+  const clocks = new Map<string, TurnState & { memberId: string }>();
   const cardOwners = new Map<string, string>();
-  const reset = (clock: TurnState & { nodeId: string }): void => {
+  const reset = (clock: TurnState & { memberId: string }): void => {
     for (const id of clock.parkedSince.keys()) {
-      cardOwners.delete(`${clock.nodeId}\u0000${id}`);
+      cardOwners.delete(`${clock.memberId}\u0000${id}`);
     }
     clock.startedAt = null;
     clock.parkedSince.clear();
@@ -777,19 +777,19 @@ export function scanCallTurns(items: readonly ChatItem[]): {
   };
 
   for (const item of items) {
-    if (item.nodeId === null) {
+    if (item.memberId === null) {
       continue;
     }
     const at = parsedAt(item.createdAt);
     if (APPROVAL_CLOSING_KINDS.has(item.kind)) {
       const id = approvalId(item.payload);
       const owner =
-        id === null ? undefined : cardOwners.get(`${item.nodeId}\u0000${id}`);
+        id === null ? undefined : cardOwners.get(`${item.memberId}\u0000${id}`);
       const clock = owner === undefined ? undefined : clocks.get(owner);
       const since = id === null ? undefined : clock?.parkedSince.get(id);
       if (clock !== undefined && since !== undefined && at !== null) {
         clock.parkedSince.delete(id!);
-        cardOwners.delete(`${item.nodeId}\u0000${id}`);
+        cardOwners.delete(`${item.memberId}\u0000${id}`);
         clock.parkedMs += Math.max(0, at - since);
       }
       continue;
@@ -801,7 +801,7 @@ export function scanCallTurns(items: readonly ChatItem[]): {
     let clock = clocks.get(callId);
     if (clock === undefined) {
       clock = {
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         startedAt: null,
         lastAt: null,
         parkedSince: new Map(),
@@ -825,7 +825,7 @@ export function scanCallTurns(items: readonly ChatItem[]): {
       const id = approvalId(item.payload);
       if (id !== null && at !== null) {
         clock.parkedSince.set(id, at);
-        cardOwners.set(`${item.nodeId}\u0000${id}`, callId);
+        cardOwners.set(`${item.memberId}\u0000${id}`, callId);
       }
       continue;
     }
@@ -875,7 +875,7 @@ export function scanCallTurns(items: readonly ChatItem[]): {
   for (const [callId, clock] of clocks) {
     if (clock.startedAt !== null) {
       open.set(callId, {
-        agentKey: clock.nodeId,
+        agentKey: clock.memberId,
         startedAt: clock.startedAt,
         parkedMs: clock.parkedMs,
         openSince: [...clock.parkedSince.values()],

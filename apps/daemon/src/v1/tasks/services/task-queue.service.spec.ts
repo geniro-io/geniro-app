@@ -24,6 +24,7 @@ import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
 import { Run } from '../../runs/entity/run.entity';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { TeamStoreService } from '../../teams/services/team-store.service';
 import type { Team } from '../../teams/teams.types';
 import { TaskDao } from '../dao/task.dao';
@@ -37,12 +38,8 @@ import {
   worktreeUnpreparedReason,
 } from './task-queue.service';
 
-/** A minimal, valid single-node team — content is irrelevant to this spec. */
-const DEV_TEAM_TEAM: Team = {
-  name: 'Dev Team',
-  nodes: [{ id: 'coder', kind: 'agent', agent: 'claude', approval: 'auto' }],
-  edges: [],
-};
+/** A minimal, valid single-member team — content is irrelevant to this spec. */
+const DEV_TEAM_TEAM: Team = teamOf([member('coder')], { name: 'Dev Team' });
 
 /**
  * Real database, real DAOs, real `TeamStoreService` over a throwaway
@@ -451,11 +448,11 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     expect(queue.blocked).toEqual([]);
   });
 
-  it('HANDS OUT a card whose team runs every agent node on auto', async () => {
+  it('HANDS OUT a card whose team runs every member on auto', async () => {
     // REPORTED as "the automatic taking of tasks doesn't work": every team
     // was refused, including this shape — nothing in it can park on a request.
     await arm({ agentKind: null, teamSlug: 'dev-team' });
-    const card = await addTask('run me as a graph', 'todo', 0);
+    const card = await addTask('run me as a team', 'todo', 0);
 
     const queue = await service.read(projectId);
 
@@ -463,26 +460,22 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     expect(queue.blocked).toEqual([]);
   });
 
-  it('BLOCKS a card whose TEAM has an agent node that can ask', async () => {
-    // A team carries `approval` per node, so there is no single field the
-    // resolver can force the way it forces an agent run's — a node that asks
+  it('BLOCKS a card whose TEAM has a member that can ask', async () => {
+    // A team carries `approval` per member, so there is no single field the
+    // resolver can force the way it forces an agent run's — a member that asks
     // parks an unattended run forever, holding its slot and its worktree while
     // the failure breaker sees nothing wrong, because parked is not failed.
-    // The card is answerable: set the node to auto, point it at an agent, or
+    // The card is answerable: set the member to auto, point it at an agent, or
     // press Run yourself. It EXISTS in the library — this is the unattended
     // refusal, not the missing-team one below.
     await teams.create(
-      {
+      teamOf([member('coder', { approval: 'ask' })], {
         name: 'Careful Team',
-        nodes: [
-          { id: 'coder', kind: 'agent', agent: 'claude', approval: 'ask' },
-        ],
-        edges: [],
-      },
+      }),
       'careful-team',
     );
     await arm({ agentKind: null, teamSlug: 'careful-team' });
-    const card = await addTask('run me as a graph', 'todo', 0);
+    const card = await addTask('run me as a team', 'todo', 0);
 
     const queue = await service.read(projectId);
 
@@ -490,7 +483,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     expect(queue.blocked).toEqual([
       {
         id: card.id,
-        title: 'run me as a graph',
+        title: 'run me as a team',
         reason: RUN_TARGET_PROBLEM_REASON['team-unattended'],
         kind: 'run-target',
         retryInMs: null,
@@ -504,19 +497,15 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     // advice it has already followed.
     await arm({ agentKind: null, teamSlug: null });
     const bare = await addTask('names nothing', 'todo', 0);
-    // A team with a node that can ASK — one on auto is now handed out.
+    // A team with a member that can ASK — one on auto is now handed out.
     await teams.create(
-      {
+      teamOf([member('coder', { approval: 'ask' })], {
         name: 'Careful Team',
-        nodes: [
-          { id: 'coder', kind: 'agent', agent: 'claude', approval: 'ask' },
-        ],
-        edges: [],
-      },
+      }),
       'careful-team',
     );
-    const graph = await addTask('names a graph', 'todo', 1);
-    graph.teamSlug = 'careful-team';
+    const viaTeam = await addTask('names a team', 'todo', 1);
+    viaTeam.teamSlug = 'careful-team';
     await em.flush();
 
     const queue = await service.read(projectId);
@@ -525,7 +514,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
       queue.blocked.map((task) => [task.id, task.reason]),
     );
     expect(reasons.get(bare.id)).toBe(RUN_TARGET_PROBLEM_REASON['no-target']);
-    expect(reasons.get(graph.id)).toBe(
+    expect(reasons.get(viaTeam.id)).toBe(
       RUN_TARGET_PROBLEM_REASON['team-unattended'],
     );
   });
@@ -540,7 +529,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
   // for a team that still exists.
   it('blocks a card whose team slug is not in the library, with a reason naming it', async () => {
     await arm({ agentKind: null, teamSlug: null });
-    const card = await addTask('run me as a ghost graph', 'todo', 0);
+    const card = await addTask('run me as a ghost team', 'todo', 0);
     card.teamSlug = 'ghost-team';
     await em.flush();
 
@@ -550,7 +539,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     expect(queue.blocked).toEqual([
       {
         id: card.id,
-        title: 'run me as a ghost graph',
+        title: 'run me as a ghost team',
         reason: missingTeamReason('ghost-team'),
         kind: 'missing-team',
         retryInMs: null,
@@ -607,7 +596,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
       teamSlug: null,
       autopilotEnabled: false,
     });
-    const card = await addTask('run me as a ghost graph', 'todo', 0);
+    const card = await addTask('run me as a ghost team', 'todo', 0);
     card.teamSlug = 'ghost-team';
     await em.flush();
 
@@ -616,7 +605,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     expect(queue.blocked).toEqual([
       {
         id: card.id,
-        title: 'run me as a ghost graph',
+        title: 'run me as a ghost team',
         reason: missingTeamReason('ghost-team'),
         kind: 'missing-team',
         retryInMs: null,
@@ -631,7 +620,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     // at an agent, when picking a different, real team is just as
     // available.
     await arm({ agentKind: null, teamSlug: null });
-    const card = await addTask('run me as a ghost graph', 'todo', 0);
+    const card = await addTask('run me as a ghost team', 'todo', 0);
     card.teamSlug = 'ghost-team';
     await em.flush();
 

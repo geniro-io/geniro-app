@@ -530,8 +530,8 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
    *
    * The board tools are auto-approved in chats, so nothing else stands between
    * an agent in an `ask` or `plan` chat and that start. A chat already in
-   * `auto` gains nothing it did not have, and a team node's board calls
-   * are gated by that node's own approval mode. An open failure breaker does
+   * `auto` gains nothing it did not have, and a team member's board calls
+   * are gated by that member's own approval mode. An open failure breaker does
    * not exempt an armed board — it only delays the start — while arming a
    * board is itself a person's act.
    */

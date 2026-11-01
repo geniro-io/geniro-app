@@ -208,7 +208,7 @@ describe('parseCursorPlan', () => {
     const rows = [
       { mode: 'snapshot', tasks: plan, toolCallId: null },
       ...EXECUTION.map((frame) => parseCursorTodos(frame)),
-    ].map((payload) => ({ nodeId: null, payload }));
+    ].map((payload) => ({ memberId: null, payload }));
 
     expect(foldTaskLists(rows)[0]?.tasks).toEqual([
       {

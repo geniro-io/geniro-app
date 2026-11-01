@@ -131,8 +131,8 @@ export class MonitorChatDelivery implements OnModuleInit {
     const held: HeldOutput = {
       owner: {
         runId: owner.runId,
-        // A chat's own rows carry no node.
-        nodeId: null,
+        // A chat's own rows carry no member.
+        memberId: null,
         callId: owner.callId,
         conversationId: owner.conversationId,
       },

@@ -43,29 +43,29 @@ export class SaveTeamChangeTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
     return (
-      this.analysis.canAnalyse(runId, nodeId) ||
-      this.builders.canEdit(runId, nodeId)
+      this.analysis.canAnalyse(runId, memberId) ||
+      this.builders.canEdit(runId, memberId)
     );
   }
 
-  protected instructions({ runId, nodeId }: McpListContext): string {
-    return saveTeamChangeInstructions(this.builders.canEdit(runId, nodeId));
+  protected instructions({ runId, memberId }: McpListContext): string {
+    return saveTeamChangeInstructions(this.builders.canEdit(runId, memberId));
   }
 
   protected inputSchema({
     runId,
-    nodeId,
+    memberId,
   }: McpListContext): Record<string, unknown> {
-    return saveTeamChangeSchema(this.builders.canEdit(runId, nodeId));
+    return saveTeamChangeSchema(this.builders.canEdit(runId, memberId));
   }
 
   protected async run(
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId } = context;
+    const { runId, memberId } = context;
     // A call is not checked against the listing, so the gate is asked again.
     if (!this.isOffered(context)) {
       return this.text(
@@ -73,21 +73,21 @@ export class SaveTeamChangeTool extends BaseMcpTool {
         true,
       );
     }
-    return this.builders.canEdit(runId, nodeId)
-      ? this.saveForBuilder(args, runId, nodeId)
-      : this.saveForAnalysis(args, runId, nodeId);
+    return this.builders.canEdit(runId, memberId)
+      ? this.saveForBuilder(args, runId, memberId)
+      : this.saveForAnalysis(args, runId, memberId);
   }
 
   private async saveForBuilder(
     args: Record<string, unknown>,
     runId: string,
-    nodeId: string,
+    memberId: string,
   ): Promise<McpToolResult> {
     const read = readBuilderTeamChangeArgs(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
-    const turn = await this.builders.teamOf(runId, nodeId);
+    const turn = await this.builders.teamOf(runId, memberId);
     if ('status' in turn) {
       return this.text(`Nothing saved: ${turn.reason}.`, true);
     }
@@ -112,14 +112,19 @@ export class SaveTeamChangeTool extends BaseMcpTool {
       // nothing: the agent repairs it itself.
       (answer) => {
         if (answer.error === 'TEAM_UNREADABLE') {
-          return this.builders.noteVersion(runId, nodeId, turn.turnStartedAt, {
-            savedHash: null,
-            acceptsAnyVersion: true,
-          });
+          return this.builders.noteVersion(
+            runId,
+            memberId,
+            turn.turnStartedAt,
+            {
+              savedHash: null,
+              acceptsAnyVersion: true,
+            },
+          );
         }
         const known = answer.currentHash;
         return typeof known === 'string'
-          ? this.builders.noteVersion(runId, nodeId, turn.turnStartedAt, {
+          ? this.builders.noteVersion(runId, memberId, turn.turnStartedAt, {
               savedHash: known,
               acceptsAnyVersion: false,
             })
@@ -131,13 +136,13 @@ export class SaveTeamChangeTool extends BaseMcpTool {
   private async saveForAnalysis(
     args: Record<string, unknown>,
     runId: string,
-    nodeId: string,
+    memberId: string,
   ): Promise<McpToolResult> {
     const read = readSaveTeamChangeArgs(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
-    const turn = await this.analysis.turnOf(runId, nodeId);
+    const turn = await this.analysis.turnOf(runId, memberId);
     if ('status' in turn) {
       return this.text(`Nothing saved: ${turn.reason}.`, true);
     }

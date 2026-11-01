@@ -3,7 +3,7 @@ import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
 /**
- * One graph a team has run with, keyed by the version its runs carry
+ * One definition a team has run with, keyed by the version its runs carry
  * (`teamVersionOf`). Written once, the first time a run of that version is
  * recorded, and never by run teardown: it is what still says what a version
  * WAS once every run of it has been deleted.
@@ -16,7 +16,7 @@ export class TeamVersion extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   version!: string;
 
-  /** The canonical graph (`canonicalGraphJson`) the version is the hash of. */
+  /** The canonical team (`canonicalGraphJson`) the version is the hash of. */
   @Property({ type: 'text' })
   graph!: string;
 

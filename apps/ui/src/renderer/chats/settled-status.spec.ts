@@ -12,12 +12,12 @@ import {
 function item(
   kind: string,
   payload: unknown = {},
-  nodeId: string | null = null,
+  memberId: string | null = null,
 ): ChatItem {
   return {
     id: 'i1',
     runId: 'r1',
-    nodeId,
+    memberId,
     seq: 1,
     kind: kind as ChatItem['kind'],
     role: null,
@@ -159,11 +159,11 @@ describe('lastTerminalItemAt', () => {
   const at = (
     kind: ChatItem['kind'],
     createdAt: string,
-    nodeId: string | null = null,
+    memberId: string | null = null,
   ): ChatItem => ({
     id: `i-${createdAt}`,
     runId: 'r',
-    nodeId,
+    memberId,
     seq: 1,
     kind,
     role: null,

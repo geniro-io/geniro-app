@@ -6,7 +6,7 @@ import type {
   LiveAction,
 } from '../../agents/chat.types';
 import { ActionPressService } from '../../agents/services/action-press.service';
-import { GraphExecutorService } from './graph-executor.service';
+import { TeamExecutorService } from './team-executor.service';
 
 /**
  * A press or dismissal of a button in a TEAM run — the chat's press, with
@@ -15,14 +15,14 @@ import { GraphExecutorService } from './graph-executor.service';
  * only this side can reach the executor.
  *
  * A message goes where a typed one does — the agents the run's trigger feeds
- * (`GraphExecutorService.sendMessage`) — never back to the publisher's own
+ * (`TeamExecutorService.sendMessage`) — never back to the publisher's own
  * conversation, which may have settled long before the press.
  */
 @Injectable()
 export class TeamActionsService {
   constructor(
     private readonly presses: ActionPressService,
-    private readonly executor: GraphExecutorService,
+    private readonly executor: TeamExecutorService,
   ) {}
 
   async press(
@@ -52,7 +52,7 @@ export class TeamActionsService {
 /**
  * The press's message as the receiving agents read it: prefixed with who
  * published it whenever the publisher carries an `agentLabel`, which
- * `GraphExecutorService.registerActionPublishers` withholds only from the
+ * `TeamExecutorService.registerActionPublishers` withholds only from the
  * run's sole trigger-fed agent speaking in its own conversation.
  */
 function attributed(text: string, action: LiveAction): string {

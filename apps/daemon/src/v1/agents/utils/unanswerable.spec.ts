@@ -8,16 +8,16 @@ import { ANSWERABILITY_KINDS, unansweredRequests } from './unanswerable';
 function row(
   kind: ItemKind,
   payload: string,
-  nodeId: string | null = null,
+  memberId: string | null = null,
 ): Item {
-  return { kind, payload, nodeId } as Item;
+  return { kind, payload, memberId } as Item;
 }
 
 const request = (id: string, toolName = 'Bash'): Item =>
   row('approval_request', JSON.stringify({ id, toolName }));
 
 describe('unansweredRequests', () => {
-  it('returns the requests nothing ever settled, with their owner node', () => {
+  it('returns the requests nothing ever settled, with their owner member', () => {
     const found = unansweredRequests([
       request('a'),
       request('b'),
@@ -25,10 +25,10 @@ describe('unansweredRequests', () => {
       row('approval_request', JSON.stringify({ id: 'c' }), 'node-1'),
     ]);
     expect(found).toEqual([
-      { nodeId: null, payload: { id: 'b', toolName: 'Bash' } },
+      { memberId: null, payload: { id: 'b', toolName: 'Bash' } },
       // No toolName in the payload: named generically rather than dropped, so
       // the card still closes.
-      { nodeId: 'node-1', payload: { id: 'c', toolName: 'tool' } },
+      { memberId: 'node-1', payload: { id: 'c', toolName: 'tool' } },
     ]);
   });
 
@@ -52,7 +52,7 @@ describe('unansweredRequests', () => {
         row('approval_verdict', JSON.stringify({ id: '1', allow: true })),
         request('1', 'Write'),
       ]),
-    ).toEqual([{ nodeId: null, payload: { id: '1', toolName: 'Write' } }]);
+    ).toEqual([{ memberId: null, payload: { id: '1', toolName: 'Write' } }]);
   });
 
   it('survives a payload that is not JSON, or not an object', () => {
@@ -66,7 +66,7 @@ describe('unansweredRequests', () => {
         row('approval_request', 'null'),
         request('ok'),
       ]),
-    ).toEqual([{ nodeId: null, payload: { id: 'ok', toolName: 'Bash' } }]);
+    ).toEqual([{ memberId: null, payload: { id: 'ok', toolName: 'Bash' } }]);
   });
 
   it('ignores a request whose id is not a string', () => {
@@ -83,7 +83,7 @@ describe('unansweredRequests', () => {
       unansweredRequests([
         row('approval_request', JSON.stringify({ id: 'a', toolName: 7 })),
       ]),
-    ).toEqual([{ nodeId: null, payload: { id: 'a', toolName: 'tool' } }]);
+    ).toEqual([{ memberId: null, payload: { id: 'a', toolName: 'tool' } }]);
   });
 
   it('answers the same from the rows of ANSWERABILITY_KINDS alone as from the whole transcript', () => {
@@ -104,7 +104,7 @@ describe('unansweredRequests', () => {
       ),
     ).toEqual(unansweredRequests(transcript));
     expect(unansweredRequests(transcript)).toEqual([
-      { nodeId: null, payload: { id: 'c', toolName: 'Bash' } },
+      { memberId: null, payload: { id: 'c', toolName: 'Bash' } },
     ]);
   });
 });

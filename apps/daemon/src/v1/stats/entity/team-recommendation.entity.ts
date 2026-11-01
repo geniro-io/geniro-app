@@ -44,7 +44,7 @@ export class TeamRecommendation extends TimestampsEntity {
   @Property({ type: DateTimeType })
   filedAt!: Date;
 
-  /** The library's graph version when the card was filed; null when it was not read then. */
+  /** The library's team version when the card was filed; null when it was not read then. */
   @Property({ type: 'string', nullable: true })
   libraryVersion: string | null = null;
 

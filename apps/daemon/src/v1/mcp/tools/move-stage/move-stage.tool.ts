@@ -24,8 +24,8 @@ export class MoveStageTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.stages.canUse(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.stages.canUse(runId, memberId);
   }
 
   protected instructions(): string {
@@ -38,9 +38,9 @@ export class MoveStageTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId, caller }: McpCallContext,
+    { runId, memberId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
-    if (!this.stages.canUse(runId, nodeId)) {
+    if (!this.stages.canUse(runId, memberId)) {
       return this.text('Not moved: this run has no stages you can move.', true);
     }
     const request = readMoveStage(args);
@@ -51,12 +51,12 @@ export class MoveStageTool extends BaseMcpTool {
       const callId = this.calls.callAnsweredBy(runId, caller);
       const result = await this.stages.move(runId, request, {
         kind: 'agent',
-        nodeId,
+        nodeId: memberId,
         ...(callId !== null ? { callId } : {}),
       });
       const reply = moveStageResultText(
         result,
-        result.ok ? result.team.nodes : [],
+        result.ok ? result.team.members : [],
       );
       return this.text(reply.text, reply.isError);
     } catch (error) {

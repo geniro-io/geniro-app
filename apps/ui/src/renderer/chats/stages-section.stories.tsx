@@ -16,28 +16,28 @@ const DEFINITIONS: TeamStage[] = [
   {
     id: 'investigation',
     title: 'Investigation',
-    instructions: 'Read the code and find what is wrong.',
-    doneWhen: 'The cause of the problem is known.',
+    howToWork: 'Read the code and find what is wrong.',
+    goal: 'The cause of the problem is known.',
     next: ['implementation', 'fix'],
   },
   {
     id: 'implementation',
     title: 'Implementation',
-    doneWhen: 'The feature works.',
+    goal: 'The feature works.',
     next: ['review'],
   },
   {
     id: 'fix',
     title: 'Fix',
-    instructions: 'Change the code so it matches the README. Keep it minimal.',
-    doneWhen: 'add(2, 3) returns 5.',
-    ownerHint: 'lead',
+    howToWork: 'Change the code so it matches the README. Keep it minimal.',
+    goal: 'add(2, 3) returns 5.',
+    responsible: ['lead'],
     next: ['review'],
   },
   {
     id: 'review',
     title: 'Review',
-    doneWhen: 'The diff is read and the tests pass.',
+    goal: 'The diff is read and the tests pass.',
   },
 ];
 
@@ -117,8 +117,8 @@ const FINISHED: StageProgress = {
   ],
 };
 
-const agentName = (nodeId: string): string =>
-  nodeId === 'lead' ? 'lead' : nodeId;
+const agentName = (memberId: string): string =>
+  memberId === 'lead' ? 'lead' : memberId;
 
 const accept =
   (progress: StageProgress) =>

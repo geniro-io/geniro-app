@@ -1,5 +1,5 @@
 /**
- * Where a thread's time went, folded from rows geniro already stores: per-node
+ * Where a thread's time went, folded from rows geniro already stores: per-member
  * busy and waiting time, each tool call's duration, and the critical path.
  *
  * Pure over the waterfall's own spans (`ChatWaterfallService.fold`) plus the
@@ -82,9 +82,9 @@ export function pairToolCalls(
   working: boolean,
 ): ToolSpan[] {
   // Ids are unique per CONVERSATION, not per run: an ACP CLI numbers its
-  // calls from one in every session, so two nodes routinely reuse an id.
+  // calls from one in every session, so two members routinely reuse an id.
   const keyOf = (row: ToolCallTime): string =>
-    `${row.nodeId ?? ''}\u0000${row.inCall ?? ''}\u0000${row.toolId ?? ''}`;
+    `${row.memberId ?? ''}\u0000${row.inCall ?? ''}\u0000${row.toolId ?? ''}`;
   // A queue per key: a CLI can open a second call under a reused id before the
   // first is answered, and the first result answers the first call.
   const open = new Map<string, ToolCallTime[]>();
@@ -99,7 +99,7 @@ export function pairToolCalls(
       const entry: ToolSpan = {
         seq: row.seq,
         resultSeq: null,
-        nodeId: row.nodeId,
+        memberId: row.memberId,
         name: row.name ?? 'unknown',
         startMs: row.at,
         durationMs: null,
@@ -142,7 +142,7 @@ export function pairToolCalls(
  * off the path: shortening it would not have ended the run any sooner.
  */
 function criticalPath(
-  work: readonly { nodeId: string | null; interval: Interval }[],
+  work: readonly { memberId: string | null; interval: Interval }[],
   userWaits: readonly Interval[],
   from: number,
   to: number,
@@ -158,14 +158,14 @@ function criticalPath(
       if (waitStart > cursor) {
         out.push({
           kind: 'idle',
-          nodeId: null,
+          memberId: null,
           startMs: cursor,
           durationMs: waitStart - cursor,
         });
       }
       out.push({
         kind: 'waiting_on_user',
-        nodeId: null,
+        memberId: null,
         startMs: waitStart,
         durationMs: waitEnd - waitStart,
       });
@@ -174,7 +174,7 @@ function criticalPath(
     if (cursor < end) {
       out.push({
         kind: 'idle',
-        nodeId: null,
+        memberId: null,
         startMs: cursor,
         durationMs: end - cursor,
       });
@@ -183,7 +183,7 @@ function criticalPath(
   let remaining = work.filter(({ interval }) => interval[1] > interval[0]);
   let cursor = to;
   while (cursor > from) {
-    let best: { nodeId: string | null; interval: Interval } | null = null;
+    let best: { memberId: string | null; interval: Interval } | null = null;
     let bestEnd = Number.NEGATIVE_INFINITY;
     for (const candidate of remaining) {
       const [start, end] = candidate.interval;
@@ -206,7 +206,7 @@ function criticalPath(
     gap(bestEnd, cursor);
     out.push({
       kind: 'work',
-      nodeId: best.nodeId,
+      memberId: best.memberId,
       startMs: best.interval[0],
       durationMs: bestEnd - best.interval[0],
     });
@@ -223,12 +223,12 @@ export function foldThreadTimeline(
   spans: TimelineSpans,
   tools: readonly ToolSpan[],
 ): ThreadTimeline {
-  const nodeIds = new Set<string | null>();
+  const memberIds = new Set<string | null>();
   for (const turn of spans.turns) {
-    nodeIds.add(turn.nodeId);
+    memberIds.add(turn.memberId);
   }
   for (const tool of tools) {
-    nodeIds.add(tool.nodeId);
+    memberIds.add(tool.memberId);
   }
 
   // Every span is clipped to the read: a turn reaches BACK from its
@@ -244,32 +244,34 @@ export function foldThreadTimeline(
   const allUserWaits = spans.waits.map((wait) =>
     span(wait.startedAt, wait.durationMs),
   );
-  const work: { nodeId: string | null; interval: Interval }[] = [];
+  const work: { memberId: string | null; interval: Interval }[] = [];
   const busyAll: Interval[] = [];
-  const nodes: NodeTime[] = [...nodeIds].map((nodeId) => {
+  const nodes: NodeTime[] = [...memberIds].map((memberId) => {
     const turns = spans.turns
-      .filter((turn) => turn.nodeId === nodeId)
+      .filter((turn) => turn.memberId === memberId)
       .map((turn) => span(turn.startedAt, turn.durationMs));
     // Anything not explicitly async holds its caller. TWIN of the renderer's
     // `blocksCaller` (`run-waterfall-geometry.ts`), which hatches the same
     // stretch on the caller's lane — change one, change the other.
     const calleeWaits = spans.calls
-      .filter((call) => call.callerNodeId === nodeId && call.mode !== 'async')
+      .filter(
+        (call) => call.callerMemberId === memberId && call.mode !== 'async',
+      )
       .map((call) => span(call.startedAt, call.durationMs));
     const userWaits = spans.waits
-      .filter((wait) => wait.nodeId === nodeId)
+      .filter((wait) => wait.memberId === memberId)
       .map((wait) => span(wait.startedAt, wait.durationMs));
     const onCallee = intersect(turns, calleeWaits);
     const onUser = subtract(intersect(turns, userWaits), onCallee);
     const busy = subtract(turns, [...calleeWaits, ...userWaits]);
     for (const interval of busy) {
-      work.push({ nodeId, interval });
+      work.push({ memberId, interval });
       busyAll.push(interval);
     }
-    const lane = tools.filter((tool) => tool.nodeId === nodeId);
+    const lane = tools.filter((tool) => tool.memberId === memberId);
     const own = lane.filter((tool) => !tool.delegate);
     return {
-      nodeId,
+      memberId,
       inTurnsMs: length(turns),
       waitingOnCalleeMs: length(onCallee),
       waitingOnUserMs: length(onUser),
@@ -289,8 +291,8 @@ export function foldThreadTimeline(
   for (const segment of path) {
     if (segment.kind === 'work') {
       byNode.set(
-        segment.nodeId,
-        (byNode.get(segment.nodeId) ?? 0) + segment.durationMs,
+        segment.memberId,
+        (byNode.get(segment.memberId) ?? 0) + segment.durationMs,
       );
     }
   }
@@ -298,9 +300,9 @@ export function foldThreadTimeline(
   const totals = new Map<string, ToolTotal>();
   for (const tool of tools) {
     // Own and sub-agents' calls are separate rows, so each row's time is its count's.
-    const key = `${tool.nodeId ?? ''}\u0000${tool.name}\u0000${tool.delegate}`;
+    const key = `${tool.memberId ?? ''}\u0000${tool.name}\u0000${tool.delegate}`;
     const total = totals.get(key) ?? {
-      nodeId: tool.nodeId,
+      memberId: tool.memberId,
       name: tool.name,
       delegate: tool.delegate,
       calls: 0,
@@ -324,7 +326,7 @@ export function foldThreadTimeline(
     criticalPathMs: [...byNode.values()].reduce((sum, ms) => sum + ms, 0),
     criticalPath: path,
     sinks: [...byNode.entries()]
-      .map(([nodeId, ms]) => ({ nodeId, ms }))
+      .map(([memberId, ms]) => ({ memberId, ms }))
       .sort((a, b) => b.ms - a.ms)
       .slice(0, SINK_COUNT),
     nodes: nodes.sort((a, b) => b.inTurnsMs - a.inTurnsMs),

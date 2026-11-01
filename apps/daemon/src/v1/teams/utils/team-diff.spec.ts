@@ -1,19 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
+import { member, teamOf } from '../__tests__/team-builders';
 import type { Team, TeamStage } from '../teams.types';
 import { diffTeams } from './team-diff';
 
 function stage(id: string, extra: Partial<TeamStage> = {}): TeamStage {
-  return { id, title: id, doneWhen: `${id} is done`, ...extra };
+  return { id, title: id, goal: `${id} is done`, ...extra };
 }
 
 function team(stages?: TeamStage[]): Team {
-  return {
-    name: 'Team',
-    nodes: [{ id: 'start', kind: 'trigger', trigger: 'manual' }],
-    edges: [],
+  return teamOf([member('lead')], {
     ...(stages === undefined ? {} : { stages }),
-  } as Team;
+  });
 }
 
 describe('diffTeams — stages', () => {
@@ -25,7 +23,7 @@ describe('diffTeams — stages', () => {
     ]);
     const after = team([
       stage('plan', { next: ['build'] }),
-      stage('build', { doneWhen: 'tests pass', next: ['review'] }),
+      stage('build', { goal: 'tests pass', next: ['review'] }),
       stage('review'),
     ]);
 
@@ -40,7 +38,7 @@ describe('diffTeams — stages', () => {
         id: 'build',
         fields: [
           {
-            field: 'doneWhen',
+            field: 'goal',
             before: '"build is done"',
             after: '"tests pass"',
           },
@@ -78,15 +76,119 @@ describe('diffTeams — stages', () => {
   });
 });
 
-describe('diffTeams — long text', () => {
-  const withRole = (role: string): Team =>
-    ({
-      name: 'Team',
-      nodes: [{ id: 'coder', kind: 'agent', agent: 'claude', role }],
-      edges: [],
-    }) as unknown as Team;
+describe('diffTeams — members, blocks and team fields', () => {
+  const block = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    title: id,
+    text: `${id} text`,
+    audience: 'everyone' as const,
+    ...extra,
+  });
 
-  it('quotes a long role from where the two versions differ, not their shared opening', () => {
+  it('names each added, removed and changed member by id', () => {
+    const before = teamOf([
+      member('lead'),
+      member('dev', { model: 'a' }),
+      member('old'),
+    ]);
+    const after = teamOf([
+      member('lead'),
+      member('dev', { model: 'b', effort: 'high' }),
+      member('qa'),
+    ]);
+
+    const diff = diffTeams(before, after);
+
+    expect(diff.addedMembers).toEqual(['qa']);
+    expect(diff.removedMembers).toEqual(['old']);
+    expect(diff.changedMembers).toEqual([
+      {
+        id: 'dev',
+        fields: [
+          { field: 'model', before: '"a"', after: '"b"' },
+          { field: 'effort', before: '(unset)', after: '"high"' },
+        ],
+      },
+    ]);
+    expect(diff.teamFields).toEqual([]);
+    expect(diff.identical).toBe(false);
+  });
+
+  it('names each added, removed and changed instruction block by id', () => {
+    const base = [member('lead'), member('dev')];
+    const diff = diffTeams(
+      teamOf(base, {
+        instructionBlocks: [block('style'), block('gone'), block('scope')],
+      }),
+      teamOf(base, {
+        instructionBlocks: [
+          block('style', { audience: ['dev'] }),
+          block('scope'),
+          block('fresh'),
+        ],
+      }),
+    );
+
+    expect(diff.addedBlocks).toEqual(['fresh']);
+    expect(diff.removedBlocks).toEqual(['gone']);
+    expect(diff.changedBlocks).toEqual([
+      {
+        id: 'style',
+        fields: [{ field: 'audience', before: '"everyone"', after: '["dev"]' }],
+      },
+    ]);
+  });
+
+  it('lists a reorder of kept members or blocks in the team fields, not as a change', () => {
+    const blocks = [block('a'), block('b')];
+    const diff = diffTeams(
+      teamOf([member('lead'), member('dev')], { instructionBlocks: blocks }),
+      teamOf([member('dev'), member('lead')], {
+        triggers: [{ kind: 'first-message', member: 'lead' }],
+        instructionBlocks: [...blocks].reverse(),
+      }),
+    );
+
+    expect(diff.teamFields).toEqual(['members', 'instructionBlocks']);
+    expect(diff.changedMembers).toEqual([]);
+    expect(diff.changedBlocks).toEqual([]);
+    expect(diff.identical).toBe(false);
+  });
+
+  it('names a changed scalar team field', () => {
+    const members = [member('lead')];
+    const diff = diffTeams(
+      teamOf(members, { maxActiveTurns: 2 }),
+      teamOf(members, { maxActiveTurns: 3, mode: 'relay' }),
+    );
+
+    expect(diff.teamFields.sort()).toEqual(['maxActiveTurns', 'mode']);
+  });
+
+  it('names a moved trigger as the triggers field', () => {
+    const members = [member('lead'), member('dev')];
+    const diff = diffTeams(
+      teamOf(members),
+      teamOf(members, {
+        triggers: [{ kind: 'first-message', member: 'dev' }],
+      }),
+    );
+
+    expect(diff.teamFields).toEqual(['triggers']);
+  });
+
+  it('is identical for equal teams', () => {
+    expect(
+      diffTeams(teamOf([member('lead')]), teamOf([member('lead')])).identical,
+    ).toBe(true);
+  });
+});
+
+describe('diffTeams — long text', () => {
+  const withRole = (instructions: string): Team =>
+    teamOf([member('coder', { instructions })]);
+
+  it('quotes long instructions from where the two versions differ, not their shared opening', () => {
     const opening = 'You lead a small team. '.repeat(40);
     const ending = ' Report the result.'.repeat(40);
     const diff = diffTeams(
@@ -94,7 +196,7 @@ describe('diffTeams — long text', () => {
       withRole(`${opening}Always open a draft PR first.${ending}`),
     );
 
-    const [field] = diff.changedNodes[0]!.fields;
+    const [field] = diff.changedMembers[0]!.fields;
     const before = JSON.parse(field!.before) as string;
     const after = JSON.parse(field!.after) as string;
     expect(before).toContain('Never push to main.');
@@ -111,15 +213,15 @@ describe('diffTeams — long text', () => {
       withRole('b'.repeat(1000)),
     );
 
-    const [field] = diff.changedNodes[0]!.fields;
+    const [field] = diff.changedMembers[0]!.fields;
     expect(JSON.parse(field!.after)).toBe(`${'b'.repeat(400)}…`);
   });
 
   it('quotes a short change whole', () => {
     const diff = diffTeams(withRole('Write tests.'), withRole('Ship it.'));
 
-    expect(diff.changedNodes[0]!.fields[0]).toEqual({
-      field: 'role',
+    expect(diff.changedMembers[0]!.fields[0]).toEqual({
+      field: 'instructions',
       before: '"Write tests."',
       after: '"Ship it."',
     });

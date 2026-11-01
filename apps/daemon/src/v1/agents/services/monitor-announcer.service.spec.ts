@@ -20,7 +20,7 @@ const snapshot: MonitorSnapshot = {
   pid: 4242,
   owner: {
     runId: 'run-a',
-    nodeId: 'chat',
+    memberId: 'chat',
     caller: 'chat',
     conversationId: null,
     callId: null,

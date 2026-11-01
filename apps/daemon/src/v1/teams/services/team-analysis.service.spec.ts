@@ -7,15 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunWire } from '../../agents/chat.types';
 import type { ThreadAnalysisService } from '../../agents/services/thread-analysis.service';
+import { member, teamOf } from '../__tests__/team-builders';
 import type { Team } from '../teams.types';
 import { TeamAnalysisService } from './team-analysis.service';
 import { TeamStoreService } from './team-store.service';
 
-const WF: Team = {
-  name: 'Review Team',
-  nodes: [{ id: 'start', kind: 'trigger', trigger: 'manual' }],
-  edges: [],
-};
+const WF: Team = teamOf([member('lead')], { name: 'Review Team' });
 
 describe('TeamAnalysisService', () => {
   let dir: string;

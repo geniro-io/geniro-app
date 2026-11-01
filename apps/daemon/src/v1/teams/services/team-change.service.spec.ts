@@ -18,6 +18,7 @@ import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { member, teamOf } from '../__tests__/team-builders';
 import type { TeamChangeLogDao } from '../dao/team-change-log.dao';
 import type { Team, TeamChangeLogRecord } from '../teams.types';
 import { configDirToken } from '../utils/config-dir-redaction';
@@ -33,14 +34,9 @@ import {
 import { TeamChangeLogService } from './team-change-log.service';
 import { TeamStoreService } from './team-store.service';
 
-const WF: Team = {
+const WF: Team = teamOf([member('builder'), member('reviewer')], {
   name: 'Dev Team',
-  nodes: [
-    { id: 'builder', kind: 'agent', agent: 'claude', approval: 'auto' },
-    { id: 'reviewer', kind: 'agent', agent: 'claude', approval: 'auto' },
-  ],
-  edges: [{ from: 'builder', to: 'reviewer', kind: 'data' as const }],
-};
+});
 
 /** The card the Apply in `applies` names, at seq 3. */
 const CARD = {
@@ -64,10 +60,7 @@ const CARD = {
 
 const FASTER: Team = {
   ...WF,
-  nodes: [
-    WF.nodes[0]!,
-    { ...WF.nodes[1]!, model: 'sonnet' } as Team['nodes'][number],
-  ],
+  members: [WF.members[0]!, { ...WF.members[1]!, model: 'sonnet' }],
 };
 
 describe('TeamChangeService', () => {
@@ -156,7 +149,7 @@ describe('TeamChangeService', () => {
     return service.save({
       authority: asked,
       slug: 'dev-team',
-      edits: [{ path: 'nodes/reviewer/model', value: 'sonnet' }],
+      edits: [{ path: 'members/reviewer/model', value: 'sonnet' }],
       dryRun: false,
       ...rest,
     });
@@ -191,7 +184,7 @@ describe('TeamChangeService', () => {
     expect(
       await readFile(join(dir, TEAM_BACKUP_DIR, backups[0]!), 'utf8'),
     ).toBe(before);
-    expect((await store.get('dev-team')).team.nodes[1]).toMatchObject({
+    expect((await store.get('dev-team')).team.members[1]).toMatchObject({
       model: 'sonnet',
     });
     expect((await store.list()).map((entry) => entry.slug)).toEqual([
@@ -267,11 +260,11 @@ describe('TeamChangeService', () => {
           baseHash: await hash(),
         },
         slug: 'dev-team',
-        edits: [{ path: 'nodes/reviewer/model', value: 'sonnet' }],
+        edits: [{ path: 'members/reviewer/model', value: 'sonnet' }],
         dryRun: false,
       }),
     ).resolves.toMatchObject({ saved: true });
-    expect((await store.get('dev-team')).team.nodes[1]).toMatchObject({
+    expect((await store.get('dev-team')).team.members[1]).toMatchObject({
       model: 'sonnet',
     });
   });
@@ -319,7 +312,7 @@ describe('TeamChangeService', () => {
     store.save = async (slug, team, baseHash) => {
       if (first) {
         first = false;
-        // A canvas autosave lands between the service's check and its write.
+        // A team editor autosave lands between the service's check and its write.
         await realSave(slug, { ...WF, description: 'builder autosave' });
       }
       return realSave(slug, team, baseHash);
@@ -344,17 +337,16 @@ describe('TeamChangeService', () => {
     await expect(readdir(dir)).resolves.not.toContain('dev-team.team.yaml');
   });
 
-  it('refuses an invalid graph and writes nothing', async () => {
+  it('refuses an invalid team and writes nothing', async () => {
     const result = await change({
-      edits: [
-        {
-          path: 'edges/-',
-          value: { from: 'reviewer', to: 'builder', kind: 'data' },
-        },
-      ],
+      edits: [{ path: 'members/-', value: member('builder') }],
     });
 
-    expect(result).toMatchObject({ saved: false, error: 'INVALID_TEAM' });
+    expect(result).toMatchObject({
+      saved: false,
+      error: 'INVALID_TEAM',
+      message: expect.stringContaining('Duplicate member id'),
+    });
     await expect(readdir(dir)).resolves.not.toContain(TEAM_BACKUP_DIR);
   });
 
@@ -392,7 +384,7 @@ describe('TeamChangeService', () => {
     expect(result).toMatchObject({
       dryRun: true,
       saved: false,
-      diff: { changedNodes: [{ id: 'reviewer' }] },
+      diff: { changedMembers: [{ id: 'reviewer' }] },
     });
     expect((await store.get('dev-team')).team).toEqual(WF);
     await expect(readdir(dir)).resolves.not.toContain(TEAM_BACKUP_DIR);
@@ -402,10 +394,7 @@ describe('TeamChangeService', () => {
     const PROFILE = '/Users/someone/.claude-work';
     const PROFILED: Team = {
       ...WF,
-      nodes: [
-        { ...WF.nodes[0]!, configDir: PROFILE } as Team['nodes'][number],
-        WF.nodes[1]!,
-      ],
+      members: [{ ...WF.members[0]!, configDir: PROFILE }, WF.members[1]!],
     };
 
     it('saves with no Apply and no hash behind it, and takes no backup of its own', async () => {
@@ -417,7 +406,7 @@ describe('TeamChangeService', () => {
       expect(result.hash).toBe(await hash());
       expect(result).not.toHaveProperty('backup');
       await expect(readdir(dir)).resolves.not.toContain(TEAM_BACKUP_DIR);
-      expect((await store.get('dev-team')).team.nodes[1]).toMatchObject({
+      expect((await store.get('dev-team')).team.members[1]).toMatchObject({
         model: 'sonnet',
       });
     });
@@ -456,7 +445,7 @@ describe('TeamChangeService', () => {
       store.save = async (slug, team, baseHash) => {
         if (first) {
           first = false;
-          await realSave(slug, { ...WF, description: 'canvas edit' });
+          await realSave(slug, { ...WF, description: 'team editor edit' });
         }
         return realSave(slug, team, baseHash);
       };
@@ -470,7 +459,7 @@ describe('TeamChangeService', () => {
     it('stays a refusal when the write it lost to left a file that does not parse', async () => {
       const realSave = store.save.bind(store);
       store.save = async (slug, team, baseHash) => {
-        await writeFile(join(dir, 'dev-team.team.yaml'), 'nodes: [\n');
+        await writeFile(join(dir, 'dev-team.team.yaml'), 'members: [\n');
         return realSave(slug, team, baseHash);
       };
 
@@ -491,7 +480,7 @@ describe('TeamChangeService', () => {
       expect(
         await change({
           authority: builder({ savedHash: known }),
-          edits: [{ path: 'nodes/reviewer/model', value: 'opus' }],
+          edits: [{ path: 'members/reviewer/model', value: 'opus' }],
         }),
       ).toMatchObject({ saved: false, error: 'HASH_DRIFT' });
     });
@@ -509,7 +498,7 @@ describe('TeamChangeService', () => {
     it('refuses a file that no longer parses, naming the fault but quoting no line of it', async () => {
       await writeFile(
         join(dir, 'dev-team.team.yaml'),
-        'name: Dev Team\nnodes:\n  - id: a\n    configDir: /Users/someone/.claude-work\n      bad: indent\n',
+        'name: Dev Team\nmembers:\n  - id: a\n    configDir: /Users/someone/.claude-work\n      bad: indent\n',
       );
 
       const result = await change({
@@ -535,7 +524,7 @@ describe('TeamChangeService', () => {
         }),
         await change({
           authority: repaired,
-          edits: [{ path: 'nodes/reviewer/model', value: undefined }],
+          edits: [{ path: 'members/reviewer/model', value: undefined }],
         }),
       ]) {
         expect(result.currentHash).toBe(await hash());
@@ -554,36 +543,35 @@ describe('TeamChangeService', () => {
       expect(result).toMatchObject({ saved: true });
     });
 
-    it('refuses an invalid graph and writes nothing', async () => {
+    it('refuses an invalid team and writes nothing', async () => {
       const result = await change({
         authority: builder(),
-        edits: [
-          {
-            path: 'edges/-',
-            value: { from: 'reviewer', to: 'builder', kind: 'data' },
-          },
-        ],
+        edits: [{ path: 'members/-', value: member('builder') }],
       });
 
-      expect(result).toMatchObject({ saved: false, error: 'INVALID_TEAM' });
+      expect(result).toMatchObject({
+        saved: false,
+        error: 'INVALID_TEAM',
+        message: expect.stringContaining('Duplicate member id'),
+      });
       await expect(readdir(dir)).resolves.not.toContain(TEAM_BACKUP_DIR);
     });
 
     it('puts back a profile it wrote as the token read_teams showed', async () => {
       await store.save('dev-team', PROFILED);
-      const node = {
-        ...WF.nodes[0]!,
+      const written = {
+        ...WF.members[0]!,
         configDir: configDirToken(PROFILE),
         model: 'opus',
       };
 
       const result = await change({
         authority: builder({ savedHash: await hash() }),
-        edits: [{ path: 'nodes/builder', value: node }],
+        edits: [{ path: 'members/builder', value: written }],
       });
 
       expect(result).toMatchObject({ saved: true });
-      expect((await store.get('dev-team')).team.nodes[0]).toMatchObject({
+      expect((await store.get('dev-team')).team.members[0]).toMatchObject({
         configDir: PROFILE,
         model: 'opus',
       });
@@ -594,7 +582,7 @@ describe('TeamChangeService', () => {
         authority: builder(),
         edits: [
           {
-            path: 'nodes/builder/configDir',
+            path: 'members/builder/configDir',
             value: configDirToken('/elsewhere'),
           },
         ],
@@ -655,7 +643,7 @@ describe('TeamChangeService', () => {
     expect(described).toMatchObject({
       slug: 'dev-team',
       team: WF,
-      changedSinceThisRun: { changedNodes: [{ id: 'reviewer' }] },
+      changedSinceThisRun: { changedMembers: [{ id: 'reviewer' }] },
     });
     expect(typeof described.hash).toBe('string');
   });
@@ -663,13 +651,13 @@ describe('TeamChangeService', () => {
   it('lists the instructions file of every agent and pool member the run itself ran', async () => {
     const ran: Team = {
       ...WF,
-      nodes: [
-        WF.nodes[0]!,
+      members: [
+        WF.members[0]!,
         {
-          ...WF.nodes[1]!,
+          ...WF.members[1]!,
           agent: 'codex',
           pool: [{ agent: 'claude', configDir: '/profiles/work' }],
-        } as Team['nodes'][number],
+        },
       ],
     };
 
@@ -699,25 +687,22 @@ describe('TeamChangeService', () => {
   });
 
   it("measures every agent's always-on instructions as the library composes them, with the run's own settings and card", async () => {
-    const roles: Team = {
+    const written: Team = {
       ...WF,
-      nodes: [
-        { ...WF.nodes[0]!, role: 'Build it.' } as Team['nodes'][number],
-        {
-          ...WF.nodes[1]!,
-          role: 'Review it.',
-        } as Team['nodes'][number],
+      members: [
+        { ...WF.members[0]!, instructions: 'Build it.' },
+        { ...WF.members[1]!, instructions: 'Review it.' },
       ],
     };
-    await store.save('dev-team', roles);
+    await store.save('dev-team', written);
     const ran: Team = {
-      ...roles,
-      nodes: [
-        roles.nodes[0]!,
+      ...written,
+      members: [
+        written.members[0]!,
         {
-          ...roles.nodes[1]!,
-          role: `Review it. ${'Be thorough. '.repeat(50)}`,
-        } as Team['nodes'][number],
+          ...written.members[1]!,
+          instructions: `Review it. ${'Be thorough. '.repeat(50)}`,
+        },
       ],
     };
 
@@ -729,14 +714,14 @@ describe('TeamChangeService', () => {
       memoryIndex: 'INDEX',
     });
     const sizes = described.instructionSizes as {
-      nodeId: string;
+      memberId: string;
       totalChars: number;
       approxTokens: number;
       parts: { source: string; chars: number }[];
       inThisRun?: { totalChars: number; approxTokens: number };
     }[];
 
-    expect(sizes.map((node) => node.nodeId)).toEqual(['builder', 'reviewer']);
+    expect(sizes.map((size) => size.memberId)).toEqual(['builder', 'reviewer']);
     const [builder, reviewer] = sizes;
     expect(builder!.parts).toEqual(
       expect.arrayContaining([
@@ -744,14 +729,14 @@ describe('TeamChangeService', () => {
         expect.objectContaining({ source: 'taskInstructions', chars: 4 }),
         expect.objectContaining({ source: 'projectInstructions', chars: 7 }),
         expect.objectContaining({ source: 'memoryIndex', chars: 5 }),
-        expect.objectContaining({ source: 'role', chars: 9 }),
+        expect.objectContaining({ source: 'instructions', chars: 9 }),
       ]),
     );
     expect(builder!.parts.map((part) => part.source)).not.toContain(
       'replyLanguage',
     );
     expect(builder).not.toHaveProperty('inThisRun');
-    // The run paid for the longer role it started with.
+    // The run paid for the longer instructions it started with.
     expect(reviewer!.inThisRun!.totalChars).toBe(
       reviewer!.totalChars + 'Be thorough. '.repeat(50).trim().length + 1,
     );

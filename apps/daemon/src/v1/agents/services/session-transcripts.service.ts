@@ -42,8 +42,8 @@ export class SessionTranscriptsService {
    * Every CLI conversation a run held, with the CLI and the profile it lives
    * under. Read BEFORE the run's `node_state` rows are deleted.
    *
-   * A chat's one node runs under the run's own profile; a team node under
-   * the one its snapshot names. A node's whole session history is taken, not
+   * A chat's one agent runs under the run's own profile; a team member under
+   * the one its snapshot names. A member's whole session history is taken, not
    * only the session it would resume: every call to it and every compaction
    * starts another conversation, and each is a transcript on disk.
    */
@@ -60,17 +60,17 @@ export class SessionTranscriptsService {
         continue;
       }
       const configDir =
-        run.teamId === null && state.nodeId === SINGLE_AGENT_NODE
+        run.teamId === null && state.memberId === SINGLE_AGENT_NODE
           ? run.configDir
-          : (nodeDirs.get(state.nodeId) ?? null);
+          : (nodeDirs.get(state.memberId) ?? null);
       const sessions = new Set(readNodeSessions(state.sessionIds));
       if (state.agentSessionId) {
         sessions.add(state.agentSessionId);
       }
-      // A pooled node's sessions belong to whichever member ran them, which
+      // A pooled member's sessions belong to whichever pool member ran them, which
       // `node_state` does not record — so each is looked for under every
       // member's profile.
-      const profiles = nodePools.get(state.nodeId) ?? [
+      const profiles = nodePools.get(state.memberId) ?? [
         { agentKind, configDir },
       ];
       for (const sessionId of sessions) {

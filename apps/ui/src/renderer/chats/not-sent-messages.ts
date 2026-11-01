@@ -148,8 +148,8 @@ export function callTargetOf(
   if (callId === null) {
     return 'run';
   }
-  const nodeId = payloadString(item.payload, 'nodeId') ?? item.nodeId;
-  if (nodeId === null) {
+  const memberId = payloadString(item.payload, 'nodeId') ?? item.memberId;
+  if (memberId === null) {
     return null;
   }
   let blockId: string | null = null;
@@ -164,7 +164,7 @@ export function callTargetOf(
   }
   return blockId === null
     ? null
-    : { runId: item.runId, nodeId, callId, blockId };
+    : { runId: item.runId, memberId, callId, blockId };
 }
 
 /**

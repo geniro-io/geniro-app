@@ -176,14 +176,14 @@ export function sameMark(
 export function onCriticalPath(
   path: readonly RunWaterfallCriticalSegment[],
   kind: RunWaterfallCriticalSegment['kind'],
-  nodeId: string | null,
+  memberId: string | null,
   start: number,
   end: number,
 ): boolean {
   return path.some(
     (segment) =>
       segment.kind === kind &&
-      (kind !== 'work' || segment.nodeId === nodeId) &&
+      (kind !== 'work' || segment.memberId === memberId) &&
       overlapMs(start, end, {
         from: Date.parse(segment.startedAt),
         to: endOf(segment),
@@ -376,9 +376,9 @@ function withCostSplit(
 /** The lane a span belongs to, by node id — which is also its colour index. */
 export function laneIndexOf(
   data: RunWaterfallDto,
-  nodeId: string | null,
+  memberId: string | null,
 ): number {
-  const index = data.lanes.findIndex((lane) => lane.nodeId === nodeId);
+  const index = data.lanes.findIndex((lane) => lane.memberId === memberId);
   // A span whose lane was dropped (a node that only ever waited) still has to
   // be drawn somewhere; the first colour is a better answer than not drawing it.
   return index < 0 ? 0 : index;

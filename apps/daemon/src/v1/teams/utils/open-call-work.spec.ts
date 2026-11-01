@@ -4,13 +4,13 @@ import type { Item } from '../../runs/entity/item.entity';
 import { OPEN_WORK_KINDS, openCalls, openNodeTurns } from './open-call-work';
 
 let seq = 0;
-function row(kind: string, nodeId: string | null, payload: unknown): Item {
+function row(kind: string, memberId: string | null, payload: unknown): Item {
   seq += 1;
-  return { seq, kind, nodeId, payload: JSON.stringify(payload) } as Item;
+  return { seq, kind, memberId, payload: JSON.stringify(payload) } as Item;
 }
 
 describe('openNodeTurns', () => {
-  it('pairs running rows with terminal ones per node and call', () => {
+  it('pairs running rows with terminal ones per member and call', () => {
     const turns = openNodeTurns([
       row('status', 'a', { nodeId: 'a', status: 'running' }),
       row('status', 'a', { nodeId: 'a', status: 'completed' }),
@@ -21,8 +21,8 @@ describe('openNodeTurns', () => {
     ]);
 
     expect(turns).toEqual([
-      { nodeId: 'a', callId: null },
-      { nodeId: 'b', callId: 'c1' },
+      { memberId: 'a', callId: null },
+      { memberId: 'b', callId: 'c1' },
     ]);
   });
 
@@ -32,7 +32,7 @@ describe('openNodeTurns', () => {
       row('status', 'a', { nodeId: 'a', status: 'running' }),
     ]);
 
-    expect(turns).toEqual([{ nodeId: 'a', callId: null }]);
+    expect(turns).toEqual([{ memberId: 'a', callId: null }]);
   });
 });
 
@@ -57,8 +57,8 @@ describe('openCalls', () => {
     expect(calls).toEqual([
       {
         callId: 'open',
-        callerNodeId: 'orch',
-        calleeNodeId: 'critic',
+        callerMemberId: 'orch',
+        calleeMemberId: 'critic',
         mode: 'async',
       },
     ]);
@@ -94,6 +94,8 @@ describe('OPEN_WORK_KINDS', () => {
     expect(openNodeTurns(loaded)).toEqual(openNodeTurns(transcript));
     expect(openCalls(loaded)).toEqual(openCalls(transcript));
     expect(openCalls(transcript).map((call) => call.callId)).toEqual(['c2']);
-    expect(openNodeTurns(transcript)).toEqual([{ nodeId: 'a', callId: null }]);
+    expect(openNodeTurns(transcript)).toEqual([
+      { memberId: 'a', callId: null },
+    ]);
   });
 });

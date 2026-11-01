@@ -16,7 +16,7 @@ import { MemoryTextIndexService } from './services/memory-text-index.service';
  * geniro's own MCP tools.
  *
  * Its rows sit outside run teardown: a memory outlives the chat that wrote it.
- * It provides the run and node DAOs it reads rather than importing
+ * It provides the run and member-state DAOs it reads rather than importing
  * `AgentsModule`, and imports only `ProjectsModule`, so `AgentsModule`,
  * `TeamsModule`, `McpModule` and `NotificationsModule` can import it without
  * a cycle.

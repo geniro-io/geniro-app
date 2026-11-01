@@ -27,7 +27,7 @@ import { payloadPreview } from '../utils/payload-preview';
  *
  * Recording the transcript plane here rather than inside `ChatService` is not
  * incidental. The bus is where BOTH execution paths converge — the chat turn
- * and the graph executor publish through it — so one subscription covers
+ * and the team executor publish through it — so one subscription covers
  * both, and neither has to remember to log. It is also the exact plane the
  * duplicate-seq defect lived in: a run of items whose seq repeats is visible
  * at a glance here, where it took a database query to find before.
@@ -53,7 +53,7 @@ export class DebugLogService implements OnModuleInit, OnApplicationShutdown {
           ` ${payloadPreview(event.item.payload)}`,
         {
           runId: event.runId,
-          ...(event.item.nodeId ? { nodeId: event.item.nodeId } : {}),
+          ...(event.item.memberId ? { memberId: event.item.memberId } : {}),
           seq: String(event.item.seq),
           kind: event.item.kind,
         },
@@ -95,7 +95,7 @@ export class DebugLogService implements OnModuleInit, OnApplicationShutdown {
     this.bus.allDeltas().subscribe((event) => {
       this.record('transcript', 'trace', 'delta', {
         runId: event.runId,
-        ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+        ...(event.memberId ? { memberId: event.memberId } : {}),
         chars: String(event.text?.length ?? 0),
       });
     });

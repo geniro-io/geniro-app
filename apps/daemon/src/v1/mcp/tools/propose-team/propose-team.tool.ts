@@ -34,38 +34,38 @@ export class ProposeTeamTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
     return (
-      this.gate.canPropose(runId, nodeId) ||
-      this.builders.canEdit(runId, nodeId)
+      this.gate.canPropose(runId, memberId) ||
+      this.builders.canEdit(runId, memberId)
     );
   }
 
-  protected instructions({ runId, nodeId }: McpListContext): string {
-    return proposeTeamInstructions(this.builders.canEdit(runId, nodeId));
+  protected instructions({ runId, memberId }: McpListContext): string {
+    return proposeTeamInstructions(this.builders.canEdit(runId, memberId));
   }
 
   protected inputSchema({
     runId,
-    nodeId,
+    memberId,
   }: McpListContext): Record<string, unknown> {
-    return proposeTeamSchema(this.builders.canEdit(runId, nodeId));
+    return proposeTeamSchema(this.builders.canEdit(runId, memberId));
   }
 
   protected async run(
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId } = context;
+    const { runId, memberId } = context;
     // A call is not checked against the listing, so the gate is asked again.
-    if (this.builders.canEdit(runId, nodeId)) {
-      return this.proposeChange(args, runId, nodeId);
+    if (this.builders.canEdit(runId, memberId)) {
+      return this.proposeChange(args, runId, memberId);
     }
     const read = readProposeTeamArgs(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
-    if (!this.gate.canPropose(runId, nodeId)) {
+    if (!this.gate.canPropose(runId, memberId)) {
       return this.text(
         "Not proposed: teams are proposed from ordinary chats and a team's own builder chat only.",
         true,
@@ -81,13 +81,13 @@ export class ProposeTeamTool extends BaseMcpTool {
   private async proposeChange(
     args: Record<string, unknown>,
     runId: string,
-    nodeId: string,
+    memberId: string,
   ): Promise<McpToolResult> {
     const read = readProposeTeamChangeArgs(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
-    const turn = await this.builders.teamOf(runId, nodeId);
+    const turn = await this.builders.teamOf(runId, memberId);
     if ('status' in turn) {
       return this.text(`Not proposed: ${turn.reason}.`, true);
     }

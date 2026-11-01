@@ -486,7 +486,7 @@ export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
         startedAt: item.createdAt,
         launchSeq: item.seq,
         trackedSeq: detached.get(callId) ?? null,
-        agentId: item.nodeId,
+        agentId: item.memberId,
         callId: payloadString(payload, 'callId'),
       };
       if (shell.command === '') {

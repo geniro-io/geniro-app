@@ -23,7 +23,7 @@ import { ChatMetricsService } from './chat-metrics.service';
  *
  * It exists because the app had nowhere to hand a whole thread from. What a
  * reader needs to diagnose a turn is spread across four tables and three of the
- * run's own columns — the transcript with its raw tool payloads, which node ran
+ * run's own columns — the transcript with its raw tool payloads, which member ran
  * on which CLI, what the thread cost, and the settings the turns actually ran
  * under — and the one place all of it is reachable at once is here.
  *
@@ -120,7 +120,7 @@ function exportRun(run: Run): ChatExportRunWire {
 
 function exportNode(node: NodeState): ChatExportNodeWire {
   return {
-    nodeId: node.nodeId,
+    memberId: node.memberId,
     status: node.status,
     agentKind: node.agentKind,
     model: node.model,

@@ -79,7 +79,7 @@ export function readCalleeFailure(
   // A diagnosis that throws must not cost the turn its bookkeeping. This runs
   // inside the executor's settle `try`, whose `finally` resolves the caller's
   // envelope either way — so a throw here would skip the callee's `node_state`
-  // write and its status item, leaving the node reading `running` for the rest
+  // write and its status item, leaving the member reading `running` for the rest
   // of the run. OBSERVED while building this: the executor's own test double
   // had no `failureFrom` yet, and the only symptom was a callee stuck on
   // `running` with nothing anywhere naming a cause.

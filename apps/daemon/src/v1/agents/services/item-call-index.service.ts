@@ -218,7 +218,7 @@ export class ItemCallIndexService {
         const inCall = callMembershipOf(
           {
             kind: row.kind,
-            nodeId: row.nodeId,
+            memberId: row.memberId,
             payload: parseJsonColumn(row.payload),
           },
           lookup,
@@ -306,7 +306,7 @@ export class ItemCallIndexService {
     return callMembershipLookupOf(
       rows.map((row) => ({
         kind: row.kind,
-        nodeId: row.nodeId,
+        memberId: row.memberId,
         payload: parseJsonColumn(row.payload),
       })),
     );

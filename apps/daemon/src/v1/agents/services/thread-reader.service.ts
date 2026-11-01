@@ -299,7 +299,7 @@ export class ThreadReaderService {
 
   /**
    * A team analysis's runs side by side: each run's totals and outcome,
-   * every node's figures, and every node's turns per model — each folded from
+   * every member's figures, and every member's turns per model — each folded from
    * every row up to that run's snapshot, never from a window.
    */
   private async runs(
@@ -485,7 +485,7 @@ export class ThreadReaderService {
     const { timeline, fold } = reading;
     const lists = {
       nodes: timeline.nodes.map((node) => ({
-        node: laneOf(node.nodeId),
+        node: laneOf(node.memberId),
         inTurnsMs: node.inTurnsMs,
         busyMs: node.busyMs,
         waitingOnCalleeMs: node.waitingOnCalleeMs,
@@ -495,14 +495,14 @@ export class ThreadReaderService {
         delegateToolCalls: node.delegateToolCalls,
         toolMs: node.toolMs,
         delegateToolMs: node.delegateToolMs,
-        maxContextTokens: maxContext(fold.turns, node.nodeId),
-        ...usageOf(fold.turns, node.nodeId),
+        maxContextTokens: maxContext(fold.turns, node.memberId),
+        ...usageOf(fold.turns, node.memberId),
       })),
       criticalPath: [...timeline.criticalPath]
         .sort((a, b) => b.durationMs - a.durationMs)
         .map((segment) => ({
           kind: segment.kind,
-          node: segment.kind === 'work' ? laneOf(segment.nodeId) : null,
+          node: segment.kind === 'work' ? laneOf(segment.memberId) : null,
           at: iso(segment.startMs),
           ms: segment.durationMs,
         })),
@@ -511,7 +511,7 @@ export class ThreadReaderService {
         .sort((a, b) => (b.durationMs ?? 0) - (a.durationMs ?? 0))
         .map((tool) => ({
           seq: tool.seq,
-          node: laneOf(tool.nodeId),
+          node: laneOf(tool.memberId),
           name: tool.name.slice(0, TOOL_NAME_CHARS),
           delegate: tool.delegate,
           ms: tool.durationMs,
@@ -519,7 +519,7 @@ export class ThreadReaderService {
           ...(tool.failed ? { failed: true } : {}),
         })),
       toolTotals: timeline.toolTotals.map((total) => ({
-        node: laneOf(total.nodeId),
+        node: laneOf(total.memberId),
         name: total.name.slice(0, TOOL_NAME_CHARS),
         delegate: total.delegate,
         calls: total.calls,
@@ -539,7 +539,7 @@ export class ThreadReaderService {
         criticalPathMs: timeline.criticalPathMs,
         criticalPathSegments: timeline.criticalPath.length,
         sinks: timeline.sinks.map((sink) => ({
-          node: laneOf(sink.nodeId),
+          node: laneOf(sink.memberId),
           ms: sink.ms,
         })),
         calls: fold.calls.length,
@@ -554,7 +554,7 @@ export class ThreadReaderService {
       },
       teamNotes,
       ...lists,
-      next: `Read view=spans for every timed span (kinds=["tool"] with minMs for slow tools), view=items for the rows (afterSeq / fromTime / nodeId / kinds), view=item seq=N for one row in full.${teamNotes > 0 ? ' The team notes are view=items kinds=["team_note"].' : ''}`,
+      next: `Read view=spans for every timed span (kinds=["tool"] with minMs for slow tools), view=items for the rows (afterSeq / fromTime / memberId / kinds), view=item seq=N for one row in full.${teamNotes > 0 ? ' The team notes are view=items kinds=["team_note"].' : ''}`,
     };
     return fitToBudget(
       answer,
@@ -591,7 +591,7 @@ export class ThreadReaderService {
       for (const turn of fold.turns) {
         all.push({
           type: 'turn',
-          node: laneOf(turn.nodeId),
+          node: laneOf(turn.memberId),
           startMs: Date.parse(turn.startedAt),
           ms: turn.durationMs,
           outcome: turn.outcome,
@@ -621,8 +621,8 @@ export class ThreadReaderService {
       for (const call of fold.calls) {
         all.push({
           type: 'call',
-          node: laneOf(call.callerNodeId),
-          callee: call.calleeNodeId,
+          node: laneOf(call.callerMemberId),
+          callee: call.calleeMemberId,
           mode: call.mode,
           status: call.status,
           running: call.running,
@@ -638,7 +638,7 @@ export class ThreadReaderService {
       for (const wait of fold.waits) {
         all.push({
           type: 'wait',
-          node: laneOf(wait.nodeId),
+          node: laneOf(wait.memberId),
           question: wait.question,
           toolName: wait.toolName,
           startMs: Date.parse(wait.startedAt),
@@ -650,7 +650,7 @@ export class ThreadReaderService {
       for (const delegate of fold.delegates) {
         all.push({
           type: 'delegate',
-          node: laneOf(delegate.nodeId),
+          node: laneOf(delegate.memberId),
           startMs: Date.parse(delegate.startedAt),
           ms: delegate.durationMs,
         });
@@ -660,7 +660,7 @@ export class ThreadReaderService {
       for (const tool of timeline.tools) {
         all.push({
           type: 'tool',
-          node: laneOf(tool.nodeId),
+          node: laneOf(tool.memberId),
           seq: tool.seq,
           resultSeq: tool.resultSeq,
           name: tool.name.slice(0, TOOL_NAME_CHARS),
@@ -677,14 +677,16 @@ export class ThreadReaderService {
         all.push({
           type: 'critical',
           kind: segment.kind,
-          node: segment.kind === 'work' ? laneOf(segment.nodeId) : null,
+          node: segment.kind === 'work' ? laneOf(segment.memberId) : null,
           startMs: segment.startMs,
           ms: segment.durationMs,
         });
       }
     }
     const filtered = all
-      .filter((span) => args.nodeId === undefined || span.node === args.nodeId)
+      .filter(
+        (span) => args.memberId === undefined || span.node === args.memberId,
+      )
       .filter((span) => args.minMs === undefined || span.ms >= args.minMs)
       .sort((a, b) => a.startMs - b.startMs);
 
@@ -730,9 +732,9 @@ export class ThreadReaderService {
         maxSeq: source.snapshotSeq,
         limit: ITEMS_READ_LIMIT,
         ...(fromTime === undefined ? {} : { fromTime }),
-        ...(args.nodeId === undefined
+        ...(args.memberId === undefined
           ? {}
-          : { nodeId: args.nodeId === CHAT_LANE ? null : args.nodeId }),
+          : { memberId: args.memberId === CHAT_LANE ? null : args.memberId }),
         ...(kinds === undefined || kinds.length === 0 ? {} : { kinds }),
       },
       em,
@@ -784,7 +786,7 @@ export class ThreadReaderService {
         seq: row.seq,
         kind: row.kind,
         role: row.role,
-        node: laneOf(row.nodeId),
+        node: laneOf(row.memberId),
         at: row.createdAt.toISOString(),
       },
       payloadText(row.payload),
@@ -835,7 +837,7 @@ function itemEntry(row: Item): Answer {
     seq: row.seq,
     kind: row.kind,
     ...(row.role === null ? {} : { role: row.role }),
-    node: laneOf(row.nodeId),
+    node: laneOf(row.memberId),
     ...(row.inCall === null || row.inCall === '' ? {} : { inCall: row.inCall }),
     at: row.createdAt.toISOString(),
     text: clip(payloadText(row.payload), ITEM_TEXT_CHARS, row.seq),
@@ -844,7 +846,7 @@ function itemEntry(row: Item): Answer {
 
 type TurnUsage = Pick<
   RunWaterfallTurn,
-  | 'nodeId'
+  | 'memberId'
   | 'inputTokens'
   | 'outputTokens'
   | 'cacheReadTokens'
@@ -854,12 +856,12 @@ type TurnUsage = Pick<
 
 /**
  * The tokens and money the CLI reported, summed over every turn — or one
- * node's when `nodeId` is given. A figure no turn reported stays null: not
+ * member's when `nodeId` is given. A figure no turn reported stays null: not
  * measured is not zero.
  */
 function usageOf(
   turns: readonly TurnUsage[],
-  nodeId?: string | null,
+  memberId?: string | null,
 ): {
   inputTokens: number | null;
   outputTokens: number | null;
@@ -869,7 +871,7 @@ function usageOf(
   estimatedCostUsd: number | null;
 } {
   const own = turns.filter(
-    (turn) => nodeId === undefined || turn.nodeId === nodeId,
+    (turn) => memberId === undefined || turn.memberId === memberId,
   );
   const sum = (pick: (turn: TurnUsage) => number | null): number | null =>
     own.reduce<number | null>((total, turn) => {
@@ -886,12 +888,12 @@ function usageOf(
 }
 
 function maxContext(
-  turns: readonly { nodeId: string | null; contextTokens: number | null }[],
-  nodeId: string | null,
+  turns: readonly { memberId: string | null; contextTokens: number | null }[],
+  memberId: string | null,
 ): number | null {
   let max: number | null = null;
   for (const turn of turns) {
-    if (turn.nodeId === nodeId && turn.contextTokens !== null) {
+    if (turn.memberId === memberId && turn.contextTokens !== null) {
       max = Math.max(max ?? 0, turn.contextTokens);
     }
   }

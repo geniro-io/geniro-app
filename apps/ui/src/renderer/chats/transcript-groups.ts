@@ -91,7 +91,7 @@ import {
  * one a hand-written node id could itself contain.
  */
 function groupKey(item: ChatItem): string {
-  return `${item.nodeId ?? ''}\u0000${subagentIdOf(item) ?? ''}`;
+  return `${item.memberId ?? ''}\u0000${subagentIdOf(item) ?? ''}`;
 }
 
 /**
@@ -147,7 +147,7 @@ export interface ToolGroupEntry {
   type: 'tools';
   /** Stable identity for React keys and expansion state: the first call's id. */
   id: string;
-  nodeId: string | null;
+  memberId: string | null;
   /**
    * The sub-agent whose work this is — the id of the tool call that started
    * it — or null for the agent's own thread.
@@ -264,9 +264,9 @@ export interface CallBlockEntry {
    * has nothing to draw.
    */
   conversationCallIds: string[];
-  calleeNodeId: string | null;
+  calleeMemberId: string | null;
   /** The caller node the call_started row was attributed to. */
-  callerNodeId: string | null;
+  callerMemberId: string | null;
   mode: string | null;
   /**
    * The FIRST call's ask — the block's REQUEST. A continuation's own ask stays
@@ -396,7 +396,7 @@ export interface TurnBlockEntry {
   id: string;
   createdAt: string;
   /** Owner node; null = the 1:1 chat's agent. */
-  nodeId: string | null;
+  memberId: string | null;
   /**
    * The sub-agent whose work this block is, or null for the main thread.
    *
@@ -436,7 +436,7 @@ export interface SubagentBlockEntry {
   id: string;
   createdAt: string;
   /** The node that ran the delegation; null = the 1:1 chat's agent. */
-  nodeId: string | null;
+  memberId: string | null;
   /**
    * The `call_agent` thread of that node the delegation was issued in, or null
    * for the node's own conversation — which INSTANCE of the agent launched it.
@@ -599,7 +599,7 @@ export interface TaskListEntry {
   createdAt: string;
   /** The highest `seq` in the run — for the readers that order nested work. */
   seq: number;
-  nodeId: string | null;
+  memberId: string | null;
   /** The thread that owns the list: a delegate's is its own. */
   parentToolUseId: string | null;
   /**
@@ -644,7 +644,7 @@ export interface FindingsEntry {
   id: string;
   createdAt: string;
   seq: number;
-  nodeId: string | null;
+  memberId: string | null;
   /**
    * The thread that produced it: a delegate's report is its own.
    *
@@ -669,7 +669,7 @@ export interface RecommendationsEntry {
   id: string;
   createdAt: string;
   seq: number;
-  nodeId: string | null;
+  memberId: string | null;
   /** Read exactly as {@link FindingsEntry.parentToolUseId} is. */
   parentToolUseId: string | null;
   runId: string;
@@ -691,7 +691,7 @@ export interface ChartEntry {
   id: string;
   createdAt: string;
   seq: number;
-  nodeId: string | null;
+  memberId: string | null;
   /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
    * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
@@ -710,7 +710,7 @@ export interface MetricsEntry {
   id: string;
   createdAt: string;
   seq: number;
-  nodeId: string | null;
+  memberId: string | null;
   /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
    * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
@@ -729,7 +729,7 @@ export interface ComparisonEntry {
   id: string;
   createdAt: string;
   seq: number;
-  nodeId: string | null;
+  memberId: string | null;
   /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
    * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
@@ -748,7 +748,7 @@ export interface GalleryEntry {
   id: string;
   createdAt: string;
   seq: number;
-  nodeId: string | null;
+  memberId: string | null;
   /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
    * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
@@ -771,7 +771,7 @@ export interface ArtifactEntry {
   id: string;
   createdAt: string;
   seq: number;
-  nodeId: string | null;
+  memberId: string | null;
   /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
    * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
@@ -800,7 +800,7 @@ export interface ActionEntry {
   id: string;
   createdAt: string;
   seq: number;
-  nodeId: string | null;
+  memberId: string | null;
   parentToolUseId: string | null;
   action: ActionCardView;
   /** The newest outcome naming this publish, among the rows the window holds. */
@@ -828,7 +828,7 @@ export interface WorkflowEntry {
   id: string;
   createdAt: string;
   seq: number;
-  nodeId: string | null;
+  memberId: string | null;
   /** Read exactly as {@link FindingsEntry.parentToolUseId} is. */
   parentToolUseId: string | null;
   workflow: WorkflowDeclaration;
@@ -992,18 +992,18 @@ const NO_OWNER = Symbol('no-owner');
  * SenderRow.
  */
 interface EntryOwner {
-  nodeId: string | null;
+  memberId: string | null;
   subagentId: string | null;
 }
 
 function sameOwner(a: EntryOwner, b: EntryOwner): boolean {
-  return a.nodeId === b.nodeId && a.subagentId === b.subagentId;
+  return a.memberId === b.memberId && a.subagentId === b.subagentId;
 }
 
 /** The agent a top-level entry belongs to (NO_OWNER breaks the block). */
 function ownerOf(entry: TranscriptEntry): EntryOwner | typeof NO_OWNER {
   if (entry.type === 'tools') {
-    return { nodeId: entry.nodeId, subagentId: entry.parentToolUseId };
+    return { memberId: entry.memberId, subagentId: entry.parentToolUseId };
   }
   if (entry.type === 'call-block') {
     // A call is ALWAYS its own top-level card, never part of the caller's
@@ -1018,24 +1018,24 @@ function ownerOf(entry: TranscriptEntry): EntryOwner | typeof NO_OWNER {
     // The DELEGATING agent's, not the delegate's — the block belongs in the
     // turn where the delegation happened, which is what puts it beside the
     // tool row that launched it. Its own rows are already inside it.
-    return { nodeId: entry.nodeId, subagentId: null };
+    return { memberId: entry.memberId, subagentId: null };
   }
   if (entry.type === 'turn-block') {
-    return { nodeId: entry.nodeId, subagentId: null };
+    return { memberId: entry.memberId, subagentId: null };
   }
   if (isCardEntry(entry)) {
-    return { nodeId: entry.nodeId, subagentId: entry.parentToolUseId };
+    return { memberId: entry.memberId, subagentId: entry.parentToolUseId };
   }
   const item = entry.item;
   if (item.kind === 'message' && item.role !== 'user') {
-    return { nodeId: item.nodeId, subagentId: subagentIdOf(item) };
+    return { memberId: item.memberId, subagentId: subagentIdOf(item) };
   }
   if (
     item.kind === 'reasoning' ||
     item.kind === 'error' ||
     item.kind === 'system'
   ) {
-    return { nodeId: item.nodeId, subagentId: subagentIdOf(item) };
+    return { memberId: item.memberId, subagentId: subagentIdOf(item) };
   }
   return NO_OWNER;
 }
@@ -1099,7 +1099,7 @@ export function buildTurnBlocks(
       type: 'turn-block',
       id: entryId(entry),
       createdAt: entryCreatedAt(entry),
-      nodeId: owner.nodeId,
+      memberId: owner.memberId,
       subagentId: owner.subagentId,
       entries: [entry],
     };
@@ -1144,12 +1144,12 @@ function subagentOwnerOf(entry: TranscriptEntry): string | null {
 /** The node an already-folded entry belongs to. */
 function entryNodeId(entry: TranscriptEntry): string | null {
   if (entry.type === 'item') {
-    return entry.item.nodeId;
+    return entry.item.memberId;
   }
   if (entry.type === 'call-block') {
-    return entry.callerNodeId;
+    return entry.callerMemberId;
   }
-  return entry.nodeId;
+  return entry.memberId;
 }
 
 /**
@@ -2152,7 +2152,7 @@ export function buildSubagentBlocks(
       // legitimately, so coalescing would fall through to the first row's
       // node whenever the launcher IS the chat agent.
       createdAt: launch ? launch.call.createdAt : entryCreatedAt(fallback),
-      nodeId: launch ? launch.call.nodeId : entryNodeId(fallback),
+      memberId: launch ? launch.call.memberId : entryNodeId(fallback),
       callId: launch
         ? payloadString(launch.call.payload, 'callId')
         : entryCallId(fallback),
@@ -2381,7 +2381,7 @@ export function workflowCardsOf(items: readonly ChatItem[]): WorkflowEntry[] {
       id,
       createdAt: anchor?.createdAt ?? '',
       seq: anchor?.seq ?? 0,
-      nodeId: anchor?.nodeId ?? null,
+      memberId: anchor?.memberId ?? null,
       // The launching call's own thread: a workflow started by a delegate is
       // the delegate's, and its card belongs inside that block's flow.
       parentToolUseId: anchor === null ? null : subagentIdOf(anchor),
@@ -2520,7 +2520,7 @@ const BLOCK_STATUSES = new Set(['running', 'completed', 'failed', 'cancelled']);
 /** A pending agent-call block under assembly (one per call_started). */
 interface CallShell {
   started: ChatItem;
-  calleeNodeId: string | null;
+  calleeMemberId: string | null;
   bucket: ChatItem[];
 }
 
@@ -2634,7 +2634,7 @@ export function groupTranscript(
     if (callId && !shells.has(callId)) {
       shells.set(callId, {
         started: item,
-        calleeNodeId: payloadString(item.payload, 'calleeNodeId'),
+        calleeMemberId: payloadString(item.payload, 'calleeNodeId'),
         bucket: [],
       });
     }
@@ -2738,7 +2738,7 @@ export function groupTranscript(
       // claim by callId alone — the whole exchange lives in the block.
       if (
         CALL_FOLLOWUP_KINDS.has(item.kind) ||
-        (item.nodeId !== null && item.nodeId === shell.calleeNodeId)
+        (item.memberId !== null && item.memberId === shell.calleeMemberId)
       ) {
         claimed.add(item.id);
         shell.bucket.push(item);
@@ -2916,7 +2916,7 @@ export function groupTranscript(
         const group: ToolGroupEntry = {
           type: 'tools',
           id: item.id,
-          nodeId: item.nodeId,
+          memberId: item.memberId,
           parentToolUseId: subagentIdOf(item),
           // Filled by the closing sweep below, once the whole stream is known.
           closed: false,
@@ -2973,7 +2973,7 @@ export function groupTranscript(
         id: item.id,
         createdAt: item.createdAt,
         seq: item.seq,
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         parentToolUseId: subagentIdOf(item),
         report,
       });
@@ -2999,7 +2999,7 @@ export function groupTranscript(
         id: item.id,
         createdAt: item.createdAt,
         seq: item.seq,
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         // Always the chat's own flow: a button is the chat's, whoever wrote
         // it, and the daemon stamps no delegate on these rows.
         parentToolUseId: null,
@@ -3021,7 +3021,7 @@ export function groupTranscript(
         id: item.id,
         createdAt: item.createdAt,
         seq: item.seq,
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         parentToolUseId: subagentIdOf(item),
         runId: item.runId,
         card,
@@ -3043,7 +3043,7 @@ export function groupTranscript(
         id: item.id,
         createdAt: item.createdAt,
         seq: item.seq,
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         parentToolUseId: subagentIdOf(item),
         chart,
       });
@@ -3062,7 +3062,7 @@ export function groupTranscript(
         id: item.id,
         createdAt: item.createdAt,
         seq: item.seq,
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         parentToolUseId: subagentIdOf(item),
         metrics,
       });
@@ -3081,7 +3081,7 @@ export function groupTranscript(
         id: item.id,
         createdAt: item.createdAt,
         seq: item.seq,
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         parentToolUseId: subagentIdOf(item),
         comparison,
       });
@@ -3100,7 +3100,7 @@ export function groupTranscript(
         id: item.id,
         createdAt: item.createdAt,
         seq: item.seq,
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         parentToolUseId: subagentIdOf(item),
         gallery,
       });
@@ -3119,7 +3119,7 @@ export function groupTranscript(
         id: item.id,
         createdAt: item.createdAt,
         seq: item.seq,
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         parentToolUseId: subagentIdOf(item),
         artifact,
         // Decided by the sweep below, once the whole stream is known.
@@ -3165,7 +3165,7 @@ export function groupTranscript(
         id: item.id,
         createdAt: item.createdAt,
         seq: item.seq,
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         parentToolUseId: thread,
         callId: payloadString(item.payload, 'callId'),
         tasks,
@@ -3196,7 +3196,7 @@ export function groupTranscript(
   for (const entry of entries) {
     if (entry.type === 'task-list') {
       lastCard.set(
-        `${entry.nodeId ?? ''}\u0000${entry.parentToolUseId ?? ''}`,
+        `${entry.memberId ?? ''}\u0000${entry.parentToolUseId ?? ''}`,
         entry,
       );
     }
@@ -3312,10 +3312,13 @@ export function withDurableTaskLists(
   }
   // A JSON pair, as on the daemon: a node id is any non-empty string, so no
   // separator character is safe to join on.
-  const threadKey = (nodeId: string | null, callId: string | null): string =>
-    JSON.stringify([nodeId, callId]);
+  const threadKey = (memberId: string | null, callId: string | null): string =>
+    JSON.stringify([memberId, callId]);
   const byThread = new Map<string, readonly AgentTaskRow[]>(
-    groups.map((group) => [threadKey(group.nodeId, group.callId), group.tasks]),
+    groups.map((group) => [
+      threadKey(group.memberId, group.callId),
+      group.tasks,
+    ]),
   );
   const complete = (entry: TranscriptEntry): TranscriptEntry => {
     if (entry.type === 'call-block' || entry.type === 'turn-block') {
@@ -3325,7 +3328,7 @@ export function withDurableTaskLists(
     if (entry.type !== 'task-list' || entry.parentToolUseId !== null) {
       return entry;
     }
-    const durable = byThread.get(threadKey(entry.nodeId, entry.callId));
+    const durable = byThread.get(threadKey(entry.memberId, entry.callId));
     if (durable === undefined || durable.length === 0) {
       return entry;
     }
@@ -3429,7 +3432,7 @@ function closeGroupsBeforeTurnEnds(
         // last row, so this group's turn is among the ones that finished.
         entry.closed = turnEnds.some(
           (item) =>
-            item.nodeId === entry.nodeId &&
+            item.memberId === entry.memberId &&
             payloadString(item.payload, 'callId') === callId &&
             item.seq > lastSeq,
         );
@@ -3674,8 +3677,8 @@ function buildCallBlock(
     // One call is its own conversation until a chain says otherwise, which
     // `buildConversationBlock` is the only thing that can.
     conversationCallIds: [callId],
-    calleeNodeId: shell.calleeNodeId,
-    callerNodeId: shell.started.nodeId,
+    calleeMemberId: shell.calleeMemberId,
+    callerMemberId: shell.started.memberId,
     mode: payloadString(shell.started.payload, 'mode'),
     message: payloadString(shell.started.payload, 'message'),
     title: payloadString(shell.started.payload, 'title'),
@@ -4814,7 +4817,7 @@ export function withLiveText(
  */
 function lastMainThreadRowAt(
   entries: readonly TranscriptEntry[],
-  nodeId: string | null,
+  memberId: string | null,
 ): number | null {
   let latest: number | null = null;
   const consider = (createdAt: string): void => {
@@ -4825,7 +4828,7 @@ function lastMainThreadRowAt(
   };
   const walk = (list: readonly TranscriptEntry[]): void => {
     for (const entry of list) {
-      if (subagentOwnerOf(entry) !== null || entryNodeId(entry) !== nodeId) {
+      if (subagentOwnerOf(entry) !== null || entryNodeId(entry) !== memberId) {
         continue;
       }
       if (entry.type === 'item') {
@@ -4891,8 +4894,8 @@ function callCallees(
 ): Set<string> {
   for (const entry of entries) {
     if (entry.type === 'call-block') {
-      if (entry.calleeNodeId !== null && matches(entry)) {
-        found.add(entry.calleeNodeId);
+      if (entry.calleeMemberId !== null && matches(entry)) {
+        found.add(entry.calleeMemberId);
       }
       continue;
     }
@@ -4920,14 +4923,14 @@ function callCallees(
  */
 function enclosingCallOf(
   list: readonly TranscriptEntry[],
-  nodeId: string,
+  memberId: string,
   callId: string | null,
 ): CallBlockEntry | null {
   for (let i = list.length - 1; i >= 0; i--) {
     const candidate = list[i]!;
     if (candidate.type === 'call-block') {
       if (
-        candidate.calleeNodeId === nodeId &&
+        candidate.calleeMemberId === memberId &&
         (OPEN_CALL_STATUSES.has(candidate.status) || candidate.calleeWorking) &&
         (callId === null || candidate.callIds.includes(callId))
       ) {
@@ -4936,7 +4939,7 @@ function enclosingCallOf(
       continue;
     }
     if (candidate.type === 'turn-block') {
-      const found = enclosingCallOf(candidate.entries, nodeId, callId);
+      const found = enclosingCallOf(candidate.entries, memberId, callId);
       if (found !== null) {
         return found;
       }
@@ -4955,12 +4958,12 @@ function enclosingCallOf(
  */
 function placeInOpenCall(
   list: TranscriptEntry[],
-  nodeId: string,
+  memberId: string,
   entry: ItemEntry,
   /** The call the row belongs to, when its live key names one. */
   callId: string | null = null,
 ): boolean {
-  const card = enclosingCallOf(list, nodeId, callId);
+  const card = enclosingCallOf(list, memberId, callId);
   return (
     card !== null &&
     placeInMatchingCall(list, entry, (candidate) => candidate === card)
@@ -5006,7 +5009,7 @@ function liveEntry(
     item: {
       id: spec.id,
       runId: '',
-      nodeId: nodeIdOf(key),
+      memberId: nodeIdOf(key),
       // Sorts after everything durable; this list is already ordered, so the
       // value only has to be larger than any real seq.
       seq: Number.MAX_SAFE_INTEGER,
@@ -5055,7 +5058,7 @@ function attach(
   /** The call a callee's row belongs to — see {@link placeInOpenCall}. */
   callId: string | null = null,
 ): void {
-  const nodeId = entry.item.nodeId;
+  const memberId = entry.item.memberId;
   // Matched on the thread as well as the node, exactly as `ownerOf` does. A
   // live row is the MAIN thread's — the daemon drops a sub-agent's deltas from
   // the live tail — so on nodeId alone it would be appended to a delegate's
@@ -5072,17 +5075,17 @@ function attach(
   // fan-out has several calls open at once, and each one's block stays open
   // until its own sub-turn settles.
   if (
-    nodeId !== null &&
+    memberId !== null &&
     subagentId === null &&
-    enclosingCallees.has(nodeId) &&
-    placeInOpenCall(out, nodeId, entry, callId)
+    enclosingCallees.has(memberId) &&
+    placeInOpenCall(out, memberId, entry, callId)
   ) {
     return;
   }
   const last = out[out.length - 1];
   if (
     last?.type === 'turn-block' &&
-    last.nodeId === nodeId &&
+    last.memberId === memberId &&
     last.subagentId === subagentId
   ) {
     out[out.length - 1] = { ...last, entries: [...last.entries, entry] };
@@ -5092,7 +5095,7 @@ function attach(
     type: 'turn-block',
     id: entry.item.id,
     createdAt: entry.item.createdAt,
-    nodeId,
+    memberId,
     subagentId,
     entries: [entry],
   });

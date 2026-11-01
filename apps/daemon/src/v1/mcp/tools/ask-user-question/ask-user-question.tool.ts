@@ -22,8 +22,8 @@ export class AskUserQuestionTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.questions.canAsk(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.questions.canAsk(runId, memberId);
   }
 
   protected instructions(): string {
@@ -38,7 +38,7 @@ export class AskUserQuestionTool extends BaseMcpTool {
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId } = context;
+    const { runId, memberId } = context;
     // Answered ahead of the call tools and in its OWN shape: the call
     // envelope is a contract between two AGENTS, and a question put to a
     // person has no status, no call_id and nothing to collect later. The
@@ -51,7 +51,7 @@ export class AskUserQuestionTool extends BaseMcpTool {
     }
     const title = readHostQuestionTitle(args);
     const outcome = await context.whileCancellable((signal) =>
-      this.questions.ask(runId, nodeId, questions, title, signal),
+      this.questions.ask(runId, memberId, questions, title, signal),
     );
     // None of the three outcomes is a tool FAILURE: a dismissal and an
     // unavailable channel are both answers the agent carries on from,

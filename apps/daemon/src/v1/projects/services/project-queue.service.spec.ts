@@ -226,7 +226,7 @@ describe('ProjectQueueService (in-memory sqlite)', () => {
   // `cancelled`, and its card is put back in the intake column to be picked up
   // again — listed here, the autopilot would leave it alone as one the user
   // stopped. (That such a run is never written `cancelled` is pinned where it
-  // is decided, in `ChatService` and `GraphExecutorService`.)
+  // is decided, in `ChatService` and `TeamExecutorService`.)
   it('names as stopped only a card whose run was cancelled, not one closed failed', async () => {
     const stopped = await addTask(
       'stopped',

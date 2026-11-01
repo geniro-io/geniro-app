@@ -21,8 +21,8 @@ export class ListMonitorsTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.monitors.canMonitor(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.monitors.canMonitor(runId, memberId);
   }
 
   protected instructions(): string {
@@ -35,14 +35,14 @@ export class ListMonitorsTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId, caller }: McpCallContext,
+    { runId, memberId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
     const input = readListMonitors(args);
     if ('error' in input) {
       return this.invalidArgs(input.error);
     }
     return this.text(
-      listMonitorsResultText(await this.monitors.list(runId, nodeId, caller)),
+      listMonitorsResultText(await this.monitors.list(runId, memberId, caller)),
     );
   }
 }

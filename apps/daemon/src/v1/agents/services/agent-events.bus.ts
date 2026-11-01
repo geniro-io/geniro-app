@@ -86,7 +86,7 @@ export class AgentEventBus {
    *
    * HERE rather than at the producers, and that is the whole point: there are
    * five announce sites in the chat service alone, three more in the title
-   * service, and one shared settle helper both the chat and graph paths go
+   * service, and one shared settle helper both the chat and team paths go
    * through. A fact carried by "whichever of those remembered to add it" is a
    * fact that goes stale at the next call site somebody writes — which is
    * exactly how the ring came to be an hour behind. One seam cannot be
@@ -123,7 +123,7 @@ export class AgentEventBus {
    *
    * A third stream rather than a direct call, because the things that must
    * react live in modules ABOVE this one — `TeamsModule` imports
-   * `AgentsModule`, so the chat service cannot inject a graph-side holder
+   * `AgentsModule`, so the chat service cannot inject a team-side holder
    * without a module cycle. Announcing the deletion downward inverts that
    * dependency: anything holding per-run state subscribes and cleans up its
    * own, which is also how a second such holder gets added later without

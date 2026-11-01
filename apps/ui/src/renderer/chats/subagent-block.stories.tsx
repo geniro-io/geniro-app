@@ -15,7 +15,7 @@ function untrackedBlock(lost: Record<string, unknown>): SubagentBlockEntry {
     {
       id: 'launch',
       runId: 'story',
-      nodeId: null,
+      memberId: null,
       seq: 1,
       kind: 'tool_call',
       role: null,
@@ -32,7 +32,7 @@ function untrackedBlock(lost: Record<string, unknown>): SubagentBlockEntry {
     {
       id: 'lost',
       runId: 'story',
-      nodeId: null,
+      memberId: null,
       seq: 2,
       kind: 'subagent_info',
       role: null,

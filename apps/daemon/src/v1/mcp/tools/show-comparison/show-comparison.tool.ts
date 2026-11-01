@@ -21,8 +21,8 @@ export class ShowComparisonTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.comparisons.canDraw(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.comparisons.canDraw(runId, memberId);
   }
 
   protected instructions(): string {
@@ -37,7 +37,7 @@ export class ShowComparisonTool extends BaseMcpTool {
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId } = context;
+    const { runId, memberId } = context;
     const comparison = readHostComparison(args);
     // Null is the reader saying there is nothing to compare — fewer than
     // two options, or no criterion. Answered as a malformed call on the
@@ -48,7 +48,7 @@ export class ShowComparisonTool extends BaseMcpTool {
         "nothing to compare — needs a 'title', at least TWO entries in 'options' each with a 'name', and at least one entry in 'criteria' with a 'label'.",
       );
     }
-    const outcome = await this.comparisons.draw(runId, nodeId, comparison);
+    const outcome = await this.comparisons.draw(runId, memberId, comparison);
     // Same reading as its drawing siblings: an unavailable channel is an
     // answer, not a failure — the agent still holds the comparison.
     return this.text(hostComparisonResultText(outcome));

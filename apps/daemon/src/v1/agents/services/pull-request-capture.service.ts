@@ -192,17 +192,17 @@ export class PullRequestCaptureService implements OnModuleInit {
    * indexed `max(seq)` read.
    *
    * It used to require `nodeId === null` as well, and that was a TEAM run
-   * excluded outright: every row of one carries a node id, so this subscriber
+   * excluded outright: every row of one carries a member id, so this subscriber
    * never fired for a single one of them — and the other trigger, the chat
    * listing, reads `RunDao.listChats`, which filters `teamId: null`. Two
    * independent gates, so a team's pull requests were never captured on
    * any path. REPORTED as a shelf showing no chip over a transcript reading
    * "Draft PR #5303 is open"; measured on that run, `pullRequests` and
    * `pullRequestsScannedSeq` were both still null with the `gh pr create` at
-   * seq 1347. Nothing about the capture itself is per-node — it reads the run's
+   * seq 1347. Nothing about the capture itself is per-member — it reads the run's
    * whole transcript by seq — so a team needed no new machinery, only to
    * stop being filtered out. One pass per NODE turn now, which is the same
-   * bound seen from the other side: a fan-out's nodes settle a handful of times
+   * bound seen from the other side: a fan-out's members settle a handful of times
    * between them, and each pass is that one `max(seq)` read.
    */
   onModuleInit(): void {

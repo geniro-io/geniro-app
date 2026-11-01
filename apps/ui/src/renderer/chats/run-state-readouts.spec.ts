@@ -20,7 +20,7 @@ const delegate = (
   extra: Partial<RunDelegateState> = {},
 ): RunDelegateState => ({
   id,
-  nodeId: null,
+  memberId: null,
   callId: null,
   label: null,
   kind: null,
@@ -74,7 +74,7 @@ describe('withDurableDelegates', () => {
   it('names an unnamed delegate by its identity, and files it under its node', () => {
     const merged = withDurableDelegates(
       new Map(),
-      [delegate('toolu_01AD1kjdJCqfkzGRTjn5M6mo', { nodeId: 'qa' })],
+      [delegate('toolu_01AD1kjdJCqfkzGRTjn5M6mo', { memberId: 'qa' })],
       'chat',
     );
     expect(merged.get('qa')![0]!.label).toBe('Sub-agent n5M6mo');
@@ -82,10 +82,10 @@ describe('withDurableDelegates', () => {
 });
 
 describe('withDurableShells', () => {
-  const open = (id: string, nodeId: string | null): OpenShell => ({
+  const open = (id: string, memberId: string | null): OpenShell => ({
     id,
     command: `cmd ${id}`,
-    nodeId,
+    memberId,
     callId: 'call-3',
     startedAt: 0,
   });
@@ -130,7 +130,7 @@ describe('withoutDaemonEndedShells', () => {
   const call = (id: string): ItemDto => ({
     id: `row-${id}`,
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq: 1,
     kind: 'tool_call',
     role: null,
@@ -140,7 +140,7 @@ describe('withoutDaemonEndedShells', () => {
   const open = (id: string): OpenShell => ({
     id,
     command: 'x',
-    nodeId: null,
+    memberId: null,
     callId: null,
     startedAt: 0,
   });
@@ -203,8 +203,8 @@ describe('callEndedPerDaemon', () => {
         'call-1',
         {
           callId: 'call-1',
-          callerNodeId: 'manager',
-          calleeNodeId: 'engineer',
+          callerMemberId: 'manager',
+          calleeMemberId: 'engineer',
           title: null,
           brief: null,
           mode: null,

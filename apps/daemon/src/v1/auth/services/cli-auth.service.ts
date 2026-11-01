@@ -295,7 +295,7 @@ export class CliAuthService {
     agent: AgentKind;
     server: string;
     /**
-     * Omitted means the folder-independent directory the graph builder's own
+     * Omitted means the folder-independent directory the team editor's own
      * listing was taken in — see {@link mcpLoginQuerySchema}. Never "wherever
      * this process happens to be".
      */

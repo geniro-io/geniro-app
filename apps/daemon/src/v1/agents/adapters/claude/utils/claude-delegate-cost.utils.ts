@@ -115,11 +115,11 @@ export class ClaudeDelegateCostLedger {
    * launching tool call, through {@link pendingKey}.
    *
    * The session is in the key because one ledger serves every process one
-   * adapter drives: the adapter is a singleton and graph fan-out runs N claude
+   * adapter drives: the adapter is a singleton and team fan-out runs N claude
    * processes through it at once. Keyed by call id alone, the first `result`
    * line to arrive — from ANY of them — settled every delegate pending across
    * all of them, pricing turn A's delegates with turn B's calibration, emitting
-   * their costs into B's event stream (another node's transcript), and leaving
+   * their costs into B's event stream (another member's transcript), and leaving
    * A's own `result` nothing to price. Both lines that matter carry claude's
    * `session_id`, and a session belongs to exactly one process.
    */

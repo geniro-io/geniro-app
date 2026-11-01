@@ -14,7 +14,7 @@ import type { RunKindRowsCache } from './run-kind-rows.cache';
 interface StoredRow {
   seq: number;
   kind: string;
-  nodeId: string | null;
+  memberId: string | null;
   payload: unknown;
   secondsIn: number;
   inCall?: string | null;
@@ -29,13 +29,13 @@ function row(
   kind: string,
   payload: unknown,
   secondsIn: number,
-  nodeId: string | null = null,
+  memberId: string | null = null,
 ): StoredRow {
-  return { seq, kind, nodeId, payload, secondsIn };
+  return { seq, kind, memberId, payload, secondsIn };
 }
 
 interface NodeStateStub {
-  nodeId: string;
+  memberId: string;
   agentKind: string | null;
   polledCostCents?: number | null;
   polledCostEvents?: number | null;
@@ -76,7 +76,7 @@ function build(
         Promise.resolve(
           rows
             .filter((r) => maxSeq === undefined || r.seq <= maxSeq)
-            .map(({ seq, kind, nodeId, payload, secondsIn, inCall }) => ({
+            .map(({ seq, kind, memberId, payload, secondsIn, inCall }) => ({
               seq,
               kind,
               inCall: inCall ?? null,
@@ -84,7 +84,7 @@ function build(
                 kind === 'message'
                   ? ((payload as { role?: string } | null)?.role ?? null)
                   : null,
-              nodeId,
+              memberId,
               createdAt: at(secondsIn),
             })),
         ),
@@ -99,10 +99,10 @@ function build(
                   ?.nodePoolHandOff !== undefined &&
                 (maxSeq === undefined || r.seq <= maxSeq),
             )
-            .map(({ seq, kind, nodeId, payload, secondsIn }) => ({
+            .map(({ seq, kind, memberId, payload, secondsIn }) => ({
               seq,
               kind,
-              nodeId,
+              memberId,
               payload: JSON.stringify(payload),
               createdAt: at(secondsIn),
             })),
@@ -158,10 +158,10 @@ function build(
         return Promise.resolve(
           rows
             .filter((r) => kinds.includes(r.kind))
-            .map(({ seq, kind, nodeId, payload, secondsIn }) => ({
+            .map(({ seq, kind, memberId, payload, secondsIn }) => ({
               seq,
               kind,
-              nodeId,
+              memberId,
               payload: JSON.stringify(payload),
               createdAt: at(secondsIn),
             })),
@@ -198,7 +198,7 @@ describe('ChatWaterfallService', () => {
       // ACP agent reports no timing at all, so dropping meant a cursor
       // callee's lane drew nothing and counted nothing while its caller drew a
       // long bar waiting on it — the picture said the agent had never run.
-      // Measured on a real team run whose `qa` node holds two
+      // Measured on a real team run whose `qa` member holds two
       // `turn_complete` rows, both with `durationMs: null`, beside 130 tool
       // calls.
       const result = await build([
@@ -234,7 +234,7 @@ describe('ChatWaterfallService', () => {
         row(2, 'turn_complete', { usage: { costUsd: 1 } }, 3, 'qa'),
       ]).read('run-a');
 
-      const qa = result.lanes.find((lane) => lane.nodeId === 'qa');
+      const qa = result.lanes.find((lane) => lane.memberId === 'qa');
       expect(qa?.turns).toBe(2);
       // And the CLI still measured nothing, so this stays unmeasured rather
       // than becoming the sum of the spans the card drew.
@@ -253,7 +253,7 @@ describe('ChatWaterfallService', () => {
         row(2, 'status', { nodeId: 'eng', status: 'cancelled' }, 3, 'eng'),
       ]).read('run-a');
 
-      const eng = result.lanes.find((lane) => lane.nodeId === 'eng');
+      const eng = result.lanes.find((lane) => lane.memberId === 'eng');
       expect(eng?.turns).toBe(1);
       // A cancelled turn reported no figures, and a lane is never invented
       // from a status row alone — this one exists because it called a tool.
@@ -263,17 +263,19 @@ describe('ChatWaterfallService', () => {
 
     it('never counts one turn twice when both rows record it', async () => {
       // A team writes BOTH — the open and the completion — so summing the
-      // two channels would double every turn a team node finished.
+      // two channels would double every turn a team member finished.
       const result = await build([
         row(0, 'status', { nodeId: 'eng', status: 'running' }, 1, 'eng'),
         row(1, 'tool_call', null, 2, 'eng'),
         row(2, 'turn_complete', { usage: { costUsd: 1 } }, 3, 'eng'),
       ]).read('run-a');
 
-      expect(result.lanes.find((lane) => lane.nodeId === 'eng')?.turns).toBe(1);
+      expect(result.lanes.find((lane) => lane.memberId === 'eng')?.turns).toBe(
+        1,
+      );
     });
 
-    it('opens no lane for a node that only ever reported a status', async () => {
+    it('opens no lane for a member that only ever reported a status', async () => {
       // A status row is evidence a turn began, never evidence of WORK — and a
       // lane drawn from one alone would be an empty row on the card.
       const result = await build([
@@ -281,21 +283,21 @@ describe('ChatWaterfallService', () => {
         row(1, 'tool_call', null, 2, 'eng'),
       ]).read('run-a');
 
-      expect(result.lanes.map((lane) => lane.nodeId)).toEqual(['eng']);
+      expect(result.lanes.map((lane) => lane.memberId)).toEqual(['eng']);
     });
 
     it('reports which tools a lane called, and how often', async () => {
       const result = await build([row(0, 'tool_call', null, 1, 'eng')], {
         toolUsage: [
           {
-            nodeId: 'eng',
+            memberId: 'eng',
             name: 'Bash',
             toolKind: 'execute',
             delegate: false,
             calls: 8939,
           },
           {
-            nodeId: 'eng',
+            memberId: 'eng',
             name: 'Read',
             toolKind: 'read',
             delegate: false,
@@ -305,8 +307,8 @@ describe('ChatWaterfallService', () => {
       }).read('run-a');
 
       expect(result.toolUse).toEqual([
-        { nodeId: 'eng', name: 'Bash', calls: 8939, delegateCalls: 0 },
-        { nodeId: 'eng', name: 'Read', calls: 2672, delegateCalls: 0 },
+        { memberId: 'eng', name: 'Bash', calls: 8939, delegateCalls: 0 },
+        { memberId: 'eng', name: 'Read', calls: 2672, delegateCalls: 0 },
       ]);
     });
 
@@ -315,21 +317,21 @@ describe('ChatWaterfallService', () => {
       const result = await build([row(0, 'tool_call', null, 1, 'middle')], {
         toolUsage: [
           {
-            nodeId: 'middle',
+            memberId: 'middle',
             name: 'Bash',
             toolKind: 'execute',
             delegate: false,
             calls: 300,
           },
           {
-            nodeId: 'middle',
+            memberId: 'middle',
             name: 'Read',
             toolKind: 'read',
             delegate: false,
             calls: 100,
           },
           {
-            nodeId: 'middle',
+            memberId: 'middle',
             name: 'Read',
             toolKind: 'read',
             delegate: true,
@@ -339,8 +341,8 @@ describe('ChatWaterfallService', () => {
       }).read('run-a');
 
       expect(result.toolUse).toEqual([
-        { nodeId: 'middle', name: 'Read', calls: 100, delegateCalls: 600 },
-        { nodeId: 'middle', name: 'Bash', calls: 300, delegateCalls: 0 },
+        { memberId: 'middle', name: 'Read', calls: 100, delegateCalls: 600 },
+        { memberId: 'middle', name: 'Bash', calls: 300, delegateCalls: 0 },
       ]);
     });
 
@@ -354,21 +356,21 @@ describe('ChatWaterfallService', () => {
       const result = await build([row(0, 'tool_call', null, 1, 'qa')], {
         toolUsage: [
           {
-            nodeId: 'qa',
+            memberId: 'qa',
             name: `\`${'gh pr view 5251 --json body '.repeat(40)}\``,
             toolKind: 'execute',
             delegate: false,
             calls: 1,
           },
           {
-            nodeId: 'qa',
+            memberId: 'qa',
             name: '`pnpm build`',
             toolKind: 'execute',
             delegate: false,
             calls: 1,
           },
           {
-            nodeId: 'qa',
+            memberId: 'qa',
             name: 'Read File',
             toolKind: 'read',
             delegate: false,
@@ -378,8 +380,8 @@ describe('ChatWaterfallService', () => {
       }).read('run-a');
 
       expect(result.toolUse).toEqual([
-        { nodeId: 'qa', name: 'Read File', calls: 40, delegateCalls: 0 },
-        { nodeId: 'qa', name: 'execute', calls: 2, delegateCalls: 0 },
+        { memberId: 'qa', name: 'Read File', calls: 40, delegateCalls: 0 },
+        { memberId: 'qa', name: 'execute', calls: 2, delegateCalls: 0 },
       ]);
       expect(
         RunWaterfallWireSchema.safeParse(result).success,
@@ -431,7 +433,7 @@ describe('ChatWaterfallService', () => {
         { status: 'running', teamId: 'dev-team' },
       ).read('run-a');
 
-      const engineer = result.turns.filter((t) => t.nodeId === 'engineer');
+      const engineer = result.turns.filter((t) => t.memberId === 'engineer');
       expect(engineer).toHaveLength(1);
       expect(engineer[0]).toMatchObject({
         outcome: 'running',
@@ -443,8 +445,8 @@ describe('ChatWaterfallService', () => {
       });
       expect(result.calls).toEqual([
         {
-          callerNodeId: 'manager',
-          calleeNodeId: 'engineer',
+          callerMemberId: 'manager',
+          calleeMemberId: 'engineer',
           mode: 'async',
           status: null,
           running: true,
@@ -469,7 +471,7 @@ describe('ChatWaterfallService', () => {
         { status: 'running', teamId: 'dev-team' },
       ).read('run-a');
 
-      expect(result.lanes.map((lane) => lane.nodeId)).toEqual([
+      expect(result.lanes.map((lane) => lane.memberId)).toEqual([
         'manager',
         'engineer',
       ]);
@@ -506,7 +508,7 @@ describe('ChatWaterfallService', () => {
 
       expect(result.turns).toHaveLength(1);
       expect(result.turns[0]).toMatchObject({
-        nodeId: 'engineer',
+        memberId: 'engineer',
         outcome: 'failed',
         startedAt: iso(10),
         durationMs: 60_000,
@@ -564,7 +566,7 @@ describe('ChatWaterfallService', () => {
       expect(
         result.turns.map((turn) => [turn.outcome, turn.model, turn.member]),
       ).toEqual([
-        // Member 1's row names nobody: the node's own CLI and model.
+        // Member 1's row names nobody: the member's own CLI and model.
         ['completed', 'claude-opus-4', { agentKind: 'claude', model: 'opus' }],
         ['failed', null, { agentKind: 'codex', model: 'gpt-5' }],
       ]);
@@ -630,7 +632,7 @@ describe('ChatWaterfallService', () => {
       ]);
     });
 
-    it('names no member on a node without a pool', async () => {
+    it('names no pool member on a member without a pool', async () => {
       const result = await build(
         [
           engineerStatus(0, 'running', 10),
@@ -676,7 +678,7 @@ describe('ChatWaterfallService', () => {
       });
     });
 
-    it("keys a node's concurrent calls apart, so one call's turn cannot hide another's failure", async () => {
+    it("keys a member's concurrent calls apart, so one call's turn cannot hide another's failure", async () => {
       const status = (
         seq: number,
         callId: string,
@@ -767,14 +769,14 @@ describe('ChatWaterfallService', () => {
         ],
         {
           nodeStates: [
-            { nodeId: 'qa', agentKind: 'cursor-agent' },
-            { nodeId: 'eng', agentKind: 'claude' },
+            { memberId: 'qa', agentKind: 'cursor-agent' },
+            { memberId: 'eng', agentKind: 'claude' },
           ],
         },
       ).read('run-a');
 
-      const qa = result.lanes.find((lane) => lane.nodeId === 'qa');
-      const eng = result.lanes.find((lane) => lane.nodeId === 'eng');
+      const qa = result.lanes.find((lane) => lane.memberId === 'qa');
+      const eng = result.lanes.find((lane) => lane.memberId === 'eng');
       expect(qa?.costUsd).toBeNull();
       expect(eng?.costUsd).toBe(2);
     });
@@ -797,14 +799,14 @@ describe('ChatWaterfallService', () => {
             'eng',
           ),
         ],
-        { nodeStates: [{ nodeId: 'eng', agentKind: 'codex' }] },
+        { nodeStates: [{ memberId: 'eng', agentKind: 'codex' }] },
       ).read('run-a');
 
       expect(result.turns.map((turn) => turn.estimatedCostUsd)).toEqual([
         2,
         null,
       ]);
-      const eng = result.lanes.find((lane) => lane.nodeId === 'eng');
+      const eng = result.lanes.find((lane) => lane.memberId === 'eng');
       expect(eng?.costUsd).toBe(3);
       expect(eng?.estimatedCostUsd).toBe(2);
     });
@@ -854,8 +856,8 @@ describe('ChatWaterfallService', () => {
 
       expect(result.calls).toEqual([
         {
-          callerNodeId: 'mgr',
-          calleeNodeId: 'qa',
+          callerMemberId: 'mgr',
+          calleeMemberId: 'qa',
           mode: 'async',
           status: 'error',
           running: false,
@@ -881,7 +883,7 @@ describe('ChatWaterfallService', () => {
       ]).read('run-a');
 
       expect(result.delegates).toEqual([
-        { nodeId: null, startedAt: iso(0), seq: 0, durationMs: 20_000 },
+        { memberId: null, startedAt: iso(0), seq: 0, durationMs: 20_000 },
       ]);
     });
   });
@@ -937,7 +939,7 @@ describe('ChatWaterfallService', () => {
         row(0, 'tool_call', { parentToolUseId: 'toolu_agent' }, 5, 'lead'),
       ]).read('run-a');
 
-      expect(result.lanes.map((lane) => lane.nodeId)).toEqual(['lead']);
+      expect(result.lanes.map((lane) => lane.memberId)).toEqual(['lead']);
     });
 
     it('carries a turn’s cost split by model, and drops one that does not add up', async () => {
@@ -1021,11 +1023,11 @@ describe('ChatWaterfallService', () => {
         [row(0, 'turn_complete', { usage: { durationMs: 1_000 } }, 1)],
         {
           agentKind: 'claude',
-          nodeStates: [{ nodeId: 'agent', agentKind: null }],
+          nodeStates: [{ memberId: 'agent', agentKind: null }],
         },
       ).read('run-a');
 
-      expect(result.lanes[0]?.nodeId).toBeNull();
+      expect(result.lanes[0]?.memberId).toBeNull();
       expect(result.lanes[0]?.agentKind).toBe('claude');
     });
   });
@@ -1042,7 +1044,7 @@ describe('ChatWaterfallService', () => {
     expect(result.from).toBe(result.to);
   });
 
-  it('opens no lane for the rows a team files under no node', async () => {
+  it('opens no lane for the rows a team files under no member', async () => {
     // A team run persists its seed message and its terminal row with
     // `nodeId: null`. Opening a lane for every spine row drew those as an empty
     // lane named `agent` beside the real ones, taking the first colour.
@@ -1057,17 +1059,17 @@ describe('ChatWaterfallService', () => {
           6,
           'engineer',
         ),
-        // The run-level terminal row: a turn_complete under no node, with no
+        // The run-level terminal row: a turn_complete under no member, with no
         // duration of its own.
         row(3, 'turn_complete', { stopReason: 'end_turn' }, 7),
       ],
       {
         teamId: 'wf',
-        nodeStates: [{ nodeId: 'engineer', agentKind: 'claude' }],
+        nodeStates: [{ memberId: 'engineer', agentKind: 'claude' }],
       },
     ).read('run-a');
 
-    expect(result.lanes.map((lane) => lane.nodeId)).toEqual(['engineer']);
+    expect(result.lanes.map((lane) => lane.memberId)).toEqual(['engineer']);
   });
 
   it("reports a cursor chat's polled price rather than its silent turns", async () => {
@@ -1084,7 +1086,7 @@ describe('ChatWaterfallService', () => {
         agentKind: 'cursor-agent',
         polledCostCents: 729,
         polledCostEvents: 3,
-        nodeStates: [{ nodeId: 'agent', agentKind: null }],
+        nodeStates: [{ memberId: 'agent', agentKind: null }],
       },
     ).read('run-a');
 
@@ -1092,8 +1094,8 @@ describe('ChatWaterfallService', () => {
     expect(result.lanes[0]?.costUsd).toBeCloseTo(7.29, 5);
   });
 
-  it("adds a team's cursor node bill on top of the turns another CLI priced", async () => {
-    // Replacing here would report the cursor node's bill as the whole run's.
+  it("adds a team's cursor member bill on top of the turns another CLI priced", async () => {
+    // Replacing here would report the cursor member's bill as the whole run's.
     const result = await build(
       [
         row(
@@ -1108,9 +1110,9 @@ describe('ChatWaterfallService', () => {
       {
         teamId: 'wf',
         nodeStates: [
-          { nodeId: 'eng', agentKind: 'claude' },
+          { memberId: 'eng', agentKind: 'claude' },
           {
-            nodeId: 'qa',
+            memberId: 'qa',
             agentKind: 'cursor-agent',
             polledCostCents: 100,
             polledCostEvents: 1,
@@ -1121,13 +1123,13 @@ describe('ChatWaterfallService', () => {
 
     expect(result.totals.costUsd).toBeCloseTo(3, 5);
     expect(
-      result.lanes.find((lane) => lane.nodeId === 'qa')?.costUsd,
+      result.lanes.find((lane) => lane.memberId === 'qa')?.costUsd,
     ).toBeCloseTo(1, 5);
   });
 
   it('prices a POOLED lane per turn: the bill for its polled member, each self-pricing turn on top', async () => {
     // `eng` is claude with a cursor member, `qa` cursor with a claude member,
-    // and each node's polled bill is $1. A turn another member ran names its
+    // and each member's polled bill is $1. A turn another pool member ran names its
     // CLI; the cursor turn's own $5 is the bill's to account for, the claude
     // turn's $4 is not.
     const result = await build(
@@ -1177,13 +1179,13 @@ describe('ChatWaterfallService', () => {
         }),
         nodeStates: [
           {
-            nodeId: 'eng',
+            memberId: 'eng',
             agentKind: 'claude',
             polledCostCents: 100,
             polledCostEvents: 1,
           },
           {
-            nodeId: 'qa',
+            memberId: 'qa',
             agentKind: 'cursor-agent',
             polledCostCents: 100,
             polledCostEvents: 1,
@@ -1193,7 +1195,7 @@ describe('ChatWaterfallService', () => {
     ).read('run-a');
 
     const lane = (id: string): number | null | undefined =>
-      result.lanes.find((one) => one.nodeId === id)?.costUsd;
+      result.lanes.find((one) => one.memberId === id)?.costUsd;
     expect(lane('eng')).toBeCloseTo(3, 5);
     expect(lane('qa')).toBeCloseTo(5, 5);
     // …and the run's total is the sum of its lanes: the two self-pricing
@@ -1229,8 +1231,8 @@ describe('ChatWaterfallService', () => {
       expect(result.turns.map((turn) => turn.seq)).toEqual([2]);
     });
 
-    it("takes a callee's turn to ITS conversation's row when one node answers two calls at once", async () => {
-      // Call c2's turn ran 50–100s, but call c1's conversation on the same node
+    it("takes a callee's turn to ITS conversation's row when one member answers two calls at once", async () => {
+      // Call c2's turn ran 50–100s, but call c1's conversation on the same member
       // wrote first inside that stretch (seq 2). Landing there would open c1's
       // card for c2's turn.
       const result = await build([
@@ -1276,7 +1278,7 @@ describe('ChatWaterfallService', () => {
       expect(result.turns[0]?.seq).toBe(0);
     });
 
-    it("takes a team node's unfinished turn to the status row that opened it", async () => {
+    it("takes a team member's unfinished turn to the status row that opened it", async () => {
       const result = await build(
         [
           row(0, 'message', { role: 'user' }, 0),
@@ -1286,7 +1288,7 @@ describe('ChatWaterfallService', () => {
         ],
         {
           teamId: 'wf',
-          nodeStates: [{ nodeId: 'qa', agentKind: 'claude' }],
+          nodeStates: [{ memberId: 'qa', agentKind: 'claude' }],
         },
       ).read('run-a');
 
@@ -1307,9 +1309,14 @@ describe('ChatWaterfallService', () => {
       ]).read('run-a');
 
       expect(result.criticalPath).toEqual([
-        { kind: 'work', nodeId: 'a', startedAt: iso(0), durationMs: 30_000 },
-        { kind: 'idle', nodeId: null, startedAt: iso(30), durationMs: 10_000 },
-        { kind: 'work', nodeId: 'b', startedAt: iso(40), durationMs: 60_000 },
+        { kind: 'work', memberId: 'a', startedAt: iso(0), durationMs: 30_000 },
+        {
+          kind: 'idle',
+          memberId: null,
+          startedAt: iso(30),
+          durationMs: 10_000,
+        },
+        { kind: 'work', memberId: 'b', startedAt: iso(40), durationMs: 60_000 },
       ]);
     });
 
@@ -1350,7 +1357,7 @@ describe('ChatWaterfallService', () => {
 
     expect(result.waits).toEqual([
       {
-        nodeId: 'manager',
+        memberId: 'manager',
         question: true,
         toolName: 'Bash',
         allowed: false,
@@ -1391,7 +1398,7 @@ describe('ChatWaterfallService', () => {
     ]).read('run-a');
 
     expect(result.delegates).toEqual([
-      { nodeId: null, startedAt: iso(0), seq: 0, durationMs: 15_000 },
+      { memberId: null, startedAt: iso(0), seq: 0, durationMs: 15_000 },
     ]);
   });
 

@@ -23,12 +23,12 @@ import { UsageRecorderService } from './services/usage-recorder.service';
 /**
  * The usage ledger and the stats it answers.
  *
- * It imports `AgentsModule` (for the event bus and the run/item/node DAOs) and
+ * It imports `AgentsModule` (for the event bus and the run/item/member-state DAOs) and
  * must not be imported BY it. That direction is deliberate and cycle-free, and
  * it mirrors `DiagnosticsModule`: this module OBSERVES the agent plane and never
  * drives it, so nothing in `v1/agents` depends on it. `TeamsModule` is imported
  * for the library store alone (the versions table names which version the saved
- * graph is), in the same direction. The one boot dependency runs the other way:
+ * team is), in the same direction. The one boot dependency runs the other way:
  * `main.ts` awaits `TeamLedgerService.sweep()` before listen.
  *
  * The one thing it deliberately does NOT hook is the run teardown. A chat

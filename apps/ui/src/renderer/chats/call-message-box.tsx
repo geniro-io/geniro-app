@@ -102,7 +102,7 @@ export function CallMessageButton({
 export function CallMessagePanel({
   blockId,
   callId,
-  calleeNodeId,
+  calleeMemberId,
   callee,
   calleeAgent,
   caller,
@@ -112,7 +112,7 @@ export function CallMessagePanel({
 }: {
   blockId: string;
   callId: string;
-  calleeNodeId: string;
+  calleeMemberId: string;
   callee: string;
   calleeAgent: string | null;
   caller: string | null;
@@ -127,8 +127,10 @@ export function CallMessagePanel({
   const runId = channel?.runId ?? null;
   const target = useMemo(
     (): CallTarget | null =>
-      runId === null ? null : { runId, nodeId: calleeNodeId, callId, blockId },
-    [runId, calleeNodeId, callId, blockId],
+      runId === null
+        ? null
+        : { runId, memberId: calleeMemberId, callId, blockId },
+    [runId, calleeMemberId, callId, blockId],
   );
   const queue =
     channel !== null && target !== null ? channel.queues.queueOf(target) : null;

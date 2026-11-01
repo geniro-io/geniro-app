@@ -274,7 +274,7 @@ describe('RunIdleReapService (in-memory sqlite)', () => {
 
   it.each([
     ['a chat', (runId: string) => runId],
-    ['a team node', (runId: string) => nodeSessionKey(runId, 'dev')],
+    ['a team member', (runId: string) => nodeSessionKey(runId, 'dev')],
   ])(
     'stops what %s left outside its CLI once it went unused, and tells the user and the agent once',
     async (_what, keyOf) => {

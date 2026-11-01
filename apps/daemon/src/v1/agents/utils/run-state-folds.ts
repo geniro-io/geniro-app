@@ -71,8 +71,8 @@ export function foldRunCalls(
     const brief = callField(row.payload, 'message');
     calls.set(callId, {
       callId,
-      callerNodeId: callField(row.payload, 'callerNodeId') ?? row.nodeId,
-      calleeNodeId: callField(row.payload, 'calleeNodeId'),
+      callerMemberId: callField(row.payload, 'callerNodeId') ?? row.memberId,
+      calleeMemberId: callField(row.payload, 'calleeNodeId'),
       title: callField(row.payload, 'title'),
       brief: brief === null ? null : brief.slice(0, RUN_CALL_BRIEF_MAX),
       mode: callField(row.payload, 'mode'),
@@ -237,7 +237,7 @@ export function foldRunDelegates({
     );
     delegates.push({
       id,
-      nodeId: anchor.nodeId,
+      memberId: anchor.memberId,
       callId: payloadString(anchor.payload, 'callId'),
       label: payloadString(input, 'description') ?? declaration?.label ?? null,
       kind: payloadString(input, 'subagent_type') ?? declaration?.kind ?? null,
@@ -256,11 +256,11 @@ export function foldRunDelegates({
  * every caller hands the fold, so they cannot read one row two ways.
  */
 export function turnEndingOf(
-  row: Pick<Item, 'seq' | 'nodeId' | 'kind' | 'payload'>,
+  row: Pick<Item, 'seq' | 'memberId' | 'kind' | 'payload'>,
 ): TurnEnding {
   return {
     seq: row.seq,
-    nodeId: row.nodeId,
+    memberId: row.memberId,
     callId: payloadString(parseJsonColumn(row.payload), 'callId'),
     cancelled: row.kind === 'turn_cancelled',
   };
@@ -284,7 +284,7 @@ function endedBy(
   const ending = endings.find(
     (candidate) =>
       candidate.seq > anchor.seq &&
-      candidate.nodeId === anchor.nodeId &&
+      candidate.memberId === anchor.memberId &&
       candidate.callId === callId,
   );
   if (ending === undefined) {

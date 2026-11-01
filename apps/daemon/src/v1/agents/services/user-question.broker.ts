@@ -21,9 +21,9 @@ export type HostQuestionAsker = (
 
 @Injectable()
 export class UserQuestionBroker extends HostSinkBroker<HostQuestionAsker> {
-  /** Whether this node can currently be asked — gates the tool listing. */
-  canAsk(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  /** Whether this member can currently be asked — gates the tool listing. */
+  canAsk(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   /**
@@ -36,14 +36,14 @@ export class UserQuestionBroker extends HostSinkBroker<HostQuestionAsker> {
    */
   async ask(
     runId: string,
-    nodeId: string,
+    memberId: string,
     questions: HostQuestion[],
     title: string | null,
     signal?: AbortSignal,
   ): Promise<HostQuestionOutcome> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no turn is running that could put this question on screen',
       'ask the user',
       (asker) => asker(questions, title, signal),

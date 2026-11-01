@@ -27,17 +27,20 @@ import {
   type TeamLocation,
   type TeamSummary,
   type TeamWire,
+  TeamYamlSchema,
 } from '../teams.types';
-import { computeRunOrder } from '../utils/graph-order';
-import { validateTeamGraph } from '../utils/graph-validate';
-import { assertValidStages } from '../utils/stage-validate';
 import { teamFileHash } from '../utils/team-hash';
 import {
   TEAM_SCHEMA_FILE_NAME,
   teamJsonSchema,
 } from '../utils/team-json-schema';
 import { isReservedTeamSlug, slugifyTeamName } from '../utils/team-slug';
-import { parseTeamYaml, serializeTeamYaml } from '../utils/team-yaml';
+import { assertValidTeam } from '../utils/team-validate';
+import {
+  parseTeamYaml,
+  parseTeamYamlDocument,
+  serializeTeamYaml,
+} from '../utils/team-yaml';
 
 /** `<userData>/` directory the team library lives in. */
 export const TEAMS_DIR_NAME = 'teams';
@@ -49,16 +52,14 @@ export const TEAM_SUFFIX = '.team.yaml';
 export const LEGACY_TEAM_SUFFIX = '.geniro.yaml';
 
 /**
- * Tally a team's nodes by agent kind for the library summary. Only kinds
+ * Tally a team's members by agent kind for the library summary. Only kinds
  * actually present appear, ordered by `TEAM_AGENT_KINDS` so the card badges
- * render in a stable order regardless of node declaration order.
+ * render in a stable order regardless of member order.
  */
 function agentCountsOf(team: Team): { kind: AgentKind; count: number }[] {
   const counts = new Map<AgentKind, number>();
-  for (const node of team.nodes) {
-    if (node.kind === 'agent') {
-      counts.set(node.agent, (counts.get(node.agent) ?? 0) + 1);
-    }
+  for (const member of team.members) {
+    counts.set(member.agent, (counts.get(member.agent) ?? 0) + 1);
   }
   return TEAM_AGENT_KINDS.flatMap((kind) => {
     const count = counts.get(kind);
@@ -74,8 +75,8 @@ export interface TeamStoreOptions {
 /**
  * The central team library: `*.team.yaml` files under the userData dir.
  * YAML is the source of truth (never SQLite); saves go through the
- * comment-preserving serializer and are validated (zod shape + graph
- * structure + acyclicity) before touching disk. Writes are atomic
+ * comment-preserving serializer and are validated (zod shape + the team
+ * rules) before touching disk. Writes are atomic
  * (tmp + rename) so a crash never leaves a half-written team.
  */
 @Injectable()
@@ -134,13 +135,7 @@ export class TeamStoreService {
     return path;
   }
 
-  /** Validate beyond the zod shape: ids unique, edges resolvable, acyclic. */
-  private validateGraph(team: Team): void {
-    validateTeamGraph(team.nodes, team.edges);
-    computeRunOrder(team.nodes, team.edges);
-    assertValidStages(team);
-  }
-
+  /** Validate beyond the zod shape: members, trigger, ids and stages. */
   async list(): Promise<TeamSummary[]> {
     await mkdir(this.dir, { recursive: true });
     const entries = await readdir(this.dir);
@@ -159,8 +154,8 @@ export class TeamStoreService {
                 slug: entry.slice(0, -TEAM_SUFFIX.length),
                 name: team.name,
                 description: team.description ?? null,
-                nodeCount: team.nodes.length,
-                edgeCount: team.edges.length,
+                memberCount: team.members.length,
+                stageCount: team.stages?.length ?? 0,
                 agentCounts: agentCountsOf(team),
                 updatedAt: stats.mtime.toISOString(),
               };
@@ -216,7 +211,7 @@ export class TeamStoreService {
    * as TEAM_EXISTS, a derived-slug collision retries the next suffix.
    */
   async create(team: Team, slug?: string): Promise<TeamWire> {
-    this.validateGraph(team);
+    assertValidTeam(team);
     await mkdir(this.dir, { recursive: true });
     const content = serializeTeamYaml(team);
     if (slug) {
@@ -280,7 +275,7 @@ export class TeamStoreService {
     team: Team,
     baseHash: string | undefined,
   ): Promise<TeamWire> {
-    this.validateGraph(team);
+    assertValidTeam(team);
     await mkdir(this.dir, { recursive: true });
     const path = this.fileFor(slug);
     const existing = (await this.exists(path))
@@ -315,7 +310,11 @@ export class TeamStoreService {
     await rm(path);
   }
 
-  /** Copy an external `*.team.yaml` into the library (validated first). */
+  /**
+   * Copy an external `*.team.yaml` into the library (validated first). A
+   * team still written as a node graph (a `.geniro.yaml` or an older export)
+   * is converted and written in the team shape.
+   */
   async importFrom(sourcePath: string): Promise<TeamWire> {
     let source: string;
     try {
@@ -326,25 +325,34 @@ export class TeamStoreService {
         `Cannot read ${sourcePath}`,
       );
     }
-    // A kind-less legacy (pre-kind) file is refused, not normalized
-    // (no-backcompat): parseTeamYaml throws TEAM_YAML_INVALID, which
-    // the controller maps to 400. The library only ever holds strict files.
-    const team = parseTeamYaml(source);
-    this.validateGraph(team);
+    const { team, legacyNotes } = parseTeamYamlDocument(source);
+    if (legacyNotes !== null) {
+      const strict = TeamYamlSchema.safeParse(team);
+      if (!strict.success) {
+        throw new BadRequestException(
+          'TEAM_YAML_INVALID',
+          `Converted from a node graph, this team would not load: ${strict.error.issues
+            .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+            .join('; ')}`,
+        );
+      }
+    }
+    assertValidTeam(team);
+    const content = legacyNotes === null ? source : serializeTeamYaml(team);
     await mkdir(this.dir, { recursive: true });
     const fileName = basename(sourcePath);
     const suffix = [TEAM_SUFFIX, LEGACY_TEAM_SUFFIX].find((s) =>
       fileName.endsWith(s),
     );
     const importedName = suffix ? fileName.slice(0, -suffix.length) : team.name;
-    // Strict files land verbatim — the user's comments come along. The slug
+    // A team file lands verbatim — the user's comments come along. The slug
     // commits through the same exclusive loop as create(): a stat-then-write
     // here was a TOCTOU that let a racing writer on the same slug be clobbered.
     const slug = await this.createDerivedSlug(
       slugifyTeamName(importedName),
-      source,
+      content,
     );
-    return { slug, team, hash: teamFileHash(source) };
+    return { slug, team, hash: teamFileHash(content) };
   }
 
   /** Export a library team to an external path chosen by the user. */

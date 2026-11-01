@@ -29,7 +29,7 @@ const NODES: ReadonlyMap<string, TranscriptNodeMeta> = new Map([
 const JOINS: CallFollowUp = { unavailableReason: null, interrupts: false };
 const TARGET = expect.objectContaining({
   runId: 'run-1',
-  nodeId: 'poet',
+  memberId: 'poet',
   callId: 'call-1',
 });
 
@@ -37,13 +37,13 @@ let seq = 0;
 function item(
   kind: ChatItem['kind'],
   payload: unknown,
-  nodeId: string,
+  memberId: string,
 ): ChatItem {
   seq += 1;
   return {
     id: `i-${seq}`,
     runId: 'run-1',
-    nodeId,
+    memberId,
     seq,
     kind,
     role: null,

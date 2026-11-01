@@ -88,9 +88,9 @@ const EMPTY_FIGURES: ReadonlyMap<string, CallFigures> = new Map();
 
 function figuresOf(
   nodeReadings: ReadonlyMap<string, NodeDurableReading>,
-  nodeId: string,
+  memberId: string,
 ): ReadonlyMap<string, CallFigures> {
-  const list = nodeReadings.get(nodeId)?.callFigures;
+  const list = nodeReadings.get(memberId)?.callFigures;
   if (list === undefined) {
     return EMPTY_FIGURES;
   }
@@ -117,14 +117,14 @@ export function ownToolCallSeqsByCall(
   for (const row of rows) {
     if (
       row.kind !== 'tool_call' ||
-      row.nodeId == null ||
+      row.memberId == null ||
       typeof row.inCall !== 'string' ||
       row.inCall === '' ||
       subagentIdOf(row) !== null
     ) {
       continue;
     }
-    const key = callToolKey(row.nodeId, row.inCall);
+    const key = callToolKey(row.memberId, row.inCall);
     const forCall = seqs.get(key);
     if (forCall === undefined) {
       seqs.set(key, [row.seq]);
@@ -135,8 +135,8 @@ export function ownToolCallSeqsByCall(
   return seqs;
 }
 
-function callToolKey(nodeId: string, callId: string): string {
-  return `${nodeId}\u0000${callId}`;
+function callToolKey(memberId: string, callId: string): string {
+  return `${memberId}\u0000${callId}`;
 }
 
 /**
@@ -152,15 +152,15 @@ function callToolKey(nodeId: string, callId: string): string {
  */
 export function resolveConversationToolCalls(
   nodeReadings: ReadonlyMap<string, NodeDurableReading>,
-  calleeNodeId: string,
+  calleeMemberId: string,
   callIds: readonly string[],
   ownToolSeqs: ReadonlyMap<string, readonly number[]>,
 ): number | null {
-  const figures = figuresOf(nodeReadings, calleeNodeId);
+  const figures = figuresOf(nodeReadings, calleeMemberId);
   let total: number | null = null;
   for (const callId of callIds) {
     const call = figures.get(callId);
-    const seqs = ownToolSeqs.get(callToolKey(calleeNodeId, callId)) ?? [];
+    const seqs = ownToolSeqs.get(callToolKey(calleeMemberId, callId)) ?? [];
     if (call === undefined) {
       if (seqs.length > 0) {
         total = (total ?? 0) + seqs.length;
@@ -188,14 +188,14 @@ export function resolveConversationToolCalls(
  */
 export function resolveConversationWorked(
   nodeReadings: ReadonlyMap<string, NodeDurableReading>,
-  calleeNodeId: string,
+  calleeMemberId: string,
   callIds: readonly string[],
   turns: {
     durations: ReadonlyMap<string, readonly CallTurnDuration[]>;
     open: ReadonlyMap<string, OpenTurn>;
   },
 ): { workedMs: number | null; openTurns: readonly OpenTurn[] } {
-  const figures = figuresOf(nodeReadings, calleeNodeId);
+  const figures = figuresOf(nodeReadings, calleeMemberId);
   let workedMs: number | null = null;
   const openTurns: OpenTurn[] = [];
   for (const callId of callIds) {
@@ -258,10 +258,10 @@ function withEstimate<T extends CallSpend>(
  */
 export function resolveConversationSpend(
   nodeReadings: ReadonlyMap<string, NodeDurableReading>,
-  calleeNodeId: string,
+  calleeMemberId: string,
   callIds: readonly string[],
 ): CallSpend | null {
-  const figures = figuresOf(nodeReadings, calleeNodeId);
+  const figures = figuresOf(nodeReadings, calleeMemberId);
   const found: CallSpend = { tokens: null, costUsd: null };
   let estimated: number | null = null;
   let measured = false;
@@ -294,12 +294,15 @@ function addFigure(a: number | null, b: number | null): number | null {
  */
 export function liveConversationCost(
   liveText: ReadonlyMap<string, LiveState>,
-  calleeNodeId: string,
+  calleeMemberId: string,
   callIds: readonly string[],
 ): LiveCost | null {
   let total: LiveCost | null = null;
   for (const callId of callIds) {
-    total = addLive(total, liveText.get(partialOwnerKey(calleeNodeId, callId)));
+    total = addLive(
+      total,
+      liveText.get(partialOwnerKey(calleeMemberId, callId)),
+    );
   }
   return total;
 }
@@ -310,11 +313,11 @@ export function liveConversationCost(
  */
 export function liveNodeCost(
   liveText: ReadonlyMap<string, LiveState>,
-  nodeId: string,
+  memberId: string,
 ): LiveCost | null {
   let total: LiveCost | null = null;
   for (const [key, state] of liveText) {
-    if (ownerOfKey(key) === nodeId) {
+    if (ownerOfKey(key) === memberId) {
       total = addLive(total, state);
     }
   }
@@ -431,12 +434,12 @@ function addLive(
 export function resolveCalleeContext(
   liveText: ReadonlyMap<string, LiveState>,
   nodeReadings: ReadonlyMap<string, NodeDurableReading>,
-  calleeNodeId: string,
+  calleeMemberId: string,
   callId: string,
 ): CalleeContext {
-  const live = liveText.get(partialOwnerKey(calleeNodeId, callId));
+  const live = liveText.get(partialOwnerKey(calleeMemberId, callId));
   const row = nodeReadings
-    .get(calleeNodeId)
+    .get(calleeMemberId)
     ?.calls.find((call) => call.callId === callId);
   // A live count is the CLI's own; only the durable row can be a stand-in.
   const estimated =
@@ -462,7 +465,7 @@ export function resolveCalleeContext(
 export function resolveConversationContext(
   liveText: ReadonlyMap<string, LiveState>,
   nodeReadings: ReadonlyMap<string, NodeDurableReading>,
-  calleeNodeId: string,
+  calleeMemberId: string,
   callIds: readonly string[],
 ): CalleeContext {
   const found: CalleeContext = {
@@ -473,7 +476,7 @@ export function resolveConversationContext(
     const reading = resolveCalleeContext(
       liveText,
       nodeReadings,
-      calleeNodeId,
+      calleeMemberId,
       callIds[i]!,
     );
     if (found.contextTokens === null && reading.contextTokens !== null) {
@@ -494,10 +497,10 @@ export function resolveConversationContext(
  */
 export function resolveConversationCacheExpiry(
   nodeReadings: ReadonlyMap<string, NodeDurableReading>,
-  calleeNodeId: string,
+  calleeMemberId: string,
   callIds: readonly string[],
 ): string | null {
-  const figures = figuresOf(nodeReadings, calleeNodeId);
+  const figures = figuresOf(nodeReadings, calleeMemberId);
   for (let i = callIds.length - 1; i >= 0; i -= 1) {
     const expiresAt = figures.get(callIds[i]!)?.promptCacheExpiresAt;
     if (typeof expiresAt === 'string') {
@@ -514,7 +517,7 @@ export function resolveConversationCacheExpiry(
  * different rings for one conversation.
  */
 export type CalleeContextResolver = (
-  calleeNodeId: string,
+  calleeMemberId: string,
   callIds: readonly string[],
 ) => CalleeReading;
 

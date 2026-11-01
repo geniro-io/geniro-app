@@ -11,7 +11,7 @@ import { callSessionKey, nodeSessionKey } from '../utils/session-keys';
  * `HostWakeGraphDelivery`).
  *
  * A leaf, so a module above `v1/agents` (shares) can publish without
- * importing the graph engine that delivers to a team.
+ * importing the team executor that delivers to a team.
  */
 @Injectable()
 export class HostWakeBus {
@@ -38,13 +38,13 @@ export class HostWakeBus {
   }
 }
 
-/** The session key a wake's note is owed under: a chat's run, a node, or a callee conversation. */
+/** The session key a wake's note is owed under: a chat's run, a member, or a callee conversation. */
 export function hostWakeSessionKey(owner: HostWake['owner']): string {
   if (owner.target === 'chat') {
     return owner.runId;
   }
   return owner.conversationId === null
-    ? nodeSessionKey(owner.runId, owner.nodeId)
+    ? nodeSessionKey(owner.runId, owner.memberId)
     : callSessionKey(owner.runId, owner.conversationId);
 }
 

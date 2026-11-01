@@ -31,7 +31,7 @@ const AGENTS = [
   { agent: 'codex', displayName: 'Codex', shortName: 'codex' },
 ] as unknown as AgentIdentityCapability[];
 
-// codex lacks `acceptEdits`, so the node's own mode below is one a codex
+// codex lacks `acceptEdits`, so the team member's own mode below is one a codex
 // member does not honour.
 const APPROVALS = [
   { agent: 'claude', modes: ['auto', 'acceptEdits', 'ask'] },
@@ -103,13 +103,13 @@ function choose(label: string, text: string): void {
 }
 
 describe('AgentPoolEditor', () => {
-  it('adds a member on the node’s own CLI', () => {
+  it('adds a member on the team member’s own CLI', () => {
     const onChange = renderEditor([]);
     press(button('Add pool member'));
     expect(onChange).toHaveBeenCalledWith([{ agent: 'claude' }]);
   });
 
-  it('starts a new member at the node’s own auto-compact threshold', () => {
+  it('starts a new member at the team member’s own auto-compact threshold', () => {
     const onChange = renderEditor([], null, 80);
     press(button('Add pool member'));
     expect(onChange).toHaveBeenCalledWith([
@@ -129,7 +129,7 @@ describe('AgentPoolEditor', () => {
     ]);
   });
 
-  it('sets a member’s own approval mode, showing the node’s until it does', () => {
+  it('sets a member’s own approval mode, showing the team member’s until it does', () => {
     const onChange = renderEditor([{ agent: 'claude' }]);
     const trigger = document.querySelector(
       '[aria-label="Tool-approval mode for member 2"]',
@@ -141,7 +141,7 @@ describe('AgentPoolEditor', () => {
     ]);
   });
 
-  it('numbers existing members from 2 — the node itself is member 1', () => {
+  it('numbers existing members from 2 — the team member itself is member 1', () => {
     renderEditor([{ agent: 'codex' }]);
     expect(container?.textContent).toContain('Member 2');
   });
@@ -344,7 +344,7 @@ describe('AgentPoolEditor', () => {
     expect(notes[0]?.textContent).toContain('“accept edits”');
   });
 
-  it('switches a member’s OWN MCP servers off, never the node’s', async () => {
+  it('switches a member’s OWN MCP servers off, never the team member’s', async () => {
     const row = (name: string, turnReason: string | null = null): unknown => ({
       name,
       target: null,

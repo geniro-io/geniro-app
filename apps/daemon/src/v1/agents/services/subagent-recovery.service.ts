@@ -280,7 +280,7 @@ export class SubagentRecoveryService
           this.em.fork(),
           {
             runId,
-            nodeId: delegate.nodeId,
+            memberId: delegate.memberId,
             seq,
             kind: mapped.kind,
             role: mapped.role,

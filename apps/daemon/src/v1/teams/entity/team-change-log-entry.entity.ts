@@ -33,7 +33,7 @@ export class TeamChangeLogEntry extends TimestampsEntity {
   @Property({ type: 'string' })
   source!: TeamChangeSource;
 
-  /** The graph version replaced (`teamVersionOf`); null when the write created the team. */
+  /** The team version replaced (`teamVersionOf`); null when the write created the team. */
   @Property({ type: 'string', nullable: true })
   fromVersion: string | null = null;
 

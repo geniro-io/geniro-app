@@ -40,8 +40,8 @@ export interface ExportCall {
   callId: string;
   /** WHY the caller made it — the `title` argument, never the brief. */
   title: string | null;
-  callerNodeId: string | null;
-  calleeNodeId: string | null;
+  callerMemberId: string | null;
+  calleeMemberId: string | null;
   /** Wall clock from the start row to the result row; null while unsettled. */
   durationMs: number | null;
   /** Summed from the `turn_complete` rows carrying this call's id. */
@@ -97,7 +97,7 @@ const MAIN_AGENT = 'agent';
  */
 function isTeamRollUp(item: ItemDto): boolean {
   return (
-    item.nodeId === null &&
+    item.memberId === null &&
     teamPassStatus(payloadString(item.payload, 'stopReason')) !== null
   );
 }
@@ -141,7 +141,7 @@ export function chatExportSummary(
   items: readonly ItemDto[],
   mainAgent: string = MAIN_AGENT,
 ): ChatExportSummary {
-  const agentOf = (item: ItemDto): string => item.nodeId ?? mainAgent;
+  const agentOf = (item: ItemDto): string => item.memberId ?? mainAgent;
   const agents = new Map<string, ExportAgentTotals>();
   const calls = new Map<string, ExportCall>();
   const startedAt = new Map<string, number>();
@@ -198,8 +198,8 @@ export function chatExportSummary(
       calls.set(callId, {
         callId,
         title: payloadString(item.payload, 'title'),
-        callerNodeId: payloadString(item.payload, 'callerNodeId'),
-        calleeNodeId: payloadString(item.payload, 'calleeNodeId'),
+        callerMemberId: payloadString(item.payload, 'callerNodeId'),
+        calleeMemberId: payloadString(item.payload, 'calleeNodeId'),
         durationMs: null,
         costUsd: null,
         estimatedCostUsd: null,
@@ -228,7 +228,7 @@ export function chatExportSummary(
     if (item.kind === 'error') {
       const message = payloadString(item.payload, 'message');
       if (message !== null) {
-        errors.push({ at: item.createdAt, agent: item.nodeId, message });
+        errors.push({ at: item.createdAt, agent: item.memberId, message });
       }
       continue;
     }
@@ -240,7 +240,7 @@ export function chatExportSummary(
       if (facts !== null) {
         compactions.push({
           at: item.createdAt,
-          agent: item.nodeId,
+          agent: item.memberId,
           ...facts,
         });
       }

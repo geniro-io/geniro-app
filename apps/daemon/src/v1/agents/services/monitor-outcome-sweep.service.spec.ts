@@ -21,7 +21,7 @@ const row = (
   conversationId: string | null = null,
 ) => ({
   runId: 'run-1',
-  nodeId: 'agent',
+  memberId: 'agent',
   seq,
   payload: JSON.stringify(
     monitorRowPayload(
@@ -78,7 +78,7 @@ describe('MonitorOutcomeSweep', () => {
     await h.sweep.sweep('quit');
     expect(h.holdInterrupted).toHaveBeenCalledTimes(1);
     expect(h.holdInterrupted).toHaveBeenCalledWith(
-      { runId: 'run-1', nodeId: 'agent', callId: null, conversationId: null },
+      { runId: 'run-1', memberId: 'agent', callId: null, conversationId: null },
       [expect.objectContaining({ id: 'm2', end: { kind: 'interrupted' } })],
     );
     expect(h.write).not.toHaveBeenCalled();
@@ -96,7 +96,12 @@ describe('MonitorOutcomeSweep', () => {
         expect.stringContaining('m2 (CI)'),
       );
       expect(h.write).toHaveBeenCalledWith(
-        { runId: 'run-1', nodeId: 'agent', callId: null, conversationId: null },
+        {
+          runId: 'run-1',
+          memberId: 'agent',
+          callId: null,
+          conversationId: null,
+        },
         expect.objectContaining({
           id: 'm2',
           event: 'end',
@@ -106,7 +111,7 @@ describe('MonitorOutcomeSweep', () => {
     },
   );
 
-  it("owes a team node's own conversation a note instead of waking it", async () => {
+  it("owes a team member's own conversation a note instead of waking it", async () => {
     const h = harness({ teamId: 'wf', archivedAt: null });
     await h.sweep.sweep('quit');
     expect(h.holdInterrupted).not.toHaveBeenCalled();
@@ -126,7 +131,7 @@ describe('MonitorOutcomeSweep', () => {
     expect(h.write).toHaveBeenCalledWith(
       {
         runId: 'run-1',
-        nodeId: 'agent',
+        memberId: 'agent',
         callId: 'call-3',
         conversationId: 'call-1',
       },
@@ -144,7 +149,7 @@ describe('MonitorOutcomeSweep', () => {
     // delivery's row plus the call, no conversation.
     const delivered = {
       runId: 'run-1',
-      nodeId: 'agent',
+      memberId: 'agent',
       seq: 2,
       payload: JSON.stringify({
         ...monitorRowPayload(

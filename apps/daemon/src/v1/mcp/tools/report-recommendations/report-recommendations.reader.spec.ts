@@ -18,7 +18,7 @@ import { ReportRecommendationsTool } from './report-recommendations.tool';
 
 const CONTEXT = {
   runId: 'analysis',
-  nodeId: 'agent',
+  memberId: 'agent',
   conversationId: null,
   caller: 'agent',
   requestId: 1,
@@ -94,7 +94,7 @@ function setup(
             activeMs: 400_000,
             waitingOnUserMs: 60_000,
             criticalPathMs: 500_000,
-            sinks: [{ nodeId: 'reviewer', ms: 300_000 }],
+            sinks: [{ memberId: 'reviewer', ms: 300_000 }],
           },
         }),
     } as unknown as ThreadTimelineService,

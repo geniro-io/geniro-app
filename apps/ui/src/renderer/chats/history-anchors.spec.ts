@@ -17,7 +17,7 @@ function row(
   return {
     id: `i${seq}`,
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind,
     role: null,

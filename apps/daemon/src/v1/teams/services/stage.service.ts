@@ -37,13 +37,13 @@ import type {
   Team,
   TeamStage,
 } from '../teams.types';
-import { leadAgentId } from '../utils/graph-order';
 import { foldStages, stagesReopenResets } from '../utils/stage-fold';
 import {
   MAX_AGENT_STAGE_TEXT_LINES,
   MAX_STAGE_TEXT_LENGTH,
 } from '../utils/stage-text';
 import { walkableStages } from '../utils/stage-validate';
+import { triggerMemberId } from '../utils/team-roster';
 import { RunTeamService } from './run-team.service';
 
 export const STAGE_COLUMN_RETRY_MS = 30_000;
@@ -97,7 +97,7 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
     }
     this.registered.set(
       runId,
-      new Set(team.nodes.filter((n) => n.kind === 'agent').map((n) => n.id)),
+      new Set(team.members.map((member) => member.id)),
     );
   }
 
@@ -142,8 +142,8 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  canUse(runId: string, nodeId: string): boolean {
-    return this.registered.get(runId)?.has(nodeId) ?? false;
+  canUse(runId: string, memberId: string): boolean {
+    return this.registered.get(runId)?.has(memberId) ?? false;
   }
 
   async current(runId: string): Promise<RunStages | null> {
@@ -183,7 +183,7 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
         const loaded = {
           stages,
           progress,
-          leadId: leadAgentId(team.nodes, team.edges),
+          leadId: triggerMemberId(team),
         };
         if (run.archivedAt === null) {
           this.cache.set(runId, loaded);
@@ -274,7 +274,7 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
         em,
         {
           runId,
-          nodeId: null,
+          memberId: null,
           seq: await this.seqs.reserve(runId),
           kind: 'stage_change',
           role: null,
@@ -289,7 +289,7 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
       this.cache.set(runId, {
         stages,
         progress,
-        leadId: leadAgentId(team.nodes, team.edges),
+        leadId: triggerMemberId(team),
       });
       return { ok: true, stages, team, progress, resets, payload };
     });
@@ -318,7 +318,7 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
         em,
         {
           runId,
-          nodeId: null,
+          memberId: null,
           seq: await this.seqs.reserve(runId),
           kind: 'stage_change',
           role: null,

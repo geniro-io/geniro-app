@@ -52,7 +52,7 @@ export type TeamChangeAuthority =
       savedHash: string | null;
       /**
        * When the turn began (epoch ms). Before the first save, a file written
-       * after it was written by something other than the canvas, which does
+       * after it was written by something other than the team editor, which does
        * not save while the chat works.
        */
       turnStartedAt: number;
@@ -75,24 +75,22 @@ export interface TeamChange {
 
 type Answer = Record<string, unknown>;
 
-/** Every (agent, profile) an agent node or one of its pool members runs under. */
+/** Every (agent, profile) a member or one of its pool members runs under. */
 function runnersOf(
   team: Team,
 ): { agent: AgentKind; configDir: string | null }[] {
-  return team.nodes.flatMap((node) =>
-    node.kind === 'agent'
-      ? [node, ...(node.pool ?? [])].map((member) => ({
-          agent: member.agent,
-          configDir: member.configDir ?? null,
-        }))
-      : [],
+  return team.members.flatMap((member) =>
+    [member, ...(member.pool ?? [])].map((runner) => ({
+      agent: runner.agent,
+      configDir: runner.configDir ?? null,
+    })),
   );
 }
 
 /**
  * The only path an analysis or a builder chat has to the team library:
  * every change is checked against its authority, against the file it was read
- * from, and against the graph rules. For an analysis the file as it stood is
+ * from, and against the team rules. For an analysis the file as it stood is
  * copied to a timed backup before `TeamStoreService.save` replaces it; a
  * builder chat backs up through {@link backUp}, when its agent calls
  * `backup_team`.
@@ -152,7 +150,7 @@ export class TeamChangeService {
   }
 
   /**
-   * Each agent node's always-on block as the library's copy composes it, with
+   * Each member's always-on block as the library's copy composes it, with
    * the run's own custom instructions, memory index, card instructions and
    * reply language,
    * and — where the run's own copy composed a different length — that length.
@@ -172,17 +170,17 @@ export class TeamChangeService {
     const inThisRun = new Map(
       (started === null
         ? []
-        : this.instructionSizes.measure({ team: started, ...settings }).nodes
-      ).map((node) => [node.nodeId, node]),
+        : this.instructionSizes.measure({ team: started, ...settings }).members
+      ).map((member) => [member.memberId, member]),
     );
     return this.instructionSizes
       .measure({ team: current, ...settings })
-      .nodes.map((node) => {
-        const ran = inThisRun.get(node.nodeId);
-        return ran === undefined || ran.totalChars === node.totalChars
-          ? node
+      .members.map((member) => {
+        const ran = inThisRun.get(member.memberId);
+        return ran === undefined || ran.totalChars === member.totalChars
+          ? member
           : {
-              ...node,
+              ...member,
               inThisRun: {
                 totalChars: ran.totalChars,
                 approxTokens: ran.approxTokens,
@@ -271,7 +269,7 @@ export class TeamChangeService {
             current.source,
           )
         : null;
-    // The store checks the hash again right before it writes, so a canvas
+    // The store checks the hash again right before it writes, so a team editor
     // save landing after the check above is refused rather than overwritten.
     let saved: { hash: string };
     try {
@@ -477,7 +475,7 @@ function changedSinceRead(
   }
   // An mtime keeps a fraction of a millisecond and the turn's start does not,
   // so the two are compared in whole milliseconds: a write in the turn's first
-  // millisecond is the canvas's last save before the send, not a later one.
+  // millisecond is the team editor's last save before the send, not a later one.
   return (
     current.modifiedAt === null ||
     Math.floor(current.modifiedAt) > authority.turnStartedAt

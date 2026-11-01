@@ -201,7 +201,7 @@ export class UsageBackfillService implements OnModuleInit {
       priced.map((run) => run.id),
       em,
     );
-    // Whose money a TEAM run's bill is comes off its nodes' shares — one
+    // Whose money a TEAM run's bill is comes off its members' shares — one
     // read for every such run rather than one per run.
     const sharesByRun = new Map<
       string,
@@ -282,28 +282,28 @@ export class UsageBackfillService implements OnModuleInit {
     );
     const nodes = new Map(
       (await this.nodeStateDao.getAll({}, undefined, em)).map((node) => [
-        `${node.runId}:${node.nodeId}`,
+        `${node.runId}:${node.memberId}`,
         node,
       ]),
     );
 
-    // Once per (run, node) rather than per turn: the team's name is read
+    // Once per (run, member) rather than per turn: the team's name is read
     // out of the run's snapshot, a whole team document, and a sweep that
     // re-parsed it for every turn of a long run would pay for the same string
     // thousands of times.
     const dimensionsByNode = new Map<string, UsageDimensions>();
     const dimensionsOf = (
       runId: string,
-      nodeId: string | null,
+      memberId: string | null,
     ): UsageDimensions => {
-      const key = JSON.stringify([runId, nodeId]);
+      const key = JSON.stringify([runId, memberId]);
       const known = dimensionsByNode.get(key);
       if (known) {
         return known;
       }
       const fresh = usageDimensions(
         runs.get(runId) ?? null,
-        nodeId === null ? null : (nodes.get(`${runId}:${nodeId}`) ?? null),
+        memberId === null ? null : (nodes.get(`${runId}:${memberId}`) ?? null),
       );
       dimensionsByNode.set(key, fresh);
       return fresh;
@@ -321,10 +321,10 @@ export class UsageBackfillService implements OnModuleInit {
       if (!figures) {
         continue;
       }
-      const dimensions = dimensionsOf(row.runId, row.nodeId);
+      const dimensions = dimensionsOf(row.runId, row.memberId);
       const input: UsageEventInput = {
         runId: row.runId,
-        nodeId: row.nodeId,
+        memberId: row.memberId,
         seq: row.seq,
         occurredAt: row.createdAt,
         // The same reading the live recorder takes: the model the CLI

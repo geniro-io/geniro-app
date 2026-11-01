@@ -5,8 +5,8 @@ import type { PendingApproval } from '../services/approval-registry';
 
 /** One never-answered request found in a stored transcript, with its owner. */
 export interface UnansweredRequest {
-  /** The graph node that asked; null for a single-agent chat's rows. */
-  nodeId: string | null;
+  /** The team member that asked; null for a single-agent chat's rows. */
+  memberId: string | null;
   payload: UnanswerableWire;
 }
 
@@ -29,7 +29,7 @@ function payloadField(raw: string, key: string): string | null {
  * The `unanswerable` item payload for one swept approval.
  *
  * Trivial on purpose, and shared anyway: every settle path in the daemon — the
- * chat turn, the DAG turn, a callee sub-turn, and both turn-start failures —
+ * chat turn, a member's own turn, a callee sub-turn, and both turn-start failures —
  * writes this row, and a field spelled differently on one of them would leave
  * that path's card live on screen while the others closed. Built from the
  * registry entry the sweep returned, never re-derived from the transcript.
@@ -78,7 +78,7 @@ export function unansweredRequests(
     }
     if (item.kind === 'approval_request') {
       open.set(id, {
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         payload: {
           id,
           toolName: payloadField(item.payload, 'toolName') ?? 'tool',

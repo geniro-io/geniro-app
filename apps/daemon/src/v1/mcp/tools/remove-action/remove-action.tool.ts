@@ -21,8 +21,8 @@ export class RemoveActionTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.actions.canPublish(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.actions.canPublish(runId, memberId);
   }
 
   protected instructions(): string {
@@ -35,13 +35,18 @@ export class RemoveActionTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId, caller }: McpCallContext,
+    { runId, memberId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
     const actionId = readRemoveAction(args);
     if (typeof actionId !== 'string') {
       return this.invalidArgs(actionId.error);
     }
-    const outcome = await this.actions.remove(runId, nodeId, actionId, caller);
+    const outcome = await this.actions.remove(
+      runId,
+      memberId,
+      actionId,
+      caller,
+    );
     return outcome.status === 'refused'
       ? this.invalidArgs(outcome.reason)
       : this.text(removeActionResultText(outcome));

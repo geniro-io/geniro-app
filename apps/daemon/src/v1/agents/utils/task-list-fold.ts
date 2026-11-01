@@ -163,7 +163,7 @@ function applyAnnouncement(
 }
 
 /**
- * Whether a row was written by a DELEGATE rather than by its node's own agent.
+ * Whether a row was written by a DELEGATE rather than by its member's own agent.
  *
  * TWIN PARSER: the renderer's `subagentIdOf` (`chats/subagent-payload.ts`)
  * reads the same `parentToolUseId` key, which `event-to-item.ts` stamps on
@@ -178,12 +178,12 @@ function writtenByDelegate(payload: unknown): boolean {
 }
 
 /**
- * The call thread one announcement was made in, or null for the node's own
+ * The call thread one announcement was made in, or null for the member's own
  * conversation.
  *
  * Read off the PAYLOAD because that is where the executor puts it: a callee
  * sub-turn tags every item it streams with its `callId`
- * (`GraphExecutorService`), which is also what the renderer nests a call's rows
+ * (`TeamExecutorService`), which is also what the renderer nests a call's rows
  * under. There is no column for it — the row's `nodeId` names the callee alone.
  */
 function readCallId(payload: unknown): string | null {
@@ -202,9 +202,9 @@ function readCallId(payload: unknown): string | null {
  * CLIs number tasks from 1, so folding two agents' rows together would have
  * task `1` mean two different things.
  *
- * And by `callId` inside that, for the SAME reason one level down: a node that
+ * And by `callId` inside that, for the SAME reason one level down: a member that
  * is called several times runs one conversation per call, each keeping its own
- * checklist from task `1`. Keyed by node alone, two instances of one Engineer
+ * checklist from task `1`. Keyed by member alone, two instances of one Engineer
  * were folded into a single list — the second call's `1 in_progress` patched
  * over the first call's `1 completed`, and the panel showed one plan that
  * belonged to neither.
@@ -216,7 +216,7 @@ function readCallId(payload: unknown): string | null {
  * transcript's cards take their titles from.
  */
 export function foldTaskLists(
-  rows: readonly { nodeId: string | null; payload: unknown }[],
+  rows: readonly { memberId: string | null; payload: unknown }[],
 ): RunTaskGroup[] {
   const perThread = new Map<string, RunTaskGroup>();
   for (const row of rows) {
@@ -228,11 +228,11 @@ export function foldTaskLists(
       continue;
     }
     const callId = readCallId(row.payload);
-    // A JSON pair rather than a joined string: a node id is any non-empty
+    // A JSON pair rather than a joined string: a member id is any non-empty
     // string, so no separator character is safe to join on.
-    const key = JSON.stringify([row.nodeId, callId]);
+    const key = JSON.stringify([row.memberId, callId]);
     const group = perThread.get(key) ?? {
-      nodeId: row.nodeId,
+      memberId: row.memberId,
       callId,
       tasks: [],
       snapshot: false,
@@ -267,7 +267,7 @@ export function readRunTaskList(stored: string | null): RunTaskGroup[] {
         return [];
       }
       const group = entry as {
-        nodeId?: unknown;
+        memberId?: unknown;
         callId?: unknown;
         tasks?: unknown;
         snapshot?: unknown;
@@ -283,9 +283,10 @@ export function readRunTaskList(stored: string | null): RunTaskGroup[] {
         ? []
         : [
             {
-              nodeId: typeof group.nodeId === 'string' ? group.nodeId : null,
+              memberId:
+                typeof group.memberId === 'string' ? group.memberId : null,
               // A row written before the fold was keyed per call carries no
-              // `callId`, and reads as the node's own conversation — which is
+              // `callId`, and reads as the member's own conversation — which is
               // what that one merged list was filed as.
               callId: readString(group.callId),
               tasks: announcement.tasks,

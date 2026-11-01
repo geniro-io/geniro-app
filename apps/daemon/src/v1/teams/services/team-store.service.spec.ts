@@ -18,18 +18,20 @@ import {
 } from '@packages/common';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { agentNode } from '../__tests__/team-node';
+import { member, teamOf } from '../__tests__/team-builders';
 import type { Team } from '../teams.types';
 import { TeamStoreService } from './team-store.service';
 
-const WF: Team = {
-  name: 'Review Team',
-  nodes: [
-    { id: 'coder', kind: 'agent', agent: 'claude', approval: 'auto' },
-    { id: 'reviewer', kind: 'agent', agent: 'cursor-agent', approval: 'ask' },
+const WF: Team = teamOf(
+  [
+    member('coder'),
+    member('reviewer', { agent: 'cursor-agent', approval: 'ask' }),
   ],
-  edges: [{ from: 'coder', to: 'reviewer', kind: 'data' as const }],
-};
+  { name: 'Review Team' },
+);
+
+const SOLO_YAML = (name: string, extra = ''): string =>
+  `name: ${name}\nmembers:\n  - id: solo\n    name: solo\n    agent: claude\n${extra}triggers:\n  - kind: first-message\n    member: solo\n`;
 
 describe('TeamStoreService', () => {
   let dir: string;
@@ -52,20 +54,20 @@ describe('TeamStoreService', () => {
     expect(listed[0]).toMatchObject({
       slug: 'review-team',
       name: 'Review Team',
-      nodeCount: 2,
-      edgeCount: 1,
+      memberCount: 2,
+      stageCount: 0,
     });
   });
 
-  it('refuses a save whose stages loop back, and keeps one whose hint names a deleted agent', async () => {
+  it('refuses a save whose stages loop back, and keeps one whose responsible member was deleted', async () => {
     await store.create(WF, 'review-team');
     await expect(
       store.save('review-team', {
         ...WF,
         stages: [
-          { id: 'build', title: 'Build', doneWhen: 'built', next: ['check'] },
-          { id: 'check', title: 'Check', doneWhen: 'ok', next: ['fix'] },
-          { id: 'fix', title: 'Fix', doneWhen: 'fixed', next: ['check'] },
+          { id: 'build', title: 'Build', goal: 'built', next: ['check'] },
+          { id: 'check', title: 'Check', goal: 'ok', next: ['fix'] },
+          { id: 'fix', title: 'Fix', goal: 'fixed', next: ['check'] },
         ],
       }),
     ).rejects.toMatchObject({ errorCode: 'STAGE_CYCLE' });
@@ -73,12 +75,12 @@ describe('TeamStoreService', () => {
     await store.save('review-team', {
       ...WF,
       stages: [
-        { id: 'build', title: 'Build', doneWhen: 'built', ownerHint: 'gone' },
+        { id: 'build', title: 'Build', goal: 'built', responsible: ['gone'] },
       ],
     });
-    expect((await store.get('review-team')).team.stages?.[0]?.ownerHint).toBe(
-      'gone',
-    );
+    expect(
+      (await store.get('review-team')).team.stages?.[0]?.responsible,
+    ).toEqual(['gone']);
   });
 
   it('refuses a save made from a copy older than the file, and accepts one from the current copy', async () => {
@@ -89,7 +91,7 @@ describe('TeamStoreService', () => {
     });
 
     await expect(
-      store.save('review-team', { ...WF, name: 'Stale canvas' }, created.hash),
+      store.save('review-team', { ...WF, name: 'Stale copy' }, created.hash),
     ).rejects.toMatchObject({ errorCode: 'TEAM_CHANGED' });
     expect((await store.get('review-team')).team.description).toBe(
       'changed by an analysis',
@@ -97,7 +99,7 @@ describe('TeamStoreService', () => {
 
     const saved = await store.save(
       'review-team',
-      { ...WF, name: 'Fresh canvas' },
+      { ...WF, name: 'Fresh copy' },
       elsewhere.hash,
     );
     expect(saved.hash).toBe((await store.get('review-team')).hash);
@@ -131,39 +133,38 @@ describe('TeamStoreService', () => {
 
   it('summarizes the per-agent-kind breakdown in a stable order', async () => {
     // The card badges read agentCounts directly — assert it is a real tally
-    // (three same-kind nodes count as 3, not deduped to 1) and that the order
+    // (three same-kind members count as 3, not deduped to 1) and that the order
     // follows TEAM_AGENT_KINDS (claude first) regardless of declaration
     // order, so a card's badges don't reshuffle between listings.
-    await store.create({
-      name: 'Mixed Team',
-      nodes: [
-        { id: 'a', kind: 'agent', agent: 'cursor-agent', approval: 'auto' },
-        { id: 'b', kind: 'agent', agent: 'claude', approval: 'auto' },
-        { id: 'c', kind: 'agent', agent: 'claude', approval: 'auto' },
-        { id: 'd', kind: 'agent', agent: 'claude', approval: 'auto' },
-      ],
-      edges: [],
-    });
+    await store.create(
+      teamOf(
+        [
+          member('a', { agent: 'cursor-agent' }),
+          member('b'),
+          member('c'),
+          member('d'),
+        ],
+        { name: 'Mixed Team' },
+      ),
+    );
     const [summary] = await store.list();
     expect(summary?.agentCounts).toEqual([
       { kind: 'claude', count: 3 },
       { kind: 'cursor-agent', count: 1 },
     ]);
-    expect(summary?.edgeCount).toBe(0);
+    expect(summary?.memberCount).toBe(4);
   });
 
-  it('counts trigger nodes in nodeCount but never in agentCounts', async () => {
+  it('counts the stages of a team in stageCount', async () => {
     await store.create({
-      name: 'Triggered',
-      nodes: [
-        { id: 't', kind: 'trigger', trigger: 'manual' },
-        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ...WF,
+      stages: [
+        { id: 'build', title: 'Build', goal: 'built', next: ['check'] },
+        { id: 'check', title: 'Check', goal: 'ok' },
       ],
-      edges: [{ from: 't', to: 'a', kind: 'data' as const }],
     });
     const [summary] = await store.list();
-    expect(summary!.nodeCount).toBe(2);
-    expect(summary!.agentCounts).toEqual([{ kind: 'claude', count: 1 }]);
+    expect(summary).toMatchObject({ memberCount: 2, stageCount: 2 });
   });
 
   it('lists teams newest-updated first', async () => {
@@ -187,15 +188,36 @@ describe('TeamStoreService', () => {
     expect(slugs).toEqual(['beta', 'alpha']);
   });
 
-  it('accepts an empty team as a library draft', async () => {
-    // "New team" persists a blank canvas (no nodes) before the builder
-    // opens — the store must round-trip it; only RUNNING it is rejected
-    // (graph-executor's GRAPH_EMPTY).
-    const created = await store.create({ name: 'Blank', nodes: [], edges: [] });
-    const { team } = await store.get(created.slug);
-    expect(team.nodes).toEqual([]);
-    const [summary] = await store.list();
-    expect(summary).toMatchObject({ nodeCount: 0, edgeCount: 0 });
+  it('refuses to create or save a team with no members, and writes nothing', async () => {
+    const empty = teamOf([], { name: 'Blank' });
+
+    await expect(store.create(empty)).rejects.toMatchObject({
+      errorCode: 'TEAM_NO_MEMBERS',
+    });
+    await expect(store.save('blank', empty)).rejects.toMatchObject({
+      errorCode: 'TEAM_NO_MEMBERS',
+    });
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it('validates a team on create and on save with the team rules', async () => {
+    const noTrigger = { ...WF, triggers: [] };
+    const unknownTrigger: Team = {
+      ...WF,
+      triggers: [{ kind: 'first-message', member: 'ghost' }],
+    };
+    const twice = teamOf([member('coder'), member('coder')]);
+
+    await expect(store.create(noTrigger)).rejects.toMatchObject({
+      errorCode: 'TEAM_TRIGGER_COUNT',
+    });
+    await expect(store.create(unknownTrigger)).rejects.toMatchObject({
+      errorCode: 'TEAM_TRIGGER_UNKNOWN',
+    });
+    await expect(store.save('team', twice)).rejects.toMatchObject({
+      errorCode: 'TEAM_DUPLICATE_MEMBER',
+    });
+    expect(await readdir(dir)).toEqual([]);
   });
 
   it('suffixes the slug when the name collides', async () => {
@@ -273,7 +295,7 @@ describe('TeamStoreService', () => {
     await store.save('good', WF);
     await writeFile(
       join(dir, 'My-Team.team.yaml'),
-      'name: my team\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n',
+      SOLO_YAML('my team'),
       'utf8',
     );
     const listed = await store.list();
@@ -310,11 +332,7 @@ describe('TeamStoreService', () => {
     it('imports a file named runs.team.yaml under `runs-1`', async () => {
       const outside = await mkdtemp(join(tmpdir(), 'geniro-import-'));
       const external = join(outside, 'runs.team.yaml');
-      await writeFile(
-        external,
-        'name: runs\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n',
-        'utf8',
-      );
+      await writeFile(external, SOLO_YAML('runs'), 'utf8');
       try {
         const imported = await store.importFrom(external);
         expect(imported.slug).toBe('runs-1');
@@ -326,11 +344,7 @@ describe('TeamStoreService', () => {
     it('takes the slug from a file named before the rename (`*.geniro.yaml`)', async () => {
       const outside = await mkdtemp(join(tmpdir(), 'geniro-import-'));
       const external = join(outside, 'review-squad.geniro.yaml');
-      await writeFile(
-        external,
-        'name: Something Else\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n',
-        'utf8',
-      );
+      await writeFile(external, SOLO_YAML('Something Else'), 'utf8');
       try {
         const imported = await store.importFrom(external);
         expect(imported.slug).toBe('review-squad');
@@ -348,14 +362,14 @@ describe('TeamStoreService', () => {
   });
 
   // Import is how a team written by SOMEBODY ELSE arrives, which is the
-  // case the refusal exists for: a NUL in a role reaches claude's argv and
-  // node refuses to spawn, so the node would fail every run.
-  it('refuses to import a team whose agent role carries a NUL', async () => {
+  // case the refusal exists for: a NUL in instructions reaches claude's argv and
+  // node refuses to spawn, so the member would fail every run.
+  it('refuses to import a team whose member instructions carry a NUL', async () => {
     const outside = await mkdtemp(join(tmpdir(), 'geniro-import-'));
     const external = join(outside, 'hostile.team.yaml');
     await writeFile(
       external,
-      'name: hostile\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n    role: "be \\0 helpful"\n',
+      SOLO_YAML('hostile', '    instructions: "be \\0 helpful"\n'),
       'utf8',
     );
     try {
@@ -389,25 +403,20 @@ describe('TeamStoreService', () => {
 
     const updated: Team = {
       ...WF,
-      nodes: [{ ...agentNode(WF.nodes[0]), model: 'opus' }, WF.nodes[1]!],
+      members: [{ ...WF.members[0]!, model: 'opus' }, WF.members[1]!],
     };
     await store.save('team', updated);
     const source = await readFile(path, 'utf8');
     expect(source).toContain('# my precious team');
-    expect(agentNode((await store.get('team')).team.nodes[0]).model).toBe(
-      'opus',
-    );
+    expect((await store.get('team')).team.members[0]?.model).toBe('opus');
   });
 
-  it('rejects a cyclic team before touching disk', async () => {
-    const cyclic: Team = {
+  it('rejects a team that fails validation before touching disk', async () => {
+    const broken: Team = {
       ...WF,
-      edges: [
-        { from: 'coder', to: 'reviewer', kind: 'data' as const },
-        { from: 'reviewer', to: 'coder', kind: 'data' as const },
-      ],
+      triggers: [{ kind: 'first-message', member: 'nobody' }],
     };
-    await expect(store.save('team', cyclic)).rejects.toBeInstanceOf(
+    await expect(store.save('team', broken)).rejects.toBeInstanceOf(
       BadRequestException,
     );
     await expect(store.get('team')).rejects.toBeInstanceOf(NotFoundException);
@@ -435,11 +444,37 @@ describe('TeamStoreService', () => {
     expect(listed.map((s) => s.slug)).toEqual(['good']);
   });
 
+  it('refuses to import a node graph whose converted team would not load', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'geniro-import-'));
+    const external = join(outside, 'long.team.yaml');
+    await writeFile(
+      external,
+      [
+        'name: Long',
+        'nodes:',
+        '  - { id: t, kind: trigger, trigger: manual }',
+        `  - { id: a, kind: agent, agent: claude, approval: auto, name: ${'x'.repeat(81)} }`,
+        'edges:',
+        '  - { from: t, to: a, kind: data }',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    try {
+      await expect(store.importFrom(external)).rejects.toMatchObject({
+        errorCode: 'TEAM_YAML_INVALID',
+      });
+      expect(await readdir(dir)).toEqual([]);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it('imports an external file verbatim under a unique slug', async () => {
     const external = join(dir, '..', `external-${Date.now()}.team.yaml`);
     await writeFile(
       external,
-      `# imported with comments\nname: ext\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n`,
+      `# imported with comments\n${SOLO_YAML('ext')}`,
       'utf8',
     );
     try {
@@ -456,11 +491,7 @@ describe('TeamStoreService', () => {
 
   it('a second import of the same name lands on the next suffix, never over the first', async () => {
     const external = join(dir, '..', `twice-${Date.now()}.team.yaml`);
-    await writeFile(
-      external,
-      `name: twice\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n`,
-      'utf8',
-    );
+    await writeFile(external, SOLO_YAML('twice'), 'utf8');
     try {
       const first = await store.importFrom(external);
       const second = await store.importFrom(external);
@@ -477,11 +508,7 @@ describe('TeamStoreService', () => {
     // the slug free and silently replace the entry; the exclusive link commit
     // gets EEXIST and retries the next suffix instead.
     const external = join(dir, '..', `occupied-${Date.now()}.team.yaml`);
-    await writeFile(
-      external,
-      `name: occupied\nnodes:\n  - id: solo\n    kind: agent\n    agent: claude\n`,
-      'utf8',
-    );
+    await writeFile(external, SOLO_YAML('occupied'), 'utf8');
     try {
       const base = external.split('/').pop()!.replace('.team.yaml', '');
       await symlink(
@@ -516,7 +543,81 @@ describe('TeamStoreService', () => {
     );
   });
 
-  describe('legacy (pre-kind) files are rejected — no normalization (no-backcompat)', () => {
+  describe('node-graph files', () => {
+    const GRAPH_SOURCE = [
+      '# the graph the team was',
+      'name: Graph Team',
+      'nodes:',
+      '  - id: start',
+      '    kind: trigger',
+      '  - id: coder',
+      '    kind: agent',
+      '    agent: claude',
+      '    description: writes the code',
+      '    role: be careful',
+      '  - id: reviewer',
+      '    kind: agent',
+      '    agent: cursor-agent',
+      'edges:',
+      '  - from: start',
+      '    to: coder',
+      '    kind: data',
+      '  - from: coder',
+      '    to: reviewer',
+      '    kind: call',
+      '',
+    ].join('\n');
+
+    it('importFrom converts a graph-shaped .geniro.yaml and writes the team shape', async () => {
+      const outside = await mkdtemp(join(tmpdir(), 'geniro-import-'));
+      const external = join(outside, 'graph-squad.geniro.yaml');
+      await writeFile(external, GRAPH_SOURCE, 'utf8');
+      try {
+        const imported = await store.importFrom(external);
+
+        expect(imported.slug).toBe('graph-squad');
+        expect(imported.team).toMatchObject({
+          name: 'Graph Team',
+          mode: 'lead',
+          members: [
+            {
+              id: 'coder',
+              name: 'coder',
+              role: 'writes the code',
+              instructions: 'be careful',
+            },
+            { id: 'reviewer', agent: 'cursor-agent' },
+          ],
+          triggers: [{ kind: 'first-message', member: 'coder' }],
+        });
+        const written = await readFile(
+          join(dir, 'graph-squad.team.yaml'),
+          'utf8',
+        );
+        expect(written).toContain('members:');
+        expect(written).not.toContain('nodes:');
+        expect(written).not.toContain('edges:');
+        expect((await store.get('graph-squad')).team).toEqual(imported.team);
+        expect(await readFile(external, 'utf8')).toBe(GRAPH_SOURCE);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('get() and list() read a graph-shaped library file as the converted team, leaving the file as written', async () => {
+      const path = join(dir, 'graph.team.yaml');
+      await writeFile(path, GRAPH_SOURCE, 'utf8');
+
+      expect((await store.get('graph')).team).toMatchObject({
+        members: [{ id: 'coder' }, { id: 'reviewer' }],
+        triggers: [{ member: 'coder' }],
+      });
+      expect(await store.list()).toMatchObject([
+        { slug: 'graph', memberCount: 2, stageCount: 0 },
+      ]);
+      expect(await readFile(path, 'utf8')).toBe(GRAPH_SOURCE);
+    });
+
     // A library file written before node/edge kinds existed — no `kind` on
     // either. The store no longer normalizes these in place: the strict schema
     // rejects them outright (parseLegacyTeamYaml + the .bak retry are gone),

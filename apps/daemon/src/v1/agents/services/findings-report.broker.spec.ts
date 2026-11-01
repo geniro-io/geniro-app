@@ -25,7 +25,7 @@ describe('FindingsReportBroker', () => {
     expect(broker.canReport(RUN, NODE)).toBe(true);
   });
 
-  it('gates per node, not per run', () => {
+  it('gates per member, not per run', () => {
     const broker = new FindingsReportBroker();
     broker.register(RUN, NODE, async () => ({ status: 'recorded', count: 1 }));
     expect(broker.canReport(RUN, 'other-node')).toBe(false);

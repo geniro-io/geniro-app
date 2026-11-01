@@ -505,7 +505,7 @@ export function RunningMonitorChips({
 }: {
   monitors: readonly OpenMonitor[];
   /** Names each row's agent; absent in a 1:1 chat. */
-  agentNameOf?: (nodeId: string) => string;
+  agentNameOf?: (memberId: string) => string;
   onStop?: (monitor: OpenMonitor) => void | Promise<void>;
 }): React.JSX.Element | null {
   const count = monitors.length;
@@ -885,7 +885,7 @@ export function TeamNotesChip({
 }: {
   /** Newest first, as the daemon lists them. */
   notes: readonly TeamNote[];
-  agentName: (nodeId: string) => string;
+  agentName: (memberId: string) => string;
   /** Open the notes popup, on one note or on none. */
   onOpen: (seq: number | null) => void;
 }): React.JSX.Element | null {

@@ -19,7 +19,7 @@ import type { AgentKind } from '../../runs/runs.types';
  *   under a running daemon answers differently, and a TTL alone would serve
  *   the old vocabulary for its remainder.
  * - **Single-flight, joined AFTER the freshness check** — so a warm answer
- *   still costs nothing, while a cold one asked by the composer and a graph
+ *   still costs nothing, while a cold one asked by the composer and a team
  *   inspector in the same instant spawns ONE process group rather than two.
  * - **A null model is its OWN key**, not a missing one: "what does this CLI
  *   offer at all" is a real question with a real answer, and folding it into

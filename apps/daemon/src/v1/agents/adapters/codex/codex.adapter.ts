@@ -194,9 +194,9 @@ export class CodexAdapter extends AgentAdapter {
         summary:
           'OpenAI Codex CLI, driven headlessly through codex app-server.',
         details: [
-          'Runs each node as a codex conversation over its app-server protocol.',
-          'Tool approvals are per-node — auto, ask, accept edits, or plan.',
-          'Model and reasoning effort are chosen per node (empty = the CLI default).',
+          'Runs each member as a codex conversation over its app-server protocol.',
+          'Tool approvals are per member — auto, ask, accept edits, or plan.',
+          'Model and reasoning effort are chosen per member (empty = the CLI default).',
           'Signs itself in with your ChatGPT account or an API key — no key to enter here.',
         ],
         icon: 'code',
@@ -298,7 +298,7 @@ export class CodexAdapter extends AgentAdapter {
         endpointRequiresCwdConfig: false,
         listingUnavailableReason: null,
         toggleUnavailableReason: null,
-        // Null: a team node's switched-off servers ride the thread's own
+        // Null: a team member's switched-off servers ride the thread's own
         // config overrides — see `codexTurnMcpOverrides` for the measurement
         // and for the rows it cannot reach (a plugin's server).
         turnToggleUnavailableReason: null,
@@ -323,7 +323,7 @@ export class CodexAdapter extends AgentAdapter {
          * The figure geniro SETS rather than one it measured: the thread config
          * carries a day-long `tool_timeout_sec` on geniro's entry alone
          * (`CODEX_GENIRO_MCP_TOOL_TIMEOUT_SEC`), so no call wait is cut by this
-         * CLI's own client inside a day and the graph runtime's own ceiling on a
+         * CLI's own client inside a day and the team runtime's own ceiling on a
          * wait is what binds.
          */
         toolCallDeadlineMs: CODEX_GENIRO_MCP_TOOL_TIMEOUT_SEC * 1000,
@@ -644,7 +644,7 @@ export class CodexAdapter extends AgentAdapter {
       config: Object.keys(config).length > 0 ? config : null,
       policy: codexTurnPolicy(input.approvalMode),
       autoCompactTokens: this.autoCompactTokens(input),
-      // geniro's own server is never switched off, whatever the node lists:
+      // geniro's own server is never switched off, whatever the member lists:
       // the turn's instructions may tell it to use those tools.
       mcpDisabled: [...new Set(input.mcpDisabled ?? [])].filter(
         (server) => server !== endpoint?.serverName,

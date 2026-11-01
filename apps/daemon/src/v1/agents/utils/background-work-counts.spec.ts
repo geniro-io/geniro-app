@@ -50,7 +50,7 @@ describe('BackgroundWorkCounts', () => {
     ]);
   });
 
-  it('keeps two nodes’ shells apart when their per-process work ids collide', () => {
+  it('keeps two members’ shells apart when their per-process work ids collide', () => {
     const { subject } = counts();
     subject.record('r1', shellOpen('bash_1'), 'engineer');
     subject.record('r1', shellOpen('bash_1'), 'qa');

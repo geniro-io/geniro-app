@@ -37,12 +37,16 @@ import type { ItemKind } from '../runs.types';
 // overflow pages: only a covering index makes the lookup cheap.
 @Index({ properties: ['runId', 'kind', 'payloadId'] })
 @Index({ properties: ['runId', 'kind', 'toolNameLower'] })
+// Named as it was before `node_id` became `member_id`: SQLite keeps an index's
+// name through a column rename, and a derived name would rebuild it on every
+// profile's largest table.
 @Index({
+  name: 'items_run_id_kind_parent_tool_use_id_node_id_in_call_seq_deleted_at_index',
   properties: [
     'runId',
     'kind',
     'parentToolUseId',
-    'nodeId',
+    'memberId',
     'inCall',
     'seq',
     'deletedAt',
@@ -56,9 +60,9 @@ export class Item extends TimestampsEntity {
   @Property({ type: 'string' })
   runId!: string;
 
-  /** Graph node that produced this item; null for single-agent runs. */
+  /** Team member that produced this item; null for single-agent runs. */
   @Property({ type: 'string', nullable: true })
-  nodeId: string | null = null;
+  memberId: string | null = null;
 
   /** Monotonic ordering within the run. */
   @Property({ type: 'integer' })

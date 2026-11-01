@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { AgentKind } from '../../runs/runs.types';
-import type { Team, TeamAgentNode } from '../teams.types';
+import type { Team, TeamMember } from '../teams.types';
 
 /**
  * How `read_teams` shows an agent's `configDir`: the path of a profile
@@ -19,20 +19,16 @@ export function configDirToken(path: string): string {
   return `${CONFIG_DIR_TOKEN_PREFIX}${digest}>`;
 }
 
-/** The team with every agent's and pool member's `configDir` tokenized. */
+/** The team with every member's and pool member's `configDir` tokenized. */
 export function redactConfigDirs(team: Team): Team {
   return {
     ...team,
-    nodes: team.nodes.map((node) =>
-      node.kind !== 'agent'
-        ? node
-        : {
-            ...withToken(node),
-            ...(node.pool === undefined
-              ? {}
-              : { pool: node.pool.map(withToken) }),
-          },
-    ),
+    members: team.members.map((member) => ({
+      ...withToken(member),
+      ...(member.pool === undefined
+        ? {}
+        : { pool: member.pool.map(withToken) }),
+    })),
   };
 }
 
@@ -62,7 +58,7 @@ export type RestoredConfigDirs =
 /**
  * Put the real `configDir` back wherever a proposal kept a token: the path the
  * token names among the profiles of the team it replaces, matched by the
- * token alone — never by node id or pool position, which an edit moves — and
+ * token alone — never by member id or pool position, which an edit moves — and
  * only for an agent of a CLI that profile served there. A token with nothing
  * behind it (a new team, an unknown token) or one moved onto another CLI
  * refuses the proposal rather than guessing, so the agent can tell the user.
@@ -103,16 +99,10 @@ export function restoreConfigDirs(
   };
   const restored: Team = {
     ...team,
-    nodes: team.nodes.map((node) =>
-      node.kind !== 'agent'
-        ? node
-        : {
-            ...restore(node),
-            ...(node.pool === undefined
-              ? {}
-              : { pool: node.pool.map(restore) }),
-          },
-    ),
+    members: team.members.map((member) => ({
+      ...restore(member),
+      ...(member.pool === undefined ? {} : { pool: member.pool.map(restore) }),
+    })),
   };
   return refusal === null
     ? { ok: true, team: restored }
@@ -121,18 +111,16 @@ export function restoreConfigDirs(
 
 /** Every profile a team names, with the CLI that runs under it. */
 function profilesOf(team: Team): { path: string; agent: AgentKind }[] {
-  return team.nodes.flatMap((node) =>
-    node.kind !== 'agent'
-      ? []
-      : [node, ...(node.pool ?? [])].flatMap((holder) =>
-          holder.configDir === undefined
-            ? []
-            : [{ path: holder.configDir, agent: holder.agent }],
-        ),
+  return team.members.flatMap((member) =>
+    [member, ...(member.pool ?? [])].flatMap((holder) =>
+      holder.configDir === undefined
+        ? []
+        : [{ path: holder.configDir, agent: holder.agent }],
+    ),
   );
 }
 
-function withToken<T extends Pick<TeamAgentNode, 'configDir'>>(holder: T): T {
+function withToken<T extends Pick<TeamMember, 'configDir'>>(holder: T): T {
   return holder.configDir === undefined
     ? holder
     : { ...holder, configDir: configDirToken(holder.configDir) };

@@ -252,7 +252,7 @@ export function taskProgress(tasks: readonly AgentTaskRow[]): {
  * The twin of the daemon's `RunTaskGroup`, and keyed the same way.
  */
 export interface ThreadTaskList {
-  nodeId: string | null;
+  memberId: string | null;
   callId: string | null;
   tasks: AgentTaskRow[];
   /** A snapshot stated this list at some point — see `combineTaskLists`. */
@@ -281,7 +281,7 @@ export function taskListsByThread(
   const perThread = new Map<
     string,
     {
-      nodeId: string | null;
+      memberId: string | null;
       callId: string | null;
       announcements: TaskAnnouncement[];
     }
@@ -300,20 +300,20 @@ export function taskListsByThread(
         ? payload.callId
         : null;
     // A JSON pair: a node id is any non-empty string, so no separator is safe.
-    const key = JSON.stringify([item.nodeId, callId]);
+    const key = JSON.stringify([item.memberId, callId]);
     const thread = perThread.get(key);
     if (thread) {
       thread.announcements.push(announcement);
     } else {
       perThread.set(key, {
-        nodeId: item.nodeId,
+        memberId: item.memberId,
         callId,
         announcements: [announcement],
       });
     }
   }
   return [...perThread.values()].map((thread) => ({
-    nodeId: thread.nodeId,
+    memberId: thread.memberId,
     callId: thread.callId,
     tasks: foldTaskList(thread.announcements),
     snapshot: thread.announcements.some((entry) => entry.mode === 'snapshot'),

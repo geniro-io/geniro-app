@@ -15,7 +15,7 @@ function row(seq: number, kind: ItemKind, payload: unknown): ItemWire {
   return {
     id: `i${seq}`,
     runId: 'run',
-    nodeId: null,
+    memberId: null,
     seq,
     kind,
     role: null,

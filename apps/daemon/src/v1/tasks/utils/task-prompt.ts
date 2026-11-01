@@ -96,10 +96,10 @@ export const TASK_REPORT_INSTRUCTIONS = [
 ].join('\n');
 
 /**
- * The same ask, for a task run through a TEAM — every node of which is
+ * The same ask, for a task run through a TEAM — every member of which is
  * handed the board tools, so one sentence says which of them should use them.
  *
- * Without it every node would report: a fan-out of reviewers each replacing the
+ * Without it every member would report: a fan-out of reviewers each replacing the
  * card's report with its own slice, and whichever wrote last standing as the
  * account of the whole task.
  */

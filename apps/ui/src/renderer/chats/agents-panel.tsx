@@ -2211,7 +2211,7 @@ export function AgentsPanel({
   // Stable per agent list, so the stages section's names are not recomputed
   // on every panel render.
   const teamNoteAgentName = useLatestCallback(
-    (nodeId: string): string => agentNameOf(agents, nodeId),
+    (memberId: string): string => agentNameOf(agents, memberId),
     [agents],
   );
   const identities = useContext(AgentIdentityContext);
@@ -2843,7 +2843,7 @@ export function AgentsPanel({
                               ? metricsRunId
                               : null
                           }
-                          nodeId={metricsByNode ? agent.id : null}
+                          memberId={metricsByNode ? agent.id : null}
                           contextTokens={agent.contextTokens}
                           contextWindowTokens={agent.contextWindowTokens}
                           contextEstimated={agent.contextEstimated === true}

@@ -49,7 +49,7 @@ export class ActionStopService {
    */
   async resolve(
     runId: string,
-    nodeId: string | null,
+    memberId: string | null,
     stop: ActionStopInput,
   ): Promise<ActionStopSpec | { reason: string }> {
     try {
@@ -64,7 +64,7 @@ export class ActionStopService {
             }
           : { targets: [targetOf(row)] };
       }
-      return await this.resolveShell(runId, nodeId, stop.shell ?? '');
+      return await this.resolveShell(runId, memberId, stop.shell ?? '');
     } catch (err) {
       if (err instanceof BadRequestException) {
         return { reason: err.message };
@@ -103,15 +103,15 @@ export class ActionStopService {
 
   private async resolveShell(
     runId: string,
-    nodeId: string | null,
+    memberId: string | null,
     shellId: string,
   ): Promise<ActionStopSpec | { reason: string }> {
     const em = this.em.fork();
     const rows = (await this.itemDao.shellRows(runId, em)).filter(
-      (row) => row.nodeId === nodeId,
+      (row) => row.memberId === memberId,
     );
     const shells = strandedShells(rows);
-    // The fold keys a node's shells by work id, and an ACP work id is a call
+    // The fold keys a member's shells by work id, and an ACP work id is a call
     // id each session restarts — so another conversation's shell by the same
     // id is only visible in the rows, and makes the id ambiguous.
     const callsNaming = new Set(
@@ -146,7 +146,7 @@ export class ActionStopService {
         : shellCommandOf(call.payload);
     };
     if (shell === undefined) {
-      // Ids only: a node's other conversations share these rows, and their
+      // Ids only: a member's other conversations share these rows, and their
       // command lines are not this conversation's to read.
       const running = shells.map((open) => open.workId);
       return {

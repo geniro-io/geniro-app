@@ -47,7 +47,7 @@ describe('UsageEventDao (in-memory sqlite)', () => {
   function input(overrides: Partial<UsageEventInput> = {}): UsageEventInput {
     return {
       runId: 'run-a',
-      nodeId: null,
+      memberId: null,
       seq: 0,
       occurredAt: new Date('2026-08-10T12:00:00.000Z'),
       agentKind: 'claude',
@@ -78,7 +78,7 @@ describe('UsageEventDao (in-memory sqlite)', () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({
         runId: 'run-a',
-        nodeId: null,
+        memberId: null,
         seq: 0,
         agentKind: 'claude',
         model: 'claude-opus-5',

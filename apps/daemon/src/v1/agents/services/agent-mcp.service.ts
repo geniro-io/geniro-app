@@ -99,7 +99,7 @@ const MCP_LIST_FAILED_REASON = 'could not read MCP servers';
  * - **agent** — the two CLIs read different config files entirely.
  * - **cwd** — the listing is folder-scoped (project `.mcp.json`, and
  *   local-scope servers keyed to that directory).
- * - **configDir** — a profile carries its own MCP servers, so two nodes pointed
+ * - **configDir** — a profile carries its own MCP servers, so two members pointed
  *   at different directories genuinely have different sets. Sharing one cache
  *   entry between them is the exact failure this dimension exists to prevent.
  * - **version** — an upgraded binary can reword the output the parser reads,
@@ -442,7 +442,7 @@ export class AgentMcpService {
     // one would silently start rejecting folders that used to succeed. (That
     // is not hypothetical — cursor gained a listing in milestone 4.)
     //
-    // A null cwd is the graph builder asking what does NOT depend on a folder;
+    // A null cwd is the team editor asking what does NOT depend on a folder;
     // it is answered in geniro's own empty directory rather than refused.
     const projectDir =
       cwd === null ? this.folderlessDir() : resolveValidCwd(cwd);
@@ -1868,7 +1868,7 @@ export class AgentMcpService {
         } = row;
         const signInUnavailableReason =
           cliSignInUnavailableReason ?? rowSignInReason ?? null;
-        // A team node's per-TURN switch — a different capability from the
+        // A team member's per-TURN switch — a different capability from the
         // folder toggle the arms below decide, so it is answered on its own,
         // on every row: the CLI's reason first, else the row's.
         const turnToggleUnavailableReason =

@@ -24,20 +24,20 @@ import { RunOutcomeHistoryService } from './run-outcome-history.service';
 
 /** The conversation behind a `record_outcome` call. */
 export interface RunOutcomeRecorder {
-  nodeId: string;
-  /** Null for the node's own conversation. */
+  memberId: string;
+  /** Null for the member's own conversation. */
   conversationId: string | null;
   /** The call that conversation is answering right now, if any. */
   callId: string | null;
 }
 
 /**
- * One team node's end of `record_outcome`, installed by the pass that runs
+ * One team member's end of `record_outcome`, installed by the pass that runs
  * it: the run's seq-allocating write, and which conversation a caller key is.
  */
 export interface RunOutcomeSink {
   persistItem(
-    nodeId: string | null,
+    memberId: string | null,
     kind: ItemKind,
     role: string | null,
     payload: unknown,
@@ -46,7 +46,7 @@ export interface RunOutcomeSink {
 }
 
 /**
- * `record_outcome`: a team node records where one pull request of its run
+ * `record_outcome`: a team member records where one pull request of its run
  * ended up. The `run_outcome` row is the record; the run's `runOutcomes`
  * column keeps the newest per pull request for the run's wire projection, and
  * the stats module copies each row into its ledger (`RunOutcomeLedgerService`
@@ -71,25 +71,25 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
     super();
   }
 
-  /** Whether this node is offered `record_outcome`. */
-  canUse(runId: string, nodeId: string): boolean {
-    return this.has(runId, nodeId);
+  /** Whether this member is offered `record_outcome`. */
+  canUse(runId: string, memberId: string): boolean {
+    return this.has(runId, memberId);
   }
 
   async record(
     runId: string,
-    nodeId: string,
+    memberId: string,
     caller: string,
     input: RunOutcomeInput,
   ): Promise<RunOutcomeWriteOutcome | HostSinkUnavailable> {
     return this.deliver(
       runId,
-      nodeId,
+      memberId,
       'no team pass is running that could record it',
       'record a pull request outcome',
       (sink) =>
         this.writes.run(runId, () =>
-          this.recordNow(runId, nodeId, caller, input, sink),
+          this.recordNow(runId, memberId, caller, input, sink),
         ),
     );
   }
@@ -100,7 +100,7 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
 
   private async recordNow(
     runId: string,
-    nodeId: string,
+    memberId: string,
     caller: string,
     input: RunOutcomeInput,
     sink: RunOutcomeSink,
@@ -162,11 +162,11 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
       questionsAsked,
       ...(input.summary === null ? {} : { summary: input.summary }),
       teamSlug: run.teamId,
-      nodeId: recorder.nodeId,
+      nodeId: recorder.memberId,
       conversationId: recorder.conversationId,
       ...(recorder.callId === null ? {} : { callId: recorder.callId }),
     };
-    const item = await sink.persistItem(nodeId, 'run_outcome', null, payload);
+    const item = await sink.persistItem(memberId, 'run_outcome', null, payload);
     await this.writeColumn(
       runId,
       run.runOutcomes,

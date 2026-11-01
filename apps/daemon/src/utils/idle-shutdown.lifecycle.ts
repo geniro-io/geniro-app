@@ -37,7 +37,7 @@ export interface IdleShutdownOptions {
  * Work is not only a turn. A kept CLI process goes on working after the turn
  * that started it settles — a continuation claude opens for itself when a
  * delegate reports back, a dev server the agent left running, a team
- * node's process between passes — and `ProcessRegistry` counts none of that,
+ * member's process between turns — and `ProcessRegistry` counts none of that,
  * because it counts TURNS. So the session registry's own reading of "working
  * between turns" (`AgentSessionRegistry.workingOffTurn`) holds the window
  * open too. Without it, macOS's ordinary state of an app with every window

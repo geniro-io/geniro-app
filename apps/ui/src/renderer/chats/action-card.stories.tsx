@@ -19,7 +19,7 @@ function entry(
     id: `i-${seq}`,
     createdAt: '2026-10-18T14:30:00Z',
     seq,
-    nodeId: null,
+    memberId: null,
     parentToolUseId: null,
     action: {
       actionId: label.toLowerCase(),
@@ -53,7 +53,7 @@ function liveCommand(seq: number, label: string): LiveAction {
   return {
     seq,
     actionId: label.toLowerCase(),
-    nodeId: 'agent',
+    memberId: 'agent',
     conversationId: '',
     label,
     once: false,
@@ -67,7 +67,7 @@ function live(seq: number, label: string, agentLabel?: string): LiveAction {
   return {
     seq,
     actionId: label.toLowerCase(),
-    nodeId: 'agent',
+    memberId: 'agent',
     conversationId: '',
     label,
     once: true,

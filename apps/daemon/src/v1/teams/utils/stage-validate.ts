@@ -10,7 +10,7 @@ export type StageIssueCode =
   | 'STAGE_NO_START'
   | 'STAGE_MULTIPLE_STARTS'
   | 'STAGE_CYCLE'
-  | 'STAGE_OWNER_UNKNOWN';
+  | 'STAGE_RESPONSIBLE_UNKNOWN';
 
 export interface StageIssue {
   code: StageIssueCode;
@@ -33,7 +33,7 @@ export function stagesOf(
 
 /** TWIN PARSER: validateStages in apps/ui/src/renderer/teams/stage-validate.ts. */
 export function validateStages(
-  team: Pick<Team, 'stages' | 'nodes'>,
+  team: Pick<Team, 'stages' | 'members'>,
 ): StageValidation {
   const errors: StageIssue[] = [];
   const warnings: StageIssue[] = [];
@@ -60,9 +60,7 @@ export function validateStages(
     ids.add(stage.id);
   }
 
-  const agentIds = new Set(
-    team.nodes.filter((n) => n.kind === 'agent').map((n) => n.id),
-  );
+  const memberIds = new Set(team.members.map((member) => member.id));
   const incoming = new Map<string, number>([...ids].map((id) => [id, 0]));
   for (const stage of stages) {
     const seen = new Set<string>();
@@ -86,12 +84,14 @@ export function validateStages(
       }
       incoming.set(next, (incoming.get(next) ?? 0) + 1);
     }
-    if (stage.ownerHint !== undefined && !agentIds.has(stage.ownerHint)) {
-      warnings.push({
-        code: 'STAGE_OWNER_UNKNOWN',
-        message: `Stage '${stage.id}' is usually done by '${stage.ownerHint}', which is not an agent of this team; agents will read it as "any agent"`,
-        stageId: stage.id,
-      });
+    for (const responsible of stage.responsible ?? []) {
+      if (!memberIds.has(responsible)) {
+        warnings.push({
+          code: 'STAGE_RESPONSIBLE_UNKNOWN',
+          message: `Stage '${stage.id}' names '${responsible}' as responsible, which is not a member of this team; it is left out of what members are told`,
+          stageId: stage.id,
+        });
+      }
     }
   }
   if (errors.length > 0) {
@@ -163,7 +163,7 @@ function cycleIn(stages: readonly TeamStage[]): string[] | null {
 }
 
 export function walkableStages(
-  team: Pick<Team, 'stages' | 'nodes'>,
+  team: Pick<Team, 'stages' | 'members'>,
 ): readonly TeamStage[] | null {
   const stages = stagesOf(team);
   return stages !== null && validateStages(team).errors.length === 0
@@ -171,7 +171,9 @@ export function walkableStages(
     : null;
 }
 
-export function assertValidStages(team: Pick<Team, 'stages' | 'nodes'>): void {
+export function assertValidStages(
+  team: Pick<Team, 'stages' | 'members'>,
+): void {
   const [first] = validateStages(team).errors;
   if (first !== undefined) {
     throw new BadRequestException(first.code, first.message);

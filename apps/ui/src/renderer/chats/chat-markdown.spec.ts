@@ -13,7 +13,7 @@ function row(
   return {
     id: `i${seq}`,
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind,
     role,
@@ -24,12 +24,12 @@ function row(
 
 /** A row filed under a team NODE, as every row of a team run is. */
 function nodeRow(
-  nodeId: string,
+  memberId: string,
   kind: ItemDto['kind'],
   payload: unknown = null,
   role: string | null = null,
 ): ItemDto {
-  return { ...row(kind, payload, role), nodeId };
+  return { ...row(kind, payload, role), memberId };
 }
 
 /** A TEAM run's export — the same document with a team id. */

@@ -6,7 +6,7 @@ import {
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
   STAGES_PROPOSAL,
-} from '../__fixtures__/team-proposals';
+} from './__fixtures__/member-team-proposals';
 import { ApprovalCard } from './approval-card';
 import { PROPOSE_TEAM } from './geniro-tool';
 

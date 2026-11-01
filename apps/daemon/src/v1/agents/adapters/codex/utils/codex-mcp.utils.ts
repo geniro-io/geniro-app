@@ -242,7 +242,7 @@ function toggleReason(
   }
 }
 
-// ── A team node's switched-off servers (one turn) ──────────────────────
+// ── A team member's switched-off servers (one turn) ──────────────────────
 
 /** A config entry codex can switch off with a thread override. */
 function definesServer(
@@ -262,7 +262,7 @@ function definesServer(
 }
 
 /**
- * Why a node cannot switch `server` off for its own turns, or null when it can
+ * Why a member cannot switch `server` off for its own turns, or null when it can
  * — the listing's per-row answer, the same decision `codexTurnMcpOverrides`
  * takes at run time.
  */
@@ -286,7 +286,7 @@ export function codexTurnToggleReason(
     : CODEX_BUILTIN_TURN_TOGGLE_REASON;
 }
 
-/** The thread config that leaves a node's switched-off servers out. */
+/** The thread config that leaves a member's switched-off servers out. */
 export interface CodexTurnMcpOverrides {
   /** Dotted config keys to merge into `thread/start` / `thread/resume`. */
   config: Record<string, unknown>;
@@ -295,7 +295,7 @@ export interface CodexTurnMcpOverrides {
 }
 
 /**
- * The thread config overrides that switch a team node's servers off for
+ * The thread config overrides that switch a team member's servers off for
  * its turns, read against codex's EFFECTIVE config for the folder (a
  * `config/read {cwd}` result).
  *

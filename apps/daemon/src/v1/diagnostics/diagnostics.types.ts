@@ -47,7 +47,7 @@ export const DebugEntrySchema = z.object({
   level: DebugLevelSchema,
   message: z.string(),
   /**
-   * Whatever identifies the thing this line is about — a run, a node, a pid, a
+   * Whatever identifies the thing this line is about — a run, a member, a pid, a
    * folder. Free-form ON PURPOSE: the channels have genuinely different
    * subjects (a transcript line has a run, a stdio line has a process), and a
    * union of every possible key would be a schema nobody could read.

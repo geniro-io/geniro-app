@@ -20,7 +20,7 @@ import { MonitorRegistry } from './monitor.registry';
 /** Where a monitor's rows are filed — `nodeId` null only for a row read back without one. */
 export interface MonitorRowOwner {
   runId: MonitorOwner['runId'];
-  nodeId: string | null;
+  memberId: string | null;
   callId: MonitorOwner['callId'];
   conversationId: MonitorOwner['conversationId'];
 }
@@ -56,9 +56,12 @@ export class MonitorRowWriter implements OnModuleInit {
       const { owner } = event.monitor;
       return entry === null
         ? undefined
-        : // A chat's own rows carry no node.
+        : // A chat's own rows carry no member.
           this.write(
-            { ...owner, nodeId: owner.target === 'chat' ? null : owner.nodeId },
+            {
+              ...owner,
+              memberId: owner.target === 'chat' ? null : owner.memberId,
+            },
             entry,
           );
     });
@@ -94,7 +97,7 @@ export class MonitorRowWriter implements OnModuleInit {
         em,
         {
           runId: owner.runId,
-          nodeId: owner.nodeId,
+          memberId: owner.memberId,
           seq: await this.seqs.reserve(owner.runId),
           kind: 'system',
           role: null,

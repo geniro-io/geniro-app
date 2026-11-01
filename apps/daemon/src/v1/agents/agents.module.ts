@@ -556,10 +556,10 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   exports: [
     AnalysisBroker,
-    // For the graphs module's team analysis ("Analyze & improve"), which
+    // For the teams module's team analysis ("Analyze & improve"), which
     // checks the library before starting one here.
     ThreadAnalysisService,
-    // For the graphs module's pool cooldowns, which key a member by the account
+    // For the teams module's pool cooldowns, which key a member by the account
     // its folder pins, as the plan-limits readout does.
     ConfigDirPinService,
     ThreadReaderService,
@@ -584,13 +584,13 @@ import { defaultSpawn } from './utils/spawn-cli';
     GalleryImageService,
     ArtifactBroker,
     ActionBroker,
-    // For the MCP host's monitor tools and the graph executor, which registers
-    // each node's sink and delivers its monitors' output; for the run-process
+    // For the MCP host's monitor tools and the team executor, which registers
+    // each member's sink and delivers its monitors' output; for the run-process
     // panel and teardown, which list and stop them.
     MonitorBroker,
     MonitorRegistry,
-    // For the MCP host's team-note tools and the graph executor, which registers
-    // each node's sink and reads the unread figure into call replies and wakes.
+    // For the MCP host's team-note tools and the team executor, which registers
+    // each member's sink and reads the unread figure into call replies and wakes.
     TeamNoteBroker,
     RunOutcomeBroker,
     RunOutcomeHistoryService,
@@ -599,14 +599,14 @@ import { defaultSpawn } from './utils/spawn-cli';
     // For the share service, which wakes the agent that asked once a share
     // waiting on the user's sign-in lands, and the team delivery of it.
     HostWakeBus,
-    // What a team node's button tools and the team press route reuse:
+    // What a team member's button tools and the team press route reuse:
     // the publish (over `ChatActionsService`, the rows' one writer) and the
     // press beside it.
     ActionPublishService,
     ActionPressService,
     TeamProposalBroker,
     TeamBuilderBroker,
-    // And the store behind it: a TEAM node publishes a page too, and the
+    // And the store behind it: a TEAM member publishes a page too, and the
     // executor is the turn that persists that row.
     ArtifactStoreService,
     // For v1/shares, which encrypts the same document a saved file carries.
@@ -615,10 +615,10 @@ import { defaultSpawn } from './utils/spawn-cli';
     NotifyBroker,
     PartialStreamService,
     ProcessRegistry,
-    // Exported for the graph executor: a follow-up message to a team run
+    // Exported for the team executor: a follow-up message to a team run
     // carries pictures the way a chat's does, saved under the run it joins.
     AttachmentStoreService,
-    // Exported so the graph executor's own run delete reaches the same
+    // Exported so the team executor's own run delete reaches the same
     // teardown obligation a chat delete does — a run-scoped CLI process is
     // reaped by nothing else.
     AgentSessionRegistry,
@@ -642,25 +642,25 @@ import { defaultSpawn } from './utils/spawn-cli';
     // reset service rather than the store alone, because every in-memory mirror
     // of the store is consulted before it (`CacheResetService.forgetAgent`).
     CacheResetService,
-    // Exported for the graph executor's own run delete: one teardown serves
+    // Exported for the team executor's own run delete: one teardown serves
     // both run kinds, so neither can drift out of clearing a store.
     RunTeardownService,
-    // Exported for the graph executor: a team run's rows are numbered by
+    // Exported for the team executor: a team run's rows are numbered by
     // the same allocator a chat's are, since its kept agent processes write
     // between passes.
     ItemSeqAllocator,
     RunWriteQueue,
-    // Exported for the graph executor's writes, which stamp each row's call
+    // Exported for the team executor's writes, which stamp each row's call
     // the way a chat's do.
     ItemCallIndexService,
-    // Exported for the graph executor, which catches a node's wall-clock work
+    // Exported for the team executor, which catches a member's wall-clock work
     // up after each turn its CLI did not time, and for the boot sweep.
     WallWorkService,
-    // Exported for the graph executor and the handoff, which read usage rows and call records through it.
+    // Exported for the team executor and the handoff, which read usage rows and call records through it.
     RunKindRowsCache,
     MessageSendService,
     SkillHarvestStore,
-    // Exported for the graph executor's own turn seam: a node's turn reports
+    // Exported for the team executor's own turn seam: a member's turn reports
     // what it loaded, and that report is what keeps the MCP panel off a cold
     // re-dial.
     McpHarvestStore,

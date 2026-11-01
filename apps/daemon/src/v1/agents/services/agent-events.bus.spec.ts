@@ -8,7 +8,7 @@ function wireItem(runId: string, seq: number): ItemWire {
   return {
     id: `i-${seq}`,
     runId,
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'message',
     role: 'assistant',

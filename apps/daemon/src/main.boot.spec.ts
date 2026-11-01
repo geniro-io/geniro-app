@@ -19,6 +19,7 @@ import {
   APP_MIGRATIONS_TABLE,
   MIGRATING_LINE_PREFIX,
 } from './v1/migrations/migrations.types';
+import { MIGRATIONS } from './v1/migrations/utils/migration-registry';
 
 /**
  * Boots the REAL daemon — the whole Nest container, from source, exactly as
@@ -121,7 +122,7 @@ describe('the daemon boots and serves', () => {
 
   it('runs the migrations before the schema sync', async () => {
     expect(output()).toContain(
-      `${MIGRATING_LINE_PREFIX} {"id":"0001-app-migrations-journal","step":1,"of":3}`,
+      `${MIGRATING_LINE_PREFIX} {"id":"0001-app-migrations-journal","step":1,"of":${MIGRATIONS.length}}`,
     );
     const orm = await MikroORM.init(
       defineConfig({
@@ -149,11 +150,9 @@ describe('the daemon boots and serves', () => {
         .selectFrom('app_migrations')
         .select('id')
         .execute();
-      expect(applied.map((row) => row.id).sort()).toEqual([
-        '0001-app-migrations-journal',
-        '0002-workflow-to-team-names',
-        '0003-team-library-files',
-      ]);
+      expect(applied.map((row) => row.id).sort()).toEqual(
+        MIGRATIONS.map((migration) => migration.id),
+      );
     } finally {
       await orm.close(true);
     }
@@ -174,30 +173,32 @@ describe('the daemon boots and serves', () => {
       body: JSON.stringify({
         team: {
           name: 'draft',
-          nodes: [
+          mode: 'lead',
+          members: [
             {
               id: 'solo',
-              kind: 'agent',
+              name: 'solo',
               agent: 'claude',
               approval: 'auto',
-              role: 'ROLE',
+              instructions: 'INSTRUCTIONS',
             },
           ],
-          edges: [],
+          triggers: [{ kind: 'first-message', member: 'solo' }],
+          instructionBlocks: [],
         },
         customInstructions: 'MINE',
       }),
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      nodes: { nodeId: string; parts: { source: string }[] }[];
+      members: { memberId: string; parts: { source: string }[] }[];
     };
-    expect(body.nodes.map((node) => node.nodeId)).toEqual(['solo']);
-    expect(body.nodes[0]?.parts.map((part) => part.source)).toEqual([
+    expect(body.members.map((member) => member.memberId)).toEqual(['solo']);
+    expect(body.members[0]?.parts.map((part) => part.source)).toEqual([
       'preamble',
       'backgroundWorkNote',
       'customInstructions',
-      'role',
+      'instructions',
     ]);
   });
 

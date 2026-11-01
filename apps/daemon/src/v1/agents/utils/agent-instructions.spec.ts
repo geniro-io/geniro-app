@@ -110,7 +110,7 @@ describe('GENIRO_UI_PREAMBLE', () => {
     // REPORTED against a real transcript: an agent embedded
     // `out/ci723-assignee-rail.png` and the row drew `could not read` it. The
     // route resolves a relative path against the RUN's cwd, which is not where
-    // a delegate, a team node, or a command run in a subdirectory writes
+    // a delegate, a team member, or a command run in a subdirectory writes
     // its files — so the only form that is always right is the absolute one.
     // The example alone does not carry this: an agent copies the shape of the
     // example but follows the sentence, so the reason has to be stated.
@@ -207,7 +207,7 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
   });
 
   it('stays true on a turn that registers none of the tools', () => {
-    // Not gated on the MCP endpoint, and a team node is offered only some
+    // Not gated on the MCP endpoint, and a team member is offered only some
     // of these tools.
     expect(toolsSection()).toContain(
       'A tool missing from your list is not offered on this turn.',
@@ -227,25 +227,40 @@ describe('the composed block', () => {
   it('orders the parts general → specific, call surface last', () => {
     const block = composed({
       customInstructions: 'GLOBAL',
-      systemPrompt: 'NODE_ROLE',
+      systemPrompt: 'MEMBER_INSTRUCTIONS',
       callSurfacePrompt: 'MAY_CALL',
     });
 
     expect(block).toBe(
-      `${GENIRO_UI_PREAMBLE}\n\nGLOBAL\n\nNODE_ROLE\n\nMAY_CALL`,
+      `${GENIRO_UI_PREAMBLE}\n\nGLOBAL\n\nMEMBER_INSTRUCTIONS\n\nMAY_CALL`,
     );
   });
 
-  it('keeps a node role ranked above the global instructions', () => {
-    // Specific beats general: a node authored for one job outranks a
+  it('puts a member’s character after its instructions and before the call notes', () => {
+    const block = composed({
+      systemPrompt: 'INSTRUCTIONS',
+      characterPrompt: 'CHARACTER',
+      answeringACallPrompt: 'ANSWERING',
+      callSurfacePrompt: 'MAY_CALL',
+    });
+
+    expect(block).toBe(
+      `${GENIRO_UI_PREAMBLE}\n\nINSTRUCTIONS\n\nCHARACTER\n\nANSWERING\n\nMAY_CALL`,
+    );
+  });
+
+  it('keeps a member’s instructions ranked above the global instructions', () => {
+    // Specific beats general: a member's instructions, written for one job, outrank a
     // preference the user set once for every agent. Position IS the precedence
     // mechanism here, so swapping these two is a real behaviour change.
     const block = composed({
       customInstructions: 'GLOBAL',
-      systemPrompt: 'NODE_ROLE',
+      systemPrompt: 'MEMBER_INSTRUCTIONS',
     });
 
-    expect(block.indexOf('GLOBAL')).toBeLessThan(block.indexOf('NODE_ROLE'));
+    expect(block.indexOf('GLOBAL')).toBeLessThan(
+      block.indexOf('MEMBER_INSTRUCTIONS'),
+    );
   });
 
   it('drops a blank part instead of joining it as an empty paragraph', () => {
@@ -524,7 +539,7 @@ describe('the composed block — task instructions', () => {
   // A card's label block and report ask are stored apart from the user's own
   // text, so the user can purge theirs; the turn must still read them in the
   // order they used to be joined in: user's own first, then the card's.
-  it('ranks a card’s instructions right after the user’s own, above the node’s blocks and role', () => {
+  it('ranks a card’s instructions right after the user’s own, above the member’s blocks and instructions', () => {
     expect(
       composed({
         includePreamble: false,
@@ -550,9 +565,9 @@ describe('the composed block — task instructions', () => {
 
 describe('the composed block — instruction blocks', () => {
   // Order IS precedence here, and the block sits between the two fields it is
-  // a peer of: below a preference the user set for every agent, above the role
-  // of the one node it happens to reach.
-  it('ranks the blocks below the user instructions and above the node role', () => {
+  // a peer of: below a preference the user set for every agent, above the
+  // instructions of the one member it is addressed to.
+  it('ranks the blocks below the user instructions and above the member instructions', () => {
     expect(
       composed({
         includePreamble: false,
@@ -575,7 +590,7 @@ describe('the composed block — instruction blocks', () => {
     ).toBe('GLOBAL\n\nROLE');
   });
 
-  it('is absent for a plain chat turn, which has no canvas to wire one on', () => {
+  it('is absent for a plain chat turn, which has no team to address one', () => {
     expect(
       composed({
         includePreamble: false,
@@ -587,9 +602,9 @@ describe('the composed block — instruction blocks', () => {
 
 describe('the composed block — team instructions', () => {
   // The brief names the file a builder chat owns, so it must outrank a
-  // standing preference and yield to a node authored for one job — the same
+  // standing preference and yield to a member's instructions, written for one job — the same
   // placement the card's block beside it takes.
-  it('ranks the brief below the user instructions and above the node role', () => {
+  it('ranks the brief below the user instructions and above the member instructions', () => {
     expect(
       composed({
         includePreamble: false,
@@ -645,7 +660,7 @@ describe('turnInstructionParts', () => {
         'taskInstructions',
         'teamInstructions',
         'instructionBlocks',
-        'role',
+        'instructions',
         'answeringACall',
         'callSurface',
       ],
@@ -673,7 +688,7 @@ describe('turnInstructionParts', () => {
     );
     expect(
       turnInstructionParts(parts).some(
-        (p) => p.source === 'taskInstructions' || p.source === 'role',
+        (p) => p.source === 'taskInstructions' || p.source === 'instructions',
       ),
     ).toBe(false);
   });

@@ -9,18 +9,18 @@ import {
 
 let seq = 0;
 
-/** One row of node `a` (or `nodeId`) at `at` ms, in the order written. */
+/** One row of member `a` (or `nodeId`) at `at` ms, in the order written. */
 function row(
   kind: string,
   at: number,
   payload: Record<string, unknown> = {},
-  nodeId: string | null = 'a',
+  memberId: string | null = 'a',
 ): WallClockRow {
   seq += 1;
   return {
     seq,
     kind,
-    nodeId,
+    memberId,
     role: null,
     createdAt: new Date(at),
     payload: JSON.stringify(payload),
@@ -32,13 +32,13 @@ const running = (at: number, extra: Record<string, unknown> = {}) =>
 const settle = (at: number, extra: Record<string, unknown> = {}) =>
   row('turn_complete', at, { usage: null, stopReason: 'end_turn', ...extra });
 
-describe("wallMeasuredTurns — a team's nodes", () => {
+describe("wallMeasuredTurns — a team's members", () => {
   const nodes = (rows: WallClockRow[]) => wallMeasuredTurns(rows, 'nodes');
 
   it('measures a turn from its running row to its settle', () => {
     const end = settle(9_000);
     expect(nodes([running(1_000), end])).toEqual([
-      { seq: end.seq, nodeId: 'a', ms: 8_000 },
+      { seq: end.seq, memberId: 'a', ms: 8_000 },
     ]);
   });
 
@@ -50,7 +50,7 @@ describe("wallMeasuredTurns — a team's nodes", () => {
       row('approval_verdict', 5_000, { id: 'card-1', allow: true }),
       end,
     ];
-    expect(nodes(rows)).toEqual([{ seq: end.seq, nodeId: 'a', ms: 7_000 }]);
+    expect(nodes(rows)).toEqual([{ seq: end.seq, memberId: 'a', ms: 7_000 }]);
   });
 
   it('pairs a verdict that carries no callId with its call conversation card', () => {
@@ -64,7 +64,7 @@ describe("wallMeasuredTurns — a team's nodes", () => {
       row('unanswerable', 3_000, { id: 'card-1' }),
       end,
     ];
-    expect(nodes(rows)).toEqual([{ seq: end.seq, nodeId: 'a', ms: 9_000 }]);
+    expect(nodes(rows)).toEqual([{ seq: end.seq, memberId: 'a', ms: 9_000 }]);
   });
 
   it('parks a card still open at the settle up to the settle', () => {
@@ -74,7 +74,7 @@ describe("wallMeasuredTurns — a team's nodes", () => {
       row('approval_request', 4_000, { id: 'card-1' }),
       end,
     ];
-    expect(nodes(rows)).toEqual([{ seq: end.seq, nodeId: 'a', ms: 4_000 }]);
+    expect(nodes(rows)).toEqual([{ seq: end.seq, memberId: 'a', ms: 4_000 }]);
   });
 
   it('leaves a turn its CLI timed to the CLI figure', () => {
@@ -83,8 +83,8 @@ describe("wallMeasuredTurns — a team's nodes", () => {
     ).toEqual([]);
   });
 
-  it('measures two calls of one node interleaved as two turns', () => {
-    // Keyed by the node alone, call-2's turn would be measured from call-1's
+  it('measures two calls of one member interleaved as two turns', () => {
+    // Keyed by the member alone, call-2's turn would be measured from call-1's
     // start (0) and read 12s.
     const one = settle(10_000, { callId: 'call-1' });
     const two = settle(12_000, { callId: 'call-2' });
@@ -95,8 +95,8 @@ describe("wallMeasuredTurns — a team's nodes", () => {
       two,
     ];
     expect(nodes(rows)).toEqual([
-      { seq: one.seq, nodeId: 'a', ms: 10_000 },
-      { seq: two.seq, nodeId: 'a', ms: 6_000 },
+      { seq: one.seq, memberId: 'a', ms: 10_000 },
+      { seq: two.seq, memberId: 'a', ms: 6_000 },
     ]);
   });
 
@@ -110,7 +110,9 @@ describe("wallMeasuredTurns — a team's nodes", () => {
         running(20_000),
         next,
       ];
-      expect(nodes(rows)).toEqual([{ seq: next.seq, nodeId: 'a', ms: 10_000 }]);
+      expect(nodes(rows)).toEqual([
+        { seq: next.seq, memberId: 'a', ms: 10_000 },
+      ]);
     },
   );
 
@@ -125,7 +127,7 @@ describe("wallMeasuredTurns — a team's nodes", () => {
       running(60_000),
       end,
     ];
-    expect(nodes(rows)).toEqual([{ seq: end.seq, nodeId: 'a', ms: 10_000 }]);
+    expect(nodes(rows)).toEqual([{ seq: end.seq, memberId: 'a', ms: 10_000 }]);
   });
 
   it('measures the open turn from a timed continuation inside it, and no second turn for a settle it answered', () => {
@@ -142,7 +144,7 @@ describe("wallMeasuredTurns — a team's nodes", () => {
         settle(4_000, { insideTurn: true, usage: { durationMs: 3_000 } }),
         later,
       ]),
-    ).toEqual([{ seq: later.seq, nodeId: 'a', ms: 5_000 }]);
+    ).toEqual([{ seq: later.seq, memberId: 'a', ms: 5_000 }]);
   });
 
   it('measures nothing for a settle with no start, or a run-level row', () => {
@@ -158,7 +160,7 @@ describe("wallMeasuredTurns — a team's nodes", () => {
 
 describe("wallMeasuredTurns — a 1:1 chat's agent", () => {
   const chat = (rows: WallClockRow[]) => wallMeasuredTurns(rows, 'chat');
-  /** A chat row: no node, and a role on a message. */
+  /** A chat row: no member, and a role on a message. */
   const chatRow = (
     kind: string,
     at: number,
@@ -172,14 +174,14 @@ describe("wallMeasuredTurns — a 1:1 chat's agent", () => {
   it("measures a turn from the user's message to its settle", () => {
     const end = chatSettle(9_000);
     expect(chat([said(1_000), end])).toEqual([
-      { seq: end.seq, nodeId: null, ms: 8_000 },
+      { seq: end.seq, memberId: null, ms: 8_000 },
     ]);
   });
 
   it('does not restart the clock for a message delivered into a running turn', () => {
     const end = chatSettle(10_000);
     expect(chat([said(0), said(6_000), end])).toEqual([
-      { seq: end.seq, nodeId: null, ms: 10_000 },
+      { seq: end.seq, memberId: null, ms: 10_000 },
     ]);
   });
 
@@ -200,7 +202,7 @@ describe("wallMeasuredTurns — a 1:1 chat's agent", () => {
         said(20_000),
         chatSettle(29_000, { usage: { durationMs: 4_000 } }),
       ]),
-    ).toEqual([{ seq: end.seq, nodeId: null, ms: 7_000 }]);
+    ).toEqual([{ seq: end.seq, memberId: null, ms: 7_000 }]);
   });
 
   it('does not measure a turn that ended in error, a boot-interrupted one included', () => {
@@ -212,10 +214,10 @@ describe("wallMeasuredTurns — a 1:1 chat's agent", () => {
         said(30_000),
         next,
       ]),
-    ).toEqual([{ seq: next.seq, nodeId: null, ms: 10_000 }]);
+    ).toEqual([{ seq: next.seq, memberId: null, ms: 10_000 }]);
   });
 
-  it("reads no team node's rows, and the node fold reads no chat rows", () => {
+  it("reads no team member's rows, and the member fold reads no chat rows", () => {
     const rows = [running(0), settle(9_000)];
     expect(chat(rows)).toEqual([]);
     expect(wallMeasuredTurns([said(0), chatSettle(9_000)], 'nodes')).toEqual(

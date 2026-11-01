@@ -147,10 +147,10 @@ describe('usage ledger retention across a run delete', () => {
       kind: 'turn_complete',
       payload: JSON.stringify({ usage: { costUsd: 2.5 } }),
     });
-    await nodeStateDao.create({ runId: 'run-a', nodeId: 'main' });
+    await nodeStateDao.create({ runId: 'run-a', memberId: 'main' });
     await usageDao.recordOnce({
       runId: 'run-a',
-      nodeId: null,
+      memberId: null,
       seq: 0,
       occurredAt: new Date(2026, 7, 10, 9),
       agentKind: 'claude',
@@ -218,7 +218,7 @@ describe('usage ledger retention across a run delete', () => {
     // The turn itself, as cursor reports it: tokens maybe, a price never.
     await usageDao.recordOnce({
       runId: 'run-cursor',
-      nodeId: null,
+      memberId: null,
       seq: 0,
       occurredAt: when,
       agentKind: 'cursor-agent',
@@ -277,7 +277,7 @@ describe('usage ledger retention across a run delete', () => {
     await runDao.create({ id: 'run-a', agentKind: 'claude' });
     await usageDao.recordOnce({
       runId: 'run-a',
-      nodeId: null,
+      memberId: null,
       seq: 0,
       occurredAt: new Date(2026, 7, 10, 9),
       agentKind: 'claude',

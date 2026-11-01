@@ -11,20 +11,20 @@ const open = (
   id: string | null,
   workId: string,
   extra: Record<string, unknown> = {},
-  nodeId: string | null = null,
+  memberId: string | null = null,
 ): ShellRow => ({
   kind: 'shell_open',
   payload: JSON.stringify({ id, workId, ...extra }),
-  nodeId,
+  memberId,
 });
 const close = (
   id: string | null,
   workId: string,
-  nodeId: string | null = null,
+  memberId: string | null = null,
 ): ShellRow => ({
   kind: 'shell_info',
   payload: JSON.stringify({ id, workId }),
-  nodeId,
+  memberId,
 });
 
 describe('strandedShells', () => {
@@ -54,24 +54,29 @@ describe('strandedShells', () => {
     expect(
       strandedShells([open('t1', 'b1', { callId: 'call-2' }, 'engineer')]),
     ).toEqual([
-      { toolCallId: 't1', workId: 'b1', nodeId: 'engineer', callId: 'call-2' },
+      {
+        toolCallId: 't1',
+        workId: 'b1',
+        memberId: 'engineer',
+        callId: 'call-2',
+      },
     ]);
   });
 
-  it('keeps two nodes’ shells apart when their per-process work ids collide', () => {
+  it('keeps two members’ shells apart when their per-process work ids collide', () => {
     expect(
       strandedShells([
         open('t1', 'bash_1', {}, 'engineer'),
         open('t1', 'bash_1', {}, 'qa'),
         close('t1', 'bash_1', 'engineer'),
-      ]).map((shell) => shell.nodeId),
+      ]).map((shell) => shell.memberId),
     ).toEqual(['qa']);
   });
 
   it('skips a row it cannot read rather than throwing', () => {
     expect(
       strandedShells([
-        { kind: 'shell_open', payload: 'not json', nodeId: null },
+        { kind: 'shell_open', payload: 'not json', memberId: null },
         open('t1', 'b1'),
       ]).map((shell) => shell.workId),
     ).toEqual(['b1']);
@@ -82,14 +87,14 @@ describe('launchingCallOf', () => {
   const call = (
     command: string,
     extra: Record<string, unknown> = {},
-    nodeId: string | null = 'dev',
+    memberId: string | null = 'dev',
   ) => ({
     payload: JSON.stringify({ id: 't1', input: { command }, ...extra }),
-    nodeId,
+    memberId,
   });
-  const shell = { toolCallId: 't1', nodeId: 'dev', callId: 'call-A' };
+  const shell = { toolCallId: 't1', memberId: 'dev', callId: 'call-A' };
 
-  it('takes the newest call by that id under the same node and team call', () => {
+  it('takes the newest call by that id under the same member and team call', () => {
     // An ACP CLI numbers calls per session: other conversations reuse `t1`.
     const calls = [
       call('pnpm older', { callId: 'call-A' }),
@@ -113,7 +118,7 @@ describe('launchingCallOf', () => {
   });
 
   it('pairs a chat shell, which has no team call, with a call that has none', () => {
-    const chat = { toolCallId: 't1', nodeId: null, callId: null };
+    const chat = { toolCallId: 't1', memberId: null, callId: null };
     const calls = [
       call('pnpm dev', {}, null),
       call('x', { callId: 'c' }, null),

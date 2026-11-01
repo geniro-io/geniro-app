@@ -724,7 +724,7 @@ describe('the expanded readout the meter opens onto', () => {
           contextTokens={62_444}
           contextWindowTokens={1_000_000}
           runId="run-1"
-          nodeId="manager"
+          memberId="manager"
         />
       </ChatMetricsLoaderContext.Provider>,
     );

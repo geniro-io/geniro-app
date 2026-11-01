@@ -114,15 +114,15 @@ describe('readCallSeed', () => {
     expect(seed.records).toEqual([
       {
         callId: 'call-1',
-        callerNodeId: 'orch',
-        calleeNodeId: 'helper',
+        callerMemberId: 'orch',
+        calleeMemberId: 'helper',
         thread: null,
         sessionId: 'sess-1',
       },
       {
         callId: 'call-3',
-        callerNodeId: 'orch',
-        calleeNodeId: 'helper',
+        callerMemberId: 'orch',
+        calleeMemberId: 'helper',
         thread: 'call-1',
         sessionId: 'sess-1',
       },
@@ -144,8 +144,8 @@ describe('readCallSeed', () => {
     expect(seed.records).toEqual([
       {
         callId: 'call-2',
-        callerNodeId: 'orch',
-        calleeNodeId: 'helper',
+        callerMemberId: 'orch',
+        calleeMemberId: 'helper',
         thread: null,
         sessionId: null,
       },
@@ -171,8 +171,8 @@ describe('readCallSeed', () => {
       records: [
         {
           callId: 'call-4',
-          callerNodeId: 'orch',
-          calleeNodeId: 'writer',
+          callerMemberId: 'orch',
+          calleeMemberId: 'writer',
           thread: null,
           sessionId: null,
         },
@@ -226,8 +226,8 @@ describe('readCallSeed', () => {
       records: [
         {
           callId: 'call-1',
-          callerNodeId: 'orch',
-          calleeNodeId: 'helper',
+          callerMemberId: 'orch',
+          calleeMemberId: 'helper',
           thread: null,
           sessionId: 'sess-1',
         },
@@ -243,10 +243,16 @@ describe('readCallSeed', () => {
 describe('callConversation', () => {
   const record = (
     callId: string,
-    calleeNodeId: string,
+    calleeMemberId: string,
     thread: string | null,
     sessionId: string | null,
-  ) => ({ callId, callerNodeId: 'manager', calleeNodeId, thread, sessionId });
+  ) => ({
+    callId,
+    callerMemberId: 'manager',
+    calleeMemberId,
+    thread,
+    sessionId,
+  });
 
   it('walks a continuation back to the call that opened its conversation', () => {
     const records = [
@@ -258,14 +264,14 @@ describe('callConversation', () => {
 
     expect(callConversation(records, 'call-4')).toEqual({
       conversationId: 'call-1',
-      calleeNodeId: 'engineer',
+      calleeMemberId: 'engineer',
       callIds: ['call-1', 'call-3', 'call-4'],
       // The newest session any call of it recorded — call-4 settled without one.
       sessionId: 'sess-b',
     });
     expect(callConversation(records, 'call-2')).toEqual({
       conversationId: 'call-2',
-      calleeNodeId: 'researcher',
+      calleeMemberId: 'researcher',
       callIds: ['call-2'],
       sessionId: 'sess-r',
     });

@@ -40,7 +40,7 @@ export function NotesDialog({
   threadNotes: ThreadNotesHandle | null;
   /** Newest first, as the daemon lists them. */
   teamNotes: readonly TeamNote[];
-  agentName: (nodeId: string) => string;
+  agentName: (memberId: string) => string;
   /** The team note picked on open — the one pressed in the transcript. */
   initialSelected?: number | null;
   /** Open a team note's row in the transcript; the popup closes first. */

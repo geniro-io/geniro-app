@@ -174,9 +174,9 @@ export function CallContinuedRow({
   const reveal = useContext(RevealCallBlockContext);
   const nameOf = (id: string | null): string | null =>
     id === null ? null : (nodes?.get(id)?.name ?? id);
-  const calleeNodeId = payloadString(item.payload, 'calleeNodeId');
-  const callee = nameOf(calleeNodeId) ?? 'agent';
-  const caller = nameOf(item.nodeId);
+  const calleeMemberId = payloadString(item.payload, 'calleeNodeId');
+  const callee = nameOf(calleeMemberId) ?? 'agent';
+  const caller = nameOf(item.memberId);
   const identityText = caller ? `${caller} → ${callee}` : callee;
   const title = payloadString(item.payload, 'title');
   const body = (
@@ -188,9 +188,9 @@ export function CallContinuedRow({
       {caller ? (
         <AvatarPair
           caller={caller}
-          callerKey={item.nodeId ?? caller}
+          callerKey={item.memberId ?? caller}
           callee={callee}
-          calleeKey={calleeNodeId ?? callee}
+          calleeKey={calleeMemberId ?? callee}
         />
       ) : null}
       <span className="min-w-0 flex-1 truncate text-left">
@@ -440,15 +440,15 @@ export const CallBlock = memo(function CallBlock({
   const identities = useContext(AgentIdentityContext);
   const nameOf = (id: string | null): string | null =>
     id === null ? null : (nodes?.get(id)?.name ?? id);
-  const callee = nameOf(block.calleeNodeId) ?? 'agent';
-  const caller = nameOf(block.callerNodeId);
+  const callee = nameOf(block.calleeMemberId) ?? 'agent';
+  const caller = nameOf(block.callerMemberId);
   const calleeKind = calleeAgentOf(block, nodes);
   const calleeAgent =
     calleeKind === null ? null : agentShortName(identities, calleeKind);
   const poolTotal =
-    (block.calleeNodeId === null
+    (block.calleeMemberId === null
       ? undefined
-      : nodes?.get(block.calleeNodeId)?.pool?.length) ?? 0;
+      : nodes?.get(block.calleeMemberId)?.pool?.length) ?? 0;
   const poolMember = poolTotal > 1 ? (block.member ?? null) : null;
   const poolTitle =
     poolMember === null
@@ -497,13 +497,13 @@ export const CallBlock = memo(function CallBlock({
   // under the run's cap, or not yet started — has no turn to join yet.
   const callRunning = block.status === 'running';
   const live =
-    resolveCallReading !== null && block.calleeNodeId !== null
+    resolveCallReading !== null && block.calleeMemberId !== null
       ? // The WHOLE conversation rather than the calls this window drew: both
         // figures the resolver answers are about the callee's SESSION, which
         // outlives the window. The ring only gains older fallbacks; the SPEND
         // was silently short by every call that had paged out — see
         // `CallBlockEntry.conversationCallIds` for what that cost.
-        resolveCallReading(block.calleeNodeId, block.conversationCallIds)
+        resolveCallReading(block.calleeMemberId, block.conversationCallIds)
       : null;
   // The daemon's whole-run spend for this conversation, over the window's
   // fold — a call that started above the loaded window, or was continued many
@@ -751,9 +751,9 @@ export const CallBlock = memo(function CallBlock({
             {caller ? (
               <AvatarPair
                 caller={caller}
-                callerKey={block.callerNodeId ?? caller}
+                callerKey={block.callerMemberId ?? caller}
                 callee={callee}
-                calleeKey={block.calleeNodeId ?? callee}
+                calleeKey={block.calleeMemberId ?? callee}
               />
             ) : null}
             {/* TWO LINES when the caller named a reason: the `title` it passed
@@ -863,11 +863,11 @@ export const CallBlock = memo(function CallBlock({
         {status === 'running' && !liveTail ? (
           <BlockPendingLine clamp="one">{pendingLine}</BlockPendingLine>
         ) : null}
-        {block.calleeNodeId !== null ? (
+        {block.calleeMemberId !== null ? (
           <CallMessagePanel
             blockId={block.id}
             callId={block.callId}
-            calleeNodeId={block.calleeNodeId}
+            calleeMemberId={block.calleeMemberId}
             callee={callee}
             calleeAgent={calleeNodeAgent}
             caller={caller}
@@ -887,7 +887,7 @@ export const CallBlock = memo(function CallBlock({
             // Only when there is a button to draw: an element the button
             // renders as null still makes the footer think it has content.
             callChannel === null ||
-            block.calleeNodeId === null ||
+            block.calleeMemberId === null ||
             !callRunning ||
             messageOpen ? undefined : (
               <CallMessageButton
@@ -931,10 +931,10 @@ function calleeAgentOf(
   block: CallBlockEntry,
   nodes: ReadonlyMap<string, TranscriptNodeMeta> | undefined,
 ): string | null {
-  if (block.calleeNodeId === null) {
+  if (block.calleeMemberId === null) {
     return null;
   }
-  const meta = nodes?.get(block.calleeNodeId);
+  const meta = nodes?.get(block.calleeMemberId);
   const member =
     block.member !== undefined ? meta?.pool?.[block.member - 1] : undefined;
   return member ?? meta?.agent ?? null;

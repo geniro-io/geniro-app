@@ -30,7 +30,7 @@ export abstract class BaseMcpTool implements McpTool {
    */
   protected readonly meta: Record<string, unknown> | null = null;
 
-  /** Whether this node is offered the tool right now. */
+  /** Whether this asker is offered the tool right now. */
   protected abstract isOffered(context: McpListContext): boolean;
 
   /** The description a model reads — `<tool>.instructions.ts`. */

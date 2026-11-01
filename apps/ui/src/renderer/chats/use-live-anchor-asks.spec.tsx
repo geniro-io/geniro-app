@@ -19,7 +19,7 @@ const NONE: ChatItem[] = [];
 const calleeRow = (runId: string, seq: number, callId: string): ChatItem => ({
   id: `${runId}-${seq}`,
   runId,
-  nodeId: 'qa',
+  memberId: 'qa',
   seq,
   kind: 'message',
   role: null,

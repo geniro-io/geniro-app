@@ -10,7 +10,7 @@ import { asRecord, asString, parseJsonColumn } from './json-util';
  *
  * The same field {@link openDelegateIds} keys its fold on, read once here so
  * the two cannot come to disagree about what identifies a delegate: a caller
- * pairing an id with something ELSE about the row — the node that launched it,
+ * pairing an id with something ELSE about the row — the member that launched it,
  * which is what `ChatService.closeStrandedDelegates` needs — must select rows
  * by exactly the rule the fold selected them by, or it pairs the wrong two.
  */
@@ -27,7 +27,7 @@ export function delegateIdOf(payload: unknown): string | null {
 export interface DelegateRow {
   /** The column as stored — JSON text. */
   payload: unknown;
-  nodeId: string | null;
+  memberId: string | null;
 }
 
 /**
@@ -39,7 +39,7 @@ export interface DelegateRow {
  */
 export interface StrandedDelegate {
   id: string;
-  nodeId: string | null;
+  memberId: string | null;
   callId: string | null;
 }
 
@@ -53,20 +53,20 @@ export function strandedDelegates(
   const payloads = rows.map((row) => parseJsonColumn(row.payload));
   const placed = new Map<
     string,
-    { nodeId: string | null; callId: string | null }
+    { memberId: string | null; callId: string | null }
   >();
   payloads.forEach((payload, index) => {
     const id = delegateIdOf(payload);
     if (id !== null && !placed.has(id)) {
       placed.set(id, {
-        nodeId: rows[index]!.nodeId,
+        memberId: rows[index]!.memberId,
         callId: asString(asRecord(payload)?.callId),
       });
     }
   });
   return openDelegateIds(payloads).map((id) => ({
     id,
-    ...(placed.get(id) ?? { nodeId: null, callId: null }),
+    ...(placed.get(id) ?? { memberId: null, callId: null }),
   }));
 }
 
@@ -138,17 +138,17 @@ export function delegateDeclarationEvent(
 }
 
 /**
- * The owner fields every row a team node persists carries in its payload,
- * for a close written on that node's behalf — without them the renderer files
+ * The owner fields every row a team member persists carries in its payload,
+ * for a close written on that member's behalf — without them the renderer files
  * the close outside the call block holding the unit it closes. Empty for a
  * chat, whose rows carry neither.
  */
 export function ownerFields(owner: {
-  nodeId: string | null;
+  memberId: string | null;
   callId: string | null;
 }): { nodeId?: string; callId?: string } {
   return {
-    ...(owner.nodeId !== null ? { nodeId: owner.nodeId } : {}),
+    ...(owner.memberId !== null ? { nodeId: owner.memberId } : {}),
     ...(owner.callId !== null ? { callId: owner.callId } : {}),
   };
 }

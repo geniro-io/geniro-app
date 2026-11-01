@@ -42,7 +42,7 @@ function homeWith(cwd: string, disabled: string[] | null): string {
 }
 
 describe('seedCursorDataDir', () => {
-  it('adds the node’s servers to the user’s own disabled list, and links everything else to the real store', () => {
+  it('adds the member’s servers to the user’s own disabled list, and links everything else to the real store', () => {
     const cwd = temp('cursor-cwd-');
     const home = homeWith(cwd, ['linear']);
     const dir = seedCursorDataDir({

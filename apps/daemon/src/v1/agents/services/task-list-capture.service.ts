@@ -32,8 +32,8 @@ function parseRow(payload: string): Record<string, unknown> | null {
  * The WHY is in `utils/task-list-fold.ts`; this is the pass that runs it. It is
  * a SUBSCRIBER rather than a call from the turn path, for the reason the stats
  * recorder and the pull-request capture are: the bus is where the chat path and
- * the graph executor converge on one `persistItemAndEmit`, so neither has to
- * remember to do this, and a team node's list is covered by the same code.
+ * the team executor converge on one `persistItemAndEmit`, so neither has to
+ * remember to do this, and a team member's list is covered by the same code.
  *
  * Two properties shape it:
  *
@@ -96,7 +96,7 @@ export class TaskListCaptureService implements OnModuleInit {
       const rows = await this.itemDao.taskListRows(runId, em);
       const folded = foldTaskLists(
         rows.map((row) => ({
-          nodeId: row.nodeId,
+          memberId: row.memberId,
           payload: parseRow(row.payload),
         })),
       );

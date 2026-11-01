@@ -21,7 +21,7 @@ function command(seq: number, label: string): LiveAction {
   return {
     seq,
     actionId: label.toLowerCase(),
-    nodeId: 'agent',
+    memberId: 'agent',
     conversationId: '',
     label,
     once: false,
@@ -41,7 +41,7 @@ function message(seq: number, label: string): LiveAction {
   return {
     seq,
     actionId: label.toLowerCase(),
-    nodeId: 'agent',
+    memberId: 'agent',
     conversationId: '',
     label,
     once: false,

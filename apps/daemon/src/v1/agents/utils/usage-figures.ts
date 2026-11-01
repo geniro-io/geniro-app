@@ -229,8 +229,8 @@ function add(
 
 /**
  * The pool member a turn ran on, when its usage row says so — a team
- * node's call that ran on another of its pool members. Null for every other
- * turn, whose CLI is its node's (or its run's) own, and for a value naming no
+ * member's call that ran on another of its pool members. Null for every other
+ * turn, whose CLI is its member's (or its run's) own, and for a value naming no
  * CLI.
  */
 export function turnMemberOf(payload: unknown): TurnMember | null {

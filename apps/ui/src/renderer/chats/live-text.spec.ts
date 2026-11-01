@@ -15,7 +15,7 @@ import {
 
 const event = (over: Partial<LiveTextEvent> = {}): LiveTextEvent => ({
   runId: 'run-1',
-  nodeId: null,
+  memberId: null,
   text: '',
   ownerKey: null,
   thinkingTokens: null,
@@ -38,7 +38,7 @@ describe('parseLiveText', () => {
     expect(
       parseLiveText({
         runId: 'run-1',
-        nodeId: 'node-a',
+        memberId: 'node-a',
         text: 'hello',
         ownerKey: null,
         thinkingTokens: 120,
@@ -54,7 +54,7 @@ describe('parseLiveText', () => {
       }),
     ).toEqual({
       runId: 'run-1',
-      nodeId: 'node-a',
+      memberId: 'node-a',
       text: 'hello',
       ownerKey: null,
       thinkingTokens: 120,
@@ -76,7 +76,7 @@ describe('parseLiveText', () => {
     expect(
       parseLiveText({
         runId: 'run-1',
-        nodeId: null,
+        memberId: null,
         text: '',
         spentCostUsd: 0.5,
         spentEstimatedCostUsd: 0.5,
@@ -85,7 +85,7 @@ describe('parseLiveText', () => {
     expect(
       parseLiveText({
         runId: 'run-1',
-        nodeId: null,
+        memberId: null,
         text: '',
         spentCostUsd: 0.5,
       }),
@@ -96,7 +96,7 @@ describe('parseLiveText', () => {
     expect(
       parseLiveText({
         runId: 'run-1',
-        nodeId: null,
+        memberId: null,
         text: '',
         thinkingText: 'listing the primes',
         thinkingStretch: 1,
@@ -111,7 +111,7 @@ describe('parseLiveText', () => {
     expect(
       parseLiveText({
         runId: 'run-1',
-        nodeId: null,
+        memberId: null,
         text: '',
         thinkingText: '',
         thinkingStretch: 1,
@@ -126,7 +126,7 @@ describe('parseLiveText', () => {
     // path would leak one, which is the asymmetry this guard closes.
     const parsed = parseLiveText({
       runId: 'run-1',
-      nodeId: null,
+      memberId: null,
       text: '',
       thinkingSince: -1,
       thinkingStretch: 0,
@@ -141,7 +141,7 @@ describe('parseLiveText', () => {
     });
     expect(parsed).toEqual({
       runId: 'run-1',
-      nodeId: null,
+      memberId: null,
       text: '',
       ownerKey: null,
       thinkingTokens: null,
@@ -166,7 +166,7 @@ describe('parseLiveText', () => {
     // whether the agent is thinking, so this field does not have to.
     const parsed = parseLiveText({
       runId: 'run-1',
-      nodeId: null,
+      memberId: null,
       text: '',
       ownerKey: null,
       thinkingTokens: 0,
@@ -179,7 +179,7 @@ describe('parseLiveText', () => {
   it('reads a running cost, and KEEPS its zero', () => {
     // Unlike a context figure, 0 here is a real reading: the turn's cost has
     // just been recorded and nothing is unrecorded any more.
-    const base = { runId: 'run-1', nodeId: null, text: '' };
+    const base = { runId: 'run-1', memberId: null, text: '' };
     expect(parseLiveText({ ...base, spentCostUsd: 2.5 })?.spentCostUsd).toBe(
       2.5,
     );
@@ -193,9 +193,9 @@ describe('parseLiveText', () => {
     expect(parseLiveText({ text: 'x' })).toBeNull();
     expect(parseLiveText(null)).toBeNull();
     expect(parseLiveText('not an object')).toBeNull();
-    expect(parseLiveText({ runId: 'r', nodeId: 42, text: 'x' })?.nodeId).toBe(
-      null,
-    );
+    expect(
+      parseLiveText({ runId: 'r', memberId: 42, text: 'x' })?.memberId,
+    ).toBe(null);
   });
 });
 
@@ -251,7 +251,7 @@ describe('applyLiveText', () => {
   it('keys a graph node separately from the single-agent chat', () => {
     const next = applyLiveText(
       new Map(),
-      event({ nodeId: 'node-a', text: 'hi' }),
+      event({ memberId: 'node-a', text: 'hi' }),
     );
     expect(next.get('node-a')?.text).toBe('hi');
     expect(next.get(CHAT_LIVE_KEY)).toBeUndefined();
@@ -288,7 +288,7 @@ describe('the owner-key twin', () => {
     const first = applyLiveText(
       new Map(),
       event({
-        nodeId: 'a',
+        memberId: 'a',
         ownerKey: partialOwnerKey('a', 'call-1'),
         text: 'one',
       }),
@@ -296,7 +296,7 @@ describe('the owner-key twin', () => {
     const both = applyLiveText(
       first,
       event({
-        nodeId: 'a',
+        memberId: 'a',
         ownerKey: partialOwnerKey('a', 'call-2'),
         text: 'two',
       }),

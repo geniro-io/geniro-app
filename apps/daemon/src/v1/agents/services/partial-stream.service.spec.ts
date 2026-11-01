@@ -262,8 +262,8 @@ describe('PartialStreamService — live context', () => {
   });
 
   it('windowFor is scoped to the OWNER, not to the run', () => {
-    // The map is keyed by the pair, so a team node must not read the window
-    // a sibling node on the same run reported.
+    // The map is keyed by the pair, so a team member must not read the window
+    // a sibling member on the same run reported.
     service.rememberWindow(RUN, OWNER, 1_000_000);
     expect(service.windowFor(RUN, 'another-node')).toBeNull();
   });
@@ -490,8 +490,8 @@ describe('PartialStreamService — a client joining late is owed the plane', () 
         .filter((event) => event.runId === RUN && event.ownerKey === ownerKey)
         .at(-1);
     expect(snapshot).toEqual([lastOf(OWNER), lastOf('engineer::call-2')]);
-    // The chat's sentinel owner carries no node; a callee key carries its node.
-    expect(snapshot.map((event) => event.nodeId)).toEqual([null, 'engineer']);
+    // The chat's sentinel owner carries no member; a callee key carries its member.
+    expect(snapshot.map((event) => event.memberId)).toEqual([null, 'engineer']);
   });
 
   it('holds nothing for a run whose turn was cleared', () => {
@@ -578,7 +578,7 @@ describe('PartialStreamService — unrecorded spend is DURABLE', () => {
     expect(
       restored
         .snapshot(RUN)
-        .map((event) => [event.ownerKey, event.nodeId, event.spentCostUsd]),
+        .map((event) => [event.ownerKey, event.memberId, event.spentCostUsd]),
     ).toEqual([
       ['engineer::call-1', 'engineer', 38.5],
       [OWNER, null, 0.25],
@@ -719,15 +719,15 @@ describe('PartialStreamService — a window belongs to an OWNER, not to a run', 
   const SMALL = 'node-small';
 
   /** The last event published for one owner, which is what its meter reads. */
-  function lastFor(nodeId: string): RunDeltaEvent {
-    const own = published.filter((event) => event.nodeId === nodeId);
+  function lastFor(memberId: string): RunDeltaEvent {
+    const own = published.filter((event) => event.memberId === memberId);
     return own[own.length - 1]!;
   }
 
-  it('gives two nodes of one run their own windows', () => {
+  it('gives two members of one run their own windows', () => {
     // A team run is N agents, and they routinely run on DIFFERENT models. A
-    // run-scoped window is whichever node reported LAST, so the 1M node's
-    // 800k-token conversation was drawn against the 200k node's window — a ring
+    // run-scoped window is whichever member reported LAST, so the 1M member's
+    // 800k-token conversation was drawn against the 200k member's window — a ring
     // pinned at 100% on an agent with three quarters of its context free.
     service.useModel(RUN, BIG, AGENT, 'big-window-model');
     service.rememberWindow(RUN, BIG, 1_000_000, 'big-window-model');
@@ -741,9 +741,9 @@ describe('PartialStreamService — a window belongs to an OWNER, not to a run', 
     expect(lastFor(SMALL).contextWindowTokens).toBe(200_000);
   });
 
-  it('does not let one node’s model change reset another node’s window', () => {
+  it('does not let one member’s model change reset another member’s window', () => {
     // `useModel` drops the remembered window when the model changes. Keyed by
-    // run, a second node announcing a different model wiped the FIRST node's
+    // run, a second member announcing a different model wiped the FIRST member's
     // window mid-turn, and its ring vanished with the number still climbing.
     service.useModel(RUN, BIG, AGENT, 'big-window-model');
     service.rememberWindow(RUN, BIG, 1_000_000, 'big-window-model');
@@ -754,9 +754,9 @@ describe('PartialStreamService — a window belongs to an OWNER, not to a run', 
     expect(lastFor(BIG).contextWindowTokens).toBe(1_000_000);
   });
 
-  it('forgetRun sweeps EVERY node of that run, and no other run', () => {
+  it('forgetRun sweeps EVERY member of that run, and no other run', () => {
     // The maps are keyed per (run, owner), so deleting the bare run id leaves a
-    // team's per-node entries behind for the life of the process — a leak
+    // team's per-member entries behind for the life of the process — a leak
     // nothing can reach again, the run they belong to being gone.
     service.rememberWindow(RUN, BIG, 1_000_000);
     service.rememberWindow(RUN, SMALL, 200_000);
@@ -852,7 +852,7 @@ describe('the owner key — this side of the twin', () => {
   // own while the mirror had five, so a drift here would misattribute every
   // live-plane owner with nothing failing to compile.
 
-  it('composes a node’s own turn as the bare node id', () => {
+  it('composes a member’s own turn as the bare member id', () => {
     expect(partialOwnerKey('reviewer', null)).toBe('reviewer');
   });
 
@@ -860,7 +860,7 @@ describe('the owner key — this side of the twin', () => {
     expect(partialOwnerKey('reviewer', 'call-1')).toBe('reviewer::call-1');
   });
 
-  it('reads the node back out of either shape', () => {
+  it('reads the member back out of either shape', () => {
     expect(ownerOfKey(partialOwnerKey('reviewer', null))).toBe('reviewer');
     expect(ownerOfKey(partialOwnerKey('reviewer', 'call-1'))).toBe('reviewer');
   });

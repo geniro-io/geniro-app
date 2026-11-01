@@ -54,7 +54,7 @@ export const saveTeamSchema = z.object({
 export class SaveTeamDto extends createZodDto(saveTeamSchema) {}
 
 /**
- * The team as the builder's canvas holds it — saved or not — plus the two
+ * The team as the team editor holds it — saved or not — plus the two
  * run settings the instruction block carries, which live in the Electron
  * process's `settings.json` and so are sent the way a run start sends them.
  */
@@ -83,30 +83,30 @@ export class ExportTeamDto extends createZodDto(exportTeamSchema) {}
 
 export const runTeamSchema = z
   .object({
-    /** Shared working folder every node runs in (validated server-side). */
+    /** Shared working folder every member runs in (validated server-side). */
     cwd: z.string().min(1),
     /**
-     * The user's task — seeds every node's prompt. May be empty when images
+     * The user's task — the trigger member's first message. May be empty when images
      * carry the message, exactly as a chat message may.
      */
     prompt: z.string(),
-    /** Pasted images, delivered to the agents the trigger feeds. */
+    /** Pasted images, delivered to the trigger member. */
     images: messageImagesSchema.optional(),
     /**
      * The app's global custom instructions, snapshotted onto the run exactly as
      * a chat snapshots them (`createChatSchema.customInstructions`).
      *
      * Sent by the client for the same reason: the value lives in the Electron
-     * process's `settings.json`, which the daemon never opens. Every agent node
-     * composes it BEHIND its own `role`, so a node authored for one job still
-     * outranks a standing preference.
+     * process's `settings.json`, which the daemon never opens. Every member
+     * composes it BEHIND its own `instructions`, so a member authored for one
+     * job still outranks a standing preference.
      */
     customInstructions: CustomInstructionsSchema.optional(),
     /** The user's reply language, snapshotted onto the run like a chat's. */
     replyLanguage: ReplyLanguageSchema.optional(),
     /**
      * The user's per-CLI switches, snapshotted onto the run exactly as a chat
-     * snapshots them ({@link Run.agentOptions}); each agent node's turn carries
+     * snapshots them ({@link Run.agentOptions}); each member's turn carries
      * its own CLI's slice.
      */
     agentOptions: AgentOptionsSchema.optional(),
@@ -148,7 +148,7 @@ export class RunTeamSnapshotDto extends createZodDto(
 /** A team as listed from the library (counts, no full definition). */
 export class TeamSummaryDto extends createZodDto(TeamSummarySchema) {}
 
-/** Per-node execution state of one team run. */
+/** Per-member execution state of one team run. */
 export class NodeStateDto extends createZodDto(NodeStateWireSchema) {}
 
 /** The calls a cancelled usage-limit continue will no longer pick up. */

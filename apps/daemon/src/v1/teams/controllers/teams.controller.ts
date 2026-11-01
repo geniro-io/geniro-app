@@ -57,13 +57,13 @@ import {
   TeamFileDto,
   TeamSummaryDto,
 } from '../dto/teams.dto';
-import { GraphExecutorService } from '../services/graph-executor.service';
 import { InstructionSizesService } from '../services/instruction-sizes.service';
 import { RunTeamService } from '../services/run-team.service';
 import { StageWakeService } from '../services/stage-wake.service';
 import { TeamActionsService } from '../services/team-actions.service';
 import { TeamAnalysisService } from '../services/team-analysis.service';
 import { TeamChatService } from '../services/team-chat.service';
+import { TeamExecutorService } from '../services/team-executor.service';
 import { TeamStoreService } from '../services/team-store.service';
 import type {
   InstructionSizesWire,
@@ -78,7 +78,7 @@ import type {
 /**
  * Loopback team REST surface (token-gated by the global
  * LoopbackTokenGuard): library CRUD over the `*.team.yaml` files plus the
- * run endpoints that hand a team to the DAG executor. The static `runs`
+ * run endpoints that hand a team to the executor. The static `runs`
  * routes are declared before the `:slug` routes so Nest never captures "runs"
  * as a slug. Run transcripts replay over the existing
  * `GET /v1/chats/:runId/items` history read (items are run-scoped, not
@@ -90,7 +90,7 @@ import type {
 export class TeamsController {
   constructor(
     private readonly store: TeamStoreService,
-    private readonly executor: GraphExecutorService,
+    private readonly executor: TeamExecutorService,
     private readonly runTeams: RunTeamService,
     private readonly teamChats: TeamChatService,
     private readonly actions: TeamActionsService,
@@ -238,22 +238,22 @@ export class TeamsController {
 
   /**
    * A message straight to the callee of one RUNNING call, past its caller.
-   * 409 `CALL_NOT_RUNNING` once the call has settled or the node is not its
+   * 409 `CALL_NOT_RUNNING` once the call has settled or the member is not its
    * callee, `CALL_MESSAGE_REFUSED` when the callee's CLI cannot take a message
    * mid-turn.
    */
-  @Post('runs/:runId/nodes/:nodeId/calls/:callId/messages')
+  @Post('runs/:runId/nodes/:memberId/calls/:callId/messages')
   @ApiOperation({ operationId: 'sendTeamCallMessage' })
   @ZodResponse({ status: 201, type: ItemDto })
   sendCallMessage(
     @Param('runId') runId: string,
-    @Param('nodeId') nodeId: string,
+    @Param('memberId') memberId: string,
     @Param('callId') callId: string,
     @Body() dto: SendMessageDto,
   ): Promise<ItemWire> {
     return this.executor.sendCallMessage(
       runId,
-      nodeId,
+      memberId,
       callId,
       dto.text,
       dto.images,
@@ -265,7 +265,7 @@ export class TeamsController {
    * Destructive and irreversible — the team-run half of the chats
    * sidebar's delete (its chat rows go to `DELETE /v1/chats/:runId`). The
    * LIBRARY team is untouched: this deletes one run's history, not the
-   * graph it ran.
+   * team it ran.
    */
   @Delete('runs/:runId')
   @ApiOperation({ operationId: 'deleteTeamRun' })

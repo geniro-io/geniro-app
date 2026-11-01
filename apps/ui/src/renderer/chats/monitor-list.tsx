@@ -99,7 +99,7 @@ export function MonitorRows({
 }: {
   monitors: readonly OpenMonitor[];
   /** Names the agent a row belongs to; absent in a 1:1 chat, which has one. */
-  agentNameOf?: (nodeId: string) => string;
+  agentNameOf?: (memberId: string) => string;
   onStop?: (monitor: OpenMonitor) => void | Promise<void>;
 }): React.JSX.Element {
   return (
@@ -111,9 +111,9 @@ export function MonitorRows({
           key={monitor.id}
           monitor={monitor}
           agentName={
-            agentNameOf === undefined || monitor.nodeId === null
+            agentNameOf === undefined || monitor.memberId === null
               ? null
-              : agentNameOf(monitor.nodeId)
+              : agentNameOf(monitor.memberId)
           }
           onStop={onStop}
         />

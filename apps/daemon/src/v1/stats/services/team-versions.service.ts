@@ -20,7 +20,6 @@ import {
   canonicalGraphJson,
   canonicalGraphOf,
   canonicalGraphYaml,
-  edgeIdentity,
   teamOfCanonical,
   teamVersionOf,
 } from '../../teams/utils/team-version';
@@ -41,7 +40,7 @@ import { versionDiff } from '../utils/version-diff';
 const DIFF_CACHE_LIMIT = 500;
 
 /**
- * One team's runs by graph version, for the Teams screen. Every read is batched
+ * One team's runs by team version, for the Teams screen. Every read is batched
  * over the team's run ids, and the figures come from one pure fold
  * (`foldTeamVersions`) over the rows as read.
  */
@@ -92,15 +91,15 @@ export class TeamVersionsService {
   }
 
   /**
-   * Write a recorded version back as the team's graph: its nodes, edges, stages and
-   * active-turn cap. The team keeps its own name and description, the canvas places of
-   * the nodes it still has, and the labels of the edges it still has — none of them is part
-   * of a version. The file as it stood is backed up first (`.backups/`, as an applied change
+   * Write a recorded version back as the team: its mode, members, trigger, instruction
+   * blocks, stages and active-turn cap. The team keeps its own name and description, which
+   * are no part of a version; a version recorded while teams were node graphs is restored
+   * converted (`teamFromWorkflow`). The file as it stood is backed up first (`.backups/`, as an applied change
    * does), and the write quotes the hash it was read at, so a save landing in between is
-   * refused rather than overwritten. A version is restorable only while its graph is
+   * refused rather than overwritten. A version is restorable only while its team is
    * recorded: an inferred one never was.
    *
-   * The graph being replaced is recorded too when no run has stamped it (an edit not run
+   * The team being replaced is recorded too when no run has stamped it (an edit not run
    * yet), numbered as of now, so the table keeps it and it can be restored back. One a
    * run has stamped already has its row: recorded, or inferred and kept unnumbered.
    */
@@ -114,7 +113,7 @@ export class TeamVersionsService {
     if (recorded === undefined) {
       throw new NotFoundException(
         'TEAM_VERSION_NOT_FOUND',
-        `Version ${version} of '${slug}' has no recorded graph`,
+        `Version ${version} of '${slug}' has no recorded team`,
       );
     }
     const graph = teamOfCanonical(recorded.graph);
@@ -202,7 +201,7 @@ export class TeamVersionsService {
     return changes;
   }
 
-  /** The library's graph and its version, or null when the file is gone or no longer reads. */
+  /** The library's team and its version, or null when the file is gone or no longer reads. */
   private async currentGraph(slug: string): Promise<TeamVersionGraph | null> {
     try {
       const { team } = await this.store.get(slug);
@@ -217,17 +216,8 @@ export class TeamVersionsService {
   }
 }
 
-/** `graph`'s nodes, edges, cap and stages under `current`'s name, description, places and labels. */
+/** `graph`'s members, trigger, blocks, mode, cap and stages under `current`'s name and description. */
 function restoredTeam(graph: Team, current: Team): Team {
-  const ids = new Set(graph.nodes.map((node) => node.id));
-  const labels = new Map(
-    current.edges.flatMap((edge) =>
-      edge.label === undefined ? [] : [[edgeIdentity(edge), edge.label]],
-    ),
-  );
-  const layout = Object.fromEntries(
-    Object.entries(current.layout ?? {}).filter(([id]) => ids.has(id)),
-  );
   return {
     name: current.name,
     ...(current.description === undefined
@@ -236,12 +226,10 @@ function restoredTeam(graph: Team, current: Team): Team {
     ...(graph.maxActiveTurns === undefined
       ? {}
       : { maxActiveTurns: graph.maxActiveTurns }),
-    nodes: graph.nodes,
-    edges: graph.edges.map((edge) => {
-      const label = labels.get(edgeIdentity(edge));
-      return label === undefined ? edge : { ...edge, label };
-    }),
-    ...(Object.keys(layout).length === 0 ? {} : { layout }),
+    mode: graph.mode,
+    members: graph.members,
+    triggers: graph.triggers,
+    instructionBlocks: graph.instructionBlocks,
     ...(graph.stages === undefined ? {} : { stages: graph.stages }),
   };
 }

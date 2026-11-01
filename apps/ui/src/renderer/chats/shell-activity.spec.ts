@@ -7,13 +7,13 @@ let seq = 0;
 function item(
   kind: ChatItem['kind'],
   payload: unknown,
-  nodeId: string | null = null,
+  memberId: string | null = null,
 ): ChatItem {
   seq += 1;
   return {
     id: `i-${seq}`,
     runId: 'run-1',
-    nodeId,
+    memberId,
     seq,
     kind,
     role: null,
@@ -27,9 +27,13 @@ const bash = (
   id: string,
   command: string,
   extra: Record<string, unknown> = {},
-  nodeId: string | null = null,
+  memberId: string | null = null,
 ) =>
-  item('tool_call', { id, name: 'Bash', input: { command, ...extra } }, nodeId);
+  item(
+    'tool_call',
+    { id, name: 'Bash', input: { command, ...extra } },
+    memberId,
+  );
 
 const reply = (id: string, result: unknown, isError = false) =>
   item('tool_result', { id, name: 'Bash', result, isError });

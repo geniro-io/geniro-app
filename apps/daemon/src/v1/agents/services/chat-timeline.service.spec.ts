@@ -11,7 +11,7 @@ interface StoredRow {
   seq: number;
   kind: string;
   role: string | null;
-  nodeId?: string;
+  memberId?: string;
   payload: string;
   createdAt: Date;
 }
@@ -52,12 +52,12 @@ function turn(seq: number, usage: unknown, secondsIn = 0): StoredRow {
 
 function build(rows: StoredRow[], runExists = true) {
   const spine = rows
-    .map(({ seq, kind, role, nodeId, createdAt }, index) => ({
+    .map(({ seq, kind, role, memberId, createdAt }, index) => ({
       id: `i-${index}`,
       seq,
       kind,
       role,
-      nodeId: nodeId ?? null,
+      memberId: memberId ?? null,
       createdAt,
     }))
     .sort((a, b) => a.seq - b.seq);
@@ -166,7 +166,7 @@ describe('ChatTimelineService', () => {
     const service = build([
       user(1, 'build it'),
       agent(2, 'calling the engineer'),
-      { ...user(3, 'use v2'), nodeId: 'engineer' },
+      { ...user(3, 'use v2'), memberId: 'engineer' },
       agent(4, 'done'),
     ]);
 

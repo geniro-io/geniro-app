@@ -18,7 +18,7 @@ function taskItem(payload: unknown): ChatItem {
   return {
     id: `i-${seq}`,
     runId: 'run-1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'task_list',
     role: null,
@@ -308,7 +308,7 @@ describe('taskListsByThread', () => {
     );
     expect(lists).toEqual([
       {
-        nodeId: null,
+        memberId: null,
         callId: null,
         tasks: [
           {
@@ -324,18 +324,18 @@ describe('taskListsByThread', () => {
   });
 
   it('keeps one team node’s list apart from another’s', () => {
-    const onNode = (nodeId: string, title: string): ChatItem => ({
+    const onNode = (memberId: string, title: string): ChatItem => ({
       ...taskItem(snapshot([row('1', title, 'pending')])),
-      nodeId,
+      memberId,
     });
     const lists = taskListsByThread(
       [onNode('writer', 'draft it'), onNode('reviewer', 'review it')],
       subagentIdOf,
     );
-    expect(lists.find((l) => l.nodeId === 'writer')?.tasks[0]?.title).toBe(
+    expect(lists.find((l) => l.memberId === 'writer')?.tasks[0]?.title).toBe(
       'draft it',
     );
-    expect(lists.find((l) => l.nodeId === 'reviewer')?.tasks[0]?.title).toBe(
+    expect(lists.find((l) => l.memberId === 'reviewer')?.tasks[0]?.title).toBe(
       'review it',
     );
   });
@@ -350,7 +350,7 @@ describe('taskListsByThread', () => {
           ? payload
           : { ...(payload as Record<string, unknown>), callId },
       ),
-      nodeId: 'engineer',
+      memberId: 'engineer',
     });
     const lists = taskListsByThread(
       [

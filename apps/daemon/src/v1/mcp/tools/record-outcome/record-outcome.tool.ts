@@ -21,8 +21,8 @@ export class RecordOutcomeTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.outcomes.canUse(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.outcomes.canUse(runId, memberId);
   }
 
   protected instructions(): string {
@@ -35,13 +35,13 @@ export class RecordOutcomeTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId, caller }: McpCallContext,
+    { runId, memberId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
     const input = readRecordOutcome(args);
     if ('error' in input) {
       return this.invalidArgs(input.error);
     }
-    const outcome = await this.outcomes.record(runId, nodeId, caller, input);
+    const outcome = await this.outcomes.record(runId, memberId, caller, input);
     return outcome.status === 'refused'
       ? this.invalidArgs(outcome.reason)
       : this.text(recordOutcomeResultText(outcome));

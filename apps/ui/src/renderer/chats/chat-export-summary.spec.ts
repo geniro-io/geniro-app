@@ -7,13 +7,13 @@ let seq = 0;
 function row(
   kind: ItemDto['kind'],
   payload: unknown,
-  extra: { nodeId?: string | null; createdAt?: string } = {},
+  extra: { memberId?: string | null; createdAt?: string } = {},
 ): ItemDto {
   seq += 1;
   return {
     id: `i${seq}`,
     runId: 'r1',
-    nodeId: extra.nodeId ?? null,
+    memberId: extra.memberId ?? null,
     seq,
     kind,
     role: null,
@@ -24,20 +24,20 @@ function row(
 
 const turn = (
   usage: Record<string, unknown>,
-  extra: { nodeId?: string | null; callId?: string } = {},
+  extra: { memberId?: string | null; callId?: string } = {},
 ): ItemDto =>
   row(
     'turn_complete',
     { usage, ...(extra.callId ? { callId: extra.callId } : {}) },
-    { nodeId: extra.nodeId },
+    { memberId: extra.memberId },
   );
 
 describe('chatExportSummary — spend per agent', () => {
   it('sums each agent’s own turns, cost and worked time', () => {
     const summary = chatExportSummary([
-      turn({ costUsd: 1.5, durationMs: 2000 }, { nodeId: 'manager' }),
-      turn({ costUsd: 0.5, durationMs: 1000 }, { nodeId: 'manager' }),
-      turn({ costUsd: 9, durationMs: 60000 }, { nodeId: 'engineer' }),
+      turn({ costUsd: 1.5, durationMs: 2000 }, { memberId: 'manager' }),
+      turn({ costUsd: 0.5, durationMs: 1000 }, { memberId: 'manager' }),
+      turn({ costUsd: 9, durationMs: 60000 }, { memberId: 'engineer' }),
     ]);
 
     expect(summary.agents).toEqual([
@@ -139,7 +139,7 @@ describe('chatExportSummary — agent calls', () => {
       turn(
         { costUsd: 4.25, durationMs: 90000 },
         {
-          nodeId: 'engineer',
+          memberId: 'engineer',
           callId: 'call-1',
         },
       ),
@@ -154,8 +154,8 @@ describe('chatExportSummary — agent calls', () => {
       {
         callId: 'call-1',
         title: 'Build the counter fix',
-        callerNodeId: 'manager',
-        calleeNodeId: 'engineer',
+        callerMemberId: 'manager',
+        calleeMemberId: 'engineer',
         durationMs: 150_000,
         costUsd: 4.25,
         estimatedCostUsd: null,
@@ -207,7 +207,7 @@ describe('chatExportSummary — agent calls', () => {
       turn(
         { costUsd: 3, durationMs: 1000 },
         {
-          nodeId: 'engineer',
+          memberId: 'engineer',
           callId: 'call-4',
         },
       ),
@@ -224,7 +224,7 @@ describe('chatExportSummary — errors and compactions', () => {
       row(
         'error',
         { message: "You've hit your session limit · resets 7:30pm" },
-        { nodeId: 'engineer', createdAt: '2026-09-18T07:30:00.000Z' },
+        { memberId: 'engineer', createdAt: '2026-09-18T07:30:00.000Z' },
       ),
     ]);
 

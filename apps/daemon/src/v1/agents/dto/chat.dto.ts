@@ -517,7 +517,7 @@ export class RunStateDto extends createZodDto(RunStateWireSchema) {}
 /** The hits a transcript search found, with why the list may be incomplete. */
 export class ChatSearchResultDto extends createZodDto(ChatSearchResultSchema) {}
 
-/** One whole conversation as a file — settings, transcript, nodes, spend. */
+/** One whole conversation as a file — settings, transcript, members, spend. */
 export class ChatExportDto extends createZodDto(ChatExportWireSchema) {}
 
 /**
@@ -590,15 +590,15 @@ export class ShellOutputQueryDto extends createZodDto(
  * Which agent of the run a context readout is about. Absent means the chat's
  * own agent; a team run names the NODE, since each holds a window of its
  * own — or one agent-to-agent CALL, whose callee holds a window per
- * conversation beside its node's own.
+ * conversation beside its member's own.
  */
 export class ChatMetricsQueryDto extends createZodDto(
   z.object({
-    nodeId: z
+    memberId: z
       .string()
       .min(1)
       .optional()
-      .describe("a team node's id; absent reads a chat's own agent"),
+      .describe("a team member's id; absent reads a chat's own agent"),
     callId: z
       .string()
       .min(1)
@@ -641,7 +641,7 @@ export class ShellKillDto extends createZodDto(ShellKillWireSchema) {}
 
 /**
  * Acknowledgement of a cancel request. Shared with the team routes — the
- * cancel surface is identical for chat and graph runs.
+ * cancel surface is identical for chat and team runs.
  */
 export class CancelledDto extends createZodDto(
   z.object({

@@ -116,7 +116,7 @@ function speaker(item: ItemDto, agent: string): string {
   if (item.role === 'user') {
     return 'You';
   }
-  return item.nodeId ?? agent;
+  return item.memberId ?? agent;
 }
 
 type Renderer = (item: ItemDto, agent: string) => string[] | null;
@@ -380,10 +380,10 @@ function ownerOf(item: ItemDto, who: Attribution): string {
   if (item.role === 'user') {
     // A message typed straight into a running call is filed under its CALLEE,
     // which is who it was addressed to — not who wrote it.
-    const you = item.nodeId === null ? 'You' : `You → ${item.nodeId}`;
+    const you = item.memberId === null ? 'You' : `You → ${item.memberId}`;
     return call === null ? you : `${you} · ${call}`;
   }
-  const parts = [item.nodeId ?? (who.team ? 'run' : who.mainAgent)];
+  const parts = [item.memberId ?? (who.team ? 'run' : who.mainAgent)];
   if (call !== null) {
     parts.push(call);
   }
@@ -517,7 +517,7 @@ function summarySections(summary: ChatExportSummary): string[] {
       ['Call', 'Caller → Callee', 'Why', 'Duration', 'Cost', 'Outcome'],
       summary.calls.map((call) => [
         call.callId,
-        `${cell(call.callerNodeId)} → ${cell(call.calleeNodeId)}`,
+        `${cell(call.callerMemberId)} → ${cell(call.calleeMemberId)}`,
         inlineCell(call.title),
         cell(worked(call.durationMs)),
         cell(money(call.costUsd, call.estimatedCostUsd)),

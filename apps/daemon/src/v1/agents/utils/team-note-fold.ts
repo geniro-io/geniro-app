@@ -35,7 +35,7 @@ export function foldTeamNotes(rows: readonly TeamNoteRow[]): TeamNote[] {
       seq: row.seq,
       kind: payload.kind,
       text: payload.text,
-      nodeId: payload.nodeId,
+      memberId: payload.nodeId,
       conversationId: payload.conversationId,
       callId: payload.callId ?? null,
       createdAt: row.createdAt.toISOString(),

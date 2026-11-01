@@ -9,7 +9,7 @@ import {
 } from './event-to-item';
 
 // The one event→transcript projection BOTH execution paths (chat service and
-// graph executor) persist through — each arm is pinned with a worked-example
+// team executor) persist through — each arm is pinned with a worked-example
 // literal so a payload-field regression (e.g. isError dropped) fails here even
 // though the adapter specs only cover CLI-line→AgentEvent.
 describe('mapEventToItem', () => {

@@ -7,16 +7,16 @@ import { useLatestCallback } from '../components/use-latest-callback';
  * bar reports. The builder has no Save button: an edit persists on its own
  * once the user pauses, so leaving the page can never discard work.
  *
- * Change detection is snapshot-based (graph-doc's `canvasSnapshot`) rather
+ * Change detection is snapshot-based (team-doc's `teamSnapshot`) rather
  * than a dirty flag — the live snapshot IS the effect's dependency, so every
  * keystroke restarts the debounce, and the write that advances `savedSnapshot`
  * settles it. Edits landing DURING a write are not lost: the effect re-runs on
- * the new `savedSnapshot`, finds the canvas dirty again, and re-arms.
+ * the new `savedSnapshot`, finds the team dirty again, and re-arms.
  */
 
 /**
  * What the status bar reports. `failed` also surfaces via the error line.
- * `paused` is DERIVED rather than set: the canvas holds edits and autosave is
+ * `paused` is DERIVED rather than set: the editor holds edits and autosave is
  * not allowed to write them right now (the builder chat's agent is editing the
  * same file) — which read as "Up to date" while it lasted, over edits that were
  * then lost.
@@ -32,11 +32,11 @@ export interface UseAutosaveOptions {
    *  a destructive op (delete) is in flight — a stray write would resurrect
    *  the file the user just deleted. */
   enabled: boolean;
-  /** The live canvas, serialized exactly as a write would store it. */
+  /** The live team, serialized exactly as a write would store it. */
   snapshot: string;
   /** The snapshot as last loaded/written; null until a team is open. */
   savedSnapshot: string | null;
-  /** Persists the canvas. Resolves false when the write failed (the caller
+  /** Persists the team. Resolves false when the write failed (the caller
    *  owns surfacing the error text). */
   save: () => Promise<boolean>;
   delayMs?: number;
@@ -45,12 +45,12 @@ export interface UseAutosaveOptions {
 export interface UseAutosaveResult {
   state: AutosaveState;
   /**
-   * Write pending edits NOW (leaving the builder) and answer whether the canvas
+   * Write pending edits NOW (leaving the builder) and answer whether the team
    * is on disk once it settles. A write already in flight is WAITED FOR, and
-   * the canvas written again if it moved on since — returning while an older
+   * the team written again if it moved on since — returning while an older
    * write is still out would let a leave clear edits nothing had written.
    * `false` means they are NOT saved: the write failed, or autosave is paused
-   * over a dirty canvas.
+   * over a dirty team.
    */
   flush: () => Promise<boolean>;
 }
@@ -113,7 +113,7 @@ export function useAutosave({
     }
     const timer = window.setTimeout(() => {
       // A write is already out: it settles `savedSnapshot`, which re-runs this
-      // effect, which finds the canvas still dirty and re-arms.
+      // effect, which finds the team still dirty and re-arms.
       if (inFlight.current === null) {
         void write(snapshot);
       }

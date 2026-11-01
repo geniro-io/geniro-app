@@ -312,7 +312,7 @@ const CURSOR_HANDSHAKE_PROBE_TTL_MS = 10 * 60_000;
  *   baseline agent→client request, so what the CLI asks about reaches a person
  *   instead of every mode degrading to `--force`.
  * - **Client-supplied MCP servers.** The call-runtime endpoint travels in
- *   `session/new`, so a cursor caller node no longer needs its token planted
+ *   `session/new`, so a cursor caller member no longer needs its token planted
  *   in the run cwd's `.cursor/mcp.json` around the turn — and the token now
  *   rides an HTTP header inside a stdin frame rather than a file on disk.
  * - **A typed event stream.** `session/update` replaces the version-volatile
@@ -341,11 +341,11 @@ export class CursorAcpAdapter extends AgentAdapter {
         displayName: 'Cursor',
         // The binary is `cursor-agent`; a row of chrome has room for one word.
         shortName: 'cursor',
-        summary: 'cursor-agent CLI — honours per-node tool approvals.',
+        summary: 'cursor-agent CLI — honours per-member tool approvals.',
         details: [
-          'Runs one turn per node, headlessly through the cursor-agent CLI.',
-          'Tool approvals are per-node — set the node to auto, ask, or accept edits.',
-          'Model is chosen per node (empty = the CLI default).',
+          'Runs one turn per member, headlessly through the cursor-agent CLI.',
+          'Tool approvals are per member — set the member to auto, ask, or accept edits.',
+          'Model is chosen per member (empty = the CLI default).',
           'Signs itself in — Settings offers the sign-in; no API key to enter.',
         ],
         icon: 'terminal',
@@ -402,7 +402,7 @@ export class CursorAcpAdapter extends AgentAdapter {
       /**
        * False, unlike claude. The question arrives as a JSON-RPC request the
        * agent sends whatever session mode it is in, so an unattended `auto`
-       * node keeps `auto` — where claude has to be moved onto its stdio
+       * member keeps `auto` — where claude has to be moved onto its stdio
        * permission dialogue to keep the tool wired at all.
        */
       questionsCostAskPosture: false,
@@ -772,7 +772,7 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         toggleUnavailableReason: null,
         /**
-         * Null: a team node's switched-off servers reach the turn through a
+         * Null: a team member's switched-off servers reach the turn through a
          * per-turn `CURSOR_DATA_DIR` whose project directory carries its own
          * `mcp-disabled.json` (`utils/cursor-data-dir.utils.ts` holds the
          * measurement and what else that directory must link).
@@ -2785,10 +2785,10 @@ export class CursorAcpAdapter extends AgentAdapter {
     return {
       ...(account === undefined ? this.inheritedEnv() : account),
       // Runs BEFORE `input.env`, deliberately: a caller that names its own
-      // config directory (a node pointed at a profile) must win over the
+      // config directory (a member pointed at a profile) must win over the
       // throwaway one, or the feature would be silently disabled by this.
       ...(profile ? { [CURSOR_CONFIG_DIR_ENV]: profile } : {}),
-      // A team node's switched-off servers — present only on a turn that
+      // A team member's switched-off servers — present only on a turn that
       // switched something off (see `prepareTurn`).
       ...(dataDir ? { [CURSOR_DATA_DIR_ENV]: dataDir } : {}),
       ...input.env,
@@ -2900,9 +2900,9 @@ export class CursorAcpAdapter extends AgentAdapter {
     if (input.configDir?.trim()) {
       this.turnAccounts.set(input, this.profileRunEnv(input.configDir));
     }
-    // A team node's switched-off MCP servers: this CLI reads which servers
+    // A team member's switched-off MCP servers: this CLI reads which servers
     // to skip from its DATA directory's per-workspace `mcp-disabled.json`, so
-    // such a turn gets a throwaway one whose list adds the node's to the user's
+    // such a turn gets a throwaway one whose list adds the member's to the user's
     // own and whose every other entry links into the real store (sign-ins,
     // approvals, transcripts). `utils/cursor-data-dir.utils.ts` carries the
     // measurement. Only when something IS switched off, so every other turn
@@ -2925,7 +2925,7 @@ export class CursorAcpAdapter extends AgentAdapter {
         // The switches are lost for this turn, never the turn: the profile
         // above already exists and the user's own data directory still works.
         this.options.logger?.warn(
-          `cursor: could not prepare the turn's MCP switches (${err instanceof Error ? err.message : String(err)}); the node's switched-off servers stay on`,
+          `cursor: could not prepare the turn's MCP switches (${err instanceof Error ? err.message : String(err)}); the member's switched-off servers stay on`,
         );
       }
     }

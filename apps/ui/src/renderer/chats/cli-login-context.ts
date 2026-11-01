@@ -27,6 +27,6 @@ import { createContext } from 'react';
  * no longer in the graph). The row then renders as an ordinary error rather
  * than offering a button that would sign the wrong account in.
  */
-export type SignInResolver = (nodeId: string | null) => (() => void) | null;
+export type SignInResolver = (memberId: string | null) => (() => void) | null;
 
 export const CliLoginContext = createContext<SignInResolver | null>(null);

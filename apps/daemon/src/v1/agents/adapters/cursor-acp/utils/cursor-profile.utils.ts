@@ -155,7 +155,7 @@ export interface CursorProfileSeed {
 export function seedCursorProfile(seed: CursorProfileSeed): string {
   mkdirSync(seed.baseDir, { recursive: true });
   // `mkdtemp` rather than a name built from the run: two turns of one run can be
-  // in flight together under graph fan-out, and they must not share a profile —
+  // in flight together under team fan-out, and they must not share a profile —
   // that is the same race, moved one level in.
   const dir = mkdtempSync(join(seed.baseDir, CURSOR_PROFILE_DIR_PREFIX));
   const configPath = join(dir, CURSOR_SEEDED_CONFIG_FILE);

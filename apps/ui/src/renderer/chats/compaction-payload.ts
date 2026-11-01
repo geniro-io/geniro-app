@@ -190,7 +190,7 @@ export function compactionOnlyTurnEnds(
   let compactions = 0;
   let work = 0;
   for (const item of items) {
-    if (item.nodeId !== null) {
+    if (item.memberId !== null) {
       continue;
     }
     if (TERMINAL_KINDS.has(item.kind)) {

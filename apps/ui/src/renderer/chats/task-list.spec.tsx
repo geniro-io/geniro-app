@@ -47,7 +47,7 @@ function card(overrides: Partial<TaskListEntry> = {}): TaskListEntry {
     id: 'c1',
     createdAt: '2026-08-14T10:00:00.000Z',
     seq: 5,
-    nodeId: null,
+    memberId: null,
     parentToolUseId: null,
     callId: null,
     tasks: rows,

@@ -195,7 +195,7 @@ type TimelineSpineRow = {
   seq: number;
   kind: string;
   role: string | null;
-  nodeId: string | null;
+  memberId: string | null;
   createdAt: Date;
 };
 
@@ -211,12 +211,12 @@ type SegmentDraft = {
 };
 
 /**
- * A message the user sent to the THREAD. One carrying a node id was sent
+ * A message the user sent to the THREAD. One carrying a member id was sent
  * straight to a team callee mid-call — it lives inside that call's block,
  * so it is neither a marker of its own nor an agent message in the stretch.
  */
 function isUserMessage(row: TimelineSpineRow): boolean {
-  return row.kind === 'message' && row.role === 'user' && row.nodeId === null;
+  return row.kind === 'message' && row.role === 'user' && row.memberId === null;
 }
 
 /**

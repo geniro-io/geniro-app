@@ -196,7 +196,7 @@ describe('persistItemAndEmit', () => {
     const { deps, settled } = fakeDeps();
     const row = {
       runId: 'run-1',
-      nodeId: null,
+      memberId: null,
       seq: 7,
       kind: 'message' as const,
       role: 'assistant',
@@ -219,7 +219,7 @@ describe('persistItemAndEmit', () => {
 
     await persistItemAndEmit(deps, em, {
       runId: 'run-1',
-      nodeId: null,
+      memberId: null,
       seq: 1,
       kind: 'tool_call',
       role: 'assistant',
@@ -238,7 +238,7 @@ describe('persistItemAndEmit', () => {
 
     await persistItemAndEmit(deps, em, {
       runId: 'run-1',
-      nodeId: null,
+      memberId: null,
       seq: 2,
       kind: 'turn_complete',
       role: null,
@@ -253,7 +253,7 @@ describe('persistItemAndEmit', () => {
 
     await persistItemAndEmit(deps, em, {
       runId: 'run-1',
-      nodeId: 'engineer',
+      memberId: 'engineer',
       seq: 4,
       kind: 'tool_call',
       role: 'assistant',
@@ -269,7 +269,7 @@ describe('persistItemAndEmit', () => {
 
     await persistItemAndEmit(deps, em, {
       runId: 'run-1',
-      nodeId: 'manager',
+      memberId: 'manager',
       seq: 5,
       kind: 'message',
       role: 'assistant',
@@ -286,7 +286,7 @@ describe('persistItemAndEmit', () => {
     // the chat and team paths cannot differ.
     const message = (payload: Record<string, unknown>) => ({
       runId: 'run-1',
-      nodeId: 'manager',
+      memberId: 'manager',
       seq: 3,
       kind: 'message' as const,
       role: 'assistant',

@@ -66,7 +66,7 @@ describe('resolveRunTarget', () => {
       { agentKind: 'claude', model: 'opus', effort: 'xhigh' },
     ]);
 
-    // Not merely "team wins": a graph's nodes name their own model and
+    // Not merely "team wins": a team's members name their own model and
     // effort in the YAML, so carrying the project's down would be a run-level
     // answer with nothing to apply it to.
     expect(target).toEqual({ kind: 'team', teamSlug: 'dev-team' });
@@ -74,8 +74,8 @@ describe('resolveRunTarget', () => {
 
   it('REFUSES a team the autopilot would run, naming that problem', () => {
     // The approval forcing below reaches the agent arm only. A team carries
-    // `approval` per NODE, so there is no single field to force — an unattended
-    // run of one parks on the first node that asks, holding its slot and its
+    // `approval` per MEMBER, so there is no single field to force — an unattended
+    // run of one parks on the first member that asks, holding its slot and its
     // worktree, and the breaker never trips because parked is not failed.
     expect(
       resolveRunTarget(
@@ -86,8 +86,7 @@ describe('resolveRunTarget', () => {
   });
 
   it('lets the AUTOPILOT start a team the library says can run unattended', () => {
-    // REPORTED as "the automatic taking of tasks doesn't work" against a board
-    // pointed at a team whose every agent node was already `auto`.
+    // A board pointed at a team whose every member is already `auto`.
     const asked: string[] = [];
     expect(
       resolveRunTarget(

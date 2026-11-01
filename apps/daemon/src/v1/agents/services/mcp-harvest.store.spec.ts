@@ -66,7 +66,7 @@ describe('McpHarvestStore', () => {
     expect(store.get('claude', '/proj', null)).toEqual([server('codegraph')]);
     expect(store.get('claude', '/other', null)).toBeNull();
     // One folder is routinely used by both CLIs, and neither loads the other's
-    // servers — keying loosely would serve claude's set for a cursor node.
+    // servers — keying loosely would serve claude's set for a cursor member.
     expect(store.get('cursor-agent', '/proj', null)).toBeNull();
   });
 
@@ -109,7 +109,7 @@ describe('McpHarvestStore', () => {
   });
 
   it('keys by plugin directory, because a plugin ships its own servers', () => {
-    // The failure this prevents: two agent nodes on one CLI in one folder,
+    // The failure this prevents: two team members on one CLI in one folder,
     // pointed at different plugin directories, genuinely load different sets.
     // Filing both under the folder alone serves each the other's answer.
     const store = new McpHarvestStore({ file: cacheFile() });

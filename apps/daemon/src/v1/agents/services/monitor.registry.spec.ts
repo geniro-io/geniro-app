@@ -15,7 +15,7 @@ import { ProcessRegistry } from './process-registry';
 
 const owner: MonitorOwner = {
   runId: 'run-1',
-  nodeId: 'agent',
+  memberId: 'agent',
   caller: 'agent',
   conversationId: null,
   callId: null,

@@ -3,8 +3,8 @@ import { effectiveAccountKey } from '../../agents/utils/plan-limits-ledger';
 import type { AgentKind } from '../../runs/runs.types';
 import type {
   PoolStanding,
-  TeamAgentNode,
   TeamAgentPoolMember,
+  TeamMember,
 } from '../teams.types';
 import {
   poolAttemptOrder,
@@ -41,8 +41,8 @@ export interface PoolAttemptResult {
  * actually runs on — the folder's pin, else its profile, canonicalized
  * (`effectiveAccountKey`, the plan-limits ledger's own key) — and its model,
  * since a plan can cap one model while the account still serves the others;
- * every run sees it. Any other failure is filed only for the run and node that
- * met it.
+ * every run sees it. Any other failure is filed only for the run and team member
+ * that met it.
  *
  * A member is PROVEN available (`proven`) only on evidence: its account
  * answered since the daemon started, or its limit ran out at the instant its
@@ -59,8 +59,8 @@ export class PoolCooldowns {
   private readonly limits = new Map<string, LimitRecord>();
   /**
    * `unavailable` records, by the site that met them and the account: an
-   * ordinary failure may be that node's own (its prompt, its MCP config), so it
-   * reorders only the node it happened to.
+   * ordinary failure may be that team member's own (its prompt, its MCP config), so
+   * it reorders only the team member it happened to.
    */
   private readonly failures = new Map<string, number>();
   /** Accounts that answered, or whose named reset passed, since their last limit. */
@@ -101,12 +101,12 @@ export class PoolCooldowns {
   }
 
   /**
-   * Every member of `node`'s pool read at one instant, and the order a new
+   * Every pool member of `node` read at one instant, and the order a new
    * conversation tries them in (`poolAttemptOrder`). Read once, since a window
    * reopening between two reads would leave a member out of the order.
    */
   order(
-    node: TeamAgentNode,
+    node: TeamMember,
     site: PoolSite,
   ): {
     standings: (PoolStanding | null)[];
@@ -214,13 +214,13 @@ interface LimitRecord {
   exact: boolean;
 }
 
-/** Where an attempt ran: the run's folder (for its account pin) and the node. */
+/** Where an attempt ran: the run's folder (for its account pin) and the team member. */
 export interface PoolSite {
   cwd: string | null;
   runId: string;
-  nodeId: string;
+  memberId: string;
 }
 
 function siteKey(site: PoolSite, account: string): string {
-  return [site.runId, site.nodeId, account].join('\u0000');
+  return [site.runId, site.memberId, account].join('\u0000');
 }

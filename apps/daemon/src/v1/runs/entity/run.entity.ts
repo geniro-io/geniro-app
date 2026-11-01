@@ -12,13 +12,13 @@ import type {
 import { PAYLOAD_REFS_VERSION } from '../../agents/utils/payload-refs';
 import type { AgentKind, RunStatus } from '../runs.types';
 
-/** One execution of a team (graph) or a single-agent chat. */
+/** One execution of a team or a single-agent chat. */
 @Entity({ tableName: 'runs' })
 export class Run extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   id: string = randomUUID();
 
-  /** Team (graph) id this run executed; null for an ad-hoc single agent. */
+  /** Team id this run executed; null for an ad-hoc single agent. */
   @Property({ type: 'string', nullable: true })
   teamId: string | null = null;
 
@@ -43,7 +43,7 @@ export class Run extends TimestampsEntity {
    * fixed point "what has changed since this conversation started" is measured
    * against.
    *
-   * Null for a graph run (whose `cwd` is null for the reason above), for a
+   * Null for a team run (whose `cwd` is null for the reason above), for a
    * folder that is not a repository, for a checkout with no commits yet, and
    * for every row predating the stamp. Read by the ELECTRON process at
    * creation and sent, like `configDir` and `customInstructions`: the daemon
@@ -62,14 +62,14 @@ export class Run extends TimestampsEntity {
    *
    * Beside the commit because the diff needs both to be honest: measured from
    * `startSha` alone, work the user had in flight before the chat opened is
-   * presented as the agent's. Null means never measured — a graph run, a
+   * presented as the agent's. Null means never measured — a team run, a
    * non-repository, a row predating the stamp — and is NOT read as clean, since
    * a false there would make exactly the claim that cannot be checked.
    */
   @Property({ type: 'boolean', nullable: true })
   startDirty: boolean | null = null;
 
-  /** Which CLI agent drives a single-agent chat run; null for graph runs. */
+  /** Which CLI agent drives a single-agent chat run; null for team runs. */
   @Property({ type: 'string', nullable: true })
   agentKind: AgentKind | null = null;
 
@@ -78,7 +78,7 @@ export class Run extends TimestampsEntity {
   model: string | null = null;
 
   /**
-   * Chat approval mode for a single-agent run; null for graph runs (their
+   * Chat approval mode for a single-agent run; null for team runs (their
    * modes live in the team YAML).
    */
   @Property({ type: 'string', nullable: true })
@@ -281,7 +281,7 @@ export class Run extends TimestampsEntity {
    * Plugin directory a single-agent run's turns load, CANONICAL (the path
    * `resolveValidConfigDir` returned when the chat was created); null = none,
    * which is every row predating the chip and every CLI with no plugin
-   * mechanism. A graph run's plugin directories live per node in the team
+   * mechanism. A team run's plugin directories live per member in the team
    * YAML instead.
    *
    * Part of the run's IDENTITY, like `cwd`, rather than a per-turn setting: it
@@ -857,7 +857,7 @@ export class Run extends TimestampsEntity {
 
   /**
    * {@link polledCostCents} split by local calendar day and model — JSON,
-   * `"YYYY-MM-DD|model"` → cents, summed over the run's nodes' polled ledgers
+   * `"YYYY-MM-DD|model"` → cents, summed over the run's members' polled ledgers
    * (`spendBucket` in `utils/polled-spend-ledger.ts`). What lets the Stats page
    * place a polled bill on the days it was spent and under the models that
    * served it, where one figure per run filed the whole bill under the run's

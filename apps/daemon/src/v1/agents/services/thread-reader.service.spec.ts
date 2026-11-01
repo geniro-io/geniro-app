@@ -20,6 +20,7 @@ import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import type { ItemKind } from '../../runs/runs.types';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { TeamSchema } from '../../teams/teams.types';
 import { teamVersionOf } from '../../teams/utils/team-version';
 import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
@@ -166,7 +167,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     const note = {
       kind: 'fact',
       text: 'CI is ubuntu',
-      nodeId: 'a',
+      memberId: 'a',
       conversationId: null,
     };
     await insert(0, 'message', { text: 'go' }, 0);
@@ -362,8 +363,8 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
   it('states how long the callee worked inside each call span, through the snapshot', async () => {
     const started = (callId: string): Record<string, unknown> => ({
       callId,
-      callerNodeId: 'lead',
-      calleeNodeId: 'dev',
+      callerMemberId: 'lead',
+      calleeMemberId: 'dev',
       mode: 'sync',
     });
     await insert(1, 'call_started', started('call-1'), 0);
@@ -388,7 +389,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       { callId: 'call-2', usage: { durationMs: 9_000 } },
       12,
     );
-    await wallTurns.record('source', [{ seq: 5, nodeId: 'dev', ms: 2_500 }]);
+    await wallTurns.record('source', [{ seq: 5, memberId: 'dev', ms: 2_500 }]);
 
     const spans = (
       await reader.read(
@@ -685,7 +686,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       kind: ItemKind,
       payload: unknown,
       seconds: number,
-      nodeId: string,
+      memberId: string,
     ): Promise<void> {
       const fork = orm.em.fork();
       const at = new Date(T0 + seconds * 1000);
@@ -693,7 +694,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         runId,
         seq,
         kind,
-        nodeId,
+        memberId,
         payload: JSON.stringify(payload),
         createdAt: at,
         updatedAt: at,
@@ -784,18 +785,11 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       );
     });
 
-    describe('graph versions', () => {
-      const first = {
+    describe('team versions', () => {
+      const first = teamOf([member('dev')], { name: 'Team' });
+      const second = teamOf([member('dev', { model: 'opus' })], {
         name: 'Team',
-        nodes: [
-          { id: 'dev', kind: 'agent', agent: 'claude', approval: 'auto' },
-        ],
-        edges: [],
-      };
-      const second = {
-        ...first,
-        nodes: [{ ...first.nodes[0]!, model: 'opus' }],
-      };
+      });
       const V1 = teamVersionOf(TeamSchema.parse(first));
       const V2 = teamVersionOf(TeamSchema.parse(second));
 
@@ -808,7 +802,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         await fork.flush();
       });
 
-      it("names each run's graph version by its number and compares the runs version by version", async () => {
+      it("names each run's team version by its number and compares the runs version by version", async () => {
         const asked: string[] = [];
 
         const answer = await reader.read(scope, { view: 'runs' }, (slug) => {
@@ -902,7 +896,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       ]);
     });
 
-    it("compares the runs and each node's models, every turn up to each run's own snapshot", async () => {
+    it("compares the runs and each member's models, every turn up to each run's own snapshot", async () => {
       const answer = await reader.read(scope, { view: 'runs' });
 
       expect(answer.team).toBe('team');
@@ -969,13 +963,13 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
 
     // cursor reports no timing: its working time is the wall clock's ledger,
     // and its completed turn is drawn from its lane's previous row.
-    it("times a node its CLI did not time by the wall clock, up to the run's snapshot", async () => {
+    it("times a member its CLI did not time by the wall clock, up to the run's snapshot", async () => {
       await row('wf-old', 2, 'message', { text: 'checking' }, 100, 'qa');
       await row('wf-old', 3, 'turn_complete', { usage: {} }, 100.002, 'qa');
       await wallTurns.record('wf-old', [
-        { seq: 3, nodeId: 'qa', ms: 90_000 },
+        { seq: 3, memberId: 'qa', ms: 90_000 },
         // Past the run's snapshot.
-        { seq: 5, nodeId: 'qa', ms: 40_000 },
+        { seq: 5, memberId: 'qa', ms: 40_000 },
       ]);
       const wider = {
         ...scope,

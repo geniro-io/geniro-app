@@ -17,7 +17,7 @@ function item(seq: number, text: string): ItemWire {
   return {
     id: `i-${seq}`,
     runId: 'r1',
-    nodeId: null,
+    memberId: null,
     seq,
     kind: 'message',
     role: 'assistant',
@@ -105,7 +105,7 @@ describe('DebugLogService — the transcript channel', () => {
 
     bus.publishDelta({
       runId: 'r1',
-      nodeId: null,
+      memberId: null,
       text: 'a very long streaming tail',
       thinkingTokens: null,
       thinkingSince: null,

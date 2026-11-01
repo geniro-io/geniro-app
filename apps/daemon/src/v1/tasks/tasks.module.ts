@@ -37,10 +37,10 @@ import { TasksService } from './services/tasks.service';
  * import the tasks module back — which is the same direction `TeamsModule`
  * already takes to the same place, and is what keeps the graph acyclic.
  *
- * And `TeamsModule`, for `GraphExecutorService`, on exactly the same terms: a
+ * And `TeamsModule`, for `TeamExecutorService`, on exactly the same terms: a
  * card may name a TEAM instead of an agent, and the second engine is
  * borrowed rather than rebuilt. Acyclic for the same reason — `TeamsModule`
- * imports `AgentsModule` and nothing else here, so tasks → graphs → agents runs
+ * imports `AgentsModule` and nothing else here, so tasks → teams → agents runs
  * one way throughout.
  *
  * `TaskQueueController` / `TaskQueueService` are the reason both imports are

@@ -85,7 +85,7 @@ interface OpenPoll {
  * a short client-initiated conversation that has to happen BEFORE the turn's
  * prompt is written, and which therefore holds state (the poll in flight) that
  * must not live on the adapter: one adapter instance drives N concurrent turns
- * under graph fan-out.
+ * under team fan-out.
  *
  * The gate's reason for existing, the probe evidence behind it and every
  * number it uses are recorded at `CLAUDE_MCP_STATUS_SUBTYPE` in
@@ -104,7 +104,7 @@ export class ClaudeTurnDriver implements TurnDriver {
    * or null when the freshest reading is a request's own.
    *
    * Per-turn state, which is why it is here and not on the adapter: one adapter
-   * instance drives N concurrent turns under graph fan-out.
+   * instance drives N concurrent turns under team fan-out.
    *
    * It exists because a compaction leaves BOTH readings of the window wrong in
    * the same direction. The live one is the prompt of the last request, which
@@ -621,7 +621,7 @@ export class ClaudeTurnDriver implements TurnDriver {
    *
    * Per PROCESS, which this driver is (see {@link io}), and deliberately not
    * the adapter's `ClaudeSessionCostLedger`: that one is keyed by the CLI's
-   * session id, and a team node's calls resume ONE session id from several
+   * session id, and a team member's calls resume ONE session id from several
    * processes, so its last-seen total can be another process's. This process's
    * own accumulator, read off its own lines, cannot be.
    *

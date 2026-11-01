@@ -1202,7 +1202,7 @@ function askersOf(column: string | null): ShareAsker[] {
     const value = entry as Partial<ShareAsker> | null;
     const target = askerTargetOf(value?.target);
     return typeof value?.runId === 'string' &&
-      typeof value.nodeId === 'string' &&
+      typeof value.memberId === 'string' &&
       typeof value.caller === 'string' &&
       (value.conversationId === null ||
         typeof value.conversationId === 'string') &&
@@ -1210,7 +1210,7 @@ function askersOf(column: string | null): ShareAsker[] {
       ? [
           {
             runId: value.runId,
-            nodeId: value.nodeId,
+            memberId: value.memberId,
             caller: value.caller,
             conversationId: value.conversationId,
             target,

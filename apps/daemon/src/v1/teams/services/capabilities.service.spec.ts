@@ -448,7 +448,7 @@ describe('CapabilitiesService — the interactive terminal', () => {
   it('does not mistake "no session yet" for "no terminal support"', () => {
     // `handoffTarget` refuses for two different reasons and only one is
     // permanent. The capability answers the permanent question directly
-    // (`handoffUnavailableReason`), which is what keeps a claude node that has
+    // (`handoffUnavailableReason`), which is what keeps a claude member that has
     // simply not run yet from being reported as having no interactive mirror at
     // all — that would hide the control forever. It used to fabricate a session
     // id to reach the same verdict through `handoffTarget`.

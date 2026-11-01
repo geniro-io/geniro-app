@@ -30,7 +30,7 @@ export function StagesSection({
   agentName,
 }: {
   stages: RunStages;
-  agentName: (nodeId: string) => string;
+  agentName: (memberId: string) => string;
 }): React.JSX.Element {
   const { definitions, archived, onMove } = stages;
   // The run_status announce after a move carries the same rev; the newer one wins.
@@ -133,41 +133,44 @@ function CurrentStageDetails({
   onSkip,
 }: {
   definition: TeamStage | null;
-  agentName: (nodeId: string) => string;
+  agentName: (memberId: string) => string;
   onComplete?: () => void;
   onSkip?: () => void;
 }): React.JSX.Element | null {
-  const instructions = definition?.instructions?.trim() ?? '';
-  const doneWhen = definition?.doneWhen.trim() ?? '';
-  const owner = definition?.ownerHint;
+  const howToWork = definition?.howToWork?.trim() ?? '';
+  const goal = definition?.goal.trim() ?? '';
+  const responsible = definition?.responsible ?? [];
   const actions = onComplete !== undefined || onSkip !== undefined;
-  if (
-    instructions === '' &&
-    doneWhen === '' &&
-    owner === undefined &&
-    !actions
-  ) {
+  if (howToWork === '' && goal === '' && responsible.length === 0 && !actions) {
     return null;
   }
   return (
     <div className="flex flex-col gap-1.5 pt-1 pb-0.5">
-      {instructions === '' ? null : (
+      {howToWork === '' ? null : (
         <p
-          data-slot="stage-instructions"
+          data-slot="stage-how-to-work"
           className="m-0 break-words whitespace-pre-wrap text-muted-foreground">
-          {instructions}
+          {howToWork}
         </p>
       )}
-      {doneWhen === '' ? null : (
-        <p data-slot="stage-done-when" className="m-0 break-words">
-          <span className="font-medium text-foreground">Done when</span>{' '}
-          <span className="text-muted-foreground">{doneWhen}</span>
+      {goal === '' ? null : (
+        <p data-slot="stage-goal" className="m-0 break-words">
+          <span className="font-medium text-foreground">Goal</span>{' '}
+          <span className="text-muted-foreground">{goal}</span>
         </p>
       )}
-      {owner === undefined ? null : (
-        <p data-slot="stage-owner" className="m-0 text-muted-foreground">
-          Usually done by{' '}
-          <span className="text-foreground">{agentName(owner)}</span>
+      {responsible.length === 0 ? null : (
+        <p data-slot="stage-responsible" className="m-0 text-muted-foreground">
+          Responsible{' '}
+          <span className="text-foreground">
+            {responsible
+              .map((id, index) =>
+                index === 0 && responsible.length > 1
+                  ? `${agentName(id)} (leads)`
+                  : agentName(id),
+              )
+              .join(', ')}
+          </span>
         </p>
       )}
       {actions ? (

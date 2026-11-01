@@ -23,6 +23,7 @@ import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { ChatService } from '../../agents/services/chat.service';
+import { member, teamOf } from '../__tests__/team-builders';
 import type { TeamChangeLogDao } from '../dao/team-change-log.dao';
 import type { Team, TeamChangeLogRecord, TeamProposal } from '../teams.types';
 import {
@@ -32,30 +33,32 @@ import {
 import { TEAM_BACKUP_DIR } from '../utils/team-backup';
 import type { TeamEdit } from '../utils/team-edits';
 import { teamVersionOf } from '../utils/team-version';
-import type { GraphExecutorService } from './graph-executor.service';
 import { TeamChangeLogService } from './team-change-log.service';
+import type { TeamExecutorService } from './team-executor.service';
 import { TeamProposalService } from './team-proposal.service';
 import { TeamStoreService } from './team-store.service';
 
-const TEAM: Team = {
-  name: 'Review Team',
-  nodes: [
-    { id: 'start', kind: 'trigger', trigger: 'manual' },
-    { id: 'coder', kind: 'agent', agent: 'claude', approval: 'ask' },
-    { id: 'reviewer', kind: 'agent', agent: 'claude', approval: 'auto' },
-  ],
-  edges: [
-    { from: 'start', to: 'coder', kind: 'data' },
-    { from: 'coder', to: 'reviewer', kind: 'data' },
-  ],
-};
+const TEAM: Team = teamOf(
+  [member('coder', { approval: 'ask' }), member('reviewer')],
+  { name: 'Review Team' },
+);
 
 const FASTER: Team = {
   ...TEAM,
-  nodes: TEAM.nodes.map((node) =>
-    node.id === 'reviewer' ? { ...node, model: 'sonnet' } : node,
+  members: TEAM.members.map((m) =>
+    m.id === 'reviewer' ? { ...m, model: 'sonnet' } : m,
   ),
 };
+
+/** `team` with the member `id` changed by `overrides`. */
+const withMember = (
+  team: Team,
+  id: string,
+  overrides: Partial<Team['members'][number]>,
+): Team => ({
+  ...team,
+  members: team.members.map((m) => (m.id === id ? { ...m, ...overrides } : m)),
+});
 
 /** `Run.pendingTeamProposal` per run, and every write to it in order. */
 class FakeRuns {
@@ -119,7 +122,7 @@ function fakeChats(approvals: ApprovalRegistry) {
   ): void =>
     approvals.track({
       runId,
-      nodeId: 'agent',
+      memberId: 'agent',
       requestId,
       toolName: card.toolName,
       input: card.input,
@@ -186,7 +189,7 @@ describe('TeamProposalService', () => {
     logged = [];
     service = new TeamProposalService(
       store,
-      { assertRunnable } as unknown as GraphExecutorService,
+      { assertRunnable } as unknown as TeamExecutorService,
       { fork: () => ({}) } as unknown as EntityManager,
       runs as unknown as RunDao,
       {
@@ -242,13 +245,13 @@ describe('TeamProposalService', () => {
     return prepared.proposal;
   }
 
-  it('refuses a proposal whose agent node omits approval, rather than defaulting it to auto', async () => {
-    const { approval: _omitted, ...bare } = TEAM.nodes[2] as Extract<
-      Team['nodes'][number],
-      { kind: 'agent' }
-    >;
+  it('refuses a proposal whose member omits approval, rather than defaulting it to auto', async () => {
+    const { approval: _omitted, ...bare } = TEAM.members[1]!;
     const prepared = await service.prepare({
-      team: { ...TEAM, nodes: [TEAM.nodes[0], TEAM.nodes[1], bare] },
+      team: {
+        ...TEAM,
+        members: [TEAM.members[0]!, bare as Team['members'][number]],
+      },
     });
 
     expect(prepared).toMatchObject({ ok: false, code: 'INVALID_TEAM' });
@@ -258,13 +261,16 @@ describe('TeamProposalService', () => {
 
   it('refuses what a run start would refuse, with the check’s own code', async () => {
     assertRunnable.mockRejectedValueOnce(
-      new BadRequestException('GRAPH_NO_TRIGGER', 'add a trigger'),
+      new BadRequestException(
+        'TEAM_MODE_UNAVAILABLE',
+        'relay is not available',
+      ),
     );
 
     await expect(service.prepare({ team: TEAM })).resolves.toEqual({
       ok: false,
-      code: 'GRAPH_NO_TRIGGER',
-      message: 'add a trigger',
+      code: 'TEAM_MODE_UNAVAILABLE',
+      message: 'relay is not available',
     });
     expect(assertRunnable).toHaveBeenCalledWith(TEAM);
     await expect(readdir(dir)).resolves.toEqual([]);
@@ -302,7 +308,7 @@ describe('TeamProposalService', () => {
       mode: 'replace',
       slug: 'team',
       replacesName: 'Review Team',
-      diff: { identical: false, changedNodes: [{ id: 'reviewer' }] },
+      diff: { identical: false, changedMembers: [{ id: 'reviewer' }] },
     });
 
     const saved = await service.apply(replacement);
@@ -328,44 +334,29 @@ describe('TeamProposalService', () => {
   });
 
   it('keeps a profile the agent saw only as a placeholder', async () => {
-    const withProfile: Team = {
-      ...TEAM,
-      nodes: TEAM.nodes.map((node) =>
-        node.id === 'coder'
-          ? { ...node, configDir: '/Users/me/.claude-work' }
-          : node,
-      ),
-    };
+    const withProfile = withMember(TEAM, 'coder', {
+      configDir: '/Users/me/.claude-work',
+    });
     await store.create(withProfile, 'team');
     const seen = redactConfigDirs(withProfile);
-    const edited = {
-      ...seen,
-      nodes: seen.nodes.map((node) =>
-        node.id === 'reviewer' ? { ...node, model: 'sonnet' } : node,
-      ),
-    };
+    const edited = withMember(seen, 'reviewer', { model: 'sonnet' });
 
     const replacement = await proposed({ team: edited, replaces: 'team' });
     await service.apply(replacement);
 
-    const saved = (await store.get('team')).team.nodes.find(
-      (node) => node.id === 'coder',
+    const saved = (await store.get('team')).team.members.find(
+      (m) => m.id === 'coder',
     );
     expect(saved).toMatchObject({ configDir: '/Users/me/.claude-work' });
     expect(replacement).toMatchObject({
-      diff: { changedNodes: [{ id: 'reviewer' }] },
+      diff: { changedMembers: [{ id: 'reviewer' }] },
     });
   });
 
   it('never hands back a profile path it put back, nor a file line, in a refusal', async () => {
-    const withProfile: Team = {
-      ...TEAM,
-      nodes: TEAM.nodes.map((node) =>
-        node.id === 'coder'
-          ? { ...node, configDir: '/Users/me/.claude-work' }
-          : node,
-      ),
-    };
+    const withProfile = withMember(TEAM, 'coder', {
+      configDir: '/Users/me/.claude-work',
+    });
     await store.create(withProfile, 'team');
     assertRunnable.mockRejectedValueOnce(
       new BadRequestException(
@@ -385,7 +376,7 @@ describe('TeamProposalService', () => {
 
     await writeFile(
       join(dir, 'team.team.yaml'),
-      'name: team\nnodes:\n  - id: coder\n    configDir: /Users/me/.claude-work: x\n',
+      'name: team\nmembers:\n  - id: coder\n    configDir: /Users/me/.claude-work: x\n',
     );
     const broken = await service.prepare({ team: TEAM, replaces: 'team' });
     expect(broken).toMatchObject({ ok: false, code: 'TEAM_YAML_INVALID' });
@@ -395,14 +386,9 @@ describe('TeamProposalService', () => {
   it('refuses a profile token it cannot place, rather than guessing or dropping it', async () => {
     await expect(
       service.prepare({
-        team: {
-          ...TEAM,
-          nodes: TEAM.nodes.map((node) =>
-            node.id === 'coder'
-              ? { ...node, configDir: configDirToken('/Users/me/.claude-work') }
-              : node,
-          ),
-        },
+        team: withMember(TEAM, 'coder', {
+          configDir: configDirToken('/Users/me/.claude-work'),
+        }),
       }),
     ).resolves.toMatchObject({ ok: false, code: 'CONFIG_DIR_UNKNOWN' });
     expect(assertRunnable).not.toHaveBeenCalled();
@@ -437,7 +423,7 @@ describe('TeamProposalService', () => {
   });
 
   describe("a builder chat's change", () => {
-    const TO_SONNET = [{ path: 'nodes/reviewer/model', value: 'sonnet' }];
+    const TO_SONNET = [{ path: 'members/reviewer/model', value: 'sonnet' }];
 
     it('applies the edits to the file as it stands and cards what, why and the difference', async () => {
       const { hash } = await store.create(TEAM, 'team');
@@ -460,7 +446,7 @@ describe('TeamProposalService', () => {
           replacesName: 'Review Team',
           diff: expect.objectContaining({
             identical: false,
-            changedNodes: [expect.objectContaining({ id: 'reviewer' })],
+            changedMembers: [expect.objectContaining({ id: 'reviewer' })],
           }),
           baseHash: hash,
           team: FASTER,
@@ -469,31 +455,21 @@ describe('TeamProposalService', () => {
       expect((await store.get('team')).team).toEqual(TEAM);
     });
 
-    it('holds a change to the graph rules, not to whether it could run yet', async () => {
-      // A team is built up over several changes: an agent nobody feeds
-      // yet would fail a run start, and is still a change worth carding.
+    it('holds a change to the team rules, not to whether it could run yet', async () => {
+      // A team is built up over several changes: a team in relay mode
+      // would fail a run start, and is still a change worth carding.
       await store.create(TEAM, 'team');
 
       const prepared = await service.prepareChange({
         slug: 'team',
-        edits: [
-          {
-            path: 'nodes/-',
-            value: {
-              id: 'tester',
-              kind: 'agent',
-              agent: 'codex',
-              approval: 'ask',
-            },
-          },
-        ],
+        edits: [{ path: 'mode', value: 'relay' }],
       });
 
       expect(prepared.ok).toBe(true);
       expect(assertRunnable).not.toHaveBeenCalled();
     });
 
-    it('refuses edits that do not apply, break the graph, or change nothing', async () => {
+    it('refuses edits that do not apply, break the team rules, or change nothing', async () => {
       await store.create(TEAM, 'team');
       const refusal = async (edits: TeamEdit[]) => {
         const prepared = await service.prepareChange({ slug: 'team', edits });
@@ -504,15 +480,10 @@ describe('TeamProposalService', () => {
         'INVALID_EDIT',
       );
       expect(
-        await refusal([
-          {
-            path: 'edges/-',
-            value: { from: 'coder', to: 'ghost', kind: 'data' },
-          },
-        ]),
+        await refusal([{ path: 'triggers/0/member', value: 'ghost' }]),
       ).toBe('INVALID_TEAM');
       expect(
-        await refusal([{ path: 'nodes/reviewer/approval', value: 'auto' }]),
+        await refusal([{ path: 'members/reviewer/approval', value: 'auto' }]),
       ).toBe('NOTHING_TO_CHANGE');
     });
 
@@ -523,7 +494,7 @@ describe('TeamProposalService', () => {
 
       await writeFile(
         store.locate('team').path,
-        'name: Team\nnodes: [\n  configDir: /Users/me/.claude-work\n',
+        'name: Team\nmembers: [\n  configDir: /Users/me/.claude-work\n',
       );
       const unreadable = await service.prepareChange({
         slug: 'team',
@@ -539,21 +510,16 @@ describe('TeamProposalService', () => {
     });
 
     it('puts a profile written back as its token back as its path', async () => {
-      const withProfile: Team = {
-        ...TEAM,
-        nodes: TEAM.nodes.map((node) =>
-          node.id === 'coder'
-            ? { ...node, configDir: '/Users/me/.claude-work' }
-            : node,
-        ),
-      };
+      const withProfile = withMember(TEAM, 'coder', {
+        configDir: '/Users/me/.claude-work',
+      });
       await store.create(withProfile, 'team');
       const token = configDirToken('/Users/me/.claude-work');
 
       const kept = await service.prepareChange({
         slug: 'team',
         edits: [
-          { path: 'nodes/reviewer/configDir', value: token },
+          { path: 'members/reviewer/configDir', value: token },
           ...TO_SONNET,
         ],
       });
@@ -561,13 +527,13 @@ describe('TeamProposalService', () => {
         slug: 'team',
         edits: [
           {
-            path: 'nodes/reviewer/configDir',
+            path: 'members/reviewer/configDir',
             value: configDirToken('/Users/me/.other'),
           },
         ],
       });
 
-      expect(kept.ok ? kept.proposal.team.nodes[2] : null).toMatchObject({
+      expect(kept.ok ? kept.proposal.team.members[1] : null).toMatchObject({
         id: 'reviewer',
         configDir: '/Users/me/.claude-work',
       });
@@ -637,12 +603,12 @@ describe('TeamProposalService', () => {
       expect(logged[0]!.toVersion).not.toBe(before);
     });
 
-    it('saves nothing on Approve when the canvas changed the file after the card went up', async () => {
+    it('saves nothing on Approve when the team editor changed the file after the card went up', async () => {
       await store.create(TEAM, 'team');
       await service.proposeChange('run-1', { slug: 'team', edits: TO_SONNET });
       await store.save('team', {
         ...TEAM,
-        description: 'edited on the canvas',
+        description: 'edited in the team editor',
       });
 
       approvals.resolve('run-1', standingCard('run-1'), true);
@@ -651,28 +617,17 @@ describe('TeamProposalService', () => {
       expect(outcome).toEqual({ kind: 'not-saved', cause: 'changed' });
       expect((await store.get('team')).team).toEqual({
         ...TEAM,
-        description: 'edited on the canvas',
+        description: 'edited in the team editor',
       });
     });
   });
 
   describe('the card', () => {
     it('names every agent that runs tools without asking, pool members included', async () => {
-      const pooled: Team = {
-        ...TEAM,
-        nodes: TEAM.nodes.map((node) =>
-          node.id === 'coder'
-            ? {
-                ...node,
-                name: 'Coder',
-                pool: [
-                  { agent: 'codex' },
-                  { agent: 'claude', approval: 'auto' },
-                ],
-              }
-            : node,
-        ),
-      } as Team;
+      const pooled = withMember(TEAM, 'coder', {
+        name: 'Coder',
+        pool: [{ agent: 'codex' }, { agent: 'claude', approval: 'auto' }],
+      });
 
       await expect(proposed({ team: pooled })).resolves.toMatchObject({
         autoAgents: ['Coder (coder) — pool member 3', 'reviewer'],
@@ -694,19 +649,18 @@ describe('TeamProposalService', () => {
       });
     });
 
-    it("refuses a graph-rule break with the rule's own code", async () => {
+    it("refuses a team-rule break with the rule's own code", async () => {
       const prepared = await service.prepare({
         team: {
           ...TEAM,
-          edges: [
-            ...TEAM.edges,
-            { from: 'reviewer', to: 'ghost', kind: 'data' },
-          ],
+          triggers: [{ kind: 'first-message', member: 'ghost' }],
         },
       });
 
-      expect(prepared.ok).toBe(false);
-      expect(prepared.ok ? '' : prepared.code).toMatch(/^GRAPH_/);
+      expect(prepared).toMatchObject({
+        ok: false,
+        code: 'TEAM_TRIGGER_UNKNOWN',
+      });
       expect(assertRunnable).not.toHaveBeenCalled();
     });
 

@@ -1,6 +1,7 @@
 import type { Kysely } from 'kysely';
 
 import type { DatabaseMigration } from '../migrations.types';
+import { columnsByTable, renameColumns } from './rename-columns';
 
 interface SqliteMasterDatabase {
   sqlite_master: { type: string; name: string };
@@ -77,18 +78,6 @@ const INDEXES: readonly IndexRename[] = [
   },
 ];
 
-type Columns = Map<string, Set<string>>;
-
-async function columnsByTable(db: Kysely<unknown>): Promise<Columns> {
-  const tables = await db.introspection.getTables();
-  return new Map(
-    tables.map((table) => [
-      table.name,
-      new Set(table.columns.map((column) => column.name)),
-    ]),
-  );
-}
-
 async function indexNames(db: Kysely<unknown>): Promise<Set<string>> {
   const rows = await (db as unknown as Kysely<SqliteMasterDatabase>)
     .selectFrom('sqlite_master')
@@ -106,19 +95,6 @@ async function renameTables(
   for (const [from, to] of pairs) {
     if (columns.has(from) && !columns.has(to)) {
       await db.schema.alterTable(from).renameTo(to).execute();
-    }
-  }
-}
-
-async function renameColumns(
-  db: Kysely<unknown>,
-  triples: readonly (readonly [string, string, string])[],
-): Promise<void> {
-  const columns = await columnsByTable(db);
-  for (const [table, from, to] of triples) {
-    const present = columns.get(table);
-    if (present?.has(from) && !present.has(to)) {
-      await db.schema.alterTable(table).renameColumn(from, to).execute();
     }
   }
 }

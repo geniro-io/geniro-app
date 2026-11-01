@@ -10,15 +10,15 @@ import {
 const T0 = Date.UTC(2026, 8, 27, 10, 0, 0);
 const at = (seconds: number): Date => new Date(T0 + seconds * 1000);
 
-const status = (nodeId: string, s: number, value: string): SpanRow => ({
+const status = (memberId: string, s: number, value: string): SpanRow => ({
   kind: 'status',
-  nodeId,
+  memberId,
   createdAt: at(s),
-  payload: JSON.stringify({ nodeId, status: value }),
+  payload: JSON.stringify({ nodeId: memberId, status: value }),
 });
-const done = (nodeId: string, s: number, durationMs?: number): SpanRow => ({
+const done = (memberId: string, s: number, durationMs?: number): SpanRow => ({
   kind: 'turn_complete',
-  nodeId,
+  memberId,
   createdAt: at(s),
   payload: JSON.stringify(
     durationMs === undefined ? { usage: {} } : { usage: { durationMs } },
@@ -26,19 +26,19 @@ const done = (nodeId: string, s: number, durationMs?: number): SpanRow => ({
 });
 const row = (
   kind: string,
-  nodeId: string,
+  memberId: string,
   s: number,
   payload: Record<string, unknown>,
 ): SpanRow => ({
   kind,
-  nodeId,
+  memberId,
   createdAt: at(s),
   payload: JSON.stringify(payload),
 });
-const asked = (nodeId: string, s: number, id: string): SpanRow =>
-  row('approval_request', nodeId, s, { id, toolName: 'ask_user_question' });
-const answered = (nodeId: string, s: number, id: string): SpanRow =>
-  row('approval_verdict', nodeId, s, { id, allow: true });
+const asked = (memberId: string, s: number, id: string): SpanRow =>
+  row('approval_request', memberId, s, { id, toolName: 'ask_user_question' });
+const answered = (memberId: string, s: number, id: string): SpanRow =>
+  row('approval_verdict', memberId, s, { id, allow: true });
 /** A Manager awaiting its Engineer, who asks the user at 20s and is answered at 80s. */
 const parkedCall = (between: SpanRow[] = []): SpanRow[] => [
   status('manager', 0, 'running'),
@@ -64,7 +64,7 @@ describe('activeSpansFrom', () => {
     expect(spans).toEqual([{ startMs: T0, endMs: T0 + 100_000 }]);
   });
 
-  it('measures a turn with no CLI timing from its node’s running row', () => {
+  it('measures a turn with no CLI timing from its member’s running row', () => {
     // cursor reports no duration over ACP; without the fallback its stretch
     // would be missing from the clock altogether.
     const spans = activeSpansFrom([status('qa', 5, 'running'), done('qa', 35)]);
@@ -72,7 +72,7 @@ describe('activeSpansFrom', () => {
     expect(spans).toEqual([{ startMs: T0 + 5000, endMs: T0 + 35_000 }]);
   });
 
-  it('does not lend a FAILED turn’s start to the node’s next turn', () => {
+  it('does not lend a FAILED turn’s start to the member’s next turn', () => {
     const spans = activeSpansFrom([
       status('qa', 0, 'running'),
       status('qa', 10, 'failed'),
@@ -89,7 +89,7 @@ describe('activeSpansFrom', () => {
     ]);
   });
 
-  it('does not lend an off-turn stretch’s start to the node’s next turn', () => {
+  it('does not lend an off-turn stretch’s start to the member’s next turn', () => {
     // An off-turn badge (`running`) restored to `completed` writes no
     // `turn_complete`; measured from it, the next turn would cover the idle hour.
     const spans = activeSpansFrom([
@@ -102,11 +102,11 @@ describe('activeSpansFrom', () => {
     expect(spans).toEqual([{ startMs: T0 + 3_600_000, endMs: T0 + 3_660_000 }]);
   });
 
-  it('keeps each parallel call’s own start when another call of the node ends', () => {
-    // One node, two calls at once; the first call's `completed` must not erase
+  it('keeps each parallel call’s own start when another call of the member ends', () => {
+    // One member, two calls at once; the first call's `completed` must not erase
     // the second's start, or the second (no CLI timing) drops off the clock.
     const call = (s: number, kind: string, callId: string, extra = {}) =>
-      row(kind, 'qa', s, { nodeId: 'qa', callId, ...extra });
+      row(kind, 'qa', s, { memberId: 'qa', callId, ...extra });
     expect(
       activeSpansFrom([
         call(0, 'status', 'c1', { status: 'running' }),
@@ -222,7 +222,7 @@ describe('activeSpansFrom — waiting on the user', () => {
     ]);
   });
 
-  it('keeps two nodes’ cards apart when their per-process ids collide', () => {
+  it('keeps two members’ cards apart when their per-process ids collide', () => {
     // ACP and codex number requests per process, so two agents can both have
     // card `n:0` open; answering one must not end the other's wait.
     expect(
@@ -269,7 +269,7 @@ describe('activeSpansFrom — waiting on the user', () => {
         status('qa', 0, 'running'),
         asked('qa', 10, 'q1'),
         done('qa', 20),
-        row('status', 'qa', 100, { nodeId: 'qa', status: 'running' }),
+        row('status', 'qa', 100, { memberId: 'qa', status: 'running' }),
         done('qa', 160),
       ]),
     ).toEqual([
@@ -280,13 +280,13 @@ describe('activeSpansFrom — waiting on the user', () => {
 
   it.each([
     [
-      'another node',
-      row('status', 'qa', 40, { nodeId: 'qa', status: 'running' }),
+      'another member',
+      row('status', 'qa', 40, { memberId: 'qa', status: 'running' }),
     ],
     [
-      'another call of the same node',
+      'another call of the same member',
       row('status', 'engineer', 40, {
-        nodeId: 'engineer',
+        memberId: 'engineer',
         callId: 'c2',
         status: 'running',
       }),
@@ -294,7 +294,7 @@ describe('activeSpansFrom — waiting on the user', () => {
     [
       'an off-turn badge of the same conversation',
       row('status', 'engineer', 40, {
-        nodeId: 'engineer',
+        memberId: 'engineer',
         status: 'running',
         offTurn: true,
       }),

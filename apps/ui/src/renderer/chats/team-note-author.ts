@@ -4,16 +4,16 @@ import { callTitle } from './call-title';
 /** An agent's display name among `agents`, or its node id when none is listed. */
 export function agentNameOf(
   agents: readonly { id: string; name: string }[],
-  nodeId: string,
+  memberId: string,
 ): string {
-  return agents.find((agent) => agent.id === nodeId)?.name ?? nodeId;
+  return agents.find((agent) => agent.id === memberId)?.name ?? memberId;
 }
 
 /** Who wrote a note: the agent, and the call it was answering — "Name · Call 3". */
 export function teamNoteAuthor(
   note: TeamNote,
-  agentName: (nodeId: string) => string,
+  agentName: (memberId: string) => string,
 ): string {
-  const name = agentName(note.nodeId);
+  const name = agentName(note.memberId);
   return note.callId === null ? name : `${name} · ${callTitle(note.callId)}`;
 }

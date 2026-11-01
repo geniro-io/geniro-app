@@ -18,8 +18,8 @@ export class NotifyUserTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.notices.canNotify(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.notices.canNotify(runId, memberId);
   }
 
   protected instructions(): string {
@@ -34,14 +34,14 @@ export class NotifyUserTool extends BaseMcpTool {
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId } = context;
+    const { runId, memberId } = context;
     const message = readHostNotify(args);
     // A notification with nothing in it is only ever a mistake, so it is
     // answered as a malformed call rather than sent as a blank banner.
     if (message === null) {
       return this.invalidArgs("'message' must be a non-empty string.");
     }
-    const outcome = await this.notices.notify(runId, nodeId, message);
+    const outcome = await this.notices.notify(runId, memberId, message);
     // An unavailable channel is an answer, not a failure — the agent can
     // still say it in its reply.
     return this.text(hostNotifyResultText(outcome));

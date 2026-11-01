@@ -48,14 +48,14 @@ let seq = 0;
 function item(
   kind: ChatItem['kind'],
   payload: unknown,
-  nodeId: string | null = 'orch',
+  memberId: string | null = 'orch',
   role: string | null = null,
 ): ChatItem {
   seq += 1;
   return {
     id: `i-${seq}`,
     runId: 'run-1',
-    nodeId,
+    memberId,
     seq,
     kind,
     role,
@@ -68,13 +68,13 @@ const call = (
   name: string,
   id: string,
   input: unknown = {},
-  nodeId: string | null = 'orch',
-): ChatItem => item('tool_call', { id, name, input }, nodeId);
+  memberId: string | null = 'orch',
+): ChatItem => item('tool_call', { id, name, input }, memberId);
 const result = (
   id: string,
   value: unknown = 'ok',
-  nodeId: string | null = 'orch',
-): ChatItem => item('tool_result', { id, name: null, result: value }, nodeId);
+  memberId: string | null = 'orch',
+): ChatItem => item('tool_result', { id, name: null, result: value }, memberId);
 
 describe('a call whose start is ABOVE the window, read through its anchors', () => {
   // The window is a page of a long conversation, and the call's `call_started`
@@ -133,7 +133,7 @@ describe('a call whose start is ABOVE the window, read through its anchors', () 
     expect(entries).toHaveLength(1);
     const block = entries[0] as CallBlockEntry;
     expect(block.type).toBe('call-block');
-    expect(block.callerNodeId).toBe('manager');
+    expect(block.callerMemberId).toBe('manager');
     expect(block.title).toBe('Review PR');
     expect(block.message).toBe('Review the PR and report.');
     expect(block.status).toBe('running');
@@ -254,7 +254,7 @@ describe('entryStartSeq', () => {
       type: 'turn-block',
       id: 'b1',
       createdAt: 'now',
-      nodeId: 'orch',
+      memberId: 'orch',
       subagentId: null,
       entries: [
         { type: 'item', item: last },
@@ -325,7 +325,7 @@ describe('entryStartSeq', () => {
       type: 'turn-block',
       id: 'empty',
       createdAt: 'now',
-      nodeId: null,
+      memberId: null,
       subagentId: null,
       entries: [],
     };
@@ -1895,9 +1895,9 @@ describe('groupTranscript — call blocks', () => {
   const tagged = (
     kind: ChatItem['kind'],
     payload: Record<string, unknown>,
-    nodeId: string,
+    memberId: string,
     callId: string,
-  ): ChatItem => item(kind, { ...payload, callId, nodeId }, nodeId);
+  ): ChatItem => item(kind, { ...payload, callId, nodeId: memberId }, memberId);
   const isBlock = (e: { type: string }): e is CallBlockEntry =>
     e.type === 'call-block';
 
@@ -1913,8 +1913,8 @@ describe('groupTranscript — call blocks', () => {
     const block = entries[0] as CallBlockEntry;
     expect(block.type).toBe('call-block');
     expect(block.callId).toBe('call-1');
-    expect(block.calleeNodeId).toBe('poet');
-    expect(block.callerNodeId).toBe('orch');
+    expect(block.calleeMemberId).toBe('poet');
+    expect(block.callerMemberId).toBe('orch');
     expect(block.mode).toBe('async');
     // Request → result framing: the ask is the request, and the COMPLETED
     // sub-turn's final message is pulled out of the flow as the RESULT. The
@@ -2654,7 +2654,7 @@ describe('groupTranscript — call blocks', () => {
       expect(actions(block.entries)).toEqual([]);
       expect(
         actions(entries).map((e) => [
-          e.nodeId,
+          e.memberId,
           e.action.agentLabel,
           e.action.callId,
         ]),
@@ -2685,7 +2685,7 @@ describe('groupTranscript — call blocks', () => {
       const block = entries.find(isBlock)!;
       expect(artifacts(block.entries)).toEqual([]);
       const [card] = artifacts(entries);
-      expect(card).toMatchObject({ nodeId: 'poet', latest: true });
+      expect(card).toMatchObject({ memberId: 'poet', latest: true });
       expect(card!.artifact.version).toBe(1);
     });
 
@@ -2709,7 +2709,7 @@ describe('groupTranscript — call blocks', () => {
         tagged('show_artifact', page(1), 'scribe', 'call-2'),
       ]);
 
-      expect(artifacts(entries).map((e) => e.nodeId)).toEqual(['scribe']);
+      expect(artifacts(entries).map((e) => e.memberId)).toEqual(['scribe']);
       for (const block of collectCallBlocks(entries)) {
         expect(artifacts(block.entries)).toEqual([]);
       }
@@ -2800,7 +2800,7 @@ describe('groupTranscript — call blocks', () => {
       ),
     ]);
     const cards = entries.flatMap((entry) =>
-      entry.type === 'task-list' ? [[entry.nodeId, entry.tasks]] : [],
+      entry.type === 'task-list' ? [[entry.memberId, entry.tasks]] : [],
     );
     expect(cards).toEqual([
       [
@@ -3313,7 +3313,7 @@ describe('groupTranscript — closing a group whose turn ended', () => {
       item('turn_complete', {}, 'reviewer'),
     ]);
     const group = toolsOf(entries)[0];
-    expect(group?.nodeId).toBe('coder');
+    expect(group?.memberId).toBe('coder');
     expect(group?.closed).toBe(false);
   });
 
@@ -3390,7 +3390,7 @@ describe('groupTranscript — closing a group whose turn ended', () => {
       item('status', { status: 'completed', callId: 'call-1' }, 'eng'),
     ]);
     const own = toolsOf(entries)[0];
-    expect(own?.nodeId).toBe('eng');
+    expect(own?.memberId).toBe('eng');
     expect(own?.closed).toBe(false);
   });
 });
@@ -3434,7 +3434,7 @@ describe('buildTurnBlocks', () => {
     if (block?.type !== 'turn-block') {
       throw new Error('expected a turn block');
     }
-    expect(block.nodeId).toBe('orch');
+    expect(block.memberId).toBe('orch');
     expect(block.entries.map((e) => e.type)).toEqual([
       'item',
       'findings',
@@ -3476,13 +3476,13 @@ describe('buildTurnBlocks', () => {
     if (block?.type !== 'turn-block') {
       throw new Error('expected a turn block');
     }
-    expect(block.nodeId).toBe('orch');
+    expect(block.memberId).toBe('orch');
     expect(block.entries.map((e) => e.type)).toEqual(['item', 'tools']);
     const after = entries[3];
     if (after?.type !== 'turn-block') {
       throw new Error('expected the caller’s later turn block');
     }
-    expect(after.nodeId).toBe('orch');
+    expect(after.memberId).toBe('orch');
     expect(after.entries).toHaveLength(1);
   });
 
@@ -3568,7 +3568,7 @@ describe('buildTurnBlocks', () => {
     if (block?.type !== 'turn-block') {
       throw new Error('expected a turn block');
     }
-    expect(block.nodeId).toBe('engineer');
+    expect(block.memberId).toBe('engineer');
     expect(block.entries.map((e) => e.type)).toEqual([
       'item',
       'tools',
@@ -3598,8 +3598,8 @@ describe('buildTurnBlocks — sub-agent work', () => {
 
     expect(entries.map((e) => e.type)).toEqual(['turn-block', 'turn-block']);
     const [main, sub] = entries as [TurnBlockEntry, TurnBlockEntry];
-    expect(main.nodeId).toBe('orch');
-    expect(sub.nodeId).toBe('orch');
+    expect(main.memberId).toBe('orch');
+    expect(sub.memberId).toBe('orch');
     expect(main.entries).toHaveLength(1);
     expect(sub.entries).toHaveLength(1);
   });
@@ -3975,7 +3975,7 @@ describe('withLiveText', () => {
 
     expect(
       entries.some(
-        (entry) => entry.type === 'turn-block' && entry.nodeId === 'poet',
+        (entry) => entry.type === 'turn-block' && entry.memberId === 'poet',
       ),
       'the callee got a turn block of its own',
     ).toBe(false);
@@ -3998,7 +3998,7 @@ describe('withLiveText', () => {
 
     expect(
       entries.some(
-        (entry) => entry.type === 'turn-block' && entry.nodeId === 'poet',
+        (entry) => entry.type === 'turn-block' && entry.memberId === 'poet',
       ),
     ).toBe(false);
     const tail = calleeBlock(entries).entries.at(-1);
@@ -4243,10 +4243,10 @@ describe('withLiveText', () => {
         : [],
     );
     expect(
-      liveRows.some((row) => row.item.nodeId === 'poet'),
+      liveRows.some((row) => row.item.memberId === 'poet'),
       'a callee row was drawn beside the caller’s waiting row',
     ).toBe(false);
-    const callerRow = liveRows.find((row) => row.item.nodeId === 'orch');
+    const callerRow = liveRows.find((row) => row.item.memberId === 'orch');
     expect(callerRow?.item.payload).toMatchObject({ live: 'working' });
     expect(callerRow?.item.payload).not.toHaveProperty('waitingCalls');
   });
@@ -4365,7 +4365,7 @@ describe('withLiveText', () => {
     const blocks = buildTurnBlocks(
       groupTranscript([item('message', { text: 'so far…' }, NODE)]),
     );
-    expect((blocks[0] as TurnBlockEntry).nodeId).toBe(NODE);
+    expect((blocks[0] as TurnBlockEntry).memberId).toBe(NODE);
 
     const overlaid = withLiveText(
       blocks,
@@ -4374,7 +4374,7 @@ describe('withLiveText', () => {
 
     expect(overlaid).toHaveLength(1);
     const block = overlaid[0] as TurnBlockEntry;
-    expect(block.nodeId).toBe(NODE);
+    expect(block.memberId).toBe(NODE);
     expect(block.entries).toHaveLength(2);
   });
 
@@ -5241,7 +5241,7 @@ describe('groupTranscript task lists', () => {
     mode: 'snapshot' | 'patch',
     rows: { id: string; title?: string | null; status?: string | null }[],
     toolCallId: string | null = null,
-    nodeId: string | null = 'orch',
+    memberId: string | null = 'orch',
   ): ChatItem =>
     item(
       'task_list',
@@ -5255,7 +5255,7 @@ describe('groupTranscript task lists', () => {
           activeForm: null,
         })),
       },
-      nodeId,
+      memberId,
     );
 
   it('renders the LIST instead of the tool call that produced it', () => {
@@ -5296,7 +5296,7 @@ describe('groupTranscript task lists', () => {
     const announce = (
       mode: 'snapshot' | 'patch',
       rows: Record<string, unknown>[],
-      nodeId = 'orch',
+      memberId = 'orch',
       thread: string | null = null,
     ): ChatItem =>
       item(
@@ -5307,7 +5307,7 @@ describe('groupTranscript task lists', () => {
           tasks: rows,
           ...(thread === null ? {} : { parentToolUseId: thread }),
         },
-        nodeId,
+        memberId,
       );
     const row = (
       id: string,
@@ -5367,7 +5367,7 @@ describe('groupTranscript task lists', () => {
         .filter(
           (source) =>
             source.kind === 'task_list' &&
-            source.nodeId === card.nodeId &&
+            source.memberId === card.memberId &&
             ((source.payload as { parentToolUseId?: string }).parentToolUseId ??
               null) === card.parentToolUseId &&
             source.seq <= card.seq,
@@ -5636,7 +5636,7 @@ describe('groupTranscript task lists', () => {
       ]);
     const durable = [
       {
-        nodeId: 'orch',
+        memberId: 'orch',
         callId: null,
         tasks: [
           {
@@ -5758,13 +5758,13 @@ describe('groupTranscript task lists', () => {
       const [card] = cards(
         withDurableTaskLists(entries, [
           {
-            nodeId: 'orch',
+            memberId: 'orch',
             callId: 'call-1',
             tasks: [row('First brief')],
             snapshot: false,
           },
           {
-            nodeId: 'orch',
+            memberId: 'orch',
             callId: 'call-2',
             tasks: [row('Second brief')],
             snapshot: false,
@@ -5810,7 +5810,7 @@ describe('groupTranscript task lists', () => {
       const [block] = collectCallBlocks(
         withDurableTaskLists(calleeCard(), [
           {
-            nodeId: 'eng',
+            memberId: 'eng',
             callId: 'call-3',
             snapshot: false,
             tasks: [
@@ -5853,13 +5853,13 @@ describe('pullFileChangesOutOfGroups', () => {
   const edit = (
     id: string,
     path: string,
-    nodeId: string | null = 'orch',
+    memberId: string | null = 'orch',
   ): ChatItem =>
     call(
       'Edit',
       id,
       { file_path: path, old_string: 'before', new_string: 'after' },
-      nodeId,
+      memberId,
     );
 
   const shapeOf = (entries: readonly TranscriptEntry[]): string[] =>
@@ -5955,7 +5955,7 @@ describe('pullFileChangesOutOfGroups', () => {
     expect(split).toHaveLength(2);
     for (const piece of split) {
       expect(piece.closed).toBe(true);
-      expect(piece.nodeId).toBe(group.nodeId);
+      expect(piece.memberId).toBe(group.memberId);
       expect(piece.parentToolUseId).toBe(group.parentToolUseId);
     }
   });

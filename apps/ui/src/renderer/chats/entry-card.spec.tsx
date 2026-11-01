@@ -34,7 +34,7 @@ const base = {
   id: 'e1',
   createdAt: '2026-09-11T10:00:00.000Z',
   seq: 1,
-  nodeId: null,
+  memberId: null,
   parentToolUseId: null,
 } as const;
 

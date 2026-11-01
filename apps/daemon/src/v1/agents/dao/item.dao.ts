@@ -70,7 +70,7 @@ const NOT_A_DELEGATE = {
 /**
  * The preview's second exclusion: a message written INSIDE an agent-to-agent
  * call. A team run's sidebar line is the conversation the user has with its
- * root agent; a callee's rows carry the call's id and are that callee's
+ * trigger member; a callee's rows carry the call's id and are that callee's
  * conversation, which the row cannot open either. REPORTED as a Dev Team row
  * previewing the Engineer's "Fixed: 36/36…" over the Manager's own words. The
  * same crude-match trade as {@link NOT_A_DELEGATE}.
@@ -166,7 +166,7 @@ function payloadField<T = string | null>(
 
 type SpineRow = Pick<
   Item,
-  'id' | 'seq' | 'kind' | 'role' | 'nodeId' | 'inCall' | 'createdAt'
+  'id' | 'seq' | 'kind' | 'role' | 'memberId' | 'inCall' | 'createdAt'
 >;
 
 /** {@link SpineRow} without `inCall`, which sits after the payload's pages. */
@@ -177,7 +177,7 @@ function railRowOf(row: {
   seq: number;
   kind: Item['kind'];
   role: Item['role'];
-  node_id: Item['nodeId'];
+  member_id: Item['memberId'];
   created_at: number;
 }): RailRow {
   return {
@@ -185,7 +185,7 @@ function railRowOf(row: {
     seq: row.seq,
     kind: row.kind,
     role: row.role,
-    nodeId: row.node_id,
+    memberId: row.member_id,
     createdAt: new Date(row.created_at),
   };
 }
@@ -193,7 +193,7 @@ function railRowOf(row: {
 const WIRE_COLUMNS = [
   'id',
   'run_id',
-  'node_id',
+  'member_id',
   'seq',
   'kind',
   'role',
@@ -205,7 +205,7 @@ const WIRE_COLUMNS = [
 function wireRowOf(row: {
   id: string;
   run_id: string;
-  node_id: Item['nodeId'];
+  member_id: Item['memberId'];
   seq: number;
   kind: Item['kind'];
   role: Item['role'];
@@ -216,7 +216,7 @@ function wireRowOf(row: {
   return {
     id: row.id,
     runId: row.run_id,
-    nodeId: row.node_id,
+    memberId: row.member_id,
     seq: row.seq,
     kind: row.kind,
     role: row.role,
@@ -240,7 +240,7 @@ function spineRowOf(row: {
   seq: number;
   kind: Item['kind'];
   role: Item['role'];
-  node_id: Item['nodeId'];
+  member_id: Item['memberId'];
   in_call: Item['inCall'];
   created_at: number;
 }): SpineRow {
@@ -249,7 +249,7 @@ function spineRowOf(row: {
     seq: row.seq,
     kind: row.kind,
     role: row.role,
-    nodeId: row.node_id,
+    memberId: row.member_id,
     inCall: row.in_call,
     createdAt: new Date(row.created_at),
   };
@@ -401,10 +401,10 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
-  /** Recent work of the node's own conversation, not its callees' traffic. */
+  /** Recent work of the member's own conversation, not its callees' traffic. */
   async nodePoolContextRows(
     runId: string,
-    nodeId: string,
+    memberId: string,
     txEm?: EntityManager,
   ): Promise<Item[]> {
     const em = txEm ?? this.em.fork();
@@ -420,18 +420,18 @@ export class ItemDao extends BaseDao<Item> {
         .where((eb) =>
           eb.or([
             eb.and([
-              eb('node_id', '=', nodeId),
+              eb('member_id', '=', memberId),
               eb('kind', 'in', ['message', 'tool_call', 'tool_result']),
               eb(payloadRef(eb, 'call_id', stamped), 'is', null),
               eb(payloadRef(eb, 'parent_tool_use_id', stamped), 'is', null),
             ]),
             eb.and([
-              eb('node_id', '=', nodeId),
+              eb('member_id', '=', memberId),
               eb('kind', 'in', ['call_started', 'call_result']),
               eb(payloadPath(eb, '$.callerConversationId'), 'is', null),
             ]),
             eb.and([
-              eb('node_id', 'is', null),
+              eb('member_id', 'is', null),
               eb('kind', '=', 'message'),
               eb('role', '=', 'user'),
             ]),
@@ -446,7 +446,7 @@ export class ItemDao extends BaseDao<Item> {
 
   /**
    * Every agent-pool hand-off of a run, in seq order — the `system` row the
-   * executor writes when a node's conversation moves to another member (a
+   * executor writes when a member's conversation moves to another pool member (a
    * call's carries its `callId`). Stops at `maxSeq`, as the waterfall's reads do.
    */
   async poolHandOffRows(
@@ -758,21 +758,21 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * One team node's clock rows — its turn boundaries and approval cards
+   * One team member's clock rows — its turn boundaries and approval cards
    * (`WALL_CLOCK_ROW_KINDS`), every conversation of it, in `seq` order — what
    * its wall-measured turns are folded from (`utils/wall-worked`).
    */
   async nodeWallClockRows(
     runId: string,
-    nodeId: string,
+    memberId: string,
     txEm?: EntityManager,
   ): Promise<WallClockRow[]> {
-    return this.wallClockRows(runId, nodeId, WALL_CLOCK_ROW_KINDS, txEm);
+    return this.wallClockRows(runId, memberId, WALL_CLOCK_ROW_KINDS, txEm);
   }
 
   /**
    * A 1:1 chat's clock rows — its user messages, turn endings and approval
-   * cards (`CHAT_WALL_CLOCK_ROW_KINDS`, the rows with no node), in `seq`
+   * cards (`CHAT_WALL_CLOCK_ROW_KINDS`, the rows with no member), in `seq`
    * order. A message is read for its role and time only: only a USER's opens a
    * turn, and its text is never needed.
    */
@@ -791,7 +791,7 @@ export class ItemDao extends BaseDao<Item> {
    */
   private async wallClockRows(
     runId: string,
-    nodeId: string | null,
+    memberId: string | null,
     kinds: readonly ItemKind[],
     txEm?: EntityManager,
   ): Promise<WallClockRow[]> {
@@ -800,19 +800,19 @@ export class ItemDao extends BaseDao<Item> {
     );
     const [rows, messages, cards] = await Promise.all([
       this.getRepo(txEm).find(
-        { runId, nodeId, kind: { $in: plainKinds } },
+        { runId, memberId, kind: { $in: plainKinds } },
         {
           orderBy: { seq: 'asc' },
-          fields: ['seq', 'kind', 'nodeId', 'role', 'createdAt', 'payload'],
+          fields: ['seq', 'kind', 'memberId', 'role', 'createdAt', 'payload'],
           disableIdentityMap: true,
         },
       ),
       kinds.includes('message')
         ? this.getRepo(txEm).find(
-            { runId, nodeId, kind: 'message', role: 'user' },
+            { runId, memberId, kind: 'message', role: 'user' },
             {
               orderBy: { seq: 'asc' },
-              fields: ['seq', 'kind', 'nodeId', 'role', 'createdAt'],
+              fields: ['seq', 'kind', 'memberId', 'role', 'createdAt'],
               disableIdentityMap: true,
             },
           )
@@ -824,14 +824,14 @@ export class ItemDao extends BaseDao<Item> {
           return [
             'seq',
             'kind',
-            'node_id',
+            'member_id',
             'created_at',
             payloadField(eb, '$.id').as('card_id'),
             payloadField(eb, '$.callId').as('call_id'),
           ];
         })
         .where('run_id', '=', runId)
-        .where('node_id', nodeId === null ? 'is' : '=', nodeId)
+        .where('member_id', memberId === null ? 'is' : '=', memberId)
         .where('deleted_at', 'is', null)
         .where(
           'kind',
@@ -845,7 +845,7 @@ export class ItemDao extends BaseDao<Item> {
       ...rows.map((row) => ({
         seq: row.seq,
         kind: row.kind,
-        nodeId: row.nodeId,
+        memberId: row.memberId,
         role: row.role,
         createdAt: row.createdAt,
         payload: row.payload,
@@ -853,7 +853,7 @@ export class ItemDao extends BaseDao<Item> {
       ...messages.map((row) => ({
         seq: row.seq,
         kind: row.kind,
-        nodeId: row.nodeId,
+        memberId: row.memberId,
         role: row.role,
         createdAt: row.createdAt,
         payload: '{}',
@@ -861,7 +861,7 @@ export class ItemDao extends BaseDao<Item> {
       ...cards.map((card) => ({
         seq: card.seq,
         kind: card.kind,
-        nodeId: card.node_id,
+        memberId: card.member_id,
         role: null,
         createdAt: new Date(card.created_at),
         payload: JSON.stringify({ id: card.card_id, callId: card.call_id }),
@@ -903,7 +903,7 @@ export class ItemDao extends BaseDao<Item> {
     since?: Date,
     txEm?: EntityManager,
   ): Promise<
-    Pick<Item, 'runId' | 'nodeId' | 'seq' | 'payload' | 'createdAt'>[]
+    Pick<Item, 'runId' | 'memberId' | 'seq' | 'payload' | 'createdAt'>[]
   > {
     return this.getRepo(txEm).find(
       {
@@ -914,7 +914,7 @@ export class ItemDao extends BaseDao<Item> {
         ...(since === undefined ? {} : { createdAt: { $gte: since } }),
       },
       {
-        fields: ['runId', 'nodeId', 'seq', 'payload', 'createdAt'],
+        fields: ['runId', 'memberId', 'seq', 'payload', 'createdAt'],
         disableIdentityMap: true,
       },
     );
@@ -1210,7 +1210,7 @@ export class ItemDao extends BaseDao<Item> {
     return (txEm ?? this.em.fork())
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
-      .select(['id', 'seq', 'kind', 'role', 'node_id', 'created_at'])
+      .select(['id', 'seq', 'kind', 'role', 'member_id', 'created_at'])
       .where('run_id', '=', runId)
       .where('deleted_at', 'is', null);
   }
@@ -1224,7 +1224,15 @@ export class ItemDao extends BaseDao<Item> {
     return (txEm ?? this.em.fork())
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
-      .select(['id', 'seq', 'kind', 'role', 'node_id', 'in_call', 'created_at'])
+      .select([
+        'id',
+        'seq',
+        'kind',
+        'role',
+        'member_id',
+        'in_call',
+        'created_at',
+      ])
       .where('run_id', '=', runId)
       .where('deleted_at', 'is', null);
   }
@@ -1283,7 +1291,7 @@ export class ItemDao extends BaseDao<Item> {
     runId: string,
     ids: readonly string[],
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'payload' | 'nodeId' | 'createdAt'>[]> {
+  ): Promise<Pick<Item, 'payload' | 'memberId' | 'createdAt'>[]> {
     if (ids.length === 0) {
       return [];
     }
@@ -1292,7 +1300,7 @@ export class ItemDao extends BaseDao<Item> {
     const rows = await em
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
-      .select(['payload', 'node_id', 'created_at'])
+      .select(['payload', 'member_id', 'created_at'])
       .where('run_id', '=', runId)
       .where('kind', '=', 'tool_call')
       .where('deleted_at', 'is', null)
@@ -1301,7 +1309,7 @@ export class ItemDao extends BaseDao<Item> {
       .execute();
     return rows.map((row) => ({
       payload: row.payload,
-      nodeId: row.node_id,
+      memberId: row.member_id,
       createdAt: new Date(row.created_at),
     }));
   }
@@ -1356,7 +1364,7 @@ export class ItemDao extends BaseDao<Item> {
           .selectFrom('items')
           .select((eb) => {
             return [
-              'node_id',
+              'member_id',
               payloadField(eb, '$.name').as('tool_name'),
               payloadField(eb, '$.toolKind').as('tool_kind'),
               eb(payloadField(eb, '$.parentToolUseId'), 'is not', null).as(
@@ -1370,19 +1378,19 @@ export class ItemDao extends BaseDao<Item> {
           .as('tool_calls'),
       )
       .select((eb) => [
-        'node_id',
+        'member_id',
         'tool_name',
         'tool_kind',
         'delegate',
         eb.fn.countAll<number>().as('calls'),
       ])
       .where('tool_name', 'is not', null)
-      .groupBy(['node_id', 'tool_name', 'tool_kind', 'delegate'])
+      .groupBy(['member_id', 'tool_name', 'tool_kind', 'delegate'])
       .orderBy('calls', 'desc')
       .limit(limit)
       .execute();
     return rows.map((row) => ({
-      nodeId: row.node_id,
+      memberId: row.member_id,
       name: String(row.tool_name),
       toolKind: row.tool_kind === null ? null : String(row.tool_kind),
       delegate: Boolean(row.delegate),
@@ -1411,7 +1419,7 @@ export class ItemDao extends BaseDao<Item> {
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
       .select((eb) => [
-        'node_id',
+        'member_id',
         'in_call',
         eb.fn.countAll<number>().as('calls'),
         eb.fn.max('seq').as('last_seq'),
@@ -1419,7 +1427,7 @@ export class ItemDao extends BaseDao<Item> {
       .where('run_id', '=', runId)
       .where('kind', '=', 'tool_call')
       .where('deleted_at', 'is', null)
-      .where('node_id', 'is not', null)
+      .where('member_id', 'is not', null)
       .where('in_call', 'is not', null)
       .where('in_call', '!=', '')
       // An empty `parentToolUseId` names no delegate (`subagentIdOf`).
@@ -1432,10 +1440,10 @@ export class ItemDao extends BaseDao<Item> {
         '=',
         '',
       )
-      .groupBy(['node_id', 'in_call'])
+      .groupBy(['member_id', 'in_call'])
       .execute();
     return rows.map((row) => ({
-      nodeId: String(row.node_id),
+      memberId: String(row.member_id),
       callId: String(row.in_call),
       calls: Number(row.calls),
       lastSeq: Number(row.last_seq),
@@ -1535,7 +1543,7 @@ export class ItemDao extends BaseDao<Item> {
       .select((eb) => [
         'seq',
         'kind',
-        'node_id',
+        'member_id',
         'in_call',
         'created_at',
         payloadField(eb, '$.id').as('tool_id'),
@@ -1554,7 +1562,7 @@ export class ItemDao extends BaseDao<Item> {
     return rows.map((row) => ({
       seq: Number(row.seq),
       kind: row.kind === 'tool_call' ? 'tool_call' : 'tool_result',
-      nodeId: row.node_id,
+      memberId: row.member_id,
       inCall: row.in_call,
       at: Number(row.created_at),
       toolId: row.tool_id === null ? null : String(row.tool_id),
@@ -1567,7 +1575,7 @@ export class ItemDao extends BaseDao<Item> {
 
   /**
    * One page of a run's rows for an analysis, oldest first: after `afterSeq`
-   * (or from `fromTime`), never past `maxSeq`, optionally one node's and some
+   * (or from `fromTime`), never past `maxSeq`, optionally one member's and some
    * kinds only. The caller budgets the page by bytes; `limit` bounds the read.
    */
   async analysisPage(
@@ -1577,7 +1585,7 @@ export class ItemDao extends BaseDao<Item> {
       maxSeq: number;
       limit: number;
       fromTime?: Date;
-      nodeId?: string | null;
+      memberId?: string | null;
       kinds?: readonly ItemKind[];
     },
     txEm?: EntityManager,
@@ -1589,7 +1597,7 @@ export class ItemDao extends BaseDao<Item> {
         ...(page.fromTime === undefined
           ? {}
           : { createdAt: { $gte: page.fromTime } }),
-        ...(page.nodeId === undefined ? {} : { nodeId: page.nodeId }),
+        ...(page.memberId === undefined ? {} : { memberId: page.memberId }),
         ...(page.kinds === undefined ? {} : { kind: { $in: [...page.kinds] } }),
       },
       { orderBy: { seq: 'asc' }, limit: page.limit, disableIdentityMap: true },
@@ -1934,13 +1942,13 @@ export class ItemDao extends BaseDao<Item> {
     afterSeq: number,
     limit: number,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'id' | 'seq' | 'kind' | 'nodeId' | 'payload'>[]> {
+  ): Promise<Pick<Item, 'id' | 'seq' | 'kind' | 'memberId' | 'payload'>[]> {
     return this.getRepo(txEm).find(
       { runId, inCall: null, seq: { $gt: afterSeq } },
       {
         limit,
         orderBy: { seq: 'asc' },
-        fields: ['id', 'seq', 'kind', 'nodeId', 'payload'],
+        fields: ['id', 'seq', 'kind', 'memberId', 'payload'],
         disableIdentityMap: true,
       },
     );
@@ -2063,12 +2071,12 @@ export class ItemDao extends BaseDao<Item> {
   async taskListRows(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'nodeId' | 'payload'>[]> {
+  ): Promise<Pick<Item, 'memberId' | 'payload'>[]> {
     return this.getRepo(txEm).find(
       { runId, kind: 'task_list' },
       {
         orderBy: { seq: 'asc' },
-        fields: ['nodeId', 'payload'],
+        fields: ['memberId', 'payload'],
         disableIdentityMap: true,
       },
     );
@@ -2109,21 +2117,23 @@ export class ItemDao extends BaseDao<Item> {
     /**
      * Narrow to rows written by particular NODES of a team run.
      *
-     * Absent means every node, which is what a chat run wants — it has one, and
-     * its rows carry no node id at all. A team run's transcript is N nodes
+     * Absent means every member, which is what a chat run wants — it has one, and
+     * its rows carry no member id at all. A team run's transcript is N members
      * interleaved in one stream, so "the latest row" is whichever of them wrote
-     * last; the task board passes the run's terminal nodes here to ask for the
+     * last; the task board passes the run's terminal members here to ask for the
      * conclusion instead. An EMPTY set is not the same as absent and is the
      * caller's to avoid: it would match nothing.
      */
-    nodeIds?: readonly string[],
+    memberIds?: readonly string[],
   ): Promise<Pick<Item, 'id'> | null> {
     const [row] = await this.getRepo(txEm).find(
       {
         runId,
         kind,
         ...(role === undefined ? {} : { role }),
-        ...(nodeIds === undefined ? {} : { nodeId: { $in: [...nodeIds] } }),
+        ...(memberIds === undefined
+          ? {}
+          : { memberId: { $in: [...memberIds] } }),
       },
       {
         orderBy: { seq: 'desc' },
@@ -2151,16 +2161,16 @@ export class ItemDao extends BaseDao<Item> {
   async subagentInfoRows(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'payload' | 'nodeId'>[]> {
+  ): Promise<Pick<Item, 'payload' | 'memberId'>[]> {
     return this.getRepo(txEm).find(
       { runId, kind: 'subagent_info' },
       {
         orderBy: { seq: 'asc' },
         // `nodeId` rides along because a delegate belongs to the NODE that
         // launched it, and the close written for a stranded one has to be filed
-        // under that same node or it reaches nothing — see
+        // under that same member or it reaches nothing — see
         // `ChatService.closeStrandedDelegates`.
-        fields: ['payload', 'nodeId'],
+        fields: ['payload', 'memberId'],
         disableIdentityMap: true,
       },
     );
@@ -2222,7 +2232,7 @@ export class ItemDao extends BaseDao<Item> {
     afterSeq: number,
     throughSeq: number,
     txEm?: EntityManager,
-  ): Promise<{ calleeNodeId: string | null; sessionId: string | null }[]> {
+  ): Promise<{ calleeMemberId: string | null; sessionId: string | null }[]> {
     const rows = await (txEm ?? this.em.fork())
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
@@ -2238,7 +2248,7 @@ export class ItemDao extends BaseDao<Item> {
       .orderBy('seq', 'asc')
       .execute();
     return rows.map((row) => ({
-      calleeNodeId:
+      calleeMemberId:
         typeof row.callee_node_id === 'string' ? row.callee_node_id : null,
       sessionId: typeof row.session_id === 'string' ? row.session_id : null,
     }));
@@ -2347,7 +2357,7 @@ export class ItemDao extends BaseDao<Item> {
    * that ever waited, read for the run-state route's `RunCallState.queued`.
    *
    * TWIN PARSER: written by `launchCalleeTurn` in
-   * apps/daemon/src/v1/teams/services/graph-executor.service.ts; read the
+   * apps/daemon/src/v1/teams/services/team-executor.service.ts; read the
    * same way by `isQueuedCall` in apps/ui/src/renderer/chats/transcript-groups.ts.
    */
   async callQueueRows(runId: string, txEm?: EntityManager): Promise<Item[]> {
@@ -2435,11 +2445,11 @@ export class ItemDao extends BaseDao<Item> {
     runId: string,
     afterSeq: number,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'seq' | 'nodeId' | 'kind' | 'payload'>[]> {
+  ): Promise<Pick<Item, 'seq' | 'memberId' | 'kind' | 'payload'>[]> {
     const rows = await (txEm ?? this.em.fork())
       .getKysely<ChatTextDatabase>({ convertValues: false })
       .selectFrom('items')
-      .select(['seq', 'node_id', 'kind', 'payload'])
+      .select(['seq', 'member_id', 'kind', 'payload'])
       .where('run_id', '=', runId)
       .where('kind', 'in', ['turn_complete', 'turn_cancelled', 'error'])
       .where('seq', '>', afterSeq)
@@ -2449,7 +2459,7 @@ export class ItemDao extends BaseDao<Item> {
       .execute();
     return rows.map((row) => ({
       seq: row.seq,
-      nodeId: row.node_id,
+      memberId: row.member_id,
       kind: row.kind,
       payload: row.payload,
     }));
@@ -2480,7 +2490,7 @@ export class ItemDao extends BaseDao<Item> {
       .selectFrom('items')
       .select('seq')
       .where('run_id', '=', runId)
-      .where('node_id', 'is', null)
+      .where('member_id', 'is', null)
       .where('kind', 'in', ['turn_complete', 'turn_cancelled', 'error'])
       .where('deleted_at', 'is', null)
       .where((eb) => insideTurnOf(eb), '=', 0)
@@ -2490,7 +2500,7 @@ export class ItemDao extends BaseDao<Item> {
     const [opener] = await this.getRepo(txEm).find(
       {
         runId,
-        nodeId: null,
+        memberId: null,
         kind: 'message',
         role: 'user',
         ...(ending === undefined ? {} : { seq: { $gt: ending.seq } }),
@@ -2511,7 +2521,7 @@ export class ItemDao extends BaseDao<Item> {
       .selectFrom('items')
       .select('created_at')
       .where('run_id', '=', runId)
-      .where('node_id', 'is', null)
+      .where('member_id', 'is', null)
       .where('kind', '=', 'turn_complete')
       .where('seq', '>', opener.seq)
       .where('deleted_at', 'is', null)
@@ -2555,7 +2565,7 @@ export class ItemDao extends BaseDao<Item> {
       .selectFrom('items')
       .select('created_at')
       .where('run_id', '=', runId)
-      .where('node_id', 'is', null)
+      .where('member_id', 'is', null)
       .where('seq', '>', endingSeq)
       .where('deleted_at', 'is', null)
       .where((eb) =>
@@ -2611,12 +2621,12 @@ export class ItemDao extends BaseDao<Item> {
   async shellRows(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'kind' | 'payload' | 'nodeId'>[]> {
+  ): Promise<Pick<Item, 'kind' | 'payload' | 'memberId'>[]> {
     return this.getRepo(txEm).find(
       { runId, kind: { $in: ['shell_open', 'shell_info'] } },
       {
         orderBy: { seq: 'asc' },
-        fields: ['kind', 'payload', 'nodeId'],
+        fields: ['kind', 'payload', 'memberId'],
         disableIdentityMap: true,
       },
     );
@@ -2628,12 +2638,12 @@ export class ItemDao extends BaseDao<Item> {
    */
   async allShellRows(
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'runId' | 'kind' | 'payload' | 'nodeId'>[]> {
+  ): Promise<Pick<Item, 'runId' | 'kind' | 'payload' | 'memberId'>[]> {
     return this.getRepo(txEm).find(
       { kind: { $in: ['shell_open', 'shell_info'] } },
       {
         orderBy: { runId: 'asc', seq: 'asc' },
-        fields: ['runId', 'kind', 'payload', 'nodeId'],
+        fields: ['runId', 'kind', 'payload', 'memberId'],
         disableIdentityMap: true,
       },
     );
@@ -2646,12 +2656,12 @@ export class ItemDao extends BaseDao<Item> {
    */
   async allMonitorRows(
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'runId' | 'nodeId' | 'seq' | 'payload'>[]> {
+  ): Promise<Pick<Item, 'runId' | 'memberId' | 'seq' | 'payload'>[]> {
     return this.getRepo(txEm).find(
       { kind: 'system', payload: { $like: '%"monitors":[%' } },
       {
         orderBy: { runId: 'asc', seq: 'asc' },
-        fields: ['runId', 'nodeId', 'seq', 'payload'],
+        fields: ['runId', 'memberId', 'seq', 'payload'],
         disableIdentityMap: true,
       },
     );
@@ -2677,13 +2687,13 @@ export class ItemDao extends BaseDao<Item> {
   /**
    * The tool calls a conversation's OPEN turn has made and not had answered —
    * the commands it is running in the foreground right now, whatever page of
-   * the transcript a client holds. A conversation is a node and the call it
+   * the transcript a client holds. A conversation is a member and the call it
    * runs in (`inCall`: `''` for its own flow), or a chat's (`nodeId` null,
    * every row). A delegate's own calls are left out.
    */
   async openTurnToolCalls(
     runId: string,
-    conversation: { nodeId: string | null; inCall: string | null },
+    conversation: { memberId: string | null; inCall: string | null },
     txEm?: EntityManager,
   ): Promise<Item[]> {
     const em = txEm ?? this.em.fork();
@@ -2705,9 +2715,9 @@ export class ItemDao extends BaseDao<Item> {
         0,
       );
     endings =
-      conversation.nodeId === null
-        ? endings.where('node_id', 'is', null)
-        : endings.where('node_id', '=', conversation.nodeId);
+      conversation.memberId === null
+        ? endings.where('member_id', 'is', null)
+        : endings.where('member_id', '=', conversation.memberId);
     if (conversation.inCall !== null) {
       endings = endings.where('in_call', '=', conversation.inCall);
     }
@@ -2717,7 +2727,7 @@ export class ItemDao extends BaseDao<Item> {
       .executeTakeFirst();
     const scope = {
       runId,
-      nodeId: conversation.nodeId,
+      memberId: conversation.memberId,
       ...(conversation.inCall === null ? {} : { inCall: conversation.inCall }),
     };
     const calls = (
@@ -2762,14 +2772,14 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * The conversations whose newest `status` row says `running` — a node's own
+   * The conversations whose newest `status` row says `running` — a member's own
    * flow (`inCall` `''`) or a call it runs in, whether the call is still out or
    * the callee carries on after it settled. What has a turn open right now.
    */
   async runningConversations(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<{ nodeId: string; inCall: string }[]> {
+  ): Promise<{ memberId: string; inCall: string }[]> {
     const db = (txEm ?? this.em.fork()).getKysely<ChatTextDatabase>({
       convertValues: false,
     });
@@ -2778,9 +2788,9 @@ export class ItemDao extends BaseDao<Item> {
       .select((eb) => eb.fn.max<number>('seq').as('seq'))
       .where('run_id', '=', runId)
       .where('kind', '=', 'status')
-      .where('node_id', 'is not', null)
+      .where('member_id', 'is not', null)
       .where('deleted_at', 'is', null)
-      .groupBy(['node_id', 'in_call'])
+      .groupBy(['member_id', 'in_call'])
       .execute();
     const seqs = newest.map((row) => Number(row.seq));
     if (seqs.length === 0) {
@@ -2788,31 +2798,31 @@ export class ItemDao extends BaseDao<Item> {
     }
     const rows = await db
       .selectFrom('items')
-      .select(['node_id', 'in_call', 'payload'])
+      .select(['member_id', 'in_call', 'payload'])
       .where('run_id', '=', runId)
       .where('seq', 'in', seqs)
       .execute();
     return rows
       .filter(
         (row) =>
-          row.node_id !== null &&
+          row.member_id !== null &&
           row.in_call !== null &&
           payloadString(parseJsonColumn(row.payload), 'status') === 'running',
       )
-      .map((row) => ({ nodeId: row.node_id!, inCall: row.in_call! }));
+      .map((row) => ({ memberId: row.member_id!, inCall: row.in_call! }));
   }
 
   /** Highest seq persisted for a run, or -1 when the run has no items yet. */
   async maxSeq(
     runId: string,
     txEm?: EntityManager,
-    /** One team node's newest row; absent means the run's. */
-    nodeId?: string,
+    /** One team member's newest row; absent means the run's. */
+    memberId?: string,
   ): Promise<number> {
     // Project ONLY `seq` — this runs on every sendMessage; hydrating the full
     // newest Item (incl. its text payload) just to read one integer is wasteful.
     const last = await this.getRepo(txEm).findOne(
-      nodeId === undefined ? { runId } : { runId, nodeId },
+      memberId === undefined ? { runId } : { runId, memberId },
       { orderBy: { seq: 'desc' }, fields: ['seq'], disableIdentityMap: true },
     );
     return last ? last.seq : -1;

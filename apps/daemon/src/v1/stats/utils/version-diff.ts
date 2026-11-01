@@ -6,7 +6,7 @@ import type { VersionChangesWire } from '../stats.types';
 const DIFF_CONTEXT = 3;
 
 /**
- * What one version's graph changed against the previous one's, both as YAML: a unified
+ * What one version's team changed against the previous one's, both as YAML: a unified
  * diff as `git diff` prints it, and how many lines it adds and removes.
  */
 export function versionDiff(

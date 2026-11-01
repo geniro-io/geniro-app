@@ -172,7 +172,7 @@ export function stagesReopenResets(
 }
 
 export function initialStageProgress(
-  team: Pick<Team, 'stages' | 'nodes'>,
+  team: Pick<Team, 'stages' | 'members'>,
 ): string | null {
   const stages = walkableStages(team);
   return stages === null ? null : writeRunStageProgress(foldStages(stages, []));

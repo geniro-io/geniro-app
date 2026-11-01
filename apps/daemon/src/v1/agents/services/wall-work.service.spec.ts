@@ -73,7 +73,7 @@ describe('WallWorkService (in-memory sqlite)', () => {
 
   interface Where {
     runId?: string;
-    nodeId?: string | null;
+    memberId?: string | null;
     role?: string | null;
     seq?: number;
   }
@@ -82,14 +82,14 @@ describe('WallWorkService (in-memory sqlite)', () => {
     kind: ItemKind,
     at: number,
     payload: Record<string, unknown> = {},
-    { runId = 'run-1', nodeId = 'eng', role = null, seq }: Where = {},
+    { runId = 'run-1', memberId = 'eng', role = null, seq }: Where = {},
   ): Promise<number> {
     const rowSeq = seq ?? (nextSeq += 1);
     await items.create({
       runId,
       seq: rowSeq,
       kind,
-      nodeId,
+      memberId,
       role,
       payload: JSON.stringify(payload),
       createdAt: new Date(at),
@@ -97,18 +97,18 @@ describe('WallWorkService (in-memory sqlite)', () => {
     return rowSeq;
   }
 
-  /** One node turn: running at `from`, settled at `to`, CLI-timed if `durationMs`. */
+  /** One member turn: running at `from`, settled at `to`, CLI-timed if `durationMs`. */
   async function turn(
     from: number,
     to: number,
     {
       runId = 'run-1',
-      nodeId = 'eng',
+      memberId = 'eng',
       durationMs,
       seqs,
     }: {
       runId?: string;
-      nodeId?: string;
+      memberId?: string;
       durationMs?: number;
       /** Explicit seqs for the three rows, to write them out of seq order. */
       seqs?: [number, number, number];
@@ -118,19 +118,19 @@ describe('WallWorkService (in-memory sqlite)', () => {
       'status',
       from,
       { status: 'running' },
-      { runId, nodeId, seq: seqs?.[0] },
+      { runId, memberId, seq: seqs?.[0] },
     );
     const end = await write(
       'turn_complete',
       to,
       { usage: durationMs === undefined ? null : { durationMs } },
-      { runId, nodeId, seq: seqs?.[1] },
+      { runId, memberId, seq: seqs?.[1] },
     );
     await write(
       'status',
       to,
       { status: 'completed' },
-      { runId, nodeId, seq: seqs?.[2] },
+      { runId, memberId, seq: seqs?.[2] },
     );
     return end;
   }
@@ -150,7 +150,7 @@ describe('WallWorkService (in-memory sqlite)', () => {
       { text: 'go' },
       {
         runId,
-        nodeId: null,
+        memberId: null,
         role: 'user',
       },
     );
@@ -158,7 +158,7 @@ describe('WallWorkService (in-memory sqlite)', () => {
       'turn_complete',
       to,
       { usage: durationMs === undefined ? null : { durationMs } },
-      { runId, nodeId: null },
+      { runId, memberId: null },
     );
   }
 
@@ -169,7 +169,7 @@ describe('WallWorkService (in-memory sqlite)', () => {
     const rows = await orm.em
       .fork()
       .find(WallTurn, {}, { orderBy: { runId: 'asc', seq: 'asc' } });
-    return rows.map((row) => [row.runId, row.seq, row.nodeId, row.ms]);
+    return rows.map((row) => [row.runId, row.seq, row.memberId, row.ms]);
   }
 
   describe('catchUpNode', () => {
@@ -203,7 +203,7 @@ describe('WallWorkService (in-memory sqlite)', () => {
       const later = await turn(10_000, 12_000, { seqs: [10, 11, 12] });
       await ledger.catchUpNode('run-1', 'eng');
       const earlier = await turn(0, 5_000, {
-        nodeId: 'eng',
+        memberId: 'eng',
         seqs: [5, 6, 7],
       });
 
@@ -229,7 +229,7 @@ describe('WallWorkService (in-memory sqlite)', () => {
       expect(await recorded()).toHaveLength(2);
     });
 
-    it('records nothing for a turn its CLI timed, so a claude node keeps its own figure', async () => {
+    it('records nothing for a turn its CLI timed, so a claude member keeps its own figure', async () => {
       await nodes.createPending('run-1', 'eng');
       await turn(0, 15_000, { durationMs: 5_000 });
       await nodes.rememberWork('run-1', 'eng', 5_000, 1);
@@ -243,8 +243,8 @@ describe('WallWorkService (in-memory sqlite)', () => {
       ).toBe(5_000);
     });
 
-    it("never records another node's turns", async () => {
-      await turn(0, 30_000, { nodeId: 'qa' });
+    it("never records another member's turns", async () => {
+      await turn(0, 30_000, { memberId: 'qa' });
 
       await ledger.catchUpNode('run-1', 'eng');
 
@@ -311,13 +311,13 @@ describe('WallWorkService (in-memory sqlite)', () => {
   });
 
   describe('sweepAllQuietly', () => {
-    it("fills older team and chat runs, every node's turns, and retires itself", async () => {
+    it("fills older team and chat runs, every member's turns, and retires itself", async () => {
       await runs.create({ id: 'run-1', teamId: 'dev-team' });
       await runs.create({ id: 'chat-1' });
       await nodes.createPending('run-1', 'eng');
       await nodes.createPending('run-1', 'qa');
       await turn(0, 9_000);
-      await turn(0, 4_000, { nodeId: 'qa' });
+      await turn(0, 4_000, { memberId: 'qa' });
       await chatTurn(0, 3_000, { runId: 'chat-1' });
 
       await ledger.sweepAllQuietly();

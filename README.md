@@ -4,7 +4,7 @@
 
 ### Your coding agents, working as a team — right on your Mac.
 
-Chat with one agent, wire a whole crew together on a canvas, or hand them a board<br>
+Chat with one agent, put a whole crew together as a team, or hand them a board<br>
 of tasks and go make coffee. ☕ **Claude Code**, **Cursor Agent** and **Codex**, driven<br>
 through their own CLIs and your own logins. No cloud, no account, no telemetry.
 
@@ -90,7 +90,7 @@ Pick the agent, model, effort, context window and approval mode. Queue follow-up
 <td width="33%" valign="top">
 
 <b>🧩 Teams</b><br>
-Drag agents onto a canvas and wire them up. Independent steps run in parallel. Agents call, message, question and cancel each other.
+Give each member a role and its own instructions. A lead takes your message; any member can call, message, question and cancel any other.
 
 </td>
 <td width="33%" valign="top">
@@ -193,43 +193,44 @@ Geniro drives each agent headlessly through its own CLI. No SDKs and no API keys
 | <img src="https://img.shields.io/badge/-Codex-412991?style=flat-square" alt="Codex"> | `codex app-server` (JSON-RPC) | Runs Ollama models too |
 
 - **Install and sign in from the app.** Geniro runs each vendor's official installer when you press the button, and signs you in without opening a terminal.
-- **Several accounts per CLI.** Config profiles give each account a name and a colour. Pick one per chat, or per node in a team.
-- **MCP servers.** List, add, edit as JSON and toggle the servers each CLI knows, and switch them off for one team node.
+- **Several accounts per CLI.** Config profiles give each account a name and a colour. Pick one per chat, or per member in a team.
+- **MCP servers.** List, add, edit as JSON and toggle the servers each CLI knows, and switch them off for one team member.
 - **Your instructions, everywhere.** Write custom instructions once, and choose a language every agent replies in.
 
 ## 🧩 Teams
 
-Drag agents onto a canvas, connect them, and press run. Dependencies decide what runs first, and independent agents run **in parallel**. Teams are plain `*.team.yaml` files you can export, review and share.
+A team is a set of **members**, each one agent with its own CLI, model and profile. Pick who handles your first message, press run, and that member leads: it calls the others as the work needs them. Teams are plain `*.team.yaml` files you can export, review and share.
 
 ```mermaid
 flowchart LR
-  T(["▶ You: ship dark mode"]) --> P["🧠 Planner<br/>Claude Code"]
-  P --> B["⚙️ Backend<br/>Codex"]
-  P --> F["🎨 Frontend<br/>Cursor Agent"]
-  S[["📏 House style"]] -.-> B
-  S -.-> F
-  B --> R["🔍 Reviewer<br/>pool: 2× Claude + Codex"]
-  F --> R
-  P -. call_agent .-> X["📚 Researcher"]
+  T(["▶ You: ship dark mode"]) --> M["🧠 Manager<br/>Claude Code · leads"]
+  M -. call_agent .-> B["⚙️ Backend<br/>Codex"]
+  M -. call_agent .-> F["🎨 Frontend<br/>Cursor Agent"]
+  B -. call_agent .-> R["🔍 Reviewer<br/>pool: 2× Claude + Codex"]
+  F -. call_agent .-> X["📚 Researcher"]
 ```
 
-- **Three kinds of nodes:** a **trigger** (your prompt), **agents** (any CLI, model and profile), and **instruction blocks** (shared text wired into the agents that need it, like a house style guide).
-- **Agents talk to each other.** An agent can `call_agent` a teammate it is wired to, `message_agent` it mid-task, `await_agent` its answer, `answer_agent` its questions, or `cancel_agent` it when plans change. Each call's card, and each of an agent's conversations in the side panel, shows how long the called agent has worked in it, ticking while it works, beside its context and cost (when the agent has ended its turn and the call waits on its monitor or its own calls, the card says `waiting` and the clock stands); an analysis reads the same figure, so it can tell a callee that worked from one that waited.
+![The team editor: the mode, who handles the first message, the members with the selected Manager's public role, private instructions and character, the instruction blocks with their audiences, and the stages](docs/screenshots/team-editor.png)
+
+- **Members, not wires.** Each member has a **name**, a public **role** (what it does — every other member reads it to decide whom to call), private **instructions** (how it works — only its own turns see them) and an optional **character** (its manner and tone). Nothing is wired: any member may call any other.
+- **One lead.** The team's trigger is your first message, and you choose the member that handles it. That member runs the job; the others work when called. A member never calls one that is waiting on its own answer, so calls cannot loop back on themselves.
+- **Instruction blocks** hold text several members need, like a house style guide, addressed to **everyone** or to the members you pick.
+- **Stages** are the steps every run walks, each with how to work in it, its goal and the members responsible for it (the first one leads it).
+- **Agents talk to each other.** A member can `call_agent` a teammate, `message_agent` it mid-task, `await_agent` its answer, `answer_agent` its questions, or `cancel_agent` it when plans change. Each call's card, and each of an agent's conversations in the side panel, shows how long the called agent has worked in it, ticking while it works, beside its context and cost (when the agent has ended its turn and the call waits on its monitor or its own calls, the card says `waiting` and the clock stands); an analysis reads the same figure, so it can tell a callee that worked from one that waited.
 - **Team notes:** every agent in a run can write to and read from one shared notebook.
 - **Pull request outcomes.** An agent records where each pull request stands: draft or ready, review rounds, and whether you accepted it. Geniro counts the questions it asked you. Each record shows in the chat, and the side panel lists a pull request's whole history under it: how many times it was sent back and how long it took to be accepted.
-- **Analyze & improve.** An analysis reads the team's latest runs and its whole history: every version with what its runs cost and took, how often its pull requests were sent back and how many questions they asked you, every change made to it with who made it and why, and what earlier analyses recommended and whether you applied, skipped or passed over each item. It compares runs within a version, says whether each earlier change helped, and proposes undoing one that made the runs worse. Its card opens with what Geniro measured over those runs: time and cost per run, failed turns, each agent's share of the working time with its model and cost, and folds for every model, run and call between agents, each call edge with how much of its time the called agent spent working. It then says what costs the most and why, beside the measured figures of the agent at fault, and projects the time and cost per run with the items you tick. It does not suggest again what you passed over unless newer runs give new evidence. Nothing changes until you tick the items and press **Apply selected**.
-- **Build it by talking.** A chat dock in the builder edits the team from plain-language requests. It also reads the team's latest runs, so you can ask it what to change ("which stages should we add?"): it answers with the same report and recommendations card as **Analyze & improve**, and each team change you apply comes back as a card showing the exact diff. A chat agent can also propose a whole team as a card for you to approve.
-
-![The team canvas: a trigger feeds a planner that fans out to a codex backend agent and a cursor frontend agent, both feeding a reviewer; a house-style instruction block is wired into both builders, and the planner can call a researcher](docs/screenshots/workflow-canvas.png)
+- **Analyze & improve.** An analysis reads the team's latest runs and its whole history: every version with what its runs cost and took, how often its pull requests were sent back and how many questions they asked you, every change made to it with who made it and why, and what earlier analyses recommended and whether you applied, skipped or passed over each item. It compares runs within a version, says whether each earlier change helped, and proposes undoing one that made the runs worse. Its card opens with what Geniro measured over those runs: time and cost per run, failed turns, each agent's share of the working time with its model and cost, and folds for every model, run and call between agents, with how much of each call's time the called agent spent working. It then says what costs the most and why, beside the measured figures of the agent at fault, and projects the time and cost per run with the items you tick. It does not suggest again what you passed over unless newer runs give new evidence. Nothing changes until you tick the items and press **Apply selected**.
+- **Build it by talking.** A chat dock in the team editor edits the team from plain-language requests. It also reads the team's latest runs, so you can ask it what to change ("which stages should we add?"): it answers with the same report and recommendations card as **Analyze & improve**, and each team change you apply comes back as a card showing the exact diff. A chat agent can also propose a whole team as a card for you to approve.
+- **Teams from before members** (graphs of nodes and wires) are converted when Geniro starts, with the original kept in `backups/`; older runs keep showing the team they ran.
 
 ### 🏊 Agent pools
 
-Rate limits are the worst part of a long run. In an agent node's settings, add an **agent pool** with up to 8 members. Each member can have its own CLI, account profile, model, approval mode and MCP settings. A reviewer could use two Claude accounts and one Codex setup, for example.
+Rate limits are the worst part of a long run. In a member's settings, add an **agent pool** with up to 8 configurations. Each configuration can have its own CLI, account profile, model, approval mode and MCP settings. A reviewer could use two Claude accounts and one Codex setup, for example.
 
-- Work goes to the first member, in pool order, that is available.
-- When a member hits a usage limit or its sign-in expires, Geniro hands the work to the next one. It remembers until when that account is spent, across every team run, for calls, team steps and direct messages alike.
-- Once the limit resets, the next turn or call goes back to the first member and carries the recent conversation over.
-- Continuing a call keeps it on the member that handled it.
+- Work goes to the first configuration, in pool order, that is available.
+- When one hits a usage limit or its sign-in expires, Geniro hands the work to the next one. It remembers until when that account is spent, across every team run, for calls, team steps and direct messages alike.
+- Once the limit resets, the next turn or call goes back to the first configuration and carries the recent conversation over.
+- Continuing a call keeps it on the configuration that handled it.
 
 ## 📋 Task board
 
@@ -399,7 +400,7 @@ Geniro has **no cloud backend, no account and no telemetry**. Chats, teams and t
 
 All screenshots use synthetic data from a fictional `acme-web` / `acme-api` project.
 
-![A finished team run: each agent's messages and tool calls in one transcript, and the agents panel with every node's model, spend, time and tool count](docs/screenshots/workflow-run.png)
+![A finished team run: each agent's messages and tool calls in one transcript, and the agents panel with every member's model, spend, time and tool count](docs/screenshots/workflow-run.png)
 
 ![Settings: the three agent CLIs detected with their versions, notification delivery, theme and archive retention](docs/screenshots/settings.png)
 

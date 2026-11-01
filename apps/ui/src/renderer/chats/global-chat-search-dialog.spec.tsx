@@ -17,7 +17,7 @@ import { GlobalChatSearchDialog } from './global-chat-search-dialog';
 const HIT: GlobalChatSearchHit = {
   runId: 'run-1',
   itemId: 'item-1',
-  nodeId: null,
+  memberId: null,
   seq: 12,
   kind: 'message',
   role: 'assistant',

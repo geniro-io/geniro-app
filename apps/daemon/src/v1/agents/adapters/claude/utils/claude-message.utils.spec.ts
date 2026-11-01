@@ -2935,7 +2935,7 @@ describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
   });
 
   it('prices a delegate on ITS OWN session’s result under fan-out, never a neighbour’s', () => {
-    // One adapter — and so one ledger — maps every claude process a graph
+    // One adapter — and so one ledger — maps every claude process a team
     // fans out to. Session B's `result` landing between A's delegate return
     // and A's own `result` must not price A's delegate into B's stream.
     const ledger = new ClaudeSessionCostLedger(LIST_PRICES);

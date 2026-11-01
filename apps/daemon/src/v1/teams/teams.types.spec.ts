@@ -4,155 +4,162 @@ import { TeamSchema } from './teams.types';
 
 /**
  * The STRICT schema — the one the HTTP routes validate against
- * (`CreateTeamDto` / `SaveTeamDto`), which is the door the builder
- * autosaves through. `TeamYamlSchema` layers YAML leniency on top and is
- * covered by `utils/team-yaml.spec.ts`; a bound pinned only there would
- * leave this arm free to drift, and a control character accepted here is
- * written to YAML and then makes every later read of that file throw.
+ * (`CreateTeamDto` / `SaveTeamDto`), the door the editor autosaves through.
+ * `TeamYamlSchema` layers YAML leniency on top and is covered by
+ * `utils/team-yaml.spec.ts`; a control character accepted here is written to
+ * YAML and then makes every later read of that file throw.
  */
-function parse(instructions: unknown): ReturnType<typeof TeamSchema.safeParse> {
-  return TeamSchema.safeParse({
-    name: 'n',
-    nodes: [{ id: 'style', kind: 'instruction', instructions }],
-    edges: [],
-  });
-}
+const worker = (
+  over: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+  id: 'worker',
+  name: 'Worker',
+  agent: 'claude',
+  approval: 'auto',
+  ...over,
+});
 
-describe('TeamInstructionNodeSchema.instructions', () => {
+const teamWith = (
+  over: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+  name: 'n',
+  mode: 'lead',
+  members: [worker()],
+  triggers: [{ kind: 'first-message', member: 'worker' }],
+  instructionBlocks: [],
+  ...over,
+});
+
+const parse = (
+  over: Record<string, unknown> = {},
+): ReturnType<typeof TeamSchema.safeParse> =>
+  TeamSchema.safeParse(teamWith(over));
+
+describe('InstructionBlockSchema.text', () => {
+  const parseText = (text: unknown): ReturnType<typeof TeamSchema.safeParse> =>
+    parse({
+      instructionBlocks: [
+        { id: 'style', title: 'Style', text, audience: 'everyone' },
+      ],
+    });
+
   it('refuses a control character', () => {
-    // Written as the ESCAPE, never the raw byte: a NUL in a .ts file makes
-    // git classify the blob as binary — no diff, no inline review comments,
-    // no three-way merge — and the pre-commit hook refuses it for that reason.
-    const result = parse('a\u0000b');
+    const result = parseText('a\u0000b');
     expect(result.success).toBe(false);
     expect(JSON.stringify(result.error?.issues)).toContain(
       'control characters',
     );
   });
 
-  // Instruction text has no size limit: a block past the old 16,000-character
-  // cap made its whole team fail to load.
   it('accepts text of any length', () => {
-    expect(parse('x'.repeat(100_000)).success).toBe(true);
+    expect(parseText('x'.repeat(100_000)).success).toBe(true);
   });
 
-  // A block is dropped on the canvas before it is written, so the strict
-  // schema has to accept the empty string the builder creates it with.
-  it('accepts the empty string', () => {
-    expect(parse('').success).toBe(true);
+  it('accepts the empty string a just-added block is saved with', () => {
+    expect(parseText('').success).toBe(true);
   });
 
-  // Only the YAML layer defaults it — the wire shape is deliberately
-  // default-free so its request and response renderings collapse to one type.
   it('requires the field on the wire', () => {
-    expect(parse(undefined).success).toBe(false);
+    expect(parseText(undefined).success).toBe(false);
+  });
+
+  it('takes everyone or a list of member ids as its audience, nothing else', () => {
+    const withAudience = (audience: unknown): boolean =>
+      parse({
+        instructionBlocks: [{ id: 'b', title: 'B', text: 'x', audience }],
+      }).success;
+
+    expect(withAudience('everyone')).toBe(true);
+    expect(withAudience(['worker'])).toBe(true);
+    expect(withAudience('worker')).toBe(false);
+    expect(withAudience([''])).toBe(false);
   });
 });
 
 /**
- * Every OTHER node string that reaches a spawned CLI. `role` is claude's
- * `--append-system-prompt` argv, `name`/`description`/`id` are written into a
- * caller's "May call" block in that same argv, `model`/`effort` are argv flags
- * and `configDir` is the child's env — and node throws at `spawn` on a NUL in
- * any of them, so the node would fail every run of an imported team.
+ * Every member string that reaches a spawned CLI. `instructions` and
+ * `character` are claude's `--append-system-prompt` argv, `name`/`role`/`id`
+ * are written into every other member's roster in that same argv,
+ * `model`/`effort` are argv flags and `configDir` is the child's env — and
+ * node throws at `spawn` on a NUL in any of them.
  */
-describe('agent node text that reaches a CLI refuses a NUL', () => {
-  function parseAgent(
+describe('member text that reaches a CLI refuses a NUL', () => {
+  const parseMember = (
     fields: Record<string, unknown>,
-  ): ReturnType<typeof TeamSchema.safeParse> {
-    return TeamSchema.safeParse({
-      name: 'n',
-      nodes: [
-        {
-          id: 'worker',
-          kind: 'agent',
-          agent: 'claude',
-          approval: 'auto',
-          ...fields,
-        },
-      ],
-      edges: [],
-    });
-  }
+  ): ReturnType<typeof TeamSchema.safeParse> =>
+    parse({ members: [worker(fields)] });
 
   it.each([
+    'instructions',
     'role',
-    'description',
+    'character',
     'name',
     'model',
     'effort',
     'contextWindow',
     'configDir',
   ])('refuses a NUL in `%s`', (field) => {
-    const result = parseAgent({ [field]: 'a\u0000b' });
+    const result = parseMember({ [field]: 'a\u0000b' });
     expect(result.success).toBe(false);
     expect(JSON.stringify(result.error?.issues)).toContain('NUL');
   });
 
-  it('refuses a NUL in a node id', () => {
-    const result = TeamSchema.safeParse({
-      name: 'n',
-      nodes: [{ id: 'start\u0000', kind: 'trigger', trigger: 'manual' }],
-      edges: [],
-    });
-    expect(result.success).toBe(false);
+  it('refuses a NUL in a member id', () => {
+    expect(parseMember({ id: 'worker\u0000' }).success).toBe(false);
   });
 
-  // The same schema READS the library's YAML and every run's graph copy, so
-  // refusing more than what breaks `spawn` locked out stored teams whose
-  // role held a pasted ESC or form-feed — characters a CLI's argv takes fine.
-  it('still reads a role holding an ESC or a form-feed', () => {
+  it('still reads instructions holding an ESC or a form-feed', () => {
     expect(
-      parseAgent({ role: 'bold \u001b[1mtext\u001b[0m\u000cnext page' })
+      parseMember({
+        instructions: 'bold \u001b[1mtext\u001b[0m\u000cnext page',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('still accepts tabs and line breaks in instructions and a role', () => {
+    expect(
+      parseMember({ instructions: 'line one\n\tline two\r\n', role: 'a\nb' })
         .success,
     ).toBe(true);
   });
 
-  // A role is prose: the three C0 characters prose is made of must pass, or
-  // every multi-line role written so far would stop loading.
-  it('still accepts tabs and line breaks in a role', () => {
-    expect(
-      parseAgent({ role: 'line one\n\tline two\r\n', description: 'a\nb' })
-        .success,
-    ).toBe(true);
+  it('bounds the name and the character', () => {
+    expect(parseMember({ name: 'x'.repeat(80) }).success).toBe(true);
+    expect(parseMember({ name: 'x'.repeat(81) }).success).toBe(false);
+    expect(parseMember({ name: '' }).success).toBe(false);
+    expect(parseMember({ character: 'x'.repeat(2000) }).success).toBe(true);
+    expect(parseMember({ character: 'x'.repeat(2001) }).success).toBe(false);
   });
 });
 
 /**
- * `mcpDisabled` — the servers a node (or a pool member) runs WITHOUT. Each name
- * reaches a CLI as argv, a config key or a JSON file, so it refuses every
+ * `mcpDisabled` — the servers a member (or a pool member) runs WITHOUT. Each
+ * name reaches a CLI as argv, a config key or a JSON file, so it refuses every
  * control character; the list and each name are bounded. TWIN:
- * `mcpServerNameProblem` / `MAX_NODE_MCP_DISABLED` in the renderer's
- * `teams/node-validate.ts`.
+ * `mcpServerNameProblem` / `MAX_MEMBER_MCP_DISABLED` in the renderer's
+ * `teams/member-validate.ts`.
  */
-describe('TeamAgentNode.mcpDisabled', () => {
-  function parseWith(
+describe('TeamMember.mcpDisabled', () => {
+  const parseWith = (
     mcpDisabled: unknown,
-    where: 'node' | 'member' = 'node',
-  ): ReturnType<typeof TeamSchema.safeParse> {
-    return TeamSchema.safeParse({
-      name: 'n',
-      nodes: [
-        {
-          id: 'worker',
-          kind: 'agent',
-          agent: 'claude',
-          approval: 'auto',
-          ...(where === 'node'
+    where: 'member' | 'pool' = 'member',
+  ): ReturnType<typeof TeamSchema.safeParse> =>
+    parse({
+      members: [
+        worker(
+          where === 'member'
             ? { mcpDisabled }
-            : { pool: [{ agent: 'codex', mcpDisabled }] }),
-        },
+            : { pool: [{ agent: 'codex', mcpDisabled }] },
+        ),
       ],
-      edges: [],
     });
-  }
 
-  it('accepts server names on a node and on a pool member', () => {
+  it('accepts server names on a member and on a pool member', () => {
     expect(parseWith(['codegraph', 'claude.ai Gmail']).success).toBe(true);
-    expect(parseWith(['playwright'], 'member').success).toBe(true);
+    expect(parseWith(['playwright'], 'pool').success).toBe(true);
   });
 
-  it.each(['node', 'member'] as const)(
+  it.each(['member', 'pool'] as const)(
     'refuses an empty name or a control character on a %s',
     (where) => {
       expect(parseWith([''], where).success).toBe(false);
@@ -174,16 +181,28 @@ describe('TeamAgentNode.mcpDisabled', () => {
   });
 });
 
+describe('Team.mode and Team.triggers', () => {
+  it('takes lead or relay as the mode, and requires one', () => {
+    expect(parse({ mode: 'lead' }).success).toBe(true);
+    expect(parse({ mode: 'relay' }).success).toBe(true);
+    expect(parse({ mode: 'graph' }).success).toBe(false);
+    expect(parse({ mode: undefined }).success).toBe(false);
+  });
+
+  it('takes a first-message trigger naming a member, and no other kind', () => {
+    expect(
+      parse({ triggers: [{ kind: 'manual', member: 'worker' }] }).success,
+    ).toBe(false);
+    expect(
+      parse({ triggers: [{ kind: 'first-message', member: '' }] }).success,
+    ).toBe(false);
+  });
+});
+
 describe('Team.maxActiveTurns', () => {
   const parseWith = (
     maxActiveTurns: unknown,
-  ): ReturnType<typeof TeamSchema.safeParse> =>
-    TeamSchema.safeParse({
-      name: 'n',
-      nodes: [],
-      edges: [],
-      maxActiveTurns,
-    });
+  ): ReturnType<typeof TeamSchema.safeParse> => parse({ maxActiveTurns });
 
   it('accepts a whole number of one or more, and its absence', () => {
     expect(parseWith(1).success).toBe(true);
@@ -204,19 +223,18 @@ describe('Team.stages', () => {
   ): Record<string, unknown> => ({
     id: 'investigation',
     title: 'Investigation',
-    doneWhen: 'The cause is known',
+    goal: 'The cause is known',
     ...over,
   });
   const parseWith = (
     stages: unknown,
-  ): ReturnType<typeof TeamSchema.safeParse> =>
-    TeamSchema.safeParse({ name: 'n', nodes: [], edges: [], stages });
+  ): ReturnType<typeof TeamSchema.safeParse> => parse({ stages });
 
   it('accepts a stage list, and its absence', () => {
     expect(
       parseWith([
-        stage({ next: ['fix', 'implementation'], ownerHint: 'lead' }),
-        stage({ id: 'fix', title: 'Fix', instructions: 'Patch it.' }),
+        stage({ next: ['fix', 'implementation'], responsible: ['worker'] }),
+        stage({ id: 'fix', title: 'Fix', howToWork: 'Patch it.' }),
         stage({ id: 'implementation', title: 'Implementation' }),
       ]).success,
     ).toBe(true);
@@ -230,18 +248,23 @@ describe('Team.stages', () => {
     expect(parseWith([stage({ id: 'step-2' })]).success).toBe(true);
   });
 
-  it('refuses a blank title or done-when and an over-long field', () => {
+  it('refuses a blank title or goal and an over-long field', () => {
     expect(parseWith([stage({ title: '   ' })]).success).toBe(false);
-    expect(parseWith([stage({ doneWhen: '' })]).success).toBe(false);
+    expect(parseWith([stage({ goal: '' })]).success).toBe(false);
     expect(parseWith([stage({ title: 'x'.repeat(81) })]).success).toBe(false);
-    expect(parseWith([stage({ instructions: 'x'.repeat(4001) })]).success).toBe(
+    expect(parseWith([stage({ howToWork: 'x'.repeat(4001) })]).success).toBe(
       false,
     );
   });
 
   it('refuses a NUL in any stage text that reaches an agent', () => {
-    for (const field of ['title', 'instructions', 'doneWhen', 'ownerHint']) {
-      expect(parseWith([stage({ [field]: 'a\u0000b' })]).success).toBe(false);
+    for (const over of [
+      { title: 'a\u0000b' },
+      { howToWork: 'a\u0000b' },
+      { goal: 'a\u0000b' },
+      { responsible: ['a\u0000b'] },
+    ]) {
+      expect(parseWith([stage(over)]).success).toBe(false);
     }
   });
 
@@ -249,14 +272,5 @@ describe('Team.stages', () => {
     const description = TeamSchema.shape.stages.description ?? '';
     expect(description).toContain('investigation');
     expect(description).not.toMatch(/→\s*done\b/);
-  });
-
-  it('reads a team written before stages existed', () => {
-    const parsed = TeamSchema.safeParse({
-      name: 'n',
-      nodes: [],
-      edges: [],
-    });
-    expect(parsed.success && parsed.data.stages).toBeUndefined();
   });
 });

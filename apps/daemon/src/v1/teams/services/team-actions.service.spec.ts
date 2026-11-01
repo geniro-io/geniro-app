@@ -32,8 +32,8 @@ import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
-import type { GraphExecutorService } from './graph-executor.service';
 import { TeamActionsService } from './team-actions.service';
+import type { TeamExecutorService } from './team-executor.service';
 
 /** Real SQLite under the shared press, with the executor's delivery observed. */
 describe('TeamActionsService (in-memory sqlite)', () => {
@@ -106,7 +106,7 @@ describe('TeamActionsService (in-memory sqlite)', () => {
         NO_COMMANDS,
         new ActionCommandRegistry(),
       ),
-      { sendMessage } as unknown as GraphExecutorService,
+      { sendMessage } as unknown as TeamExecutorService,
     );
     await runs.create({ id: 'run-w', status: 'running', teamId: 'team' });
     await runs.create({ id: 'run-c', status: 'completed', teamId: null });

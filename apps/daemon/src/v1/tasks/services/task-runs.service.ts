@@ -17,10 +17,10 @@ import { ProjectQueueService } from '../../projects/services/project-queue.servi
 import { taskIdentifier } from '../../projects/utils/project-key';
 import { Run } from '../../runs/entity/run.entity';
 import { isTerminalRunStatus } from '../../runs/runs.types';
-import { GraphExecutorService } from '../../teams/services/graph-executor.service';
 import { RunTeamService } from '../../teams/services/run-team.service';
+import { TeamExecutorService } from '../../teams/services/team-executor.service';
 import { TeamStoreService } from '../../teams/services/team-store.service';
-import { nodesThatAsk } from '../../teams/utils/unattended';
+import { membersThatAsk } from '../../teams/utils/unattended';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import {
@@ -86,7 +86,7 @@ export class TaskRunsService {
     private readonly tasks: TasksService,
     private readonly chats: ChatService,
     private readonly queue: ProjectQueueService,
-    private readonly executor: GraphExecutorService,
+    private readonly executor: TeamExecutorService,
     private readonly groups: RunGroupsService,
     private readonly labelInstructions: LabelInstructionsService,
     private readonly teams: TeamStoreService,
@@ -176,7 +176,7 @@ export class TaskRunsService {
     }
     const safe = await this.teams
       .get(asUser.teamSlug)
-      .then(({ team }) => nodesThatAsk(team).length === 0)
+      .then(({ team }) => membersThatAsk(team).length === 0)
       .catch(() => false);
     return (slug) => safe && slug === asUser.teamSlug;
   }
@@ -290,8 +290,8 @@ export class TaskRunsService {
         });
         runId = run.id;
         // No `sendMessage` here, and that is the arm's whole difference: a
-        // graph's seed prompt IS its opening message, persisted by the
-        // executor before it walks. A LATER press sends into this run instead
+        // team's seed prompt IS its opening message, persisted by the
+        // executor before the trigger member's first turn. A LATER press sends into this run instead
         // — see `resumeTeam`.
         return await this.recordRun(taskId, run.id, input);
       }
@@ -338,12 +338,12 @@ export class TaskRunsService {
   }
 
   /**
-   * Start the graph arm.
+   * Start the team arm.
    *
    * The three overrides it passes are the whole of what a task run needs the
    * executor to do differently, and each is an answer the library route has no
    * way to give: the card's `taskId` (so `TaskSettleService` can move it when
-   * the graph finishes), the card's own title (so the sidebar names the WORK
+   * the team run finishes), the card's own title (so the sidebar names the WORK
    * rather than restating which team ran), and the group resolved for it
    * in `startClaimed` (a worktree being a path no auto-file rule has ever
    * seen).
@@ -478,15 +478,15 @@ export class TaskRunsService {
   /**
    * Continue the card's existing TEAM run, or answer null when there is
    * none to continue and a new one has to be made — `resume`'s twin for the
-   * graph arm.
+   * team arm.
    *
-   * The press goes through `GraphExecutorService.sendMessage`, the channel the
-   * run's own composer uses: a settled run is walked again from its trigger,
-   * every node resuming its own session, so the team remembers the earlier
+   * The press goes through `TeamExecutorService.sendMessage`, the channel the
+   * run's own composer uses: a settled run starts its trigger member again,
+   * every member resuming its own session, so the team remembers the earlier
    * pass instead of starting cold in a second thread beside the first. The
    * text is `continuation`'s, on the agent arm's reasoning.
    *
-   * The run keeps the graph it was started with — its snapshot, never the
+   * The run keeps the team it was started with — its snapshot, never the
    * library's current copy (`RunTeamService`) — and the settings it was
    * started with: a team run has no settings patch to re-resolve the
    * card's label instructions or the board's switches onto.
@@ -525,7 +525,7 @@ export class TaskRunsService {
    *
    * A person's press always may. The autopilot's was vetted by
    * `unattendedTeam` against the LIBRARY's copy, but a continued run walks
-   * its own snapshot, which may still hold a node that asks — and a card the
+   * its own snapshot, which may still hold a member that asks — and a card the
    * autopilot holds must never reach a permission card nobody will answer. So
    * the snapshot is asked too; one that asks, or cannot be read, makes a new
    * run from the vetted library copy instead.
@@ -540,7 +540,7 @@ export class TaskRunsService {
     }
     return this.runTeams
       .teamOf(assertTeamRun(run, run.id), em)
-      .then((team) => nodesThatAsk(team).length === 0)
+      .then((team) => membersThatAsk(team).length === 0)
       .catch(() => false);
   }
 
@@ -687,7 +687,7 @@ export class TaskRunsService {
     //
     // Routed by ENGINE, because both deletes are kind-guarded: `chats.delete`
     // asserts a chat run and `deleteRun` asserts a team one, so sending a
-    // graph run to the chat teardown throws `NOT_A_CHAT_RUN` — swallowed by
+    // team run to the chat teardown throws `NOT_A_CHAT_RUN` — swallowed by
     // the catch below, leaving exactly the orphaned run row this block exists
     // to prevent, and leaving it silently.
     if (runId !== null) {

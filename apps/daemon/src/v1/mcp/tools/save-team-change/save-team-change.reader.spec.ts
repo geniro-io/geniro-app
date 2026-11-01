@@ -16,7 +16,7 @@ import { SaveTeamChangeTool } from './save-team-change.tool';
 
 const CONTEXT = {
   runId: 'analysis',
-  nodeId: 'agent',
+  memberId: 'agent',
   conversationId: null,
   caller: 'agent',
   requestId: 1,
@@ -339,8 +339,8 @@ describe('readSaveTeamChangeArgs edits', () => {
 
   it('reads each edit shape', () => {
     expect(edits([{ find: 'a', replace: 'b' }])).toBe(true);
-    expect(edits([{ path: 'nodes/x/model', value: 'sonnet' }])).toBe(true);
-    expect(edits([{ path: 'nodes/x/model', remove: true }])).toBe(true);
+    expect(edits([{ path: 'members/x/model', value: 'sonnet' }])).toBe(true);
+    expect(edits([{ path: 'members/x/model', remove: true }])).toBe(true);
   });
 
   it('refuses the whole team, no edits, an empty find, and a mixed edit', () => {

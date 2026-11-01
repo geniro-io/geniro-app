@@ -498,12 +498,12 @@ describe('resolveConversationToolCalls', () => {
   const toolRow = (
     seq: number,
     inCall: string,
-    nodeId = 'callee',
+    memberId = 'callee',
     parentToolUseId?: string,
   ): ChatItem => ({
     id: `i${seq}`,
     runId: 'w1',
-    nodeId,
+    memberId,
     seq,
     kind: 'tool_call',
     role: null,

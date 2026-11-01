@@ -3542,7 +3542,7 @@ describe('AgentsPanel workflows', () => {
     id,
     createdAt: '2026-08-30T00:00:00.000Z',
     seq: 1,
-    nodeId: null,
+    memberId: null,
     parentToolUseId: null,
     workflow: {
       id,

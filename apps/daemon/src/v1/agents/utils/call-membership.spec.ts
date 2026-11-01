@@ -10,10 +10,10 @@ import {
 
 function row(
   kind: ItemKind,
-  nodeId: string | null,
+  memberId: string | null,
   payload: unknown,
 ): CallMembershipRow {
-  return { kind, nodeId, payload };
+  return { kind, memberId, payload };
 }
 
 const start = row('call_started', 'manager', {
@@ -63,7 +63,7 @@ describe('callMembershipOf', () => {
     }
   });
 
-  it('keeps a row another node wrote about the call in the main flow', () => {
+  it('keeps a row another member wrote about the call in the main flow', () => {
     expect(
       callMembershipOf(
         row('system', 'manager', { callId: 'call-1', stalledCall: true }),

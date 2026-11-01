@@ -107,7 +107,7 @@ function isReplaced(chat: ChatActions | null, entry: ActionEntry): boolean {
       (action) =>
         action.seq > entry.seq &&
         action.actionId === entry.action.actionId &&
-        action.nodeId === entry.action.nodeId &&
+        action.memberId === entry.action.nodeId &&
         action.conversationId === entry.action.conversationId,
     ) ?? false
   );

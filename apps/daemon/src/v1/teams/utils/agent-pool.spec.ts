@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   CalleeTurnOutcome,
   PoolStanding,
-  TeamAgentNode,
+  TeamMember,
 } from '../teams.types';
 import {
   callPoolHandOffPrompt,
@@ -19,16 +19,16 @@ import {
   poolSize,
 } from './agent-pool';
 
-function pooled(): TeamAgentNode {
+function pooled(): TeamMember {
   return {
     id: 'engineer',
-    kind: 'agent',
+    name: 'Engineer',
     agent: 'claude',
     model: 'opus',
     effort: 'high',
     configDir: '/profiles/work',
-    role: 'Build things.',
-    description: 'Builds.',
+    instructions: 'Build things.',
+    role: 'Builds.',
     approval: 'auto',
     pool: [
       { agent: 'claude', configDir: '/profiles/personal' },
@@ -50,7 +50,7 @@ function failed(patch: Partial<CalleeTurnOutcome> = {}): CalleeTurnOutcome {
 }
 
 describe('poolMemberNode', () => {
-  it('member 1 is the node’s own settings, without the pool', () => {
+  it('member 1 is the team member’s own settings, without the pool', () => {
     const member = poolMemberNode(pooled(), 1);
     expect(member).toMatchObject({
       agent: 'claude',
@@ -60,21 +60,21 @@ describe('poolMemberNode', () => {
     expect(member?.pool).toBeUndefined();
   });
 
-  it('a later member REPLACES the CLI settings whole and keeps the node’s own text', () => {
+  it('a later member REPLACES the CLI settings whole and keeps the member’s own text', () => {
     const member = poolMemberNode(pooled(), 2);
     expect(member).toEqual({
       id: 'engineer',
-      kind: 'agent',
+      name: 'Engineer',
       agent: 'claude',
       configDir: '/profiles/personal',
-      role: 'Build things.',
-      description: 'Builds.',
+      instructions: 'Build things.',
+      role: 'Builds.',
       approval: 'auto',
     });
   });
 
   it('a member compacts at its own threshold, and never when it states none', () => {
-    const node: TeamAgentNode = {
+    const node: TeamMember = {
       ...pooled(),
       autoCompactPercent: 80,
       pool: [{ agent: 'codex', autoCompactPercent: 60 }, { agent: 'codex' }],
@@ -85,7 +85,7 @@ describe('poolMemberNode', () => {
   });
 
   it('a member runs without its OWN switched-off MCP servers, never member 1’s', () => {
-    const node: TeamAgentNode = {
+    const node: TeamMember = {
       ...pooled(),
       mcpDisabled: ['codegraph'],
       pool: [
@@ -100,8 +100,8 @@ describe('poolMemberNode', () => {
     expect(poolMemberNode(node, 3)).not.toHaveProperty('mcpDisabled');
   });
 
-  it('a member runs its own approval mode, else the node’s', () => {
-    const node: TeamAgentNode = {
+  it('a pool member runs its own approval mode, else the team member’s', () => {
+    const node: TeamMember = {
       ...pooled(),
       approval: 'acceptEdits',
       pool: [{ agent: 'codex', approval: 'auto' }, { agent: 'codex' }],
@@ -116,7 +116,7 @@ describe('poolMemberNode', () => {
     expect(poolMemberNode(pooled(), 1.5)).toBeNull();
   });
 
-  it('a node with no pool is a pool of one', () => {
+  it('a team member with no pool is a pool of one', () => {
     const { pool: _pool, ...single } = pooled();
     expect(poolSize(single)).toBe(1);
     expect(poolSize(pooled())).toBe(3);
@@ -156,7 +156,7 @@ describe('conversationStartMember', () => {
       ...patch,
     });
 
-  it('starts a node with no conversation yet on the first member in order', () => {
+  it('starts a team member with no conversation yet on the first pool member in order', () => {
     expect(start({ standings: ['unavailable', null], hasSession: false })).toBe(
       2,
     );
@@ -265,7 +265,7 @@ describe('poolHandOffNotice', () => {
 });
 
 describe('poolMoveNotice', () => {
-  it('names the member a node turn moves to, back or on', () => {
+  it('names the pool member a turn moves to, back or on', () => {
     const [first, , third] = poolAttempts(pooled(), [1, 2, 3]);
     expect(poolMoveNotice('Engineer', 3, first!)).toBe(
       'Engineer: pool member 1 (claude · opus · effort high · separate profile) is available again — moving the conversation back to it from member 3.',

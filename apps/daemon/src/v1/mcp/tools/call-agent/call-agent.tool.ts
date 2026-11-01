@@ -9,20 +9,20 @@ import { callAgentInstructions } from './call-agent.instructions';
 import { poolMemberArg, validateCallAgentArgs } from './call-agent.reader';
 import { callAgentSchema } from './call-agent.schema';
 
-/** `call_agent` — invoke one of this node's call-wired agents. */
+/** `call_agent` — invoke another member of this team. */
 export class CallAgentTool extends CallMcpTool {
   readonly name = 'call_agent';
 
   protected instructions({
     runId,
-    nodeId,
+    memberId,
     conversationId,
   }: McpListContext): string {
     // Each callee's own description is the routing signal — pick the agent
     // whose blurb matches the task, no hand-written roster in your role.
     const callable =
       this.calls
-        .listCallees(runId, nodeId)
+        .listCallees(runId, memberId)
         .map((callee) => calleeSummary(callee, CALLEE_DESCRIPTION_MAX))
         .join('; ') || 'none';
     return callAgentInstructions(callable, conversationId !== null);

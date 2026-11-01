@@ -13,7 +13,7 @@ function row(
   return {
     id,
     runId: 'run-12345678',
-    nodeId: null,
+    memberId: null,
     seq,
     kind,
     role: kind === 'message' ? 'assistant' : null,

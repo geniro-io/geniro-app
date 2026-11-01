@@ -110,7 +110,7 @@ describe('threadAnalysisBrief', () => {
 });
 
 describe('teamAnalysisGuide', () => {
-  it('starts from the history, then the cross-run comparison, and asks for models and the graph', () => {
+  it('starts from the history, then the cross-run comparison, and asks for models and the team structure', () => {
     const guide = teamAnalysisGuide(null, true);
 
     expect(guide).toContain('# Team analysis');
@@ -119,7 +119,7 @@ describe('teamAnalysisGuide', () => {
     );
     expect(guide).toContain('7. Model effectiveness.');
     expect(guide).toContain('recommend nothing from a single sample');
-    expect(guide).toContain('8. Graph structure.');
+    expect(guide).toContain('8. Team structure.');
     expect(guide).toContain('its `runId` and seq');
   });
 

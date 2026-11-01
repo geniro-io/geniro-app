@@ -80,20 +80,20 @@ function Rows({ rows }: { rows: readonly (Row | null)[] }): React.JSX.Element {
   );
 }
 
-const laneName = (nodeId: string | null): string => nodeId ?? 'agent';
+const laneName = (memberId: string | null): string => memberId ?? 'agent';
 
 function Swatch({
   data,
-  nodeId,
+  memberId,
 }: {
   data: RunWaterfallDto;
-  nodeId: string | null;
+  memberId: string | null;
 }): React.JSX.Element {
   return (
     <span
       aria-hidden="true"
       className="size-2 shrink-0 rounded-[2px]"
-      style={{ backgroundColor: categoryToken(laneIndexOf(data, nodeId)) }}
+      style={{ backgroundColor: categoryToken(laneIndexOf(data, memberId)) }}
     />
   );
 }
@@ -127,8 +127,8 @@ export function WaterfallDetail({
     <div data-slot="waterfall-detail" className="flex flex-col gap-3">
       <div className="flex flex-col gap-0.5">
         <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          {view.nodeId === undefined ? null : (
-            <Swatch data={data} nodeId={view.nodeId} />
+          {view.memberId === undefined ? null : (
+            <Swatch data={data} memberId={view.memberId} />
           )}
           {view.eyebrow}
         </span>
@@ -166,7 +166,7 @@ export function WaterfallDetail({
 }
 
 interface Described {
-  nodeId?: string | null;
+  memberId?: string | null;
   eyebrow: string;
   title: string;
   note?: string;
@@ -201,7 +201,7 @@ function describe(
       const to = from + call.durationMs;
       const answering = data.turns.filter(
         (turn) =>
-          turn.nodeId === call.calleeNodeId &&
+          turn.memberId === call.calleeMemberId &&
           overlapMs(Date.parse(turn.startedAt), endOf(turn), { from, to }) > 0,
       );
       const worked = answering.reduce(
@@ -219,12 +219,12 @@ function describe(
         (sum, turn) => sum + (turn.estimatedCostUsd ?? 0),
         0,
       );
-      const callee = laneName(call.calleeNodeId);
-      const caller = laneName(call.callerNodeId);
+      const callee = laneName(call.calleeMemberId);
+      const caller = laneName(call.callerMemberId);
       const wall = Math.max(1, Date.parse(data.to) - Date.parse(data.from));
       const blocked = selected.kind === 'blocked';
       return {
-        nodeId: blocked ? call.callerNodeId : call.calleeNodeId,
+        memberId: blocked ? call.callerMemberId : call.calleeMemberId,
         eyebrow: `${caller} · ${at(call.startedAt)}`,
         title: blocked ? `${caller} waited on ${callee}` : `→ ${callee}`,
         note: blocked
@@ -289,8 +289,8 @@ function describe(
         start + wait.durationMs,
       );
       return {
-        nodeId: wait.nodeId,
-        eyebrow: `${laneName(wait.nodeId)} · ${at(wait.startedAt)}`,
+        memberId: wait.memberId,
+        eyebrow: `${laneName(wait.memberId)} · ${at(wait.startedAt)}`,
         title: wait.question ? 'A question for you' : 'A permission request',
         rows: [
           { label: 'tool', value: wait.toolName ?? '—' },
@@ -319,11 +319,11 @@ function describe(
       return delegate === undefined
         ? null
         : {
-            nodeId: delegate.nodeId,
-            eyebrow: `${laneName(delegate.nodeId)} · ${at(delegate.startedAt)}`,
+            memberId: delegate.memberId,
+            eyebrow: `${laneName(delegate.memberId)} · ${at(delegate.startedAt)}`,
             title: 'A sub-agent',
             rows: [
-              { label: 'launched by', value: laneName(delegate.nodeId) },
+              { label: 'launched by', value: laneName(delegate.memberId) },
               {
                 label: 'ran for',
                 value: formatTurnDuration(delegate.durationMs),
@@ -357,8 +357,8 @@ function describeTurn(
           ? ' · working now'
           : '';
   return {
-    nodeId: turn.nodeId,
-    eyebrow: `${laneName(turn.nodeId)} · ${at(turn.startedAt)}`,
+    memberId: turn.memberId,
+    eyebrow: `${laneName(turn.memberId)} · ${at(turn.startedAt)}`,
     title: `A turn${outcome}`,
     note:
       turn.timingSource === 'derived'
@@ -454,8 +454,8 @@ function RunSummary({ data }: { data: RunWaterfallDto }): React.JSX.Element {
   for (const segment of data.criticalPath) {
     if (segment.kind === 'work') {
       byNode.set(
-        segment.nodeId,
-        (byNode.get(segment.nodeId) ?? 0) + segment.durationMs,
+        segment.memberId,
+        (byNode.get(segment.memberId) ?? 0) + segment.durationMs,
       );
     } else if (segment.kind === 'waiting_on_user') {
       waited += segment.durationMs;
@@ -484,8 +484,8 @@ function RunSummary({ data }: { data: RunWaterfallDto }): React.JSX.Element {
           </p>
           <Rows
             rows={[
-              ...holders.map(([nodeId, ms]) => ({
-                label: laneName(nodeId),
+              ...holders.map(([memberId, ms]) => ({
+                label: laneName(memberId),
                 value: `${formatDuration(ms)} · ${share(ms)}`,
               })),
               waited === 0

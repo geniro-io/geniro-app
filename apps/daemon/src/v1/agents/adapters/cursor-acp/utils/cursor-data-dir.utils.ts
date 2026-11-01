@@ -82,7 +82,7 @@ function readDisabled(file: string): string[] {
 
 /**
  * A throwaway `CURSOR_DATA_DIR` for ONE turn whose `mcp-disabled.json` adds a
- * team node's switched-off servers to the user's own — the only per-turn
+ * team member's switched-off servers to the user's own — the only per-turn
  * MCP switch this CLI has.
  *
  * **Where the list lives.** cursor-agent keeps a workspace's disabled servers,
@@ -98,7 +98,7 @@ function readDisabled(file: string): string[] {
  * **What this builds.** `<dir>/projects/<root key>/` is a REAL directory whose
  * every entry is a symlink into the user's real one — sign-ins, approvals,
  * transcripts, terminals — except `mcp-disabled.json`, which is this turn's
- * own: the user's list plus the node's. Names the CLI writes and that do not
+ * own: the user's list plus the member's. Names the CLI writes and that do not
  * exist yet are linked anyway ({@link CURSOR_PROJECT_STATE_FILES} /
  * {@link CURSOR_PROJECT_STATE_DIRS}), so a sign-in refreshed mid-turn lands in
  * the real `mcp-auth.json`. When the cwd is not the project root, its own key

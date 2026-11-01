@@ -18,7 +18,7 @@ describe('waterfallInsights', () => {
       criticalPath: [
         {
           kind: 'work',
-          nodeId: 'eng',
+          memberId: 'eng',
           startedAt: atSecond(0),
           durationMs: 600_000,
         },
@@ -37,7 +37,7 @@ describe('waterfallInsights', () => {
       criticalPath: [
         {
           kind: 'waiting_on_user',
-          nodeId: null,
+          memberId: null,
           startedAt: atSecond(100),
           durationMs: 100_000,
         },
@@ -180,7 +180,7 @@ describe('waterfallInsights', () => {
       criticalPath: [
         {
           kind: 'idle',
-          nodeId: null,
+          memberId: null,
           startedAt: atSecond(0),
           durationMs: 50_000,
         },

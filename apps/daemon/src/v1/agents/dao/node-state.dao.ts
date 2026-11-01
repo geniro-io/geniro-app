@@ -16,7 +16,7 @@ import { positive } from '../utils/positive-figure';
 interface NodeStateDatabase {
   node_state: {
     run_id: NodeState['runId'];
-    node_id: NodeState['nodeId'];
+    member_id: NodeState['memberId'];
     worked_ms: NodeState['workedMs'];
     tool_calls: NodeState['toolCalls'];
     /** Epoch milliseconds, since value conversion is off. */
@@ -32,25 +32,25 @@ export class NodeStateDao extends BaseDao<NodeState> {
 
   async getByRunNode(
     runId: string,
-    nodeId: string,
+    memberId: string,
     txEm?: EntityManager,
   ): Promise<NodeState | null> {
-    return this.getRepo(txEm).findOne({ runId, nodeId });
+    return this.getRepo(txEm).findOne({ runId, memberId });
   }
 
   /**
-   * File (or clear) one node's last context and plan reading — the per-node
+   * File (or clear) one member's last context and plan reading — the per-member
    * twin of `RunDao.rememberMetricsReading`, and a bare `nativeUpdate` for its
    * reason: a row that no longer exists simply matches nothing.
    */
   async rememberMetricsReading(
     runId: string,
-    nodeId: string,
+    memberId: string,
     reading: string | null,
     txEm?: EntityManager,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
-      { runId, nodeId },
+      { runId, memberId },
       { lastMetricsReading: reading },
     );
   }
@@ -62,7 +62,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
 
   /**
    * Which of these CLI sessions some OTHER run still names — as the session
-   * one of its nodes resumes, or anywhere in a node's session history.
+   * one of its members resumes, or anywhere in a member's session history.
    *
    * What keeps a run delete from removing a conversation another thread is
    * still built on. The history is a JSON array in a text column, so it is
@@ -102,27 +102,27 @@ export class NodeStateDao extends BaseDao<NodeState> {
     return held;
   }
 
-  /** Seed one `pending` row per graph node when a team run starts. */
+  /** Seed one `pending` row per team member when a team run starts. */
   async createPending(
     runId: string,
-    nodeId: string,
+    memberId: string,
     txEm?: EntityManager,
   ): Promise<void> {
     const em = txEm ?? this.em;
     this.getRepo(txEm).create(
-      { runId, nodeId, status: 'pending' },
+      { runId, memberId, status: 'pending' },
       { partial: true },
     );
     await em.flush();
   }
 
   /**
-   * Transition a node's lifecycle status (composite PK, so `BaseDao.updateById`
+   * Transition a member's lifecycle status (composite PK, so `BaseDao.updateById`
    * does not apply). An absent patch field leaves the stored value untouched.
    */
   async setStatus(
     runId: string,
-    nodeId: string,
+    memberId: string,
     patch: {
       status: NodeStatus;
       startedAt?: number;
@@ -137,7 +137,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
   ): Promise<void> {
     const em = txEm ?? this.em;
     const repo = this.getRepo(txEm);
-    const existing = await repo.findOne({ runId, nodeId });
+    const existing = await repo.findOne({ runId, memberId });
     if (existing) {
       existing.status = patch.status;
       if (patch.startedAt !== undefined) {
@@ -153,7 +153,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
         existing.agentKind = patch.agentKind;
       }
       // Accepted and dropped for a release: the executor passed it on every
-      // turn start and no path wrote it, so every team node read back a
+      // turn start and no path wrote it, so every team member read back a
       // null model — Stats filed all team spend under "no model" and an
       // export named none. Absent still means untouched, so a status-only
       // transition cannot erase the model a turn stamped.
@@ -164,7 +164,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
       repo.create(
         {
           runId,
-          nodeId,
+          memberId,
           status: patch.status,
           startedAt: patch.startedAt ?? null,
           endedAt: patch.endedAt ?? null,
@@ -179,76 +179,76 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
-   * Create or update the per-node state, persisting the CLI session id used for
+   * Create or update the per-member state, persisting the CLI session id used for
    * `--resume`. Composite-PK entity, so `BaseDao.getById` (which keys on `id`)
    * does not apply — this upsert keys on (runId, nodeId).
    */
   async saveSessionId(
     runId: string,
-    nodeId: string,
+    memberId: string,
     agentSessionId: string,
     txEm?: EntityManager,
   ): Promise<void> {
     const em = txEm ?? this.em;
     const repo = this.getRepo(txEm);
-    const existing = await repo.findOne({ runId, nodeId });
+    const existing = await repo.findOne({ runId, memberId });
     if (existing) {
       existing.agentSessionId = agentSessionId;
     } else {
       repo.create(
-        { runId, nodeId, status: 'running', agentSessionId },
+        { runId, memberId, status: 'running', agentSessionId },
         { partial: true },
       );
     }
     await em.flush();
-    await this.appendSessionHistory(runId, nodeId, agentSessionId, txEm);
+    await this.appendSessionHistory(runId, memberId, agentSessionId, txEm);
   }
 
   /**
-   * Add a session to the node's history WITHOUT making it the node's own —
-   * for a conversation the node held on another of its pool members, whose
+   * Add a session to the member's history WITHOUT making it the member's own —
+   * for a conversation the member held on another of its pool members, whose
    * session its own (member 1) turns could not resume.
    */
   recordSessionHistory(
     runId: string,
-    nodeId: string,
+    memberId: string,
     sessionId: string,
     txEm?: EntityManager,
   ): Promise<void> {
-    return this.appendSessionHistory(runId, nodeId, sessionId, txEm);
+    return this.appendSessionHistory(runId, memberId, sessionId, txEm);
   }
 
   /** The history append in flight per `(runId, nodeId)` — see below. */
   private readonly historyWrites = new Map<string, Promise<void>>();
 
   /**
-   * Add a session to the node's HISTORY, which `saveSessionId` overwrites the
+   * Add a session to the member's HISTORY, which `saveSessionId` overwrites the
    * current one over. Read past the identity map and written natively, so a
    * cached entity cannot carry an older history back over it — and SERIALIZED
-   * per node: parallel calls to one node each save their own session, and two
+   * per member: parallel calls to one member each save their own session, and two
    * read-then-writes in flight together dropped one (measured: three saves
    * landing together kept one). The daemon is this database's only writer
    * (`instance-lock.ts`), so an in-process chain is the whole of the lock.
    */
   private appendSessionHistory(
     runId: string,
-    nodeId: string,
+    memberId: string,
     sessionId: string,
     txEm?: EntityManager,
   ): Promise<void> {
-    const key = `${runId}\u0000${nodeId}`;
+    const key = `${runId}\u0000${memberId}`;
     const previous = this.historyWrites.get(key) ?? Promise.resolve();
     const next = previous
       .catch(() => undefined)
       .then(async () => {
         const repo = this.getRepo(txEm);
         const fresh = await repo.findOne(
-          { runId, nodeId },
+          { runId, memberId },
           { disableIdentityMap: true },
         );
         const history = withNodeSession(fresh?.sessionIds ?? null, sessionId);
         if (fresh !== null && history !== null) {
-          await repo.nativeUpdate({ runId, nodeId }, { sessionIds: history });
+          await repo.nativeUpdate({ runId, memberId }, { sessionIds: history });
         }
       });
     this.historyWrites.set(key, next);
@@ -263,7 +263,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
-   * Record this node's latest context reading — the per-node twin of
+   * Record this member's latest context reading — the per-member twin of
    * `RunDao.rememberContext`, and it follows that method's rules exactly.
    *
    * A bare `nativeUpdate` rather than `updateById`/`findOne`+flush: this fires
@@ -280,14 +280,14 @@ export class NodeStateDao extends BaseDao<NodeState> {
    *
    * It writes nothing when no row exists yet, unlike `saveSessionId` beside it:
    * a reading is about a turn, and a turn always has its `createPending` row by
-   * the time one arrives — creating one HERE would invent a node with a status
+   * the time one arrives — creating one HERE would invent a member with a status
    * nobody chose. A `nativeUpdate` against a non-existent `(runId, nodeId)`
    * matches nothing and writes nothing, which preserves that guard without a
    * read.
    */
   async rememberContext(
     runId: string,
-    nodeId: string,
+    memberId: string,
     reading: ContextLevel,
     txEm?: EntityManager,
   ): Promise<void> {
@@ -303,18 +303,18 @@ export class NodeStateDao extends BaseDao<NodeState> {
     if (Object.keys(data).length === 0) {
       return;
     }
-    await this.getRepo(txEm).nativeUpdate({ runId, nodeId }, data);
+    await this.getRepo(txEm).nativeUpdate({ runId, memberId }, data);
   }
 
   /**
-   * Add one turn's worked milliseconds and tool count to this node's running
+   * Add one turn's worked milliseconds and tool count to this member's running
    * totals — the ACCUMULATING counterpart of {@link rememberContext}, and the
    * difference between the two is the whole reason it is a separate method.
    *
    * That one records a LEVEL: the newest reading is the entire truth, so it
    * overwrites and a write that never lands costs nothing, because the next one
    * supersedes it. These are TOTALS, where every write is a fraction of the
-   * answer — overwriting would report the last turn's work as the node's whole
+   * answer — overwriting would report the last turn's work as the member's whole
    * history, and a lost write is a figure that is permanently short.
    *
    * A real increment in ONE statement, not a read-modify-write, so it holds
@@ -332,7 +332,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
    */
   async rememberWork(
     runId: string,
-    nodeId: string,
+    memberId: string,
     workedMs: number | null,
     toolCalls: number | null,
     txEm?: EntityManager,
@@ -364,13 +364,13 @@ export class NodeStateDao extends BaseDao<NodeState> {
           : {}),
       }))
       .where('run_id', '=', runId)
-      .where('node_id', '=', nodeId)
+      .where('member_id', '=', memberId)
       .where('deleted_at', 'is', null)
       .execute();
   }
 
   /**
-   * Store one poll's reading of this node's conversations: the ledger they are
+   * Store one poll's reading of this member's conversations: the ledger they are
    * priced from (`NodeState.polledSpend`) and the totals it sums to.
    *
    * A REPLACEMENT, never an add: the ledger is the whole truth about these
@@ -381,12 +381,12 @@ export class NodeStateDao extends BaseDao<NodeState> {
    */
   async writePolledSpend(
     runId: string,
-    nodeId: string,
+    memberId: string,
     spend: { ledger: string | null; cents: number; events: number },
     txEm?: EntityManager,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
-      { runId, nodeId },
+      { runId, memberId },
       {
         polledSpend: spend.ledger,
         polledCostCents: spend.cents,
@@ -396,39 +396,39 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
-   * Every node of these runs carrying a polled price — which CLI spent each
+   * Every member of these runs carrying a polled price — which CLI spent each
    * share of a team run's polled money, for the Stats page's per-agent row.
    */
   async polledSharesForRuns(
     runIds: readonly string[],
     txEm?: EntityManager,
   ): Promise<
-    Pick<NodeState, 'runId' | 'nodeId' | 'agentKind' | 'polledCostCents'>[]
+    Pick<NodeState, 'runId' | 'memberId' | 'agentKind' | 'polledCostCents'>[]
   > {
     return this.getRepo(txEm).find(
       { runId: { $in: [...runIds] }, polledCostCents: { $ne: null, $gt: 0 } },
       {
-        fields: ['runId', 'nodeId', 'agentKind', 'polledCostCents'],
+        fields: ['runId', 'memberId', 'agentKind', 'polledCostCents'],
         disableIdentityMap: true,
       },
     );
   }
 
   /**
-   * The CLI that ran this run's FIRST node, or null when no node has taken a
+   * The CLI that ran this run's FIRST member, or null when no member has taken a
    * turn yet.
    *
    * A team run's own `agentKind` is null — it is N conversations, not one —
-   * which is why nothing could ask a CLI to name one. Each node stamps the CLI
+   * which is why nothing could ask a CLI to name one. Each member stamps the CLI
    * that actually ran it ({@link NodeState.agentKind}), so the run can name one
-   * after all, and the FIRST node to start is the right one to ask: a DAG's
-   * entry node is the one handed the user's own task, so its CLI is the one
+   * after all, and the FIRST member to start is the right one to ask: the
+   * trigger member is the one handed the user's own task, so its CLI is the one
    * that has read the thing the title is supposed to describe.
    *
-   * Ordered by `startedAt` and never by node id, which would be alphabetical
+   * Ordered by `startedAt` and never by member id, which would be alphabetical
    * order dressed up as execution order. Rows that never started are excluded
    * rather than sorted last: SQLite sorts nulls FIRST on `ASC`, so a pending
-   * node would otherwise outrank every node that actually ran.
+   * member would otherwise outrank every member that actually ran.
    */
   async firstAgentKind(
     runId: string,
@@ -444,23 +444,23 @@ export class NodeStateDao extends BaseDao<NodeState> {
   async firstAgentProfile(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<{ nodeId: string; model: string | null } | null> {
+  ): Promise<{ memberId: string; model: string | null } | null> {
     const row = await this.getRepo(txEm).findOne(
       { runId, agentKind: { $ne: null }, startedAt: { $ne: null } },
       { orderBy: { startedAt: 'ASC' }, disableIdentityMap: true },
     );
-    return row ? { nodeId: row.nodeId, model: row.model } : null;
+    return row ? { memberId: row.memberId, model: row.model } : null;
   }
 
   /**
-   * The runs holding at least one node that ran on `agentKind`.
+   * The runs holding at least one member that ran on `agentKind`.
    *
    * A TEAM run has no agent of its own — `Run.agentKind` is null, because
-   * its agents are per node — so a reader that selects runs by that column sees
-   * none of them. That is how a polled-spend node inside a team came to be
+   * its agents are per member — so a reader that selects runs by that column sees
+   * none of them. That is how a polled-spend member inside a team came to be
    * invisible to the usage poll: it holds a real conversation, spends real
    * money, and its run row says nothing about which CLI ran it. Measured on a
-   * real profile: a `dev-team` run whose QA node worked an hour on cursor was
+   * real profile: a `dev-team` run whose QA member worked an hour on cursor was
    * priced at nothing.
    */
   async runIdsForAgent(
@@ -475,22 +475,22 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
-   * Drop this node's context COUNT while keeping its window — what a
+   * Drop this member's context COUNT while keeping its window — what a
    * compaction leaves behind. The node twin of `RunDao.forgetContext`.
    */
   async forgetContext(
     runId: string,
-    nodeId: string,
+    memberId: string,
     txEm?: EntityManager,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
-      { runId, nodeId },
+      { runId, memberId },
       { contextTokens: null, contextEstimated: null },
     );
   }
 
   /**
-   * Forget the CLI session this node was resuming, so the next turn starts a
+   * Forget the CLI session this member was resuming, so the next turn starts a
    * fresh one.
    *
    * The mechanism behind a geniro-performed compaction
@@ -501,11 +501,11 @@ export class NodeStateDao extends BaseDao<NodeState> {
    */
   async clearSessionId(
     runId: string,
-    nodeId: string,
+    memberId: string,
     txEm?: EntityManager,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
-      { runId, nodeId },
+      { runId, memberId },
       { agentSessionId: null },
     );
   }
@@ -513,11 +513,11 @@ export class NodeStateDao extends BaseDao<NodeState> {
   /** A new account owns a fresh conversation with its own context window. */
   async clearConversation(
     runId: string,
-    nodeId: string,
+    memberId: string,
     txEm?: EntityManager,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
-      { runId, nodeId },
+      { runId, memberId },
       {
         agentSessionId: null,
         contextTokens: null,

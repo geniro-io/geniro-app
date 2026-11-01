@@ -90,7 +90,7 @@ export class ChatShellsService {
       // null instead, because an id is not a command and matching one against
       // the process table can only ever hit by accident.
       command: row.command ?? row.id,
-      nodeId: row.nodeId,
+      memberId: row.memberId,
       callId: row.callId,
       startedAt: row.startedAt,
     }));
@@ -103,7 +103,7 @@ export class ChatShellsService {
     /**
      * Open commands, keyed by the call that detached them.
      *
-     * A `Map` rather than a `Set` so the ROW that opened it is kept — its node
+     * A `Map` rather than a `Set` so the ROW that opened it is kept — its member
      * and its timestamp are what the list is drawn from, and the close carries
      * neither. Insertion-ordered, so the list reads oldest-first like the
      * transcript it comes from.
@@ -111,7 +111,7 @@ export class ChatShellsService {
     const open = new Map<
       string,
       {
-        nodeId: string | null;
+        memberId: string | null;
         callId: string | null;
         startedAt: number;
         workId: string | null;
@@ -129,7 +129,7 @@ export class ChatShellsService {
       }
       if (row.kind === 'shell_open') {
         open.set(id, {
-          nodeId: row.nodeId,
+          memberId: row.memberId,
           callId: asString(payload?.callId),
           startedAt: row.createdAt.getTime(),
           // The CLI's OWN handle for this command, carried through so the close
@@ -159,13 +159,13 @@ export class ChatShellsService {
     const shells: FoldedShell[] = [];
     for (const [id, row] of open) {
       const call = launchingCallOf(
-        { toolCallId: id, nodeId: row.nodeId, callId: row.callId || null },
+        { toolCallId: id, memberId: row.memberId, callId: row.callId || null },
         calls,
       );
       shells.push({
         id,
         command: call === undefined ? null : shellCommandOf(call.payload),
-        nodeId: row.nodeId,
+        memberId: row.memberId,
         callId: row.callId,
         startedAt: row.startedAt,
         workId: row.workId,
@@ -460,9 +460,9 @@ export class ChatShellsService {
       em,
       {
         runId,
-        // The node that STARTED it, carried over from the open: a close filed at
-        // the wrong node is a row the team's own transcript cannot show.
-        nodeId: shell.nodeId,
+        // The member that STARTED it, carried over from the open: a close filed at
+        // the wrong member is a row the team's own transcript cannot show.
+        memberId: shell.memberId,
         seq: await this.seqs.reserve(runId),
         kind: 'shell_info',
         role: null,
@@ -476,7 +476,7 @@ export class ChatShellsService {
         },
       },
     );
-    this.chats.noteShellClosed(runId, shell.workId, shell.nodeId);
+    this.chats.noteShellClosed(runId, shell.workId, shell.memberId);
   }
 }
 
@@ -491,7 +491,7 @@ export class ChatShellsService {
 interface FoldedShell {
   id: string;
   command: string | null;
-  nodeId: string | null;
+  memberId: string | null;
   callId: string | null;
   startedAt: number;
   /** The CLI's own handle, from the open — see {@link ChatShellsService.kill}. */

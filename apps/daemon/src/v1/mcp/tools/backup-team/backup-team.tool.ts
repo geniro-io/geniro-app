@@ -29,8 +29,8 @@ export class BackupTeamTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.builders.canEdit(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.builders.canEdit(runId, memberId);
   }
 
   protected instructions(): string {
@@ -43,13 +43,13 @@ export class BackupTeamTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, nodeId }: McpCallContext,
+    { runId, memberId }: McpCallContext,
   ): Promise<McpToolResult> {
     const read = readBackupTeamArgs(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
-    const turn = await this.builders.teamOf(runId, nodeId);
+    const turn = await this.builders.teamOf(runId, memberId);
     if ('status' in turn) {
       return this.text(`Nothing backed up: ${turn.reason}.`, true);
     }

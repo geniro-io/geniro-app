@@ -63,7 +63,7 @@ const STATUSES: ReadonlySet<string> = new Set<AgentMcpServerStatus>([
  *
  * Keyed by `(agent, cwd, configDir)` — the same three dimensions
  * `AgentMcpService`'s own cache keys by, and for the same reason: a plugin
- * ships its own MCP servers, so two nodes on one CLI pointed at different
+ * ships its own MCP servers, so two members on one CLI pointed at different
  * plugin directories genuinely load different sets, and one folder is
  * routinely used by both CLIs.
  *

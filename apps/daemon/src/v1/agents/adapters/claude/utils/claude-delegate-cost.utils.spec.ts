@@ -200,7 +200,7 @@ describe('ClaudeDelegateCostLedger', () => {
   });
 
   it('never lets one session’s result price ANOTHER session’s delegate', () => {
-    // One ledger serves every process an adapter drives, and graph fan-out runs
+    // One ledger serves every process an adapter drives, and team fan-out runs
     // several at once. Keyed by call id alone, session B's `result` took A's
     // pending delegate — priced it with B's calibration, announced its cost in
     // B's stream — and left A's own `result` nothing to price.

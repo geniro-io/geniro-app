@@ -11,13 +11,13 @@ import { usageFiguresFrom } from './usage-figures';
  *
  * TWIN PARSER: `apps/ui/src/renderer/chats/turn-duration.ts` → `scanTurns`,
  * the renderer's wall-clock fallback over the rows it has loaded — its
- * `nodeScoped: true` mode for a team's nodes (`scope: 'nodes'`) and its
+ * `nodeScoped: true` mode for a team's members (`scope: 'nodes'`) and its
  * default mode for a 1:1 chat (`scope: 'chat'`). Both read the same durable
  * rows the same way. A call card's clock reads the same rows per call through
- * the renderer's `scanCallTurns`, keyed by node and `callId` as the `nodes`
+ * the renderer's `scanCallTurns`, keyed by member and `callId` as the `nodes`
  * scope keys them:
  *
- * - a turn opens on a team node's `running` status row, or on a chat's
+ * - a turn opens on a team member's `running` status row, or on a chat's
  *   USER message, and a row of that kind arriving inside an open turn does not
  *   restart it (`startedAt ??=`);
  * - an approval card parks the clock from its `approval_request` to the
@@ -31,11 +31,11 @@ import { usageFiguresFrom } from './usage-figures';
  * A key renamed on either side must be renamed on both. Where this deliberately
  * differs from the renderer:
  *
- * - Nodes: a conversation is keyed by node AND the row's `callId`, as
- *   `activeSpansFrom` keys it — parallel calls run one node in several
+ * - Nodes: a conversation is keyed by member AND the row's `callId`, as
+ *   `activeSpansFrom` keys it — parallel calls run one member in several
  *   conversations at once, and the renderer's node-only key measures the
  *   second call's turn from the first call's start. A card's close is paired by
- *   its `id` within the node rather than by conversation, because a verdict
+ *   its `id` within the member rather than by conversation, because a verdict
  *   row carries no `callId`.
  * - Nodes: a terminal `status` row (`completed` / `failed` / `cancelled` /
  *   `skipped`) closes an open turn UNMEASURED, as `activeSpansFrom` does. On
@@ -57,7 +57,7 @@ import { usageFiguresFrom } from './usage-figures';
 export interface WallClockRow {
   seq: number;
   kind: string;
-  nodeId: string | null;
+  memberId: string | null;
   /** Read for `message` rows only: a chat's turn opens on the USER's. */
   role: string | null;
   createdAt: Date;
@@ -65,7 +65,7 @@ export interface WallClockRow {
   payload: string;
 }
 
-/** The kinds that end a turn, park it, or open a team node's turn. */
+/** The kinds that end a turn, park it, or open a team member's turn. */
 const CLOCK_ROW_KINDS = [
   'turn_complete',
   'turn_cancelled',
@@ -104,8 +104,8 @@ export type WallScope = 'nodes' | 'chat';
 export interface MeasuredTurn {
   /** The seq of the `turn_complete` that ended the turn. */
   seq: number;
-  /** The team node that took it; null for a chat's agent. */
-  nodeId: string | null;
+  /** The team member that took it; null for a chat's agent. */
+  memberId: string | null;
   ms: number;
 }
 
@@ -205,14 +205,14 @@ export function wallMeasuredTurns(
   };
 
   for (const row of rows) {
-    if ((scope === 'nodes') !== (row.nodeId !== null)) {
+    if ((scope === 'nodes') !== (row.memberId !== null)) {
       continue;
     }
     const time = row.createdAt.getTime();
     const at = Number.isFinite(time) ? time : null;
     const body = parseJsonColumn(row.payload);
-    // A chat is one conversation; a node is one per call.
-    const owner = row.nodeId ?? '';
+    // A chat is one conversation; a member is one per call.
+    const owner = row.memberId ?? '';
     const key =
       scope === 'chat'
         ? ''
@@ -301,7 +301,7 @@ export function wallMeasuredTurns(
     ) {
       measured.push({
         seq: row.seq,
-        nodeId: row.nodeId,
+        memberId: row.memberId,
         ms: Math.max(0, at - clock.startedAt - clock.parkedMs),
       });
     }

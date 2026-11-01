@@ -79,7 +79,7 @@ describe('useAutosave', () => {
     expect(state()).toBe('saved');
   });
 
-  it('never writes a canvas that matches what was last saved', async () => {
+  it('never writes a team that matches what was last saved', async () => {
     const save = vi.fn().mockResolvedValue(true);
     render({ save, snapshot: 'same', savedSnapshot: 'same' });
     await tick();
@@ -152,7 +152,7 @@ describe('useAutosave', () => {
     expect(save).toHaveBeenCalledTimes(1);
   });
 
-  it('flush on a clean canvas writes nothing', async () => {
+  it('flush on a clean team writes nothing', async () => {
     const save = vi.fn().mockResolvedValue(true);
     render({ save, snapshot: 'same', savedSnapshot: 'same' });
     await act(async () => {
@@ -193,7 +193,7 @@ describe('useAutosave', () => {
    * a write was still out, or reported nothing about how it went, let a leave
    * throw away edits no write had carried.
    */
-  describe('flush answers whether the canvas is on disk', () => {
+  describe('flush answers whether the team is on disk', () => {
     it('waits out a write already in flight, then writes the edits made during it', async () => {
       const releases: ((ok: boolean) => void)[] = [];
       const save = vi.fn(
@@ -229,7 +229,7 @@ describe('useAutosave', () => {
       expect(flushed).toBe(true);
     });
 
-    it('does not write twice when the write in flight already carried the canvas', async () => {
+    it('does not write twice when the write in flight already carried the team', async () => {
       let release: (ok: boolean) => void = () => {};
       const save = vi.fn(
         () =>
@@ -264,7 +264,7 @@ describe('useAutosave', () => {
       expect(flushed).toBe(false);
     });
 
-    it('reports a paused, dirty canvas as not saved — and writes nothing', async () => {
+    it('reports a paused, dirty team as not saved — and writes nothing', async () => {
       const save = vi.fn().mockResolvedValue(true);
       render({ save, enabled: false });
       let flushed: boolean | undefined;
@@ -275,7 +275,7 @@ describe('useAutosave', () => {
       expect(save).not.toHaveBeenCalled();
     });
 
-    it('answers true for a clean canvas', async () => {
+    it('answers true for a clean team', async () => {
       const save = vi.fn().mockResolvedValue(true);
       render({ save, snapshot: 'same', savedSnapshot: 'same' });
       let flushed: boolean | undefined;

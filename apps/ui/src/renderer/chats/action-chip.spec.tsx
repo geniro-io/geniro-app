@@ -21,7 +21,7 @@ function action(seq: number, label: string, once = true): LiveAction {
   return {
     seq,
     actionId: label.toLowerCase(),
-    nodeId: 'agent',
+    memberId: 'agent',
     conversationId: '',
     label,
     once,

@@ -36,11 +36,7 @@ export interface AppModuleOptions {
  * is wired via bootstrapper extensions in main.ts — mirroring how Geniro's
  * apps/api keeps AppModule free of infra imports. The per-launch runtime is
  * exposed app-wide via the global RuntimeModule (so the HTTP token guard and
- * the notifications gateway both read it); M1 registered the runs domain
- * (`v1/runs`) and the Socket.IO notifications channel (`v1/notifications`). M2
- * adds the single-agent chat feature (`v1/agents`: adapters, persistence, the
- * in-proc event bus); M3 adds the graph feature module alongside them; M4 adds
- * the live PTY terminal mirror (`v1/terminals`).
+ * the notifications gateway both read it).
  */
 @Module({})
 export class AppModule {

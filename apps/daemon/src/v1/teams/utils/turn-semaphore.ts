@@ -1,7 +1,7 @@
 /**
  * The run-wide cap on active callee turns (`Team.maxActiveTurns`). Callee
- * turns draw from their own gate, never from the DAG nodes' pool — a sync
- * caller blocked on its callee holds a DAG slot, so sharing one pool would
+ * turns draw from their own gate, never from the pool members' own turns start in —
+ * a sync caller blocked on its callee holds a slot there, so sharing one pool would
  * deadlock a full level of sync callers (every slot a caller, none left for
  * their callees).
  *

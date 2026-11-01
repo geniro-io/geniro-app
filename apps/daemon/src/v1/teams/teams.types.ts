@@ -32,119 +32,25 @@ import type { TeamDiff } from './utils/team-diff';
 import type { TeamEdit } from './utils/team-edits';
 
 /**
- * The team domain model — the zod half of the Geniro graph-core port
- * (geniro apps/api teams.types.ts:134-167), trimmed to geniro-app's node
- * shapes: a `kind`-discriminated union of agent nodes (CLI coding agents
- * carrying agent/model/role/approval — no template+config indirection),
- * trigger nodes (the graph's entry points, geniro-style: a run fires a
- * trigger, never an agent directly) and instruction nodes (free-text blocks
- * wired to the agents they apply to, which run nothing themselves). YAML
- * files (`*.team.yaml`) are the source of truth for these shapes; SQLite
- * stores runtime/history only.
- */
-
-/**
- * Agent kinds a node may run — the same enum the runs domain uses, re-exported
- * under the graph vocabulary so a node schema and a run row can never drift.
- */
-export const TEAM_AGENT_KINDS = AgentKindSchema.options;
-
-/**
- * Node kinds a team may contain. A new kind is added here plus one entry
- * in `NODE_CONNECTION_RULES` (and its schema branch in `TeamNodeSchema`)
- * — nothing else has to change for the graph validation and the builder to
- * understand it.
- */
-export const NODE_KINDS = ['agent', 'trigger', 'instruction'] as const;
-export const NodeKindSchema = z.enum(NODE_KINDS).meta({ id: 'NodeKind' });
-export type NodeKind = z.infer<typeof NodeKindSchema>;
-
-/** Trigger types a trigger node may carry — `manual` (fired by hand) today. */
-export const TRIGGER_KINDS = ['manual'] as const;
-export const TriggerKindSchema = z
-  .enum(TRIGGER_KINDS)
-  .meta({ id: 'TriggerKind' });
-export type TriggerKind = z.infer<typeof TriggerKindSchema>;
-
-/**
- * Edge kinds: `data` — the producer's final text feeds the consumer's prompt
- * (the DAG flow); `call` — the source may invoke the target at runtime via
- * the call_agent tool (grants permission only; no data flows along it);
- * `instruction` — the source instruction block's text is appended to the
- * target's turn instructions (no data flows and nothing is ordered, the same
- * way a `call` edge orders nothing).
+ * The team domain model. A team is a set of MEMBERS — CLI coding agents, each
+ * with a public role every other member sees and private instructions only it
+ * reads — plus the stages a run walks, instruction blocks addressed to an
+ * audience, the one trigger that starts a run and the coordination mode. Any
+ * member may call any other; nothing is wired. YAML files (`*.team.yaml`) are
+ * the source of truth for these shapes; SQLite stores runtime/history only.
  *
- * Only `data` participates in the DAG: `buildEdgeMaps` and `computeRunOrder`
- * ignore everything else, which is what lets an instruction block attach to a
- * node without becoming one of its producers.
+ * Teams written before this model are node graphs (`LegacyTeamGraphSchema`
+ * below); `teamFromLegacyGraph` converts them wherever one is read.
  */
-export const EDGE_KINDS = ['data', 'call', 'instruction'] as const;
+
+/** Agent kinds a member may run — the runs domain's enum, so a member and a run row never drift. */
+export const TEAM_AGENT_KINDS = AgentKindSchema.options;
 
 /** A library team's slug — a plain file-name segment, so no path traversal is possible. */
 export const SLUG_RE = /^[a-z0-9][a-z0-9-_]*$/i;
-export const EdgeKindSchema = z.enum(EDGE_KINDS).meta({ id: 'EdgeKind' });
-export type EdgeKind = z.infer<typeof EdgeKindSchema>;
 
 /**
- * One typed connection rule of a node kind (the geniro `ConnectionRule`
- * model, trimmed to kind-matching — geniro-app has no template indirection):
- * "this side of the node accepts/produces edges to nodes of `kind`".
- * `required` = the graph is invalid until at least one such edge exists;
- * `multiple` = more than one such edge may attach (default: single).
- */
-export interface ConnectionRule {
-  /** Edge kind this rule governs — data-flow and call wires are separate ports. */
-  edge: EdgeKind;
-  kind: NodeKind;
-  required?: boolean;
-  multiple?: boolean;
-}
-
-/**
- * The connection contract per node kind — the single source of truth for
- * which edges are legal, enforced by `validateTeamGraph` on save and run
- * and mirrored by the renderer (info popup + canvas `isValidConnection`).
- * An edge `from → to` is legal iff `from`'s kind lists `to`'s kind in
- * `outputs` AND `to`'s kind lists `from`'s kind in `inputs`.
- */
-export const NODE_CONNECTION_RULES: Record<
-  NodeKind,
-  { inputs: readonly ConnectionRule[]; outputs: readonly ConnectionRule[] }
-> = {
-  agent: {
-    inputs: [
-      { edge: 'data', kind: 'agent', multiple: true },
-      { edge: 'data', kind: 'trigger' }, // at most one trigger feeds an agent
-      { edge: 'call', kind: 'agent', multiple: true },
-      { edge: 'instruction', kind: 'instruction', multiple: true },
-    ],
-    outputs: [
-      { edge: 'data', kind: 'agent', multiple: true },
-      { edge: 'call', kind: 'agent', multiple: true },
-    ],
-  },
-  trigger: {
-    // Triggers are pure entry points: nothing may feed one, and firing starts
-    // exactly ONE agent. Call wires never touch triggers.
-    //
-    // Single-arity by OMITTING `multiple` rather than spelling `false`, which
-    // is how every other single-arity rule here reads — including the agent's
-    // own `{ edge: 'data', kind: 'trigger' }` input, the mirror of this rule
-    // from the other end.
-    inputs: [],
-    outputs: [{ edge: 'data', kind: 'agent' }],
-  },
-  instruction: {
-    // An instruction block is written, never produced: nothing may feed one,
-    // and it only ever hands its text to agents. Data and call wires never
-    // touch it — it runs no CLI and has no output to order.
-    inputs: [],
-    outputs: [{ edge: 'instruction', kind: 'agent', multiple: true }],
-  },
-};
-
-/**
- * Per-node approval mode: `auto` lets the agent run its tools unattended;
+ * Per-member approval mode: `auto` lets the agent run its tools unattended;
  * `ask` routes tool-permission requests to the renderer as elicitation cards
  * and blocks the tool call until a verdict comes back; `acceptEdits`
  * auto-approves file edits on the CLI side and routes everything else to the
@@ -160,25 +66,25 @@ export const ApprovalModeSchema = z
 export type ApprovalMode = z.infer<typeof ApprovalModeSchema>;
 
 /**
- * The refusal every agent-node string that reaches a spawned CLI carries: a
+ * The refusal every member string that reaches a spawned CLI carries: a
  * NUL, and only a NUL.
  *
- * A node's text is not inert data: `role` becomes claude's
- * `--append-system-prompt` argv, `id`/`name`/`description` are written into a
- * caller's "May call" block in that same argv, `model` and `effort` are argv
- * flags, and `configDir` is a child's ENV. Node refuses a NUL in any of them
- * SYNCHRONOUSLY at `spawn`, so one such character fails that node on every run
+ * A member's text is not inert data: `instructions` and `character` become
+ * claude's `--append-system-prompt` argv, `id`/`name`/`role` are written into
+ * every other member's roster in that same argv, `model` and `effort` are argv
+ * flags, and `configDir` is a child's ENV. Node.js refuses a NUL in any of them
+ * SYNCHRONOUSLY at `spawn`, so one such character fails that member on every run
  * — and a team is a file that can be IMPORTED, so the text is not
  * necessarily written by the person who runs it.
  *
  * NUL rather than every C0 character (`CustomInstructionsSchema`'s rule, which
  * the instruction block keeps): this schema also READS what is already stored —
- * the library's YAML and every run's own graph copy — so a wider rule turned a
+ * the library's YAML and every run's own team copy — so a wider rule turned a
  * role holding a pasted ESC or form-feed, which runs fine, into a team that
- * no longer loads and a run whose graph answers 409.
+ * no longer loads and a run whose team answers 409.
  *
- * TWIN: `ARGV_TEXT_FIELDS` in the renderer's `teams/node-validate.ts`
- * flags the same fields on the canvas, because the builder autosaves the whole
+ * TWIN: `ARGV_TEXT_FIELDS` in the renderer's `teams/member-validate.ts`
+ * flags the same fields in the editor, because the builder autosaves the whole
  * team in one PUT and a refused field would otherwise stop every later
  * edit from persisting. Add a field here, add it there.
  */
@@ -187,23 +93,8 @@ function argvSafe(value: string): boolean {
   return !value.includes('\u0000');
 }
 
-/** Envelope fields every node kind shares. */
-const teamNodeBase = {
-  id: z
-    .string()
-    .min(1)
-    .refine(argvSafe, NO_CONTROL_CHARACTERS)
-    .describe('Unique node id within the team'),
-  name: z
-    .string()
-    .min(1)
-    .refine(argvSafe, NO_CONTROL_CHARACTERS)
-    .optional()
-    .describe('Display name (defaults to id)'),
-};
-
 /**
- * How many members a pool may hold BESIDES the node's own configuration.
+ * How many members a pool may hold BESIDES the member's own configuration.
  *
  * TWIN: `MAX_POOL_EXTRA_MEMBERS` in the renderer's
  * `teams/agent-pool-editor.tsx` stops offering a member past it — the
@@ -213,15 +104,15 @@ const teamNodeBase = {
 export const MAX_AGENT_POOL_EXTRA_MEMBERS = 7;
 
 /**
- * How many MCP servers one node (or one pool member) may switch off, and how
+ * How many MCP servers one member (or one pool member) may switch off, and how
  * long one server's name may be.
  *
- * TWIN: `MAX_NODE_MCP_DISABLED` / `MAX_MCP_SERVER_NAME_LENGTH` in the
- * renderer's `teams/node-validate.ts`, which flags a node past either
+ * TWIN: `MAX_MEMBER_MCP_DISABLED` / `MAX_MCP_SERVER_NAME_LENGTH` in the
+ * renderer's `teams/member-validate.ts`, which flags a member past either
  * before the builder's whole-team PUT is refused. Change one, change the
  * other.
  */
-export const MAX_NODE_MCP_DISABLED = 100;
+export const MAX_MEMBER_MCP_DISABLED = 100;
 export const MAX_MCP_SERVER_NAME_LENGTH = 256;
 
 /**
@@ -233,7 +124,7 @@ export const MAX_MCP_SERVER_NAME_LENGTH = 256;
  * scan rather than a regex, on `hasControlCharacters`'s reasoning (eslint's
  * `no-control-regex`).
  *
- * TWIN: `mcpServerNameProblem` in the renderer's `teams/node-validate.ts`.
+ * TWIN: `mcpServerNameProblem` in the renderer's `teams/member-validate.ts`.
  */
 function mcpServerNameIsClean(name: string): boolean {
   for (let i = 0; i < name.length; i += 1) {
@@ -246,12 +137,12 @@ function mcpServerNameIsClean(name: string): boolean {
 }
 
 /**
- * The MCP servers this node's (or this pool member's) turns run WITHOUT, by the
+ * The MCP servers this member's (or this pool member's) turns run WITHOUT, by the
  * name the CLI lists them under.
  *
- * Applied per TURN by the node's own CLI (`AgentTurnInput.mcpDisabled`) and
+ * Applied per TURN by the member's own CLI (`AgentTurnInput.mcpDisabled`) and
  * written into no config file of the CLI's: it changes nothing outside this
- * node's turns. A name the CLI does not load at run time is simply ignored, so
+ * member's turns. A name the CLI does not load at run time is simply ignored, so
  * a profile that later drops a server leaves the team runnable.
  */
 const McpDisabledSchema = z
@@ -262,25 +153,25 @@ const McpDisabledSchema = z
       .max(MAX_MCP_SERVER_NAME_LENGTH)
       .refine(mcpServerNameIsClean, 'must not contain control characters'),
   )
-  .max(MAX_NODE_MCP_DISABLED);
+  .max(MAX_MEMBER_MCP_DISABLED);
 
 /**
- * One more configuration an agent node can run a turn under — a pool member
- * after the node's own (which is member 1).
+ * One more configuration a member can run a turn under — a pool member
+ * after the member's own (which is member 1).
  *
  * It carries every setting a turn RUNS with, and REPLACES them whole rather
  * than overriding member 1's: an omitted `model` means this member's CLI
  * default, never member 1's model, which another CLI would not recognise, and
  * an omitted `autoCompactPercent` means this member never compacts. The one
- * exception is `approval`, which the node REQUIRES — omitted, the member runs
- * the node's own mode. What the node says about itself — `role`,
- * `description` — is shared by every member.
+ * exception is `approval`, which the member REQUIRES — omitted, the pool member
+ * runs the member's own mode. What the member says about itself — `name`,
+ * `role`, `instructions`, `character` — is shared by every pool member.
  */
 export const TeamAgentPoolMemberSchema = z
   .object({
     agent: AgentKindSchema.describe('CLI agent this member runs'),
     approval: ApprovalModeSchema.optional().describe(
-      "Tool-approval mode for this member; omitted = the node's own",
+      "Tool-approval mode for this member; omitted = the member's own",
     ),
     autoCompactPercent: AutoCompactPercentSchema.optional().describe(
       'Auto-compact threshold (% of the context window); omitted = never',
@@ -323,242 +214,266 @@ export const TeamAgentPoolMemberSchema = z
   })
   .meta({ id: 'TeamAgentPoolMember' });
 
-/** One agent node — a CLI coding agent running one turn per run. */
-export const TeamAgentNodeSchema = z
+/**
+ * How a team coordinates: `lead` — the trigger's member runs the work and
+ * calls the others; `relay` — each stage is run by its responsible member and
+ * handed on to the next.
+ */
+export const TEAM_MODES = ['lead', 'relay'] as const;
+export const TeamModeSchema = z.enum(TEAM_MODES).meta({ id: 'TeamMode' });
+export type TeamMode = z.infer<typeof TeamModeSchema>;
+
+/** TWIN: the member limits in apps/ui/src/renderer/teams/member-validate.ts. */
+export const MAX_MEMBER_NAME_LENGTH = 80;
+export const MAX_MEMBER_CHARACTER_LENGTH = 2000;
+export const MAX_INSTRUCTION_BLOCK_TITLE_LENGTH = 80;
+export const MAX_AVATAR_VALUE_LENGTH = 512;
+
+export const MEMBER_AVATAR_KINDS = ['initials', 'emoji', 'picture'] as const;
+
+/** How a member is drawn — display data only, never part of a prompt. */
+export const MemberAvatarSchema = z
   .object({
-    ...teamNodeBase,
-    kind: z.literal('agent'),
-    agent: AgentKindSchema.describe('CLI agent that runs this node'),
-    model: z
+    kind: z.enum(MEMBER_AVATAR_KINDS),
+    value: z
       .string()
-      .min(1)
+      .max(MAX_AVATAR_VALUE_LENGTH)
       .refine(argvSafe, NO_CONTROL_CHARACTERS)
       .optional()
-      .describe('Model alias; omitted = CLI default'),
-    /**
-     * How hard this node's CLI is asked to think, in that CLI's own vocabulary
-     * (`AgentAdapter.listEfforts`) — never an enum here, for the same reason
-     * `model` is a free string: the levels belong to the CLI, and a CLI that
-     * gains one must not need an app release to offer it.
-     *
-     * A level the node's CLI does not list is DROPPED at run start with a
-     * system item naming it, exactly as an unusable `configDir` is: the two
-     * fail the same way (a team arriving as YAML carries a value the
-     * builder never had a chance to refuse) and the cost of passing it through
-     * differs per CLI — claude warns and runs on its default, cursor answers
-     * `-32602` and the turn is lost.
-     */
-    effort: z
+      .describe('The initials, the emoji, or the stored picture’s id'),
+    tone: z
       .string()
-      .min(1)
+      .max(40)
       .refine(argvSafe, NO_CONTROL_CHARACTERS)
       .optional()
-      .describe('Reasoning-effort level; omitted = CLI default'),
-    /**
-     * Which of the model's context-window sizes this node's turns run at, in
-     * the CLI's own vocabulary (`300k`, `1m`); omitted = the model's own
-     * default.
-     *
-     * Beside `effort` because it is the same kind of thing — a per-MODEL
-     * parameter the adapter owns the vocabulary of — and it fails the same way:
-     * a size the node's model does not offer is answered `-32602` by cursor,
-     * so the turn's own driver reports it on the transcript rather than a
-     * constant here refusing it at save time. A team runs for months and
-     * its model's sizes can change under it, which is exactly why the check
-     * belongs against the live agent.
-     */
-    contextWindow: z
-      .string()
-      .min(1)
-      .refine(argvSafe, NO_CONTROL_CHARACTERS)
-      .optional()
-      .describe("Context-window size; omitted = the model's own default"),
-    /**
-     * Compact this node's conversation right after a turn that left its
-     * context at or above this percentage of the window; omitted = never.
-     * Performed by the executor inside the unit that still owns the node's (or
-     * the call's) session, before the turn settles — so a follow-up is refused
-     * meanwhile and a caller's result waits for it. See
-     * `GraphExecutorService`'s `compactIfDue` and `Run.autoCompactPercent`.
-     */
-    autoCompactPercent: AutoCompactPercentSchema.optional().describe(
-      'Auto-compact threshold (% of the context window); omitted = never',
+      .describe('Colour token the avatar is drawn in'),
+  })
+  .meta({ id: 'MemberAvatar' });
+export type MemberAvatar = z.infer<typeof MemberAvatarSchema>;
+
+const memberSettingsShape = {
+  agent: AgentKindSchema.describe('CLI agent this member runs'),
+  model: z
+    .string()
+    .min(1)
+    .refine(argvSafe, NO_CONTROL_CHARACTERS)
+    .optional()
+    .describe('Model alias; omitted = CLI default'),
+  /**
+   * How hard this member's CLI is asked to think, in that CLI's own vocabulary
+   * (`AgentAdapter.listEfforts`) — never an enum here, for the same reason
+   * `model` is a free string: the levels belong to the CLI, and a CLI that
+   * gains one must not need an app release to offer it.
+   *
+   * A level the member's CLI does not list is DROPPED at run start with a
+   * system item naming it, exactly as an unusable `configDir` is: the two
+   * fail the same way (a team arriving as YAML carries a value the
+   * builder never had a chance to refuse) and the cost of passing it through
+   * differs per CLI — claude warns and runs on its default, cursor answers
+   * `-32602` and the turn is lost.
+   */
+  effort: z
+    .string()
+    .min(1)
+    .refine(argvSafe, NO_CONTROL_CHARACTERS)
+    .optional()
+    .describe('Reasoning-effort level; omitted = CLI default'),
+  /**
+   * Which of the model's context-window sizes this member's turns run at, in
+   * the CLI's own vocabulary (`300k`, `1m`); omitted = the model's own
+   * default.
+   *
+   * Beside `effort` because it is the same kind of thing — a per-MODEL
+   * parameter the adapter owns the vocabulary of — and it fails the same way:
+   * a size the member's model does not offer is answered `-32602` by cursor,
+   * so the turn's own driver reports it on the transcript rather than a
+   * constant here refusing it at save time. A team runs for months and
+   * its model's sizes can change under it, which is exactly why the check
+   * belongs against the live agent.
+   */
+  contextWindow: z
+    .string()
+    .min(1)
+    .refine(argvSafe, NO_CONTROL_CHARACTERS)
+    .optional()
+    .describe("Context-window size; omitted = the model's own default"),
+  /**
+   * Compact this member's conversation right after a turn that left its
+   * context at or above this percentage of the window; omitted = never.
+   * Performed by the executor inside the unit that still owns the member's (or
+   * the call's) session, before the turn settles — so a follow-up is refused
+   * meanwhile and a caller's result waits for it. See
+   * `TeamExecutorService`'s `compactIfDue` and `Run.autoCompactPercent`.
+   */
+  autoCompactPercent: AutoCompactPercentSchema.optional().describe(
+    'Auto-compact threshold (% of the context window); omitted = never',
+  ),
+  /**
+   * Every OTHER model setting this member's turns ask for, keyed by the CLI's
+   * own parameter id (`{optimize_for: 'intelligence'}`).
+   *
+   * Unchecked here for the reason the window above is, taken further: geniro
+   * holds no vocabulary for these at all — the model enumerates them and the
+   * live agent refuses a value it does not accept, per turn, which is the
+   * only check that stays true for a team that runs for months.
+   */
+  modelParameters: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults",
     ),
-    /**
-     * Every OTHER model setting this node's turns ask for, keyed by the CLI's
-     * own parameter id (`{optimize_for: 'intelligence'}`).
-     *
-     * Unchecked here for the reason the window above is, taken further: geniro
-     * holds no vocabulary for these at all — the model enumerates them and the
-     * live agent refuses a value it does not accept, per turn, which is the
-     * only check that stays true for a team that runs for months.
-     */
-    modelParameters: z
-      .record(z.string(), z.string())
-      .optional()
-      .describe(
-        "Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults",
-      ),
-    /**
-     * The node's PUBLIC blurb: what this agent is for, written for the agents
-     * wired to call it. It is the only thing a caller is told about a callee
-     * (see `calleeSummary`) — it rides the call_agent tool description and the
-     * caller's "May call" block, so a caller discovers its team from the graph
-     * instead of restating it in its own role.
-     */
-    description: z
+  approval: ApprovalModeSchema.describe('Tool-approval mode for this member'),
+  /**
+   * The agent config directory this member's turns run under, and no other
+   * member's — the folder holding that CLI's credentials, settings, installed
+   * plugins and history.
+   *
+   * A MEMBER field rather than a run-level one because that is what it buys:
+   * two members of one team can run as different ACCOUNTS (two subscriptions,
+   * two rate limits) with different tools, and neither touches the user's
+   * default profile.
+   *
+   * Absolute path, validated before it reaches the child's env. Existence is
+   * checked because the CLI will not check it: claude CREATES whatever
+   * directory it is handed and reports "Not logged in" (probe-verified on
+   * 2.1.227), so a typo would otherwise fail the member with a login error
+   * about a profile nobody meant to name.
+   */
+  configDir: z
+    .string()
+    .min(1)
+    .refine(argvSafe, NO_CONTROL_CHARACTERS)
+    .optional()
+    .describe(
+      'Absolute path to the agent config directory this member runs under',
+    ),
+  /**
+   * The MCP servers this member's turns run WITHOUT — the member's own switches
+   * over the servers its profile loads (see {@link McpDisabledSchema}). A
+   * MEMBER field: each pool member carries its own list, since a member is a
+   * different profile as often as a different CLI.
+   */
+  mcpDisabled: McpDisabledSchema.optional().describe(
+    'MCP servers this member’s turns run without, by name; omitted = none switched off',
+  ),
+  /**
+   * The member's AGENT POOL: further configurations a turn of this member may run
+   * under — another account, another model, another CLI. The fields above are
+   * member 1 and these are members 2, 3, … in order.
+   *
+   * A call that opens a new conversation uses member 1 first, trying later
+   * members in priority order when earlier ones are unavailable or fail on a
+   * usage limit, a lapsed sign-in, or before doing any work. A caller may
+   * also pin a member at the user's request. A continued thread starts on
+   * the member holding its latest session; fallback carries its original
+   * task and recent conversation into a fresh session. The member's own
+   * conversation — including a trigger-fed root — also falls through the pool and continues on the
+   * member that answered. A hand-off opens a fresh CLI session with the
+   * recent team transcript and keeps the member's outstanding calls.
+   * See `utils/agent-pool.ts`.
+   */
+  pool: z
+    .array(TeamAgentPoolMemberSchema)
+    .max(MAX_AGENT_POOL_EXTRA_MEMBERS)
+    .optional()
+    .describe(
+      'Further agent configurations a turn of this member can run under (members 2, 3, …); the member’s own settings are member 1',
+    ),
+};
+
+/** One member of a team — a CLI coding agent and how it presents itself. */
+export const TeamMemberSchema = z
+  .object({
+    id: z
       .string()
+      .min(1)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .describe('Unique member id within the team'),
+    name: z
+      .string()
+      .min(1)
+      .max(MAX_MEMBER_NAME_LENGTH)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .describe('Display name, and how other members address it'),
+    character: z
+      .string()
+      .max(MAX_MEMBER_CHARACTER_LENGTH)
       .refine(argvSafe, NO_CONTROL_CHARACTERS)
       .optional()
-      .describe('What this agent does — shown to agents wired to call it'),
+      .describe('Manner and tone; only this member’s own prompt carries it'),
+    avatar: MemberAvatarSchema.optional(),
     /**
-     * The node's PRIVATE instructions, prepended to its own turn and never
-     * shown to another node. Keeping role private is the point: a callee's
-     * internals (which skills it runs, how it works) are its own business.
+     * The member's PUBLIC role: what it does, written for the members that
+     * may call it. It is the only thing another member is told about it (see
+     * `calleeSummary`).
      */
     role: z
       .string()
       .refine(argvSafe, NO_CONTROL_CHARACTERS)
       .optional()
-      .describe('Role/system prompt prepended to the node turn'),
-    approval: ApprovalModeSchema.describe('Tool-approval mode for this node'),
+      .describe('What this member does — shown to every other member'),
     /**
-     * The agent config directory this node's turns run under, and no other
-     * node's — the folder holding that CLI's credentials, settings, installed
-     * plugins and history.
-     *
-     * A NODE field rather than a run-level one because that is what it buys:
-     * two nodes of one graph can run as different ACCOUNTS (two subscriptions,
-     * two rate limits) with different tools, and neither touches the user's
-     * default profile.
-     *
-     * Absolute path, validated before it reaches the child's env. Existence is
-     * checked because the CLI will not check it: claude CREATES whatever
-     * directory it is handed and reports "Not logged in" (probe-verified on
-     * 2.1.227), so a typo would otherwise fail the node with a login error
-     * about a profile nobody meant to name.
+     * The member's PRIVATE instructions, prepended to its own turns and never
+     * shown to another member: how it works is its own business.
      */
-    configDir: z
+    instructions: z
+      .string()
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .optional()
+      .describe('How this member works — only its own turns carry it'),
+    ...memberSettingsShape,
+  })
+  .meta({ id: 'TeamMember' });
+
+export const TEAM_TRIGGER_KINDS = ['first-message'] as const;
+
+/** What starts a run: the user's first message, handled by `member`. */
+export const TeamTriggerSchema = z
+  .object({
+    kind: z.enum(TEAM_TRIGGER_KINDS),
+    member: z
+      .string()
+      .min(1)
+      .describe('Id of the member that handles the first message'),
+  })
+  .meta({ id: 'TeamTrigger' });
+
+export const INSTRUCTION_BLOCK_EVERYONE = 'everyone';
+
+/**
+ * Free text composed into the turns of its audience: every member, or the
+ * members it names. It runs nothing and orders nothing.
+ */
+export const InstructionBlockSchema = z
+  .object({
+    id: z
       .string()
       .min(1)
       .refine(argvSafe, NO_CONTROL_CHARACTERS)
-      .optional()
-      .describe(
-        'Absolute path to the agent config directory this node runs under',
-      ),
+      .describe('Unique block id within the team'),
+    title: z
+      .string()
+      .max(MAX_INSTRUCTION_BLOCK_TITLE_LENGTH)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .describe('Short name shown in the editor'),
     /**
-     * The MCP servers this node's turns run WITHOUT — the node's own switches
-     * over the servers its profile loads (see {@link McpDisabledSchema}). A
-     * MEMBER field: each pool member carries its own list, since a member is a
-     * different profile as often as a different CLI.
+     * Control-character-free through the schema the user's own custom
+     * instructions use: it reaches the same composed block, and a team is a
+     * file that can be imported. The empty string is admitted so a block just
+     * added can be saved; the editor flags it.
      */
-    mcpDisabled: McpDisabledSchema.optional().describe(
-      'MCP servers this node’s turns run without, by name; omitted = none switched off',
+    text: CustomInstructionsSchema.describe(
+      'Instruction text composed into every audience member’s turns',
     ),
-    /**
-     * The node's AGENT POOL: further configurations a turn of this node may run
-     * under — another account, another model, another CLI. The fields above are
-     * member 1 and these are members 2, 3, … in order.
-     *
-     * A call that opens a new conversation uses member 1 first, trying later
-     * members in priority order when earlier ones are unavailable or fail on a
-     * usage limit, a lapsed sign-in, or before doing any work. A caller may
-     * also pin a member at the user's request. A continued thread starts on
-     * the member holding its latest session; fallback carries its original
-     * task and recent conversation into a fresh session. The node's own
-     * conversation — including a trigger-fed root — also falls through the pool and continues on the
-     * member that answered. A hand-off opens a fresh CLI session with the
-     * recent team transcript and keeps the node's outstanding calls.
-     * See `utils/agent-pool.ts`.
-     */
-    pool: z
-      .array(TeamAgentPoolMemberSchema)
-      .max(MAX_AGENT_POOL_EXTRA_MEMBERS)
-      .optional()
-      .describe(
-        'Further agent configurations a turn of this node can run under (members 2, 3, …); the node’s own settings are member 1',
-      ),
+    audience: z
+      .union([
+        z.literal(INSTRUCTION_BLOCK_EVERYONE),
+        z.array(z.string().min(1)),
+      ])
+      .describe("'everyone', or the ids of the members it applies to"),
   })
-  .meta({ id: 'TeamAgentNode' });
-
-/**
- * One trigger node — the graph's entry point. It runs no CLI: firing it
- * (today only `manual` — submitting a run prompt) seeds its downstream
- * agents. A run refuses to start unless every root node is a trigger.
- */
-export const TeamTriggerNodeSchema = z
-  .object({
-    ...teamNodeBase,
-    kind: z.literal('trigger'),
-    trigger: TriggerKindSchema.describe('How this trigger fires'),
-  })
-  .meta({ id: 'TeamTriggerNode' });
-
-/**
- * One instruction block — free text wired to the agents it applies to.
- *
- * It is NOT an execution step: it runs no CLI, holds no slot, never enters the
- * run order and never settles. Each wired agent's turn is composed with this
- * text in it; `turnInstructionParts` owns where it ranks against the user's
- * global instructions and that node's own `role`.
- */
-export const TeamInstructionNodeSchema = z
-  .object({
-    ...teamNodeBase,
-    kind: z.literal('instruction'),
-    /**
-     * Control-character-free through the SAME schema the user's global
-     * custom instructions use, because it reaches the same place: the
-     * composed block that becomes claude's `--append-system-prompt` argv. A
-     * NUL there makes `spawn` throw SYNCHRONOUSLY, and a team is a file
-     * that can be IMPORTED, so the text is not necessarily written by the
-     * person who runs it — the block would fail every wired node of every run,
-     * with nothing on screen naming a character the builder renders as
-     * nothing.
-     *
-     * It still admits the EMPTY string: a block is dropped on the canvas
-     * before it is written, so refusing `''` would make a freshly-added node
-     * unsaveable. The builder flags an empty one instead (`node-validate.ts`),
-     * where it can be shown beside the field.
-     */
-    instructions: CustomInstructionsSchema.describe(
-      'Instruction text appended to every wired agent’s turn',
-    ),
-  })
-  .meta({ id: 'TeamInstructionNode' });
-
-/**
- * One node of a team DAG, discriminated by `kind`. Strict: `kind` is
- * required on every node, and the store refuses a kind-less file.
- */
-export const TeamNodeSchema = z
-  .discriminatedUnion('kind', [
-    TeamAgentNodeSchema,
-    TeamTriggerNodeSchema,
-    TeamInstructionNodeSchema,
-  ])
-  .meta({ id: 'TeamNode' });
-
-/**
- * A directed edge `from → to`, discriminated by `kind`. For `data` edges,
- * node `from`'s final text is appended to node `to`'s prompt context (`to`
- * depends on `from`; producers run first) — that is the geniro-app execution
- * semantics; the Geniro source models edges the other way around
- * (`edge.from` depends on `edge.to`), so the ported topo-sort operates on
- * this repo's producer→consumer direction. `call` and `instruction` edges
- * order nothing and feed no prompt context — the first grants the call_agent
- * tool, the second carries instruction text (see `EDGE_KINDS`).
- */
-export const TeamEdgeSchema = z
-  .object({
-    from: z.string().min(1).describe('Source node id'),
-    to: z.string().min(1).describe('Target node id'),
-    kind: EdgeKindSchema.describe(
-      "Edge kind — 'data' feeds output text; 'call' grants the call_agent tool; 'instruction' appends instruction text",
-    ),
-    label: z.string().optional().describe('Optional edge label'),
-  })
-  .meta({ id: 'TeamEdge' });
+  .meta({ id: 'InstructionBlock' });
 
 /** TWIN: the stage limits in apps/ui/src/renderer/teams/stage-validate.ts. */
 export const MAX_TEAM_STAGES = 20;
@@ -581,26 +496,24 @@ export const TeamStageSchema = z
       .regex(/\S/)
       .max(MAX_STAGE_TITLE_LENGTH)
       .refine(argvSafe, NO_CONTROL_CHARACTERS)
-      .describe('Short stage name shown to agents and the user'),
-    instructions: z
+      .describe('Short stage name shown to members and the user'),
+    howToWork: z
       .string()
       .max(MAX_STAGE_INSTRUCTIONS_LENGTH)
       .refine(argvSafe, NO_CONTROL_CHARACTERS)
       .optional()
-      .describe('What to do in this stage, in plain language'),
-    doneWhen: z
+      .describe('How to work in this stage, in plain language'),
+    goal: z
       .string()
       .regex(/\S/)
       .max(MAX_STAGE_DONE_WHEN_LENGTH)
       .refine(argvSafe, NO_CONTROL_CHARACTERS)
-      .describe('The condition that makes this stage finished'),
-    ownerHint: z
-      .string()
-      .min(1)
-      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .describe('The condition that makes this stage done'),
+    responsible: z
+      .array(z.string().min(1).refine(argvSafe, NO_CONTROL_CHARACTERS))
       .optional()
       .describe(
-        'Id of the agent node that usually does this stage — a hint, never a permission',
+        'Ids of the members responsible for this stage; the first one leads it',
       ),
     next: z
       .array(z.string().min(1))
@@ -611,22 +524,14 @@ export const TeamStageSchema = z
   })
   .meta({ id: 'TeamStage' });
 
-/** Canvas position per node id — persisted so the canvas re-opens as drawn. */
-export const TeamLayoutSchema = z.record(
-  z.string(),
-  z.object({ x: z.number(), y: z.number() }).meta({ id: 'NodePosition' }),
-);
-
 /**
  * A complete team definition — the `*.team.yaml` shape and the HTTP wire
  * shape alike.
  *
  * Deliberately DEFAULT-FREE: a zod `.default()` makes a field optional on the
  * way in and required on the way out, so the schema would render as two
- * different OpenAPI components (a request one and a response one) and the
- * generated client would carry two incompatible `Team` types. Leniency for
- * hand-written YAML lives in {@link TeamYamlSchema}, which layers the
- * defaults back on for the file-parsing path only.
+ * OpenAPI components and the generated client would carry two incompatible
+ * `Team` types. Leniency for hand-written YAML lives in {@link TeamYamlSchema}.
  */
 export const TeamSchema = z
   .object({
@@ -645,72 +550,140 @@ export const TeamSchema = z
       .describe(
         'Cap on callee turns working at once across the run; omitted = the machine ceiling',
       ),
-    // An empty node list is a legal library draft (the builder starts from a
-    // blank canvas); running one is rejected at run start (GRAPH_EMPTY).
-    nodes: z.array(TeamNodeSchema),
-    edges: z.array(TeamEdgeSchema),
-    layout: TeamLayoutSchema.optional(),
+    mode: TeamModeSchema.describe(
+      "How the team coordinates: 'lead' (the trigger's member runs the work) or 'relay' (stages pass between their responsible members)",
+    ),
+    members: z.array(TeamMemberSchema),
+    triggers: z
+      .array(TeamTriggerSchema)
+      .describe('What starts a run — exactly one, the first message'),
+    instructionBlocks: z.array(InstructionBlockSchema),
     stages: z
       .array(TeamStageSchema)
       .optional()
       .describe(
-        "The team's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review. Every agent of a run sees it and moves it with move_stage. Omitted = the team has no stages",
+        "The team's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review. Every member of a run sees it and moves it with move_stage. Omitted = the team has no stages",
       ),
   })
   .meta({ id: 'Team' });
 
 /**
- * {@link TeamSchema} with the omissible-in-YAML fields defaulted — the ONE
- * schema `parseTeamYaml` reads files through, so a hand-written team
- * may still leave `nodes`/`edges` off a draft and `approval`/`trigger` off a
- * node. Derived from the strict schemas (never a second copy of the shapes), so
- * a field added above is automatically accepted here too; parsing yields the
- * strict `Team` type because zod applies the defaults.
+ * {@link TeamSchema} with the omissible-in-YAML fields defaulted — the one
+ * schema `parseTeamYaml` reads files through. Derived from the strict schemas,
+ * so a field added above is accepted here too.
  */
 export const TeamYamlSchema = TeamSchema.extend({
-  nodes: z
+  mode: TeamModeSchema.default('lead'),
+  members: z
     .array(
-      z.discriminatedUnion('kind', [
-        TeamAgentNodeSchema.extend({
-          approval: ApprovalModeSchema.default('auto'),
-        }),
-        TeamTriggerNodeSchema.extend({
-          trigger: TriggerKindSchema.default('manual'),
-        }),
-        TeamInstructionNodeSchema.extend({
-          // Leniency layered ON the shared schema, never a fresh `z.string()`:
-          // re-declaring the field here would silently drop its
-          // control-character refusal for the ONE path that reads files from
-          // disk — which is the only path a hostile team arrives by.
-          //
-          // `nullish`, not `.default()`: a hand-written `instructions:` with
-          // nothing after it parses as NULL, which a default never fires for,
-          // so the block a user scaffolded and had not filled in yet made its
-          // whole team unopenable.
-          instructions: CustomInstructionsSchema.nullish().transform(
-            (value) => value ?? '',
-          ),
-        }),
-      ]),
+      TeamMemberSchema.extend({
+        approval: ApprovalModeSchema.default('auto'),
+      }),
     )
     .default([]),
-  edges: z.array(TeamEdgeSchema).default([]),
+  triggers: z.array(TeamTriggerSchema).default([]),
+  instructionBlocks: z
+    .array(
+      InstructionBlockSchema.extend({
+        // `nullish`, not `.default()`: a hand-written `text:` with nothing
+        // after it parses as NULL, which a default never fires for.
+        text: CustomInstructionsSchema.nullish().transform(
+          (value) => value ?? '',
+        ),
+        audience: InstructionBlockSchema.shape.audience.default(
+          INSTRUCTION_BLOCK_EVERYONE,
+        ),
+      }),
+    )
+    .default([]),
 });
 
-export type TeamNode = z.infer<typeof TeamNodeSchema>;
-export type TeamAgentNode = z.infer<typeof TeamAgentNodeSchema>;
+export type TeamMember = z.infer<typeof TeamMemberSchema>;
 export type TeamAgentPoolMember = z.infer<typeof TeamAgentPoolMemberSchema>;
-export type TeamTriggerNode = z.infer<typeof TeamTriggerNodeSchema>;
-export type TeamInstructionNode = z.infer<typeof TeamInstructionNodeSchema>;
-export type TeamEdge = z.infer<typeof TeamEdgeSchema>;
-export type TeamLayout = z.infer<typeof TeamLayoutSchema>;
+export type TeamTrigger = z.infer<typeof TeamTriggerSchema>;
+export type InstructionBlock = z.infer<typeof InstructionBlockSchema>;
 export type TeamStage = z.infer<typeof TeamStageSchema>;
 export type Team = z.infer<typeof TeamSchema>;
 
 /**
+ * The node graph every team was before members (milestone 3 of GEN-248):
+ * agent, trigger and instruction nodes joined by `data`, `call` and
+ * `instruction` edges. Read only — through `teamFromLegacyGraph` — wherever a
+ * team written then is still read: library files before migration 0005, run
+ * snapshots, recorded versions, standing proposal cards and imports.
+ */
+const legacyNodeBase = {
+  id: z.string().min(1).refine(argvSafe, NO_CONTROL_CHARACTERS),
+  name: z.string().min(1).refine(argvSafe, NO_CONTROL_CHARACTERS).optional(),
+};
+
+export const LegacyAgentNodeSchema = z.object({
+  ...legacyNodeBase,
+  kind: z.literal('agent'),
+  ...memberSettingsShape,
+  approval: ApprovalModeSchema.default('auto'),
+  description: z.string().refine(argvSafe, NO_CONTROL_CHARACTERS).optional(),
+  role: z.string().refine(argvSafe, NO_CONTROL_CHARACTERS).optional(),
+});
+
+export const LegacyTriggerNodeSchema = z.object({
+  ...legacyNodeBase,
+  kind: z.literal('trigger'),
+  trigger: z.literal('manual').default('manual'),
+});
+
+export const LegacyInstructionNodeSchema = z.object({
+  ...legacyNodeBase,
+  kind: z.literal('instruction'),
+  instructions: CustomInstructionsSchema.nullish().transform(
+    (value) => value ?? '',
+  ),
+});
+
+export const LegacyStageSchema = z.object({
+  id: z.string().regex(STAGE_ID_PATTERN),
+  title: z.string().regex(/\S/).max(MAX_STAGE_TITLE_LENGTH),
+  instructions: z.string().max(MAX_STAGE_INSTRUCTIONS_LENGTH).optional(),
+  doneWhen: z.string().regex(/\S/).max(MAX_STAGE_DONE_WHEN_LENGTH),
+  ownerHint: z.string().min(1).optional(),
+  next: z.array(z.string().min(1)).optional(),
+});
+
+export const LegacyTeamGraphSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  maxActiveTurns: z.number().int().min(1).optional(),
+  nodes: z
+    .array(
+      z.discriminatedUnion('kind', [
+        LegacyAgentNodeSchema,
+        LegacyTriggerNodeSchema,
+        LegacyInstructionNodeSchema,
+      ]),
+    )
+    .default([]),
+  edges: z
+    .array(
+      z.object({
+        from: z.string().min(1),
+        to: z.string().min(1),
+        kind: z.enum(['data', 'call', 'instruction']),
+        label: z.string().optional(),
+      }),
+    )
+    .default([]),
+  layout: z.unknown().optional(),
+  stages: z.array(LegacyStageSchema).optional(),
+});
+
+export type LegacyTeamGraph = z.infer<typeof LegacyTeamGraphSchema>;
+export type LegacyAgentNode = z.infer<typeof LegacyAgentNodeSchema>;
+export type LegacyStage = z.infer<typeof LegacyStageSchema>;
+
+/**
  * A team as listed over the wire: `slug` is the library file name without
  * the `.team.yaml` suffix and is the stable id the UI runs/edits by. The
- * counts feed the library cards (nodes, connections, and the per-agent-kind
+ * counts feed the library cards (members, stages and the per-agent-kind
  * breakdown) so the renderer never has to fetch every full definition to draw
  * the list.
  */
@@ -718,10 +691,10 @@ export const TeamSummarySchema = z.object({
   slug: z.string().describe('Library file name without the .team.yaml suffix'),
   name: z.string(),
   description: z.string().nullable(),
-  nodeCount: z.number().int(),
-  edgeCount: z.number().int(),
+  memberCount: z.number().int(),
+  stageCount: z.number().int(),
   /**
-   * Per-agent-kind node counts — only kinds actually present, ordered by
+   * Per-agent-kind member counts — only kinds actually present, ordered by
    * `TEAM_AGENT_KINDS` so the card badges keep a stable order.
    */
   agentCounts: z
@@ -730,7 +703,7 @@ export const TeamSummarySchema = z.object({
         .object({ kind: AgentKindSchema, count: z.number().int() })
         .meta({ id: 'AgentCount' }),
     )
-    .describe('Per-agent-kind node counts, only kinds present, stable order'),
+    .describe('Per-agent-kind member counts, only kinds present, stable order'),
   updatedAt: z.string(),
 });
 export type TeamSummary = z.infer<typeof TeamSummarySchema>;
@@ -830,13 +803,15 @@ export type PendingTeamProposal = z.infer<typeof PendingTeamProposalSchema>;
 /**
  * Who wrote a change to a library team, as its change log names it: an
  * analysis's applied recommendations, an approved card in the team's
- * builder chat or in another chat, or a recorded version written back.
+ * builder chat or in another chat, a recorded version written back, or the
+ * conversion of a node graph into a team (the first version run after it).
  */
 export const TEAM_CHANGE_SOURCES = [
   'analysis',
   'builder',
   'chat',
   'restore',
+  'migration',
 ] as const;
 export type TeamChangeSource = (typeof TEAM_CHANGE_SOURCES)[number];
 
@@ -915,14 +890,14 @@ export type RunTeamSnapshotWire = z.infer<typeof RunTeamSnapshotWireSchema>;
  */
 export const CALL_START_BRIEF_MAX = 2_000;
 
-/** Per-node execution state projected to the wire (from `node_state` rows). */
+/** Per-member execution state projected to the wire (from `node_state` rows). */
 export const NodeStateWireSchema = z.object({
   runId: z.string(),
-  nodeId: z.string(),
+  memberId: z.string(),
   status: NodeStatusSchema,
   /**
-   * The node's last context reading and the window it was measured against —
-   * what a client with no live plane draws its ring from. Null while the node
+   * The member's last context reading and the window it was measured against —
+   * what a client with no live plane draws its ring from. Null while the member
    * has reported none.
    */
   contextTokens: z.number().nullable(),
@@ -933,15 +908,15 @@ export const NodeStateWireSchema = z.object({
     ),
   contextWindowTokens: z.number().nullable(),
   /**
-   * The model the node's newest turn reported running on (`usage.contextModel`
+   * The model the member's newest turn reported running on (`usage.contextModel`
    * over the whole run) — what its card names when the client's window holds
    * none of its turns. Null while no turn has named one.
    */
   model: z.string().nullable(),
   /**
-   * The same reading per agent-to-agent CALL this node ran (from `call_context`
-   * rows). The node figures above collapse to whichever call wrote last, so a
-   * node called several times needs these to draw one ring per call thread
+   * The same reading per agent-to-agent CALL this member ran (from `call_context`
+   * rows). The member figures above collapse to whichever call wrote last, so a
+   * member called several times needs these to draw one ring per call thread
    * rather than one flickering between windows.
    *
    * CAPPED at the newest `CALL_CONTEXT_SNAPSHOT_LIMIT` calls of the run: it
@@ -972,7 +947,7 @@ export const NodeStateWireSchema = z.object({
          */
         start: z
           .object({
-            callerNodeId: z.string().nullable(),
+            callerMemberId: z.string().nullable(),
             title: z.string().nullable(),
             message: z.string().nullable(),
             mode: z.string().nullable(),
@@ -989,7 +964,7 @@ export const NodeStateWireSchema = z.object({
       .meta({ id: 'CallContextReading' }),
   ),
   /**
-   * EVERY call this node ran, with what the daemon measured of it over the
+   * EVERY call this member ran, with what the daemon measured of it over the
    * whole run — never capped, so a card's figures do not depend on how many
    * calls the run has made since.
    */
@@ -1035,7 +1010,7 @@ export const NodeStateWireSchema = z.object({
       .meta({ id: 'CallFigures' }),
   ),
   /**
-   * What this node has spent over the WHOLE run, summed from every
+   * What this member has spent over the WHOLE run, summed from every
    * `turn_complete` it wrote — never the client's loaded window, which on a
    * long run leaves the oldest turns out. `totals` is every turn, its calls
    * included; `mainTotals` the turns outside any call (its own conversation).
@@ -1043,12 +1018,12 @@ export const NodeStateWireSchema = z.object({
   totals: ChatTotalsWireSchema,
   mainTotals: ChatTotalsWireSchema,
   /**
-   * When the node's OWN conversation's prompt cache lapses (ISO), as each
+   * When the member's OWN conversation's prompt cache lapses (ISO), as each
    * call's `promptCacheExpiresAt` is stated. Null when its CLI reports none.
    */
   promptCacheExpiresAt: z.string().nullable(),
   /**
-   * This node's worked milliseconds and tool count, TOTALLED across its turns
+   * This member's worked milliseconds and tool count, TOTALLED across its turns
    * (see `NodeState` for why these accumulate where the pair above replaces).
    * Null means never measured — separately, since an ACP agent reports no
    * timing while still using tools.
@@ -1062,7 +1037,7 @@ export const NodeStateWireSchema = z.object({
 export type NodeStateWire = z.infer<typeof NodeStateWireSchema>;
 
 // ── Agent-to-agent call runtime ─────────────────────────────────────────────
-// The shared contract between the CallBroker (call semantics), the graph
+// The shared contract between the CallBroker (call semantics), the team
 // executor (callee-turn mechanics), and the MCP server (the wire surface).
 
 /** How a caller wants its call to behave (the call_agent `mode` argument). */
@@ -1128,7 +1103,7 @@ export const DEFAULT_AWAIT_TIMEOUT_MS = MAX_AWAIT_TIMEOUT_MS;
  *
  * A vendor key inside `_meta`, which MCP reserves for exactly this and every
  * other client ignores — so it is written once on the tools that need it rather
- * than routed per CLI. Kept to the call tools: they are the ones a caller node
+ * than routed per CLI. Kept to the call tools: they are the ones a caller member
  * cannot work without, and every always-loaded schema is paid for on every turn.
  */
 export const ALWAYS_LOADED_TOOL_META = {
@@ -1268,13 +1243,13 @@ export type CallHoldRelease =
 /** One pool member a call can run under: its 1-based number, resolved. */
 export interface CalleePoolAttempt {
   member: number;
-  /** The callee node with that member's CLI settings in place. */
-  node: TeamAgentNode;
+  /** The callee with that pool member's CLI settings in place. */
+  node: TeamMember;
 }
 
 /**
  * How a call to a pooled callee is to be run — handed to
- * `RunCallCapability.launchCalleeTurn` beside the first member's node.
+ * `RunCallCapability.launchCalleeTurn` beside the callee's own settings.
  */
 export interface CalleePoolPlan {
   /** The member the `callee` argument already is. */
@@ -1401,7 +1376,7 @@ export type CallEnvelope =
   | {
       status: 'question';
       call_id: string;
-      /** The callee node id the question came from. */
+      /** The callee member id the question came from. */
       agent: string;
       /** The question text (multi-question inputs join per line). */
       question: string;
@@ -1417,7 +1392,7 @@ export type CallEnvelope =
   | {
       status: 'pending';
       call_id: string;
-      /** The callee node id still working on it. */
+      /** The callee member id still working on it. */
       agent: string;
       /** Every call a wait over ALL of the caller's calls is still waiting on. */
       waiting_on?: { call_id: string; agent: string }[];
@@ -1655,7 +1630,7 @@ export const AgentIdentityCapabilitySchema = z
     details: z.array(z.string()),
     icon: z.enum(AGENT_ICON_NAMES).meta({ id: 'AgentIconName' }),
     /**
-     * Whether a node of this CLI can put a callee's question to the USER. It
+     * Whether a member of this CLI can put a callee's question to the USER. It
      * needs a question tool of its own: geniro supplies its own only in chats,
      * so a CLI whose model has none answers a callee's question itself or lets
      * the call time out.
@@ -1783,10 +1758,9 @@ export const CapabilitiesWireSchema = z.object({
 });
 export type CapabilitiesWire = z.infer<typeof CapabilitiesWireSchema>;
 
-/** One instruction node's text, as it reaches a wired agent. */
-export interface InstructionBlock {
-  /** The instruction node the text was written in. */
-  nodeId: string;
+/** One instruction block as composed into a member's turn. */
+export interface ComposedInstructionBlock {
+  blockId: string;
   text: string;
 }
 
@@ -1794,15 +1768,15 @@ export const InstructionSizeSourceSchema = z
   .enum(TURN_INSTRUCTION_SOURCES)
   .meta({ id: 'InstructionSizeSource' });
 
-/** One part of an agent node's always-on instruction block, measured. */
+/** One part of a member's always-on instruction block, measured. */
 export const InstructionSizePartSchema = z
   .object({
     source: InstructionSizeSourceSchema,
-    instructionNodeId: z
+    blockId: z
       .string()
       .optional()
       .describe(
-        'For an instructionBlocks part: the instruction node whose text it is (one part per wired block)',
+        'For an instructionBlocks part: the block whose text it is (one part per block addressed to the member)',
       ),
     chars: z.number().int().nonnegative(),
     approxTokens: z.number().int().nonnegative(),
@@ -1810,17 +1784,17 @@ export const InstructionSizePartSchema = z
   .meta({ id: 'InstructionSizePart' });
 export type InstructionSizePart = z.infer<typeof InstructionSizePartSchema>;
 
-/** What one agent node's turns pay for before the prompt, every turn. */
-export const NodeInstructionSizeSchema = z
+/** What one member's turns pay for before the prompt, every turn. */
+export const MemberInstructionSizeSchema = z
   .object({
-    nodeId: z.string(),
+    memberId: z.string(),
     agent: AgentKindSchema.describe(
-      'The CLI measured — the node’s own, a pool’s first member',
+      'The CLI measured — the member’s own, a pool’s first member',
     ),
     turn: z
       .enum(['own', 'call'])
       .describe(
-        'Which turn was measured: the node’s own turn, or — for a node only ever called — a turn answering a call',
+        'Which turn was measured: the member’s own turn, or — for a member only ever called — a turn answering a call',
       ),
     totalChars: z
       .number()
@@ -1837,12 +1811,12 @@ export const NodeInstructionSizeSchema = z
       ),
     parts: z.array(InstructionSizePartSchema),
   })
-  .meta({ id: 'NodeInstructionSize' });
-export type NodeInstructionSize = z.infer<typeof NodeInstructionSizeSchema>;
+  .meta({ id: 'MemberInstructionSize' });
+export type MemberInstructionSize = z.infer<typeof MemberInstructionSizeSchema>;
 
-/** POST /v1/teams/instruction-sizes — one entry per agent node. */
+/** POST /v1/teams/instruction-sizes — one entry per member. */
 export const InstructionSizesWireSchema = z.object({
-  nodes: z.array(NodeInstructionSizeSchema),
+  members: z.array(MemberInstructionSizeSchema),
 });
 export type InstructionSizesWire = z.infer<typeof InstructionSizesWireSchema>;
 
@@ -1871,18 +1845,18 @@ export interface ResetWakeHooks {
    */
   wakeRestoredRun(runId: string, wake: PersistedResetWake): void;
   /** A transcript row for a run with no capability to write one through. */
-  note(runId: string, nodeId: string, payload: Record<string, unknown>): void;
+  note(runId: string, memberId: string, payload: Record<string, unknown>): void;
 }
 
 /**
- * What the graph executor exposes to the broker for one live run — the
+ * What the team executor exposes to the broker for one live run — the
  * capability seam. The broker owns call SEMANTICS (ids, caps, sync/async
  * bookkeeping); the executor owns MECHANICS (spawning the callee turn,
  * transcript persistence, slot accounting, cancellation fan-out).
  */
 export interface RunCallCapability {
-  /** Callees each caller may invoke: caller node id → callee agent nodes. */
-  readonly calleesOf: ReadonlyMap<string, readonly TeamAgentNode[]>;
+  /** Callees each caller may invoke: caller member id → every other member. */
+  readonly calleesOf: ReadonlyMap<string, readonly TeamMember[]>;
   /**
    * The run's folder, whose account pin decides which account a pool member
    * runs on (`PoolCooldowns`). Absent: no folder, so nothing is pinned.
@@ -1890,7 +1864,7 @@ export interface RunCallCapability {
   readonly cwd?: string;
   /**
    * The agents a user's message goes to (the trigger-fed ones) — the only
-   * nodes whose waits `awaitingCalls` counts.
+   * members whose waits `awaitingCalls` counts.
    */
   readonly messageTargets: ReadonlySet<string>;
   /**
@@ -1910,11 +1884,11 @@ export interface RunCallCapability {
    * answering one message and editing the same files.
    *
    * `options.pool` is set for a callee with an agent pool: `callee` is then
-   * that member's resolved node, and the plan names it and the members to
+   * that member's resolved settings, and the plan names it and the members to
    * fall through to. The outcome says which member produced it.
    */
   launchCalleeTurn(
-    callee: TeamAgentNode,
+    callee: TeamMember,
     message: string,
     callId: string,
     resumeSessionId: string | null,
@@ -1949,7 +1923,7 @@ export interface RunCallCapability {
   messageCallee(callId: string, text: string): CalleeMessageOutcome;
   /** Persist one transcript item on the run's serialized write chain. */
   persistItem(
-    nodeId: string | null,
+    memberId: string | null,
     kind: ItemKind,
     role: string | null,
     payload: unknown,
@@ -1967,10 +1941,10 @@ export interface RunCallCapability {
   /**
    * How long the CLI behind `caller` holds ONE MCP tool call open — its
    * adapter's `mcp.toolCallDeadlineMs` — or null for a caller with no such
-   * wall (not an agent node). The broker bounds every wait it serves that
+   * wall (not a member). The broker bounds every wait it serves that
    * caller below it (`CallBroker.waitCeiling`).
    *
-   * A caller KEY (`utils/caller-key.ts`), not a node id: a pooled callee's
+   * A caller KEY (`utils/caller-key.ts`), not a member id: a pooled callee's
    * conversation runs on whichever member's CLI took it, and that CLI's
    * deadline is the one that cuts the wait.
    */
@@ -1978,8 +1952,8 @@ export interface RunCallCapability {
   /**
    * True while the caller's CONVERSATION has a live turn — i.e. it could still
    * call answer_agent. `caller` is a caller key (`utils/caller-key.ts`): a
-   * node's own conversation, or one call lineage it answers as a callee, and
-   * never the node as a whole — a node's callee turns say nothing about
+   * member's own conversation, or one call lineage it answers as a callee, and
+   * never the member as a whole — a member's callee turns say nothing about
    * whether its own conversation can answer. A question parking after its
    * owner settled is handed to {@link wakeNode} rather than waiting out the
    * TTL; one owned by a fire-and-forget caller is orphaned at once.
@@ -2017,7 +1991,7 @@ export interface RunCallCapability {
   unreadTeamNotes?(caller: string): number;
   currentStage?(): string | null;
   /**
-   * Start another turn of a node's OWN conversation whose turns have all
+   * Start another turn of a member's OWN conversation whose turns have all
    * ended, carrying `prompt` — how a question or a result that arrives after
    * the caller stopped still reaches it. False when the run cannot take a turn
    * (cancelled, finished, not an agent) — and for a callee conversation, which

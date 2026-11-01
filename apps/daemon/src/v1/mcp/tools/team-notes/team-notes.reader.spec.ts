@@ -12,7 +12,7 @@ function note(overrides: Partial<TeamNoteEntry>): TeamNoteEntry {
     seq: 10,
     kind: 'fact',
     text: 'CI runs on ubuntu-22.04',
-    nodeId: 'engineer',
+    memberId: 'engineer',
     conversationId: null,
     callId: null,
     createdAt: '2026-10-26T09:00:00.000Z',

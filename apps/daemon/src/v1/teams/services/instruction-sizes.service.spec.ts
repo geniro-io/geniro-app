@@ -10,9 +10,10 @@ import {
   joinTurnInstructionParts,
   turnInstructionParts,
 } from '../../agents/utils/agent-instructions';
-import type { Team, TeamAgentNode } from '../teams.types';
+import { member, teamOf } from '../__tests__/team-builders';
+import type { Team } from '../teams.types';
 import { ANSWERING_A_CALL } from '../utils/callee-text';
-import { callSurfaceText } from '../utils/node-instructions';
+import { callSurfaceText } from '../utils/member-instructions';
 import { stageMapPrompt } from '../utils/stage-text';
 import { InstructionSizesService } from './instruction-sizes.service';
 
@@ -26,49 +27,47 @@ const subject = new InstructionSizesService(
   ]),
 );
 
-const manager = {
-  id: 'manager',
+const manager = member('manager', {
   name: 'Manager',
-  kind: 'agent',
-  agent: 'claude',
-  approval: 'auto',
-  role: 'You run the team.\n',
-} as TeamAgentNode;
-const reviewer = {
-  id: 'reviewer',
-  kind: 'agent',
+  instructions: 'You run the team.\n',
+  character: ' Calm and brief. ',
+});
+const reviewer = member('reviewer', {
+  name: 'Reviewer',
   agent: 'codex',
-  approval: 'auto',
-  description: 'Reviews a diff.',
-  role: 'Review carefully.',
-} as TeamAgentNode;
+  role: 'Reviews a diff.',
+  instructions: 'Review carefully.',
+});
 
-/** The Dev Team's shape: a trigger-fed manager with blocks, a call-only callee. */
-const DEV_TEAM: Pick<Team, 'nodes' | 'edges' | 'stages'> = {
-  nodes: [
-    { id: 'trigger', kind: 'trigger', trigger: 'manual' },
-    { id: 'settings', kind: 'instruction', instructions: 'TEAM SETTINGS' },
-    { id: 'intent', kind: 'instruction', instructions: 'INTENT STANDARD' },
-    manager,
-    reviewer,
-  ] as Team['nodes'],
-  edges: [
-    { from: 'trigger', to: 'manager', kind: 'data' },
-    { from: 'settings', to: 'manager', kind: 'instruction' },
-    { from: 'intent', to: 'manager', kind: 'instruction' },
-    { from: 'settings', to: 'reviewer', kind: 'instruction' },
-    { from: 'manager', to: 'reviewer', kind: 'call' },
+/** The Dev Team's shape: a manager that handles the first message, a reviewer that only answers calls. */
+const DEV_TEAM: Pick<
+  Team,
+  'members' | 'triggers' | 'instructionBlocks' | 'stages'
+> = teamOf([manager, reviewer], {
+  instructionBlocks: [
+    {
+      id: 'settings',
+      title: 'Settings',
+      text: 'TEAM SETTINGS',
+      audience: 'everyone',
+    },
+    {
+      id: 'intent',
+      title: 'Intent',
+      text: 'INTENT STANDARD',
+      audience: ['manager'],
+    },
   ],
-};
+});
 
 const SETTINGS = { customInstructions: 'MINE', replyLanguage: 'Russian' };
 
-function sizeOf(nodeId: string) {
+function sizeOf(memberId: string) {
   const size = subject
     .measure({ team: DEV_TEAM, ...SETTINGS })
-    .nodes.find((node) => node.nodeId === nodeId);
+    .members.find((entry) => entry.memberId === memberId);
   if (!size) {
-    throw new Error(`no size for ${nodeId}`);
+    throw new Error(`no size for ${memberId}`);
   }
   return size;
 }
@@ -81,7 +80,8 @@ describe('InstructionSizesService', () => {
         replyLanguage: 'Russian',
         customInstructions: 'MINE',
         instructionBlocks: 'TEAM SETTINGS\n\nINTENT STANDARD',
-        systemPrompt: manager.role,
+        systemPrompt: manager.instructions,
+        characterPrompt: manager.character,
         callSurfacePrompt: callSurfaceText(
           [reviewer],
           claude.getConfig().questionToolName,
@@ -97,19 +97,18 @@ describe('InstructionSizesService', () => {
     expect(size).toMatchObject({ agent: 'claude', turn: 'own' });
   });
 
-  it('breaks it down by source, one row per wired block, adding up to the total', () => {
+  it('breaks it down by source, one row per block, adding up to the total', () => {
     const size = sizeOf('manager');
 
-    expect(
-      size.parts.map((part) => [part.source, part.instructionNodeId]),
-    ).toEqual([
+    expect(size.parts.map((part) => [part.source, part.blockId])).toEqual([
       ['preamble', undefined],
       ['backgroundWorkNote', undefined],
       ['replyLanguage', undefined],
       ['customInstructions', undefined],
       ['instructionBlocks', 'settings'],
       ['instructionBlocks', 'intent'],
-      ['role', undefined],
+      ['instructions', undefined],
+      ['character', undefined],
       ['callSurface', undefined],
     ]);
     expect(size.parts[0]?.chars).toBe(GENIRO_UI_PREAMBLE.length);
@@ -117,17 +116,28 @@ describe('InstructionSizesService', () => {
       chars: 'TEAM SETTINGS'.length,
       approxTokens: Math.ceil('TEAM SETTINGS'.length / 4),
     });
-    // The role is measured as sent: trimmed.
+    // Instructions and character are measured as sent: trimmed.
     expect(size.parts[6]?.chars).toBe('You run the team.'.length);
-    // Seven breaks between the eight rows, two characters each.
-    expect(size.separatorChars).toBe(14);
+    expect(size.parts[7]?.chars).toBe('Calm and brief.'.length);
+    // Eight breaks between the nine rows, two characters each.
+    expect(size.separatorChars).toBe(16);
     expect(
       size.parts.reduce((sum, part) => sum + part.chars, 0) +
         size.separatorChars,
     ).toBe(size.totalChars);
   });
 
-  it('measures a node only ever called as a turn answering a call, on its own CLI', () => {
+  it('gives each member only the blocks addressed to it', () => {
+    const blockRows = (memberId: string) =>
+      sizeOf(memberId)
+        .parts.filter((part) => part.source === 'instructionBlocks')
+        .map((part) => part.blockId);
+
+    expect(blockRows('manager')).toEqual(['settings', 'intent']);
+    expect(blockRows('reviewer')).toEqual(['settings']);
+  });
+
+  it('measures a member only ever called as a turn answering a call, on its own CLI', () => {
     const size = sizeOf('reviewer');
 
     expect(size).toMatchObject({ agent: 'codex', turn: 'call' });
@@ -137,10 +147,13 @@ describe('InstructionSizesService', () => {
       'replyLanguage',
       'customInstructions',
       'instructionBlocks',
-      'role',
+      'instructions',
       'answeringACall',
+      'callSurface',
     ]);
-    expect(size.parts.at(-1)?.chars).toBe(ANSWERING_A_CALL.length);
+    expect(size.parts.find((p) => p.source === 'answeringACall')?.chars).toBe(
+      ANSWERING_A_CALL.length,
+    );
     expect(size.parts[1]?.chars).toBe(
       codex.getConfig().backgroundWork.agentNote?.trim().length,
     );
@@ -149,7 +162,7 @@ describe('InstructionSizesService', () => {
   it('leaves out the settings the user has not set', () => {
     const size = subject
       .measure({ team: DEV_TEAM })
-      .nodes.find((node) => node.nodeId === 'manager');
+      .members.find((entry) => entry.memberId === 'manager');
 
     expect(size?.parts.map((part) => part.source)).not.toContain(
       'customInstructions',
@@ -159,35 +172,31 @@ describe('InstructionSizesService', () => {
     );
   });
 
-  it("measures the run's stage map for every agent, between the wired blocks and the role", () => {
+  it("measures the run's stage map for every member, between the blocks and the role", () => {
     const stages: NonNullable<Team['stages']> = [
-      { id: 'build', title: 'Build', doneWhen: 'built', next: ['review'] },
+      { id: 'build', title: 'Build', goal: 'built', next: ['review'] },
       {
         id: 'review',
         title: 'Review',
-        doneWhen: 'approved',
-        ownerHint: 'reviewer',
+        goal: 'approved',
+        responsible: ['reviewer'],
       },
     ];
     const sizes = subject.measure({
       team: { ...DEV_TEAM, stages },
       ...SETTINGS,
-    }).nodes;
-    const map = [
-      'This team has stages every run walks, in order:',
-      '1. Build (build) — then Review (review)',
-      '   Done when: built',
-      '2. Review (review) — final stage — usually done by reviewer',
-      '   Done when: approved',
-      '',
-      `Each of your turns starts with the current stage. When the current stage's "done when" holds, mark it with move_stage (action "complete", a one-line summary). Skip a stage that does not apply with action "skip" and the reason; at a stage with ONE-of branches, name the branch you take as "next". If an earlier stage turns out unfinished, reopen it with action "reopen" and the reason — that also reopens every stage after it.`,
-      'Any agent of the run may move a stage; "usually done by" is a hint, not a rule. Move only the stage you finished, and only when it is the current one.',
-    ].join('\n');
-    expect(stageMapPrompt(stages, DEV_TEAM.nodes)).toBe(map);
+    }).members;
+    const map = stageMapPrompt(stages, DEV_TEAM.members);
+    expect(map).toContain(
+      '2. Review (review) — final stage — responsible: Reviewer',
+    );
+    expect(sizes).toHaveLength(2);
     for (const size of sizes) {
       const sources = size.parts.map((part) => part.source);
       expect(sources).toContain('stageMap');
-      expect(sources.indexOf('stageMap')).toBe(sources.indexOf('role') - 1);
+      expect(sources.indexOf('stageMap')).toBe(
+        sources.indexOf('instructions') - 1,
+      );
       expect(size.parts.find((p) => p.source === 'stageMap')?.chars).toBe(
         map.length,
       );
@@ -195,15 +204,15 @@ describe('InstructionSizesService', () => {
     expect(
       subject
         .measure({ team: DEV_TEAM, ...SETTINGS })
-        .nodes.flatMap((n) => n.parts.map((p) => p.source)),
+        .members.flatMap((m) => m.parts.map((p) => p.source)),
     ).not.toContain('stageMap');
   });
 
-  it('answers only for agent nodes', () => {
+  it('answers for every member of the team, in the team’s order', () => {
     expect(
       subject
         .measure({ team: DEV_TEAM, ...SETTINGS })
-        .nodes.map((node) => node.nodeId),
+        .members.map((entry) => entry.memberId),
     ).toEqual(['manager', 'reviewer']);
   });
 });

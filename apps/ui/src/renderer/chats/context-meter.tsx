@@ -61,7 +61,7 @@ function MeterReadout({
   side,
   className,
   runId,
-  nodeId = null,
+  memberId = null,
   callId = null,
   live = false,
   children,
@@ -74,7 +74,7 @@ function MeterReadout({
   /** Which chat to fetch the full readout for, or null for none. */
   runId?: string | null;
   /** Which team node of that run, or null for a chat's own agent. */
-  nodeId?: string | null;
+  memberId?: string | null;
   /** Which agent-to-agent call of that run, or null for none. */
   callId?: string | null;
   /** Whether this chat's agent is working right now — see {@link LIVE_REREAD_MS}. */
@@ -86,7 +86,7 @@ function MeterReadout({
   // fetch has to be told. `useState`'s setter is stable, so it can be the
   // callback directly.
   const [open, setOpen] = useState(false);
-  const metrics = useChatMetrics(runId ?? null, nodeId, callId, open, live);
+  const metrics = useChatMetrics(runId ?? null, memberId, callId, open, live);
   return (
     <HoverPopover
       // Unchanged whichever shape the meter has taken, so "where is the meter"
@@ -214,7 +214,7 @@ interface ChatMetricsHandle extends MetricsState {
  */
 function useChatMetrics(
   runId: string | null,
-  nodeId: string | null,
+  memberId: string | null,
   callId: string | null,
   open: boolean,
   live: boolean,
@@ -227,7 +227,7 @@ function useChatMetrics(
   const target =
     runId === null
       ? null
-      : `${runId}\u0000${nodeId ?? ''}\u0000${callId ?? ''}`;
+      : `${runId}\u0000${memberId ?? ''}\u0000${callId ?? ''}`;
   // Bumped by the live re-read timer below. A nonce rather than calling the
   // fetch from two places: one effect owns the request, so a re-read cannot
   // race the open-fetch or duplicate its cancellation.
@@ -290,7 +290,7 @@ function useChatMetrics(
         ? { ...previous, loading: true, error: null }
         : { target, ...NO_READING, loading: true },
     );
-    void load(runId, nodeId, callId, refreshing)
+    void load(runId, memberId, callId, refreshing)
       .then((data) => {
         answered = true;
         if (!current) {
@@ -339,7 +339,7 @@ function useChatMetrics(
     };
     // `live` rides the deps so a settle takes one final reading; `nonce` is the
     // live re-read.
-  }, [load, runId, nodeId, callId, target, open, live, nonce, refresh]);
+  }, [load, runId, memberId, callId, target, open, live, nonce, refresh]);
   if (load === null || runId === null) {
     return null;
   }
@@ -379,7 +379,7 @@ export function ContextMeter({
   spentUsd = null,
   spentEstimatedUsd = null,
   runId = null,
-  nodeId = null,
+  memberId = null,
   callId = null,
   side = 'bottom',
   live = false,
@@ -391,7 +391,7 @@ export function ContextMeter({
    * chat's own agent. A team run holds one window per node, so without it
    * there is no single agent to ask.
    */
-  nodeId?: string | null;
+  memberId?: string | null;
   /**
    * Which agent-to-agent CALL of {@link runId} the readout reports on — the
    * callee's conversation that call belongs to, which holds a window of its
@@ -488,7 +488,7 @@ export function ContextMeter({
         side={side}
         className={className}
         runId={runId}
-        nodeId={nodeId}
+        memberId={memberId}
         callId={callId}
         live={live}
         label={awaitingReading}
@@ -566,7 +566,7 @@ export function ContextMeter({
         side={side}
         className={className}
         runId={runId}
-        nodeId={nodeId}
+        memberId={memberId}
         callId={callId}
         live={live}
         label={unscaled ?? 'No context reading yet'}
@@ -608,7 +608,7 @@ export function ContextMeter({
       side={side}
       className={className}
       runId={runId}
-      nodeId={nodeId}
+      memberId={memberId}
       callId={callId}
       live={live}
       // Deliberately still the bare reading, with no "which measurement"

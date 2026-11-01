@@ -59,12 +59,12 @@ export abstract class HostSinkBroker<TSink> {
   private readonly logger = new Logger(this.constructor.name);
   private readonly sinks = new Map<string, HostSinkEntry<TSink>>();
 
-  private key(runId: string, nodeId: string): string {
-    return `${runId}::${nodeId}`;
+  private key(runId: string, memberId: string): string {
+    return `${runId}::${memberId}`;
   }
 
   /**
-   * Install the sink for one node's turn; the returned disposer removes it.
+   * Install the sink for one member's turn; the returned disposer removes it.
    *
    * A disposer rather than a keyed `unregister(runId, nodeId)`, and the
    * distinction is load-bearing: settle paths run late and out of order, so a
@@ -78,11 +78,11 @@ export abstract class HostSinkBroker<TSink> {
    */
   register(
     runId: string,
-    nodeId: string,
+    memberId: string,
     sink: TSink,
     options: HostSinkOptions = {},
   ): () => void {
-    const key = this.key(runId, nodeId);
+    const key = this.key(runId, memberId);
     const entry: HostSinkEntry<TSink> = {
       sink,
       answersAtOnce: options.answersAtOnce ?? false,
@@ -96,24 +96,24 @@ export abstract class HostSinkBroker<TSink> {
   }
 
   /**
-   * Whether this node currently has a sink — what every subclass's `canX` gate
+   * Whether this member currently has a sink — what every subclass's `canX` gate
    * answers, and what gates the TOOL LISTING, so an agent is never offered a
    * tool whose output nobody would receive.
    */
-  protected has(runId: string, nodeId: string): boolean {
-    return this.sinks.has(this.key(runId, nodeId));
+  protected has(runId: string, memberId: string): boolean {
+    return this.sinks.has(this.key(runId, memberId));
   }
 
   /**
-   * Whether this node's sink was installed for a CLI that will not hold the
+   * Whether this member's sink was installed for a CLI that will not hold the
    * call open (see {@link HostSinkOptions.answersAtOnce}). False with no sink.
    */
-  protected sinkAnswersAtOnce(runId: string, nodeId: string): boolean {
-    return this.sinks.get(this.key(runId, nodeId))?.answersAtOnce ?? false;
+  protected sinkAnswersAtOnce(runId: string, memberId: string): boolean {
+    return this.sinks.get(this.key(runId, memberId))?.answersAtOnce ?? false;
   }
 
   /**
-   * Hand the call to this node's sink and resolve with what happened.
+   * Hand the call to this member's sink and resolve with what happened.
    *
    * Never throws, which is the whole contract: a call that cannot be delivered
    * is an OUTCOME the agent reads and carries on from — it still holds the data
@@ -135,12 +135,12 @@ export abstract class HostSinkBroker<TSink> {
    */
   protected async deliver<TOutcome>(
     runId: string,
-    nodeId: string,
+    memberId: string,
     absent: string,
     failure: string,
     call: (sink: TSink) => Promise<TOutcome>,
   ): Promise<TOutcome | HostSinkUnavailable> {
-    const sink = this.sinks.get(this.key(runId, nodeId))?.sink;
+    const sink = this.sinks.get(this.key(runId, memberId))?.sink;
     if (!sink) {
       return { status: 'unavailable', reason: absent };
     }
@@ -149,7 +149,7 @@ export abstract class HostSinkBroker<TSink> {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(
-        `run ${runId}/${nodeId} could not ${failure}: ${message}`,
+        `run ${runId}/${memberId} could not ${failure}: ${message}`,
       );
       return {
         status: 'unavailable',

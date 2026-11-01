@@ -441,8 +441,8 @@ export abstract class AgentAdapter {
    * installed binary — plus the line the transcript owes the user when that is
    * not the mode they asked for.
    *
-   * The ONE answer behind every approval seam (the chat turn and each graph
-   * node alike), because the two encoding it separately is exactly how a
+   * The ONE answer behind every approval seam (the chat turn and each team
+   * member alike), because the two encoding it separately is exactly how a
    * degrade gets fixed on one path and silently missed on the other. Policy
    * lives here, not in the caller: which modes degrade, which ride through to
    * be rejected loudly by the CLI, and what the user is told.
@@ -489,7 +489,7 @@ export abstract class AgentAdapter {
    * never offered an option the card would not show.
    *
    * The input is the question tool's own arguments — a shape only this CLI's
-   * adapter knows. Consumers hold a payload they must never parse: the graph
+   * adapter knows. Consumers hold a payload they must never parse: the team
    * executor bridges a callee's question to its caller without knowing which
    * CLI raised it, which is exactly what this method buys.
    *
@@ -2163,12 +2163,12 @@ export abstract class AgentAdapter {
   /**
    * The full instruction text for one turn: geniro's own preamble about the
    * surface the reply is rendered on, the user's global custom instructions,
-   * the node's role, then the caller's "May call" block — the last ONLY when
+   * the member's instructions, then the caller's "May call" block — the last ONLY when
    * this turn actually registered the call tools.
    *
    * This lives on the base because getting it wrong is silent: an agent told
    * to route work through `call_agent` with no such tool registered never runs
-   * its callees, and the node still reports success. Each adapter knows its
+   * its callees, and the member still reports success. Each adapter knows its
    * own delivery mechanism, so it passes `granted`; nobody re-derives the
    * join. Adapters deliver the result differently — claude appends it via
    * `--append-system-prompt`, outside the conversation; ACP carries it in the
@@ -2217,6 +2217,7 @@ export abstract class AgentAdapter {
       instructionBlocks: input.instructionBlocks,
       stageMapPrompt: granted ? input.stageMapPrompt : null,
       systemPrompt: input.systemPrompt,
+      characterPrompt: input.characterPrompt,
       answeringACallPrompt: input.answeringACallPrompt,
       callSurfacePrompt: granted ? input.callSurfacePrompt : null,
     });
@@ -2381,7 +2382,7 @@ export abstract class AgentAdapter {
    * {@link buildApprovalResponse}, which is the whole protocol for a one-shot
    * stream-json CLI. Override when the CLI speaks a stateful, bidirectional
    * protocol whose state must be per-turn (see `AcpTurnDriver`): one adapter
-   * instance drives N concurrent turns under graph fan-out, so that state can
+   * instance drives N concurrent turns under team fan-out, so that state can
    * never live on the adapter itself.
    */
   protected createTurnDriver(_input: AgentTurnInput): TurnDriver {
@@ -2522,6 +2523,7 @@ export abstract class AgentAdapter {
       this.modelConfiguration(input.model),
       input.effort ?? null,
       input.systemPrompt ?? null,
+      input.characterPrompt ?? null,
       // Baked into the same composed block as `systemPrompt`, so it is argv
       // for claude and prompt text for ACP either way — a process spawned
       // under one user's instruction set cannot serve a turn that carries
@@ -2545,8 +2547,8 @@ export abstract class AgentAdapter {
       // The same block again, and the same rule: a process spawned to edit one
       // team file must not serve a turn pointed at another.
       input.teamInstructions ?? null,
-      // On the same composed block and the same reasoning: two graph nodes
-      // wired to different instruction blocks must not share a process.
+      // On the same composed block and the same reasoning: two team members
+      // given different instruction blocks must not share a process.
       input.instructionBlocks ?? null,
       // Static per run (the snapshot's stages), so it restarts nothing.
       input.stageMapPrompt ?? null,
@@ -2569,7 +2571,7 @@ export abstract class AgentAdapter {
       // Applied at spawn by every CLI that honours it (argv, a thread config,
       // a per-turn data directory), so a process started with one set cannot
       // serve a turn that switched off another. Sorted and de-duplicated: the
-      // ORDER a node lists them in is not a different set.
+      // ORDER a member lists them in is not a different set.
       [...new Set(input.mcpDisabled ?? [])].sort(),
       input.mcpEndpoint?.url ?? null,
       input.env ?? null,
@@ -2930,7 +2932,7 @@ export abstract class AgentAdapter {
         // Passed straight through: what to answer between turns depends on the
         // run's approval posture, which the CALLER holds — an adapter deciding
         // it here would be a third copy of approval semantics that already
-        // live in the chat service and the graph executor.
+        // live in the chat service and the team executor.
         betweenTurnApproval: opts.betweenTurnApproval,
         onBetweenTurnEvent: opts.onBetweenTurnEvent
           ? (event) => {

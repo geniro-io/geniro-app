@@ -1213,7 +1213,7 @@ export class AcpTurnDriver {
    * reads the model's whole parameter list, awaits, then writes the whole list
    * back with its one value changed. Frames in flight together therefore
    * overwrite each other with stale lists, and whichever lands last wins.
-   * REPORTED as a Grok 4.7 node set to 500K that "shows 256k only sometimes";
+   * REPORTED as a Grok 4.7 member set to 500K that "shows 256k only sometimes";
    * two of its fresh sessions in the reporter's own store read 256,000 from
    * their very first reading. PROBED on cursor-agent 2026.09.10-fd3934a with the
    * four frames that turn sends (`model`, `reasoning_effort`, `context`, `fast`)
@@ -1379,7 +1379,7 @@ export class AcpTurnDriver {
    * that would otherwise call the turn a success.
    *
    * Per-turn state, so it belongs to the driver rather than the adapter: one
-   * adapter instance drives N concurrent turns under graph fan-out. It has to
+   * adapter instance drives N concurrent turns under team fan-out. It has to
    * be state at all because the two halves arrive apart — the sentence in a
    * message chunk, the ending in the prompt reply — and it is the ENDING that
    * is wrong, so the sentence has to outlive its own notification to correct
@@ -2154,7 +2154,7 @@ export class AcpTurnDriver {
    * another can never be cancelled — neither by the next prompt nor by a
    * `session/cancel` — and runs on to `end_turn` beside the prompt that
    * replaced it, repeating every step (grok-4.7 3/3 runs, gpt-5.6-sol 1/1).
-   * REPORTED as a QA node running fourteen reviewers where it had launched
+   * REPORTED as a QA member running fourteen reviewers where it had launched
    * seven, then working on after its call had returned, from a conversation
    * whose history no longer held the correction its caller had sent. Cancel
    * first and wait, and every prompt stops cleanly — measured through a chain
@@ -2763,7 +2763,7 @@ export class AcpTurnDriver {
     // session store was being deleted with the turn's config directory.
     const offered = readAcpModels(sessionResult);
     if (offered.length > 0 && !acpOffersModel(sessionResult, wanted)) {
-      // Never silent, for the reason the mode degrade above is not: a node the
+      // Never silent, for the reason the mode degrade above is not: a member the
       // user pointed at one model quietly running on another is a wrong turn
       // that reports success.
       events.push({
@@ -3113,8 +3113,8 @@ export class AcpTurnDriver {
    * the conversation here, not out-of-band like claude's
    * `--append-system-prompt`, so every block a turn carries stays in the window
    * for every turn after it. Re-sending it each turn put a full copy of the
-   * user's instructions, the wired instruction blocks and the node's role into
-   * every message: a team node with a ~20KB role and block had ~5k tokens
+   * user's instructions, the member's instruction blocks and its instructions
+   * into every message: a team member with ~20KB of instructions and blocks had ~5k tokens
    * of duplicate instructions added to its window per turn, on top of the ~1.1KB
    * preamble that alone had put ~40 copies (~11k tokens) into a 40-message
    * thread.
@@ -3233,7 +3233,7 @@ export class AcpTurnDriver {
 
     if (stopReason === 'cancelled') {
       // A cancelled turn is not a completion — it must not record usage or a
-      // final answer downstream nodes would then consume. What the user
+      // final answer a caller would then consume. What the user
       // ALREADY SAW is a different question: the open block is still written,
       // so cancelling does not erase the words that reached the screen.
       return [...this.flushPending(), ...dropped, { type: 'turn_cancelled' }];
@@ -3249,8 +3249,8 @@ export class AcpTurnDriver {
       // at the end of real work, and a transcript that dropped it would hide
       // the part the user can act on. What is dropped is the failure's own
       // usage and `finalText` — a turn that produced no answer has none, and
-      // publishing a `finalText` here would hand a downstream graph node the
-      // transport error as this node's output.
+      // publishing a `finalText` here would hand a caller the
+      // transport error as this member's output.
       const message = this.agentFailure;
       this.agentFailure = null;
       const events: AgentEvent[] = [...this.flushPending(), ...dropped];
@@ -4261,7 +4261,7 @@ export class AcpTurnDriver {
       return [];
     }
     // Per-TURN state on the driver, never on the adapter: one adapter instance
-    // serves N concurrent turns under graph fan-out.
+    // serves N concurrent turns under team fan-out.
     this.session.delegateToolCalls.add(toolCall.toolCallId);
     this.session.noteDelegateLaunch(toolCall.toolCallId);
     return [
@@ -4826,7 +4826,7 @@ export class AcpTurnDriver {
         // message — see {@link AcpAgentFailureProtocol}. Held rather than
         // emitted: the terminal is what says a turn failed, and it has not
         // arrived yet. Deliberately NOT pushed onto `textChunks` either, so it
-        // cannot become the turn's `finalText` — a downstream graph node
+        // cannot become the turn's `finalText` — a caller
         // consuming "the answer" must not be handed the transport error as one.
         const failure = this.session.options.agentFailure?.read(text) ?? null;
         if (failure !== null) {

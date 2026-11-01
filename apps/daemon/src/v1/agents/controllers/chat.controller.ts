@@ -519,7 +519,7 @@ export class ChatController {
 
   /**
    * The whole conversation as one file — every setting, every transcript item
-   * with its payload verbatim, the per-node execution state and the spend.
+   * with its payload verbatim, the per-member execution state and the spend.
    *
    * Its own route rather than a flag on `:runId/items`, because it answers a
    * different question: that route serves a WINDOW to a screen and is paged
@@ -706,7 +706,7 @@ export class ChatController {
   ): Promise<ChatMetricsWire> {
     return this.metrics.read(
       runId,
-      query.nodeId ?? null,
+      query.memberId ?? null,
       query.callId ?? null,
       query.refresh ?? false,
     );

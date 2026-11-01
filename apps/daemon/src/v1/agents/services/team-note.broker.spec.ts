@@ -81,9 +81,9 @@ const NAMES: Record<string, string> = {
 
 /** Caller keys in this spec are `node` or `node/conversation`. */
 function writerOf(caller: string): TeamNoteWriter {
-  const [nodeId, conversationId] = caller.split('/');
+  const [memberId, conversationId] = caller.split('/');
   return {
-    nodeId: nodeId!,
+    memberId: memberId!,
     conversationId: conversationId ?? null,
     callId: conversationId === undefined ? null : `call-${conversationId}`,
   };
@@ -94,7 +94,7 @@ function sinkFor(items: FakeItems, runId: string, delayMs = 0): TeamNoteSink {
     persistItem: (_nodeId, _kind, _role, payload) =>
       items.persist(runId, payload, delayMs),
     writer: writerOf,
-    agentName: (nodeId) => NAMES[nodeId] ?? nodeId,
+    agentName: (memberId) => NAMES[memberId] ?? memberId,
   };
 }
 
@@ -104,7 +104,7 @@ function setUp(): { broker: TeamNoteBroker; items: FakeItems } {
   return { broker: new TeamNoteBroker(em, items.dao()), items };
 }
 
-/** Register every named node of `runId` on the broker. */
+/** Register every named member of `runId` on the broker. */
 function register(
   broker: TeamNoteBroker,
   items: FakeItems,
@@ -112,8 +112,8 @@ function register(
   nodes: string[],
   delayMs = 0,
 ): void {
-  for (const nodeId of nodes) {
-    broker.register(runId, nodeId, sinkFor(items, runId, delayMs));
+  for (const memberId of nodes) {
+    broker.register(runId, memberId, sinkFor(items, runId, delayMs));
   }
 }
 
@@ -164,7 +164,7 @@ describe('TeamNoteBroker', () => {
       seq: note.seq,
       kind: 'contract',
       text: 'POST /orders returns { id, status }',
-      nodeId: 'engineer',
+      memberId: 'engineer',
       conversationId: 'c1',
       callId: 'call-c1',
       author: 'Backend Engineer',
@@ -174,7 +174,7 @@ describe('TeamNoteBroker', () => {
     expect(other.notes).toEqual([]);
   });
 
-  it('is not offered, and answers unavailable, for a node with no sink', async () => {
+  it('is not offered, and answers unavailable, for a member with no sink', async () => {
     const { broker } = setUp();
 
     expect(broker.canUse('run-a', 'manager')).toBe(false);
@@ -264,7 +264,7 @@ describe('TeamNoteBroker', () => {
       text: 'use gRPC',
       supersedes: old.seq,
     });
-    const manager = { nodeId: 'manager', conversationId: null };
+    const manager = { memberId: 'manager', conversationId: null };
     // Only the replacement is news.
     expect(broker.unreadCount('run-a', manager)).toBe(1);
 
@@ -361,20 +361,32 @@ describe('TeamNoteBroker', () => {
     expect(own.unread).toBe(1);
     // Never read anything: every note it did not write.
     expect(
-      broker.unreadCount('run-a', { nodeId: 'manager', conversationId: null }),
+      broker.unreadCount('run-a', {
+        memberId: 'manager',
+        conversationId: null,
+      }),
     ).toBe(2);
-    // The same node in another conversation is another reader.
+    // The same member in another conversation is another reader.
     expect(
-      broker.unreadCount('run-a', { nodeId: 'engineer', conversationId: 'c1' }),
+      broker.unreadCount('run-a', {
+        memberId: 'engineer',
+        conversationId: 'c1',
+      }),
     ).toBe(1);
     expect(
-      broker.unreadCount('run-a', { nodeId: 'engineer', conversationId: 'c2' }),
+      broker.unreadCount('run-a', {
+        memberId: 'engineer',
+        conversationId: 'c2',
+      }),
     ).toBe(2);
 
     const seen = read(await broker.read('run-a', 'manager', 'manager', QUERY));
     expect(seen.unread).toBe(0);
     expect(
-      broker.unreadCount('run-a', { nodeId: 'manager', conversationId: null }),
+      broker.unreadCount('run-a', {
+        memberId: 'manager',
+        conversationId: null,
+      }),
     ).toBe(0);
 
     written(
@@ -384,7 +396,10 @@ describe('TeamNoteBroker', () => {
       }),
     );
     expect(
-      broker.unreadCount('run-a', { nodeId: 'manager', conversationId: null }),
+      broker.unreadCount('run-a', {
+        memberId: 'manager',
+        conversationId: null,
+      }),
     ).toBe(1);
   });
 
@@ -399,7 +414,7 @@ describe('TeamNoteBroker', () => {
       kind: 'contract',
       text: 'c',
     });
-    const manager = { nodeId: 'manager', conversationId: null };
+    const manager = { memberId: 'manager', conversationId: null };
 
     // Contracts only, as the description asks before an interface changes:
     // the older decision was not shown, so it is still unread.
@@ -431,15 +446,21 @@ describe('TeamNoteBroker', () => {
     // A daemon restart is a broker with no memory of the run.
     broker.forgetRun('run-a');
     expect(
-      broker.unreadCount('run-a', { nodeId: 'manager', conversationId: null }),
+      broker.unreadCount('run-a', {
+        memberId: 'manager',
+        conversationId: null,
+      }),
     ).toBe(0);
     await broker.prime('run-a');
     expect(
-      broker.unreadCount('run-a', { nodeId: 'manager', conversationId: null }),
+      broker.unreadCount('run-a', {
+        memberId: 'manager',
+        conversationId: null,
+      }),
     ).toBe(1);
   });
 
-  it('filters by kind and by author name or node id', async () => {
+  it('filters by kind and by author name or member id', async () => {
     const { broker, items } = setUp();
     register(broker, items, 'run-a', ['manager', 'engineer', 'reviewer']);
     await broker.write('run-a', 'engineer', 'engineer', {

@@ -62,7 +62,7 @@ describe('addPolledSpendToTotals', () => {
 describe('nodePolledSpend', () => {
   const polled = (kind: string | null) => kind === 'cursor-agent';
 
-  it('answers a polled node’s own figure', () => {
+  it('answers a polled member’s own figure', () => {
     expect(
       nodePolledSpend(
         {
@@ -75,7 +75,7 @@ describe('nodePolledSpend', () => {
     ).toEqual({ polledCostCents: 300, polledCostEvents: 1 });
   });
 
-  it('never gives a node of a self-pricing CLI a polled bill', () => {
+  it('never gives a member of a self-pricing CLI a polled bill', () => {
     // Its turns carry their own price; a stray figure on its row must not be
     // read as a second one.
     expect(
@@ -90,7 +90,7 @@ describe('nodePolledSpend', () => {
 describe('nodePolledSpend — agent pool', () => {
   const polled = (kind: string | null) => kind === 'cursor-agent';
 
-  it('answers a pooled node’s bill when a member other than its stamp polls', () => {
+  it('answers a pooled member’s bill when a pool member other than its stamp polls', () => {
     expect(
       nodePolledSpend(
         { agentKind: 'claude', polledCostCents: 300, polledCostEvents: 1 },
@@ -106,7 +106,7 @@ describe('withNodePolledSpend', () => {
   const bill = { polledCostCents: 500, polledCostEvents: 4 };
   const noTurns = { costUsd: null, costedTurns: 0 };
 
-  it('replaces a polled node’s turn totals with its bill', () => {
+  it('replaces a polled member’s turn totals with its bill', () => {
     expect(withNodePolledSpend(totals, noTurns, bill)).toEqual({
       costUsd: 5,
       costedTurns: 4,

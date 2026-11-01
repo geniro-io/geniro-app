@@ -45,9 +45,9 @@ import {
   useCapabilities,
 } from './use-capabilities';
 
-// Code-split the conditionally-rendered views: Teams drags @xyflow/react +
-// elkjs and Settings its own tree — eager imports would put both in the
-// startup chunk of the always-mounted shell.
+// Code-split the conditionally-rendered views: Teams and Settings each bring
+// their own tree — eager imports would put both in the startup chunk of the
+// always-mounted shell.
 const Teams = lazy(() =>
   import('./teams/Teams').then((m) => ({ default: m.Teams })),
 );

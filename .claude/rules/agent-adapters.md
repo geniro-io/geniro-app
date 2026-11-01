@@ -40,7 +40,7 @@ Every fact about a specific CLI lives in its `adapters/<name>/` directory, as a 
 
 ## The call surface
 
-- Every adapter must hand its CLI `input.mcpEndpoint`; the graph executor assumes it with no capability gate.
+- Every adapter must hand its CLI `input.mcpEndpoint`; the team executor assumes it with no capability gate.
 - Build the instruction text only with the base's `composeSystemPrompt(input, granted)`, passing whether YOUR delivery of the MCP tools succeeded. Never join the instruction parts yourself: order is precedence, and telling an agent to use `call_agent` without the tool registered silently skips its callees.
 
 ## Layout

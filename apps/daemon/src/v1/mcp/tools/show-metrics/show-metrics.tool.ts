@@ -18,8 +18,8 @@ export class ShowMetricsTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, nodeId }: McpListContext): boolean {
-    return this.metrics.canDraw(runId, nodeId);
+  protected isOffered({ runId, memberId }: McpListContext): boolean {
+    return this.metrics.canDraw(runId, memberId);
   }
 
   protected instructions(): string {
@@ -34,7 +34,7 @@ export class ShowMetricsTool extends BaseMcpTool {
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, nodeId } = context;
+    const { runId, memberId } = context;
     const metrics = readHostMetrics(args);
     // Null is the reader saying there is no figure here at all, answered as
     // a malformed call for the CHART's reason rather than the findings
@@ -46,7 +46,7 @@ export class ShowMetricsTool extends BaseMcpTool {
         "no figure could be read — 'metrics' must be a non-empty array, and each entry needs a 'label' and a 'value', both STRINGS (format the number yourself: \"82%\", not 0.82).",
       );
     }
-    const outcome = await this.metrics.draw(runId, nodeId, metrics);
+    const outcome = await this.metrics.draw(runId, memberId, metrics);
     // Same reading as its drawing siblings: an unavailable channel is an
     // answer, not a failure — the agent still holds the figures.
     return this.text(hostMetricsResultText(outcome));

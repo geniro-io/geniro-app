@@ -5,7 +5,7 @@ import type { RunWaterfallToolUse } from '../chat.types';
  * the CALL rather than the TOOL has been collapsed.
  */
 export interface ToolUsageGroup {
-  nodeId: string | null;
+  memberId: string | null;
   /** `payload.name` — a tool's name on one CLI, a per-call TITLE on another. */
   name: string;
   /** `payload.toolKind` — the shared classifier's own word for what it does. */
@@ -44,7 +44,7 @@ const UNNAMED_TOOL = 'tool';
  * `mcp__geniro-…__await_agent`) and, on the ACP transport, whatever the CLI
  * TITLED the call — which for a shell call is the command itself, backticked.
  * MEASURED on a real database: 3,251 such rows, the longest 37,630 characters,
- * and on the run this was written against a single cursor node produced 64
+ * and on the run this was written against a single cursor member produced 64
  * distinct "names" for 64 shell calls.
  *
  * Both halves of that are defects in a histogram. The wire caps a label at
@@ -86,9 +86,9 @@ export function foldToolUsage(
   const byLabel = new Map<string, RunWaterfallToolUse>();
   for (const group of groups) {
     const name = toolLabel(group.name, group.toolKind);
-    const key = `${group.nodeId ?? ''}\u0000${name}`;
+    const key = `${group.memberId ?? ''}\u0000${name}`;
     const row = byLabel.get(key) ?? {
-      nodeId: group.nodeId,
+      memberId: group.memberId,
       name,
       calls: 0,
       delegateCalls: 0,

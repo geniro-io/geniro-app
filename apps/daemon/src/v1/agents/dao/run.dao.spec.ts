@@ -13,7 +13,7 @@ import { RunDao } from './run.dao';
 /**
  * Real-driver DAO spec for the run listings the service specs only fake
  * ("Mirrors the real query's chat-only scoping…" in chat.service.spec, the
- * pending-counts orphan filter in graph-executor.service.spec). Same in-memory
+ * pending-counts orphan filter in team-executor.service.spec). Same in-memory
  * better-sqlite3 harness as item.dao.spec: real entities, the daemon config's
  * discovery settings, actual SQL.
  */
@@ -427,7 +427,7 @@ describe('RunDao (in-memory sqlite)', () => {
       await dao.create({ status: 'pending' });
       const running = await dao.create({ status: 'running' });
       await dao.create({ status: 'completed' });
-      // A mid-turn TEAM run is the graph executor's reconcile concern.
+      // A mid-turn TEAM run is the team executor's reconcile concern.
       await dao.create({ teamId: 'wf-1', status: 'running' });
 
       const stale = await dao.listRunningChats();

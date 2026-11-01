@@ -478,7 +478,7 @@ export class NotificationsGateway
 
   /**
    * The elicitation card's answer: routes a tool-approval verdict to the
-   * paused `ask`-node turn via the {@link ApprovalRegistry}. The acknowledgment
+   * paused `ask`-mode turn via the {@link ApprovalRegistry}. The acknowledgment
    * distinguishes applied, expired, and retryable-invalid payloads. The socket
    * is already token-authenticated at `handleConnection`.
    *

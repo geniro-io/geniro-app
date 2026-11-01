@@ -37,12 +37,12 @@ const NODES: ReadonlyMap<string, TranscriptNodeMeta> = new Map([
 function item(
   kind: ChatItemKind,
   payload: unknown,
-  nodeId: string | null = 'orch',
+  memberId: string | null = 'orch',
 ): ChatItem {
   return {
     id: `${kind}-1`,
     runId: 'run-1',
-    nodeId,
+    memberId,
     seq: 1,
     kind,
     role: null,

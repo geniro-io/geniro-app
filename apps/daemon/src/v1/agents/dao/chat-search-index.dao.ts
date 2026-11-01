@@ -37,7 +37,7 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
       .select([
         'i.id',
         'i.run_id',
-        'i.node_id',
+        'i.member_id',
         'i.seq',
         'i.kind',
         'i.role',
@@ -214,7 +214,7 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
       .select([
         'id',
         'run_id',
-        'node_id',
+        'member_id',
         'seq',
         'kind',
         'role',

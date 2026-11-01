@@ -12,7 +12,7 @@ import { usageFiguresFromRaw } from './usage-figures';
 /** One row of the projection {@link activeSpansFrom} folds. */
 export interface SpanRow {
   kind: string;
-  nodeId: string | null;
+  memberId: string | null;
   createdAt: Date;
   /** The row's JSON text, exactly as stored. */
   payload: string;
@@ -47,7 +47,7 @@ export const SPAN_ROW_KINDS = [
  * works — and a clock built on the sum advances two seconds a second. A clock
  * is read as a clock, so its settled half is the UNION of these spans.
  *
- * A turn's span runs from its conversation's `running` status row (node and
+ * A turn's span runs from its conversation's `running` status row (member and
  * `callId`) to its `turn_complete` — the same instant the renderer's live clock counts an open
  * turn from, so a turn landing does not move the total. A turn with no
  * `running` row reaches back from its end by the CLI's own `durationMs`; a turn
@@ -74,8 +74,8 @@ export function activeSpansFrom(
       continue;
     }
     const body = parseJsonColumn(row.payload);
-    // Parallel calls run one node in several conversations at once.
-    const key = `${row.nodeId ?? ''}\u0000${payloadString(body, 'callId') ?? ''}`;
+    // Parallel calls run one member in several conversations at once.
+    const key = `${row.memberId ?? ''}\u0000${payloadString(body, 'callId') ?? ''}`;
     if (row.kind === 'status') {
       const status = asRecord(body)?.status;
       if (status === 'running' && !runningSince.has(key)) {
@@ -87,7 +87,7 @@ export function activeSpansFrom(
         status === 'skipped'
       ) {
         // A stretch that ended without a `turn_complete` — an off-turn badge
-        // restored, a failed turn — must not lend its start to the node's NEXT
+        // restored, a failed turn — must not lend its start to the member's NEXT
         // turn, or that one would be measured from here. A normal turn writes
         // its `turn_complete` before its `completed` row.
         runningSince.delete(key);
@@ -123,14 +123,14 @@ export function activeSpansFrom(
  * `Infinity`; the spans this is subtracted from bound it.
  *
  * Card and shell ids are per-process counters (`n:0`, `bash_1`), so every unit
- * is keyed by its node as well. A card that never got a closing row ends when
+ * is keyed by its member as well. A card that never got a closing row ends when
  * its own conversation starts its next turn, so one lost close cannot stop the
  * clock for the rest of the run.
  */
 export function pausedSpansFrom(rows: readonly SpanRow[]): ActiveSpan[] {
   const cards = new Map<
     string,
-    { since: number; nodeId: string | null; callId: string | null }
+    { since: number; memberId: string | null; callId: string | null }
   >();
   const shells = new Map<string, { since: number; keys: string[] }>();
   const delegates = new Map<string, number>();
@@ -144,7 +144,7 @@ export function pausedSpansFrom(rows: readonly SpanRow[]): ActiveSpan[] {
     const body = parseJsonColumn(row.payload);
     // Not the payload's `callId`: an `unanswerable` close carries none.
     const unitKey = (id: string | null): string | null =>
-      id === null ? null : `${row.nodeId ?? ''}\u0000${id}`;
+      id === null ? null : `${row.memberId ?? ''}\u0000${id}`;
     if (row.kind === 'status') {
       // An off-turn badge is activity between turns, not the conversation
       // taking its next turn — a deferred question stays open through it.
@@ -154,7 +154,7 @@ export function pausedSpansFrom(rows: readonly SpanRow[]): ActiveSpan[] {
       }
       const callId = payloadString(body, 'callId');
       for (const [id, card] of cards) {
-        if (card.nodeId === row.nodeId && card.callId === callId) {
+        if (card.memberId === row.memberId && card.callId === callId) {
           cards.delete(id);
           waits.push({ startMs: card.since, endMs: at });
         }
@@ -164,7 +164,7 @@ export function pausedSpansFrom(rows: readonly SpanRow[]): ActiveSpan[] {
       if (id !== null && !cards.has(id)) {
         cards.set(id, {
           since: at,
-          nodeId: row.nodeId,
+          memberId: row.memberId,
           callId: payloadString(body, 'callId'),
         });
       }

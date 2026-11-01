@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { teamSnapshotOf } from '../../teams/utils/team-snapshot';
 import { reportedModelOf, usageDimensions } from './usage-dimensions';
 
@@ -21,7 +22,7 @@ const run = (overrides: Partial<Run> = {}): Run =>
 const node = (overrides: Partial<NodeState> = {}): NodeState =>
   ({
     runId: 'run-a',
-    nodeId: 'main',
+    memberId: 'main',
     agentKind: null,
     model: null,
     ...overrides,
@@ -29,7 +30,7 @@ const node = (overrides: Partial<NodeState> = {}): NodeState =>
 
 /** The copy a team run keeps, written by the executor's own writer. */
 const snapshotNamed = (name: string): string =>
-  teamSnapshotOf({ name, nodes: [], edges: [] });
+  teamSnapshotOf(teamOf([member('dev')], { name }));
 
 describe('usageDimensions', () => {
   it('names the team from the run’s own snapshot, never its title', () => {
@@ -68,8 +69,8 @@ describe('usageDimensions', () => {
     expect(names).toEqual(['Nightly review', 'Nightly review']);
   });
 
-  it('files a turn under the pool member its own row names over its node’s stamp', () => {
-    // A pooled node is stamped with member 1; a call another member ran says so
+  it('files a turn under the pool member its own row names over its member’s stamp', () => {
+    // A pooled member is stamped with pool member 1; a call another member ran says so
     // on its usage rows, and its spend belongs to that CLI and that model.
     const member1 = {
       agentKind: 'claude',
@@ -111,7 +112,7 @@ describe('usageDimensions', () => {
 
   it('falls back to the slug when the run holds no snapshot — not to its title', () => {
     // A run made before snapshots existed carries none until something first
-    // reads its graph. The slug is the file name, which is still a thing a
+    // reads its team. The slug is the file name, which is still a thing a
     // person can recognise; the title would be the conversation's.
     const dimensions = usageDimensions(
       run({ teamId: 'nightly-review', title: 'Fix the login bug' }),
@@ -130,9 +131,9 @@ describe('usageDimensions', () => {
     expect(dimensions.teamName).toBe('nightly-review');
   });
 
-  it('prefers the NODE’s agent and model over the run’s', () => {
+  it('prefers the MEMBER’s agent and model over the run’s', () => {
     // A team run names no single agent — its own `agentKind` is null and
-    // each node names its own. Reading the run alone attributes every node's
+    // each member names its own. Reading the run alone attributes every member's
     // spend to nothing.
     const dimensions = usageDimensions(
       run({ teamId: 'w', agentKind: null, model: null, cwd: '/work' }),

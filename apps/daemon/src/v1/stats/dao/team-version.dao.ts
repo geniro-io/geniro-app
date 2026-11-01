@@ -18,7 +18,7 @@ interface TeamVersionDatabase {
   };
 }
 
-/** The registry of graphs each team has run with (see the entity). */
+/** The registry of definitions each team has run with (see the entity). */
 @Injectable()
 export class TeamVersionDao extends BaseDao<TeamVersion> {
   constructor(em: EntityManager) {
@@ -26,8 +26,8 @@ export class TeamVersionDao extends BaseDao<TeamVersion> {
   }
 
   /**
-   * Record a version's graph the first time a run of it is seen. A version
-   * already recorded keeps its graph and moves `firstSeenAt` only earlier, so
+   * Record a version's team the first time a run of it is seen. A version
+   * already recorded keeps its team and moves `firstSeenAt` only earlier, so
    * the boot sweep may meet a team's runs in any order and still number its
    * versions by their first run.
    */

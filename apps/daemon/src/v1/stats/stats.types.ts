@@ -14,7 +14,7 @@ import type { AgentKind } from '../runs/runs.types';
  */
 export interface UsageEventInput {
   runId: string;
-  nodeId: string | null;
+  memberId: string | null;
   seq: number;
   occurredAt: Date;
   agentKind: AgentKind | null;
@@ -110,7 +110,7 @@ export interface LineSnapshotRow {
 /** What the team ledger writes on a run's thread row when the run is created. */
 export interface ThreadVersionStamp {
   slug: string;
-  /** Null when the run kept no graph copy it can read. */
+  /** Null when the run kept no team copy it can read. */
   version: string | null;
   inferred: boolean | null;
 }
@@ -168,7 +168,7 @@ export interface TeamRecommendationSource {
   chatKind: TeamRecommendationChat;
 }
 
-/** A graph version as the history names it: its hash, its number once recorded, and whether it is the library's now. */
+/** A team version as the history names it: its hash, its number once recorded, and whether it is the library's now. */
 export interface HistoryVersionRef {
   version: string;
   number: number | null;
@@ -356,7 +356,7 @@ export const POLLED_SPEND_SEQ = -1;
  */
 export interface UsageRecordedEvent {
   runId: string;
-  nodeId: string | null;
+  memberId: string | null;
   /**
    * When the spend happened — ISO-8601, the same instant the row carries: the
    * turn's own, or for polled spend the run's last activity.
@@ -647,7 +647,7 @@ export const VersionFiguresSchema = z
   .meta({ id: 'VersionFigures' });
 export type VersionFiguresWire = z.infer<typeof VersionFiguresSchema>;
 
-/** A version's graph against the version recorded before it, as `git diff` prints it. */
+/** A version's team against the version recorded before it, as `git diff` prints it. */
 export const VersionChangesSchema = z
   .object({
     added: z.number().describe('lines the diff adds'),
@@ -664,7 +664,7 @@ export const TeamVersionRowSchema = z
     version: z
       .string()
       .nullable()
-      .describe('null for the runs that kept no graph copy'),
+      .describe('null for the runs that kept no team copy'),
     ordinal: z
       .number()
       .nullable()
@@ -672,12 +672,17 @@ export const TeamVersionRowSchema = z
     inferred: z
       .boolean()
       .describe(
-        'every run of it predates graph copies, so the graph was frozen after the run started',
+        'every run of it predates team copies, so the team was frozen after the run started',
       ),
     recorded: z
       .boolean()
       .describe(
-        'false only for the library graph before its first run or restore records it',
+        'false only for the library team before its first run or restore records it',
+      ),
+    preTeam: z
+      .boolean()
+      .describe(
+        'recorded while teams were node graphs; its diff is taken over the graph converted to a team',
       ),
     firstRunAt: z
       .string()
@@ -685,23 +690,23 @@ export const TeamVersionRowSchema = z
       .describe('null for a version not run yet'),
     lastRunAt: z.string().nullable().describe('null for a version not run yet'),
     changes: VersionChangesSchema.nullable().describe(
-      'null for the first recorded version, an inferred one and the runs with no graph copy',
+      'null for the first recorded version, an inferred one and the runs with no team copy',
     ),
     figures: VersionFiguresSchema,
   })
   .meta({ id: 'TeamVersionRow' });
 export type TeamVersionRowWire = z.infer<typeof TeamVersionRowSchema>;
 
-/** One team's runs grouped by the graph version they ran. */
+/** One team's runs grouped by the team version they ran. */
 export const TeamVersionsWireSchema = z.object({
   slug: z.string(),
   currentVersion: z
     .string()
     .nullable()
-    .describe("the library graph's version; null when the file cannot be read"),
+    .describe("the library team's version; null when the file cannot be read"),
   versions: z.array(TeamVersionRowSchema).describe('newest first'),
   unversioned: TeamVersionRowSchema.nullable().describe(
-    'the runs that kept no graph copy, or null when there are none',
+    'the runs that kept no team copy, or null when there are none',
   ),
   totals: VersionFiguresSchema.describe(
     'folded over every run of the team, not summed from the rows',
@@ -710,10 +715,10 @@ export const TeamVersionsWireSchema = z.object({
 // No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
 export type TeamVersionsWire = z.infer<typeof TeamVersionsWireSchema>;
 
-/** A version written back to the library as the team's graph. */
+/** A version written back to the library as the team. */
 export const TeamVersionRestoredSchema = z.object({
   slug: z.string(),
-  version: z.string().describe('the graph version the library file now holds'),
+  version: z.string().describe('the team version the library file now holds'),
   hash: z.string().describe('the file hash the next save must quote'),
   backup: z
     .string()

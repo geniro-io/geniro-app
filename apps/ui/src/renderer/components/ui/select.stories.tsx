@@ -13,8 +13,8 @@ const AGENT_GROUPS: SelectGroup[] = [
     ],
   },
   {
-    label: 'Workflows',
-    items: [{ value: 'wf:dev-team', label: 'Dev team' }],
+    label: 'Teams',
+    items: [{ value: 'team:dev-team', label: 'Dev team' }],
   },
 ];
 

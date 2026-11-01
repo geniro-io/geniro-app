@@ -1185,7 +1185,7 @@ describe('pressing Run when the daemon refuses the start', () => {
 
   it('gives back a worktree it made when nothing else is using it', async () => {
     const { prune } = await press(
-      refusal(400, 'NO_RUN_TARGET', 'no agent or workflow'),
+      refusal(400, 'NO_RUN_TARGET', 'no agent or team'),
       task({ status: 'todo' }),
     );
 

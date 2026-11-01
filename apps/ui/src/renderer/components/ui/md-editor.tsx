@@ -20,7 +20,7 @@ interface MarkdownNode {
  * `.claude/worktrees/<linear-id-slug>` opened an unknown `<linear-id-slug>`
  * element that swallowed every line after it, and the preview beside a
  * two-page instruction block showed one and a half sentences. REPORTED against
- * a workflow's instruction block. Turning the `html` nodes into `text` before
+ * a team's instruction block. Turning the `html` nodes into `text` before
  * rehype sees them is what the chat transcript already does for the same words
  * (`react-markdown` escapes HTML by default), so an instruction reads the same
  * in the editor and in the thread it is sent to.

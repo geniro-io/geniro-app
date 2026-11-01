@@ -129,7 +129,7 @@ export const TASK_RUN_CONFIG_FIELDS = [
   'effort',
   'approval',
   'configDir',
-  'workflowSlug',
+  'teamSlug',
 ] as const;
 
 /**
@@ -252,11 +252,11 @@ export const TaskWireSchema = z.object({
   effort: z.string().nullable(),
   approval: ChatApprovalModeSchema.nullable(),
   configDir: z.string().nullable(),
-  workflowSlug: z
+  teamSlug: z
     .string()
     .nullable()
     .describe(
-      "A workflow to run this card through instead of a single agent; null means take the project's",
+      "A team to run this card through instead of a single agent; null means take the project's",
     ),
   branch: z
     .string()
@@ -306,7 +306,7 @@ export const TaskWireSchema = z.object({
       "Pull requests the task's run opened, oldest first, as captured from the agent output",
     ),
   stage: TaskStageLineSchema.nullable().describe(
-    "Where the task's workflow run stands in its stage graph; null when it has no run or no stages",
+    "Where the task's team run stands in its stage graph; null when it has no run or no stages",
   ),
   position: z
     .number()
@@ -442,7 +442,7 @@ export interface StartTaskRun {
   effort?: string;
   approval?: ChatApprovalMode;
   configDir?: string;
-  workflowSlug?: string;
+  teamSlug?: string;
   customInstructions?: string;
   replyLanguage?: string;
   agentOptions?: AgentOptionsSnapshot;
@@ -452,14 +452,14 @@ export interface StartTaskRun {
  * What a card will actually be run as, once the card's own choices and the
  * project's defaults have been read together.
  *
- * `workflowSlug` non-null is the WORKFLOW arm and `agentKind` non-null the
+ * `teamSlug` non-null is the TEAM arm and `agentKind` non-null the
  * AGENT arm; exactly one is set, which is what makes this a resolved answer
  * rather than a merge of two rows. See `resolveRunTarget`.
  */
 export type ResolvedRunTarget =
   | {
-      kind: 'workflow';
-      workflowSlug: string;
+      kind: 'team';
+      teamSlug: string;
     }
   | {
       kind: 'agent';
@@ -473,20 +473,17 @@ export type ResolvedRunTarget =
 /** The AGENT arm of {@link ResolvedRunTarget}, which alone carries CLI fields. */
 export type ResolvedAgentTarget = Extract<ResolvedRunTarget, { kind: 'agent' }>;
 
-/** The WORKFLOW arm of {@link ResolvedRunTarget}. */
-export type ResolvedWorkflowTarget = Extract<
-  ResolvedRunTarget,
-  { kind: 'workflow' }
->;
+/** The TEAM arm of {@link ResolvedRunTarget}. */
+export type ResolvedTeamTarget = Extract<ResolvedRunTarget, { kind: 'team' }>;
 
 /**
  * Why a card cannot be started as it stands.
  *
- * `no-target` is the card that names neither an agent nor a workflow;
- * `workflow-unattended` is the card that names a workflow the AUTOPILOT may not
+ * `no-target` is the card that names neither an agent nor a team;
+ * `team-unattended` is the card that names a team the AUTOPILOT may not
  * run, which is a different sentence to the user and a different fix.
  */
-export type RunTargetProblemReason = 'no-target' | 'workflow-unattended';
+export type RunTargetProblemReason = 'no-target' | 'team-unattended';
 
 /**
  * An OBJECT rather than the bare reason string, so the arm is discriminated the
@@ -509,7 +506,7 @@ export type RunTargetProblem = {
  *
  * The refusal is a VALUE rather than a null because both callers have to say
  * WHICH problem the card has — a bare null can only ever be reported as the
- * commonest one, which is what would make a card naming a workflow read to its
+ * commonest one, which is what would make a card naming a team read to its
  * user as a card naming nothing.
  */
 export type RunTargetResolution = ResolvedRunTarget | RunTargetProblem;
@@ -578,7 +575,7 @@ export interface BoardVocabulary {
     /** Where instructions attached to it apply: `every project`, or keys. */
     instructionsFor: string[];
   }[];
-  workflows: { slug: string; name: string; description: string | null }[];
+  teams: { slug: string; name: string; description: string | null }[];
   agents: {
     agentKind: AgentKind;
     name: string;

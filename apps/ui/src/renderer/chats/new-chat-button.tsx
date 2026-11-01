@@ -5,7 +5,7 @@ import type { RunConfig } from '../../shared/contracts';
 import { Button } from '../components/ui/button';
 import { Menu } from '../components/ui/menu';
 import { useLatestCallback } from '../components/use-latest-callback';
-import { workflowSlugOf } from './composer-values';
+import { teamSlugOf } from './composer-values';
 import { shortenPath } from './directory-select';
 
 /**
@@ -113,7 +113,7 @@ export function NewChatButton({
           // The agent, and the folder under it — the two facts that tell two
           // similarly-named setups apart. Elided from the FRONT, since CSS
           // truncation eats the end that identifies a directory.
-          hint: workflowSlugOf(config.target) ?? config.target,
+          hint: teamSlugOf(config.target) ?? config.target,
           title: `${config.name} · ${shortenPath(config.cwd)}`,
         })),
       },

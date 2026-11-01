@@ -108,7 +108,7 @@ export function ContextWindowSelect({
   }
   const known = windows.some((window) => window.id === value);
   // A size the CURRENT model does not offer — a chat carried over to another
-  // model, or a workflow node whose model changed under it. Always model-
+  // model, or a team node whose model changed under it. Always model-
   // specific here (there is no CLI-wide union of window sizes), so the row is
   // added back DISABLED rather than dropped: the value is still stored, and
   // hiding it would leave nothing on screen naming what the chip's silent

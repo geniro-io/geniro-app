@@ -100,7 +100,7 @@ describe('createDaemonApis', () => {
   it('sends a bodyless POST WITHOUT a content-type header', async () => {
     // The cancel routes are bodyless POSTs; an application/json claim with an
     // empty body is rejected by Fastify (FST_ERR_CTP_EMPTY_JSON_BODY), which
-    // broke Stop for chats and workflow runs alike.
+    // broke Stop for chats and team runs alike.
     const fetchMock = stubFetch({ ok: true });
 
     await createDaemonApis(handle).chats.cancelChat({ runId: 'r1' });
@@ -149,9 +149,9 @@ describe('createDaemonApis', () => {
       text: () => Promise.reject(new Error('stream gone')),
     });
 
-    await expect(
-      createDaemonApis(handle).workflows.listWorkflows(),
-    ).rejects.toThrow(/daemon GET \/v1\/workflows failed \(502\)$/);
+    await expect(createDaemonApis(handle).teams.listTeams()).rejects.toThrow(
+      /daemon GET \/v1\/teams failed \(502\)$/,
+    );
   });
 
   it('names the query string in the error route, not just the path', async () => {
@@ -165,7 +165,7 @@ describe('createDaemonApis', () => {
   it('bounds every request with an abort timeout — a wedged daemon route must not hang its renderer action forever', async () => {
     const fetchMock = stubFetch({ ok: true, json: () => Promise.resolve([]) });
 
-    await createDaemonApis(handle).workflows.listWorkflows();
+    await createDaemonApis(handle).teams.listTeams();
 
     expect(initOf(fetchMock).signal).toBeInstanceOf(AbortSignal);
     // The ceiling stays sane for a local daemon: generous enough for a slow
@@ -183,11 +183,11 @@ describe('daemonErrorStatus', () => {
     stubFetch({
       ok: false,
       status: 404,
-      text: () => Promise.resolve('WORKFLOW_NOT_FOUND'),
+      text: () => Promise.resolve('TEAM_NOT_FOUND'),
     });
 
     const err = await createDaemonApis(handle)
-      .workflows.getWorkflow({ slug: 'gone' })
+      .teams.getTeam({ slug: 'gone' })
       .catch((caught: unknown) => caught);
 
     expect(daemonErrorStatus(err)).toBe(404);

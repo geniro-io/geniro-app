@@ -25,7 +25,7 @@ export type CallFollowUp = Pick<
   'unavailableReason' | 'interrupts'
 >;
 
-/** The direct line to the running calls of the open workflow run. */
+/** The direct line to the running calls of the open team run. */
 export interface CallMessageChannel {
   runId: string;
   queues: CallMessageQueues;

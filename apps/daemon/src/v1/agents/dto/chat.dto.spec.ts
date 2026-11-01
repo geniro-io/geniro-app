@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { runWorkflowSchema } from '../../graphs/dto/workflows.dto';
-import { StartWorkflowChatSchema } from '../../graphs/graphs.types';
 import { startTaskRunSchema } from '../../tasks/dto/task-run.dto';
+import { runTeamSchema } from '../../teams/dto/teams.dto';
+import { StartTeamChatSchema } from '../../teams/teams.types';
 import { MAX_RUN_NOTES_LENGTH, REPLY_LANGUAGE_MAX_LENGTH } from '../chat.types';
 import {
   analyzeThreadSchema,
@@ -239,12 +239,8 @@ describe('every run-start schema keeps the reply language', () => {
   // schema missing the field drops the language silently instead of failing.
   it.each([
     ['analyzeThreadSchema', analyzeThreadSchema, { agentKind: 'claude' }],
-    [
-      'StartWorkflowChatSchema',
-      StartWorkflowChatSchema,
-      { agentKind: 'claude' },
-    ],
-    ['runWorkflowSchema', runWorkflowSchema, { cwd: '/w', prompt: 'go' }],
+    ['StartTeamChatSchema', StartTeamChatSchema, { agentKind: 'claude' }],
+    ['runTeamSchema', runTeamSchema, { cwd: '/w', prompt: 'go' }],
     [
       'startTaskRunSchema',
       startTaskRunSchema,

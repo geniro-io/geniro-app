@@ -89,7 +89,7 @@ describe('launchingCallOf', () => {
   });
   const shell = { toolCallId: 't1', nodeId: 'dev', callId: 'call-A' };
 
-  it('takes the newest call by that id under the same node and workflow call', () => {
+  it('takes the newest call by that id under the same node and team call', () => {
     // An ACP CLI numbers calls per session: other conversations reuse `t1`.
     const calls = [
       call('pnpm older', { callId: 'call-A' }),
@@ -112,7 +112,7 @@ describe('launchingCallOf', () => {
     expect(isDelegateCall(own)).toBe(false);
   });
 
-  it('pairs a chat shell, which has no workflow call, with a call that has none', () => {
+  it('pairs a chat shell, which has no team call, with a call that has none', () => {
     const chat = { toolCallId: 't1', nodeId: null, callId: null };
     const calls = [
       call('pnpm dev', {}, null),

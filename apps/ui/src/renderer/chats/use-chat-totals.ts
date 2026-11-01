@@ -122,12 +122,12 @@ export function useChatTotals(
   cacheTokens: number | null;
   /**
    * The merged wall-clock stretches in which some agent of the run worked —
-   * what a WORKFLOW's header clock is the union of (see `clockMs`). Null until
+   * what a TEAM's header clock is the union of (see `clockMs`). Null until
    * the daemon has answered.
    */
   activeSpans: readonly ActiveSpan[] | null;
   /**
-   * Where a WORKFLOW waited on the user with nothing running; the one still
+   * Where a TEAM waited on the user with nothing running; the one still
    * open ends at `Infinity`. Null until the daemon has answered.
    */
   pausedSpans: readonly ActiveSpan[] | null;

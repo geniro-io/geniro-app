@@ -52,84 +52,84 @@ describe('resolveRunTarget', () => {
     expect(target).toMatchObject({ kind: 'agent', agentKind: 'claude' });
   });
 
-  it('names the PROBLEM when no rung names an agent or a workflow', () => {
+  it('names the PROBLEM when no rung names an agent or a team', () => {
     expect(resolveRunTarget([press(), press(), { model: 'opus' }])).toEqual({
       kind: 'problem',
       reason: 'no-target',
     });
   });
 
-  it('reads a workflow as the whole answer, dropping the CLI-only fields', () => {
+  it('reads a team as the whole answer, dropping the CLI-only fields', () => {
     const target = resolveRunTarget([
       press(),
-      { workflowSlug: 'dev-team' },
+      { teamSlug: 'dev-team' },
       { agentKind: 'claude', model: 'opus', effort: 'xhigh' },
     ]);
 
-    // Not merely "workflow wins": a graph's nodes name their own model and
+    // Not merely "team wins": a graph's nodes name their own model and
     // effort in the YAML, so carrying the project's down would be a run-level
     // answer with nothing to apply it to.
-    expect(target).toEqual({ kind: 'workflow', workflowSlug: 'dev-team' });
+    expect(target).toEqual({ kind: 'team', teamSlug: 'dev-team' });
   });
 
-  it('REFUSES a workflow the autopilot would run, naming that problem', () => {
-    // The approval forcing below reaches the agent arm only. A workflow carries
+  it('REFUSES a team the autopilot would run, naming that problem', () => {
+    // The approval forcing below reaches the agent arm only. A team carries
     // `approval` per NODE, so there is no single field to force — an unattended
     // run of one parks on the first node that asks, holding its slot and its
     // worktree, and the breaker never trips because parked is not failed.
     expect(
       resolveRunTarget(
-        [press(), { workflowSlug: 'dev-team' }, { agentKind: 'claude' }],
+        [press(), { teamSlug: 'dev-team' }, { agentKind: 'claude' }],
         'autopilot',
       ),
-    ).toEqual({ kind: 'problem', reason: 'workflow-unattended' });
+    ).toEqual({ kind: 'problem', reason: 'team-unattended' });
   });
 
-  it('lets the AUTOPILOT start a workflow the library says can run unattended', () => {
+  it('lets the AUTOPILOT start a team the library says can run unattended', () => {
     // REPORTED as "the automatic taking of tasks doesn't work" against a board
-    // pointed at a workflow whose every agent node was already `auto`.
+    // pointed at a team whose every agent node was already `auto`.
     const asked: string[] = [];
     expect(
       resolveRunTarget(
-        [press(), { workflowSlug: 'dev-team' }, { agentKind: 'claude' }],
+        [press(), { teamSlug: 'dev-team' }, { agentKind: 'claude' }],
         'autopilot',
         (slug) => {
           asked.push(slug);
           return true;
         },
       ),
-    ).toEqual({ kind: 'workflow', workflowSlug: 'dev-team' });
+    ).toEqual({ kind: 'team', teamSlug: 'dev-team' });
     expect(asked).toEqual(['dev-team']);
   });
 
-  it('still refuses the autopilot a workflow the library says can ask', () => {
+  it('still refuses the autopilot a team the library says can ask', () => {
     expect(
       resolveRunTarget(
-        [press(), { workflowSlug: 'dev-team' }],
+        [press(), { teamSlug: 'dev-team' }],
         'autopilot',
         () => false,
       ),
-    ).toEqual({ kind: 'problem', reason: 'workflow-unattended' });
+    ).toEqual({ kind: 'problem', reason: 'team-unattended' });
   });
 
-  it('lets a USER start the same workflow', () => {
-    // The refusal is about nobody being there to answer, not about workflows.
+  it('lets a USER start the same team', () => {
+    // The refusal is about nobody being there to answer, not about teams.
     expect(
       resolveRunTarget(
-        [press(), { workflowSlug: 'dev-team' }, { agentKind: 'claude' }],
+        [press(), { teamSlug: 'dev-team' }, { agentKind: 'claude' }],
         'user',
       ),
-    ).toEqual({ kind: 'workflow', workflowSlug: 'dev-team' });
+    ).toEqual({ kind: 'team', teamSlug: 'dev-team' });
   });
 
   it('distinguishes the two refusals by their sentence', () => {
-    // One reason for both is what made a card naming a workflow tell its user
-    // to "set an agent or workflow" — advice it had already followed.
+    // One reason for both is what made a card naming a team tell its user
+    // to "set an agent or team" — advice it had already followed.
     expect(RUN_TARGET_PROBLEM_REASON['no-target']).not.toBe(
-      RUN_TARGET_PROBLEM_REASON['workflow-unattended'],
+      RUN_TARGET_PROBLEM_REASON['team-unattended'],
     );
     expect(RUN_TARGET_PROBLEM_CODE['no-target']).not.toBe(
-      RUN_TARGET_PROBLEM_CODE['workflow-unattended'],
+      RUN_TARGET_PROBLEM_CODE['team-unattended'],
     );
   });
 

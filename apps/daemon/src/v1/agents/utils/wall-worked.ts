@@ -11,13 +11,13 @@ import { usageFiguresFrom } from './usage-figures';
  *
  * TWIN PARSER: `apps/ui/src/renderer/chats/turn-duration.ts` → `scanTurns`,
  * the renderer's wall-clock fallback over the rows it has loaded — its
- * `nodeScoped: true` mode for a workflow's nodes (`scope: 'nodes'`) and its
+ * `nodeScoped: true` mode for a team's nodes (`scope: 'nodes'`) and its
  * default mode for a 1:1 chat (`scope: 'chat'`). Both read the same durable
  * rows the same way. A call card's clock reads the same rows per call through
  * the renderer's `scanCallTurns`, keyed by node and `callId` as the `nodes`
  * scope keys them:
  *
- * - a turn opens on a workflow node's `running` status row, or on a chat's
+ * - a turn opens on a team node's `running` status row, or on a chat's
  *   USER message, and a row of that kind arriving inside an open turn does not
  *   restart it (`startedAt ??=`);
  * - an approval card parks the clock from its `approval_request` to the
@@ -65,7 +65,7 @@ export interface WallClockRow {
   payload: string;
 }
 
-/** The kinds that end a turn, park it, or open a workflow node's turn. */
+/** The kinds that end a turn, park it, or open a team node's turn. */
 const CLOCK_ROW_KINDS = [
   'turn_complete',
   'turn_cancelled',
@@ -104,7 +104,7 @@ export type WallScope = 'nodes' | 'chat';
 export interface MeasuredTurn {
   /** The seq of the `turn_complete` that ended the turn. */
   seq: number;
-  /** The workflow node that took it; null for a chat's agent. */
+  /** The team node that took it; null for a chat's agent. */
   nodeId: string | null;
   ms: number;
 }

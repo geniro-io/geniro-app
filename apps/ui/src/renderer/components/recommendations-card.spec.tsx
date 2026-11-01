@@ -8,8 +8,8 @@ import {
   ITEMS,
   LOOK,
   recommendation,
+  TEAM_STATS,
   TIMING,
-  WORKFLOW_STATS,
 } from '../__fixtures__/recommendations';
 import { RecommendationsCard } from './recommendations-card';
 
@@ -83,7 +83,7 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={TIMING}
-        workflow
+        team
         items={ITEMS}
         applied={null}
         outcomes={{}}
@@ -108,7 +108,7 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={TIMING}
-        workflow
+        team
         items={ITEMS}
         applied={['W-1', 'R-1']}
         outcomes={{
@@ -135,7 +135,7 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={null}
-        workflow
+        team
         items={ITEMS}
         applied={['W-1', 'R-1']}
         outcomes={{
@@ -164,7 +164,7 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={TIMING}
-        workflow
+        team
         items={[]}
         applied={null}
         outcomes={{}}
@@ -177,13 +177,13 @@ describe('RecommendationsCard', () => {
     expect(el.querySelector('[data-slot="recommendations-footer"]')).toBeNull();
   });
 
-  it('draws no Workflow group for a plain chat, and the user-instruction items in their own', () => {
+  it('draws no Team group for a plain chat, and the user-instruction items in their own', () => {
     const el = render(
       <RecommendationsCard
         look={LOOK}
         summary={null}
         timing={null}
-        workflow={false}
+        team={false}
         items={[
           recommendation('U-1'),
           recommendation('R-1'),
@@ -208,7 +208,7 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={null}
-        workflow={false}
+        team={false}
         items={[
           recommendation('M-1'),
           recommendation('R-1'),
@@ -237,7 +237,7 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={null}
-        workflow={false}
+        team={false}
         items={[
           recommendation('R-1', { territory: 'process' }),
           recommendation('R-2', { territory: 'domain' }),
@@ -263,7 +263,7 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={TIMING}
-        workflow={false}
+        team={false}
         items={[
           recommendation('R-1', { basis: 'one turn saved.', riskNote: 'x' }),
           recommendation('R-2', { basis: 'one call saved', riskNote: 'y' }),
@@ -295,7 +295,7 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={null}
-        workflow
+        team
         items={[
           recommendation('W-1', {
             evidence: [
@@ -326,7 +326,7 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={TIMING}
-        workflow
+        team
         items={ITEMS}
         applied={null}
         outcomes={{}}
@@ -343,8 +343,8 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={null}
-        workflowStats={WORKFLOW_STATS}
-        workflow
+        teamStats={TEAM_STATS}
+        team
         items={ITEMS}
         applied={null}
         outcomes={{}}
@@ -374,8 +374,8 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={null}
-        workflowStats={WORKFLOW_STATS}
-        workflow
+        teamStats={TEAM_STATS}
+        team
         items={[
           recommendation('W-1', {
             minutesSaved: -4,
@@ -410,8 +410,8 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={null}
-        workflowStats={WORKFLOW_STATS}
-        workflow
+        teamStats={TEAM_STATS}
+        team
         items={ITEMS}
         applied={null}
         outcomes={{}}
@@ -422,7 +422,7 @@ describe('RecommendationsCard', () => {
     );
     const agents = [...el.querySelectorAll('[data-slot="analysis-agent"]')];
 
-    expect(el.textContent).toContain('Workflow analysis · 8 runs');
+    expect(el.textContent).toContain('Team analysis · 8 runs');
     expect(tiles).toEqual([
       expect.stringContaining('Time per run42maverage of 8 runs'),
       expect.stringContaining('Cost per run$3.10$24.80 in all'),
@@ -466,9 +466,9 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={null}
-        workflowStats={WORKFLOW_STATS}
+        teamStats={TEAM_STATS}
         hotspots={HOTSPOTS}
-        workflow
+        team
         items={ITEMS}
         applied={null}
         outcomes={{}}
@@ -505,7 +505,7 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={TIMING}
-        workflow={false}
+        team={false}
         items={[recommendation('R-1', { costSavedUsd: 0.3 })]}
         applied={null}
         outcomes={{}}
@@ -524,8 +524,8 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={null}
-        workflowStats={WORKFLOW_STATS}
-        workflow
+        teamStats={TEAM_STATS}
+        team
         items={ITEMS}
         applied={['W-1', 'R-1', 'U-1']}
         outcomes={{
@@ -548,8 +548,8 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={null}
-        workflowStats={{ ...WORKFLOW_STATS, callEdges: 12 }}
-        workflow
+        teamStats={{ ...TEAM_STATS, callEdges: 12 }}
+        team
         items={ITEMS}
         applied={null}
         outcomes={{}}
@@ -565,9 +565,9 @@ describe('RecommendationsCard', () => {
         look={LOOK}
         summary={null}
         timing={null}
-        workflowStats={WORKFLOW_STATS}
+        teamStats={TEAM_STATS}
         hotspots={[{ ...HOTSPOTS[0]!, items: [] }]}
-        workflow
+        team
         items={[]}
         applied={null}
         outcomes={{}}

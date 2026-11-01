@@ -290,7 +290,7 @@ interface SessionEntry {
    *
    * It was bound once at spawn, on the reading that it carries no turn state
    * and files under the RUN. That held while a key served one identity turn
-   * after turn. A workflow callee's key is its CONVERSATION, which several
+   * after turn. A team callee's key is its CONVERSATION, which several
    * calls continue in turn, and each call files its rows under its own id — so,
    * bound at spawn, everything the CLI did after call-2's turn was filed under
    * call-1 and nested in call-1's block. Each turn now installs its own.
@@ -486,7 +486,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    *
    * Only that close: an eviction, a stale replacement, a teardown (which reaps
    * itself) and shutdown are not the user leaving the run, and a teardown or
-   * shutdown that escalates the close still under way withdraws it. A workflow
+   * shutdown that escalates the close still under way withdraws it. A team
    * run is told once per key; whatever listens decides whether the RUN is done.
    */
   onIdleClosed(listener: (runId: string) => void): void {
@@ -496,7 +496,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   /**
    * Owe the next turn of any conversation under `runId` a prompt line — what
    * was stopped while the run sat unused, which no single key's close stopped.
-   * A chat's key is its run id; in a workflow the first conversation to take a
+   * A chat's key is its run id; in a team the first conversation to take a
    * turn carries it.
    */
   oweRunNote(runId: string, prompt: string): void {
@@ -505,7 +505,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
 
   /**
    * Owe one conversation's next turn a prompt line: `key` is its session key
-   * (a workflow node's own, or a chat's run id). False when it was not kept —
+   * (a team node's own, or a chat's run id). False when it was not kept —
    * the daemon is shutting down, so no next turn will carry it.
    */
   oweKeyNote(key: string, prompt: string): boolean {
@@ -653,7 +653,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
               offTurn.current?.(event);
             },
       onHeldApproval,
-      // The RUN, not this key: a workflow files each node and conversation
+      // The RUN, not this key: a team files each node and conversation
       // under its own key, and the run's teardown searches by the run alone.
       runTag: runTagEnv(runIdOfSessionKey(runId), this.runOwner),
     });
@@ -702,7 +702,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   /**
    * The user stopped this run's work while its processes are kept: whenever
    * one of them is closed before it is asked anything again, the close is the
-   * Stop's ({@link SessionCloseCause}). A workflow keeps its processes across
+   * Stop's ({@link SessionCloseCause}). A team keeps its processes across
    * a Stop, so the close that ends their delegates comes later.
    */
   noteUserStop(runId: string): void {
@@ -716,11 +716,11 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
 
   /**
    * Close EVERY process one run holds — its own key, and every per-node and
-   * per-conversation key a workflow run opens under it (`<runId>::…`).
+   * per-conversation key a team run opens under it (`<runId>::…`).
    *
-   * A workflow run's processes outlive each reply, as a chat's do, so a
+   * A team run's processes outlive each reply, as a chat's do, so a
    * teardown that closed only the bare run key (all a chat has) would leave a
-   * deleted or archived workflow's agents — and every server they started —
+   * deleted or archived team's agents — and every server they started —
    * running with nothing left to end them.
    */
   closeRun(runId: string): void {
@@ -906,7 +906,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   /**
    * Whether a live process is kept under any key starting with `prefix` — for
    * a caller that knows the family of keys a conversation's process sits in
-   * but not the exact one (a workflow call is keyed by its conversation's
+   * but not the exact one (a team call is keyed by its conversation's
    * first call). Like {@link peek}, reading does not refresh the idle clock.
    */
   holdsAnyUnder(prefix: string): boolean {

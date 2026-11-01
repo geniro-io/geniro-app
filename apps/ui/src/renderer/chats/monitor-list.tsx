@@ -16,7 +16,7 @@ function MonitorRow({
   onStop,
 }: {
   monitor: OpenMonitor;
-  /** Whose monitor this is, where the list mixes several agents' — a workflow's. */
+  /** Whose monitor this is, where the list mixes several agents' — a team's. */
   agentName: string | null;
   onStop?: (monitor: OpenMonitor) => void | Promise<void>;
 }): React.JSX.Element {

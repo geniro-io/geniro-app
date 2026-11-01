@@ -57,9 +57,9 @@ export function RecommendationsBlock({
       }}
       summary={entry.card.summary}
       timing={entry.card.timing}
-      workflowStats={entry.card.workflowStats}
+      teamStats={entry.card.teamStats}
       hotspots={entry.card.hotspots}
-      workflow={entry.card.sourceKind === 'workflow'}
+      team={entry.card.sourceKind === 'team'}
       items={entry.card.items}
       applied={entry.applied ?? sent}
       outcomes={entry.outcomes}

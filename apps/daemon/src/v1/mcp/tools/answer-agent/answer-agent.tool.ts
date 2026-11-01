@@ -1,4 +1,4 @@
-import type { CallEnvelope } from '../../../graphs/graphs.types';
+import type { CallEnvelope } from '../../../teams/teams.types';
 import type { McpCallContext } from '../../mcp.types';
 import { CallMcpTool } from '../call-mcp-tool';
 import { answerAgentInstructions } from './answer-agent.instructions';

@@ -82,7 +82,7 @@ function readDisabled(file: string): string[] {
 
 /**
  * A throwaway `CURSOR_DATA_DIR` for ONE turn whose `mcp-disabled.json` adds a
- * workflow node's switched-off servers to the user's own — the only per-turn
+ * team node's switched-off servers to the user's own — the only per-turn
  * MCP switch this CLI has.
  *
  * **Where the list lives.** cursor-agent keeps a workspace's disabled servers,

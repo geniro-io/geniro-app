@@ -193,9 +193,9 @@ export class RunStateService {
       ...rowsWithId(replies, artifactIds),
     ].sort((a, b) => a.seq - b.seq);
 
-    // A workflow's turns belong to its nodes, each with a clock of its own on
+    // A team's turns belong to its nodes, each with a clock of its own on
     // `node_state`; only a chat's turn is the RUN's.
-    const chatTurnOpen = run.workflowId === null && run.status === 'running';
+    const chatTurnOpen = run.teamId === null && run.status === 'running';
     const hold = chatTurnOpen ? this.holds.read(runId) : null;
     // A stretch the CLI runs by itself is dated by when it woke, which no row
     // records; the rows answer for a turn of ours and a stretch it missed.
@@ -208,7 +208,7 @@ export class RunStateService {
 
     return {
       openRequests,
-      openToolCalls: wire(await this.openToolCalls(runId, run.workflowId, em)),
+      openToolCalls: wire(await this.openToolCalls(runId, run.teamId, em)),
       throughSeq,
       calls,
       delegates,
@@ -232,14 +232,14 @@ export class RunStateService {
 
   /**
    * The foreground commands of every conversation with a turn open: a chat's,
-   * and each workflow conversation whose newest status row says running.
+   * and each team conversation whose newest status row says running.
    */
   private async openToolCalls(
     runId: string,
-    workflowId: string | null,
+    teamId: string | null,
     em: EntityManager,
   ): Promise<Item[]> {
-    if (workflowId === null) {
+    if (teamId === null) {
       // A chat's turn is open from its last ending on, whatever the run row
       // says — a cancelled chat still answers off-turn.
       return this.itemDao.openTurnToolCalls(
@@ -263,7 +263,7 @@ export class RunStateService {
   /**
    * Every adapter's delegate-launching tool names, as the CLI spells them, and
    * its artifact tool names, lowercased — the run may hold rows of any CLI a
-   * workflow mixed.
+   * team mixed.
    */
   private toolNames(): { launchNames: string[]; artifactNames: string[] } {
     const launchNames = new Set<string>();

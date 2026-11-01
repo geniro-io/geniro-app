@@ -16,7 +16,7 @@ export interface CallConversationState {
 }
 
 /**
- * Loads a call card's own conversation, which a workflow run's window never
+ * Loads a call card's own conversation, which a team run's window never
  * holds: the page of the run's own flow brings only what a folded card shows.
  */
 export interface CallConversationLoader {

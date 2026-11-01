@@ -13,25 +13,25 @@ import type { NotifyBroker } from '../../agents/services/notify.broker';
 import type { PatchBroker } from '../../agents/services/patch.broker';
 import type { PlanBroker } from '../../agents/services/plan.broker';
 import type { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
+import type { TeamBuilderBroker } from '../../agents/services/team-builder.broker';
 import type { TeamNoteBroker } from '../../agents/services/team-note.broker';
+import type { TeamProposalBroker } from '../../agents/services/team-proposal.broker';
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import type { UserQuestionBroker } from '../../agents/services/user-question.broker';
-import type { WorkflowBuilderBroker } from '../../agents/services/workflow-builder.broker';
-import type { WorkflowProposalBroker } from '../../agents/services/workflow-proposal.broker';
-import type { CallBroker } from '../../graphs/services/call-broker.service';
-import type { StageService } from '../../graphs/services/stage.service';
-import type { TaskBoardBroker } from '../../graphs/services/task-board.broker';
-import type { WorkflowChangeService } from '../../graphs/services/workflow-change.service';
-import type { WorkflowProposalService } from '../../graphs/services/workflow-proposal.service';
-import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ShareService } from '../../shares/services/share.service';
-import type { WorkflowHistoryService } from '../../stats/services/workflow-history.service';
+import type { TeamHistoryService } from '../../stats/services/team-history.service';
+import type { CallBroker } from '../../teams/services/call-broker.service';
+import type { StageService } from '../../teams/services/stage.service';
+import type { TaskBoardBroker } from '../../teams/services/task-board.broker';
+import type { TeamChangeService } from '../../teams/services/team-change.service';
+import type { TeamProposalService } from '../../teams/services/team-proposal.service';
+import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { McpTool } from '../mcp.types';
 import { AnswerAgentTool } from './answer-agent/answer-agent.tool';
 import { AskUserQuestionTool } from './ask-user-question/ask-user-question.tool';
 import { AwaitAgentTool } from './await-agent/await-agent.tool';
-import { BackupWorkflowTool } from './backup-workflow/backup-workflow.tool';
+import { BackupTeamTool } from './backup-team/backup-team.tool';
 import { BoardTools } from './board/board.tools';
 import { CallAgentTool } from './call-agent/call-agent.tool';
 import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
@@ -48,16 +48,16 @@ import { MoveStageTool } from './move-stage/move-stage.tool';
 import { NotifyUserTool } from './notify-user/notify-user.tool';
 import { ProposePatchTool } from './propose-patch/propose-patch.tool';
 import { ProposePlanTool } from './propose-plan/propose-plan.tool';
-import { ProposeWorkflowTool } from './propose-workflow/propose-workflow.tool';
+import { ProposeTeamTool } from './propose-team/propose-team.tool';
 import { PublishActionTool } from './publish-action/publish-action.tool';
 import { ReadAnalyzedThreadTool } from './read-analyzed-thread/read-analyzed-thread.tool';
 import { ReadChatContextTool } from './read-chat-context/read-chat-context.tool';
-import { ReadWorkflowsTool } from './read-workflows/read-workflows.tool';
+import { ReadTeamsTool } from './read-teams/read-teams.tool';
 import { RecordOutcomeTool } from './record-outcome/record-outcome.tool';
 import { RemoveActionTool } from './remove-action/remove-action.tool';
 import { ReportFindingsTool } from './report-findings/report-findings.tool';
 import { ReportRecommendationsTool } from './report-recommendations/report-recommendations.tool';
-import { SaveWorkflowChangeTool } from './save-workflow-change/save-workflow-change.tool';
+import { SaveTeamChangeTool } from './save-team-change/save-team-change.tool';
 import { SearchChatsTool } from './search-chats/search-chats.tool';
 import { ShowArtifactTool } from './show-artifact/show-artifact.tool';
 import { ShowChartTool } from './show-chart/show-chart.tool';
@@ -95,12 +95,12 @@ export interface McpToolDeps {
   memory: MemoryService;
   analysis: AnalysisBroker;
   threads: ThreadReaderService;
-  workflowChanges: WorkflowChangeService;
-  workflowHistory: WorkflowHistoryService;
-  workflowGate: WorkflowProposalBroker;
-  workflowBuilders: WorkflowBuilderBroker;
-  workflowStore: WorkflowStoreService;
-  workflowProposals: WorkflowProposalService;
+  teamChanges: TeamChangeService;
+  teamHistory: TeamHistoryService;
+  teamGate: TeamProposalBroker;
+  teamBuilders: TeamBuilderBroker;
+  teamStore: TeamStoreService;
+  teamProposals: TeamProposalService;
   shares: ShareService;
 }
 
@@ -111,7 +111,7 @@ export interface McpToolDeps {
  * The order is part of what a model reads — the descriptions are audited as a
  * SET (`mcp-server.service.spec.ts`) — so it is written once, here: the call
  * surface, the team notes, the run outcome, then the question, the render family, the action buttons, the
- * monitors, the board, the chat history, the workflow library, the analysis tools, and the
+ * monitors, the board, the chat history, the team library, the analysis tools, and the
  * agent's own notification last.
  */
 export function createMcpTools(deps: McpToolDeps): McpTool[] {
@@ -147,35 +147,23 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new MemoryReadTool(deps.memory),
     new MemorySaveTool(deps.memory),
     new MemoryForgetTool(deps.memory),
-    new ReadWorkflowsTool(
-      deps.workflowGate,
-      deps.workflowBuilders,
-      deps.workflowStore,
-    ),
-    new ProposeWorkflowTool(
-      deps.workflowGate,
-      deps.workflowBuilders,
-      deps.workflowProposals,
-    ),
+    new ReadTeamsTool(deps.teamGate, deps.teamBuilders, deps.teamStore),
+    new ProposeTeamTool(deps.teamGate, deps.teamBuilders, deps.teamProposals),
     new ReadAnalyzedThreadTool(
       deps.analysis,
       deps.threads,
-      deps.workflowChanges,
-      deps.workflowHistory,
+      deps.teamChanges,
+      deps.teamHistory,
     ),
-    new ReportRecommendationsTool(
-      deps.analysis,
-      deps.memory,
-      deps.workflowHistory,
-    ),
+    new ReportRecommendationsTool(deps.analysis, deps.memory, deps.teamHistory),
     new MarkRecommendationsTool(deps.analysis),
-    new SaveWorkflowChangeTool(
+    new SaveTeamChangeTool(
       deps.analysis,
-      deps.workflowBuilders,
+      deps.teamBuilders,
       deps.threads,
-      deps.workflowChanges,
+      deps.teamChanges,
     ),
-    new BackupWorkflowTool(deps.workflowBuilders, deps.workflowChanges),
+    new BackupTeamTool(deps.teamBuilders, deps.teamChanges),
     new NotifyUserTool(deps.notices),
   ];
 }

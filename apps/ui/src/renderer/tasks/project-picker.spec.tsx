@@ -33,7 +33,7 @@ const project = (over: Partial<ProjectDto> = {}): ProjectDto =>
     effort: null,
     approval: null,
     configDir: null,
-    workflowSlug: null,
+    teamSlug: null,
     autopilotEnabled: false,
     autopilotIntakeStatus: TaskStatus.Todo,
     autopilotMaxConcurrent: 1,

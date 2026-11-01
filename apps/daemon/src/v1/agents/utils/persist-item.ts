@@ -94,7 +94,7 @@ export async function persistItemAndEmit(
   // Items reach ONE run room and a client joins one at a time, so a thread
   // working in the background delivers none of them to the window watching the
   // sidebar. Its preview line rides the client-wide status channel instead —
-  // announced HERE so every execution path (chat, workflow, any added later)
+  // announced HERE so every execution path (chat, team, any added later)
   // pushes it, after the row is durable. `status: null` asserts no status;
   // `activity` is left absent, since a null one would blank the phrase of a
   // turn still working.
@@ -117,7 +117,7 @@ function readRunColor(stored: unknown): RunGroupColor | null {
   return parsed.success ? parsed.data : null;
 }
 
-/** The one Run → wire projection (chat and workflow runs share the shape). */
+/** The one Run → wire projection (chat and team runs share the shape). */
 export function runToWire(
   run: Run,
   /** The run's newest transcript rows, as `ItemDao.runPreviews` reads them. */
@@ -127,7 +127,7 @@ export function runToWire(
    *
    * Passed in rather than looked up here: this is a pure projection of a row,
    * and the registry is in-memory DI state. Defaulted to null so the paths
-   * that genuinely cannot be parked — a run being created, a workflow run just
+   * that genuinely cannot be parked — a run being created, a team run just
    * started — say so without asking.
    */
   awaiting: RunAwaiting | null = null,
@@ -148,7 +148,7 @@ export function runToWire(
    *
    * Passed in for the reason the two above are: this is a pure projection of a
    * row, and the answer comes from an adapter behind a cache. Defaulted to null
-   * so the callers that cannot usefully ask — a workflow node's own run row,
+   * so the callers that cannot usefully ask — a team node's own run row,
    * whose agents are per node — say nothing rather than guessing.
    */
   configDirPin: ConfigDirPinWire | null = null,
@@ -163,7 +163,7 @@ export function runToWire(
    *
    * It asserts nothing about the turn — a shell does not hold one open. Last in
    * the parameter list so the callers that cannot know (a run being created, a
-   * workflow node's row) keep saying nothing by saying nothing.
+   * team node's row) keep saying nothing by saying nothing.
    */
   shellsOpen = 0,
   /**
@@ -194,12 +194,12 @@ export function runToWire(
    * goes on saying nothing by saying nothing.
    */
   awaitingCalls = 0,
-  /** Trigger-fed workflow agents inside a turn — see `RunWire.rootsWorking`. */
+  /** Trigger-fed team agents inside a turn — see `RunWire.rootsWorking`. */
   rootsWorking = 0,
   /**
    * This chat's wall-measured worked time (`WallTurnDao.chatSums`), added to
    * the CLI-reported `Run.workedMs` so the row says what the agent worked
-   * whatever its CLI timed. Last and defaulted to null for the workflow
+   * whatever its CLI timed. Last and defaulted to null for the team
    * callers, whose worked time lives per node.
    */
   wallWorkedMs: number | null = null,
@@ -218,7 +218,7 @@ export function runToWire(
     monitorsOpen,
     title: run.title,
     agentKind: run.agentKind,
-    workflowId: run.workflowId,
+    teamId: run.teamId,
     cwd: run.cwd,
     startSha: run.startSha,
     startDirty: run.startDirty,
@@ -243,7 +243,7 @@ export function runToWire(
     taskIdentifier: run.taskIdentifier,
     analysisSourceRunId: run.analysisSourceRunId,
     analysisSourceSeq: run.analysisSourceSeq,
-    analysisWorkflowSlug: run.analysisWorkflowSlug,
+    analysisTeamSlug: run.analysisTeamSlug,
     pinnedPosition: run.pinnedPosition,
     color: readRunColor(run.color),
     createdAt: run.createdAt.toISOString(),

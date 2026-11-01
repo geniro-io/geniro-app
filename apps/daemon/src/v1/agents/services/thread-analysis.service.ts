@@ -14,8 +14,8 @@ import {
   type AnalysedRun,
   ANALYSIS_DEFAULT_APPROVAL,
   type RunWire,
+  type StartTeamAnalysis,
   type StartThreadAnalysis,
-  type StartWorkflowAnalysis,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
@@ -24,14 +24,14 @@ import { resolveValidDirectory } from '../utils/resolve-directory';
 import {
   runSnapshotOf,
   type RunSnapshotReaders,
-  workflowRunSnapshots,
+  teamRunSnapshots,
 } from '../utils/run-snapshots';
 import {
   analysedThreadKindOf,
+  teamAnalysisBrief,
+  teamAnalysisGuide,
   threadAnalysisBrief,
   threadAnalysisGuide,
-  workflowAnalysisBrief,
-  workflowAnalysisGuide,
 } from '../utils/thread-analysis-guide';
 import { AgentEventBus } from './agent-events.bus';
 import { ChatService } from './chat.service';
@@ -55,7 +55,7 @@ function existingFolder(path: string): string | null {
  * (`TaskRunsService.start`).
  *
  * It belongs to the thread it reads, the way the builder's chat belongs to its
- * workflow: the sidebar never lists it (`RunDao.listChats`), the source's
+ * team: the sidebar never lists it (`RunDao.listChats`), the source's
  * popup finds it ({@link find}), a new one replaces it, and it goes when the
  * source is deleted.
  */
@@ -78,7 +78,7 @@ export class ThreadAnalysisService
   /**
    * A deleted thread takes its analysis with it — nothing else could reach it.
    * Announced after the source's rows are gone, whichever route deleted it (a
-   * chat, a workflow run, the archive's retention sweep).
+   * chat, a team run, the archive's retention sweep).
    */
   onModuleInit(): void {
     this.deletedSubscription = this.bus.allDeleted().subscribe((runId) => {
@@ -229,23 +229,23 @@ export class ThreadAnalysisService
     return (await this.chats.findAnalysis(source.id, run.id)) ?? run;
   }
 
-  /** The workflow's analysis as it reads now, or null when it has none. */
-  findWorkflowAnalysis(slug: string): Promise<RunWire | null> {
-    return this.chats.findWorkflowAnalysis(slug);
+  /** The team's analysis as it reads now, or null when it has none. */
+  findTeamAnalysis(slug: string): Promise<RunWire | null> {
+    return this.chats.findTeamAnalysis(slug);
   }
 
   /**
-   * Start a workflow's analysis over its newest runs: ONE chat per workflow,
+   * Start a team's analysis over its newest runs: ONE chat per team,
    * replacing the one it had on the same terms as {@link start}. The runs are
-   * chosen here, from every run of the workflow, never from a list a client
+   * chosen here, from every run of the team, never from a list a client
    * loaded; each is read up to its own snapshot.
    */
-  async startWorkflow(
+  async startTeam(
     target: { slug: string; name: string },
-    input: StartWorkflowAnalysis,
+    input: StartTeamAnalysis,
   ): Promise<RunWire> {
     const em = this.em.fork();
-    const snapshots = await workflowRunSnapshots(
+    const snapshots = await teamRunSnapshots(
       this.snapshotReaders(),
       target.slug,
       input.runs,
@@ -253,7 +253,7 @@ export class ThreadAnalysisService
     if (snapshots.length === 0) {
       throw new ConflictException(
         'ANALYSIS_NO_RUNS',
-        'the workflow has no runs to analyse yet — run it first',
+        'the team has no runs to analyse yet — run it first',
       );
     }
     const runs: AnalysedRun[] = snapshots.map(
@@ -275,9 +275,9 @@ export class ThreadAnalysisService
         "the newest run's folder no longer exists — pick a folder to run the analysis in",
       );
     }
-    const earlier = (
-      await this.runDao.listWorkflowAnalyses(target.slug, em)
-    ).map((analysis) => analysis.id);
+    const earlier = (await this.runDao.listTeamAnalyses(target.slug, em)).map(
+      (analysis) => analysis.id,
+    );
     const run = await this.chats.createChat({
       agentKind: input.agentKind,
       cwd,
@@ -289,40 +289,37 @@ export class ThreadAnalysisService
       replyLanguage: input.replyLanguage,
       agentOptions: input.agentOptions,
       title: `Analysis: ${target.name}`,
-      taskInstructions: workflowAnalysisGuide(
+      taskInstructions: teamAnalysisGuide(
         input.focus ?? null,
         this.memory.enabled,
       ),
-      analysisWorkflow: { slug: target.slug, runs },
+      analysisTeam: { slug: target.slug, runs },
     });
     try {
       await this.chats.sendMessage(
         run.id,
-        workflowAnalysisBrief({ name: target.name, runs: runs.length }),
+        teamAnalysisBrief({ name: target.name, runs: runs.length }),
       );
     } catch (error) {
       await this.chats.delete(run.id).catch(() => undefined);
       throw error;
     }
-    await this.deleteRuns(`workflow ${target.slug}`, earlier);
-    return (await this.chats.findWorkflowAnalysis(target.slug, run.id)) ?? run;
+    await this.deleteRuns(`team ${target.slug}`, earlier);
+    return (await this.chats.findTeamAnalysis(target.slug, run.id)) ?? run;
   }
 
-  /** Delete every analysis of a library workflow — the workflow is gone. */
-  async deleteWorkflowAnalyses(slug: string): Promise<void> {
-    const analyses = await this.runDao.listWorkflowAnalyses(
-      slug,
-      this.em.fork(),
-    );
+  /** Delete every analysis of a library team — the team is gone. */
+  async deleteTeamAnalyses(slug: string): Promise<void> {
+    const analyses = await this.runDao.listTeamAnalyses(slug, this.em.fork());
     await this.deleteRuns(
-      `workflow ${slug}`,
+      `team ${slug}`,
       analyses.map((analysis) => analysis.id),
     );
   }
 
-  /** The slugs of every workflow some analysis was started on. */
-  analysedWorkflowSlugs(): Promise<string[]> {
-    return this.runDao.workflowAnalysisSlugs(this.em.fork());
+  /** The slugs of every team some analysis was started on. */
+  analysedTeamSlugs(): Promise<string[]> {
+    return this.runDao.teamAnalysisSlugs(this.em.fork());
   }
 
   /** Delete every analysis of a thread. */

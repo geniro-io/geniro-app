@@ -111,7 +111,7 @@ export interface RunConfig {
    * applies.
    */
   branch: string | null;
-  /** The composer target — a CLI kind or `wf:<slug>`, exactly as `lastChatTarget`. */
+  /** The composer target — a CLI kind or `team:<slug>`, exactly as `lastChatTarget`. */
   target: string;
   model: string | null;
   effort: string | null;
@@ -423,7 +423,7 @@ export interface Settings {
    * mean a name and a colour the app was free to evict.
    */
   configProfiles: ConfigProfile[];
-  /** The chat composer's last target — a CLI kind or `wf:<slug>`. */
+  /** The chat composer's last target — a CLI kind or `team:<slug>`. */
   lastChatTarget: string | null;
   /**
    * The new-run composer's last approval mode, so it opens on the choice the
@@ -583,7 +583,7 @@ export interface Settings {
    * `GET /v1/capabilities`, so this side holds the user's CHOICES and nothing
    * else: an option absent here reads as that option's own default.
    *
-   * SNAPSHOTTED per run — sent on chat create, workflow start and task run —
+   * SNAPSHOTTED per run — sent on chat create, team start and task run —
    * so flipping one changes the next run rather than one already open.
    */
   agentOptions: Partial<Record<CliKind, Record<string, boolean>>>;
@@ -685,7 +685,7 @@ export const MAX_AUTO_COMPACT_PERCENT = 95;
  * `apps/daemon/src/v1/agents/chat.types.ts`, which is the ENFORCING side (the
  * value reaches a child's argv there, where node rejects a NUL synchronously).
  * This copy exists because STORING a value the daemon will refuse turns one
- * invisible pasted character into a 400 on every new chat and workflow run,
+ * invisible pasted character into a 400 on every new chat and team run,
  * surfacing in the composer with nothing pointing back at the settings box
  * holding it. Refusing where the text is typed is what keeps the two honest.
  * Change one, change the other.
@@ -1682,10 +1682,10 @@ export interface GeniroApi {
   installCli(kind: CliKind): Promise<CliInstallResult>;
   /** Persist onboarding input and mark onboarding complete. */
   completeOnboarding(input: OnboardingInput): Promise<Settings>;
-  /** Open a native picker for a workflow YAML to import; path or null. */
-  pickWorkflowImport(): Promise<string | null>;
-  /** Open a native save dialog for a workflow export; target path or null. */
-  pickWorkflowExport(defaultName: string): Promise<string | null>;
+  /** Open a native picker for a team YAML to import; path or null. */
+  pickTeamImport(): Promise<string | null>;
+  /** Open a native save dialog for a team export; target path or null. */
+  pickTeamExport(defaultName: string): Promise<string | null>;
   /** The current update state, for a screen that just mounted. */
   getUpdateState(): Promise<UpdateState>;
   /**
@@ -1807,7 +1807,7 @@ export interface GeniroApi {
    *
    * Both halves on one channel because the renderer already HOLDS the document
    * — see `main/save-chat-export.ts` for why that differs from
-   * {@link pickWorkflowExport}, whose bytes live in the daemon. A cancelled
+   * {@link pickTeamExport}, whose bytes live in the daemon. A cancelled
    * dialog resolves `saved: false`, which is an outcome and not an error.
    *
    * BOTH renderings go across and main writes the one the user's chosen filename
@@ -2142,8 +2142,8 @@ export const IPC = {
   updateCli: 'geniro:updateCli',
   installCli: 'geniro:installCli',
   completeOnboarding: 'geniro:completeOnboarding',
-  pickWorkflowImport: 'geniro:pickWorkflowImport',
-  pickWorkflowExport: 'geniro:pickWorkflowExport',
+  pickTeamImport: 'geniro:pickTeamImport',
+  pickTeamExport: 'geniro:pickTeamExport',
   getUpdateState: 'geniro:getUpdateState',
   checkForUpdates: 'geniro:checkForUpdates',
   installUpdate: 'geniro:installUpdate',

@@ -2408,7 +2408,7 @@ export interface AgentMcpServer {
    */
   signInUnavailableReason?: string | null;
   /**
-   * Why THIS row cannot be switched off for one workflow node's turns
+   * Why THIS row cannot be switched off for one team node's turns
    * (`AgentTurnInput.mcpDisabled`), when the reason belongs to the row rather
    * than to the CLI — codex's plugin servers, which only the whole plugin
    * turns off. `AdapterConfig.mcp.turnToggleUnavailableReason` wins over it.
@@ -2441,7 +2441,7 @@ export interface AgentMcpServersInput {
    * a project `.mcp.json` is visible ONLY from its own folder (probe-verified
    * on 2.1.220), so listing from a folder that has none yields the
    * folder-INDEPENDENT set — exactly what the graph builder wants, since a
-   * workflow has no folder until it runs.
+   * team has no folder until it runs.
    */
   cwd: string;
   /**
@@ -2649,7 +2649,7 @@ export interface AgentSessionHistory {
    * How many earlier rows were left out to honour the caller's limit; 0 when
    * the whole conversation is here.
    *
-   * Stated rather than silent, on the rule the workflow executor's dropped
+   * Stated rather than silent, on the rule the team executor's dropped
    * settings follow: a transcript that begins mid-conversation with nothing
    * saying so is a transcript that lies about what the agent was told.
    */
@@ -3319,16 +3319,16 @@ export interface AgentTurnInput {
    */
   taskInstructions?: string | null;
   /**
-   * What geniro tells a workflow-editing chat about the file it owns — where
-   * it is, and what a workflow document may contain — as stored on
-   * `Run.workflowInstructions`. Undefined for every run outside the builder's
+   * What geniro tells a team-editing chat about the file it owns — where
+   * it is, and what a team document may contain — as stored on
+   * `Run.teamInstructions`. Undefined for every run outside the builder's
    * chat panel.
    *
    * A peer of {@link taskInstructions} for that field's own reason, and the
    * two are mutually exclusive in practice: a run is either working a card or
-   * editing a workflow.
+   * editing a team.
    */
-  workflowInstructions?: string | null;
+  teamInstructions?: string | null;
   /**
    * The instruction blocks wired to this graph node, already joined by the
    * executor. Undefined for plain chat and for a node nothing is wired to.
@@ -3491,7 +3491,7 @@ export interface AgentTurnInput {
   isolateMcpServers?: boolean;
   /**
    * MCP servers this turn runs WITHOUT, by the name the CLI lists them under —
-   * a workflow node's own switches (`WorkflowAgentNode.mcpDisabled`). Absent
+   * a team node's own switches (`TeamAgentNode.mcpDisabled`). Absent
    * or empty switches nothing off; chats never set it.
    *
    * Adapter-agnostic like {@link isolateMcpServers}: the caller says which
@@ -3563,7 +3563,7 @@ export type TurnInstructionInput = Pick<
   | 'projectInstructions'
   | 'memoryIndex'
   | 'taskInstructions'
-  | 'workflowInstructions'
+  | 'teamInstructions'
   | 'instructionBlocks'
   | 'stageMapPrompt'
   | 'systemPrompt'
@@ -4262,7 +4262,7 @@ export interface AdapterConfig {
     readonly displayName: string;
     /** The one word a row of chrome has room for (`cursor`). */
     readonly shortName: string;
-    /** One sentence on what this agent is, for the workflow palette. */
+    /** One sentence on what this agent is, for the team palette. */
     readonly summary: string;
     /** The palette's detail lines — how a node of this CLI behaves. */
     readonly details: readonly string[];
@@ -4438,7 +4438,7 @@ export interface AdapterConfig {
      * them even when no `subagent_info` declaration names it. `[]` for a CLI
      * whose launch carries no usable name — its delegates are admitted by the
      * declaration the daemon writes. Matched EXACTLY: the run state reads the
-     * names of every CLI a workflow mixed, and another CLI's command row that
+     * names of every CLI a team mixed, and another CLI's command row that
      * happens to be titled `task` is not a delegation.
      *
      * TWIN PARSER: `isAgentToolName` in apps/ui/src/renderer/chats/tool-kind.ts
@@ -4751,7 +4751,7 @@ export interface AdapterConfig {
     readonly toggleUnavailableReason: string | null;
     /**
      * Why NO server of this CLI can be switched off for ONE turn
-     * (`AgentTurnInput.mcpDisabled`, a workflow node's own switches), or null
+     * (`AgentTurnInput.mcpDisabled`, a team node's own switches), or null
      * when the adapter applies that field.
      *
      * Separate from {@link toggleUnavailableReason}: that switch writes the

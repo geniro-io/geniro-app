@@ -3,7 +3,7 @@ import { TEAM_NOTE_MAX_CHARS } from '../../../agents/chat.types';
 /** What a model reads about `team_note`. */
 export function teamNoteInstructions(): string {
   return (
-    "Write a note to this workflow run's shared team notes — one store every agent of the run can " +
+    "Write a note to this team run's shared team notes — one store every agent of the run can " +
     'read with team_notes, whoever called whom, or nobody. Use it when you learn something another ' +
     'agent of this run would otherwise have to rediscover, or could get wrong. Pick the `kind`: ' +
     '`contract` — an interface others build against, settled before parallel work starts (an API ' +

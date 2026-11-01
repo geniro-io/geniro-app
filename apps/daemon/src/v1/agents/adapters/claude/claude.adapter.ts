@@ -323,7 +323,7 @@ export class ClaudeAdapter extends AgentAdapter {
       /**
        * This CLI compacts ITSELF, inside the agent loop — which is the only
        * place a threshold can be held, and it was already visible in geniro's
-       * own transcripts before the flag was wired: a workflow run on 2026-09-22
+       * own transcripts before the flag was wired: a team run on 2026-09-22
        * shows three `context_compacted` rows reading `967,557 → 42,401` tokens,
        * every one of them in the MIDDLE of a call.
        *
@@ -622,7 +622,7 @@ export class ClaudeAdapter extends AgentAdapter {
          */
         toggleUnavailableReason: null,
         /**
-         * Null: a workflow node's switched-off servers ride
+         * Null: a team node's switched-off servers ride
          * `--disallowedTools mcp__<server>` (`claudeDisallowedToolArgs`).
          * MEASURED on 2.1.284: `--disallowedTools mcp__codegraph
          * mcp__plugin_playwright_playwright` took the turn's `system/init`
@@ -2268,7 +2268,7 @@ export class ClaudeAdapter extends AgentAdapter {
     } else if (input.approvalMode === 'auto') {
       args.push(CLAUDE_SKIP_PERMISSIONS_FLAG);
     }
-    // claude's own tools geniro replaces, and a workflow node's switched-off
+    // claude's own tools geniro replaces, and a team node's switched-off
     // servers, ride one variadic `--disallowedTools`; geniro's own server is
     // filtered out inside.
     args.push(
@@ -2383,7 +2383,7 @@ export class ClaudeAdapter extends AgentAdapter {
    * Every turn that carries the dialogue, and every `auto` turn without it:
    * a kept process is what holds a turn — and the call it answers — while its
    * background sub-agents run, which is what the background-work note tells
-   * the agent to rely on. An `auto` workflow node spawned one-shot with its
+   * the agent to rely on. An `auto` team node spawned one-shot with its
    * stdin closed got none of that: it settled on its launching result and
    * passed "the reviewers are running" downstream. Its stdin carries no
    * dialogue, so the base serves a later turn in another mode on a fresh

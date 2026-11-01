@@ -1,4 +1,4 @@
-import { COLD_RESUME_RULE } from '../../../graphs/utils/prompt-cache-standing';
+import { COLD_RESUME_RULE } from '../../../teams/utils/prompt-cache-standing';
 
 /** What a model reads about `list_agent_threads`. */
 export function listAgentThreadsInstructions(): string {

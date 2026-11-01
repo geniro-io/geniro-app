@@ -102,7 +102,7 @@ describe('ChatTimelineService over a long run (in-memory sqlite)', () => {
     await new RunDao(orm.em.fork()).create({
       id: 'run-a',
       status: 'running',
-      workflowId: null,
+      teamId: null,
     });
     const at = (seq: number): Date =>
       new Date(Date.UTC(2026, 9, 27, 12) + seq * 1000);

@@ -49,24 +49,24 @@ function build(
     runExists?: boolean;
     status?: string;
     agentKind?: string | null;
-    workflowId?: string | null;
+    teamId?: string | null;
     polledCostCents?: number | null;
     polledCostEvents?: number | null;
     nodeStates?: NodeStateStub[];
     toolUsage?: ToolUsageGroup[];
-    workflowSnapshot?: string | null;
+    teamSnapshot?: string | null;
   } = {},
 ) {
   const {
     runExists = true,
     status = 'completed',
     agentKind = 'claude',
-    workflowId = null,
+    teamId = null,
     polledCostCents = null,
     polledCostEvents = null,
     nodeStates = [],
     toolUsage = [],
-    workflowSnapshot = null,
+    teamSnapshot = null,
   } = options;
   payloadReads = [];
   return new ChatWaterfallService(
@@ -139,10 +139,10 @@ function build(
             ? {
                 status,
                 agentKind,
-                workflowId,
+                teamId,
                 polledCostCents,
                 polledCostEvents,
-                workflowSnapshot,
+                teamSnapshot,
               }
             : null,
         ),
@@ -198,7 +198,7 @@ describe('ChatWaterfallService', () => {
       // ACP agent reports no timing at all, so dropping meant a cursor
       // callee's lane drew nothing and counted nothing while its caller drew a
       // long bar waiting on it — the picture said the agent had never run.
-      // Measured on a real workflow run whose `qa` node holds two
+      // Measured on a real team run whose `qa` node holds two
       // `turn_complete` rows, both with `durationMs: null`, beside 130 tool
       // calls.
       const result = await build([
@@ -262,8 +262,8 @@ describe('ChatWaterfallService', () => {
     });
 
     it('never counts one turn twice when both rows record it', async () => {
-      // A workflow writes BOTH — the open and the completion — so summing the
-      // two channels would double every turn a workflow node finished.
+      // A team writes BOTH — the open and the completion — so summing the
+      // two channels would double every turn a team node finished.
       const result = await build([
         row(0, 'status', { nodeId: 'eng', status: 'running' }, 1, 'eng'),
         row(1, 'tool_call', null, 2, 'eng'),
@@ -428,7 +428,7 @@ describe('ChatWaterfallService', () => {
           row(3, 'tool_call', null, 150, 'engineer'),
           row(4, 'tool_call', null, 400, 'engineer'),
         ],
-        { status: 'running', workflowId: 'dev-team' },
+        { status: 'running', teamId: 'dev-team' },
       ).read('run-a');
 
       const engineer = result.turns.filter((t) => t.nodeId === 'engineer');
@@ -466,7 +466,7 @@ describe('ChatWaterfallService', () => {
           engineerStatus(1, 'running', 10),
           row(2, 'tool_call', null, 20, 'manager'),
         ],
-        { status: 'running', workflowId: 'dev-team' },
+        { status: 'running', teamId: 'dev-team' },
       ).read('run-a');
 
       expect(result.lanes.map((lane) => lane.nodeId)).toEqual([
@@ -485,7 +485,7 @@ describe('ChatWaterfallService', () => {
           engineerStatus(1, 'running', 0),
           row(2, 'tool_call', null, 50, 'engineer'),
         ],
-        { status: 'completed', workflowId: 'dev-team' },
+        { status: 'completed', teamId: 'dev-team' },
       ).read('run-a');
 
       expect(result.turns).toHaveLength(0);
@@ -501,7 +501,7 @@ describe('ChatWaterfallService', () => {
           row(1, 'tool_call', null, 20, 'engineer'),
           engineerStatus(2, 'failed', 70),
         ],
-        { workflowId: 'dev-team' },
+        { teamId: 'dev-team' },
       ).read('run-a');
 
       expect(result.turns).toHaveLength(1);
@@ -546,8 +546,8 @@ describe('ChatWaterfallService', () => {
           engineerStatus(5, 'failed', 31),
         ],
         {
-          workflowId: 'dev-team',
-          workflowSnapshot: JSON.stringify({
+          teamId: 'dev-team',
+          teamSnapshot: JSON.stringify({
             nodes: [
               {
                 id: 'engineer',
@@ -612,8 +612,8 @@ describe('ChatWaterfallService', () => {
           row(3, 'tool_call', null, 40, 'engineer'),
         ],
         {
-          workflowId: 'dev-team',
-          workflowSnapshot: pooledSnapshot,
+          teamId: 'dev-team',
+          teamSnapshot: pooledSnapshot,
           status: 'running',
         },
       ).read('run-a');
@@ -643,7 +643,7 @@ describe('ChatWaterfallService', () => {
           ),
           engineerStatus(2, 'failed', 30),
         ],
-        { workflowId: 'dev-team' },
+        { teamId: 'dev-team' },
       ).read('run-a');
 
       expect(result.turns[0]).toMatchObject({
@@ -666,7 +666,7 @@ describe('ChatWaterfallService', () => {
           ),
           engineerStatus(3, 'completed', 60),
         ],
-        { workflowId: 'dev-team' },
+        { teamId: 'dev-team' },
       ).read('run-a');
 
       expect(result.turns).toHaveLength(1);
@@ -705,7 +705,7 @@ describe('ChatWaterfallService', () => {
           status(4, 'call-1', 'completed', 20),
           status(5, 'call-2', 'failed', 30),
         ],
-        { workflowId: 'dev-team' },
+        { teamId: 'dev-team' },
       ).read('run-a');
 
       expect(result.turns.map((turn) => turn.outcome)).toEqual([
@@ -1042,8 +1042,8 @@ describe('ChatWaterfallService', () => {
     expect(result.from).toBe(result.to);
   });
 
-  it('opens no lane for the rows a workflow files under no node', async () => {
-    // A workflow run persists its seed message and its terminal row with
+  it('opens no lane for the rows a team files under no node', async () => {
+    // A team run persists its seed message and its terminal row with
     // `nodeId: null`. Opening a lane for every spine row drew those as an empty
     // lane named `agent` beside the real ones, taking the first colour.
     const result = await build(
@@ -1062,7 +1062,7 @@ describe('ChatWaterfallService', () => {
         row(3, 'turn_complete', { stopReason: 'end_turn' }, 7),
       ],
       {
-        workflowId: 'wf',
+        teamId: 'wf',
         nodeStates: [{ nodeId: 'engineer', agentKind: 'claude' }],
       },
     ).read('run-a');
@@ -1092,7 +1092,7 @@ describe('ChatWaterfallService', () => {
     expect(result.lanes[0]?.costUsd).toBeCloseTo(7.29, 5);
   });
 
-  it("adds a workflow's cursor node bill on top of the turns another CLI priced", async () => {
+  it("adds a team's cursor node bill on top of the turns another CLI priced", async () => {
     // Replacing here would report the cursor node's bill as the whole run's.
     const result = await build(
       [
@@ -1106,7 +1106,7 @@ describe('ChatWaterfallService', () => {
         row(1, 'turn_complete', { usage: { durationMs: 1_000 } }, 2, 'qa'),
       ],
       {
-        workflowId: 'wf',
+        teamId: 'wf',
         nodeStates: [
           { nodeId: 'eng', agentKind: 'claude' },
           {
@@ -1158,8 +1158,8 @@ describe('ChatWaterfallService', () => {
         ),
       ],
       {
-        workflowId: 'wf',
-        workflowSnapshot: JSON.stringify({
+        teamId: 'wf',
+        teamSnapshot: JSON.stringify({
           nodes: [
             {
               id: 'eng',
@@ -1276,7 +1276,7 @@ describe('ChatWaterfallService', () => {
       expect(result.turns[0]?.seq).toBe(0);
     });
 
-    it("takes a workflow node's unfinished turn to the status row that opened it", async () => {
+    it("takes a team node's unfinished turn to the status row that opened it", async () => {
       const result = await build(
         [
           row(0, 'message', { role: 'user' }, 0),
@@ -1285,7 +1285,7 @@ describe('ChatWaterfallService', () => {
           row(5, 'status', { status: 'failed' }, 20, 'qa'),
         ],
         {
-          workflowId: 'wf',
+          teamId: 'wf',
           nodeStates: [{ nodeId: 'qa', agentKind: 'claude' }],
         },
       ).read('run-a');

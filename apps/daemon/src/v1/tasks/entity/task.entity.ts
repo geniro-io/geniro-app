@@ -113,12 +113,12 @@ export class Task extends TimestampsEntity {
   // the same six fields and the same null-means-unset reading — the two are
   // resolved together, most specific first, by `TaskRunsService.startClaimed`.
   //
-  // A card names an agent OR a workflow, never both: `workflowSlug` wins where
+  // A card names an agent OR a team, never both: `teamSlug` wins where
   // a task sets one, and the CLI-only fields beside it are meaningless to a
   // graph, whose nodes carry their own. Nothing here is enforced at the column
   // level, because the inheritance makes "both set" reachable without either
   // row being wrong on its own — a project pinning an agent and a card pinning
-  // a workflow is exactly the override this exists for.
+  // a team is exactly the override this exists for.
 
   @Property({ type: 'string', nullable: true })
   agentKind: AgentKind | null = null;
@@ -135,9 +135,9 @@ export class Task extends TimestampsEntity {
   @Property({ type: 'text', nullable: true })
   configDir: string | null = null;
 
-  /** A workflow to run this card through, instead of a single agent. */
+  /** A team to run this card through, instead of a single agent. */
   @Property({ type: 'string', nullable: true })
-  workflowSlug: string | null = null;
+  teamSlug: string | null = null;
 
   /** The branch an agent works this task on — null until one runs. */
   @Property({ type: 'string', nullable: true })

@@ -23,9 +23,9 @@ const EXPORT_FORMATS: FileFilter[] = [
 /**
  * Ask the user where to keep a chat export, and write it there.
  *
- * ONE channel doing both halves, unlike the workflow export beside it
- * (`pickWorkflowExport` → the DAEMON writes the path it was handed). The
- * difference is who holds the bytes: a workflow lives in the daemon's library,
+ * ONE channel doing both halves, unlike the team export beside it
+ * (`pickTeamExport` → the DAEMON writes the path it was handed). The
+ * difference is who holds the bytes: a team lives in the daemon's library,
  * so the renderer has only a slug to pass along, while a chat export is a
  * document the renderer already fetched and holds in full. Handing that path
  * back down for a second process to re-derive the same document would be a

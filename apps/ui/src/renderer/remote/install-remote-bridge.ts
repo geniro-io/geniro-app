@@ -213,13 +213,11 @@ export function installRemoteBridge(): void {
       invoke(IPC.completeOnboarding, [input]) as ReturnType<
         GeniroApi['completeOnboarding']
       >,
-    pickWorkflowImport: () =>
-      invoke(IPC.pickWorkflowImport) as ReturnType<
-        GeniroApi['pickWorkflowImport']
-      >,
-    pickWorkflowExport: (defaultName) =>
-      invoke(IPC.pickWorkflowExport, [defaultName]) as ReturnType<
-        GeniroApi['pickWorkflowExport']
+    pickTeamImport: () =>
+      invoke(IPC.pickTeamImport) as ReturnType<GeniroApi['pickTeamImport']>,
+    pickTeamExport: (defaultName) =>
+      invoke(IPC.pickTeamExport, [defaultName]) as ReturnType<
+        GeniroApi['pickTeamExport']
       >,
     getUpdateState: () =>
       invoke(IPC.getUpdateState) as ReturnType<GeniroApi['getUpdateState']>,

@@ -20,10 +20,10 @@ import {
   HOST_NOTIFY_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
-  HOST_PROPOSE_WORKFLOW_TOOL,
+  HOST_PROPOSE_TEAM_TOOL,
   HOST_PUBLISH_ACTION_TOOL,
   HOST_READ_CHAT_CONTEXT_TOOL,
-  HOST_READ_WORKFLOWS_TOOL,
+  HOST_READ_TEAMS_TOOL,
   HOST_SEARCH_CHATS_TOOL,
   type HostBoardTool,
 } from '../chat.types';
@@ -110,7 +110,7 @@ describe('GENIRO_UI_PREAMBLE', () => {
     // REPORTED against a real transcript: an agent embedded
     // `out/ci723-assignee-rail.png` and the row drew `could not read` it. The
     // route resolves a relative path against the RUN's cwd, which is not where
-    // a delegate, a workflow node, or a command run in a subdirectory writes
+    // a delegate, a team node, or a command run in a subdirectory writes
     // its files — so the only form that is always right is the absolute one.
     // The example alone does not carry this: an agent copies the shape of the
     // example but follows the sentence, so the reason has to be stated.
@@ -172,8 +172,8 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
       HOST_SEARCH_CHATS_TOOL,
       HOST_READ_CHAT_CONTEXT_TOOL,
       ...BOARD_TOOLS_NAMED,
-      HOST_READ_WORKFLOWS_TOOL,
-      HOST_PROPOSE_WORKFLOW_TOOL,
+      HOST_READ_TEAMS_TOOL,
+      HOST_PROPOSE_TEAM_TOOL,
     ]) {
       expect(section).toContain(`\`${name}\``);
     }
@@ -207,7 +207,7 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
   });
 
   it('stays true on a turn that registers none of the tools', () => {
-    // Not gated on the MCP endpoint, and a workflow node is offered only some
+    // Not gated on the MCP endpoint, and a team node is offered only some
     // of these tools.
     expect(toolsSection()).toContain(
       'A tool missing from your list is not offered on this turn.',
@@ -585,7 +585,7 @@ describe('the composed block — instruction blocks', () => {
   });
 });
 
-describe('the composed block — workflow instructions', () => {
+describe('the composed block — team instructions', () => {
   // The brief names the file a builder chat owns, so it must outrank a
   // standing preference and yield to a node authored for one job — the same
   // placement the card's block beside it takes.
@@ -594,11 +594,11 @@ describe('the composed block — workflow instructions', () => {
       composed({
         includePreamble: false,
         customInstructions: 'GLOBAL',
-        workflowInstructions: 'WORKFLOW',
+        teamInstructions: 'TEAM',
         systemPrompt: 'ROLE',
         callSurfacePrompt: 'CALLS',
       }),
-    ).toBe('GLOBAL\n\nWORKFLOW\n\nROLE\n\nCALLS');
+    ).toBe('GLOBAL\n\nTEAM\n\nROLE\n\nCALLS');
   });
 
   it('drops a blank brief instead of joining an empty paragraph', () => {
@@ -606,12 +606,12 @@ describe('the composed block — workflow instructions', () => {
       composed({
         includePreamble: false,
         customInstructions: 'GLOBAL',
-        workflowInstructions: '   ',
+        teamInstructions: '   ',
       }),
     ).toBe('GLOBAL');
   });
 
-  it('is absent for a chat opened outside the workflow builder', () => {
+  it('is absent for a chat opened outside the team builder', () => {
     expect(
       composed({
         includePreamble: false,
@@ -628,7 +628,7 @@ describe('turnInstructionParts', () => {
     replyLanguage: 'Russian',
     customInstructions: '  GLOBAL\n',
     taskInstructions: 'CARD',
-    workflowInstructions: 'WORKFLOW',
+    teamInstructions: 'TEAM',
     instructionBlocks: 'BLOCKS',
     systemPrompt: 'ROLE',
     answeringACallPrompt: 'ANSWER',
@@ -643,7 +643,7 @@ describe('turnInstructionParts', () => {
         'replyLanguage',
         'customInstructions',
         'taskInstructions',
-        'workflowInstructions',
+        'teamInstructions',
         'instructionBlocks',
         'role',
         'answeringACall',
@@ -665,7 +665,7 @@ describe('turnInstructionParts', () => {
         'NOTE',
         replyLanguageInstruction('Russian'),
         'GLOBAL',
-        'WORKFLOW',
+        'TEAM',
         'BLOCKS',
         'ANSWER',
         'CALLS',

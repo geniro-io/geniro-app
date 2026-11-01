@@ -52,7 +52,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const TwoInAWorkflow: Story = {};
+export const TwoInATeam: Story = {};
 
 export const OneInAChat: Story = {
   args: { monitors: [monitor({})], agentNameOf: undefined },

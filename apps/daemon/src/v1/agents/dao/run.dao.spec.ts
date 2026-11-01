@@ -62,12 +62,12 @@ describe('RunDao (in-memory sqlite)', () => {
   });
 
   describe('listChats', () => {
-    it('lists chat runs only (workflowId null), newest first', async () => {
+    it('lists chat runs only (teamId null), newest first', async () => {
       // Oldest inserted first, with explicit createdAt values: a dropped
       // ORDER BY (insertion order) flips the expected order below.
       const older = await dao.create({ createdAt: new Date(1_000) });
       const newer = await dao.create({ createdAt: new Date(2_000) });
-      await dao.create({ workflowId: 'wf-1', createdAt: new Date(3_000) });
+      await dao.create({ teamId: 'wf-1', createdAt: new Date(3_000) });
 
       const chats = await dao.listChats('active');
 
@@ -92,11 +92,11 @@ describe('RunDao (in-memory sqlite)', () => {
         createdAt: new Date(2_000),
         archivedAt: new Date(9_000),
       });
-      // An archived WORKFLOW run is still out of scope: this route is the
-      // chat listing, and the workflow half of the sidebar has its own
-      // (`listWorkflowRuns`, which takes the same scope).
+      // An archived TEAM run is still out of scope: this route is the
+      // chat listing, and the team half of the sidebar has its own
+      // (`listTeamRuns`, which takes the same scope).
       await dao.create({
-        workflowId: 'wf-1',
+        teamId: 'wf-1',
         createdAt: new Date(3_000),
         archivedAt: new Date(9_000),
       });
@@ -115,9 +115,9 @@ describe('RunDao (in-memory sqlite)', () => {
         archivedAt: new Date(9_000),
       });
       const active = await dao.create({ createdAt: new Date(2_000) });
-      // A workflow run is out of scope on EVERY side, `all` included — the
+      // A team run is out of scope on EVERY side, `all` included — the
       // scope widens the archive, never the run kind.
-      await dao.create({ workflowId: 'wf-1', createdAt: new Date(3_000) });
+      await dao.create({ teamId: 'wf-1', createdAt: new Date(3_000) });
 
       const chats = await dao.listChats('all');
 
@@ -206,17 +206,17 @@ describe('RunDao (in-memory sqlite)', () => {
       expect(outdated.map((run) => run.id)).toEqual([older.id, never.id]);
     });
 
-    it('pages workflow runs by the same cursor', async () => {
+    it('pages team runs by the same cursor', async () => {
       const older = await dao.create({
-        workflowId: 'wf-1',
+        teamId: 'wf-1',
         createdAt: new Date(1_000),
       });
       const newer = await dao.create({
-        workflowId: 'wf-1',
+        teamId: 'wf-1',
         createdAt: new Date(2_000),
       });
 
-      const page = await dao.listWorkflowRuns('all', undefined, {
+      const page = await dao.listTeamRuns('all', undefined, {
         limit: 1,
         before: { createdAt: newer.createdAt, id: newer.id },
       });
@@ -224,18 +224,18 @@ describe('RunDao (in-memory sqlite)', () => {
       expect(page.map((run) => run.id)).toEqual([older.id]);
     });
 
-    it('leaves the builder’s workflow-editing chat out of EVERY scope', async () => {
-      // It is a chat by every column the listing filters on — no workflowId, no
-      // archive — so only `editsWorkflowSlug` keeps it off the sidebar, and
+    it('leaves the builder’s team-editing chat out of EVERY scope', async () => {
+      // It is a chat by every column the listing filters on — no teamId, no
+      // archive — so only `editsTeamSlug` keeps it off the sidebar, and
       // `all` is the scope that would otherwise let it back in.
       const mine = await dao.create({ createdAt: new Date(1_000) });
       await dao.create({
         createdAt: new Date(2_000),
-        editsWorkflowSlug: 'review-team',
+        editsTeamSlug: 'review-team',
       });
       await dao.create({
         createdAt: new Date(3_000),
-        editsWorkflowSlug: 'review-team',
+        editsTeamSlug: 'review-team',
         archivedAt: new Date(9_000),
       });
 
@@ -251,7 +251,7 @@ describe('RunDao (in-memory sqlite)', () => {
       // And it is still reachable where the panel looks for it — hidden from
       // the sidebar, not hidden from the builder.
       expect(
-        (await dao.listEditingWorkflow('review-team')).map((run) => run.id),
+        (await dao.listEditingTeam('review-team')).map((run) => run.id),
       ).toHaveLength(2);
     });
 
@@ -286,20 +286,20 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('workflow analyses', () => {
-    it('leaves a workflow’s analysis out of EVERY scope, and finds it by its slug', async () => {
+  describe('team analyses', () => {
+    it('leaves a team’s analysis out of EVERY scope, and finds it by its slug', async () => {
       const older = await dao.create({
         createdAt: new Date(2_000),
-        analysisWorkflowSlug: 'review-team',
+        analysisTeamSlug: 'review-team',
       });
       const newer = await dao.create({
         createdAt: new Date(3_000),
-        analysisWorkflowSlug: 'review-team',
+        analysisTeamSlug: 'review-team',
         archivedAt: new Date(9_000),
       });
       await dao.create({
         createdAt: new Date(4_000),
-        analysisWorkflowSlug: 'other-team',
+        analysisTeamSlug: 'other-team',
       });
       const chat = await dao.create({ createdAt: new Date(1_000) });
 
@@ -311,48 +311,48 @@ describe('RunDao (in-memory sqlite)', () => {
         ).toEqual([]);
       }
       expect(
-        (await dao.listWorkflowAnalyses('review-team')).map((run) => run.id),
+        (await dao.listTeamAnalyses('review-team')).map((run) => run.id),
       ).toEqual([newer.id, older.id]);
-      expect((await dao.workflowAnalysisSlugs()).sort()).toEqual([
+      expect((await dao.teamAnalysisSlugs()).sort()).toEqual([
         'other-team',
         'review-team',
       ]);
     });
 
-    it('reads a workflow’s newest unarchived runs, newest first, up to the limit', async () => {
+    it('reads a team’s newest unarchived runs, newest first, up to the limit', async () => {
       await dao.create({
         id: 'w1',
-        workflowId: 'team',
+        teamId: 'team',
         createdAt: new Date(1_000),
       });
       await dao.create({
         id: 'w2',
-        workflowId: 'team',
+        teamId: 'team',
         createdAt: new Date(2_000),
       });
       await dao.create({
         id: 'w3',
-        workflowId: 'team',
+        teamId: 'team',
         createdAt: new Date(3_000),
         archivedAt: new Date(5_000),
       });
       await dao.create({
         id: 'w4',
-        workflowId: 'team',
+        teamId: 'team',
         createdAt: new Date(4_000),
       });
       await dao.create({
         id: 'x1',
-        workflowId: 'other',
+        teamId: 'other',
         createdAt: new Date(6_000),
       });
       await dao.create({ id: 'c1', createdAt: new Date(7_000) });
 
       expect(
-        (await dao.newestWorkflowRuns('team', 2)).map((run) => run.id),
+        (await dao.newestTeamRuns('team', 2)).map((run) => run.id),
       ).toEqual(['w4', 'w2']);
       expect(
-        (await dao.newestWorkflowRuns('team', 10)).map((run) => run.id),
+        (await dao.newestTeamRuns('team', 10)).map((run) => run.id),
       ).toEqual(['w4', 'w2', 'w1']);
     });
   });
@@ -405,30 +405,30 @@ describe('RunDao (in-memory sqlite)', () => {
       expect(await dao.archivedRunsBefore(new Date(9_999))).toEqual([]);
     });
 
-    it('answers a WORKFLOW run too, and says which it is', async () => {
-      // It answered chats alone until workflow runs became archivable, which
+    it('answers a TEAM run too, and says which it is', async () => {
+      // It answered chats alone until team runs became archivable, which
       // left the retention window covering half the shelf and saying nothing.
       // The kind rides along because the sweep picks a teardown by it.
       const wf = await dao.create({
-        workflowId: 'wf-1',
+        teamId: 'wf-1',
         archivedAt: new Date(1_000),
       });
       const chat = await dao.create({ archivedAt: new Date(2_000) });
 
       expect(await dao.archivedRunsBefore(new Date(9_999))).toEqual([
-        { id: wf.id, workflowId: 'wf-1' },
-        { id: chat.id, workflowId: null },
+        { id: wf.id, teamId: 'wf-1' },
+        { id: chat.id, teamId: null },
       ]);
     });
   });
 
   describe('listRunningChats', () => {
-    it('scopes to running chats — non-running chats and workflow runs are excluded', async () => {
+    it('scopes to running chats — non-running chats and team runs are excluded', async () => {
       await dao.create({ status: 'pending' });
       const running = await dao.create({ status: 'running' });
       await dao.create({ status: 'completed' });
-      // A mid-turn WORKFLOW run is the graph executor's reconcile concern.
-      await dao.create({ workflowId: 'wf-1', status: 'running' });
+      // A mid-turn TEAM run is the graph executor's reconcile concern.
+      await dao.create({ teamId: 'wf-1', status: 'running' });
 
       const stale = await dao.listRunningChats();
 
@@ -436,67 +436,67 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('listWorkflowRuns', () => {
-    it('lists workflow runs only (workflowId set), newest first', async () => {
+  describe('listTeamRuns', () => {
+    it('lists team runs only (teamId set), newest first', async () => {
       const older = await dao.create({
-        workflowId: 'wf-1',
+        teamId: 'wf-1',
         createdAt: new Date(1_000),
       });
       const newer = await dao.create({
-        workflowId: 'wf-2',
+        teamId: 'wf-2',
         createdAt: new Date(2_000),
       });
       await dao.create({ createdAt: new Date(3_000) }); // chat run
 
-      const runs = await dao.listWorkflowRuns('active');
+      const runs = await dao.listTeamRuns('active');
 
       expect(runs.map((run) => run.id)).toEqual([newer.id, older.id]);
     });
 
     it('answers the scope exactly as the chat listing does', async () => {
       // The two halves feed ONE sidebar, so `active` must hide a shelved
-      // workflow run, `archived` must show only it, and `all` must hold both.
+      // team run, `archived` must show only it, and `all` must hold both.
       const active = await dao.create({
-        workflowId: 'wf-1',
+        teamId: 'wf-1',
         createdAt: new Date(1_000),
       });
       const archived = await dao.create({
-        workflowId: 'wf-2',
+        teamId: 'wf-2',
         createdAt: new Date(2_000),
         archivedAt: new Date(9_000),
       });
 
-      expect((await dao.listWorkflowRuns('active')).map((r) => r.id)).toEqual([
+      expect((await dao.listTeamRuns('active')).map((r) => r.id)).toEqual([
         active.id,
       ]);
-      expect((await dao.listWorkflowRuns('archived')).map((r) => r.id)).toEqual(
-        [archived.id],
-      );
-      expect((await dao.listWorkflowRuns('all')).map((r) => r.id)).toEqual([
+      expect((await dao.listTeamRuns('archived')).map((r) => r.id)).toEqual([
+        archived.id,
+      ]);
+      expect((await dao.listTeamRuns('all')).map((r) => r.id)).toEqual([
         archived.id,
         active.id,
       ]);
     });
   });
 
-  describe('listRunningWorkflowRuns', () => {
-    it('treats pending AND running workflow runs as orphans; terminal and chat runs never appear', async () => {
-      // A workflow run is created `running`, but pending still counts as
+  describe('listRunningTeamRuns', () => {
+    it('treats pending AND running team runs as orphans; terminal and chat runs never appear', async () => {
+      // A team run is created `running`, but pending still counts as
       // non-terminal (see the DAO doc comment) — pin both.
       const pending = await dao.create({
-        workflowId: 'wf-1',
+        teamId: 'wf-1',
         status: 'pending',
       });
       const running = await dao.create({
-        workflowId: 'wf-1',
+        teamId: 'wf-1',
         status: 'running',
       });
-      await dao.create({ workflowId: 'wf-1', status: 'completed' });
-      await dao.create({ workflowId: 'wf-1', status: 'failed' });
-      await dao.create({ workflowId: 'wf-1', status: 'cancelled' });
+      await dao.create({ teamId: 'wf-1', status: 'completed' });
+      await dao.create({ teamId: 'wf-1', status: 'failed' });
+      await dao.create({ teamId: 'wf-1', status: 'cancelled' });
       await dao.create({ status: 'running' }); // mid-turn chat, not an orphan here
 
-      const stale = await dao.listRunningWorkflowRuns();
+      const stale = await dao.listRunningTeamRuns();
 
       // No ORDER BY on this query — compare as a set.
       expect(stale.map((run) => run.id).sort()).toEqual(

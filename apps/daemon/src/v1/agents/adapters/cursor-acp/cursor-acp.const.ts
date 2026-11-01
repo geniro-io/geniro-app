@@ -1549,7 +1549,7 @@ export const CURSOR_PLAN_LIMITS_REQUEST_TIMEOUT_MS = 8_000;
 
 /**
  * How long one account's answer is served before the account is asked again.
- * Every turn's prewarm and every readout open ask, so a busy workflow would
+ * Every turn's prewarm and every readout open ask, so a busy team would
  * otherwise put two requests per turn to the user's account.
  */
 export const CURSOR_PLAN_LIMITS_MIN_INTERVAL_MS = 30_000;

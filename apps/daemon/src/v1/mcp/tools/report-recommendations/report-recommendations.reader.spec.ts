@@ -2,7 +2,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { describe, expect, it } from 'vitest';
 
 import type {
-  AnalysedWorkflow,
+  AnalysedTeam,
   RecommendationItem,
 } from '../../../agents/chat.types';
 import type { ItemDao } from '../../../agents/dao/item.dao';
@@ -28,7 +28,7 @@ function item(id: string, seq = 3): RecommendationItem {
   return {
     id,
     target: id.startsWith('W')
-      ? 'workflow'
+      ? 'team'
       : id.startsWith('U')
         ? 'user'
         : id.startsWith('M')
@@ -61,8 +61,8 @@ function item(id: string, seq = 3): RecommendationItem {
 }
 
 function setup(
-  workflowId: string | null,
-  workflow: AnalysedWorkflow | null = null,
+  teamId: string | null,
+  team: AnalysedTeam | null = null,
   memoryOn = true,
 ) {
   const memory = { enabled: memoryOn } as MemoryService;
@@ -71,10 +71,10 @@ function setup(
   const reports = new AnalysisReportsService(
     { fork: () => ({}) } as unknown as EntityManager,
     {
-      // A workflow analysis needs no source row: its newest run may be gone.
+      // A team analysis needs no source row: its newest run may be gone.
       getById: () =>
         Promise.resolve(
-          workflow === null ? ({ id: 'source', workflowId } as Run) : null,
+          team === null ? ({ id: 'source', teamId } as Run) : null,
         ),
     } as unknown as RunDao,
     {
@@ -111,7 +111,7 @@ function setup(
         sourceRunId: 'source',
         snapshotSeq: 50,
         sourceWorking: false,
-        workflow,
+        team,
       },
       (kind, payload) => {
         written.push({ kind, payload });
@@ -140,7 +140,7 @@ describe('ReportRecommendationsTool', () => {
     expect(written[0]!.kind).toBe('recommendations');
     expect(written[0]!.payload).toMatchObject({
       sourceRunId: 'source',
-      sourceKind: 'workflow',
+      sourceKind: 'team',
       timing: {
         wallMs: 600_000,
         criticalPathMs: 500_000,
@@ -160,7 +160,7 @@ describe('ReportRecommendationsTool', () => {
     expect(written).toEqual([]);
   });
 
-  it("checks a workflow analysis's evidence against the run each quote names, at that run's snapshot", async () => {
+  it("checks a team analysis's evidence against the run each quote names, at that run's snapshot", async () => {
     const { report, written, checked } = setup(null, {
       slug: 'team',
       runs: [
@@ -198,14 +198,14 @@ describe('ReportRecommendationsTool', () => {
       'evidence runId other is not one of the runs this analysis reads',
     );
     expect(written).toHaveLength(1);
-    // One run's timing would pass for the workflow's.
+    // One run's timing would pass for the team's.
     expect(written[0]!.payload).toMatchObject({
-      sourceKind: 'workflow',
+      sourceKind: 'team',
       timing: null,
     });
   });
 
-  it('refuses a workflow item when the analysed thread is a plain chat', async () => {
+  it('refuses a team item when the analysed thread is a plain chat', async () => {
     const { report, written } = setup(null);
 
     const result = await report({ items: [item('W-1')] });
@@ -260,7 +260,7 @@ describe('ReportRecommendationsTool', () => {
       (await report({ items: [item('R-1'), item('R-1')] })).content[0]!.text,
     ).toContain('duplicate id R-1');
     expect(
-      (await report({ items: [{ ...item('R-2'), target: 'workflow' }] }))
+      (await report({ items: [{ ...item('R-2'), target: 'team' }] }))
         .content[0]!.text,
     ).toContain('starts with W-');
     expect(

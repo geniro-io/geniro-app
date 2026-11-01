@@ -136,7 +136,7 @@ function parsedAt(iso: string): number | null {
  *
  * Keyed by that item and not by an index, because the consumer is the row
  * renderer: a `turn_complete` row has to look up its own figure, and it knows
- * only its own id. RUN-level turns only — a workflow node's own `turn_complete`
+ * only its own id. RUN-level turns only — a team node's own `turn_complete`
  * ends that node's work, not a turn of the conversation, and its cost and
  * context already live in the agents panel.
  *
@@ -162,7 +162,7 @@ export function turnDurations(
  */
 export interface OpenTurn {
   /**
-   * Which agent is taking this turn — a workflow node's id, or
+   * Which agent is taking this turn — a team node's id, or
    * {@link CHAT_AGENT_KEY} for a 1:1 chat, whose rows carry no `nodeId`.
    *
    * A SETTLED turn is attributed through a join rather than a stored field: its
@@ -198,7 +198,7 @@ export interface OpenTurn {
  * listeners. That is the same non-work as a turn parked on an approval card,
  * and `openSince` is already how such a stretch stops the live total — so this
  * adds the hold to it rather than inventing a second mechanism. Read by a chat's
- * clock and each agent's own figure; a workflow header's clock ({@link clockMs})
+ * clock and each agent's own figure; a team header's clock ({@link clockMs})
  * reads only turn starts and the daemon's paused stretches.
  *
  * A separate function rather than a branch inside {@link scanTurns}, because a
@@ -220,7 +220,7 @@ export function parkWhileHeld(
     return open;
   }
   // A hold is a fact about the RUN, so it parks every turn open under it. In a
-  // workflow that is several at once, and each of them is equally not working:
+  // team that is several at once, and each of them is equally not working:
   // the daemon holds the run's turn for background work, and the agents it was
   // holding for are exactly the ones with turns still open.
   return open.map((turn) => ({
@@ -241,7 +241,7 @@ export function heldSinceOf(iso: string | null): number | undefined {
  * The open turns, completed from the DAEMON's node rows where the loaded window
  * cannot see a node's turn begin.
  *
- * A workflow node's turn opens on its `running` status row, and a long run
+ * A team node's turn opens on its `running` status row, and a long run
  * loads only its newest `HISTORY_PAGE` items — so a node working one turn for
  * longer than that window had no open turn at all, and every live clock built
  * on it froze: the agent card's `worked` sat on the last settled total while
@@ -351,7 +351,7 @@ const CLOCK_ROW_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether a row is one the daemon folds a workflow's paused stretches from: a
+ * Whether a row is one the daemon folds a team's paused stretches from: a
  * card or background unit opening or closing, or a turn starting (which ends a
  * card that lost its close).
  *
@@ -366,12 +366,12 @@ export function movesPausedSpans(item: ChatItem): boolean {
 }
 
 /**
- * A WORKFLOW's header clock: the UNION of every stretch in which some agent
+ * A TEAM's header clock: the UNION of every stretch in which some agent
  * worked, the running ones included — so it advances one second a second
  * however many agents are working at once.
  *
  * {@link openTurnWorkedMs} SUMS, deliberately, because the per-agent figure it
- * joins is a sum. On a workflow, summing would run the header's clock N times
+ * joins is a sum. On a team, summing would run the header's clock N times
  * fast: a Manager's turn stays open for the whole time it waits in
  * `await_agent` while its Engineer works, so the header would gain two
  * seconds a second. The settled half comes from the daemon's `activeSpans`,
@@ -535,18 +535,18 @@ function opensNodeTurn(payload: unknown): boolean {
 /**
  * Both readings off ONE pass: the settled turns, and the ones still running.
  *
- * `nodeScoped` is what a WORKFLOW run needs, and the two modes read disjoint
- * halves of the transcript rather than one filtering the other. A workflow has
+ * `nodeScoped` is what a TEAM run needs, and the two modes read disjoint
+ * halves of the transcript rather than one filtering the other. A team has
  * no run-level turn at all — its work belongs to its NODES, several of which
  * can be running at once — so a scan keyed to the run measures nothing there:
  * every row carries a `nodeId`, the whole loop skipped them, and the header's
  * live clock got no open turn to tick. REPORTED as "timer in header is stuck",
- * against a workflow 41 minutes in whose figure had not moved since its last
+ * against a team 41 minutes in whose figure had not moved since its last
  * node turn landed. The per-row `took 13s` under each `turn_complete` was the
- * same hole seen from the other side: a workflow node never had one.
+ * same hole seen from the other side: a team node never had one.
  *
  * The two modes also start a turn from different rows, because the transcripts
- * genuinely differ. A chat's turn begins with the USER's message. A workflow
+ * genuinely differ. A chat's turn begins with the USER's message. A team
  * node's begins when the executor spawns it, which it says with a `status`
  * row — the node is handed no user message of its own, and the one message the
  * run does carry (the trigger's prompt, `nodeId: null`) is the run's input

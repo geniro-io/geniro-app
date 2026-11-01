@@ -30,7 +30,11 @@ import {
   shareDestinationSchema,
   shareSignInSchema,
 } from './ipc-schemas';
-import { SETTINGS_VERSION, storedSettingsVersion } from './settings-migrations';
+import {
+  SETTINGS_VERSION,
+  storedSettingsVersion,
+  withPendingMigrations,
+} from './settings-migrations';
 
 /**
  * Non-secret app settings, persisted as a plain JSON file in Electron's
@@ -70,10 +74,11 @@ export function readSettings(): Settings {
     return defaults;
   }
   try {
-    const record = parseSettingsObject(readFileSync(path, 'utf8'));
-    if (record === null) {
+    const stored = parseSettingsObject(readFileSync(path, 'utf8'));
+    if (stored === null) {
       return defaults;
     }
+    const record = withPendingMigrations(stored);
     // Salvage per key. The strict schema keeps renderer WRITES honest (ipc.ts
     // validates every patch), but the on-disk file can be newer than this
     // build — the notify-only brew flow makes version skew normal — so one
@@ -145,7 +150,7 @@ export function readSettings(): Settings {
     return {
       ...DEFAULT_SETTINGS,
       ...salvaged,
-      settingsVersion: storedSettingsVersion(record),
+      settingsVersion: storedSettingsVersion(stored),
     } as Settings;
   } catch {
     return defaults;

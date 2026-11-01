@@ -13,13 +13,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { HOST_BOARD_TOOLS } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
-import { TaskBoardBroker } from '../../graphs/services/task-board.broker';
-import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { TaskBoardBroker } from '../../teams/services/task-board.broker';
+import type { TeamStoreService } from '../../teams/services/team-store.service';
 import { LabelInstructionDao } from '../dao/label-instruction.dao';
 import { TaskDao } from '../dao/task.dao';
 import { LabelInstruction } from '../entity/label-instruction.entity';
@@ -89,17 +89,17 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
       attachments,
       runDao,
     );
-    const workflows = {
+    const teams = {
       list: async () => [
         { slug: 'dev-team', name: 'Dev Team', description: 'A team' },
       ],
-    } as unknown as WorkflowStoreService;
+    } as unknown as TeamStoreService;
     const vocabulary = new TaskBoardVocabularyService(
       em,
       taskDao,
       projectDao,
       labelInstructions,
-      workflows,
+      teams,
       {
         all: () =>
           new Map([
@@ -140,7 +140,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
       tasks,
       attachments,
       new TaskFilesService(em, taskDao, tasks),
-      workflows,
+      teams,
       vocabulary,
     );
     service.onModuleInit();
@@ -158,7 +158,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     ] as const) {
       await runDao.create({
         id,
-        workflowId: null,
+        teamId: null,
         status: 'completed',
         agentKind: 'claude',
         approval,
@@ -186,7 +186,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     await tasks.moveStatus(task.id, { from: 'backlog', to: 'in_progress' });
     await runDao.create({
       id: runId,
-      workflowId: null,
+      teamId: null,
       status: 'running',
       agentKind: 'claude',
       taskId: task.id,
@@ -422,7 +422,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
   it.each([
     ['agentKind', { agentKind: 'cursor-agent' }],
     ['approval', { approval: null }],
-    ['workflowSlug', { workflowSlug: 'dev-team' }],
+    ['teamSlug', { teamSlug: 'dev-team' }],
     ['folder', { folder: null }],
   ] as const)(
     'refuses an `ask` chat a change to an existing card’s run configuration (%s)',
@@ -448,7 +448,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
       expect(stored).toMatchObject({
         agentKind: 'claude',
         approval: 'ask',
-        workflowSlug: null,
+        teamSlug: null,
       });
     },
   );
@@ -471,14 +471,14 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
   it.each([
     ['a disarmed project', true, 'ask-chat', false, false],
     ['an armed project paused by its breaker', false, 'ask-chat', true, true],
-    ['a workflow run', true, 'workflow-run', true, false],
+    ['a team run', true, 'team-run', true, false],
     ['an unknown run', false, 'no-such-run', true, false],
   ] as const)(
     'into the intake from %s: allowed=%s',
     async (_case, allowed, runId, armed, breaker) => {
       await runDao.create({
-        id: 'workflow-run',
-        workflowId: 'dev-team',
+        id: 'team-run',
+        teamId: 'dev-team',
         status: 'running',
         agentKind: 'claude',
       });
@@ -523,7 +523,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     expect(answer.text).toContain('File new cards in `todo`');
   });
 
-  it('warns that a card naming no agent or workflow cannot be started', async () => {
+  it('warns that a card naming no agent or team cannot be started', async () => {
     const answer = await call('create_task', { project: 'GEN', title: 'x' });
 
     expect(answer.text).toContain('cannot be started until one is set');
@@ -550,11 +550,11 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     expect(answer.text).toContain(`GEN (Geniro) (id ${project.id})`);
   });
 
-  it('refuses a workflow the library does not hold, naming the ones it does', async () => {
+  it('refuses a team the library does not hold, naming the ones it does', async () => {
     const answer = await call('create_task', {
       project: 'GEN',
       title: 'x',
-      workflowSlug: 'ghost',
+      teamSlug: 'ghost',
     });
 
     expect(answer.isError).toBe(true);
@@ -1002,9 +1002,7 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
         },
         { label: 'ui', cards: 1, projects: ['GEN'], instructionsFor: [] },
       ]),
-      workflows: [
-        { slug: 'dev-team', name: 'Dev Team', description: 'A team' },
-      ],
+      teams: [{ slug: 'dev-team', name: 'Dev Team', description: 'A team' }],
       agents: [
         {
           agentKind: 'claude',

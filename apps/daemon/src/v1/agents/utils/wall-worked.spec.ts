@@ -32,7 +32,7 @@ const running = (at: number, extra: Record<string, unknown> = {}) =>
 const settle = (at: number, extra: Record<string, unknown> = {}) =>
   row('turn_complete', at, { usage: null, stopReason: 'end_turn', ...extra });
 
-describe("wallMeasuredTurns — a workflow's nodes", () => {
+describe("wallMeasuredTurns — a team's nodes", () => {
   const nodes = (rows: WallClockRow[]) => wallMeasuredTurns(rows, 'nodes');
 
   it('measures a turn from its running row to its settle', () => {
@@ -215,7 +215,7 @@ describe("wallMeasuredTurns — a 1:1 chat's agent", () => {
     ).toEqual([{ seq: next.seq, nodeId: null, ms: 10_000 }]);
   });
 
-  it("reads no workflow node's rows, and the node fold reads no chat rows", () => {
+  it("reads no team node's rows, and the node fold reads no chat rows", () => {
     const rows = [running(0), settle(9_000)];
     expect(chat(rows)).toEqual([]);
     expect(wallMeasuredTurns([said(0), chatSettle(9_000)], 'nodes')).toEqual(

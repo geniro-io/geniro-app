@@ -22,7 +22,7 @@ function row(
   };
 }
 
-/** A row filed under a workflow NODE, as every row of a workflow run is. */
+/** A row filed under a team NODE, as every row of a team run is. */
 function nodeRow(
   nodeId: string,
   kind: ItemDto['kind'],
@@ -32,10 +32,10 @@ function nodeRow(
   return { ...row(kind, payload, role), nodeId };
 }
 
-/** A WORKFLOW run's export — the same document with a workflow id. */
-function workflowDoc(items: ItemDto[]): ChatExportDto {
+/** A TEAM run's export — the same document with a team id. */
+function teamDoc(items: ItemDto[]): ChatExportDto {
   const base = doc(items);
-  return { ...base, run: { ...base.run, workflowId: 'dev-team' } };
+  return { ...base, run: { ...base.run, teamId: 'dev-team' } };
 }
 
 /** The heading line of the row with this seq. */
@@ -56,7 +56,7 @@ function doc(items: ItemDto[]): ChatExportDto {
     daemonVersion: '1.2.3',
     run: {
       id: 'r1',
-      workflowId: null,
+      teamId: null,
       status: 'completed',
       title: 'Sizing the bloom filter',
       agentKind: 'claude',
@@ -76,7 +76,7 @@ function doc(items: ItemDto[]): ChatExportDto {
       customInstructions: null,
       projectInstructions: null,
       replyLanguage: null,
-      workflowInstructions: null,
+      teamInstructions: null,
       memoryIndex: null,
       nativeMemoryOff: null,
       taskInstructions: null,
@@ -173,7 +173,7 @@ describe('chatToMarkdown', () => {
       nodeId: 'engineer',
       conversationId: null,
     });
-    const out = chatToMarkdown(workflowDoc([note]));
+    const out = chatToMarkdown(teamDoc([note]));
 
     expect(out).toContain(
       `**📝 team note · pitfall** — engineer — note ${note.seq} — replaces note 3`,
@@ -193,21 +193,21 @@ describe('chatToMarkdown', () => {
       reviewRounds: 1,
       acceptance: 'changes_requested',
       questionsAsked: 0,
-      workflowSlug: 'dev-team',
+      teamSlug: 'dev-team',
       nodeId: 'manager',
       conversationId: null,
     };
     const out = chatToMarkdown(
-      workflowDoc([nodeRow('manager', 'run_outcome', payload)]),
+      teamDoc([nodeRow('manager', 'run_outcome', payload)]),
     );
 
     expect(out).toContain(
       '**✔ outcome** — manager — [acme/platform#87](https://github.com/acme/platform/pull/87) — ready — 1 review round — changes requested — no questions',
     );
-    expect(out).not.toContain('"workflowSlug"');
+    expect(out).not.toContain('"teamSlug"');
 
     const withSummary = chatToMarkdown(
-      workflowDoc([
+      teamDoc([
         nodeRow('manager', 'run_outcome', {
           ...payload,
           summary: 'Move the retry behind a flag.',
@@ -219,7 +219,7 @@ describe('chatToMarkdown', () => {
     );
 
     const unreadable = chatToMarkdown(
-      workflowDoc([
+      teamDoc([
         nodeRow('manager', 'run_outcome', { ...payload, acceptance: 'x' }),
       ]),
     );
@@ -236,7 +236,7 @@ describe('chatToMarkdown', () => {
       rev: 2,
       by: { kind: 'user', via: 'desktop' },
     };
-    const out = chatToMarkdown(workflowDoc([row('stage_change', payload)]));
+    const out = chatToMarkdown(teamDoc([row('stage_change', payload)]));
 
     expect(out).toContain(
       '**◈ stage Review** — You — skipped — took ship\n\ndocs only',
@@ -244,7 +244,7 @@ describe('chatToMarkdown', () => {
     expect(out).not.toContain('"stageId"');
 
     const unreadable = chatToMarkdown(
-      workflowDoc([row('stage_change', { ...payload, action: 'finish' })]),
+      teamDoc([row('stage_change', { ...payload, action: 'finish' })]),
     );
     expect(unreadable).toContain('#### stage_change ·');
   });
@@ -281,7 +281,7 @@ describe('chatToMarkdown', () => {
 
   it('writes a caller’s message into a call as the message, and one that never landed as not delivered', () => {
     const out = chatToMarkdown(
-      workflowDoc([
+      teamDoc([
         nodeRow('manager', 'call_answer', {
           callId: 'call-1',
           message: 'stop after 3',
@@ -339,7 +339,7 @@ describe('chatToMarkdown', () => {
     expect(out).toContain('**claude**');
   });
 
-  it('names the AGENT and its CALL on every row of a workflow run, not only on messages', () => {
+  it('names the AGENT and its CALL on every row of a team run, not only on messages', () => {
     // REPORTED: a 26 MB Dev Team export could not say which agent ran which
     // step — its tool rows were anonymous while a manager, three concurrent
     // engineer calls and a QA interleaved — so the analysis had to go back to
@@ -356,7 +356,7 @@ describe('chatToMarkdown', () => {
       callId: 'call-3',
     });
     const thought = nodeRow('manager', 'reasoning', { text: 'wait for it' });
-    const out = chatToMarkdown(workflowDoc([call, result, thought]));
+    const out = chatToMarkdown(teamDoc([call, result, thought]));
 
     expect(headingOf(out, call.seq)).toMatch(
       /^#### tool_call · engineer · call-3 · seq /,
@@ -389,7 +389,7 @@ describe('chatToMarkdown', () => {
       text: 'hm',
       parentToolUseId: 'toolu_01ZZZZZZZZZZZZZZZZQ7xk2p',
     });
-    const out = chatToMarkdown(workflowDoc([launch, inside, orphan]));
+    const out = chatToMarkdown(teamDoc([launch, inside, orphan]));
 
     expect(headingOf(out, inside.seq)).toContain(
       '· engineer · call-1 · sub-agent "Self-review: bugs" · seq',
@@ -410,7 +410,7 @@ describe('chatToMarkdown', () => {
       text: 'no findings',
       parentToolUseId: 'tc-7',
     });
-    const out = chatToMarkdown(workflowDoc([declared, inside]));
+    const out = chatToMarkdown(teamDoc([declared, inside]));
 
     expect(headingOf(out, inside.seq)).toContain(
       '· qa · sub-agent "Review security in range" · seq',
@@ -424,16 +424,16 @@ describe('chatToMarkdown', () => {
       { text: 'use safeStringify', callId: 'call-26' },
       'user',
     );
-    const out = chatToMarkdown(workflowDoc([typed]));
+    const out = chatToMarkdown(teamDoc([typed]));
 
     expect(headingOf(out, typed.seq)).toMatch(
       /^#### message · You → engineer · call-26 · seq /,
     );
   });
 
-  it('files a node-less row under the chat’s agent, but under the RUN in a workflow', () => {
+  it('files a node-less row under the chat’s agent, but under the RUN in a team', () => {
     // In a 1:1 chat every row is node-less and they are all the one agent's; in
-    // a workflow the only node-less agent-side row is the pass-end roll-up, and
+    // a team the only node-less agent-side row is the pass-end roll-up, and
     // naming it after a CLI would pin it on whichever node shares that CLI.
     const chatRow = row('tool_call', { id: 't', name: 'Bash', input: {} });
     const chatOut = chatToMarkdown(doc([chatRow]));
@@ -445,21 +445,21 @@ describe('chatToMarkdown', () => {
       usage: null,
       stopReason: 'workflow_completed',
     });
-    const wfOut = chatToMarkdown(workflowDoc([rollUp]));
+    const wfOut = chatToMarkdown(teamDoc([rollUp]));
     expect(headingOf(wfOut, rollUp.seq)).toMatch(
       /^#### turn_complete · run · seq /,
     );
   });
 
-  it('does not count a workflow pass ending as an agent’s turn in the spend table', () => {
+  it('does not count a team pass ending as an agent’s turn in the spend table', () => {
     // A Dev Team export listed `agent | 10 | — | —` — ten passes of the RUN read
     // as ten turns of an agent that does not exist.
     const out = chatToMarkdown(
-      workflowDoc([
+      teamDoc([
         nodeRow('engineer', 'turn_complete', {
           usage: { costUsd: 4.25, durationMs: 90_000 },
         }),
-        row('turn_complete', { usage: null, stopReason: 'workflow_completed' }),
+        row('turn_complete', { usage: null, stopReason: 'team_completed' }),
         row('turn_complete', { usage: null, stopReason: 'workflow_completed' }),
       ]),
     );

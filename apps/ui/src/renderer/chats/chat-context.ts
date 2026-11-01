@@ -95,7 +95,7 @@ export function chatContextAwaitingReading(
 }
 
 /**
- * The ring's bookkeeping, shared by the chat screen and the workflow dock: files
+ * The ring's bookkeeping, shared by the chat screen and the team dock: files
  * the reading on screen for its run, and answers why the ring has no count when
  * that is worth drawing (see {@link chatContextAwaitingReading}).
  *

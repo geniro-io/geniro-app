@@ -28,7 +28,7 @@ export interface ActionCardView {
   once: boolean;
   nodeId: string;
   conversationId: string;
-  /** Who published it, when a press must say so — another agent of a workflow. */
+  /** Who published it, when a press must say so — another agent of a team. */
   agentLabel: string | null;
   /** The call its publisher was answering, which the card links to. */
   callId: string | null;

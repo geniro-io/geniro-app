@@ -18,7 +18,7 @@ import { servedWorkedMs } from './wall-worked';
  * status written WITHOUT the announce goes stale invisibly: the row is correct
  * in SQLite while the sidebar keeps showing the old badge until something else
  * forces a refetch. The chat path fixed that behind a helper; the executor's
- * five writes kept calling `runDao.updateById` directly, so every workflow row
+ * five writes kept calling `runDao.updateById` directly, so every team row
  * in the same sidebar still showed the stale badge. One function is what makes
  * that class of divergence impossible rather than merely unlikely.
  */
@@ -37,7 +37,7 @@ export interface RunStatusAnnounce {
   activity?: string | null;
   /**
    * What the run is parked on, when a card outlives the turns around it — a
-   * standing workflow proposal (`ChatService.awaitingOf`). Absent reads as
+   * standing team proposal (`ChatService.awaitingOf`). Absent reads as
    * null, the answer for every other run; see the note in `writeRunStatus`.
    */
   awaiting?: RunAwaiting | null;
@@ -107,7 +107,7 @@ export async function writeRunStatus(
   // A deferred card is the exception `sweepNode` leaves standing. The null
   // here is still right for a question, plan or patch — the status write does
   // not know about that card — and the chat finalizer re-announces `awaiting`
-  // afterwards when one remains. A standing workflow proposal, which outlives
+  // afterwards when one remains. A standing team proposal, which outlives
   // every turn, is said by its caller through `announce.awaiting`.
   // A TERMINAL status always carries `summary`, null included; a non-terminal
   // one never does. The two are different statements and the wire has to keep
@@ -137,13 +137,13 @@ export async function writeRunStatus(
   //
   // Only on a settle, because that is the only moment they change, and one
   // extra read per turn is what an activity announce firing on every tool call
-  // must not pay. A workflow run keeps its figures per NODE, so both come back
+  // must not pay. A team run keeps its figures per NODE, so both come back
   // null there and the renderer's chat-only guard ignores them.
   //
   // Sent only when there is a figure to send, on the rule every optional field
   // here follows: absent asserts nothing, and these columns only ever GROW —
   // nothing nulls them once written — so a pair of nulls could never correct a
-  // client's copy of anything. That is every workflow run (its figures live per
+  // client's copy of anything. That is every team run (its figures live per
   // NODE) and every chat whose CLI has reported no timing and called no tool.
   const stored = settled ? await deps.runDao.readWork(runId, em) : null;
   // The worked time as every reader is served it: the CLI-reported total plus

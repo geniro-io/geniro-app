@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
+import { teamSnapshotOf } from '../../teams/utils/team-snapshot';
 import { reportedModelOf, usageDimensions } from './usage-dimensions';
 
 const run = (overrides: Partial<Run> = {}): Run =>
   ({
     id: 'run-a',
-    workflowId: null,
-    workflowSnapshot: null,
+    teamId: null,
+    teamSnapshot: null,
     title: null,
     cwd: null,
     agentKind: null,
@@ -27,44 +27,44 @@ const node = (overrides: Partial<NodeState> = {}): NodeState =>
     ...overrides,
   }) as NodeState;
 
-/** The copy a workflow run keeps, written by the executor's own writer. */
+/** The copy a team run keeps, written by the executor's own writer. */
 const snapshotNamed = (name: string): string =>
-  workflowSnapshotOf({ name, nodes: [], edges: [] });
+  teamSnapshotOf({ name, nodes: [], edges: [] });
 
 describe('usageDimensions', () => {
-  it('names the workflow from the run’s own snapshot, never its title', () => {
-    // A workflow run is titled after its CONVERSATION now, like a chat. Read
-    // from the title, one workflow's spend split into a row per task it was
+  it('names the team from the run’s own snapshot, never its title', () => {
+    // A team run is titled after its CONVERSATION now, like a chat. Read
+    // from the title, one team's spend split into a row per task it was
     // ever run on — the breakdown named what each run was ABOUT.
     const dimensions = usageDimensions(
       run({
-        workflowId: 'nightly-review',
+        teamId: 'nightly-review',
         title: 'Fix the flaky login test',
-        workflowSnapshot: snapshotNamed('Nightly review'),
+        teamSnapshot: snapshotNamed('Nightly review'),
       }),
       node({ agentKind: 'claude' }),
     );
 
-    expect(dimensions.workflowName).toBe('Nightly review');
+    expect(dimensions.teamName).toBe('Nightly review');
   });
 
-  it('files every run of one workflow under one name, however each is titled', () => {
+  it('files every run of one team under one name, however each is titled', () => {
     const snapshot = snapshotNamed('Nightly review');
     const names = [
       run({
-        workflowId: 'nightly-review',
+        teamId: 'nightly-review',
         title: null,
-        workflowSnapshot: snapshot,
+        teamSnapshot: snapshot,
       }),
       run({
-        workflowId: 'nightly-review',
+        teamId: 'nightly-review',
         title: 'Bump the SDK',
-        workflowSnapshot: snapshot,
+        teamSnapshot: snapshot,
       }),
-    ].map((one) => usageDimensions(one, null).workflowName);
+    ].map((one) => usageDimensions(one, null).teamName);
 
     // The FIRST turns of a run land before the run is named, and must not
-    // fall through to the slug — one workflow, two keys, within one run.
+    // fall through to the slug — one team, two keys, within one run.
     expect(names).toEqual(['Nightly review', 'Nightly review']);
   });
 
@@ -75,40 +75,38 @@ describe('usageDimensions', () => {
       agentKind: 'claude',
       model: 'opus',
     } as unknown as NodeState;
-    const dimensions = usageDimensions(
-      run({ workflowId: 'team' }),
-      member1,
-      null,
-      { agentKind: AgentKind.Codex, model: 'gpt-5.5' },
-    );
+    const dimensions = usageDimensions(run({ teamId: 'team' }), member1, null, {
+      agentKind: AgentKind.Codex,
+      model: 'gpt-5.5',
+    });
     expect(dimensions).toMatchObject({ agentKind: 'codex', model: 'gpt-5.5' });
     // A member on its CLI's default model is filed under no model — never
     // under member 1's — unless the CLI reported the one it ran.
     expect(
-      usageDimensions(run({ workflowId: 'team' }), member1, null, {
+      usageDimensions(run({ teamId: 'team' }), member1, null, {
         agentKind: AgentKind.Codex,
         model: null,
       }).model,
     ).toBeNull();
     expect(
-      usageDimensions(run({ workflowId: 'team' }), member1, 'gpt-5.6', {
+      usageDimensions(run({ teamId: 'team' }), member1, 'gpt-5.6', {
         agentKind: AgentKind.Codex,
         model: null,
       }).model,
     ).toBe('gpt-5.6');
   });
 
-  it('leaves a single-agent chat out of the workflow breakdown', () => {
+  it('leaves a single-agent chat out of the team breakdown', () => {
     // A CHAT carries a title too — its conversation name. Taking the title
-    // unconditionally files every chat in the workflow breakdown under its own
+    // unconditionally files every chat in the team breakdown under its own
     // heading, which is the one thing that breakdown must not contain, so the
-    // gate is `workflowId` and never the title's presence.
+    // gate is `teamId` and never the title's presence.
     const dimensions = usageDimensions(
-      run({ workflowId: null, title: 'Fix the login bug' }),
+      run({ teamId: null, title: 'Fix the login bug' }),
       null,
     );
 
-    expect(dimensions.workflowName).toBeNull();
+    expect(dimensions.teamName).toBeNull();
   });
 
   it('falls back to the slug when the run holds no snapshot — not to its title', () => {
@@ -116,28 +114,28 @@ describe('usageDimensions', () => {
     // reads its graph. The slug is the file name, which is still a thing a
     // person can recognise; the title would be the conversation's.
     const dimensions = usageDimensions(
-      run({ workflowId: 'nightly-review', title: 'Fix the login bug' }),
+      run({ teamId: 'nightly-review', title: 'Fix the login bug' }),
       null,
     );
 
-    expect(dimensions.workflowName).toBe('nightly-review');
+    expect(dimensions.teamName).toBe('nightly-review');
   });
 
   it('falls back to the slug when the snapshot cannot be read', () => {
     const dimensions = usageDimensions(
-      run({ workflowId: 'nightly-review', workflowSnapshot: 'not json {' }),
+      run({ teamId: 'nightly-review', teamSnapshot: 'not json {' }),
       null,
     );
 
-    expect(dimensions.workflowName).toBe('nightly-review');
+    expect(dimensions.teamName).toBe('nightly-review');
   });
 
   it('prefers the NODE’s agent and model over the run’s', () => {
-    // A workflow run names no single agent — its own `agentKind` is null and
+    // A team run names no single agent — its own `agentKind` is null and
     // each node names its own. Reading the run alone attributes every node's
     // spend to nothing.
     const dimensions = usageDimensions(
-      run({ workflowId: 'w', agentKind: null, model: null, cwd: '/work' }),
+      run({ teamId: 'w', agentKind: null, model: null, cwd: '/work' }),
       node({ agentKind: 'cursor-agent', model: 'auto' }),
     );
 
@@ -180,7 +178,7 @@ describe('usageDimensions', () => {
       agentKind: null,
       model: null,
       cwd: null,
-      workflowName: null,
+      teamName: null,
     });
   });
 });

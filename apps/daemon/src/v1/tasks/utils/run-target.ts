@@ -51,7 +51,7 @@ export const AUTOPILOT_APPROVAL: ChatApprovalMode = 'auto';
  * fixes it: the card inherits what the project sets.
  */
 export const NO_RUN_TARGET_REASON =
-  'no agent or workflow — set one on this task, or a default for the project';
+  'no agent or team — set one on this task, or a default for the project';
 
 /**
  * The sentence for each way a card can be unstartable.
@@ -63,8 +63,8 @@ export const NO_RUN_TARGET_REASON =
 export const RUN_TARGET_PROBLEM_REASON: Record<RunTargetProblemReason, string> =
   {
     'no-target': NO_RUN_TARGET_REASON,
-    'workflow-unattended':
-      'this workflow cannot run unattended — an agent node whose approval is not "auto" would park on a request nobody is there to answer; set every agent node to auto, point this task at an agent, or start it yourself',
+    'team-unattended':
+      'this team cannot run unattended — an agent node whose approval is not "auto" would park on a request nobody is there to answer; set every agent node to auto, point this task at an agent, or start it yourself',
   };
 
 /**
@@ -77,7 +77,7 @@ export const RUN_TARGET_PROBLEM_REASON: Record<RunTargetProblemReason, string> =
  */
 export const RUN_TARGET_PROBLEM_CODE: Record<RunTargetProblemReason, string> = {
   'no-target': 'TASK_RUN_NO_AGENT',
-  'workflow-unattended': 'TASK_RUN_WORKFLOW_UNATTENDED',
+  'team-unattended': 'TASK_RUN_TEAM_UNATTENDED',
 };
 
 /** Narrows {@link resolveRunTarget}'s answer to the refusal arm. */
@@ -100,7 +100,7 @@ export interface RunTargetLevel {
   effort?: string | null;
   approval?: ChatApprovalMode | null;
   configDir?: string | null;
-  workflowSlug?: string | null;
+  teamSlug?: string | null;
 }
 
 /**
@@ -109,7 +109,7 @@ export interface RunTargetLevel {
  * The levels are read MOST SPECIFIC FIRST — this press, then the card, then the
  * project — and the first level naming a target decides which ARM the run takes
  * and nothing below it can change that. A level "names a target" by setting
- * either a workflow or an agent; one that sets neither is a level with nothing
+ * either a team or an agent; one that sets neither is a level with nothing
  * to say, which is what makes the project's answer a default rather than a law.
  *
  * The trim fields (model, effort, approval, config directory) then fall back
@@ -122,52 +122,51 @@ export interface RunTargetLevel {
  *
  * A refusal is RETURNED and NAMES which refusal it is: both callers — the start
  * route and the autopilot queue — turn it into their own kind of message rather
- * than guessing an agent, and a card that names a workflow it may not run needs
+ * than guessing an agent, and a card that names a team it may not run needs
  * a different sentence from one that names nothing at all.
  */
 export function resolveRunTarget(
   levels: readonly RunTargetLevel[],
   startedBy: TaskRunStarter = 'user',
   /**
-   * Whether the named workflow can run with nobody watching — every agent node
+   * Whether the named team can run with nobody watching — every agent node
    * on `auto` (`nodesThatAsk`). A question about the LIBRARY, which this pure
-   * function cannot read, so the caller answers it; absent, no workflow is
+   * function cannot read, so the caller answers it; absent, no team is
    * trusted to, which is the refusal this parameter narrows.
    */
-  runsUnattended: (workflowSlug: string) => boolean = () => false,
+  runsUnattended: (teamSlug: string) => boolean = () => false,
 ): RunTargetResolution {
   const deciding = levels.find(
     (level) =>
-      nonEmpty(level.workflowSlug) !== null ||
-      nonEmpty(level.agentKind) !== null,
+      nonEmpty(level.teamSlug) !== null || nonEmpty(level.agentKind) !== null,
   );
   if (deciding === undefined) {
     return { kind: 'problem', reason: 'no-target' };
   }
 
-  const workflowSlug = nonEmpty(deciding.workflowSlug);
-  if (workflowSlug !== null) {
+  const teamSlug = nonEmpty(deciding.teamSlug);
+  if (teamSlug !== null) {
     // The agent arm below can force ONE approval mode for an unattended run; a
-    // workflow has no such field to force, since `approval` is per NODE in the
-    // YAML and a node that asks is a legitimate thing to author. So a workflow
+    // team has no such field to force, since `approval` is per NODE in the
+    // YAML and a node that asks is a legitimate thing to author. So a team
     // with such a node is refused here rather than started and left to park —
     // and one whose every agent node is already `auto` is not.
     //
-    // It refused EVERY workflow for a release, which is the reported "the
-    // automatic taking of tasks doesn't work": a board pointed at a workflow
+    // It refused EVERY team for a release, which is the reported "the
+    // automatic taking of tasks doesn't work": a board pointed at a team
     // whose four agent nodes were all `auto` — nothing in it could park —
     // reported its whole intake column as "cannot start".
-    if (startedBy === 'autopilot' && !runsUnattended(workflowSlug)) {
-      return { kind: 'problem', reason: 'workflow-unattended' };
+    if (startedBy === 'autopilot' && !runsUnattended(teamSlug)) {
+      return { kind: 'problem', reason: 'team-unattended' };
     }
     // The CLI-only fields are deliberately dropped rather than carried: a
-    // workflow's nodes each name their own agent, model and approval in the
+    // team's nodes each name their own agent, model and approval in the
     // YAML, so there is nothing here for a run-level answer to apply to.
-    return { kind: 'workflow', workflowSlug };
+    return { kind: 'team', teamSlug };
   }
 
   // Non-null by construction — `deciding` named one or the other, and the
-  // workflow arm returned above.
+  // team arm returned above.
   const agentKind = nonEmpty(deciding.agentKind) as AgentKind;
   const compatible = levels.filter((level) => {
     const named = nonEmpty(level.agentKind);

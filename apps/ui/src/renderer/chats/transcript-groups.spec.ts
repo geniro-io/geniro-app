@@ -455,7 +455,7 @@ describe('groupTranscript', () => {
         ),
       ]).member,
     ).toBe(1);
-    // A workflow run's call rows all reach the fold as anchors (`structure`),
+    // A team run's call rows all reach the fold as anchors (`structure`),
     // so an anchored hand-off still names the member AND stays in the card's
     // entries, where the card's own page window decides whether it is drawn.
     const anchored = groupTranscript([started, handOff], {
@@ -2449,7 +2449,7 @@ describe('groupTranscript — call blocks', () => {
   it('claims a delegate close that names no call into the call its launch was made in', () => {
     // The daemon's stranded-delegate repair filed its closes with the node and
     // no call id for a release, so a callee's delegate sat in the call block
-    // while its close landed in the main flow — and the finished workflow went
+    // while its close landed in the main flow — and the finished team went
     // on showing it at work.
     const entries = groupTranscript([
       startCall('call-7', 'engineer'),
@@ -2771,7 +2771,7 @@ describe('groupTranscript — call blocks', () => {
     expect(innerJson).not.toContain('call_result');
   });
 
-  it('keeps each workflow NODE’s task history apart on its cards', () => {
+  it('keeps each team NODE’s task history apart on its cards', () => {
     // Keyed by thread alone, every node shared the main-thread history: an
     // Engineer's `TaskUpdate {taskId: "1"}` ticked the Manager's task 1 on the
     // Engineer's own card.
@@ -3533,7 +3533,7 @@ describe('buildTurnBlocks', () => {
   });
 
   it('a delegate declaration does not split the agent’s block — it draws nothing', () => {
-    // The reported shape: two `Engineer` blocks back to back on a workflow run,
+    // The reported shape: two `Engineer` blocks back to back on a team run,
     // the second holding only a task card, with the daemon's `subagent_info`
     // two rows above it. The row renders as nothing, so a block boundary there
     // is a second avatar and `name · time` line with nothing between them.
@@ -4352,8 +4352,8 @@ describe('withLiveText', () => {
     expect(after[0]).toBe(before[0]);
   });
 
-  it('keeps a workflow node’s tail in that node’s block when the node is named “agent”', () => {
-    // A workflow node id is `z.string().min(1)`, so nothing stops a user
+  it('keeps a team node’s tail in that node’s block when the node is named “agent”', () => {
+    // A team node id is `z.string().min(1)`, so nothing stops a user
     // calling a node `agent`. While that was also the 1:1 chat's node-less
     // sentinel, the key round-trip read the node's own id as "no node" — its
     // words were torn out of the block they belong to and pushed into a
@@ -5013,7 +5013,7 @@ describe('buildSubagentBlocks', () => {
     expect(contentless.result).not.toBe('null');
   });
 
-  it('encloses a delegate that a workflow callee launched inside its call block', () => {
+  it('encloses a delegate that a team callee launched inside its call block', () => {
     // A callee node runs its own Task delegates like any other agent, and the
     // call block re-folds its sub-turn with `groupTranscript` alone — so the
     // delegate's rows stay loose in the callee's conversation, the one thing
@@ -6180,7 +6180,7 @@ describe('withLiveText — a card being WRITTEN', () => {
   });
 
   it('names a large call that draws no card on the WORKING row, with its bytes', () => {
-    // An analysis re-emitting a whole workflow as `save_workflow_change`
+    // An analysis re-emitting a whole team as `save_team_change`
     // arguments streamed for ten minutes under a looping word. Its byte count
     // was arriving the whole time; nothing put it on screen.
     const entries = withLiveText(
@@ -6189,7 +6189,7 @@ describe('withLiveText — a card being WRITTEN', () => {
         [
           CHAT_LIVE_KEY,
           live({
-            composingTool: 'mcp__geniro-abc12345__save_workflow_change',
+            composingTool: 'mcp__geniro-abc12345__save_team_change',
             composingBytes: 86_016,
           }),
         ],
@@ -6200,7 +6200,7 @@ describe('withLiveText — a card being WRITTEN', () => {
     expect(liveRows(entries)).toEqual([
       {
         live: 'working',
-        writingTool: 'Geniro-abc12345: Save workflow change',
+        writingTool: 'Geniro-abc12345: Save team change',
         writingBytes: 86_016,
       },
     ]);

@@ -162,7 +162,7 @@ export function foldRunDelegates({
   runSettled: boolean;
   /**
    * The run itself was stopped. Read only for a delegate whose own turn has
-   * no ending in `endings` — a workflow cancel, which ends no turn row.
+   * no ending in `endings` — a team cancel, which ends no turn row.
    */
   runCancelled?: boolean;
   /**

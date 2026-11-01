@@ -89,7 +89,7 @@ function render(
     root!.render(
       <ProjectRunConfig
         project={aProject({ agentKind: 'claude' })}
-        workflows={[]}
+        teams={[]}
         cliDetections={null}
         agentsApi={null}
         capabilitiesApi={null}
@@ -150,18 +150,18 @@ function optionNamed(text: string): HTMLElement {
 }
 
 describe('ProjectRunConfig', () => {
-  it('picking a workflow clears every per-CLI field along with the agent', () => {
+  it('picking a team clears every per-CLI field along with the agent', () => {
     const { onUpdate } = render({
       project: aProject({ agentKind: 'claude', model: 'opus', effort: 'high' }),
-      workflows: [{ slug: 'review-team', name: 'Review team' }],
+      teams: [{ slug: 'review-team', name: 'Review team' }],
     });
 
-    click(button('Agent or workflow for this project'));
+    click(button('Agent or team for this project'));
     click(optionNamed('Review team'));
 
     expect(onUpdate).toHaveBeenCalledWith({
       agentKind: null,
-      workflowSlug: 'review-team',
+      teamSlug: 'review-team',
       model: null,
       effort: null,
       approval: null,
@@ -169,7 +169,7 @@ describe('ProjectRunConfig', () => {
     });
   });
 
-  // Clearing on a workflow switch alone leaves a claude→cursor-agent switch
+  // Clearing on a team switch alone leaves a claude→cursor-agent switch
   // carrying the stale claude model into a cursor run — the exact bug
   // `resolveRunTarget` cannot see past, since it reads each field off
   // whichever level named it first. `approval` is in the patch for the same
@@ -184,12 +184,12 @@ describe('ProjectRunConfig', () => {
     });
     await flush();
 
-    click(button('Agent or workflow for this project'));
+    click(button('Agent or team for this project'));
     click(optionNamed('cursor-agent'));
 
     expect(onUpdate).toHaveBeenCalledWith({
       agentKind: 'cursor-agent',
-      workflowSlug: null,
+      teamSlug: null,
       model: null,
       effort: null,
       approval: null,
@@ -211,10 +211,10 @@ describe('ProjectRunConfig', () => {
     expect(onUpdate).toHaveBeenCalledWith({ model: 'opus', effort: null });
   });
 
-  it('draws no Model row for a workflow target', () => {
+  it('draws no Model row for a team target', () => {
     render({
-      project: aProject({ agentKind: null, workflowSlug: 'review-team' }),
-      workflows: [{ slug: 'review-team', name: 'Review team' }],
+      project: aProject({ agentKind: null, teamSlug: 'review-team' }),
+      teams: [{ slug: 'review-team', name: 'Review team' }],
     });
 
     expect(el().querySelector('[aria-label="Model"]')).toBeNull();

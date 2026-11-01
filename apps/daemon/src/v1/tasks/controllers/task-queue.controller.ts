@@ -13,8 +13,8 @@ import { TaskQueueService } from '../services/task-queue.service';
  * `ProjectsController` uses for its own routes — because the question is a
  * TASKS one even though its address names projects: deciding which waiting
  * cards may actually start needs both `ProjectQueueService`'s raw counts AND
- * the workflow library (`WorkflowStoreService`, owned by `GraphsModule`), and
- * `ProjectsModule` cannot import `GraphsModule` to ask that itself without
+ * the team library (`TeamStoreService`, owned by `TeamsModule`), and
+ * `ProjectsModule` cannot import `TeamsModule` to ask that itself without
  * recreating the cycle its own module doc refuses — `TasksModule` already
  * imports `ProjectsModule`, so the reverse import would need a `forwardRef`.
  * `TasksModule` already imports both, so `TaskQueueService` lives here

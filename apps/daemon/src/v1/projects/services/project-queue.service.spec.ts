@@ -26,7 +26,7 @@ import { ProjectQueueService } from './project-queue.service';
  *
  * `readRaw` no longer decides which waiting cards may actually start —
  * `TaskQueueService.read` (`apps/daemon/src/v1/tasks/services/task-queue.service.spec.ts`)
- * does that now, joining this service's raw read against the workflow
+ * does that now, joining this service's raw read against the team
  * library. This spec covers only the counts and rows `readRaw` itself
  * computes.
  */
@@ -147,13 +147,13 @@ describe('ProjectQueueService (in-memory sqlite)', () => {
     await arm({
       agentKind: null,
       model: null,
-      workflowSlug: 'dev-team',
+      teamSlug: 'dev-team',
     });
 
     const queue = await service.readRaw(projectId);
 
     expect(queue.agentKind).toBeNull();
-    expect(queue.workflowSlug).toBe('dev-team');
+    expect(queue.teamSlug).toBe('dev-team');
   });
 
   it('narrows the free-slot count to what the cap allows', async () => {

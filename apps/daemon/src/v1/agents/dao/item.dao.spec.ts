@@ -201,7 +201,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       await new RunDao(orm.em.fork()).create({
         id: 'run-a',
         status: 'running',
-        workflowId: null,
+        teamId: null,
       });
       await columnOnlyRows('run-a');
 
@@ -228,7 +228,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       await new RunDao(orm.em.fork()).create({
         id: 'run-a',
         status: 'running',
-        workflowId: null,
+        teamId: null,
       });
       await orm.em
         .fork()
@@ -258,7 +258,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       await new RunDao(orm.em.fork()).create({
         id: 'run-a',
         status: 'running',
-        workflowId: null,
+        teamId: null,
       });
       await insert('run-a', 1, 'tool_call', JSON.stringify({ id: 'call-50' }));
       await insert('run-a', 2, 'tool_call', JSON.stringify({ id: 'call-5' }));
@@ -553,7 +553,7 @@ describe('ItemDao (in-memory sqlite)', () => {
   });
 
   describe('latestMessageTextPerRun', () => {
-    it('previews the ROOT conversation of a workflow run, not a callee inside a call', async () => {
+    it('previews the ROOT conversation of a team run, not a callee inside a call', async () => {
       // REPORTED as a Dev Team row previewing the Engineer's "Fixed: 36/36…"
       // over the Manager's own words.
       await insert(
@@ -1044,7 +1044,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       const spine = await dao.timelineSpine('run-a');
 
       // `nodeId` is what tells a message to the thread from one sent straight
-      // to a workflow callee, so the projection has to carry it.
+      // to a team callee, so the projection has to carry it.
       expect(
         spine.map((row) => [row.seq, row.kind, row.role, row.nodeId]),
       ).toEqual([
@@ -1308,7 +1308,7 @@ describe('ItemDao (in-memory sqlite)', () => {
     await new RunDao(orm.em.fork()).create({
       id: 'run-a',
       status: 'completed',
-      workflowId: 'dev',
+      teamId: 'dev',
     });
     const at = new Date(Date.UTC(2026, 9, 27));
     await orm.em.fork().insertMany(
@@ -1802,7 +1802,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       await chatRow('run-o', 3, 'message', 4_000, {}, { role: 'user' });
       // Each of these, read as an ending, would leave no message after it
       // and the answer null: a continuation that finished inside the turn, a
-      // workflow node's ending, another run's ending.
+      // team node's ending, another run's ending.
       await chatRow('run-o', 4, 'turn_complete', 5_000, { insideTurn: true });
       await chatRow('run-o', 5, 'error', 5_500, {}, { nodeId: 'n1' });
       await chatRow('run-other', 6, 'turn_complete', 6_000);
@@ -1837,7 +1837,7 @@ describe('ItemDao (in-memory sqlite)', () => {
           insideTurn: true,
           usage: { durationMs: '7' },
         });
-        // Newer, but a workflow node's.
+        // Newer, but a team node's.
         await chatRow(
           'run-o',
           6,
@@ -1855,7 +1855,7 @@ describe('ItemDao (in-memory sqlite)', () => {
       await chatRow('run-o', 0, 'message', 1_000, {}, { role: 'user' });
       await chatRow('run-o', 1, 'turn_complete', 2_000);
       // None of these is the main agent working: a background command's end,
-      // a delegate's own call, a workflow node's reply, another run's reply.
+      // a delegate's own call, a team node's reply, another run's reply.
       await chatRow('run-o', 2, 'shell_info', 2_500, { id: 'call-1' });
       await chatRow(
         'run-o',

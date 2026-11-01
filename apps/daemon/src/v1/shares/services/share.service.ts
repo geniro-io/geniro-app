@@ -1179,6 +1179,14 @@ function sameAsker(a: ShareAsker, b: ShareAsker): boolean {
   return a.runId === b.runId && a.caller === b.caller;
 }
 
+/** An asker stored before the rename names a team run `workflow`. */
+function askerTargetOf(target: unknown): ShareAsker['target'] | null {
+  if (target === 'workflow') {
+    return 'team';
+  }
+  return target === 'chat' || target === 'team' ? target : null;
+}
+
 /** Every agent conversation waiting on a share; an unreadable entry waits for nothing. */
 function askersOf(column: string | null): ShareAsker[] {
   if (column === null) {
@@ -1192,19 +1200,20 @@ function askersOf(column: string | null): ShareAsker[] {
   }
   return (Array.isArray(raw) ? raw : []).flatMap((entry: unknown) => {
     const value = entry as Partial<ShareAsker> | null;
+    const target = askerTargetOf(value?.target);
     return typeof value?.runId === 'string' &&
       typeof value.nodeId === 'string' &&
       typeof value.caller === 'string' &&
       (value.conversationId === null ||
         typeof value.conversationId === 'string') &&
-      (value.target === 'chat' || value.target === 'workflow')
+      target !== null
       ? [
           {
             runId: value.runId,
             nodeId: value.nodeId,
             caller: value.caller,
             conversationId: value.conversationId,
-            target: value.target,
+            target,
           },
         ]
       : [];

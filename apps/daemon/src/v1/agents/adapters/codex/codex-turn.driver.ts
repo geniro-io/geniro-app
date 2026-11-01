@@ -116,7 +116,7 @@ export interface CodexTurnOptions {
    */
   autoCompactTokens: number | null;
   /**
-   * The MCP servers this turn runs without — a workflow node's own switches,
+   * The MCP servers this turn runs without — a team node's own switches,
    * geniro's own server already left out. Non-empty makes the thread's opening
    * read codex's config first (`config/read`), because which override reaches
    * a server depends on where codex defines it (`codexTurnMcpOverrides`).

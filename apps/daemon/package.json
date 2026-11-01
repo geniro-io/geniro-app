@@ -19,7 +19,7 @@
     "lint:fix": "eslint src --fix",
     "test": "ELECTRON_RUN_AS_NODE=1 ../../node_modules/.bin/electron ../../node_modules/vitest/vitest.mjs run",
     "test:unit": "ELECTRON_RUN_AS_NODE=1 ../../node_modules/.bin/electron ../../node_modules/vitest/vitest.mjs run",
-    "test:graph": "ELECTRON_RUN_AS_NODE=1 ../../node_modules/.bin/electron ../../node_modules/vitest/vitest.mjs run src/v1/graphs"
+    "test:graph": "ELECTRON_RUN_AS_NODE=1 ../../node_modules/.bin/electron ../../node_modules/vitest/vitest.mjs run src/v1/teams"
   },
   "dependencies": {
     "@mikro-orm/core": "^7.2.3",

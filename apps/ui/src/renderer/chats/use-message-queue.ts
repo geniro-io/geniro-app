@@ -61,7 +61,7 @@ export type SteerStatus = { id: string; state: 'sending' | 'held' } | null;
  * dropped on the way through the queue would have the agent answer about a
  * screenshot it never received.
  *
- * The chat screen and the workflow builder's dock both queue through here, so
+ * The chat screen and the team builder's dock both queue through here, so
  * the order, the pause, Send-now and the RUN_BUSY backoff are one set of rules.
  * The surface fills {@link MessageQueueHandlers} through `handlersRef` once its
  * turn start exists, and fires `drain` on whatever tells it a turn ended.

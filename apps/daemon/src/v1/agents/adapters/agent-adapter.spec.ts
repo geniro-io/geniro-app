@@ -2918,7 +2918,7 @@ describe('AgentAdapter — how a failed turn is classified for a CALLER', () => 
   });
 
   it('reads claude’s 5-hour window sentence, with the reset it named', () => {
-    // VERBATIM out of a workflow run's `error` row (claude 2.1.312, HTTP 429),
+    // VERBATIM out of a team run's `error` row (claude 2.1.312, HTTP 429),
     // which was handed to the next pool member as "failed before doing any
     // work" and never filed as a spent account.
     expect(

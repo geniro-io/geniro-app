@@ -23,7 +23,7 @@ const readNotes = async (
   (await api.readRunTeamNotes({ runId })).notes;
 
 /**
- * Every team note of the open workflow run, newest first, superseded ones
+ * Every team note of the open team run, newest first, superseded ones
  * marked. Re-read on the newest `team_note` seq the window and the open call
  * cards hold: a note is append-only, so a new row is the only way the list
  * moves.

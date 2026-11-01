@@ -115,7 +115,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await tasks.moveStatus(task.id, { from: 'backlog', to: 'in_progress' });
     await runDao.create({
       id: runId,
-      workflowId: null,
+      teamId: null,
       status: 'running',
       agentKind: 'claude',
       taskId: task.id,
@@ -834,7 +834,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       expect(await streak()).toBe(2);
     });
 
-    it('reads past everything the workflow reconcile and the boot sweeps write after it', async () => {
+    it('reads past everything the team reconcile and the boot sweeps write after it', async () => {
       await armProject({ enabled: true, streak: 0 });
       const task = await working();
       await interruptedAtBoot();

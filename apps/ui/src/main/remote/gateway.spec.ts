@@ -368,7 +368,7 @@ describe('RemoteGateway: static serving', () => {
     const host = `${ALLOWED_HOST_NAME}:${port}`;
 
     const chunk = await rawRequest(port, {
-      path: '/assets/Workflows-OLDHASH.js',
+      path: '/assets/Teams-OLDHASH.js',
       host,
     });
     const file = await rawRequest(port, { path: '/favicon.ico', host });

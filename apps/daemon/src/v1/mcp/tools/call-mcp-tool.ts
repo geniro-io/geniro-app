@@ -1,8 +1,8 @@
+import type { CallBroker } from '../../teams/services/call-broker.service';
 import {
   ALWAYS_LOADED_TOOL_META,
   type CallEnvelope,
-} from '../../graphs/graphs.types';
-import type { CallBroker } from '../../graphs/services/call-broker.service';
+} from '../../teams/teams.types';
 import type {
   McpCallContext,
   McpListContext,

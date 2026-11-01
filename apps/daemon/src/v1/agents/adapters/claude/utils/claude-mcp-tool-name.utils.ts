@@ -44,7 +44,7 @@ export function claudeMcpServerRule(server: string): string {
 
 /**
  * The argv that withholds claude's own replaced tools
- * (`CLAUDE_WITHHELD_TOOLS`) and a workflow node's switched-off MCP servers
+ * (`CLAUDE_WITHHELD_TOOLS`) and a team node's switched-off MCP servers
  * from one claude process — always at least the replaced tools.
  *
  * MEASURED on 2.1.284 (`claude -p --output-format stream-json --verbose`, read

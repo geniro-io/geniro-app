@@ -76,7 +76,7 @@ describe('MonitorRowWriter', () => {
     expect(created[0]?.payload).toContain('"monitors":[');
   });
 
-  it("files a workflow callee's rows under its node and conversation", async () => {
+  it("files a team callee's rows under its node and conversation", async () => {
     registry.start({
       owner: {
         ...chatOwner,
@@ -84,7 +84,7 @@ describe('MonitorRowWriter', () => {
         caller: 'dev::call-1',
         conversationId: 'call-1',
         callId: 'call-1',
-        target: 'workflow',
+        target: 'team',
       },
       command: 'true',
       description: 'once',

@@ -9,11 +9,11 @@ import type {
   RecommendationView,
 } from '../components/recommendations-card';
 import type {
-  WorkflowAgentStatsView,
-  WorkflowCallStatsView,
-  WorkflowModelStatsView,
-  WorkflowRunStatsView,
-  WorkflowStatsView,
+  TeamAgentStatsView,
+  TeamCallStatsView,
+  TeamModelStatsView,
+  TeamRunStatsView,
+  TeamStatsView,
 } from '../components/recommendations-figures';
 
 /**
@@ -22,7 +22,7 @@ import type {
  * carries.
  *
  * TWIN PARSER: apps/daemon/src/v1/agents/chat.types.ts —
- * `RecommendationsPayloadSchema` (with `RecommendationsWorkflowStatsSchema`),
+ * `RecommendationsPayloadSchema` (with `RecommendationsTeamStatsSchema`),
  * `RecommendationMarksSchema` (the outcome rows) and
  * `RecommendationApplySchema`. The daemon validates before it writes, so these
  * are defensive rather than strict: an entry that does not read is dropped, and
@@ -32,9 +32,9 @@ import type {
 export interface RecommendationsCardData {
   summary: string | null;
   timing: RecommendationsTimingView | null;
-  workflowStats: WorkflowStatsView | null;
+  teamStats: TeamStatsView | null;
   hotspots: RecommendationHotspotView[];
-  sourceKind: 'workflow' | 'chat';
+  sourceKind: 'team' | 'chat';
   items: RecommendationView[];
 }
 
@@ -141,7 +141,7 @@ function readTiming(value: unknown): RecommendationsTimingView | null {
   return { wallMs, activeMs, waitingMs, criticalPathMs, sinks };
 }
 
-function readRun(value: unknown): WorkflowRunStatsView | null {
+function readRun(value: unknown): TeamRunStatsView | null {
   const row = record(value);
   const runId = text(row?.runId);
   const createdAt = text(row?.createdAt);
@@ -166,7 +166,7 @@ function readRun(value: unknown): WorkflowRunStatsView | null {
   };
 }
 
-function readModel(value: unknown): WorkflowModelStatsView | null {
+function readModel(value: unknown): TeamModelStatsView | null {
   const row = record(value);
   const figures = counts(row, [
     'turns',
@@ -189,7 +189,7 @@ function readModel(value: unknown): WorkflowModelStatsView | null {
   };
 }
 
-function readAgent(value: unknown): WorkflowAgentStatsView | null {
+function readAgent(value: unknown): TeamAgentStatsView | null {
   const row = record(value);
   const node = text(row?.node);
   const figures = counts(row, [
@@ -217,7 +217,7 @@ function readAgent(value: unknown): WorkflowAgentStatsView | null {
   };
 }
 
-function readCall(value: unknown): WorkflowCallStatsView | null {
+function readCall(value: unknown): TeamCallStatsView | null {
   const row = record(value);
   const caller = text(row?.caller);
   const callee = text(row?.callee);
@@ -233,7 +233,7 @@ function readCall(value: unknown): WorkflowCallStatsView | null {
     : { caller, callee, ...figures, workedMs: count(row?.workedMs) };
 }
 
-function readWorkflowStats(value: unknown): WorkflowStatsView | null {
+function readTeamStats(value: unknown): TeamStatsView | null {
   const row = record(value);
   const runs = count(row?.runs);
   const perRunRow = record(row?.perRun);
@@ -292,8 +292,8 @@ function readHotspot(value: unknown): RecommendationHotspotView | null {
 function readItem(value: unknown): RecommendationView | null {
   const row = record(value);
   const id = text(row?.id);
-  const target = oneOf(row?.target, [
-    'workflow',
+  const target = oneOf(row?.target === 'workflow' ? 'team' : row?.target, [
+    'team',
     'repo',
     'user',
     'memory',
@@ -351,7 +351,11 @@ function readItem(value: unknown): RecommendationView | null {
   };
 }
 
-/** One `recommendations` row, or null when it does not read as one. */
+/**
+ * One `recommendations` row, or null when it does not read as one. A card
+ * filed before the rename says `workflow` for the team and carries its figures
+ * as `workflowStats`.
+ */
 export function readRecommendations(
   item: ChatItem,
 ): RecommendationsCardData | null {
@@ -370,9 +374,12 @@ export function readRecommendations(
   return {
     summary: text(row.summary),
     timing: readTiming(row.timing),
-    workflowStats: readWorkflowStats(row.workflowStats),
+    teamStats: readTeamStats(row.teamStats ?? row.workflowStats),
     hotspots: list(row.hotspots, readHotspot),
-    sourceKind: row.sourceKind === 'workflow' ? 'workflow' : 'chat',
+    sourceKind:
+      row.sourceKind === 'team' || row.sourceKind === 'workflow'
+        ? 'team'
+        : 'chat',
     items,
   };
 }

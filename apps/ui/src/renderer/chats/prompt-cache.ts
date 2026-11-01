@@ -29,7 +29,7 @@ export type PromptCacheState =
 
 /**
  * The cache's state at `now`, or null when there is nothing to say — no
- * expiry known (a CLI that reports no cache, a workflow run), or comfortably
+ * expiry known (a CLI that reports no cache, a team run), or comfortably
  * inside the window.
  */
 export function promptCacheState(

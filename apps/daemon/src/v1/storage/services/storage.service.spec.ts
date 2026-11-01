@@ -151,19 +151,31 @@ describe('StorageService', () => {
     expect(group(usage, 'agentSessions')?.clean).toEqual([]);
   });
 
-  it('counts workflow backups apart from the workflows and never twice', async () => {
-    write(join(root, 'workflows', 'a.geniro.yaml'), 100);
-    write(join(root, 'workflows', '.backups', 'a.2026.yaml'), 50_000);
-    write(join(root, 'workflows', '.backups', 'a.2027.yaml'), 50_000);
+  it('keeps the library the rename moved out of as app state, never a leftover', async () => {
+    write(join(root, 'workflows', '.migrated', 'dev-team.geniro.yaml'));
 
     const usage = await service.usage();
-    const backups = group(usage, 'workflowBackups')!;
-    const workflows = group(usage, 'workflows')!;
+
+    expect(group(usage, 'appState')?.entries.map((e) => e.name)).toEqual([
+      'workflows',
+    ]);
+    expect(group(usage, 'leftovers')?.entries ?? []).toEqual([]);
+    expect(usage.unclaimed).toEqual([]);
+  });
+
+  it('counts team backups apart from the teams and never twice', async () => {
+    write(join(root, 'teams', 'a.team.yaml'), 100);
+    write(join(root, 'teams', '.backups', 'a.2026.yaml'), 50_000);
+    write(join(root, 'teams', '.backups', 'a.2027.yaml'), 50_000);
+
+    const usage = await service.usage();
+    const backups = group(usage, 'teamBackups')!;
+    const teams = group(usage, 'teams')!;
 
     expect(backups.bytes).toBeGreaterThanOrEqual(100_000);
-    expect(workflows.bytes).toBeLessThan(backups.bytes);
+    expect(teams.bytes).toBeLessThan(backups.bytes);
     expect(backups.clean).toEqual([
-      expect.objectContaining({ target: 'workflowBackups', count: 2 }),
+      expect.objectContaining({ target: 'teamBackups', count: 2 }),
     ]);
     expect(backups.clean[0]!.bytes).toBeGreaterThanOrEqual(100_000);
   });
@@ -232,17 +244,17 @@ describe('StorageService', () => {
     );
   });
 
-  it('removes the workflow backups and leaves the workflows', async () => {
-    write(join(root, 'workflows', 'a.geniro.yaml'));
-    write(join(root, 'workflows', '.backups', 'a.2026.yaml'), 9000);
+  it('removes the team backups and leaves the teams', async () => {
+    write(join(root, 'teams', 'a.team.yaml'));
+    write(join(root, 'teams', '.backups', 'a.2026.yaml'), 9000);
 
-    await service.start('workflowBackups');
+    await service.start('teamBackups');
     await settle();
 
-    expect(existsSync(join(root, 'workflows', '.backups', 'a.2026.yaml'))).toBe(
+    expect(existsSync(join(root, 'teams', '.backups', 'a.2026.yaml'))).toBe(
       false,
     );
-    expect(existsSync(join(root, 'workflows', 'a.geniro.yaml'))).toBe(true);
+    expect(existsSync(join(root, 'teams', 'a.team.yaml'))).toBe(true);
     expect(service.job()?.freedBytes).toBeGreaterThanOrEqual(9000);
   });
 

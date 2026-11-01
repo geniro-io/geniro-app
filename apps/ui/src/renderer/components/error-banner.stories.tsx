@@ -8,7 +8,7 @@ const meta = {
   title: 'Components/ErrorBanner',
   component: ErrorBanner,
   args: {
-    message: 'Could not load the workflow.',
+    message: 'Could not load the team.',
     onDismiss: () => undefined,
   },
   decorators: [(story) => <div className="w-[420px]">{story()}</div>],

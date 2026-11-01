@@ -17,13 +17,13 @@ export type BackgroundCountsPatch =
  * knowable for the thread a window has open and for no other: a settled chat
  * with a `sleep` still out read `working` while selected and `completed` the
  * moment it was not. And shared by BOTH owners — `ChatService` and
- * `GraphExecutorService` — because a workflow run is listed in the same sidebar
+ * `GraphExecutorService` — because a team run is listed in the same sidebar
  * and was reporting 0 for both figures by default, so its badge could never
  * reach the held state and its shelf never saw a delegate launched earlier than
  * the loaded page.
  *
  * Shells are keyed by the node that opened them as well: a work id is the CLI's
- * per-process counter (`bash_1`), so two agents of one workflow can each have
+ * per-process counter (`bash_1`), so two agents of one team can each have
  * the same id out. Delegate ids are tool-use ids and unique.
  *
  * SETS of ids rather than counters: a CLI is free to report one unit's end on
@@ -47,7 +47,7 @@ export class BackgroundWorkCounts {
 
   /**
    * Apply one agent event; anything that is not a bracket is ignored. `nodeId`
-   * is the workflow node the event came from, null for a chat.
+   * is the team node the event came from, null for a chat.
    */
   record(runId: string, event: AgentEvent, nodeId: string | null = null): void {
     if (event.type === 'shell_open') {

@@ -11,10 +11,10 @@ import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
-import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
+import { teamSnapshotOf } from '../../teams/utils/team-snapshot';
 import { LineBaselineDao } from '../dao/line-baseline.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
@@ -105,7 +105,7 @@ describe('StatsService (in-memory sqlite)', () => {
       agentKind: 'claude',
       model: 'claude-opus-5',
       cwd: '/work/project',
-      workflowName: null,
+      teamName: null,
       costUsd: 1,
       estimatedCostUsd: null,
       inputTokens: 100,
@@ -143,7 +143,7 @@ describe('StatsService (in-memory sqlite)', () => {
 
     /**
      * File a run's polled spend in the ledger, as the recorder does. The agent
-     * is the one the recorder RESOLVES (`polledAgentKind`) — a workflow run
+     * is the one the recorder RESOLVES (`polledAgentKind`) — a team run
      * names none of its own — so a case that files one says which.
      */
     async function recordPolled(
@@ -200,7 +200,7 @@ describe('StatsService (in-memory sqlite)', () => {
     });
 
     it('places a polled bill on the DAYS it was spent and under the MODELS that spent it', async () => {
-      // One row per run put a month of a workflow's cursor bill on its last
+      // One row per run put a month of a team's cursor bill on its last
       // day under no model — the "By model" list's largest entry was a blank.
       await recordCursorTurn();
       await recordPolled(
@@ -255,16 +255,16 @@ describe('StatsService (in-memory sqlite)', () => {
       expect(stats.totals.costUsd).toBe(2.5);
     });
 
-    it('files a workflow run’s price under its own thread', async () => {
-      // A workflow run's cursor bill was once left out of the per-workflow
+    it('files a team run’s price under its own thread', async () => {
+      // A team run's cursor bill was once left out of the per-team
       // breakdown for want of a key matching the ledger's, so its rows stopped
       // summing to the headline. The polled row is keyed by its own run.
       await recordPolled(
         pricedRun({
           agentKind: null,
           model: null,
-          workflowId: 'dev-team',
-          workflowSnapshot: workflowSnapshotOf({
+          teamId: 'dev-team',
+          teamSnapshot: teamSnapshotOf({
             name: 'Dev Team',
             nodes: [],
             edges: [],
@@ -281,18 +281,18 @@ describe('StatsService (in-memory sqlite)', () => {
       expect(
         stats.byThread.map((group) => [group.key, group.totals.costUsd]),
       ).toEqual([['run-cursor', 2.5]]);
-      // The CLI the recorder resolved, since a workflow run names no agent.
+      // The CLI the recorder resolved, since a team run names no agent.
       expect(stats.byAgent.map((row) => row.key)).toEqual(['cursor-agent']);
     });
 
-    it('divides a workflow’s polled money over the turns of the CLI that polls, not over an unpriced turn of one that does not', async () => {
+    it('divides a team’s polled money over the turns of the CLI that polls, not over an unpriced turn of one that does not', async () => {
       // A cursor node, whose money reaches this app through an account poll, and
       // a codex node, whose turns carry no cost and which no poll covers. Both
       // leave unpriced turns in the ledger, but the run's polled bill is for
       // cursor's alone — counting codex's as costed would spread cursor's money
       // over turns it never paid for.
       //
-      // Shaped as the recorder writes a workflow: the run names no agent, model
+      // Shaped as the recorder writes a team: the run names no agent, model
       // or folder of its own (each node names its agent and model; `cwd` lives
       // on the run and is null for a graph), so the polled fold files the run
       // under the NULL model and project buckets.
@@ -300,7 +300,7 @@ describe('StatsService (in-memory sqlite)', () => {
       const unpriced: Partial<UsageEventInput> = {
         runId: 'run-wf',
         cwd: null,
-        workflowName: 'dev-team',
+        teamName: 'dev-team',
         costUsd: null,
       };
       await record(when, {
@@ -322,7 +322,7 @@ describe('StatsService (in-memory sqlite)', () => {
           agentKind: null,
           model: null,
           cwd: null,
-          workflowId: 'dev-team',
+          teamId: 'dev-team',
           polledCostCents: 300,
           updatedAt: when,
         }),
@@ -364,7 +364,7 @@ describe('StatsService (in-memory sqlite)', () => {
       const unpriced: Partial<UsageEventInput> = {
         runId: 'run-wf',
         cwd: null,
-        workflowName: 'dev-team',
+        teamName: 'dev-team',
         costUsd: null,
       };
       await record(when, {
@@ -379,7 +379,7 @@ describe('StatsService (in-memory sqlite)', () => {
           agentKind: null,
           model: null,
           cwd: null,
-          workflowId: 'dev-team',
+          teamId: 'dev-team',
           polledCostCents: 300,
           updatedAt: when,
         }),
@@ -410,7 +410,7 @@ describe('StatsService (in-memory sqlite)', () => {
         agentKind: 'cursor-agent',
         model: 'kimi-k3',
         cwd: '/work/chat',
-        workflowName: null,
+        teamName: null,
         costUsd: null,
       };
       await record(when, unpriced);
@@ -572,14 +572,14 @@ describe('StatsService (in-memory sqlite)', () => {
         agentKind: 'claude',
         model: 'claude-opus-5',
         cwd: '/work/a',
-        workflowName: null,
+        teamName: null,
         costUsd: 1,
       });
       await record(new Date(2026, 7, 10, 10), {
         agentKind: 'cursor-agent',
         model: 'composer-1',
         cwd: '/work/b',
-        workflowName: null,
+        teamName: null,
         costUsd: 5,
       });
 
@@ -607,12 +607,12 @@ describe('StatsService (in-memory sqlite)', () => {
       await record(new Date(2026, 7, 10, 9), { cwd: '/work/a', costUsd: null });
       await record(new Date(2026, 7, 10, 10), {
         cwd: '/work/b',
-        workflowName: null,
+        teamName: null,
         costUsd: null,
       });
       await record(new Date(2026, 7, 10, 11), {
         cwd: '/work/b',
-        workflowName: null,
+        teamName: null,
         costUsd: null,
       });
 
@@ -649,9 +649,9 @@ describe('StatsService (in-memory sqlite)', () => {
     });
 
     it('splits spend by THREAD, titled from its run, and says so when the thread is gone', async () => {
-      // REPORTED: the per-workflow breakdown pooled every chat into one row.
+      // REPORTED: the per-team breakdown pooled every chat into one row.
       // What a reader brings here is which conversations cost the most —
-      // chats and workflow runs alike — and a deleted one keeps its spend.
+      // chats and team runs alike — and a deleted one keeps its spend.
       const em = orm.em.fork();
       em.persist(
         Object.assign(new Run(), {

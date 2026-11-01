@@ -172,12 +172,12 @@ describe('TaskRunConfigRows', () => {
     });
     await flush();
 
-    click(button('Agent or workflow for this task'));
+    click(button('Agent or team for this task'));
     click(optionNamed('cursor-agent'));
 
     expect(onChange).toHaveBeenCalledWith({
       agentKind: 'cursor-agent',
-      workflowSlug: null,
+      teamSlug: null,
       model: null,
       effort: null,
       approval: null,
@@ -185,23 +185,23 @@ describe('TaskRunConfigRows', () => {
     });
   });
 
-  it('clears every per-CLI field when the target switches to a workflow', () => {
+  it('clears every per-CLI field when the target switches to a team', () => {
     const { onChange } = renderRunConfig({
       value: aTask({ agentKind: 'claude', model: 'opus', effort: 'high' }),
       context: {
         project: noProject,
-        workflows: [{ slug: 'review-team', name: 'Review team' }],
+        teams: [{ slug: 'review-team', name: 'Review team' }],
         agentsApi: null,
         capabilitiesApi: null,
       },
     });
 
-    click(button('Agent or workflow for this task'));
+    click(button('Agent or team for this task'));
     click(optionNamed('Review team'));
 
     expect(onChange).toHaveBeenCalledWith({
       agentKind: null,
-      workflowSlug: 'review-team',
+      teamSlug: 'review-team',
       model: null,
       effort: null,
       approval: null,

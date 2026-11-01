@@ -136,7 +136,7 @@ export function ContextPanel({
           </span>
         </div>
       ) : null}
-      {/* The reason is shown only where the limits would have been: a workflow
+      {/* The reason is shown only where the limits would have been: a team
           run and a CLI with no such channel both get a sentence rather than a
           missing section, which is the rule the breakdown above follows. */}
       {metrics && !metrics.plan && metrics.planReason ? (

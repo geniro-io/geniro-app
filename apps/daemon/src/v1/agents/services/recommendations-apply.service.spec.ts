@@ -17,7 +17,7 @@ function item(id: string, title: string): RecommendationItem {
   return {
     id,
     target: id.startsWith('W')
-      ? 'workflow'
+      ? 'team'
       : id.startsWith('M')
         ? 'memory'
         : 'repo',
@@ -49,7 +49,7 @@ function item(id: string, title: string): RecommendationItem {
 
 const CARD: RecommendationsPayload = {
   sourceRunId: 'source',
-  sourceKind: 'workflow',
+  sourceKind: 'team',
   timing: null,
   items: [item('W-1', 'Run reviewers in parallel'), item('R-1', 'Add a rule')],
 };
@@ -57,7 +57,7 @@ const CARD: RecommendationsPayload = {
 function build(
   options: {
     analysis?: boolean;
-    workflowAnalysis?: boolean;
+    teamAnalysis?: boolean;
     builder?: boolean;
     card?: Partial<Item> | null;
     appliedCards?: number[];
@@ -71,11 +71,11 @@ function build(
         Promise.resolve({
           id: 'analysis',
           analysisSourceRunId:
-            options.analysis === false || options.workflowAnalysis
+            options.analysis === false || options.teamAnalysis
               ? null
               : 'source',
-          analysisWorkflowSlug: options.workflowAnalysis ? 'team' : null,
-          editsWorkflowSlug: options.builder ? 'team' : null,
+          analysisTeamSlug: options.teamAnalysis ? 'team' : null,
+          editsTeamSlug: options.builder ? 'team' : null,
         } as Run),
     } as unknown as RunDao,
     {
@@ -126,9 +126,7 @@ describe('RecommendationsApplyService.apply', () => {
     expect(runId).toBe('analysis');
     expect(images).toEqual([]);
     expect(text).toContain('### W-1 · Run reviewers in parallel');
-    expect(text).toContain(
-      'Target: workflow · process · parallelize · reviewer',
-    );
+    expect(text).toContain('Target: team · process · parallelize · reviewer');
     expect(text).toContain('the exact change for W-1');
     expect(text).not.toContain('the exact change for R-1');
     expect(text).toContain('Not selected — leave alone: R-1.');
@@ -231,9 +229,9 @@ describe('RecommendationsApplyService.apply', () => {
     ).rejects.toMatchObject({ errorCode: 'NOT_AN_ANALYSIS' });
   });
 
-  it("applies a workflow analysis's card like a thread analysis's", async () => {
+  it("applies a team analysis's card like a thread analysis's", async () => {
     await expect(
-      build({ workflowAnalysis: true }).service.apply('analysis', {
+      build({ teamAnalysis: true }).service.apply('analysis', {
         cardSeq: 5,
         ids: ['W-1'],
         clientMessageId: 'press-1',
@@ -241,7 +239,7 @@ describe('RecommendationsApplyService.apply', () => {
     ).resolves.toEqual({ seq: 9 });
   });
 
-  it("applies the card a workflow's builder chat posted", async () => {
+  it("applies the card a team's builder chat posted", async () => {
     const { service, sendMessage } = build({ analysis: false, builder: true });
 
     await expect(

@@ -138,11 +138,11 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     );
   });
 
-  describe('one conversation of a workflow run', () => {
-    async function workflowRun(): Promise<void> {
+  describe('one conversation of a team run', () => {
+    async function teamRun(): Promise<void> {
       await new RunDao(orm.em.fork()).create({
         id: 'run-a',
-        workflowId: 'dev-team',
+        teamId: 'dev-team',
       });
       await dao.create({
         runId: 'run-a',
@@ -207,7 +207,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     }
 
     it("reads the run's own flow — its turns, every call's start and the card a person answers — and no callee's rows", async () => {
-      await workflowRun();
+      await teamRun();
 
       const { items } = await readingService().read(
         'run-a',
@@ -220,7 +220,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it("reads a call's conversation, its continuation included, and no other call's", async () => {
-      await workflowRun();
+      await teamRun();
 
       const { items } = await readingService().read(
         'run-a',
@@ -233,7 +233,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it("anchors each call card's readings to a page of the run's own flow — and nothing only an opened card draws", async () => {
-      await workflowRun();
+      await teamRun();
       const row = (
         seq: number,
         kind: ItemKind,
@@ -309,7 +309,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it('anchors older named tool calls too, for the card to pass over one it hides', async () => {
-      await workflowRun();
+      await teamRun();
       const row = (seq: number, payload: Record<string, unknown>) =>
         dao.create({
           runId: 'run-a',
@@ -376,7 +376,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     }
 
     it("caps a call's card rows per kind, so a flood of one kind never crowds out another", async () => {
-      await workflowRun();
+      await teamRun();
       await row(90, 'turn_complete', 'qa', { callId: 'call-2' });
       for (let seq = 100; seq < 310; seq += 1) {
         await row(seq, 'status', 'qa', { callId: 'call-2', status: 'running' });
@@ -389,7 +389,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it('anchors a turn that ended in an error or was cancelled — without it the turn reads as still running', async () => {
-      await workflowRun();
+      await teamRun();
       await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
       await row(10, 'error', 'qa', { callId: 'call-2', message: 'boom' });
       await row(11, 'status', 'qa', { callId: 'call-2', status: 'running' });
@@ -401,7 +401,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it("anchors a call's task lists from the newest one stating the whole list", async () => {
-      await workflowRun();
+      await teamRun();
       await row(9, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
       await row(10, 'task_list', 'qa', { callId: 'call-2', mode: 'snapshot' });
       await row(11, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
@@ -411,7 +411,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it('anchors every task list of a call that never stated a whole one', async () => {
-      await workflowRun();
+      await teamRun();
       await row(9, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
       await row(10, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
 
@@ -419,7 +419,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it("anchors every tool call of a call's turn still running — and not a settled turn's", async () => {
-      await workflowRun();
+      await teamRun();
       // A settled turn's tools, naming nothing: no reading needs them.
       await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
       await row(10, 'tool_call', 'qa', { id: 'old', callId: 'call-2' });
@@ -436,7 +436,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it('anchors the calls that run across a page of the run’s own flow but began above it', async () => {
-      await workflowRun();
+      await teamRun();
       // call-2 settles before the page, call-4 below it; call-1 (continued by
       // call-3) never settles.
       await row(15, 'call_result', 'manager', { callId: 'call-2', ok: true });
@@ -468,7 +468,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it('anchors a call that began above the page and settled within it — its settle is filed under the call, never on the page', async () => {
-      await workflowRun();
+      await teamRun();
       await row(16, 'call_started', 'manager', {
         callId: 'call-4',
         calleeNodeId: 'qa',
@@ -499,7 +499,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it("anchors what closes a call's anchored rows — a tool call's reply, its shells and delegates opened and ended", async () => {
-      await workflowRun();
+      await teamRun();
       await row(9, 'tool_call', 'qa', {
         id: 't9',
         name: 'Bash',
@@ -523,7 +523,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it("anchors the callee's own newest words, never a delegate's", async () => {
-      await workflowRun();
+      await teamRun();
       await row(9, 'message', 'qa', { text: 'mine', callId: 'call-2' });
       await row(10, 'message', 'qa', {
         text: "the delegate's",
@@ -536,7 +536,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it("anchors the row saying a callee's turn took its approval card down", async () => {
-      await workflowRun();
+      await teamRun();
       await row(29, 'unanswerable', 'eng', { id: 'req-0', callId: 'call-1' });
       await row(30, 'approval_request', 'eng', {
         id: 'req-9',
@@ -562,7 +562,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it("anchors none of a call's rows to a page of that call's own conversation", async () => {
-      await workflowRun();
+      await teamRun();
 
       const { anchors } = await readingService().read(
         'run-a',
@@ -595,7 +595,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
     });
 
     it('still reads the whole run when no conversation is named', async () => {
-      await workflowRun();
+      await teamRun();
 
       const { items } = await readingService().read('run-a', -1, {
         limit: 50,

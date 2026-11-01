@@ -301,8 +301,8 @@ describe('ChatShellsService', () => {
     ]);
   });
 
-  it('carries the workflow NODE that started it', async () => {
-    // The shelf labels a workflow's rows by agent, and that is the only place
+  it('carries the team NODE that started it', async () => {
+    // The shelf labels a team's rows by agent, and that is the only place
     // the question arises — a 1:1 chat writes null here.
     const { service: svc } = service(
       [lifecycle(1, 'shell_open', 'c', 'qa')],

@@ -375,7 +375,7 @@ function AutopilotBanner({
  */
 const FIXED_IN_RUN_SETTINGS: ReadonlySet<BlockedTaskKind> = new Set([
   BlockedTaskKind.RunTarget,
-  BlockedTaskKind.MissingWorkflow,
+  BlockedTaskKind.MissingTeam,
 ]);
 
 /**

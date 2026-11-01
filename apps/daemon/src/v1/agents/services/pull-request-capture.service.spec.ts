@@ -838,7 +838,7 @@ describe('PullRequestCaptureService', () => {
   });
 
   it('keeps only the touched pull requests the thread itself names, never one claude read off the branch its folder had checked out', async () => {
-    // A workflow node pushes a worktree's branch with `git -C`, from a shared
+    // A team node pushes a worktree's branch with `git -C`, from a shared
     // checkout that sits on ANOTHER pull request's head branch. claude 2.1.295
     // answers every push with `gh pr view --json url` in its own folder, so its
     // record names that other pull request (#7207) — which nothing in this
@@ -1346,7 +1346,7 @@ describe('PullRequestCaptureService', () => {
     const dao = {
       runOutcomesOf: async () => null,
       outcomeContextOf: async () => ({
-        workflowId: 'dev-team',
+        teamId: 'dev-team',
         pullRequests: stored,
         touchedPullRequests: null,
         runOutcomes: JSON.stringify({ 'acme/platform#87': outcome }),
@@ -1439,7 +1439,7 @@ describe('PullRequestCaptureService', () => {
     const dao = {
       runOutcomesOf: async () => null,
       outcomeContextOf: async () => ({
-        workflowId: null,
+        teamId: null,
         pullRequests: JSON.stringify([
           {
             owner: 'acme',
@@ -1484,7 +1484,7 @@ describe('PullRequestCaptureService', () => {
         new Promise((resolve) => {
           releaseRead = () =>
             resolve({
-              workflowId: null,
+              teamId: null,
               pullRequests: null,
               touchedPullRequests: null,
               runOutcomes: null,
@@ -2277,7 +2277,7 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
 
   it('ANNOUNCES a pull request the LISTING captured before the turn ended', async () => {
     // THE REPORTED DEFECT, second form. Run `4f7ae5fa`: the Engineer's `gh pr
-    // create` landed at 14:02:32Z, a `GET /v1/workflows/runs` at 14:14:38Z
+    // create` landed at 14:02:32Z, a `GET /v1/teams/runs` at 14:14:38Z
     // captured it, and its turn ended at 14:24:16Z. Only the turn-end pass
     // announced, and by then the marker had moved, so it found nothing new —
     // no window was ever told, and the shelf showed no chip under a manager
@@ -2350,12 +2350,12 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
     expect(deps.published).toEqual([]);
   });
 
-  it('captures a WORKFLOW node’s turn, exactly as a chat’s', async () => {
+  it('captures a TEAM node’s turn, exactly as a chat’s', async () => {
     // REPORTED as a shelf with no chip over a transcript reading "Draft PR
-    // #5303 is open". Every row of a workflow run carries a node id, and this
+    // #5303 is open". Every row of a team run carries a node id, and this
     // subscriber required `nodeId === null` — so it never fired for one, while
-    // the other trigger (the chat listing) filters `workflowId: null`. Two
-    // gates, and a workflow's pull requests were captured on no path at all.
+    // the other trigger (the chat listing) filters `teamId: null`. Two
+    // gates, and a team's pull requests were captured on no path at all.
     const { itemDao, counts } = daos([
       call(1, 'toolu_1', 'gh pr create --base main'),
       result(2, 'toolu_1', CREATED),

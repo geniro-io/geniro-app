@@ -85,7 +85,7 @@ function build(
             ? null
             : {
                 id: 'run-1',
-                workflowId: null,
+                teamId: null,
                 status: 'completed',
                 title: 'A thread',
                 agentKind: AgentKind.Claude,
@@ -108,7 +108,7 @@ function build(
                 customInstructions: 'always answer in Russian',
                 replyLanguage: 'Russian',
                 taskInstructions: 'label block and report ask',
-                workflowInstructions: null,
+                teamInstructions: null,
                 projectInstructions: 'Project: Billing\n\nUse pnpm.',
                 memoryIndex: 'Memory index …\n- m1 [user] Terse (global)',
                 nativeMemoryOff: false,

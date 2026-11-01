@@ -2315,7 +2315,7 @@ describe('a delegate whose own detached command outlives its turn', () => {
   });
 
   it('closes them as stopped when a recorded Stop ends the process by any other way', () => {
-    // A workflow Stop is recorded ahead of the cancel; the process can then
+    // A team Stop is recorded ahead of the cancel; the process can then
     // end from its own kill after a refused interrupt, with no close() at all.
     const { session, child, last, launch } = openDelegateSession();
     launch();
@@ -2644,7 +2644,7 @@ describe('a turn whose background work outlives its result', () => {
   });
 
   it('keeps a held segment’s cost on the LIVE plane until the turn that records it settles', async () => {
-    // REPORTED as two identical workflow callees reading $0.18 and $22.34 (run
+    // REPORTED as two identical team callees reading $0.18 and $22.34 (run
     // `07d68eea`): the CLI's running figure restarts at each `result`, and the
     // held `turn_complete` carrying that segment is emitted only at the end —
     // so a held turn's card stated what it spent since its latest continuation.

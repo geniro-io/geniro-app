@@ -137,7 +137,9 @@ import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
 import { SubagentRecoveryService } from './services/subagent-recovery.service';
 import { TaskListCaptureService } from './services/task-list-capture.service';
+import { TeamBuilderBroker } from './services/team-builder.broker';
 import { TeamNoteBroker } from './services/team-note.broker';
+import { TeamProposalBroker } from './services/team-proposal.broker';
 import { ThreadAnalysisService } from './services/thread-analysis.service';
 import { ThreadOverviewService } from './services/thread-overview.service';
 import { ThreadReaderService } from './services/thread-reader.service';
@@ -145,8 +147,6 @@ import { ThreadTimelineService } from './services/thread-timeline.service';
 import { UnrecordedSpendStore } from './services/unrecorded-spend.store';
 import { UserQuestionBroker } from './services/user-question.broker';
 import { WallWorkService } from './services/wall-work.service';
-import { WorkflowBuilderBroker } from './services/workflow-builder.broker';
-import { WorkflowProposalBroker } from './services/workflow-proposal.broker';
 import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
 import { defaultSpawn } from './utils/spawn-cli';
 
@@ -241,8 +241,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     GalleryBroker,
     ArtifactBroker,
     ActionBroker,
-    WorkflowProposalBroker,
-    WorkflowBuilderBroker,
+    TeamProposalBroker,
+    TeamBuilderBroker,
     ActionPublishService,
     ActionPressService,
     ActionStopService,
@@ -556,7 +556,7 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   exports: [
     AnalysisBroker,
-    // For the graphs module's workflow analysis ("Analyze & improve"), which
+    // For the graphs module's team analysis ("Analyze & improve"), which
     // checks the library before starting one here.
     ThreadAnalysisService,
     // For the graphs module's pool cooldowns, which key a member by the account
@@ -594,19 +594,19 @@ import { defaultSpawn } from './utils/spawn-cli';
     TeamNoteBroker,
     RunOutcomeBroker,
     RunOutcomeHistoryService,
-    // For the workflow delivery, which records the end of output it drops.
+    // For the team delivery, which records the end of output it drops.
     MonitorRowWriter,
     // For the share service, which wakes the agent that asked once a share
-    // waiting on the user's sign-in lands, and the workflow delivery of it.
+    // waiting on the user's sign-in lands, and the team delivery of it.
     HostWakeBus,
-    // What a workflow node's button tools and the workflow press route reuse:
+    // What a team node's button tools and the team press route reuse:
     // the publish (over `ChatActionsService`, the rows' one writer) and the
     // press beside it.
     ActionPublishService,
     ActionPressService,
-    WorkflowProposalBroker,
-    WorkflowBuilderBroker,
-    // And the store behind it: a WORKFLOW node publishes a page too, and the
+    TeamProposalBroker,
+    TeamBuilderBroker,
+    // And the store behind it: a TEAM node publishes a page too, and the
     // executor is the turn that persists that row.
     ArtifactStoreService,
     // For v1/shares, which encrypts the same document a saved file carries.
@@ -615,7 +615,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     NotifyBroker,
     PartialStreamService,
     ProcessRegistry,
-    // Exported for the graph executor: a follow-up message to a workflow run
+    // Exported for the graph executor: a follow-up message to a team run
     // carries pictures the way a chat's does, saved under the run it joins.
     AttachmentStoreService,
     // Exported so the graph executor's own run delete reaches the same
@@ -629,7 +629,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // Exported for main.ts's boot sweep — it runs before the server listens,
     // beside the other reconciles a crashed launch leaves behind.
     StrandedChildReaper,
-    // Exported so the WORKFLOW run listing backfills its pull requests the way
+    // Exported so the TEAM run listing backfills its pull requests the way
     // the chat listing does. The live capture rides the event bus and covers a
     // run whose turns end while a window is open; this covers the rest — a run
     // whose `gh pr create` landed while the daemon was down, and every run that
@@ -645,7 +645,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // Exported for the graph executor's own run delete: one teardown serves
     // both run kinds, so neither can drift out of clearing a store.
     RunTeardownService,
-    // Exported for the graph executor: a workflow run's rows are numbered by
+    // Exported for the graph executor: a team run's rows are numbered by
     // the same allocator a chat's are, since its kept agent processes write
     // between passes.
     ItemSeqAllocator,
@@ -684,9 +684,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     // through the same cached listings the composer reads.
     ModelsService,
     EffortsService,
-    // Exported so a WORKFLOW run is filed by the same rule a chat is: a group
-    // can claim a workflow by slug, and the executor is the only place a
-    // workflow run row is created.
+    // Exported so a TEAM run is filed by the same rule a chat is: a group
+    // can claim a team by slug, and the executor is the only place a
+    // team run row is created.
     RunGroupsService,
     // Exported for the tasks module: pressing Run on a card starts an ORDINARY
     // chat, so it needs the same service the chat routes use rather than a
@@ -694,7 +694,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // required for that injection, not merely tidy.
     //
     // The service alone, and the import runs one way — `TasksModule` imports
-    // this module, never the reverse, as `GraphsModule` already does.
+    // this module, never the reverse, as `TeamsModule` already does.
     ChatService,
   ],
 })

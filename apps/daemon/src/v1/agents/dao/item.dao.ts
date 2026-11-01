@@ -69,7 +69,7 @@ const NOT_A_DELEGATE = {
 
 /**
  * The preview's second exclusion: a message written INSIDE an agent-to-agent
- * call. A workflow run's sidebar line is the conversation the user has with its
+ * call. A team run's sidebar line is the conversation the user has with its
  * root agent; a callee's rows carry the call's id and are that callee's
  * conversation, which the row cannot open either. REPORTED as a Dev Team row
  * previewing the Engineer's "Fixed: 36/36…" over the Manager's own words. The
@@ -364,7 +364,7 @@ export class ItemDao extends BaseDao<Item> {
     afterSeq = -1,
     txEm?: EntityManager,
     window?: HistoryWindow,
-    /** Only rows whose `inCall` is one of these — one conversation of a workflow run. */
+    /** Only rows whose `inCall` is one of these — one conversation of a team run. */
     inCalls?: readonly string[],
   ): Promise<Item[]> {
     const conversation =
@@ -758,7 +758,7 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * One workflow node's clock rows — its turn boundaries and approval cards
+   * One team node's clock rows — its turn boundaries and approval cards
    * (`WALL_CLOCK_ROW_KINDS`), every conversation of it, in `seq` order — what
    * its wall-measured turns are folded from (`utils/wall-worked`).
    */
@@ -871,7 +871,7 @@ export class ItemDao extends BaseDao<Item> {
 
   /**
    * Every `run_outcome` row of every run, for the stats ledger's boot sweep. Served
-   * by the `kind` index; a profile holds a handful per workflow run.
+   * by the `kind` index; a profile holds a handful per team run.
    */
   async runOutcomeRows(
     txEm?: EntityManager,
@@ -2107,10 +2107,10 @@ export class ItemDao extends BaseDao<Item> {
     role?: string,
     txEm?: EntityManager,
     /**
-     * Narrow to rows written by particular NODES of a workflow run.
+     * Narrow to rows written by particular NODES of a team run.
      *
      * Absent means every node, which is what a chat run wants — it has one, and
-     * its rows carry no node id at all. A workflow run's transcript is N nodes
+     * its rows carry no node id at all. A team run's transcript is N nodes
      * interleaved in one stream, so "the latest row" is whichever of them wrote
      * last; the task board passes the run's terminal nodes here to ask for the
      * conclusion instead. An EMPTY set is not the same as absent and is the
@@ -2347,7 +2347,7 @@ export class ItemDao extends BaseDao<Item> {
    * that ever waited, read for the run-state route's `RunCallState.queued`.
    *
    * TWIN PARSER: written by `launchCalleeTurn` in
-   * apps/daemon/src/v1/graphs/services/graph-executor.service.ts; read the
+   * apps/daemon/src/v1/teams/services/graph-executor.service.ts; read the
    * same way by `isQueuedCall` in apps/ui/src/renderer/chats/transcript-groups.ts.
    */
   async callQueueRows(runId: string, txEm?: EntityManager): Promise<Item[]> {
@@ -2806,7 +2806,7 @@ export class ItemDao extends BaseDao<Item> {
   async maxSeq(
     runId: string,
     txEm?: EntityManager,
-    /** One workflow node's newest row; absent means the run's. */
+    /** One team node's newest row; absent means the run's. */
     nodeId?: string,
   ): Promise<number> {
     // Project ONLY `seq` — this runs on every sendMessage; hydrating the full

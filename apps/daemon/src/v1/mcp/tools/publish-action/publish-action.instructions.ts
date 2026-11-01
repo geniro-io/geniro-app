@@ -29,9 +29,9 @@ export function publishActionInstructions(): string {
     "for one), in this chat's folder unless you give `cwd`, and is stopped after `timeout_minutes` (default " +
     `${ACTION_COMMAND_TIMEOUT_DEFAULT_MINUTES}, at most ${ACTION_COMMAND_TIMEOUT_MAX_MINUTES}). The user sees ` +
     'its exact argv and folder before it runs; its exit code and the end of its output land in the chat. ' +
-    'Set `notify_agent: true` to have them sent too, as a message, when it finishes (in a workflow, to the ' +
+    'Set `notify_agent: true` to have them sent too, as a message, when it finishes (in a team, to the ' +
     "agent the user's messages go to). " +
-    "In a workflow the press goes to the agent the user's messages go to — not back to you unless you " +
+    "In a team the press goes to the agent the user's messages go to — not back to you unless you " +
     'are that agent — prefixed with your name, and a call you are answering lists the button in its ' +
     'result; so word `message` for whoever reads it next. ' +
     'A button lasts until it is pressed (when `once`, the default), until you remove it with ' +

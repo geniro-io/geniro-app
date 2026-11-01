@@ -206,7 +206,7 @@ describe('UpdateService.install', () => {
   it('puts the staged release in place only when the app QUITS, and only once', async () => {
     // Replacing the bundle under a running app left the renderer loading its
     // next screen from the new archive at the old one's offsets — REPORTED as
-    // "Something went wrong. Unexpected token ')'" on opening Workflows after
+    // "Something went wrong. Unexpected token ')'" on opening Teams after
     // an update had installed. So an install stages, and the quit applies.
     const service = build();
     await service.check();

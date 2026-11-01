@@ -14,15 +14,16 @@ import { WALL_WORK_MARKER_FILE } from '../../agents/services/wall-work.service';
 import { CHILD_JOURNAL_FILE_NAME } from '../../agents/utils/child-journal';
 import { FOLDERLESS_DIR_NAME } from '../../agents/utils/folderless-dir';
 import { DEBUG_LOG_DIR_NAME } from '../../diagnostics/utils/debug-sink';
-import { WORKFLOWS_DIR_NAME } from '../../graphs/services/workflow-store.service';
 import {
   MIGRATION_BACKUPS_DIR,
   MIGRATION_ERROR_FILE,
 } from '../../migrations/migrations.types';
+import { LEGACY_LIBRARY_DIR } from '../../migrations/utils/m0003-team-library-files';
 import { TASK_ATTACHMENTS_DIR_NAME } from '../../tasks/utils/task-attachments';
+import { TEAMS_DIR_NAME } from '../../teams/services/team-store.service';
 import type { StorageClassifier, StorageGroupId } from '../storage.types';
 
-export { WORKFLOWS_DIR_NAME };
+export { TEAMS_DIR_NAME };
 
 /**
  * `<userData>/` file whose presence asks the next daemon start to compact the
@@ -55,7 +56,7 @@ const NAMED: Readonly<Record<string, StorageGroupId>> = {
   [ARTIFACTS_DIR_NAME]: 'chatFiles',
   [CHAT_UPLOADS_DIR_NAME]: 'chatFiles',
   [TASK_ATTACHMENTS_DIR_NAME]: 'taskFiles',
-  [WORKFLOWS_DIR_NAME]: 'workflows',
+  [TEAMS_DIR_NAME]: 'teams',
   [DEBUG_LOG_DIR_NAME]: 'logs',
   [FOLDERLESS_DIR_NAME]: 'caches',
   [SKILL_HARVEST_FILE_NAME]: 'caches',
@@ -71,6 +72,7 @@ const NAMED: Readonly<Record<string, StorageGroupId>> = {
   [COMPACTION_MARKER_FILE]: 'appState',
   [MIGRATION_ERROR_FILE]: 'appState',
   [MIGRATION_BACKUPS_DIR]: 'appState',
+  [LEGACY_LIBRARY_DIR]: 'appState',
   'task-reports': 'leftovers',
   'task-artifacts': 'leftovers',
   'review-artifacts': 'leftovers',

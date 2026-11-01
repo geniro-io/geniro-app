@@ -260,10 +260,10 @@ describe('Menu', () => {
         ],
       },
       {
-        label: 'Workflows',
+        label: 'Teams',
         items: [
-          { value: 'wf:review', label: 'Review team' },
-          { value: 'wf:ship', label: 'Ship team' },
+          { value: 'team:review', label: 'Review team' },
+          { value: 'team:ship', label: 'Ship team' },
         ],
       },
     ]);

@@ -34,9 +34,9 @@ function flagOf(value: number | null): boolean | null {
 const LEDGER_COLUMNS = [
   'run_id',
   'occurred_at',
-  'workflow_slug',
-  'workflow_version',
-  'workflow_version_inferred',
+  'team_slug',
+  'team_version',
+  'team_version_inferred',
 ] as const;
 
 type LedgerColumns = Pick<
@@ -48,9 +48,9 @@ function toLedgerRow(row: LedgerColumns): ThreadLedgerRow {
   return {
     runId: row.run_id,
     occurredAt: new Date(Number(row.occurred_at)),
-    slug: row.workflow_slug,
-    version: row.workflow_version,
-    inferred: flagOf(row.workflow_version_inferred),
+    slug: row.team_slug,
+    version: row.team_version,
+    inferred: flagOf(row.team_version_inferred),
   };
 }
 
@@ -77,7 +77,7 @@ interface ActivityDatabase {
     lines_added: UsageActivity['linesAdded'];
     lines_removed: UsageActivity['linesRemoved'];
     partial: number | null;
-    workflow_slug: UsageActivity['workflowSlug'];
+    team_slug: UsageActivity['teamSlug'];
     source_seq: UsageActivity['sourceSeq'];
     outcome_draft: number | null;
     outcome_review_rounds: UsageActivity['outcomeReviewRounds'];
@@ -85,8 +85,8 @@ interface ActivityDatabase {
     outcome_questions_asked: UsageActivity['outcomeQuestionsAsked'];
     outcome_changes_requested_rounds: UsageActivity['outcomeChangesRequestedRounds'];
     outcome_ms_to_accepted: UsageActivity['outcomeMsToAccepted'];
-    workflow_version: UsageActivity['workflowVersion'];
-    workflow_version_inferred: number | null;
+    team_version: UsageActivity['teamVersion'];
+    team_version_inferred: number | null;
   };
 }
 
@@ -212,7 +212,7 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
         pr_repo: row.prRepo,
         pr_number: row.prNumber,
         pr_url: row.prUrl,
-        workflow_slug: row.workflowSlug,
+        team_slug: row.teamSlug,
         source_seq: row.sourceSeq,
         outcome_draft: row.draft ? 1 : 0,
         outcome_review_rounds: row.reviewRounds,
@@ -228,7 +228,7 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
             updated_at: now,
             occurred_at: eb.ref('excluded.occurred_at'),
             pr_url: eb.ref('excluded.pr_url'),
-            workflow_slug: eb.ref('excluded.workflow_slug'),
+            team_slug: eb.ref('excluded.team_slug'),
             source_seq: eb.ref('excluded.source_seq'),
             outcome_draft: eb.ref('excluded.outcome_draft'),
             outcome_review_rounds: eb.ref('excluded.outcome_review_rounds'),
@@ -267,11 +267,11 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
 
   /**
    * The outcomes the ledger holds — one per run and pull request, its newest — for the
-   * given runs, or every run of one workflow. What a per-version outcome fold reads, and it
+   * given runs, or every run of one team. What a per-version outcome fold reads, and it
    * reads it here rather than from the transcript because a deleted run's rows are gone.
    */
   async runOutcomes(
-    filter: { runIds?: readonly string[]; workflowSlug?: string },
+    filter: { runIds?: readonly string[]; teamSlug?: string },
     txEm?: EntityManager,
   ): Promise<RunOutcomeLedgerRow[]> {
     if (filter.runIds !== undefined && filter.runIds.length === 0) {
@@ -283,9 +283,7 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
         ...(filter.runIds === undefined
           ? {}
           : { runId: { $in: [...filter.runIds] } }),
-        ...(filter.workflowSlug === undefined
-          ? {}
-          : { workflowSlug: filter.workflowSlug }),
+        ...(filter.teamSlug === undefined ? {} : { teamSlug: filter.teamSlug }),
       },
       { orderBy: { occurredAt: 'asc' }, disableIdentityMap: true },
     );
@@ -308,7 +306,7 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
         runId: row.runId,
         sourceSeq: row.sourceSeq,
         occurredAt: row.occurredAt,
-        workflowSlug: row.workflowSlug,
+        teamSlug: row.teamSlug,
         prOwner: row.prOwner,
         prRepo: row.prRepo,
         prNumber: row.prNumber,
@@ -479,7 +477,7 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
   }
 
   /**
-   * Stamp a workflow run's thread row with its workflow and graph version, writing the row
+   * Stamp a team run's thread row with its team and graph version, writing the row
    * first when the recorder has not yet. Both writers insert through the unique key, so
    * either may go first.
    */
@@ -495,9 +493,9 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
       .getKysely<ActivityDatabase>({ convertValues: false })
       .updateTable('usage_activity')
       .set({
-        workflow_slug: stamp.slug,
-        workflow_version: stamp.version,
-        workflow_version_inferred:
+        team_slug: stamp.slug,
+        team_version: stamp.version,
+        team_version_inferred:
           stamp.inferred === null ? null : stamp.inferred ? 1 : 0,
         updated_at: Date.now(),
       })
@@ -505,7 +503,7 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
       .execute();
   }
 
-  /** Every thread row stamped with this workflow — its runs, deleted ones included. */
+  /** Every thread row stamped with this team — its runs, deleted ones included. */
   async threadRowsBySlug(
     slug: string,
     txEm?: EntityManager,
@@ -515,7 +513,7 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
       .selectFrom('usage_activity')
       .select(LEDGER_COLUMNS)
       .where('kind', '=', 'thread')
-      .where('workflow_slug', '=', slug)
+      .where('team_slug', '=', slug)
       .where('deleted_at', 'is', null)
       .execute();
     return rows.map(toLedgerRow);

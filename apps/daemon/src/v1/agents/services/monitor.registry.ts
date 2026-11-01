@@ -57,7 +57,7 @@ interface RunningMonitor {
  * runtime is fenced as a system executable).
  *
  * A leaf: ProcessRegistry is its only dependency. Delivery — rows, chat turns,
- * workflow wakes — subscribes to its events, so `RunTeardownService` and the
+ * team wakes — subscribes to its events, so `RunTeardownService` and the
  * chat side can inject it without a cycle back to them.
  */
 @Injectable()

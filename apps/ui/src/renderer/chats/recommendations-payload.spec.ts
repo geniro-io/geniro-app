@@ -8,6 +8,9 @@ import {
 } from './recommendations-payload';
 import { groupTranscript } from './transcript-groups';
 
+const record = (value: unknown): Record<string, unknown> =>
+  value as Record<string, unknown>;
+
 function item(
   seq: number,
   kind: string,
@@ -28,7 +31,7 @@ function item(
 
 const CARD = {
   sourceRunId: 'source',
-  sourceKind: 'workflow',
+  sourceKind: 'team',
   summary: 'reviewers ran serially',
   timing: {
     wallMs: 1000,
@@ -40,7 +43,7 @@ const CARD = {
   items: [
     {
       id: 'W-1',
-      target: 'workflow',
+      target: 'team',
       territory: 'process',
       kind: 'parallelize',
       location: 'reviewer',
@@ -72,14 +75,28 @@ describe('recommendations payload readers', () => {
   it('reads a card and drops an item that does not read', () => {
     const card = readRecommendations(item(5, 'recommendations', CARD));
 
-    expect(card?.sourceKind).toBe('workflow');
+    expect(card?.sourceKind).toBe('team');
     expect(card?.timing?.sinks).toEqual([{ label: 'reviewer', ms: 600 }]);
     expect(card?.items.map((entry) => entry.id)).toEqual(['W-1', 'U-1']);
     expect(card?.items[1]?.target).toBe('user');
     expect(card?.items[0]).toMatchObject({ minutesSaved: 12, risk: 'low' });
-    // A workflow analysis names the run each quote is from.
+    // A team analysis names the run each quote is from.
     expect(card?.items[1]?.evidence[0]?.runId).toBe('run-older');
     expect(card?.items[0]?.evidence[0]?.runId).toBeNull();
+  });
+
+  it('reads a card filed before the rename, which says workflow for the team', () => {
+    const [w1] = CARD.items as Record<string, unknown>[];
+    const card = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        sourceKind: 'workflow',
+        items: [{ ...w1, target: 'workflow' }],
+      }),
+    );
+
+    expect(card?.sourceKind).toBe('team');
+    expect(card?.items.map((entry) => entry.target)).toEqual(['team']);
   });
 
   it('reads a memory item, and still drops an item whose target is unknown', () => {
@@ -106,126 +123,125 @@ describe('recommendations payload readers', () => {
     expect(card?.items[0]).toMatchObject({ kind: 'update', location: 'm12' });
   });
 
-  it("reads the workflow's measured figures, the hotspots and each item's estimates, an older card's missing ones as absent", () => {
-    const filed = readRecommendations(
-      item(6, 'recommendations', {
-        ...CARD,
-        timing: null,
-        hotspots: [
-          {
-            title: 'Serial reviews',
-            node: 'reviewer',
-            why: 'waits on itself',
-            items: ['W-1', 7],
+  it("reads the team's measured figures, the hotspots and each item's estimates, an older card's missing ones as absent", () => {
+    const filedItem = item(6, 'recommendations', {
+      ...CARD,
+      timing: null,
+      hotspots: [
+        {
+          title: 'Serial reviews',
+          node: 'reviewer',
+          why: 'waits on itself',
+          items: ['W-1', 7],
+        },
+        { title: 'no why' },
+      ],
+      items: [
+        {
+          ...CARD.items[0],
+          impact: {
+            minutesSaved: -3,
+            costSavedUsd: -0.2,
+            basis: 'one more pass',
+            confidence: 3,
+            outcome: 'bugs caught before review',
           },
-          { title: 'no why' },
-        ],
-        items: [
+        },
+      ],
+      teamStats: {
+        runs: 2,
+        perRun: {
+          wallMs: 60_000,
+          activeMs: 50_000,
+          waitingOnUserMs: 0,
+          criticalPathMs: 40_000,
+          turns: 4.5,
+          calls: 1,
+          costUsd: null,
+          pricedRuns: 0,
+        },
+        totals: {
+          wallMs: 120_000,
+          activeMs: 100_000,
+          turns: 9,
+          failedTurns: 1,
+          cancelledTurns: 0,
+          toolCalls: 30,
+          failedToolCalls: 2,
+          calls: 2,
+          costUsd: null,
+        },
+        runList: [
           {
-            ...CARD.items[0],
-            impact: {
-              minutesSaved: -3,
-              costSavedUsd: -0.2,
-              basis: 'one more pass',
-              confidence: 3,
-              outcome: 'bugs caught before review',
-            },
-          },
-        ],
-        workflowStats: {
-          runs: 2,
-          perRun: {
+            runId: 'r1',
+            title: null,
+            createdAt: '2026-10-14T10:00:00.000Z',
+            version: 3,
+            current: true,
             wallMs: 60_000,
             activeMs: 50_000,
             waitingOnUserMs: 0,
-            criticalPathMs: 40_000,
-            turns: 4.5,
-            calls: 1,
+            turns: 5,
+            failedTurns: 1,
             costUsd: null,
-            pricedRuns: 0,
           },
-          totals: {
-            wallMs: 120_000,
-            activeMs: 100_000,
+          { runId: 'broken' },
+        ],
+        agents: [
+          {
+            node: 'reviewer',
+            agent: 'claude',
+            runs: 2,
             turns: 9,
             failedTurns: 1,
             cancelledTurns: 0,
+            workedMs: 90_000,
+            workedPerRunMs: 45_000,
+            waitingOnCalleePerRunMs: null,
+            criticalPathPerRunMs: 20_000,
             toolCalls: 30,
             failedToolCalls: 2,
-            calls: 2,
             costUsd: null,
+            costPerRunUsd: null,
+            models: [
+              {
+                agent: 'claude',
+                model: null,
+                modelSource: 'configured',
+                turns: 9,
+                failedTurns: 1,
+                cancelledTurns: 0,
+                avgTurnMs: null,
+                costUsd: null,
+                costPerTurnUsd: null,
+              },
+            ],
           },
-          runList: [
-            {
-              runId: 'r1',
-              title: null,
-              createdAt: '2026-10-14T10:00:00.000Z',
-              version: 3,
-              current: true,
-              wallMs: 60_000,
-              activeMs: 50_000,
-              waitingOnUserMs: 0,
-              turns: 5,
-              failedTurns: 1,
-              costUsd: null,
-            },
-            { runId: 'broken' },
-          ],
-          agents: [
-            {
-              node: 'reviewer',
-              agent: 'claude',
-              runs: 2,
-              turns: 9,
-              failedTurns: 1,
-              cancelledTurns: 0,
-              workedMs: 90_000,
-              workedPerRunMs: 45_000,
-              waitingOnCalleePerRunMs: null,
-              criticalPathPerRunMs: 20_000,
-              toolCalls: 30,
-              failedToolCalls: 2,
-              costUsd: null,
-              costPerRunUsd: null,
-              models: [
-                {
-                  agent: 'claude',
-                  model: null,
-                  modelSource: 'configured',
-                  turns: 9,
-                  failedTurns: 1,
-                  cancelledTurns: 0,
-                  avgTurnMs: null,
-                  costUsd: null,
-                  costPerTurnUsd: null,
-                },
-              ],
-            },
-          ],
-          calls: [
-            {
-              caller: 'lead',
-              callee: 'reviewer',
-              calls: 2,
-              failedCalls: 0,
-              totalMs: 80_000,
-              avgMs: 40_000,
-              maxMs: 50_000,
-              workedMs: 30_000,
-            },
-            {
-              caller: 'lead',
-              callee: 'qa',
-              calls: 1,
-              failedCalls: 0,
-              totalMs: 9_000,
-              avgMs: 9_000,
-              maxMs: 9_000,
-            },
-          ],
-        },
-      }),
-    );
+        ],
+        calls: [
+          {
+            caller: 'lead',
+            callee: 'reviewer',
+            calls: 2,
+            failedCalls: 0,
+            totalMs: 80_000,
+            avgMs: 40_000,
+            maxMs: 50_000,
+            workedMs: 30_000,
+          },
+          {
+            caller: 'lead',
+            callee: 'qa',
+            calls: 1,
+            failedCalls: 0,
+            totalMs: 9_000,
+            avgMs: 9_000,
+            maxMs: 9_000,
+          },
+        ],
+      },
+    });
+    const filed = readRecommendations(filedItem);
     const older = readRecommendations(item(5, 'recommendations', CARD));
 
     expect(filed?.hotspots).toEqual([
@@ -241,7 +257,7 @@ describe('recommendations payload readers', () => {
       costSavedUsd: -0.2,
       outcome: 'bugs caught before review',
     });
-    expect(filed?.workflowStats).toMatchObject({
+    expect(filed?.teamStats).toMatchObject({
       runs: 2,
       perRun: { wallMs: 60_000, costUsd: null, pricedRuns: 0 },
       totals: { failedTurns: 1, costUsd: null },
@@ -261,7 +277,16 @@ describe('recommendations payload readers', () => {
         },
       ],
     });
-    expect(older?.workflowStats).toBeNull();
+    const { teamStats, ...filedBeforeRename } = record(filedItem.payload);
+    expect(
+      readRecommendations(
+        item(6, 'recommendations', {
+          ...filedBeforeRename,
+          workflowStats: teamStats,
+        }),
+      )?.teamStats,
+    ).toEqual(filed?.teamStats);
+    expect(older?.teamStats).toBeNull();
     expect(older?.hotspots).toEqual([]);
     expect(older?.items[0]).toMatchObject({
       minutesSaved: 12,
@@ -274,11 +299,11 @@ describe('recommendations payload readers', () => {
     const card = readRecommendations(
       item(6, 'recommendations', {
         ...CARD,
-        workflowStats: { runs: 2, perRun: { wallMs: 'slow' }, totals: {} },
+        teamStats: { runs: 2, perRun: { wallMs: 'slow' }, totals: {} },
       }),
     );
 
-    expect(card?.workflowStats).toBeNull();
+    expect(card?.teamStats).toBeNull();
   });
 
   it("reads each item's territory, and drops an item that names none or another", () => {

@@ -15,14 +15,14 @@ const EXAMPLES: readonly { label: string; hash: string; route: Route }[] = [
     route: { view: 'chats', runId: null },
   },
   {
-    label: 'an open workflow',
-    hash: '#/workflows/dev-team',
-    route: { view: 'workflows', slug: 'dev-team' },
+    label: 'an open team',
+    hash: '#/teams/dev-team',
+    route: { view: 'teams', slug: 'dev-team' },
   },
   {
-    label: 'the workflow library with nothing open',
-    hash: '#/workflows',
-    route: { view: 'workflows', slug: null },
+    label: 'the team library with nothing open',
+    hash: '#/teams',
+    route: { view: 'teams', slug: null },
   },
   {
     label: 'an open task project',
@@ -58,6 +58,14 @@ describe('parseRoute', () => {
     });
   }
 
+  it('opens the teams view from a link saved before the rename', () => {
+    expect(parseRoute('#/workflows/dev-team')).toEqual({
+      view: 'teams',
+      slug: 'dev-team',
+    });
+    expect(parseRoute('#/workflows')).toEqual({ view: 'teams', slug: null });
+  });
+
   it('answers null for an empty hash', () => {
     expect(parseRoute('')).toBeNull();
     expect(parseRoute('#')).toBeNull();
@@ -77,7 +85,7 @@ describe('parseRoute', () => {
     // A lone `%` is not a valid escape — `decodeURIComponent` throws on it,
     // and a hash this build cannot decode names no route at all.
     expect(parseRoute('#/chats/%')).toBeNull();
-    expect(parseRoute('#/workflows/100%')).toBeNull();
+    expect(parseRoute('#/teams/100%')).toBeNull();
   });
 });
 

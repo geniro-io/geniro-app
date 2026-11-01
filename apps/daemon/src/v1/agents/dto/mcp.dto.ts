@@ -20,7 +20,7 @@ import {
  * the only way a server that has since recovered is re-dialled.
  *
  * `cwd` is OPTIONAL because the graph builder genuinely has no folder — a
- * workflow is edited long before it runs in one. Omitting it asks for the set
+ * team is edited long before it runs in one. Omitting it asks for the set
  * that does not depend on a folder (the user's global servers, plus whatever
  * `configDir` brings); the project-scope servers of whichever folder the run
  * lands in are added by the CLI itself at run time.

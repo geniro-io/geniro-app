@@ -106,7 +106,7 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // and an `unanswerable` row of its own, not a row of this event's.
       return null;
     case 'follow_up_dropped':
-      // Mapped HERE rather than by each owner, so a chat and a workflow node
+      // Mapped HERE rather than by each owner, so a chat and a team node
       // write the same row through the path every other row takes.
       //
       // TWIN PARSER: `apps/ui/src/renderer/chats/system-payload.ts` reads
@@ -494,7 +494,7 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
  * Whether an OFF-TURN row means the run is working again.
  *
  * Asked by `ChatService.handleBetweenTurnEvent` and the graph executor's
- * `onOffTurnEvent` (a workflow node's off-turn badge), both of which only ever
+ * `onOffTurnEvent` (a team node's off-turn badge), both of which only ever
  * see events that produced a durable row — so the default is YES: a
  * settled run whose CLI is writing rows again is the CLI carrying on by itself,
  * and its own continuation settles it a second time. What this names is the

@@ -177,7 +177,7 @@ const manyNotes = Array.from({ length: 64 }, (_, index) =>
   note(index + 1, { text: `Note ${index + 1}` }),
 );
 
-/** A workflow run's busy shelf at an iPhone's composer width. */
+/** A team run's busy shelf at an iPhone's composer width. */
 export const OnAPhone: Story = {
   render: (args) => (
     <ThreadUiMemoryContext.Provider value="story-run">

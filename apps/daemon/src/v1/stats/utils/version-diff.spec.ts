@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Workflow } from '../../graphs/graphs.types';
+import type { Team } from '../../teams/teams.types';
 import {
   canonicalGraphJson,
   canonicalGraphOf,
   canonicalGraphYaml,
-} from '../../graphs/utils/workflow-version';
+} from '../../teams/utils/team-version';
 import { versionDiff } from './version-diff';
 
-const base: Workflow = {
+const base: Team = {
   name: 'Dev Team',
   nodes: [
     { id: 'start', kind: 'trigger', trigger: 'manual' },
@@ -17,13 +17,13 @@ const base: Workflow = {
   edges: [{ from: 'start', to: 'dev', kind: 'data' }],
 };
 
-function yamlOf(workflow: Workflow): string {
-  return canonicalGraphYaml(canonicalGraphJson(canonicalGraphOf(workflow)))!;
+function yamlOf(team: Team): string {
+  return canonicalGraphYaml(canonicalGraphJson(canonicalGraphOf(team)))!;
 }
 
 describe('versionDiff', () => {
   it('prints a unified diff with file headers and counts the lines it adds and removes', () => {
-    const next: Workflow = {
+    const next: Team = {
       ...base,
       nodes: base.nodes.map((node) =>
         node.id === 'dev' ? { ...node, approval: 'ask' } : node,
@@ -36,8 +36,8 @@ describe('versionDiff', () => {
     expect(changes.removed).toBe(1);
     const lines = changes.diff.split('\n');
     expect(lines.slice(0, 2)).toEqual([
-      '--- a/dev-team.geniro.yaml',
-      '+++ b/dev-team.geniro.yaml',
+      '--- a/dev-team.team.yaml',
+      '+++ b/dev-team.team.yaml',
     ]);
     expect(lines[2]).toMatch(/^@@ -\d+,\d+ \+\d+,\d+ @@$/);
     expect(lines).toContain('-    approval: auto');

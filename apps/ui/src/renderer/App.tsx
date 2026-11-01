@@ -45,11 +45,11 @@ import {
   useCapabilities,
 } from './use-capabilities';
 
-// Code-split the conditionally-rendered views: Workflows drags @xyflow/react +
+// Code-split the conditionally-rendered views: Teams drags @xyflow/react +
 // elkjs and Settings its own tree — eager imports would put both in the
 // startup chunk of the always-mounted shell.
-const Workflows = lazy(() =>
-  import('./workflows/Workflows').then((m) => ({ default: m.Workflows })),
+const Teams = lazy(() =>
+  import('./teams/Teams').then((m) => ({ default: m.Teams })),
 );
 import type { SettingsSection } from './settings/Settings';
 
@@ -74,7 +74,7 @@ type Phase = 'loading' | 'onboarding' | 'ready';
  */
 const VIEW_TITLE: Record<AppView, string> = {
   chats: 'Chats',
-  workflows: 'Workflows',
+  teams: 'Teams',
   tasks: 'Tasks',
   stats: 'Stats',
   settings: 'Settings',
@@ -91,7 +91,7 @@ const VIEW_TITLE: Record<AppView, string> = {
  * names a thread for one render and nothing afterwards — which is no address
  * at all for a link meant to be copied and sent.
  *
- * `workflows`/`tasks` pick their own open item internally (the builder's
+ * `teams`/`tasks` pick their own open item internally (the builder's
  * selection, the board's project), so from here they are addressed by view
  * alone.
  */
@@ -99,8 +99,8 @@ function currentRoute(view: AppView, openRunId: string | null): Route {
   switch (view) {
     case 'chats':
       return { view: 'chats', runId: openRunId };
-    case 'workflows':
-      return { view: 'workflows', slug: null };
+    case 'teams':
+      return { view: 'teams', slug: null };
     case 'tasks':
       return { view: 'tasks', projectId: null };
     case 'settings':
@@ -119,8 +119,8 @@ export function App(): React.JSX.Element {
   const [guideOpen, setGuideOpen] = useState(false);
   const [chatLaunch, setChatLaunch] = useState<CliKind | null>(null);
   const [teamLaunch, setTeamLaunch] = useState<TeamLaunch | null>(null);
-  // A library workflow the chat screen asked the builder to open.
-  const [workflowRequest, setWorkflowRequest] = useState<string | null>(null);
+  // A library team the chat screen asked the builder to open.
+  const [teamRequest, setTeamRequest] = useState<string | null>(null);
   const [view, setView] = useState<AppView>(
     () => initialRoute?.view ?? 'chats',
   );
@@ -155,10 +155,10 @@ export function App(): React.JSX.Element {
   );
   /** Every thread's wait, ranked, as `Chats` reports it. */
   const [waiting, setWaiting] = useState<readonly WaitReading[]>([]);
-  // Workflows mounts lazily on first visit, then stays mounted (hidden) like
+  // Teams mounts lazily on first visit, then stays mounted (hidden) like
   // Chats — unmounting on nav used to silently discard every unsaved builder
   // edit when the user glanced at Chats/Settings mid-composition.
-  const [workflowsMounted, setWorkflowsMounted] = useState(false);
+  const [teamsMounted, setTeamsMounted] = useState(false);
   // Same latch, same reason: the board holds a selected project, a scroll
   // position and a half-finished drag, none of which survive a remount.
   const [tasksMounted, setTasksMounted] = useState(false);
@@ -170,8 +170,8 @@ export function App(): React.JSX.Element {
    */
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>('general');
-  if (view === 'workflows' && !workflowsMounted) {
-    setWorkflowsMounted(true);
+  if (view === 'teams' && !teamsMounted) {
+    setTeamsMounted(true);
   }
   if (view === 'tasks' && !tasksMounted) {
     setTasksMounted(true);
@@ -420,7 +420,7 @@ export function App(): React.JSX.Element {
       setPhase('ready');
       if (destination?.route === 'team' && destination.agent) {
         setTeamLaunch({ ...destination, agent: destination.agent });
-        setView('workflows');
+        setView('teams');
       } else if (destination?.route === 'chat' && destination.agent) {
         setThreadRequest(null);
         setChatLaunch(destination.agent);
@@ -709,7 +709,7 @@ export function App(): React.JSX.Element {
             daemon that is not answering breaks the view under it, while an
             update is an offer with no deadline. */}
               {/* Chats stays mounted (hidden) across nav switches so its live WS room
-            and active-run selection survive a trip to Settings/Workflows. */}
+            and active-run selection survive a trip to Settings/Teams. */}
               <div
                 className={cn(
                   'min-h-0 flex-1',
@@ -744,9 +744,9 @@ export function App(): React.JSX.Element {
                       setSettingsSectionOpen(true);
                       setView('settings');
                     }}
-                    onOpenWorkflow={(slug) => {
-                      setWorkflowRequest(slug);
-                      setView('workflows');
+                    onOpenTeam={(slug) => {
+                      setTeamRequest(slug);
+                      setView('teams');
                     }}
                     onPhoneDetailChange={setChatsPhoneDetail}
                     onWaitingChange={setWaiting}
@@ -766,17 +766,17 @@ export function App(): React.JSX.Element {
                 <div
                   className={cn(
                     'min-h-0 flex-1',
-                    (view !== 'workflows' || showStartup) && 'hidden',
+                    (view !== 'teams' || showStartup) && 'hidden',
                   )}>
-                  {workflowsMounted ? (
-                    <Workflows
+                  {teamsMounted ? (
+                    <Teams
                       handle={handle}
                       client={clientRef.current}
-                      active={view === 'workflows'}
+                      active={view === 'teams'}
                       firstLaunch={teamLaunch}
                       onFirstLaunchHandled={() => setTeamLaunch(null)}
-                      openRequest={workflowRequest}
-                      onOpenRequestHandled={() => setWorkflowRequest(null)}
+                      openRequest={teamRequest}
+                      onOpenRequestHandled={() => setTeamRequest(null)}
                     />
                   ) : null}
                 </div>
@@ -801,7 +801,7 @@ export function App(): React.JSX.Element {
                     />
                   ) : null}
                 </div>
-                {/* Unmounted when hidden, like Settings and unlike Chats/Workflows:
+                {/* Unmounted when hidden, like Settings and unlike Chats/Teams:
               the page holds no unsaved edit and no live subscription, and a
               fresh mount is how a revisit gets figures that are current
               rather than however stale the last visit left them. */}

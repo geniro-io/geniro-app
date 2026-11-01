@@ -152,7 +152,7 @@ export const RevealCallContext = createContext<
  * Where an EARLIER call of a continued conversation was made — a pointer to the
  * card, which is drawn at the conversation's newest call.
  *
- * REPORTED as "if we keep writing to the same agent thread in a workflow, the
+ * REPORTED as "if we keep writing to the same agent thread in a team, the
  * call card moves and disappears from where it was — the history becomes
  * unclear, there is just an empty space". The card moving is deliberate (one
  * card per conversation, with the work in flight at the tail); the empty slot
@@ -415,7 +415,7 @@ function CallFigures({
  *
  * It is COLLAPSIBLE and shut to start, which REVERSES what shipped first. The
  * old reasoning — "a call is the point of the row it sits on, so it stays
- * open" — is true of one call and false of the conversation a workflow
+ * open" — is true of one call and false of the conversation a team
  * actually produces: a manager routing work to three agents draws three cards
  * each holding a clamped brief, the callee's whole sub-turn and a clamped
  * result, so the caller's own sentences are pages apart and the transcript

@@ -96,16 +96,16 @@ export const TASK_REPORT_INSTRUCTIONS = [
 ].join('\n');
 
 /**
- * The same ask, for a task run through a WORKFLOW — every node of which is
+ * The same ask, for a task run through a TEAM — every node of which is
  * handed the board tools, so one sentence says which of them should use them.
  *
  * Without it every node would report: a fan-out of reviewers each replacing the
  * card's report with its own slice, and whichever wrote last standing as the
  * account of the whole task.
  */
-export const TASK_REPORT_INSTRUCTIONS_WORKFLOW = [
+export const TASK_REPORT_INSTRUCTIONS_TEAM = [
   REPORT_OPENING,
-  'You are one agent of a workflow working this task. Update the card only if your part concludes the work; an agent handing its result on to another leaves the card alone.',
+  'You are one agent of a team working this task. Update the card only if your part concludes the work; an agent handing its result on to another leaves the card alone.',
   REPORT_TOOL,
   REPORT_CONTENT,
   REPORT_PULL_REQUEST,

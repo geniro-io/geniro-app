@@ -64,7 +64,7 @@ describe('previewMessageOf', () => {
 
 describe('previewsThread', () => {
   it('leaves out a message written inside an agent call, or by a delegate', () => {
-    // REPORTED as a workflow row previewing the Engineer's "Fixed: 36/36…"
+    // REPORTED as a team row previewing the Engineer's "Fixed: 36/36…"
     // over the Manager's own words.
     expect(
       previewMessageOf([

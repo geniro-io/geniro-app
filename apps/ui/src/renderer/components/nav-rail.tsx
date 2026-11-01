@@ -6,7 +6,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
-  Workflow,
+  Workflow as TeamIcon,
 } from 'lucide-react';
 
 import {
@@ -17,7 +17,7 @@ import { Logo } from './logo';
 import { cn } from './ui/utils';
 
 /** The top-level views the nav rail switches between. */
-export type AppView = 'chats' | 'workflows' | 'tasks' | 'stats' | 'settings';
+export type AppView = 'chats' | 'teams' | 'tasks' | 'stats' | 'settings';
 
 export interface NavItem {
   view: AppView;
@@ -28,7 +28,7 @@ export interface NavItem {
 /** Primary destinations (pinned to the top). */
 const PRIMARY_ITEMS: readonly NavItem[] = [
   { view: 'chats', label: 'Chats', icon: MessageSquare },
-  { view: 'workflows', label: 'Workflows', icon: Workflow },
+  { view: 'teams', label: 'Teams', icon: TeamIcon },
   { view: 'tasks', label: 'Tasks', icon: KanbanSquare },
   { view: 'stats', label: 'Stats', icon: ChartColumn },
 ];
@@ -84,7 +84,7 @@ function NavButton({
 
 /**
  * The app's persistent left navigation. The single home for switching between
- * the top-level surfaces (Chats, Workflows, Stats, Settings). Collapses to an
+ * the top-level surfaces (Chats, Teams, Stats, Settings). Collapses to an
  * icon-only rail — REMEMBERED across launches in `settings.json` — and
  * collapsed items expose their label as a tooltip + aria-label.
  *

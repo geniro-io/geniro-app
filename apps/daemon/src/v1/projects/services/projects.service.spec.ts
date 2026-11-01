@@ -162,7 +162,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
     const thread = (id: string, taskId: string) =>
       runDao.create({
         id,
-        workflowId: null,
+        teamId: null,
         status: 'completed',
         agentKind: 'claude',
         taskId,
@@ -346,7 +346,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
       name: 'Board',
       folder,
       model: 'sonnet',
-      workflowSlug: 'ship-it',
+      teamSlug: 'ship-it',
     });
 
     const updated = await service.update(project.id, { model: null });
@@ -354,7 +354,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
     expect(updated.model).toBeNull();
     // The omitted key is the half that is easy to break: a patch that rebuilds
     // the row from its own fields would blank this too.
-    expect(updated.workflowSlug).toBe('ship-it');
+    expect(updated.teamSlug).toBe('ship-it');
   });
 
   it('stores a trimmed description and instructions, and returns them on the wire', async () => {

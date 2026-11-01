@@ -201,7 +201,7 @@ export class UsageBackfillService implements OnModuleInit {
       priced.map((run) => run.id),
       em,
     );
-    // Whose money a WORKFLOW run's bill is comes off its nodes' shares — one
+    // Whose money a TEAM run's bill is comes off its nodes' shares — one
     // read for every such run rather than one per run.
     const sharesByRun = new Map<
       string,
@@ -287,8 +287,8 @@ export class UsageBackfillService implements OnModuleInit {
       ]),
     );
 
-    // Once per (run, node) rather than per turn: the workflow's name is read
-    // out of the run's snapshot, a whole workflow document, and a sweep that
+    // Once per (run, node) rather than per turn: the team's name is read
+    // out of the run's snapshot, a whole team document, and a sweep that
     // re-parsed it for every turn of a long run would pay for the same string
     // thousands of times.
     const dimensionsByNode = new Map<string, UsageDimensions>();

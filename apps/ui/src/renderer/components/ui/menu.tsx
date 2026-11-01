@@ -11,7 +11,7 @@ import { cn } from './utils';
 export interface MenuItem {
   value: string;
   label: string;
-  /** Leading glyph — a folder, a branch, a workflow icon. */
+  /** Leading glyph — a folder, a branch, a team icon. */
   icon?: React.ReactNode;
   /**
    * A colour this row carries as a LEFT BORDER, from the app's one palette.
@@ -104,7 +104,7 @@ export interface MenuItem {
   disabled?: boolean;
 }
 
-/** A titled block of rows ("Recents", "Agents", "Workflows"). */
+/** A titled block of rows ("Recents", "Agents", "Teams"). */
 export interface MenuGroup {
   label?: string;
   /**

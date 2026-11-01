@@ -269,7 +269,7 @@ describe('useRunState', () => {
     expect(h.api.readRunState.mock.calls.length).toBe(before + 1);
   });
 
-  it('re-reads on the reply to an artifact or a workflow it lists — the reply is what carries the URL', async () => {
+  it('re-reads on the reply to an artifact or a team it lists — the reply is what carries the URL', async () => {
     const listedRow = (id: string, name: string): ChatItem => ({
       id: `row-${id}`,
       runId: 'r1',

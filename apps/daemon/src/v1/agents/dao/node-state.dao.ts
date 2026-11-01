@@ -102,7 +102,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
     return held;
   }
 
-  /** Seed one `pending` row per graph node when a workflow run starts. */
+  /** Seed one `pending` row per graph node when a team run starts. */
   async createPending(
     runId: string,
     nodeId: string,
@@ -128,7 +128,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
       startedAt?: number;
       endedAt?: number;
       error?: string | null;
-      /** Stamped at turn start so run history survives workflow YAML edits. */
+      /** Stamped at turn start so run history survives team YAML edits. */
       agentKind?: AgentKind;
       /** Stamped beside {@link agentKind}, and for the same reason. */
       model?: string | null;
@@ -153,8 +153,8 @@ export class NodeStateDao extends BaseDao<NodeState> {
         existing.agentKind = patch.agentKind;
       }
       // Accepted and dropped for a release: the executor passed it on every
-      // turn start and no path wrote it, so every workflow node read back a
-      // null model — Stats filed all workflow spend under "no model" and an
+      // turn start and no path wrote it, so every team node read back a
+      // null model — Stats filed all team spend under "no model" and an
       // export named none. Absent still means untouched, so a status-only
       // transition cannot erase the model a turn stamped.
       if (patch.model !== undefined) {
@@ -397,7 +397,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
 
   /**
    * Every node of these runs carrying a polled price — which CLI spent each
-   * share of a workflow run's polled money, for the Stats page's per-agent row.
+   * share of a team run's polled money, for the Stats page's per-agent row.
    */
   async polledSharesForRuns(
     runIds: readonly string[],
@@ -418,7 +418,7 @@ export class NodeStateDao extends BaseDao<NodeState> {
    * The CLI that ran this run's FIRST node, or null when no node has taken a
    * turn yet.
    *
-   * A workflow run's own `agentKind` is null — it is N conversations, not one —
+   * A team run's own `agentKind` is null — it is N conversations, not one —
    * which is why nothing could ask a CLI to name one. Each node stamps the CLI
    * that actually ran it ({@link NodeState.agentKind}), so the run can name one
    * after all, and the FIRST node to start is the right one to ask: a DAG's
@@ -455,9 +455,9 @@ export class NodeStateDao extends BaseDao<NodeState> {
   /**
    * The runs holding at least one node that ran on `agentKind`.
    *
-   * A WORKFLOW run has no agent of its own — `Run.agentKind` is null, because
+   * A TEAM run has no agent of its own — `Run.agentKind` is null, because
    * its agents are per node — so a reader that selects runs by that column sees
-   * none of them. That is how a polled-spend node inside a workflow came to be
+   * none of them. That is how a polled-spend node inside a team came to be
    * invisible to the usage poll: it holds a real conversation, spends real
    * money, and its run row says nothing about which CLI ran it. Measured on a
    * real profile: a `dev-team` run whose QA node worked an hour on cursor was

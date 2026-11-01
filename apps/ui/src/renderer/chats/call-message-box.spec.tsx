@@ -173,7 +173,7 @@ async function flush(): Promise<void> {
 
 function refusal(code: string, message: string): Error {
   return new Error(
-    `daemon POST /v1/workflows/runs/run-1/nodes/poet/calls/call-1/messages failed (409): ${JSON.stringify({ code, message })}`,
+    `daemon POST /v1/teams/runs/run-1/nodes/poet/calls/call-1/messages failed (409): ${JSON.stringify({ code, message })}`,
   );
 }
 

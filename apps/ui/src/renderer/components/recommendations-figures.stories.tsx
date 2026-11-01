@@ -1,10 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { useState } from 'react';
 
-import { LOOK, WORKFLOW_STATS } from '../__fixtures__/recommendations';
+import { LOOK, TEAM_STATS } from '../__fixtures__/recommendations';
 import {
   RecommendationsProjection,
-  WorkflowFigures,
+  TeamFigures,
 } from './recommendations-figures';
 
 function FiguresDemo(): React.JSX.Element {
@@ -13,8 +13,8 @@ function FiguresDemo(): React.JSX.Element {
   );
   return (
     <div className="w-[560px]">
-      <WorkflowFigures
-        stats={WORKFLOW_STATS}
+      <TeamFigures
+        stats={TEAM_STATS}
         look={LOOK}
         hotNodes={new Set(['reviewer'])}
         folds={{

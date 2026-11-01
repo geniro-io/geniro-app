@@ -366,7 +366,7 @@ describe('a command still running after its turn', () => {
 
   it('leaves a run that never started alone', () => {
     // `pending` has no commands of its own to be waiting on, and neither does
-    // a workflow node nothing ever ran.
+    // a team node nothing ever ran.
     for (const status of ['pending', 'skipped'] as const) {
       expect(
         displayRunStatus({ ...settled, status, shellsRunning: true }),

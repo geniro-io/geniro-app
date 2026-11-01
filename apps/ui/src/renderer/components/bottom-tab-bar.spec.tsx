@@ -44,13 +44,7 @@ describe('BottomTabBar', () => {
     const labels = tabs(render('chats')).map((tab) =>
       tab.getAttribute('aria-label'),
     );
-    expect(labels).toEqual([
-      'Chats',
-      'Workflows',
-      'Tasks',
-      'Stats',
-      'Settings',
-    ]);
+    expect(labels).toEqual(['Chats', 'Teams', 'Tasks', 'Stats', 'Settings']);
   });
 
   it('marks the current view as the page and only that one', () => {

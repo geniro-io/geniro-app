@@ -29,7 +29,7 @@ export interface TeamNoteWriter {
 }
 
 /**
- * One workflow node's end of the team-note tools, installed by the pass that
+ * One team node's end of the team-note tools, installed by the pass that
  * runs it. The broker owns validation, the cap, the fold and the record of
  * what each conversation was shown; the sink owns what only the run knows —
  * its seq-allocating write, which conversation a caller key is, and what each
@@ -65,7 +65,7 @@ function authorKey(nodeId: string, conversationId: string | null): string {
 }
 
 /**
- * The run-wide shared notes of a workflow's agents (`team_note` /
+ * The run-wide shared notes of a team's agents (`team_note` /
  * `team_notes`). Notes are `team_note` items, so the transcript row is the
  * only copy; what lives here is per launch — which notes each conversation
  * has been shown, and an index of who wrote which seq, rebuilt from the rows
@@ -123,7 +123,7 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
     return this.deliver(
       runId,
       nodeId,
-      'no workflow pass is running that could record it',
+      'no team pass is running that could record it',
       'write a team note',
       (sink) =>
         this.writes.run(runId, () =>
@@ -141,7 +141,7 @@ export class TeamNoteBroker extends HostSinkBroker<TeamNoteSink> {
     return this.deliver(
       runId,
       nodeId,
-      'no workflow pass is running that could read them',
+      'no team pass is running that could read them',
       'read the team notes',
       (sink) => this.readNow(runId, caller, query, sink),
     );

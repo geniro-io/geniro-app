@@ -6,7 +6,7 @@ import type {
   AnalysisTurn,
   RecommendationMarks,
   RecommendationsReport,
-  WorkflowVersionIndexReader,
+  TeamVersionIndexReader,
 } from '../chat.types';
 import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 
@@ -15,7 +15,7 @@ import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
  * siblings) — mechanics in {@link HostSinkBroker}. A chat holds a sink only
  * while one of its turns runs AND it is an analysis (`analysisTurnOf`), which
  * is what keeps the tools off every other chat's listing and scopes them to
- * what the analysis was started on — one source, or a workflow's runs.
+ * what the analysis was started on — one source, or a team's runs.
  */
 @Injectable()
 export class AnalysisBroker extends HostSinkBroker<AnalysisSink> {
@@ -41,7 +41,7 @@ export class AnalysisBroker extends HostSinkBroker<AnalysisSink> {
     runId: string,
     nodeId: string,
     report: RecommendationsReport,
-    versionIndex: WorkflowVersionIndexReader | null = null,
+    versionIndex: TeamVersionIndexReader | null = null,
   ): Promise<AnalysisFiled | HostSinkUnavailable> {
     return this.deliver(
       runId,

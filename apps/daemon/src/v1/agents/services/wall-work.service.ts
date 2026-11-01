@@ -64,7 +64,7 @@ export class WallWorkService {
   }
 
   /**
-   * Record every settled wall-measured turn of one workflow node. Idempotent
+   * Record every settled wall-measured turn of one team node. Idempotent
    * and safe beside any concurrent catch-up of the same node. Throws on a
    * database failure; the callers decide what that costs.
    */
@@ -94,10 +94,7 @@ export class WallWorkService {
       if ((await this.sweptVersion()) === WALL_WORK_VERSION) {
         return;
       }
-      const workflows = await this.runDao.listWorkflowRuns(
-        'all',
-        this.em.fork(),
-      );
+      const teams = await this.runDao.listTeamRuns('all', this.em.fork());
       const chats = await this.runDao.listChatRunIds(this.em.fork());
       let failed = 0;
       const each = async (runId: string, work: () => Promise<void>) => {
@@ -110,7 +107,7 @@ export class WallWorkService {
           );
         }
       };
-      for (const run of workflows) {
+      for (const run of teams) {
         await each(run.id, async () => {
           const em = this.em.fork();
           for (const node of await this.nodeStateDao.listByRun(run.id, em)) {

@@ -9,72 +9,70 @@ import {
 
 describe('targetOf', () => {
   it('reads an agent row as its CLI kind', () => {
-    expect(targetOf({ agentKind: 'claude', workflowSlug: null })).toBe(
-      'claude',
+    expect(targetOf({ agentKind: 'claude', teamSlug: null })).toBe('claude');
+  });
+
+  it('reads a team row as the composer’s own `team:` encoding', () => {
+    expect(targetOf({ agentKind: null, teamSlug: 'dev-team' })).toBe(
+      'team:dev-team',
     );
   });
 
-  it('reads a workflow row as the composer’s own `wf:` encoding', () => {
-    expect(targetOf({ agentKind: null, workflowSlug: 'dev-team' })).toBe(
-      'wf:dev-team',
-    );
-  });
-
-  it('lets a workflow win, matching the daemon’s own resolution order', () => {
+  it('lets a team win, matching the daemon’s own resolution order', () => {
     // Both columns set is reachable — a project pinning an agent and later a
-    // workflow — and `resolveRunTarget` answers the workflow. Disagreeing here
+    // team — and `resolveRunTarget` answers the team. Disagreeing here
     // would draw a picker on `claude` over a board that runs the graph.
-    expect(targetOf({ agentKind: 'claude', workflowSlug: 'dev-team' })).toBe(
-      'wf:dev-team',
+    expect(targetOf({ agentKind: 'claude', teamSlug: 'dev-team' })).toBe(
+      'team:dev-team',
     );
   });
 
   it('answers null when the row names nothing', () => {
-    expect(targetOf({ agentKind: null, workflowSlug: null })).toBeNull();
+    expect(targetOf({ agentKind: null, teamSlug: null })).toBeNull();
     expect(targetOf({})).toBeNull();
   });
 });
 
 describe('targetPatch', () => {
-  it('CLEARS the workflow when an agent is chosen', () => {
+  it('CLEARS the team when an agent is chosen', () => {
     // The whole reason both fields are always written: without the explicit
-    // null a card moved from a workflow to an agent keeps its slug, and the
-    // daemon — which reads a workflow first — goes on running the graph while
+    // null a card moved from a team to an agent keeps its slug, and the
+    // daemon — which reads a team first — goes on running the graph while
     // the picker shows the agent.
     expect(targetPatch('claude')).toEqual({
       agentKind: 'claude',
-      workflowSlug: null,
+      teamSlug: null,
     });
   });
 
-  it('CLEARS the agent when a workflow is chosen', () => {
-    expect(targetPatch('wf:dev-team')).toEqual({
+  it('CLEARS the agent when a team is chosen', () => {
+    expect(targetPatch('team:dev-team')).toEqual({
       agentKind: null,
-      workflowSlug: 'dev-team',
+      teamSlug: 'dev-team',
     });
   });
 
   it('clears both for the reset, which is what hands a card back to its project', () => {
-    expect(targetPatch(null)).toEqual({ agentKind: null, workflowSlug: null });
+    expect(targetPatch(null)).toEqual({ agentKind: null, teamSlug: null });
   });
 
   it('round-trips a slug carrying a colon of its own', () => {
-    // `wf:` is a PREFIX, not a separator: the pattern is greedy past the first
+    // `team:` is a PREFIX, not a separator: the pattern is greedy past the first
     // colon, so a slug with one survives.
-    expect(targetPatch('wf:team:v2').workflowSlug).toBe('team:v2');
+    expect(targetPatch('team:team:v2').teamSlug).toBe('team:v2');
   });
 });
 
 describe('targetLabel', () => {
   const library = [{ slug: 'dev-team', name: 'Dev team' }];
 
-  it('names a workflow by its NAME, not the slug the wire carries', () => {
-    expect(targetLabel('wf:dev-team', library)).toBe('Dev team');
+  it('names a team by its NAME, not the slug the wire carries', () => {
+    expect(targetLabel('team:dev-team', library)).toBe('Dev team');
   });
 
-  it('falls back to the slug for a workflow the library no longer holds', () => {
-    // A deleted workflow still says something rather than rendering blank.
-    expect(targetLabel('wf:gone', library)).toBe('gone');
+  it('falls back to the slug for a team the library no longer holds', () => {
+    // A deleted team still says something rather than rendering blank.
+    expect(targetLabel('team:gone', library)).toBe('gone');
   });
 
   it('leaves an agent as it is', () => {
@@ -108,7 +106,7 @@ describe('inheritsProjectRunConfig', () => {
     // claude model to a cursor run. A card that overrides the agent overrides
     // everything that belongs to it.
     expect(inheritsProjectRunConfig('cursor-agent', 'claude')).toBe(false);
-    expect(inheritsProjectRunConfig('wf:review', 'claude')).toBe(false);
+    expect(inheritsProjectRunConfig('team:review', 'claude')).toBe(false);
   });
 
   it('inherits nothing from a project that names nothing', () => {

@@ -34,7 +34,7 @@ interface RunReading {
  * The desktop app lists a repository's other working trees (the daemon runs no
  * git), and this narrows them to the ones the thread worked in. A repository's
  * worktrees belong to every thread and session that ever made one — two
- * workflows on one repo each make their own — so the thread's transcript is
+ * teams on one repo each make their own — so the thread's transcript is
  * the one record that says which are its.
  *
  * Asked on every turn end, so each run's reading is remembered: a later ask

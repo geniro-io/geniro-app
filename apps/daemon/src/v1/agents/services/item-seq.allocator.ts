@@ -31,9 +31,9 @@ import { ItemDao } from '../dao/item.dao';
  * both the same value across its `await`. Each run therefore gets its own
  * chain, and callers of different runs never wait on each other.
  *
- * Workflow runs come through here too. They used to number their rows from a
+ * Team runs come through here too. They used to number their rows from a
  * counter of each pass's own, which was sound only while a pass was the run's
- * sole writer — and it stopped being one when a workflow's agent processes
+ * sole writer — and it stopped being one when a team's agent processes
  * began outliving each pass (so a dev server an agent started survives its
  * reply): what those processes do between passes is written by the pass that
  * spawned them while a later pass may already be writing.

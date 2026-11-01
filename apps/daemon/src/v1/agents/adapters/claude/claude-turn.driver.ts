@@ -621,7 +621,7 @@ export class ClaudeTurnDriver implements TurnDriver {
    *
    * Per PROCESS, which this driver is (see {@link io}), and deliberately not
    * the adapter's `ClaudeSessionCostLedger`: that one is keyed by the CLI's
-   * session id, and a workflow node's calls resume ONE session id from several
+   * session id, and a team node's calls resume ONE session id from several
    * processes, so its last-seen total can be another process's. This process's
    * own accumulator, read off its own lines, cannot be.
    *

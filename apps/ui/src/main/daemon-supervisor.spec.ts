@@ -36,6 +36,7 @@ import {
   DaemonMigrationFailedError,
   DaemonSupervisor,
   type DaemonSupervisorOptions,
+  defaultCheckBusy,
   defaultCheckHealth,
   defaultCheckIdentity,
 } from './daemon-supervisor';
@@ -1664,7 +1665,7 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
         step: 1,
         of: 1,
         kind: 'database',
-        message: 'no such table: workflows',
+        message: 'no such table: teams',
         backupDir: null,
       }),
     });
@@ -1676,7 +1677,7 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
 
     expect(r.children).toHaveLength(2);
     expect(r.logs.join('\n')).toMatch(
-      /updating your data failed at 0002-rename .*no such table: workflows/,
+      /updating your data failed at 0002-rename .*no such table: teams/,
     );
     await expect(r.supervisor.start()).rejects.toBeInstanceOf(
       DaemonMigrationFailedError,
@@ -1697,5 +1698,66 @@ describe('DaemonSupervisor — a daemon it OWNS that dies on its own', () => {
 
     expect(r.children).toHaveLength(3);
     expect(r.supervisor.getHandle()).toBe(r.started[2]);
+  });
+});
+
+describe('defaultCheckBusy', () => {
+  const HANDLE = {
+    pid: 1,
+    host: '127.0.0.1',
+    port: 1,
+    token: 't',
+    version: '1',
+  } as unknown as Parameters<typeof defaultCheckBusy>[0];
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function answering(routes: Record<string, unknown>): string[] {
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', (url: string) => {
+      const path = new URL(url).pathname;
+      asked.push(path);
+      return Promise.resolve(
+        path in routes
+          ? new Response(JSON.stringify(routes[path]))
+          : new Response(null, { status: 404 }),
+      );
+    });
+    return asked;
+  }
+
+  it('reads a live team run as busy', async () => {
+    answering({ '/v1/chats': [], '/v1/teams/runs': [{ status: 'running' }] });
+
+    await expect(defaultCheckBusy(HANDLE)).resolves.toBe(true);
+  });
+
+  it('asks a daemon built before the rename for its runs where it serves them', async () => {
+    const asked = answering({
+      '/v1/chats': [],
+      '/v1/workflows/runs': [{ status: 'completed' }],
+    });
+
+    await expect(defaultCheckBusy(HANDLE)).resolves.toBe(false);
+    expect(asked).toContain('/v1/workflows/runs');
+  });
+
+  it('still reads an older daemon’s live run as busy', async () => {
+    answering({
+      '/v1/chats': [],
+      '/v1/workflows/runs': [{ status: 'running' }],
+    });
+
+    await expect(defaultCheckBusy(HANDLE)).resolves.toBe(true);
+  });
+
+  it('throws when neither path answers, so the caller reads it as busy', async () => {
+    answering({ '/v1/chats': [] });
+
+    await expect(defaultCheckBusy(HANDLE)).rejects.toThrow(
+      '/v1/workflows/runs answered 404',
+    );
   });
 });

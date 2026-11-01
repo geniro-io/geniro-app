@@ -262,7 +262,7 @@ describe('PartialStreamService — live context', () => {
   });
 
   it('windowFor is scoped to the OWNER, not to the run', () => {
-    // The map is keyed by the pair, so a workflow node must not read the window
+    // The map is keyed by the pair, so a team node must not read the window
     // a sibling node on the same run reported.
     service.rememberWindow(RUN, OWNER, 1_000_000);
     expect(service.windowFor(RUN, 'another-node')).toBeNull();
@@ -725,7 +725,7 @@ describe('PartialStreamService — a window belongs to an OWNER, not to a run', 
   }
 
   it('gives two nodes of one run their own windows', () => {
-    // A workflow run is N agents, and they routinely run on DIFFERENT models. A
+    // A team run is N agents, and they routinely run on DIFFERENT models. A
     // run-scoped window is whichever node reported LAST, so the 1M node's
     // 800k-token conversation was drawn against the 200k node's window — a ring
     // pinned at 100% on an agent with three quarters of its context free.
@@ -756,7 +756,7 @@ describe('PartialStreamService — a window belongs to an OWNER, not to a run', 
 
   it('forgetRun sweeps EVERY node of that run, and no other run', () => {
     // The maps are keyed per (run, owner), so deleting the bare run id leaves a
-    // workflow's per-node entries behind for the life of the process — a leak
+    // team's per-node entries behind for the life of the process — a leak
     // nothing can reach again, the run they belong to being gone.
     service.rememberWindow(RUN, BIG, 1_000_000);
     service.rememberWindow(RUN, SMALL, 200_000);

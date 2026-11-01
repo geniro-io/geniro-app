@@ -68,7 +68,7 @@ afterEach(async () => {
 
 describe('RunNamedPathsService', () => {
   it('names the worktree its own tool calls work in, and not one only another thread of the same repository names', async () => {
-    // Two workflows on one repository, each with its own worktree: the
+    // Two teams on one repository, each with its own worktree: the
     // repository lists both, and each thread must claim only its own.
     await ranCommand('run-a', `cd ${OWN} && pnpm test`);
     await ranCommand('run-b', `git -C ${SIBLING} status`);

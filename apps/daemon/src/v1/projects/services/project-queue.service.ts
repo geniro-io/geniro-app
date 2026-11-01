@@ -78,7 +78,7 @@ export class ProjectQueueService {
       effort: project.effort,
       approval: project.approval,
       configDir: project.configDir,
-      workflowSlug: project.workflowSlug,
+      teamSlug: project.teamSlug,
       waitingTasks,
       stoppedTaskIds: stopped,
       interruptedTasks: new Map(

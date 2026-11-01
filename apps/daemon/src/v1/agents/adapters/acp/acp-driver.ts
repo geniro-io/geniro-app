@@ -1538,7 +1538,7 @@ export class AcpTurnDriver {
   openOnLiveSession(): AgentEvent[] {
     const events: AgentEvent[] = [];
     // Every turn names the session it runs in, not only the one that opened
-    // it: a workflow call records its turn's session as the handle a later
+    // it: a team call records its turn's session as the handle a later
     // `thread:` resumes, and a turn that names none leaves its call
     // unresumable once this process is gone.
     if (this.session.sessionId !== null) {
@@ -3114,7 +3114,7 @@ export class AcpTurnDriver {
    * `--append-system-prompt`, so every block a turn carries stays in the window
    * for every turn after it. Re-sending it each turn put a full copy of the
    * user's instructions, the wired instruction blocks and the node's role into
-   * every message: a workflow node with a ~20KB role and block had ~5k tokens
+   * every message: a team node with a ~20KB role and block had ~5k tokens
    * of duplicate instructions added to its window per turn, on top of the ~1.1KB
    * preamble that alone had put ~40 copies (~11k tokens) into a 40-message
    * thread.

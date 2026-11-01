@@ -230,7 +230,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
   });
 
   it('reads a run once to know whether it can hold calls', async () => {
-    await runs.create({ id: 'run-1', workflowId: 'dev-team' });
+    await runs.create({ id: 'run-1', teamId: 'dev-team' });
     await runs.create({ id: 'chat-1' });
     const reads = vi.spyOn(runs, 'getById');
 
@@ -242,9 +242,9 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
   });
 
   describe('the boot sweep', () => {
-    it('stamps every workflow run and records the rule it stamped under', async () => {
-      await runs.create({ id: 'run-1', workflowId: 'dev-team' });
-      await runs.create({ id: 'run-2', workflowId: 'dev-team' });
+    it('stamps every team run and records the rule it stamped under', async () => {
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
+      await runs.create({ id: 'run-2', teamId: 'dev-team' });
       await legacy(1, 'message', 'manager', { text: 'a' }, 'run-1');
       await legacy(1, 'message', 'manager', { text: 'b' }, 'run-2');
 
@@ -258,7 +258,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
     });
 
     it('stays retired once it has finished under the current rule', async () => {
-      await runs.create({ id: 'run-1', workflowId: 'dev-team' });
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION}\n`);
       await legacy(1, 'message', 'manager', { text: 'a' });
 
@@ -269,7 +269,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
     });
 
     it("stamps every row again when the stamps are another rule's", async () => {
-      await runs.create({ id: 'run-1', workflowId: 'dev-team' });
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
       await dao.create({
         runId: 'run-1',
@@ -286,15 +286,15 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
     });
 
     it('resolves when the runs cannot be listed, and is not retired', async () => {
-      vi.spyOn(runs, 'listWorkflowRuns').mockRejectedValue(new Error('locked'));
+      vi.spyOn(runs, 'listTeamRuns').mockRejectedValue(new Error('locked'));
 
       await expect(index.indexAllQuietly()).resolves.toBeUndefined();
       expect(existsSync(marker)).toBe(false);
     });
 
     it('stamps again a run whose stamping started after the sweep looked, and spans the clear', async () => {
-      await runs.create({ id: 'run-1', workflowId: 'dev-team' });
-      await runs.create({ id: 'run-2', workflowId: 'dev-team' });
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
+      await runs.create({ id: 'run-2', teamId: 'dev-team' });
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
       await legacyRun(
         600,
@@ -343,7 +343,7 @@ describe('ItemCallIndexService (in-memory sqlite)', () => {
     });
 
     it('leaves no row unstamped when a read was stamping the run as the stamps were cleared', async () => {
-      await runs.create({ id: 'run-1', workflowId: 'dev-team' });
+      await runs.create({ id: 'run-1', teamId: 'dev-team' });
       writeFileSync(marker, `${CALL_MEMBERSHIP_VERSION - 1}\n`);
       await legacyRun(600, (seq) => ({
         kind: 'message',

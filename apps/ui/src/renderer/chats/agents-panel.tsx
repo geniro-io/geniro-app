@@ -1920,7 +1920,7 @@ export function AgentsPanel({
    */
   metricsRunId?: string | null;
   /**
-   * Whether those readouts are asked PER NODE — a workflow run, whose nodes
+   * Whether those readouts are asked PER NODE — a team run, whose nodes
    * each hold a process and a window of their own. Otherwise only the chat
    * agent's own card offers one, since a chat holds one process; asking the run
    * alone on a workflow would report one node's window under every node's name.
@@ -2836,7 +2836,7 @@ export function AgentsPanel({
                           instances … it's different for each instance"). */}
                       {shownInstances.length > 1 ? null : (
                         <ContextMeter
-                          // Per node on a workflow run, else only the chat
+                          // Per node on a team run, else only the chat
                           // agent's own card: see `metricsByNode`.
                           runId={
                             metricsByNode || agent.id === CHAT_AGENT_KEY

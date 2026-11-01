@@ -14,7 +14,7 @@ import { mergeSkills } from './skill-autocomplete';
  * 7 plugins and a command. Without it the `/` menu offered the default
  * account's list to every chat.
  *
- * A pair rather than a kind list beside one directory, because a workflow's
+ * A pair rather than a kind list beside one directory, because a team's
  * agents each name their own profile: a Manager on one account and a Reviewer
  * on another fed by the same trigger have two different lists.
  */
@@ -25,7 +25,7 @@ export interface SkillTarget {
 
 /**
  * The composer target's invokable skills, fetched from the daemon per
- * (agent kind, cwd, PROFILE). `targets` may hold several — a workflow trigger
+ * (agent kind, cwd, PROFILE). `targets` may hold several — a team trigger
  * fanning out to mixed agents — whose lists union de-duped by name. A fetch
  * failure just yields an empty list: the autocomplete is a nicety, never an
  * error surface.

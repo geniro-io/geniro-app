@@ -1,4 +1,4 @@
-/** What separates a run id from the rest of a workflow key. */
+/** What separates a run id from the rest of a team key. */
 const RUN_KEY_SEPARATOR = '::';
 
 /** What opens a node's own key after its run's prefix. */
@@ -8,7 +8,7 @@ const NODE_KEY_PREFIX = 'node:';
 const CALL_KEY_PREFIX = 'call:';
 
 /**
- * The keys a WORKFLOW run's agent processes are kept under in
+ * The keys a TEAM run's agent processes are kept under in
  * `AgentSessionRegistry` — a chat's is its bare run id.
  *
  * Written once because two modules must agree on them: the graph executor
@@ -25,7 +25,7 @@ export function nodeSessionKey(runId: string, nodeId: string): string {
 }
 
 /**
- * What EVERY key a workflow run opens starts with — its nodes' and its
+ * What EVERY key a team run opens starts with — its nodes' and its
  * conversations' alike — for a caller that has to reach all of one run's
  * processes, or all of its per-key facts, at once. A chat's key is the bare run
  * id and does not start with it.
@@ -52,7 +52,7 @@ export function callSessionKeyPrefix(runId: string): string {
 }
 
 /**
- * Which run — and which workflow node — a registry key names: a bare run id is
+ * Which run — and which team node — a registry key names: a bare run id is
  * a chat's (`nodeId` null), `<runId>::node:<id>` is a node's own process.
  *
  * A CALL's key answers null. Its process belongs to a conversation rather than
@@ -90,7 +90,7 @@ export function callConversationOf(key: string): string | null {
 
 /**
  * The run any registry key belongs to — a chat's bare id, or the prefix of a
- * workflow key, whatever kind of key follows it.
+ * team key, whatever kind of key follows it.
  */
 export function runIdOfSessionKey(key: string): string {
   const at = key.indexOf(RUN_KEY_SEPARATOR);

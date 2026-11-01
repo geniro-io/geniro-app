@@ -11,7 +11,7 @@ import type { RunGroupColor } from '../../agents/chat.types';
  *
  * Runtime state, not a definition: a group is how one machine's user chose to
  * arrange their own sidebar, so it lives in SQLite beside the runs it holds
- * rather than in a YAML file (which is reserved for workflows — the things the
+ * rather than in a YAML file (which is reserved for teams — the things the
  * user authors, exports and shares). Deleting one RELEASES its runs instead of
  * taking them with it; nothing here owns a conversation.
  */
@@ -60,8 +60,8 @@ export class RunGroup extends TimestampsEntity {
   autoCwd: string | null = null;
 
   /**
-   * A workflow whose runs land in this group automatically, by SLUG — the
-   * workflow library's own identity — or null for a group that claims none.
+   * A team whose runs land in this group automatically, by SLUG — the
+   * team library's own identity — or null for a group that claims none.
    *
    * The sibling of {@link autoCwd} and a different question: that one files by
    * WHERE a conversation was started, this one by WHAT it is. A user running
@@ -69,11 +69,11 @@ export class RunGroup extends TimestampsEntity {
    * runs, and a folder rule set on any of them would sweep up their ordinary
    * chats as well.
    *
-   * Nothing validates that it names a workflow still in the library: a slug
+   * Nothing validates that it names a team still in the library: a slug
    * that has been deleted simply never matches, and a group is not the place a
-   * workflow's absence should be reported. It OUTRANKS a folder claim — see
+   * team's absence should be reported. It OUTRANKS a folder claim — see
    * `RunGroupsService.resolveAutoGroupId`.
    */
   @Property({ type: 'text', nullable: true })
-  autoWorkflowId: string | null = null;
+  autoTeamId: string | null = null;
 }

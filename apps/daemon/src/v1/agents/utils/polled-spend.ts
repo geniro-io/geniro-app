@@ -41,7 +41,7 @@ export function applyPolledSpend<
 }
 
 /**
- * Put a polled bill ON TOP of turns another CLI priced — a workflow run, whose
+ * Put a polled bill ON TOP of turns another CLI priced — a team run, whose
  * other nodes report their cost per turn. Replacing there (as
  * {@link applyPolledSpend} rightly does for a single-CLI chat) would report the
  * polled node's bill as the whole run's cost.
@@ -76,7 +76,7 @@ export function pollsSpendFor(
 }
 
 /**
- * One workflow node's polled bill: its own row's, or none at all for a node
+ * One team node's polled bill: its own row's, or none at all for a node
  * whose CLI prices its own turns.
  */
 export function nodePolledSpend(

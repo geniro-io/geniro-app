@@ -44,7 +44,7 @@ const STAMP_BATCH_PAUSE_MS = 10;
 
 /**
  * Writes and repairs `Item.inCall` — which call's card each row of a run is
- * drawn in (`utils/call-membership.ts`), the key a workflow run's transcript is
+ * drawn in (`utils/call-membership.ts`), the key a team run's transcript is
  * paged by.
  */
 @Injectable()
@@ -84,7 +84,7 @@ export class ItemCallIndexService {
   }
 
   /**
-   * Whether a run can hold calls at all. Only a workflow's agents call one
+   * Whether a run can hold calls at all. Only a team's agents call one
    * another, so every row of a chat is in its own flow and a conversation read
    * of one is a read of the whole run — with nothing to index first. Kept per
    * run: what kind of run it is never changes.
@@ -98,7 +98,7 @@ export class ItemCallIndexService {
     if (run === null) {
       return false;
     }
-    const holds = run.workflowId !== null;
+    const holds = run.teamId !== null;
     this.runKinds.set(runId, holds);
     return holds;
   }
@@ -143,7 +143,7 @@ export class ItemCallIndexService {
   }
 
   /**
-   * The boot entry point: every workflow run, newest first, so the threads
+   * The boot entry point: every team run, newest first, so the threads
    * opened next are ready soonest. Never throws; a run it misses is stamped
    * when it is first read.
    */
@@ -162,7 +162,7 @@ export class ItemCallIndexService {
       await this.itemDao.forgetInCalls(this.em.fork());
       this.epoch += 1;
       this.indexed.clear();
-      const runs = await this.runDao.listWorkflowRuns('all', this.em.fork());
+      const runs = await this.runDao.listTeamRuns('all', this.em.fork());
       let checked = 0;
       for (const run of runs) {
         if (this.indexed.has(run.id)) {
@@ -172,9 +172,7 @@ export class ItemCallIndexService {
         checked += 1;
       }
       if (checked > 0) {
-        this.logger.log(
-          `checked call membership for ${checked} workflow run(s)`,
-        );
+        this.logger.log(`checked call membership for ${checked} team run(s)`);
       }
       await this.markSwept();
     } catch (err) {

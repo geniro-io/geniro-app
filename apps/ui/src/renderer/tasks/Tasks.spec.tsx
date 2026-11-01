@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
     eligible: [],
     blocked: [],
   })),
-  listWorkflows: vi.fn(async () => []),
+  listTeams: vi.fn(async () => []),
   listLabelInstructions: vi.fn(
     async (_params: { projectId?: string }): Promise<unknown[]> => [],
   ),
@@ -53,10 +53,10 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       reorderTasks: mocks.reorderTasks,
     },
     chats: withHistoryPages({ listRunItems: mocks.listRunItems }),
-    // The board reads the workflow library for its two target pickers. The
+    // The board reads the team library for its two target pickers. The
     // real `createDaemonApis` returns every API class, so a double that omits
     // one is the double drifting rather than a case worth guarding for.
-    workflows: { listWorkflows: mocks.listWorkflows },
+    teams: { listTeams: mocks.listTeams },
     labelInstructions: { listLabelInstructions: mocks.listLabelInstructions },
     agents: {},
     capabilities: mocks.capabilities,

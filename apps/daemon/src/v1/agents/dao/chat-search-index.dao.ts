@@ -51,12 +51,12 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
       .where('chat_text', 'match', matchQuery)
       .where('i.deleted_at', 'is', null)
       .where('r.deleted_at', 'is', null)
-      // A workflow builder's own chat, and a thread's or a workflow's
+      // A team builder's own chat, and a thread's or a team's
       // analysis, are listed nowhere a hit could open them: each lives in its
       // own surface.
-      .where('r.edits_workflow_slug', 'is', null)
+      .where('r.edits_team_slug', 'is', null)
       .where('r.analysis_source_run_id', 'is', null)
-      .where('r.analysis_workflow_slug', 'is', null);
+      .where('r.analysis_team_slug', 'is', null);
     if (!options.includeArchived) {
       query = query.where('r.archived_at', 'is', null);
     }
@@ -82,9 +82,9 @@ export class ChatSearchIndexDao extends BaseDao<Item> {
         .where('id', '=', runId)
         .where('deleted_at', 'is', null)
         // The same reach as `match`: nothing a search cannot return.
-        .where('edits_workflow_slug', 'is', null)
+        .where('edits_team_slug', 'is', null)
         .where('analysis_source_run_id', 'is', null)
-        .where('analysis_workflow_slug', 'is', null)
+        .where('analysis_team_slug', 'is', null)
         .executeTakeFirst()
     );
   }

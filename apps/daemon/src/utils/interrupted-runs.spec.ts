@@ -18,9 +18,9 @@ function harness(settle: () => Promise<void> = async () => undefined) {
         calls.push(`chats:${cause}`);
       },
     },
-    workflows: {
+    teams: {
       reconcileOrphanedRuns: async (cause: InterruptCause) => {
-        calls.push(`workflows:${cause}`);
+        calls.push(`teams:${cause}`);
       },
     },
     tasks: {
@@ -43,7 +43,7 @@ describe('closeInterruptedRuns', () => {
 
   it('reads the note once, hands its cause to both reconciles, then settles every board', async () => {
     // A second read would find the note already gone and call every
-    // workflow's stop `unknown`; settling first would find no run closed yet.
+    // team's stop `unknown`; settling first would find no run closed yet.
     const h = harness();
 
     await closeInterruptedRuns(h.deps);
@@ -52,7 +52,7 @@ describe('closeInterruptedRuns', () => {
     expect(h.calls).toEqual([
       'read',
       'chats:crash',
-      'workflows:crash',
+      'teams:crash',
       'settle:null',
     ]);
   });

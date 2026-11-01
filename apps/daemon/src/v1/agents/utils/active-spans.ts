@@ -38,11 +38,11 @@ export const SPAN_ROW_KINDS = [
 
 /**
  * The wall-clock stretches in which SOME agent of a run was working, merged —
- * what the chat header's clock is drawn from on a WORKFLOW run.
+ * what the chat header's clock is drawn from on a TEAM run.
  *
  * Why this exists rather than `ChatTotals.workedMs`: that figure is a SUM of
  * every turn's own duration, so two agents working a minute in parallel is two
- * minutes there. On a workflow that is the ordinary case — a Manager's turn
+ * minutes there. On a team that is the ordinary case — a Manager's turn
  * stays open for the whole time it waits in `await_agent` while its Engineer
  * works — and a clock built on the sum advances two seconds a second. A clock
  * is read as a clock, so its settled half is the UNION of these spans.

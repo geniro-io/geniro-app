@@ -39,7 +39,7 @@ export interface RecommendationsFolds {
   toggle: (key: string) => void;
 }
 
-export interface WorkflowRunStatsView {
+export interface TeamRunStatsView {
   runId: string;
   title: string | null;
   createdAt: string;
@@ -53,7 +53,7 @@ export interface WorkflowRunStatsView {
   costUsd: number | null;
 }
 
-export interface WorkflowModelStatsView {
+export interface TeamModelStatsView {
   agent: string | null;
   model: string | null;
   modelSource: 'reported' | 'configured' | 'unreported';
@@ -65,7 +65,7 @@ export interface WorkflowModelStatsView {
   costPerTurnUsd: number | null;
 }
 
-export interface WorkflowAgentStatsView {
+export interface TeamAgentStatsView {
   node: string;
   agent: string | null;
   runs: number;
@@ -80,10 +80,10 @@ export interface WorkflowAgentStatsView {
   failedToolCalls: number;
   costUsd: number | null;
   costPerRunUsd: number | null;
-  models: WorkflowModelStatsView[];
+  models: TeamModelStatsView[];
 }
 
-export interface WorkflowCallStatsView {
+export interface TeamCallStatsView {
   caller: string;
   callee: string;
   calls: number;
@@ -95,7 +95,7 @@ export interface WorkflowCallStatsView {
   workedMs: number | null;
 }
 
-export interface WorkflowStatsView {
+export interface TeamStatsView {
   runs: number;
   perRun: {
     wallMs: number;
@@ -118,10 +118,10 @@ export interface WorkflowStatsView {
     calls: number;
     costUsd: number | null;
   };
-  runList: WorkflowRunStatsView[];
-  agents: WorkflowAgentStatsView[];
+  runList: TeamRunStatsView[];
+  agents: TeamAgentStatsView[];
   callEdges: number;
-  calls: WorkflowCallStatsView[];
+  calls: TeamCallStatsView[];
 }
 
 const NOT_MEASURED = '—';
@@ -228,7 +228,7 @@ function Scorecard({
   stats,
   look,
 }: {
-  stats: WorkflowStatsView;
+  stats: TeamStatsView;
   look: RecommendationsLook;
 }): React.JSX.Element {
   const { perRun, totals } = stats;
@@ -266,7 +266,7 @@ function Scorecard({
   );
 }
 
-function topModel(agent: WorkflowAgentStatsView): string | null {
+function topModel(agent: TeamAgentStatsView): string | null {
   const named = agent.models.filter((model) => model.model !== null);
   if (named.length === 0) {
     return null;
@@ -283,7 +283,7 @@ function AgentRow({
   look,
   hot,
 }: {
-  agent: WorkflowAgentStatsView;
+  agent: TeamAgentStatsView;
   index: number;
   share: number | null;
   runs: number;
@@ -365,7 +365,7 @@ function WhereTheTimeGoes({
   folds,
   hotNodes,
 }: {
-  stats: WorkflowStatsView;
+  stats: TeamStatsView;
   look: RecommendationsLook;
   folds: RecommendationsFolds;
   hotNodes: ReadonlySet<string>;
@@ -449,7 +449,7 @@ function ModelsTable({
   stats,
   look,
 }: {
-  stats: WorkflowStatsView;
+  stats: TeamStatsView;
   look: RecommendationsLook;
 }): React.JSX.Element {
   return (
@@ -480,7 +480,7 @@ function ModelsTable({
                   className="px-1.5 py-1 whitespace-nowrap text-muted-foreground"
                   title={
                     model.modelSource === 'configured'
-                      ? 'Turns that ended before the agent reported its model — the model the workflow configured'
+                      ? 'Turns that ended before the agent reported its model — the model the team configured'
                       : model.modelSource === 'unreported'
                         ? 'Pooled turns that named no member'
                         : undefined
@@ -514,7 +514,7 @@ function ModelsTable({
   );
 }
 
-function runLabel(run: WorkflowRunStatsView): string {
+function runLabel(run: TeamRunStatsView): string {
   return (
     run.title ??
     new Date(run.createdAt).toLocaleString(undefined, {
@@ -530,7 +530,7 @@ function RunsList({
   stats,
   look,
 }: {
-  stats: WorkflowStatsView;
+  stats: TeamStatsView;
   look: RecommendationsLook;
 }): React.JSX.Element {
   const longest = Math.max(1, ...stats.runList.map((run) => run.wallMs));
@@ -549,7 +549,7 @@ function RunsList({
                 className={versionTag({ current: run.current })}
                 title={
                   run.current
-                    ? 'Ran the workflow as it is now'
+                    ? 'Ran the team as it is now'
                     : 'Ran an earlier version'
                 }>
                 v{run.version}
@@ -583,7 +583,7 @@ function CallsTable({
   stats,
   look,
 }: {
-  stats: WorkflowStatsView;
+  stats: TeamStatsView;
   look: RecommendationsLook;
 }): React.JSX.Element {
   return (
@@ -636,13 +636,13 @@ function CallsTable({
   );
 }
 
-export function WorkflowFigures({
+export function TeamFigures({
   stats,
   look,
   folds,
   hotNodes,
 }: {
-  stats: WorkflowStatsView;
+  stats: TeamStatsView;
   look: RecommendationsLook;
   folds: RecommendationsFolds;
   hotNodes: ReadonlySet<string>;
@@ -693,8 +693,8 @@ export function WorkflowFigures({
 }
 
 export function workedShare(
-  stats: WorkflowStatsView,
-  agent: WorkflowAgentStatsView,
+  stats: TeamStatsView,
+  agent: TeamAgentStatsView,
 ): number | null {
   const worked = stats.agents.reduce(
     (total, each) => total + (each.workedMs ?? 0),

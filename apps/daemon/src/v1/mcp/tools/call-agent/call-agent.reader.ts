@@ -2,7 +2,7 @@ import {
   CALL_MODES,
   type CallEnvelope,
   type CallMode,
-} from '../../../graphs/graphs.types';
+} from '../../../teams/teams.types';
 import { invalidArgsEnvelope, unknownArgsEnvelope } from '../call-mcp-tool';
 
 /**

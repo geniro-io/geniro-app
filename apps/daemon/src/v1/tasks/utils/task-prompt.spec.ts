@@ -4,7 +4,7 @@ import { reportImagePaths } from './report-images';
 import {
   composeTaskPrompt,
   TASK_REPORT_INSTRUCTIONS,
-  TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+  TASK_REPORT_INSTRUCTIONS_TEAM,
 } from './task-prompt';
 
 describe('the report instructions — screenshots', () => {
@@ -13,7 +13,7 @@ describe('the report instructions — screenshots', () => {
     // would attach, or the agent is taught a form that is silently dropped.
     for (const text of [
       TASK_REPORT_INSTRUCTIONS,
-      TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+      TASK_REPORT_INSTRUCTIONS_TEAM,
     ]) {
       expect(text).toMatch(/screenshot/i);
       expect(reportImagePaths(text)).toEqual(['/absolute/path/to/image.png']);
@@ -25,7 +25,7 @@ describe('the report instructions — screenshots', () => {
     // card alone, and the user reading the thread saw none.
     for (const text of [
       TASK_REPORT_INSTRUCTIONS,
-      TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+      TASK_REPORT_INSTRUCTIONS_TEAM,
     ]) {
       const sentence = text
         .split('\n')
@@ -44,7 +44,7 @@ describe('the report instructions — the board tool', () => {
     // In progress for good.
     for (const text of [
       TASK_REPORT_INSTRUCTIONS,
-      TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+      TASK_REPORT_INSTRUCTIONS_TEAM,
     ]) {
       expect(text).toContain('`update_task`');
       expect(text).toContain('`in_review`');
@@ -52,10 +52,10 @@ describe('the report instructions — the board tool', () => {
     }
   });
 
-  it('tells a workflow node to leave the card to the agent that concludes', () => {
-    // Every node of a task workflow holds the tool; without this each one
+  it('tells a team node to leave the card to the agent that concludes', () => {
+    // Every node of a task team holds the tool; without this each one
     // replaces the card's report with its own slice.
-    expect(TASK_REPORT_INSTRUCTIONS_WORKFLOW).toMatch(/leaves the card alone/);
+    expect(TASK_REPORT_INSTRUCTIONS_TEAM).toMatch(/leaves the card alone/);
     expect(TASK_REPORT_INSTRUCTIONS).not.toMatch(/leaves the card alone/);
   });
 });

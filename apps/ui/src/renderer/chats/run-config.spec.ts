@@ -26,17 +26,17 @@ function config(over: Partial<RunConfig> = {}): RunConfig {
   };
 }
 describe('which targets are honoured', () => {
-  it('accepts a real CLI and a workflow reference, rejects anything else', () => {
+  it('accepts a real CLI and a team reference, rejects anything else', () => {
     // Asserted through `applyRunConfig`, the only consumer of the underlying
     // check — a null return IS "this build cannot point a run at that".
     expect(applyRunConfig(config({ target: 'claude' }))).not.toBeNull();
     expect(applyRunConfig(config({ target: 'cursor-agent' }))).not.toBeNull();
-    expect(applyRunConfig(config({ target: 'wf:ship-it' }))).not.toBeNull();
+    expect(applyRunConfig(config({ target: 'team:ship-it' }))).not.toBeNull();
     expect(
       applyRunConfig(config({ target: 'some-agent-we-dropped' })),
     ).toBeNull();
-    // A bare `wf:` names no workflow.
-    expect(applyRunConfig(config({ target: 'wf:' }))).toBeNull();
+    // A bare `team:` names no team.
+    expect(applyRunConfig(config({ target: 'team:' }))).toBeNull();
   });
 });
 
@@ -78,13 +78,13 @@ describe('captureRunConfig', () => {
     ).toBe('Padded');
   });
 
-  it('a workflow target stores none of the three per-CLI choices', () => {
+  it('a team target stores none of the three per-CLI choices', () => {
     // The composer hides the model / effort / approval / config-dir chips for a
-    // workflow (its nodes name their own in the YAML), so capturing whatever
+    // team (its nodes name their own in the YAML), so capturing whatever
     // they last showed would save choices the user could not see or edit.
     const draft = captureRunConfig({
       name: 'Team',
-      target: 'wf:ship-it',
+      target: 'team:ship-it',
       cwd: '/Users/dev/app',
       branch: null,
       configDir: '/Users/dev/.config/work',
@@ -124,7 +124,7 @@ describe('applyRunConfig', () => {
     expect(applied).toEqual({
       target: 'cursor-agent',
       agentKind: 'cursor-agent',
-      isWorkflow: false,
+      isTeam: false,
       cwd: '/Users/dev/geniro-app',
       configDir: '/Users/dev/.config/work',
       model: 'auto-smart',
@@ -159,10 +159,10 @@ describe('applyRunConfig', () => {
     expect(applied?.cwd).toBe('/Users/dev/geniro-app');
   });
 
-  it('a workflow configuration resolves without the CLI-only choices', () => {
+  it('a team configuration resolves without the CLI-only choices', () => {
     const applied = applyRunConfig(
       config({
-        target: 'wf:ship-it',
+        target: 'team:ship-it',
         model: 'claude-opus-5',
         effort: 'high',
         approval: ChatApprovalMode.AcceptEdits,
@@ -171,7 +171,7 @@ describe('applyRunConfig', () => {
     );
 
     expect(applied).toMatchObject({
-      target: 'wf:ship-it',
+      target: 'team:ship-it',
       agentKind: 'claude',
       model: null,
       effort: null,
@@ -182,18 +182,16 @@ describe('applyRunConfig', () => {
     });
   });
 
-  it('flags a workflow so the caller does not write the per-CLI choices', () => {
+  it('flags a team so the caller does not write the per-CLI choices', () => {
     // The flag is the whole guard against a real data loss: `agentKind` is
-    // `claude` for a workflow, and the composer's model/effort setters PERSIST,
+    // `claude` for a team, and the composer's model/effort setters PERSIST,
     // so writing the nulls below through them deletes the user's own remembered
     // claude model. A CLI configuration that merely names no model is the
     // opposite case and must stay writable.
-    expect(applyRunConfig(config({ target: 'wf:ship-it' }))?.isWorkflow).toBe(
+    expect(applyRunConfig(config({ target: 'team:ship-it' }))?.isTeam).toBe(
       true,
     );
-    expect(applyRunConfig(config({ target: 'claude' }))?.isWorkflow).toBe(
-      false,
-    );
+    expect(applyRunConfig(config({ target: 'claude' }))?.isTeam).toBe(false);
   });
 
   it('carries the branch through so the caller can attempt the switch', () => {

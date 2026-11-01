@@ -50,7 +50,7 @@ function build(opts: {
   agentSessionId?: string | null;
   /**
    * The CLI stamped by the node that started FIRST — which is the only way a
-   * WORKFLOW run can name a CLI at all, its own `agentKind` being null.
+   * TEAM run can name a CLI at all, its own `agentKind` being null.
    * `null` models a run no node has taken a turn on yet.
    */
   firstNodeAgentKind?: AgentKind | null;
@@ -75,7 +75,7 @@ function build(opts: {
       : {
           id: 'run-a',
           title: null,
-          workflowId: null,
+          teamId: null,
           agentKind: AgentKind.CursorAgent,
           ...opts.run,
         };
@@ -132,7 +132,7 @@ function build(opts: {
         : { agentSessionId: opts.agentSessionId },
     ),
   );
-  // The stamp the first node left behind — a workflow run's only route to a CLI.
+  // The stamp the first node left behind — a team run's only route to a CLI.
   const firstAgentKind = vi.fn(() =>
     Promise.resolve(
       opts.firstNodeAgentKind === undefined
@@ -244,7 +244,7 @@ function build(opts: {
   /**
    * A graph NODE reaching for a tool.
    *
-   * The earliest moment a workflow run can be named by anything: its own
+   * The earliest moment a team run can be named by anything: its own
    * run-level stream carries one user message and then nothing until the whole
    * run settles, so every naming opportunity in between belongs to a node.
    */
@@ -324,10 +324,10 @@ describe('ChatTitleService', () => {
     );
   });
 
-  it('uses the workflow node’s actual local model for its title', async () => {
+  it('uses the team node’s actual local model for its title', async () => {
     const { settle, generateTitle } = build({
       run: {
-        workflowId: 'wf-local',
+        teamId: 'wf-local',
         agentKind: null,
         model: null,
         title: 'implement local coding',
@@ -662,16 +662,16 @@ describe('ChatTitleService', () => {
     expect(retitle).not.toHaveBeenCalled();
   });
 
-  it('gives a workflow run its FIRST title from the seed prompt alone', async () => {
-    // It used to be skipped entirely, on the reading that the workflow's own
+  it('gives a team run its FIRST title from the seed prompt alone', async () => {
+    // It used to be skipped entirely, on the reading that the team's own
     // name is already a true label — which holds for ONE run and fails for two:
-    // every run of one workflow then carried the identical row, so a sidebar
-    // holding three Dev Team runs said which WORKFLOW three times and which
-    // TASK not once. Reported as "title generation should work for workflow as
-    // well". The workflow's name is not lost — the row now carries it as its
+    // every run of one team then carried the identical row, so a sidebar
+    // holding three Dev Team runs said which TEAM three times and which
+    // TASK not once. Reported as "title generation should work for team as
+    // well". The team's name is not lost — the row now carries it as its
     // own label chip.
     const { settle, retitle, generateTitle, readSessionTitle } = build({
-      run: { workflowId: 'wf-1', agentKind: null },
+      run: { teamId: 'wf-1', agentKind: null },
       firstUserMessageText: 'implement CI-619 scorecard percentages',
     });
 
@@ -686,17 +686,17 @@ describe('ChatTitleService', () => {
     // The FIRST naming is derived and costs nothing — no CLI is asked to name a
     // run that has no title yet, exactly as on the chat path. The upgrade is a
     // separate moment with its own test below; this one pins that an unnamed
-    // workflow run does not pay a model call to get its opening line.
+    // team run does not pay a model call to get its opening line.
     expect(generateTitle).not.toHaveBeenCalled();
     expect(readSessionTitle).not.toHaveBeenCalled();
   });
 
-  it('upgrades a workflow run by asking the CLI of the node that ran FIRST', async () => {
-    // The report: "for workflows title is not generating automatically", over a
+  it('upgrades a team run by asking the CLI of the node that ran FIRST', async () => {
+    // The report: "for teams title is not generating automatically", over a
     // row reading `review it https://github.com/ma…`. The derivation had run —
     // that IS what `titleFromText` makes of an opening that is a pasted URL —
     // and nothing ever improved on it, because the upgrade was skipped on the
-    // reading that a workflow has no CLI to ask. It has: every node stamps the
+    // reading that a team has no CLI to ask. It has: every node stamps the
     // CLI that ran it, and the node that started first is the one handed the
     // user's own task.
     // The stored title has to be exactly what the deriver would write today —
@@ -706,7 +706,7 @@ describe('ChatTitleService', () => {
     // truncated: `review it https://github.com/manifestlaw-labs/Mani…`.
     const { settle, retitle, generateTitle, adapterFor } = build({
       run: {
-        workflowId: 'wf-1',
+        teamId: 'wf-1',
         agentKind: null,
         title: 'review PR 5376',
       },
@@ -729,11 +729,11 @@ describe('ChatTitleService', () => {
 
   it('never reads a NODE’s own session title to name the whole run', async () => {
     // A CLI's session title names the conversation IT holds, which for a
-    // workflow is one node's thread — the QA agent's name for its own work,
+    // team is one node's thread — the QA agent's name for its own work,
     // over a run the manager is coordinating. Only the ask is handed the run's
     // own seed prompt, so only the ask can answer about the run.
     const { settle, readSessionTitle, retitle } = build({
-      run: { workflowId: 'wf-1', agentKind: null, title: 'do the thing' },
+      run: { teamId: 'wf-1', agentKind: null, title: 'do the thing' },
       firstUserMessageText: 'do the thing',
       nativeTitle: 'QA — flaky spec triage',
       generatedTitle: 'Ship the thing',
@@ -751,14 +751,14 @@ describe('ChatTitleService', () => {
     );
   });
 
-  it('names a workflow run while it is STILL RUNNING, on a node’s first tool call', async () => {
-    // The whole point of the fix. A workflow's run-level stream holds one user
+  it('names a team run while it is STILL RUNNING, on a node’s first tool call', async () => {
+    // The whole point of the fix. A team's run-level stream holds one user
     // message and then nothing until the run settles — measured on a real run,
     // 3 run-level rows out of 573 — so naming had exactly one trigger, the run
     // ENDING, which on this app's work is an hour after anybody went looking
     // for the row in the sidebar.
     const { nodeToolCall, retitle, generateTitle } = build({
-      run: { workflowId: 'wf-1', agentKind: null, title: 'do the thing' },
+      run: { teamId: 'wf-1', agentKind: null, title: 'do the thing' },
       firstUserMessageText: 'do the thing',
       generatedTitle: 'Ship the thing',
       firstNodeAgentKind: AgentKind.Claude,
@@ -775,12 +775,12 @@ describe('ChatTitleService', () => {
     );
   });
 
-  it('leaves a workflow run alone until one of its nodes has actually run', async () => {
+  it('leaves a team run alone until one of its nodes has actually run', async () => {
     // No node has started, so there is no stamp to read and no CLI to ask. The
     // derived title stands rather than a model call being spent on a run that
     // has produced nothing to name it after.
     const { settle, retitle, generateTitle, firstAgentKind } = build({
-      run: { workflowId: 'wf-1', agentKind: null, title: 'do the thing' },
+      run: { teamId: 'wf-1', agentKind: null, title: 'do the thing' },
       firstUserMessageText: 'do the thing',
       generatedTitle: 'Ship the thing',
       firstNodeAgentKind: null,
@@ -793,12 +793,12 @@ describe('ChatTitleService', () => {
     expect(retitle).not.toHaveBeenCalled();
   });
 
-  it('leaves an already-named workflow run alone, so a rename survives', async () => {
-    // `title === null` is "unnamed" for a workflow exactly as it is for a chat
+  it('leaves an already-named team run alone, so a rename survives', async () => {
+    // `title === null` is "unnamed" for a team exactly as it is for a chat
     // — the executor stamps nothing — so anything already written is either
     // this derivation or the user's own rename, and re-deriving would undo it.
     const { settle, retitle } = build({
-      run: { workflowId: 'wf-1', agentKind: null, title: 'My own name' },
+      run: { teamId: 'wf-1', agentKind: null, title: 'My own name' },
       firstUserMessageText: 'implement CI-619 scorecard percentages',
     });
 
@@ -810,8 +810,8 @@ describe('ChatTitleService', () => {
   it('ignores a graph node’s turn ENDING without reading the run at all', async () => {
     // A node's own terminal is not the RUN's terminal — the run gets one of its
     // own — so it names nothing. Narrower than it used to be: a node's tool call
-    // now DOES reach the naming, which is the only way a workflow run can be
-    // named while it is still running (see the workflow tests above).
+    // now DOES reach the naming, which is the only way a team run can be
+    // named while it is still running (see the team tests above).
     const { settle, retitle, readSessionTitle } = build({
       nativeTitle: 'Should Not Be Used',
     });

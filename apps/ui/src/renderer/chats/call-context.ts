@@ -525,7 +525,7 @@ export type CalleeContextResolver = (
  * follows: every row shell between `Chats` and a call block is memoized, and a
  * block nests inside another block's entries, so threading this down would mean
  * a new prop on each of them and one more place to forget it. It is also the
- * only shape that reaches the sub-agent detail dialog and the workflow card,
+ * only shape that reaches the sub-agent detail dialog and the team card,
  * each of which renders a transcript as a sibling subtree of the main one.
  *
  * Null means NO source — a spec rendering the block bare, and any surface

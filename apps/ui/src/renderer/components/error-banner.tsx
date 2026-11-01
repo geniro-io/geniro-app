@@ -22,7 +22,7 @@ export type BannerTone = 'error' | 'warning';
  *
  * {@link ErrorText} alone is the right shape for a form field, where the error
  * clears itself the moment the input changes. A strip pinned to a screen is
- * not: nothing the user can type clears "could not load the workflow", so
+ * not: nothing the user can type clears "could not load the team", so
  * without a close control the failure sits on screen for the rest of the
  * session — which is exactly what it did.
  *

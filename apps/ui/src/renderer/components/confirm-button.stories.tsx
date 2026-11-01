@@ -6,7 +6,7 @@ const meta = {
   title: 'Components/ConfirmButton',
   component: ConfirmButton,
   args: {
-    children: 'Delete workflow',
+    children: 'Delete team',
     onConfirm: () => undefined,
   },
 } satisfies Meta<typeof ConfirmButton>;

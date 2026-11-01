@@ -10,7 +10,7 @@ import type { AgentMcpScope } from './use-agent-mcp';
 /**
  * The "Add MCP server" dialog's three daemon calls, bound to ONE agent scope —
  * a CLI and the config directory its listing was taken under — so every
- * surface that draws an MCP listing (the chat's agents panel, a workflow node,
+ * surface that draws an MCP listing (the chat's agents panel, a team node,
  * a pool member) offers the same writes to the same profile its rows came
  * from. A plain factory, not a hook: the agents panel binds one per card, in a
  * loop.

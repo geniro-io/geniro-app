@@ -20,8 +20,8 @@ export const POLLED_SPEND_RUN_FIELDS = [
   'agentKind',
   'model',
   'cwd',
-  'workflowId',
-  'workflowSnapshot',
+  'teamId',
+  'teamSnapshot',
   'polledSpendBuckets',
 ] as const satisfies readonly (keyof Run)[];
 
@@ -49,7 +49,7 @@ export type PolledSpendRun = Pick<
  *
  * - One row per bucket, so the Stats page draws the bill on the DAYS it was
  *   spent and under the MODELS that spent it. Before, one row per run placed a
- *   month of a workflow's cursor bill on its last day under no model — the
+ *   month of a team's cursor bill on its last day under no model — the
  *   "By model" list's largest entry was a blank. Rows are keyed
  *   `(runId, POLLED_SPEND_SEQ - i)` over the buckets in key order, and the
  *   whole set is replaced on every write (`UsageEventDao.recordPolledSpend`).
@@ -57,7 +57,7 @@ export type PolledSpendRun = Pick<
  *   last activity, the approximation that row always was.
  * - A row the account named no model for is filed under `reportedModel`.
  * - `agentKind` is the CLI whose money this is, resolved by the caller
- *   (`polledAgentKind`) and never read off the run alone: a WORKFLOW run — where
+ *   (`polledAgentKind`) and never read off the run alone: a TEAM run — where
  *   a polled node's spend comes from — has no agent of its own.
  * - Every figure but the cost is null — the poll measures money and nothing
  *   else, and null means NOT MEASURED here as everywhere in this table.
@@ -68,7 +68,7 @@ export function polledSpendRows(
   /**
    * The model this run's own turns of that CLI last REPORTED running on
    * (`UsageEventDao.latestReportedModel`) — what a row is filed under when the
-   * account named no model for it, since a workflow run names none of its own.
+   * account named no model for it, since a team run names none of its own.
    */
   reportedModel: string | null = null,
 ): UsageEventInput[] {
@@ -151,7 +151,7 @@ export function turnKey(runId: string, agentKind: string | null): string {
 
 /**
  * Count a finished turn nobody priced (`costUsd === null`) — the turns a POLLED price is
- * spread over. Keyed by agent, so a workflow's polled money is credited to each CLI with
+ * spread over. Keyed by agent, so a team's polled money is credited to each CLI with
  * that CLI's own turns.
  */
 export function tallyUnpricedTurn(
@@ -216,7 +216,7 @@ export class PolledTurnCredit {
 
 /**
  * The CLI a run's polled money belongs to. A chat's is its own agent's. A
- * workflow run names no agent, so its bill is the CLI of the node holding the
+ * team run names no agent, so its bill is the CLI of the node holding the
  * largest polled share — the per-node figures the poll records beside the run's
  * total — or null when no node carries one.
  *
@@ -224,7 +224,7 @@ export class PolledTurnCredit {
  * bill is its polling member's, read off the run's snapshot (`pollsSpend`).
  */
 export function polledAgentKind(
-  run: Pick<Run, 'agentKind' | 'workflowSnapshot'>,
+  run: Pick<Run, 'agentKind' | 'teamSnapshot'>,
   shares: readonly Pick<
     NodeState,
     'nodeId' | 'agentKind' | 'polledCostCents'
@@ -234,7 +234,7 @@ export function polledAgentKind(
   if (run.agentKind !== null) {
     return run.agentKind;
   }
-  const poolKinds = snapshotPoolKinds(run.workflowSnapshot ?? null);
+  const poolKinds = snapshotPoolKinds(run.teamSnapshot ?? null);
   let kind: AgentKind | null = null;
   let largest = 0;
   for (const share of shares) {

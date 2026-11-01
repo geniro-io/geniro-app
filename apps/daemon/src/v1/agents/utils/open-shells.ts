@@ -12,7 +12,7 @@ import { asRecord, asString, parseJsonColumn } from './json-util';
  * from the groups its session recorded — and the exit announces a close for
  * each. That announcement reaches the transcript
  * only through the owner's between-turn sink, and two owners are not listening
- * when it comes — a workflow run that has FINISHED, whose sink stops at
+ * when it comes — a team run that has FINISHED, whose sink stops at
  * `runFinished` one step before its teardown kills the processes, and a daemon
  * that died before any of it could run. Both leave the command listed as
  * running for the life of the transcript, and the transcript is then the only
@@ -99,7 +99,7 @@ export function shellCommandOf(toolCallPayload: unknown): string | null {
 
 /**
  * The tool call that launched a shell, from the run's calls oldest first: the
- * newest with the shell's call id under the same node and workflow call. An
+ * newest with the shell's call id under the same node and team call. An
  * ACP CLI numbers its calls from one in every session, so another
  * conversation can reuse the id; a delegate's call is taken only when no call
  * of the agent's own matches. Every reader that pairs a shell with its call

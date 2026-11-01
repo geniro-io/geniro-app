@@ -432,27 +432,27 @@ export function registerIpc(
   );
 
   handle(
-    IPC.pickWorkflowImport,
+    IPC.pickTeamImport,
     denyRemotely('opens a native file picker on the computer running geniro'),
     async () => {
       const result = await dialog.showOpenDialog({
         properties: ['openFile'],
-        filters: [{ name: 'Geniro workflow', extensions: ['yaml', 'yml'] }],
+        filters: [{ name: 'Geniro team', extensions: ['yaml', 'yml'] }],
       });
       return result.canceled ? null : (result.filePaths[0] ?? null);
     },
   );
 
   handle(
-    IPC.pickWorkflowExport,
+    IPC.pickTeamExport,
     denyRemotely('opens a native save dialog on the computer running geniro'),
     async (_event, defaultName: unknown) => {
       const result = await dialog.showSaveDialog({
         defaultPath:
           typeof defaultName === 'string' && defaultName.length > 0
             ? defaultName
-            : 'workflow.geniro.yaml',
-        filters: [{ name: 'Geniro workflow', extensions: ['yaml', 'yml'] }],
+            : 'team.team.yaml',
+        filters: [{ name: 'Geniro team', extensions: ['yaml', 'yml'] }],
       });
       return result.canceled ? null : (result.filePath ?? null);
     },

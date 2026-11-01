@@ -138,7 +138,7 @@ export function delegateDeclarationEvent(
 }
 
 /**
- * The owner fields every row a workflow node persists carries in its payload,
+ * The owner fields every row a team node persists carries in its payload,
  * for a close written on that node's behalf — without them the renderer files
  * the close outside the call block holding the unit it closes. Empty for a
  * chat, whose rows carry neither.

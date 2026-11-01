@@ -529,7 +529,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     });
 
     it('leaves the transcripts of a run that was never archived', async () => {
-      // A failed task start and a workflow builder's chat purge their runs too,
+      // A failed task start and a team builder's chat purge their runs too,
       // and neither is the user deleting a conversation.
       await seedChat('run-a', false, ['s-1']);
 
@@ -549,13 +549,13 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       ]);
     });
 
-    it('deletes a workflow node’s sessions under the profile its snapshot names', async () => {
+    it('deletes a team node’s sessions under the profile its snapshot names', async () => {
       await runDao.create({
         id: 'run-w',
-        workflowId: 'dev-team',
+        teamId: 'dev-team',
         cwd: '/work',
         archivedAt: new Date(),
-        workflowSnapshot: JSON.stringify({
+        teamSnapshot: JSON.stringify({
           nodes: [
             { id: 'manager', kind: 'agent', configDir: '/profiles/alt' },
             { id: 'qa', kind: 'agent' },
@@ -596,10 +596,10 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     it('looks for a POOLED node’s session under every member’s CLI and profile', async () => {
       await runDao.create({
         id: 'run-p',
-        workflowId: 'dev-team',
+        teamId: 'dev-team',
         cwd: '/work',
         archivedAt: new Date(),
-        workflowSnapshot: JSON.stringify({
+        teamSnapshot: JSON.stringify({
           nodes: [
             {
               id: 'engineer',

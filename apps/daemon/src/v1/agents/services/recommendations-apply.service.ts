@@ -28,7 +28,7 @@ export interface ApplyRecommendations {
 /**
  * The card's Apply: composes the user message that tells the analysis agent
  * exactly which items to apply, and sends it with the selection persisted on
- * the message row (`payload.apply`) — the record `save_workflow_change` checks
+ * the message row (`payload.apply`) — the record `save_team_change` checks
  * every write against, so an item nobody selected cannot be saved.
  *
  * The message carries every selected item in FULL rather than naming ids, so
@@ -49,14 +49,14 @@ export class RecommendationsApplyService {
     if (run === null) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${runId}`);
     }
-    if (!isAnalysisRun(run) && run.editsWorkflowSlug === null) {
+    if (!isAnalysisRun(run) && run.editsTeamSlug === null) {
       throw new ConflictException(
         'NOT_AN_ANALYSIS',
-        "recommendations are applied only in an analysis chat or a workflow's builder chat",
+        "recommendations are applied only in an analysis chat or a team's builder chat",
       );
     }
     const card = await readCard(this.itemDao, runId, input.cardSeq, em);
-    // One Apply per card: the newest Apply is what `save_workflow_change`
+    // One Apply per card: the newest Apply is what `save_team_change`
     // may write, so a second press from a window that cannot see the first
     // would silently re-open the selection.
     const applies = await appliesOf(this.itemDao, runId, em);

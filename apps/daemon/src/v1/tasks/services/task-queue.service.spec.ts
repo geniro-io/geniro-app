@@ -20,32 +20,32 @@ import {
 } from 'vitest';
 
 import { RunDao } from '../../agents/dao/run.dao';
-import type { Workflow } from '../../graphs/graphs.types';
-import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
 import { Run } from '../../runs/entity/run.entity';
+import { TeamStoreService } from '../../teams/services/team-store.service';
+import type { Team } from '../../teams/teams.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import { RUN_TARGET_PROBLEM_REASON } from '../utils/run-target';
 import {
-  missingWorkflowReason,
+  missingTeamReason,
   PREPARE_FAILURE_RETRY_MS,
   STOPPED_BY_USER_REASON,
   TaskQueueService,
   worktreeUnpreparedReason,
 } from './task-queue.service';
 
-/** A minimal, valid single-node workflow — content is irrelevant to this spec. */
-const DEV_TEAM_WORKFLOW: Workflow = {
+/** A minimal, valid single-node team — content is irrelevant to this spec. */
+const DEV_TEAM_TEAM: Team = {
   name: 'Dev Team',
   nodes: [{ id: 'coder', kind: 'agent', agent: 'claude', approval: 'auto' }],
   edges: [],
 };
 
 /**
- * Real database, real DAOs, real `WorkflowStoreService` over a throwaway
+ * Real database, real DAOs, real `TeamStoreService` over a throwaway
  * library directory — the split under test JOINS the two, so faking either
  * side would assert the wiring and prove nothing about the join.
  *
@@ -57,13 +57,13 @@ describe('TaskQueueService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let projectQueue: ProjectQueueService;
   let service: TaskQueueService;
-  let workflows: WorkflowStoreService;
+  let teams: TeamStoreService;
   let projectDao: ProjectDao;
   let taskDao: TaskDao;
   let runDao: RunDao;
   let em: EntityManager;
   let folder: string;
-  let workflowsDir: string;
+  let teamsDir: string;
   let projectId: string;
 
   beforeAll(async () => {
@@ -94,21 +94,21 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     runDao = new RunDao(em);
     projectQueue = new ProjectQueueService(em, projectDao, taskDao, runDao);
 
-    workflowsDir = mkdtempSync(join(tmpdir(), 'geniro-task-queue-workflows-'));
-    workflows = new WorkflowStoreService({ workflowsDir });
+    teamsDir = mkdtempSync(join(tmpdir(), 'geniro-task-queue-teams-'));
+    teams = new TeamStoreService({ teamsDir });
     // Present in the library for every test unless a test says otherwise — the
-    // existing 'BLOCKS a card whose only target is a WORKFLOW' behaviour is
-    // about a workflow that DOES exist (it is simply unattended-incapable),
+    // existing 'BLOCKS a card whose only target is a TEAM' behaviour is
+    // about a team that DOES exist (it is simply unattended-incapable),
     // which this fixture has to keep true to stay meaningful.
-    await workflows.create(DEV_TEAM_WORKFLOW, 'dev-team');
+    await teams.create(DEV_TEAM_TEAM, 'dev-team');
 
-    service = new TaskQueueService(projectQueue, workflows);
+    service = new TaskQueueService(projectQueue, teams);
 
     const project = await projectDao.create({
       name: 'board',
       folder,
       // Names an agent, because the handout asks whether each card COULD be
-      // started: a project with no agent and no workflow blocks every card on
+      // started: a project with no agent and no team blocks every card on
       // its board, which is its own group of cases below rather than the
       // background condition for the ones about capacity and ordering.
       agentKind: 'claude',
@@ -121,7 +121,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
   });
 
   afterEach(() => {
-    rmSync(workflowsDir, { recursive: true, force: true });
+    rmSync(teamsDir, { recursive: true, force: true });
   });
 
   async function addTask(
@@ -310,7 +310,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     it('is reported by its settings problem, not as a timed hold, when it has both', async () => {
       // The run settings are where that one is answered; a worktree kind would
       // hide the button that leads there for the rest of the hold.
-      await arm({ agentKind: null, workflowSlug: null });
+      await arm({ agentKind: null, teamSlug: null });
       const head = await addTask('head', 'todo', 0);
       await failedAgo(head, 30_000);
 
@@ -418,8 +418,8 @@ describe('TaskQueueService (in-memory sqlite)', () => {
   // prune every tick, forever — the breaker cannot end it, because a run that
   // never started never failed. Keeping such a card out of `eligible` is what
   // stops that, and naming it is what lets the board explain itself.
-  it('blocks a card no rung names an agent or a workflow for', async () => {
-    await arm({ agentKind: null, workflowSlug: null });
+  it('blocks a card no rung names an agent or a team for', async () => {
+    await arm({ agentKind: null, teamSlug: null });
     const orphan = await addTask('nothing to run me', 'todo', 0);
 
     const queue = await service.read(projectId);
@@ -440,7 +440,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
   });
 
   it('starts a card the CARD itself names an agent for, project silent', async () => {
-    await arm({ agentKind: null, workflowSlug: null });
+    await arm({ agentKind: null, teamSlug: null });
     const own = await addTask('names its own agent', 'todo', 0);
     own.agentKind = 'cursor-agent';
     await em.flush();
@@ -451,10 +451,10 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     expect(queue.blocked).toEqual([]);
   });
 
-  it('HANDS OUT a card whose workflow runs every agent node on auto', async () => {
-    // REPORTED as "the automatic taking of tasks doesn't work": every workflow
+  it('HANDS OUT a card whose team runs every agent node on auto', async () => {
+    // REPORTED as "the automatic taking of tasks doesn't work": every team
     // was refused, including this shape — nothing in it can park on a request.
-    await arm({ agentKind: null, workflowSlug: 'dev-team' });
+    await arm({ agentKind: null, teamSlug: 'dev-team' });
     const card = await addTask('run me as a graph', 'todo', 0);
 
     const queue = await service.read(projectId);
@@ -463,15 +463,15 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     expect(queue.blocked).toEqual([]);
   });
 
-  it('BLOCKS a card whose WORKFLOW has an agent node that can ask', async () => {
-    // A workflow carries `approval` per node, so there is no single field the
+  it('BLOCKS a card whose TEAM has an agent node that can ask', async () => {
+    // A team carries `approval` per node, so there is no single field the
     // resolver can force the way it forces an agent run's — a node that asks
     // parks an unattended run forever, holding its slot and its worktree while
     // the failure breaker sees nothing wrong, because parked is not failed.
     // The card is answerable: set the node to auto, point it at an agent, or
     // press Run yourself. It EXISTS in the library — this is the unattended
-    // refusal, not the missing-workflow one below.
-    await workflows.create(
+    // refusal, not the missing-team one below.
+    await teams.create(
       {
         name: 'Careful Team',
         nodes: [
@@ -481,7 +481,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
       },
       'careful-team',
     );
-    await arm({ agentKind: null, workflowSlug: 'careful-team' });
+    await arm({ agentKind: null, teamSlug: 'careful-team' });
     const card = await addTask('run me as a graph', 'todo', 0);
 
     const queue = await service.read(projectId);
@@ -491,7 +491,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
       {
         id: card.id,
         title: 'run me as a graph',
-        reason: RUN_TARGET_PROBLEM_REASON['workflow-unattended'],
+        reason: RUN_TARGET_PROBLEM_REASON['team-unattended'],
         kind: 'run-target',
         retryInMs: null,
       },
@@ -500,12 +500,12 @@ describe('TaskQueueService (in-memory sqlite)', () => {
 
   it('names the two refusals differently', async () => {
     // The queue is where a user reads WHY a card is not being picked up, so a
-    // card naming a workflow must not be told to name an agent or a workflow —
+    // card naming a team must not be told to name an agent or a team —
     // advice it has already followed.
-    await arm({ agentKind: null, workflowSlug: null });
+    await arm({ agentKind: null, teamSlug: null });
     const bare = await addTask('names nothing', 'todo', 0);
-    // A workflow with a node that can ASK — one on auto is now handed out.
-    await workflows.create(
+    // A team with a node that can ASK — one on auto is now handed out.
+    await teams.create(
       {
         name: 'Careful Team',
         nodes: [
@@ -516,7 +516,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
       'careful-team',
     );
     const graph = await addTask('names a graph', 'todo', 1);
-    graph.workflowSlug = 'careful-team';
+    graph.teamSlug = 'careful-team';
     await em.flush();
 
     const queue = await service.read(projectId);
@@ -526,22 +526,22 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     );
     expect(reasons.get(bare.id)).toBe(RUN_TARGET_PROBLEM_REASON['no-target']);
     expect(reasons.get(graph.id)).toBe(
-      RUN_TARGET_PROBLEM_REASON['workflow-unattended'],
+      RUN_TARGET_PROBLEM_REASON['team-unattended'],
     );
   });
 
-  // A card naming a workflow the LIBRARY no longer holds — a workflow deleted
+  // A card naming a team the LIBRARY no longer holds — a team deleted
   // out from under a task (a rename keeps the file, so deletion is the
-  // reachable cause; see `WorkflowStoreService.save`/`delete`). Without this
-  // check the card would resolve as any other workflow target, land in
-  // `blocked` under the generic 'workflow-unattended' reason, and a user
+  // reachable cause; see `TeamStoreService.save`/`delete`). Without this
+  // check the card would resolve as any other team target, land in
+  // `blocked` under the generic 'team-unattended' reason, and a user
   // reading that would go looking for the wrong fix — pointing it at an
   // agent when the real problem is a dangling slug they could instead swap
-  // for a workflow that still exists.
-  it('blocks a card whose workflow slug is not in the library, with a reason naming it', async () => {
-    await arm({ agentKind: null, workflowSlug: null });
+  // for a team that still exists.
+  it('blocks a card whose team slug is not in the library, with a reason naming it', async () => {
+    await arm({ agentKind: null, teamSlug: null });
     const card = await addTask('run me as a ghost graph', 'todo', 0);
-    card.workflowSlug = 'ghost-workflow';
+    card.teamSlug = 'ghost-team';
     await em.flush();
 
     const queue = await service.read(projectId);
@@ -551,8 +551,8 @@ describe('TaskQueueService (in-memory sqlite)', () => {
       {
         id: card.id,
         title: 'run me as a ghost graph',
-        reason: missingWorkflowReason('ghost-workflow'),
-        kind: 'missing-workflow',
+        reason: missingTeamReason('ghost-team'),
+        kind: 'missing-team',
         retryInMs: null,
       },
     ]);
@@ -567,7 +567,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     // ordering the cap is applied to.
     await arm({
       agentKind: null,
-      workflowSlug: null,
+      teamSlug: null,
       autopilotMaxConcurrent: 1,
     });
     await addTask('blocked', 'todo', 0);
@@ -585,7 +585,7 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     // A card naming nothing is broken whether or not the timer is running, and
     // a user who arms the project to find out why nothing happens has been
     // told nothing.
-    await arm({ agentKind: null, workflowSlug: null, autopilotEnabled: false });
+    await arm({ agentKind: null, teamSlug: null, autopilotEnabled: false });
     await addTask('nothing to run me', 'todo', 0);
 
     const queue = await service.read(projectId);
@@ -594,21 +594,21 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     expect(queue.blocked).toHaveLength(1);
   });
 
-  it('names a MISSING workflow on a disarmed board too, not just an armed one', async () => {
-    // The library check used to sit inside the 'workflow-unattended' arm, which
+  it('names a MISSING team on a disarmed board too, not just an armed one', async () => {
+    // The library check used to sit inside the 'team-unattended' arm, which
     // `resolveRunTarget` only produces under 'autopilot' — so on a disarmed
-    // board a card naming a deleted workflow resolved cleanly to
-    // `{kind: 'workflow'}` and landed in `startable`. Nothing said it was
+    // board a card naming a deleted team resolved cleanly to
+    // `{kind: 'team'}` and landed in `startable`. Nothing said it was
     // broken, and a hand press cut a worktree before 404ing
-    // WORKFLOW_NOT_FOUND: the same dead end the armed board's churn loop is,
+    // TEAM_NOT_FOUND: the same dead end the armed board's churn loop is,
     // reached by the one door left open there.
     await arm({
       agentKind: null,
-      workflowSlug: null,
+      teamSlug: null,
       autopilotEnabled: false,
     });
     const card = await addTask('run me as a ghost graph', 'todo', 0);
-    card.workflowSlug = 'ghost-workflow';
+    card.teamSlug = 'ghost-team';
     await em.flush();
 
     const queue = await service.read(projectId);
@@ -617,29 +617,27 @@ describe('TaskQueueService (in-memory sqlite)', () => {
       {
         id: card.id,
         title: 'run me as a ghost graph',
-        reason: missingWorkflowReason('ghost-workflow'),
-        kind: 'missing-workflow',
+        reason: missingTeamReason('ghost-team'),
+        kind: 'missing-team',
         retryInMs: null,
       },
     ]);
   });
 
-  it('prefers the MISSING-workflow reason over the unattended one', async () => {
-    // Both refusals apply to an armed board's workflow card; the specific one
+  it('prefers the MISSING-team reason over the unattended one', async () => {
+    // Both refusals apply to an armed board's team card; the specific one
     // has to win. A user told "cannot run unattended" about a card whose
-    // workflow no longer exists goes looking for the wrong fix — repointing it
-    // at an agent, when picking a different, real workflow is just as
+    // team no longer exists goes looking for the wrong fix — repointing it
+    // at an agent, when picking a different, real team is just as
     // available.
-    await arm({ agentKind: null, workflowSlug: null });
+    await arm({ agentKind: null, teamSlug: null });
     const card = await addTask('run me as a ghost graph', 'todo', 0);
-    card.workflowSlug = 'ghost-workflow';
+    card.teamSlug = 'ghost-team';
     await em.flush();
 
     const queue = await service.read(projectId);
 
-    expect(queue.blocked[0]?.reason).toBe(
-      missingWorkflowReason('ghost-workflow'),
-    );
+    expect(queue.blocked[0]?.reason).toBe(missingTeamReason('ghost-team'));
   });
 
   it('narrows the handout to the free slots', async () => {

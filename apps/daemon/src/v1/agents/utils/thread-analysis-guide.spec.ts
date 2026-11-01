@@ -7,39 +7,37 @@ import {
   HOST_MEMORY_SAVE_TOOL,
   HOST_METRICS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
-  HOST_WORKFLOW_CHANGE_TOOL,
+  HOST_TEAM_CHANGE_TOOL,
 } from '../chat.types';
 import {
+  teamAnalysisBrief,
+  teamAnalysisGuide,
   threadAnalysisBrief,
   threadAnalysisGuide,
-  workflowAnalysisBrief,
-  workflowAnalysisGuide,
 } from './thread-analysis-guide';
 
 describe('threadAnalysisGuide', () => {
-  it('offers workflow, repo and user changes, and the workflow save, for a workflow thread', () => {
-    const guide = threadAnalysisGuide('workflow', null, true);
+  it('offers team, repo and user changes, and the team save, for a team thread', () => {
+    const guide = threadAnalysisGuide('team', null, true);
 
-    expect(guide).toContain('This is a WORKFLOW thread');
-    expect(guide).toContain(HOST_WORKFLOW_CHANGE_TOOL);
+    expect(guide).toContain('This is a TEAM thread');
+    expect(guide).toContain(HOST_TEAM_CHANGE_TOOL);
     expect(guide).toContain('W-1, W-2');
     expect(guide).toContain('U-1, U-2');
     expect(guide).toContain('M-1, M-2');
     expect(guide).toContain('Recommend changes of four kinds');
-    expect(guide).toContain(
-      'view=workflow lists them under `userInstructions`',
-    );
+    expect(guide).toContain('view=team lists them under `userInstructions`');
   });
 
-  it('keeps a plain chat to repo and user changes and never names the workflow save', () => {
+  it('keeps a plain chat to repo and user changes and never names the team save', () => {
     const guide = threadAnalysisGuide('chat', null, true);
 
-    expect(guide).toContain('Never recommend a workflow change');
+    expect(guide).toContain('Never recommend a team change');
     expect(guide).toContain('U-1, U-2');
     expect(guide).toContain('M-1, M-2');
     expect(guide).toContain('target "memory"');
     expect(guide).toContain('`source.userInstructions`');
-    expect(guide).not.toContain(HOST_WORKFLOW_CHANGE_TOOL);
+    expect(guide).not.toContain(HOST_TEAM_CHANGE_TOOL);
     expect(guide).not.toContain('W-1');
     expect(guide).toContain(HOST_RECOMMENDATIONS_TOOL);
   });
@@ -47,8 +45,8 @@ describe('threadAnalysisGuide', () => {
   it('applies a memory item through the memory tools, and does not retry a refusal under review', () => {
     for (const guide of [
       threadAnalysisGuide('chat', null, true),
-      threadAnalysisGuide('workflow', null, true),
-      workflowAnalysisGuide(null, true),
+      threadAnalysisGuide('team', null, true),
+      teamAnalysisGuide(null, true),
     ]) {
       expect(guide).toContain(
         `- Memory items: add — call \`${HOST_MEMORY_SAVE_TOOL}\``,
@@ -62,7 +60,7 @@ describe('threadAnalysisGuide', () => {
   });
 
   it("has the analyst read the repo's own checks and place each fix on the lowest rung", () => {
-    for (const kind of ['chat', 'workflow'] as const) {
+    for (const kind of ['chat', 'team'] as const) {
       const guide = threadAnalysisGuide(kind, null, true);
 
       expect(guide).toContain(
@@ -74,7 +72,7 @@ describe('threadAnalysisGuide', () => {
   });
 
   it('has every item keep to one territory, process or domain, and split one that needs both', () => {
-    for (const kind of ['chat', 'workflow'] as const) {
+    for (const kind of ['chat', 'team'] as const) {
       const guide = threadAnalysisGuide(kind, null, true);
 
       expect(guide).toContain('## Two territories: process and domain');
@@ -105,19 +103,17 @@ describe('threadAnalysisGuide', () => {
 
 describe('threadAnalysisBrief', () => {
   it('names the source and where to start', () => {
-    expect(
-      threadAnalysisBrief({ title: 'Dev Team run', kind: 'workflow' }),
-    ).toBe(
-      'Analyse "Dev Team run" (a workflow thread): find where its time went and what in its environment would make the next run faster or less error-prone. Start with read_analyzed_thread view=overview.',
+    expect(threadAnalysisBrief({ title: 'Dev Team run', kind: 'team' })).toBe(
+      'Analyse "Dev Team run" (a team thread): find where its time went and what in its environment would make the next run faster or less error-prone. Start with read_analyzed_thread view=overview.',
     );
   });
 });
 
-describe('workflowAnalysisGuide', () => {
+describe('teamAnalysisGuide', () => {
   it('starts from the history, then the cross-run comparison, and asks for models and the graph', () => {
-    const guide = workflowAnalysisGuide(null, true);
+    const guide = teamAnalysisGuide(null, true);
 
-    expect(guide).toContain('# Workflow analysis');
+    expect(guide).toContain('# Team analysis');
     expect(guide.indexOf('1. History. Read view=history first')).toBeLessThan(
       guide.indexOf('2. Compare the runs. Read view=runs next'),
     );
@@ -128,7 +124,7 @@ describe('workflowAnalysisGuide', () => {
   });
 
   it('has the analyst judge the earlier changes by their runs and not repeat what the user passed over', () => {
-    const guide = workflowAnalysisGuide(null, true);
+    const guide = teamAnalysisGuide(null, true);
 
     expect(guide).toContain('3. Versions, not one pool.');
     expect(guide).toContain(
@@ -144,22 +140,22 @@ describe('workflowAnalysisGuide', () => {
     expect(guide).toContain('Set every item against view=history');
   });
 
-  it('offers workflow, repo and user changes and the workflow save', () => {
-    const guide = workflowAnalysisGuide(null, true);
+  it('offers team, repo and user changes and the team save', () => {
+    const guide = teamAnalysisGuide(null, true);
 
     expect(guide).toContain('W-1, W-2');
     expect(guide).toContain('U-1, U-2');
     expect(guide).toContain('M-1, M-2');
     expect(guide).toContain('target "memory"');
-    expect(guide).toContain(HOST_WORKFLOW_CHANGE_TOOL);
+    expect(guide).toContain(HOST_TEAM_CHANGE_TOOL);
     expect(guide).toContain('## Two territories: process and domain');
     expect(guide).toContain('## Where a fix belongs');
   });
 
   it("has the analyst measure every agent's instructions and grade them on five marks", () => {
-    const guide = workflowAnalysisGuide(null, true);
+    const guide = teamAnalysisGuide(null, true);
 
-    expect(guide).toContain('9. Instruction size. Read view=workflow');
+    expect(guide).toContain('9. Instruction size. Read view=team');
     expect(guide).toContain('`instructionSizes`');
     expect(guide).toContain('`inThisRun`');
     expect(guide).toContain('10. Instruction quality.');
@@ -175,7 +171,7 @@ describe('workflowAnalysisGuide', () => {
   });
 
   it('asks the reply for what the card does not draw, section by section, before the card, and nothing the card does', () => {
-    const guide = workflowAnalysisGuide(null, true);
+    const guide = teamAnalysisGuide(null, true);
     const report = guide.indexOf('## The report');
     const send = guide.indexOf('## What to send');
     const sections = [
@@ -205,7 +201,7 @@ describe('workflowAnalysisGuide', () => {
   });
 
   it('files again what a replaced card left unanswered, but not what the user passed over', () => {
-    const guide = workflowAnalysisGuide(null, true);
+    const guide = teamAnalysisGuide(null, true);
 
     expect(guide).toContain(
       'unanswered (its card was replaced before the user applied anything from it)',
@@ -219,18 +215,18 @@ describe('workflowAnalysisGuide', () => {
   });
 
   it("adds the user's focus as its own section", () => {
-    expect(workflowAnalysisGuide(' cheaper reviews ', true)).toContain(
+    expect(teamAnalysisGuide(' cheaper reviews ', true)).toContain(
       "## The user's focus for this analysis\n\ncheaper reviews",
     );
   });
 });
 
-describe('workflowAnalysisBrief', () => {
-  it('names the workflow, how many runs, and where to start', () => {
-    expect(workflowAnalysisBrief({ name: 'Dev Team', runs: 5 })).toBe(
-      "Analyse the workflow \"Dev Team\" across its 5 latest runs: explain where its runs' time and money went and why, how large and how good each agent's instructions are, how its agents' models fit their work, and how the earlier changes to it worked out, and find what in the workflow or its environment would make the next runs faster, cheaper or less error-prone. Start with read_analyzed_thread view=history, then view=runs.",
+describe('teamAnalysisBrief', () => {
+  it('names the team, how many runs, and where to start', () => {
+    expect(teamAnalysisBrief({ name: 'Dev Team', runs: 5 })).toBe(
+      "Analyse the team \"Dev Team\" across its 5 latest runs: explain where its runs' time and money went and why, how large and how good each agent's instructions are, how its agents' models fit their work, and how the earlier changes to it worked out, and find what in the team or its environment would make the next runs faster, cheaper or less error-prone. Start with read_analyzed_thread view=history, then view=runs.",
     );
-    expect(workflowAnalysisBrief({ name: 'Dev Team', runs: 1 })).toContain(
+    expect(teamAnalysisBrief({ name: 'Dev Team', runs: 1 })).toContain(
       'across its latest run:',
     );
   });
@@ -238,15 +234,15 @@ describe('workflowAnalysisBrief', () => {
   it('leaves the memory target out entirely while the shared memory is off', () => {
     for (const guide of [
       threadAnalysisGuide('chat', null, false),
-      threadAnalysisGuide('workflow', null, false),
-      workflowAnalysisGuide(null, false),
+      threadAnalysisGuide('team', null, false),
+      teamAnalysisGuide(null, false),
     ]) {
       expect(guide).not.toContain('target "memory"');
       expect(guide).not.toContain('M-1');
       expect(guide).not.toContain('Memory items:');
       expect(guide).not.toContain('memory item');
     }
-    expect(threadAnalysisGuide('workflow', null, false)).toContain(
+    expect(threadAnalysisGuide('team', null, false)).toContain(
       'changes of three kinds',
     );
   });

@@ -73,7 +73,7 @@ function MeterReadout({
   className?: string;
   /** Which chat to fetch the full readout for, or null for none. */
   runId?: string | null;
-  /** Which workflow node of that run, or null for a chat's own agent. */
+  /** Which team node of that run, or null for a chat's own agent. */
   nodeId?: string | null;
   /** Which agent-to-agent call of that run, or null for none. */
   callId?: string | null;
@@ -163,14 +163,14 @@ function MeterReadout({
 /** What one open readout knows about the chat it is reporting on. */
 interface MetricsState {
   /**
-   * Which chat — and which of its workflow nodes or calls — this reading was
+   * Which chat — and which of its team nodes or calls — this reading was
    * taken from, as one key.
    *
    * Carried WITH the reading rather than assumed from the current props: the
    * component is not unmounted across a chat switch (the composer keeps one
    * meter and `activateRun` only swaps the run beneath it), so without this the
    * state that survives the switch is indistinguishable from a fresh one. The
-   * node is part of it because a workflow run holds one window per node.
+   * node is part of it because a team run holds one window per node.
    */
   target: string | null;
   data: ChatMetricsDto | null;
@@ -387,8 +387,8 @@ export function ContextMeter({
   className,
 }: {
   /**
-   * Which WORKFLOW node of {@link runId} the readout reports on, or null for a
-   * chat's own agent. A workflow run holds one window per node, so without it
+   * Which TEAM node of {@link runId} the readout reports on, or null for a
+   * chat's own agent. A team run holds one window per node, so without it
    * there is no single agent to ask.
    */
   nodeId?: string | null;

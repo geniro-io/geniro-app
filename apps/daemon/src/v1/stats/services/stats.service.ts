@@ -112,7 +112,7 @@ export class StatsService {
      * tally is built here rather than re-queried because this loop is already
      * reading every event in the period, and the predicate is the CLI-agnostic
      * one (`costUsd === null` means nobody priced this turn) rather than a test
-     * on which agent ran it. Keyed by agent so a workflow's polled money is
+     * on which agent ran it. Keyed by agent so a team's polled money is
      * credited to each CLI with that CLI's own turns, and so the fold below can
      * leave out the turns of a CLI nobody polls.
      */
@@ -135,7 +135,7 @@ export class StatsService {
       addUsage(bucket(byAgent, event.agentKind), event);
       addUsage(bucket(byModel, event.model), event);
       addUsage(bucket(byProject, projectOf(event.cwd)), event);
-      // Per THREAD, chats and workflow runs alike. It replaced a per-workflow
+      // Per THREAD, chats and team runs alike. It replaced a per-team
       // breakdown whose null key pooled every chat into one "Chats" row —
       // REPORTED as combining everything into one bucket — when the question a
       // reader brings here is which conversations cost the most.
@@ -174,7 +174,7 @@ export class StatsService {
         turns,
       );
       // The agent's own divisor is that agent's unpriced turns alone: the row
-      // names the one CLI whose money this is, so a workflow's other agents'
+      // names the one CLI whose money this is, so a team's other agents'
       // turns are not part of what it is spread over.
       addPolledSpend(bucket(byAgent, event.agentKind), costUsd, agentTurns);
       addPolledSpend(bucket(byModel, event.model), costUsd, turns);

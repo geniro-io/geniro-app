@@ -181,7 +181,7 @@ export function displayRunStatus({
    * visibly working".
    *
    * Defaulted, so the many call sites that know nothing about sub-agents (a
-   * background row, a workflow node) are unaffected.
+   * background row, a team node) are unaffected.
    */
   subagentRunning?: boolean;
   /**
@@ -208,7 +208,7 @@ export function displayRunStatus({
    * Ranked BELOW `heldForBackgroundWork` (a delegate hold is the stronger fact
    * and already says `waiting on N sub-agents`) and below a live turn, which
    * is the agent genuinely working. Defaulted, so every call site that knows
-   * nothing about shells — a background row, a workflow node — is unaffected.
+   * nothing about shells — a background row, a team node — is unaffected.
    */
   shellsRunning?: boolean;
   /**
@@ -309,7 +309,7 @@ export function displayRunStatus({
   // started. See the field for why this is a display reading rather than a
   // hold on the turn.
   // `completed` ALONE, spelled out rather than asked of `isSettledRunStatus`:
-  // failed and cancelled already returned above, and `skipped` is a workflow
+  // failed and cancelled already returned above, and `skipped` is a team
   // node nothing ever ran, which has no commands of its own to be waiting on.
   if ((shellsRunning || subagentsOut) && status === 'completed') {
     return 'held';
@@ -447,7 +447,7 @@ export function untrackedSummary(processEnded: boolean): string {
  * An announce with no activity key leaves the phrase as it was, but a terminal
  * status clears it: a stopped run is doing nothing, whatever the announce carried.
  * An empty phrase names nothing, so it reads as null. The chat screen keeps one
- * phrase per run and the workflow dock keeps one for its run, and both apply this,
+ * phrase per run and the team dock keeps one for its run, and both apply this,
  * so they agree about when a phrase stands.
  */
 export function activityAfterAnnounce(event: {
@@ -514,7 +514,7 @@ export function RunStatusLabel({
 }
 
 /**
- * The glyph and its word together — the readout the chat header and the workflow
+ * The glyph and its word together — the readout the chat header and the team
  * dock both draw. Props the caller names (a `data-slot`, say) go on the span.
  */
 export function RunStatusBadge({

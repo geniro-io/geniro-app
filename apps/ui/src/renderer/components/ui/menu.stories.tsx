@@ -13,8 +13,8 @@ const AGENT_GROUPS: MenuGroup[] = [
     ],
   },
   {
-    label: 'Workflows',
-    items: [{ value: 'wf:dev-team', label: 'Dev team' }],
+    label: 'Teams',
+    items: [{ value: 'team:dev-team', label: 'Dev team' }],
   },
   {
     items: [{ value: 'new', label: 'New configuration…', action: true }],

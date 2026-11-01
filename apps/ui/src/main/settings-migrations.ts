@@ -25,8 +25,40 @@ export interface SettingsMigration {
   migrate(raw: Record<string, unknown>): Record<string, unknown>;
 }
 
+const LEGACY_TEAM_TARGET = 'wf:';
+const TEAM_TARGET = 'team:';
+
+function teamTarget(value: unknown): unknown {
+  return typeof value === 'string' && value.startsWith(LEGACY_TEAM_TARGET)
+    ? `${TEAM_TARGET}${value.slice(LEGACY_TEAM_TARGET.length)}`
+    : value;
+}
+
+/** A composer target names a library team `team:<slug>`, no longer `wf:<slug>`. */
+const teamTargets: SettingsMigration = {
+  version: 1,
+  id: 'settings-0001-team-targets',
+  migrate(raw) {
+    const next = { ...raw };
+    if ('lastChatTarget' in raw) {
+      next.lastChatTarget = teamTarget(raw.lastChatTarget);
+    }
+    if (Array.isArray(raw.runConfigs)) {
+      next.runConfigs = raw.runConfigs.map((config: unknown) =>
+        typeof config === 'object' && config !== null && !Array.isArray(config)
+          ? {
+              ...config,
+              target: teamTarget((config as { target?: unknown }).target),
+            }
+          : config,
+      );
+    }
+    return next;
+  },
+};
+
 /** Every settings migration, in order. Append only. */
-export const SETTINGS_MIGRATIONS: readonly SettingsMigration[] = [];
+export const SETTINGS_MIGRATIONS: readonly SettingsMigration[] = [teamTargets];
 
 /** The `settingsVersion` this build writes. */
 export const SETTINGS_VERSION = latestVersion(SETTINGS_MIGRATIONS);
@@ -68,6 +100,31 @@ export function storedSettingsVersion(raw: Record<string, unknown>): number {
     settingsVersion >= 0
     ? settingsVersion
     : 0;
+}
+
+/**
+ * `raw` with every step above its stored version applied in memory: what
+ * `readSettings` reads while the file still waits for a launch to migrate it,
+ * so a later write carries every value over in its new shape. A step that
+ * throws leaves the object as the steps before it left it.
+ */
+export function withPendingMigrations(
+  raw: Record<string, unknown>,
+  migrations: readonly SettingsMigration[] = SETTINGS_MIGRATIONS,
+): Record<string, unknown> {
+  const from = storedSettingsVersion(raw);
+  let next = raw;
+  for (const migration of migrations) {
+    if (migration.version <= from) {
+      continue;
+    }
+    try {
+      next = migration.migrate(next);
+    } catch {
+      return next;
+    }
+  }
+  return next;
 }
 
 /**

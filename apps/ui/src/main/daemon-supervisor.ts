@@ -243,6 +243,11 @@ export async function defaultCheckIdentity(
  */
 const PROCESS_IDENTITY_TOLERANCE_MS = 2_000;
 
+const TEAM_RUNS_PATH = '/v1/teams/runs';
+
+/** Where a daemon built before the Workflow → Team rename lists its team runs. */
+const LEGACY_TEAM_RUNS_PATH = '/v1/workflows/runs';
+
 /** Statuses a run is still doing something in. */
 const LIVE_RUN_STATUSES = new Set(['pending', 'running']);
 
@@ -259,28 +264,38 @@ function hasLiveRun(body: unknown): boolean {
 }
 
 /**
- * Whether the daemon has a chat turn or a workflow run in flight.
+ * Whether the daemon has a chat turn or a team run in flight.
  *
  * Both surfaces, because either one can hold live agent children and a
  * replacement kills them all. A non-ok response throws so the caller's
  * fail-toward-busy guard sees it, rather than reading an error body as "idle".
+ * The daemon being replaced is often an older build, which serves team runs
+ * under {@link LEGACY_TEAM_RUNS_PATH}; reading that one only as busy would
+ * leave it running for good.
  */
 export async function defaultCheckBusy(handle: DaemonHandle): Promise<boolean> {
-  const read = async (path: string): Promise<unknown> => {
-    const res = await fetch(`http://${handle.host}:${handle.port}${path}`, {
+  const get = (path: string): Promise<Response> =>
+    fetch(`http://${handle.host}:${handle.port}${path}`, {
       headers: { authorization: `Bearer ${handle.token}` },
       signal: AbortSignal.timeout(HEALTH_FETCH_TIMEOUT_MS),
     });
+  const body = async (path: string, res: Response): Promise<unknown> => {
     if (!res.ok) {
       throw new Error(`${path} answered ${res.status}`);
     }
     return res.json();
   };
-  const [chats, workflowRuns] = await Promise.all([
-    read('/v1/chats'),
-    read('/v1/workflows/runs'),
+  const teamRuns = async (): Promise<unknown> => {
+    const res = await get(TEAM_RUNS_PATH);
+    return res.status === 404
+      ? body(LEGACY_TEAM_RUNS_PATH, await get(LEGACY_TEAM_RUNS_PATH))
+      : body(TEAM_RUNS_PATH, res);
+  };
+  const [chats, runs] = await Promise.all([
+    get('/v1/chats').then((res) => body('/v1/chats', res)),
+    teamRuns(),
   ]);
-  return hasLiveRun(chats) || hasLiveRun(workflowRuns);
+  return hasLiveRun(chats) || hasLiveRun(runs);
 }
 
 /** The kernel's start time for `pid` in epoch ms, or null if unreadable. */

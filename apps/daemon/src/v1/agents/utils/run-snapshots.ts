@@ -40,15 +40,15 @@ export async function runSnapshotOf(
 }
 
 /**
- * A workflow's newest unarchived runs, newest first, each read at its own
+ * A team's newest unarchived runs, newest first, each read at its own
  * snapshot, with the folder it ran in. A run with no rows yet is skipped.
  */
-export async function workflowRunSnapshots(
+export async function teamRunSnapshots(
   readers: RunSnapshotReaders,
   slug: string,
   limit: number,
 ): Promise<(AnalysedRun & { cwd: string | null })[]> {
-  const candidates = await readers.runDao.newestWorkflowRuns(
+  const candidates = await readers.runDao.newestTeamRuns(
     slug,
     limit,
     readers.em.fork(),

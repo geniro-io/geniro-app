@@ -61,7 +61,7 @@ import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
 /**
  * The values only a transcript row reads. {@link TranscriptContexts} provides
- * them: the chat screen around its transcript alone, the workflow dock (through
+ * them: the chat screen around its transcript alone, the team dock (through
  * `ChatProviders`' `transcript`) around its whole surface.
  */
 export interface TranscriptValues {
@@ -88,7 +88,7 @@ export interface TranscriptValues {
 
 /**
  * The {@link TranscriptValues} plus the readers the chat screen provides
- * screen-wide on its own: what a surface that is ALL transcript (the workflow
+ * screen-wide on its own: what a surface that is ALL transcript (the team
  * dock) hands {@link ChatProviders} in one piece.
  */
 export interface TranscriptSurface extends TranscriptValues {
@@ -149,7 +149,7 @@ export function ChatProviders({
   runSettledAt: RunSettleAt;
   /**
    * Everything a transcript row reads, for a surface that is ALL transcript
-   * (the workflow dock). The chat screen leaves it out: it provides the
+   * (the team dock). The chat screen leaves it out: it provides the
    * transcript values around its transcript alone, and the readers itself.
    */
   transcript?: TranscriptSurface;
@@ -161,7 +161,7 @@ export function ChatProviders({
    * still open — see `CalleeContextResolverContext`. Provided HERE rather than
    * around the transcript itself because a call block is rendered from three
    * separate subtrees (the transcript, the sub-agent detail dialog, and the
-   * workflow card), and this component wraps all of them.
+   * team card), and this component wraps all of them.
    */
   callContext: CalleeContextResolver | null;
   /** The direct line to a running call's callee — see `CallMessageBox`. */
@@ -178,7 +178,7 @@ export function ChatProviders({
    * `ArtifactShareContext`. Absent (or null) draws no Share control.
    */
   artifactSharing?: ArtifactSharing | null;
-  /** Read images attached to this conversation, including in the workflow dock. */
+  /** Read images attached to this conversation, including in the team dock. */
   loadAttachment?: AttachmentLoader | null;
   /**
    * How an opened call card reads its own conversation — see
@@ -193,7 +193,7 @@ export function ChatProviders({
   jumpMark?: JumpMark | null;
   /**
    * A recommendations card's Apply — see `RecommendationsApplyContext`.
-   * Absent draws the card read-only (the workflow dock has no analysis).
+   * Absent draws the card read-only (the team dock has no analysis).
    */
   applyRecommendations?: RecommendationsApplier | null;
   /**

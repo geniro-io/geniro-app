@@ -4,9 +4,9 @@ import { StageMoveActionSchema } from '../../../agents/chat.types';
 import type {
   StageMoveRequest,
   StageMoveResult,
-  WorkflowNode,
-} from '../../../graphs/graphs.types';
-import { moveReply } from '../../../graphs/utils/stage-text';
+  TeamNode,
+} from '../../../teams/teams.types';
+import { moveReply } from '../../../teams/utils/stage-text';
 import { readToolArgs } from '../tool-args';
 
 const MoveStageArgsSchema = z
@@ -35,7 +35,7 @@ export function readMoveStage(
 
 export function moveStageResultText(
   result: StageMoveResult,
-  nodes: readonly WorkflowNode[],
+  nodes: readonly TeamNode[],
 ): { text: string; isError: boolean } {
   if (!result.ok) {
     return { text: `${result.code}: ${result.message}`, isError: true };

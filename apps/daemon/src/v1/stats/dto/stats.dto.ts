@@ -1,11 +1,11 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
-import { SLUG_RE } from '../../graphs/graphs.types';
+import { SLUG_RE } from '../../teams/teams.types';
 import {
+  TeamVersionRestoredSchema,
+  TeamVersionsWireSchema,
   UsageStatsWireSchema,
-  WorkflowVersionRestoredSchema,
-  WorkflowVersionsWireSchema,
 } from '../stats.types';
 
 /**
@@ -44,33 +44,31 @@ export class UsageStatsQueryDto extends createZodDto(usageStatsQuerySchema) {}
 /** What the app has spent over a period — see {@link UsageStatsWireSchema}. */
 export class UsageStatsDto extends createZodDto(UsageStatsWireSchema) {}
 
-/** Which workflow's versions to read: a library slug, in the library's own charset. */
-export const workflowVersionsQuerySchema = z.object({
+/** Which team's versions to read: a library slug, in the library's own charset. */
+export const teamVersionsQuerySchema = z.object({
   slug: z.string().min(1).regex(SLUG_RE),
 });
-export class WorkflowVersionsQueryDto extends createZodDto(
-  workflowVersionsQuerySchema,
+export class TeamVersionsQueryDto extends createZodDto(
+  teamVersionsQuerySchema,
 ) {}
 
-/** One workflow's runs by graph version — see {@link WorkflowVersionsWireSchema}. */
-export class WorkflowVersionsDto extends createZodDto(
-  WorkflowVersionsWireSchema,
-) {}
+/** One team's runs by graph version — see {@link TeamVersionsWireSchema}. */
+export class TeamVersionsDto extends createZodDto(TeamVersionsWireSchema) {}
 
 /**
- * Write a recorded version back as the workflow's graph. `baseHash` is the file hash the
+ * Write a recorded version back as the team's graph. `baseHash` is the file hash the
  * caller's copy was read at; a file changed since is refused, never overwritten.
  */
-export const restoreWorkflowVersionSchema = z.object({
+export const restoreTeamVersionSchema = z.object({
   slug: z.string().min(1).regex(SLUG_RE),
   version: z.string().regex(/^[0-9a-f]{16}$/),
   baseHash: z.string().min(1).optional(),
 });
-export class RestoreWorkflowVersionDto extends createZodDto(
-  restoreWorkflowVersionSchema,
+export class RestoreTeamVersionDto extends createZodDto(
+  restoreTeamVersionSchema,
 ) {}
 
-/** The restored version and the file's new hash — see {@link WorkflowVersionRestoredSchema}. */
-export class WorkflowVersionRestoredDto extends createZodDto(
-  WorkflowVersionRestoredSchema,
+/** The restored version and the file's new hash — see {@link TeamVersionRestoredSchema}. */
+export class TeamVersionRestoredDto extends createZodDto(
+  TeamVersionRestoredSchema,
 ) {}

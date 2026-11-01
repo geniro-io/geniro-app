@@ -299,7 +299,7 @@ function McpRow({
             unavailable, where no control was ever going to appear, only raises
             a question. The graph inspector HAS one — a node's own switches —
             and hands rows whose `toggleUnavailableReason` is already the
-            NODE's answer (`workflows/node-mcp-switches.ts`), so this row never
+            NODE's answer (`teams/node-mcp-switches.ts`), so this row never
             learns which surface it is on. */}
         {onSetEnabled === undefined ? null : server.toggleUnavailableReason !==
           null ? (

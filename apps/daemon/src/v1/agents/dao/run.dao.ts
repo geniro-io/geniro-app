@@ -25,7 +25,7 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Single-agent chat runs (no workflow), newest first, filtered by how much
+   * Single-agent chat runs (no team), newest first, filtered by how much
    * of the archive the caller asked for.
    *
    * `all` states NO condition on `archivedAt` rather than a condition matching
@@ -33,19 +33,19 @@ export class RunDao extends BaseDao<Run> {
    * predicate SQL cannot use an index for, and one that a nullable column
    * makes easy to get subtly wrong.
    *
-   * **A workflow-editing chat is NOT a chat of the sidebar's kind** and is
+   * **A team-editing chat is NOT a chat of the sidebar's kind** and is
    * excluded on every scope. It is the builder's "Change with chat" panel: the
-   * user never opened it, never named it, and cannot get back to the workflow
+   * user never opened it, never named it, and cannot get back to the team
    * it is about from a sidebar row — it belongs to that one page, and the panel
-   * finds it through {@link listEditingWorkflow} rather than through this
+   * finds it through {@link listEditingTeam} rather than through this
    * listing. REPORTED as "этот тред здесь быть не должен! Он должен быть только
    * там, на той странице, то есть это special тред."
    *
    * **A thread's analysis is hidden for the same reason** ("I should not see
-   * this thread in shared list - same as for thread with changing workflow"):
+   * this thread in shared list - same as for thread with changing team"):
    * it belongs to the thread it reads, opens in that thread's popup, and is
-   * found through {@link listAnalysesOf}. A workflow's analysis is hidden on
-   * the same terms and found through {@link listWorkflowAnalyses}. Nothing
+   * found through {@link listAnalysesOf}. A team's analysis is hidden on
+   * the same terms and found through {@link listTeamAnalyses}. Nothing
    * else is hidden by kind.
    */
   async listChats(
@@ -55,10 +55,10 @@ export class RunDao extends BaseDao<Run> {
   ): Promise<Run[]> {
     return this.listPage(
       {
-        workflowId: null,
-        editsWorkflowSlug: null,
+        teamId: null,
+        editsTeamSlug: null,
         analysisSourceRunId: null,
-        analysisWorkflowSlug: null,
+        analysisTeamSlug: null,
         ...scopeFilter(scope),
       },
       page,
@@ -102,19 +102,16 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Every chat opened to EDIT one library workflow, newest first.
+   * Every chat opened to EDIT one library team, newest first.
    *
    * Archived rows are included deliberately: the two readers want opposite
    * things from the shelf — reopening the builder's panel should find a chat
    * the user shelved rather than silently start a second one, and deleting the
-   * workflow must destroy every chat about it, shelved ones included.
+   * team must destroy every chat about it, shelved ones included.
    */
-  async listEditingWorkflow(
-    slug: string,
-    txEm?: EntityManager,
-  ): Promise<Run[]> {
+  async listEditingTeam(slug: string, txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(
-      { editsWorkflowSlug: slug },
+      { editsTeamSlug: slug },
       { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
     );
   }
@@ -136,61 +133,58 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Every analysis started on one library workflow, newest first — archived
+   * Every analysis started on one library team, newest first — archived
    * rows included, for the reason {@link listAnalysesOf} gives.
    */
-  async listWorkflowAnalyses(
-    slug: string,
-    txEm?: EntityManager,
-  ): Promise<Run[]> {
+  async listTeamAnalyses(slug: string, txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(
-      { analysisWorkflowSlug: slug },
+      { analysisTeamSlug: slug },
       { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
     );
   }
 
   /**
-   * Every chat that can file recommendations about a library workflow — its
+   * Every chat that can file recommendations about a library team — its
    * analyses and its builder chats — archived ones included.
    */
-  async workflowRecommendationChats(
+  async teamRecommendationChats(
     txEm?: EntityManager,
-  ): Promise<Pick<Run, 'id' | 'analysisWorkflowSlug' | 'editsWorkflowSlug'>[]> {
+  ): Promise<Pick<Run, 'id' | 'analysisTeamSlug' | 'editsTeamSlug'>[]> {
     return this.getRepo(txEm).find(
       {
         $or: [
-          { analysisWorkflowSlug: { $ne: null } },
-          { editsWorkflowSlug: { $ne: null } },
+          { analysisTeamSlug: { $ne: null } },
+          { editsTeamSlug: { $ne: null } },
         ],
       },
       {
-        fields: ['id', 'analysisWorkflowSlug', 'editsWorkflowSlug'],
+        fields: ['id', 'analysisTeamSlug', 'editsTeamSlug'],
         disableIdentityMap: true,
       },
     );
   }
 
-  /** The slugs of every workflow some analysis was started on. */
-  async workflowAnalysisSlugs(txEm?: EntityManager): Promise<string[]> {
+  /** The slugs of every team some analysis was started on. */
+  async teamAnalysisSlugs(txEm?: EntityManager): Promise<string[]> {
     const rows = await this.getRepo(txEm).find(
-      { analysisWorkflowSlug: { $ne: null } },
-      { fields: ['analysisWorkflowSlug'], disableIdentityMap: true },
+      { analysisTeamSlug: { $ne: null } },
+      { fields: ['analysisTeamSlug'], disableIdentityMap: true },
     );
-    return [...new Set(rows.map((run) => run.analysisWorkflowSlug!))];
+    return [...new Set(rows.map((run) => run.analysisTeamSlug!))];
   }
 
   /**
-   * A library workflow's newest runs, newest first, at most `limit` — the
-   * ones a workflow analysis reads. Archived runs are left out: the user
+   * A library team's newest runs, newest first, at most `limit` — the
+   * ones a team analysis reads. Archived runs are left out: the user
    * shelved them, and an analysis refuses an archived thread too.
    */
-  async newestWorkflowRuns(
+  async newestTeamRuns(
     slug: string,
     limit: number,
     txEm?: EntityManager,
   ): Promise<Pick<Run, 'id' | 'status' | 'title' | 'createdAt' | 'cwd'>[]> {
     return this.getRepo(txEm).find(
-      { workflowId: slug, archivedAt: null },
+      { teamId: slug, archivedAt: null },
       {
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         limit,
@@ -250,11 +244,11 @@ export class RunDao extends BaseDao<Run> {
    *
    * TWO columns rather than whole rows: every one of them is about to be
    * destroyed, so hydrating entities buys nothing and a long archive would load
-   * its whole history into the forked EM. The `workflowId` rides along because
+   * its whole history into the forked EM. The `teamId` rides along because
    * the sweep has to know which teardown a run needs, and asking per id would
    * be a second query for a column this one already touches.
    *
-   * It answered CHAT runs alone until workflow runs became archivable — a limit
+   * It answered CHAT runs alone until team runs became archivable — a limit
    * that then meant the retention window silently did not cover half the shelf.
    *
    * Oldest FIRST, which is the reverse of every other listing here and is the
@@ -266,39 +260,39 @@ export class RunDao extends BaseDao<Run> {
   async archivedRunsBefore(
     cutoff: Date,
     txEm?: EntityManager,
-  ): Promise<{ id: string; workflowId: string | null }[]> {
+  ): Promise<{ id: string; teamId: string | null }[]> {
     const rows = await this.getRepo(txEm).find(
       { archivedAt: { $ne: null, $lte: cutoff } },
       {
-        fields: ['id', 'workflowId'],
+        fields: ['id', 'teamId'],
         orderBy: { archivedAt: 'asc' },
         disableIdentityMap: true,
       },
     );
-    return rows.map((run) => ({ id: run.id, workflowId: run.workflowId }));
+    return rows.map((run) => ({ id: run.id, teamId: run.teamId }));
   }
 
   /**
-   * Who these runs are — never their graph copy, which runs to hundreds of KB a run. `'every-workflow-run'` reads every workflow run. A run that no
+   * Who these runs are — never their graph copy, which runs to hundreds of KB a run. `'every-team-run'` reads every team run. A run that no
    * longer exists is absent.
    */
   async runFacts(
-    runIds: readonly string[] | 'every-workflow-run',
+    runIds: readonly string[] | 'every-team-run',
     txEm?: EntityManager,
   ): Promise<RunFacts[]> {
     const read = async (where: FilterQuery<Run>): Promise<RunFacts[]> =>
       (
         await this.getRepo(txEm).find(where, {
-          fields: ['id', 'workflowId', 'createdAt'],
+          fields: ['id', 'teamId', 'createdAt'],
           disableIdentityMap: true,
         })
       ).map((run) => ({
         id: run.id,
-        workflowId: run.workflowId,
+        teamId: run.teamId,
         createdAt: run.createdAt,
       }));
-    if (runIds === 'every-workflow-run') {
-      return read({ workflowId: { $ne: null } });
+    if (runIds === 'every-team-run') {
+      return read({ teamId: { $ne: null } });
     }
     const facts: RunFacts[] = [];
     for (const batch of idBatches(runIds)) {
@@ -307,8 +301,8 @@ export class RunDao extends BaseDao<Run> {
     return facts;
   }
 
-  /** These runs' graph copies (`Run.workflowSnapshot`), by run id; a run that no longer exists is absent. */
-  async workflowSnapshots(
+  /** These runs' graph copies (`Run.teamSnapshot`), by run id; a run that no longer exists is absent. */
+  async teamSnapshots(
     runIds: readonly string[],
     txEm?: EntityManager,
   ): Promise<Map<string, string | null>> {
@@ -316,10 +310,10 @@ export class RunDao extends BaseDao<Run> {
     for (const batch of idBatches(runIds)) {
       const rows = await this.getRepo(txEm).find(
         { id: { $in: batch } },
-        { fields: ['id', 'workflowSnapshot'], disableIdentityMap: true },
+        { fields: ['id', 'teamSnapshot'], disableIdentityMap: true },
       );
       for (const run of rows) {
-        out.set(run.id, run.workflowSnapshot);
+        out.set(run.id, run.teamSnapshot);
       }
     }
     return out;
@@ -817,26 +811,24 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Record — or, with null, forget — the standing workflow proposal card
-   * (`Run.pendingWorkflowProposal`), on {@link setPendingQuestion}'s terms.
+   * Record — or, with null, forget — the standing team proposal card
+   * (`Run.pendingTeamProposal`), on {@link setPendingQuestion}'s terms.
    */
-  async setPendingWorkflowProposal(
+  async setPendingTeamProposal(
     runId: string,
     value: string | null,
     txEm?: EntityManager,
   ): Promise<void> {
     await this.getRepo(txEm).nativeUpdate(
       { id: runId },
-      { pendingWorkflowProposal: value },
+      { pendingTeamProposal: value },
     );
   }
 
-  /** Every run standing on a workflow proposal card — the boot rehydration's read. */
-  async listRunsWithPendingWorkflowProposal(
-    txEm?: EntityManager,
-  ): Promise<Run[]> {
+  /** Every run standing on a team proposal card — the boot rehydration's read. */
+  async listRunsWithPendingTeamProposal(txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(
-      { pendingWorkflowProposal: { $ne: null } },
+      { pendingTeamProposal: { $ne: null } },
       { disableIdentityMap: true },
     );
   }
@@ -887,7 +879,7 @@ export class RunDao extends BaseDao<Run> {
 
   /**
    * What recording a pull request's outcome reads off its run, in one read
-   * past the identity map: the workflow it ran, the pull-request lists the
+   * past the identity map: the team it ran, the pull-request lists the
    * announce re-projects, and the outcomes column it updates. Null for a
    * run that is gone.
    */
@@ -896,14 +888,14 @@ export class RunDao extends BaseDao<Run> {
     txEm?: EntityManager,
   ): Promise<Pick<
     Run,
-    'workflowId' | 'pullRequests' | 'touchedPullRequests' | 'runOutcomes'
+    'teamId' | 'pullRequests' | 'touchedPullRequests' | 'runOutcomes'
   > | null> {
     const row = await this.getRepo(txEm).findOne(
       { id: runId },
       {
         fields: [
           'id',
-          'workflowId',
+          'teamId',
           'pullRequests',
           'touchedPullRequests',
           'runOutcomes',
@@ -915,7 +907,7 @@ export class RunDao extends BaseDao<Run> {
       return null;
     }
     return {
-      workflowId: row.workflowId,
+      teamId: row.teamId,
       pullRequests: row.pullRequests,
       touchedPullRequests: row.touchedPullRequests,
       runOutcomes: row.runOutcomes,
@@ -1028,7 +1020,7 @@ export class RunDao extends BaseDao<Run> {
    */
   async listRunningChats(txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(
-      { workflowId: null, status: 'running' },
+      { teamId: null, status: 'running' },
       { disableIdentityMap: true },
     );
   }
@@ -1039,7 +1031,7 @@ export class RunDao extends BaseDao<Run> {
    * The runs are UNTOUCHED apart from the column: a folder disappearing must
    * never take a conversation with it, which is the whole reason this exists
    * instead of a cascade. Both run kinds are swept, since the sidebar files
-   * chats and workflow runs into the same groups.
+   * chats and team runs into the same groups.
    */
   async clearGroup(groupId: string, txEm?: EntityManager): Promise<number> {
     const runs = await this.getRepo(txEm).find({ groupId });
@@ -1072,7 +1064,7 @@ export class RunDao extends BaseDao<Run> {
    * would interleave two bands into one nonsense order.
    *
    * Both run kinds, like {@link clearGroup} and for its reason — the sidebar
-   * pins chats and workflow runs into the same bands. The identity map is
+   * pins chats and team runs into the same bands. The identity map is
    * deliberately LEFT ON, unlike the read-only listings above: every caller
    * renumbers what it reads and flushes.
    */
@@ -1152,48 +1144,48 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Workflow runs (graph executions), newest first, filtered by how much of the
+   * Team runs (graph executions), newest first, filtered by how much of the
    * archive the caller asked for.
    *
    * The archive predicate is {@link listChats}' own, down to `all` stating no
    * condition at all — the two listings feed ONE sidebar, so a scope that meant
-   * different things on either side of it would put a shelved workflow run in a
+   * different things on either side of it would put a shelved team run in a
    * view the user opened to see only live work.
    */
-  async listWorkflowRuns(
+  async listTeamRuns(
     scope: ChatListScope,
     txEm?: EntityManager,
     page: RunListPage = {},
   ): Promise<Run[]> {
     return this.listPage(
-      { workflowId: { $ne: null }, ...scopeFilter(scope) },
+      { teamId: { $ne: null }, ...scopeFilter(scope) },
       page,
       txEm,
     );
   }
 
   /**
-   * The id of every 1:1 chat run, a workflow's builder chats and archived
+   * The id of every 1:1 chat run, a team's builder chats and archived
    * chats included — what the wall-work boot sweep walks. Ids only: the sweep
    * reads each chat's rows itself.
    */
   async listChatRunIds(txEm?: EntityManager): Promise<string[]> {
     const rows = await this.getRepo(txEm).find(
-      { workflowId: null },
+      { teamId: null },
       { fields: ['id'], disableIdentityMap: true },
     );
     return rows.map((row) => row.id);
   }
 
   /**
-   * Workflow runs left in a non-terminal state by a crash / SIGKILL — the
+   * Team runs left in a non-terminal state by a crash / SIGKILL — the
    * graph executor's boot reconcile closes them (pending counts too: a
-   * workflow run is created `running`, so anything non-terminal is orphaned).
+   * team run is created `running`, so anything non-terminal is orphaned).
    */
-  async listRunningWorkflowRuns(txEm?: EntityManager): Promise<Run[]> {
+  async listRunningTeamRuns(txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(
       {
-        workflowId: { $ne: null },
+        teamId: { $ne: null },
         status: { $in: ['pending', 'running'] },
       },
       { disableIdentityMap: true },

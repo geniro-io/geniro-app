@@ -7,7 +7,7 @@ import type { Run } from '../../runs/entity/run.entity';
 import { type ItemKind, ItemKindSchema } from '../../runs/runs.types';
 import {
   type AnalysedRun,
-  type AnalysedWorkflowRef,
+  type AnalysedTeamRef,
   ANALYSIS_SPAN_KINDS,
   type AnalysisReadScope,
   type AnalysisSource,
@@ -16,8 +16,8 @@ import {
   type ReadAnalyzedThreadArgs,
   type RunFold,
   type RunWaterfallTurn,
-  type WorkflowVersionIndex,
-  type WorkflowVersionIndexReader,
+  type TeamVersionIndex,
+  type TeamVersionIndexReader,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
@@ -28,9 +28,6 @@ import { callWorkedMsByStart } from '../utils/call-worked';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import { asRecord } from '../utils/json-util';
 import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
-import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
-import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
-import { sizedUserInstructionFiles } from '../utils/user-instruction-files';
 import {
   callFigures,
   configuredModels,
@@ -41,7 +38,10 @@ import {
   snapshotVersion,
   versionFigures,
   versionRef,
-} from '../utils/workflow-runs-fold';
+} from '../utils/team-runs-fold';
+import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
+import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
+import { sizedUserInstructionFiles } from '../utils/user-instruction-files';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { RunKindRowsCache } from './run-kind-rows.cache';
 import { RunOutcomeHistoryService } from './run-outcome-history.service';
@@ -176,10 +176,10 @@ export class ThreadReaderService {
     turn: AnalysisReadScope,
     args: ReadAnalyzedThreadArgs,
     /**
-     * The workflow's version numbers, which the stats module keeps; without
+     * The team's version numbers, which the stats module keeps; without
      * it, or when it fails, view=runs names each run's version by hash alone.
      */
-    versionIndex: WorkflowVersionIndexReader | null = null,
+    versionIndex: TeamVersionIndexReader | null = null,
   ): Promise<Answer> {
     if (args.view === 'history') {
       return {
@@ -188,15 +188,15 @@ export class ThreadReaderService {
       };
     }
     if (args.view === 'runs') {
-      if (!turn.workflow) {
+      if (!turn.team) {
         return {
           error: 'UNSUPPORTED',
           message:
-            'view=runs compares the runs of a workflow analysis; this one reads one thread — start with view=overview.',
+            'view=runs compares the runs of a team analysis; this one reads one thread — start with view=overview.',
         };
       }
       const offset = args.offset ?? 0;
-      const key = JSON.stringify([turn.workflow.slug, turn.workflow.runs]);
+      const key = JSON.stringify([turn.team.slug, turn.team.runs]);
       // A later page is cut from the very text the first one was: one folded
       // again could differ (a status moved on, a run deleted) and join into
       // broken JSON.
@@ -214,11 +214,11 @@ export class ThreadReaderService {
         kept ??
           (await this.runs(
             key,
-            turn.workflow.slug,
-            turn.workflow.runs,
+            turn.team.slug,
+            turn.team.runs,
             versionIndex === null
               ? null
-              : await versionIndex(turn.workflow.slug).catch(() => null),
+              : await versionIndex(turn.team.slug).catch(() => null),
           )),
         offset,
       );
@@ -244,10 +244,10 @@ export class ThreadReaderService {
         return this.items(source, args, em);
       case 'item':
         return this.item(source, args, em);
-      case 'workflow':
+      case 'team':
         return {
           error: 'UNSUPPORTED',
-          message: 'The workflow view is answered by the tool, not the reader.',
+          message: 'The team view is answered by the tool, not the reader.',
         };
     }
   }
@@ -288,8 +288,8 @@ export class ThreadReaderService {
                   em,
                 ),
                 costUsd: reading.fold.totals.costUsd,
-                version: snapshotVersion(run.workflowSnapshot),
-                ...configuredModels(run.workflowSnapshot),
+                version: snapshotVersion(run.teamSnapshot),
+                ...configuredModels(run.teamSnapshot),
                 timeline: reading.timeline,
               },
       });
@@ -298,7 +298,7 @@ export class ThreadReaderService {
   }
 
   /**
-   * A workflow analysis's runs side by side: each run's totals and outcome,
+   * A team analysis's runs side by side: each run's totals and outcome,
    * every node's figures, and every node's turns per model — each folded from
    * every row up to that run's snapshot, never from a window.
    */
@@ -306,7 +306,7 @@ export class ThreadReaderService {
     key: string,
     slug: string,
     analysedRuns: readonly AnalysedRun[],
-    index: WorkflowVersionIndex | null,
+    index: TeamVersionIndex | null,
   ): Promise<Answer> {
     const em = this.em.fork();
     const folded: FoldedRun[] = [];
@@ -344,9 +344,7 @@ export class ThreadReaderService {
         createdAt: run.createdAt.toISOString(),
         statusNow: run.status,
         version: versionRef(
-          entry === null
-            ? snapshotVersion(run.workflowSnapshot)
-            : entry.version,
+          entry === null ? snapshotVersion(run.teamSnapshot) : entry.version,
           index,
         ),
         snapshotSeq: analysed.snapshotSeq,
@@ -368,14 +366,14 @@ export class ThreadReaderService {
     // Masked BEFORE it is kept and cut into pages: a secret split across two
     // chunks matches in neither, and the per-page pass would let both out.
     const answer = maskedAnswer({
-      workflow: slug,
+      team: slug,
       currentVersion: index === null ? null : versionRef(index.current, index),
       runs,
       versions: versionFigures(folded, index),
       nodes: nodeFigures(folded),
       calls: callFigures(folded),
       models: modelFigures(folded),
-      next: "Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=workflow runId=… is the workflow as the library holds it now, against that run's copy. view=history is every version of the workflow, the changes made to it and why, and the earlier analyses' recommendations with what became of them.",
+      next: "Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=team runId=… is the team as the library holds it now, against that run's copy. view=history is every version of the team, the changes made to it and why, and the earlier analyses' recommendations with what became of them.",
     });
     this.runsAnswers.delete(key);
     this.runsAnswers.set(key, { at: Date.now(), answer });
@@ -403,17 +401,17 @@ export class ThreadReaderService {
   }
 
   /**
-   * The library slug and run-start snapshot of a WORKFLOW source, or null for
+   * The library slug and run-start snapshot of a TEAM source, or null for
    * a plain chat (or a source that is gone).
    */
-  async workflowOf(sourceRunId: string): Promise<AnalysedWorkflowRef | null> {
+  async teamOf(sourceRunId: string): Promise<AnalysedTeamRef | null> {
     const run = await this.runDao.getById(sourceRunId, this.em.fork());
-    if (run === null || run.workflowId === null) {
+    if (run === null || run.teamId === null) {
       return null;
     }
     return {
-      slug: run.workflowId,
-      snapshot: run.workflowSnapshot,
+      slug: run.teamId,
+      snapshot: run.teamSnapshot,
       instructions: {
         customInstructions: run.customInstructions,
         replyLanguage: run.replyLanguage,
@@ -425,23 +423,23 @@ export class ThreadReaderService {
   }
 
   /**
-   * The workflow an analysis may read and change: a workflow analysis's own,
+   * The team an analysis may read and change: a team analysis's own,
    * with the start copy of the run read (its newest unless one is named,
-   * through `analysedSourceOf`) while that run still exists, else a workflow
+   * through `analysedSourceOf`) while that run still exists, else a team
    * source's — null for a plain chat (or a source that is gone).
    */
-  async analysedWorkflowOf(
+  async analysedTeamOf(
     turn: AnalysisReadScope,
     /** The analysed run whose start copy the library is set against. */
     read: AnalysisSource = turn,
-  ): Promise<AnalysedWorkflowRef | null> {
-    const source = await this.workflowOf(read.sourceRunId);
-    if (!turn.workflow) {
+  ): Promise<AnalysedTeamRef | null> {
+    const source = await this.teamOf(read.sourceRunId);
+    if (!turn.team) {
       return source;
     }
-    return source?.slug === turn.workflow.slug
+    return source?.slug === turn.team.slug
       ? source
-      : { slug: turn.workflow.slug, snapshot: null, instructions: null };
+      : { slug: turn.team.slug, snapshot: null, instructions: null };
   }
 
   private async overview(source: AnalysisSource, run: Run): Promise<Answer> {
@@ -461,7 +459,7 @@ export class ThreadReaderService {
         runId: run.id,
         title: run.title,
         kind,
-        workflowId: run.workflowId,
+        teamId: run.teamId,
         agentKind: run.agentKind,
         model: run.model,
         effort: run.effort,
@@ -471,7 +469,7 @@ export class ThreadReaderService {
         cwd: run.cwd,
         createdAt: run.createdAt.toISOString(),
         snapshotSeq: source.snapshotSeq,
-        // A workflow's agents differ per node: view=workflow lists theirs.
+        // A team's agents differ per node: view=team lists theirs.
         ...(kind === 'chat' && run.agentKind !== null
           ? {
               userInstructions: await sizedUserInstructionFiles(this.adapters, [

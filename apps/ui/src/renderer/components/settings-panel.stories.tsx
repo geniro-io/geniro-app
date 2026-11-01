@@ -97,7 +97,7 @@ export const Block: Story = {
       </SettingsPanelRow>
       <SettingsPanelRow
         label="Applies to new chats"
-        description="Handed to every agent at the start of each new chat or workflow run — one already running keeps what it started with.">
+        description="Handed to every agent at the start of each new chat or team run — one already running keeps what it started with.">
         <Button type="button" variant="ghost" size="sm">
           Remove from existing chats
         </Button>

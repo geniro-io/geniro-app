@@ -5,7 +5,7 @@
  * user's own custom instructions, what a board card asks of the run working it,
  * and whatever the turn itself has to say (a graph node's instruction blocks
  * and role, the call surface). Reached only through `AgentAdapter`
- * (`composeSystemPrompt`, and `turnInstructionParts` for the workflow
+ * (`composeSystemPrompt`, and `turnInstructionParts` for the team
  * inspector's size readout) — adapters never join these fields themselves
  * (`.claude/rules/agent-adapters.md`).
  *
@@ -40,7 +40,7 @@ import { redactSecrets } from '../../diagnostics/utils/redact';
  *   `![](out/ci723-assignee-rail.png)` and the transcript drew
  *   `could not read out/ci723-assignee-rail.png`, because the base a relative
  *   reference is measured against is the RUN's cwd and the agent had written
- *   the file somewhere else — routinely, since a delegate, a workflow node or
+ *   the file somewhere else — routinely, since a delegate, a team node or
  *   a command run in a subdirectory all write relative to their own place. The
  *   route still accepts a relative path (old transcripts are full of them, and
  *   it is right when the two agree); the instruction simply stops recommending
@@ -58,7 +58,7 @@ import { redactSecrets } from '../../diagnostics/utils/redact';
  * stack, so its phrasing is the default habit, and a default that competes with
  * a tool wins by being read first. Every tool it names is named conditionally:
  * this text is not gated on the MCP endpoint having been delivered (on ACP it
- * is said once per session and never repeated), and a workflow node is offered
+ * is said once per session and never repeated), and a team node is offered
  * only some of them, so it must stay true on a turn where none of them is
  * registered — hence "where a tool is offered" and "a tool missing from your
  * list is not offered", conditions the agent can check and geniro cannot.
@@ -121,7 +121,7 @@ Nothing else about how you write your replies changes, including how long they s
 Beside your CLI's tools, this app offers tools of its own, named below (in your tool list a name may carry a prefix naming this app's server). When a situation below comes up, use its tool rather than a workaround; the tool's own description says how. Where your CLI lists tools by name only, load the tool first. A tool missing from your list is not offered on this turn.
 
 - \`monitor\`: waiting on something slow that reports as it goes — a CI run, a deploy, a long build or test run, a log line you need, or a condition you would otherwise re-check in a loop. Start it as a monitor and, with nothing else to do, end your turn: its output wakes you, so never poll it with sleep loops. Where your CLI's own instructions name a \`Monitor\` tool, this is the one to use.
-- \`publish_action\`: a BUTTON in this chat. A press sends the message you gave it — to you, or in a workflow to the agent the user's messages go to — stops a process you left running, or runs a command once the user has confirmed it. Use it when your next step waits on something only the user will see happen, such as a pull request being merged; whenever you leave a server or watcher running for the user, so they can stop it once they are done with it; and for a step only they should decide to run.
+- \`publish_action\`: a BUTTON in this chat. A press sends the message you gave it — to you, or in a team to the agent the user's messages go to — stops a process you left running, or runs a command once the user has confirmed it. Use it when your next step waits on something only the user will see happen, such as a pull request being merged; whenever you leave a server or watcher running for the user, so they can stop it once they are done with it; and for a step only they should decide to run.
 - \`notify_user\`: once, at the very end, when you have finished but leave something running for the user, such as a dev server.
 - \`show_chart\` for several readings of one thing, \`show_metrics\` for one current figure each of several things, \`show_comparison\` for options you weigh against the same criteria and pick between, \`show_gallery\` for several pictures that belong together: each draws a live card, so reach for it before writing the same data as a table, an ASCII chart or a list of paths.
 - \`show_artifact\`: a PAGE of your own — an HTML document this app shows beside the conversation and opens full-screen, with your own layout and working interaction — for an answer to look at rather than read in order, such as a report or a dashboard.
@@ -130,7 +130,7 @@ Beside your CLI's tools, this app offers tools of its own, named below (in your 
 - \`memory_search\`, then \`memory_read\`: a preference, convention, decision or command another agent may already have recorded — at the start of a task, and before you ask the user or guess. \`memory_save\`: one durable fact the next agent, on any CLI and in any later chat, would otherwise have to rediscover — a correction the user gave, a convention and its reason, a command that works; never a secret or your progress. \`memory_forget\`: an entry that turned out wrong.
 - \`search_chats\`, then \`read_chat_context\`: an earlier decision, fix or context from another conversation.
 - \`list_tasks\`, \`get_task\`, \`create_task\`, \`update_task\`: the user's task board, when they ask to find, file or change work on it.
-- \`read_workflows\`, then \`propose_workflow\`: a saved team of agents (a workflow) the user asks you to build or change.`;
+- \`read_teams\`, then \`propose_team\`: a saved team of agents the user asks you to build or change.`;
 
 /**
  * The instruction parts one turn contributes, in the order they are joined.
@@ -182,11 +182,11 @@ export interface TurnInstructionParts {
    */
   taskInstructions?: string | null;
   /**
-   * What geniro tells a workflow-editing chat about the file it owns, as
-   * stored on `Run.workflowInstructions`. Absent for every run outside the
+   * What geniro tells a team-editing chat about the file it owns, as
+   * stored on `Run.teamInstructions`. Absent for every run outside the
    * builder's chat panel.
    */
-  workflowInstructions?: string | null;
+  teamInstructions?: string | null;
   /**
    * The instruction blocks wired to this graph node, already joined. Absent
    * for plain chat, which has no canvas to wire one on.
@@ -228,7 +228,7 @@ export function replyLanguageInstruction(
 
 /**
  * Where each part of a turn's instruction block comes from, in the order they
- * are joined. The workflow inspector's size readout names its rows by these.
+ * are joined. The team inspector's size readout names its rows by these.
  */
 export const TURN_INSTRUCTION_SOURCES = [
   'preamble',
@@ -238,7 +238,7 @@ export const TURN_INSTRUCTION_SOURCES = [
   'projectInstructions',
   'memoryIndex',
   'taskInstructions',
-  'workflowInstructions',
+  'teamInstructions',
   'instructionBlocks',
   'stageMap',
   'role',
@@ -260,7 +260,7 @@ export const TURN_INSTRUCTION_SEPARATOR = '\n\n';
 /**
  * The turn's instruction parts, each named by its source, trimmed, blank ones
  * dropped — what an adapter joins ({@link joinTurnInstructionParts}) into the
- * one block it hands its CLI, and what the workflow inspector measures, so the
+ * one block it hands its CLI, and what the team inspector measures, so the
  * block and its breakdown can never disagree.
  *
  * **Order is precedence, and it runs general → specific.** The preamble is
@@ -275,7 +275,7 @@ export const TURN_INSTRUCTION_SEPARATOR = '\n\n';
  * card asks of the run working it —
  * its label instructions, written for a class of card, and the report ask that
  * run needs.
- * A workflow-editing chat's brief sits beside that one: same kind of claim (the
+ * A team-editing chat's brief sits beside that one: same kind of claim (the
  * job geniro opened this run for), and a run is only ever one of the two, so
  * their relative order decides nothing.
  * The instruction blocks wired to this node follow — written for a
@@ -310,7 +310,7 @@ export function turnInstructionParts(
       parts.memoryIndex ? redactSecrets(parts.memoryIndex) : null,
     ],
     ['taskInstructions', parts.taskInstructions],
-    ['workflowInstructions', parts.workflowInstructions],
+    ['teamInstructions', parts.teamInstructions],
     ['instructionBlocks', parts.instructionBlocks],
     ['stageMap', parts.stageMapPrompt],
     ['role', parts.systemPrompt],

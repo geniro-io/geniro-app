@@ -14,7 +14,7 @@ import { registerLineFlush } from './line-flush';
 
 /**
  * How long a burst of finished turns is allowed to settle before its thread is
- * measured. A workflow writes a ledger row per node as the nodes' turns end, so
+ * measured. A team writes a ledger row per node as the nodes' turns end, so
  * the measurement belongs after the last of them, not after each.
  */
 export const MEASURE_DEBOUNCE_MS = 2_000;

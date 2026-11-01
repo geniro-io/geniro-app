@@ -4,13 +4,13 @@ import { Injectable } from '@nestjs/common';
 import {
   HOST_QUESTION_TOOL,
   type RunOutcomeEntry,
-  RunOutcomePayloadSchema,
   type RunPullRequestOutcomes,
   type SeqRange,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { asRecord, asString, parseJsonColumn } from '../utils/json-util';
 import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
+import { parseRunOutcomePayload } from '../utils/run-outcome-payload';
 import { outcomeHistoryFigures } from '../utils/run-outcomes';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 
@@ -89,9 +89,7 @@ export class RunOutcomeHistoryService {
       }
     >();
     for (const row of rows) {
-      const parsed = RunOutcomePayloadSchema.safeParse(
-        parseJsonColumn(row.payload),
-      );
+      const parsed = parseRunOutcomePayload(parseJsonColumn(row.payload));
       if (!parsed.success) {
         continue;
       }

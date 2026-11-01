@@ -29,12 +29,10 @@ function usage(job: StorageJob | null = null): StorageUsageDto {
         ],
       },
       {
-        id: 'workflowBackups',
+        id: 'teamBackups',
         bytes: 5 * 1024 * 1024,
-        entries: [{ name: 'workflows/.backups', bytes: 5 * 1024 * 1024 }],
-        clean: [
-          { target: 'workflowBackups', count: 20, bytes: 5 * 1024 * 1024 },
-        ],
+        entries: [{ name: 'teams/.backups', bytes: 5 * 1024 * 1024 }],
+        clean: [{ target: 'teamBackups', count: 20, bytes: 5 * 1024 * 1024 }],
       },
     ],
     chats: { active: 19, archived: 778 },
@@ -267,7 +265,7 @@ describe('Storage', () => {
   it('shows a clean-up that failed as an error', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const running: StorageJob = {
-      target: 'workflowBackups',
+      target: 'teamBackups',
       state: 'running',
       startedAt: '2026-10-31T12:00:00.000Z',
       finishedAt: null,

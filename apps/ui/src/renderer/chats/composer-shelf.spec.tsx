@@ -234,7 +234,7 @@ describe('RunningMonitorChips', () => {
     ]);
     expect(rows[0]!.textContent).toContain('gh pr checks 42 --watch');
     expect(rows[0]!.textContent).toContain('m1');
-    // A chat's own monitor names no agent; a workflow node's does.
+    // A chat's own monitor names no agent; a team node's does.
     expect(rows[0]!.querySelector('[data-slot="monitor-agent"]')).toBeNull();
     expect(
       rows[1]!.querySelector('[data-slot="monitor-agent"]')!.textContent,
@@ -542,8 +542,8 @@ describe('RunningSubagentChips', () => {
     expect(opened).toEqual(['call_9']);
   });
 
-  it('splits a workflow run into one BLOCK per agent, each under its name', async () => {
-    // REPORTED: "in workflow we should see subagents list in chip divided by
+  it('splits a team run into one BLOCK per agent, each under its name', async () => {
+    // REPORTED: "in team we should see subagents list in chip divided by
     // block by agent, same as for todo". Flattened, a Reviewer's delegates and
     // an Engineer's arrive as one run of rows that says nothing about whose
     // each one is.
@@ -597,7 +597,7 @@ describe('RunningSubagentChips', () => {
   });
 
   it('leaves a 1:1 chat its one flat list, with no agent heading', async () => {
-    // The gate is the caller's (a workflow, never a 1:1 chat) — this pins that
+    // The gate is the caller's (a team, never a 1:1 chat) — this pins that
     // the chip honours an ABSENT `groups` rather than grouping regardless.
     const el = mount(<RunningSubagentChips running={1} threads={[thread()]} />);
     await press(el, 'running-subagents');
@@ -745,8 +745,8 @@ describe('TaskListChip', () => {
     expect(panel.textContent).not.toContain('writing the adapter');
   });
 
-  it('splits a workflow run into one BLOCK per agent, each under its name', async () => {
-    // REPORTED: "if we working with workflows - each task set should be inside
+  it('splits a team run into one BLOCK per agent, each under its name', async () => {
+    // REPORTED: "if we working with teams - each task set should be inside
     // popover in block related to its connected agent". Flattened, a Manager's
     // plan and an Engineer's arrive as one run of rows that is neither.
     const el = mount(
@@ -796,7 +796,7 @@ describe('TaskListChip', () => {
   });
 
   it('leaves a 1:1 chat its one flat list, with no agent heading', async () => {
-    // The gate is the caller's (a workflow, never a 1:1 chat) — this pins that
+    // The gate is the caller's (a team, never a 1:1 chat) — this pins that
     // the chip honours an ABSENT `groups` rather than grouping regardless.
     const el = mount(
       <TaskListChip

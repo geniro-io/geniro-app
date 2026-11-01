@@ -139,7 +139,7 @@ describe('ModelSelect', () => {
     expect(picked).toHaveBeenCalledWith('ollama/coder');
   });
 
-  it('keeps a missing saved local model disabled in the workflow picker', () => {
+  it('keeps a missing saved local model disabled in the team picker', () => {
     const el = render(
       <ModelSelect
         agentKind="codex"
@@ -253,7 +253,7 @@ describe('ModelSelect', () => {
 
 /**
  * The graph builder's half of the same chip. It used to be a second component
- * in `workflows/` — a bordered select over a text input, which is what the reported
+ * in `teams/` — a bordered select over a text input, which is what the reported
  * "model should be the same design as when we create chat" was about.
  */
 describe('ModelSelect — allowCustom (the node inspector)', () => {

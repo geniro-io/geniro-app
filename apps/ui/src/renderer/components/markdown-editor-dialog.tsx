@@ -16,7 +16,7 @@ const EDITOR_HEIGHT = 520;
  * Edits are STAGED: typing here changes nothing until Save, so Cancel (and
  * Escape, and the backdrop) genuinely abandons the edit. A reopened dialog
  * always starts from the caller's current value, never from a previous
- * visit's abandoned draft — the same contract as `WorkflowMetaDialog`.
+ * visit's abandoned draft — the same contract as `TeamMetaDialog`.
  */
 export function MarkdownEditorDialog({
   open,

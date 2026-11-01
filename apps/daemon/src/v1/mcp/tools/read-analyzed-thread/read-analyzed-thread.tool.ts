@@ -8,8 +8,8 @@ import {
   type ThreadReaderService,
 } from '../../../agents/services/thread-reader.service';
 import { analysedSourceOf } from '../../../agents/utils/analysed-runs';
-import type { WorkflowChangeService } from '../../../graphs/services/workflow-change.service';
-import type { WorkflowHistoryService } from '../../../stats/services/workflow-history.service';
+import type { TeamHistoryService } from '../../../stats/services/team-history.service';
+import type { TeamChangeService } from '../../../teams/services/team-change.service';
 import type {
   McpCallContext,
   McpListContext,
@@ -23,15 +23,14 @@ import {
 } from './read-analyzed-thread.reader';
 import { readAnalyzedThreadSchema } from './read-analyzed-thread.schema';
 
-const NOT_A_WORKFLOW = {
-  error: 'NOT_A_WORKFLOW',
-  message:
-    'The analysed thread is a plain chat (or is gone): it has no workflow.',
+const NOT_A_TEAM = {
+  error: 'NOT_A_TEAM',
+  message: 'The analysed thread is a plain chat (or is gone): it has no team.',
 };
 
 /**
  * `read_analyzed_thread` — an analysis chat's paged read of the one thread it
- * analyses, or of the runs a workflow analysis was started on. Offered only
+ * analyses, or of the runs a team analysis was started on. Offered only
  * while an analysis turn runs, and carries no `readOnlyHint` (codex would skip
  * its approval); its auto-approval is `isHostAnalysisReadCall`'s, scoped by
  * the broker to those sources.
@@ -43,8 +42,8 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
   constructor(
     private readonly analysis: AnalysisBroker,
     private readonly threads: ThreadReaderService,
-    private readonly workflows: WorkflowChangeService,
-    private readonly history: WorkflowHistoryService,
+    private readonly teams: TeamChangeService,
+    private readonly history: TeamHistoryService,
   ) {
     super();
   }
@@ -75,17 +74,17 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
     }
     try {
       if (read.query.view === 'history') {
-        const workflow = await this.threads.analysedWorkflowOf(turn);
-        if (workflow === null) {
-          return this.text(analyzedThreadResultText(NOT_A_WORKFLOW));
+        const team = await this.threads.analysedTeamOf(turn);
+        if (team === null) {
+          return this.text(analyzedThreadResultText(NOT_A_TEAM));
         }
         return this.text(
           analyzedThreadResultText(
             pagedAnswer(
               maskedAnswer({
-                ...(await this.history.read(workflow.slug, {
-                  analysedRunIds: turn.workflow
-                    ? turn.workflow.runs.map((run) => run.runId)
+                ...(await this.history.read(team.slug, {
+                  analysedRunIds: turn.team
+                    ? turn.team.runs.map((run) => run.runId)
                     : [turn.sourceRunId],
                   readerRunId: runId,
                 })),
@@ -95,7 +94,7 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
           ),
         );
       }
-      if (read.query.view !== 'workflow') {
+      if (read.query.view !== 'team') {
         return this.text(
           analyzedThreadResultText(
             await this.threads.read(turn, read.query, (slug) =>
@@ -108,9 +107,9 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
       if ('error' in named) {
         return this.text(analyzedThreadResultText(named));
       }
-      const workflow = await this.threads.analysedWorkflowOf(turn, named);
-      if (workflow === null) {
-        return this.text(analyzedThreadResultText(NOT_A_WORKFLOW));
+      const team = await this.threads.analysedTeamOf(turn, named);
+      if (team === null) {
+        return this.text(analyzedThreadResultText(NOT_A_TEAM));
       }
       return this.text(
         analyzedThreadResultText(
@@ -118,10 +117,10 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
             // Masked BEFORE paging: a secret cut across two chunks matches
             // in neither, and the per-chunk pass would let both halves out.
             maskedAnswer(
-              await this.workflows.describe(
-                workflow.slug,
-                workflow.snapshot,
-                workflow.instructions,
+              await this.teams.describe(
+                team.slug,
+                team.snapshot,
+                team.instructions,
               ),
             ),
             read.query.offset ?? 0,

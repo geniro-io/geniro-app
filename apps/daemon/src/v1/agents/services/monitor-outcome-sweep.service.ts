@@ -36,7 +36,7 @@ interface CutOff {
  * until the daemon listens and for any card the user still has to answer —
  * unless the daemon crashed (or nobody knows why it stopped), so an
  * unattended restart cannot start turns nobody asked for; such a chat's next
- * turn is owed a note instead. A workflow's turn state did not survive, so the
+ * turn is owed a note instead. A team's turn state did not survive, so the
  * owning conversation's next turn is owed one. An archived run gets neither.
  *
  * Every id a run's rows hold is handed to the registry, whose counter is per
@@ -153,7 +153,7 @@ export class MonitorOutcomeSweep {
     if (run === null) {
       return;
     }
-    const isChat = run.workflowId === null || run.workflowId === undefined;
+    const isChat = run.teamId === null || run.teamId === undefined;
     const message = (monitor: CutOff): MonitorMessage => ({
       id: monitor.id,
       description: monitor.description,

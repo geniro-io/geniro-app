@@ -64,7 +64,7 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       agentKind: 'claude',
       model: 'claude-opus-5',
       cwd: '/work/project',
-      workflowName: null,
+      teamName: null,
       costUsd: 0.25,
       estimatedCostUsd: null,
       inputTokens: null,

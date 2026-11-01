@@ -178,7 +178,7 @@ export class PolledSpendService implements OnModuleInit {
    * Per CLI, the runs whose graph copy pools a member of it, and the instant
    * that list was read from. A run's copy is frozen as it is created, so after
    * the first read only runs created since (less {@link POOLED_RESCAN_MARGIN_MS})
-   * are matched against their copies — plus the workflow runs that had no copy
+   * are matched against their copies — plus the team runs that had no copy
    * at the first read, which an older run gets only when it is next read.
    */
   /**
@@ -241,7 +241,7 @@ export class PolledSpendService implements OnModuleInit {
 
   /**
    * Whether a run holds any polled conversation — the chat's own agent, or a
-   * polled-CLI node in a workflow. What a readout asks before it nudges a poll.
+   * polled-CLI node in a team. What a readout asks before it nudges a poll.
    */
   async runHoldsPolledSpend(
     runId: string,
@@ -258,9 +258,9 @@ export class PolledSpendService implements OnModuleInit {
       // A pooled node is stamped with member 1 while one of its other members
       // may be the polled one.
       const run = await this.runDao.getById(runId, this.em.fork());
-      return [
-        ...snapshotPoolKinds(run?.workflowSnapshot ?? null).values(),
-      ].some((kinds) => kinds.some((kind) => this.pollsSpend(kind)));
+      return [...snapshotPoolKinds(run?.teamSnapshot ?? null).values()].some(
+        (kinds) => kinds.some((kind) => this.pollsSpend(kind)),
+      );
     } catch {
       return false;
     }
@@ -287,7 +287,7 @@ export class PolledSpendService implements OnModuleInit {
 
   /**
    * Whether a row came from a polled CLI — the run's own agent for a chat, the
-   * NODE's for a workflow, whose run names no agent because its agents are per
+   * NODE's for a team, whose run names no agent because its agents are per
    * node.
    */
   private async isPolledRow(
@@ -307,7 +307,7 @@ export class PolledSpendService implements OnModuleInit {
       if (run === null) {
         return false;
       }
-      if (run.workflowId === null || nodeId === null) {
+      if (run.teamId === null || nodeId === null) {
         const polled = this.pollsSpend(run.agentKind);
         this.polledRows.set(key, polled);
         return polled;
@@ -315,8 +315,8 @@ export class PolledSpendService implements OnModuleInit {
       // A pooled node's row is stamped with member 1, while its calls may
       // run on a polled member — the pool, fixed for the run, says so.
       if (
-        (snapshotPoolKinds(run.workflowSnapshot).get(nodeId) ?? []).some(
-          (kind) => this.pollsSpend(kind),
+        (snapshotPoolKinds(run.teamSnapshot).get(nodeId) ?? []).some((kind) =>
+          this.pollsSpend(kind),
         )
       ) {
         this.polledRows.set(key, true);
@@ -465,7 +465,7 @@ export class PolledSpendService implements OnModuleInit {
     em: EntityManager,
   ): Promise<ReadonlySet<string>> {
     const needle = `"agent":"${kind}"`;
-    const match = { workflowSnapshot: { $like: `%${needle}%` } };
+    const match = { teamSnapshot: { $like: `%${needle}%` } };
     const readAt = Date.now();
     const known = this.pooledRuns.get(kind);
     if (known === undefined) {
@@ -479,7 +479,7 @@ export class PolledSpendService implements OnModuleInit {
       }
       const uncopied = new Set<string>();
       for (const row of await this.runDao.getAll(
-        { workflowId: { $ne: null }, workflowSnapshot: null },
+        { teamId: { $ne: null }, teamSnapshot: null },
         { fields: ['id'], disableIdentityMap: true },
         em,
       )) {
@@ -500,12 +500,12 @@ export class PolledSpendService implements OnModuleInit {
     }
     if (known.uncopied.size > 0) {
       for (const row of await this.runDao.getAll(
-        { id: { $in: [...known.uncopied] }, workflowSnapshot: { $ne: null } },
-        { fields: ['id', 'workflowSnapshot'], disableIdentityMap: true },
+        { id: { $in: [...known.uncopied] }, teamSnapshot: { $ne: null } },
+        { fields: ['id', 'teamSnapshot'], disableIdentityMap: true },
         em,
       )) {
         known.uncopied.delete(row.id);
-        if (row.workflowSnapshot?.includes(needle)) {
+        if (row.teamSnapshot?.includes(needle)) {
           known.ids.add(row.id);
         }
       }
@@ -527,12 +527,12 @@ export class PolledSpendService implements OnModuleInit {
     if (missing.length > 0) {
       for (const row of await this.runDao.getAll(
         { id: { $in: missing } },
-        { fields: ['id', 'workflowSnapshot'], disableIdentityMap: true },
+        { fields: ['id', 'teamSnapshot'], disableIdentityMap: true },
         em,
       )) {
-        const pools = snapshotNodePoolProfiles(row.workflowSnapshot);
+        const pools = snapshotNodePoolProfiles(row.teamSnapshot);
         parsed.set(row.id, pools);
-        if (row.workflowSnapshot !== null) {
+        if (row.teamSnapshot !== null) {
           this.poolsByRun.set(row.id, pools);
         }
       }
@@ -550,7 +550,7 @@ export class PolledSpendService implements OnModuleInit {
    * with each conversation it is answerable for.
    *
    * Runs whose OWN agent is this CLI (a 1:1 chat) PLUS runs merely holding a
-   * node that ran on it — every workflow routing work to it, whose run row
+   * node that ran on it — every team routing work to it, whose run row
    * names no agent at all. A conversation is claimed by ONE node, first come:
    * the sessions nodes ran in, then the conversations callers held with them,
    * then the delegates any of those spawned — so no charge is counted twice.
@@ -588,7 +588,7 @@ export class PolledSpendService implements OnModuleInit {
       const nodePools =
         pools.get(row.id) ?? new Map<string, (SnapshotPoolProfile | null)[]>();
       for (const state of await this.nodeStates.listByRun(row.id, em)) {
-        // A workflow's node on another CLI holds a session id from THAT CLI's
+        // A team's node on another CLI holds a session id from THAT CLI's
         // store, which this account has never heard of — never offer it. A
         // pooled node is this CLI's when any of its members is.
         if (

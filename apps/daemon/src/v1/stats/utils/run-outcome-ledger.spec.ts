@@ -8,7 +8,7 @@ const ROW: RunOutcomeLedgerRow = {
   runId: 'run-1',
   sourceSeq: 40,
   occurredAt: new Date('2026-10-27T10:00:00.000Z'),
-  workflowSlug: 'dev-team',
+  teamSlug: 'dev-team',
   prOwner: 'Acme',
   prRepo: 'platform',
   prNumber: 87,

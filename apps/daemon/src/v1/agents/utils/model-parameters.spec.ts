@@ -58,7 +58,7 @@ describe('model parameters column', () => {
 
   it('bounds the parameter ID, not only its value', () => {
     // The count and the value cap between them left the KEY unbounded, and a
-    // workflow arriving as YAML the user hand-edited or received is free to
+    // team arriving as YAML the user hand-edited or received is free to
     // supply one — it is then persisted to the run and rides every turn's
     // config frame for the life of that run.
     expect(

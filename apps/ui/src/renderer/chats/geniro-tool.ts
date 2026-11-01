@@ -41,7 +41,7 @@ export type GeniroCardKind =
   | 'artifact'
   | 'patch'
   | 'plan'
-  | 'workflow';
+  | 'team';
 
 /**
  * The tools geniro publishes on its own server that tell their story ELSEWHERE
@@ -70,8 +70,11 @@ export type GeniroCardKind =
  * `adapters/adapter.types.ts`. A tool added there that draws its own card
  * belongs here; one that draws nothing does not.
  */
-/** `propose_workflow` — its card stands across turns ({@link standsAcrossTurns}). */
-export const PROPOSE_WORKFLOW = 'propose_workflow';
+/** `propose_team` — its card stands across turns ({@link standsAcrossTurns}). */
+export const PROPOSE_TEAM = 'propose_team';
+
+/** `propose_team`'s name before the rename, which the rows recorded then still carry. */
+export const LEGACY_PROPOSE_TEAM = 'propose_workflow';
 
 const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   call_agent: null,
@@ -99,8 +102,9 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   record_outcome: null,
   move_stage: null,
   // The card is the `approval_request` row the daemon writes, which outlives
-  // the call; `read_workflows` draws nothing and stays visible.
-  [PROPOSE_WORKFLOW]: 'workflow',
+  // the call; `read_teams` draws nothing and stays visible.
+  [PROPOSE_TEAM]: 'team',
+  [LEGACY_PROPOSE_TEAM]: 'team',
 };
 
 /** The bare tool names, for the matching below. */
@@ -269,7 +273,7 @@ export function geniroCardKindOf(
 }
 
 /**
- * Whether an approval card for this tool stands ACROSS turns — `propose_workflow`
+ * Whether an approval card for this tool stands ACROSS turns — `propose_team`
  * alone — so it waits on the user only while no turn runs, the daemon's
  * `awaitingOf` rule.
  *
@@ -278,5 +282,10 @@ export function geniroCardKindOf(
  * `ChatService.raiseOwnedCard` raises.
  */
 export function standsAcrossTurns(toolName: string | null): boolean {
-  return toolName === PROPOSE_WORKFLOW;
+  return isTeamProposalTool(toolName);
+}
+
+/** Whether a row's tool is `propose_team`, under either of its names. */
+export function isTeamProposalTool(toolName: string | null): boolean {
+  return toolName === PROPOSE_TEAM || toolName === LEGACY_PROPOSE_TEAM;
 }

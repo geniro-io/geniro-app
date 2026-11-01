@@ -178,60 +178,60 @@ describe('RunGroupsService', () => {
     expect(await service.resolveAutoGroupId({ cwd: nested })).toBe(inner.id);
   });
 
-  it('files a run by its WORKFLOW, whatever folder it runs in', async () => {
+  it('files a run by its TEAM, whatever folder it runs in', async () => {
     const { service } = setup();
     const group = await service.create({
       name: 'Dev team',
-      autoWorkflowId: 'dev-team',
+      autoTeamId: 'dev-team',
     });
     // No folder rule anywhere: a graph runs over many repositories, so the
     // folder is exactly what cannot identify these runs.
     expect(
       await service.resolveAutoGroupId({
         cwd: realpathSync(tmpdir()),
-        workflowId: 'dev-team',
+        teamId: 'dev-team',
       }),
     ).toBe(group.id);
-    // Another workflow, and an ordinary chat, are both unclaimed.
+    // Another team, and an ordinary chat, are both unclaimed.
     expect(
-      await service.resolveAutoGroupId({ cwd: nested, workflowId: 'other' }),
+      await service.resolveAutoGroupId({ cwd: nested, teamId: 'other' }),
     ).toBeNull();
     expect(await service.resolveAutoGroupId({ cwd: nested })).toBeNull();
   });
 
-  it('lets a WORKFLOW claim outrank a folder claim on the same run', async () => {
-    // The ranking is the whole reason both rules can coexist: a workflow run
+  it('lets a TEAM claim outrank a folder claim on the same run', async () => {
+    // The ranking is the whole reason both rules can coexist: a team run
     // starts inside the very project whose ordinary chats the user already
     // files elsewhere, so reading it as a folder chat puts it in the wrong
     // group every time.
     const { service } = setup();
     const byFolder = await service.create({ name: 'App', autoCwd: nested });
-    const byWorkflow = await service.create({
+    const byTeam = await service.create({
       name: 'Dev team',
-      autoWorkflowId: 'dev-team',
+      autoTeamId: 'dev-team',
     });
     expect(
       await service.resolveAutoGroupId({
         cwd: nested,
-        workflowId: 'dev-team',
+        teamId: 'dev-team',
       }),
-    ).toBe(byWorkflow.id);
+    ).toBe(byTeam.id);
     // …and the folder rule still answers for a chat in the same folder.
     expect(await service.resolveAutoGroupId({ cwd: nested })).toBe(byFolder.id);
   });
 
-  it('clears the WORKFLOW rule on an explicit null too', async () => {
+  it('clears the TEAM rule on an explicit null too', async () => {
     const { service } = setup();
     const group = await service.create({
       name: 'Dev team',
-      autoWorkflowId: 'dev-team',
+      autoTeamId: 'dev-team',
     });
     const renamed = await service.update(group.id, { name: 'Renamed' });
-    expect(renamed.autoWorkflowId).toBe('dev-team'); // omitting changes nothing
-    const cleared = await service.update(group.id, { autoWorkflowId: null });
-    expect(cleared.autoWorkflowId).toBeNull();
+    expect(renamed.autoTeamId).toBe('dev-team'); // omitting changes nothing
+    const cleared = await service.update(group.id, { autoTeamId: null });
+    expect(cleared.autoTeamId).toBeNull();
     expect(
-      await service.resolveAutoGroupId({ cwd: null, workflowId: 'dev-team' }),
+      await service.resolveAutoGroupId({ cwd: null, teamId: 'dev-team' }),
     ).toBeNull();
   });
 

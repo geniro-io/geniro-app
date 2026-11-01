@@ -78,7 +78,7 @@ export function publishActionSchema(): Record<string, unknown> {
             type: 'boolean',
             description:
               "Whether the exit code and the end of its output are sent, when it finishes, where a press's " +
-              "message would go — to you, or in a workflow to the agent the user's messages go to. Default false.",
+              "message would go — to you, or in a team to the agent the user's messages go to. Default false.",
           },
         },
         required: ['argv'],

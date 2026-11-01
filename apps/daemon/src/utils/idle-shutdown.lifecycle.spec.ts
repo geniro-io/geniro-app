@@ -73,7 +73,7 @@ describe('IdleShutdownLifecycle', () => {
   });
 
   it('stays up while a turn is in flight, even with nobody watching', () => {
-    // A workflow keeps running after its window closes. Exiting here would
+    // A team keeps running after its window closes. Exiting here would
     // kill work the user is waiting on.
     const { lifecycle, processes, shutdown, advance } = setup();
     processes.tryClaim('run-1');

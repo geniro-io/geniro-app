@@ -10,7 +10,7 @@ import { teamNotesInstructions } from './team-notes.instructions';
 import { readTeamNotes, teamNotesResultText } from './team-notes.reader';
 import { teamNotesSchema } from './team-notes.schema';
 
-/** `team_notes` — read the notes every agent of this workflow run wrote. */
+/** `team_notes` — read the notes every agent of this team run wrote. */
 export class TeamNotesTool extends BaseMcpTool {
   readonly name = HOST_TEAM_NOTES_TOOL;
 

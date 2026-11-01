@@ -86,7 +86,7 @@ export interface RunStream {
   structure: ChatItem[];
   /**
    * Rows of the run's CALLS (`inCall`) — never part of {@link items}, which
-   * holds a workflow run's own flow. Folded like anchors: their cards are built
+   * holds a team run's own flow. Folded like anchors: their cards are built
    * from them, live rows and pages of an opened card alike.
    */
   callRows: ChatItem[];
@@ -126,7 +126,7 @@ export interface RunStream {
 /**
  * The per-run stream a transcript renders from — rows, anchors, the live plane,
  * request expiry, and the socket's reconnect replay — shared by the chat screen
- * and the workflow dock.
+ * and the team dock.
  *
  * It owns the state and the event handling. What differs between the two
  * surfaces (the sidebar, the queue, the notifications, a builder's canvas) is
@@ -232,7 +232,7 @@ export function useRunStream(options: RunStreamOptions): RunStream {
       // and nothing else — the cursor and the consumer's effects still run.
       if (optionsRef.current.atTail()) {
         if (isCallRow(item)) {
-          // A call's row: its card folds it in, and the window — a workflow
+          // A call's row: its card folds it in, and the window — a team
           // run's own flow, paged as such — never holds it.
           commitCallRows((prev) => {
             const last = prev[prev.length - 1];

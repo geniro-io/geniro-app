@@ -33,7 +33,7 @@ function parseRow(payload: string): Record<string, unknown> | null {
  * a SUBSCRIBER rather than a call from the turn path, for the reason the stats
  * recorder and the pull-request capture are: the bus is where the chat path and
  * the graph executor converge on one `persistItemAndEmit`, so neither has to
- * remember to do this, and a workflow node's list is covered by the same code.
+ * remember to do this, and a team node's list is covered by the same code.
  *
  * Two properties shape it:
  *

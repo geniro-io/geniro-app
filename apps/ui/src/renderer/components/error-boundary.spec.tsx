@@ -59,7 +59,7 @@ describe('ErrorBoundary', () => {
     sessionStorage.clear();
     function StaleStyles(): React.JSX.Element {
       throw new Error(
-        'Unable to preload CSS for http://192.168.1.5:47616/assets/Workflows-3f2a.css',
+        'Unable to preload CSS for http://192.168.1.5:47616/assets/Teams-3f2a.css',
       );
     }
     const reload = vi.fn();

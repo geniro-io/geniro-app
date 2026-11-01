@@ -45,7 +45,7 @@ Agents may file issues and open pull requests. The human version is [`CONTRIBUTI
 
 - Search first (`gh issue list -R geniro-io/geniro-app --state all --search "<words>"`); comment on a match instead of opening a duplicate.
 - The forms in `.github/ISSUE_TEMPLATE/` are web-only. From `gh issue create` or the API, write the body with the same `###` headings the form produces, and pass `--label bug` or `--label enhancement`.
-- Bug: `### Geniro version`, `### macOS version and chip`, `### Which agent was involved?` (claude / cursor-agent / codex / a workflow / none), `### Agent CLI version`, `### Steps to reproduce`, `### What happened, and what did you expect?`, `### Debug log`, `### Anything else?`. Write "unknown" rather than guessing a version.
+- Bug: `### Geniro version`, `### macOS version and chip`, `### Which agent was involved?` (claude / cursor-agent / codex / a team / none), `### Agent CLI version`, `### Steps to reproduce`, `### What happened, and what did you expect?`, `### Debug log`, `### Anything else?`. Write "unknown" rather than guessing a version.
 - Feature: `### What problem are you trying to solve?`, `### What would you like to happen?`, `### What do you do today instead?`, `### Would you like to work on it?`. A request that needs a cloud service, telemetry or an account is out of scope (see _Constraints_).
 - Never paste a debug log you have not read: it can hold paths and, with `agent-stdio` on, the user's conversation.
 
@@ -209,7 +209,7 @@ pnpm commit             # conventional commit via commitizen
 - Import shared packages as `@packages/*`.
 - Daemon modules and entities: `.claude/rules/daemon-module-structure.md`.
 - CLI agent adapters: `.claude/rules/agent-adapters.md`. geniro's MCP tools: `.claude/rules/mcp-tools.md`.
-- "Workflow" is the user-facing thing (strings, `Workflow`, `WorkflowsApi`, `WorkflowStoreService`); "graph" is only its DAG shape (executor, validator, edges, canvas, the daemon's `v1/graphs/`).
+- "Team" is the thing, in code, wire, storage and copy (`Team`, `TeamsApi`, `TeamStoreService`, the daemon's `v1/teams/`); "graph" is only its DAG shape (executor, validator, edges, canvas). "Workflow" stays only where it is someone else's word: Claude Code's own dynamic workflows (`workflow_info`, `workflow-block.tsx`), GitHub Actions, and the readers of rows stored before the rename.
 - Renderer UI follows the design system (see _Design system (renderer)_).
 
 ---
@@ -282,7 +282,7 @@ pnpm commit             # conventional commit via commitizen
 - Child env: `buildChildEnv` (`utils/child-env.ts`) strips every `GENIRO_`-prefixed key, the daemon's own `ELECTRON_RUN_AS_NODE` and every adapter's `auth.isolatedEnvKeys`, then each adapter re-injects only its own `auth.inheritedEnvKeys`. Never un-strip a name: an inherited user credential must not reach another CLI's child.
 - Every child process the daemon spawns registers with `ProcessRegistry`, and every detached group is recorded in the child journal; never spawn an unmanaged child. The reaper never kills on a pid alone: it re-confirms identity through `utils/process-identity` and leaves an unconfirmable entry alone.
 - Run-scoped kills (archive, delete, the sweeps) follow `apps/daemon/AGENTS.md` → _Run processes_; never widen them.
-- Workflow definitions are YAML; SQLite holds runtime/history only.
+- Team definitions are YAML; SQLite holds runtime/history only.
 - The daemon binds `127.0.0.1` only and gates every non-public route with the per-launch token.
 - No tmux or PTY scraping for graph execution. Inspection is a handoff to the user's own terminal (`v1/handoff/`).
 - Never use `--no-verify`.
@@ -300,16 +300,16 @@ Full guide: `apps/daemon/AGENTS.md`. Codex never loads it (this root file alone 
 
 ### The UI (`apps/ui`)
 
-Full guides: `apps/ui/AGENTS.md` (renderer, chats, workflows, settings, notifications) and `apps/ui/src/main/AGENTS.md` (Electron main process: IPC, git and worktrees, daemon supervision, terminal, LAN gateway, app updates, security); macOS packaging: `.claude/rules/packaging-config.md`. Codex never loads them; read them yourself before working there.
+Full guides: `apps/ui/AGENTS.md` (renderer, chats, teams, settings, notifications) and `apps/ui/src/main/AGENTS.md` (Electron main process: IPC, git and worktrees, daemon supervision, terminal, LAN gateway, app updates, security); macOS packaging: `.claude/rules/packaging-config.md`. Codex never loads them; read them yourself before working there.
 
 ### Agent instructions — the host preamble and the user's own
 
 - The preamble exists to contradict the CLI's own claim that output goes to a terminal, and to say when each of geniro's own tools is the move. Every claim in it must match this renderer: GFM renders, local-path images render, remote images do not (CSP `img-src 'self' data:`). Never promise remote images or image output blocks, and say nothing about response length.
-- Composition, order, per-CLI delivery, and the custom-instruction / reply-language snapshots: `apps/daemon/AGENTS.md` → _Agent instructions_. The Settings and workflow-inspector readouts of it: `apps/ui/AGENTS.md`.
+- Composition, order, per-CLI delivery, and the custom-instruction / reply-language snapshots: `apps/daemon/AGENTS.md` → _Agent instructions_. The Settings and team-inspector readouts of it: `apps/ui/AGENTS.md`.
 
 ### The daemon API client (generated — never hand-mirrored)
 
-- `pnpm generate:api` emits a typed client (openapi-generator `typescript-fetch`) into `apps/ui/src/renderer/autogenerated/` from the daemon's OpenAPI document: every wire type (`RunDto`, `ItemDto`, `Workflow`, …) plus one API class per swagger tag.
+- `pnpm generate:api` emits a typed client (openapi-generator `typescript-fetch`) into `apps/ui/src/renderer/autogenerated/` from the daemon's OpenAPI document: every wire type (`RunDto`, `ItemDto`, `Team`, …) plus one API class per swagger tag.
 - It is committed, excluded from eslint/prettier, and never edited by hand. The renderer never restates a daemon HTTP shape.
 - `renderer/daemon-api.ts` is the only hand-written transport: loopback base URL from the pidfile, per-launch bearer token, request timeout, and the error shape `daemon <METHOD> <path> failed (<status>): <detail>`. `createDaemonApis(handle)` binds every API class; the `DaemonApis` interface is the authoritative list.
 
@@ -322,8 +322,9 @@ Daemon side of the contract (zod wire schemas, `@ZodResponse`, operationIds, `se
 
 ### Storage split
 
-- **Workflow (graph) definitions → YAML.** Never in SQLite.
-  - Workflow backups → `<userData>/workflows/.backups/<slug>.<YYYY-MM-DDTHH-mm-ss>.yaml`, written before every save an analysis applies and whenever a builder chat's agent calls `backup_workflow` (`WorkflowChangeService`) before an approved `propose_workflow` replaces a file (`WorkflowProposalService`), and before a version restore (`WorkflowVersionsService.restore`). Never named `*.geniro.yaml`, so the library never lists them; restore by copying one over `<slug>.geniro.yaml`.
+- **Team (graph) definitions → YAML.** Never in SQLite.
+  - Team backups → `<userData>/teams/.backups/<slug>.<YYYY-MM-DDTHH-mm-ss>.yaml`, written before every save an analysis applies and whenever a builder chat's agent calls `backup_team` (`TeamChangeService`) before an approved `propose_team` replaces a file (`TeamProposalService`), and before a version restore (`TeamVersionsService.restore`). Never named `*.team.yaml`, so the library never lists them; restore by copying one over `<slug>.team.yaml`.
+  - The library lived in `<userData>/workflows/` as `*.geniro.yaml` before the rename; migration `0003-team-library-files` moved it and keeps the originals in `<userData>/workflows/.migrated/`.
 - **Settings → `settings.json`** in the Electron userData dir. The key list is `apps/ui/AGENTS.md` → **Settings keys (`settings.json`).**
   - Removing or renaming a schema key destroys what it held (`readSettings` keeps only known keys; `writeSettings` rewrites the file). Migrate or export the data first.
   - An unparseable file is copied aside to `settings.json.corrupt-<timestamp>` before any write; never write over a file that cannot be read.
@@ -335,8 +336,8 @@ Daemon side of the contract (zod wire schemas, `@ZodResponse`, operationIds, `se
 - **Secrets → the Keychain only.** Every CLI authenticates from its own login (a cursor named configuration's is the CLI's own file store in that directory: `apps/daemon/AGENTS.md` → _ACP and cursor transport_). Share keys are the one secret geniro keeps (see _Constraints_).
 - **SQLite (`geniro.db`) → runtime and history only**: `runs`, `items`, `node_state`, and the usage tables.
   - Archive uses its own `archivedAt` column, never `deletedAt`: the `softDelete` filter is global and default-on, so an archived row would vanish from the read that unarchives it.
-  - `usage_events`, `usage_activity`, `line_baselines` and `workflow_versions` are exempt from run teardown so lifetime totals survive deleting a chat. `usage_events` is append-only and denormalizes agent/model/folder at write time. A workflow run's `usage_activity` thread row also carries its graph version (`apps/daemon/AGENTS.md` → *Stats*).
-  - `workflow_change_log` and `workflow_recommendations` are exempt too: a workflow analysis reads every change made to its workflow and every recommendation the analyses it replaced filed (`apps/daemon/AGENTS.md` → *Thread analysis*).
+  - `usage_events`, `usage_activity`, `line_baselines` and `team_versions` are exempt from run teardown so lifetime totals survive deleting a chat. `usage_events` is append-only and denormalizes agent/model/folder at write time. A team run's `usage_activity` thread row also carries its graph version (`apps/daemon/AGENTS.md` → *Stats*).
+  - `team_change_log` and `team_recommendations` are exempt too: a team analysis reads every change made to its team and every recommendation the analyses it replaced filed (`apps/daemon/AGENTS.md` → *Thread analysis*).
   - `artifact_shares` is exempt from run teardown too: a shared link outlives its chat, and the row is the only way to revoke it. Only a share never uploaded (waiting on sign-in, or failed after it) is dropped with its run. Its key is in the Keychain, never the row. Accepted exception: an agent's `show_artifact(share: true)` receipt (or, after a sign-in wait, its `HostWakeBus` wake prompt) carries the whole link, so the key is also in that agent's transcript: the receipt's `items` row (readable from a paired device), the CLI's session file and the provider's copy. `shares_changed` and the sign-in notification never carry it.
   - `memories` (the shared agent memory, `v1/memory`, with its FTS index `memories_fts`) is exempt from run teardown too: a memory outlives the chat that wrote it. geniro never writes into any CLI's own memory store.
 - **Persist-then-emit** for streamed, replayable data (chat and graph-node items): allocate the monotonic `seq`, write the row, then publish. Clients replay through an `afterSeq` cursor, so nothing is emitted before it is durable.

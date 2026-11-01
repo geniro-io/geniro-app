@@ -483,7 +483,7 @@ export interface CliSession {
    * REAPS an unused process must not reap one holding them: a dev server is
    * quiet by design, and a session that has said nothing for the idle window
    * while serving `localhost:3000` is not a session going unused. Reported as
-   * servers an agent started in a workflow run being unreachable after its
+   * servers an agent started in a team run being unreachable after its
    * next reply.
    */
   readonly shellsRunning: number;
@@ -998,7 +998,7 @@ interface TurnState {
  * Without it the live figure drops it: the CLI's own reading restarts at each
  * `result` (`cost_progress` measures from there), while the held
  * `turn_complete` carrying that segment is not emitted until the turn ends.
- * REPORTED as two identical callees on one workflow reading $0.18 and $22.34 —
+ * REPORTED as two identical callees on one team reading $0.18 and $22.34 —
  * the first had been held for its background delegates, and its card showed
  * only what it spent after the latest continuation (run `07d68eea`, call-15,
  * whose session files price at ~$15).

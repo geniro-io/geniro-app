@@ -81,17 +81,17 @@ export class UsageEvent extends TimestampsEntity {
   cwd: string | null = null;
 
   /**
-   * The workflow this turn belonged to, or null for a single-agent chat.
+   * The team this turn belonged to, or null for a single-agent chat.
    *
    * The NAME, denormalized like every dimension here, because the run that
-   * knows it is destroyed with the chat and the workflow YAML behind it can be
+   * knows it is destroyed with the chat and the team YAML behind it can be
    * renamed or deleted independently. Rows written before this column existed
    * carry null and are therefore indistinguishable from chats in the breakdown
    * — a name that was never recorded cannot be recovered, and inventing one
    * would be worse than saying nothing.
    */
   @Property({ type: 'text', nullable: true })
-  workflowName: string | null = null;
+  teamName: string | null = null;
 
   /**
    * Every figure below is nullable, and null means NOT MEASURED rather than

@@ -150,7 +150,7 @@ function commandsOf(stopped: readonly ScannedProcess[]): string[] {
 /**
  * Their executables alone, for the prompt: an argv read from the process
  * table can carry a credential no agent typed, and the prompt leaves the
- * machine — in a workflow, possibly to another agent's provider.
+ * machine — in a team, possibly to another agent's provider.
  */
 function executablesOf(stopped: readonly ScannedProcess[]): string[] {
   return [

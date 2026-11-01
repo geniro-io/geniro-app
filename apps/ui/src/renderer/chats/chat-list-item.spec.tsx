@@ -49,7 +49,7 @@ function props(
   return {
     runId: 'run-1',
     label: 'Review team',
-    isWorkflow: false,
+    isTeam: false,
     status: 'completed' as const,
     lastMessage: 'All checks passed on the auth module.',
     lastActivityAt: new Date(Date.now() - 5 * 60_000).toISOString(),
@@ -343,17 +343,17 @@ describe('ChatListItem', () => {
       expect(event.defaultPrevented).toBe(true);
     });
 
-    it('offers PIN and RENAME on a WORKFLOW row, on BOTH surfaces', async () => {
-      // Rename was withheld here on the reading that a workflow run's NAME
+    it('offers PIN and RENAME on a TEAM row, on BOTH surfaces', async () => {
+      // Rename was withheld here on the reading that a team run's NAME
       // belonged to the library entry, so renaming it would read as editing
       // that from another view. It stopped being true when `ChatTitleService`
-      // began naming workflow runs from their own conversation and the
-      // workflow's name moved to the label chip — the title is the RUN's, and
+      // began naming team runs from their own conversation and the
+      // team's name moved to the label chip — the title is the RUN's, and
       // the daemon's rename route is kind-blind and says so. REPORTED as "i
-      // should be able to rename workflow threads as well".
+      // should be able to rename team threads as well".
       const container = await mount(
         <ChatListItem
-          {...props({ isWorkflow: true, pinned: false, onSetPinned: vi.fn() })}
+          {...props({ isTeam: true, pinned: false, onSetPinned: vi.fn() })}
         />,
       );
       expect(
@@ -366,10 +366,10 @@ describe('ChatListItem', () => {
       ]);
     });
 
-    it('renames a WORKFLOW row through the same inline field a chat uses', async () => {
+    it('renames a TEAM row through the same inline field a chat uses', async () => {
       // The menu row and the pencil are only the way IN; what the report asks
       // for is the rename actually reaching the daemon, which is kind-blind.
-      const p = props({ isWorkflow: true, workflowName: 'Dev Team Manifest' });
+      const p = props({ isTeam: true, teamName: 'Dev Team Manifest' });
       const container = await mount(<ChatListItem {...p} />);
       await act(async () => {
         buttonLabelled(container, 'Rename Review team').click();
@@ -725,19 +725,19 @@ describe('ChatListItem', () => {
     );
   });
 
-  it('labels a workflow run with the WORKFLOW’s name, whatever kind it carries', async () => {
-    // The label slot says what KIND of thing the row is, and every workflow row
-    // said `graph` — the same word for every run of every workflow, and now the
+  it('labels a team run with the TEAM’s name, whatever kind it carries', async () => {
+    // The label slot says what KIND of thing the row is, and every team row
+    // said `graph` — the same word for every run of every team, and now the
     // least useful thing available, because the row's TITLE is the task rather
-    // than the workflow (see the daemon's `ChatTitleService`). Asked for as
-    // "name of workflow should be as chip". Given a kind as well, to pin that
-    // the workflow reading still WINS rather than merely filling a gap.
+    // than the team (see the daemon's `ChatTitleService`). Asked for as
+    // "name of team should be as chip". Given a kind as well, to pin that
+    // the team reading still WINS rather than merely filling a gap.
     const container = await mount(
       <ChatListItem
         {...props({
-          isWorkflow: true,
+          isTeam: true,
           agentKind: 'claude',
-          workflowName: 'Dev Team Manifest',
+          teamName: 'Dev Team Manifest',
         })}
       />,
     );
@@ -746,11 +746,11 @@ describe('ChatListItem', () => {
     ).toBe('Dev Team Manifest');
   });
 
-  it('falls back to `graph` for a workflow this client cannot name', async () => {
-    // A run of a workflow since deleted from the library. The slot is always
+  it('falls back to `graph` for a team this client cannot name', async () => {
+    // A run of a team since deleted from the library. The slot is always
     // filled, so the honest generic is what it had before — never a blank chip.
     const container = await mount(
-      <ChatListItem {...props({ isWorkflow: true, agentKind: 'claude' })} />,
+      <ChatListItem {...props({ isTeam: true, agentKind: 'claude' })} />,
     );
     expect(
       container.querySelector('[data-slot="agent-kind"]')?.textContent,
@@ -848,16 +848,16 @@ describe('ChatListItem', () => {
     expect(cancelled.querySelector('svg.text-muted-foreground')).not.toBeNull();
   });
 
-  it('shows the workflow glyph only for workflow runs', async () => {
+  it('shows the team glyph only for team runs', async () => {
     // The label row is the content stack's first span (the li's first child
     // is the activation overlay button): only the truncated label + the
-    // rename pencil for a 1:1 chat; a workflow run gets one leading glyph.
+    // rename pencil for a 1:1 chat; a team run gets one leading glyph.
     const chat = await mount(<ChatListItem {...props()} />);
     const chatIcons = chat.querySelectorAll(
       'li > div > span:first-child > svg',
     );
     expect(chatIcons.length).toBe(0);
-    const wf = await mount(<ChatListItem {...props({ isWorkflow: true })} />);
+    const wf = await mount(<ChatListItem {...props({ isTeam: true })} />);
     expect(
       wf.querySelectorAll('li > div > span:first-child > svg').length,
     ).toBe(1);
@@ -1012,14 +1012,14 @@ describe('ChatListItem', () => {
     expect(container.textContent).not.toContain('daemon PATCH failed');
   });
 
-  it('a WORKFLOW row on the desk offers rename and archive, and never delete', async () => {
+  it('a TEAM row on the desk offers rename and archive, and never delete', async () => {
     // RENAME is offered here now: the title is the run's own (the daemon names
-    // a workflow run from its conversation, and the workflow's name is the
+    // a team run from its conversation, and the team's name is the
     // label chip), so renaming edits nothing in the library. The DELETE moved
     // behind the archive with the chats': it destroys one run's history, and
     // leaving it a hover-click away on the one row kind that had no shelf is
     // the arrangement archiving exists to end.
-    const p = props({ isWorkflow: true });
+    const p = props({ isTeam: true });
     const container = await mount(<ChatListItem {...p} />);
 
     expect(buttonLabelled(container, 'Rename Review team')).not.toBeNull();
@@ -1029,10 +1029,10 @@ describe('ChatListItem', () => {
     expect(buttonLabelled(container, 'Review team')).not.toBeNull();
   });
 
-  it('an ARCHIVED workflow row can still be destroyed — the door moved, it did not close', async () => {
+  it('an ARCHIVED team row can still be destroyed — the door moved, it did not close', async () => {
     // Gating delete behind a kind is what once left these rows undeletable;
     // gating it behind the archive must not do the same thing again.
-    const p = props({ isWorkflow: true, archived: true });
+    const p = props({ isTeam: true, archived: true });
     const container = await mount(<ChatListItem {...p} />);
 
     await openMenu(container);

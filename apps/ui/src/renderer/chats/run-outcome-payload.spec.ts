@@ -11,7 +11,7 @@ const PAYLOAD = {
   reviewRounds: 1,
   acceptance: 'not_needed',
   questionsAsked: 0,
-  workflowSlug: 'dev-team',
+  teamSlug: 'dev-team',
   nodeId: 'manager',
   conversationId: null,
   callId: 'call-2',

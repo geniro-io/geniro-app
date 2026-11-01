@@ -298,7 +298,7 @@ export class CodexAdapter extends AgentAdapter {
         endpointRequiresCwdConfig: false,
         listingUnavailableReason: null,
         toggleUnavailableReason: null,
-        // Null: a workflow node's switched-off servers ride the thread's own
+        // Null: a team node's switched-off servers ride the thread's own
         // config overrides — see `codexTurnMcpOverrides` for the measurement
         // and for the rows it cannot reach (a plugin's server).
         turnToggleUnavailableReason: null,

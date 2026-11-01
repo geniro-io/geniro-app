@@ -12,7 +12,7 @@ import type { RunOutcomePayload } from './run-outcome-payload';
 import { useThreadFlag } from './thread-ui-memory';
 
 /**
- * Where one pull request stood when a workflow agent recorded it
+ * Where one pull request stood when a team agent recorded it
  * (`record_outcome`), as its row in the recording agent's flow or its call's
  * card. A later outcome of the same pull request supersedes this one: the row
  * stays, dimmed and tagged, since the transcript is the history.

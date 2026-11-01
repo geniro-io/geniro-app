@@ -1172,7 +1172,7 @@ describe('ShareService', () => {
         ...ASKER,
         nodeId: 'reviewer',
         caller: 'reviewer',
-        target: 'workflow',
+        target: 'team',
       };
       await service.shareForAgent(
         { runId: RUN, artifactId: 'report', title: 'Report', asker: other },
@@ -1203,7 +1203,7 @@ describe('ShareService', () => {
         ...ASKER,
         nodeId: 'reviewer',
         caller: 'reviewer',
-        target: 'workflow',
+        target: 'team',
       };
       await service.shareForAgent(
         { runId: RUN, artifactId: 'report', title: 'Report', asker: other },
@@ -1222,6 +1222,25 @@ describe('ShareService', () => {
       await service.republishOwedWakes();
 
       expect(wakes.map((w) => w.owner)).toEqual([other]);
+    });
+
+    it('wakes a team asker stored before the rename, which names its run `workflow`', async () => {
+      await dao.create({
+        runId: RUN,
+        artifactId: 'report',
+        title: 'Report',
+        destination: JSON.stringify(GCS),
+        objectId: 'obj',
+        linkBase: GCS.linkBase,
+        sharedVersion: 1,
+        sharedBy: 'agent',
+        status: 'live',
+        asker: JSON.stringify([{ ...ASKER, target: 'workflow' }]),
+      });
+
+      await service.republishOwedWakes();
+
+      expect(wakes.map((w) => w.owner)).toEqual([{ ...ASKER, target: 'team' }]);
     });
 
     it('shares a never-uploaded page to the place Settings name now when its own place was removed', async () => {

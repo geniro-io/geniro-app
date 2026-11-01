@@ -95,7 +95,7 @@ describe('ChatActionsService (in-memory sqlite)', () => {
       kindRowsPassthrough(items),
       new RunHoldRegistry(),
     );
-    await runs.create({ id: 'run-a', status: 'running', workflowId: null });
+    await runs.create({ id: 'run-a', status: 'running', teamId: null });
   });
 
   it('publishes a message action and serves it in run state', async () => {

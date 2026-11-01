@@ -62,8 +62,8 @@ timeout 20 bash -c 'until tmux capture-pane -t georun -p | grep -q "driver>"; do
 tmux send-keys -t georun 'launch' Enter
 timeout 70 bash -c 'until tmux capture-pane -t georun -p | grep -qE "app shell ready|WARN"; do sleep 0.5; done'
 tmux send-keys -t georun 'ss chats' Enter          # screenshot the chats view
-tmux send-keys -t georun 'nav Workflows' Enter
-tmux send-keys -t georun 'ss workflows' Enter
+tmux send-keys -t georun 'nav Teams' Enter
+tmux send-keys -t georun 'ss teams' Enter
 tmux capture-pane -t georun -p                       # read command output
 ```
 
@@ -75,8 +75,8 @@ Then actually open `/tmp/shots/chats.png`. Blank frame = launch failed.
 |---|---|
 | `launch` | boot daemon + warm probe + Chromium + stub, open the renderer |
 | `caps` | print `GET /v1/capabilities` (the claude modes probe verdict) |
-| `nav <Chats\|Workflows\|Tasks\|Stats\|Settings>` | click a nav-rail item. Matches VISIBLE text, so the rail must be expanded — a collapsed item carries only `aria-label`/`title` and returns `NOT_FOUND` |
-| `seed-workflow` | drop a demo workflow (an acceptEdits + an auto agent) — run AFTER `launch`, then `nav Workflows` |
+| `nav <Chats\|Teams\|Tasks\|Stats\|Settings>` | click a nav-rail item. Matches VISIBLE text, so the rail must be expanded — a collapsed item carries only `aria-label`/`title` and returns `NOT_FOUND` |
+| `seed-team` | drop a demo team (an acceptEdits + an auto agent) — run AFTER `launch`, then `nav Teams` |
 | `fill <css-sel> <text>` | fill an input/textarea |
 | `click <css-sel>` / `click-text <text>` | click (DOM click; coords not needed) |
 | `send` | click the composer's Send button |

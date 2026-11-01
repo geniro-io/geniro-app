@@ -26,7 +26,7 @@ const outcome = (
   acceptance: fields.acceptance,
   questionsAsked: 0,
   ...(fields.summary === undefined ? {} : { summary: fields.summary }),
-  workflowSlug: 'dev-team',
+  teamSlug: 'dev-team',
   nodeId: 'manager',
   conversationId: null,
 });

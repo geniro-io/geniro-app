@@ -16,24 +16,24 @@ import { NotifyBroker } from '../agents/services/notify.broker';
 import { PatchBroker } from '../agents/services/patch.broker';
 import { PlanBroker } from '../agents/services/plan.broker';
 import { RunOutcomeBroker } from '../agents/services/run-outcome.broker';
+import { TeamBuilderBroker } from '../agents/services/team-builder.broker';
 import { TeamNoteBroker } from '../agents/services/team-note.broker';
+import { TeamProposalBroker } from '../agents/services/team-proposal.broker';
 import { ThreadReaderService } from '../agents/services/thread-reader.service';
 import { UserQuestionBroker } from '../agents/services/user-question.broker';
-import { WorkflowBuilderBroker } from '../agents/services/workflow-builder.broker';
-import { WorkflowProposalBroker } from '../agents/services/workflow-proposal.broker';
-import { GraphsModule } from '../graphs/graphs.module';
-import { CallBroker } from '../graphs/services/call-broker.service';
-import { StageService } from '../graphs/services/stage.service';
-import { TaskBoardBroker } from '../graphs/services/task-board.broker';
-import { WorkflowChangeService } from '../graphs/services/workflow-change.service';
-import { WorkflowProposalService } from '../graphs/services/workflow-proposal.service';
-import { WorkflowStoreService } from '../graphs/services/workflow-store.service';
 import { MemoryModule } from '../memory/memory.module';
 import { MemoryService } from '../memory/services/memory.service';
 import { ShareService } from '../shares/services/share.service';
 import { SharesModule } from '../shares/shares.module';
-import { WorkflowHistoryService } from '../stats/services/workflow-history.service';
+import { TeamHistoryService } from '../stats/services/team-history.service';
 import { StatsModule } from '../stats/stats.module';
+import { CallBroker } from '../teams/services/call-broker.service';
+import { StageService } from '../teams/services/stage.service';
+import { TaskBoardBroker } from '../teams/services/task-board.broker';
+import { TeamChangeService } from '../teams/services/team-change.service';
+import { TeamProposalService } from '../teams/services/team-proposal.service';
+import { TeamStoreService } from '../teams/services/team-store.service';
+import { TeamsModule } from '../teams/teams.module';
 import { McpController } from './controllers/mcp.controller';
 import { McpServerService } from './services/mcp-server.service';
 import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
@@ -44,8 +44,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
  *
  * Its own module because it sits ABOVE the two it serves: the render family's
  * brokers live in {@link AgentsModule}, the call runtime and the board's
- * rendezvous in {@link GraphsModule}, and the host needs both — and the
- * workflow history an analysis reads in {@link StatsModule}, which sits above
+ * rendezvous in {@link TeamsModule}, and the host needs both — and the
+ * team history an analysis reads in {@link StatsModule}, which sits above
  * those two. Nothing imports this module back.
  *
  * The tools are plain classes, one directory each under `tools/`, built by ONE
@@ -53,13 +53,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
  * ({@link createMcpTools}).
  */
 @Module({
-  imports: [
-    AgentsModule,
-    GraphsModule,
-    SharesModule,
-    MemoryModule,
-    StatsModule,
-  ],
+  imports: [AgentsModule, TeamsModule, SharesModule, MemoryModule, StatsModule],
   controllers: [McpController],
   providers: [
     {
@@ -87,12 +81,12 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         memory: MemoryService,
         analysis: AnalysisBroker,
         threads: ThreadReaderService,
-        workflowChanges: WorkflowChangeService,
-        workflowHistory: WorkflowHistoryService,
-        workflowGate: WorkflowProposalBroker,
-        workflowBuilders: WorkflowBuilderBroker,
-        workflowStore: WorkflowStoreService,
-        workflowProposals: WorkflowProposalService,
+        teamChanges: TeamChangeService,
+        teamHistory: TeamHistoryService,
+        teamGate: TeamProposalBroker,
+        teamBuilders: TeamBuilderBroker,
+        teamStore: TeamStoreService,
+        teamProposals: TeamProposalService,
         shares: ShareService,
       ) =>
         createMcpTools({
@@ -118,12 +112,12 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           memory,
           analysis,
           threads,
-          workflowChanges,
-          workflowHistory,
-          workflowGate,
-          workflowBuilders,
-          workflowStore,
-          workflowProposals,
+          teamChanges,
+          teamHistory,
+          teamGate,
+          teamBuilders,
+          teamStore,
+          teamProposals,
           shares,
         }),
       inject: [
@@ -149,12 +143,12 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         MemoryService,
         AnalysisBroker,
         ThreadReaderService,
-        WorkflowChangeService,
-        WorkflowHistoryService,
-        WorkflowProposalBroker,
-        WorkflowBuilderBroker,
-        WorkflowStoreService,
-        WorkflowProposalService,
+        TeamChangeService,
+        TeamHistoryService,
+        TeamProposalBroker,
+        TeamBuilderBroker,
+        TeamStoreService,
+        TeamProposalService,
         ShareService,
       ],
     },

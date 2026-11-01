@@ -19,10 +19,10 @@ import {
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
-import { workflowSnapshotOf } from '../../graphs/utils/workflow-snapshot';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { teamSnapshotOf } from '../../teams/utils/team-snapshot';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { UsageActivity } from '../entity/usage-activity.entity';
@@ -131,7 +131,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       agentKind: 'claude',
       model: 'claude-opus-5',
       cwd: '/work/project',
-      workflowName: null,
+      teamName: null,
       costUsd: 0.4,
       inputTokens: 800,
     });
@@ -194,7 +194,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       agentKind: 'claude',
       model: null,
       cwd: null,
-      workflowName: null,
+      teamName: null,
       costUsd: 0.4,
       estimatedCostUsd: null,
       inputTokens: 800,
@@ -248,12 +248,12 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
     expect((await usageDao.getAll({})).map((row) => row.seq)).toEqual([2]);
   });
 
-  it('attributes a workflow node’s turn to the node’s own agent and model', async () => {
-    // A workflow run names no single agent; reading the run alone would leave
+  it('attributes a team node’s turn to the node’s own agent and model', async () => {
+    // A team run names no single agent; reading the run alone would leave
     // every node's spend unattributed.
     await runDao.create({
       id: 'run-w',
-      workflowId: 'wf-1',
+      teamId: 'wf-1',
       agentKind: null,
       model: null,
       cwd: '/work/project',
@@ -279,7 +279,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
   it('files a turn another pool member ran under that member, as the live recorder does', async () => {
     await runDao.create({
       id: 'run-w',
-      workflowId: 'wf-1',
+      teamId: 'wf-1',
       agentKind: null,
       model: null,
       cwd: '/work/project',
@@ -319,7 +319,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       agentKind: null,
       model: null,
       cwd: null,
-      workflowName: null,
+      teamName: null,
       costUsd: 0.4,
     });
   });
@@ -442,16 +442,16 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       expect(await usageDao.getAll({})).toHaveLength(1);
     });
 
-    it('writes the model and the workflow from the columns it loads', async () => {
+    it('writes the model and the team from the columns it loads', async () => {
       // The sweep loads a projection of each run, so a column left out of it
       // reads as nothing — and the row, rewritten on any difference, would
-      // then file the bill under no model and no workflow on every boot.
+      // then file the bill under no model and no team on every boot.
       await runDao.create({
         id: 'run-wf',
         agentKind: null,
         model: 'gpt-5.6-sol',
-        workflowId: 'dev-team',
-        workflowSnapshot: workflowSnapshotOf({
+        teamId: 'dev-team',
+        teamSnapshot: teamSnapshotOf({
           name: 'Dev Team',
           nodes: [],
           edges: [],
@@ -464,7 +464,7 @@ describe('UsageBackfillService (in-memory sqlite)', () => {
       const [row] = await usageDao.getAll({ runId: 'run-wf' });
       expect(row).toMatchObject({
         model: 'gpt-5.6-sol',
-        workflowName: 'Dev Team',
+        teamName: 'Dev Team',
         costUsd: 7.29,
       });
     });

@@ -236,7 +236,7 @@ export function Stats({
                 icon={MessageSquarePlus}
                 label="Threads"
                 value={formatCount(data.activity.threadsCreated)}
-                hint="Conversations started in this period — chats and workflow runs, each counted on the day it was created."
+                hint="Conversations started in this period — chats and team runs, each counted on the day it was created."
               />
               <StatCell
                 size="lead"
@@ -394,7 +394,7 @@ export function Stats({
                 groups={data.byThread}
                 // A thread is keyed by its run id, so it is named by its own
                 // title — and one deleted since keeps its spend and says so.
-                // It replaced a per-workflow column whose null key pooled
+                // It replaced a per-team column whose null key pooled
                 // every chat into one row.
                 labelOf={threadLabel}
                 titleOf={(group) => threadLabel(group.key, group)}

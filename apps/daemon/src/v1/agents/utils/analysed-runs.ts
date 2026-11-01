@@ -51,7 +51,7 @@ export function readAnalysedRuns(value: string | null): AnalysedRun[] {
 
 /**
  * What an analysis chat's turn reads, or null for a chat that is not an
- * analysis: a thread analysis reads its one source, a workflow analysis the
+ * analysis: a thread analysis reads its one source, a team analysis the
  * runs it was started on, the newest of them standing for a read that names
  * none.
  */
@@ -62,7 +62,7 @@ export function analysisTurnOf(
     | 'analysisSourceRunId'
     | 'analysisSourceSeq'
     | 'analysisSourceWorking'
-    | 'analysisWorkflowSlug'
+    | 'analysisTeamSlug'
     | 'analysisRuns'
   >,
 ): AnalysisTurn | null {
@@ -74,22 +74,22 @@ export function analysisTurnOf(
       sourceWorking: run.analysisSourceWorking ?? false,
     };
   }
-  if (run.analysisWorkflowSlug === null) {
+  if (run.analysisTeamSlug === null) {
     return null;
   }
-  return workflowAnalysisTurn(
+  return teamAnalysisTurn(
     analysisRunId,
-    run.analysisWorkflowSlug,
+    run.analysisTeamSlug,
     readAnalysedRuns(run.analysisRuns),
   );
 }
 
 /**
- * A turn reading a workflow's runs, newest first — a workflow analysis's, or
+ * A turn reading a team's runs, newest first — a team analysis's, or
  * a builder chat's over the runs snapshotted when its turn began. Null with no
  * run to read.
  */
-export function workflowAnalysisTurn(
+export function teamAnalysisTurn(
   analysisRunId: string,
   slug: string,
   runs: readonly AnalysedRun[],
@@ -103,7 +103,7 @@ export function workflowAnalysisTurn(
     sourceRunId: newest.runId,
     snapshotSeq: newest.snapshotSeq,
     sourceWorking: newest.working,
-    workflow: {
+    team: {
       slug,
       runs: runs.map(({ runId, snapshotSeq, working }) => ({
         runId,
@@ -116,7 +116,7 @@ export function workflowAnalysisTurn(
 
 /**
  * The run a read is about: the one `runId` names among those the analysis
- * reads, or — named none — its source (a workflow analysis's newest run).
+ * reads, or — named none — its source (a team analysis's newest run).
  * Never a run outside them: the model names it, and the analysis reads only
  * what it was started on.
  */
@@ -127,11 +127,11 @@ export function analysedSourceOf(
   if (runId === undefined || runId === turn.sourceRunId) {
     return turn;
   }
-  const run = turn.workflow?.runs.find((entry) => entry.runId === runId);
+  const run = turn.team?.runs.find((entry) => entry.runId === runId);
   if (run === undefined) {
     return {
       error: 'NOT_ANALYSED',
-      message: turn.workflow
+      message: turn.team
         ? `${runId} is not one of the runs this analysis reads — view=runs lists them.`
         : 'This analysis reads one thread: leave runId out.',
     };
@@ -144,11 +144,11 @@ export function analysedSourceOf(
 }
 
 /**
- * Whether a run is itself an analysis — of a thread, or of a workflow across
+ * Whether a run is itself an analysis — of a thread, or of a team across
  * its runs. Every check of it reads both columns.
  */
 export function isAnalysisRun(
-  run: Pick<Run, 'analysisSourceRunId' | 'analysisWorkflowSlug'>,
+  run: Pick<Run, 'analysisSourceRunId' | 'analysisTeamSlug'>,
 ): boolean {
-  return run.analysisSourceRunId !== null || run.analysisWorkflowSlug !== null;
+  return run.analysisSourceRunId !== null || run.analysisTeamSlug !== null;
 }

@@ -17,24 +17,21 @@ import { AttachmentStrip } from './attachment-strip';
 import { plainMarkdownText } from './brief-text';
 import { DiffView, editDiffOf, PROPOSE_PATCH } from './diff-view';
 import {
+  isTeamProposalTool,
   namesGeniroGallery,
   namesGeniroMonitor,
-  PROPOSE_WORKFLOW,
 } from './geniro-tool';
 import { MarkdownContent } from './markdown-content';
 import { insertPastedFilePaths } from './paste-file-paths';
 import { PlanCard, PROPOSE_PLAN, readPlan } from './plan-card';
+import { TeamProposalCard } from './team-proposal-card';
+import { readProposalOutcome, readTeamProposal } from './team-proposal-payload';
 import { HazardAck, HazardWarning, useHazardGate } from './text-hazard-gate';
 import { useThreadFlag } from './thread-ui-memory';
 import { disclosesInput } from './tool-render';
 import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useOneShotVerdict } from './use-one-shot-verdict';
 import { MAX_ANSWER_LENGTH } from './verdict-note';
-import { WorkflowProposalCard } from './workflow-proposal-card';
-import {
-  readProposalOutcome,
-  readWorkflowProposal,
-} from './workflow-proposal-payload';
 
 /** One question of the card (defensive — bad shapes are dropped). */
 interface ParsedQuestion {
@@ -1296,7 +1293,7 @@ export function ApprovalCard({
   expired = false,
   requestId,
   onRespond,
-  onOpenWorkflow,
+  onOpenTeam,
 }: {
   toolName: string;
   input: unknown;
@@ -1334,13 +1331,13 @@ export function ApprovalCard({
   answer?: string | null;
   /**
    * What the card's owner did with an approval, read back from the same verdict
-   * item — only the workflow proposal card reads it.
+   * item — only the team proposal card reads it.
    */
   outcome?: unknown;
   /** The turn ended before an answer — no verdict can apply anymore. */
   expired?: boolean;
-  /** Open a saved library workflow on its canvas; absent, nothing offers to. */
-  onOpenWorkflow?: (slug: string) => void;
+  /** Open a saved library team on its canvas; absent, nothing offers to. */
+  onOpenTeam?: (slug: string) => void;
   /**
    * `images` arrive only from the QUESTION body, and only as a SEPARATE
    * delivery — see its `onRespond` note. A permission card never sends any:
@@ -1356,23 +1353,23 @@ export function ApprovalCard({
   ) => void;
 }): React.JSX.Element {
   const questions = readQuestions(card);
-  // geniro's own workflow proposal, read once per row: its graph and diff are
+  // geniro's own team proposal, read once per row: its graph and diff are
   // the largest payload any card parses.
-  const workflowProposal = useMemo(
-    () => (toolName === PROPOSE_WORKFLOW ? readWorkflowProposal(input) : null),
+  const teamProposal = useMemo(
+    () => (isTeamProposalTool(toolName) ? readTeamProposal(input) : null),
     [toolName, input],
   );
-  if (workflowProposal !== null) {
+  if (teamProposal !== null) {
     return (
-      <WorkflowProposalCard
-        proposal={workflowProposal}
+      <TeamProposalCard
+        proposal={teamProposal}
         verdict={verdict}
         note={answer}
         outcome={readProposalOutcome(outcome)}
         expired={expired}
         memoryKey={requestId ?? undefined}
         onRespond={onRespond}
-        onOpenWorkflow={onOpenWorkflow}
+        onOpenTeam={onOpenTeam}
       />
     );
   }

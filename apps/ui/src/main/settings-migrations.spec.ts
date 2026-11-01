@@ -16,11 +16,12 @@ vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => mocks.userData) },
 }));
 
-import { readSettings } from './settings';
+import { readSettings, writeSettings } from './settings';
 import {
   migrateSettingsFile,
   SETTINGS_BACKUPS_DIR,
   type SettingsMigration,
+  withPendingMigrations,
 } from './settings-migrations';
 
 const NOW = new Date('2026-11-01T10:20:30.000Z');
@@ -152,5 +153,108 @@ describe('migrateSettingsFile', () => {
       ),
     ).toThrow(/not above 2/);
     expect(readdirSync(mocks.userData)).toEqual(['settings.json']);
+  });
+});
+
+describe('settings-0001-team-targets', () => {
+  const runConfig = (id: string, target: string) => ({
+    id,
+    name: id,
+    cwd: '/tmp/project',
+    branch: null,
+    target,
+    model: null,
+    effort: null,
+    contextWindow: null,
+    modelParameters: {},
+    approval: null,
+    configDir: null,
+  });
+
+  it('rewrites wf:<slug> to team:<slug> in runConfigs and lastChatTarget', () => {
+    writeRaw(
+      JSON.stringify({
+        lastChatTarget: 'wf:dev-team',
+        runConfigs: [
+          runConfig('a', 'wf:review-team'),
+          runConfig('b', 'claude'),
+          runConfig('c', 'team:already'),
+        ],
+      }),
+    );
+
+    migrateSettingsFile(mocks.userData, undefined, NOW);
+
+    const raw = readRaw();
+    expect(raw.settingsVersion).toBe(1);
+    expect(raw.lastChatTarget).toBe('team:dev-team');
+    expect(
+      (raw.runConfigs as { target: string }[]).map((config) => config.target),
+    ).toEqual(['team:review-team', 'claude', 'team:already']);
+    const settings = readSettings();
+    expect(settings.lastChatTarget).toBe('team:dev-team');
+    expect(settings.runConfigs.map((config) => config.target)).toEqual([
+      'team:review-team',
+      'claude',
+      'team:already',
+    ]);
+  });
+
+  it('reads a file a launch left unmigrated in the new shape, and a write keeps every saved configuration', () => {
+    writeRaw(
+      JSON.stringify({
+        lastChatTarget: 'wf:dev-team',
+        runConfigs: [runConfig('a', 'wf:review-team'), runConfig('b', 'codex')],
+      }),
+    );
+
+    const settings = readSettings();
+    expect(settings.lastChatTarget).toBe('team:dev-team');
+    expect(settings.runConfigs.map((config) => config.id)).toEqual(['a', 'b']);
+
+    writeSettings({ ...settings, theme: 'dark' }, new Set(['theme']));
+
+    const raw = readRaw();
+    expect(raw.settingsVersion).toBeUndefined();
+    expect(
+      (raw.runConfigs as { target: string }[]).map((config) => config.target),
+    ).toEqual(['wf:review-team', 'codex']);
+    expect(readSettings().runConfigs.map((config) => config.id)).toEqual([
+      'a',
+      'b',
+    ]);
+  });
+});
+
+describe('withPendingMigrations', () => {
+  it('stops at a step that throws, keeping what the steps before it did', () => {
+    const later = vi.fn((raw: Record<string, unknown>) => ({
+      ...raw,
+      later: true,
+    }));
+
+    const result = withPendingMigrations({ legacyInstructions: 'Be brief.' }, [
+      renamesInstructions,
+      {
+        version: 2,
+        id: 'settings-0002-throws',
+        migrate: () => {
+          throw new Error('boom');
+        },
+      },
+      { version: 3, id: 'settings-0003-later', migrate: later },
+    ]);
+
+    expect(result).toEqual({ customInstructions: 'Be brief.' });
+    expect(later).not.toHaveBeenCalled();
+  });
+
+  it('applies only the steps above the stored version', () => {
+    expect(
+      withPendingMigrations({ settingsVersion: 1, replyLanguage: '' }, [
+        renamesInstructions,
+        addsLanguage,
+      ]),
+    ).toEqual({ settingsVersion: 1, replyLanguage: 'Russian' });
   });
 });

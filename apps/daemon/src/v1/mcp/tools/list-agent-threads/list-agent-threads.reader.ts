@@ -1,4 +1,4 @@
-import type { CallEnvelope } from '../../../graphs/graphs.types';
+import type { CallEnvelope } from '../../../teams/teams.types';
 import { unknownArgsEnvelope } from '../call-mcp-tool';
 
 /** `list_agent_threads` reads no argument — see `call-agent.reader.ts`. */

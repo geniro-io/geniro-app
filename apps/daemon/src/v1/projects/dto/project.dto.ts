@@ -88,7 +88,7 @@ export const createProjectSchema = z.object({
   effort: z.string().min(1).optional(),
   approval: ChatApprovalModeSchema.optional(),
   configDir: z.string().min(1).optional(),
-  workflowSlug: z.string().min(1).optional(),
+  teamSlug: z.string().min(1).optional(),
   provider: TaskSourceSchema.optional(),
   autopilotEnabled: autopilotPolicy.autopilotEnabled.optional(),
   autopilotIntakeStatus: autopilotPolicy.autopilotIntakeStatus.optional(),
@@ -113,7 +113,7 @@ export const updateProjectSchema = z
     effort: z.string().min(1).nullable().optional(),
     approval: ChatApprovalModeSchema.nullable().optional(),
     configDir: z.string().min(1).nullable().optional(),
-    workflowSlug: z.string().min(1).nullable().optional(),
+    teamSlug: z.string().min(1).nullable().optional(),
     /**
      * The three policy fields break the nullable pattern of every field above
      * them, and the reason is the column: these are NOT NULL with defaults, so

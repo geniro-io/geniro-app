@@ -53,16 +53,16 @@ import {
 import { createPinoSinkStream } from './v1/diagnostics/utils/pino-sink-stream';
 import { registerSecret } from './v1/diagnostics/utils/redact';
 import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
-import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
-import { WorkflowProposalService } from './v1/graphs/services/workflow-proposal.service';
 import { MemoryTextIndexService } from './v1/memory/services/memory-text-index.service';
 import { MIGRATION_FAILED_EXIT_CODE } from './v1/migrations/migrations.types';
 import { MigrationRunnerService } from './v1/migrations/services/migration-runner.service';
 import { MigrationFailedError } from './v1/migrations/utils/migration-failed-error';
 import { ShareService } from './v1/shares/services/share.service';
-import { WorkflowLedgerService } from './v1/stats/services/workflow-ledger.service';
+import { TeamLedgerService } from './v1/stats/services/team-ledger.service';
 import { StorageService } from './v1/storage/services/storage.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
+import { GraphExecutorService } from './v1/teams/services/graph-executor.service';
+import { TeamProposalService } from './v1/teams/services/team-proposal.service';
 
 /**
  * The one method of better-sqlite3's `Database` this file calls. No type
@@ -189,7 +189,7 @@ bootstrapper.addExtension(
           `GENIRO_DAEMON_READY ${JSON.stringify({ port })}\n`,
         );
         // AFTER the ready print, and deliberately NOT awaited: it stamps every
-        // row of every workflow run written before `Item.inCall` existed, and
+        // row of every team run written before `Item.inCall` existed, and
         // Nest awaits `onModuleInit` before the socket binds, so awaiting it
         // would hold the pidfile write and this print behind it — the app would
         // look hung on the first launch after an update. A run it has not
@@ -279,7 +279,7 @@ bootstrapper.addExtension(
       const stopCause = await closeInterruptedRuns({
         readCause: () => consumeStopCause(environment.userDataDir),
         chats: app.get(ChatService),
-        workflows: app.get(GraphExecutorService),
+        teams: app.get(GraphExecutorService),
         tasks: app.get(TaskSettleService),
         logError: (message) => new Logger('TaskSettleService').error(message),
       });
@@ -307,10 +307,10 @@ bootstrapper.addExtension(
       // answer that later" comes back. AFTER the schema sync for the same
       // reason as its neighbours; it reads the `runs` table.
       await app.get(ChatService).rehydrateDeferredQuestions();
-      // And every standing workflow proposal card, for the same reason.
-      await app.get(WorkflowProposalService).rehydrate();
+      // And every standing team proposal card, for the same reason.
+      await app.get(TeamProposalService).rehydrate();
 
-      // Arm again every continue geniro PROMISED a workflow run at a
+      // Arm again every continue geniro PROMISED a team run at a
       // usage-limit reset. Its agents were told to wait for it rather than set
       // a timer of their own, so without this a restart in those hours leaves
       // a team waiting on a promise nothing is keeping any more.
@@ -322,12 +322,12 @@ bootstrapper.addExtension(
       // column is the only place geniro still knows it.
       await app.get(PartialStreamService).rehydrateUnrecordedSpend();
 
-      // Stamp every workflow run the version ledger does not describe yet,
+      // Stamp every team run the version ledger does not describe yet,
       // BEFORE listen: the renderer's archive-retention sweep reaches the
       // daemon only once it listens, and a run it deletes first would lose its
       // version for good. The ledger's bus subscriptions start in
       // `onModuleInit`, inside listen, so they never race this.
-      await app.get(WorkflowLedgerService).sweep();
+      await app.get(TeamLedgerService).sweep();
 
       // Resolved here, STARTED from `onListening` — see that comment. This is
       // the only line of it that may run before the server is up, and it only

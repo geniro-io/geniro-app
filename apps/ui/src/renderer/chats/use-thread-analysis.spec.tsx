@@ -142,11 +142,11 @@ describe('useThreadAnalysis', () => {
 });
 
 describe('isAnalysisRun', () => {
-  it('tells a thread’s or a workflow’s analysis from any other run', () => {
-    const none = { analysisSourceRunId: null, analysisWorkflowSlug: null };
+  it('tells a thread’s or a team’s analysis from any other run', () => {
+    const none = { analysisSourceRunId: null, analysisTeamSlug: null };
 
     expect(isAnalysisRun(none)).toBe(false);
     expect(isAnalysisRun({ ...none, analysisSourceRunId: 'src' })).toBe(true);
-    expect(isAnalysisRun({ ...none, analysisWorkflowSlug: 'team' })).toBe(true);
+    expect(isAnalysisRun({ ...none, analysisTeamSlug: 'team' })).toBe(true);
   });
 });

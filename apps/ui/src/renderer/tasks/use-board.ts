@@ -335,7 +335,7 @@ export interface BoardApi {
     autopilotMaxConcurrent?: number;
   }) => Promise<void>;
   /**
-   * Write the open project's RUN defaults — the agent or workflow every task
+   * Write the open project's RUN defaults — the agent or team every task
    * on this board takes, and the model and effort under it.
    *
    * The same call as `updateAutopilot` under a name that says which question

@@ -284,7 +284,7 @@ export interface ActiveTask {
  */
 export interface ActivityTotals {
     /**
-     * threads (chats and workflow runs) created in the period
+     * threads (chats and team runs) created in the period
      * @type {number}
      * @memberof ActivityTotals
      */
@@ -1524,6 +1524,81 @@ export interface AgentVocabularyDto {
 /**
  * 
  * @export
+ * @interface AnalyzeTeamDto
+ */
+export interface AnalyzeTeamDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AnalyzeTeamDto
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof AnalyzeTeamDto
+     */
+    approval?: ChatApprovalMode;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeTeamDto
+     */
+    model?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeTeamDto
+     */
+    effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeTeamDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeTeamDto
+     */
+    cwd?: string;
+    /**
+     * The user's focus or extra instructions for this analysis
+     * @type {string}
+     * @memberof AnalyzeTeamDto
+     */
+    focus?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeTeamDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeTeamDto
+     */
+    replyLanguage?: string;
+    /**
+     * 
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
+     * @memberof AnalyzeTeamDto
+     */
+    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
+    /**
+     * How many of the team's newest runs to read
+     * @type {number}
+     * @memberof AnalyzeTeamDto
+     */
+    runs: number;
+}
+
+
+/**
+ * 
+ * @export
  * @interface AnalyzeThreadDto
  */
 export interface AnalyzeThreadDto {
@@ -1593,81 +1668,6 @@ export interface AnalyzeThreadDto {
 /**
  * 
  * @export
- * @interface AnalyzeWorkflowDto
- */
-export interface AnalyzeWorkflowDto {
-    /**
-     * 
-     * @type {AgentKind}
-     * @memberof AnalyzeWorkflowDto
-     */
-    agentKind: AgentKind;
-    /**
-     * 
-     * @type {ChatApprovalMode}
-     * @memberof AnalyzeWorkflowDto
-     */
-    approval?: ChatApprovalMode;
-    /**
-     * 
-     * @type {string}
-     * @memberof AnalyzeWorkflowDto
-     */
-    model?: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof AnalyzeWorkflowDto
-     */
-    effort?: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof AnalyzeWorkflowDto
-     */
-    configDir?: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof AnalyzeWorkflowDto
-     */
-    cwd?: string;
-    /**
-     * The user's focus or extra instructions for this analysis
-     * @type {string}
-     * @memberof AnalyzeWorkflowDto
-     */
-    focus?: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof AnalyzeWorkflowDto
-     */
-    customInstructions?: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof AnalyzeWorkflowDto
-     */
-    replyLanguage?: string;
-    /**
-     * 
-     * @type {{ [key: string]: { [key: string]: boolean; }; }}
-     * @memberof AnalyzeWorkflowDto
-     */
-    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
-    /**
-     * How many of the workflow's newest runs to read
-     * @type {number}
-     * @memberof AnalyzeWorkflowDto
-     */
-    runs: number;
-}
-
-
-/**
- * 
- * @export
  * @interface AppProcessThread
  */
 export interface AppProcessThread {
@@ -1690,7 +1690,7 @@ export interface AppProcessThread {
      */
     agentKinds: Array<AgentKind>;
     /**
-     * how many agent processes it keeps — several for a workflow
+     * how many agent processes it keeps — several for a team
      * @type {number}
      * @memberof AppProcessThread
      */
@@ -1872,7 +1872,7 @@ export interface BlockedTask {
      */
     reason: string;
     /**
-     * Where the answer lies: the run settings (run-target, missing-workflow), or a Run press on the card itself (stopped, worktree)
+     * Where the answer lies: the run settings (run-target, missing-team), or a Run press on the card itself (stopped, worktree)
      * @type {BlockedTaskKind}
      * @memberof BlockedTask
      */
@@ -1893,7 +1893,7 @@ export interface BlockedTask {
  */
 export const BlockedTaskKind = {
     RunTarget: 'run-target',
-    MissingWorkflow: 'missing-workflow',
+    MissingTeam: 'missing-team',
     Stopped: 'stopped',
     Worktree: 'worktree'
 } as const;
@@ -2269,7 +2269,7 @@ export interface ChatExportRun {
      * @type {string}
      * @memberof ChatExportRun
      */
-    workflowId: string | null;
+    teamId: string | null;
     /**
      * 
      * @type {RunStatus}
@@ -2389,7 +2389,7 @@ export interface ChatExportRun {
      * @type {string}
      * @memberof ChatExportRun
      */
-    workflowInstructions: string | null;
+    teamInstructions: string | null;
     /**
      * 
      * @type {string}
@@ -2785,13 +2785,13 @@ export interface ChatTotalsDto {
      */
     totals: ChatTotals;
     /**
-     * on a WORKFLOW run, the merged wall-clock stretches in which some agent of it was working, with every `pausedSpans` stretch already cut out — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock
+     * on a TEAM run, the merged wall-clock stretches in which some agent of it was working, with every `pausedSpans` stretch already cut out — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock
      * @type {Array<ActiveSpan>}
      * @memberof ChatTotalsDto
      */
     activeSpans: Array<ActiveSpan>;
     /**
-     * on a WORKFLOW run, where it waited on the user — an approval or question card open with no background shell or sub-agent running. The header clock stands still through them, the open one included. Always empty for a chat
+     * on a TEAM run, where it waited on the user — an approval or question card open with no background shell or sub-agent running. The header clock stands still through them, the open one included. Always empty for a chat
      * @type {Array<PausedSpan>}
      * @memberof ChatTotalsDto
      */
@@ -3335,7 +3335,7 @@ export interface CreateProjectDto {
      * @type {string}
      * @memberof CreateProjectDto
      */
-    workflowSlug?: string;
+    teamSlug?: string;
     /**
      * 
      * @type {TaskSource}
@@ -3392,7 +3392,7 @@ export interface CreateRunGroupDto {
      * @type {string}
      * @memberof CreateRunGroupDto
      */
-    autoWorkflowId?: string;
+    autoTeamId?: string;
 }
 
 
@@ -3522,7 +3522,7 @@ export interface CreateTaskDto {
      * @type {string}
      * @memberof CreateTaskDto
      */
-    workflowSlug?: string;
+    teamSlug?: string;
     /**
      * 
      * @type {TaskSource}
@@ -3541,21 +3541,21 @@ export interface CreateTaskDto {
 /**
  * 
  * @export
- * @interface CreateWorkflowDto
+ * @interface CreateTeamDto
  */
-export interface CreateWorkflowDto {
+export interface CreateTeamDto {
     /**
      * 
      * @type {string}
-     * @memberof CreateWorkflowDto
+     * @memberof CreateTeamDto
      */
     slug?: string;
     /**
      * 
-     * @type {Workflow}
-     * @memberof CreateWorkflowDto
+     * @type {Team}
+     * @memberof CreateTeamDto
      */
-    workflow: Workflow;
+    team: Team;
 }
 
 /**
@@ -3928,13 +3928,13 @@ export type EdgeKind = typeof EdgeKind[keyof typeof EdgeKind];
 /**
  * 
  * @export
- * @interface ExportWorkflowDto
+ * @interface ExportTeamDto
  */
-export interface ExportWorkflowDto {
+export interface ExportTeamDto {
     /**
      * 
      * @type {string}
-     * @memberof ExportWorkflowDto
+     * @memberof ExportTeamDto
      */
     path: string;
 }
@@ -4223,13 +4223,13 @@ export type ImportMemoriesDtoRowsInnerTypeEnum = typeof ImportMemoriesDtoRowsInn
 /**
  * 
  * @export
- * @interface ImportWorkflowDto
+ * @interface ImportTeamDto
  */
-export interface ImportWorkflowDto {
+export interface ImportTeamDto {
     /**
      * 
      * @type {string}
-     * @memberof ImportWorkflowDto
+     * @memberof ImportTeamDto
      */
     path: string;
 }
@@ -4279,7 +4279,7 @@ export const InstructionSizeSource = {
     ProjectInstructions: 'projectInstructions',
     MemoryIndex: 'memoryIndex',
     TaskInstructions: 'taskInstructions',
-    WorkflowInstructions: 'workflowInstructions',
+    TeamInstructions: 'teamInstructions',
     InstructionBlocks: 'instructionBlocks',
     StageMap: 'stageMap',
     Role: 'role',
@@ -4812,10 +4812,10 @@ export interface LogoutResultDto {
 export interface MeasureInstructionSizesDto {
     /**
      * 
-     * @type {Workflow}
+     * @type {Team}
      * @memberof MeasureInstructionSizesDto
      */
-    workflow: Workflow;
+    team: Team;
     /**
      * 
      * @type {string}
@@ -5535,37 +5535,37 @@ export interface MoveTaskStatusDto {
 /**
  * 
  * @export
- * @interface MoveWorkflowRunStageDto
+ * @interface MoveTeamRunStageDto
  */
-export interface MoveWorkflowRunStageDto {
+export interface MoveTeamRunStageDto {
     /**
      * 
-     * @type {MoveWorkflowRunStageDtoStageMoveAction}
-     * @memberof MoveWorkflowRunStageDto
+     * @type {MoveTeamRunStageDtoStageMoveAction}
+     * @memberof MoveTeamRunStageDto
      */
-    action: MoveWorkflowRunStageDtoStageMoveAction;
+    action: MoveTeamRunStageDtoStageMoveAction;
     /**
      * The id of the stage to move
      * @type {string}
-     * @memberof MoveWorkflowRunStageDto
+     * @memberof MoveTeamRunStageDto
      */
     stage: string;
     /**
      * At a fork: the id of the stage the run takes
      * @type {string}
-     * @memberof MoveWorkflowRunStageDto
+     * @memberof MoveTeamRunStageDto
      */
     next?: string;
     /**
      * What was done, or why
      * @type {string}
-     * @memberof MoveWorkflowRunStageDto
+     * @memberof MoveTeamRunStageDto
      */
     text: string;
     /**
      * The stage revision the user was looking at; a different one is refused 409 STAGE_PROGRESS_CHANGED
      * @type {number}
-     * @memberof MoveWorkflowRunStageDto
+     * @memberof MoveTeamRunStageDto
      */
     expectedRev: number;
 }
@@ -5576,12 +5576,12 @@ export interface MoveWorkflowRunStageDto {
  * 
  * @export
  */
-export const MoveWorkflowRunStageDtoStageMoveAction = {
+export const MoveTeamRunStageDtoStageMoveAction = {
     Complete: 'complete',
     Skip: 'skip',
     Reopen: 'reopen'
 } as const;
-export type MoveWorkflowRunStageDtoStageMoveAction = typeof MoveWorkflowRunStageDtoStageMoveAction[keyof typeof MoveWorkflowRunStageDtoStageMoveAction];
+export type MoveTeamRunStageDtoStageMoveAction = typeof MoveTeamRunStageDtoStageMoveAction[keyof typeof MoveTeamRunStageDtoStageMoveAction];
 
 /**
  * 
@@ -6127,7 +6127,7 @@ export interface ProjectDto {
      * @type {string}
      * @memberof ProjectDto
      */
-    workflowSlug: string | null;
+    teamSlug: string | null;
     /**
      * 
      * @type {boolean}
@@ -6496,25 +6496,25 @@ export interface ResetWakesCancelledDto {
 /**
  * 
  * @export
- * @interface RestoreWorkflowVersionDto
+ * @interface RestoreTeamVersionDto
  */
-export interface RestoreWorkflowVersionDto {
+export interface RestoreTeamVersionDto {
     /**
      * 
      * @type {string}
-     * @memberof RestoreWorkflowVersionDto
+     * @memberof RestoreTeamVersionDto
      */
     slug: string;
     /**
      * 
      * @type {string}
-     * @memberof RestoreWorkflowVersionDto
+     * @memberof RestoreTeamVersionDto
      */
     version: string;
     /**
      * 
      * @type {string}
-     * @memberof RestoreWorkflowVersionDto
+     * @memberof RestoreTeamVersionDto
      */
     baseHash?: string;
 }
@@ -6879,7 +6879,7 @@ export interface RunDto {
      */
     awaitingCalls: number;
     /**
-     * DAG agents of this workflow run inside a turn (calls excluded); 0 when a message would be taken now
+     * DAG agents of this team run inside a turn (calls excluded); 0 when a message would be taken now
      * @type {number}
      * @memberof RunDto
      */
@@ -6919,7 +6919,7 @@ export interface RunDto {
      * @type {string}
      * @memberof RunDto
      */
-    workflowId: string | null;
+    teamId: string | null;
     /**
      * 
      * @type {string}
@@ -7039,7 +7039,7 @@ export interface RunDto {
      * @type {string}
      * @memberof RunDto
      */
-    analysisWorkflowSlug: string | null;
+    analysisTeamSlug: string | null;
     /**
      * 
      * @type {number}
@@ -7240,7 +7240,7 @@ export interface RunGroupDto {
      * @type {string}
      * @memberof RunGroupDto
      */
-    autoWorkflowId: string | null;
+    autoTeamId: string | null;
 }
 
 
@@ -7897,6 +7897,61 @@ export type RunTaskRowStatusEnum = typeof RunTaskRowStatusEnum[keyof typeof RunT
 /**
  * 
  * @export
+ * @interface RunTeamDto
+ */
+export interface RunTeamDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunTeamDto
+     */
+    cwd: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunTeamDto
+     */
+    prompt: string;
+    /**
+     * 
+     * @type {Array<SendMessageDtoImagesInner>}
+     * @memberof RunTeamDto
+     */
+    images?: Array<SendMessageDtoImagesInner>;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunTeamDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunTeamDto
+     */
+    replyLanguage?: string;
+    /**
+     * 
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
+     * @memberof RunTeamDto
+     */
+    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
+    /**
+     * 
+     * @type {string}
+     * @memberof RunTeamDto
+     */
+    startSha?: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof RunTeamDto
+     */
+    startDirty?: boolean;
+}
+/**
+ * 
+ * @export
  * @interface RunTeamNotesDto
  */
 export interface RunTeamNotesDto {
@@ -7906,6 +7961,19 @@ export interface RunTeamNotesDto {
      * @memberof RunTeamNotesDto
      */
     notes: Array<TeamNote>;
+}
+/**
+ * 
+ * @export
+ * @interface RunTeamSnapshotDto
+ */
+export interface RunTeamSnapshotDto {
+    /**
+     * 
+     * @type {Team}
+     * @memberof RunTeamSnapshotDto
+     */
+    team: Team;
 }
 /**
  * 
@@ -8469,87 +8537,19 @@ export type RunWorkStatus = typeof RunWorkStatus[keyof typeof RunWorkStatus];
 /**
  * 
  * @export
- * @interface RunWorkflowDto
+ * @interface SaveTeamDto
  */
-export interface RunWorkflowDto {
+export interface SaveTeamDto {
     /**
      * 
+     * @type {Team}
+     * @memberof SaveTeamDto
+     */
+    team: Team;
+    /**
+     * The `hash` of the version this save was made from; a file changed since is refused 409 TEAM_CHANGED
      * @type {string}
-     * @memberof RunWorkflowDto
-     */
-    cwd: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof RunWorkflowDto
-     */
-    prompt: string;
-    /**
-     * 
-     * @type {Array<SendMessageDtoImagesInner>}
-     * @memberof RunWorkflowDto
-     */
-    images?: Array<SendMessageDtoImagesInner>;
-    /**
-     * 
-     * @type {string}
-     * @memberof RunWorkflowDto
-     */
-    customInstructions?: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof RunWorkflowDto
-     */
-    replyLanguage?: string;
-    /**
-     * 
-     * @type {{ [key: string]: { [key: string]: boolean; }; }}
-     * @memberof RunWorkflowDto
-     */
-    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
-    /**
-     * 
-     * @type {string}
-     * @memberof RunWorkflowDto
-     */
-    startSha?: string;
-    /**
-     * 
-     * @type {boolean}
-     * @memberof RunWorkflowDto
-     */
-    startDirty?: boolean;
-}
-/**
- * 
- * @export
- * @interface RunWorkflowSnapshotDto
- */
-export interface RunWorkflowSnapshotDto {
-    /**
-     * 
-     * @type {Workflow}
-     * @memberof RunWorkflowSnapshotDto
-     */
-    workflow: Workflow;
-}
-/**
- * 
- * @export
- * @interface SaveWorkflowDto
- */
-export interface SaveWorkflowDto {
-    /**
-     * 
-     * @type {Workflow}
-     * @memberof SaveWorkflowDto
-     */
-    workflow: Workflow;
-    /**
-     * The `hash` of the version this save was made from; a file changed since is refused 409 WORKFLOW_CHANGED
-     * @type {string}
-     * @memberof SaveWorkflowDto
+     * @memberof SaveTeamDto
      */
     baseHash?: string;
 }
@@ -9627,11 +9627,11 @@ export interface StartTaskRunDto {
      */
     configDir?: string;
     /**
-     * Run this press through a workflow instead of a single agent; outranks every agent field above
+     * Run this press through a team instead of a single agent; outranks every agent field above
      * @type {string}
      * @memberof StartTaskRunDto
      */
-    workflowSlug?: string;
+    teamSlug?: string;
     /**
      * 
      * @type {string}
@@ -9671,73 +9671,73 @@ export type StartTaskRunDtoStartedByEnum = typeof StartTaskRunDtoStartedByEnum[k
 /**
  * 
  * @export
- * @interface StartWorkflowChatDto
+ * @interface StartTeamChatDto
  */
-export interface StartWorkflowChatDto {
+export interface StartTeamChatDto {
     /**
      * 
      * @type {AgentKind}
-     * @memberof StartWorkflowChatDto
+     * @memberof StartTeamChatDto
      */
     agentKind: AgentKind;
     /**
      * 
      * @type {string}
-     * @memberof StartWorkflowChatDto
+     * @memberof StartTeamChatDto
      */
     model?: string;
     /**
      * 
      * @type {ChatApprovalMode}
-     * @memberof StartWorkflowChatDto
+     * @memberof StartTeamChatDto
      */
     approval?: ChatApprovalMode;
     /**
      * 
      * @type {string}
-     * @memberof StartWorkflowChatDto
+     * @memberof StartTeamChatDto
      */
     effort?: string;
     /**
      * 
      * @type {string}
-     * @memberof StartWorkflowChatDto
+     * @memberof StartTeamChatDto
      */
     contextWindow?: string;
     /**
      * 
      * @type {number}
-     * @memberof StartWorkflowChatDto
+     * @memberof StartTeamChatDto
      */
     autoCompactPercent?: number;
     /**
      * 
      * @type {{ [key: string]: string; }}
-     * @memberof StartWorkflowChatDto
+     * @memberof StartTeamChatDto
      */
     modelParameters?: { [key: string]: string; };
     /**
      * 
      * @type {string}
-     * @memberof StartWorkflowChatDto
+     * @memberof StartTeamChatDto
      */
     configDir?: string;
     /**
      * 
      * @type {string}
-     * @memberof StartWorkflowChatDto
+     * @memberof StartTeamChatDto
      */
     customInstructions?: string;
     /**
      * 
      * @type {string}
-     * @memberof StartWorkflowChatDto
+     * @memberof StartTeamChatDto
      */
     replyLanguage?: string;
     /**
      * 
      * @type {{ [key: string]: { [key: string]: boolean; }; }}
-     * @memberof StartWorkflowChatDto
+     * @memberof StartTeamChatDto
      */
     agentOptions?: { [key: string]: { [key: string]: boolean; }; };
 }
@@ -9833,7 +9833,7 @@ export const StorageCleanTarget = {
     CompactDatabase: 'compactDatabase',
     OrphanChatFiles: 'orphanChatFiles',
     OrphanTaskFiles: 'orphanTaskFiles',
-    WorkflowBackups: 'workflowBackups',
+    TeamBackups: 'teamBackups',
     Logs: 'logs',
     Leftovers: 'leftovers',
     SettingsCopies: 'settingsCopies'
@@ -9900,8 +9900,8 @@ export const StorageGroupIdEnum = {
     ChatFiles: 'chatFiles',
     AgentSessions: 'agentSessions',
     TaskFiles: 'taskFiles',
-    Workflows: 'workflows',
-    WorkflowBackups: 'workflowBackups',
+    Teams: 'teams',
+    TeamBackups: 'teamBackups',
     Logs: 'logs',
     Caches: 'caches',
     AppState: 'appState',
@@ -10249,7 +10249,7 @@ export interface TaskDto {
      * @type {string}
      * @memberof TaskDto
      */
-    workflowSlug: string | null;
+    teamSlug: string | null;
     /**
      * 
      * @type {string}
@@ -10423,6 +10423,356 @@ export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
 /**
  * 
  * @export
+ * @interface Team
+ */
+export interface Team {
+    /**
+     * Human-readable team name
+     * @type {string}
+     * @memberof Team
+     */
+    name: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof Team
+     */
+    description?: string;
+    /**
+     * Cap on callee turns working at once across the run; omitted = the machine ceiling
+     * @type {number}
+     * @memberof Team
+     */
+    maxActiveTurns?: number;
+    /**
+     * 
+     * @type {Array<TeamNode>}
+     * @memberof Team
+     */
+    nodes: Array<TeamNode>;
+    /**
+     * 
+     * @type {Array<TeamEdge>}
+     * @memberof Team
+     */
+    edges: Array<TeamEdge>;
+    /**
+     * 
+     * @type {{ [key: string]: NodePosition; }}
+     * @memberof Team
+     */
+    layout?: { [key: string]: NodePosition; };
+    /**
+     * The team's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review. Every agent of a run sees it and moves it with move_stage. Omitted = the team has no stages
+     * @type {Array<TeamStage>}
+     * @memberof Team
+     */
+    stages?: Array<TeamStage>;
+}
+/**
+ * 
+ * @export
+ * @interface TeamAgentNode
+ */
+export interface TeamAgentNode {
+    /**
+     * Unique node id within the team
+     * @type {string}
+     * @memberof TeamAgentNode
+     */
+    id: string;
+    /**
+     * Display name (defaults to id)
+     * @type {string}
+     * @memberof TeamAgentNode
+     */
+    name?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamAgentNode
+     */
+    kind: TeamAgentNodeKindEnum;
+    /**
+     * CLI agent that runs this node
+     * @type {AgentKind}
+     * @memberof TeamAgentNode
+     */
+    agent: AgentKind;
+    /**
+     * Model alias; omitted = CLI default
+     * @type {string}
+     * @memberof TeamAgentNode
+     */
+    model?: string;
+    /**
+     * Reasoning-effort level; omitted = CLI default
+     * @type {string}
+     * @memberof TeamAgentNode
+     */
+    effort?: string;
+    /**
+     * Context-window size; omitted = the model's own default
+     * @type {string}
+     * @memberof TeamAgentNode
+     */
+    contextWindow?: string;
+    /**
+     * Auto-compact threshold (% of the context window); omitted = never
+     * @type {number}
+     * @memberof TeamAgentNode
+     */
+    autoCompactPercent?: number;
+    /**
+     * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
+     * @type {{ [key: string]: string; }}
+     * @memberof TeamAgentNode
+     */
+    modelParameters?: { [key: string]: string; };
+    /**
+     * What this agent does — shown to agents wired to call it
+     * @type {string}
+     * @memberof TeamAgentNode
+     */
+    description?: string;
+    /**
+     * Role/system prompt prepended to the node turn
+     * @type {string}
+     * @memberof TeamAgentNode
+     */
+    role?: string;
+    /**
+     * Tool-approval mode for this node
+     * @type {ApprovalMode}
+     * @memberof TeamAgentNode
+     */
+    approval: ApprovalMode;
+    /**
+     * Absolute path to the agent config directory this node runs under
+     * @type {string}
+     * @memberof TeamAgentNode
+     */
+    configDir?: string;
+    /**
+     * MCP servers this node’s turns run without, by name; omitted = none switched off
+     * @type {Array<string>}
+     * @memberof TeamAgentNode
+     */
+    mcpDisabled?: Array<string>;
+    /**
+     * Further agent configurations a turn of this node can run under (members 2, 3, …); the node’s own settings are member 1
+     * @type {Array<TeamAgentPoolMember>}
+     * @memberof TeamAgentNode
+     */
+    pool?: Array<TeamAgentPoolMember>;
+}
+
+
+/**
+ * @export
+ */
+export const TeamAgentNodeKindEnum = {
+    Agent: 'agent'
+} as const;
+export type TeamAgentNodeKindEnum = typeof TeamAgentNodeKindEnum[keyof typeof TeamAgentNodeKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface TeamAgentPoolMember
+ */
+export interface TeamAgentPoolMember {
+    /**
+     * CLI agent this member runs
+     * @type {AgentKind}
+     * @memberof TeamAgentPoolMember
+     */
+    agent: AgentKind;
+    /**
+     * Tool-approval mode for this member; omitted = the node's own
+     * @type {ApprovalMode}
+     * @memberof TeamAgentPoolMember
+     */
+    approval?: ApprovalMode;
+    /**
+     * Auto-compact threshold (% of the context window); omitted = never
+     * @type {number}
+     * @memberof TeamAgentPoolMember
+     */
+    autoCompactPercent?: number;
+    /**
+     * Model alias; omitted = CLI default
+     * @type {string}
+     * @memberof TeamAgentPoolMember
+     */
+    model?: string;
+    /**
+     * Reasoning-effort level; omitted = CLI default
+     * @type {string}
+     * @memberof TeamAgentPoolMember
+     */
+    effort?: string;
+    /**
+     * Context-window size; omitted = the model's own default
+     * @type {string}
+     * @memberof TeamAgentPoolMember
+     */
+    contextWindow?: string;
+    /**
+     * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
+     * @type {{ [key: string]: string; }}
+     * @memberof TeamAgentPoolMember
+     */
+    modelParameters?: { [key: string]: string; };
+    /**
+     * Absolute path to the agent config directory this member runs under
+     * @type {string}
+     * @memberof TeamAgentPoolMember
+     */
+    configDir?: string;
+    /**
+     * MCP servers this member’s turns run without, by name; omitted = none switched off
+     * @type {Array<string>}
+     * @memberof TeamAgentPoolMember
+     */
+    mcpDisabled?: Array<string>;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface TeamChatsDiscardedDto
+ */
+export interface TeamChatsDiscardedDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamChatsDiscardedDto
+     */
+    deleted: number;
+}
+/**
+ * 
+ * @export
+ * @interface TeamDeletedDto
+ */
+export interface TeamDeletedDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof TeamDeletedDto
+     */
+    deleted: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface TeamEdge
+ */
+export interface TeamEdge {
+    /**
+     * Source node id
+     * @type {string}
+     * @memberof TeamEdge
+     */
+    from: string;
+    /**
+     * Target node id
+     * @type {string}
+     * @memberof TeamEdge
+     */
+    to: string;
+    /**
+     * Edge kind — 'data' feeds output text; 'call' grants the call_agent tool; 'instruction' appends instruction text
+     * @type {EdgeKind}
+     * @memberof TeamEdge
+     */
+    kind: EdgeKind;
+    /**
+     * Optional edge label
+     * @type {string}
+     * @memberof TeamEdge
+     */
+    label?: string;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface TeamFileDto
+ */
+export interface TeamFileDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamFileDto
+     */
+    slug: string;
+    /**
+     * 
+     * @type {Team}
+     * @memberof TeamFileDto
+     */
+    team: Team;
+    /**
+     * The file's version as stored — send it back as a save's `baseHash` so a save over a newer file is refused
+     * @type {string}
+     * @memberof TeamFileDto
+     */
+    hash: string;
+}
+/**
+ * 
+ * @export
+ * @interface TeamInstructionNode
+ */
+export interface TeamInstructionNode {
+    /**
+     * Unique node id within the team
+     * @type {string}
+     * @memberof TeamInstructionNode
+     */
+    id: string;
+    /**
+     * Display name (defaults to id)
+     * @type {string}
+     * @memberof TeamInstructionNode
+     */
+    name?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamInstructionNode
+     */
+    kind: TeamInstructionNodeKindEnum;
+    /**
+     * Instruction text appended to every wired agent’s turn
+     * @type {string}
+     * @memberof TeamInstructionNode
+     */
+    instructions: string;
+}
+
+
+/**
+ * @export
+ */
+export const TeamInstructionNodeKindEnum = {
+    Instruction: 'instruction'
+} as const;
+export type TeamInstructionNodeKindEnum = typeof TeamInstructionNodeKindEnum[keyof typeof TeamInstructionNodeKindEnum];
+
+/**
+ * @type TeamNode
+ * 
+ * @export
+ */
+export type TeamNode = TeamAgentNode | TeamInstructionNode | TeamTriggerNode;
+/**
+ * 
+ * @export
  * @interface TeamNote
  */
 export interface TeamNote {
@@ -10497,6 +10847,262 @@ export const TeamNoteKind = {
 } as const;
 export type TeamNoteKind = typeof TeamNoteKind[keyof typeof TeamNoteKind];
 
+/**
+ * 
+ * @export
+ * @interface TeamStage
+ */
+export interface TeamStage {
+    /**
+     * Stable stage id: lowercase letters, digits and '-', at most 40 characters, never all digits (e.g. 'investigation')
+     * @type {string}
+     * @memberof TeamStage
+     */
+    id: string;
+    /**
+     * Short stage name shown to agents and the user
+     * @type {string}
+     * @memberof TeamStage
+     */
+    title: string;
+    /**
+     * What to do in this stage, in plain language
+     * @type {string}
+     * @memberof TeamStage
+     */
+    instructions?: string;
+    /**
+     * The condition that makes this stage finished
+     * @type {string}
+     * @memberof TeamStage
+     */
+    doneWhen: string;
+    /**
+     * Id of the agent node that usually does this stage — a hint, never a permission
+     * @type {string}
+     * @memberof TeamStage
+     */
+    ownerHint?: string;
+    /**
+     * Ids of the stages that may follow; two or more = the run takes ONE of them; omitted = a final stage
+     * @type {Array<string>}
+     * @memberof TeamStage
+     */
+    next?: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface TeamSummaryDto
+ */
+export interface TeamSummaryDto {
+    /**
+     * Library file name without the .team.yaml suffix
+     * @type {string}
+     * @memberof TeamSummaryDto
+     */
+    slug: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamSummaryDto
+     */
+    name: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamSummaryDto
+     */
+    description: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamSummaryDto
+     */
+    nodeCount: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamSummaryDto
+     */
+    edgeCount: number;
+    /**
+     * Per-agent-kind node counts, only kinds present, stable order
+     * @type {Array<AgentCount>}
+     * @memberof TeamSummaryDto
+     */
+    agentCounts: Array<AgentCount>;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamSummaryDto
+     */
+    updatedAt: string;
+}
+/**
+ * 
+ * @export
+ * @interface TeamTriggerNode
+ */
+export interface TeamTriggerNode {
+    /**
+     * Unique node id within the team
+     * @type {string}
+     * @memberof TeamTriggerNode
+     */
+    id: string;
+    /**
+     * Display name (defaults to id)
+     * @type {string}
+     * @memberof TeamTriggerNode
+     */
+    name?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamTriggerNode
+     */
+    kind: TeamTriggerNodeKindEnum;
+    /**
+     * How this trigger fires
+     * @type {TriggerKind}
+     * @memberof TeamTriggerNode
+     */
+    trigger: TriggerKind;
+}
+
+
+/**
+ * @export
+ */
+export const TeamTriggerNodeKindEnum = {
+    Trigger: 'trigger'
+} as const;
+export type TeamTriggerNodeKindEnum = typeof TeamTriggerNodeKindEnum[keyof typeof TeamTriggerNodeKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface TeamVersionRestoredDto
+ */
+export interface TeamVersionRestoredDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamVersionRestoredDto
+     */
+    slug: string;
+    /**
+     * the graph version the library file now holds
+     * @type {string}
+     * @memberof TeamVersionRestoredDto
+     */
+    version: string;
+    /**
+     * the file hash the next save must quote
+     * @type {string}
+     * @memberof TeamVersionRestoredDto
+     */
+    hash: string;
+    /**
+     * where the replaced file was copied, relative to the library
+     * @type {string}
+     * @memberof TeamVersionRestoredDto
+     */
+    backup: string;
+}
+/**
+ * 
+ * @export
+ * @interface TeamVersionRow
+ */
+export interface TeamVersionRow {
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamVersionRow
+     */
+    version: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamVersionRow
+     */
+    ordinal: number | null;
+    /**
+     * every run of it predates graph copies, so the graph was frozen after the run started
+     * @type {boolean}
+     * @memberof TeamVersionRow
+     */
+    inferred: boolean;
+    /**
+     * false only for the library graph before its first run or restore records it
+     * @type {boolean}
+     * @memberof TeamVersionRow
+     */
+    recorded: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamVersionRow
+     */
+    firstRunAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamVersionRow
+     */
+    lastRunAt: string | null;
+    /**
+     * 
+     * @type {VersionChanges}
+     * @memberof TeamVersionRow
+     */
+    changes: VersionChanges | null;
+    /**
+     * 
+     * @type {VersionFigures}
+     * @memberof TeamVersionRow
+     */
+    figures: VersionFigures;
+}
+/**
+ * 
+ * @export
+ * @interface TeamVersionsDto
+ */
+export interface TeamVersionsDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamVersionsDto
+     */
+    slug: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamVersionsDto
+     */
+    currentVersion: string | null;
+    /**
+     * newest first
+     * @type {Array<TeamVersionRow>}
+     * @memberof TeamVersionsDto
+     */
+    versions: Array<TeamVersionRow>;
+    /**
+     * 
+     * @type {TeamVersionRow}
+     * @memberof TeamVersionsDto
+     */
+    unversioned: TeamVersionRow | null;
+    /**
+     * folded over every run of the team, not summed from the rows
+     * @type {VersionFigures}
+     * @memberof TeamVersionsDto
+     */
+    totals: VersionFigures;
+}
 /**
  * 
  * @export
@@ -10597,7 +11203,7 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      */
     awaitingCalls: number;
     /**
-     * DAG agents of this workflow run inside a turn (calls excluded); 0 when a message would be taken now
+     * DAG agents of this team run inside a turn (calls excluded); 0 when a message would be taken now
      * @type {number}
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
@@ -10637,7 +11243,7 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      * @type {string}
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
-    workflowId: string | null;
+    teamId: string | null;
     /**
      * 
      * @type {string}
@@ -10757,7 +11363,7 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      * @type {string}
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
-    analysisWorkflowSlug: string | null;
+    analysisTeamSlug: string | null;
     /**
      * 
      * @type {number}
@@ -11005,13 +11611,13 @@ export interface ThreadOverviewDtoTotals {
      */
     totals: ChatTotals;
     /**
-     * on a WORKFLOW run, the merged wall-clock stretches in which some agent of it was working, with every `pausedSpans` stretch already cut out — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock
+     * on a TEAM run, the merged wall-clock stretches in which some agent of it was working, with every `pausedSpans` stretch already cut out — a CLOCK reads their union, where `totals.workedMs` is a sum that runs N times faster while N agents work at once. Always empty for a chat, whose header draws its own clock
      * @type {Array<ActiveSpan>}
      * @memberof ThreadOverviewDtoTotals
      */
     activeSpans: Array<ActiveSpan>;
     /**
-     * on a WORKFLOW run, where it waited on the user — an approval or question card open with no background shell or sub-agent running. The header clock stands still through them, the open one included. Always empty for a chat
+     * on a TEAM run, where it waited on the user — an approval or question card open with no background shell or sub-agent running. The header clock stands still through them, the open one included. Always empty for a chat
      * @type {Array<PausedSpan>}
      * @memberof ThreadOverviewDtoTotals
      */
@@ -11272,7 +11878,7 @@ export interface UpdateProjectDto {
      * @type {string}
      * @memberof UpdateProjectDto
      */
-    workflowSlug?: string | null;
+    teamSlug?: string | null;
     /**
      * 
      * @type {boolean}
@@ -11329,7 +11935,7 @@ export interface UpdateRunGroupDto {
      * @type {string}
      * @memberof UpdateRunGroupDto
      */
-    autoWorkflowId?: string | null;
+    autoTeamId?: string | null;
 }
 
 
@@ -11410,7 +12016,7 @@ export interface UpdateTaskDto {
      * @type {string}
      * @memberof UpdateTaskDto
      */
-    workflowSlug?: string | null;
+    teamSlug?: string | null;
 }
 
 
@@ -11563,7 +12169,7 @@ export interface UsageStatsDto {
      */
     byProject: Array<UsageGroup>;
     /**
-     * per thread (run), keyed by run id — chats and workflow runs
+     * per thread (run), keyed by run id — chats and team runs
      * @type {Array<UsageGroup>}
      * @memberof UsageStatsDto
      */
@@ -11624,612 +12230,6 @@ export interface VersionFigures {
      * @memberof VersionFigures
      */
     estimatedCostUsd: number | null;
-}
-/**
- * 
- * @export
- * @interface Workflow
- */
-export interface Workflow {
-    /**
-     * Human-readable workflow name
-     * @type {string}
-     * @memberof Workflow
-     */
-    name: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof Workflow
-     */
-    description?: string;
-    /**
-     * Cap on callee turns working at once across the run; omitted = the machine ceiling
-     * @type {number}
-     * @memberof Workflow
-     */
-    maxActiveTurns?: number;
-    /**
-     * 
-     * @type {Array<WorkflowNode>}
-     * @memberof Workflow
-     */
-    nodes: Array<WorkflowNode>;
-    /**
-     * 
-     * @type {Array<WorkflowEdge>}
-     * @memberof Workflow
-     */
-    edges: Array<WorkflowEdge>;
-    /**
-     * 
-     * @type {{ [key: string]: NodePosition; }}
-     * @memberof Workflow
-     */
-    layout?: { [key: string]: NodePosition; };
-    /**
-     * The workflow's stage graph: the steps every run walks, in order, e.g. investigation → implementation | fix → review. Every agent of a run sees it and moves it with move_stage. Omitted = the workflow has no stages
-     * @type {Array<WorkflowStage>}
-     * @memberof Workflow
-     */
-    stages?: Array<WorkflowStage>;
-}
-/**
- * 
- * @export
- * @interface WorkflowAgentNode
- */
-export interface WorkflowAgentNode {
-    /**
-     * Unique node id within the workflow
-     * @type {string}
-     * @memberof WorkflowAgentNode
-     */
-    id: string;
-    /**
-     * Display name (defaults to id)
-     * @type {string}
-     * @memberof WorkflowAgentNode
-     */
-    name?: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowAgentNode
-     */
-    kind: WorkflowAgentNodeKindEnum;
-    /**
-     * CLI agent that runs this node
-     * @type {AgentKind}
-     * @memberof WorkflowAgentNode
-     */
-    agent: AgentKind;
-    /**
-     * Model alias; omitted = CLI default
-     * @type {string}
-     * @memberof WorkflowAgentNode
-     */
-    model?: string;
-    /**
-     * Reasoning-effort level; omitted = CLI default
-     * @type {string}
-     * @memberof WorkflowAgentNode
-     */
-    effort?: string;
-    /**
-     * Context-window size; omitted = the model's own default
-     * @type {string}
-     * @memberof WorkflowAgentNode
-     */
-    contextWindow?: string;
-    /**
-     * Auto-compact threshold (% of the context window); omitted = never
-     * @type {number}
-     * @memberof WorkflowAgentNode
-     */
-    autoCompactPercent?: number;
-    /**
-     * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
-     * @type {{ [key: string]: string; }}
-     * @memberof WorkflowAgentNode
-     */
-    modelParameters?: { [key: string]: string; };
-    /**
-     * What this agent does — shown to agents wired to call it
-     * @type {string}
-     * @memberof WorkflowAgentNode
-     */
-    description?: string;
-    /**
-     * Role/system prompt prepended to the node turn
-     * @type {string}
-     * @memberof WorkflowAgentNode
-     */
-    role?: string;
-    /**
-     * Tool-approval mode for this node
-     * @type {ApprovalMode}
-     * @memberof WorkflowAgentNode
-     */
-    approval: ApprovalMode;
-    /**
-     * Absolute path to the agent config directory this node runs under
-     * @type {string}
-     * @memberof WorkflowAgentNode
-     */
-    configDir?: string;
-    /**
-     * MCP servers this node’s turns run without, by name; omitted = none switched off
-     * @type {Array<string>}
-     * @memberof WorkflowAgentNode
-     */
-    mcpDisabled?: Array<string>;
-    /**
-     * Further agent configurations a turn of this node can run under (members 2, 3, …); the node’s own settings are member 1
-     * @type {Array<WorkflowAgentPoolMember>}
-     * @memberof WorkflowAgentNode
-     */
-    pool?: Array<WorkflowAgentPoolMember>;
-}
-
-
-/**
- * @export
- */
-export const WorkflowAgentNodeKindEnum = {
-    Agent: 'agent'
-} as const;
-export type WorkflowAgentNodeKindEnum = typeof WorkflowAgentNodeKindEnum[keyof typeof WorkflowAgentNodeKindEnum];
-
-/**
- * 
- * @export
- * @interface WorkflowAgentPoolMember
- */
-export interface WorkflowAgentPoolMember {
-    /**
-     * CLI agent this member runs
-     * @type {AgentKind}
-     * @memberof WorkflowAgentPoolMember
-     */
-    agent: AgentKind;
-    /**
-     * Tool-approval mode for this member; omitted = the node's own
-     * @type {ApprovalMode}
-     * @memberof WorkflowAgentPoolMember
-     */
-    approval?: ApprovalMode;
-    /**
-     * Auto-compact threshold (% of the context window); omitted = never
-     * @type {number}
-     * @memberof WorkflowAgentPoolMember
-     */
-    autoCompactPercent?: number;
-    /**
-     * Model alias; omitted = CLI default
-     * @type {string}
-     * @memberof WorkflowAgentPoolMember
-     */
-    model?: string;
-    /**
-     * Reasoning-effort level; omitted = CLI default
-     * @type {string}
-     * @memberof WorkflowAgentPoolMember
-     */
-    effort?: string;
-    /**
-     * Context-window size; omitted = the model's own default
-     * @type {string}
-     * @memberof WorkflowAgentPoolMember
-     */
-    contextWindow?: string;
-    /**
-     * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
-     * @type {{ [key: string]: string; }}
-     * @memberof WorkflowAgentPoolMember
-     */
-    modelParameters?: { [key: string]: string; };
-    /**
-     * Absolute path to the agent config directory this member runs under
-     * @type {string}
-     * @memberof WorkflowAgentPoolMember
-     */
-    configDir?: string;
-    /**
-     * MCP servers this member’s turns run without, by name; omitted = none switched off
-     * @type {Array<string>}
-     * @memberof WorkflowAgentPoolMember
-     */
-    mcpDisabled?: Array<string>;
-}
-
-
-/**
- * 
- * @export
- * @interface WorkflowChatsDiscardedDto
- */
-export interface WorkflowChatsDiscardedDto {
-    /**
-     * 
-     * @type {number}
-     * @memberof WorkflowChatsDiscardedDto
-     */
-    deleted: number;
-}
-/**
- * 
- * @export
- * @interface WorkflowDeletedDto
- */
-export interface WorkflowDeletedDto {
-    /**
-     * 
-     * @type {boolean}
-     * @memberof WorkflowDeletedDto
-     */
-    deleted: boolean;
-}
-/**
- * 
- * @export
- * @interface WorkflowEdge
- */
-export interface WorkflowEdge {
-    /**
-     * Source node id
-     * @type {string}
-     * @memberof WorkflowEdge
-     */
-    from: string;
-    /**
-     * Target node id
-     * @type {string}
-     * @memberof WorkflowEdge
-     */
-    to: string;
-    /**
-     * Edge kind — 'data' feeds output text; 'call' grants the call_agent tool; 'instruction' appends instruction text
-     * @type {EdgeKind}
-     * @memberof WorkflowEdge
-     */
-    kind: EdgeKind;
-    /**
-     * Optional edge label
-     * @type {string}
-     * @memberof WorkflowEdge
-     */
-    label?: string;
-}
-
-
-/**
- * 
- * @export
- * @interface WorkflowFileDto
- */
-export interface WorkflowFileDto {
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowFileDto
-     */
-    slug: string;
-    /**
-     * 
-     * @type {Workflow}
-     * @memberof WorkflowFileDto
-     */
-    workflow: Workflow;
-    /**
-     * The file's version as stored — send it back as a save's `baseHash` so a save over a newer file is refused
-     * @type {string}
-     * @memberof WorkflowFileDto
-     */
-    hash: string;
-}
-/**
- * 
- * @export
- * @interface WorkflowInstructionNode
- */
-export interface WorkflowInstructionNode {
-    /**
-     * Unique node id within the workflow
-     * @type {string}
-     * @memberof WorkflowInstructionNode
-     */
-    id: string;
-    /**
-     * Display name (defaults to id)
-     * @type {string}
-     * @memberof WorkflowInstructionNode
-     */
-    name?: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowInstructionNode
-     */
-    kind: WorkflowInstructionNodeKindEnum;
-    /**
-     * Instruction text appended to every wired agent’s turn
-     * @type {string}
-     * @memberof WorkflowInstructionNode
-     */
-    instructions: string;
-}
-
-
-/**
- * @export
- */
-export const WorkflowInstructionNodeKindEnum = {
-    Instruction: 'instruction'
-} as const;
-export type WorkflowInstructionNodeKindEnum = typeof WorkflowInstructionNodeKindEnum[keyof typeof WorkflowInstructionNodeKindEnum];
-
-/**
- * @type WorkflowNode
- * 
- * @export
- */
-export type WorkflowNode = WorkflowAgentNode | WorkflowInstructionNode | WorkflowTriggerNode;
-/**
- * 
- * @export
- * @interface WorkflowStage
- */
-export interface WorkflowStage {
-    /**
-     * Stable stage id: lowercase letters, digits and '-', at most 40 characters, never all digits (e.g. 'investigation')
-     * @type {string}
-     * @memberof WorkflowStage
-     */
-    id: string;
-    /**
-     * Short stage name shown to agents and the user
-     * @type {string}
-     * @memberof WorkflowStage
-     */
-    title: string;
-    /**
-     * What to do in this stage, in plain language
-     * @type {string}
-     * @memberof WorkflowStage
-     */
-    instructions?: string;
-    /**
-     * The condition that makes this stage finished
-     * @type {string}
-     * @memberof WorkflowStage
-     */
-    doneWhen: string;
-    /**
-     * Id of the agent node that usually does this stage — a hint, never a permission
-     * @type {string}
-     * @memberof WorkflowStage
-     */
-    ownerHint?: string;
-    /**
-     * Ids of the stages that may follow; two or more = the run takes ONE of them; omitted = a final stage
-     * @type {Array<string>}
-     * @memberof WorkflowStage
-     */
-    next?: Array<string>;
-}
-/**
- * 
- * @export
- * @interface WorkflowSummaryDto
- */
-export interface WorkflowSummaryDto {
-    /**
-     * Library file name without the .geniro.yaml suffix
-     * @type {string}
-     * @memberof WorkflowSummaryDto
-     */
-    slug: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowSummaryDto
-     */
-    name: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowSummaryDto
-     */
-    description: string | null;
-    /**
-     * 
-     * @type {number}
-     * @memberof WorkflowSummaryDto
-     */
-    nodeCount: number;
-    /**
-     * 
-     * @type {number}
-     * @memberof WorkflowSummaryDto
-     */
-    edgeCount: number;
-    /**
-     * Per-agent-kind node counts, only kinds present, stable order
-     * @type {Array<AgentCount>}
-     * @memberof WorkflowSummaryDto
-     */
-    agentCounts: Array<AgentCount>;
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowSummaryDto
-     */
-    updatedAt: string;
-}
-/**
- * 
- * @export
- * @interface WorkflowTriggerNode
- */
-export interface WorkflowTriggerNode {
-    /**
-     * Unique node id within the workflow
-     * @type {string}
-     * @memberof WorkflowTriggerNode
-     */
-    id: string;
-    /**
-     * Display name (defaults to id)
-     * @type {string}
-     * @memberof WorkflowTriggerNode
-     */
-    name?: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowTriggerNode
-     */
-    kind: WorkflowTriggerNodeKindEnum;
-    /**
-     * How this trigger fires
-     * @type {TriggerKind}
-     * @memberof WorkflowTriggerNode
-     */
-    trigger: TriggerKind;
-}
-
-
-/**
- * @export
- */
-export const WorkflowTriggerNodeKindEnum = {
-    Trigger: 'trigger'
-} as const;
-export type WorkflowTriggerNodeKindEnum = typeof WorkflowTriggerNodeKindEnum[keyof typeof WorkflowTriggerNodeKindEnum];
-
-/**
- * 
- * @export
- * @interface WorkflowVersionRestoredDto
- */
-export interface WorkflowVersionRestoredDto {
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowVersionRestoredDto
-     */
-    slug: string;
-    /**
-     * the graph version the library file now holds
-     * @type {string}
-     * @memberof WorkflowVersionRestoredDto
-     */
-    version: string;
-    /**
-     * the file hash the next save must quote
-     * @type {string}
-     * @memberof WorkflowVersionRestoredDto
-     */
-    hash: string;
-    /**
-     * where the replaced file was copied, relative to the library
-     * @type {string}
-     * @memberof WorkflowVersionRestoredDto
-     */
-    backup: string;
-}
-/**
- * 
- * @export
- * @interface WorkflowVersionRow
- */
-export interface WorkflowVersionRow {
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowVersionRow
-     */
-    version: string | null;
-    /**
-     * 
-     * @type {number}
-     * @memberof WorkflowVersionRow
-     */
-    ordinal: number | null;
-    /**
-     * every run of it predates graph copies, so the graph was frozen after the run started
-     * @type {boolean}
-     * @memberof WorkflowVersionRow
-     */
-    inferred: boolean;
-    /**
-     * false only for the library graph before its first run or restore records it
-     * @type {boolean}
-     * @memberof WorkflowVersionRow
-     */
-    recorded: boolean;
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowVersionRow
-     */
-    firstRunAt: string | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowVersionRow
-     */
-    lastRunAt: string | null;
-    /**
-     * 
-     * @type {VersionChanges}
-     * @memberof WorkflowVersionRow
-     */
-    changes: VersionChanges | null;
-    /**
-     * 
-     * @type {VersionFigures}
-     * @memberof WorkflowVersionRow
-     */
-    figures: VersionFigures;
-}
-/**
- * 
- * @export
- * @interface WorkflowVersionsDto
- */
-export interface WorkflowVersionsDto {
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowVersionsDto
-     */
-    slug: string;
-    /**
-     * 
-     * @type {string}
-     * @memberof WorkflowVersionsDto
-     */
-    currentVersion: string | null;
-    /**
-     * newest first
-     * @type {Array<WorkflowVersionRow>}
-     * @memberof WorkflowVersionsDto
-     */
-    versions: Array<WorkflowVersionRow>;
-    /**
-     * 
-     * @type {WorkflowVersionRow}
-     * @memberof WorkflowVersionsDto
-     */
-    unversioned: WorkflowVersionRow | null;
-    /**
-     * folded over every run of the workflow, not summed from the rows
-     * @type {VersionFigures}
-     * @memberof WorkflowVersionsDto
-     */
-    totals: VersionFigures;
 }
 /**
  * 

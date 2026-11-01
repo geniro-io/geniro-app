@@ -35,7 +35,7 @@ import { BranchValueSelect } from './branch-select';
 import {
   isChatApprovalMode,
   targetAgentKind,
-  workflowSlugOf,
+  teamSlugOf,
 } from './composer-values';
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextWindowSelect } from './context-window-select';
@@ -50,7 +50,7 @@ import { ModelSelect } from './model-select';
 import { ModelSettingsPendingRow } from './model-settings-pending-row';
 import type { RunConfigDraft } from './run-config';
 import { moveRunConfig } from './run-config';
-import type { TargetWorkflow } from './target-select';
+import type { TargetTeam } from './target-select';
 import { TargetSelect } from './target-select';
 import { useAgentContextWindows } from './use-agent-context-windows';
 import { useAgentEfforts } from './use-agent-efforts';
@@ -100,7 +100,7 @@ export function RunConfigPicker({
   asDialog = true,
   configs,
   agentsApi,
-  workflows,
+  teams,
   cliDetections,
   recentFolders,
   recentConfigDirsFor,
@@ -131,7 +131,7 @@ export function RunConfigPicker({
   asDialog?: boolean;
   configs: readonly RunConfig[];
   agentsApi: DaemonApis['agents'] | null;
-  workflows: readonly TargetWorkflow[];
+  teams: readonly TargetTeam[];
   cliDetections: readonly CliDetection[] | null;
   recentFolders: string[];
   /** One CLI's own recent config directories — never the composer's flat list. */
@@ -268,7 +268,7 @@ export function RunConfigPicker({
           isNew={editing.id === null}
           agentsApi={agentsApi}
           open={open}
-          workflows={workflows}
+          teams={teams}
           cliDetections={cliDetections}
           recentFolders={recentFolders}
           recentConfigDirsFor={recentConfigDirsFor}
@@ -472,7 +472,7 @@ function RunConfigRow({
   onDeleteCancel: () => void;
   onDeleteConfirm: () => void;
 }): React.JSX.Element {
-  const workflow = workflowSlugOf(config.target);
+  const team = teamSlugOf(config.target);
   return (
     <li
       // Dragged to reorder — asked for as "change sequence of run
@@ -576,7 +576,7 @@ function RunConfigRow({
             </>
           )}
           <span aria-hidden="true">·</span>
-          <span className="shrink-0">{workflow ?? config.target}</span>
+          <span className="shrink-0">{team ?? config.target}</span>
           {config.model === null ? null : (
             <>
               <span aria-hidden="true">·</span>
@@ -650,7 +650,7 @@ function RunConfigEditor({
   isNew,
   open,
   agentsApi,
-  workflows,
+  teams,
   cliDetections,
   recentFolders,
   recentConfigDirsFor,
@@ -665,7 +665,7 @@ function RunConfigEditor({
   isNew: boolean;
   open: boolean;
   agentsApi: DaemonApis['agents'] | null;
-  workflows: readonly TargetWorkflow[];
+  teams: readonly TargetTeam[];
   cliDetections: readonly CliDetection[] | null;
   recentFolders: string[];
   recentConfigDirsFor: (kind: CliKind) => readonly string[];
@@ -676,14 +676,14 @@ function RunConfigEditor({
   onCancel: () => void;
   onCommit: () => void;
 }): React.JSX.Element {
-  const workflow = workflowSlugOf(draft.target) !== null;
+  const team = teamSlugOf(draft.target) !== null;
   const kind = targetAgentKind(draft.target);
   // Null while closed, so neither list is fetched for a dialog nobody opened.
-  const vocabularyKind = open && !workflow ? kind : null;
+  const vocabularyKind = open && !team ? kind : null;
   // Every listing below is asked about the CONFIGURATION's own profile, since
   // each is an ACCOUNT fact — a saved configuration naming a profile has to be
   // edited against that account's models and levels, not the composer's.
-  const vocabularyConfigDir = open && !workflow ? draft.configDir : null;
+  const vocabularyConfigDir = open && !team ? draft.configDir : null;
   const { models, loading: modelsLoading } = useAgentModels(
     agentsApi,
     vocabularyKind,
@@ -761,14 +761,14 @@ function RunConfigEditor({
           <SettingRow label="Agent">
             <TargetSelect
               value={draft.target}
-              workflows={workflows}
+              teams={teams}
               cliDetections={cliDetections}
-              aria-label="Agent or workflow this configuration starts"
+              aria-label="Agent or team this configuration starts"
               onChange={(target) =>
-                // Switching to a workflow drops the CLI-only choices rather than
+                // Switching to a team drops the CLI-only choices rather than
                 // keeping them invisibly: their rows disappear, and a value the
                 // user can neither see nor edit would still be saved.
-                workflowSlugOf(target) !== null
+                teamSlugOf(target) !== null
                   ? set({
                       target,
                       model: null,
@@ -801,7 +801,7 @@ function RunConfigEditor({
               />
             </SettingRow>
           ) : null}
-          {workflow ? null : (
+          {team ? null : (
             <>
               {configDirReasonFor(kind) === null ? (
                 <SettingRow label="Profile">
@@ -821,7 +821,7 @@ function RunConfigEditor({
                   // Guarded against the CURRENT kind's own modes, unlike a
                   // stored value elsewhere in this app: switching the Agent
                   // row between two CLIs does not clear `approval` (only a
-                  // switch to/from a workflow does, above), so a value left
+                  // switch to/from a team does, above), so a value left
                   // over from the PREVIOUS CLI must not be shown as this
                   // one's current pick.
                   value={

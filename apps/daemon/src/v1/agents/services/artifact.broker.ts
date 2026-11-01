@@ -17,15 +17,15 @@ export type ArtifactPublisher = (
   artifact: HostArtifact,
   /**
    * The caller key of the conversation that published it — which call of a
-   * workflow node it came from.
+   * team node it came from.
    */
   caller: string,
 ) => Promise<HostArtifactOutcome>;
 
 @Injectable()
 export class ArtifactBroker extends HostSinkBroker<ArtifactPublisher> {
-  /** Runs whose publishers a workflow executor installed, by their mark. */
-  private readonly workflowRuns = new Map<string, symbol>();
+  /** Runs whose publishers a team executor installed, by their mark. */
+  private readonly teamRuns = new Map<string, symbol>();
 
   /** Whether this node can currently publish — gates the tool listing. */
   canPublish(runId: string, nodeId: string): boolean {
@@ -33,23 +33,23 @@ export class ArtifactBroker extends HostSinkBroker<ArtifactPublisher> {
   }
 
   /**
-   * Mark `runId` as a WORKFLOW run until the returned disposer runs — what the
+   * Mark `runId` as a TEAM run until the returned disposer runs — what the
    * tool's description keys its run-wide wording on. Identity-checked like
    * {@link register}'s disposer, so a late one never unmarks a newer mark.
    */
-  markWorkflowRun(runId: string): () => void {
+  markTeamRun(runId: string): () => void {
     const mark = Symbol(runId);
-    this.workflowRuns.set(runId, mark);
+    this.teamRuns.set(runId, mark);
     return () => {
-      if (this.workflowRuns.get(runId) === mark) {
-        this.workflowRuns.delete(runId);
+      if (this.teamRuns.get(runId) === mark) {
+        this.teamRuns.delete(runId);
       }
     };
   }
 
-  /** Whether `runId` is a workflow run — every agent of it may publish. */
-  inWorkflowRun(runId: string): boolean {
-    return this.workflowRuns.has(runId);
+  /** Whether `runId` is a team run — every agent of it may publish. */
+  inTeamRun(runId: string): boolean {
+    return this.teamRuns.has(runId);
   }
 
   /** Publish the page and resolve with what happened. Never throws. */

@@ -95,10 +95,10 @@ export const ProjectWireSchema = z.object({
   effort: z.string().nullable(),
   approval: ChatApprovalModeSchema.nullable(),
   configDir: z.string().nullable(),
-  workflowSlug: z
+  teamSlug: z
     .string()
     .nullable()
-    .describe('A workflow to run a task through instead of a single agent'),
+    .describe('A team to run a task through instead of a single agent'),
   autopilotEnabled: z.boolean(),
   autopilotIntakeStatus: TaskStatusSchema.describe(
     'The column the autopilot picks work up from',
@@ -165,10 +165,10 @@ export const BlockedTaskSchema = z
       .string()
       .describe('Why this card cannot start, in words a user can act on'),
     kind: z
-      .enum(['run-target', 'missing-workflow', 'stopped', 'worktree'])
+      .enum(['run-target', 'missing-team', 'stopped', 'worktree'])
       .meta({ id: 'BlockedTaskKind' })
       .describe(
-        'Where the answer lies: the run settings (run-target, missing-workflow), or a Run press on the card itself (stopped, worktree)',
+        'Where the answer lies: the run settings (run-target, missing-team), or a Run press on the card itself (stopped, worktree)',
       ),
     retryInMs: z
       .number()
@@ -200,7 +200,7 @@ export const ActiveTaskSchema = z
     id: z.string().describe('The task'),
     runId: z.string().describe('The live run working it'),
     agentKind: AgentKindSchema.nullable().describe(
-      'The CLI actually running it — null for a workflow run, whose agents are per node',
+      'The CLI actually running it — null for a team run, whose agents are per node',
     ),
   })
   .meta({ id: 'ActiveTask' });
@@ -211,15 +211,15 @@ export type ActiveTask = z.infer<typeof ActiveTaskSchema>;
  * compute over the `projects` and `tasks` tables alone, WITHOUT deciding which
  * waiting cards may actually start.
  *
- * The eligible/blocked split cannot live here: the WORKFLOW arm of a card's
+ * The eligible/blocked split cannot live here: the TEAM arm of a card's
  * resolved run target names a slug, and whether that slug still exists is a
- * question only the workflow LIBRARY can answer — `ProjectsModule` has no way
- * to ask it without importing `GraphsModule`, which would recreate the very
+ * question only the team LIBRARY can answer — `ProjectsModule` has no way
+ * to ask it without importing `TeamsModule`, which would recreate the very
  * cycle `ProjectsModule`'s own module doc warns against (`TasksModule`
  * already imports `ProjectsModule`, so the reverse import would need a
  * `forwardRef`). So this module answers only what it alone can compute, and
  * `TaskQueueService` (in the tasks module, which already imports both
- * `ProjectsModule` and `GraphsModule`) joins it against the library to
+ * `ProjectsModule` and `TeamsModule`) joins it against the library to
  * produce the real `eligible`/`blocked` split.
  *
  * Not a wire schema — nothing outside the daemon ever sees this shape, so it
@@ -250,12 +250,12 @@ export interface ProjectQueueRaw {
   effort: string | null;
   approval: ChatApprovalMode | null;
   configDir: string | null;
-  workflowSlug: string | null;
+  teamSlug: string | null;
   /**
    * Every task sitting in the intake column, UNFILTERED — the rows a splitter
    * walks to decide `eligible` vs `blocked`. Full entities rather than a
    * projection: the split needs nearly every column (`agentKind` through
-   * `workflowSlug` for `resolveRunTarget`, `folder`/`position` for
+   * `teamSlug` for `resolveRunTarget`, `folder`/`position` for
    * `toQueued`), so a narrower shape would just restate the entity's own
    * fields under a new name.
    */

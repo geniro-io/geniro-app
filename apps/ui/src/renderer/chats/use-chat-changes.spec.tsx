@@ -66,7 +66,7 @@ async function readHook(
 
 describe('useChatChanges', () => {
   it('counts the files an agent changed in a worktree it created, though the thread’s own folder is clean', async () => {
-    // A workflow agent that runs `git worktree add` under the repository and
+    // A team agent that runs `git worktree add` under the repository and
     // commits there leaves the thread's folder untouched — and a nested
     // worktree is usually gitignored, so the folder's own diff cannot see it
     // either.

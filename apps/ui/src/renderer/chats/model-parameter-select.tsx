@@ -100,7 +100,7 @@ export function ModelParameterSelect({
   }
   const known = parameter.values.some((option) => option.id === value);
   // A value the current model does not offer — a chat carried over to another
-  // model, or a workflow node whose model changed under it. Added back
+  // model, or a team node whose model changed under it. Added back
   // DISABLED rather than dropped, on the context chip's own rule: the value is
   // still stored and still sent, so hiding the row would leave nothing on
   // screen naming what the chip is silently falling back from.

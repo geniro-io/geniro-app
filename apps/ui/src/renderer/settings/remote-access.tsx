@@ -524,7 +524,7 @@ export function RemoteAccess({
                   />
                   <p className="text-xs text-muted-foreground">
                     Scan with your phone’s camera to open the primary link — the
-                    real workflow is scanning this rather than retyping it.
+                    real team is scanning this rather than retyping it.
                   </p>
                 </div>
               </SettingsPanelRow>

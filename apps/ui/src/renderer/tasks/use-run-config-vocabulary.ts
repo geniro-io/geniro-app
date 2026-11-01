@@ -61,7 +61,7 @@ export interface RunConfigVocabulary {
  * `AdapterConfig.approval`. None of the three is ever decided here by agent
  * name, which is the rule `approval-mode-select.tsx` records the cost of.
  *
- * A null `agentKind` (nothing chosen, or a workflow, whose nodes each name
+ * A null `agentKind` (nothing chosen, or a team, whose nodes each name
  * their own model) yields empty vocabularies, so every picker draws nothing —
  * the same subtraction `resolveRunTarget` makes on the daemon side.
  */

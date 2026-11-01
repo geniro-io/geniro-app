@@ -2,7 +2,7 @@ import {
   type CallEnvelope,
   DEFAULT_AWAIT_TIMEOUT_MS,
   MAX_AWAIT_TIMEOUT_MS,
-} from '../../../graphs/graphs.types';
+} from '../../../teams/teams.types';
 import type { McpCallContext, McpListContext } from '../../mcp.types';
 import { CallMcpTool } from '../call-mcp-tool';
 import { awaitAgentInstructions } from './await-agent.instructions';

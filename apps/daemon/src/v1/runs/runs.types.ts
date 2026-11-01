@@ -167,12 +167,12 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * the pair into the live set it serves on run state (`ChatActionsService`), so
  * no client derives "still pressable" from the window of rows it holds.
  *
- * `team_note` is one note a workflow agent wrote to the run's shared team
+ * `team_note` is one note a team agent wrote to the run's shared team
  * notes (`team_note`), readable by every agent of the run (`team_notes`).
  * Append-only like the action pair: a correction is a newer note naming the
  * older one's seq in `supersedes`, and readers fold the pair.
  *
- * `run_outcome` is where one pull request of a workflow run ended up, recorded
+ * `run_outcome` is where one pull request of a team run ended up, recorded
  * by a node (`record_outcome`). Append-only per pull request: the newest row
  * naming a pull request is its outcome, and an earlier one stays as history.
  */

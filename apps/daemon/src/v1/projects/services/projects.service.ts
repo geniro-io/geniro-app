@@ -65,7 +65,7 @@ export class ProjectsService {
     effort?: string;
     approval?: Project['approval'];
     configDir?: string;
-    workflowSlug?: string;
+    teamSlug?: string;
     autopilotEnabled?: boolean;
     autopilotIntakeStatus?: Project['autopilotIntakeStatus'];
     autopilotMaxConcurrent?: number;
@@ -106,7 +106,7 @@ export class ProjectsService {
               noun: 'config directory',
             })
           : null,
-        workflowSlug: input.workflowSlug ?? null,
+        teamSlug: input.teamSlug ?? null,
         ...(input.autopilotEnabled === undefined
           ? {}
           : { autopilotEnabled: input.autopilotEnabled }),
@@ -143,7 +143,7 @@ export class ProjectsService {
       effort?: string | null;
       approval?: Project['approval'];
       configDir?: string | null;
-      workflowSlug?: string | null;
+      teamSlug?: string | null;
       autopilotEnabled?: boolean;
       autopilotIntakeStatus?: Project['autopilotIntakeStatus'];
       autopilotMaxConcurrent?: number;
@@ -196,8 +196,8 @@ export class ProjectsService {
               noun: 'config directory',
             });
     }
-    if (patch.workflowSlug !== undefined) {
-      project.workflowSlug = patch.workflowSlug;
+    if (patch.teamSlug !== undefined) {
+      project.teamSlug = patch.teamSlug;
     }
     if (patch.autopilotEnabled !== undefined) {
       project.autopilotEnabled = patch.autopilotEnabled;
@@ -410,7 +410,7 @@ function toWire(project: Project): ProjectWire {
     effort: project.effort,
     approval: project.approval,
     configDir: project.configDir,
-    workflowSlug: project.workflowSlug,
+    teamSlug: project.teamSlug,
     autopilotEnabled: project.autopilotEnabled,
     autopilotIntakeStatus: project.autopilotIntakeStatus,
     autopilotMaxConcurrent: project.autopilotMaxConcurrent,

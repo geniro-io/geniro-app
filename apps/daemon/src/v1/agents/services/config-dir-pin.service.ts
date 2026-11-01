@@ -40,7 +40,7 @@ export class ConfigDirPinService {
   /**
    * The pin in force for this run, or null when there is none.
    *
-   * A run with no agent or no folder has nothing to ask about: a workflow run's
+   * A run with no agent or no folder has nothing to ask about: a team run's
    * agents are per node, and there is no folder whose settings could pin
    * anything. Both answer null rather than being treated as an error, because a
    * run projection cannot fail over a readout.

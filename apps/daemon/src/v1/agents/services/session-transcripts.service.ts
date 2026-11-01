@@ -42,7 +42,7 @@ export class SessionTranscriptsService {
    * Every CLI conversation a run held, with the CLI and the profile it lives
    * under. Read BEFORE the run's `node_state` rows are deleted.
    *
-   * A chat's one node runs under the run's own profile; a workflow node under
+   * A chat's one node runs under the run's own profile; a team node under
    * the one its snapshot names. A node's whole session history is taken, not
    * only the session it would resume: every call to it and every compaction
    * starts another conversation, and each is a transcript on disk.
@@ -51,8 +51,8 @@ export class SessionTranscriptsService {
     run: Run,
     em: EntityManager,
   ): Promise<SessionTranscriptTarget[]> {
-    const nodeDirs = snapshotNodeConfigDirs(run.workflowSnapshot);
-    const nodePools = snapshotNodePoolProfiles(run.workflowSnapshot);
+    const nodeDirs = snapshotNodeConfigDirs(run.teamSnapshot);
+    const nodePools = snapshotNodePoolProfiles(run.teamSnapshot);
     const targets: SessionTranscriptTarget[] = [];
     for (const state of await this.nodeStateDao.listByRun(run.id, em)) {
       const agentKind = state.agentKind ?? run.agentKind;
@@ -60,7 +60,7 @@ export class SessionTranscriptsService {
         continue;
       }
       const configDir =
-        run.workflowId === null && state.nodeId === SINGLE_AGENT_NODE
+        run.teamId === null && state.nodeId === SINGLE_AGENT_NODE
           ? run.configDir
           : (nodeDirs.get(state.nodeId) ?? null);
       const sessions = new Set(readNodeSessions(state.sessionIds));

@@ -1,4 +1,4 @@
-import { MIN_AWAIT_TIMEOUT_MS } from '../../../graphs/graphs.types';
+import { MIN_AWAIT_TIMEOUT_MS } from '../../../teams/teams.types';
 
 /**
  * `await_agent`'s arguments.

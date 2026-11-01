@@ -96,10 +96,22 @@ describe('settledRunStatus', () => {
     expect(settledRunStatus(item('error'))).toBe('failed');
   });
 
-  it('takes a workflow run’s roll-up from the stopReason, not the kind', () => {
-    // Every workflow run ends in a run-level `turn_complete` whose stopReason
-    // carries the verdict, so reading the kind alone reported a failed workflow
-    // as completed.
+  it('takes a team run’s roll-up from the stopReason, not the kind', () => {
+    // Every team run ends in a run-level `turn_complete` whose stopReason
+    // carries the verdict, so reading the kind alone reported a failed team
+    // run as completed.
+    expect(
+      settledRunStatus(item('turn_complete', { stopReason: 'team_failed' })),
+    ).toBe('failed');
+    expect(
+      settledRunStatus(item('turn_complete', { stopReason: 'team_cancelled' })),
+    ).toBe('cancelled');
+    expect(
+      settledRunStatus(item('turn_complete', { stopReason: 'team_completed' })),
+    ).toBe('completed');
+  });
+
+  it('reads the roll-up rows stored before the rename, which say workflow_<status>', () => {
     expect(
       settledRunStatus(
         item('turn_complete', { stopReason: 'workflow_failed' }),
@@ -118,7 +130,7 @@ describe('settledRunStatus', () => {
   });
 
   it('refuses a NODE’s own turn end', () => {
-    // A workflow node settling says nothing about the run — sibling branches may
+    // A team node settling says nothing about the run — sibling branches may
     // still be running, and reading one as the run's end re-enabled the composer
     // underneath them.
     expect(settledRunStatus(item('turn_complete', {}, 'coder'))).toBeNull();
@@ -182,7 +194,7 @@ describe('lastTerminalItemAt', () => {
     ).toBe(Date.parse('2026-08-14T08:00:00.000Z'));
   });
 
-  it('ignores a workflow NODE’s own turn end', () => {
+  it('ignores a team NODE’s own turn end', () => {
     // Same rule `settledRunStatus` enforces: a node's `turn_complete` says
     // nothing about the run, and reading one as the run's stop would close every
     // sibling branch's spinners while they were still working.

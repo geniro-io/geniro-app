@@ -32,7 +32,7 @@ export interface RunOutcomeRecorder {
 }
 
 /**
- * One workflow node's end of `record_outcome`, installed by the pass that runs
+ * One team node's end of `record_outcome`, installed by the pass that runs
  * it: the run's seq-allocating write, and which conversation a caller key is.
  */
 export interface RunOutcomeSink {
@@ -46,7 +46,7 @@ export interface RunOutcomeSink {
 }
 
 /**
- * `record_outcome`: a workflow node records where one pull request of its run
+ * `record_outcome`: a team node records where one pull request of its run
  * ended up. The `run_outcome` row is the record; the run's `runOutcomes`
  * column keeps the newest per pull request for the run's wire projection, and
  * the stats module copies each row into its ledger (`RunOutcomeLedgerService`
@@ -85,7 +85,7 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
     return this.deliver(
       runId,
       nodeId,
-      'no workflow pass is running that could record it',
+      'no team pass is running that could record it',
       'record a pull request outcome',
       (sink) =>
         this.writes.run(runId, () =>
@@ -161,7 +161,7 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
       acceptance: input.acceptance,
       questionsAsked,
       ...(input.summary === null ? {} : { summary: input.summary }),
-      workflowSlug: run.workflowId,
+      teamSlug: run.teamId,
       nodeId: recorder.nodeId,
       conversationId: recorder.conversationId,
       ...(recorder.callId === null ? {} : { callId: recorder.callId }),

@@ -65,8 +65,8 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
   /** Sender name for a 1:1 chat's agent items (they carry no nodeId). */
   chatAgentName?: string | null;
   /**
-   * ONE node whose rows need no identity — a workflow's root agent, the one
-   * its trigger feeds (`workflow-root.ts`). The same exemption
+   * ONE node whose rows need no identity — a team's root agent, the one
+   * its trigger feeds (`team-root.ts`). The same exemption
    * {@link soloAgent} makes for a 1:1 chat, granted per NODE rather than per
    * run, because the other agents of the same run still need their frames.
    */
@@ -107,7 +107,7 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
   /**
    * A row NO node owns is the RUN's, not an agent's. In a 1:1 chat that is
    * every row and `soloAgent` already drops the frame; in a multi-agent run it
-   * is the daemon speaking for the run as a whole — `workflow run interrupted`,
+   * is the daemon speaking for the run as a whole — `team run interrupted`,
    * written at boot with no `nodeId`. Framed, it became an avatar and an
    * `AGENT · 10:54` title naming nobody around a lone error row, REPORTED as an
    * abandoned empty agent block. There is nobody to name, so it sits bare in

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Run } from '../../runs/entity/run.entity';
-import { assertChatRun, assertWorkflowRun } from './run-kind';
+import { assertChatRun, assertTeamRun } from './run-kind';
 
-const chatRun = { id: 'r1', workflowId: null } as unknown as Run;
-const workflowRun = { id: 'r2', workflowId: 'wf-1' } as unknown as Run;
+const chatRun = { id: 'r1', teamId: null } as unknown as Run;
+const teamRun = { id: 'r2', teamId: 'wf-1' } as unknown as Run;
 
 describe('assertChatRun', () => {
   it('returns a chat run unchanged', () => {
@@ -17,27 +17,27 @@ describe('assertChatRun', () => {
     );
   });
 
-  it('rejects a workflow run addressed via a chat endpoint', () => {
-    expect(() => assertChatRun(workflowRun, 'r2')).toThrowError(
+  it('rejects a team run addressed via a chat endpoint', () => {
+    expect(() => assertChatRun(teamRun, 'r2')).toThrowError(
       /NOT_A_CHAT_RUN|not a single-agent chat/,
     );
   });
 });
 
-describe('assertWorkflowRun', () => {
-  it('returns a workflow run unchanged', () => {
-    expect(assertWorkflowRun(workflowRun, 'r2')).toBe(workflowRun);
+describe('assertTeamRun', () => {
+  it('returns a team run unchanged', () => {
+    expect(assertTeamRun(teamRun, 'r2')).toBe(teamRun);
   });
 
   it('404s a missing run', () => {
-    expect(() => assertWorkflowRun(null, 'gone')).toThrowError(
+    expect(() => assertTeamRun(null, 'gone')).toThrowError(
       /RUN_NOT_FOUND|not found/,
     );
   });
 
-  it('rejects a chat run addressed via a workflow endpoint', () => {
-    expect(() => assertWorkflowRun(chatRun, 'r1')).toThrowError(
-      /NOT_A_WORKFLOW_RUN|not a workflow/,
+  it('rejects a chat run addressed via a team endpoint', () => {
+    expect(() => assertTeamRun(chatRun, 'r1')).toThrowError(
+      /NOT_A_TEAM_RUN|not a team/,
     );
   });
 });

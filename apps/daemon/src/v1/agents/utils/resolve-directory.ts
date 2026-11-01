@@ -55,7 +55,7 @@ export function resolveValidDirectory(
  * `EPERM`. Measured on 2026-09-14, a Desktop project after Geniro lost its
  * Desktop grant. Every check above passed, and claude, started there, exited
  * in 4ms with `error: An unknown error occurred (Unexpected)`. REPORTED as a
- * workflow whose Manager failed on every message with that line and nothing
+ * team whose Manager failed on every message with that line and nothing
  * saying what to do.
  *
  * Its own code rather than the caller's: the renderer answers `INVALID_CWD` on

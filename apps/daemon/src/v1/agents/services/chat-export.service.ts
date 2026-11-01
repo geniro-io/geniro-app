@@ -34,7 +34,7 @@ import { ChatMetricsService } from './chat-metrics.service';
  * figure the header shows. A second projection here is how the file and the
  * screen would come to disagree about the same conversation.
  *
- * Kind-BLIND, like the history and rename routes it sits beside: a workflow
+ * Kind-BLIND, like the history and rename routes it sits beside: a team
  * run's transcript is worth exporting for the same reason a chat's is, and the
  * `nodes` array is where that kind carries most of its evidence. Only the
  * routes that COMMAND an engine have to know which one they are talking to.
@@ -85,7 +85,7 @@ export class ChatExportService {
 function exportRun(run: Run): ChatExportRunWire {
   return {
     id: run.id,
-    workflowId: run.workflowId,
+    teamId: run.teamId,
     status: run.status,
     title: run.title,
     agentKind: run.agentKind,
@@ -105,7 +105,7 @@ function exportRun(run: Run): ChatExportRunWire {
     customInstructions: run.customInstructions,
     replyLanguage: run.replyLanguage,
     taskInstructions: run.taskInstructions,
-    workflowInstructions: run.workflowInstructions,
+    teamInstructions: run.teamInstructions,
     projectInstructions: run.projectInstructions,
     memoryIndex: run.memoryIndex,
     nativeMemoryOff: run.nativeMemoryOff,

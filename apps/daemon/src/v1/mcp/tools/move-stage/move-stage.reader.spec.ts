@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { WorkflowStage } from '../../../graphs/graphs.types';
+import type { TeamStage } from '../../../teams/teams.types';
 import { moveStageResultText, readMoveStage } from './move-stage.reader';
 
 describe('readMoveStage', () => {
@@ -37,7 +37,7 @@ describe('readMoveStage', () => {
 });
 
 describe('moveStageResultText', () => {
-  const stages: WorkflowStage[] = [
+  const stages: TeamStage[] = [
     {
       id: 'investigation',
       title: 'Investigation',
@@ -58,7 +58,7 @@ describe('moveStageResultText', () => {
     const reply = moveStageResultText(
       {
         ok: true,
-        workflow: { name: 'w', nodes: [], edges: [] },
+        team: { name: 'w', nodes: [], edges: [] },
         stages,
         progress: {
           rev: 1,

@@ -79,13 +79,13 @@ export const branchNameSchema = z
   .refine((b) => !/[\s~^:?*[\\\u0000-\u001f\u007f]/.test(b), 'invalid refname')
   .refine((b) => !b.includes('..') && !b.includes('@{'), 'invalid refname');
 
-/** The composer target: a CLI kind, or `wf:<slug>` for a library workflow. */
+/** The composer target: a CLI kind, or `team:<slug>` for a library team. */
 const chatTarget = z.union([
   cliKind,
   z
     .string()
     .max(128)
-    .regex(/^wf:.+/),
+    .regex(/^team:.+/),
 ]);
 
 /**
@@ -411,7 +411,7 @@ export const settingsPatchSchema = z.strictObject({
   // The check is mirrored here rather than left to the daemon because this
   // is the WRITE the user makes. A value stored here and refused there turns
   // one invisible pasted character (Word and Notes emit U+000B for a soft line
-  // break) into a 400 on every new chat and workflow run, surfacing in the
+  // break) into a 400 on every new chat and team run, surfacing in the
   // composer with nothing pointing back at the settings box holding it.
   customInstructions: z
     .string()

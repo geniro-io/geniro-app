@@ -34,7 +34,7 @@ import {
 } from '../daemon-api';
 import { randomId } from '../random-id';
 import { isRemoteRuntime } from '../remote/remote-session';
-import { configDirCapabilityFrom } from '../workflows/use-config-dir-capability';
+import { configDirCapabilityFrom } from '../teams/use-config-dir-capability';
 import { CHAT_AGENT_KEY, computeAgentActivity } from './agent-activity';
 import { appendDraft } from './append-draft';
 import { ApprovalCard } from './approval-card';
@@ -115,8 +115,8 @@ import type { HostedChatState } from './use-hosted-chat';
 import { useMessageQueue } from './use-message-queue';
 import { useRunState } from './use-run-state';
 
-/** No workflow is ever a target here: a hosted chat is one agent's. */
-const NO_WORKFLOW_TARGETS = [] as const;
+/** No team is ever a target here: a hosted chat is one agent's. */
+const NO_TEAM_TARGETS = [] as const;
 
 /**
  * One frozen empty list for a CLI that has stored no recent config
@@ -184,7 +184,7 @@ function chipsOfRun(run: RunDto, draft: ChipValues): ChipValues {
  * row looks wrong, it looks wrong in the chat screen too.
  *
  * The caller owns the conversation (`useHostedChat`) and the frame: the
- * builder's dock (`WorkflowChatPanel`) and a thread's analysis popup
+ * builder's dock (`TeamChatPanel`) and a thread's analysis popup
  * (`AnalysisDialog`). This renders the header the frame hands it, the
  * transcript and the composer, as siblings for the frame's own column.
  */
@@ -276,7 +276,7 @@ export function HostedChat({
    * toggle from this; nothing else on screen would say so.
    */
   onAwaitingChange?: (awaiting: RunAwaiting | null) => void;
-  /** A turn ended — the builder re-reads the workflow the agent may have edited. */
+  /** A turn ended — the builder re-reads the team the agent may have edited. */
   onTurnSettled?: () => void | Promise<void>;
 }): React.JSX.Element {
   // The chips' values before a conversation exists: what the create starts with.
@@ -1122,7 +1122,7 @@ export function HostedChat({
           {chat.run === null && onDraftChipsChange !== undefined ? (
             <TargetSelect
               value={agentKind}
-              workflows={NO_WORKFLOW_TARGETS}
+              teams={NO_TEAM_TARGETS}
               cliDetections={null}
               aria-label="Agent for this chat"
               onChange={(target) =>

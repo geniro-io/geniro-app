@@ -93,7 +93,7 @@ export const createTaskSchema = z.object({
   effort: z.string().min(1).optional(),
   approval: ChatApprovalModeSchema.optional(),
   configDir: z.string().min(1).optional(),
-  workflowSlug: z.string().min(1).optional(),
+  teamSlug: z.string().min(1).optional(),
   source: TaskSourceSchema.optional(),
   sourceRef: z.string().min(1).max(TASK_SOURCE_REF_MAX).optional(),
 });
@@ -139,7 +139,7 @@ export const updateTaskSchema = z
     effort: z.string().min(1).nullable().optional(),
     approval: ChatApprovalModeSchema.nullable().optional(),
     configDir: z.string().min(1).nullable().optional(),
-    workflowSlug: z.string().min(1).nullable().optional(),
+    teamSlug: z.string().min(1).nullable().optional(),
   })
   .refine(
     (dto) => Object.values(dto).some((value) => value !== undefined),

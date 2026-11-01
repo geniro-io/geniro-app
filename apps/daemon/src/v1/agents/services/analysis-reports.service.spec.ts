@@ -20,12 +20,12 @@ import type { ThreadTimelineService } from './thread-timeline.service';
 
 const CARD: RecommendationsPayload = {
   sourceRunId: 'source',
-  sourceKind: 'workflow',
+  sourceKind: 'team',
   timing: null,
   items: [
     {
       id: 'W-1',
-      target: 'workflow',
+      target: 'team',
       territory: 'process',
       kind: 'parallelize',
       location: 'reviewer',
@@ -99,7 +99,7 @@ describe('AnalysisReportsService — outcomes', () => {
   it('still marks a card whose stored figures no longer read', async () => {
     const { mark, written } = sink(7, {
       ...CARD,
-      workflowStats: { runs: -1, agents: 'none' },
+      teamStats: { runs: -1, agents: 'none' },
     });
 
     expect(
@@ -211,7 +211,7 @@ function folded(runId: string): FoldedRun {
   };
 }
 
-function workflowReporter() {
+function teamReporter() {
   const written: { kind: string; payload: object }[] = [];
   const runs = [
     { runId: 'r2', snapshotSeq: 30, working: false },
@@ -250,7 +250,7 @@ function workflowReporter() {
       sourceRunId: 'r2',
       snapshotSeq: 30,
       sourceWorking: false,
-      workflow: { slug: 'dev-team', runs },
+      team: { slug: 'dev-team', runs },
     },
     (kind, payload) => {
       written.push({ kind, payload });
@@ -260,12 +260,12 @@ function workflowReporter() {
   return { written, report };
 }
 
-describe('AnalysisReportsService — a workflow card', () => {
+describe('AnalysisReportsService — a team card', () => {
   const index = () =>
     Promise.resolve({ current: 'v-b', numbers: new Map([['v-b', 3]]) });
 
   it("files the runs' figures the daemon measured beside the agent's hotspots, every run it read but a deleted one", async () => {
-    const { report, written } = workflowReporter();
+    const { report, written } = teamReporter();
     const filed: RecommendationsReport = {
       hotspots: [
         {
@@ -287,7 +287,7 @@ describe('AnalysisReportsService — a workflow card', () => {
     expect(payload).toMatchObject({
       hotspots: filed.hotspots,
       timing: null,
-      workflowStats: {
+      teamStats: {
         runs: 2,
         perRun: { wallMs: 2_400_000, costUsd: 2, pricedRuns: 2 },
         totals: { costUsd: 4, turns: 2 },
@@ -303,7 +303,7 @@ describe('AnalysisReportsService — a workflow card', () => {
       },
     });
     expect(
-      payload.workflowStats?.runList.map((run) => [
+      payload.teamStats?.runList.map((run) => [
         run.runId,
         run.title,
         run.version,
@@ -316,21 +316,21 @@ describe('AnalysisReportsService — a workflow card', () => {
   });
 
   it('files the runs by hash alone when the version index cannot be read', async () => {
-    const { report, written } = workflowReporter();
+    const { report, written } = teamReporter();
 
     await report({ hotspots: [], items: [ITEM] }, () =>
       Promise.reject(new Error('ledger locked')),
     );
 
     expect(
-      (
-        written[0]?.payload as RecommendationsPayload
-      ).workflowStats?.runList.map((run) => run.version),
+      (written[0]?.payload as RecommendationsPayload).teamStats?.runList.map(
+        (run) => run.version,
+      ),
     ).toEqual([null, null]);
   });
 
   it('refuses a hotspot naming an item the card lacks, or a node that took no turn', async () => {
-    const { report, written } = workflowReporter();
+    const { report, written } = teamReporter();
 
     expect(
       await report(

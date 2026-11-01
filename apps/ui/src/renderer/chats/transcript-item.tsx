@@ -32,7 +32,7 @@ import { RetryContext } from './retry-context';
 import { pullRequestOutcomeKey, RunOutcomesContext } from './run-outcome';
 import { readRunOutcomePayload } from './run-outcome-payload';
 import { RunOutcomeRow } from './run-outcome-row';
-import { settlesOnContinuation } from './settled-status';
+import { settlesOnContinuation, teamPassStatus } from './settled-status';
 import {
   readStageChangePayload,
   type StageChangePayload,
@@ -182,7 +182,7 @@ export function errorRecovery(
 
 /**
  * One transcript row, rendered by item kind. Memoized: items are immutable
- * (keyed by id), and a streaming workflow run re-renders the whole list per
+ * (keyed by id), and a streaming team run re-renders the whole list per
  * event — without the memo every tool row re-stringifies its payload on each
  * incoming item.
  */
@@ -192,11 +192,11 @@ export const TranscriptItem = memo(function TranscriptItem({
   namesSender = false,
 }: {
   item: ChatItem;
-  /** Workflow node display metadata, keyed by node id (names + kinds). */
+  /** Team node display metadata, keyed by node id (names + kinds). */
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
   /**
    * The row stands outside any frame naming its agent, so it names the agent
-   * itself — an error a workflow node raised with nothing else to say.
+   * itself — an error a team node raised with nothing else to say.
    */
   namesSender?: boolean;
 }): React.JSX.Element | null {
@@ -209,7 +209,7 @@ export const TranscriptItem = memo(function TranscriptItem({
   const runOutcomes = useContext(RunOutcomesContext);
   const nodeName = (id: string | null): string | null =>
     id === null ? null : (nodes?.get(id)?.name ?? id);
-  // Workflow-run items carry the node that produced them; tag each row so
+  // Team-run items carry the node that produced them; tag each row so
   // parallel branches stay readable in the interleaved transcript.
   const tag = (label: string): string => {
     const name = nodeName(item.nodeId);
@@ -369,7 +369,7 @@ export const TranscriptItem = memo(function TranscriptItem({
           // somebody, and a screenshot of a sentence is not a report.
           facts={errorFactsOf(item)}
           copyText={errorReportText(item)}
-          // Resolved per ROW, by the node that failed: on a workflow run each
+          // Resolved per ROW, by the node that failed: on a team run each
           // node names its own CLI and profile, so the thread has no single
           // account to sign in.
           recovery={errorRecovery(
@@ -388,8 +388,8 @@ export const TranscriptItem = memo(function TranscriptItem({
     case 'turn_complete': {
       // A node's finished turn already lands as its "<Name> finished" status
       // row (its cost/context live in the agents panel) — only the run-level
-      // note renders. That note carries the workflow roll-up in stopReason:
-      // a failed/cancelled workflow must not read "✓ done".
+      // note renders. That note carries the team roll-up in stopReason:
+      // a failed/cancelled team must not read "✓ done".
       if (item.nodeId !== null) {
         return null;
       }
@@ -399,11 +399,11 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (settlesOnContinuation(item)) {
         return null;
       }
-      const stop = payloadString(item.payload, 'stopReason');
-      if (stop === 'workflow_failed') {
+      const stop = teamPassStatus(payloadString(item.payload, 'stopReason'));
+      if (stop === 'failed') {
         return <MessageBubble variant="note">✗ failed</MessageBubble>;
       }
-      if (stop === 'workflow_cancelled') {
+      if (stop === 'cancelled') {
         return <MessageBubble variant="note">⊘ cancelled</MessageBubble>;
       }
       const usage = (item.payload as { usage?: unknown } | null)?.usage;
@@ -472,7 +472,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       // A skipped row that EXPLAINS something — an upstream node failed, so
       // this one could not run — is worth drawing, and still is. This one says
       // only that a node the graph offers was not needed, which the agents
-      // panel already states from `node_state` for every node in the workflow.
+      // panel already states from `node_state` for every node in the team.
       // So a run whose manager routed everything to one specialist closed with
       // `− Engineer skipped — never called` and `− Researcher skipped — never
       // called` in the conversation, duplicating the panel a few inches away.
@@ -941,7 +941,7 @@ export interface RecordedVerdict {
   answer: string | null;
   /**
    * What the card's owner did with an approval, as the row carries it — the
-   * `propose_workflow` card's saved/not-saved reading, unread here; the card
+   * `propose_team` card's saved/not-saved reading, unread here; the card
    * that knows its shape reads it (`readProposalOutcome`).
    */
   outcome: unknown;

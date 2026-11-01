@@ -21,7 +21,7 @@ import {
 import { RunDao } from '../dao/run.dao';
 import type { ActionFold } from '../utils/action-fold';
 import { randomFenceTag } from '../utils/fence-tag';
-import { assertChatRun, assertWorkflowRun } from '../utils/run-kind';
+import { assertChatRun, assertTeamRun } from '../utils/run-kind';
 import {
   ActionCommandRegistry,
   type ActionCommandSlot,
@@ -46,7 +46,7 @@ export type DeliverMessage = (
  * Which route a press or dismissal came in on: each refuses the other kind of
  * run, whose delivery it does not know.
  */
-export type ActionRunKind = 'chat' | 'workflow';
+export type ActionRunKind = 'chat' | 'team';
 
 export interface ActionPressInput {
   run: ActionRunKind;
@@ -286,7 +286,7 @@ export class ActionPressService {
   }
 
   /**
-   * Tells the agent how its command ended. A chat or workflow busy in a way
+   * Tells the agent how its command ended. A chat or team busy in a way
    * that takes no message (compacting, a turn starting, a run stopping) is
    * asked again until it takes it or refuses outright — archived, deleted.
    */
@@ -316,7 +316,7 @@ export class ActionPressService {
     }
   }
 
-  /** {@link dismiss} on the chat route, which a workflow run has its own of. */
+  /** {@link dismiss} on the chat route, which a team run has its own of. */
   async dismissChat(
     runId: string,
     seq: number,
@@ -353,7 +353,7 @@ export class ActionPressService {
     const run =
       kind === 'chat'
         ? assertChatRun(found, runId)
-        : assertWorkflowRun(found, runId);
+        : assertTeamRun(found, runId);
     if (run.archivedAt !== null) {
       throw new ConflictException(
         'RUN_ARCHIVED',

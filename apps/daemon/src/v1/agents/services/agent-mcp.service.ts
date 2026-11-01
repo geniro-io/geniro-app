@@ -1122,7 +1122,7 @@ export class AgentMcpService {
 
   /**
    * The transcript sentence a turn's server report earns, or null — the whole
-   * of {@link observeTurnServers} as the chat and the workflow executor use it,
+   * of {@link observeTurnServers} as the chat and the team executor use it,
    * so each only persists what comes back. Never throws.
    */
   async turnMismatchNotice(
@@ -1868,7 +1868,7 @@ export class AgentMcpService {
         } = row;
         const signInUnavailableReason =
           cliSignInUnavailableReason ?? rowSignInReason ?? null;
-        // A workflow node's per-TURN switch — a different capability from the
+        // A team node's per-TURN switch — a different capability from the
         // folder toggle the arms below decide, so it is answered on its own,
         // on every row: the CLI's reason first, else the row's.
         const turnToggleUnavailableReason =

@@ -11,9 +11,9 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { cameViaRemote } from '../../../auth/remote-marker';
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
-import type { CallEnvelope } from '../../graphs/graphs.types';
-import { callerKey } from '../../graphs/utils/caller-key';
-import { closeQuietly } from '../../graphs/utils/close-quietly';
+import type { CallEnvelope } from '../../teams/teams.types';
+import { callerKey } from '../../teams/utils/caller-key';
+import { closeQuietly } from '../../teams/utils/close-quietly';
 import type { McpCallContext, McpTool } from '../mcp.types';
 import { MCP_TOOLS } from '../tools/mcp-tools';
 

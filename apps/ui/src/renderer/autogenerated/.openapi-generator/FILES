@@ -13,7 +13,7 @@ apis/SharesApi.ts
 apis/StatsApi.ts
 apis/StorageApi.ts
 apis/TasksApi.ts
-apis/WorkflowsApi.ts
+apis/TeamsApi.ts
 apis/index.ts
 index.ts
 models/index.ts

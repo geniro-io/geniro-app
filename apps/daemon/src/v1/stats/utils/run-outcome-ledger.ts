@@ -1,8 +1,6 @@
-import {
-  RunOutcomePayloadSchema,
-  type RunPullRequestOutcomes,
-} from '../../agents/chat.types';
+import type { RunPullRequestOutcomes } from '../../agents/chat.types';
 import { pullRequestOutcomeKey } from '../../agents/utils/pull-request-capture';
+import { parseRunOutcomePayload } from '../../agents/utils/run-outcome-payload';
 import type { RunOutcomeLedgerRow } from '../stats.types';
 import { runOutcomeKey } from './activity-facts';
 
@@ -18,7 +16,7 @@ export function ledgerRowOf(item: {
   payload: unknown;
   createdAt: Date;
 }): RunOutcomeLedgerRow | null {
-  const parsed = RunOutcomePayloadSchema.safeParse(item.payload);
+  const parsed = parseRunOutcomePayload(item.payload);
   if (!parsed.success) {
     return null;
   }
@@ -27,7 +25,7 @@ export function ledgerRowOf(item: {
     runId: item.runId,
     sourceSeq: item.seq,
     occurredAt: item.createdAt,
-    workflowSlug: payload.workflowSlug,
+    teamSlug: payload.teamSlug,
     prOwner: payload.prOwner,
     prRepo: payload.prRepo,
     prNumber: payload.prNumber,

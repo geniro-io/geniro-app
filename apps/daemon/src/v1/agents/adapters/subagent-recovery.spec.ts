@@ -93,7 +93,8 @@ describe('CursorAcpAdapter recovery', () => {
       toolCallId: 'launch',
       cwd: '/project',
       configDir: null,
-      launchedAtMs: Date.now(),
+      // A file's mtime comes from the kernel's coarse clock and can read a few ms behind Date.now().
+      launchedAtMs: Date.now() - 1_000,
       childSessionId: 'child',
     };
     const directory = join(

@@ -76,6 +76,33 @@ describe('pending question snapshots', () => {
     expect(readPendingQuestion(serializePendingQuestion(patch))).toEqual(patch);
   });
 
+  it('round-trips a project-instructions card, and drops one that does not read', () => {
+    const project = {
+      kind: 'project' as const,
+      requestId: 'req-project',
+      change: {
+        projectId: 'p-billing',
+        project: 'Billing',
+        previous: null,
+        next: 'Use pnpm.',
+        baseRevision: 2,
+        ids: ['P-1', 'P-2'],
+        cardSeq: 9,
+      },
+    };
+    expect(readPendingQuestion(serializePendingQuestion(project))).toEqual(
+      project,
+    );
+    expect(
+      readPendingQuestion(
+        JSON.stringify({
+          ...project,
+          change: { ...project.change, ids: ['W-1'] },
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it('writes a question with its kind, so every row names what it is', () => {
     expect(JSON.parse(serializePendingQuestion(SNAPSHOT))).toMatchObject({
       kind: 'question',

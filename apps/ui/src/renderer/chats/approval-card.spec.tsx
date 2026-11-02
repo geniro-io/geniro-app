@@ -2012,6 +2012,71 @@ describe('ApprovalCard — Enter moves to the next question', () => {
     expect(el.textContent).toContain('processor.ts');
   });
 
+  it('draws an analysis’s project-instructions change as its changed lines under its own heading', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="save_project_instructions"
+        input={{
+          summary: 'Change the instructions of project Billing',
+          projectId: 'p-billing',
+          project: 'Billing',
+          diff: '@@ -1,2 +1,2 @@\n Keep cards small.\n-Use yarn.\n+Use pnpm.',
+          old_string: 'Keep cards small.\nUse yarn.',
+          new_string: 'Keep cards small.\nUse pnpm.',
+          ids: ['P-1'],
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain(
+      'Change the instructions of project Billing',
+    );
+    expect(el.textContent).not.toContain('asks to run a tool');
+    expect(el.textContent).toContain('Carries out P-1');
+    expect(el.querySelector('[data-slot="diff"]')).toBeNull();
+    const lines = [
+      ...el.querySelectorAll('[data-slot="unified-diff"] > div'),
+    ].map((line) => line.textContent);
+    expect(lines).toEqual([
+      '@@ -1,2 +1,2 @@',
+      ' Keep cards small.',
+      '-Use yarn.',
+      '+Use pnpm.',
+    ]);
+  });
+
+  it('says beside Apply what a proposed change’s Apply saved', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="save_project_instructions"
+        input={{ diff: '@@ -1 +1 @@\n-a\n+b', new_string: 'b' }}
+        verdict={true}
+        answer="saved as revision 4"
+        outcome="saved"
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain('✓ approved — saved as revision 4');
+  });
+
+  it('reads an Apply that could not be written as not saved, never approved', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="save_project_instructions"
+        input={{ diff: '@@ -1 +1 @@\n-a\n+b', new_string: 'b' }}
+        verdict={true}
+        answer="the project has been deleted"
+        outcome="not-saved"
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain(
+      '✗ Not saved — the project has been deleted',
+    );
+    expect(el.textContent).not.toContain('approved');
+  });
+
   it('still names a proposal when the agent wrote no summary', () => {
     const el = render(
       <ApprovalCard

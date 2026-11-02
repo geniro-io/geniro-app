@@ -126,6 +126,27 @@ export function readHostPatch(args: Record<string, unknown>): PatchRead {
 }
 
 /**
+ * What a patch card's verdict row records of an Apply: whether it was written,
+ * and where, or why not.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/approval-card.tsx `PermissionCard`
+ * reads `outcome` and `answer` off the `approval_verdict` row.
+ */
+export function hostPatchVerdict(outcome: HostPatchOutcome): {
+  outcome?: 'saved' | 'not-saved';
+  answer?: string;
+} {
+  switch (outcome.status) {
+    case 'applied':
+      return { outcome: 'saved', answer: `applied to ${outcome.path}` };
+    case 'stale':
+      return { outcome: 'not-saved', answer: outcome.reason };
+    default:
+      return {};
+  }
+}
+
+/**
  * The tool result text for one outcome.
  *
  * A receipt like its siblings', but this one carries a DECISION the agent has

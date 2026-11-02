@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
 import { DateTimeType } from '@mikro-orm/core';
-import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
+import {
+  Entity,
+  Index,
+  PrimaryKey,
+  Property,
+} from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
 import type {
@@ -10,10 +15,11 @@ import type {
   RunGroupColor,
 } from '../../agents/chat.types';
 import { PAYLOAD_REFS_VERSION } from '../../agents/utils/payload-refs';
-import type { AgentKind, RunStatus } from '../runs.types';
+import type { AgentKind, ProjectSource, RunStatus } from '../runs.types';
 
 /** One execution of a team or a single-agent chat. */
 @Entity({ tableName: 'runs' })
+@Index({ properties: ['projectId'] })
 export class Run extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   id: string = randomUUID();
@@ -313,7 +319,7 @@ export class Run extends TimestampsEntity {
 
   /**
    * What the run's project told its agents when the run was created
-   * (`ProjectScopeService.instructionsSnapshot`: the name, description and
+   * (`ProjectScopeService.placeNewRun`: the name, description and
    * instructions), composed right after {@link customInstructions}; null when
    * the run is in no project or its project says nothing. A snapshot for
    * {@link customInstructions}' reason: editing the project must not respawn a
@@ -526,6 +532,24 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'string', nullable: true })
   taskIdentifier: string | null = null;
+
+  /**
+   * The project this run belongs to, settled once at creation
+   * (`ProjectScopeService.placeNewRun`) and never moved: its instructions and
+   * its shared memory follow it for the run's whole life. A plain id like
+   * {@link groupId}: a deleted project leaves the id here, and every reader
+   * asks for the LIVE project, so it then reads as none.
+   */
+  @Property({ type: 'string', nullable: true })
+  projectId: string | null = null;
+
+  /**
+   * How {@link projectId} was settled; null for a run created before the
+   * column, or whose project could not be read, which is resolved again
+   * wherever it is asked (card, then exact folder).
+   */
+  @Property({ type: 'string', nullable: true })
+  projectSource: ProjectSource | null = null;
 
   /**
    * The run this chat was started to ANALYSE ("Analyze thread"), or null for

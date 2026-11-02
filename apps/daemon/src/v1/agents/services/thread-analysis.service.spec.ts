@@ -7,6 +7,8 @@ import { Subject } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MemoryService } from '../../memory/services/memory.service';
+import type { Project } from '../../projects/entity/project.entity';
+import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type { RunWire } from '../chat.types';
 import { HOST_TEAM_CHANGE_TOOL } from '../chat.types';
@@ -15,6 +17,12 @@ import type { RunDao } from '../dao/run.dao';
 import type { AgentEventBus } from './agent-events.bus';
 import type { ChatService } from './chat.service';
 import { ThreadAnalysisService } from './thread-analysis.service';
+
+/** The project a run settled into, as `ProjectScopeService.projectOfRun` reads a bound run. */
+const STORED_PROJECT = {
+  projectOfRun: async (run: Pick<Run, 'projectId'>) =>
+    run.projectId ? ({ id: run.projectId } as Project) : null,
+} as unknown as ProjectScopeService;
 
 describe('ThreadAnalysisService.start', () => {
   let folder: string;
@@ -89,6 +97,7 @@ describe('ThreadAnalysisService.start', () => {
       } as unknown as ChatService,
       { allDeleted: () => deleted.asObservable() } as unknown as AgentEventBus,
       { enabled: memoryOn } as MemoryService,
+      STORED_PROJECT,
     );
     return {
       service,
@@ -102,6 +111,16 @@ describe('ThreadAnalysisService.start', () => {
       deleted,
     };
   }
+
+  it('an analysis chat inherits the analysed run project, and none explicitly when it has none', async () => {
+    const bound = build({ projectId: 'p-billing', projectSource: 'folder' });
+    await bound.service.start('source', { agentKind: 'claude' });
+    expect(bound.createChat.mock.calls[0]![0].projectId).toBe('p-billing');
+
+    const unbound = build({ projectId: null, projectSource: 'none' });
+    await unbound.service.start('source', { agentKind: 'claude' });
+    expect(unbound.createChat.mock.calls[0]![0].projectId).toBeNull();
+  });
 
   it('replaces the thread’s earlier analysis once the new one has its brief', async () => {
     const { service, sendMessage, remove, findAnalysis } = build({}, 41, [
@@ -469,11 +488,34 @@ describe('ThreadAnalysisService.startTeam', () => {
         allDeleted: () => new Subject<string>().asObservable(),
       } as unknown as AgentEventBus,
       { enabled: true } as MemoryService,
+      STORED_PROJECT,
     );
     return { service, createChat, sendMessage, remove, runDao };
   }
 
   const TARGET = { slug: 'team', name: 'Dev Team' };
+
+  it('gives a team analysis the one project its runs share, and none when they span projects', async () => {
+    const shared = build(
+      [
+        { id: 'r2', projectId: 'p-billing' },
+        { id: 'r1', projectId: 'p-billing' },
+      ],
+      { r2: 5, r1: 5 },
+    );
+    await shared.service.startTeam(TARGET, { agentKind: 'claude', runs: 2 });
+    expect(shared.createChat.mock.calls[0]![0].projectId).toBe('p-billing');
+
+    const spanning = build(
+      [
+        { id: 'r2', projectId: 'p-billing' },
+        { id: 'r1', projectId: 'p-shop' },
+      ],
+      { r2: 5, r1: 5 },
+    );
+    await spanning.service.startTeam(TARGET, { agentKind: 'claude', runs: 2 });
+    expect(spanning.createChat.mock.calls[0]![0].projectId).toBeNull();
+  });
 
   it('reads the newest runs up to the count, each at its own snapshot, skipping an empty one', async () => {
     const { service, createChat, sendMessage, runDao } = build(

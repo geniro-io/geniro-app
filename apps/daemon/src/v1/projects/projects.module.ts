@@ -6,6 +6,8 @@ import { LabelInstructionDao } from '../tasks/dao/label-instruction.dao';
 import { TaskDao } from '../tasks/dao/task.dao';
 import { ProjectsController } from './controllers/projects.controller';
 import { ProjectDao } from './dao/project.dao';
+import { ProjectInstructionChangeDao } from './dao/project-instruction-change.dao';
+import { ProjectEventBus } from './services/project-events.bus';
 import { ProjectQueueService } from './services/project-queue.service';
 import { ProjectRootsService } from './services/project-roots.service';
 import { ProjectScopeService } from './services/project-scope.service';
@@ -39,6 +41,8 @@ import { ProjectsService } from './services/projects.service';
   controllers: [ProjectsController],
   providers: [
     ProjectDao,
+    ProjectInstructionChangeDao,
+    ProjectEventBus,
     TaskDao,
     RunDao,
     RunGroupDao,
@@ -50,9 +54,12 @@ import { ProjectsService } from './services/projects.service';
   ],
   exports: [
     ProjectDao,
+    ProjectInstructionChangeDao,
+    ProjectEventBus,
     ProjectQueueService,
     ProjectRootsService,
     ProjectScopeService,
+    ProjectsService,
   ],
 })
 export class ProjectsModule {}

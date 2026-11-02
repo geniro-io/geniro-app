@@ -12,12 +12,18 @@ export type Route =
   | { view: 'chats'; runId: string | null }
   | { view: 'teams'; slug: string | null }
   | { view: 'tasks'; projectId: string | null }
+  | { view: 'projects'; projectId: string | null }
   | { view: 'settings' }
   | { view: 'stats' };
 
 // Explicitly `AppView`-typed (rather than `Route['view']`) so a typo here
 // that names something outside `nav-rail.tsx`'s own union is a type error.
-const ID_VIEWS: ReadonlySet<AppView> = new Set(['chats', 'teams', 'tasks']);
+const ID_VIEWS: ReadonlySet<AppView> = new Set([
+  'chats',
+  'teams',
+  'tasks',
+  'projects',
+]);
 
 /** The teams view's hash before the rename, still found in saved links. */
 const LEGACY_TEAMS_VIEW = 'workflows';
@@ -60,6 +66,8 @@ export function parseRoute(hash: string): Route | null {
         return { view: 'teams', slug: id };
       case 'tasks':
         return { view: 'tasks', projectId: id };
+      case 'projects':
+        return { view: 'projects', projectId: id };
       default:
         // `settings`/`stats` take no id at all — a stray segment names no
         // route rather than one this build merely ignores.
@@ -74,6 +82,8 @@ export function parseRoute(hash: string): Route | null {
       return { view: 'teams', slug: null };
     case 'tasks':
       return { view: 'tasks', projectId: null };
+    case 'projects':
+      return { view: 'projects', projectId: null };
     case 'settings':
       return { view: 'settings' };
     case 'stats':
@@ -96,7 +106,7 @@ export function formatRoute(route: Route): string {
       ? route.runId
       : route.view === 'teams'
         ? route.slug
-        : route.view === 'tasks'
+        : route.view === 'tasks' || route.view === 'projects'
           ? route.projectId
           : null;
   return id === null

@@ -1,5 +1,6 @@
 import {
   ChartColumn,
+  FolderGit2,
   KanbanSquare,
   type LucideIcon,
   MessageSquare,
@@ -17,7 +18,8 @@ import { Logo } from './logo';
 import { cn } from './ui/utils';
 
 /** The top-level views the nav rail switches between. */
-export type AppView = 'chats' | 'teams' | 'tasks' | 'stats' | 'settings';
+export type AppView =
+  'chats' | 'teams' | 'tasks' | 'projects' | 'stats' | 'settings';
 
 export interface NavItem {
   view: AppView;
@@ -30,6 +32,7 @@ const PRIMARY_ITEMS: readonly NavItem[] = [
   { view: 'chats', label: 'Chats', icon: MessageSquare },
   { view: 'teams', label: 'Teams', icon: TeamIcon },
   { view: 'tasks', label: 'Tasks', icon: KanbanSquare },
+  { view: 'projects', label: 'Projects', icon: FolderGit2 },
   { view: 'stats', label: 'Stats', icon: ChartColumn },
 ];
 

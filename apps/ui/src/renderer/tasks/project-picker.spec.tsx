@@ -125,6 +125,62 @@ describe('ProjectPicker — every project at once', () => {
   });
 });
 
+describe('ProjectPicker — the project page', () => {
+  const mountWith = (
+    selectedProjectId: string | null,
+    onOpenProjectPage: (projectId: string) => void,
+  ): HTMLDivElement => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root!.render(
+        <ProjectPicker
+          projects={[project()]}
+          selectedProjectId={selectedProjectId}
+          onSelect={vi.fn()}
+          onNewProject={vi.fn()}
+          onOpenProjectPage={onOpenProjectPage}
+        />,
+      );
+    });
+    return container;
+  };
+  const optionLabels = (el: HTMLElement): string[] => {
+    act(() => {
+      trigger(el).click();
+    });
+    return [...el.querySelectorAll<HTMLElement>('[role="option"]')].map(
+      (node) => node.textContent?.trim() ?? '',
+    );
+  };
+
+  it('opens the picked project’s page, and offers it only while one is picked', () => {
+    const onOpenProjectPage = vi.fn();
+    const el = mountWith('p1', onOpenProjectPage);
+    const open = (() => {
+      act(() => {
+        trigger(el).click();
+      });
+      return [...el.querySelectorAll<HTMLElement>('[role="option"]')].find(
+        (node) => node.textContent?.trim() === 'Open project page',
+      );
+    })();
+    act(() => {
+      open!.click();
+    });
+    expect(onOpenProjectPage).toHaveBeenCalledWith('p1');
+
+    act(() => {
+      root?.unmount();
+    });
+    container?.remove();
+    expect(optionLabels(mountWith(null, vi.fn()))).not.toContain(
+      'Open project page',
+    );
+  });
+});
+
 describe('ProjectPicker — the ambient armed mark', () => {
   // Nothing has to LOOK like nothing: a project nobody armed must carry no
   // marker anywhere, or the glyph stops meaning anything on the boards that do.

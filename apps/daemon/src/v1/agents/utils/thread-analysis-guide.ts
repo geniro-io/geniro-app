@@ -5,6 +5,7 @@ import {
   HOST_MEMORY_READ_TOOL,
   HOST_MEMORY_SAVE_TOOL,
   HOST_MEMORY_SEARCH_TOOL,
+  HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_RECOMMENDATION_MARKS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
@@ -39,6 +40,12 @@ const MEMORY_TARGET_CAVEAT = `A memory entry reaches every agent in every later 
 
 const MEMORY_APPLY = `- Memory items: add — call \`${HOST_MEMORY_SAVE_TOOL}\` for a new entry with the item's text; update — read the entry named by \`location\` with \`${HOST_MEMORY_READ_TOOL}\`, then call \`${HOST_MEMORY_SAVE_TOOL}\` with that handle and the rev you read; forget — call \`${HOST_MEMORY_FORGET_TOOL}\` with that handle and a reason. While the user reviews agent writes, a new entry lands pending and an update or forget of an existing entry is refused UNDER_REVIEW: do not retry it, report it to the user in your reply and mark the item failed with that reason.\n`;
 
+const PROJECT_TARGET = `project-instruction changes (target "project": the standing instructions of the project the runs belong to, which every agent of every later run in it receives — view=project shows them, each run's start copy where it differed, and the changes made to them since; \`kind\` is add, update or remove; \`location\` is the projectId view=project names; \`change\` is the exact text. The instructions only, never the project's description)`;
+
+const PROJECT_TARGET_CAVEAT = `A project instruction reaches every agent — every member of a team — in every later run of that project, whichever repository or agent it runs: recommend one only for what holds for the project's work (a convention, a standing decision, where something lives), and file a fact about one repository's files in that repository instead. Read view=project first: never repeat what its instructions already say, judge a change made since the last analysis by the runs after it, and recommend none when the runs belong to no project.`;
+
+const PROJECT_APPLY = `- Last, project items: read view=project, then call \`${HOST_PROJECT_INSTRUCTIONS_TOOL}\` once per project with the instructions as they should read in full, every selected item for that project made in them, the \`instructionsRevision\` you read as baseRevision and those items' ids. The user sees what changes on a card and nothing is written without their Apply there. When the call answers, mark that project's items with \`${HOST_RECOMMENDATION_MARKS_TOOL}\`: applied when saved, skipped when the user rejected it, failed when it was not saved. When it answers that the card is posted instead, end your turn at once; the verdict arrives as your next message — mark that project's items then, and only then raise the next project's card. Never change the project's description, and never write its instructions any other way. If it is refused because the revision changed, read view=project again and re-apply.`;
+
 const INSTRUCTION_AUDIT =
   "For each instruction that shaped behaviour (role text, AGENTS.md, rules, the user's own file), classify it: followed; violated while loaded (fix by rewording, moving it closer to where it applies, or turning it into a check — never by repeating it); missing (add it); misleading (an agent following it errs). Also look for lines that can be deleted: one that changes nothing the agent would do anyway is a no-op, and every line in an always-loaded file dilutes the rest.";
 
@@ -72,7 +79,7 @@ Put each repo or user fix on the first rung that works:
 1. A deterministic check — a lint rule, a type check, a test, a git hook or a CI job, or wiring an existing one into what the agent runs. A mechanical mistake (a banned API, an import shape, a file location, a fixed pattern) always goes here, never into prose.
 2. The reviewer's standards${team ? " — the reviewing member's instructions" : ''} — for a judgement call no check can make.
 3. A path-scoped rule (.claude/rules/*) or a skill, loaded only where it applies.
-4. AGENTS.md / CLAUDE.md or the user's own file — only for a pointer to where something lives, or a rule that truly holds everywhere.
+4. AGENTS.md / CLAUDE.md, the project's instructions or the user's own file — only for a pointer to where something lives, or a rule that truly holds everywhere it reaches.
 
 Deleting a line is a fix too: prefer it whenever a line is a no-op or contradicts the code.`;
 }
@@ -85,14 +92,14 @@ Keep an item only if all four hold; when unsure, drop it:
 ${firstThree}
 - Dedup: it is not already said where the agent could see it. A rule that was loaded and violated anyway needs a different fix, not a repeat.
 
-${dropLine} At most ${MAX_RECOMMENDATIONS_PER_TARGET} items per target, fewer is better, and zero is a valid answer. Put the exact change in \`change\`: the replacement text, a YAML fragment, the check's code or the rule line — never a description of a change. For a repo or user item, \`kind\` names its rung: check, standard, rule, skill, pointer, access or remove${memory ? '; for a memory item it is add, update or forget' : ''}.`;
+${dropLine} At most ${MAX_RECOMMENDATIONS_PER_TARGET} items per target, fewer is better, and zero is a valid answer. Put the exact change in \`change\`: the replacement text, a YAML fragment, the check's code or the rule line — never a description of a change. For a repo or user item, \`kind\` names its rung: check, standard, rule, skill, pointer, access or remove${memory ? '; for a memory item it is add, update or forget' : ''}; for a project item, add, update or remove.`;
 }
 
 function whatToSend(team: boolean, memory: boolean, summary: string): string {
   return `## What to send
 
 1. ${summary}
-2. Then call \`${HOST_RECOMMENDATIONS_TOOL}\` ONCE with every item, costliest first. Ids are ${team ? 'W-1, W-2… for team items, ' : ''}R-1, R-2… for repo items${memory ? ', U-1, U-2… for user items and M-1, M-2… for memory items' : ' and U-1, U-2… for user items'}. Do not list the items again in text — the user sees them as a card with checkboxes.
+2. Then call \`${HOST_RECOMMENDATIONS_TOOL}\` ONCE with every item, costliest first. Ids are ${team ? 'W-1, W-2… for team items, ' : ''}R-1, R-2… for repo items, U-1, U-2… for user items${memory ? ', M-1, M-2… for memory items' : ''} and P-1, P-2… for project items. Do not list the items again in text — the user sees them as a card with checkboxes.
 3. The card is where the user decides, so it explains itself: its \`hotspots\` are where the time and money went, costliest first — each one line, then why it costs that (the mechanism, with the tool's figures), ${team ? 'the member it is about, ' : ''}and the ids of the items that address it; each item's \`impact\` gives minutes and dollars saved per run (dollars null when the runs report no cost, negative when the change adds) and its \`outcome\`, the figure it moves from what to what. The card draws the measured figures${team ? ' over every analysed run' : ''} itself and projects them with the items the user ticks.
 
 Then stop. Change nothing until the user applies.`;
@@ -115,7 +122,8 @@ function whenTheUserApplies(
 A later message lists the items the user selected, in full. Apply exactly those and nothing else:
 ${teamItems === null ? '' : `${teamItems}\n`}- Repo items: edit the files in ${folder} with your own tools. Do not commit.
 - User items: edit exactly the file the item names — one listed under \`userInstructions\` — and nothing else outside ${folder}.
-${memory ? MEMORY_APPLY : ''}- Then call \`${HOST_RECOMMENDATION_MARKS_TOOL}\` with the card's seq and an outcome for every selected item${proposed ? ' but the team items, marked once their verdict arrives' : ''}: applied${proposed ? '' : ' (with the backup name for a team save)'}, failed (with the reason), or skipped (with the reason).`;
+${memory ? MEMORY_APPLY : ''}- Then call \`${HOST_RECOMMENDATION_MARKS_TOOL}\` with the card's seq and an outcome for every selected item but the project items${proposed ? ' and the team items, marked once their verdict arrives' : ''}: applied${proposed ? '' : ' (with the backup name for a team save)'}, failed (with the reason), or skipped (with the reason).
+${PROJECT_APPLY}`;
 }
 
 /** The sections joined, with the user's focus as its own last section. */
@@ -159,11 +167,11 @@ You are analysing ANOTHER thread of this app to find where its time went, and wh
 
 ${
   team
-    ? `This is a TEAM thread. Recommend changes of ${memory ? 'four' : 'three'} kinds: team changes (target "team": a member's role or instructions, model, effort, which member a stage is given to, parallelising work, a termination or verification rule, adding or removing a member), ${repo}, ${memory ? `${userTarget}, and ${MEMORY_TARGET}` : `and ${userTarget}`}.`
-    : `This is a plain CHAT thread. Recommend ${repo}${memory ? `, ${userTarget} and ${MEMORY_TARGET}` : ` and ${userTarget}`}. Never recommend a team change — the tool refuses one.`
+    ? `This is a TEAM thread. Recommend changes of ${memory ? 'five' : 'four'} kinds: team changes (target "team": a member's role or instructions, model, effort, which member a stage is given to, parallelising work, a termination or verification rule, adding or removing a member), ${repo}, ${userTarget}, ${memory ? `${MEMORY_TARGET}, ` : ''}and ${PROJECT_TARGET}.`
+    : `This is a plain CHAT thread. Recommend ${repo}, ${userTarget}, ${memory ? `${MEMORY_TARGET}, ` : ''}and ${PROJECT_TARGET}. Never recommend a team change — the tool refuses one.`
 }
 
-${USER_TARGET_CAVEAT}${memory ? `\n\n${MEMORY_TARGET_CAVEAT}` : ''}`,
+${USER_TARGET_CAVEAT}${memory ? `\n\n${MEMORY_TARGET_CAVEAT}` : ''}\n\n${PROJECT_TARGET_CAVEAT}`,
       `## Method
 
 1. Timeline. Read view=overview first. Note wall time, active time, time waiting on the user, the critical path, and the tokens and cost spent. \`estimatedCostUsd\` is the part of a cost geniro priced from token counts at list price, not the CLI's own bill. The overview also lists the thread's \`goals\` (each with how it closed and its evidence) and its \`outcome\` (recorded by an agent, or derived from the goals); set what the thread was meant to achieve against what it did, and treat a goal closed without real evidence, or left open, as a finding. It counts each MCP server's calls and failures (\`mcpServers\`), the stage moves and hand-offs (\`stages\`, \`handOffs\`) and the calls between members (\`calls\`).
@@ -173,7 +181,7 @@ ${USER_TARGET_CAVEAT}${memory ? `\n\n${MEMORY_TARGET_CAVEAT}` : ''}`,
 5. Context. contextTokens growth per member, compactions, whole histories relayed between agents.
 6. Termination and verification. Work done after the task was already done; a missing or late check that let a defect travel; a check run many times.
 7. Human friction. Corrections, rejections and waits on approval — quote each with its seq. A correction the user had to make is a rule or a check the agent lacked.
-8. Instruction audit.${team ? ' Read view=team for the roles.' : ''} ${INSTRUCTION_AUDIT}
+8. Instruction audit.${team ? ' Read view=team for the roles.' : ''} Read view=project for the project's instructions every run received. ${INSTRUCTION_AUDIT}
 9. ${NAVIGATION}
 10. ${checks(WORKING_FOLDER)}
 11. ${TOOL_ECONOMY}
@@ -222,7 +230,7 @@ The card draws the figures geniro measured over the analysed runs by itself — 
 2. Outcomes — a table per run, newest first: its questions to the user, and each pull request's acceptance, review rounds, times sent back for changes and time to acceptance.
 3. Models — your verdict on each agent's model and effort: fit, too strong or too weak for what it did, with the figures behind it, saying where the data is too thin to judge.
 4. Instruction size — a table per agent: its always-on block per turn (characters, approximate tokens), its two largest parts, and approximate tokens per run (per turn times turns per run); then every instruction file its CLI loads — its own user file, the repo's AGENTS.md / CLAUDE.md and rules — with its size.
-5. Instruction quality — a table per agent: its mark on each of clear, specific, consistent, lean and followed, and an overall grade from A (nothing to fix) to D (misleads the agent); under it, every weak or poor mark with the line behind it, and the run and seq where it cost something when the runs show one.
+5. Instruction quality — a table per agent: its mark on each of clear, specific, consistent, lean and followed, and an overall grade from A (nothing to fix) to D (misleads the agent), with a row of its own for the project's instructions when the runs belong to a project; under it, every weak or poor mark with the line behind it, and the run and seq where it cost something when the runs show one.
 6. The one change that matters most, and what it would save.`;
 
 /**
@@ -234,9 +242,9 @@ function teamAnalysisSections(memory: boolean, folder: string): string[] {
   return [
     `## Scope
 
-Recommend changes of ${memory ? 'four' : 'three'} kinds: team changes (target "team": a member's role or instructions, its model or effort, which member a stage is given to, parallelising work, a termination or verification rule, adding, merging or removing a member, a stage every run walks — the stage graph's structure — or undoing an earlier change that made the runs worse), ${repoTarget(folder)}, ${memory ? '' : 'and '}user-instruction changes (target "user": the user's own instruction file of an agent the team runs — view=team lists them under \`userInstructions\`)${memory ? `, and ${MEMORY_TARGET}` : ''}.
+Recommend changes of ${memory ? 'five' : 'four'} kinds: team changes (target "team": a member's role or instructions, its model or effort, which member a stage is given to, parallelising work, a termination or verification rule, adding, merging or removing a member, a stage every run walks — the stage graph's structure — or undoing an earlier change that made the runs worse), ${repoTarget(folder)}, user-instruction changes (target "user": the user's own instruction file of an agent the team runs — view=team lists them under \`userInstructions\`), ${memory ? `${MEMORY_TARGET}, ` : ''}and ${PROJECT_TARGET}.
 
-${USER_TARGET_CAVEAT}${memory ? `\n\n${MEMORY_TARGET_CAVEAT}` : ''}`,
+${USER_TARGET_CAVEAT}${memory ? `\n\n${MEMORY_TARGET_CAVEAT}` : ''}\n\n${PROJECT_TARGET_CAVEAT}`,
     `## Method
 
 1. History. Read view=history first (follow its \`next.offset\` when it comes in chunks). It holds every version of the team, newest first, with what its runs did over every run of it, deleted runs included (runs, cost per run, turns, the CLIs' own working time, pull requests and their acceptance, review rounds, times sent back for changes, time to acceptance and questions per run up to its last recorded outcome), and its diff against the version before; every logged change to the team — an analysis's applied items, a card approved in the builder or another chat, a restore — with the versions it moved between, its summary, reason and the user's note on it; and every recommendation filed about the team before, with its status: applied, skipped or failed (with the note), selected (applied, never marked), not-selected (the user applied others from its card and left it), open (on a card still waiting for the user) or unanswered (its card was replaced before the user applied anything from it). A version no logged change made was edited by hand.
@@ -248,8 +256,8 @@ ${USER_TARGET_CAVEAT}${memory ? `\n\n${MEMORY_TARGET_CAVEAT}` : ''}`,
 7. Model effectiveness. For each member, set the models it ran with side by side (across runs and pool members): failed or cancelled turns, turns per run, time and cost per turn, and what the work came to (a pull request's acceptance, review rounds and rounds of changes in a run's \`pullRequests\`). Recommend a model or effort change (kind "model" or "effort") only with those numbers and a cited run where the weaker choice cost something — a cheaper model that does as well is a finding too. Say so when the data is too thin (one run of a model), and recommend nothing from a single sample.
 8. Team structure. Members that sit idle while another works, calls made one after another that could run at once (parallelise them), a review↔fix loop that recurs (the \`calls\` between two members), two members doing the same work (merge or remove one), a verification stage that is missing or comes too late, a member never called. Recommend each structural change with the exact YAML in \`change\`.
 9. Instruction size. Read view=team: its \`instructionSizes\` is every agent's always-on block — what each of its turns carries before the prompt — measured part by part (the host's own parts, the custom and card instructions, the instruction blocks addressed to it, the stage map, its instructions, its character, the call surface), with \`inThisRun\` where the run started with a block of another length, and \`userInstructions\` sizes each agent's own file. Measure, with your own tools, the instruction files its CLI loads from ${folder} (AGENTS.md / CLAUDE.md, what they import, path-scoped rules). Weigh each agent's size against what it does: its approximate tokens per turn times its turns per run, its largest parts, and text one part repeats from another.
-10. Instruction quality. Grade each member's instructions — its role, its instructions, the blocks addressed to it and the files its CLI loads — on five marks, each good, weak or poor: clear (one reading; no line an agent could take two ways), specific (WHEN <situation> → <action>, naming the command, file or threshold, never an attitude such as "be careful"), consistent (nothing contradicts another part, a repo rule or the code), lean (no no-op line, nothing said twice, a size in proportion to the work), followed (the loaded rules the runs kept; a rule broken while loaded is cited with its run and seq). Every weak or poor mark quotes the line behind it and names the run and seq where it cost something when the runs show one; only a mark the runs back can become a recommendation.
-11. The thread checks, across runs. Loops and retries, context growth and compactions, work done after the task was done, human friction (corrections, rejections, waits on approval), and an instruction audit — read view=team for the roles and instructions. ${INSTRUCTION_AUDIT}
+10. Instruction quality. Grade each member's instructions — its role, its instructions, the blocks addressed to it, the project's instructions (view=project) and the files its CLI loads — on five marks, each good, weak or poor: clear (one reading; no line an agent could take two ways), specific (WHEN <situation> → <action>, naming the command, file or threshold, never an attitude such as "be careful"), consistent (nothing contradicts another part, a repo rule or the code), lean (no no-op line, nothing said twice, a size in proportion to the work), followed (the loaded rules the runs kept; a rule broken while loaded is cited with its run and seq). Every weak or poor mark quotes the line behind it and names the run and seq where it cost something when the runs show one; only a mark the runs back can become a recommendation.
+11. The thread checks, across runs. Loops and retries, context growth and compactions, work done after the task was done, human friction (corrections, rejections, waits on approval), and an instruction audit — read view=team for the roles and instructions, and view=project for the project's. ${INSTRUCTION_AUDIT}
 12. ${NAVIGATION}
 13. ${checks(folder)}
 14. ${TOOL_ECONOMY}

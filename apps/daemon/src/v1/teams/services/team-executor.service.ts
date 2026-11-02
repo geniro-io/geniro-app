@@ -181,6 +181,7 @@ import {
 } from '../../agents/utils/wall-worked';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
+import { placedFacts } from '../../projects/utils/placed-facts';
 import {
   AgentKind,
   type ItemKind,
@@ -358,6 +359,12 @@ export interface StartTeamRunInput {
    * folder rule has ever seen. Absent means resolve the rule as usual.
    */
   groupId?: string | null;
+  /**
+   * The project this run was started under by choice — a run configuration's
+   * or the composer's pick, reaching every member: an id binds it, null means
+   * none, absent leaves it to the card and the folder (`ProjectScopeService`).
+   */
+  projectId?: string | null;
 }
 
 /** How long a message waits for a relay hand-off's turn to open before it goes to the new lead anyway. */
@@ -1315,30 +1322,34 @@ export class TeamExecutorService
     const cwd = resolveValidCwd(input.cwd);
     const lead = startingLeadOf(team);
 
+    const scopeFacts = {
+      taskId: input.taskId ?? null,
+      cwd,
+      projectId: input.projectId,
+    };
+    const placement = await this.projectScope.placeNewRun(scopeFacts);
     // Which sidebar group claims this run — by the TEAM first, which is the
     // rule a team exists for: one team runs over a dozen repositories,
     // so no folder names its runs. Resolved here for the reason the chat
     // service resolves its own here: this is the one place a team run row
     // is created, so the rule cannot be missed by a second caller.
-    // A caller that names one WINS, and only a task run does: its project's
-    // group is a deliberate answer about where this run belongs, where the
-    // rule below is a guess made from a folder the run does not work in. An
-    // explicit null is a caller saying "no group", which is also an answer —
-    // hence `!== undefined` rather than a `??` that would re-resolve it.
+    // A caller that names one WINS (a task run, for its project's group), and
+    // a project chosen at start files the run in that project's group: both
+    // are deliberate answers about where this run belongs, where the rule is
+    // a guess made from a folder the run does not work in. An explicit null
+    // is a caller saying "no group", which is also an answer — hence
+    // `!== undefined` rather than a `??` that would re-resolve it.
     const groupId =
       input.groupId !== undefined
         ? input.groupId
-        : await this.groups.resolveAutoGroupId({
+        : await this.groups.groupForNewRun({
             cwd,
             teamId: input.slug,
+            chosenProjectGroupId: placement.chosenProjectGroupId,
           });
-    const scopeFacts = { taskId: input.taskId ?? null, cwd };
-    const memory = await this.memory.runSnapshot({
-      ...scopeFacts,
-      teamSlug: input.slug,
-    });
-    const projectInstructions =
-      await this.projectScope.instructionsSnapshot(scopeFacts);
+    const memory = await this.memory.runSnapshot(
+      placedFacts({ ...scopeFacts, teamSlug: input.slug }, placement),
+    );
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -1358,7 +1369,9 @@ export class TeamExecutorService
         // state. Every member of this run then composes the same text.
         customInstructions: input.customInstructions?.trim() || null,
         replyLanguage: input.replyLanguage?.trim() || null,
-        projectInstructions,
+        projectId: placement.projectId,
+        projectSource: placement.source,
+        projectInstructions: placement.instructions,
         ...memory,
         taskInstructions: input.taskInstructions?.trim() || null,
         agentOptions: writeAgentOptions(input.agentOptions),
@@ -1449,6 +1462,7 @@ export class TeamExecutorService
       dropped,
     );
 
+    const projectNames = await this.projectScope.liveNamesOf([run.projectId]);
     return runToWire(
       run,
       null,
@@ -1459,6 +1473,9 @@ export class TeamExecutorService
       0,
       0,
       this.workingRoots.get(run.id)?.size ?? 0,
+      null,
+      0,
+      projectNames.get(run.projectId ?? '') ?? null,
     );
   }
 
@@ -2282,10 +2299,13 @@ export class TeamExecutorService
     // before a team run was captured at all, since those runs carry a null
     // marker and are read once from the beginning.
     await this.pullRequests.sync(runs, em);
-    const previews = await this.itemDao.runPreviews(
-      runs.map((run) => run.id),
-      em,
-    );
+    const [previews, projectNames] = await Promise.all([
+      this.itemDao.runPreviews(
+        runs.map((run) => run.id),
+        em,
+      ),
+      this.projectScope.liveNamesOf(runs.map((run) => run.projectId)),
+    ]);
     // Same registry the chat list reads: a team member parked on an `ask`
     // card blocks its run exactly as a chat's question blocks that chat, and
     // both lists feed the same sidebar.
@@ -2307,6 +2327,7 @@ export class TeamExecutorService
         this.workingRoots.get(run.id)?.size ?? 0,
         null,
         this.monitors?.list(run.id).length ?? 0,
+        projectNames.get(run.projectId ?? '') ?? null,
       ),
     );
   }

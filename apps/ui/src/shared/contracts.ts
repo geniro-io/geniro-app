@@ -126,6 +126,12 @@ export interface RunConfig {
   approval: string | null;
   /** Plugin/profile directory, or null for the CLI's own account. */
   configDir: string | null;
+  /**
+   * The project a run started from this configuration belongs to, whatever
+   * folder it runs in: its instructions reach every agent of the run. Absent or
+   * null leaves it to the folder; an id naming a deleted project reads as null.
+   */
+  projectId?: string | null;
 }
 
 /**

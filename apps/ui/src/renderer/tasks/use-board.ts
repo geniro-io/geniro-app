@@ -399,7 +399,7 @@ export function useBoard(
         }
         setProjects(rows);
         // A selection pointing at a project that is no longer here has to GO:
-        // Settings can delete the project this board is showing, and the
+        // the Projects page can delete the project this board is showing, and the
         // screen is latch-mounted so it never remounts to notice. Null is the
         // every-project board, which is also where the board opens.
         setSelectedProjectId((current) =>

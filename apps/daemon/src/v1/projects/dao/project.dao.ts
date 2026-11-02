@@ -3,6 +3,26 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { Project } from '../entity/project.entity';
+import { MAX_PROJECTS } from '../projects.types';
+import { nearestProjectOf } from '../utils/nearest-project';
+
+/** The `projects` columns a light read selects. */
+interface ProjectRefTable {
+  projects: {
+    id: string;
+    name: string;
+    folder: string;
+    created_at: string;
+    deleted_at: string | null;
+  };
+}
+
+/** A project as a picker or a folder match needs it: never its texts. */
+export interface ProjectRefRow {
+  id: string;
+  name: string;
+  folder: string;
+}
 
 @Injectable()
 export class ProjectDao extends BaseDao<Project> {
@@ -69,6 +89,36 @@ export class ProjectDao extends BaseDao<Project> {
     txEm?: EntityManager,
   ): Promise<Project | null> {
     return this.getOne({ folder }, undefined, txEm);
+  }
+
+  /**
+   * The LIVE project bound to `folder` or, failing that, to the closest folder
+   * above it (`nearestProjectOf`: `homeDir` and the root only exactly), newest
+   * first among rows that share a folder.
+   */
+  async findNearestByFolder(
+    folder: string,
+    homeDir: string,
+    txEm?: EntityManager,
+  ): Promise<Project | null> {
+    const nearest = nearestProjectOf(
+      folder,
+      await this.listRefs(txEm),
+      homeDir,
+    );
+    return nearest === null ? null : this.getById(nearest.id, txEm);
+  }
+
+  /** Every LIVE project's id, name and folder, newest first. */
+  async listRefs(txEm?: EntityManager): Promise<ProjectRefRow[]> {
+    return (txEm ?? this.em.fork())
+      .getKysely<ProjectRefTable>({ convertValues: false })
+      .selectFrom('projects')
+      .select(['id', 'name', 'folder'])
+      .where('deleted_at', 'is', null)
+      .orderBy('created_at', 'desc')
+      .limit(MAX_PROJECTS)
+      .execute();
   }
 
   /**

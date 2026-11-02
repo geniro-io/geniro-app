@@ -15,8 +15,14 @@ import { type OptionArity, OptionList } from '../components/ui/option-list';
 import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
 import { plainMarkdownText } from './brief-text';
-import { DiffView, editDiffOf, PROPOSE_PATCH } from './diff-view';
 import {
+  DiffView,
+  editDiffOf,
+  projectInstructionsCardOf,
+  UnifiedDiff,
+} from './diff-view';
+import {
+  isProposedChange,
   isTeamProposalTool,
   namesGeniroGallery,
   namesGeniroMonitor,
@@ -1058,6 +1064,8 @@ function PermissionCard({
   options,
   verdict,
   verdictOption,
+  answer,
+  outcome,
   expired,
   onRespond,
 }: {
@@ -1068,6 +1076,10 @@ function PermissionCard({
   verdict: boolean | null;
   /** The label of the option the settled verdict picked, or null. */
   verdictOption: string | null;
+  /** What a proposed change's Apply did, from its verdict row. */
+  answer: string | null;
+  /** `not-saved` when a proposed change's Apply could not be written. */
+  outcome: unknown;
   expired: boolean;
   onRespond: (
     allow: boolean,
@@ -1080,6 +1092,7 @@ function PermissionCard({
   // A file edit under review reads as a diff, not as raw JSON — the same
   // red/green view the tool-group rows use once the call has run.
   const diff = editDiffOf(toolName, input);
+  const projectCard = projectInstructionsCardOf(toolName, input);
   const filePath =
     input && typeof input === 'object' && 'file_path' in input
       ? String((input as { file_path: unknown }).file_path)
@@ -1090,12 +1103,13 @@ function PermissionCard({
   // word `null` in the card, which reads as a value the agent supplied. The
   // predicate is shared with the transcript row so the two surfaces cannot give
   // different answers about whether arguments exist.
-  // geniro's own patch proposal says what it DOES, and the card leads with it.
-  // Scoped to that tool rather than to any input carrying a `summary` key: the
-  // word is generic enough that another tool's arguments could hold one meaning
-  // something else entirely, and this line replaces the card's whole heading.
+  // geniro's own proposals say what they DO, and the card leads with it.
+  // Scoped to those tools rather than to any input carrying a `summary` key:
+  // the word is generic enough that another tool's arguments could hold one
+  // meaning something else entirely, and this line replaces the card's whole
+  // heading.
   const proposal =
-    toolName === PROPOSE_PATCH &&
+    isProposedChange(toolName) &&
     input &&
     typeof input === 'object' &&
     typeof (input as { summary?: unknown }).summary === 'string'
@@ -1160,7 +1174,7 @@ function PermissionCard({
             saying that much when the agent named no summary. Every other tool
             keeps the wording it has always had. */}
         <span className="min-w-0 flex-1 truncate text-sm font-medium">
-          {toolName === PROPOSE_PATCH
+          {isProposedChange(toolName)
             ? (proposal ?? 'Agent proposes a change')
             : 'Agent asks to run a tool'}
         </span>
@@ -1179,8 +1193,17 @@ function PermissionCard({
               {filePath}
             </div>
           ) : null}
+          {projectCard !== null && projectCard.ids.length > 0 ? (
+            <div className="text-xs text-muted-foreground">
+              Carries out {projectCard.ids.join(', ')}
+            </div>
+          ) : null}
           <div className="max-h-48 overflow-auto">
-            <DiffView oldText={diff.oldText} newText={diff.newText} />
+            {projectCard === null ? (
+              <DiffView oldText={diff.oldText} newText={diff.newText} />
+            ) : (
+              <UnifiedDiff diff={projectCard.diff} wordLevel />
+            )}
           </div>
         </div>
       ) : showsInput ? (
@@ -1254,6 +1277,10 @@ function PermissionCard({
             </p>
           ) : null}
         </div>
+      ) : verdict && outcome === 'not-saved' && isProposedChange(toolName) ? (
+        <p className="text-xs text-destructive">
+          ✗ Not saved{answer === null ? null : ` — ${answer}`}
+        </p>
       ) : (
         <p
           className={cn(
@@ -1262,6 +1289,9 @@ function PermissionCard({
           )}>
           {verdict ? '✓ approved' : '✗ denied'}
           {verdictOption === null ? null : ` — ${verdictOption}`}
+          {verdict && answer !== null && isProposedChange(toolName)
+            ? ` — ${answer}`
+            : null}
         </p>
       )}
     </Card>
@@ -1321,17 +1351,16 @@ export function ApprovalCard({
   /**
    * The words that answer carried, read back from the same verdict item.
    *
-   * TWO bodies can show one, and they are exactly the two that can produce
-   * one: the QUESTION card, whose answer the daemon folds into the CLI's own
-   * question tool, and the PLAN card, whose optional note rides the same
-   * `answer` field to the agent. A permission card's verdict stays a yes or a
-   * no with nothing said. Defaulted so a caller with nothing to read back — a
-   * card still pending — need not pass it.
+   * The QUESTION card shows the answer the daemon folds into the CLI's own
+   * question tool, the PLAN card its optional note, and a proposed change
+   * (`isProposedChange`) what its Apply did. Any other permission card's
+   * verdict stays a yes or a no with nothing said. Defaulted so a caller with
+   * nothing to read back — a card still pending — need not pass it.
    */
   answer?: string | null;
   /**
    * What the card's owner did with an approval, read back from the same verdict
-   * item — only the team proposal card reads it.
+   * item — the team proposal card and a proposed change read it.
    */
   outcome?: unknown;
   /** The turn ended before an answer — no verdict can apply anymore. */
@@ -1405,6 +1434,8 @@ export function ApprovalCard({
       options={readApprovalOptions(options)}
       verdict={verdict}
       verdictOption={verdictOption}
+      answer={answer}
+      outcome={outcome}
       expired={expired}
       onRespond={onRespond}
     />

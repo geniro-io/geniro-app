@@ -20,6 +20,7 @@ import {
   geniroCardKindOf,
   geniroToolOf,
   isGeniroToolName,
+  SAVE_PROJECT_INSTRUCTIONS,
 } from './geniro-tool';
 import {
   callIdOfKey,
@@ -2888,7 +2889,8 @@ export function groupTranscript(
         refusedCallIds.has(callId) &&
         (tool === 'team_note' ||
           tool === 'record_outcome' ||
-          tool === 'move_stage');
+          tool === 'move_stage' ||
+          tool === SAVE_PROJECT_INSTRUCTIONS);
       if (
         (isGeniroToolName(name, item.runId) && !refusedNote) ||
         (callId !== null && taskToolCallIds.has(callId))

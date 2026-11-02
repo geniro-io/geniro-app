@@ -88,6 +88,7 @@ import {
   useRunNotifications,
   useShareSignInNotifications,
 } from '../notifications/use-run-notifications';
+import { type ProjectRef, useProjectRefs } from '../projects/use-projects';
 import { randomId } from '../random-id';
 import { isRemoteRuntime } from '../remote/remote-session';
 import { currentRunSettings } from '../run-settings';
@@ -172,6 +173,7 @@ import {
   RunningSubagentChips,
   TaskListChip,
   TeamNotesChip,
+  ThreadProjectChip,
   ThreadPullRequestChips,
 } from './composer-shelf';
 import { createComposerText, useComposerTextFact } from './composer-text';
@@ -226,6 +228,7 @@ import {
 } from './not-sent-messages';
 import { NotesDialog } from './notes-dialog';
 import { OlderMessagesControl } from './older-messages-control';
+import { ProjectSelect } from './project-select';
 import { PromptCacheNotice } from './prompt-cache-notice';
 import {
   type ArtifactUrlBuilder,
@@ -239,8 +242,7 @@ import type { RunConfigDraft } from './run-config';
 import {
   applyRunConfig,
   captureRunConfig,
-  newRunConfigId,
-  replaceRunConfig,
+  upsertRunConfig,
 } from './run-config';
 import { RunConfigPicker } from './run-config-picker';
 import {
@@ -453,6 +455,28 @@ const SESSION_LIST_LIMIT = 400;
 
 /** The start screen's content column — the greeting and the new-run composer. */
 const START_COLUMN_WIDTH = '42rem';
+
+/**
+ * The new-chat composer's project: chosen by an applied configuration or by
+ * hand — either outlives a folder change — else the folder's own.
+ */
+interface ComposerProject {
+  projectId: string | null;
+  source: 'config' | 'manual' | 'folder';
+}
+const FOLDER_PROJECT: ComposerProject = { projectId: null, source: 'folder' };
+const NO_PROJECTS: ProjectRef[] = [];
+
+/**
+ * What a new run is told about its project: nothing for the folder's own (the
+ * daemon resolves it the same way), else the choice — an explicit none for a
+ * cleared chip, and an id the daemon passes over once its project is gone.
+ */
+function projectFieldOf(project: ComposerProject): {
+  projectId?: string | null;
+} {
+  return project.source === 'folder' ? {} : { projectId: project.projectId };
+}
 
 /** The start screen's own padding, and so its smallest gap to the sidebar. */
 const START_COLUMN_PAD = '1.5rem';
@@ -819,6 +843,8 @@ export function Chats({
   phoneHomeSignal?: number;
 }): React.JSX.Element {
   const apis = useMemo(() => createDaemonApis(handle), [handle]);
+  const projectRefs = useProjectRefs(apis, client);
+  const projects = projectRefs ?? NO_PROJECTS;
   const {
     chats: chatApi,
     agents: agentsApi,
@@ -1016,6 +1042,8 @@ export function Chats({
   // (persisted in settings); each chat records its own cwd, so this is only the
   // default the picker starts from.
   const [folder, setFolder] = useState<string | null>(null);
+  const [composerProject, setComposerProject] =
+    useState<ComposerProject>(FOLDER_PROJECT);
   // Recently used folders (persisted), surfaced as composer suggestion chips.
   const [recentFolders, setRecentFolders] = useState<string[]>([]);
   // OPTIONAL config directory (profile / account) for the NEXT new chat — the
@@ -3344,6 +3372,7 @@ export function Chats({
       ...(configDir !== null && composerConfigDirUnavailableReason === null
         ? { configDir }
         : {}),
+      ...projectFieldOf(composerProject),
     }),
     // `composerApprovalCapability` belongs here: it starts undefined and only
     // fills in once capabilities load, so a callback that captured the first
@@ -3368,8 +3397,49 @@ export function Chats({
       autoCompactPercent,
       modelParameters,
       configDir,
+      composerProject,
     ],
   );
+
+  // The folder's own project, by the rule a new run follows; asked again when
+  // the projects change, so one made or moved meanwhile is seen.
+  // A chosen project deleted since falls back to the folder's own, so the chip
+  // and the run agree; an unanswered list keeps the choice.
+  const chosenProjectGone =
+    projectRefs !== null &&
+    composerProject.source !== 'folder' &&
+    composerProject.projectId !== null &&
+    !projectRefs.some((project) => project.id === composerProject.projectId);
+  useEffect(() => {
+    if (chosenProjectGone) {
+      setComposerProject(FOLDER_PROJECT);
+    }
+  }, [chosenProjectGone]);
+
+  const folderProjectFor = composerProject.source === 'folder' ? folder : null;
+  useEffect(() => {
+    if (folderProjectFor === null) {
+      return;
+    }
+    let live = true;
+    const settle = (projectId: string | null): void => {
+      if (live) {
+        setComposerProject((current) =>
+          current.source === 'folder'
+            ? { projectId, source: 'folder' }
+            : current,
+        );
+      }
+    };
+    apis.projects
+      .resolveProjectForFolder({ path: folderProjectFor })
+      .then(({ project }) => settle(project?.id ?? null))
+      .catch(() => settle(null));
+    return () => {
+      live = false;
+    };
+  }, [apis, folderProjectFor, projects]);
+
   const createChatRun = useLatestCallback(
     async (cwd: string, composer: ReturnType<typeof composerChatFields>) =>
       chatApi.createChat({
@@ -3744,6 +3814,9 @@ export function Chats({
   const newChat = useLatestCallback((): void => {
     deactivateRun();
     refreshRuns();
+    setComposerProject((current) =>
+      current.source === 'folder' ? current : FOLDER_PROJECT,
+    );
   }, [deactivateRun, refreshRuns]);
 
   useEffect(() => {
@@ -4173,6 +4246,7 @@ export function Chats({
             // The folder's commit, as a chat is stamped with it — what the team's
             // line totals are measured against.
             ...(await chatGitStamp(cwd)),
+            ...projectFieldOf(composerProject),
           },
         });
         addRun(run);
@@ -5399,12 +5473,7 @@ export function Chats({
 
   const saveRunConfig = useLatestCallback(
     (draft: RunConfigDraft, id: string | null): void => {
-      persistRunConfigs(
-        id === null
-          ? [...runConfigs, { ...draft, id: newRunConfigId() }]
-          : replaceRunConfig(runConfigs, { ...draft, id }),
-        runConfigs,
-      );
+      persistRunConfigs(upsertRunConfig(runConfigs, draft, id), runConfigs);
     },
     [runConfigs, persistRunConfigs],
   );
@@ -5444,8 +5513,13 @@ export function Chats({
             contextWindows,
             modelParameters,
             approval: approvalMode,
+            projectId:
+              composerProject.source === 'folder'
+                ? null
+                : composerProject.projectId,
           }),
     [
+      composerProject,
       folder,
       target,
       git.info,
@@ -5494,6 +5568,11 @@ export function Chats({
 
       changeTarget(applied.target);
       chooseFolder(applied.cwd);
+      setComposerProject(
+        applied.projectId === null
+          ? FOLDER_PROJECT
+          : { projectId: applied.projectId, source: 'config' },
+      );
       // A team says NOTHING about any CLI's model, effort or profile — its
       // nodes each name their own. These setters PERSIST and `null` through
       // them DELETES the remembered entry, so writing the blanks a team
@@ -9060,6 +9139,7 @@ export function Chats({
         cancelling={cancellingResetWakes}
         onCancel={() => activeRunId && cancelResetWakes(activeRunId)}
       />
+      <ThreadProjectChip project={activeRun?.project} />
       {/* The readings run DURABLE → VOLATILE, left to
             right, and that is the whole of the ordering
             rule: a chip that comes and goes must never shift
@@ -9629,6 +9709,26 @@ export function Chats({
                                   void git.switchTo(branch);
                                 }}
                               />
+                              {composerProject.source === 'manual' ||
+                              projects.some(
+                                (project) =>
+                                  project.id === composerProject.projectId,
+                              ) ? (
+                                <ProjectSelect
+                                  variant="ghost"
+                                  projects={projects}
+                                  value={composerProject.projectId}
+                                  noneLabel="No project"
+                                  aria-label="Project for the new run"
+                                  title="Its instructions go to every agent of the new run"
+                                  onChange={(projectId) =>
+                                    setComposerProject({
+                                      projectId,
+                                      source: 'manual',
+                                    })
+                                  }
+                                />
+                              ) : null}
                               {!teamSlug ? (
                                 // The optional config directory (account / profile)
                                 // this chat's CLI runs as.
@@ -11100,6 +11200,7 @@ export function Chats({
                   configs={runConfigs}
                   agentsApi={agentsApi}
                   teams={teams}
+                  projects={projects}
                   cliDetections={cliDetections}
                   recentFolders={recentFolders}
                   // Asked about the CONFIGURATION's own agent, not the

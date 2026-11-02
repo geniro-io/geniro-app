@@ -50,7 +50,7 @@ export function BottomTabBar({
             )}>
             <Icon
               aria-hidden="true"
-              className="size-6"
+              className="size-6 max-[340px]:size-5"
               strokeWidth={active ? 2.25 : 1.75}
             />
           </button>

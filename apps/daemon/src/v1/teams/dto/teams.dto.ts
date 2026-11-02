@@ -122,6 +122,12 @@ export const runTeamSchema = z
      */
     startSha: commitShaSchema.optional(),
     startDirty: z.boolean().optional(),
+    /**
+     * The project this run is started under by choice, reaching every member
+     * (`createChatSchema.projectId`): an id binds it, null means none,
+     * omitted leaves it to the folder.
+     */
+    projectId: z.string().min(1).nullable().optional(),
   })
   .refine(
     (dto) => dto.prompt.trim().length > 0 || (dto.images?.length ?? 0) > 0,

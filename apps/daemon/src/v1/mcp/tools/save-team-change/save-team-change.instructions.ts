@@ -1,5 +1,6 @@
 import {
   HOST_ANALYZED_THREAD_TOOL,
+  HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
   HOST_RECOMMENDATION_MARKS_TOOL,
@@ -35,6 +36,6 @@ export function saveTeamChangeInstructions(forBuilder: boolean): string {
     EDIT_SHAPES +
     'It refuses an id the user did not select in the latest Apply, a hash that changed since you read it (read again and re-apply), an edit that does not apply, a deleted team, and an invalid team. ' +
     SAVE_OUTCOME +
-    `Do NOT use it for anything the user did not apply; afterwards record the outcome with ${HOST_RECOMMENDATION_MARKS_TOOL}.`
+    `Do NOT use it for anything the user did not apply, nor for a project's instructions (${HOST_PROJECT_INSTRUCTIONS_TOOL}); afterwards record the outcome with ${HOST_RECOMMENDATION_MARKS_TOOL}.`
   );
 }

@@ -2,6 +2,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
 import { MemoryService } from '../../memory/services/memory.service';
+import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { ItemKind } from '../../runs/runs.types';
 import {
   type AnalysedThreadKind,
@@ -21,7 +22,7 @@ import {
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
-import { analysedSourceOf } from '../utils/analysed-runs';
+import { analysedProjectIdsOf, analysedSourceOf } from '../utils/analysed-runs';
 import { readCard } from '../utils/recommendations-card';
 import { teamCardStats } from '../utils/team-runs-fold';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
@@ -54,6 +55,7 @@ export class AnalysisReportsService {
     private readonly timelines: ThreadTimelineService,
     private readonly memory: MemoryService,
     private readonly threads: ThreadReaderService,
+    private readonly projectScope: ProjectScopeService,
   ) {}
 
   sinkFor(turn: AnalysisTurn, write: AnalysisRowWriter): AnalysisSink {
@@ -80,7 +82,18 @@ export class AnalysisReportsService {
       }
       sourceKind = analysedThreadKindOf(source);
     }
-    const problem = checkItems(report, sourceKind, this.memory.enabled);
+    const problem = checkItems(
+      report,
+      sourceKind,
+      this.memory.enabled,
+      report.items.some((item) => item.target === 'project')
+        ? await analysedProjectIdsOf(
+            turn,
+            { runDao: this.runDao, projectScope: this.projectScope },
+            em,
+          )
+        : new Set(),
+    );
     if (problem !== null) {
       return refused(problem);
     }
@@ -239,6 +252,8 @@ export function checkItems(
   report: RecommendationsReport,
   sourceKind: AnalysedThreadKind,
   memoryEnabled: boolean,
+  /** The projects the analysed runs belong to — a project item must name one. */
+  projectIds: ReadonlySet<string>,
 ): string | null {
   const seen = new Set<string>();
   for (const item of report.items) {
@@ -254,7 +269,13 @@ export function checkItems(
       return `${item.id}: the shared memory is off, so memory recommendations cannot apply`;
     }
     if (item.target === 'team' && sourceKind === 'chat') {
-      return `${item.id}: the analysed thread is a plain chat, so only repo, user and memory recommendations apply`;
+      return `${item.id}: the analysed thread is a plain chat, so only repo, user, memory and project recommendations apply`;
+    }
+    if (item.target === 'project' && projectIds.size === 0) {
+      return `${item.id}: the analysed runs belong to no project, so project-instructions recommendations cannot apply`;
+    }
+    if (item.target === 'project' && !projectIds.has(item.location)) {
+      return `${item.id}: location must be the projectId of an analysed run's project (${[...projectIds].join(', ')}) — view=project names it`;
     }
   }
   for (const target of RECOMMENDATION_TARGETS) {

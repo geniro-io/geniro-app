@@ -1,3 +1,6 @@
+import type { EntityManager } from '@mikro-orm/sqlite';
+
+import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { Run } from '../../runs/entity/run.entity';
 import type {
   AnalysedRun,
@@ -5,6 +8,7 @@ import type {
   AnalysisSource,
   AnalysisTurn,
 } from '../chat.types';
+import type { RunDao } from '../dao/run.dao';
 
 /** `Run.analysisRuns` as the column stores it. */
 export function writeAnalysedRuns(runs: readonly AnalysedRun[]): string {
@@ -112,6 +116,33 @@ export function teamAnalysisTurn(
       })),
     },
   };
+}
+
+/** Every run an analysis reads: a team analysis's runs, else its one source. */
+export function analysedRunIdsOf(turn: AnalysisReadScope): string[] {
+  return turn.team
+    ? turn.team.runs.map((run) => run.runId)
+    : [turn.sourceRunId];
+}
+
+/** The live projects the runs an analysis reads belong to, by id. */
+export async function analysedProjectIdsOf(
+  turn: AnalysisReadScope,
+  readers: {
+    runDao: Pick<RunDao, 'getById'>;
+    projectScope: Pick<ProjectScopeService, 'projectOfRun'>;
+  },
+  em: EntityManager,
+): Promise<Set<string>> {
+  const ids = new Set<string>();
+  for (const runId of analysedRunIdsOf(turn)) {
+    const run = await readers.runDao.getById(runId, em);
+    const project = run ? await readers.projectScope.projectOfRun(run) : null;
+    if (project) {
+      ids.add(project.id);
+    }
+  }
+  return ids;
 }
 
 /**

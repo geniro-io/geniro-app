@@ -1,6 +1,7 @@
 import {
   AlarmClock,
   ArrowRightLeft,
+  FolderGit2,
   GitCompare,
   GitPullRequest,
   NotebookPen,
@@ -847,6 +848,32 @@ export function TaskListChip({
 
 /** How many of the newest notes the chip's panel previews. */
 const TEAM_NOTES_PREVIEW = 5;
+
+/**
+ * The project a started thread belongs to — fixed when the thread was
+ * created, so a reading, never a picker. Hidden for a thread in no project.
+ */
+export function ThreadProjectChip({
+  project,
+}: {
+  project: { id: string; name: string } | null | undefined;
+}): React.JSX.Element | null {
+  if (!project) {
+    return null;
+  }
+  return (
+    <span
+      data-slot="project-chip"
+      title={`Project: ${project.name} (fixed for this thread)`}
+      className={cn(SHELF_CHIP_CLASS, 'max-w-[14rem] gap-1 text-xs')}>
+      <FolderGit2
+        aria-hidden="true"
+        className="size-3 shrink-0 text-muted-foreground"
+      />
+      <span className="min-w-0 truncate text-foreground">{project.name}</span>
+    </span>
+  );
+}
 
 /**
  * Who a relay team run's messages go to now — the lead of its current stage.

@@ -1,13 +1,12 @@
-import { ArrowLeft } from 'lucide-react';
 import { useId } from 'react';
 
+import { BackLink } from '../components/back-link';
 import {
   tabId,
   tabPanelId,
   TabStrip,
   type TabStripTab,
 } from '../components/tab-strip';
-import { Button } from '../components/ui/button';
 
 export type TeamTab = 'team' | 'memory' | 'stats';
 
@@ -99,14 +98,7 @@ export function TeamPage({
           className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex max-w-[880px] flex-col gap-8 px-4 pt-3 pb-16 sm:px-6">
             <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                aria-label="Back to teams"
-                className="h-8 gap-1.5 rounded-control px-2 text-muted-foreground hover:text-foreground"
-                onClick={onBack}>
-                <ArrowLeft aria-hidden="true" /> Teams
-              </Button>
+              <BackLink label="Teams" onClick={onBack} />
               <div className="ml-auto flex items-center gap-1">
                 {headerActions}
               </div>

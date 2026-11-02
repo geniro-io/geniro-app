@@ -1140,7 +1140,9 @@ function setup(
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot'>;
     /** What the run's project tells it; no project when absent. */
-    projectScope?: Pick<ProjectScopeService, 'instructionsSnapshot'>;
+    projectScope?: Partial<
+      Pick<ProjectScopeService, 'placeNewRun' | 'liveNamesOf'>
+    >;
     /** The red setup problems a run start refuses on; none when absent. */
     health?: Pick<TeamHealthService, 'blockingProblems'>;
   } = {},
@@ -1530,10 +1532,14 @@ function setup(
     // slug is what the executor files it under, and `autoGroupId` is the seam
     // a test sets to say a group does.
     {
-      resolveAutoGroupId: async (run: { teamId?: string | null }) =>
-        run.teamId !== null && run.teamId !== undefined
+      groupForNewRun: async (run: {
+        teamId?: string | null;
+        chosenProjectGroupId: string | null;
+      }) =>
+        run.chosenProjectGroupId ??
+        (run.teamId !== null && run.teamId !== undefined
           ? (opts.autoGroupId ?? null)
-          : null,
+          : null),
     } as unknown as RunGroupsService,
     {
       token: 'launch-token',
@@ -1560,9 +1566,16 @@ function setup(
     (opts.memory ?? {
       runSnapshot: async () => ({ nativeMemoryOff: false, memoryIndex: null }),
     }) as unknown as MemoryService,
-    (opts.projectScope ?? {
-      instructionsSnapshot: async () => null,
-    }) as unknown as ProjectScopeService,
+    {
+      placeNewRun: async () => ({
+        projectId: null,
+        chosenProjectGroupId: null,
+        source: 'none',
+        instructions: null,
+      }),
+      liveNamesOf: async () => new Map(),
+      ...opts.projectScope,
+    } as unknown as ProjectScopeService,
     artifacts,
     // A stub store: the real one refuses the short run ids these fakes mint,
     // and what it writes is pinned in its own spec.
@@ -6538,7 +6551,7 @@ describe('TeamExecutorService — agent calls', () => {
     );
   });
 
-  it('startRunBySlug snapshots the shared memory onto the run row and every member, whatever memory holds later', async () => {
+  it('startRunBySlug snapshots the shared memory of the run’s settled project onto the run row and every member, whatever memory holds later', async () => {
     const asked: unknown[] = [];
     let index = 'INDEX AT START';
     const { service, claude, runDao, storeGet } = setup(4870, {
@@ -6547,6 +6560,14 @@ describe('TeamExecutorService — agent calls', () => {
           asked.push(facts);
           return { nativeMemoryOff: true, memoryIndex: index };
         },
+      },
+      projectScope: {
+        placeNewRun: async () => ({
+          projectId: 'p-billing',
+          chosenProjectGroupId: null,
+          source: 'card',
+          instructions: null,
+        }),
       },
     });
     storeGet.mockResolvedValue({ slug: 'lin', team: LINEAR });
@@ -6560,7 +6581,12 @@ describe('TeamExecutorService — agent calls', () => {
     await drain();
 
     expect(asked).toEqual([
-      { taskId: 'task-9', cwd: run.cwd, teamSlug: 'lin' },
+      {
+        taskId: 'task-9',
+        cwd: run.cwd,
+        projectId: 'p-billing',
+        teamSlug: 'lin',
+      },
     ]);
     expect(runDao.runs.get(run.id)).toMatchObject({
       memoryIndex: 'INDEX AT START',
@@ -6623,9 +6649,14 @@ describe('TeamExecutorService — agent calls', () => {
     let text: string | null = 'Project: Billing\n\nUse pnpm.';
     const { service, claude, runDao, storeGet } = setup(4870, {
       projectScope: {
-        instructionsSnapshot: async (facts) => {
+        placeNewRun: async (facts) => {
           asked.push(facts);
-          return text;
+          return {
+            projectId: 'p-billing',
+            chosenProjectGroupId: null,
+            source: 'card',
+            instructions: text,
+          };
         },
       },
     });
@@ -6640,9 +6671,11 @@ describe('TeamExecutorService — agent calls', () => {
     await drain();
 
     expect(asked).toEqual([{ taskId: 'task-9', cwd: run.cwd }]);
-    expect(runDao.runs.get(run.id)?.projectInstructions).toBe(
-      'Project: Billing\n\nUse pnpm.',
-    );
+    expect(runDao.runs.get(run.id)).toMatchObject({
+      projectId: 'p-billing',
+      projectSource: 'card',
+      projectInstructions: 'Project: Billing\n\nUse pnpm.',
+    });
     expect(claude.starts.length).toBeGreaterThan(0);
     for (const start of claude.starts) {
       expect(start.input.projectInstructions).toBe(
@@ -6651,13 +6684,57 @@ describe('TeamExecutorService — agent calls', () => {
     }
   });
 
+  it('startRunBySlug binds the run to the project it was started under, files it in that project’s group and names it on the wire', async () => {
+    const asked: unknown[] = [];
+    const { service, runDao, storeGet } = setup(4870, {
+      projectScope: {
+        placeNewRun: async (facts) => {
+          asked.push(facts);
+          return {
+            projectId: 'p-billing',
+            chosenProjectGroupId: 'g-billing',
+            source: 'explicit',
+            instructions: null,
+          };
+        },
+        liveNamesOf: async (ids) =>
+          new Map(
+            [...ids].includes('p-billing') ? [['p-billing', 'Billing']] : [],
+          ),
+      },
+    });
+    storeGet.mockResolvedValue({ slug: 'lin', team: LINEAR });
+
+    const run = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      projectId: 'p-billing',
+    });
+    await drain();
+
+    expect(asked).toEqual([
+      { taskId: null, cwd: run.cwd, projectId: 'p-billing' },
+    ]);
+    expect(runDao.runs.get(run.id)).toMatchObject({
+      projectId: 'p-billing',
+      projectSource: 'explicit',
+      groupId: 'g-billing',
+    });
+    expect(run.project).toEqual({ id: 'p-billing', name: 'Billing' });
+  });
+
   it('a follow-up pass on a settled run carries the project snapshot, never a fresh one', async () => {
     let asked = 0;
     const { service, claude, storeGet } = setup(4870, {
       projectScope: {
-        instructionsSnapshot: async () => {
+        placeNewRun: async () => {
           asked += 1;
-          return `Project: Billing (read ${asked})`;
+          return {
+            projectId: 'p-billing',
+            chosenProjectGroupId: null,
+            source: 'card',
+            instructions: `Project: Billing (read ${asked})`,
+          };
         },
       },
     });

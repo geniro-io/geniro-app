@@ -297,6 +297,7 @@ function readItem(value: unknown): RecommendationView | null {
     'repo',
     'user',
     'memory',
+    'project',
   ] as const);
   const territory = oneOf(row?.territory, TERRITORIES);
   const title = text(row?.title);

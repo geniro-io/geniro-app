@@ -5,25 +5,56 @@ import {
   type ChatApprovalMode,
   ChatApprovalModeSchema,
 } from '../agents/chat.types';
-import { type AgentKind, AgentKindSchema } from '../runs/runs.types';
+import {
+  type AgentKind,
+  AgentKindSchema,
+  type ProjectSource,
+} from '../runs/runs.types';
 import type { Task } from '../tasks/entity/task.entity';
 import {
   TaskSourceSchema,
   type TaskStatus,
   TaskStatusSchema,
 } from '../tasks/tasks.types';
+import type { Project } from './entity/project.entity';
 
 /** A project's name — non-blank after trimming, sanely bounded. */
 export const PROJECT_NAME_MAX = 120;
 
-/** Bounds on a project's description and instructions; twinned in the renderer's `project-instructions-dialog.tsx`. */
+/** Bounds on a project's description and instructions; twinned in the renderer's `projects/project-instructions-form.tsx`. */
 export const PROJECT_DESCRIPTION_MAX = 2000;
 export const PROJECT_INSTRUCTIONS_MAX = 20_000;
+
+/** How many projects one machine may hold — a guard, not a design limit. */
+export const MAX_PROJECTS = 200;
 
 /** What a run is known by before its row exists: the facts its project follows from. */
 export interface RunProjectFacts {
   taskId: string | null;
   cwd: string | null;
+  /**
+   * The project the run was started under by choice: an id binds it, null
+   * means none even inside a project's folder, and absent leaves it to the
+   * card and the folder.
+   */
+  projectId?: string | null;
+}
+
+/** Which project a new run belongs to and how that was settled. */
+export interface RunProject {
+  project: Project | null;
+  source: ProjectSource;
+}
+
+/** What a new run keeps of its project, written onto its row at creation. */
+export interface RunPlacement {
+  projectId: string | null;
+  /** The project's sidebar group, when the run was started under it by choice. */
+  chosenProjectGroupId: string | null;
+  /** Null when the project could not be read. */
+  source: ProjectSource | null;
+  /** The composed name, description and instructions; null for none. */
+  instructions: string | null;
 }
 
 /**
@@ -90,6 +121,12 @@ export const ProjectWireSchema = z.object({
     .describe(
       'Standing instructions every run in this project receives, after the user’s custom instructions; null when unset',
     ),
+  instructionsRevision: z
+    .number()
+    .int()
+    .describe(
+      'Counts every change to the description or instructions; quote it back as expectedInstructionsRevision so a stale write is refused instead of overwriting a newer one',
+    ),
   agentKind: AgentKindSchema.nullable(),
   model: z.string().nullable(),
   effort: z.string().nullable(),
@@ -117,6 +154,60 @@ export const ProjectWireSchema = z.object({
   updatedAt: z.iso.datetime(),
 });
 export type ProjectWire = z.infer<typeof ProjectWireSchema>;
+
+/** The project a folder belongs to, by the rule a new run follows. */
+export const ProjectForFolderSchema = z.object({
+  project: ProjectWireSchema.nullable(),
+});
+export type ProjectForFolder = z.infer<typeof ProjectForFolderSchema>;
+
+/**
+ * Announced to every client when a project is created, changed or deleted.
+ *
+ * TWIN PARSER: read by the renderer's `parseProjectsChanged`
+ * (`apps/ui/src/renderer/daemon-client.ts`). Change one and change the other.
+ */
+export interface ProjectsChangedEvent {
+  projectId: string;
+  /** True when the change touched only the project's description or instructions. */
+  textsOnly?: boolean;
+}
+
+/** The two texts a project tells its runs, and whose changes are logged. */
+export const PROJECT_INSTRUCTION_FIELDS = [
+  'description',
+  'instructions',
+] as const;
+export type ProjectInstructionField =
+  (typeof PROJECT_INSTRUCTION_FIELDS)[number];
+
+/** Who changed a project's texts: the user, or an analysis applying `P-` items. */
+export type ProjectInstructionChangeSource = 'user' | 'analysis';
+
+/** Consecutive user edits of one field this close together are logged as one change. */
+export const PROJECT_CHANGE_COALESCE_MS = 10 * 60 * 1000;
+
+/** What an analysis's write carries into the change log. */
+export interface ProjectChangeOrigin {
+  source: 'analysis';
+  recommendationIds: readonly string[];
+  chatRunId: string;
+  cardSeq: number | null;
+}
+
+/** One logged change as the analysis reads it. */
+export interface ProjectInstructionChangeRecord {
+  id: string;
+  projectId: string;
+  changedAt: Date;
+  field: ProjectInstructionField;
+  source: ProjectInstructionChangeSource;
+  previous: string | null;
+  next: string | null;
+  recommendationIds: string[];
+  chatRunId: string | null;
+  cardSeq: number | null;
+}
 
 /**
  * One card the autopilot may pick up, and only what starting it needs.

@@ -24,6 +24,7 @@ import {
 } from '../../../utils/stop-cause';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
+import { placedFacts } from '../../projects/utils/placed-facts';
 import { Run } from '../../runs/entity/run.entity';
 import {
   type AgentKind,
@@ -54,6 +55,7 @@ import {
   type HistoryWindow,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_QUESTION_TOOL,
   type HostArtifact,
@@ -74,6 +76,8 @@ import {
   type HostPatchOutcome,
   type HostPlan,
   type HostPlanOutcome,
+  type HostProjectInstructions,
+  type HostProjectInstructionsOutcome,
   type HostQuestion,
   type HostQuestionOutcome,
   type HostRowWire,
@@ -144,8 +148,19 @@ import { hostGalleryDownloads, isHostGalleryCall } from '../utils/host-gallery';
 import { isHostMemoryCall } from '../utils/host-memory';
 import { isHostMetricsCall } from '../utils/host-metrics';
 import { isHostNotifyCall } from '../utils/host-notify';
-import { hostPatchResultText, isHostPatchCall } from '../utils/host-patch';
+import {
+  hostPatchResultText,
+  hostPatchVerdict,
+  isHostPatchCall,
+} from '../utils/host-patch';
 import { hostPlanResultText, isHostPlanCall } from '../utils/host-plan';
+import {
+  hostProjectInstructionsResultText,
+  isHostProjectInstructionsCall,
+  projectInstructionsCardInput,
+  projectInstructionsCardKey,
+  projectInstructionsVerdict,
+} from '../utils/host-project-instructions';
 import {
   deferredAnswerMessage,
   hostCardQuestions,
@@ -179,7 +194,6 @@ import {
 import {
   type PendingCardSnapshot,
   type PendingPatchSnapshot,
-  type PendingPlanSnapshot,
   type PendingQuestionSnapshot,
   readPendingQuestion,
   serializePendingQuestion,
@@ -229,6 +243,8 @@ import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
+import { ProjectInstructionsBroker } from './project-instructions.broker';
+import { ProjectInstructionsChangeService } from './project-instructions-change.service';
 import { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
@@ -310,12 +326,14 @@ interface RunWireRead {
   preview: RunPreview | null;
   /** The chat's wall-measured worked time (`WallTurnDao.chatSums`). */
   wallMs: number | null;
+  /** The name of the run's project while it exists. */
+  projectName: string | null;
 }
 
 /**
  * What an agent is told when it raises a DIFFERENT card while one is already
  * standing — or is still being put up. One per run: the durable half is a
- * single column, shared by a question, a plan and a patch.
+ * single column, shared by a question, a plan, a patch and a project card.
  */
 const QUESTION_ALREADY_STANDING =
   'a card is already on the user’s screen waiting to be answered — wait for that answer before raising another';
@@ -347,6 +365,8 @@ function deferredCardInput(snapshot: PendingCardSnapshot): unknown {
       return { title: snapshot.title, steps: snapshot.steps };
     case 'patch':
       return patchWireInput(snapshot.patch);
+    case 'project':
+      return projectInstructionsCardInput(snapshot.change);
   }
 }
 
@@ -374,12 +394,15 @@ function deferredCardTool(snapshot: PendingCardSnapshot): string {
       return HOST_PLAN_TOOL;
     case 'patch':
       return HOST_PATCH_TOOL;
+    case 'project':
+      return HOST_PROJECT_INSTRUCTIONS_TOOL;
   }
 }
 
 /**
  * Whether `key` is the card already standing. A question's key is every word
- * it shows; a plan's and a patch's are prefixed so they cannot collide with it.
+ * it shows; a plan's, a patch's and a project card's are prefixed so they
+ * cannot collide with it.
  */
 function adoptsStanding(standing: PendingCardSnapshot, key: string): boolean {
   switch (standing.kind) {
@@ -394,6 +417,8 @@ function adoptsStanding(standing: PendingCardSnapshot, key: string): boolean {
       );
     case 'patch':
       return deferredPatchKey(standing.patch) === key;
+    case 'project':
+      return projectInstructionsCardKey(standing.change) === key;
   }
 }
 
@@ -559,7 +584,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     {
       key: string;
       outcome: Promise<
-        HostQuestionOutcome | HostPlanOutcome | HostPatchOutcome
+        | HostQuestionOutcome
+        | HostPlanOutcome
+        | HostPatchOutcome
+        | HostProjectInstructionsOutcome
       >;
     }
   >();
@@ -842,6 +870,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     @Optional() private readonly monitorSinks?: MonitorBroker,
     /** `record_outcome`'s sink, installed per turn. Optional for the positional specs. */
     @Optional() private readonly runOutcomes?: RunOutcomeBroker,
+    /** `save_project_instructions`' card and its Apply. Optional for the positional specs. */
+    @Optional()
+    private readonly projectInstructionCards?: ProjectInstructionsBroker,
+    @Optional()
+    private readonly projectInstructionWrites?: ProjectInstructionsChangeService,
   ) {}
 
   /**
@@ -1108,7 +1141,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   // hold a `tools/call` open for a person (`AdapterConfig.hostQuestionDeferredReason`).
   // The tool answers `posted` at once and the agent is told to stop; the card
   // stands until the user answers it, and the answer reaches the agent as the
-  // run's NEXT message. A question, a plan and a patch share the column and
+  // run's NEXT message. A question, a plan, a patch and a project card share the column and
   // the one-card rule. So a card may be left open for an hour, which is the
   // whole point — what it costs is that these methods have to hold everything
   // the parked promise used to hold for free.
@@ -1151,8 +1184,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * What the verdict row records and what the agent is told.
    *
    * A question sends the user's words, as it always has. A plan sends the
-   * verdict sentence, note included. A patch runs the write first and sends
-   * what that write did.
+   * verdict sentence, note included. A patch and a project card run their
+   * write first and send what that write did.
    */
   private async deferredDelivery(
     runId: string,
@@ -1160,7 +1193,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     allow: boolean,
     answer: string | undefined,
     em: EntityManager,
-  ): Promise<{ message: string; answer?: string }> {
+  ): Promise<{ message: string; answer?: string; outcome?: string }> {
     switch (snapshot.kind) {
       case 'question':
         return {
@@ -1190,12 +1223,33 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         );
         return {
           message: hostPatchResultText(outcome),
-          ...(outcome.status === 'applied'
-            ? { answer: `applied to ${outcome.path}` }
-            : {}),
+          ...hostPatchVerdict(outcome),
+        };
+      }
+      case 'project': {
+        const outcome: HostProjectInstructionsOutcome = allow
+          ? await this.writeProjectInstructions(runId, snapshot.change)
+          : { status: 'declined' };
+        return {
+          message: hostProjectInstructionsResultText(outcome),
+          ...projectInstructionsVerdict(outcome),
         };
       }
     }
+  }
+
+  /** A project-instructions card's Apply, written as the analysis that raised it. */
+  private writeProjectInstructions(
+    runId: string,
+    change: HostProjectInstructions,
+  ): Promise<HostProjectInstructionsOutcome> {
+    return (
+      this.projectInstructionWrites?.write(runId, change) ??
+      Promise.resolve({
+        status: 'stale',
+        reason: 'this daemon cannot write project instructions',
+      })
+    );
   }
 
   /**
@@ -1288,6 +1342,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           id: snapshot.requestId,
           allow,
           ...(delivery.answer === undefined ? {} : { answer: delivery.answer }),
+          ...(delivery.outcome === undefined
+            ? {}
+            : { outcome: delivery.outcome }),
         },
       );
       this.announceAwaiting(runId);
@@ -1768,6 +1825,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     );
   }
 
+  private proposeProjectInstructionsDeferred(
+    em: EntityManager,
+    runId: string,
+    change: HostProjectInstructions,
+  ): Promise<HostProjectInstructionsOutcome> {
+    const key = projectInstructionsCardKey(change);
+    return this.withDeferredClaim(runId, key, () =>
+      this.raiseDeferredProjectInstructions(em, runId, key, change),
+    );
+  }
+
   private proposePatchDeferred(
     em: EntityManager,
     runId: string,
@@ -1789,7 +1857,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * first one's outcome.
    */
   private withDeferredClaim<
-    T extends HostQuestionOutcome | HostPlanOutcome | HostPatchOutcome,
+    T extends
+      | HostQuestionOutcome
+      | HostPlanOutcome
+      | HostPatchOutcome
+      | HostProjectInstructionsOutcome,
   >(runId: string, key: string, raise: () => Promise<T>): Promise<T> {
     const inFlight = this.deferredAsks.get(runId);
     if (inFlight !== undefined) {
@@ -1863,63 +1935,72 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /** {@link proposePlanDeferred}'s body, once the run's claim is held. */
-  private async raiseDeferredPlan(
+  private raiseDeferredPlan(
     em: EntityManager,
     runId: string,
     key: string,
     plan: HostPlan,
   ): Promise<HostPlanOutcome> {
-    const standing = await this.standingCard(em, runId, key);
-    if (standing !== null) {
-      return standing;
-    }
-    const requestId = randomUUID();
-    const snapshot: PendingPlanSnapshot = {
+    return this.raiseDeferredCard(em, runId, key, async (requestId) => ({
       kind: 'plan',
       requestId,
       title: plan.title,
       steps: plan.steps,
-    };
-    return this.commitDeferredCard(
-      em,
-      runId,
-      snapshot,
-      {
-        id: requestId,
-        toolName: HOST_PLAN_TOOL,
-        input: deferredCardInput(snapshot),
-      },
-      'the card could not be written',
-    );
+    }));
   }
 
   /** {@link proposePatchDeferred}'s body, once the run's claim is held. */
-  private async raiseDeferredPatch(
+  private raiseDeferredPatch(
     em: EntityManager,
     runId: string,
     key: string,
     patch: HostPatch,
     cwd: string,
   ): Promise<HostPatchOutcome> {
+    return this.raiseDeferredCard(em, runId, key, async (requestId) => ({
+      kind: 'patch',
+      requestId,
+      patch,
+      fingerprint: await captureHostPatchFingerprint(cwd, patch),
+    }));
+  }
+
+  /** {@link proposeProjectInstructionsDeferred}'s body, once the run's claim is held. */
+  private raiseDeferredProjectInstructions(
+    em: EntityManager,
+    runId: string,
+    key: string,
+    change: HostProjectInstructions,
+  ): Promise<HostProjectInstructionsOutcome> {
+    return this.raiseDeferredCard(em, runId, key, async (requestId) => ({
+      kind: 'project',
+      requestId,
+      change,
+    }));
+  }
+
+  /**
+   * A plan, patch or project card put up deferred, unless the run already
+   * stands on one: the same card adopted, a different one refused.
+   */
+  private async raiseDeferredCard(
+    em: EntityManager,
+    runId: string,
+    key: string,
+    snapshotOf: (requestId: string) => Promise<PendingCardSnapshot>,
+  ): Promise<{ status: 'posted' } | { status: 'unavailable'; reason: string }> {
     const standing = await this.standingCard(em, runId, key);
     if (standing !== null) {
       return standing;
     }
-    const requestId = randomUUID();
-    const fingerprint = await captureHostPatchFingerprint(cwd, patch);
-    const snapshot: PendingPatchSnapshot = {
-      kind: 'patch',
-      requestId,
-      patch,
-      fingerprint,
-    };
+    const snapshot = await snapshotOf(randomUUID());
     return this.commitDeferredCard(
       em,
       runId,
       snapshot,
       {
-        id: requestId,
-        toolName: HOST_PATCH_TOOL,
+        id: snapshot.requestId,
+        toolName: deferredCardTool(snapshot),
         input: deferredCardInput(snapshot),
       },
       'the card could not be written',
@@ -2043,6 +2124,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      */
     groupId?: string | null;
     /**
+     * The project this chat was started under by choice — a run
+     * configuration's or the composer's pick: an id binds it, null means none,
+     * absent leaves it to the card and the folder (`ProjectScopeService`).
+     */
+    projectId?: string | null;
+    /**
      * The run this chat analyses and the seq its reads stop at — set only by
      * `ThreadAnalysisService.start`. See `Run.analysisSourceRunId`.
      */
@@ -2069,6 +2156,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // reaching the child, where claude would CREATE it and report a login
     // failure about a directory nobody meant to name.
     const configDir = this.resolveConfigDir(input.agentKind, input.configDir);
+    const scopeFacts = {
+      taskId: input.taskId ?? null,
+      cwd,
+      projectId: input.projectId,
+    };
+    const placement = await this.projectScope.placeNewRun(scopeFacts);
     // Which sidebar group claims a chat opened in this folder. Resolved HERE
     // rather than by the caller so the rule holds for every chat the daemon
     // creates, and against the CANONICAL cwd above rather than the one the
@@ -2080,7 +2173,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const groupId =
       input.groupId !== undefined
         ? input.groupId
-        : await this.groups.resolveAutoGroupId({ cwd });
+        : await this.groups.groupForNewRun({
+            cwd,
+            chosenProjectGroupId: placement.chosenProjectGroupId,
+          });
     // BEFORE the run row exists. A CLI that has to bring the conversation
     // across can refuse (it was deleted, it is under another profile), and a
     // refusal must leave no half-made thread behind — the user gets the CLI's
@@ -2094,10 +2190,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         configDir,
       );
     }
-    const scopeFacts = { taskId: input.taskId ?? null, cwd };
-    const memory = await this.memory.runSnapshot(scopeFacts);
-    const projectInstructions =
-      await this.projectScope.instructionsSnapshot(scopeFacts);
+    const memory = await this.memory.runSnapshot(
+      placedFacts(scopeFacts, placement),
+    );
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -2122,7 +2217,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // adapter an empty string to compose around.
         customInstructions: input.customInstructions?.trim() || null,
         replyLanguage: input.replyLanguage?.trim() || null,
-        projectInstructions,
+        projectId: placement.projectId,
+        projectSource: placement.source,
+        projectInstructions: placement.instructions,
         ...memory,
         taskInstructions: input.taskInstructions?.trim() || null,
         editsTeamSlug: input.editsTeamSlug ?? null,
@@ -2155,7 +2252,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (input.resumeSessionId !== undefined) {
       await this.adoptSession(em, run.id, input, cwd, configDir);
     }
-    return this.toRunWire(run, (await this.wireReads([run.id], em)).of(run.id));
+    return this.toRunWire(run, (await this.wireReads([run], em)).of(run.id));
   }
 
   /**
@@ -2434,7 +2531,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         { message: profileMove.notice, severity: 'info' },
       );
     }
-    const previews = await this.wireReads([runId], em);
+    const previews = await this.wireReads([run], em);
     return this.toRunWire(run, previews.of(runId));
   }
 
@@ -2857,7 +2954,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (!run) {
       return null;
     }
-    const previews = await this.wireReads([run.id], em);
+    const previews = await this.wireReads([run], em);
     return this.toRunWire(run, previews.of(run.id));
   }
 
@@ -2876,7 +2973,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (!run) {
       return null;
     }
-    const previews = await this.wireReads([run.id], em);
+    const previews = await this.wireReads([run], em);
     return this.toRunWire(run, previews.of(run.id));
   }
 
@@ -2897,7 +2994,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (!run) {
       return null;
     }
-    const previews = await this.wireReads([run.id], em);
+    const previews = await this.wireReads([run], em);
     return this.toRunWire(run, previews.of(run.id));
   }
 
@@ -3012,10 +3109,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // Incremental and error-swallowing by construction, so this is a `max(seq)`
     // read per run in the steady state and can never fail the listing.
     await this.pullRequests.sync(runs, em);
-    const previews = await this.wireReads(
-      runs.map((run) => run.id),
-      em,
-    );
+    const previews = await this.wireReads(runs, em);
     return runs.map((run) => this.toRunWire(run, previews.of(run.id)));
   }
 
@@ -3088,7 +3182,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     await this.runDao.updateWithoutActivity(runId, patch, em);
     Object.assign(run, patch);
-    const previews = await this.wireReads([runId], em);
+    const previews = await this.wireReads([run], em);
     return this.announceRefiled(this.toRunWire(run, previews.of(runId)));
   }
 
@@ -3107,7 +3201,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     await this.runDao.updateWithoutActivity(runId, { color }, em);
     run.color = color;
-    const previews = await this.wireReads([runId], em);
+    const previews = await this.wireReads([run], em);
     return this.announceRefiled(this.toRunWire(run, previews.of(runId)));
   }
 
@@ -3149,7 +3243,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     if (moving) {
       await this.runDao.repin(run, true, em);
     }
-    const previews = await this.wireReads([runId], em);
+    const previews = await this.wireReads([run], em);
     const answer = this.toRunWire(run, previews.of(runId));
     if (!moving) {
       return this.announceRefiled(answer);
@@ -3186,10 +3280,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         }
       }
     }
-    const previews = await this.wireReads(
-      band.map((row) => row.id),
-      em,
-    );
+    const previews = await this.wireReads(band, em);
     this.announceRefiled([
       ...changed,
       ...band.map((row) => this.toRunWire(row, previews.of(row.id))),
@@ -3235,10 +3326,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const affected = band.some((row) => row.id === run.id)
       ? band
       : [...band, run];
-    const previews = await this.wireReads(
-      affected.map((row) => row.id),
-      em,
-    );
+    const previews = await this.wireReads(affected, em);
     return this.announceRefiled(
       affected.map((row) => this.toRunWire(row, previews.of(row.id))),
     );
@@ -3275,10 +3363,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const namedIds = new Set(named.map((run) => run.id));
     const ordered = [...named, ...band.filter((run) => !namedIds.has(run.id))];
     await this.runDao.applyPinnedOrder(ordered, em);
-    const previews = await this.wireReads(
-      ordered.map((run) => run.id),
-      em,
-    );
+    const previews = await this.wireReads(ordered, em);
     return this.announceRefiled(
       ordered.map((run) => this.toRunWire(run, previews.of(run.id))),
     );
@@ -3371,7 +3456,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       await this.runDao.repin(fresh, false, em);
       const answer = this.toRunWire(
         fresh,
-        (await this.wireReads([runId], em)).of(runId),
+        (await this.wireReads([fresh], em)).of(runId),
       );
       // The band the pin left was renumbered, and every OTHER client's copy of
       // it has to hear so — see {@link announceBands}.
@@ -3433,7 +3518,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     await this.runDao.updateWithoutActivity(runId, { archivedAt: null }, em);
     run.archivedAt = null;
     this.teardown.resumeProcesses(runId);
-    const previews = await this.wireReads([runId], em);
+    const previews = await this.wireReads([run], em);
     return this.announceRefiled(this.toRunWire(run, previews.of(runId)));
   }
 
@@ -5626,6 +5711,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // first and the patch card second, and answering the first decided
         // nothing at all.
         isHostPatchCall(hostServerName, toolName) ||
+        isHostProjectInstructionsCall(hostServerName, toolName) ||
         // The plan tool, on the same reading and one step further from the
         // disk: proposing a plan does not even offer to change a file. Its card
         // is the gate; a permission card in front of it would ask the user to
@@ -6084,6 +6170,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       >();
       /** The same again for {@link HOST_PLAN_TOOL}, on the reason just above. */
       const outstandingPlans = new Set<(outcome: HostPlanOutcome) => boolean>();
+      /** And for {@link HOST_PROJECT_INSTRUCTIONS_TOOL}. */
+      const outstandingProjectChanges = new Set<
+        (outcome: HostProjectInstructionsOutcome) => boolean
+      >();
       /**
        * Close a parked host-tool card whose CALLER has given up on it.
        *
@@ -6571,6 +6661,107 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         return Promise.resolve({ status: 'sent' });
       };
       /**
+       * A card whose Apply runs a write: put on screen as an
+       * `approval_request`, parked until the press, the write run behind
+       * Apply, and the verdict row recording what it did — the patch card and
+       * the project-instructions card. `outstanding` is the tool's own set, so
+       * the turn-end sweep tells each agent what actually happened.
+       */
+      const parkWriteCard = async <TOutcome>(card: {
+        toolName: string;
+        input: unknown;
+        /** What the card is, for the log line when it cannot be written. */
+        what: string;
+        outstanding: Set<(outcome: TOutcome) => boolean>;
+        write: () => Promise<TOutcome>;
+        verdictOf: (outcome: TOutcome) => Record<string, unknown>;
+        declined: TOutcome;
+        unavailable: (reason: string) => TOutcome;
+        signal: AbortSignal | undefined;
+      }): Promise<TOutcome> => {
+        const requestId = randomUUID();
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'approval_request',
+            null,
+            { id: requestId, toolName: card.toolName, input: card.input },
+          );
+        } catch (err) {
+          // The card is what the user answers through, so a card that was never
+          // written is a change nobody can accept — said so rather than left
+          // parked forever on a verdict that cannot arrive. The reason is
+          // logged and NOT returned: a persist failure names an absolute
+          // database path.
+          this.logger.error(
+            `run ${runId} could not persist ${card.what}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return card.unavailable('the card could not be written');
+        }
+        return await new Promise<TOutcome>((resolve) => {
+          const settle = (outcome: TOutcome): boolean => {
+            if (!card.outstanding.delete(settle)) {
+              return false;
+            }
+            resolve(outcome);
+            return true;
+          };
+          card.outstanding.add(settle);
+          this.approvals.track({
+            runId,
+            memberId: SINGLE_AGENT_NODE,
+            requestId,
+            toolName: card.toolName,
+            input: card.input,
+            question: false,
+            respond: (allow) => {
+              // Liveness is answered SYNCHRONOUSLY, because that is what the
+              // registry's contract returns — while the write itself is async,
+              // so it is queued and the promise settles after it.
+              if (!card.outstanding.has(settle)) {
+                return false;
+              }
+              this.announceAwaiting(
+                runId,
+                runningToolActivity() ?? idleActivity(),
+              );
+              enqueue(async () => {
+                const outcome = allow ? await card.write() : card.declined;
+                // Settled first, so the agent is released the moment the write
+                // is done rather than behind the row.
+                settle(outcome);
+                // Written even when the settle found nobody. The turn can be
+                // cancelled between the press and the write completing, and in
+                // that window the write HAS HAPPENED — a transcript that
+                // recorded nothing would leave the user with a change and no
+                // row saying who made it.
+                await this.persist(
+                  em,
+                  runId,
+                  await this.seqs.reserve(runId),
+                  'approval_verdict',
+                  null,
+                  { id: requestId, allow, ...card.verdictOf(outcome) },
+                );
+              });
+              return true;
+            },
+          });
+          // Nothing is written on the way out, exactly as the settle-time sweep
+          // writes nothing: the agent that proposed it has stopped listening,
+          // so an Apply here would change the user's files or project for a
+          // call nothing will ever be told the result of.
+          abandonOnCancel(
+            card.signal,
+            requestId,
+            settle,
+            card.unavailable('the agent stopped waiting for an answer'),
+          );
+        });
+      };
+      /**
        * geniro's own patch channel: the agent proposes a change it has NOT
        * made, the user sees the diff with Apply and Reject, and this writes the
        * file if they accept.
@@ -6604,103 +6795,40 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           return this.proposePatchDeferred(em, runId, patch, cwd);
         }
         const fingerprint = await captureHostPatchFingerprint(cwd, patch);
-        const requestId = randomUUID();
-        const input = {
-          file_path: patch.filePath,
-          ...(patch.oldString === undefined
-            ? {}
-            : { old_string: patch.oldString }),
-          new_string: patch.newString,
-          ...(patch.summary === undefined ? {} : { summary: patch.summary }),
-        };
-        try {
-          await this.persist(
-            em,
-            runId,
-            await this.seqs.reserve(runId),
-            'approval_request',
-            null,
-            { id: requestId, toolName: HOST_PATCH_TOOL, input },
-          );
-        } catch (err) {
-          // The card is what the user answers through, so a card that was never
-          // written is a patch nobody can accept — said so rather than left
-          // parked forever on a verdict that cannot arrive. The reason is
-          // logged and NOT returned: a persist failure names an absolute
-          // database path.
-          this.logger.error(
-            `run ${runId} could not persist a patch proposal: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return {
-            status: 'unavailable',
-            reason: 'the card could not be written',
-          };
+        return parkWriteCard({
+          toolName: HOST_PATCH_TOOL,
+          input: patchWireInput(patch),
+          what: 'a patch proposal',
+          outstanding: outstandingPatches,
+          write: () => applyHostPatch(cwd, patch, fingerprint),
+          verdictOf: hostPatchVerdict,
+          declined: { status: 'declined' },
+          unavailable: (reason) => ({ status: 'unavailable', reason }),
+          signal,
+        });
+      };
+      /**
+       * An analysis's change to a project's instructions: {@link proposePatch}'s
+       * shape, a card with the old and new text in every approval mode, and
+       * the write behind its Apply.
+       */
+      const proposeProjectInstructions = async (
+        change: HostProjectInstructions,
+        signal?: AbortSignal,
+      ): Promise<HostProjectInstructionsOutcome> => {
+        if (adapter.getConfig().hostQuestionDeferredReason !== null) {
+          return this.proposeProjectInstructionsDeferred(em, runId, change);
         }
-        return await new Promise<HostPatchOutcome>((resolve) => {
-          const settle = (outcome: HostPatchOutcome): boolean => {
-            if (!outstandingPatches.delete(settle)) {
-              return false;
-            }
-            resolve(outcome);
-            return true;
-          };
-          outstandingPatches.add(settle);
-          this.approvals.track({
-            runId,
-            memberId: SINGLE_AGENT_NODE,
-            requestId,
-            toolName: HOST_PATCH_TOOL,
-            input,
-            question: false,
-            respond: (allow) => {
-              // Liveness is answered SYNCHRONOUSLY, because that is what the
-              // registry's contract returns — while the write itself is async,
-              // so it is queued and the promise settles after it.
-              if (!outstandingPatches.has(settle)) {
-                return false;
-              }
-              this.announceAwaiting(
-                runId,
-                runningToolActivity() ?? idleActivity(),
-              );
-              enqueue(async () => {
-                const outcome: HostPatchOutcome = allow
-                  ? await applyHostPatch(cwd, patch, fingerprint)
-                  : { status: 'declined' };
-                // Settled first, so the agent is released the moment the write
-                // is done rather than behind the row.
-                settle(outcome);
-                await this.persist(
-                  em,
-                  runId,
-                  await this.seqs.reserve(runId),
-                  'approval_verdict',
-                  null,
-                  {
-                    id: requestId,
-                    allow,
-                    // Written even when the settle found nobody. The turn can be
-                    // cancelled between the press and the write completing, and
-                    // in that window the FILE HAS CHANGED — a transcript that
-                    // recorded nothing would leave the user with an edited
-                    // working tree and no row saying who edited it.
-                    ...(outcome.status === 'applied'
-                      ? { answer: `applied to ${outcome.path}` }
-                      : {}),
-                  },
-                );
-              });
-              return true;
-            },
-          });
-          // The patch is NOT applied on the way out, exactly as the settle-time
-          // sweep does not apply one: the agent that proposed it has stopped
-          // listening, so an Apply here would edit the user's working tree for
-          // a call nothing will ever be told the result of.
-          abandonOnCancel(signal, requestId, settle, {
-            status: 'unavailable',
-            reason: 'the agent stopped waiting for an answer',
-          });
+        return parkWriteCard({
+          toolName: HOST_PROJECT_INSTRUCTIONS_TOOL,
+          input: projectInstructionsCardInput(change),
+          what: 'a project-instructions card',
+          outstanding: outstandingProjectChanges,
+          write: () => this.writeProjectInstructions(runId, change),
+          verdictOf: projectInstructionsVerdict,
+          declined: { status: 'declined' },
+          unavailable: (reason) => ({ status: 'unavailable', reason }),
+          signal,
         });
       };
       /**
@@ -6983,6 +7111,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               ),
             )
           : null;
+      const disposeProjectCards =
+        mcpEndpoint &&
+        analysisTurn !== null &&
+        this.projectInstructionCards !== undefined
+          ? this.projectInstructionCards.register(
+              runId,
+              SINGLE_AGENT_NODE,
+              proposeProjectInstructions,
+              { answersAtOnce },
+            )
+          : null;
       // NOT disposed with the turn — see `notifiers`.
       if (disposeNotifier) {
         this.notifiers.set(runId, disposeNotifier);
@@ -7007,6 +7146,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         disposeTeamProposals?.();
         disposeTeamBuilder?.();
         disposeAnalysis?.();
+        disposeProjectCards?.();
       };
       // ZERO the last turn's running bill before this one's first request can
       // report. It belongs HERE rather than at the settle for the reason the
@@ -7895,6 +8035,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               reason: 'the turn ended before the plan was answered',
             });
           }
+          for (const settle of [...outstandingProjectChanges]) {
+            settle({
+              status: 'unavailable',
+              reason: 'the turn ended before the change was answered',
+            });
+          }
           // Sweep BEFORE the branches below — the failure path early-returns,
           // and a settled turn must never leave a pending card that no
           // verdict can ever reach. Each swept request is SAID so in the
@@ -8569,6 +8715,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       0,
       reads.wallMs,
       this.monitors?.list(run.id).length ?? 0,
+      reads.projectName,
     );
   }
 
@@ -8579,17 +8726,21 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * CLI-reported `Run.workedMs`. Two queries however many runs.
    */
   private async wireReads(
-    runIds: readonly string[],
+    runs: readonly Pick<Run, 'id' | 'projectId'>[],
     em: EntityManager,
   ): Promise<{ of: (runId: string) => RunWireRead }> {
-    const [previews, wall] = await Promise.all([
-      this.itemDao.runPreviews([...runIds], em),
+    const runIds = runs.map((run) => run.id);
+    const projectOfRun = new Map(runs.map((run) => [run.id, run.projectId]));
+    const [previews, wall, projectNames] = await Promise.all([
+      this.itemDao.runPreviews(runIds, em),
       this.wallTurns.chatSums(runIds, em),
+      this.projectScope.liveNamesOf(runs.map((run) => run.projectId)),
     ]);
     return {
       of: (runId) => ({
         preview: previews.get(runId) ?? null,
         wallMs: wall.get(runId) ?? null,
+        projectName: projectNames.get(projectOfRun.get(runId) ?? '') ?? null,
       }),
     };
   }

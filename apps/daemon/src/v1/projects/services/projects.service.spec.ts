@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,7 +8,16 @@ import {
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { RunDao } from '../../agents/dao/run.dao';
 import { RunGroupDao } from '../../agents/dao/run-group.dao';
@@ -19,8 +28,23 @@ import { TaskDao } from '../../tasks/dao/task.dao';
 import { LabelInstruction } from '../../tasks/entity/label-instruction.entity';
 import { Task } from '../../tasks/entity/task.entity';
 import { ProjectDao } from '../dao/project.dao';
+import { ProjectInstructionChangeDao } from '../dao/project-instruction-change.dao';
 import { Project } from '../entity/project.entity';
+import { ProjectInstructionChange } from '../entity/project-instruction-change.entity';
+import { PROJECT_CHANGE_COALESCE_MS } from '../projects.types';
+import { ProjectEventBus } from './project-events.bus';
+import type { ProjectRootsService } from './project-roots.service';
+import { ProjectScopeService } from './project-scope.service';
 import { ProjectsService } from './projects.service';
+
+const sameFolderRoots = {
+  rootsOf: async (cwds: Iterable<string | null>) =>
+    new Map(
+      [...cwds]
+        .filter((cwd): cwd is string => cwd !== null)
+        .map((cwd) => [cwd, cwd]),
+    ),
+} as unknown as ProjectRootsService;
 
 /**
  * Real database, real DAOs: the behaviour under test is that deleting a
@@ -38,6 +62,8 @@ describe('ProjectsService (in-memory sqlite)', () => {
   let labelInstructionDao: LabelInstructionDao;
   let runDao: RunDao;
   let groupDao: RunGroupDao;
+  let changeDao: ProjectInstructionChangeDao;
+  let published: string[];
   let folder: string;
   let otherFolder: string;
 
@@ -49,7 +75,14 @@ describe('ProjectsService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Project, Task, LabelInstruction, Run, RunGroup],
+        entities: [
+          Project,
+          ProjectInstructionChange,
+          Task,
+          LabelInstruction,
+          Run,
+          RunGroup,
+        ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -73,6 +106,10 @@ describe('ProjectsService (in-memory sqlite)', () => {
     labelInstructionDao = new LabelInstructionDao(em);
     runDao = new RunDao(em);
     groupDao = new RunGroupDao(em);
+    changeDao = new ProjectInstructionChangeDao(em);
+    const events = new ProjectEventBus();
+    published = [];
+    events.allChanges().subscribe(({ projectId }) => published.push(projectId));
     service = new ProjectsService(
       em,
       projectDao,
@@ -80,7 +117,259 @@ describe('ProjectsService (in-memory sqlite)', () => {
       labelInstructionDao,
       runDao,
       groupDao,
+      changeDao,
+      events,
+      new ProjectScopeService(em, taskDao, projectDao, sameFolderRoots),
     );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe('instructions revision and change log', () => {
+    it('refuses a stale expectedInstructionsRevision with 409 and writes nothing', async () => {
+      const project = await service.create({ name: 'Board', folder });
+      const saved = await service.update(project.id, {
+        instructions: 'Use pnpm.',
+        expectedInstructionsRevision: 0,
+      });
+      expect(saved.instructionsRevision).toBe(1);
+
+      await expect(
+        service.update(project.id, {
+          instructions: 'Stale text.',
+          expectedInstructionsRevision: 0,
+        }),
+      ).rejects.toMatchObject({
+        errorCode: 'PROJECT_INSTRUCTIONS_DRIFT',
+        statusCode: 409,
+      });
+      expect(await service.get(project.id)).toMatchObject({
+        instructions: 'Use pnpm.',
+        instructionsRevision: 1,
+      });
+    });
+
+    it('runs two writes quoting the same revision one after the other, refusing the second', async () => {
+      const project = await service.create({ name: 'Board', folder });
+      const [first, second] = await Promise.allSettled([
+        service.update(project.id, {
+          instructions: 'From the page.',
+          expectedInstructionsRevision: 0,
+        }),
+        service.update(project.id, {
+          instructions: 'From the analysis.',
+          expectedInstructionsRevision: 0,
+        }),
+      ]);
+
+      expect(first).toMatchObject({ status: 'fulfilled' });
+      expect(second).toMatchObject({
+        status: 'rejected',
+        reason: { errorCode: 'PROJECT_INSTRUCTIONS_DRIFT' },
+      });
+      expect(await service.get(project.id)).toMatchObject({
+        instructions: 'From the page.',
+        instructionsRevision: 1,
+      });
+    });
+
+    it('refuses a text with a control character, from any writer', async () => {
+      const project = await service.create({ name: 'Board', folder });
+      await expect(
+        service.update(
+          project.id,
+          { instructions: 'Use pnpm.\u0000' },
+          {
+            source: 'analysis',
+            recommendationIds: ['P-1'],
+            chatRunId: 'analysis-run',
+            cardSeq: 1,
+          },
+        ),
+      ).rejects.toMatchObject({ errorCode: 'INVALID_PROJECT_TEXT' });
+      expect(await service.get(project.id)).toMatchObject({
+        instructions: null,
+        instructionsRevision: 0,
+      });
+      expect(
+        (
+          await service.update(project.id, {
+            instructions: 'Line one.\nLine two.',
+          })
+        ).instructions,
+      ).toBe('Line one.\nLine two.');
+    });
+
+    it('bumps the revision only when a text changes', async () => {
+      const project = await service.create({ name: 'Board', folder });
+      await service.update(project.id, { name: 'Renamed' });
+      await service.update(project.id, { description: '  ' });
+      expect((await service.get(project.id)).instructionsRevision).toBe(0);
+      await service.update(project.id, { description: 'What it is.' });
+      expect((await service.get(project.id)).instructionsRevision).toBe(1);
+    });
+
+    it('coalesces user edits within 10 minutes into one change row', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-11-01T10:00:00Z'));
+      const project = await service.create({ name: 'Board', folder });
+      await service.update(project.id, { instructions: 'Use' });
+      vi.setSystemTime(new Date('2026-11-01T10:05:00Z'));
+      await service.update(project.id, { instructions: 'Use pnpm.' });
+
+      let rows = await changeDao.recentFor(project.id, 20);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        field: 'instructions',
+        source: 'user',
+        previous: null,
+        next: 'Use pnpm.',
+      });
+
+      vi.setSystemTime(
+        new Date(
+          new Date('2026-11-01T10:05:00Z').getTime() +
+            PROJECT_CHANGE_COALESCE_MS,
+        ),
+      );
+      await service.update(project.id, { instructions: 'Use pnpm only.' });
+      rows = await changeDao.recentFor(project.id, 20);
+      expect(rows.map((row) => [row.previous, row.next])).toEqual([
+        ['Use pnpm.', 'Use pnpm only.'],
+        [null, 'Use pnpm.'],
+      ]);
+    });
+
+    it('keeps each field’s edits on that field’s own row', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-11-01T10:00:00Z'));
+      const project = await service.create({ name: 'Board', folder });
+      await service.update(project.id, { description: 'What it is.' });
+      vi.setSystemTime(new Date('2026-11-01T10:02:00Z'));
+      await service.update(project.id, {
+        description: 'What it is.',
+        instructions: 'Use pnpm.',
+      });
+
+      const rows = await changeDao.recentFor(project.id, 20);
+      expect(
+        rows.map((row) => [row.field, row.previous, row.next]).sort(),
+      ).toEqual([
+        ['description', null, 'What it is.'],
+        ['instructions', null, 'Use pnpm.'],
+      ]);
+    });
+
+    it('drops the row when a user’s edits land back where they started', async () => {
+      const project = await service.create({
+        name: 'Board',
+        folder,
+        instructions: 'Use pnpm.',
+      });
+      await service.update(project.id, { instructions: 'Use yarn.' });
+      await service.update(project.id, { instructions: 'Use pnpm.' });
+
+      expect(await changeDao.recentFor(project.id, 20)).toEqual([]);
+      expect((await service.get(project.id)).instructionsRevision).toBe(2);
+    });
+
+    it('logs an analysis write on its own row, crediting its recommendations', async () => {
+      const project = await service.create({ name: 'Board', folder });
+      await service.update(project.id, { instructions: 'Use pnpm.' });
+      await service.update(
+        project.id,
+        { instructions: 'Use pnpm. Run full-check.' },
+        {
+          source: 'analysis',
+          recommendationIds: ['P-1'],
+          chatRunId: 'analysis-run',
+          cardSeq: 42,
+        },
+      );
+      await service.update(project.id, {
+        instructions: 'Use pnpm. Run full-check first.',
+      });
+
+      const rows = await changeDao.recentFor(project.id, 20);
+      expect(
+        rows.map((row) => [row.source, row.next, row.recommendationIds]),
+      ).toEqual([
+        ['user', 'Use pnpm. Run full-check first.', []],
+        ['analysis', 'Use pnpm. Run full-check.', ['P-1']],
+        ['user', 'Use pnpm.', []],
+      ]);
+      expect(rows[1]).toMatchObject({
+        chatRunId: 'analysis-run',
+        cardSeq: 42,
+      });
+    });
+
+    it('marks a projects_changed that touched only the texts', async () => {
+      const project = await service.create({ name: 'Board', folder });
+      const events: { projectId: string; textsOnly?: boolean }[] = [];
+      const bus = new ProjectEventBus();
+      bus.allChanges().subscribe((event) => events.push(event));
+      const watched = new ProjectsService(
+        em,
+        projectDao,
+        taskDao,
+        labelInstructionDao,
+        runDao,
+        groupDao,
+        changeDao,
+        bus,
+        new ProjectScopeService(em, taskDao, projectDao, sameFolderRoots),
+      );
+
+      await watched.update(project.id, {
+        instructions: 'Use pnpm.',
+        expectedInstructionsRevision: 0,
+      });
+      await watched.update(project.id, { name: 'Renamed' });
+      await watched.update(project.id, {
+        name: 'Renamed again',
+        description: 'What it is.',
+      });
+
+      expect(events.map((event) => event.textsOnly === true)).toEqual([
+        true,
+        false,
+        false,
+      ]);
+    });
+
+    it('announces projects_changed on create, update, rearm and delete', async () => {
+      const project = await service.create({ name: 'Board', folder });
+      await service.update(project.id, { name: 'Renamed' });
+      await service.rearmAutopilot(project.id);
+      const tripped = await projectDao.getById(project.id, em);
+      tripped!.autopilotFailureStreak = 3;
+      await em.flush();
+      await service.rearmAutopilot(project.id);
+      await service.remove(project.id);
+
+      expect(published).toEqual([
+        project.id,
+        project.id,
+        project.id,
+        project.id,
+      ]);
+    });
+  });
+
+  describe('forFolder', () => {
+    it('answers the project bound to a folder or to the closest one above it', async () => {
+      const project = await service.create({ name: 'Board', folder });
+      const nested = join(folder, 'packages');
+      mkdirSync(nested);
+
+      expect((await service.forFolder(folder)).project?.id).toBe(project.id);
+      expect((await service.forFolder(nested)).project?.id).toBe(project.id);
+      expect((await service.forFolder(otherFolder)).project).toBeNull();
+      expect((await service.forFolder('/no/such/folder')).project).toBeNull();
+    });
   });
 
   it('refuses a group id that names no sidebar group, on create and on update', async () => {

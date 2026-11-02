@@ -15,6 +15,7 @@ import {
   RunningSubagentChips,
   TaskListChip,
   TeamNotesChip,
+  ThreadProjectChip,
   ThreadPullRequestChips,
 } from './composer-shelf';
 import type { ShellRun } from './shell-activity';
@@ -259,6 +260,22 @@ export const RelayLeadOnTheShelf: Story = {
           </>
         }>
         <LeadChip name="Backend Engineer" />
+        <ThreadPullRequestChips results={[pullRequest]} />
+      </ComposerShelf>
+    </div>
+  ),
+};
+
+export const ProjectOnTheShelf: Story = {
+  render: (args) => (
+    <div className="w-[720px]">
+      <ComposerShelf
+        status={
+          <>
+            <TeamNotesChip {...args} />
+          </>
+        }>
+        <ThreadProjectChip project={{ id: 'p-billing', name: 'Billing' }} />
         <ThreadPullRequestChips results={[pullRequest]} />
       </ComposerShelf>
     </div>

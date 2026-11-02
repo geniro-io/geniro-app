@@ -88,6 +88,15 @@ vi.mock('./daemon-client', () => ({
     onUsageRecorded(): () => void {
       return () => {};
     }
+    onProjectsChanged(): () => void {
+      return () => {};
+    }
+    onTaskChanged(): () => void {
+      return () => {};
+    }
+    onReconnect(): () => void {
+      return () => {};
+    }
   },
 }));
 vi.mock('./terminal/terminal-panel', () => ({ TerminalPanel: () => null }));
@@ -327,6 +336,50 @@ describe('App — the connection banner’s Retry', () => {
     expect(ensureDaemon).toHaveBeenCalledTimes(2);
     // The supervisor's own reason reaches the banner.
     expect(container.textContent).toContain('not answering its health check');
+  });
+});
+
+describe('App — the Projects address', () => {
+  const backToGallery = (): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Back to projects"]',
+    );
+
+  it('shows the gallery when #/projects arrives while a project page is open', async () => {
+    history.replaceState(null, '', '#/projects/p1');
+    window.geniro = createPreloadStub({
+      ensureDaemon: () => Promise.resolve(HANDLE),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('no daemon in this spec'))),
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+
+    await act(async () => {
+      root.render(<App />);
+    });
+    for (
+      let tries = 0;
+      tries < 100 && !testOver && !backToGallery();
+      tries += 1
+    ) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+    }
+    expect(backToGallery()).not.toBeNull();
+
+    await act(async () => {
+      location.hash = '#/projects';
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await flush();
+
+    expect(backToGallery()).toBeNull();
+    expect(location.hash).toBe('#/projects');
   });
 });
 

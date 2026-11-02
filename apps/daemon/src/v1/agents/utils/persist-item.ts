@@ -206,6 +206,11 @@ export function runToWire(
   wallWorkedMs: number | null = null,
   /** How many monitors the run has running, from `MonitorRegistry`. */
   monitorsOpen = 0,
+  /**
+   * The name of the run's project while it exists, read for a whole listing at
+   * once (`ProjectScopeService.liveNamesOf`); null draws no project.
+   */
+  projectName: string | null = null,
 ): RunWire {
   return {
     id: run.id,
@@ -242,6 +247,10 @@ export function runToWire(
     groupId: run.groupId,
     taskId: run.taskId,
     taskIdentifier: run.taskIdentifier,
+    project:
+      run.projectId !== null && projectName !== null
+        ? { id: run.projectId, name: projectName }
+        : null,
     analysisSourceRunId: run.analysisSourceRunId,
     analysisSourceSeq: run.analysisSourceSeq,
     analysisTeamSlug: run.analysisTeamSlug,

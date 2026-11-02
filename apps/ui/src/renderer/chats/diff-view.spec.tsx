@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { DiffView, editDiffOf } from './diff-view';
+import { DiffView, editDiffOf, UnifiedDiff } from './diff-view';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -45,6 +45,59 @@ describe('DiffView', () => {
   });
 });
 
+describe('UnifiedDiff', () => {
+  const classOf = (text: string): string | undefined =>
+    [...container.querySelectorAll('[data-slot="unified-diff"] > div')]
+      .find((line) => line.textContent === text)
+      ?.getAttribute('class') ?? undefined;
+
+  it('reads a changed line that begins with -- or ++ as a change, and git’s file headers as headers', () => {
+    act(() =>
+      root.render(
+        <UnifiedDiff
+          diff={[
+            '--- a/rules.md',
+            '+++ b/rules.md',
+            '@@ -1,3 +1,3 @@',
+            ' Rules',
+            '----',
+            '+++ always ask first',
+            ' Use pnpm',
+          ].join('\n')}
+        />,
+      ),
+    );
+
+    expect(classOf('--- a/rules.md')).toContain('text-muted-foreground');
+    expect(classOf('+++ b/rules.md')).toContain('text-muted-foreground');
+    expect(classOf('----')).toContain('text-destructive');
+    expect(classOf('+++ always ask first')).toContain('text-success');
+    expect(classOf(' Use pnpm')).toContain('text-foreground');
+  });
+});
+
+describe('UnifiedDiff — changed words', () => {
+  it('marks the words that changed inside a long line, and nothing when asked not to', () => {
+    const long =
+      'push to main on Fridays only after the suite passes and a reviewer approved';
+    const diff = [
+      '@@ -1,1 +1,1 @@',
+      `-Never ${long}.`,
+      `+Always ${long}.`,
+    ].join('\n');
+
+    act(() => root.render(<UnifiedDiff diff={diff} wordLevel />));
+    expect(
+      [...container.querySelectorAll('[data-changed]')].map(
+        (span) => span.textContent,
+      ),
+    ).toEqual(['Never', 'Always']);
+
+    act(() => root.render(<UnifiedDiff diff={diff} />));
+    expect(container.querySelectorAll('[data-changed]')).toHaveLength(0);
+  });
+});
+
 describe('editDiffOf', () => {
   it('reads an Edit, which is the shape the whole helper is built around', () => {
     expect(
@@ -82,6 +135,21 @@ describe('editDiffOf', () => {
         new_string: 'export const x = 1;\n',
       }),
     ).toEqual({ oldText: null, newText: 'export const x = 1;\n' });
+  });
+
+  it('reads a project-instructions card, and one for a project with none yet as additions', () => {
+    expect(
+      editDiffOf('save_project_instructions', {
+        old_string: 'Use pnpm.',
+        new_string: 'Use pnpm. Run pnpm test:unit.',
+      }),
+    ).toEqual({
+      oldText: 'Use pnpm.',
+      newText: 'Use pnpm. Run pnpm test:unit.',
+    });
+    expect(
+      editDiffOf('save_project_instructions', { new_string: 'Use pnpm.' }),
+    ).toEqual({ oldText: null, newText: 'Use pnpm.' });
   });
 
   it('KEEPS refusing an Edit with no old_string — that is a malformed call', () => {

@@ -231,6 +231,41 @@ describe('RecommendationsCard', () => {
     ).not.toBeNull();
   });
 
+  it.each([
+    ['a chat card', false],
+    ['a team card', true],
+  ])(
+    'draws project items in a Project instructions group, after memory, on %s',
+    (_name, team) => {
+      const el = render(
+        <RecommendationsCard
+          look={LOOK}
+          summary={null}
+          timing={null}
+          team={team}
+          items={[
+            recommendation('P-1'),
+            recommendation('M-1'),
+            recommendation('R-1'),
+          ]}
+          applied={null}
+          outcomes={{}}
+          onApply={vi.fn()}
+        />,
+      );
+
+      const headings = [...el.querySelectorAll('h4')].map((h) => h.textContent);
+      expect(headings).toEqual([
+        'Repository',
+        'Memory',
+        'Project instructions',
+      ]);
+      expect(
+        el.querySelector('section:last-of-type [data-id="P-1"]'),
+      ).not.toBeNull();
+    },
+  );
+
   it('tags each row with its territory, and says what the territory means', () => {
     const el = render(
       <RecommendationsCard

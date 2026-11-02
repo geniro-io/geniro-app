@@ -12,6 +12,7 @@ import { AnalysisReportsService } from '../../../agents/services/analysis-report
 import type { ThreadReaderService } from '../../../agents/services/thread-reader.service';
 import type { ThreadTimelineService } from '../../../agents/services/thread-timeline.service';
 import type { MemoryService } from '../../../memory/services/memory.service';
+import type { ProjectScopeService } from '../../../projects/services/project-scope.service';
 import type { Run } from '../../../runs/entity/run.entity';
 import type { McpCallContext } from '../../mcp.types';
 import { ReportRecommendationsTool } from './report-recommendations.tool';
@@ -100,6 +101,7 @@ function setup(
     } as unknown as ThreadTimelineService,
     memory,
     { foldRuns: () => Promise.resolve([]) } as unknown as ThreadReaderService,
+    {} as ProjectScopeService,
   );
   const analysis = new AnalysisBroker();
   analysis.register(
@@ -212,7 +214,7 @@ describe('ReportRecommendationsTool', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain(
-      'only repo, user and memory recommendations',
+      'only repo, user, memory and project recommendations',
     );
     expect(written).toEqual([]);
   });

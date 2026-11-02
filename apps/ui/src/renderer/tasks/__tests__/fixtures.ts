@@ -1,5 +1,4 @@
 import {
-  type ProjectDto,
   type TaskDto,
   TaskPriority,
   TaskSource,
@@ -54,28 +53,4 @@ export function aTask(over: Partial<TaskDto> = {}): TaskDto {
   };
 }
 
-export function aProject(over: Partial<ProjectDto> = {}): ProjectDto {
-  return {
-    id: 'p1',
-    name: 'One',
-    taskKey: 'ONE',
-    folder: '/w',
-    groupId: null,
-    description: null,
-    instructions: null,
-    agentKind: null,
-    model: null,
-    effort: null,
-    approval: null,
-    configDir: null,
-    teamSlug: null,
-    autopilotEnabled: false,
-    autopilotIntakeStatus: TaskStatus.Todo,
-    autopilotMaxConcurrent: 1,
-    autopilotFailureStreak: 0,
-    provider: TaskSource.Geniro,
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-    ...over,
-  };
-}
+export { aProject } from '../../__fixtures__/projects';

@@ -7,6 +7,7 @@ import {
   parseChangedRuns,
   parseDeletedRunId,
   parseMemoryChanged,
+  parseProjectsChanged,
   parseRunStatus,
   parseTaskChanged,
   parseUsageRecorded,
@@ -991,6 +992,33 @@ describe('parseDeletedRunId — the run_deleted twin', () => {
     // A blank string is not a run identity; degrading to null here means "no
     // ghost row gets cleared" rather than "clear every run in the sidebar".
     expect(parseDeletedRunId({ runId: '' })).toBeNull();
+  });
+});
+
+describe('parseProjectsChanged — the projects_changed twin', () => {
+  it('reads the project a write named and whether only its texts changed', () => {
+    expect(parseProjectsChanged({ projectId: 'p1' })).toEqual({
+      projectId: 'p1',
+      textsOnly: false,
+    });
+    expect(parseProjectsChanged({ projectId: 'p1', textsOnly: true })).toEqual({
+      projectId: 'p1',
+      textsOnly: true,
+    });
+    expect(parseProjectsChanged({ projectId: 3 })).toBeNull();
+    expect(parseProjectsChanged(null)).toBeNull();
+  });
+
+  it('hands a projects_changed event to every project listener', () => {
+    const client = new DaemonClient(handle, {});
+    const seen: string[] = [];
+    client.onProjectsChanged((event) => seen.push(event.projectId));
+    client.connect();
+
+    mocks.ref.any?.('projects_changed', { projectId: 'p1' });
+    mocks.ref.any?.('memory_changed', { memoryId: 'e1', change: 'created' });
+
+    expect(seen).toEqual(['p1']);
   });
 });
 

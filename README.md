@@ -104,7 +104,7 @@ Give one agent up to 8 setups: other accounts, models or CLIs. When one hits its
 <td valign="top">
 
 <b>📋 Task board</b><br>
-Each card gets its own worktree and branch, and runs a chat or a team. Autopilot works the queue, and a merged PR closes the card.
+Each card gets its own worktree and branch, and runs a chat or a team. Autopilot works the queue, and a merged PR closes the card. Each project has its own page, with standing instructions every agent run in it receives.
 
 </td>
 <td valign="top">
@@ -124,7 +124,7 @@ Charts, comparisons, scorecards, image galleries, review findings, patches, plan
 <td valign="top">
 
 <b>🔬 Thread analyzer</b><br>
-An agent studies a finished run, or a team's latest runs, shows where the time and money went and why, and proposes fixes with what each should save. Tick the ones you like and press **Apply selected**.
+An agent studies a finished run, or a team's latest runs, shows where the time and money went and why, and proposes fixes with what each should save — including to the project's instructions. Tick the ones you like and press **Apply selected**.
 
 </td>
 <td valign="top">
@@ -257,7 +257,8 @@ A project board for agents. Write a card and hit start, or let **autopilot** pic
 - **Autopilot** starts cards from your intake columns, as many at once as you allow.
 - When a card's pull request is merged, the card moves itself to Done.
 - Agents can manage the board themselves through Geniro's board tools: list, read, create and update tasks.
-- **Project instructions.** Give a project a description and standing instructions in **Settings → Projects**. Every chat and team started in the project's folder, or on one of its cards, receives them after your own custom instructions; a chat keeps what it started with, so an edit reaches new chats.
+- **Projects page.** **Projects** in the sidebar opens a gallery of cards, one per project: its card key, name, folder and description, whether it has standing instructions, how many run configurations are bound to it, who runs its board, its autopilot, and how many of its tasks are running and waiting. A card opens the project's own page: a header with its key, name (rename it from the pencil), folder and run settings, then cards for the description and standing instructions that save as you type, the board (its running and waiting counts, run settings and autopilot) and the run configurations bound to it. **Open project page** in the board's project picker takes you there.
+- **Project instructions.** Every chat and team started in a project receives its instructions after your own custom instructions, every member of a team included. A run belongs to the project its run configuration or the composer's project chip names; otherwise to its card's project, else to the project whose folder holds the run's folder (the closest one, never your home folder or `/`). A chat keeps what it started with, so an edit reaches new chats.
 
 ![The tasks board with a card open: its properties, the run configuration it will use, its description and the report the agent wrote](docs/screenshots/tasks-board.png)
 
@@ -320,8 +321,8 @@ Finished a long run and wondering why it took 40 minutes? Press **Analyze thread
 
 1. Pick the agent, account, model and effort that should do the analysis.
 2. It reads a snapshot of the thread: timings, slow or failed tools, the critical path and every row.
-3. You get a **recommendations card** that explains itself: what cost the most time and money and why, then each fix with its evidence, the minutes and dollars it should save per run and what the next run looks like with it, tagged by where the fix belongs: your team, your repo, your own instruction files, or the shared memory.
-4. Tick what you want: the card projects the time and cost per run with exactly those fixes. Press **Apply selected**. Team edits are saved only if the file has not changed in the meantime, and a backup is written first.
+3. You get a **recommendations card** that explains itself: what cost the most time and money and why, then each fix with its evidence, the minutes and dollars it should save per run and what the next run looks like with it, tagged by where the fix belongs: your team, your repo, your own instruction files, the shared memory, or the project's instructions.
+4. Tick what you want: the card projects the time and cost per run with exactly those fixes. Press **Apply selected**. Team edits are saved only if the file has not changed in the meantime, and a backup is written first. A project-instructions fix is shown to you as a card with the old and new text, in every approval mode, and written only when you press **Apply** there — only for the items you ticked, and only if nobody changed the instructions since the agent read them; the next analysis sees every change made to them and who made it.
 
 The analysis lives in a popup over the thread it analyzed, so you can come back to it, ask follow-up questions, or start a fresh one.
 
@@ -377,7 +378,7 @@ The memory works from your phone as well: you can read, edit, forget and approve
 ## ⚡ Fast actions, run configurations and tidy threads
 
 - **Fast actions:** your own buttons under the message box, each one a name and a snippet. A press drops the snippet into the message box. It sends nothing, so you can still edit.
-- **Run configurations:** save a new-chat setup (folder, branch, agent or team, model, effort, context window, approval mode and profile) under a name, and apply it by hovering the **New chat** button.
+- **Run configurations:** save a new-chat setup (folder, branch, agent or team, project, model, effort, context window, approval mode and profile) under a name, and apply it by hovering the **New chat** button. A configuration bound to a project gives every run it starts that project's instructions, whatever folder it works in.
 - **Folders and branches:** each chat runs in its own folder, with your recent folders one click away. Switch the branch right from the composer.
 - **Colours and groups:** give a thread one of 8 colours. File threads into colour-coded groups that you can collapse and drag into order. A group can automatically collect every new chat from a folder, or every run of a team.
 - **Notes:** keep private notes on any thread. They are never sent to the agent.
@@ -393,7 +394,7 @@ Start [Ollama](https://ollama.com) on your Mac and download a model that support
 
 ## 📱 Your phone
 
-In **Settings → Remote access**, scan the QR code and enter the pairing code shown on your Mac. Your phone opens the same live chats, teams and board over your Wi-Fi. For access away from home, **Get an address** starts the `cloudflared` or `ngrok` you already have installed and opens a tunnel from the Mac.
+In **Settings → Remote access**, scan the QR code and enter the pairing code shown on your Mac. Your phone opens the same live chats, teams, board and projects over your Wi-Fi. For access away from home, **Get an address** starts the `cloudflared` or `ngrok` you already have installed and opens a tunnel from the Mac.
 
 To stay quick on a phone, a long chat opens on its newest 250 items (scroll up for more), and everything the Mac sends is compressed. The row of chips above the message box scrolls sideways when it holds more than fits.
 

@@ -61,9 +61,17 @@ export function Tasks({
   active,
   onOpenThread,
   waitingByRun,
+  projectRequest = null,
+  onProjectRequestHandled,
+  onOpenProjectPage,
 }: {
   handle: DaemonHandle | null;
   client: DaemonClient | null;
+  /** A project another screen asked the board to show; taken once. */
+  projectRequest?: string | null;
+  onProjectRequestHandled?: () => void;
+  /** Open a project's own page; absent, the picker does not offer it. */
+  onOpenProjectPage?: (projectId: string) => void;
   /** Each thread's wait (`waitReadings`), keyed by run — a card's mark. */
   waitingByRun?: ReadonlyMap<string, WaitState>;
   /**
@@ -106,6 +114,19 @@ export function Tasks({
       refreshProjects();
     }
   }, [active, refreshProjects]);
+
+  const selectProject = board.selectProject;
+  const projectRequestHandled = useLatestCallback(
+    () => onProjectRequestHandled?.(),
+    [],
+  );
+  useEffect(() => {
+    if (projectRequest === null) {
+      return;
+    }
+    selectProject(projectRequest);
+    projectRequestHandled();
+  }, [projectRequest, selectProject, projectRequestHandled]);
 
   /**
    * The team library, for the two target pickers (the project chip, and a
@@ -449,6 +470,7 @@ export function Tasks({
             onNewProject={() => {
               setNewProjectOpen(true);
             }}
+            {...(onOpenProjectPage === undefined ? {} : { onOpenProjectPage })}
           />
           {openProject !== null ? (
             <>

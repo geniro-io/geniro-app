@@ -4,14 +4,17 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { ConflictException } from '@packages/common';
 
-import {
-  type AnalysedTeamRef,
-  RECOMMENDATION_ID_PREFIX,
-  type RecommendationApply,
+import type {
+  AnalysedTeamRef,
+  RecommendationApply,
 } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
-import { appliesOf, readCard } from '../../agents/utils/recommendations-card';
+import {
+  appliesOf,
+  readCard,
+  unappliedRefusal,
+} from '../../agents/utils/recommendations-card';
 import { sizedUserInstructionFiles } from '../../agents/utils/user-instruction-files';
 import type { AgentKind } from '../../runs/runs.types';
 import type { Team } from '../teams.types';
@@ -388,25 +391,8 @@ export class TeamChangeService {
         'nothing has been applied in this chat yet — team changes are saved only for items the user selected and applied',
       );
     }
-    const otherItems = authority.ids.filter(
-      (id) => !id.startsWith(RECOMMENDATION_ID_PREFIX.team),
-    );
-    if (otherItems.length > 0) {
-      return refuse(
-        'NOT_A_TEAM_ITEM',
-        `${otherItems.join(', ')} ${otherItems.length === 1 ? 'is not a team item' : 'are not team items'} — only W- items change the team`,
-      );
-    }
-    const unselected = authority.ids.filter((id) => !apply.ids.includes(id));
-    if (authority.ids.length === 0 || unselected.length > 0) {
-      return refuse(
-        'NOT_SELECTED',
-        authority.ids.length === 0
-          ? 'name the recommendation ids this change carries out'
-          : `${unselected.join(', ')} ${unselected.length === 1 ? 'was' : 'were'} not selected in the latest Apply (${apply.ids.join(', ')})`,
-      );
-    }
-    return null;
+    const refusal = unappliedRefusal('team', authority.ids, apply);
+    return refusal === null ? null : refuse(refusal.error, refusal.message);
   }
 
   private async readCurrent(slug: string): Promise<CurrentTeam | null> {

@@ -21,3 +21,17 @@ export function projectInstructionsText(
     .filter((paragraph): paragraph is string => Boolean(paragraph))
     .join('\n\n');
 }
+
+/**
+ * A composed project text (`projectInstructionsText`) without its `Project:`
+ * line — what was said, whatever the project was called then.
+ */
+export function projectInstructionsBody(
+  composed: string | null,
+): string | null {
+  if (composed === null) {
+    return null;
+  }
+  const lineEnd = composed.indexOf('\n');
+  return lineEnd === -1 ? '' : composed.slice(lineEnd).trim();
+}

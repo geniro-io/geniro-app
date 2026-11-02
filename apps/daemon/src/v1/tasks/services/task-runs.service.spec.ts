@@ -111,6 +111,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     id,
     status: 'pending',
     taskIdentifier: null,
+    project: null,
     analysisSourceRunId: null,
     analysisSourceSeq: null,
     analysisTeamSlug: null,

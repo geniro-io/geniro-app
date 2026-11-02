@@ -15,12 +15,20 @@ import {
 } from 'vitest';
 
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
+import { ProjectDao } from '../../projects/dao/project.dao';
+import { ProjectInstructionChangeDao } from '../../projects/dao/project-instruction-change.dao';
+import { Project } from '../../projects/entity/project.entity';
+import { ProjectInstructionChange } from '../../projects/entity/project-instruction-change.entity';
+import type { ProjectRootsService } from '../../projects/services/project-roots.service';
+import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import type { ItemKind } from '../../runs/runs.types';
+import { TaskDao } from '../../tasks/dao/task.dao';
+import { Task } from '../../tasks/entity/task.entity';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { TeamSchema } from '../../teams/teams.types';
 import { teamVersionOf } from '../../teams/utils/team-version';
@@ -56,7 +64,16 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Run, Item, NodeState, WallTurn, Goal],
+        entities: [
+          Run,
+          Item,
+          NodeState,
+          WallTurn,
+          Goal,
+          Project,
+          ProjectInstructionChange,
+          Task,
+        ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -112,6 +129,15 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           ]),
       } as unknown as AgentAdapterRegistry),
       kindRowsPassthrough(itemDao),
+      new ProjectScopeService(em, new TaskDao(em), new ProjectDao(em), {
+        rootsOf: async (cwds: Iterable<string | null>) =>
+          new Map(
+            [...cwds]
+              .filter((cwd): cwd is string => cwd !== null)
+              .map((cwd) => [cwd, cwd]),
+          ),
+      } as unknown as ProjectRootsService),
+      new ProjectInstructionChangeDao(em),
       new GoalDao(em),
     );
     const run = new Run();
@@ -148,6 +174,180 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     });
     await fork.flush();
   }
+
+  describe('view=project', () => {
+    async function bindSource(
+      project: Partial<Project>,
+      snapshot: string | null,
+    ): Promise<void> {
+      const fork = orm.em.fork();
+      fork.persist(
+        Object.assign(new Project(), {
+          id: 'p-billing',
+          name: 'Billing',
+          folder: '/tmp/project',
+          taskKey: 'BIL',
+          ...project,
+        }),
+      );
+      const run = await fork.findOneOrFail(Run, 'source');
+      run.projectId = 'p-billing';
+      run.projectSource = 'folder';
+      run.projectInstructions = snapshot;
+      await fork.flush();
+    }
+
+    it('returns current text, differing snapshot and changes, masked', async () => {
+      registerSecret('tok-SECRET-1234', 'deploy key');
+      await bindSource(
+        {
+          instructions: 'Use pnpm. Deploy key tok-SECRET-1234.',
+          instructionsRevision: 3,
+        },
+        'Project: Billing\n\nUse yarn.',
+      );
+      const fork = orm.em.fork();
+      fork.persist(
+        Object.assign(new ProjectInstructionChange(), {
+          projectId: 'p-billing',
+          changedAt: new Date(T0),
+          field: 'instructions',
+          source: 'analysis',
+          previous: 'Use yarn.',
+          next: 'Use pnpm.',
+          recommendationIds: JSON.stringify(['P-1']),
+          chatRunId: 'analysis-1',
+        }),
+      );
+      await fork.flush();
+
+      const answer = await reader.read(
+        { sourceRunId: 'source', snapshotSeq: 0, sourceWorking: false },
+        { view: 'project' },
+      );
+
+      expect(JSON.stringify(answer)).not.toContain('tok-SECRET-1234');
+      expect(answer.projects).toEqual([
+        expect.objectContaining({
+          projectId: 'p-billing',
+          name: 'Billing',
+          key: 'BIL',
+          instructionsRevision: 3,
+          description: null,
+          instructions: expect.stringMatching(/^Use pnpm\. Deploy key /),
+          runs: [
+            expect.objectContaining({
+              runId: 'source',
+              startedWith: 'Project: Billing\n\nUse yarn.',
+            }),
+          ],
+          changes: [
+            expect.objectContaining({
+              field: 'instructions',
+              by: 'analysis',
+              previous: 'Use yarn.',
+              next: 'Use pnpm.',
+              recommendationIds: ['P-1'],
+            }),
+          ],
+        }),
+      ]);
+    });
+
+    it('reads a start copy that differs only by the project’s old name as the same text', async () => {
+      await bindSource(
+        { name: 'Billing', instructions: 'Use pnpm.' },
+        'Project: Payments\n\nUse pnpm.',
+      );
+
+      const answer = await reader.read(
+        { sourceRunId: 'source', snapshotSeq: 0, sourceWorking: false },
+        { view: 'project' },
+      );
+
+      expect(answer.projects).toEqual([
+        expect.objectContaining({
+          runs: [
+            expect.objectContaining({ startedWith: 'the same text as now' }),
+          ],
+        }),
+      ]);
+    });
+
+    it('lists every project a team analysis’s runs belong to', async () => {
+      await bindSource({ instructions: 'Use pnpm.' }, null);
+      const fork = orm.em.fork();
+      fork.persist(
+        Object.assign(new Project(), {
+          id: 'p-ledger',
+          name: 'Ledger',
+          folder: '/tmp/ledger',
+          taskKey: 'LED',
+        }),
+      );
+      fork.persist(
+        Object.assign(new Run(), {
+          id: 'other',
+          title: 'Ledger run',
+          status: 'completed',
+          agentKind: 'claude',
+          cwd: '/tmp/ledger',
+          projectId: 'p-ledger',
+          projectSource: 'explicit',
+        }),
+      );
+      await fork.flush();
+
+      const answer = await reader.read(
+        {
+          sourceRunId: 'source',
+          snapshotSeq: 0,
+          sourceWorking: false,
+          team: {
+            slug: 'crew',
+            runs: [
+              { runId: 'source', snapshotSeq: 0, working: false },
+              { runId: 'other', snapshotSeq: 0, working: false },
+            ],
+          },
+        },
+        { view: 'project' },
+      );
+
+      expect(
+        (answer.projects as { projectId: string; runs: { runId: string }[] }[])
+          .map((project) => [
+            project.projectId,
+            project.runs.map((run) => run.runId),
+          ])
+          .sort(),
+      ).toEqual([
+        ['p-billing', ['source']],
+        ['p-ledger', ['other']],
+      ]);
+    });
+
+    it('names a run in no project, and the overview names the run’s project', async () => {
+      const none = await reader.read(
+        { sourceRunId: 'source', snapshotSeq: 0, sourceWorking: false },
+        { view: 'project' },
+      );
+      expect(none).toMatchObject({
+        projects: [],
+        runsWithoutProject: ['source'],
+      });
+
+      await bindSource({ instructions: 'Use pnpm.' }, null);
+      await insert(0, 'message', { text: 'go' }, 0);
+      const overview = await reader.read(
+        { sourceRunId: 'source', snapshotSeq: 0, sourceWorking: false },
+        { view: 'overview' },
+      );
+      expect(overview.source).toMatchObject({
+        project: { id: 'p-billing', name: 'Billing' },
+      });
+    });
+  });
 
   it('times tool calls in the overview and keeps it inside its budget', async () => {
     await insert(0, 'message', { text: 'go' }, 0);

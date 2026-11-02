@@ -109,6 +109,8 @@ import { PayloadRefsSweepService } from './services/payload-refs-sweep.service';
 import { PlanBroker } from './services/plan.broker';
 import { PolledSpendService } from './services/polled-spend.service';
 import { ProcessRegistry } from './services/process-registry';
+import { ProjectInstructionsBroker } from './services/project-instructions.broker';
+import { ProjectInstructionsChangeService } from './services/project-instructions-change.service';
 import { PullRequestCaptureService } from './services/pull-request-capture.service';
 import { RecommendationsApplyService } from './services/recommendations-apply.service';
 import { RunAttentionService } from './services/run-attention.service';
@@ -240,6 +242,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     FindingsReportBroker,
     AnalysisBroker,
     AnalysisReportsService,
+    ProjectInstructionsChangeService,
+    ProjectInstructionsBroker,
     ChartBroker,
     PatchBroker,
     ComparisonBroker,
@@ -573,6 +577,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     // its folder pins, as the plan-limits readout does.
     ConfigDirPinService,
     ThreadReaderService,
+    // For the MCP host's `save_project_instructions`.
+    ProjectInstructionsChangeService,
     GlobalChatSearchService,
     AgentEventBus,
     ApprovalRegistry,
@@ -587,6 +593,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     FindingsReportBroker,
     ChartBroker,
     PatchBroker,
+    ProjectInstructionsBroker,
     ComparisonBroker,
     MetricsBroker,
     GalleryBroker,

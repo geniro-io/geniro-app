@@ -11,6 +11,7 @@ import { PartialStreamService } from '../../agents/services/partial-stream.servi
 import type { SubagentRecoveryService } from '../../agents/services/subagent-recovery.service';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { MemoryEventBus } from '../../memory/services/memory-events.bus';
+import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { ShareEventBus } from '../../shares/services/share-events.bus';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';
 import { TaskEventBus } from '../../tasks/services/task-events.bus';
@@ -95,6 +96,7 @@ describe('NotificationsGateway', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const socket = fakeSocket('wrong-token');
 
@@ -117,6 +119,7 @@ describe('NotificationsGateway', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -142,6 +145,7 @@ describe('NotificationsGateway', () => {
       recovery,
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -194,6 +198,7 @@ describe('NotificationsGateway', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -232,6 +237,7 @@ describe('NotificationsGateway', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -254,6 +260,7 @@ describe('NotificationsGateway', () => {
       recovery,
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const socket = fakeSocket('good-token');
     let resolveJoin!: () => void;
@@ -292,6 +299,7 @@ describe('NotificationsGateway', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -316,6 +324,7 @@ describe('NotificationsGateway', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     let calls = 0;
     const emit = vi.fn(() => {
@@ -355,6 +364,7 @@ describe('NotificationsGateway', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a usage event must never take it — the Stats page
@@ -393,6 +403,7 @@ describe('NotificationsGateway', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a task write must never take it — a board is not
@@ -427,6 +438,7 @@ describe('NotificationsGateway', () => {
       subagents(),
       shares,
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const emit = vi.fn();
     const roomEmit = vi.fn();
@@ -468,6 +480,7 @@ describe('NotificationsGateway', () => {
       subagents(),
       new ShareEventBus(),
       memories,
+      new ProjectEventBus(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -500,6 +513,35 @@ describe('NotificationsGateway', () => {
     expect(emit).toHaveBeenCalledTimes(2);
   });
 
+  it('broadcasts a project write to every client, phone included, until destroyed', () => {
+    const projects = new ProjectEventBus();
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+      subagents(),
+      new ShareEventBus(),
+      new MemoryEventBus(),
+      projects,
+    );
+    const emit = vi.fn();
+    const to = vi.fn(() => ({ emit: vi.fn() }));
+    gw.afterInit({ emit, to } as unknown as Server);
+
+    projects.publish({ projectId: 'p-1' });
+    expect(emit).toHaveBeenCalledWith('projects_changed', { projectId: 'p-1' });
+    expect(to).not.toHaveBeenCalled();
+
+    gw.onModuleDestroy();
+    projects.publish({ projectId: 'p-2' });
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
   it('puts the Mac’s own sockets in the desktop room and a paired device’s outside it', () => {
     const gw = new NotificationsGateway(
       runtime,
@@ -513,6 +555,7 @@ describe('NotificationsGateway', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const desktop = fakeSocket('good-token');
     const phone = {
@@ -544,6 +587,7 @@ describe('NotificationsGateway', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a deletion must never take it — every OTHER
@@ -587,6 +631,7 @@ describe('runs_changed broadcast', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -638,6 +683,7 @@ describe('verdict round-trip', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
 
     const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
@@ -673,6 +719,7 @@ describe('verdict round-trip', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
 
     track('req-o');
@@ -712,6 +759,7 @@ describe('verdict round-trip', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
     expect(
       gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
@@ -748,6 +796,7 @@ describe('verdict round-trip', () => {
       subagents(),
       new ShareEventBus(),
       new MemoryEventBus(),
+      new ProjectEventBus(),
     );
 
     track('req-a');

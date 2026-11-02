@@ -3219,6 +3219,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     resumeSessionId?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateChatDto
+     */
+    projectId?: string | null;
 }
 
 
@@ -6541,6 +6547,12 @@ export interface ProjectDto {
      */
     instructions: string | null;
     /**
+     * Counts every change to the description or instructions; quote it back as expectedInstructionsRevision so a stale write is refused instead of overwriting a newer one
+     * @type {number}
+     * @memberof ProjectDto
+     */
+    instructionsRevision: number;
+    /**
      * 
      * @type {AgentKind}
      * @memberof ProjectDto
@@ -6616,6 +6628,154 @@ export interface ProjectDto {
      * 
      * @type {string}
      * @memberof ProjectDto
+     */
+    updatedAt: string;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface ProjectForFolderDto
+ */
+export interface ProjectForFolderDto {
+    /**
+     * 
+     * @type {ProjectForFolderDtoProject}
+     * @memberof ProjectForFolderDto
+     */
+    project: ProjectForFolderDtoProject | null;
+}
+/**
+ * 
+ * @export
+ * @interface ProjectForFolderDtoProject
+ */
+export interface ProjectForFolderDtoProject {
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    name: string;
+    /**
+     * The absolute project folder every task in it is worked in
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    folder: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    groupId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    taskKey: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    description: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    instructions: string | null;
+    /**
+     * Counts every change to the description or instructions; quote it back as expectedInstructionsRevision so a stale write is refused instead of overwriting a newer one
+     * @type {number}
+     * @memberof ProjectForFolderDtoProject
+     */
+    instructionsRevision: number;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof ProjectForFolderDtoProject
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    effort: string | null;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof ProjectForFolderDtoProject
+     */
+    approval: ChatApprovalMode | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    configDir: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    teamSlug: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ProjectForFolderDtoProject
+     */
+    autopilotEnabled: boolean;
+    /**
+     * The column the autopilot picks work up from
+     * @type {TaskStatus}
+     * @memberof ProjectForFolderDtoProject
+     */
+    autopilotIntakeStatus: TaskStatus;
+    /**
+     * 
+     * @type {number}
+     * @memberof ProjectForFolderDtoProject
+     */
+    autopilotMaxConcurrent: number;
+    /**
+     * Consecutive failed autopilot runs — the breaker reads it, and a success resets it to 0
+     * @type {number}
+     * @memberof ProjectForFolderDtoProject
+     */
+    autopilotFailureStreak: number;
+    /**
+     * Where this project's tasks come from — the value its tasks carry as their own source
+     * @type {TaskSource}
+     * @memberof ProjectForFolderDtoProject
+     */
+    provider: TaskSource;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
      */
     updatedAt: string;
 }
@@ -7472,6 +7632,12 @@ export interface RunDto {
     taskIdentifier: string | null;
     /**
      * 
+     * @type {RunProjectRef}
+     * @memberof RunDto
+     */
+    project: RunProjectRef | null;
+    /**
+     * 
      * @type {string}
      * @memberof RunDto
      */
@@ -8118,6 +8284,25 @@ export interface RunProcessesDto {
 /**
  * 
  * @export
+ * @interface RunProjectRef
+ */
+export interface RunProjectRef {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProjectRef
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunProjectRef
+     */
+    name: string;
+}
+/**
+ * 
+ * @export
  * @interface RunPullRequest
  */
 export interface RunPullRequest {
@@ -8484,6 +8669,12 @@ export interface RunTeamDto {
      * @memberof RunTeamDto
      */
     startDirty?: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunTeamDto
+     */
+    projectId?: string | null;
 }
 /**
  * 
@@ -12283,6 +12474,12 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
     taskIdentifier: string | null;
     /**
      * 
+     * @type {RunProjectRef}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    project: RunProjectRef | null;
+    /**
+     * 
      * @type {string}
      * @memberof ThreadOverviewDtoAnalysisAnalysis
      */
@@ -12883,6 +13080,12 @@ export interface UpdateProjectDto {
      * @memberof UpdateProjectDto
      */
     autopilotMaxConcurrent?: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof UpdateProjectDto
+     */
+    expectedInstructionsRevision?: number;
 }
 
 

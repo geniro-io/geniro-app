@@ -23,6 +23,7 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
+import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { isBreakerOpen } from '../../projects/utils/breaker';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
@@ -56,6 +57,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
   let bus: AgentEventBus;
   let taskEvents: TaskEventBus;
   let changes: TaskChangedEvent[];
+  let projectChanges: string[];
   let projectId: string;
 
   beforeAll(async () => {
@@ -98,6 +100,11 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     );
     tasks.onModuleInit();
     bus = new AgentEventBus();
+    const projectEvents = new ProjectEventBus();
+    projectChanges = [];
+    projectEvents
+      .allChanges()
+      .subscribe((event) => projectChanges.push(event.projectId));
     service = new TaskSettleService(
       em,
       bus,
@@ -106,6 +113,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       projectDao,
       tasks,
       itemDao,
+      projectEvents,
     );
     const project = await projectDao.create({
       name: 'Board',
@@ -434,6 +442,78 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(await statusOf(task.id)).toBe('failed');
   });
 
+  describe('announcing a card whose own run starts or settles in place', () => {
+    const announcedFor = (taskId: string): TaskChangedEvent[] =>
+      changes.filter((event) => event.taskId === taskId);
+
+    it('announces a card in review when its run works again and when it settles, with no reason', async () => {
+      const task = await working();
+      await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
+      service.onModuleInit();
+      changes.length = 0;
+
+      await announce('running');
+      await announce('completed');
+
+      expect(announcedFor(task.id)).toEqual([
+        { taskId: task.id, projectId, status: 'in_review' },
+        { taskId: task.id, projectId, status: 'in_review' },
+      ]);
+      expect(await statusOf(task.id)).toBe('in_review');
+    });
+
+    it('announces a worked card whose run completed, though nothing moved it', async () => {
+      const task = await working();
+      service.onModuleInit();
+      changes.length = 0;
+
+      await announce('completed');
+
+      expect(announcedFor(task.id)).toEqual([
+        { taskId: task.id, projectId, status: 'in_progress' },
+      ]);
+    });
+
+    it('lets the move be the one announce when the ending moves the card', async () => {
+      const task = await working();
+      service.onModuleInit();
+      changes.length = 0;
+
+      await announce('failed');
+
+      expect(announcedFor(task.id)).toEqual([
+        { taskId: task.id, projectId, status: 'failed' },
+      ]);
+    });
+
+    it('announces nothing for a run its card has moved on from', async () => {
+      const task = await working();
+      await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
+      await tasks.update(task.id, { runId: 'run-2' });
+      service.onModuleInit();
+      changes.length = 0;
+
+      await announce('running');
+      await announce('completed');
+
+      expect(announcedFor(task.id)).toEqual([]);
+    });
+
+    it('announces nothing from a reconcile, which every board load and task change runs', async () => {
+      const task = await working();
+      const run = await runDao.getById('run-1');
+      if (run) {
+        run.status = 'completed';
+        await em.flush();
+      }
+      changes.length = 0;
+
+      await service.settle('run-1', 'completed', 'reconcile');
+
+      expect(announcedFor(task.id)).toEqual([]);
+    });
+  });
+
   it('one contested card does not cost the board its whole listing', async () => {
     const task = await working();
     const other = await tasks.create({ projectId, title: 'untouched' });
@@ -487,7 +567,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await em.flush();
   };
 
-  it('counts a failed run against an armed project', async () => {
+  it('counts a failed run against an armed project, and announces the project changed', async () => {
     await armProject({ enabled: true });
     const task = await working();
 
@@ -495,6 +575,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
 
     expect(await streak()).toBe(1);
     expect((await taskDao.getById(task.id))?.status).toBe('failed');
+    expect(projectChanges).toEqual([projectId]);
   });
 
   it('opens the breaker at the threshold, and not one failure sooner', async () => {
@@ -513,7 +594,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(isBreakerOpen(await freshProject())).toBe(true);
   });
 
-  it('clears the streak on a success', async () => {
+  it('clears the streak on a success, and announces the project changed', async () => {
     await armProject({
       enabled: true,
       streak: PROJECT_FAILURE_BREAKER_THRESHOLD,
@@ -523,6 +604,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await service.settle('run-1', 'completed');
 
     expect(await streak()).toBe(0);
+    expect(projectChanges).toEqual([projectId]);
   });
 
   // The agent routinely moves its card to review BEFORE its turn ends, so a

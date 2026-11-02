@@ -442,6 +442,78 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(await statusOf(task.id)).toBe('failed');
   });
 
+  describe('announcing a card whose own run starts or settles in place', () => {
+    const announcedFor = (taskId: string): TaskChangedEvent[] =>
+      changes.filter((event) => event.taskId === taskId);
+
+    it('announces a card in review when its run works again and when it settles, with no reason', async () => {
+      const task = await working();
+      await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
+      service.onModuleInit();
+      changes.length = 0;
+
+      await announce('running');
+      await announce('completed');
+
+      expect(announcedFor(task.id)).toEqual([
+        { taskId: task.id, projectId, status: 'in_review' },
+        { taskId: task.id, projectId, status: 'in_review' },
+      ]);
+      expect(await statusOf(task.id)).toBe('in_review');
+    });
+
+    it('announces a worked card whose run completed, though nothing moved it', async () => {
+      const task = await working();
+      service.onModuleInit();
+      changes.length = 0;
+
+      await announce('completed');
+
+      expect(announcedFor(task.id)).toEqual([
+        { taskId: task.id, projectId, status: 'in_progress' },
+      ]);
+    });
+
+    it('lets the move be the one announce when the ending moves the card', async () => {
+      const task = await working();
+      service.onModuleInit();
+      changes.length = 0;
+
+      await announce('failed');
+
+      expect(announcedFor(task.id)).toEqual([
+        { taskId: task.id, projectId, status: 'failed' },
+      ]);
+    });
+
+    it('announces nothing for a run its card has moved on from', async () => {
+      const task = await working();
+      await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
+      await tasks.update(task.id, { runId: 'run-2' });
+      service.onModuleInit();
+      changes.length = 0;
+
+      await announce('running');
+      await announce('completed');
+
+      expect(announcedFor(task.id)).toEqual([]);
+    });
+
+    it('announces nothing from a reconcile, which every board load and task change runs', async () => {
+      const task = await working();
+      const run = await runDao.getById('run-1');
+      if (run) {
+        run.status = 'completed';
+        await em.flush();
+      }
+      changes.length = 0;
+
+      await service.settle('run-1', 'completed', 'reconcile');
+
+      expect(announcedFor(task.id)).toEqual([]);
+    });
+  });
+
   it('one contested card does not cost the board its whole listing', async () => {
     const task = await working();
     const other = await tasks.create({ projectId, title: 'untouched' });

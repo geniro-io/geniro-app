@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react';
+import { Pencil, Plus, SlidersHorizontal, Unlink } from 'lucide-react';
 import { useState } from 'react';
 
 import type { RunConfig } from '../../shared/contracts';
@@ -10,12 +10,11 @@ import {
   upsertRunConfig,
 } from '../chats/run-config';
 import { RunConfigEditor, RunConfigSummary } from '../chats/run-config-picker';
-import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
-import { SettingsList, SettingsPanel } from '../components/settings-panel';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import type { DaemonApis } from '../daemon-api';
+import { ProjectSection } from './project-section';
 import type { RunConfigSources } from './use-run-config-sources';
 
 interface Editing {
@@ -77,13 +76,19 @@ export function ProjectRunConfigs({
   };
 
   return (
-    <section className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-lg font-medium">Run configurations</h2>
+    <ProjectSection
+      slot="project-run-configs"
+      icon={<SlidersHorizontal />}
+      title="Run configurations"
+      hint="Saved setups whose runs belong to this project."
+      action={
         <Button
           type="button"
           variant="outline"
           size="sm"
+          className="shrink-0 rounded-control"
+          aria-label="New configuration"
+          title="New configuration"
           onClick={() =>
             open({
               id: null,
@@ -94,26 +99,23 @@ export function ProjectRunConfigs({
             })
           }>
           <Plus className="size-4" aria-hidden />
-          New configuration
+          New
         </Button>
-      </div>
+      }>
       {linked.length === 0 ? (
-        <SettingsPanel>
-          <EmptyState className="py-6">
-            No run configurations linked. Pick this project in a
-            configuration&rsquo;s Project field, or create one here.
-          </EmptyState>
-        </SettingsPanel>
+        <p className="rounded-control border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground">
+          None linked yet. Pick this project in a configuration&rsquo;s Project
+          field, or create one here.
+        </p>
       ) : (
-        <SettingsList
-          className="overflow-hidden"
-          aria-label="Run configurations">
+        <ul aria-label="Run configurations" className="flex flex-col gap-2">
           {linked.map((config) => (
             <li
               key={config.id}
-              className="flex items-center gap-1 py-2 pr-2 pl-4">
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate text-sm text-foreground">
+              data-slot="project-run-config"
+              className="flex items-start gap-1 rounded-control bg-muted/50 py-2 pr-1 pl-3 ring-1 ring-border/60">
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5 py-0.5">
+                <span className="truncate text-sm font-medium text-foreground">
                   {config.name}
                 </span>
                 <RunConfigSummary config={config} projectName={null} />
@@ -121,22 +123,23 @@ export function ProjectRunConfigs({
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
-                className="shrink-0"
+                size="icon"
+                className="size-7 shrink-0 rounded-control text-muted-foreground"
                 aria-label={`Edit ${config.name}`}
+                title="Edit"
                 onClick={() => {
                   const { id, ...draft } = config;
                   open({ id, draft });
                 }}>
-                Edit
+                <Pencil className="size-3.5" aria-hidden />
               </Button>
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
-                className="shrink-0"
+                size="icon"
+                className="size-7 shrink-0 rounded-control text-muted-foreground"
                 aria-label={`Unlink ${config.name}`}
-                title="Keep the configuration, bound to no project"
+                title="Unlink — keep the configuration, bound to no project"
                 onClick={() =>
                   write((current) =>
                     current.map((entry) =>
@@ -146,11 +149,11 @@ export function ProjectRunConfigs({
                     ),
                   )
                 }>
-                Unlink
+                <Unlink className="size-3.5" aria-hidden />
               </Button>
             </li>
           ))}
-        </SettingsList>
+        </ul>
       )}
       <Dialog
         open={editing !== null}
@@ -182,6 +185,6 @@ export function ProjectRunConfigs({
           </div>
         )}
       </Dialog>
-    </section>
+    </ProjectSection>
   );
 }

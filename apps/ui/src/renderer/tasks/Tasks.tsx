@@ -63,7 +63,6 @@ export function Tasks({
   waitingByRun,
   projectRequest = null,
   onProjectRequestHandled,
-  onSelectedProjectChange,
   onOpenProjectPage,
 }: {
   handle: DaemonHandle | null;
@@ -71,8 +70,6 @@ export function Tasks({
   /** A project another screen asked the board to show; taken once. */
   projectRequest?: string | null;
   onProjectRequestHandled?: () => void;
-  /** The board's project as it changes; null is every project. */
-  onSelectedProjectChange?: (projectId: string | null) => void;
   /** Open a project's own page; absent, the picker does not offer it. */
   onOpenProjectPage?: (projectId: string) => void;
   /** Each thread's wait (`waitReadings`), keyed by run — a card's mark. */
@@ -130,14 +127,6 @@ export function Tasks({
     selectProject(projectRequest);
     projectRequestHandled();
   }, [projectRequest, selectProject, projectRequestHandled]);
-
-  const selectedProjectChanged = useLatestCallback(
-    (projectId: string | null) => onSelectedProjectChange?.(projectId),
-    [],
-  );
-  useEffect(() => {
-    selectedProjectChanged(board.selectedProjectId);
-  }, [board.selectedProjectId, selectedProjectChanged]);
 
   /**
    * The team library, for the two target pickers (the project chip, and a

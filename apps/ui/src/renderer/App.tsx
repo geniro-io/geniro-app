@@ -28,6 +28,7 @@ import { DebugPanel } from './debug/debug-panel';
 import { reportUiErrors } from './debug/report-ui-errors';
 import type { FirstLaunch, TeamLaunch } from './onboarding/first-launch';
 import { Onboarding } from './onboarding/Onboarding';
+import type { ProjectsRequest } from './projects/Projects';
 import { isRemoteRuntime } from './remote/remote-session';
 import { formatRoute, parseRoute, type Route } from './routing';
 import { answerLineFlush } from './stats/line-flush';
@@ -165,13 +166,15 @@ export function App(): React.JSX.Element {
     initialRoute?.view === 'chats' ? initialRoute.runId : null,
   );
   /** Inbound and one-shot, like `threadRequest`; `shownProjectId` is its outbound twin. */
-  const [projectRequest, setProjectRequest] = useState<string | null>(() =>
-    initialRoute?.view === 'projects' ? initialRoute.projectId : null,
+  const [projectRequest, setProjectRequest] = useState<ProjectsRequest | null>(
+    () =>
+      initialRoute?.view === 'projects' && initialRoute.projectId !== null
+        ? { projectId: initialRoute.projectId }
+        : null,
   );
   const [shownProjectId, setShownProjectId] = useState<string | null>(() =>
     initialRoute?.view === 'projects' ? initialRoute.projectId : null,
   );
-  const [boardProjectId, setBoardProjectId] = useState<string | null>(null);
   const [boardProjectRequest, setBoardProjectRequest] = useState<string | null>(
     null,
   );
@@ -582,8 +585,8 @@ export function App(): React.JSX.Element {
       if (route.view === 'chats') {
         setThreadRequest(route.runId);
       }
-      if (route.view === 'projects' && route.projectId !== null) {
-        setProjectRequest(route.projectId);
+      if (route.view === 'projects') {
+        setProjectRequest({ projectId: route.projectId });
       }
     };
     window.addEventListener('hashchange', onHashChange);
@@ -845,9 +848,8 @@ export function App(): React.JSX.Element {
                         onProjectRequestHandled={() =>
                           setBoardProjectRequest(null)
                         }
-                        onSelectedProjectChange={setBoardProjectId}
                         onOpenProjectPage={(projectId) => {
-                          setProjectRequest(projectId);
+                          setProjectRequest({ projectId });
                           setView('projects');
                         }}
                       />
@@ -858,8 +860,7 @@ export function App(): React.JSX.Element {
                       <Projects
                         handle={handle}
                         client={clientRef.current}
-                        requestedProjectId={projectRequest}
-                        fallbackProjectId={boardProjectId}
+                        request={projectRequest}
                         onRequestHandled={() => setProjectRequest(null)}
                         onProjectShown={setShownProjectId}
                         onOpenBoard={(projectId) => {

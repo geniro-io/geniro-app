@@ -126,7 +126,7 @@ export class TaskSettleService implements OnModuleInit {
     });
     this.bus.allStatuses().subscribe((event) => {
       if (event.status === 'running') {
-        void this.reviveFailedCard(event.runId).catch((error: unknown) => {
+        void this.followRunWorking(event.runId).catch((error: unknown) => {
           this.logger.warn(
             `could not put the task for run ${event.runId} back to work: ${
               error instanceof Error ? error.message : String(error)
@@ -165,7 +165,8 @@ export class TaskSettleService implements OnModuleInit {
   }
 
   /**
-   * Put a FAILED card back to work when the run it failed on works again.
+   * Put a FAILED card back to work when the run it failed on works again;
+   * any other card whose own run works again is announced where it stands.
    *
    * A card's run is an ordinary chat, so a turn that errored is routinely
    * followed by the user carrying the conversation on IN THE CHAT — which goes
@@ -179,7 +180,7 @@ export class TaskSettleService implements OnModuleInit {
    * user continues deliberately, and the agent moves it again itself if the
    * work reopens.
    */
-  private async reviveFailedCard(runId: string): Promise<void> {
+  private async followRunWorking(runId: string): Promise<void> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
     if (!run?.taskId) {
@@ -188,7 +189,11 @@ export class TaskSettleService implements OnModuleInit {
     const task = await this.taskDao.getById(run.taskId, em);
     // A card that has since been started on a DIFFERENT run failed on that
     // one, not on this.
-    if (!task || task.runId !== runId || task.status !== 'failed') {
+    if (!task || task.runId !== runId) {
+      return;
+    }
+    if (task.status !== 'failed') {
+      this.tasks.announceRunChanged(task);
       return;
     }
     await this.tasks.moveStatus(task.id, { from: 'failed', to: 'in_progress' });
@@ -310,7 +315,10 @@ export class TaskSettleService implements OnModuleInit {
     // becomes FINISHED now, or once the run's live work outside a turn ends:
     // the move could not release the worktree while the agent still worked.
     if (task.status === 'done') {
-      await this.tasks.finishWhenFree(task);
+      const finished = await this.tasks.finishWhenFree(task);
+      if (!finished && from === 'event') {
+        this.tasks.announceRunChanged(task);
+      }
       return;
     }
     // Only a card still reading as worked is moved. The run is an ordinary
@@ -332,6 +340,11 @@ export class TaskSettleService implements OnModuleInit {
         ? await this.intakeColumn(task.projectId, em)
         : ENDED_TASK_STATUS[ending];
     if (to === undefined || !worked) {
+      // Never from a reconcile: a board reconciles on every load and every
+      // `task_changed`, so announcing there would reload the board for good.
+      if (from === 'event') {
+        this.tasks.announceRunChanged(task);
+      }
       return;
     }
     await this.tasks.moveStatus(task.id, { from: 'in_progress', to });

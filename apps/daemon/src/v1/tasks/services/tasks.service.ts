@@ -170,14 +170,28 @@ export class TasksService implements OnModuleInit {
   /**
    * A Done card's run has settled: tell every board its work is finished,
    * without moving the card (`TaskChangedEvent.reason`) — or, while the run
-   * still has live work, once that work ends.
+   * still has live work, once that work ends. True when it was announced now.
    */
   async finishWhenFree(
     task: Pick<Task, 'id' | 'projectId' | 'status' | 'runId'>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (await this.judgeFinish(task, this.em.fork())) {
       this.announceFinished(task);
+      return true;
     }
+    return false;
+  }
+
+  /**
+   * A card's own run started or settled with the card left where it was: no
+   * column moved, but what the board counts as running did.
+   */
+  announceRunChanged(task: Pick<Task, 'id' | 'projectId' | 'status'>): void {
+    this.events.publishTaskChanged({
+      taskId: task.id,
+      projectId: task.projectId,
+      status: task.status,
+    });
   }
 
   private announceFinished(

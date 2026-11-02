@@ -179,7 +179,14 @@ export const SHELF_YIELD_CLASS =
 
 /**
  * The right-hand cluster of status counters (tasks, notes, agents, sub-agents,
- * monitors, terminals): glyph and figure only, the name in the tooltip.
+ * monitors, terminals, stages): glyph and figure only, the name in the tooltip.
  */
 export const SHELF_STATUS_GROUP_CLASS =
-  'ml-auto flex shrink-0 items-center gap-1.5 empty:hidden';
+  'ml-auto flex shrink-0 items-center gap-0.5 empty:hidden';
+
+/**
+ * A status counter's trigger: the chip's box and type without the card, so the
+ * counters read as a status bar beside the content chips rather than as five
+ * more cards competing with them.
+ */
+export const SHELF_STATUS_TRIGGER_CLASS = `${SHELF_BODY} ${SHELF_ITEM_HEIGHT} shrink-0 rounded-md px-1.5 aria-expanded:bg-sidebar-accent`;

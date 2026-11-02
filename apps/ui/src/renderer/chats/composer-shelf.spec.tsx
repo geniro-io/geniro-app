@@ -990,12 +990,13 @@ describe('the shelf — separate chips, ONE joined group', () => {
       ['1/2', 'Tasks · 1 of 2 done'],
     ]);
     for (const chip of status.querySelectorAll<HTMLElement>('button')) {
-      // The same chip as every other item on the row — height, padding and
-      // card — only its content is shorter.
+      // The row's height and padding, but no card: the counters read as a
+      // status bar beside the content chips, not as more cards.
       expect(chip.className).toContain('h-[22px]');
       expect(chip.className).toContain('px-1.5');
       expect(chip.className).toContain('rounded-md');
-      expect(chip.className).toContain('shadow-panel-sm');
+      expect(chip.className).not.toContain('shadow-panel-sm');
+      expect(chip.className).not.toMatch(/(^| )border( |$)/);
       expect(chip.className).not.toContain('rounded-full');
     }
   });
@@ -1160,6 +1161,43 @@ describe('the shelf under a squeeze', () => {
     }
   });
 
+  it('draws a lone pull request’s title inside the part that yields', () => {
+    const el = mount(<ThreadPullRequestChips results={[pr(1)]} />);
+    const chip = el.querySelector<HTMLElement>(
+      '[data-slot="pull-request-chip"]',
+    )!;
+    const yielding = chip.querySelector<HTMLElement>(
+      '[class*="minmax(0,max-content)"]',
+    )!;
+    expect(yielding.textContent).toContain('pull request 1');
+  });
+
+  it('leaves the title to the tooltip beside another pull request, keeping the figures', () => {
+    const sized = (number: number): PullRequestRefResult => {
+      const row = pr(number);
+      return {
+        ...row,
+        pullRequest: {
+          ...row.pullRequest!,
+          changedFiles: 3,
+          added: 26,
+          removed: 1,
+        },
+      };
+    };
+    const el = mount(<ThreadPullRequestChips results={[sized(1), sized(2)]} />);
+    const chips = [
+      ...el.querySelectorAll<HTMLElement>('[data-slot="pull-request-chip"]'),
+    ];
+    expect(chips).toHaveLength(2);
+    for (const chip of chips) {
+      expect(chip.textContent).not.toContain('pull request');
+      expect(chip.getAttribute('title')).toContain('pull request');
+      expect(chip.textContent).toContain('3 files');
+      expect(chip.textContent).toContain('+26');
+    }
+  });
+
   it('never squeezes the pull requests to an empty card beside the agent’s buttons', () => {
     // REPORTED as an empty pill between the changes chip and two action
     // buttons. Measured at a 510px shelf: the group was 2px wide, because it
@@ -1190,12 +1228,10 @@ describe('the shelf under a squeeze', () => {
     )) {
       expect(chip.className).toContain('min-w-min');
       expect(chip.className).not.toMatch(/(^| )min-w-0( |$)/);
-      // The floor is what lies OUTSIDE the yielding span: the number. The
-      // title sits inside it, or `min-w-min` would floor at the whole title.
+      // The floor is what lies OUTSIDE the yielding span: the number.
       const yielding = chip.querySelector<HTMLElement>(
         '[class*="minmax(0,max-content)"]',
       )!;
-      expect(yielding.textContent).toContain('pull request');
       expect(yielding.textContent).not.toMatch(/#\d/);
     }
     const actions = el.querySelector<HTMLElement>(

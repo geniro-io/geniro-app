@@ -35,6 +35,7 @@ import {
   SHELF_GROUP_CLASS,
   SHELF_SEGMENT_CLASS,
   SHELF_STATUS_GROUP_CLASS,
+  SHELF_STATUS_TRIGGER_CLASS,
 } from './shelf-chip';
 import {
   CallGlyph,
@@ -310,18 +311,10 @@ export function FolderChangesChip({
  * width and leave the rest of the shelf pressed against the edge — hence a cap
  * that comes down as the count goes up.
  *
- * The steps are not linear because the chip is not all title: a number, a glyph
- * and the padding are fixed at about 5rem, so the old 14 → 11 → 9rem left
- * roughly 9rem, 6rem and 4rem of title. That is a readable title, a
- * recognisable one, and a hint — which is the right shape for a row where the
- * leftmost chip is the one the thread is most likely on.
- *
- * They went UP when the chips gained their size — `3 files +26 −1` is about
- * 7rem of figures that must never truncate, so at the old caps the title had
- * nothing left at any count. The same three shapes, moved along: a title with
- * room, one that is recognisable, and a hint. Past that the flex shrink still
- * governs, so a genuinely crowded row still fits by its floors rather than by
- * these numbers being right.
+ * Only a lone pull request draws its title; beside another one the title only
+ * ever fitted as a few letters, so it is left to the tooltip and the chip is
+ * the mark, the number and the figures. Past these caps the flex shrink still
+ * governs, so a crowded row fits by its floors rather than by these numbers.
  */
 const PULL_REQUEST_CHIP_WIDTH: Record<number, string> = {
   1: 'max-w-96',
@@ -387,6 +380,7 @@ export function ThreadPullRequestChips({
           result={result}
           showRepo={repos.size > 1}
           widthClassName={PULL_REQUEST_CHIP_WIDTH[shown.length]}
+          showTitle={shown.length === 1}
           outcome={outcomes.get(pullRequestOutcomeKey(result.ref)) ?? null}
         />
       ))}
@@ -470,7 +464,7 @@ export function RunningShellChips({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       // Bounded and scrolling, as in the header: a fan-out can hold a dozen,
       // and the rows are long — a command, not a name.
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
@@ -523,7 +517,7 @@ export function RunningMonitorChips({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
         <StatusFigure icon={MonitorGlyph} live>
@@ -609,7 +603,7 @@ export function RunningSubagentChips({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       // Bounded and scrolling, as it was in the header: a delegating turn can
       // hold a dozen live and forty finished, and a panel that grows with them
       // runs off the top of the window. Grouped, it holds a block per agent and
@@ -696,7 +690,7 @@ export function RunningCallChips({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
         <StatusFigure
@@ -843,7 +837,7 @@ export function TaskListChip({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       // Grouped, the panel holds one bounded block per agent, so it needs a
       // bound of its own — three agents' blocks stack past the top of the
       // window otherwise. Flat, the single block already bounds itself and a
@@ -932,7 +926,7 @@ export function TeamNotesChip({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       panelClassName="w-[22rem]"
       trigger={<StatusFigure icon={NotebookPen}>{notes.length}</StatusFigure>}>
       {(close) => (

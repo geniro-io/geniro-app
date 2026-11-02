@@ -255,9 +255,15 @@ export function ThreadPullRequestChip({
   showRepo,
   widthClassName = 'max-w-56',
   outcome = null,
+  showTitle = true,
 }: {
   result: PullRequestRefResult;
   showRepo: boolean;
+  /**
+   * Whether the title is drawn. Beside other pull requests it only ever fits as
+   * a few letters, so the shelf leaves it to the tooltip and keeps the figures.
+   */
+  showTitle?: boolean;
   /**
    * Its newest recorded outcome on this thread (`record_outcome`), drawn as an
    * acceptance mark beside the number; null when none was recorded.
@@ -304,10 +310,21 @@ export function ThreadPullRequestChip({
       )}
       {pullRequest === null ? null : (
         <span className={SHELF_YIELD_CLASS}>
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="min-w-0 truncate text-muted-foreground">
-              {pullRequest.title}
-            </span>
+          {/* Without a title the figures are what yields, so they wrap onto a
+              clipped second line whole rather than leaving a sliver of a digit;
+              the empty lead holds the first line, which never wraps its first item. */}
+          <span
+            className={cn(
+              'flex min-w-0 items-center gap-1.5',
+              !showTitle && 'h-lh flex-wrap overflow-hidden',
+            )}>
+            {showTitle ? (
+              <span className="min-w-0 truncate text-muted-foreground">
+                {pullRequest.title}
+              </span>
+            ) : (
+              <span aria-hidden="true" className="-mr-1.5 h-lh w-0" />
+            )}
             {/* The SIZE — files AND lines, `shrink-0` like the number beside them: a
           half-shown figure is worse than a shortened word, so the title is what
           gives up width as the shelf fills, which is the mechanism the chip

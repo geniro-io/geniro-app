@@ -9,8 +9,8 @@ import { Button } from '../components/ui/button';
 import { revealAgentsPanel } from './panel-flags';
 import { formatRelativeTime } from './relative-time';
 import {
-  SHELF_CHIP_TRIGGER_CLASS,
   SHELF_CHIP_WRAPPER_CLASS,
+  SHELF_STATUS_TRIGGER_CLASS,
 } from './shelf-chip';
 import {
   ClampedText,
@@ -181,7 +181,7 @@ export function StageProgressChip({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       panelClassName="w-[24rem]"
       trigger={
         <>

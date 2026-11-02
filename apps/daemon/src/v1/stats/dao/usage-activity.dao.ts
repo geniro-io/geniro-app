@@ -37,6 +37,7 @@ const LEDGER_COLUMNS = [
   'team_slug',
   'team_version',
   'team_version_inferred',
+  'metrics_ledger',
 ] as const;
 
 type LedgerColumns = Pick<
@@ -51,6 +52,7 @@ function toLedgerRow(row: LedgerColumns): ThreadLedgerRow {
     slug: row.team_slug,
     version: row.team_version,
     inferred: flagOf(row.team_version_inferred),
+    metrics: row.metrics_ledger === 1,
   };
 }
 
@@ -59,7 +61,7 @@ function toLedgerRow(row: LedgerColumns): ThreadLedgerRow {
  * the entity, so a renamed or retyped field fails the build. Dates are the stored epoch
  * milliseconds and booleans the stored 0/1, since value conversion is off.
  */
-interface ActivityDatabase {
+export interface ActivityDatabase {
   usage_activity: {
     id: UsageActivity['id'];
     created_at: number;
@@ -87,6 +89,17 @@ interface ActivityDatabase {
     outcome_ms_to_accepted: UsageActivity['outcomeMsToAccepted'];
     team_version: UsageActivity['teamVersion'];
     team_version_inferred: number | null;
+    metrics_ledger: number | null;
+    member_id: UsageActivity['memberId'];
+    peer_member_id: UsageActivity['peerMemberId'];
+    stage_id: UsageActivity['stageId'];
+    stage_action: UsageActivity['stageAction'];
+    entered_at: number | null;
+    duration_ms: UsageActivity['durationMs'];
+    cost_usd: UsageActivity['costUsd'];
+    turns: UsageActivity['turns'];
+    ok: number | null;
+    outcome_kind: UsageActivity['outcomeKind'];
   };
 }
 
@@ -125,6 +138,20 @@ export class UsageActivityDao extends BaseDao<UsageActivity> {
     txEm?: EntityManager,
   ): Promise<boolean> {
     return this.insertOnce(threadFact(runId, occurredAt), txEm);
+  }
+
+  /** Mark a run's thread row as one the metric ledgers watched from its creation. */
+  async markMetricsMeasured(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await (txEm ?? this.em.fork())
+      .getKysely<ActivityDatabase>({ convertValues: false })
+      .updateTable('usage_activity')
+      .set({ metrics_ledger: 1, updated_at: Date.now() })
+      .where('kind', '=', 'thread')
+      .where('run_id', '=', runId)
+      .execute();
   }
 
   /**

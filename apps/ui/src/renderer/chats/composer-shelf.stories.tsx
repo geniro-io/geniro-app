@@ -6,6 +6,7 @@ import type { AgentThread } from './agent-activity';
 import {
   ComposerShelf,
   FolderChangesChip,
+  GoalsChip,
   LeadChip,
   type OpenCallChipRow,
   RunningCallChips,
@@ -187,6 +188,30 @@ export const OnAPhone: Story = {
           status={
             <>
               <RunningCallChips calls={calls} onReveal={() => {}} />
+              <GoalsChip
+                goals={[
+                  {
+                    id: 'g1',
+                    text: 'The export button saves a .csv',
+                    source: 'user',
+                    status: 'achieved',
+                    evidence: 'Saved report.csv with 12 rows',
+                    memberId: null,
+                    createdAt: '2026-11-01T10:00:00.000Z',
+                    closedAt: '2026-11-01T10:20:00.000Z',
+                  },
+                  {
+                    id: 'g2',
+                    text: 'The failing spec passes',
+                    source: 'agent',
+                    status: 'open',
+                    evidence: null,
+                    memberId: null,
+                    createdAt: '2026-11-01T10:00:00.000Z',
+                    closedAt: null,
+                  },
+                ]}
+              />
               <TeamNotesChip {...args} notes={manyNotes} />
               <TaskListChip done={5} total={5} tasks={tasks} live={false} />
               <StageProgressChip progress={stages} />

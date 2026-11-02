@@ -1,4 +1,8 @@
-import { RunOutcomeAcceptanceSchema } from '../../../agents/chat.types';
+import {
+  RunOutcomeAcceptanceSchema,
+  THREAD_OUTCOME_SUMMARY_MAX,
+  ThreadOutcomeKindSchema,
+} from '../../../agents/chat.types';
 import { OUTCOME_SUMMARY_MAX } from './record-outcome.reader';
 
 /** `record_outcome`'s arguments. */
@@ -6,6 +10,12 @@ export function recordOutcomeSchema(): Record<string, unknown> {
   return {
     type: 'object',
     properties: {
+      outcome: {
+        type: 'string',
+        enum: [...ThreadOutcomeKindSchema.options],
+        description:
+          'How the whole thread ended: success, partial, failed or abandoned. Send it with `summary` alone, never with the pull request fields.',
+      },
       pr_number: {
         type: 'integer',
         minimum: 1,
@@ -34,11 +44,10 @@ export function recordOutcomeSchema(): Record<string, unknown> {
       },
       summary: {
         type: 'string',
-        maxLength: OUTCOME_SUMMARY_MAX,
+        maxLength: Math.max(OUTCOME_SUMMARY_MAX, THREAD_OUTCOME_SUMMARY_MAX),
         description:
-          'Optional. One to three sentences a person reads on the outcome: what the change does, what the user asked to change, or what is still open before acceptance.',
+          'One to three sentences a person reads on the outcome. Required with `outcome`: what was done and what is left. Optional for a pull request: what the change does, what the user asked to change, or what is still open before acceptance.',
       },
     },
-    required: ['pr_number', 'pr_url', 'draft', 'review_rounds', 'acceptance'],
   };
 }

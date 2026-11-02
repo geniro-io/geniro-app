@@ -63,6 +63,27 @@ describe('runStatusRowFields', () => {
     expect(runStatusRowFields(announce())).not.toHaveProperty('stages');
   });
 
+  it('writes the goals whole and the outcome, a null included, and leaves both alone when absent', () => {
+    const goals = [
+      {
+        id: 'g1',
+        text: 'ship',
+        source: 'user' as const,
+        status: 'open' as const,
+        evidence: null,
+        memberId: null,
+        createdAt: '2026-11-01T00:00:00.000Z',
+        closedAt: null,
+      },
+    ];
+    expect(runStatusRowFields(announce({ goals, outcome: null }))).toEqual({
+      goals,
+      outcome: null,
+    });
+    expect(runStatusRowFields(announce())).not.toHaveProperty('goals');
+    expect(runStatusRowFields(announce())).not.toHaveProperty('outcome');
+  });
+
   it('writes the run’s lead, a null included, and leaves it alone when absent', () => {
     expect(runStatusRowFields(announce({ currentLead: null }))).toEqual({
       currentLead: null,

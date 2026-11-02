@@ -80,6 +80,7 @@ import { bareUrl, briefParts, plainMarkdownText } from './brief-text';
 import { callTitle } from './call-title';
 import { ContextMeter } from './context-meter';
 import { ConversationTimeline } from './conversation-timeline';
+import { GoalsSection, type RunGoals } from './goals-section';
 import { formatElapsed } from './live-row';
 import {
   AGENTS_PANEL_COLLAPSED_FLAG,
@@ -1834,6 +1835,7 @@ export function AgentsPanel({
   workflows = [],
   onRevealWorkflow,
   stages,
+  goals,
   tasksByAgent,
   shellsByAgent,
   workByAgent,
@@ -1920,6 +1922,8 @@ export function AgentsPanel({
   /** Take the reader to one workflow's card in the transcript. */
   onRevealWorkflow?: (workflowId: string) => void;
   stages?: RunStages;
+  /** The run's goals and outcome, with the user's hand on them. */
+  goals?: RunGoals;
   /**
    * The run whose expanded context readouts this panel may offer, or null.
    */
@@ -3113,6 +3117,9 @@ export function AgentsPanel({
         {workflows.length > 0 && onRevealWorkflow !== undefined ? (
           <WorkflowsSection workflows={workflows} onReveal={onRevealWorkflow} />
         ) : null}
+        {goals === undefined ? null : (
+          <GoalsSection goals={goals} nameOf={teamNoteAgentName} />
+        )}
         {stages === undefined ? null : (
           <StagesSection stages={stages} agentName={teamNoteAgentName} />
         )}

@@ -38,6 +38,7 @@ import type {
   AgentApprovalCapability,
   AgentSkillDto as AgentSkill,
   CallStartReading,
+  CloseRunGoalDtoGoalClosingStatus,
   GlobalChatSearchHit,
   HandoffTargetDto,
   ItemDto as ChatItem,
@@ -161,6 +162,7 @@ import {
   ActiveWorkflowChips,
   ComposerShelf,
   FolderChangesChip,
+  GoalsChip,
   LeadChip,
   type OpenCallChipRow,
   ResetWakeChip,
@@ -194,6 +196,7 @@ import {
 import { standsAcrossTurns } from './geniro-tool';
 import { GitNoticeOffers } from './git-notice-offers';
 import { GlobalChatSearchDialog } from './global-chat-search-dialog';
+import type { GoalsActions } from './goals-list';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { isCallRow, mergeAnchorRows, withAnchors } from './history-anchors';
 import { foldsHolding } from './jump-folds';
@@ -7491,6 +7494,58 @@ export function Chats({
     threadTotals.cacheTokens,
   ]);
   /** A node's agent by name, for the shelf's team-note and monitor chips — the panel has its own. */
+  const goalRunId = activeRun?.id ?? null;
+  const goalsArchived = activeRun?.archivedAt != null;
+  const goalRun = (): string => {
+    if (goalRunId === null) {
+      throw new Error('No thread is open.');
+    }
+    return goalRunId;
+  };
+  const addGoal = useLatestCallback(
+    (text: string) =>
+      chatApi.addRunGoal({ runId: goalRun(), createRunGoalDto: { text } }),
+    [chatApi, goalRunId],
+  );
+  const editGoal = useLatestCallback(
+    (goalId: string, text: string) =>
+      chatApi.editRunGoal({
+        runId: goalRun(),
+        goalId,
+        editRunGoalDto: { text },
+      }),
+    [chatApi, goalRunId],
+  );
+  const closeGoal = useLatestCallback(
+    (
+      goalId: string,
+      status: CloseRunGoalDtoGoalClosingStatus,
+      evidence: string,
+    ) =>
+      chatApi.closeRunGoal({
+        runId: goalRun(),
+        goalId,
+        closeRunGoalDto: { status, evidence },
+      }),
+    [chatApi, goalRunId],
+  );
+  const reopenGoal = useLatestCallback(
+    (goalId: string) => chatApi.reopenRunGoal({ runId: goalRun(), goalId }),
+    [chatApi, goalRunId],
+  );
+  const goalActions = useMemo(
+    (): GoalsActions | undefined =>
+      goalRunId === null || goalsArchived
+        ? undefined
+        : {
+            add: addGoal,
+            edit: editGoal,
+            close: closeGoal,
+            reopen: reopenGoal,
+          },
+    [goalRunId, goalsArchived, addGoal, editGoal, closeGoal, reopenGoal],
+  );
+
   const shelfAgentName = useLatestCallback(
     (memberId: string): string => agentNameOf(agents, memberId),
     [agents],
@@ -8945,6 +9000,11 @@ export function Chats({
             onOpen={openSubagentById}
           />
           <RunningCallChips calls={openCallRows} onReveal={revealOpenCall} />
+          <GoalsChip
+            goals={activeRun?.goals ?? []}
+            actions={goalActions}
+            nameOf={shelfAgentName}
+          />
           <TeamNotesChip
             notes={teamNotes}
             agentName={shelfAgentName}
@@ -10720,6 +10780,15 @@ export function Chats({
                       pullRequestOutcomes={pullRequestOutcomes}
                       workflows={runWorkflows}
                       onRevealWorkflow={revealWorkflow}
+                      goals={
+                        activeRun === undefined || activeRun === null
+                          ? undefined
+                          : {
+                              goals: activeRun.goals ?? [],
+                              outcome: activeRun.outcome ?? null,
+                              actions: goalActions,
+                            }
+                      }
                       stages={
                         activeRun?.stages
                           ? {

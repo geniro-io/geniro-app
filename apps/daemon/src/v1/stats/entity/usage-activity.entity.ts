@@ -10,7 +10,11 @@ import {
 } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
-import type { RunOutcomeAcceptance } from '../../agents/chat.types';
+import type {
+  RunOutcomeAcceptance,
+  StageChangeAction,
+  ThreadOutcomeKind,
+} from '../../agents/chat.types';
 import type { UsageActivityKind } from '../stats.types';
 
 /**
@@ -35,6 +39,13 @@ import type { UsageActivityKind } from '../stats.types';
  * - `run_outcome`: one pull request's newest recorded outcome (`record_outcome`), copied
  *   from the run's `run_outcome` items. One row per run and pull request, UPDATED to a
  *   newer outcome, and only ever forward (`sourceSeq`).
+ * - `thread_outcome`: how the thread ended, as its newest `thread_outcome` item says.
+ *   One row per run, UPDATED forward like `run_outcome`.
+ * - `stage`: one stage change of a team run (`stage_change` items): a move, or a
+ *   hand-off of the lead. One row per change.
+ * - `call`: one agent-to-agent call that ended (`call_result` items), with its caller,
+ *   callee, the callee's turns and spend inside it, and whether it answered. One row per
+ *   call.
  *
  * Every figure is nullable, and null means NOT MEASURED rather than zero: a snapshot
  * whose changes could not be counted is simply not written.
@@ -53,6 +64,8 @@ import type { UsageActivityKind } from '../stats.types';
 @Index({ properties: ['lineKey', 'kind', 'occurredAt'] })
 // One team's thread rows, for its versions table.
 @Index({ properties: ['teamSlug', 'kind'] })
+// One team's stage, call and outcome rows over a period.
+@Index({ properties: ['teamSlug', 'kind', 'occurredAt'] })
 export class UsageActivity extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   id: string = randomUUID();
@@ -148,4 +161,48 @@ export class UsageActivity extends TimestampsEntity {
   /** The version was hashed from a copy frozen AFTER the run started, so it may not be the team the run had. */
   @Property({ type: 'boolean', nullable: true })
   teamVersionInferred: boolean | null = null;
+
+  /** A `stage` row's mover, when an agent moved it; a `call` row's caller. */
+  @Property({ type: 'string', nullable: true })
+  memberId: string | null = null;
+
+  /** A `call` row's callee; a `stage` hand-off's new lead. */
+  @Property({ type: 'string', nullable: true })
+  peerMemberId: string | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  stageId: string | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  stageAction: StageChangeAction | null = null;
+
+  /** When the stage a `complete` row closes became current. */
+  @Property({ type: DateTimeType, nullable: true })
+  enteredAt: Date | null = null;
+
+  /** A completed stage's time as current; a call's time from start to answer. */
+  @Property({ type: 'integer', nullable: true })
+  durationMs: number | null = null;
+
+  /** What the callee's turns inside a call cost, as their CLIs reported; null when none did. */
+  @Property({ type: 'float', nullable: true })
+  costUsd: number | null = null;
+
+  /** The callee's finished turns inside a call. */
+  @Property({ type: 'integer', nullable: true })
+  turns: number | null = null;
+
+  /** Whether a call answered rather than failing or being cancelled. */
+  @Property({ type: 'boolean', nullable: true })
+  ok: boolean | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  outcomeKind: ThreadOutcomeKind | null = null;
+
+  /**
+   * A `thread` row of a run this build's metric ledgers watched from its creation
+   * (tool calls, stages, calls). A run without it reads "not measured" for those.
+   */
+  @Property({ type: 'boolean', nullable: true })
+  metricsLedger: boolean | null = null;
 }

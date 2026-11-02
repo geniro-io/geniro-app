@@ -7,9 +7,10 @@ import {
 import type {
   AgentEvent,
   BackgroundUnitOutcome,
+  ToolCallMetric,
   TurnImage,
 } from '../../adapter.types';
-import { CODEX_TOOL_NAMES } from '../codex.const';
+import { CODEX_MCP_TOOL_PREFIX, CODEX_TOOL_NAMES } from '../codex.const';
 import type { CodexItem } from '../codex.types';
 
 /** A `ThreadItem` off a notification's `item`, or null when it is not one. */
@@ -95,7 +96,7 @@ export function toolCallOf(item: CodexItem): CodexToolCall | null {
       const server = asString(record.server) ?? 'mcp';
       const tool = asString(record.tool) ?? 'tool';
       return {
-        name: `mcp__${server}__${tool}`,
+        name: `${CODEX_MCP_TOOL_PREFIX}${server}__${tool}`,
         input: record.arguments ?? {},
       };
     }
@@ -498,4 +499,20 @@ export function itemCompletedEvents(item: CodexItem): AgentEvent[] {
       ];
     }
   }
+}
+
+/**
+ * A codex tool call as the tool ledger counts it: the `mcp__<server>__<tool>`
+ * name this adapter gives an `mcpToolCall` item is an MCP tool of `<server>`
+ * (read as far as its first `__`); every other name is codex's own.
+ */
+export function codexToolCallMetric(name: string): ToolCallMetric {
+  if (!name.startsWith(CODEX_MCP_TOOL_PREFIX)) {
+    return { tool: name, server: null };
+  }
+  const rest = name.slice(CODEX_MCP_TOOL_PREFIX.length);
+  const split = rest.indexOf('__');
+  return split <= 0 || split + 2 >= rest.length
+    ? { tool: name, server: null }
+    : { tool: rest.slice(split + 2), server: rest.slice(0, split) };
 }

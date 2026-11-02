@@ -58,6 +58,7 @@ import type {
   SessionPullRequest,
   SessionPullRequestsInput,
   SubagentRecoveryRef,
+  ToolCallMetric,
   TurnDriver,
   TurnImage,
 } from '../adapter.types';
@@ -200,6 +201,7 @@ import {
   withDisabledServer,
 } from './utils/claude-mcp-toggle.utils';
 import { claudeDisallowedToolArgs } from './utils/claude-mcp-tool-name.utils';
+import { claudeToolCallMetric } from './utils/claude-mcp-tool-name.utils';
 import { readClaudeMemoryNotes } from './utils/claude-memory.utils';
 import { mapClaudeMessage } from './utils/claude-message.utils';
 import { ClaudeModelMismatchNotice } from './utils/claude-model-mismatch.utils';
@@ -2597,6 +2599,10 @@ export class ClaudeAdapter extends AgentAdapter {
    * overlapping read-modify-writes would put back a key the other removed.
    */
   private needsAuthWrites: Promise<unknown> = Promise.resolve();
+
+  override toolCallMetric(name: string): ToolCallMetric {
+    return claudeToolCallMetric(name);
+  }
 
   protected mapMessage(obj: unknown): AgentEvent[] {
     return mapClaudeMessage(obj, this.costLedger);

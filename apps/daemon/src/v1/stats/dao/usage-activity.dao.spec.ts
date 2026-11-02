@@ -632,6 +632,7 @@ describe('UsageActivityDao (in-memory sqlite)', () => {
           slug: 'dev-team',
           version: 'abcdef0123456789',
           inferred: false,
+          metrics: false,
         },
       ]);
       expect(await orm.em.fork().count(UsageActivity, {})).toBe(1);

@@ -9,11 +9,17 @@ import {
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import type { AvatarLook } from '../components/member-avatar';
+import { ToolUsageTables } from '../components/tool-usage-tables';
 import { Input } from '../components/ui/input';
 import { SERIES } from '../stats/charts/chart-theme';
-import { formatCount, formatDuration } from '../stats/stats-format';
+import {
+  formatCount,
+  formatDuration,
+  formatPercent,
+} from '../stats/stats-format';
 import { KpiStrip, KpiTile } from './kpi-tile';
 import { MemberBreakdownRow } from './member-breakdown-row';
+import { CallMatrix, StageFiguresTable } from './team-metrics';
 
 /**
  * The Statistics tab. Every figure is the daemon's; one nothing measured is a
@@ -24,6 +30,7 @@ export function TeamStatsTab({
   loading,
   error,
   memberOf,
+  stageTitleOf = (stageId) => stageId,
 }: {
   stats: TeamStatsDto | null;
   loading: boolean;
@@ -32,9 +39,15 @@ export function TeamStatsTab({
   memberOf: (
     memberId: string,
   ) => { name: string; avatar?: AvatarLook | null } | null;
+  /** A stage's title, or its id once it is no longer on the team. */
+  stageTitleOf?: (stageId: string) => string;
 }): React.JSX.Element {
   const estimated = stats?.estimatedCostUsd;
   const outcomes = stats?.outcomes;
+  const metrics = stats?.metrics;
+  const goals = metrics?.goals;
+  const nameOf = (memberId: string): string =>
+    memberOf(memberId)?.name ?? `${memberId} (removed)`;
   return (
     <div data-slot="team-stats" className="flex flex-col gap-8">
       {error !== null && stats === null ? (
@@ -83,6 +96,38 @@ export function TeamStatsTab({
           trend={stats ? stats.days.map((day) => day.outcomes) : null}
           color={SERIES.pullRequests}
         />
+        <KpiTile
+          caption="Goals achieved"
+          value={
+            goals?.achievedShare == null
+              ? null
+              : formatPercent(goals.achievedShare * 100)
+          }
+          note={
+            goals === undefined || goals.recorded === 0
+              ? null
+              : `${formatCount(goals.achieved)} of ${formatCount(goals.recorded - goals.dropped)} goals${
+                  goals.coverage === null
+                    ? ''
+                    : ` · ${formatPercent(goals.coverage * 100)} of runs set goals`
+                }`
+          }
+          trend={null}
+          color={SERIES.threads}
+        />
+        <KpiTile
+          caption="Hand-offs"
+          value={
+            metrics?.handOffs == null ? null : formatCount(metrics.handOffs)
+          }
+          note={
+            metrics?.handOffs == null
+              ? null
+              : `over ${formatCount(goals?.measuredRuns ?? 0)} measured runs`
+          }
+          trend={null}
+          color={SERIES.avgTime}
+        />
       </KpiStrip>
       <section className="flex flex-col gap-3">
         <div className="flex flex-col gap-0.5">
@@ -99,7 +144,50 @@ export function TeamStatsTab({
           </EmptyState>
         )}
       </section>
+      {metrics === undefined ? null : (
+        <>
+          <MetricsSection
+            title="Calls between members"
+            caption="Who asked whom for help, and how often a call failed.">
+            <CallMatrix calls={metrics.calls} nameOf={nameOf} />
+          </MetricsSection>
+          <MetricsSection
+            title="Tools and MCP servers"
+            caption="Every tool the team's agents called, with its errors and time.">
+            <ToolUsageTables
+              tools={metrics.tools}
+              mcpServers={metrics.mcpServers}
+              emptyLabel="No tool calls recorded yet."
+            />
+          </MetricsSection>
+          <MetricsSection
+            title="Stages"
+            caption="How each stage went: completions, skips, reopens and time.">
+            <StageFiguresTable stages={metrics.stages} titleOf={stageTitleOf} />
+          </MetricsSection>
+        </>
+      )}
     </div>
+  );
+}
+
+function MetricsSection({
+  title,
+  caption,
+  children,
+}: {
+  title: string;
+  caption: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex flex-col gap-0.5">
+        <h3 className="text-base font-semibold">{title}</h3>
+        <p className="text-sm text-muted-foreground">{caption}</p>
+      </div>
+      {children}
+    </section>
   );
 }
 

@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import type { Item } from '../../runs/entity/item.entity';
@@ -16,9 +16,12 @@ import {
   type ReadAnalyzedThreadArgs,
   type RunFold,
   type RunWaterfallTurn,
+  StageChangePayloadSchema,
   type TeamVersionIndex,
   type TeamVersionIndexReader,
+  ThreadOutcomePayloadSchema,
 } from '../chat.types';
+import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
@@ -26,8 +29,9 @@ import { analysedSourceOf } from '../utils/analysed-runs';
 import { CHAT_LANE, laneOf } from '../utils/analysis-lane';
 import { callWorkedMsByStart } from '../utils/call-worked';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
-import { asRecord } from '../utils/json-util';
+import { asRecord, parseJsonColumn } from '../utils/json-util';
 import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
+import { threadOutcomeOf } from '../utils/run-goals';
 import {
   callFigures,
   configuredModels,
@@ -40,9 +44,11 @@ import {
   versionRef,
 } from '../utils/team-runs-fold';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
+import { toolMetricOf } from '../utils/tool-metric';
 import { USAGE_ITEM_KINDS } from '../utils/usage-figures';
 import { sizedUserInstructionFiles } from '../utils/user-instruction-files';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
+import { goalIdOf } from './goals.service';
 import { RunKindRowsCache } from './run-kind-rows.cache';
 import { RunOutcomeHistoryService } from './run-outcome-history.service';
 import { ThreadTimelineService } from './thread-timeline.service';
@@ -153,6 +159,7 @@ export class ThreadReaderService {
     private readonly wallTurns: WallTurnDao,
     private readonly outcomes: RunOutcomeHistoryService,
     private readonly kindRows: RunKindRowsCache,
+    @Optional() private readonly goalDao?: GoalDao,
   ) {}
 
   /**
@@ -553,14 +560,171 @@ export class ThreadReaderService {
         working: fold.working,
       },
       teamNotes,
+      ...(await this.measured(source, run, timeline.tools, fold.calls)),
       ...lists,
       next: `Read view=spans for every timed span (kinds=["tool"] with minMs for slow tools), view=items for the rows (afterSeq / fromTime / memberId / kinds), view=item seq=N for one row in full.${teamNotes > 0 ? ' The team notes are view=items kinds=["team_note"].' : ''}`,
     };
     return fitToBudget(
       answer,
-      ['slowestTools', 'toolTotals', 'criticalPath', 'nodes'],
+      [
+        'slowestTools',
+        'toolTotals',
+        'criticalPath',
+        'nodes',
+        'stages',
+        'calls',
+      ],
       OVERVIEW_BYTES,
     );
+  }
+
+  /**
+   * What the thread set out to do and how it ended — its goals with their evidence and
+   * its outcome — and what it used: each MCP server's calls, its stage moves and the
+   * calls between its members, over its rows up to the snapshot.
+   */
+  private async measured(
+    source: AnalysisSource,
+    run: Run,
+    tools: readonly { name: string; delegate: boolean; failed: boolean }[],
+    calls: readonly {
+      callerMemberId: string | null;
+      calleeMemberId: string | null;
+      status: string | null;
+      durationMs: number;
+    }[],
+  ): Promise<Answer> {
+    const em = this.em.fork();
+    const range = { before: source.snapshotSeq + 1 };
+    const goals = (await this.goalDao?.listByRun(source.sourceRunId, em)) ?? [];
+    const outcomeRow = (
+      await this.itemDao.rowsOfKinds(
+        source.sourceRunId,
+        ['thread_outcome'],
+        range,
+        em,
+      )
+    ).at(-1);
+    const recorded =
+      outcomeRow === undefined
+        ? null
+        : ThreadOutcomePayloadSchema.safeParse(
+            parseJsonColumn(outcomeRow.payload),
+          );
+    const outcome =
+      recorded?.success === true
+        ? {
+            kind: recorded.data.kind,
+            summary: recorded.data.summary,
+            source: 'recorded',
+            seq: outcomeRow!.seq,
+          }
+        : threadOutcomeOf(null, goals);
+    const servers = new Map<
+      string,
+      { calls: number; failed: number; tools: Set<string> }
+    >();
+    for (const tool of tools) {
+      if (tool.delegate) {
+        continue;
+      }
+      const metric = toolMetricOf(
+        this.adapters,
+        run.id,
+        run.agentKind,
+        tool.name,
+        null,
+      );
+      if (metric.server === null) {
+        continue;
+      }
+      const server = metric.server;
+      const entry = servers.get(server) ?? {
+        calls: 0,
+        failed: 0,
+        tools: new Set(),
+      };
+      entry.calls += 1;
+      entry.failed += tool.failed ? 1 : 0;
+      entry.tools.add(metric.tool);
+      servers.set(server, entry);
+    }
+    const stages = (
+      await this.itemDao.rowsOfKinds(
+        source.sourceRunId,
+        ['stage_change'],
+        range,
+        em,
+      )
+    ).flatMap((row) => {
+      const change = StageChangePayloadSchema.safeParse(
+        parseJsonColumn(row.payload),
+      );
+      return change.success &&
+        change.data.action !== 'nudge' &&
+        change.data.action !== 'stalled'
+        ? [
+            {
+              seq: row.seq,
+              at: row.createdAt.toISOString(),
+              action: change.data.action,
+              stage: change.data.stageId,
+              by:
+                change.data.by.kind === 'agent'
+                  ? laneOf(change.data.by.nodeId)
+                  : change.data.by.kind,
+              ...(change.data.lead === undefined
+                ? {}
+                : { lead: change.data.lead }),
+            },
+          ]
+        : [];
+    });
+    const pairs = new Map<
+      string,
+      {
+        caller: string;
+        callee: string;
+        calls: number;
+        failed: number;
+        totalMs: number;
+      }
+    >();
+    for (const call of calls) {
+      const caller = laneOf(call.callerMemberId);
+      const callee = laneOf(call.calleeMemberId);
+      const key = `${caller}\u0000${callee}`;
+      const pair = pairs.get(key) ?? {
+        caller,
+        callee,
+        calls: 0,
+        failed: 0,
+        totalMs: 0,
+      };
+      pair.calls += 1;
+      pair.failed += call.status !== null && call.status !== 'ok' ? 1 : 0;
+      pair.totalMs += call.durationMs;
+      pairs.set(key, pair);
+    }
+    return {
+      goals: goals.map((goal) => ({
+        id: goalIdOf(goal.number),
+        text: goal.text,
+        source: goal.source,
+        status: goal.status,
+        evidence: goal.evidence,
+      })),
+      outcome,
+      mcpServers: [...servers].map(([server, entry]) => ({
+        server,
+        calls: entry.calls,
+        failed: entry.failed,
+        tools: [...entry.tools],
+      })),
+      handOffs: stages.filter((stage) => stage.action === 'handoff').length,
+      stages,
+      calls: [...pairs.values()],
+    };
   }
 
   private async spans(

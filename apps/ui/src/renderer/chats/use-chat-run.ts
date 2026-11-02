@@ -2544,6 +2544,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         tasks !== undefined ||
         event.stages !== undefined ||
         event.currentLead !== undefined ||
+        event.goals !== undefined ||
+        event.outcome !== undefined ||
         // Same for a usage-limit continue: its announce carries nothing else.
         resetWakes !== undefined ||
         workedMs !== undefined ||

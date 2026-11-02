@@ -8,6 +8,7 @@ import { BadRequestException, ConflictException } from '@packages/common';
 
 import type { HostRowWire, StageProgress } from '../../agents/chat.types';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { GoalsService } from '../../agents/services/goals.service';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
 import { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import type { StageMoved, StageMoveRequest } from '../teams.types';
@@ -37,6 +38,7 @@ export class StageWakeService implements OnModuleInit {
     private readonly wakes: HostWakeBus,
     private readonly bus: AgentEventBus,
     @Optional() private readonly teamNotes?: TeamNoteBroker,
+    @Optional() private readonly goals?: GoalsService,
   ) {}
 
   onModuleInit(): void {
@@ -252,6 +254,9 @@ export class StageWakeService implements OnModuleInit {
           memberId: lead,
           conversationId: null,
         }) ?? 0,
+      openGoals: ((await this.goals?.list(runId)) ?? [])
+        .filter((goal) => goal.status === 'open')
+        .map((goal) => ({ id: goal.id, text: goal.text })),
       ...(userReason === undefined ? {} : { userReason }),
     });
   }

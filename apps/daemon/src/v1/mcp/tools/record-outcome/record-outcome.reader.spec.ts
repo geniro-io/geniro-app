@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isThreadOutcomeCall,
   readRecordOutcome,
+  readThreadOutcomeCall,
   recordOutcomeResultText,
+  threadOutcomeResultText,
 } from './record-outcome.reader';
 
 const ARGS = {
@@ -111,5 +114,42 @@ describe('recordOutcomeResultText', () => {
     expect(
       recordOutcomeResultText({ status: 'unavailable', reason: 'no pass' }),
     ).toBe('Not recorded: no pass.');
+  });
+});
+
+describe('readThreadOutcomeCall', () => {
+  it('reads a thread outcome apart from a pull request one', () => {
+    expect(isThreadOutcomeCall({ outcome: 'success', summary: 'x' })).toBe(
+      true,
+    );
+    expect(isThreadOutcomeCall(ARGS)).toBe(false);
+    expect(
+      readThreadOutcomeCall({ outcome: 'partial', summary: ' half done ' }),
+    ).toEqual({ kind: 'partial', summary: 'half done' });
+  });
+
+  it('needs a summary and refuses pull request fields beside it', () => {
+    const read = readThreadOutcomeCall({ outcome: 'failed' });
+    expect('error' in read && read.error).toContain('summary');
+    expect(
+      readThreadOutcomeCall({ outcome: 'failed', summary: '  ' }),
+    ).toMatchObject({ error: expect.stringContaining('summary is required') });
+    const mixed = readThreadOutcomeCall({
+      outcome: 'success',
+      summary: 'x',
+      pr_number: 3,
+    });
+    expect('error' in mixed && mixed.error).toContain(
+      'record a pull request in a call of its own',
+    );
+  });
+
+  it('words the receipt', () => {
+    expect(threadOutcomeResultText({ status: 'recorded', seq: 40 })).toBe(
+      "Recorded as the thread's outcome 40.",
+    );
+    expect(threadOutcomeResultText({ status: 'unchanged', seq: 40 })).toContain(
+      'nothing was written',
+    );
   });
 });

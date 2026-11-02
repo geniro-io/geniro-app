@@ -6,14 +6,18 @@ import {
 import { BadRequestException, NotFoundException } from '@packages/common';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { GoalDao } from '../../agents/dao/goal.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { ProjectRootsService } from '../../projects/services/project-roots.service';
+import { Goal } from '../../runs/entity/goal.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { LineBaselineDao } from '../dao/line-baseline.dao';
+import { MetricLedgerDao } from '../dao/metric-ledger.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { LineBaseline } from '../entity/line-baseline.entity';
+import { ToolCallEvent } from '../entity/tool-call-event.entity';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
 import {
@@ -92,6 +96,8 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
       new UsageActivityDao(em),
       bus,
       new LineBaselineDao(em),
+      new MetricLedgerDao(em),
+      new GoalDao(em),
     );
   }
 
@@ -99,7 +105,14 @@ describe('StatsService — what the threads did (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [UsageActivity, UsageEvent, Run, LineBaseline],
+        entities: [
+          UsageActivity,
+          UsageEvent,
+          Run,
+          LineBaseline,
+          ToolCallEvent,
+          Goal,
+        ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,

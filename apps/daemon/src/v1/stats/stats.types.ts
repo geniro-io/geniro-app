@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-import { ChatTotalsWireSchema } from '../agents/chat.types';
+import {
+  ChatTotalsWireSchema,
+  type GoalStatus,
+  type StageChangeAction,
+  type ThreadOutcomeKind,
+} from '../agents/chat.types';
 import {
   commitShaSchema,
   type RunOutcomeAcceptance,
@@ -40,7 +45,75 @@ export interface UsageEventInput {
  * how it is keyed.
  */
 export type UsageActivityKind =
-  'thread' | 'pull_request' | 'lines' | 'run_outcome';
+  | 'thread'
+  | 'pull_request'
+  | 'lines'
+  | 'run_outcome'
+  | 'thread_outcome'
+  | 'stage'
+  | 'call';
+
+/** One finished tool call as `tool_call_events` keeps it. */
+export interface ToolCallLedgerRow {
+  runId: string;
+  seq: number;
+  occurredAt: Date;
+  teamSlug: string | null;
+  memberId: string | null;
+  agentKind: AgentKind | null;
+  tool: string;
+  mcpServer: string | null;
+  ok: boolean;
+  durationMs: number | null;
+}
+
+/** One stage change as the ledger keeps it (`usage_activity` kind `stage`). */
+export interface StageLedgerRow {
+  runId: string;
+  seq: number;
+  occurredAt: Date;
+  teamSlug: string | null;
+  /** The agent member that moved it; null for the user or the daemon. */
+  memberId: string | null;
+  /** A hand-off's new lead. */
+  lead: string | null;
+  stageId: string;
+  action: StageChangeAction;
+  /** When the stage a `complete` closed became current. */
+  enteredAt: Date | null;
+  durationMs: number | null;
+}
+
+/** One ended agent-to-agent call as the ledger keeps it (`usage_activity` kind `call`). */
+export interface CallLedgerRow {
+  runId: string;
+  seq: number;
+  callId: string;
+  occurredAt: Date;
+  teamSlug: string | null;
+  caller: string;
+  callee: string;
+  durationMs: number | null;
+  costUsd: number | null;
+  turns: number | null;
+  ok: boolean;
+}
+
+/** One goal as the stats read it from `run_goals`. */
+export interface GoalLedgerRow {
+  runId: string;
+  status: GoalStatus;
+}
+
+/** A run's recorded thread outcome as the ledger keeps it. */
+export interface ThreadOutcomeLedgerRow {
+  runId: string;
+  seq: number;
+  occurredAt: Date;
+  teamSlug: string | null;
+  memberId: string | null;
+  kind: ThreadOutcomeKind;
+}
 
 /**
  * One pull request's newest recorded outcome, as the ledger keeps it (a `run_outcome`
@@ -122,6 +195,8 @@ export interface ThreadLedgerRow {
   slug: string | null;
   version: string | null;
   inferred: boolean | null;
+  /** Whether the metric ledgers watched the run from its creation. */
+  metrics?: boolean;
 }
 
 /** Which kind of chat filed a team's recommendations card. */
@@ -588,6 +663,131 @@ export const UsageGroupWireSchema = z
   .meta({ id: 'UsageGroup' });
 export type UsageGroupWire = z.infer<typeof UsageGroupWireSchema>;
 
+/** How a set of runs' goals ended. */
+export const GoalFiguresSchema = z
+  .object({
+    recorded: z.number().describe('every goal recorded, dropped ones included'),
+    achieved: z.number(),
+    notAchieved: z.number(),
+    dropped: z.number(),
+    open: z.number(),
+    achievedShare: z
+      .number()
+      .nullable()
+      .describe(
+        'achieved over every goal not dropped, an open one counting as not achieved; null with no such goal',
+      ),
+    runsWithGoals: z.number(),
+    measuredRuns: z
+      .number()
+      .describe(
+        'runs the ledgers watched from their start — what coverage is out of',
+      ),
+    coverage: z
+      .number()
+      .nullable()
+      .describe(
+        'runs with goals over measured runs; null with no measured run',
+      ),
+  })
+  .meta({ id: 'GoalFigures' });
+export type GoalFiguresWire = z.infer<typeof GoalFiguresSchema>;
+
+/** How a set of runs ended: each run's recorded outcome, else the one its goals derive. */
+export const ThreadOutcomeCountsSchema = z
+  .object({
+    success: z.number(),
+    partial: z.number(),
+    failed: z.number(),
+    abandoned: z.number(),
+    recorded: z.number().describe('runs whose outcome an agent recorded'),
+    derived: z.number().describe('runs whose outcome is read from their goals'),
+  })
+  .meta({ id: 'ThreadOutcomeCounts' });
+export type ThreadOutcomeCountsWire = z.infer<typeof ThreadOutcomeCountsSchema>;
+
+/** One tool's finished calls. */
+export const ToolUseSchema = z
+  .object({
+    tool: z.string(),
+    mcpServer: z
+      .string()
+      .nullable()
+      .describe("the MCP server it came from; null for a CLI's own tool"),
+    calls: z.number(),
+    errors: z.number(),
+    avgMs: z
+      .number()
+      .nullable()
+      .describe('mean time from call to result; null when none was timed'),
+  })
+  .meta({ id: 'ToolUse' });
+export type ToolUseWire = z.infer<typeof ToolUseSchema>;
+
+/** One MCP server's finished calls, over every tool of it. */
+export const McpServerUseSchema = z
+  .object({
+    server: z.string(),
+    calls: z.number(),
+    errors: z.number(),
+    tools: z.number().describe('distinct tools of it that were called'),
+  })
+  .meta({ id: 'McpServerUse' });
+export type McpServerUseWire = z.infer<typeof McpServerUseSchema>;
+
+/** One stage's moves over a team's runs. */
+export const StageFiguresSchema = z
+  .object({
+    stageId: z.string(),
+    completed: z.number(),
+    skipped: z.number(),
+    reopened: z.number(),
+    avgMs: z
+      .number()
+      .nullable()
+      .describe(
+        'mean time a completed stage was current; null when none completed',
+      ),
+  })
+  .meta({ id: 'StageFigures' });
+export type StageFiguresWire = z.infer<typeof StageFiguresSchema>;
+
+/** Every call one member made to another, over a team's runs. */
+export const MemberCallSchema = z
+  .object({
+    caller: z.string(),
+    callee: z.string(),
+    calls: z.number(),
+    failed: z.number().describe('calls that ended without an answer'),
+    turns: z.number().describe("the callee's turns inside them"),
+    costUsd: z
+      .number()
+      .nullable()
+      .describe("what the callee's turns cost; null when none reported a cost"),
+    avgMs: z.number().nullable().describe('mean time from call to answer'),
+  })
+  .meta({ id: 'MemberCall' });
+export type MemberCallWire = z.infer<typeof MemberCallSchema>;
+
+/** The thread metrics of a set of runs, folded over the write-time ledgers. */
+export const ThreadMetricsSchema = z
+  .object({
+    goals: GoalFiguresSchema,
+    outcomes: ThreadOutcomeCountsSchema,
+    handOffs: z
+      .number()
+      .nullable()
+      .describe('stage hand-offs of the lead; null when no run was measured'),
+    tools: z.array(ToolUseSchema).describe('most called first'),
+    mcpServers: z.array(McpServerUseSchema).describe('most called first'),
+    stages: z.array(StageFiguresSchema),
+    calls: z
+      .array(MemberCallSchema)
+      .describe('one row per caller and callee, most calls first'),
+  })
+  .meta({ id: 'ThreadMetrics' });
+export type ThreadMetricsWire = z.infer<typeof ThreadMetricsSchema>;
+
 /**
  * Everything the Stats page shows for one period.
  *
@@ -625,6 +825,9 @@ export const UsageStatsWireSchema = z.object({
     .describe(
       'per team, keyed by slug; a thread with no team is in no row, so a chat is never pooled into one',
     ),
+  metrics: ThreadMetricsSchema.describe(
+    'the threads started in the period: goals, outcomes, and every tool and MCP server called in it',
+  ),
 });
 // No `.meta({ id })`: this is a RESPONSE DTO ROOT, and nestjs-zod would then
 // register the component under the id while the route still points at the DTO
@@ -792,6 +995,7 @@ export const TeamStatsWireSchema = z.object({
     .describe(
       'most expensive first; turns recorded with no member are in the totals only',
     ),
+  metrics: ThreadMetricsSchema,
 });
 // No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
 export type TeamStatsWire = z.infer<typeof TeamStatsWireSchema>;

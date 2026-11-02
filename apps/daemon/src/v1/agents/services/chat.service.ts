@@ -233,6 +233,7 @@ import { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunHoldRegistry } from './run-hold.registry';
+import { RunOutcomeBroker } from './run-outcome.broker';
 import { RunTeardownService } from './run-teardown.service';
 import { RunWriteQueue } from './run-write.queue';
 import { SkillHarvestStore } from './skill-harvest.store';
@@ -839,6 +840,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     /** The `monitor` tool's commands, stopped with the thread. Optional for the positional specs. */
     @Optional() private readonly monitors?: MonitorRegistry,
     @Optional() private readonly monitorSinks?: MonitorBroker,
+    /** `record_outcome`'s sink, installed per turn. Optional for the positional specs. */
+    @Optional() private readonly runOutcomes?: RunOutcomeBroker,
   ) {}
 
   /**
@@ -6919,6 +6922,25 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               }),
             })
           : null;
+      const disposeOutcomes =
+        mcpEndpoint && this.runOutcomes !== undefined
+          ? this.runOutcomes.register(runId, SINGLE_AGENT_NODE, {
+              persistItem: async (_memberId, kind, role, payload) =>
+                this.persist(
+                  em,
+                  runId,
+                  await this.seqs.reserve(runId),
+                  kind,
+                  role,
+                  payload,
+                ),
+              recorder: () => ({
+                memberId: SINGLE_AGENT_NODE,
+                conversationId: null,
+                callId: null,
+              }),
+            })
+          : null;
       // Only an ORDINARY chat proposes whole teams: a builder chat
       // proposes changes to its own through the `TeamBuilderBroker` sink
       // below, and an analysis saves the analysed one through
@@ -6981,6 +7003,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         disposePublisher?.();
         disposeActions?.();
         disposeMonitors?.();
+        disposeOutcomes?.();
         disposeTeamProposals?.();
         disposeTeamBuilder?.();
         disposeAnalysis?.();

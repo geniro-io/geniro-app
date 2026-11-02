@@ -17,6 +17,7 @@ import type { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { CallContextDao } from '../../agents/dao/call-context.dao';
+import { GoalDao } from '../../agents/dao/goal.dao';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -36,13 +37,16 @@ import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import { CallContext } from '../../runs/entity/call-context.entity';
+import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import { LineBaselineDao } from '../dao/line-baseline.dao';
+import { MetricLedgerDao } from '../dao/metric-ledger.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
+import { ToolCallEvent } from '../entity/tool-call-event.entity';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
 import { StatsService } from './stats.service';
@@ -81,6 +85,8 @@ describe('usage ledger retention across a run delete', () => {
           WallTurn,
           UsageActivity,
           UsageEvent,
+          ToolCallEvent,
+          Goal,
         ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
@@ -263,6 +269,8 @@ describe('usage ledger retention across a run delete', () => {
       new UsageActivityDao(orm.em.fork()),
       new UsageEventBus(),
       new LineBaselineDao(orm.em.fork()),
+      new MetricLedgerDao(orm.em.fork()),
+      new GoalDao(orm.em.fork()),
     ).usage(
       new Date(2026, 7, 10).toISOString(),
       new Date(2026, 7, 11).toISOString(),

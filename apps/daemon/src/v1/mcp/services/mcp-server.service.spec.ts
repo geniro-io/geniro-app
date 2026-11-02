@@ -11,6 +11,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { chatSearchDb } from '../../agents/__tests__/chat-search-db';
+import { goalsDb } from '../../agents/__tests__/goals-db';
 import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
 import {
   HISTORY_RESULT_PREFACE,
@@ -22,6 +23,7 @@ import {
   HOST_COMPARISON_TOOL,
   HOST_FINDINGS_TOOL,
   HOST_GALLERY_TOOL,
+  HOST_GOALS_TOOL,
   HOST_LIST_MONITORS_TOOL,
   HOST_MEMORY_SAVE_TOOL,
   HOST_MEMORY_SEARCH_TOOL,
@@ -59,6 +61,7 @@ import { FindingsReportBroker } from '../../agents/services/findings-report.brok
 import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { GalleryImageService } from '../../agents/services/gallery-image.service';
 import { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
+import type { GoalsService } from '../../agents/services/goals.service';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { MonitorBroker } from '../../agents/services/monitor.broker';
 import { MonitorRegistry } from '../../agents/services/monitor.registry';
@@ -124,6 +127,7 @@ import {
   ANSWERING_WITH_CALLS_OUT,
 } from '../../teams/utils/callee-text';
 import { callerKey } from '../../teams/utils/caller-key';
+import { GoalsTool } from '../tools/goals/goals.tool';
 import { createMcpTools } from '../tools/mcp-tools';
 import { MoveStageTool } from '../tools/move-stage/move-stage.tool';
 import { proposePatchInstructions } from '../tools/propose-patch/propose-patch.instructions';
@@ -212,6 +216,7 @@ function service(
   }),
   // Off unless a case turns it on: no memory tool is listed.
   memory = fakeMemory(false).service,
+  goals = {} as GoalsService,
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -228,6 +233,7 @@ function service(
       monitors,
       teamNotes,
       runOutcomes,
+      goals,
       stages,
       patches,
       plans,
@@ -374,7 +380,7 @@ function stageService(
 /** A `record_outcome` broker no case here records through: listing only. */
 function runOutcomeBroker(): RunOutcomeBroker {
   return new RunOutcomeBroker(
-    ...([{}, {}, {}, {}] as unknown as ConstructorParameters<
+    ...([{}, {}, {}, {}, {}] as unknown as ConstructorParameters<
       typeof RunOutcomeBroker
     >),
   );
@@ -848,6 +854,7 @@ describe('McpServerService', () => {
     ).tools;
     expect(tools.map((t) => t.name)).toEqual([
       ...GENIRO_MCP_CALL_TOOLS,
+      HOST_GOALS_TOOL,
       HOST_SEARCH_CHATS_TOOL,
       HOST_READ_CHAT_CONTEXT_TOOL,
     ]);
@@ -1198,6 +1205,7 @@ describe('McpServerService', () => {
     );
     const tools = (json().result as { tools: { name: string }[] }).tools;
     expect(tools.map((t) => t.name)).toEqual([
+      HOST_GOALS_TOOL,
       HOST_QUESTION_TOOL,
       HOST_SEARCH_CHATS_TOOL,
       HOST_READ_CHAT_CONTEXT_TOOL,
@@ -3381,8 +3389,6 @@ describe('McpServerService', () => {
 const PREAMBLE_EXEMPT: Readonly<Record<string, string>> = {
   [HOST_TEAM_NOTE_TOOL]: 'team members only; their own descriptions carry it',
   [HOST_TEAM_NOTES_TOOL]: 'team members only; their own descriptions carry it',
-  [HOST_RECORD_OUTCOME_TOOL]:
-    'team members only; their own descriptions carry it',
   [HOST_MOVE_STAGE_TOOL]: 'staged team runs only; the stage map names it',
   [HOST_QUESTION_TOOL]:
     'the CLI’s own question tool comes first; the preamble words every question',
@@ -4217,6 +4223,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
+      goals: {} as GoalsService,
       stages: stageService(),
     } as Parameters<typeof createMcpTools>[0]);
     const listing = tools.flatMap((tool) =>
@@ -4305,6 +4312,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
+      goals: {} as GoalsService,
       stages: stageService(),
     }).find((t) => t.handles(HOST_READ_TEAMS_TOOL))!;
 
@@ -4372,6 +4380,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
+      goals: {} as GoalsService,
       stages: stageService(),
     }).find((t) => t.handles(HOST_PROPOSE_TEAM_TOOL))!;
     const context = {
@@ -5308,5 +5317,149 @@ describe('McpServerService — the team-note tools', () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain('names no team note of this run');
     expect(rows).toHaveLength(0);
+  });
+});
+
+type GoalsDb = Awaited<ReturnType<typeof goalsDb>>;
+
+interface ToolCallReply {
+  result: { content: { text: string }[]; isError?: boolean };
+}
+
+/** One `tools/call` of `goals` through the endpoint, as `member` of `run-1`. */
+async function callGoals(
+  target: McpServerService,
+  member: string,
+  args: Record<string, unknown>,
+): Promise<{ text: string; isError: boolean }> {
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      void target.handlePost(
+        'run-1',
+        member,
+        {
+          raw: req,
+          body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+          headers: req.headers,
+        } as unknown as FastifyRequest,
+        { raw: res, hijack: () => {} } as unknown as FastifyReply,
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const port = (server.address() as AddressInfo).port;
+    const res = await fetch(`http://127.0.0.1:${port}/v1/mcp/run-1/${member}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'goals', arguments: args },
+      }),
+    });
+    const { result } = (await res.json()) as ToolCallReply;
+    return { text: result.content[0]!.text, isError: result.isError === true };
+  } finally {
+    server.close();
+  }
+}
+
+describe('goals through the MCP endpoint', () => {
+  let db: GoalsDb;
+  let endpoint: McpServerService;
+
+  beforeEach(async () => {
+    db = await goalsDb();
+    await db.seedRun('run-1', { teamId: 'dev-team' });
+    endpoint = new McpServerService([new GoalsTool(db.service)], {
+      token: 'launch',
+      version: '9.9.9',
+      startedAt: 0,
+      port: 4870,
+    });
+  });
+
+  afterEach(async () => {
+    await db.orm.close(true);
+  });
+
+  it('records goals, refuses complete without evidence, closes achieved', async () => {
+    const set = await callGoals(endpoint, 'dev', {
+      action: 'set',
+      goals: [
+        { text: 'the export button saves a .csv', source: 'user' },
+        { text: 'the failing spec passes', source: 'agent' },
+        { text: 'the README names the export', source: 'agent' },
+      ],
+    });
+    expect(set.isError).toBe(false);
+    expect(set.text).toContain('Saved g1, g2, g3.');
+
+    const bare = await callGoals(endpoint, 'dev', {
+      action: 'complete',
+      id: 'g1',
+      status: 'achieved',
+    });
+    expect(bare.isError).toBe(true);
+    expect(bare.text).toContain('complete needs "evidence"');
+    expect((await db.service.list('run-1'))![0]!.status).toBe('open');
+
+    const closed = await callGoals(endpoint, 'dev', {
+      action: 'complete',
+      id: 'g1',
+      status: 'achieved',
+      evidence: 'clicked Export, saved report.csv with 12 rows',
+    });
+    expect(closed.isError).toBe(false);
+    expect(closed.text).toContain('Closed g1 as achieved.');
+
+    const goals = (await db.service.list('run-1'))!;
+    expect(goals.map((goal) => [goal.id, goal.status, goal.memberId])).toEqual([
+      ['g1', 'achieved', 'dev'],
+      ['g2', 'open', 'dev'],
+      ['g3', 'open', 'dev'],
+    ]);
+    expect(goals[0]!.evidence).toBe(
+      'clicked Export, saved report.csv with 12 rows',
+    );
+  });
+
+  it('reads the list back, refuses an unknown goal and a closed goal’s removal', async () => {
+    await callGoals(endpoint, 'dev', {
+      action: 'add',
+      goals: [{ text: 'a', source: 'agent' }],
+    });
+    await callGoals(endpoint, 'dev', {
+      action: 'complete',
+      id: 'g1',
+      status: 'dropped',
+      evidence: 'the user said skip it',
+    });
+
+    const list = await callGoals(endpoint, 'dev', { action: 'list' });
+    expect(list.text).toContain(
+      'g1 [dropped] a — evidence: the user said skip it',
+    );
+
+    const unknown = await callGoals(endpoint, 'dev', {
+      action: 'update',
+      id: 'g7',
+      text: 'x',
+    });
+    expect(unknown).toMatchObject({ isError: true });
+    expect(unknown.text).toContain('GOAL_NOT_FOUND');
+
+    const removal = await callGoals(endpoint, 'dev', {
+      action: 'remove',
+      id: 'g1',
+    });
+    expect(removal.text).toContain('GOAL_CLOSED');
   });
 });

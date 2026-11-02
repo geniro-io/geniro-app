@@ -325,6 +325,8 @@ const run1: ChatRun = {
   stages: null,
   resetWakes: [],
   currentLead: null,
+  goals: [],
+  outcome: null,
 };
 
 // A fake DaemonClient whose item/reconnect listeners the test can fire.
@@ -4697,6 +4699,8 @@ describe('Chats team runs', () => {
     stages: null,
     resetWakes: [],
     currentLead: null,
+    goals: [],
+    outcome: null,
   };
 
   function wfItem(
@@ -6657,6 +6661,8 @@ describe('Chats — handing a conversation to the user', () => {
       stages: null,
       resetWakes: [],
       currentLead: null,
+      goals: [],
+      outcome: null,
     };
     teamApi.listTeamRuns.mockResolvedValue([wfRun]);
     teamApi.getTeam.mockResolvedValue({

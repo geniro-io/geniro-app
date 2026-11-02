@@ -59,17 +59,24 @@ describe('UsageActivityRecorderService (in-memory sqlite)', () => {
     vi.restoreAllMocks();
   });
 
-  it('records a thread when its run is created, dated by the creation time', async () => {
+  it('records a thread when its run is created, dated by the creation time and marked measured', async () => {
     bus.publishRunCreated({
       runId: 'run-a',
       createdAt: '2026-08-10T12:00:00.000Z',
     });
 
     await vi.waitFor(async () => {
-      const rows = await dao.getAll({ kind: 'thread' });
+      const rows = await dao.getAll(
+        { kind: 'thread' },
+        { disableIdentityMap: true },
+      );
       expect(
-        rows.map((row) => [row.runId, row.occurredAt.toISOString()]),
-      ).toEqual([['run-a', '2026-08-10T12:00:00.000Z']]);
+        rows.map((row) => [
+          row.runId,
+          row.occurredAt.toISOString(),
+          row.metricsLedger,
+        ]),
+      ).toEqual([['run-a', '2026-08-10T12:00:00.000Z', true]]);
     });
   });
 

@@ -5,6 +5,7 @@ import { Injectable } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
 import type { ChatTotalsWire } from '../../agents/chat.types';
+import { GoalDao } from '../../agents/dao/goal.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { isWithinDirectory } from '../../agents/utils/path-within';
@@ -17,6 +18,7 @@ import {
 import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import type { Run } from '../../runs/entity/run.entity';
 import { LineBaselineDao } from '../dao/line-baseline.dao';
+import { MetricLedgerDao } from '../dao/metric-ledger.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEvent } from '../entity/usage-event.entity';
@@ -24,6 +26,7 @@ import type {
   LineBaselineRequest,
   LineBaselineWire,
   LineSnapshotInput,
+  ThreadMetricsWire,
   UsageGroupWire,
   UsageStatsWire,
 } from '../stats.types';
@@ -34,6 +37,7 @@ import {
   PolledTurnCredit,
   tallyUnpricedTurn,
 } from '../utils/polled-spend';
+import { foldThreadMetrics } from '../utils/thread-metrics-fold';
 import { eachLocalDay, localDateKey } from '../utils/usage-fold';
 import { UsageEventBus } from './usage-events.bus';
 
@@ -71,6 +75,10 @@ export class StatsService {
     private readonly usageBus: UsageEventBus,
     /** The commit each folder's lines are measured against. */
     private readonly baselineDao: LineBaselineDao,
+    /** The thread metric ledgers: goals, outcomes, tools, stages and calls. */
+    private readonly ledger: MetricLedgerDao,
+    /** The goals of the period's threads. */
+    private readonly goals: GoalDao,
   ) {}
 
   /**
@@ -250,6 +258,7 @@ export class StatsService {
     }
 
     const days = eachLocalDay(range.from, range.to);
+    const metrics = await this.periodMetrics(range.from, range.to, em);
     return {
       from: range.from.toISOString(),
       to: range.to.toISOString(),
@@ -271,6 +280,70 @@ export class StatsService {
       byProject: rank(byProject),
       byThread: await this.titled(rank(byThread), em),
       byTeam: rank(byTeam),
+      metrics,
+    };
+  }
+
+  /**
+   * The period's thread metrics: goals and outcomes of the threads STARTED in it, and
+   * every tool call, stage change and agent call that HAPPENED in it, whenever its
+   * thread started.
+   */
+  private async periodMetrics(
+    from: Date,
+    to: Date,
+    em: EntityManager,
+  ): Promise<ThreadMetricsWire> {
+    const runs = (
+      await this.activityDao.inRange(
+        'thread',
+        from,
+        to,
+        ['runId', 'metricsLedger'],
+        em,
+      )
+    ).map((row) => ({ runId: row.runId, metrics: row.metricsLedger === true }));
+    const period = { from, to };
+    const [goals, threadOutcomes, toolCalls, stages, calls] = await Promise.all(
+      [
+        this.goals.statusesOf({ runIds: runs.map((run) => run.runId) }, em),
+        this.ledger.threadOutcomes(
+          { runIds: runs.map((run) => run.runId) },
+          em,
+        ),
+        this.ledger.toolCalls(period, em),
+        this.ledger.stages(period, em),
+        this.ledger.calls(period, em),
+      ],
+    );
+    const started = foldThreadMetrics({
+      runs,
+      goals,
+      threadOutcomes,
+      toolCalls: [],
+      stages: [],
+      calls: [],
+    });
+    const happened = foldThreadMetrics({
+      runs: [
+        ...new Set([...toolCalls, ...stages, ...calls].map((row) => row.runId)),
+      ].map((runId) => ({ runId })),
+      goals: [],
+      threadOutcomes: [],
+      toolCalls,
+      stages,
+      calls,
+    });
+    return {
+      ...started,
+      handOffs:
+        started.handOffs === null
+          ? null
+          : stages.filter((row) => row.action === 'handoff').length,
+      tools: happened.tools,
+      mcpServers: happened.mcpServers,
+      stages: happened.stages,
+      calls: happened.calls,
     };
   }
 

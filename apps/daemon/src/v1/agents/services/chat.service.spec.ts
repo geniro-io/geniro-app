@@ -136,6 +136,7 @@ import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunHoldRegistry } from './run-hold.registry';
+import { RunOutcomeBroker } from './run-outcome.broker';
 import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunTeardownService } from './run-teardown.service';
 import { RunWriteQueue } from './run-write.queue';
@@ -1190,6 +1191,12 @@ function setup(
   const charts = new ChartBroker();
   const patches = new PatchBroker();
   const plans = new PlanBroker();
+  // Its sink is all these cases observe: whether a chat turn offers it.
+  const runOutcomes = new RunOutcomeBroker(
+    ...([em, runDao, {}, {}, bus] as unknown as ConstructorParameters<
+      typeof RunOutcomeBroker
+    >),
+  );
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
   const galleries = new GalleryBroker();
@@ -1392,6 +1399,8 @@ function setup(
     },
     opts.agentMcp as AgentMcpService | undefined,
     opts.monitors,
+    undefined,
+    runOutcomes,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -1407,6 +1416,7 @@ function setup(
     charts,
     patches,
     plans,
+    runOutcomes,
     metrics,
     comparisons,
     galleries,
@@ -2146,6 +2156,19 @@ describe('ChatService', () => {
       expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(false);
       expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
       await settle(claude);
+    });
+
+    it('offers record_outcome in a chat turn, and takes it away with the turn', async () => {
+      const { service, cursor, runOutcomes } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+
+      expect(runOutcomes.canUse(run.id, SINGLE_AGENT_NODE)).toBe(true);
+      await settle(cursor);
+      expect(runOutcomes.canUse(run.id, SINGLE_AGENT_NODE)).toBe(false);
     });
 
     it('hands a cursor turn the findings tool too — every chat can draw a card', async () => {

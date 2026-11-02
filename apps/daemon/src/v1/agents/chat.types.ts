@@ -4095,6 +4095,176 @@ export type RunOutcomeWriteOutcome =
   | { status: 'unchanged'; seq: number }
   | { status: 'refused'; reason: string };
 
+export const HOST_GOALS_TOOL = 'goals';
+
+export const GOAL_TEXT_MAX = 300;
+export const GOAL_EVIDENCE_MAX = 2000;
+/** Goals one run may hold at once, closed ones included; the next is refused. */
+export const GOALS_PER_RUN = 40;
+
+export const GoalStatusSchema = z
+  .enum(['open', 'achieved', 'not_achieved', 'dropped'])
+  .meta({ id: 'GoalStatus' });
+export type GoalStatus = z.infer<typeof GoalStatusSchema>;
+
+export const GoalClosingStatusSchema = z
+  .enum(['achieved', 'not_achieved', 'dropped'])
+  .meta({ id: 'GoalClosingStatus' });
+export type GoalClosingStatus = z.infer<typeof GoalClosingStatusSchema>;
+
+export const GoalSourceSchema = z
+  .enum(['user', 'agent'])
+  .meta({ id: 'GoalSource' });
+export type GoalSource = z.infer<typeof GoalSourceSchema>;
+
+/**
+ * One goal of a run, as `run_goals` keeps it.
+ *
+ * TWIN PARSER: the `run_status` announce carries the run's goals as this shape
+ * (`RunStatusEvent.goals`), read by `readRunGoals` in
+ * `apps/ui/src/renderer/daemon-client.ts`.
+ */
+export const RunGoalSchema = z
+  .object({
+    id: z.string().describe('The goal within its run: g1, g2, …'),
+    text: z.string(),
+    source: GoalSourceSchema.describe(
+      'Who the goal came from: the user, or the agent working the task',
+    ),
+    status: GoalStatusSchema,
+    evidence: z
+      .string()
+      .nullable()
+      .describe('What shows how the goal ended; null while it is open'),
+    memberId: z
+      .string()
+      .nullable()
+      .describe(
+        "The team member that recorded or closed it last; null for the user's own edits and a chat's agent",
+      ),
+    createdAt: z.string(),
+    closedAt: z.string().nullable(),
+  })
+  .meta({ id: 'RunGoal' });
+export type RunGoal = z.infer<typeof RunGoalSchema>;
+
+export const RunGoalsWireSchema = z.object({
+  goals: z.array(RunGoalSchema),
+});
+export type RunGoalsWire = z.infer<typeof RunGoalsWireSchema>;
+
+export const GOAL_HIDDEN_TEXT =
+  'holds a control, format or line-separator character — write it as one plain line';
+
+export const RunGoalCreateSchema = z.object({
+  text: z
+    .string()
+    .trim()
+    .min(1)
+    .max(GOAL_TEXT_MAX)
+    .refine((text) => !hasHiddenText(text, false), GOAL_HIDDEN_TEXT),
+});
+export type RunGoalCreate = z.infer<typeof RunGoalCreateSchema>;
+
+export const RunGoalEditSchema = RunGoalCreateSchema;
+export type RunGoalEdit = z.infer<typeof RunGoalEditSchema>;
+
+export const RunGoalCloseSchema = z.object({
+  status: GoalClosingStatusSchema,
+  evidence: z
+    .string()
+    .trim()
+    .min(1)
+    .max(GOAL_EVIDENCE_MAX)
+    .refine(
+      (evidence) => !hasHiddenText(evidence, true),
+      'holds a control or format character',
+    ),
+});
+export type RunGoalClose = z.infer<typeof RunGoalCloseSchema>;
+
+/** A goal as the tool or the user hands one over to be recorded. */
+export interface GoalDraft {
+  text: string;
+  source: GoalSource;
+}
+
+/** Who changes a run's goals: the user from the app, or one of the run's agents. */
+export type GoalActor =
+  { kind: 'user' } | { kind: 'agent'; memberId: string | null };
+
+/** A goals write as its service answers it. */
+export type GoalsWriteOutcome =
+  | { status: 'ok'; goals: RunGoal[]; changed: RunGoal[] }
+  | { status: 'refused'; code: GoalRefusalCode; reason: string };
+
+export type GoalRefusalCode =
+  | 'RUN_NOT_FOUND'
+  | 'GOAL_NOT_FOUND'
+  | 'GOAL_CLOSED'
+  | 'GOAL_OPEN'
+  | 'TOO_MANY_GOALS'
+  | 'EMPTY_TEXT';
+
+/** How a thread ended, in the words every run can use — a pull request or not. */
+export const ThreadOutcomeKindSchema = z
+  .enum(['success', 'partial', 'failed', 'abandoned'])
+  .meta({ id: 'ThreadOutcomeKind' });
+export type ThreadOutcomeKind = z.infer<typeof ThreadOutcomeKindSchema>;
+
+export const THREAD_OUTCOME_SUMMARY_MAX = 600;
+
+/**
+ * A `thread_outcome` row: how the whole thread ended, as one of its agents
+ * recorded it with `record_outcome`. The newest row is the thread's outcome.
+ *
+ * TWIN PARSER: apps/ui/src/renderer/chats/thread-outcome-payload.ts
+ * (`readThreadOutcomePayload`), which draws the transcript row.
+ */
+export const ThreadOutcomePayloadSchema = z.object({
+  kind: ThreadOutcomeKindSchema,
+  summary: z.string(),
+  teamSlug: z.string().nullable(),
+  nodeId: z.string(),
+  conversationId: z.string().nullable(),
+  callId: z.string().optional(),
+});
+export type ThreadOutcomePayload = z.infer<typeof ThreadOutcomePayloadSchema>;
+
+/**
+ * A thread's outcome as it is served: the newest one an agent recorded, else
+ * one derived from its goals (all achieved → success, some → partial, none →
+ * failed). Null on the wire when it has neither.
+ */
+export const ThreadOutcomeSchema = z
+  .object({
+    kind: ThreadOutcomeKindSchema,
+    summary: z.string().nullable(),
+    source: z
+      .enum(['recorded', 'goals'])
+      .describe(
+        'recorded: an agent called record_outcome; goals: derived from how its goals closed',
+      ),
+    seq: z
+      .number()
+      .int()
+      .nullable()
+      .describe('The thread_outcome row it was read from; null when derived'),
+  })
+  .meta({ id: 'ThreadOutcome' });
+export type ThreadOutcome = z.infer<typeof ThreadOutcomeSchema>;
+
+/** A general `record_outcome` call as its reader hands it over. */
+export interface ThreadOutcomeInput {
+  kind: ThreadOutcomeKind;
+  summary: string;
+}
+
+export type ThreadOutcomeWriteOutcome =
+  | { status: 'recorded'; seq: number }
+  | { status: 'unchanged'; seq: number }
+  | { status: 'refused'; reason: string };
+
 /** A `monitor` call as its reader hands it over. */
 export interface MonitorStartInput {
   command: string;
@@ -5387,6 +5557,7 @@ export interface RunCreatedEvent {
 export interface RunFacts {
   id: string;
   teamId: string | null;
+  agentKind: AgentKind | null;
   createdAt: Date;
 }
 
@@ -5805,6 +5976,10 @@ export interface RunStatusEvent {
   stages?: StageProgress;
   /** The team member a run's messages go to now; sent when it changes. */
   currentLead?: string | null;
+  /** The run's whole goal list, sent after every goals write; the client replaces its copy. */
+  goals?: RunGoal[];
+  /** The thread's outcome as it stands after a goals write or a recorded outcome. */
+  outcome?: ThreadOutcome | null;
   /**
    * How long this run's agent has WORKED and how many tools it has called, as
    * the durable totals stand now — sent on a SETTLE alone.
@@ -6681,6 +6856,14 @@ export const RunWireSchema = z.object({
     .describe(
       "A team run's member that leads it now — the one a message goes to; null for a chat or a run started before the lead was recorded",
     ),
+  goals: z
+    .array(RunGoalSchema)
+    .describe(
+      "The run's goals as the goals tool and the user left them, open and closed",
+    ),
+  outcome: ThreadOutcomeSchema.nullable().describe(
+    'How the thread ended: the newest outcome an agent recorded, else one derived from its goals; null with neither',
+  ),
   /**
    * This chat's worked milliseconds and tool count, TOTALLED across its turns.
    *

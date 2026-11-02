@@ -58,5 +58,11 @@ export function runStatusRowFields(event: RunStatusEvent): Partial<RunDto> {
   if (event.currentLead !== undefined) {
     fields.currentLead = event.currentLead;
   }
+  if (event.goals !== undefined) {
+    fields.goals = event.goals;
+  }
+  if (event.outcome !== undefined) {
+    fields.outcome = event.outcome;
+  }
   return fields;
 }

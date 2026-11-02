@@ -17,6 +17,7 @@ import {
   subagentRef,
 } from './subagent-payload';
 import { readTeamNotePayload } from './team-note-payload';
+import { readThreadOutcomePayload } from './thread-outcome-payload';
 import { isAgentToolName } from './tool-kind';
 import {
   isDeliveryAcknowledgement,
@@ -278,6 +279,16 @@ const RENDERERS: Partial<Record<string, Renderer>> = {
     }
     const head = `**◈ stage ${change.stageTitle}** — ${stageActorLabel(change.by, (id) => id)} — ${stageChangeVerb(change)}`;
     return change.text === '' ? [head] : [head, '', change.text];
+  },
+  thread_outcome: (item, agent) => {
+    const outcome = readThreadOutcomePayload(item.payload);
+    return outcome === null
+      ? null
+      : [
+          `**⚑ thread outcome** — ${speaker(item, agent)} — ${outcome.kind}`,
+          '',
+          outcome.summary,
+        ];
   },
   run_outcome: (item, agent) => {
     const outcome = readRunOutcomePayload(item.payload);

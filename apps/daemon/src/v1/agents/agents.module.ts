@@ -17,6 +17,7 @@ import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
 import { ArtifactsController } from './controllers/artifacts.controller';
 import { ChatController } from './controllers/chat.controller';
 import { ChatSearchController } from './controllers/chat-search.controller';
+import { GoalsController } from './controllers/goals.controller';
 import { KeptSessionsController } from './controllers/kept-sessions.controller';
 import { McpController } from './controllers/mcp.controller';
 import { MemoryImportController } from './controllers/memory-import.controller';
@@ -24,6 +25,7 @@ import { RunGroupsController } from './controllers/run-groups.controller';
 import { SkillsController } from './controllers/skills.controller';
 import { CallContextDao } from './dao/call-context.dao';
 import { ChatSearchIndexDao } from './dao/chat-search-index.dao';
+import { GoalDao } from './dao/goal.dao';
 import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
@@ -79,6 +81,7 @@ import { FindingsReportBroker } from './services/findings-report.broker';
 import { GalleryBroker } from './services/gallery.broker';
 import { GalleryImageService } from './services/gallery-image.service';
 import { GlobalChatSearchService } from './services/global-chat-search.service';
+import { GoalsService } from './services/goals.service';
 import { HostWakeBus } from './services/host-wake.bus';
 import { HostWakeChatDelivery } from './services/host-wake-chat-delivery.service';
 import { ItemCallIndexService } from './services/item-call-index.service';
@@ -170,6 +173,7 @@ import { defaultSpawn } from './utils/spawn-cli';
   controllers: [
     ArtifactsController,
     ChatController,
+    GoalsController,
     ChatSearchController,
     KeptSessionsController,
     McpController,
@@ -259,6 +263,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     MonitorBroker,
     TeamNoteBroker,
     RunOutcomeBroker,
+    GoalsService,
+    GoalDao,
     RunOutcomeHistoryService,
     HostWakeBus,
     HostWakeChatDelivery,
@@ -597,6 +603,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     // each member's sink and reads the unread figure into call replies and wakes.
     TeamNoteBroker,
     RunOutcomeBroker,
+    GoalsService,
+    GoalDao,
     RunOutcomeHistoryService,
     // For the team delivery, which records the end of output it drops.
     MonitorRowWriter,

@@ -99,6 +99,7 @@ import type {
   SessionPullRequest,
   SessionPullRequestsInput,
   SubagentRecoveryRef,
+  ToolCallMetric,
   TurnDriver,
   TurnInstructionInput,
 } from './adapter.types';
@@ -599,6 +600,15 @@ export abstract class AgentAdapter {
     _input: SessionPullRequestsInput,
   ): Promise<SessionPullRequest[]> {
     return Promise.resolve([]);
+  }
+
+  /**
+   * How one of this CLI's tool calls is counted in the tool ledger: the tool,
+   * and the MCP server its name says it came from, from the `tool_call` row's
+   * `name` and `kind`. The default knows no MCP spelling and counts the name.
+   */
+  toolCallMetric(name: string, _kind: string | null): ToolCallMetric {
+    return { tool: name, server: null };
   }
 
   /**

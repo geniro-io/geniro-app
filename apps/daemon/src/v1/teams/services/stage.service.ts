@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 
 import {
+  HOST_GOALS_TOOL,
   type StageActor,
   type StageChangePayload,
   StageChangePayloadSchema,
@@ -17,6 +18,7 @@ import {
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { GoalsService } from '../../agents/services/goals.service';
 import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { MonitorRegistry } from '../../agents/services/monitor.registry';
@@ -81,6 +83,7 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
     private readonly runTeams: RunTeamService,
     private readonly writes: RunWriteQueue,
     @Optional() private readonly monitors?: MonitorRegistry,
+    @Optional() private readonly goals?: GoalsService,
   ) {}
 
   onModuleInit(): void {
@@ -264,6 +267,16 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
         return refusal;
       }
       const stage = stages.find((s) => s.id === request.stage)!;
+      if (
+        request.action === 'complete' &&
+        stage.requireGoals === true &&
+        ((await this.goals?.list(runId)) ?? []).length === 0
+      ) {
+        return refuse(
+          'GOALS_REQUIRED',
+          `${stage.title} needs the run's goals recorded before it is done: record them with ${HOST_GOALS_TOOL} (action "set"), then complete the stage.`,
+        );
+      }
       const forks = stage.next ?? [];
       const payload: StageChangePayload = {
         action: request.action,

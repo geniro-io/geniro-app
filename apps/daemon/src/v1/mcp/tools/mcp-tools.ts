@@ -7,6 +7,7 @@ import type { FindingsReportBroker } from '../../agents/services/findings-report
 import type { GalleryBroker } from '../../agents/services/gallery.broker';
 import type { GalleryImageService } from '../../agents/services/gallery-image.service';
 import type { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
+import type { GoalsService } from '../../agents/services/goals.service';
 import type { MetricsBroker } from '../../agents/services/metrics.broker';
 import type { MonitorBroker } from '../../agents/services/monitor.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
@@ -35,6 +36,7 @@ import { BackupTeamTool } from './backup-team/backup-team.tool';
 import { BoardTools } from './board/board.tools';
 import { CallAgentTool } from './call-agent/call-agent.tool';
 import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
+import { GoalsTool } from './goals/goals.tool';
 import { ListAgentThreadsTool } from './list-agent-threads/list-agent-threads.tool';
 import { ListMonitorsTool } from './list-monitors/list-monitors.tool';
 import { MarkRecommendationsTool } from './mark-recommendations/mark-recommendations.tool';
@@ -86,6 +88,7 @@ export interface McpToolDeps {
   monitors: MonitorBroker;
   teamNotes: TeamNoteBroker;
   runOutcomes: RunOutcomeBroker;
+  goals: GoalsService;
   stages: StageService;
   patches: PatchBroker;
   plans: PlanBroker;
@@ -110,7 +113,7 @@ export interface McpToolDeps {
  *
  * The order is part of what a model reads — the descriptions are audited as a
  * SET (`mcp-server.service.spec.ts`) — so it is written once, here: the call
- * surface, the team notes, the run outcome, then the question, the render family, the action buttons, the
+ * surface, the team notes, the run outcome and goals, then the question, the render family, the action buttons, the
  * monitors, the board, the chat history, the team library, the analysis tools, and the
  * agent's own notification last.
  */
@@ -126,6 +129,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new TeamNotesTool(deps.teamNotes),
     new RecordOutcomeTool(deps.runOutcomes),
     new MoveStageTool(deps.stages, deps.calls),
+    new GoalsTool(deps.goals),
     new AskUserQuestionTool(deps.questions),
     new ReportFindingsTool(deps.findings),
     new ShowChartTool(deps.charts),

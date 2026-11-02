@@ -295,12 +295,13 @@ export class RunDao extends BaseDao<Run> {
     const read = async (where: FilterQuery<Run>): Promise<RunFacts[]> =>
       (
         await this.getRepo(txEm).find(where, {
-          fields: ['id', 'teamId', 'createdAt'],
+          fields: ['id', 'teamId', 'agentKind', 'createdAt'],
           disableIdentityMap: true,
         })
       ).map((run) => ({
         id: run.id,
         teamId: run.teamId,
+        agentKind: run.agentKind,
         createdAt: run.createdAt,
       }));
     if (runIds === 'every-team-run') {
@@ -895,6 +896,18 @@ export class RunDao extends BaseDao<Run> {
    * announce re-projects, and the outcomes column it updates. Null for a
    * run that is gone.
    */
+  /** The run's recorded thread outcome column, read alone; null for none or a run that is gone. */
+  async threadOutcomeOf(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<string | null> {
+    const row = await this.getRepo(txEm).findOne(
+      { id: runId },
+      { fields: ['id', 'threadOutcome'], disableIdentityMap: true },
+    );
+    return row?.threadOutcome ?? null;
+  }
+
   async outcomeContextOf(
     runId: string,
     txEm?: EntityManager,

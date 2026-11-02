@@ -7,17 +7,22 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { CallContext } from '../../runs/entity/call-context.entity';
+import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import { ArtifactShareDao } from '../../shares/dao/artifact-share.dao';
 import { ArtifactShare } from '../../shares/entity/artifact-share.entity';
+import { MetricLedgerDao } from '../../stats/dao/metric-ledger.dao';
+import { ToolCallEvent } from '../../stats/entity/tool-call-event.entity';
+import { UsageActivity } from '../../stats/entity/usage-activity.entity';
 import type {
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
 } from '../adapters/adapter.types';
 import { CallContextDao } from '../dao/call-context.dao';
+import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -74,7 +79,17 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Run, Item, NodeState, CallContext, WallTurn, ArtifactShare],
+        entities: [
+          Run,
+          Item,
+          NodeState,
+          CallContext,
+          WallTurn,
+          ArtifactShare,
+          Goal,
+          ToolCallEvent,
+          UsageActivity,
+        ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -367,6 +382,69 @@ describe('RunTeardownService (in-memory sqlite)', () => {
         'report',
       ),
     ).not.toBeNull();
+  });
+
+  it('keeps the run’s goals and its metric ledgers, which count every run a team ever had', async () => {
+    await seedRun('run-a');
+    const em = orm.em.fork();
+    em.persist(
+      Object.assign(new Goal(), {
+        runId: 'run-a',
+        number: 1,
+        text: 'ship it',
+        source: 'agent',
+        status: 'achieved',
+        evidence: 'merged',
+      }),
+    );
+    await em.flush();
+    const ledger = new MetricLedgerDao(orm.em);
+    await ledger.insertToolCall({
+      runId: 'run-a',
+      seq: 3,
+      occurredAt: new Date(),
+      teamSlug: 'dev-team',
+      memberId: 'dev',
+      agentKind: 'claude',
+      tool: 'Bash',
+      mcpServer: null,
+      ok: true,
+      durationMs: 10,
+    });
+    await ledger.insertCall({
+      runId: 'run-a',
+      seq: 4,
+      callId: 'call-1',
+      occurredAt: new Date(),
+      teamSlug: 'dev-team',
+      caller: 'lead',
+      callee: 'dev',
+      durationMs: 1,
+      costUsd: null,
+      turns: 1,
+      ok: true,
+    });
+    await ledger.insertStage({
+      runId: 'run-a',
+      seq: 5,
+      occurredAt: new Date(),
+      teamSlug: 'dev-team',
+      memberId: 'dev',
+      lead: null,
+      stageId: 'plan',
+      action: 'complete',
+      enteredAt: null,
+      durationMs: null,
+    });
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(
+      await new GoalDao(orm.em).listByRun('run-a', orm.em.fork()),
+    ).toHaveLength(1);
+    expect(await ledger.toolCalls({})).toHaveLength(1);
+    expect(await ledger.calls({})).toHaveLength(1);
+    expect(await ledger.stages({})).toHaveLength(1);
   });
 
   it('hands the run’s own user messages to the upload store, and nothing else', async () => {

@@ -51,6 +51,41 @@ function onBuild(summary = 'planned it'): StageProgress {
 }
 
 describe('handOffBrief', () => {
+  it('lists the open goals for the new lead to close, the rest counted', () => {
+    const goals = Array.from({ length: 10 }, (_, i) => ({
+      id: `g${i + 1}`,
+      text: `goal ${i + 1}`,
+    }));
+    const brief = handOffBrief({
+      stages: STAGES,
+      members: MEMBERS,
+      progress: onBuild(),
+      lead: 'bob',
+      previousLead: 'ada',
+      request: null,
+      unreadTeamNotes: 0,
+      openGoals: goals,
+    });
+    expect(brief).toContain(
+      'Open goals (10) — close each with evidence using goals once it is met:\n- g1: goal 1',
+    );
+    expect(brief).toContain('- g8: goal 8');
+    expect(brief).not.toContain('- g9: goal 9');
+    expect(brief).toContain('- …and 2 more (goals action "list")');
+    expect(
+      handOffBrief({
+        stages: STAGES,
+        members: MEMBERS,
+        progress: onBuild(),
+        lead: 'bob',
+        previousLead: 'ada',
+        request: null,
+        unreadTeamNotes: 0,
+        openGoals: [],
+      }),
+    ).not.toContain('Open goals');
+  });
+
   it('lists completed stages with their summaries and caps the length', () => {
     const brief = handOffBrief({
       stages: STAGES,

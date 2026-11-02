@@ -22,6 +22,7 @@ import { Dialog } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
 import { Menu } from '../components/ui/menu';
 import { OptionList } from '../components/ui/option-list';
+import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { memberLabels, ResponsiblePick } from './member-pick';
@@ -48,6 +49,7 @@ function normalized(draft: readonly TeamStage[]): TeamStage[] {
       title: stage.title.trim(),
       ...(howToWork ? { howToWork } : {}),
       goal: stage.goal.trim(),
+      ...(stage.requireGoals === true ? { requireGoals: true } : {}),
       ...(stage.responsible && stage.responsible.length > 0
         ? { responsible: stage.responsible }
         : {}),
@@ -855,6 +857,17 @@ function StageForm({
           onBlur={() => onTouch('goal')}
         />
         <FieldIssues {...at('goal')} />
+        <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+          <Switch
+            size="sm"
+            checked={stage.requireGoals === true}
+            aria-label="Require the run's goals before this stage is done"
+            onCheckedChange={(on) =>
+              onChange({ requireGoals: on ? true : undefined })
+            }
+          />
+          Require the run's goals to be recorded before this stage is done
+        </label>
       </Field>
       <Field
         label="Responsible"

@@ -8,16 +8,26 @@ import {
   type RunOutcomeInput,
   type RunOutcomePayload,
   type RunOutcomeWriteOutcome,
+  type ThreadOutcomeInput,
+  type ThreadOutcomePayload,
+  type ThreadOutcomeWriteOutcome,
 } from '../chat.types';
 import { RunDao } from '../dao/run.dao';
 import { KeyedChain } from '../utils/keyed-chain';
 import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
+import {
+  readRunGoals,
+  readThreadOutcome,
+  threadOutcomeOf,
+  writeThreadOutcome,
+} from '../utils/run-goals';
 import {
   parsePullRequestUrl,
   type PullRequestIdentity,
   readRunOutcomes,
   withRunOutcome,
 } from '../utils/run-outcomes';
+import { AgentEventBus } from './agent-events.bus';
 import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 import { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunOutcomeHistoryService } from './run-outcome-history.service';
@@ -32,8 +42,9 @@ export interface RunOutcomeRecorder {
 }
 
 /**
- * One team member's end of `record_outcome`, installed by the pass that runs
- * it: the run's seq-allocating write, and which conversation a caller key is.
+ * One agent's end of `record_outcome`, installed by whatever runs it — a
+ * team pass for each member, a chat for each turn: the run's seq-allocating
+ * write, and which conversation a caller key is.
  */
 export interface RunOutcomeSink {
   persistItem(
@@ -46,8 +57,9 @@ export interface RunOutcomeSink {
 }
 
 /**
- * `record_outcome`: a team member records where one pull request of its run
- * ended up. The `run_outcome` row is the record; the run's `runOutcomes`
+ * `record_outcome`: an agent records how its thread ended (a `thread_outcome`
+ * row, the newest kept in `Run.threadOutcome`), or where one pull request of
+ * its run ended up. The `run_outcome` row is the record; the run's `runOutcomes`
  * column keeps the newest per pull request for the run's wire projection, and
  * the stats module copies each row into its ledger (`RunOutcomeLedgerService`
  * there), which outlives the run.
@@ -67,6 +79,7 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
     private readonly runDao: RunDao,
     private readonly history: RunOutcomeHistoryService,
     private readonly captures: PullRequestCaptureService,
+    private readonly bus: AgentEventBus,
   ) {
     super();
   }
@@ -94,8 +107,86 @@ export class RunOutcomeBroker extends HostSinkBroker<RunOutcomeSink> {
     );
   }
 
+  async recordThread(
+    runId: string,
+    memberId: string,
+    caller: string,
+    input: ThreadOutcomeInput,
+  ): Promise<ThreadOutcomeWriteOutcome | HostSinkUnavailable> {
+    return this.deliver(
+      runId,
+      memberId,
+      'no pass is running that could record it',
+      'record how the thread ended',
+      (sink) =>
+        this.writes.run(runId, () =>
+          this.recordThreadNow(runId, memberId, caller, input, sink),
+        ),
+    );
+  }
+
   forgetRun(runId: string): void {
     this.writes.forget(runId);
+  }
+
+  private async recordThreadNow(
+    runId: string,
+    memberId: string,
+    caller: string,
+    input: ThreadOutcomeInput,
+    sink: RunOutcomeSink,
+  ): Promise<ThreadOutcomeWriteOutcome> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (run === null) {
+      return { status: 'refused', reason: 'this run no longer exists' };
+    }
+    const standing = readThreadOutcome(run.threadOutcome);
+    if (
+      standing?.seq != null &&
+      standing.kind === input.kind &&
+      standing.summary === input.summary
+    ) {
+      return { status: 'unchanged', seq: standing.seq };
+    }
+    const recorder = sink.recorder(caller);
+    const payload: ThreadOutcomePayload = {
+      kind: input.kind,
+      summary: input.summary,
+      teamSlug: run.teamId,
+      nodeId: recorder.memberId,
+      conversationId: recorder.conversationId,
+      ...(recorder.callId === null ? {} : { callId: recorder.callId }),
+    };
+    const item = await sink.persistItem(
+      memberId,
+      'thread_outcome',
+      null,
+      payload,
+    );
+    const outcome = {
+      kind: input.kind,
+      summary: input.summary,
+      source: 'recorded' as const,
+      seq: item.seq,
+    };
+    try {
+      await this.runDao.updateWithoutActivity(
+        runId,
+        { threadOutcome: writeThreadOutcome(outcome) },
+        em,
+      );
+    } catch (err) {
+      this.log.warn(
+        `run ${runId} recorded thread outcome ${item.seq} but could not update its column: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    this.bus.publishRunStatus({
+      runId,
+      status: null,
+      outcome: threadOutcomeOf(outcome, readRunGoals(run.goals)),
+    });
+    return { status: 'recorded', seq: item.seq };
   }
 
   private async recordNow(

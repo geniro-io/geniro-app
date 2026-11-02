@@ -73,6 +73,7 @@ import type {
   NO_PLAN_LIMITS,
   RecoveredSubagentOutcome,
   SubagentRecoveryRef,
+  ToolCallMetric,
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
@@ -206,6 +207,7 @@ import {
   readCursorTaskInput,
 } from './utils/cursor-task.utils';
 import { parseCursorPlan, parseCursorTodos } from './utils/cursor-todos.utils';
+import { cursorToolCallMetric } from './utils/cursor-tool-metric.utils';
 import { cursorTransientResumePrompt } from './utils/cursor-transient-resume.utils';
 import {
   cursorUsagePageLength,
@@ -3236,6 +3238,10 @@ export class CursorAcpAdapter extends AgentAdapter {
    */
   override sweepStaleState(): void {
     sweepStaleCursorProfiles(this.profileBaseDir());
+  }
+
+  override toolCallMetric(name: string, kind: string | null): ToolCallMetric {
+    return cursorToolCallMetric(name, kind);
   }
 
   /**

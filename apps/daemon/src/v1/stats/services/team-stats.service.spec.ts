@@ -8,10 +8,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
+import { GoalDao } from '../../agents/dao/goal.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { ID_BATCH } from '../../agents/utils/id-batches';
+import { Goal } from '../../runs/entity/goal.entity';
+import { MetricLedgerDao } from '../dao/metric-ledger.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
+import { ToolCallEvent } from '../entity/tool-call-event.entity';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
 import type { RunOutcomeLedgerRow, UsageEventInput } from '../stats.types';
@@ -28,7 +32,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [UsageActivity, UsageEvent],
+        entities: [UsageActivity, UsageEvent, ToolCallEvent, Goal],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -55,6 +59,8 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         new ClaudeAdapter(),
         new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
       ]),
+      new MetricLedgerDao(em),
+      new GoalDao(em),
     );
   });
 
@@ -198,6 +204,173 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       },
       days: [],
       byMember: [],
+      metrics: {
+        goals: {
+          recorded: 0,
+          achieved: 0,
+          notAchieved: 0,
+          dropped: 0,
+          open: 0,
+          achievedShare: null,
+          runsWithGoals: 0,
+          measuredRuns: 0,
+          coverage: null,
+        },
+        outcomes: {
+          success: 0,
+          partial: 0,
+          failed: 0,
+          abandoned: 0,
+          recorded: 0,
+          derived: 0,
+        },
+        handOffs: null,
+        tools: [],
+        mcpServers: [],
+        stages: [],
+        calls: [],
+      },
+    });
+  });
+
+  describe('thread metrics', () => {
+    async function goal(
+      runId: string,
+      number: number,
+      status: Goal['status'],
+      teamSlug = 'dev-team',
+    ): Promise<void> {
+      const em = orm.em.fork();
+      em.persist(
+        Object.assign(new Goal(), {
+          runId,
+          number,
+          teamSlug,
+          text: `goal ${number}`,
+          source: 'agent',
+          status,
+        }),
+      );
+      await em.flush();
+    }
+
+    it('reports goals achieved as achieved over every goal not dropped, an open one counted as not achieved', async () => {
+      await teamRun('r1');
+      await activityDao.markMetricsMeasured('r1');
+      await teamRun('r2');
+      await activityDao.markMetricsMeasured('r2');
+      await goal('r1', 1, 'achieved');
+      await goal('r1', 2, 'achieved');
+      await goal('r1', 3, 'not_achieved');
+      await goal('r2', 1, 'achieved');
+      await goal('r2', 2, 'dropped');
+      await goal('r2', 3, 'open');
+      await goal('other-team-run', 1, 'not_achieved', 'other');
+
+      const { metrics } = await service.read('dev-team');
+
+      expect(metrics.goals).toEqual({
+        recorded: 6,
+        achieved: 3,
+        notAchieved: 1,
+        dropped: 1,
+        open: 1,
+        achievedShare: 0.6,
+        runsWithGoals: 2,
+        measuredRuns: 2,
+        coverage: 1,
+      });
+      expect(metrics.outcomes).toMatchObject({
+        partial: 1,
+        success: 0,
+        derived: 1,
+      });
+    });
+
+    it('counts calls between members and hand-offs', async () => {
+      await teamRun('r1');
+      await activityDao.markMetricsMeasured('r1');
+      const ledger = new MetricLedgerDao(orm.em);
+      const call = (seq: number, caller: string, callee: string, ok: boolean) =>
+        ledger.insertCall({
+          runId: 'r1',
+          seq,
+          callId: `call-${seq}`,
+          occurredAt: started,
+          teamSlug: 'dev-team',
+          caller,
+          callee,
+          durationMs: 1000 * seq,
+          costUsd: 0.5,
+          turns: 2,
+          ok,
+        });
+      await call(1, 'lead', 'dev', true);
+      await call(2, 'lead', 'dev', false);
+      await call(3, 'dev', 'reviewer', true);
+      for (const [seq, action] of [
+        [10, 'handoff'],
+        [11, 'complete'],
+        [12, 'handoff'],
+      ] as const) {
+        await ledger.insertStage({
+          runId: 'r1',
+          seq,
+          occurredAt: started,
+          teamSlug: 'dev-team',
+          memberId: null,
+          lead: 'dev',
+          stageId: 'build',
+          action,
+          enteredAt: null,
+          durationMs: action === 'complete' ? 60_000 : null,
+        });
+      }
+
+      const { metrics } = await service.read('dev-team');
+
+      expect(metrics.calls).toEqual([
+        {
+          caller: 'lead',
+          callee: 'dev',
+          calls: 2,
+          failed: 1,
+          turns: 4,
+          costUsd: 1,
+          avgMs: 1500,
+        },
+        {
+          caller: 'dev',
+          callee: 'reviewer',
+          calls: 1,
+          failed: 0,
+          turns: 2,
+          costUsd: 0.5,
+          avgMs: 3000,
+        },
+      ]);
+      expect(metrics.handOffs).toBe(2);
+      expect(metrics.stages).toEqual([
+        {
+          stageId: 'build',
+          completed: 1,
+          skipped: 0,
+          reopened: 0,
+          avgMs: 60_000,
+        },
+      ]);
+    });
+
+    it('keeps metrics of runs before the ledger null', async () => {
+      await teamRun('old-run');
+
+      const { metrics } = await service.read('dev-team');
+
+      expect(metrics.goals.measuredRuns).toBe(0);
+      expect(metrics.goals.coverage).toBeNull();
+      expect(metrics.goals.achievedShare).toBeNull();
+      expect(metrics.handOffs).toBeNull();
+      expect(metrics.tools).toEqual([]);
     });
   });
 

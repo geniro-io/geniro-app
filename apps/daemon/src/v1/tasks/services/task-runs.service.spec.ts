@@ -624,6 +624,25 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     expect(stored?.runId).toBe('run-1');
   });
 
+  it('starts the chat at the project’s context window and model parameters', async () => {
+    await projectDao.updateById(projectId, {
+      model: 'opus',
+      contextWindow: '1m',
+      modelParameters: JSON.stringify({ fast: 'on' }),
+    });
+    const task = await seed();
+
+    await service.start(task.id, start());
+
+    expect(createChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'opus',
+        contextWindow: '1m',
+        modelParameters: { fast: 'on' },
+      }),
+    );
+  });
+
   it('hands the chat the task id and the PROJECT’s group, not the folder rule', async () => {
     const task = await seed();
 

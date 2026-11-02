@@ -1,6 +1,7 @@
 import {
   Bot as SubagentIcon,
   ChartGantt,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
@@ -72,6 +73,7 @@ import {
   instanceIdentity,
   type InstanceTaskList,
   isInstanceLive,
+  visibleInstances,
 } from './agent-instances';
 import { ArtifactDialog } from './artifact-dialog';
 import type { RunArtifact } from './artifact-payload';
@@ -2349,6 +2351,12 @@ export function AgentsPanel({
   // An override rather than the whole state: absent a press a block follows
   // its instance — open while it works, shut once it is over — so a call that
   // finishes folds itself away without anybody having to.
+  const allInstancesKey = (id: string): string => `instances-all:${id}`;
+  const areAllInstancesShown = (id: string): boolean =>
+    folds.get(allInstancesKey(id)) === true;
+  const toggleAllInstances = (id: string): void => {
+    folds.set(allInstancesKey(id), !areAllInstancesShown(id));
+  };
   const instanceOverride = (key: string): boolean | null =>
     folds.get(`instance:${key}`);
   const toggleInstance = (key: string, wasOpen: boolean): void => {
@@ -2719,6 +2727,11 @@ export function AgentsPanel({
                 : [];
               const activeInstances =
                 shownInstances.filter(isInstanceLive).length;
+              const allInstancesShown = areAllInstancesShown(agent.id);
+              const visible = visibleInstances(
+                shownInstances,
+                allInstancesShown,
+              );
               return (
                 <li
                   key={agent.id}
@@ -3014,7 +3027,7 @@ export function AgentsPanel({
                           already the enclosure, and a bordered list inside it
                           was a box in a box. */}
                       <ul className="m-0 flex list-none flex-col divide-y divide-border/60 border-y border-border/60 p-0">
-                        {shownInstances.map((instance) => {
+                        {visible.shown.map((instance) => {
                           const identity = instanceIdentity(instance.thread);
                           const key = instanceKey(agent.id, identity);
                           // Open by default only when it is the ONE instance at
@@ -3050,6 +3063,23 @@ export function AgentsPanel({
                           );
                         })}
                       </ul>
+                      {visible.folded > 0 || allInstancesShown ? (
+                        <button
+                          type="button"
+                          data-slot="agent-instances-more"
+                          aria-expanded={allInstancesShown}
+                          className="mt-1 flex items-center gap-1 rounded-control px-1 py-1 text-left text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                          onClick={() => toggleAllInstances(agent.id)}>
+                          {allInstancesShown ? (
+                            <ChevronUp aria-hidden className="size-3.5" />
+                          ) : (
+                            <ChevronDown aria-hidden className="size-3.5" />
+                          )}
+                          {allInstancesShown
+                            ? 'Show only the latest finished'
+                            : `Show ${visible.folded} earlier finished`}
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                 </li>

@@ -5,6 +5,7 @@ import { redactSecrets } from '../../diagnostics/utils/redact';
 import { ProjectInstructionChangeDao } from '../../projects/dao/project-instruction-change.dao';
 import type { Project } from '../../projects/entity/project.entity';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
+import { projectBlocksOf } from '../../projects/utils/project-instruction-blocks';
 import {
   projectInstructionsBody,
   projectInstructionsText,
@@ -319,7 +320,7 @@ export class ThreadReaderService {
         key: project.taskKey,
         instructionsRevision: project.instructionsRevision,
         description: project.description,
-        instructions: project.instructions,
+        instructionBlocks: projectBlocksOf(project),
         runs,
         changes: changes.map((change) => ({
           at: change.changedAt.toISOString(),
@@ -342,7 +343,7 @@ export class ThreadReaderService {
       next:
         projects.length === 0
           ? 'The analysed runs belong to no project, so there are no project instructions to improve.'
-          : 'A project-instructions recommendation (P-) names its projectId and changes only `instructions`; once applied it is written with the project’s instructionsRevision as read here.',
+          : 'A project-instructions recommendation (P-) names its projectId and changes only its instruction blocks (each run receives their texts joined in order); once applied it is written with the project’s instructionsRevision as read here.',
     });
   }
 

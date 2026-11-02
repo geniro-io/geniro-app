@@ -27,9 +27,58 @@ describe('resolveRunTarget', () => {
       agentKind: 'claude',
       model: 'opus',
       effort: null,
+      contextWindow: null,
+      modelParameters: {},
       approval: null,
       configDir: null,
     });
+  });
+
+  it('carries the project context window and model parameters with its model', () => {
+    const target = resolveRunTarget([
+      press(),
+      press(),
+      {
+        agentKind: 'claude',
+        model: 'opus',
+        contextWindow: '1m',
+        modelParameters: JSON.stringify({ fast: 'on' }),
+      },
+    ]);
+
+    expect(target).toMatchObject({
+      contextWindow: '1m',
+      modelParameters: { fast: 'on' },
+    });
+  });
+
+  it('drops the project window and parameters once a card picks another model', () => {
+    const target = resolveRunTarget([
+      press(),
+      { model: 'sonnet' },
+      {
+        agentKind: 'claude',
+        model: 'opus',
+        contextWindow: '1m',
+        modelParameters: JSON.stringify({ fast: 'on' }),
+      },
+    ]);
+
+    expect(target).toMatchObject({
+      model: 'sonnet',
+      contextWindow: null,
+      modelParameters: {},
+    });
+  });
+
+  it('keeps the project window when nothing names a model', () => {
+    const target = resolveRunTarget([
+      press(),
+      { effort: 'high' },
+      { agentKind: 'claude', contextWindow: '1m' },
+    ]);
+
+    expect(target).toMatchObject({ model: null, contextWindow: '1m' });
   });
 
   it('lets a CARD override the project it belongs to', () => {
@@ -152,7 +201,13 @@ describe('resolveRunTarget', () => {
     const target = resolveRunTarget([
       press(),
       { agentKind: 'claude' },
-      { agentKind: 'cursor-agent', model: 'kimi-k3', effort: 'max' },
+      {
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+        effort: 'max',
+        contextWindow: '1m',
+        modelParameters: JSON.stringify({ fast: 'on' }),
+      },
     ]);
 
     expect(target).toEqual({
@@ -160,6 +215,8 @@ describe('resolveRunTarget', () => {
       agentKind: 'claude',
       model: null,
       effort: null,
+      contextWindow: null,
+      modelParameters: {},
       approval: null,
       configDir: null,
     });

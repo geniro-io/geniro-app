@@ -836,6 +836,10 @@ export function Tasks({
         open={newProjectOpen}
         teams={teams}
         cliDetections={cliDetections}
+        agentsApi={apis?.agents ?? null}
+        capabilitiesApi={apis?.capabilities ?? null}
+        recentConfigDirs={recentConfigDirs}
+        configProfiles={configProfiles}
         onClose={() => {
           setNewProjectOpen(false);
         }}

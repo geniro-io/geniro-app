@@ -17,6 +17,7 @@ import {
   turnMemberOf,
   usageFiguresFrom,
 } from '../../agents/utils/usage-figures';
+import type { AgentKind } from '../../runs/runs.types';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { UsageEventInput } from '../stats.types';
 import { polledAgentKind, polledSpendRows } from '../utils/polled-spend';
@@ -121,13 +122,15 @@ export class UsageRecorderService implements OnModuleInit {
       run.agentKind === null && (run.polledCostCents ?? 0) > 0
         ? await this.nodeStateDao.polledSharesForRuns([runId], em)
         : [];
-    const agentKind = polledAgentKind(run, shares, (kind) =>
-      pollsSpendFor(this.adapters?.all() ?? new Map(), kind),
-    );
+    const pollsSpend = (kind: AgentKind): boolean =>
+      pollsSpendFor(this.adapters?.all() ?? new Map(), kind);
+    const agentKind = polledAgentKind(run, shares, pollsSpend);
     const rows = polledSpendRows(
       run,
       agentKind,
       await this.usageDao.latestReportedModel(runId, agentKind, em),
+      shares,
+      pollsSpend,
     );
     const newest = rows.at(-1);
     if (newest === undefined) {

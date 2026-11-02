@@ -233,8 +233,6 @@
   --title-line-height: 1.25;
   --title-tracking: -0.015em;
   --kpi-line-height: 1.15;
-  /* What a card does under the pointer: a soft lift. */
-  --lift-shadow: 0 1px 2px rgb(32 31 26 / 0.06), 0 6px 16px -8px rgb(32 31 26 / 0.18);
 
   /* Elevation — desktop panels use these, web relies on Tailwind defaults.
 

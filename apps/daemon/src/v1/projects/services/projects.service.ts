@@ -9,6 +9,10 @@ import {
 import { hasControlCharacters } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { RunGroupDao } from '../../agents/dao/run-group.dao';
+import {
+  readModelParameters,
+  writeModelParameters,
+} from '../../agents/utils/model-parameters';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { resolveValidDirectory } from '../../agents/utils/resolve-directory';
 import { LabelInstructionDao } from '../../tasks/dao/label-instruction.dao';
@@ -20,14 +24,22 @@ import { ProjectInstructionChangeDao } from '../dao/project-instruction-change.d
 import { Project } from '../entity/project.entity';
 import { ProjectInstructionChange } from '../entity/project-instruction-change.entity';
 import {
+  MAX_PROJECT_INSTRUCTION_BLOCKS,
   MAX_PROJECTS,
   PROJECT_CHANGE_COALESCE_MS,
-  PROJECT_INSTRUCTION_FIELDS,
+  PROJECT_INSTRUCTIONS_MAX,
   type ProjectChangeOrigin,
   type ProjectForFolder,
+  type ProjectInstructionBlock,
+  ProjectInstructionBlockSchema,
   type ProjectInstructionField,
   type ProjectWire,
 } from '../projects.types';
+import {
+  blocksDocument,
+  joinedBlockTexts,
+  projectBlocksOf,
+} from '../utils/project-instruction-blocks';
 import { projectKey } from '../utils/project-key';
 import { ProjectEventBus } from './project-events.bus';
 import { ProjectScopeService } from './project-scope.service';
@@ -38,10 +50,12 @@ type ProjectPatch = {
   folder?: string;
   groupId?: string | null;
   description?: string | null;
-  instructions?: string | null;
+  instructionBlocks?: ProjectInstructionBlock[] | null;
   agentKind?: Project['agentKind'];
   model?: string | null;
   effort?: string | null;
+  contextWindow?: string | null;
+  modelParameters?: Record<string, string> | null;
   approval?: Project['approval'];
   configDir?: string | null;
   teamSlug?: string | null;
@@ -122,10 +136,12 @@ export class ProjectsService {
     folder: string;
     groupId?: string;
     description?: string;
-    instructions?: string;
+    instructionBlocks?: ProjectInstructionBlock[];
     agentKind?: Project['agentKind'];
     model?: string;
     effort?: string;
+    contextWindow?: string;
+    modelParameters?: Record<string, string>;
     approval?: Project['approval'];
     configDir?: string;
     teamSlug?: string;
@@ -158,10 +174,12 @@ export class ProjectsService {
         folder,
         groupId: input.groupId ?? null,
         description: blankToNull(input.description),
-        instructions: blankToNull(input.instructions),
+        ...blockColumns(checkedBlocks(input.instructionBlocks ?? [])),
         agentKind: input.agentKind ?? null,
         model: input.model ?? null,
         effort: input.effort ?? null,
+        contextWindow: input.contextWindow ?? null,
+        modelParameters: writeModelParameters(input.modelParameters),
         approval: input.approval ?? null,
         configDir: input.configDir
           ? resolveValidDirectory(input.configDir, {
@@ -247,21 +265,33 @@ export class ProjectsService {
       project.groupId = patch.groupId;
     }
     const textChanges: TextChange[] = [];
-    for (const field of PROJECT_INSTRUCTION_FIELDS) {
-      const value = patch[field];
-      if (value === undefined) {
-        continue;
-      }
-      const next = blankToNull(value);
+    if (patch.description !== undefined) {
+      const next = blankToNull(patch.description);
       if (next !== null && hasControlCharacters(next)) {
         throw new BadRequestException(
           'INVALID_PROJECT_TEXT',
-          `the project's ${field} must not contain control characters`,
+          "the project's description must not contain control characters",
         );
       }
-      if (next !== project[field]) {
-        textChanges.push({ field, previous: project[field], next });
-        project[field] = next;
+      if (next !== project.description) {
+        textChanges.push({
+          field: 'description',
+          previous: project.description,
+          next,
+        });
+        project.description = next;
+      }
+    }
+    if (patch.instructionBlocks !== undefined) {
+      const blocks = checkedBlocks(patch.instructionBlocks ?? []);
+      const previous = blocksDocument(projectBlocksOf(project));
+      const next = blocksDocument(blocks);
+      const columns = blockColumns(blocks);
+      if (columns.instructionBlocks !== project.instructionBlocks) {
+        if (next !== previous) {
+          textChanges.push({ field: 'instructions', previous, next });
+        }
+        Object.assign(project, columns);
       }
     }
     if (textChanges.length > 0) {
@@ -276,6 +306,12 @@ export class ProjectsService {
     }
     if (patch.effort !== undefined) {
       project.effort = patch.effort;
+    }
+    if (patch.contextWindow !== undefined) {
+      project.contextWindow = patch.contextWindow;
+    }
+    if (patch.modelParameters !== undefined) {
+      project.modelParameters = writeModelParameters(patch.modelParameters);
     }
     if (patch.approval !== undefined) {
       project.approval = patch.approval;
@@ -544,8 +580,58 @@ function textsOnly(patch: ProjectPatch): boolean {
     ([key, value]) =>
       value === undefined ||
       key === 'expectedInstructionsRevision' ||
-      (PROJECT_INSTRUCTION_FIELDS as readonly string[]).includes(key),
+      key === 'description' ||
+      key === 'instructionBlocks',
   );
+}
+
+/**
+ * Blocks a writer may store: unique ids, and texts that together fit the
+ * instructions' bound. Refused whole, never trimmed.
+ */
+function checkedBlocks(
+  blocks: readonly ProjectInstructionBlock[],
+): ProjectInstructionBlock[] {
+  if (blocks.length > MAX_PROJECT_INSTRUCTION_BLOCKS) {
+    throw new BadRequestException(
+      'INVALID_PROJECT_BLOCKS',
+      `a project holds at most ${MAX_PROJECT_INSTRUCTION_BLOCKS} instruction blocks`,
+    );
+  }
+  const ids = new Set(blocks.map((block) => block.id));
+  if (ids.size !== blocks.length) {
+    throw new BadRequestException(
+      'INVALID_PROJECT_BLOCKS',
+      'two instruction blocks share an id',
+    );
+  }
+  const parsed = blocks.map((block) => {
+    const result = ProjectInstructionBlockSchema.safeParse(block);
+    if (!result.success) {
+      throw new BadRequestException(
+        'INVALID_PROJECT_BLOCKS',
+        `instruction block ${block.id}: ${result.error.issues[0]?.message ?? 'invalid'}`,
+      );
+    }
+    return result.data;
+  });
+  if ((joinedBlockTexts(parsed)?.length ?? 0) > PROJECT_INSTRUCTIONS_MAX) {
+    throw new BadRequestException(
+      'INVALID_PROJECT_BLOCKS',
+      `the instructions may hold at most ${PROJECT_INSTRUCTIONS_MAX} characters in all`,
+    );
+  }
+  return parsed;
+}
+
+/** The two columns a block list is stored in. */
+function blockColumns(
+  blocks: readonly ProjectInstructionBlock[],
+): Pick<Project, 'instructions' | 'instructionBlocks'> {
+  return {
+    instructions: joinedBlockTexts(blocks),
+    instructionBlocks: JSON.stringify(blocks),
+  };
 }
 
 function blankToNull(value: string | null | undefined): string | null {
@@ -562,10 +648,13 @@ function toWire(project: Project): ProjectWire {
     groupId: project.groupId,
     description: project.description,
     instructions: project.instructions,
+    instructionBlocks: projectBlocksOf(project),
     instructionsRevision: project.instructionsRevision,
     agentKind: project.agentKind,
     model: project.model,
     effort: project.effort,
+    contextWindow: project.contextWindow,
+    modelParameters: readModelParameters(project.modelParameters),
     approval: project.approval,
     configDir: project.configDir,
     teamSlug: project.teamSlug,

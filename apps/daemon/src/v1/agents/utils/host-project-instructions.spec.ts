@@ -40,6 +40,7 @@ describe('projectInstructionsCardInput', () => {
       project: 'Billing',
       previous: null,
       next: 'Use pnpm.',
+      blocks: [{ id: 'b1', title: '', text: 'Use pnpm.' }],
       baseRevision: 0,
       ids: ['P-1'],
       cardSeq: 4,

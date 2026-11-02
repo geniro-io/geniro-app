@@ -17,6 +17,7 @@ import {
   usageFiguresFrom,
 } from '../../agents/utils/usage-figures';
 import type { Run } from '../../runs/entity/run.entity';
+import type { AgentKind } from '../../runs/runs.types';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type { ActivityFact, UsageEventInput } from '../stats.types';
@@ -222,17 +223,18 @@ export class UsageBackfillService implements OnModuleInit {
     );
     let written = 0;
     for (const run of priced) {
-      const agentKind = polledAgentKind(
-        run,
-        sharesByRun.get(run.id) ?? [],
-        (kind) => pollsSpendFor(this.adapters?.all() ?? new Map(), kind),
-      );
+      const shares = sharesByRun.get(run.id) ?? [];
+      const pollsSpend = (kind: AgentKind): boolean =>
+        pollsSpendFor(this.adapters?.all() ?? new Map(), kind);
+      const agentKind = polledAgentKind(run, shares, pollsSpend);
       const rows = polledSpendRows(
         run,
         agentKind,
         agentKind === null
           ? null
           : (models.get(run.id)?.get(agentKind) ?? null),
+        shares,
+        pollsSpend,
       );
       if (
         rows.length > 0 &&

@@ -9041,9 +9041,13 @@ export function Chats({
   // fell into. Without it a team whose call never returned reads `running`
   // on the chip for the life of the chat, and the chip's whole point is that it
   // goes away.
-  const renderComposerShelf = (inQueueHeader: boolean): React.JSX.Element => (
+  const renderComposerShelf = (
+    inQueueHeader: boolean,
+    queueControl?: React.ReactNode,
+  ): React.JSX.Element => (
     <ComposerShelf
       inline={inQueueHeader}
+      trailing={queueControl}
       // The status counters, right-anchored, so they run VOLATILE → DURABLE:
       // a command comes and goes many times a turn, a task list outlives it.
       status={
@@ -10454,7 +10458,9 @@ export function Chats({
                         onReorder={messageQueue.reorder}
                         onSteer={(id) => void messageQueue.steer(id)}
                         onTogglePause={messageQueue.togglePause}
-                        leading={renderComposerShelf(true)}
+                        leading={(control) =>
+                          renderComposerShelf(true, control)
+                        }
                       />
                       {queued.length === 0 ? renderComposerShelf(false) : null}
 

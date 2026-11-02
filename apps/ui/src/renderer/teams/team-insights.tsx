@@ -8,7 +8,8 @@ import {
 } from '../chats/agent-activity';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
-import type { AvatarLook } from '../components/member-avatar';
+import { FigureTable } from '../components/figure-table';
+import { type AvatarLook, MemberAvatar } from '../components/member-avatar';
 import { ToolUsageTables } from '../components/tool-usage-tables';
 import { Input } from '../components/ui/input';
 import { SERIES } from '../stats/charts/chart-theme';
@@ -16,9 +17,9 @@ import {
   formatCount,
   formatDuration,
   formatPercent,
+  NOT_MEASURED,
 } from '../stats/stats-format';
 import { KpiStrip, KpiTile } from './kpi-tile';
-import { MemberBreakdownRow } from './member-breakdown-row';
 import { CallMatrix, StageFiguresTable } from './team-metrics';
 
 /**
@@ -53,82 +54,93 @@ export function TeamStatsTab({
       {error !== null && stats === null ? (
         <ErrorText>Couldn't load statistics: {error}</ErrorText>
       ) : null}
-      <KpiStrip>
-        <KpiTile
-          caption="Runs"
-          value={stats ? formatCount(stats.runs) : null}
-          trend={stats ? stats.days.map((day) => day.runs) : null}
-          color={SERIES.threads}
-        />
-        <KpiTile
-          caption="Cost"
-          value={stats?.costUsd == null ? null : formatExactUsd(stats.costUsd)}
-          note={
-            isEstimatedCost(estimated)
-              ? `incl. ${formatExactUsd(estimated)} estimated`
-              : null
-          }
-          trend={stats ? stats.days.map((day) => day.costUsd) : null}
-          color={SERIES.spend}
-        />
-        <KpiTile
-          caption="Turns"
-          value={stats ? formatCount(stats.turns) : null}
-          trend={stats ? stats.days.map((day) => day.turns) : null}
-          color={SERIES.tokens}
-        />
-        <KpiTile
-          caption="Worked time"
-          value={
-            stats?.workedMs == null ? null : formatDuration(stats.workedMs)
-          }
-          trend={stats ? stats.days.map((day) => day.workedMs) : null}
-          color={SERIES.avgTime}
-        />
-        <KpiTile
-          caption="Outcomes"
-          value={
-            outcomes && outcomes.total > 0
-              ? `${formatCount(outcomes.accepted)} of ${formatCount(outcomes.total)}`
-              : null
-          }
-          note={outcomes && outcomes.total > 0 ? 'accepted' : null}
-          trend={stats ? stats.days.map((day) => day.outcomes) : null}
-          color={SERIES.pullRequests}
-        />
-        <KpiTile
-          caption="Goals achieved"
-          value={
-            goals?.achievedShare == null
-              ? null
-              : formatPercent(goals.achievedShare * 100)
-          }
-          note={
-            goals === undefined || goals.recorded === 0
-              ? null
-              : `${formatCount(goals.achieved)} of ${formatCount(goals.recorded - goals.dropped)} goals${
-                  goals.coverage === null
-                    ? ''
-                    : ` · ${formatPercent(goals.coverage * 100)} of runs set goals`
-                }`
-          }
-          trend={null}
-          color={SERIES.threads}
-        />
-        <KpiTile
-          caption="Hand-offs"
-          value={
-            metrics?.handOffs == null ? null : formatCount(metrics.handOffs)
-          }
-          note={
-            metrics?.handOffs == null
-              ? null
-              : `over ${formatCount(goals?.measuredRuns ?? 0)} measured runs`
-          }
-          trend={null}
-          color={SERIES.avgTime}
-        />
-      </KpiStrip>
+      <div className="flex flex-col gap-3">
+        <KpiStrip>
+          <KpiTile
+            caption="Runs"
+            value={stats ? formatCount(stats.runs) : null}
+            trend={stats ? stats.days.map((day) => day.runs) : null}
+            color={SERIES.threads}
+          />
+          <KpiTile
+            caption="Cost"
+            value={
+              stats?.costUsd == null ? null : formatExactUsd(stats.costUsd)
+            }
+            note={
+              isEstimatedCost(estimated)
+                ? `incl. ${formatExactUsd(estimated)} estimated`
+                : null
+            }
+            trend={stats ? stats.days.map((day) => day.costUsd) : null}
+            color={SERIES.spend}
+          />
+          <KpiTile
+            caption="Turns"
+            value={stats ? formatCount(stats.turns) : null}
+            trend={stats ? stats.days.map((day) => day.turns) : null}
+            color={SERIES.tokens}
+          />
+          <KpiTile
+            caption="Worked time"
+            value={
+              stats?.workedMs == null ? null : formatDuration(stats.workedMs)
+            }
+            note={
+              stats && stats.measuredWorkedMs > 0
+                ? `incl. ${formatDuration(stats.measuredWorkedMs)} measured by Geniro`
+                : null
+            }
+            trend={stats ? stats.days.map((day) => day.workedMs) : null}
+            color={SERIES.avgTime}
+          />
+        </KpiStrip>
+        <KpiStrip columns={3}>
+          <KpiTile
+            caption="Outcomes"
+            value={
+              outcomes && outcomes.total > 0
+                ? `${formatCount(outcomes.accepted)} of ${formatCount(outcomes.total)}`
+                : null
+            }
+            note={outcomes && outcomes.total > 0 ? 'accepted' : null}
+            trend={stats ? stats.days.map((day) => day.outcomes) : null}
+            color={SERIES.pullRequests}
+          />
+          <KpiTile
+            caption="Goals achieved"
+            value={
+              goals?.achievedShare == null
+                ? null
+                : formatPercent(goals.achievedShare * 100)
+            }
+            note={
+              goals === undefined || goals.recorded === 0
+                ? null
+                : `${formatCount(goals.achieved)} of ${formatCount(goals.recorded - goals.dropped)} goals${
+                    goals.coverage === null
+                      ? ''
+                      : ` · ${formatPercent(goals.coverage * 100)} of runs set goals`
+                  }`
+            }
+            trend={null}
+            color={SERIES.threads}
+          />
+          <KpiTile
+            caption="Hand-offs"
+            value={
+              metrics?.handOffs == null ? null : formatCount(metrics.handOffs)
+            }
+            note={
+              metrics?.handOffs == null
+                ? null
+                : `over ${formatCount(goals?.measuredRuns ?? 0)} measured runs`
+            }
+            trend={null}
+            color={SERIES.avgTime}
+          />
+        </KpiStrip>
+      </div>
       <section className="flex flex-col gap-3">
         <div className="flex flex-col gap-0.5">
           <h3 className="text-base font-semibold">By member</h3>
@@ -137,14 +149,25 @@ export function TeamStatsTab({
           </p>
         </div>
         {stats && stats.runs > 0 ? (
-          <MemberRows stats={stats} memberOf={memberOf} />
+          <MemberTable stats={stats} memberOf={memberOf} />
         ) : (
           <EmptyState icon={<BarChart3 aria-hidden="true" />}>
             {loading ? 'Loading…' : 'No runs yet.'}
           </EmptyState>
         )}
       </section>
-      {metrics === undefined ? null : (
+      {metrics === undefined ? null : stats &&
+        stats.runs > 0 &&
+        metrics.goals.measuredRuns === 0 ? (
+        <MetricsSection
+          title="Calls, tools and stages"
+          caption="Recorded only for runs started since Geniro began measuring them.">
+          <p className="text-sm text-muted-foreground">
+            None of this team's {formatCount(stats.runs)} runs was measured yet;
+            its next run will be.
+          </p>
+        </MetricsSection>
+      ) : (
         <>
           <MetricsSection
             title="Calls between members"
@@ -191,7 +214,7 @@ function MetricsSection({
   );
 }
 
-function MemberRows({
+function MemberTable({
   stats,
   memberOf,
 }: {
@@ -200,34 +223,90 @@ function MemberRows({
     memberId: string,
   ) => { name: string; avatar?: AvatarLook | null } | null;
 }): React.JSX.Element {
+  type Row = TeamStatsDto['byMember'][number];
+  const nameOf = (row: Row): string =>
+    memberOf(row.memberId)?.name ?? `${row.memberId} (removed)`;
+  const shareOf = (row: Row): number | null =>
+    row.costUsd !== null && stats.costUsd
+      ? Math.round((row.costUsd / stats.costUsd) * 100)
+      : null;
   return (
-    <ul className="flex flex-col">
-      {stats.byMember.map((member) => {
-        const known = memberOf(member.memberId);
-        return (
-          <MemberBreakdownRow
-            key={member.memberId}
-            memberId={member.memberId}
-            name={known ? known.name : `${member.memberId} (removed)`}
-            avatar={known?.avatar}
-            share={
-              member.costUsd !== null && stats.costUsd
-                ? member.costUsd / stats.costUsd
-                : null
-            }
-            figures={[
-              member.costUsd === null ? null : formatUsd(member.costUsd),
-              formatCount(member.turns),
-              member.workedMs === null ? null : formatDuration(member.workedMs),
-            ]}
-          />
-        );
-      })}
-    </ul>
+    <FigureTable
+      ariaLabel="By member"
+      rows={stats.byMember}
+      rowKey={(row) => row.memberId}
+      emptyLabel="No member has taken a turn yet."
+      columns={[
+        {
+          header: 'Member',
+          cell: (row) => (
+            <span className="flex items-center gap-2 whitespace-nowrap">
+              <MemberAvatar
+                name={nameOf(row)}
+                avatar={memberOf(row.memberId)?.avatar}
+                colorKey={row.memberId}
+                size={20}
+              />
+              <span className="max-w-48 truncate">{nameOf(row)}</span>
+            </span>
+          ),
+          title: nameOf,
+        },
+        {
+          header: 'Share of cost',
+          fill: true,
+          cell: (row) => {
+            const share = shareOf(row);
+            return (
+              <span className="flex min-w-24 flex-row-reverse items-center gap-2">
+                <span className="w-9 text-right text-muted-foreground tabular-nums">
+                  {share === null ? NOT_MEASURED : `${share}%`}
+                </span>
+                <span className="h-1.5 flex-1 overflow-hidden rounded-pill bg-muted">
+                  <span
+                    aria-hidden="true"
+                    className="block h-full rounded-pill bg-chart-1"
+                    style={{ width: `${share ?? 0}%` }}
+                  />
+                </span>
+              </span>
+            );
+          },
+        },
+        {
+          header: 'Cost',
+          align: 'end',
+          cell: (row) =>
+            row.costUsd === null ? NOT_MEASURED : formatUsd(row.costUsd),
+          title: (row) =>
+            row.costUsd === null
+              ? 'No cost was reported for this member’s turns.'
+              : undefined,
+        },
+        {
+          header: 'Turns',
+          align: 'end',
+          cell: (row) => formatCount(row.turns),
+        },
+        {
+          header: 'Worked time',
+          align: 'end',
+          cell: (row) =>
+            row.workedMs === null
+              ? NOT_MEASURED
+              : `${row.measuredWorkedMs > 0 ? '≈' : ''}${formatDuration(row.workedMs)}`,
+          title: (row) =>
+            row.workedMs === null
+              ? 'Not measured: no turn of this member was timed.'
+              : row.measuredWorkedMs > 0
+                ? `Includes ${formatDuration(row.measuredWorkedMs)} Geniro measured by the clock, for turns this member’s CLI did not time.`
+                : undefined,
+        },
+      ]}
+    />
   );
 }
 
-/** The Memory tab: the team's memories, searchable, each opening in Settings. */
 export function TeamMemoryTab({
   query,
   onQueryChange,

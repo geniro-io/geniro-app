@@ -78,8 +78,16 @@ export class Project extends TimestampsEntity {
   @Property({ type: 'text', nullable: true })
   description: string | null = null;
 
+  /** The blocks' texts joined in order; written with {@link instructionBlocks}. */
   @Property({ type: 'text', nullable: true })
   instructions: string | null = null;
+
+  /**
+   * JSON `ProjectInstructionBlock[]`. Null on a project written before blocks,
+   * whose {@link instructions} then reads as one block (`projectBlocksOf`).
+   */
+  @Property({ type: 'text', nullable: true })
+  instructionBlocks: string | null = null;
 
   /**
    * Counts every change to {@link description} or {@link instructions}. A
@@ -103,6 +111,13 @@ export class Project extends TimestampsEntity {
 
   @Property({ type: 'string', nullable: true })
   effort: string | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  contextWindow: string | null = null;
+
+  /** JSON `{parameterId: value}`, as `Run.modelParameters` stores it. */
+  @Property({ type: 'text', nullable: true })
+  modelParameters: string | null = null;
 
   @Property({ type: 'string', nullable: true })
   approval: ChatApprovalMode | null = null;

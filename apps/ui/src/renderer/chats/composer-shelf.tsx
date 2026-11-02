@@ -106,10 +106,13 @@ import { WorkflowChip, workflowShellStatus } from './workflow-block';
  */
 export function ComposerShelf({
   children,
+  trailing,
   status,
   inline = false,
 }: {
   children: React.ReactNode;
+  /** Drawn after the content chips, before the right-anchored counters. */
+  trailing?: React.ReactNode;
   status?: React.ReactNode;
   inline?: boolean;
 }): React.JSX.Element {
@@ -118,9 +121,10 @@ export function ComposerShelf({
       data-slot="composer-shelf"
       className={cn(
         'flex min-h-7 items-center gap-1.5 overflow-clip px-1 max-sm:overflow-x-auto max-sm:overscroll-x-contain max-sm:[scrollbar-width:none] max-sm:*:shrink-0',
-        inline && '-ml-2 min-w-0 [&:not(:has(>:not(:empty)))]:hidden',
+        inline && '-mx-2 min-w-0 flex-1 [&:not(:has(>:not(:empty)))]:hidden',
       )}>
       {children}
+      {trailing}
       {status === undefined ? null : (
         <div data-slot="shelf-status" className={SHELF_STATUS_GROUP_CLASS}>
           {status}

@@ -4,6 +4,7 @@ import type { InterruptCause } from '../../utils/stop-cause';
 import {
   type ChatApprovalMode,
   ChatApprovalModeSchema,
+  hasControlCharacters,
 } from '../agents/chat.types';
 import {
   type AgentKind,
@@ -24,6 +25,43 @@ export const PROJECT_NAME_MAX = 120;
 /** Bounds on a project's description and instructions; twinned in the renderer's `projects/project-instructions-form.tsx`. */
 export const PROJECT_DESCRIPTION_MAX = 2000;
 export const PROJECT_INSTRUCTIONS_MAX = 20_000;
+
+/** TWIN: the renderer's `projects/project-instruction-blocks.ts`. */
+export const PROJECT_BLOCK_TITLE_MAX = 80;
+export const PROJECT_BLOCK_ID_MAX = 64;
+export const MAX_PROJECT_INSTRUCTION_BLOCKS = 40;
+
+const noControlCharacters = (value: string): boolean =>
+  !hasControlCharacters(value);
+
+/**
+ * One block of a project's instructions: a title the editor shows and text
+ * every run in the project receives. Blocks are joined in order, titles left
+ * out, the way a team's are.
+ */
+export const ProjectInstructionBlockSchema = z
+  .object({
+    id: z
+      .string()
+      .min(1)
+      .max(PROJECT_BLOCK_ID_MAX)
+      .refine(noControlCharacters, 'must not contain control characters')
+      .describe('Unique block id within the project'),
+    title: z
+      .string()
+      .max(PROJECT_BLOCK_TITLE_MAX)
+      .refine(noControlCharacters, 'must not contain control characters')
+      .describe('Short name shown in the editor'),
+    text: z
+      .string()
+      .max(PROJECT_INSTRUCTIONS_MAX)
+      .refine(noControlCharacters, 'must not contain control characters')
+      .describe('Instruction text every run in the project receives'),
+  })
+  .meta({ id: 'ProjectInstructionBlock' });
+export type ProjectInstructionBlock = z.infer<
+  typeof ProjectInstructionBlockSchema
+>;
 
 /** How many projects one machine may hold — a guard, not a design limit. */
 export const MAX_PROJECTS = 200;
@@ -119,8 +157,11 @@ export const ProjectWireSchema = z.object({
     .string()
     .nullable()
     .describe(
-      'Standing instructions every run in this project receives, after the user’s custom instructions; null when unset',
+      'Standing instructions every run in this project receives, after the user’s custom instructions — the blocks’ texts joined in order; null when unset',
     ),
+  instructionBlocks: z
+    .array(ProjectInstructionBlockSchema)
+    .describe('The instructions as the user wrote them, block by block'),
   instructionsRevision: z
     .number()
     .int()
@@ -130,6 +171,17 @@ export const ProjectWireSchema = z.object({
   agentKind: AgentKindSchema.nullable(),
   model: z.string().nullable(),
   effort: z.string().nullable(),
+  contextWindow: z
+    .string()
+    .nullable()
+    .describe(
+      "Which of the model's context-window sizes a run here starts at, in the CLI's own vocabulary; null = the model's own default",
+    ),
+  modelParameters: z
+    .record(z.string(), z.string())
+    .describe(
+      "Every other model setting a run here starts with, keyed by the CLI's own parameter id; {} when none are set",
+    ),
   approval: ChatApprovalModeSchema.nullable(),
   configDir: z.string().nullable(),
   teamSlug: z

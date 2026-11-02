@@ -97,7 +97,6 @@
   --text-title--letter-spacing: var(--title-tracking);
   --text-kpi: var(--kpi-size);
   --text-kpi--line-height: var(--kpi-line-height);
-  --shadow-panel-lift: var(--lift-shadow);
   --shadow-panel-sm: var(--shadow-sm);
   --shadow-panel-md: var(--shadow-md);
   --shadow-panel-lg: var(--shadow-lg);

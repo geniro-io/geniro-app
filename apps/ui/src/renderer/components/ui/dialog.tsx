@@ -2,62 +2,13 @@ import { X } from 'lucide-react';
 import * as React from 'react';
 
 import { Button } from './button';
+import { pushEscapeLayer } from './escape-layers';
 import { MenuAnchorContext } from './menu-anchor';
 import { cn } from './utils';
 
 /** What the focus trap treats as tabbable inside the dialog card. */
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-/**
- * Every open dialog, in the order it OPENED — the last one is on top.
- *
- * Escape belongs to exactly one dialog. With a `document` listener per dialog,
- * each would close on every Escape, and the ⤢ editor opened over the New task
- * dialog would take that dialog (and its whole draft) down with it on one
- * key. So there is ONE listener for all of them, and it closes the top entry
- * only.
- *
- * Ordered by OPENING, which is the order a user produces by opening one dialog
- * from inside another. Two dialogs that mount already open in the same commit
- * are ranked child-first (React runs a child's effects before its parent's) —
- * no screen does that, and the one sensible answer for it would need the tree.
- */
-const layers: { close: () => void }[] = [];
-
-function closeTopLayer(event: KeyboardEvent): void {
-  // A control that owns Escape says so with `preventDefault` — a label field
-  // abandoning its draft, a picker closing its menu (`menu.tsx`'s `consume()`).
-  // The key was theirs, and closing the dialog around them anyway made their
-  // own Escape cost the whole form.
-  if (event.key !== 'Escape' || event.defaultPrevented) {
-    return;
-  }
-  const top = layers[layers.length - 1];
-  if (top === undefined) {
-    return;
-  }
-  // Consumed here, so nothing else listening on `document` also acts on it.
-  event.preventDefault();
-  top.close();
-}
-
-/** Put a dialog on top of the stack; answers the call that takes it off. */
-function pushLayer(layer: { close: () => void }): () => void {
-  if (layers.length === 0) {
-    document.addEventListener('keydown', closeTopLayer);
-  }
-  layers.push(layer);
-  return () => {
-    const index = layers.indexOf(layer);
-    if (index !== -1) {
-      layers.splice(index, 1);
-    }
-    if (layers.length === 0) {
-      document.removeEventListener('keydown', closeTopLayer);
-    }
-  };
-}
 
 /**
  * A minimal modal dialog: a dark backdrop + a centered token-styled card.
@@ -68,7 +19,7 @@ function pushLayer(layer: { close: () => void }): () => void {
  * restores focus to the opener — aria-modal promises assistive tech the
  * background does not exist, so keyboard focus must not walk it either.
  *
- * Escape closes only the dialog on TOP (see `layers`), and never one whose
+ * Escape closes only the dialog on TOP (see `pushEscapeLayer`), and never one whose
  * control inside it already handled the key (`preventDefault`).
  */
 export function Dialog({
@@ -114,7 +65,7 @@ export function Dialog({
     if (!open) {
       return;
     }
-    return pushLayer({
+    return pushEscapeLayer({
       close: () => {
         onCloseRef.current();
       },

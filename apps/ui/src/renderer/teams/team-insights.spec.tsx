@@ -52,6 +52,7 @@ const STATS: TeamStatsDto = {
   estimatedCostUsd: 6.4,
   turns: 312,
   workedMs: 50_400_000,
+  measuredWorkedMs: 0,
   outcomes: {
     total: 9,
     accepted: 6,
@@ -85,6 +86,7 @@ const STATS: TeamStatsDto = {
       costUsd: 28.5,
       turns: 190,
       workedMs: 32_400_000,
+      measuredWorkedMs: 0,
     },
     {
       memberId: 'gone-member',
@@ -92,6 +94,7 @@ const STATS: TeamStatsDto = {
       costUsd: null,
       turns: 7,
       workedMs: null,
+      measuredWorkedMs: 0,
     },
   ],
 };
@@ -236,12 +239,40 @@ describe('TeamStatsTab', () => {
     expect(tile('Hand-offs').textContent).toBe('Hand-offs—');
   });
 
+  it('marks worked time Geniro measured by the clock, on the tile and the member', () => {
+    render({
+      ...STATS,
+      measuredWorkedMs: 7_200_000,
+      byMember: [
+        {
+          memberId: 'qa',
+          agentKind: 'cursor-agent',
+          costUsd: 12,
+          turns: 40,
+          workedMs: 7_200_000,
+          measuredWorkedMs: 7_200_000,
+        },
+      ],
+    });
+
+    expect(tile('Worked time').textContent).toContain(
+      'incl. 2h 0m measured by Geniro',
+    );
+    const cell = [
+      ...container.querySelectorAll<HTMLElement>(
+        'table[aria-label="By member"] tbody td',
+      ),
+    ].at(-1)!;
+    expect(cell.textContent).toBe('≈2h 0m');
+    expect(cell.title).toContain('Geniro measured by the clock');
+  });
+
   it('lists each member by name, and a removed member by id', () => {
     render(STATS);
 
     const rows = [
       ...container.querySelectorAll<HTMLElement>(
-        '[data-slot="member-breakdown-row"]',
+        'table[aria-label="By member"] tbody tr',
       ),
     ];
     expect(rows).toHaveLength(2);
@@ -266,8 +297,26 @@ describe('TeamStatsTab', () => {
     });
 
     expect(container.textContent).toContain('No runs yet.');
+    expect(container.querySelector('table[aria-label="By member"]')).toBeNull();
+  });
+
+  it('heads the member figures so each column says what it counts', () => {
+    render(STATS);
+
     expect(
-      container.querySelector('[data-slot="member-breakdown-row"]'),
-    ).toBeNull();
+      [
+        ...container.querySelectorAll('table[aria-label="By member"] thead th'),
+      ].map((th) => th.textContent),
+    ).toEqual(['Member', 'Share of cost', 'Cost', 'Turns', 'Worked time']);
+  });
+
+  it('says calls, tools and stages were not measured when no run was', () => {
+    render(STATS);
+
+    expect(container.textContent).toContain(
+      "None of this team's 23 runs was measured yet",
+    );
+    expect(container.querySelector('table[aria-label="Stages"]')).toBeNull();
+    expect(container.textContent).not.toContain('No tool calls recorded yet.');
   });
 });

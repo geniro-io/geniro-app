@@ -177,7 +177,7 @@ export function BoardColumn({
       ) : null}
       <div
         data-slot="task-column-cards"
-        className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto">
+        className="-m-0.5 flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto p-0.5">
         {tasks.map((task) => (
           <div key={task.id} className="flex flex-col gap-2">
             {dropBeforeTaskId === task.id ? <DropLine /> : null}

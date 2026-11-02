@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  MAX_PROJECT_INSTRUCTION_BLOCKS,
   PROJECT_DESCRIPTION_MAX,
   PROJECT_INSTRUCTIONS_MAX,
   PROJECT_MAX_CONCURRENT_CEILING,
@@ -95,12 +96,14 @@ describe('project input schemas — description and instructions', () => {
         name: 'geniro-app',
         folder: '/tmp/x',
         description: 'what it is',
-        instructions: 'line one\nline two\ttabbed',
+        instructionBlocks: [
+          { id: 'b1', title: 'Build', text: 'line one\nline two\ttabbed' },
+        ],
       }),
     ).toMatchObject({ description: 'what it is' });
     expect(
-      updateProjectSchema.parse({ description: null, instructions: null }),
-    ).toEqual({ description: null, instructions: null });
+      updateProjectSchema.parse({ description: null, instructionBlocks: null }),
+    ).toEqual({ description: null, instructionBlocks: null });
   });
 
   it('refuses a null on create, where the key is only ever omitted', () => {
@@ -124,14 +127,23 @@ describe('project input schemas — description and instructions', () => {
         description: 'a'.repeat(PROJECT_DESCRIPTION_MAX + 1),
       }).success,
     ).toBe(false);
+    const block = (text: string) => ({ id: 'b1', title: '', text });
     expect(
       updateProjectSchema.safeParse({
-        instructions: 'a'.repeat(PROJECT_INSTRUCTIONS_MAX),
+        instructionBlocks: [block('a'.repeat(PROJECT_INSTRUCTIONS_MAX))],
       }).success,
     ).toBe(true);
     expect(
       updateProjectSchema.safeParse({
-        instructions: 'a'.repeat(PROJECT_INSTRUCTIONS_MAX + 1),
+        instructionBlocks: [block('a'.repeat(PROJECT_INSTRUCTIONS_MAX + 1))],
+      }).success,
+    ).toBe(false);
+    expect(
+      updateProjectSchema.safeParse({
+        instructionBlocks: Array.from(
+          { length: MAX_PROJECT_INSTRUCTION_BLOCKS + 1 },
+          (_, index) => ({ ...block('a'), id: `b${index}` }),
+        ),
       }).success,
     ).toBe(false);
   });
@@ -139,7 +151,9 @@ describe('project input schemas — description and instructions', () => {
   it('refuses a control character, which would brick every turn spawned with it', () => {
     const withNul = `bad${String.fromCharCode(0)}text`;
     expect(
-      updateProjectSchema.safeParse({ instructions: withNul }).success,
+      updateProjectSchema.safeParse({
+        instructionBlocks: [{ id: 'b1', title: '', text: withNul }],
+      }).success,
     ).toBe(false);
     expect(
       createProjectSchema.safeParse({

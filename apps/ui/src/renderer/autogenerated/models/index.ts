@@ -3380,10 +3380,10 @@ export interface CreateProjectDto {
     description?: string;
     /**
      * 
-     * @type {string}
+     * @type {Array<ProjectInstructionBlock>}
      * @memberof CreateProjectDto
      */
-    instructions?: string;
+    instructionBlocks?: Array<ProjectInstructionBlock>;
     /**
      * 
      * @type {AgentKind}
@@ -3402,6 +3402,18 @@ export interface CreateProjectDto {
      * @memberof CreateProjectDto
      */
     effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateProjectDto
+     */
+    contextWindow?: string;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof CreateProjectDto
+     */
+    modelParameters?: { [key: string]: string; };
     /**
      * 
      * @type {ChatApprovalMode}
@@ -6642,6 +6654,12 @@ export interface ProjectDto {
      */
     instructions: string | null;
     /**
+     * The instructions as the user wrote them, block by block
+     * @type {Array<ProjectInstructionBlock>}
+     * @memberof ProjectDto
+     */
+    instructionBlocks: Array<ProjectInstructionBlock>;
+    /**
      * Counts every change to the description or instructions; quote it back as expectedInstructionsRevision so a stale write is refused instead of overwriting a newer one
      * @type {number}
      * @memberof ProjectDto
@@ -6665,6 +6683,18 @@ export interface ProjectDto {
      * @memberof ProjectDto
      */
     effort: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    contextWindow: string | null;
+    /**
+     * Every other model setting a run here starts with, keyed by the CLI's own parameter id; {} when none are set
+     * @type {{ [key: string]: string; }}
+     * @memberof ProjectDto
+     */
+    modelParameters: { [key: string]: string; };
     /**
      * 
      * @type {ChatApprovalMode}
@@ -6790,6 +6820,12 @@ export interface ProjectForFolderDtoProject {
      */
     instructions: string | null;
     /**
+     * The instructions as the user wrote them, block by block
+     * @type {Array<ProjectInstructionBlock>}
+     * @memberof ProjectForFolderDtoProject
+     */
+    instructionBlocks: Array<ProjectInstructionBlock>;
+    /**
      * Counts every change to the description or instructions; quote it back as expectedInstructionsRevision so a stale write is refused instead of overwriting a newer one
      * @type {number}
      * @memberof ProjectForFolderDtoProject
@@ -6813,6 +6849,18 @@ export interface ProjectForFolderDtoProject {
      * @memberof ProjectForFolderDtoProject
      */
     effort: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    contextWindow: string | null;
+    /**
+     * Every other model setting a run here starts with, keyed by the CLI's own parameter id; {} when none are set
+     * @type {{ [key: string]: string; }}
+     * @memberof ProjectForFolderDtoProject
+     */
+    modelParameters: { [key: string]: string; };
     /**
      * 
      * @type {ChatApprovalMode}
@@ -6879,6 +6927,31 @@ export interface ProjectForFolderDtoProject {
 /**
  * 
  * @export
+ * @interface ProjectInstructionBlock
+ */
+export interface ProjectInstructionBlock {
+    /**
+     * Unique block id within the project
+     * @type {string}
+     * @memberof ProjectInstructionBlock
+     */
+    id: string;
+    /**
+     * Short name shown in the editor
+     * @type {string}
+     * @memberof ProjectInstructionBlock
+     */
+    title: string;
+    /**
+     * Instruction text every run in the project receives
+     * @type {string}
+     * @memberof ProjectInstructionBlock
+     */
+    text: string;
+}
+/**
+ * 
+ * @export
  * @interface ProjectInstructionSizesDto
  */
 export interface ProjectInstructionSizesDto {
@@ -6888,6 +6961,12 @@ export interface ProjectInstructionSizesDto {
      * @memberof ProjectInstructionSizesDto
      */
     agents: Array<AgentInstructionSize>;
+    /**
+     * Each instruction block’s own text; every run carries it, so `reaches` is 1
+     * @type {Array<InstructionBlockSize>}
+     * @memberof ProjectInstructionSizesDto
+     */
+    blocks: Array<InstructionBlockSize>;
 }
 /**
  * 
@@ -11879,6 +11958,12 @@ export interface TeamStatsDto {
      */
     workedMs: number | null;
     /**
+     * the part of workedMs geniro measured by the clock (`wall_turns`), which a deleted run takes with it
+     * @type {number}
+     * @memberof TeamStatsDto
+     */
+    measuredWorkedMs: number;
+    /**
      * 
      * @type {TeamStatsOutcomes}
      * @memberof TeamStatsDto
@@ -11939,6 +12024,12 @@ export interface TeamStatsMember {
      * @memberof TeamStatsMember
      */
     workedMs: number | null;
+    /**
+     * the part of workedMs geniro measured by the clock
+     * @type {number}
+     * @memberof TeamStatsMember
+     */
+    measuredWorkedMs: number;
 }
 /**
  * 
@@ -13130,10 +13221,10 @@ export interface UpdateProjectDto {
     description?: string | null;
     /**
      * 
-     * @type {string}
+     * @type {Array<ProjectInstructionBlock>}
      * @memberof UpdateProjectDto
      */
-    instructions?: string | null;
+    instructionBlocks?: Array<ProjectInstructionBlock> | null;
     /**
      * 
      * @type {AgentKind}
@@ -13152,6 +13243,18 @@ export interface UpdateProjectDto {
      * @memberof UpdateProjectDto
      */
     effort?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateProjectDto
+     */
+    contextWindow?: string | null;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof UpdateProjectDto
+     */
+    modelParameters?: { [key: string]: string; } | null;
     /**
      * 
      * @type {ChatApprovalMode}

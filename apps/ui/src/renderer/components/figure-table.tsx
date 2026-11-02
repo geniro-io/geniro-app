@@ -10,6 +10,8 @@ export interface FigureColumn<Row> {
   cell: (row: Row) => React.ReactNode;
   /** A tooltip for the cell, when its text may be cut. */
   title?: (row: Row) => string | undefined;
+  /** Takes the width the other columns leave, for a bar drawn in the cell. */
+  fill?: boolean;
 }
 
 const cellVariants = cva('px-2 py-1.5 align-baseline', {
@@ -18,8 +20,9 @@ const cellVariants = cva('px-2 py-1.5 align-baseline', {
       start: 'text-left',
       end: 'text-right tabular-nums whitespace-nowrap',
     },
+    fill: { true: 'w-full', false: '' },
   },
-  defaultVariants: { align: 'start' },
+  defaultVariants: { align: 'start', fill: false },
 });
 
 /**
@@ -63,7 +66,7 @@ export function FigureTable<Row>({
                 key={column.header}
                 scope="col"
                 className={cn(
-                  cellVariants({ align: column.align }),
+                  cellVariants({ align: column.align, fill: column.fill }),
                   'font-medium',
                 )}>
                 {column.header}
@@ -80,7 +83,10 @@ export function FigureTable<Row>({
                 <td
                   key={column.header}
                   title={column.title?.(row)}
-                  className={cellVariants({ align: column.align })}>
+                  className={cellVariants({
+                    align: column.align,
+                    fill: column.fill,
+                  })}>
                   {column.cell(row)}
                 </td>
               ))}

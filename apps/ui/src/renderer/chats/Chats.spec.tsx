@@ -9248,6 +9248,16 @@ describe('Chats queued messages', () => {
     expect(header).not.toBeNull();
     // The line takes over the reservation, so a chip still cannot resize it.
     expect(header!.className).toContain('min-h-7');
+    // The queue's short control rides inside the shelf after its chips, so the
+    // right-anchored counters keep the end of the line.
+    const shelfChildren = [...shelves()[0]!.children].map((child) =>
+      child.getAttribute('data-slot'),
+    );
+    expect(shelfChildren.indexOf('queue-summary')).toBeGreaterThan(-1);
+    expect(shelfChildren.at(-1)).toBe('shelf-status');
+    expect(
+      container.querySelector('[data-slot="queue-summary"]')?.textContent,
+    ).toContain('1 queued');
 
     await act(async () => {
       (

@@ -303,6 +303,10 @@ export class TaskRunsService {
         startDirty: input.startDirty,
         model: target.model ?? undefined,
         effort: target.effort ?? undefined,
+        contextWindow: target.contextWindow ?? undefined,
+        ...(Object.keys(target.modelParameters).length === 0
+          ? {}
+          : { modelParameters: target.modelParameters }),
         approval: this.chats.offeredApproval(target.agentKind, target.approval),
         configDir: target.configDir ?? undefined,
         customInstructions: input.customInstructions,
@@ -452,6 +456,12 @@ export class TaskRunsService {
           ? {}
           : { model: target.model }),
         ...(target.effort === null ? {} : { effort: target.effort }),
+        ...(target.contextWindow === null
+          ? {}
+          : { contextWindow: target.contextWindow }),
+        ...(Object.keys(target.modelParameters).length === 0
+          ? {}
+          : { modelParameters: target.modelParameters }),
         ...(target.configDir === null ? {} : { configDir: target.configDir }),
         // Always present: a card always carries at least the report ask. Text
         // that changed respawns the thread's kept CLI process on this turn —

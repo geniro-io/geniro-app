@@ -257,3 +257,31 @@ export function hasInstanceContent(instance: AgentInstance): boolean {
     instance.tasks.length > 0
   );
 }
+
+/** How many finished instances a card shows before folding the older ones. */
+export const FINISHED_INSTANCES_SHOWN = 3;
+
+/**
+ * The instances a card draws, in their own order, and how many older finished
+ * ones it folds away: every instance still at work, every failed one and the
+ * agent's own conversation always show; of the rest, only the newest
+ * {@link FINISHED_INSTANCES_SHOWN}. With `showAll` nothing is folded.
+ */
+export function visibleInstances(
+  instances: readonly AgentInstance[],
+  showAll: boolean,
+): { shown: AgentInstance[]; folded: number } {
+  const kept = (instance: AgentInstance): boolean =>
+    instance.thread.kind !== 'call' ||
+    instance.thread.status === 'failed' ||
+    isInstanceLive(instance);
+  const finished = instances.filter((instance) => !kept(instance));
+  const folded = showAll
+    ? 0
+    : Math.max(0, finished.length - FINISHED_INSTANCES_SHOWN);
+  const hidden = new Set(finished.slice(0, folded));
+  return {
+    shown: instances.filter((instance) => !hidden.has(instance)),
+    folded,
+  };
+}

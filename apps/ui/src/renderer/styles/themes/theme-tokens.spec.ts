@@ -158,7 +158,6 @@ describe('theme token files', () => {
     ['--color-field-border', '--field-border'],
     ['--text-title', '--title-size'],
     ['--text-kpi', '--kpi-size'],
-    ['--shadow-panel-lift', '--lift-shadow'],
   ])(
     'exposes the %s utility from the %s token every theme declares',
     (utility, token) => {

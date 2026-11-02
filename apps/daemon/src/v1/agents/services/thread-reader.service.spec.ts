@@ -234,7 +234,13 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           key: 'BIL',
           instructionsRevision: 3,
           description: null,
-          instructions: expect.stringMatching(/^Use pnpm\. Deploy key /),
+          instructionBlocks: [
+            {
+              id: 'instructions',
+              title: 'Instructions',
+              text: expect.stringMatching(/^Use pnpm\. Deploy key /),
+            },
+          ],
           runs: [
             expect.objectContaining({
               runId: 'source',

@@ -1,5 +1,6 @@
 import * as React from 'react';
 
+import { pushEscapeLayer } from './escape-layers';
 import { MenuAnchorContext } from './menu-anchor';
 import { cn } from './utils';
 
@@ -229,18 +230,24 @@ export function Popover({
         onClose();
       }
     };
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
     document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
     return () => {
       document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
     };
   }, [open, onClose, triggerRef]);
+
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+  React.useEffect(() => {
+    if (!open) {
+      return;
+    }
+    return pushEscapeLayer({
+      close: () => {
+        onCloseRef.current();
+      },
+    });
+  }, [open]);
 
   if (!open) {
     return null;

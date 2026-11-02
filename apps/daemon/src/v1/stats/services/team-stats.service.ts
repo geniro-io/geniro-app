@@ -2,6 +2,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
 import { GoalDao } from '../../agents/dao/goal.dao';
+import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
 import { MetricLedgerDao } from '../dao/metric-ledger.dao';
@@ -25,6 +26,7 @@ export class TeamStatsService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly ledger: MetricLedgerDao,
     private readonly goals: GoalDao,
+    private readonly wallTurns: WallTurnDao,
   ) {}
 
   async read(slug: string): Promise<TeamStatsWire> {
@@ -41,13 +43,12 @@ export class TeamStatsService {
         this.ledger.calls(scope, em),
       ],
     );
+    const runIds = threads.map((thread) => thread.runId);
     const figures = foldTeamStats({
       slug,
       threads,
-      usage: await this.usageDao.rowsByRuns(
-        threads.map((thread) => thread.runId),
-        em,
-      ),
+      usage: await this.usageDao.rowsByRuns(runIds, em),
+      wallTurns: await this.wallTurns.turnsOfRuns(runIds, em),
       polledKinds: [...adapters.keys()].filter((kind) =>
         pollsSpendFor(adapters, kind),
       ),

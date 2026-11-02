@@ -6,9 +6,13 @@ import {
   NotFoundException,
 } from '@packages/common';
 
-import type { ProjectWire } from '../../projects/projects.types';
+import type {
+  ProjectInstructionBlock,
+  ProjectWire,
+} from '../../projects/projects.types';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { ProjectsService } from '../../projects/services/projects.service';
+import { blocksDocument } from '../../projects/utils/project-instruction-blocks';
 import {
   type AnalysisTurn,
   type HostProjectInstructions,
@@ -30,8 +34,8 @@ import {
 export interface ProjectInstructionsChange {
   turn: AnalysisTurn;
   projectId: string;
-  /** The instructions as they should read in full; blank clears them. */
-  instructions: string;
+  /** Every block as it should read after the change, in order; none clears them. */
+  blocks: ProjectInstructionBlock[];
   /** The `instructionsRevision` view=project returned. */
   baseRevision: number;
   /** The `P-` ids the change carries out. */
@@ -101,13 +105,14 @@ export class ProjectInstructionsChangeService {
     if (project.instructionsRevision !== change.baseRevision) {
       return refuse('REVISION_DRIFT', driftMessage(change.baseRevision));
     }
-    const next = change.instructions.trim() || null;
+    const previous = blocksDocument(project.instructionBlocks);
+    const next = blocksDocument(change.blocks);
     const receipt = {
       projectId: project.id,
       project: project.name,
       carriedOut: change.ids,
     };
-    if (next === project.instructions) {
+    if (sameBlocks(change.blocks, project.instructionBlocks)) {
       return {
         saved: true,
         ...receipt,
@@ -118,8 +123,9 @@ export class ProjectInstructionsChangeService {
     const outcome = await card({
       projectId: project.id,
       project: project.name,
-      previous: project.instructions,
+      previous,
       next,
+      blocks: change.blocks,
       baseRevision: change.baseRevision,
       ids: [...change.ids],
       cardSeq: apply.cardSeq,
@@ -162,7 +168,7 @@ export class ProjectInstructionsChangeService {
       const saved = await this.projects.update(
         change.projectId,
         {
-          instructions: change.next,
+          instructionBlocks: change.blocks,
           expectedInstructionsRevision: change.baseRevision,
         },
         {
@@ -245,4 +251,16 @@ export class ProjectInstructionsChangeService {
 
 function driftMessage(baseRevision: number): string {
   return `the project's instructions changed since revision ${baseRevision} — read view=project again and re-apply`;
+}
+
+/** Whether two block lists say the same, whitespace around a title or text aside. */
+function sameBlocks(
+  a: readonly ProjectInstructionBlock[],
+  b: readonly ProjectInstructionBlock[],
+): boolean {
+  const trimmed = (blocks: readonly ProjectInstructionBlock[]) =>
+    JSON.stringify(
+      blocks.map((block) => [block.id, block.title.trim(), block.text.trim()]),
+    );
+  return trimmed(a) === trimmed(b);
 }

@@ -2989,6 +2989,45 @@ describe('AgentsPanel — the instances of a called agent', () => {
     ).toBeNull();
   });
 
+  it('folds all but the newest finished instances behind a row that shows them', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[
+          {
+            ...engineer,
+            threads: [
+              call('done-1', 'One', 'completed'),
+              call('done-2', 'Two', 'completed'),
+              call('done-3', 'Three', 'completed'),
+              call('done-4', 'Four', 'completed'),
+              call('done-5', 'Five', 'completed'),
+              call('now', 'Six', 'running'),
+            ],
+          },
+        ]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const ids = (): (string | null)[] =>
+      [...el.querySelectorAll('[data-slot="agent-instance"]')].map((each) =>
+        each.getAttribute('data-instance-id'),
+      );
+    const more = (): HTMLButtonElement | null =>
+      el.querySelector('[data-slot="agent-instances-more"]');
+
+    expect(ids()).toEqual(['done-3', 'done-4', 'done-5', 'now']);
+    expect(
+      el.querySelector('[data-slot="agent-instances-caption"]')?.textContent,
+    ).toBe('Instances6· 1 running');
+    expect(more()?.textContent).toBe('Show 2 earlier finished');
+
+    act(() => more()!.click());
+
+    expect(ids()).toHaveLength(6);
+    expect(more()?.textContent).toBe('Show only the latest finished');
+  });
+
   it('draws each call as its own block, holding only its OWN delegates, commands and plan', () => {
     const el = panel();
     openAllInstances(el);

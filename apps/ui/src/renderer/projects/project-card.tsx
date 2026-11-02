@@ -13,7 +13,7 @@ import { shortenPath } from '../chats/directory-select';
 import { plural } from '../chats/run-outcome';
 import type { TargetTeam } from '../chats/target-select';
 import { AutopilotMark } from '../components/autopilot-mark';
-import { LIFT_CARD_CLASS } from '../components/lift-card';
+import { NAV_CARD_CLASS } from '../components/card-hover';
 import { initialsOf } from '../components/member-avatar';
 import { NavListItem } from '../components/nav-list-item';
 import { cn } from '../components/ui/utils';
@@ -135,7 +135,7 @@ export function ProjectCard({
       active={false}
       activateLabel={`Open ${project.name}`}
       onActivate={onOpen}
-      className={cn('p-5', LIFT_CARD_CLASS)}>
+      className={cn('p-5', NAV_CARD_CLASS)}>
       <div data-slot="project-card" className="flex flex-col gap-4">
         <div className="flex items-start justify-between gap-3">
           <ProjectMonogram project={project} />

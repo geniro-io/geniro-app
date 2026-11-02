@@ -948,7 +948,7 @@ export const TeamStatsDaySchema = z
     workedMs: z
       .number()
       .nullable()
-      .describe('null when no turn that day timed itself'),
+      .describe('null when no turn that day was timed'),
     outcomes: z.number().describe('pull request outcomes recorded that day'),
   })
   .meta({ id: 'TeamStatsDay' });
@@ -967,7 +967,15 @@ export const TeamStatsMemberSchema = z
       .nullable()
       .describe('null when no turn reported a cost'),
     turns: z.number(),
-    workedMs: z.number().nullable().describe('null when no turn timed itself'),
+    workedMs: z
+      .number()
+      .nullable()
+      .describe(
+        'the CLIs’ own time plus geniro’s clock for turns no CLI timed; null when no turn was timed',
+      ),
+    measuredWorkedMs: z
+      .number()
+      .describe('the part of workedMs geniro measured by the clock'),
   })
   .meta({ id: 'TeamStatsMember' });
 export type TeamStatsMemberWire = z.infer<typeof TeamStatsMemberSchema>;
@@ -985,7 +993,14 @@ export const TeamStatsWireSchema = z.object({
   workedMs: z
     .number()
     .nullable()
-    .describe('the CLIs’ own worked time; null when no turn timed itself'),
+    .describe(
+      'the CLIs’ own worked time plus geniro’s clock for turns no CLI timed; null when no turn was timed',
+    ),
+  measuredWorkedMs: z
+    .number()
+    .describe(
+      'the part of workedMs geniro measured by the clock (`wall_turns`), which a deleted run takes with it',
+    ),
   outcomes: TeamStatsOutcomesSchema,
   days: z
     .array(TeamStatsDaySchema)

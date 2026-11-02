@@ -1,3 +1,7 @@
+import { cva } from 'class-variance-authority';
+
+import { cn } from '../components/ui/utils';
+
 /**
  * A tiny trend line under a figure — the figure beside it carries the number,
  * so the line is hidden from assistive tech. A null value is a gap: the line
@@ -97,7 +101,12 @@ export function KpiTile({
       <span className="text-xs font-medium tracking-[0.02em] text-muted-foreground uppercase">
         {caption}
       </span>
-      <span className="text-kpi font-semibold tabular-nums">
+      <span
+        className={cn(
+          'truncate text-kpi font-semibold whitespace-nowrap tabular-nums',
+          value === null && 'text-muted-foreground',
+        )}
+        title={value ?? undefined}>
         {value ?? '—'}
       </span>
       <span className="h-6">
@@ -110,17 +119,31 @@ export function KpiTile({
   );
 }
 
-/** The strip of KPI tiles: one frame around them, no lines between. */
+const kpiStripVariants = cva('grid rounded-card bg-card ring-1 ring-border', {
+  variants: {
+    columns: {
+      3: 'grid-cols-1 @lg:grid-cols-3',
+      4: 'grid-cols-2 @3xl:grid-cols-4',
+    },
+  },
+});
+
+/**
+ * The strip of KPI tiles: one frame around them, no lines between. `columns`
+ * is how many tiles it holds, so every row it draws is full.
+ */
 export function KpiStrip({
+  columns = 4,
   children,
 }: {
+  columns?: 3 | 4;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
-    <div
-      data-slot="kpi-strip"
-      className="grid grid-cols-2 rounded-card bg-card ring-1 ring-border sm:grid-cols-5">
-      {children}
+    <div className="@container">
+      <div data-slot="kpi-strip" className={kpiStripVariants({ columns })}>
+        {children}
+      </div>
     </div>
   );
 }

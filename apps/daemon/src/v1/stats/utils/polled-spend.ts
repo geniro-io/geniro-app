@@ -61,6 +61,9 @@ export type PolledSpendRun = Pick<
  *   a polled member's spend comes from — has no agent of its own.
  * - Every figure but the cost is null — the poll measures money and nothing
  *   else, and null means NOT MEASURED here as everywhere in this table.
+ * - A team run's bill is split across the members the poll credited
+ *   (`NodeState.polledCostCents`), each bucket in proportion to each member's
+ *   share, so every row names its member and that member's billed CLI.
  */
 export function polledSpendRows(
   run: PolledSpendRun,
@@ -71,6 +74,8 @@ export function polledSpendRows(
    * account named no model for it, since a team run names none of its own.
    */
   reportedModel: string | null = null,
+  shares: readonly PolledShare[] = [],
+  pollsSpend: (kind: AgentKind) => boolean = () => false,
 ): UsageEventInput[] {
   const cents = run.polledCostCents;
   if (cents === null || !(cents > 0)) {
@@ -88,14 +93,41 @@ export function polledSpendRows(
             cents: amount,
           };
         });
-  return entries.map((entry, index) => ({
+  const poolKinds = snapshotPoolKinds(run.teamSnapshot ?? null);
+  const credited = shares.filter((share) => (share.polledCostCents ?? 0) > 0);
+  const creditedCents = credited.reduce(
+    (total, share) => total + (share.polledCostCents ?? 0),
+    0,
+  );
+  const payers: {
+    memberId: string | null;
+    agentKind: AgentKind | null;
+    fraction: number;
+  }[] =
+    run.agentKind !== null || creditedCents <= 0
+      ? [{ memberId: null, agentKind, fraction: 1 }]
+      : [...credited]
+          .sort((a, b) => a.memberId.localeCompare(b.memberId))
+          .map((share) => ({
+            memberId: share.memberId,
+            agentKind: billedKindOf(share, poolKinds, pollsSpend),
+            fraction: (share.polledCostCents ?? 0) / creditedCents,
+          }));
+  const charges = entries.flatMap((entry) =>
+    payers.map((payer) => ({ entry, payer })),
+  );
+  return charges.map(({ entry, payer }, index) => ({
     runId: run.id,
-    memberId: null,
+    memberId: payer.memberId,
     seq: POLLED_SPEND_SEQ - index,
     occurredAt: entry.occurredAt,
-    ...usageDimensions(run, null, entry.model ?? reportedModel),
-    agentKind,
-    costUsd: entry.cents / 100,
+    ...usageDimensions(
+      run,
+      null,
+      entry.model ?? (payer.agentKind === agentKind ? reportedModel : null),
+    ),
+    agentKind: payer.agentKind,
+    costUsd: (entry.cents * payer.fraction) / 100,
     // The vendor's own charge, never priced here.
     estimatedCostUsd: null,
     inputTokens: null,
@@ -225,10 +257,7 @@ export class PolledTurnCredit {
  */
 export function polledAgentKind(
   run: Pick<Run, 'agentKind' | 'teamSnapshot'>,
-  shares: readonly Pick<
-    NodeState,
-    'memberId' | 'agentKind' | 'polledCostCents'
-  >[],
+  shares: readonly PolledShare[],
   pollsSpend: (kind: AgentKind) => boolean = () => false,
 ): AgentKind | null {
   if (run.agentKind !== null) {
@@ -239,14 +268,28 @@ export function polledAgentKind(
   let largest = 0;
   for (const share of shares) {
     const cents = share.polledCostCents ?? 0;
-    const billed =
-      share.agentKind !== null && pollsSpend(share.agentKind)
-        ? share.agentKind
-        : (poolKinds.get(share.memberId)?.find(pollsSpend) ?? share.agentKind);
+    const billed = billedKindOf(share, poolKinds, pollsSpend);
     if (billed !== null && cents > largest) {
       kind = billed;
       largest = cents;
     }
   }
   return kind;
+}
+
+/** One member's polled share of a team run's bill, as the poll recorded it. */
+export type PolledShare = Pick<
+  NodeState,
+  'memberId' | 'agentKind' | 'polledCostCents'
+>;
+
+/** The CLI a member's polled money belongs to: its own, else a polling pool member's. */
+function billedKindOf(
+  share: PolledShare,
+  poolKinds: ReturnType<typeof snapshotPoolKinds>,
+  pollsSpend: (kind: AgentKind) => boolean,
+): AgentKind | null {
+  return share.agentKind !== null && pollsSpend(share.agentKind)
+    ? share.agentKind
+    : (poolKinds.get(share.memberId)?.find(pollsSpend) ?? share.agentKind);
 }

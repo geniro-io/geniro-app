@@ -101,7 +101,7 @@ describe('mapClaudeMessage', () => {
             name: 'ticktick',
             target: null,
             transport: null,
-            status: 'pending',
+            status: 'loading',
             detail: null,
           },
           {
@@ -174,6 +174,35 @@ describe('mapClaudeMessage', () => {
         expect.objectContaining({
           name: 'claude.ai Wispr Flow',
           status: 'needs_auth',
+        }),
+      ],
+    });
+  });
+
+  it('reads init’s pending as still connecting, never as awaiting approval', () => {
+    const [event] = mapClaudeMessage(
+      {
+        type: 'system',
+        subtype: 'init',
+        mcp_servers: [
+          { name: 'ticktick', status: 'pending', source: 'user' },
+          {
+            name: 'claude.ai Wispr Flow',
+            status: 'pending',
+            source: 'claudeai',
+          },
+        ],
+      },
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(event).toEqual({
+      type: 'mcp_servers',
+      servers: [
+        expect.objectContaining({ name: 'ticktick', status: 'loading' }),
+        expect.objectContaining({
+          name: 'claude.ai Wispr Flow',
+          status: 'loading',
         }),
       ],
     });

@@ -1,66 +1,23 @@
 /**
- * The composer shelf's look: separate chips, and ONE joined group among them.
+ * The composer shelf's look: separate chips with gaps, one per kind of thing,
+ * and the status counters on the right drawn without a card.
  *
- * The chips are free-standing cards with gaps between them, and they stay that
- * way — a row of distinct readings about a thread, each its own object. What is
- * joined is the PULL REQUESTS and nothing else: the `All 4` control belongs to
- * the chips it counts, and standing apart from them as a fifth identical pill it
- * read as a peer of `Tasks 2/6`. REPORTED first as "let's join all chips somehow
- * to prs. like it should be more understandable", then — after the whole row was
- * joined into one bar — as "but chips still should be separate, as before. What
- * i told - ts only for prs".
- *
- * That is the shape of the fix: things that TOUCH are one thing, so touching is
- * a claim, and it must only be made where it is true. A bar holding every chip
- * claims the terminals and the pull requests are one statement, which they are
- * not; a group holding `#76` and `All 4` claims they are, which they are.
- *
- * Constants rather than components, and for the reason the first one had: the
- * chips are structurally different elements — the pull request is an anchor, the
- * team a button, the three counters are hover-popover triggers — so there is
- * no one component to wrap them in without taking each one's own behaviour away.
- * They also cannot live in `composer-shelf.tsx`, which imports two of the three:
- * those would have to import it back, and a cycle through a `const` is a
+ * Constants rather than components: the chips are structurally different
+ * elements — the pull request is an anchor, the folder chip a button, the
+ * counters hover-popover triggers — so there is no one component to wrap them
+ * in. They cannot live in `composer-shelf.tsx` either, which imports two of
+ * their users: those would import it back, and a cycle through a `const` is a
  * temporal-dead-zone crash rather than a type error.
  */
 
 /**
- * How tall EVERY item on the shelf is — a chip, a segment of the group, and the
- * plain `All N` buttons alike.
- *
- * Stated once and shared, because the row is `items-center`: two items of
- * different heights are centred on each other rather than sharing a baseline,
- * so their text sits at two different heights and the row reads as crooked.
- * REPORTED as exactly that ("chips looks a bit not aligned, not in the middle,
- * content inside"), and measured in the running app at **24.5px for a chip
- * against 26px for the button beside it** — the chip took its height from its
- * content (`py-1` over a 15px line box plus 2px of border) while the button
- * already carried this literal, written out twice.
- *
- * It matters more INSIDE the group than beside it: two free-standing cards of
- * different heights are merely misaligned, while two segments of one card leave
- * a visible step in that card's own outline.
- *
- * It is worn by the two things the row LAYS OUT — a standalone chip, and the
- * GROUP — and never by a segment, which fills the group with `h-full`. That
- * split is the fix for the reported "Chips shoud have same height", and the
- * cause was arithmetic rather than a missing rule: every box here is
- * `border-box`, so a chip carrying this height AND the card's 1px border is 26px
- * overall, while the group had no height of its own and took its segments' 26px
- * PLUS its own two borders. Measured in the running app at **28px for the group
- * against 26px for the chip beside it**. Giving the group the height and the
- * segment `h-full` makes the outer boxes agree by construction, which is the
- * only way two different structures can keep agreeing.
+ * How tall EVERY item on the shelf is, carded or not. The row is
+ * `items-center`, so items of different heights put their text at different
+ * heights and the row reads as crooked.
  */
 const SHELF_ITEM_HEIGHT = 'h-[22px]';
 
-/**
- * The CARD — the small white surface with a hairline and a soft lift.
- *
- * Worn by a standalone chip and by the pull-request GROUP alike, which is what
- * makes a joined run look like one chip rather than like a new kind of object:
- * whatever the group holds, the row still reads as cards with gaps between them.
- */
+/** The CARD — the small surface with a hairline and a soft lift. */
 const SHELF_CARD = 'rounded-md border border-border bg-card shadow-panel-sm';
 
 /**
@@ -105,62 +62,6 @@ export const SHELF_CHIP_WRAPPER_CLASS = 'shrink-0';
 export const SHELF_CHIP_TRIGGER_CLASS = `${SHELF_CHIP_CLASS} shrink-0`;
 
 /**
- * ONE segment of {@link SHELF_GROUP_CLASS}.
- *
- * It carries no card of its own: a segment with its own hairline draws a second
- * line beside the divider, and one with its own radius leaves notches of the
- * group's background inside the run. What it keeps is the HOVER fill, because
- * hovering has to land on the one reading under the pointer rather than on the
- * group.
- *
- * `rounded-none` is an OVERRIDE and invisible until you look for it: it beats
- * `HoverPopover`'s own `rounded-full` on a trigger button, which the card's
- * `rounded-lg` used to win for the standalone chips. Take the radius away
- * without replacing it and the pill comes back, filling as a lozenge floating
- * inside a square segment.
- *
- * `px-2.5` rather than the chip's `px-2`. Two adjacent segments put their
- * padding back to back, so the value that reads as comfortable around a lone
- * card reads as cramped against a divider — the label needs its own room on
- * each side of the line, not half of it.
- *
- * `focus-visible:bg-sidebar-accent` is the keyboard's indicator here, because
- * the group's `overflow-hidden` CLIPS a focus ring — a ring is a box-shadow
- * drawn outside the element's box, so on the end segments most of it is cut
- * away. A fill is the element's own background and cannot be clipped.
- *
- * `overflow-hidden` on the SEGMENT is a different clip from the group's, and it
- * is what keeps a squeezed run readable rather than merely inside its box. A
- * pull-request chip is `[icon][number][title]` with the NUMBER deliberately
- * `shrink-0` — it identifies the thing, so it must never truncate — and under a
- * hard squeeze that unshrinkable content spilled out of its own segment and
- * printed over `All 4` beside it. Measured on a 430px shelf: two overlapping
- * strings where one was expected. The group's own clip cannot help, since the
- * two are SIBLINGS inside it. Clipping the number at its segment's edge is the
- * honest degradation — a cut-off number reads as "there is more here", where
- * overlapping glyphs read as a broken app.
- */
-export const SHELF_SEGMENT_CLASS = `${SHELF_BODY} h-full overflow-hidden rounded-none px-2 focus-visible:bg-sidebar-accent`;
-
-/**
- * A JOINED run of segments, wearing one card — used for the pull requests, and
- * so far only for them.
- *
- * `divide-x divide-border` is the separation, and a hairline is all that is
- * needed: the segments are already spaced by their own padding, so the line
- * only has to say "a different one starts here". Tailwind's `divide-*` puts the
- * border on every child but the first, which is right for a run whose
- * membership changes — a chip that comes and goes takes its own divider with
- * it, and the leading edge is never doubled against the card's own border.
- *
- * `overflow-hidden` clips the end segments to the card's radius, so no segment
- * needs a corner rule of its own and the run stays correct however many it
- * holds. It does NOT clip the popovers: those are `anchor="viewport"`, so they
- * are `position: fixed`, and nothing here creates a containing block for them.
- */
-export const SHELF_GROUP_CLASS = `flex ${SHELF_ITEM_HEIGHT} min-w-min items-center divide-x divide-border overflow-hidden ${SHELF_CARD}`;
-
-/**
  * The part of a chip that GIVES WAY on a crowded shelf — a title, a label —
  * while the part that identifies the chip stays whole.
  *
@@ -179,7 +80,14 @@ export const SHELF_YIELD_CLASS =
 
 /**
  * The right-hand cluster of status counters (tasks, notes, agents, sub-agents,
- * monitors, terminals): glyph and figure only, the name in the tooltip.
+ * monitors, terminals, stages): glyph and figure only, the name in the tooltip.
  */
 export const SHELF_STATUS_GROUP_CLASS =
-  'ml-auto flex shrink-0 items-center gap-1.5 empty:hidden';
+  'ml-auto flex shrink-0 items-center gap-0.5 empty:hidden';
+
+/**
+ * A status counter's trigger: the chip's box and type without the card, so the
+ * counters read as a status bar beside the content chips rather than as five
+ * more cards competing with them.
+ */
+export const SHELF_STATUS_TRIGGER_CLASS = `${SHELF_BODY} ${SHELF_ITEM_HEIGHT} shrink-0 rounded-md px-1.5 aria-expanded:bg-sidebar-accent`;

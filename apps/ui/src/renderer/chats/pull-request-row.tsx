@@ -16,7 +16,7 @@ import { PanelLinkRow } from '../components/panel-link-row';
 import { Badge } from '../components/ui/badge';
 import { cn } from '../components/ui/utils';
 import { AcceptanceIcon, outcomeSentence } from './run-outcome';
-import { SHELF_SEGMENT_CLASS, SHELF_YIELD_CLASS } from './shelf-chip';
+import { SHELF_CHIP_CLASS } from './shelf-chip';
 
 /**
  * How one state is drawn — the single mapping, so the panel's list, the sidebar
@@ -117,13 +117,20 @@ function sizeSentence(pullRequest: PullRequestInfo): string {
 function PullRequestMeta({
   name,
   pullRequest,
+  outcome,
 }: {
   name: string;
   pullRequest: PullRequestInfo;
+  outcome: PullRequestOutcome | null;
 }): React.JSX.Element {
   return (
     <span className="flex items-baseline gap-2">
       <span className="tabular-nums text-foreground/80">{name}</span>
+      {outcome === null ? null : (
+        <span className="self-center">
+          <AcceptanceIcon acceptance={outcome.acceptance} />
+        </span>
+      )}
       {pullRequest.changedFiles === null ? null : (
         <span className="tabular-nums">
           {pullRequest.changedFiles}{' '}
@@ -210,9 +217,12 @@ function pullRequestLabel(
 export function ThreadPullRequestRow({
   result,
   showRepo,
+  outcome = null,
 }: {
   result: PullRequestRefResult;
   showRepo: boolean;
+  /** Its newest recorded outcome, drawn beside the number; null when none. */
+  outcome?: PullRequestOutcome | null;
 }): React.JSX.Element {
   const { ref, pullRequest } = result;
   const name = pullRequestLabel(ref, showRepo);
@@ -237,23 +247,25 @@ export function ThreadPullRequestRow({
       title={pullRequest.title}
       tooltip={`${ref.owner}/${ref.repo}#${ref.number} ${pullRequest.title} · ${lookOf(pullRequest).word}${sizeSentence(pullRequest)}`}
       icon={<PullRequestStateIcon pullRequest={pullRequest} />}
-      detail={<PullRequestMeta name={name} pullRequest={pullRequest} />}
+      detail={
+        <PullRequestMeta
+          name={name}
+          pullRequest={pullRequest}
+          outcome={outcome}
+        />
+      }
     />
   );
 }
 
 /**
- * The same pull request as a CHIP for the shelf above the composer.
- *
- * A shelf chip is deliberately not a panel row: it sits in a wrapping row
- * beside whatever else the shelf carries, so it takes a bounded width and gives
- * the rest to its neighbours — the title truncates, the number never does,
- * since the number is what identifies it.
+ * The thread's one pull request as a shelf chip: the state glyph, the number
+ * and the recorded acceptance. The title and the size are on the tooltip, so
+ * the chip stays as short as the counters beside it.
  */
 export function ThreadPullRequestChip({
   result,
   showRepo,
-  widthClassName = 'max-w-56',
   outcome = null,
 }: {
   result: PullRequestRefResult;
@@ -263,12 +275,6 @@ export function ThreadPullRequestChip({
    * acceptance mark beside the number; null when none was recorded.
    */
   outcome?: PullRequestOutcome | null;
-  /**
-   * How wide this chip may get — the SHELF's decision, since it depends on how
-   * many are drawn beside it (`PULL_REQUEST_CHIP_WIDTH`). Defaulted to the lone
-   * chip's width so a caller that draws exactly one need not say so.
-   */
-  widthClassName?: string;
 }): React.JSX.Element {
   const { ref, pullRequest } = result;
   const name = pullRequestLabel(ref, showRepo);
@@ -285,9 +291,7 @@ export function ThreadPullRequestChip({
       target="_blank"
       rel="noreferrer"
       title={label}
-      // `min-w-min` is the FLOOR — the mark and the number, everything outside
-      // the yielding span below (`SHELF_YIELD_CLASS`).
-      className={cn(SHELF_SEGMENT_CLASS, 'min-w-min', widthClassName)}>
+      className={cn(SHELF_CHIP_CLASS, 'shrink-0')}>
       {pullRequest === null ? (
         <GitPullRequest
           aria-hidden="true"
@@ -296,42 +300,9 @@ export function ThreadPullRequestChip({
       ) : (
         <PullRequestStateIcon pullRequest={pullRequest} />
       )}
-      <span className="shrink-0 font-medium">{name}</span>
-      {/* Beside the number, in the part that never yields: the acceptance is
-          what a glance at the shelf is for, and the title gives way first. */}
+      <span className="font-medium tabular-nums">{name}</span>
       {outcome === null ? null : (
         <AcceptanceIcon acceptance={outcome.acceptance} />
-      )}
-      {pullRequest === null ? null : (
-        <span className={SHELF_YIELD_CLASS}>
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="min-w-0 truncate text-muted-foreground">
-              {pullRequest.title}
-            </span>
-            {/* The SIZE — files AND lines, `shrink-0` like the number beside them: a
-          half-shown figure is worse than a shortened word, so the title is what
-          gives up width as the shelf fills, which is the mechanism the chip
-          already used rather than a new one.
-
-          Lines alone shipped here first, on the reasoning that three figures
-          plus a title do not fit a 9rem chip. That was true of the CAP, not of
-          the chip — the caps went up with this (`PULL_REQUEST_CHIP_WIDTH`),
-          because "how many files" is the other half of the question "how big is
-          this" and reading it required a hover. Inside the yielding span all
-          the same: past the title they are the next to go, never the number. */}
-            {pullRequest.changedFiles === null ? null : (
-              <span className="shrink-0 tabular-nums text-muted-foreground">
-                {pullRequest.changedFiles}{' '}
-                {pullRequest.changedFiles === 1 ? 'file' : 'files'}
-              </span>
-            )}
-            <DiffFigures
-              added={pullRequest.added}
-              removed={pullRequest.removed}
-              className="text-[11px]"
-            />
-          </span>
-        </span>
       )}
     </a>
   );

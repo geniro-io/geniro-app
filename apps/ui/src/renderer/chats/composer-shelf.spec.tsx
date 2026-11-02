@@ -878,7 +878,7 @@ const liveAction = (seq: number): LiveAction => ({
   pending: false,
 });
 
-describe('the shelf — separate chips, ONE joined group', () => {
+describe('the shelf — separate chips, one per kind', () => {
   it('RESERVES its row when empty, so a chip appearing cannot move the transcript', () => {
     // REPORTED: the chat jumped every time a chip (Terminals, most often)
     // appeared or vanished — the row collapsed to nothing when empty, so the
@@ -990,81 +990,71 @@ describe('the shelf — separate chips, ONE joined group', () => {
       ['1/2', 'Tasks · 1 of 2 done'],
     ]);
     for (const chip of status.querySelectorAll<HTMLElement>('button')) {
-      // The same chip as every other item on the row — height, padding and
-      // card — only its content is shorter.
+      // The row's height and padding, but no card: the counters read as a
+      // status bar beside the content chips, not as more cards.
       expect(chip.className).toContain('h-[22px]');
       expect(chip.className).toContain('px-1.5');
       expect(chip.className).toContain('rounded-md');
-      expect(chip.className).toContain('shadow-panel-sm');
+      expect(chip.className).not.toContain('shadow-panel-sm');
+      expect(chip.className).not.toMatch(/(^| )border( |$)/);
       expect(chip.className).not.toContain('rounded-full');
     }
   });
 
-  it('joins the pull requests and their `All N` under ONE card', () => {
-    // The one place touching is true. `All 4` standing apart as a fifth
-    // identical pill read as a peer of `Tasks 2/6`, because nothing on the row
-    // said which items belonged together.
+  it('keeps a lone pull request a short card: its mark, number and acceptance', () => {
+    const el = mount(
+      <ComposerShelf>
+        <ThreadPullRequestChips
+          results={[pr(1)]}
+          outcomes={
+            new Map([
+              [
+                'geniro-io/geniro-app#1',
+                {
+                  seq: 5,
+                  draft: false,
+                  reviewRounds: 1,
+                  acceptance: RunOutcomeAcceptance.Accepted,
+                  questionsAsked: 0,
+                },
+              ],
+            ])
+          }
+        />
+      </ComposerShelf>,
+    );
+    const chip = el.querySelector<HTMLElement>(
+      '[data-slot="pull-request-chip"]',
+    )!;
+    expect(chip.className).toContain('rounded-md');
+    expect(chip.className).toContain('shadow-panel-sm');
+    expect(
+      chip.querySelector('[data-slot="pull-request-outcome"]'),
+    ).not.toBeNull();
+    expect(chip.textContent).toContain('#1');
+    expect(chip.textContent).not.toContain('pull request 1');
+    expect(chip.getAttribute('title')).toContain('pull request 1');
+  });
+
+  it('collapses several pull requests into ONE card that counts them', () => {
     const el = mount(
       <ComposerShelf>
         <ThreadPullRequestChips results={[pr(1), pr(2), pr(3), pr(4)]} />
       </ComposerShelf>,
     );
-    const group = el.querySelector<HTMLElement>(
-      '[data-slot="pull-request-group"]',
-    )!;
-    expect(group.className).toContain('divide-x');
-    expect(group.className).toContain('rounded-md');
-    expect(group.className).toContain('shadow-panel-sm');
-    expect(group.className).toContain('overflow-hidden');
-    // The `All N` is INSIDE it, and last — which is what makes the glyph read
-    // as "and all four of them" rather than as a fourth pull request.
-    const all = group.querySelector<HTMLElement>(
-      '[data-slot="all-pull-requests"]',
-    )!;
-    expect(all.textContent).toBe('All 4');
-    expect([...group.children].at(-1)).toBe(all);
-    // No segment redraws the card: one with its own hairline draws a second
-    // line beside the divider, one with its own radius leaves notches of the
-    // group's background inside the run.
-    for (const segment of group.children) {
-      expect(segment.className).not.toContain('rounded-md');
-      expect(segment.className).not.toContain('shadow-panel-sm');
-      expect(segment.className).not.toMatch(/(^| )border( |$)/);
-    }
-  });
-
-  it('gives the `All N` control the mark of the thing it counts', () => {
-    // It was the one item on the shelf naming no subject, and the hardest to
-    // guess, being a control rather than a reading — `All 4` beside `Tasks 2/6`
-    // says nothing about which of them it belongs to.
-    const el = mount(
-      <ComposerShelf>
-        <ThreadPullRequestChips results={[pr(1), pr(2), pr(3), pr(4)]} />
-      </ComposerShelf>,
+    expect(el.querySelectorAll('[data-slot="pull-request-chip"]')).toHaveLength(
+      0,
     );
-    const all = el.querySelector<HTMLElement>(
-      '[data-slot="all-pull-requests"]',
+    const trigger = el.querySelector<HTMLElement>(
+      '[data-slot="thread-pull-requests"] button',
     )!;
-    expect(all.querySelector('svg')).not.toBeNull();
+    expect(trigger.textContent).toBe('PR4');
+    expect(trigger.querySelector('svg')).not.toBeNull();
+    expect(trigger.className).toContain('shadow-panel-sm');
+    expect(trigger.className).not.toContain('rounded-full');
   });
 
-  it('draws a LONE pull request through the same group, so the two shapes cannot drift', () => {
-    // A group of one is visually identical to a standalone chip — the card is
-    // the same card — so there is no branch to keep in step.
-    const el = mount(
-      <ComposerShelf>
-        <ThreadPullRequestChips results={[pr(1)]} />
-      </ComposerShelf>,
-    );
-    const group = el.querySelector<HTMLElement>(
-      '[data-slot="pull-request-group"]',
-    )!;
-    expect(group).not.toBeNull();
-    expect(group.children).toHaveLength(1);
-    expect(el.querySelector('[data-slot="all-pull-requests"]')).toBeNull();
-  });
-
-  it('marks only the chip whose pull request has a recorded outcome, matched by its identity', () => {
+  it('marks the recorded outcome on that pull request’s row in the list, matched by its identity', () => {
     const el = mount(
       <ComposerShelf>
         <ThreadPullRequestChips
@@ -1086,14 +1076,23 @@ describe('the shelf — separate chips, ONE joined group', () => {
         />
       </ComposerShelf>,
     );
-    const chips = [
-      ...el.querySelectorAll<HTMLElement>('[data-slot="pull-request-chip"]'),
-    ];
-    const marked = chips.filter(
-      (chip) =>
-        chip.querySelector('[data-slot="pull-request-outcome"]') !== null,
+    act(() =>
+      el
+        .querySelector<HTMLElement>(
+          '[data-slot="thread-pull-requests"] button',
+        )!
+        .click(),
     );
-    expect(marked.map((chip) => chip.getAttribute('href'))).toEqual([
+    const rows = [
+      ...el.querySelectorAll<HTMLAnchorElement>(
+        '[data-slot="thread-pull-request-list"] a',
+      ),
+    ];
+    expect(rows).toHaveLength(2);
+    const marked = rows.filter(
+      (row) => row.querySelector('[data-slot="pull-request-outcome"]') !== null,
+    );
+    expect(marked.map((row) => row.getAttribute('href'))).toEqual([
       'https://github.com/geniro-io/geniro-app/pull/2',
     ]);
   });
@@ -1139,78 +1138,33 @@ describe('the shelf under a squeeze', () => {
     }
   });
 
-  it('clips a segment’s own content rather than letting it print over its neighbour', () => {
-    // A pull-request chip is [icon][number][title] with the NUMBER deliberately
-    // `shrink-0` — it identifies the thing, so it must never truncate. Under a
-    // hard squeeze that unshrinkable content spilled out of its segment and
-    // over the `All 4` beside it: measured at a 430px shelf as two overlapping
-    // strings. The GROUP's own clip cannot help, the two being siblings inside
-    // it. A cut-off number reads as "there is more here"; overlapping glyphs
-    // read as a broken app.
-    const el = mount(
-      <ComposerShelf>
-        <ThreadPullRequestChips results={[pr(1), pr(2), pr(3), pr(4)]} />
-      </ComposerShelf>,
-    );
-    const group = el.querySelector<HTMLElement>(
-      '[data-slot="pull-request-group"]',
-    )!;
-    for (const segment of group.children) {
-      expect(segment.className).toContain('overflow-hidden');
-    }
-  });
-
-  it('never squeezes the pull requests to an empty card beside the agent’s buttons', () => {
-    // REPORTED as an empty pill between the changes chip and two action
-    // buttons. Measured at a 510px shelf: the group was 2px wide, because it
-    // and its segments were `min-w-0` with no floor while the buttons were
-    // `shrink-0`, so the pull requests took the whole squeeze. Now the group
-    // gives way first but stops at a floor of mark and number, and the buttons
-    // yield their labels after it.
-    //
+  it('keeps the pull-request chip whole and lets an action’s label yield', () => {
     // Classes, for the reason the tests above give.
     const el = mount(
       <ComposerShelf>
         <ThreadPullRequestChips results={[pr(1), pr(2)]} />
         <ChatActionChips
-          actions={[liveAction(2), liveAction(1)]}
+          actions={[liveAction(1)]}
           phases={new Map()}
           onPress={() => undefined}
           onDismiss={() => undefined}
         />
       </ComposerShelf>,
     );
-    const group = el.querySelector<HTMLElement>(
-      '[data-slot="pull-request-group"]',
+    const pullRequests = el.querySelector<HTMLElement>(
+      '[data-slot="thread-pull-requests"]',
     )!;
-    expect(group.className).toContain('min-w-min');
-    expect(group.className).toContain('shrink-[100]');
-    for (const chip of el.querySelectorAll<HTMLElement>(
-      '[data-slot="pull-request-chip"]',
-    )) {
-      expect(chip.className).toContain('min-w-min');
-      expect(chip.className).not.toMatch(/(^| )min-w-0( |$)/);
-      // The floor is what lies OUTSIDE the yielding span: the number. The
-      // title sits inside it, or `min-w-min` would floor at the whole title.
-      const yielding = chip.querySelector<HTMLElement>(
-        '[class*="minmax(0,max-content)"]',
-      )!;
-      expect(yielding.textContent).toContain('pull request');
-      expect(yielding.textContent).not.toMatch(/#\d/);
-    }
+    expect(pullRequests.className).toContain('shrink-0');
     const actions = el.querySelector<HTMLElement>(
       '[data-slot="chat-actions"]',
     )!;
     expect(actions.className).not.toContain('shrink-0');
-    for (const chip of el.querySelectorAll<HTMLElement>(
-      '[data-slot="action-chip"]',
-    )) {
-      expect(chip.className).not.toContain('shrink-0');
-      expect(chip.className).toContain('min-w-min');
-      expect(
-        chip.querySelector('[class*="minmax(0,max-content)"]')?.textContent,
-      ).toContain('Action');
-    }
+    const chip = el.querySelector<HTMLElement>('[data-slot="action-chip"]')!;
+    expect(chip.className).not.toContain('shrink-0');
+    expect(chip.className).toContain('min-w-min');
+    expect(
+      chip.querySelector('[class*="minmax(0,max-content)"]')?.textContent,
+    ).toContain('Action');
   });
 });
 

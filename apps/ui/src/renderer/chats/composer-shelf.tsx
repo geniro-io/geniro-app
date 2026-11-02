@@ -25,16 +25,18 @@ import type { ChangesSummary } from './changes-tree';
 import { formatElapsed, RunSettledContext, useSecondsTick } from './live-row';
 import { MonitorRows } from './monitor-list';
 import { revealThreadPullRequests, revealWorkflows } from './panel-flags';
-import { ThreadPullRequestChip } from './pull-request-row';
+import {
+  ThreadPullRequestChip,
+  ThreadPullRequestRow,
+} from './pull-request-row';
 import { formatClockTime, formatRelativeTime } from './relative-time';
 import { pullRequestOutcomeKey } from './run-outcome';
 import {
   SHELF_CHIP_CLASS,
   SHELF_CHIP_TRIGGER_CLASS,
   SHELF_CHIP_WRAPPER_CLASS,
-  SHELF_GROUP_CLASS,
-  SHELF_SEGMENT_CLASS,
   SHELF_STATUS_GROUP_CLASS,
+  SHELF_STATUS_TRIGGER_CLASS,
 } from './shelf-chip';
 import {
   CallGlyph,
@@ -73,17 +75,12 @@ import { WorkflowChip, workflowShellStatus } from './workflow-block';
  * another chip in this row, not another line above the composer, which is how
  * the area became a stack of one-item rows in the first place. A row that
  * wrapped would push the textarea down by however much the thread happened to
- * produce, so each chip takes a bounded width and gives the rest back: what
- * truncates is the TITLE, never the number, since the number identifies it.
- * On a phone the row scrolls sideways instead, each chip at its own width.
+ * produce, so each KIND of thing is one short chip — one pull request shows
+ * itself, several are one chip with the list behind it, and the agent's
+ * buttons likewise. On a phone the row scrolls sideways instead.
  *
  * The chips stay SEPARATE, with gaps — a row of distinct readings, each its own
- * object. The whole row was joined into one segmented bar for a moment and that
- * was rejected on sight ("but chips still should be separate, as before. What i
- * told - ts only for prs"): touching is a claim that two things are one, and it
- * is true of a pull request and the `All 4` that counts it, false of a terminal
- * and a task list. The one joined run therefore lives inside
- * {@link ThreadPullRequestChips} rather than here.
+ * object; the whole row joined into one segmented bar was rejected.
  *
  * Its height is RESERVED even when it holds nothing. The transcript above is
  * pinned to its tail, so a row appearing or vanishing resized the transcript
@@ -296,54 +293,13 @@ export function FolderChangesChip({
 }
 
 /**
- * How wide ONE pull-request chip may get, by how many are drawn beside it.
+ * The thread's pull requests as ONE shelf chip.
  *
- * The shelf is a single line that never wraps, so width taken by one chip is
- * width the next one does not have — "we always should fit all available chips
- * to one line". Two mechanisms do that and they answer different situations. A
- * CROWDED row is handled by flex on its own: the group shrinks far ahead of
- * everything beside it (`shrink-[100]`; the counter chips are `shrink-0`), so
- * the pull requests give up width first — down to a floor of mark and number
- * (`SHELF_YIELD_CLASS`), never to an empty card, after which the agent's
- * buttons give way too. Only a shelf too narrow for every floor clips. What flex
- * cannot do is the ROOMY row, where three chips would each take their full
- * width and leave the rest of the shelf pressed against the edge — hence a cap
- * that comes down as the count goes up.
- *
- * The steps are not linear because the chip is not all title: a number, a glyph
- * and the padding are fixed at about 5rem, so the old 14 → 11 → 9rem left
- * roughly 9rem, 6rem and 4rem of title. That is a readable title, a
- * recognisable one, and a hint — which is the right shape for a row where the
- * leftmost chip is the one the thread is most likely on.
- *
- * They went UP when the chips gained their size — `3 files +26 −1` is about
- * 7rem of figures that must never truncate, so at the old caps the title had
- * nothing left at any count. The same three shapes, moved along: a title with
- * room, one that is recognisable, and a hint. Past that the flex shrink still
- * governs, so a genuinely crowded row still fits by its floors rather than by
- * these numbers being right.
- */
-const PULL_REQUEST_CHIP_WIDTH: Record<number, string> = {
-  1: 'max-w-96',
-  2: 'max-w-72',
-  3: 'max-w-60',
-};
-
-/**
- * The pull requests this thread has OPEN as shelf chips, and a way to the rest.
- *
- * Up to {@link MAX_SHELF_PULL_REQUESTS} of them — see `shelfThreadPullRequests`
- * for which, and why an open one is what earns a chip. It named exactly ONE for
- * a release, which was right for a thread whose work is one branch and wrong
- * for the case it was reported against ("in case if we have few opened PRS -
- * all of them, but maximum 3"): several reviews open at once, only the newest
- * reachable from here.
- *
- * The CAP is the point, though, and it is the same one the single chip was
- * chosen for. A thread opens as many pull requests as it opens — thirty-one
- * across six repositories in the case this was built for — and drawing them all
- * pushed the textarea most of the way up the pane. Past the cap the button
- * hands the list to the PANEL, which is a scrolling column built for it.
+ * A thread with a single pull request shows it: its state, number and
+ * acceptance, a press away from GitHub. With several, the chip is the glyph and
+ * how many there are, and the list behind it holds every one — open first —
+ * with its title, size and acceptance, and the way to the panel. Drawn while
+ * the thread has a pull request worth naming (`shelfThreadPullRequests`).
  */
 export function ThreadPullRequestChips({
   results,
@@ -354,72 +310,89 @@ export function ThreadPullRequestChips({
   outcomes?: ReadonlyMap<string, PullRequestOutcome>;
 }): React.JSX.Element | null {
   const runId = useContext(ThreadUiMemoryContext);
-  const shown = shelfThreadPullRequests(results);
-  if (shown.length === 0) {
+  const [newest] = shelfThreadPullRequests(results);
+  if (newest === undefined) {
     return null;
   }
-  const repos = new Set(
-    results.map((row) => `${row.ref.owner}/${row.ref.repo}`),
-  );
+  const outcomeOf = (result: PullRequestRefResult): PullRequestOutcome | null =>
+    outcomes.get(pullRequestOutcomeKey(result.ref)) ?? null;
+  if (results.length === 1) {
+    return (
+      <ThreadPullRequestChip
+        result={newest}
+        showRepo={false}
+        outcome={outcomeOf(newest)}
+      />
+    );
+  }
+  const showRepo =
+    new Set(results.map((row) => `${row.ref.owner}/${row.ref.repo}`)).size > 1;
+  const isOpen = (row: PullRequestRefResult): boolean =>
+    row.pullRequest?.state === 'open';
+  const open = results.filter(isOpen);
+  const ordered = [...open, ...results.filter((row) => !isOpen(row))];
+  const summary =
+    open.length === 0
+      ? `${results.length} pull requests`
+      : `${results.length} pull requests · ${open.length} open`;
   return (
-    // ONE card over the pull requests and the control that counts them — the
-    // only joined run on the shelf. `All 4` standing apart as a fifth identical
-    // pill read as a peer of `Tasks 2/6`, because nothing said which items
-    // belonged together; touching says it, and here it is true. The chips
-    // beside this group stay separate, which is the other half of the same
-    // rule — see `ComposerShelf`.
-    //
-    // Drawn even for a lone pull request with no control beside it: a group of
-    // one is visually identical to the standalone chip it replaces (the card is
-    // the same card), so there is no branch, and no way for the two shapes to
-    // drift apart.
-    //
-    // `shrink-[100]`: on a crowded shelf the pull requests give way FIRST, down
-    // to their floor of mark and number, before the agent's buttons beside them
-    // lose their labels — a button is a control, a title is a reading the panel
-    // also holds.
-    <div
-      data-slot="pull-request-group"
-      className={cn(SHELF_GROUP_CLASS, 'shrink-[100]')}>
-      {shown.map((result) => (
-        <ThreadPullRequestChip
-          key={result.ref.url}
-          result={result}
-          showRepo={repos.size > 1}
-          widthClassName={PULL_REQUEST_CHIP_WIDTH[shown.length]}
-          outcome={outcomes.get(pullRequestOutcomeKey(result.ref)) ?? null}
-        />
-      ))}
-      {/* Counting the THREAD's pull requests, not what is left over: the button
-          goes to a panel listing every one of them, merged included, so `All 6`
-          beside three chips is the honest number even though only three are
-          hidden. It appears only once something IS hidden. */}
-      {results.length > shown.length ? (
-        <button
-          type="button"
-          data-slot="all-pull-requests"
-          title="Show every pull request of this thread"
-          aria-label={`Show all ${results.length} pull requests of this thread`}
-          // A SEGMENT of the group, not a card standing beside it — which is
-          // the whole point of the group. `font-normal` is an override:
-          // `global.css` gives every bare `button` the base 15px at medium
-          // weight, which the segment's own `text-xs` covers for size but not
-          // for weight.
-          className={cn(
-            SHELF_SEGMENT_CLASS,
-            'shrink-0 font-normal text-muted-foreground',
-          )}
-          onClick={() => revealThreadPullRequests(runId)}>
-          {/* The GLYPH is the other half of making `All 4` mean something. It
-              was the one item on the shelf that named no subject, and the
-              hardest to guess, being a control rather than a reading: carrying
-              the mark of the chips it is joined to, the run says "pull
-              requests, and all four of them" without a word more. */}
-          <GitPullRequest aria-hidden="true" className="size-3.5 shrink-0" />
-          All {results.length}
-        </button>
-      ) : null}
-    </div>
+    <HoverPopover
+      slot="thread-pull-requests"
+      openOn="click"
+      label={`${summary} — show the list`}
+      title={`Pull requests · ${open.length} open of ${results.length}`}
+      panelLabel="Pull requests"
+      side="top"
+      align="start"
+      className={SHELF_CHIP_WRAPPER_CLASS}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      panelClassName="w-[22rem]"
+      trigger={
+        <>
+          <GitPullRequest
+            aria-hidden="true"
+            className={cn(
+              'size-3.5 shrink-0',
+              open.length > 0 ? 'text-warning' : 'text-muted-foreground',
+            )}
+          />
+          <span className="font-medium">PR</span>
+          <span className="text-muted-foreground tabular-nums">
+            {results.length}
+          </span>
+        </>
+      }>
+      {(close) => (
+        <div
+          data-slot="thread-pull-request-list"
+          className="flex flex-col gap-1 p-1">
+          <p className="m-0 px-1 text-[11px] text-muted-foreground">
+            {summary}
+          </p>
+          <div className="flex max-h-72 flex-col overflow-y-auto">
+            {ordered.map((result) => (
+              <ThreadPullRequestRow
+                key={result.ref.url}
+                result={result}
+                showRepo={showRepo}
+                outcome={outcomeOf(result)}
+              />
+            ))}
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="self-start"
+            onClick={() => {
+              close();
+              revealThreadPullRequests(runId);
+            }}>
+            Show in the panel
+          </Button>
+        </div>
+      )}
+    </HoverPopover>
   );
 }
 
@@ -470,7 +443,7 @@ export function RunningShellChips({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       // Bounded and scrolling, as in the header: a fan-out can hold a dozen,
       // and the rows are long — a command, not a name.
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
@@ -523,7 +496,7 @@ export function RunningMonitorChips({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
         <StatusFigure icon={MonitorGlyph} live>
@@ -609,7 +582,7 @@ export function RunningSubagentChips({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       // Bounded and scrolling, as it was in the header: a delegating turn can
       // hold a dozen live and forty finished, and a panel that grows with them
       // runs off the top of the window. Grouped, it holds a block per agent and
@@ -696,7 +669,7 @@ export function RunningCallChips({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
       trigger={
         <StatusFigure
@@ -843,7 +816,7 @@ export function TaskListChip({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       // Grouped, the panel holds one bounded block per agent, so it needs a
       // bound of its own — three agents' blocks stack past the top of the
       // window otherwise. Flat, the single block already bounds itself and a
@@ -932,7 +905,7 @@ export function TeamNotesChip({
       side="top"
       align="end"
       className={SHELF_CHIP_WRAPPER_CLASS}
-      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
+      triggerClassName={SHELF_STATUS_TRIGGER_CLASS}
       panelClassName="w-[22rem]"
       trigger={<StatusFigure icon={NotebookPen}>{notes.length}</StatusFigure>}>
       {(close) => (

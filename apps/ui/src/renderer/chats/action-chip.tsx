@@ -6,6 +6,7 @@ import {
   Send,
   Square,
   SquareTerminal,
+  Zap,
 } from 'lucide-react';
 import { useRef, useState } from 'react';
 
@@ -36,9 +37,6 @@ const ACTION_KIND_NAME: Record<ActionSpecKindEnum, string> = {
   stop: 'stops a process',
   command: 'runs a command',
 };
-
-/** Chips drawn in the row; the rest are reached through {@link ActionOverflow}. */
-export const VISIBLE_ACTIONS = 2;
 
 /** A button's accessible name: its label, what a press does, and its state. */
 export function actionAccessibleName(
@@ -152,7 +150,7 @@ export function ActionChip({
       <ActionGlyph action={action} phase={phase} />
       <span className={SHELF_YIELD_CLASS}>
         <span className="flex min-w-0 items-center gap-1.5">
-          <span className="max-w-40 min-w-0 truncate font-medium">
+          <span className="max-w-32 min-w-0 truncate font-medium">
             {action.label}
           </span>
           {action.publisher.agentLabel === undefined ? null : (
@@ -280,8 +278,8 @@ export function ActionRow({
 }
 
 /**
- * Every live button as a list, behind an `All N` chip — what does not fit on
- * the one-line shelf, and the only place a button is dismissed from the shelf.
+ * Every live button as a list, behind one chip with their count — the only
+ * place a button is dismissed from the shelf.
  * Opens upward, off the composer, like every chip on this row.
  */
 export function ActionOverflow({
@@ -304,16 +302,20 @@ export function ActionOverflow({
       label={`All ${actions.length} actions`}
       panelLabel="Actions"
       side="top"
-      align="end"
+      align="start"
       className={cn(SHELF_CHIP_WRAPPER_CLASS, className)}
       triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       panelClassName="max-h-72 w-[20rem] overflow-y-auto"
       trigger={
         <>
-          <span className="font-medium">All</span>
-          <span className="text-muted-foreground tabular-nums">
-            {actions.length}
-          </span>
+          {actions.some((action) =>
+            isActionBusy(action, phases.get(action.seq)),
+          ) ? (
+            <Spinner className="size-3.5" />
+          ) : (
+            <Zap aria-hidden="true" className="size-3.5 shrink-0" />
+          )}
+          <span className="font-medium tabular-nums">{actions.length}</span>
         </>
       }>
       {actions.map((action) => (
@@ -352,10 +354,9 @@ function announcementOf(
 }
 
 /**
- * The run's agent-published buttons on the composer shelf: the newest few as
- * chips, the whole set behind `All N`, set off from the readings by a divider.
- * Count-based rather than measured, so it never reflows: the newest stay in
- * view, and on a phone only the newest one does — the list holds every one.
+ * The run's agent-published buttons on the composer shelf, set off from the
+ * readings by a divider: a lone button is its own chip, several are one chip
+ * with their count and the list behind it.
  */
 export function ChatActionChips({
   actions,
@@ -368,37 +369,30 @@ export function ChatActionChips({
   onPress: (action: LiveAction) => void;
   onDismiss: (action: LiveAction) => void;
 }): React.JSX.Element | null {
-  if (actions.length === 0) {
+  const [first] = actions;
+  if (first === undefined) {
     return null;
   }
-  const visible = actions.slice(0, VISIBLE_ACTIONS);
   return (
     <div
       role="group"
       aria-label="Chat actions"
       data-slot="chat-actions"
       className="flex min-w-min items-center gap-1.5 border-l border-border pl-1.5">
-      {visible.map((action, index) => (
+      {actions.length === 1 ? (
         <ActionChip
-          key={action.seq}
-          action={action}
-          phase={phases.get(action.seq)}
+          action={first}
+          phase={phases.get(first.seq)}
           onPress={onPress}
-          className={index > 0 ? 'max-sm:hidden' : undefined}
         />
-      ))}
-      {actions.length > 1 ? (
+      ) : (
         <ActionOverflow
           actions={actions}
           phases={phases}
           onPress={onPress}
           onDismiss={onDismiss}
-          // Everything is already in the row on a wide screen when it fits.
-          className={
-            actions.length <= VISIBLE_ACTIONS ? 'sm:hidden' : undefined
-          }
         />
-      ) : null}
+      )}
       <span aria-live="polite" className="sr-only">
         {announcementOf(actions, phases)}
       </span>

@@ -12,10 +12,14 @@ import type {
 
 const mocks = vi.hoisted(() => ({
   readUsageStats: vi.fn(),
+  listTeams: vi.fn(),
 }));
 
 vi.mock('../daemon-api', () => ({
-  createDaemonApis: () => ({ stats: { readUsageStats: mocks.readUsageStats } }),
+  createDaemonApis: () => ({
+    stats: { readUsageStats: mocks.readUsageStats },
+    teams: { listTeams: mocks.listTeams },
+  }),
 }));
 
 const { Stats } = await import('./Stats');
@@ -116,6 +120,10 @@ function stats(overrides: Partial<UsageStatsDto> = {}): UsageStatsDto {
     byAgent: [{ key: 'claude', totals: totals() }],
     byModel: [{ key: 'claude-opus-5', totals: totals() }],
     byProject: [{ key: '/Users/me/work/geniro-app', totals: totals() }],
+    byTeam: [
+      { key: 'dev-team', totals: totals() },
+      { key: 'review-team', totals: totals() },
+    ],
     byThread: [
       {
         key: 'run-1',
@@ -159,6 +167,7 @@ const buttonNamed = (el: HTMLElement, label: string): HTMLButtonElement =>
 describe('Stats', () => {
   beforeEach(() => {
     mocks.readUsageStats.mockResolvedValue(stats());
+    mocks.listTeams.mockResolvedValue([{ slug: 'dev-team', name: 'Dev Team' }]);
   });
 
   it('shows the period’s headline figures', async () => {
@@ -368,6 +377,15 @@ describe('Stats', () => {
     expect(el.textContent).toContain('Deleted thread');
     expect(el.textContent).toContain('Untitled thread');
     expect(el.textContent).not.toContain('run-1');
+  });
+
+  it('lists each team bucket in the By team column, by name when it has one', async () => {
+    const el = await render(<Stats handle={HANDLE} />);
+
+    expect(el.textContent).toContain('By team');
+    expect(el.textContent).toContain('Dev Team');
+    expect(el.textContent).not.toContain('dev-team');
+    expect(el.textContent).toContain('review-team');
   });
 
   it('shortens a project path in the breakdown', async () => {

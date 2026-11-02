@@ -143,6 +143,23 @@ describe('memory_search', () => {
     expect(line()).toContain('1 result ');
   });
 
+  it('counts a hit filed under the run’s team like any other', () => {
+    draw(
+      pair(
+        'memory_search',
+        { query: 'seeds' },
+        {
+          text: [
+            PREFACE,
+            '- m4 (rev 1, this team, project) — Team seeds: an excerpt',
+            '- m6 (rev 1, global, user) — Seeds: an excerpt',
+          ].join('\n'),
+        },
+      ),
+    );
+    expect(line()).toBe('Searched memory · 2 results “seeds”');
+  });
+
   it('reads a result delivered as MCP content blocks', () => {
     draw(
       pair(
@@ -208,6 +225,17 @@ describe('memory_read', () => {
 describe('memory_save', () => {
   const saved = (verb: string, tail = ''): { text: string } => ({
     text: `${verb} m12 (rev 1, this project, project) — Use pnpm.${tail}`,
+  });
+
+  it('shows an entry saved under the run’s team with its handle', () => {
+    draw(
+      pair(
+        'memory_save',
+        { title: 'Team rule', body: 'b', scope: 'team' },
+        { text: 'Saved m13 (rev 1, this team, project) — Team rule.' },
+      ),
+    );
+    expect(line()).toBe('Saved memory · Team rule m13');
   });
 
   it('shows a created entry with its title and handle', () => {
@@ -332,6 +360,7 @@ function memory(handle: string, title: string): MemoryEntry {
     body: `body of ${handle}`,
     type: 'project',
     projectId: 'p1',
+    teamSlug: null,
     status: 'active',
     rev: 1,
     source: {

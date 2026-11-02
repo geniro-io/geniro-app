@@ -39,6 +39,11 @@ describe('TeamChatService', () => {
     offeredApproval: ReturnType<typeof vi.fn>;
   };
   let analyses: { deleteTeamAnalyses: ReturnType<typeof vi.fn> };
+  let memory: {
+    enabled: boolean;
+    settleDeletedTeam: ReturnType<typeof vi.fn>;
+    useTeamLookup: ReturnType<typeof vi.fn>;
+  };
   let service: TeamChatService;
 
   beforeEach(async () => {
@@ -55,11 +60,16 @@ describe('TeamChatService', () => {
       ),
     };
     analyses = { deleteTeamAnalyses: vi.fn().mockResolvedValue(undefined) };
+    memory = {
+      enabled: true,
+      settleDeletedTeam: vi.fn(async () => 0),
+      useTeamLookup: vi.fn(),
+    };
     service = new TeamChatService(
       store,
       chats as unknown as ChatService,
       analyses as unknown as ThreadAnalysisService,
-      { enabled: true } as MemoryService,
+      memory as unknown as MemoryService,
     );
   });
 
@@ -308,23 +318,37 @@ describe('TeamChatService', () => {
     expect(chats.deleteTeamChats).toHaveBeenCalledWith('already-deleted');
   });
 
-  it('deletes a team, the chat about it and its analyses', async () => {
+  it('deletes a team, the chat about it and its analyses, and settles its memories as the user chose', async () => {
     const { slug } = await store.create(WF);
 
-    await service.deleteTeam(slug);
+    await service.deleteTeam(slug, 'forget');
 
     await expect(store.get(slug)).rejects.toThrow(NotFoundException);
     expect(chats.deleteTeamChats).toHaveBeenCalledWith(slug);
     expect(analyses.deleteTeamAnalyses).toHaveBeenCalledWith(slug);
+    expect(memory.settleDeletedTeam).toHaveBeenCalledWith(slug, 'forget');
+  });
+
+  it('tells the memory whether a team exists, by the library', async () => {
+    const { slug } = await store.create(WF);
+    service.onModuleInit();
+    const lookup = memory.useTeamLookup.mock.calls[0]![0] as (
+      slug: string,
+    ) => Promise<boolean>;
+
+    await expect(lookup(slug)).resolves.toBe(true);
+    await expect(lookup('no-such-team')).resolves.toBe(false);
+    await expect(lookup('../escape')).resolves.toBe(false);
   });
 
   // The file goes first, so a slug the library never held cannot take a
   // conversation with it.
   it('destroys no chat when the team was not there to delete', async () => {
-    await expect(service.deleteTeam('no-such-team')).rejects.toThrow(
+    await expect(service.deleteTeam('no-such-team', 'forget')).rejects.toThrow(
       NotFoundException,
     );
     expect(chats.deleteTeamChats).not.toHaveBeenCalled();
     expect(analyses.deleteTeamAnalyses).not.toHaveBeenCalled();
+    expect(memory.settleDeletedTeam).not.toHaveBeenCalled();
   });
 });

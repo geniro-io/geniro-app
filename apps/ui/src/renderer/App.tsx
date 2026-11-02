@@ -791,6 +791,11 @@ export function App(): React.JSX.Element {
                         onFirstLaunchHandled={() => setTeamLaunch(null)}
                         openRequest={teamRequest}
                         onOpenRequestHandled={() => setTeamRequest(null)}
+                        onOpenSettings={(section) => {
+                          setSettingsSection(section);
+                          setSettingsSectionOpen(true);
+                          setView('settings');
+                        }}
                       />
                     ) : null}
                   </div>

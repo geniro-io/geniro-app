@@ -20,10 +20,15 @@ import type {
   LineSnapshotAckDto,
   LineSnapshotDto,
   RestoreTeamVersionDto,
+  TeamStatsDto,
   TeamVersionRestoredDto,
   TeamVersionsDto,
   UsageStatsDto,
 } from '../models/index';
+
+export interface StatsApiReadTeamStatsRequest {
+    slug: string;
+}
 
 export interface StatsApiReadTeamVersionsRequest {
     slug: string;
@@ -50,6 +55,51 @@ export interface StatsApiRestoreTeamVersionRequest {
  * 
  */
 export class StatsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async readTeamStatsRaw(requestParameters: StatsApiReadTeamStatsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TeamStatsDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling readTeamStats().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/stats/teams/{slug}`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readTeamStats(requestParameters: StatsApiReadTeamStatsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamStatsDto> {
+        const response = await this.readTeamStatsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 

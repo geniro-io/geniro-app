@@ -6,25 +6,22 @@ import { NavListItem } from '../components/nav-list-item';
 import { StatusDot, type StatusTone } from '../components/status-dot';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
+import type { MemberStatus } from './member-problems';
 import { LIFT_CARD_CLASS } from './team-card';
 
-/**
- * A member's setup health. `unchecked` covers everything past the editor's own
- * refusals until the daemon checks it.
- */
-export type MemberHealth = 'ready' | 'warning' | 'error' | 'unchecked';
-
-export const HEALTH_WORD: Record<MemberHealth, string> = {
+export const HEALTH_WORD: Record<MemberStatus, string> = {
   ready: 'ready',
   warning: 'needs setup',
   error: 'cannot run',
+  checking: 'checking…',
   unchecked: 'not checked',
 };
 
-const HEALTH_TONE: Record<MemberHealth, StatusTone> = {
+const HEALTH_TONE: Record<MemberStatus, StatusTone> = {
   ready: 'ok',
   warning: 'warn',
   error: 'bad',
+  checking: 'unknown',
   unchecked: 'unknown',
 };
 
@@ -55,7 +52,7 @@ export function MemberCard({
 }: {
   member: TeamMember;
   agentLabel: string;
-  health: MemberHealth;
+  health: MemberStatus;
   /** Why the member is not ready, in words; null when nothing is wrong. */
   reason?: string | null;
   fix?: MemberCardFix;
@@ -97,7 +94,11 @@ export function MemberCard({
             <StatusDot
               tone={HEALTH_TONE[health]}
               label={HEALTH_WORD[health]}
-              className="absolute right-0.5 bottom-0.5 size-3 ring-2 ring-card"
+              className={cn(
+                'absolute right-0.5 bottom-0.5 size-3 ring-2 ring-card',
+                health === 'checking' &&
+                  'animate-pulse motion-reduce:animate-none',
+              )}
             />
           </span>
           <div className="flex min-w-0 flex-1 flex-col gap-1">

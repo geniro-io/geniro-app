@@ -73,8 +73,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.updateSettings, patch) as ReturnType<
       GeniroApi['updateSettings']
     >,
-  detectClis: () =>
-    ipcRenderer.invoke(IPC.detectClis) as ReturnType<GeniroApi['detectClis']>,
+  detectClis: (options) =>
+    ipcRenderer.invoke(IPC.detectClis, options) as ReturnType<
+      GeniroApi['detectClis']
+    >,
   updateCli: (kind) =>
     ipcRenderer.invoke(IPC.updateCli, kind) as ReturnType<
       GeniroApi['updateCli']

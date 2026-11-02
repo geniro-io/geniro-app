@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { DesktopOnlyGuard } from '../../../auth/desktop-only.guard';
 import { MemoryImportController } from '../../agents/controllers/memory-import.controller';
 import {
+  MemoryCreateSchema,
   type MemoryEntry,
   MemoryListQuerySchema,
   MemoryPatchSchema,
@@ -19,6 +20,7 @@ const ENTRY: MemoryEntry = {
   body: 'Never npm.',
   type: 'project',
   projectId: null,
+  teamSlug: null,
   status: 'active',
   rev: 2,
   source: {
@@ -115,12 +117,18 @@ describe('MemoriesController', () => {
       body: 'b',
       type: 'project',
       projectId: null,
+      teamSlug: null,
     };
 
     expect(MemoryPatchSchema.safeParse({ status: 'forgotten' }).success).toBe(
       true,
     );
     expect(MemoryPatchSchema.safeParse(edit).success).toBe(true);
+    const { teamSlug: _omitted, ...withoutTeam } = edit;
+    expect(MemoryPatchSchema.safeParse(withoutTeam).success).toBe(false);
+    expect(
+      MemoryPatchSchema.safeParse({ ...edit, teamSlug: 'bad slug\n' }).success,
+    ).toBe(false);
     expect(
       MemoryPatchSchema.safeParse({ ...edit, status: 'active' }).success,
     ).toBe(false);
@@ -142,5 +150,46 @@ describe('MemoriesController', () => {
       ok({ beforeUpdatedAt: '2026-10-01T00:00:00.000Z', beforeId: 'e1' }),
     ).toBe(true);
     expect(ok({ beforeId: 'e1' })).toBe(false);
+  });
+
+  it('takes a team slug only with scope: team', () => {
+    const ok = (query: object) =>
+      MemoryListQuerySchema.safeParse(query).success;
+
+    expect(ok({ scope: 'team', teamSlug: 'a' })).toBe(true);
+    expect(ok({ scope: 'team' })).toBe(false);
+    expect(ok({ teamSlug: 'a' })).toBe(false);
+    expect(ok({ scope: 'project', projectId: 'p1', teamSlug: 'a' })).toBe(
+      false,
+    );
+  });
+
+  it('files an entry under a project or a team, never both', () => {
+    const entry = {
+      title: 't',
+      body: 'b',
+      type: 'project',
+      projectId: null,
+    };
+    const edit = { ...entry, rev: 1 };
+
+    expect(
+      MemoryCreateSchema.safeParse({ ...entry, teamSlug: 'a' }).success,
+    ).toBe(true);
+    expect(MemoryCreateSchema.safeParse(entry).success).toBe(true);
+    expect(
+      MemoryCreateSchema.safeParse({ ...entry, projectId: 'p1', teamSlug: 'a' })
+        .success,
+    ).toBe(false);
+    expect(
+      MemoryPatchSchema.safeParse({ ...edit, teamSlug: 'a' }).success,
+    ).toBe(true);
+    expect(
+      MemoryPatchSchema.safeParse({ ...edit, projectId: 'p1', teamSlug: 'a' })
+        .success,
+    ).toBe(false);
+    expect(
+      MemoryPatchSchema.safeParse({ status: 'active', teamSlug: 'a' }).success,
+    ).toBe(false);
   });
 });

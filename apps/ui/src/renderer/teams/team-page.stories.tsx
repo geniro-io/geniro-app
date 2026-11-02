@@ -110,7 +110,14 @@ function Page(): React.JSX.Element {
           </div>
         }
         memoryTab={<TeamMemoryTab query={query} onQueryChange={setQuery} />}
-        statsTab={<TeamStatsTab runs={null} />}
+        statsTab={
+          <TeamStatsTab
+            stats={null}
+            loading={false}
+            error={null}
+            memberOf={() => null}
+          />
+        }
       />
     </div>
   );

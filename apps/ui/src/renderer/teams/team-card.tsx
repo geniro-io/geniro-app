@@ -21,6 +21,8 @@ export const LIFT_CARD_CLASS =
 export function TeamCard({
   summary,
   warningCount = null,
+  warningsCheckedAt = null,
+  blocking = false,
   deleteDisabledReason = null,
   onOpen,
   onDelete,
@@ -28,6 +30,10 @@ export function TeamCard({
   summary: TeamSummary;
   /** Open setup problems; null until the daemon has checked. */
   warningCount?: number | null;
+  /** When the MCP servers were last read, for the badge's tooltip; null if never. */
+  warningsCheckedAt?: string | null;
+  /** A problem stands that stops a run: the badge is red instead of amber. */
+  blocking?: boolean;
   /** Why the team cannot be deleted right now, or null. */
   deleteDisabledReason?: string | null;
   onOpen: () => void;
@@ -76,7 +82,18 @@ export function TeamCard({
             {warningCount === null ? null : warningCount > 0 ? (
               <span
                 data-slot="team-card-warnings"
-                className="inline-flex h-6 shrink-0 items-center gap-1 rounded-pill bg-warning/15 px-2 text-sm font-medium text-warning tabular-nums">
+                data-blocking={blocking || undefined}
+                title={
+                  warningsCheckedAt === null
+                    ? 'MCP not checked yet'
+                    : `MCP last checked ${formatUpdated(warningsCheckedAt)}`
+                }
+                className={cn(
+                  'inline-flex h-6 shrink-0 items-center gap-1 rounded-pill px-2 text-sm font-medium tabular-nums',
+                  blocking
+                    ? 'bg-destructive/15 text-destructive'
+                    : 'bg-warning/15 text-warning',
+                )}>
                 <TriangleAlert aria-hidden="true" className="size-3" />
                 {warningCount}
                 <span className="sr-only"> need setup</span>

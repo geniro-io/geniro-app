@@ -8,8 +8,10 @@ import {
   ReplyLanguageSchema,
 } from '../../agents/chat.types';
 import { messageImagesSchema } from '../../agents/dto/chat.dto';
+import { TEAM_MEMORY_FATES } from '../../memory/memory.types';
 import {
   InstructionSizesWireSchema,
+  MemberHealthSchema,
   NodeStateWireSchema,
   ResetWakesCancelledSchema,
   RunTeamSnapshotWireSchema,
@@ -20,6 +22,7 @@ import {
   TeamAvatarIdSchema,
   TeamAvatarUploadSchema,
   TeamChatsDiscardedSchema,
+  TeamHealthSchema,
   TeamSchema,
   TeamSummarySchema,
   TeamWireSchema,
@@ -180,3 +183,27 @@ export class ExportedDto extends createZodDto(
 
 export class MoveTeamRunStageDto extends createZodDto(StageMoveRequestSchema) {}
 export class StageMoveResultDto extends createZodDto(StageMoveResultSchema) {}
+
+export const teamHealthQuerySchema = z.object({
+  probe: z
+    .enum(['true', 'false'])
+    .optional()
+    .describe(
+      'true also reads the MCP servers behind the cache (team page only); default false',
+    ),
+});
+export class TeamHealthQueryDto extends createZodDto(teamHealthQuerySchema) {}
+
+export const deleteTeamQuerySchema = z.object({
+  memories: z
+    .enum(TEAM_MEMORY_FATES)
+    .optional()
+    .describe(
+      'What happens to the entries filed under the team: forget them (restorable), keep them under the slug, or file them as global; default keep',
+    ),
+});
+export class DeleteTeamQueryDto extends createZodDto(deleteTeamQuerySchema) {}
+
+export class TeamHealthDto extends createZodDto(TeamHealthSchema) {}
+
+export class MemberHealthDto extends createZodDto(MemberHealthSchema) {}

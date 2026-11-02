@@ -9,6 +9,11 @@ export const MEMORY_PROJECTS: readonly { id: string; name: string }[] = [
   { id: 'project-website', name: 'Website' },
 ];
 
+export const MEMORY_TEAMS: readonly { slug: string; name: string }[] = [
+  { slug: 'review-crew', name: 'Review crew' },
+  { slug: 'release-train', name: 'Release train' },
+];
+
 export function memoryEntry(over: Partial<MemoryEntry> = {}): MemoryEntry {
   return {
     id: 'memory-1',
@@ -17,6 +22,7 @@ export function memoryEntry(over: Partial<MemoryEntry> = {}): MemoryEntry {
     body: 'Issue a credit note instead of editing a sent invoice.',
     type: 'feedback',
     projectId: null,
+    teamSlug: null,
     status: 'active',
     rev: 1,
     source: {

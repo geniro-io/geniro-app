@@ -22,7 +22,7 @@ export class MemoryForgetTool extends MemoryMcpTool {
 
   protected async answer(
     args: Record<string, unknown>,
-    { projectId, actor }: MemoryCallScope,
+    { place, actor }: MemoryCallScope,
   ): Promise<McpToolResult> {
     const read = readMemoryForgetArgs(args);
     if (!read.ok) {
@@ -32,7 +32,7 @@ export class MemoryForgetTool extends MemoryMcpTool {
       actor,
       read.query.id,
       read.query.reason,
-      projectId,
+      place,
     );
     const { text, isError } = memoryForgetResultText(outcome);
     return this.masked(text, isError);

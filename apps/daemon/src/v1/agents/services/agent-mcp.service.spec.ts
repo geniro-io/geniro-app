@@ -3275,3 +3275,104 @@ describe('AgentMcpService — repeated turn reports of the same missing server',
     ).toEqual(['figma']);
   });
 });
+
+describe('AgentMcpService — knownStatus', () => {
+  function knownStatusService(listingUnavailableReason: string | null = null): {
+    service: AgentMcpService;
+    harvest: McpHarvestStore;
+    folderless: string;
+    listMcpServers: ReturnType<typeof vi.fn>;
+    resolveVersion: ReturnType<typeof vi.fn>;
+  } {
+    const folderless = join(realDir(), 'folderless');
+    const harvest = emptyHarvest();
+    const listMcpServers = vi.fn(() =>
+      Promise.resolve({ ok: true as const, servers: [server('cached')] }),
+    );
+    const resolveVersion = vi.fn(() => Promise.resolve('2.1.220'));
+    const adapter = {
+      listMcpServers,
+      forgetMcpNeedsAuth: () => Promise.resolve([]),
+      readMcpFolderFacts: () =>
+        Promise.resolve({
+          disabled: [],
+          lockedOff: [],
+          origins: {},
+          interactiveOnlyNote: null,
+          plugins: [],
+        }),
+      getConfig: () => ({
+        mcp: {
+          listingUnavailableReason,
+          toggleUnavailableReason: null,
+          approveUnavailableReason: null,
+          turnToggleUnavailableReason: null,
+          userDisabledReason: 'you switched it off yourself',
+          changeReach: {
+            toggle: { where: 'folder', perProfile: true },
+            signIn: { where: 'folder', perProfile: true },
+          },
+        },
+      }),
+    } as unknown as AgentAdapter;
+    const service = new AgentMcpService(
+      { for: () => adapter } as unknown as AgentAdapterRegistry,
+      new ProcessRegistry(),
+      new AgentVersionService(),
+      harvest,
+      new AgentSessionRegistry(),
+      {
+        now: () => 5_000,
+        resolveVersionFn: resolveVersion,
+        folderlessDir: folderless,
+      },
+    );
+    return { service, harvest, folderless, listMcpServers, resolveVersion };
+  }
+
+  it('reads the folderless harvest without dialling or resolving a version', () => {
+    const { service, harvest, folderless, listMcpServers, resolveVersion } =
+      knownStatusService();
+    // The service creates its folderless directory on first use; the harvest
+    // key is its canonical path.
+    service.knownStatus(AgentKind.Claude, null);
+    harvest.record('claude', realpathSync(folderless), null, [
+      { ...server('gmail'), status: 'needs_auth' },
+    ]);
+
+    const known = service.knownStatus(AgentKind.Claude, null);
+
+    expect(known.servers?.map((row) => [row.name, row.status])).toEqual([
+      ['gmail', 'needs_auth'],
+    ]);
+    expect(known.checkedAt).toBeNull();
+    expect(listMcpServers).not.toHaveBeenCalled();
+    expect(resolveVersion).not.toHaveBeenCalled();
+  });
+
+  it('answers from the cache of a finished listing, with its time, and asks nothing more', async () => {
+    const { service, listMcpServers } = knownStatusService();
+    await service.list(AgentKind.Claude, null);
+
+    const known = service.knownStatus(AgentKind.Claude, null);
+
+    expect(known.servers?.map((row) => row.name)).toEqual(['cached']);
+    expect(known.checkedAt).toBe(new Date(5_000).toISOString());
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+  });
+
+  it('knows nothing for a profile that does not exist or a CLI that cannot be listed', () => {
+    const missing = knownStatusService();
+    expect(
+      missing.service.knownStatus(
+        AgentKind.Claude,
+        join(realDir(), 'gone-profile'),
+      ),
+    ).toEqual({ servers: null, checkedAt: null });
+    const unlisted = knownStatusService('this CLI has no listing');
+    expect(unlisted.service.knownStatus(AgentKind.Claude, null)).toEqual({
+      servers: null,
+      checkedAt: null,
+    });
+  });
+});

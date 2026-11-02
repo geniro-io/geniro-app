@@ -10,6 +10,7 @@ import {
 } from '../../../db/memory-text-index.ddl';
 import { Memory } from '../entity/memory.entity';
 import type {
+  MemoryPlace,
   MemoryStatus,
   MemoryTextDatabase,
   MemoryType,
@@ -19,12 +20,11 @@ import type {
 export interface MemoryMatchScope {
   statuses: readonly MemoryStatus[];
   /**
-   * `visibleTo`: global entries plus this project's (null = global only).
-   * `exactly`: entries filed under exactly this scope (null = global).
+   * `visibleTo`: global entries plus this place's project's and team's.
+   * `exactly`: entries filed under exactly this place (both null = global).
    * `any`: every scope — the user's own view.
    */
-  projects:
-    { visibleTo: string | null } | { exactly: string | null } | { any: true };
+  places: { visibleTo: MemoryPlace } | { exactly: MemoryPlace } | { any: true };
 }
 
 /** One page of the user's list, newest edit first. */
@@ -171,30 +171,80 @@ export class MemoryDao extends BaseDao<Memory> {
     return Number(result.numUpdatedRows);
   }
 
+  /** Forget a team's active and pending entries, each kept restorable. */
+  async forgetTeam(
+    teamSlug: string,
+    at: Date,
+    em: EntityManager = this.em,
+  ): Promise<number> {
+    const result = await this.database(em)
+      .updateTable('memories')
+      .set((eb) => ({
+        status_before_forget: eb.ref('status'),
+        status: 'forgotten',
+        rev: eb('rev', '+', 1),
+        updated_at: at.getTime(),
+      }))
+      .where('deleted_at', 'is', null)
+      .where('team_slug', '=', teamSlug)
+      .where('status', 'in', ['active', 'pending'])
+      .executeTakeFirst();
+    return Number(result.numUpdatedRows);
+  }
+
+  /** File every entry of a team, whatever its status, as global. */
+  async refileTeamAsGlobal(
+    teamSlug: string,
+    at: Date,
+    em: EntityManager = this.em,
+  ): Promise<number> {
+    const result = await this.database(em)
+      .updateTable('memories')
+      .set((eb) => ({
+        team_slug: null,
+        rev: eb('rev', '+', 1),
+        updated_at: at.getTime(),
+      }))
+      .where('deleted_at', 'is', null)
+      .where('team_slug', '=', teamSlug)
+      .executeTakeFirst();
+    return Number(result.numUpdatedRows);
+  }
+
   /** Live rows of the given statuses in the given scope. */
   private scoped(scope: MemoryMatchScope, em: EntityManager) {
     const query = this.database(em)
       .selectFrom('memories as m')
       .where('m.deleted_at', 'is', null)
       .where('m.status', 'in', [...scope.statuses]);
-    if ('any' in scope.projects) {
+    const { places } = scope;
+    if ('any' in places) {
       return query;
     }
-    if ('visibleTo' in scope.projects) {
-      const project = scope.projects.visibleTo;
+    if ('visibleTo' in places) {
+      const { projectId, teamSlug } = places.visibleTo;
       return query.where((eb) =>
-        project === null
-          ? eb('m.project_id', 'is', null)
-          : eb.or([
-              eb('m.project_id', 'is', null),
-              eb('m.project_id', '=', project),
-            ]),
+        eb.or([
+          eb.and([
+            eb('m.project_id', 'is', null),
+            eb('m.team_slug', 'is', null),
+          ]),
+          ...(projectId === null
+            ? []
+            : [
+                eb.and([
+                  eb('m.project_id', '=', projectId),
+                  eb('m.team_slug', 'is', null),
+                ]),
+              ]),
+          ...(teamSlug === null ? [] : [eb('m.team_slug', '=', teamSlug)]),
+        ]),
       );
     }
-    const project = scope.projects.exactly;
-    return project === null
-      ? query.where('m.project_id', 'is', null)
-      : query.where('m.project_id', '=', project);
+    const { projectId, teamSlug } = places.exactly;
+    return query
+      .where('m.project_id', projectId === null ? 'is' : '=', projectId)
+      .where('m.team_slug', teamSlug === null ? 'is' : '=', teamSlug);
   }
 
   /**

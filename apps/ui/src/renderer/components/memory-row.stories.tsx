@@ -70,3 +70,10 @@ export const Focused: Story = {
 };
 
 export const Busy: Story = { args: { busy: true } };
+
+export const TeamNote: Story = {
+  args: {
+    entry: memoryEntry({ teamSlug: 'review-crew' }),
+    teamName: 'Review crew',
+  },
+};

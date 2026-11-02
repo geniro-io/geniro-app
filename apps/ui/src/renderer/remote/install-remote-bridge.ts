@@ -203,8 +203,11 @@ export function installRemoteBridge(): void {
       invoke(IPC.updateSettings, [patch]) as ReturnType<
         GeniroApi['updateSettings']
       >,
-    detectClis: () =>
-      invoke(IPC.detectClis) as ReturnType<GeniroApi['detectClis']>,
+    detectClis: (options) =>
+      invoke(
+        IPC.detectClis,
+        options === undefined ? [] : [options],
+      ) as ReturnType<GeniroApi['detectClis']>,
     updateCli: (kind) =>
       invoke(IPC.updateCli, [kind]) as ReturnType<GeniroApi['updateCli']>,
     installCli: (kind) =>

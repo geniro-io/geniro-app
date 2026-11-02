@@ -478,6 +478,7 @@ describe('NotificationsGateway', () => {
       change: 'created' as const,
       status: 'active' as const,
       projectId: null,
+      teamSlug: null,
     };
     memories.publish(change);
 
@@ -489,6 +490,7 @@ describe('NotificationsGateway', () => {
       change: 'bulk' as const,
       status: 'forgotten' as const,
       projectId: null,
+      teamSlug: null,
     };
     memories.publish(bulk);
     expect(emit).toHaveBeenLastCalledWith('memory_changed', bulk);

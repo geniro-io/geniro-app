@@ -64,6 +64,10 @@ export const CannotRun: Story = {
   },
 };
 
+export const Checking: Story = {
+  args: { health: 'checking', reason: null },
+};
+
 export const NoRole: Story = {
   args: {
     member: {

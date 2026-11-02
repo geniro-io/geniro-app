@@ -117,6 +117,55 @@ function profileDirs(kind: CliKind, settings: Settings): string[] {
   ];
 }
 
+interface HeldDetection {
+  key: string;
+  at: number;
+  answer: Promise<CliDetection[]>;
+}
+
+let held: HeldDetection | null = null;
+
+/** What decides the answer besides the machine itself. */
+function detectionKey(settings: Settings): string {
+  return JSON.stringify([settings.cliPaths, settings.configProfiles]);
+}
+
+/**
+ * {@link detectClis} answered from the last detection while it is younger than
+ * `maxAgeMs` and asked under the same paths and profiles, so a page that reads
+ * every member's sign-in on open spawns no probe of its own. A detection still
+ * running is joined. Without `maxAgeMs` it detects afresh, and that answer is
+ * the one later reads are served.
+ */
+export function detectClisCached(
+  settings: Settings,
+  maxAgeMs?: number,
+  now: () => number = Date.now,
+  detect: (settings: Settings) => Promise<CliDetection[]> = detectClis,
+): Promise<CliDetection[]> {
+  const key = detectionKey(settings);
+  if (
+    maxAgeMs !== undefined &&
+    held !== null &&
+    held.key === key &&
+    now() - held.at < maxAgeMs
+  ) {
+    return held.answer;
+  }
+  const entry: HeldDetection = {
+    key,
+    at: now(),
+    answer: detect(settings),
+  };
+  held = entry;
+  entry.answer.catch(() => {
+    if (held === entry) {
+      held = null;
+    }
+  });
+  return entry.answer;
+}
+
 /**
  * Probe the host for each supported CLI agent (path, reported version, and
  * whether it reports itself signed in).

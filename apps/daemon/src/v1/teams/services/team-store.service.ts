@@ -408,6 +408,11 @@ export class TeamStoreService {
     }
   }
 
+  /** Whether the library holds a team under `slug`; false for a slug no file can have. */
+  async has(slug: string): Promise<boolean> {
+    return SLUG_RE.test(slug) && this.exists(this.fileFor(slug));
+  }
+
   private async exists(path: string): Promise<boolean> {
     try {
       await stat(path);

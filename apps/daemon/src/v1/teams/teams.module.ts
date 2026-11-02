@@ -25,6 +25,7 @@ import { TeamChangeService } from './services/team-change.service';
 import { TeamChangeLogService } from './services/team-change-log.service';
 import { TeamChatService } from './services/team-chat.service';
 import { TeamExecutorService } from './services/team-executor.service';
+import { TeamHealthService } from './services/team-health.service';
 import { TeamLiveWorkSources } from './services/team-live-work.service';
 import { TeamProposalService } from './services/team-proposal.service';
 import { TeamStoreService } from './services/team-store.service';
@@ -83,6 +84,7 @@ import { TeamStoreService } from './services/team-store.service';
     TeamChangeLogService,
     TeamActionsService,
     TeamProposalService,
+    TeamHealthService,
   ],
   // `TeamExecutorService` is exported for `TasksModule`, whose cards may name
   // a team instead of an agent — the team twin of the `ChatService` export

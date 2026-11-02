@@ -620,6 +620,11 @@ export const UsageStatsWireSchema = z.object({
   byThread: z
     .array(UsageGroupWireSchema)
     .describe('per thread (run), keyed by run id — chats and team runs'),
+  byTeam: z
+    .array(UsageGroupWireSchema)
+    .describe(
+      'per team, keyed by slug; a thread with no team is in no row, so a chat is never pooled into one',
+    ),
 });
 // No `.meta({ id })`: this is a RESPONSE DTO ROOT, and nestjs-zod would then
 // register the component under the id while the route still points at the DTO
@@ -714,6 +719,82 @@ export const TeamVersionsWireSchema = z.object({
 });
 // No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
 export type TeamVersionsWire = z.infer<typeof TeamVersionsWireSchema>;
+
+/** A team's pull request outcomes: each pull request's newest, one per run and pull request. */
+export const TeamStatsOutcomesSchema = z
+  .object({
+    total: z.number(),
+    accepted: z.number(),
+    changesRequested: z.number(),
+    notYet: z.number(),
+    notNeeded: z.number(),
+  })
+  .meta({ id: 'TeamStatsOutcomes' });
+export type TeamStatsOutcomesWire = z.infer<typeof TeamStatsOutcomesSchema>;
+
+/** One local calendar day of a team's activity. */
+export const TeamStatsDaySchema = z
+  .object({
+    day: z.string().describe('YYYY-MM-DD, the machine’s local day'),
+    runs: z.number().describe('runs that started that day'),
+    costUsd: z
+      .number()
+      .nullable()
+      .describe('null when no turn that day reported a cost'),
+    turns: z.number(),
+    workedMs: z
+      .number()
+      .nullable()
+      .describe('null when no turn that day timed itself'),
+    outcomes: z.number().describe('pull request outcomes recorded that day'),
+  })
+  .meta({ id: 'TeamStatsDay' });
+export type TeamStatsDayWire = z.infer<typeof TeamStatsDaySchema>;
+
+/** One team member's share of a team's turns. */
+export const TeamStatsMemberSchema = z
+  .object({
+    memberId: z.string(),
+    agentKind: z
+      .string()
+      .nullable()
+      .describe('the CLI of the member’s newest turn that names one'),
+    costUsd: z
+      .number()
+      .nullable()
+      .describe('null when no turn reported a cost'),
+    turns: z.number(),
+    workedMs: z.number().nullable().describe('null when no turn timed itself'),
+  })
+  .meta({ id: 'TeamStatsMember' });
+export type TeamStatsMemberWire = z.infer<typeof TeamStatsMemberSchema>;
+
+/** What one team's runs did, folded over every run the ledger holds for it — a deleted run's too. */
+export const TeamStatsWireSchema = z.object({
+  slug: z.string(),
+  runs: z.number().describe('every thread row of the team'),
+  costUsd: z.number().nullable().describe('null when no run reported a cost'),
+  estimatedCostUsd: z
+    .number()
+    .nullable()
+    .describe('the part of costUsd geniro priced, not billed by a CLI'),
+  turns: z.number(),
+  workedMs: z
+    .number()
+    .nullable()
+    .describe('the CLIs’ own worked time; null when no turn timed itself'),
+  outcomes: TeamStatsOutcomesSchema,
+  days: z
+    .array(TeamStatsDaySchema)
+    .describe('oldest first, only the days with activity'),
+  byMember: z
+    .array(TeamStatsMemberSchema)
+    .describe(
+      'most expensive first; turns recorded with no member are in the totals only',
+    ),
+});
+// No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
+export type TeamStatsWire = z.infer<typeof TeamStatsWireSchema>;
 
 /** A version written back to the library as the team. */
 export const TeamVersionRestoredSchema = z.object({

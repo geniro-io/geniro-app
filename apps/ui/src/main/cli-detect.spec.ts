@@ -63,7 +63,7 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
-import { detectClis } from './cli-detect';
+import { detectClis, detectClisCached } from './cli-detect';
 
 /** claude's own measured reason it cannot be asked about updates. */
 const CLAUDE_CHECK_UNAVAILABLE =
@@ -771,5 +771,73 @@ describe('detectClis', () => {
 
       expect((await detectCodex())?.loggedIn).toBeNull();
     });
+  });
+});
+
+describe('detectClisCached', () => {
+  const versionProbes = (): number =>
+    mocks.calls.filter((call) => call.args.includes('--version')).length;
+
+  it('answers a page asking within maxAgeMs from the last detection, spawning no probe', async () => {
+    vi.stubEnv('PATH', sandboxDir('bin'));
+    fakeBinary(join(root, 'bin'), 'claude');
+    stubExec(() => ({ stdout: '1.0.0\n' }));
+    const settings = settingsWith({});
+    let now = 1_000;
+    const clock = (): number => now;
+
+    const first = await detectClisCached(settings, undefined, clock);
+    const probesAfterFirst = versionProbes();
+    expect(probesAfterFirst).toBeGreaterThan(0);
+
+    now += 30_000;
+    expect(await detectClisCached(settings, 60_000, clock)).toBe(first);
+    expect(versionProbes()).toBe(probesAfterFirst);
+
+    now += 40_000;
+    await detectClisCached(settings, 60_000, clock);
+    expect(versionProbes()).toBe(probesAfterFirst * 2);
+  });
+
+  it('asks afresh without maxAgeMs and when the paths or profiles changed', async () => {
+    vi.stubEnv('PATH', sandboxDir('bin'));
+    fakeBinary(join(root, 'bin'), 'claude');
+    stubExec(() => ({ stdout: '1.0.0\n' }));
+    const settings = settingsWith({});
+    const clock = (): number => 5_000;
+
+    await detectClisCached(settings, undefined, clock);
+    const once = versionProbes();
+    await detectClisCached(settings, undefined, clock);
+    expect(versionProbes()).toBe(once * 2);
+
+    await detectClisCached(
+      {
+        ...settings,
+        configProfiles: [],
+        cliPaths: { claude: '/nowhere/claude' },
+      },
+      60_000,
+      clock,
+    );
+    expect(versionProbes()).toBeGreaterThan(once * 2);
+  });
+
+  it('drops a detection that failed, so the next read within maxAgeMs asks again', async () => {
+    const settings = settingsWith({});
+    const clock = (): number => 9_000;
+    const detect = vi
+      .fn<(settings: Settings) => Promise<CliDetection[]>>()
+      .mockRejectedValueOnce(new Error('probe failed'))
+      .mockResolvedValueOnce([]);
+
+    await expect(
+      detectClisCached(settings, undefined, clock, detect),
+    ).rejects.toThrow('probe failed');
+    await expect(
+      detectClisCached(settings, 60_000, clock, detect),
+    ).resolves.toEqual([]);
+
+    expect(detect).toHaveBeenCalledTimes(2);
   });
 });

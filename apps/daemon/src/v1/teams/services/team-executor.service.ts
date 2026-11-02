@@ -109,6 +109,7 @@ import { addCallWork, type CallWork } from '../../agents/utils/call-worked';
 import { asksForSecret } from '../../agents/utils/card-questions';
 import { withCarriedContext } from '../../agents/utils/carried-context';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
+import { effortListed } from '../../agents/utils/effort-listed';
 import {
   endsOffTurnStretch,
   mapEventToItem,
@@ -250,6 +251,7 @@ import { createTurnSemaphore, type TurnSlot } from '../utils/turn-semaphore';
 import { CallBroker } from './call-broker.service';
 import { RunTeamService } from './run-team.service';
 import { StageService } from './stage.service';
+import { TeamHealthService } from './team-health.service';
 import { TeamStoreService } from './team-store.service';
 
 /** How one member's turn ended (the run-level rollup derives from these). */
@@ -655,10 +657,7 @@ function resolveMemberSettings<T extends TeamAgentPoolMember>(
     const adapter = adapterFor(resolved.agent);
     const levels = adapter.listEfforts();
     const effort = resolved.effort;
-    if (
-      adapter.getConfig().effortsAreExhaustive &&
-      !levels.some((level) => level.id === effort)
-    ) {
+    if (effortListed(adapter, effort) === false) {
       drop(
         'a reasoning effort',
         effort,
@@ -787,6 +786,7 @@ export class TeamExecutorService
     /** `record_outcome`, optional on `artifacts`' terms. */
     @Optional() private readonly runOutcomes?: RunOutcomeBroker,
     @Optional() private readonly stages?: StageService,
+    @Optional() private readonly health?: TeamHealthService,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -1303,6 +1303,7 @@ export class TeamExecutorService
    * bus → WS while the team works.
    */
   async startRun(input: StartTeamRunInput): Promise<RunWire> {
+    await this.assertMembersReady(input.team);
     // Member settings are resolved HERE rather than per turn, for the same two
     // reasons `cwd` is: a bad config directory is a configuration mistake, so
     // refusing the run names it once up front instead of failing one member
@@ -1332,7 +1333,10 @@ export class TeamExecutorService
             teamId: input.slug,
           });
     const scopeFacts = { taskId: input.taskId ?? null, cwd };
-    const memory = await this.memory.runSnapshot(scopeFacts);
+    const memory = await this.memory.runSnapshot({
+      ...scopeFacts,
+      teamSlug: input.slug,
+    });
     const projectInstructions =
       await this.projectScope.instructionsSnapshot(scopeFacts);
     const em = this.em.fork();
@@ -2740,7 +2744,8 @@ export class TeamExecutorService
    * build runs, and a model each CLI can run — asked without starting one, so
    * a team can be judged runnable before it is saved. Resolves to the copy a
    * run would execute, with the member settings its CLI cannot honour
-   * stripped, and what was stripped.
+   * stripped, and what was stripped. The setup-health gate (a CLI not
+   * installed, a profile folder gone) is `startRun`'s own, not this one.
    */
   async assertRunnable(
     team: Team,
@@ -2751,6 +2756,21 @@ export class TeamExecutorService
     );
     await this.validateTeamModels(resolved.team);
     return resolved;
+  }
+
+  /**
+   * Refuse to start a run a red setup problem would stop anyway — the leading
+   * member's CLI not installed, a profile folder gone, no trigger member —
+   * naming each. Amber problems never refuse.
+   */
+  private async assertMembersReady(team: Team): Promise<void> {
+    const problems = (await this.health?.blockingProblems(team)) ?? [];
+    if (problems.length > 0) {
+      throw new BadRequestException(
+        'TEAM_NOT_READY',
+        problems.map((problem) => problem.message).join(' '),
+      );
+    }
   }
 
   private async validateTeamModels(team: Team): Promise<void> {

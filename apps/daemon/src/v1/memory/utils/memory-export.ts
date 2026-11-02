@@ -1,36 +1,53 @@
 import type { MemoryEntry } from '../memory.types';
 
+const GLOBAL = 'global';
+
 /**
  * The user's memory as one Markdown document: global entries first, then each
- * project's by name, every entry with its type, status, scope and source.
+ * project's by name and each team's, every entry with its type, status, scope and source.
  */
 export function memoryExportMarkdown(
   entries: readonly MemoryEntry[],
   projectNames: ReadonlyMap<string, string>,
   now: Date,
 ): string {
-  const groups = new Map<string | null, MemoryEntry[]>();
+  const keyOf = (entry: MemoryEntry): string =>
+    entry.teamSlug !== null
+      ? `team:${entry.teamSlug}`
+      : entry.projectId === null
+        ? GLOBAL
+        : `project:${entry.projectId}`;
+  const headings = new Map<string, string>();
+  const groups = new Map<string, MemoryEntry[]>();
   for (const entry of entries) {
-    const group = groups.get(entry.projectId) ?? [];
-    group.push(entry);
-    groups.set(entry.projectId, group);
+    const key = keyOf(entry);
+    headings.set(
+      key,
+      entry.teamSlug !== null
+        ? `Team: ${entry.teamSlug}`
+        : entry.projectId === null
+          ? 'Global'
+          : `Project: ${projectNames.get(entry.projectId) ?? entry.projectId}`,
+    );
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
   }
-  const scopeOf = (projectId: string | null) =>
-    projectId === null
-      ? 'Global'
-      : `Project: ${projectNames.get(projectId) ?? projectId}`;
+  const headingOf = (key: string): string => headings.get(key) ?? key;
   const order = [...groups.keys()].sort((a, b) =>
-    a === null ? -1 : b === null ? 1 : scopeOf(a).localeCompare(scopeOf(b)),
+    a === GLOBAL
+      ? -1
+      : b === GLOBAL
+        ? 1
+        : headingOf(a).localeCompare(headingOf(b)) || a.localeCompare(b),
   );
   const lines = [
     '# Geniro shared memory',
     '',
     `Exported ${now.toISOString()} · ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}`,
   ];
-  for (const projectId of order) {
-    const scope = scopeOf(projectId);
+  for (const key of order) {
+    const scope = headingOf(key);
     lines.push('', `## ${scope}`);
-    for (const entry of groups.get(projectId) ?? []) {
+    for (const entry of groups.get(key) ?? []) {
       lines.push(
         '',
         `### ${entry.handle} · ${entry.title}`,

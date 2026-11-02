@@ -75,6 +75,7 @@ import { InstructionSizeCard } from './instruction-size-card';
 import { InstructionsCard } from './instructions-card';
 import { AddMemberCard, MemberCard } from './member-card';
 import { memberLabels } from './member-pick';
+import { memberProblemsOf, memberStatusOf } from './member-problems';
 import { modelChangePatch } from './member-schema';
 import { MemberSheet } from './member-sheet';
 import {
@@ -107,8 +108,10 @@ import {
   withoutMember,
   withTriggerMember,
 } from './team-doc';
-import { TeamHero, UNMEASURED_FIGURES } from './team-hero';
+import { teamFiguresOf, TeamHero } from './team-hero';
 import { TeamMemoryTab, TeamStatsTab } from './team-insights';
+import { type TeamMemoryFate, TeamMemoryFatePick } from './team-memory-fate';
+import { TeamMemoryPanel } from './team-memory-panel';
 import { TeamMetaDialog } from './team-meta-dialog';
 import { TeamPage, TeamSection, type TeamTab } from './team-page';
 import { validateTeam } from './team-validate';
@@ -117,7 +120,12 @@ import { TeamsLibrary } from './teams-library';
 import { useAutosave } from './use-autosave';
 import { configDirCapabilityFrom } from './use-config-dir-capability';
 import { useInstructionSizes } from './use-instruction-sizes';
+import { useMemberFixes } from './use-member-fixes';
 import { useNodeMcp } from './use-node-mcp';
+import { useSignInHealth } from './use-sign-in-health';
+import { useLibraryHealth, useTeamHealth } from './use-team-health';
+import { useTeamMemories } from './use-team-memories';
+import { useTeamStats } from './use-team-stats';
 import { useTeamVersions } from './use-team-versions';
 import { type TeamProblem, WarningPill } from './warning-pill';
 
@@ -172,6 +180,7 @@ export function Teams({
   onFirstLaunchHandled,
   openRequest = null,
   onOpenRequestHandled,
+  onOpenSettings,
 }: {
   handle: DaemonHandle | null;
   /** The live daemon socket, for the builder's chat panel. */
@@ -187,6 +196,8 @@ export function Teams({
    */
   openRequest?: string | null;
   onOpenRequestHandled?: () => void;
+  /** Opens a Settings section, for a member warning whose fix lives there. */
+  onOpenSettings?: (section: 'general') => void;
 }): React.JSX.Element {
   const apis = useMemo(
     () => (handle ? createDaemonApis(handle) : null),
@@ -247,6 +258,7 @@ export function Teams({
   // A delete in flight — suspends autosave (see `remove`).
   const [deleting, setDeleting] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<TeamSummary | null>(null);
+  const [memoryFate, setMemoryFate] = useState<TeamMemoryFate>('forget');
   // A menu row cannot arm itself, so the builder's delete confirms in a dialog.
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLButtonElement | null>(null);
@@ -275,6 +287,8 @@ export function Teams({
   } | null>(null);
   const [tab, setTab] = useState<TeamTab>('team');
   const [memoryQuery, setMemoryQuery] = useState('');
+  const teamStats = useTeamStats(apis, activeSlug, client);
+  const teamMemories = useTeamMemories(apis, activeSlug, memoryQuery, client);
   /** A member just added, whose Name field takes the cursor. */
   const [focusNameOf, setFocusNameOf] = useState<string | null>(null);
   const narrow = useNarrowViewport();
@@ -416,6 +430,48 @@ export function Teams({
   );
 
   const members = team?.members ?? NO_MEMBERS;
+  const teamHealth = useTeamHealth(apis, team === null ? null : activeSlug, {
+    probe: true,
+  });
+  const lastHealthSnapshot = useRef<{
+    slug: string | null;
+    snapshot: string | null;
+  }>({ slug: null, snapshot: null });
+  useEffect(() => {
+    const previous = lastHealthSnapshot.current;
+    lastHealthSnapshot.current = { slug: activeSlug, snapshot: savedSnapshot };
+    if (
+      previous.slug === activeSlug &&
+      previous.snapshot !== null &&
+      savedSnapshot !== null &&
+      previous.snapshot !== savedSnapshot
+    ) {
+      teamHealth.reload();
+    }
+  }, [activeSlug, savedSnapshot, teamHealth]);
+  const [signInRefresh, setSignInRefresh] = useState(0);
+  const signIn = useSignInHealth(members, {
+    agentLabelOf: (agent) =>
+      agentDisplayName(capabilities?.agents ?? [], agent),
+    refreshKey: signInRefresh,
+  });
+  const memberFixes = useMemberFixes({
+    apis,
+    openMember: (memberId) => {
+      setFocusNameOf(null);
+      setSelection({ kind: 'member', id: memberId });
+    },
+    openSettings: (section) => onOpenSettings?.(section),
+    onFixed: () => {
+      teamHealth.reload();
+      setSignInRefresh((count) => count + 1);
+    },
+  });
+  const librarySlugs = useMemo(
+    () => (team === null ? (summaries ?? []).map((entry) => entry.slug) : []),
+    [team, summaries],
+  );
+  const libraryHealth = useLibraryHealth(apis, librarySlugs);
   const handlerId = team === null ? null : triggerMemberOf(team);
 
   /**
@@ -705,7 +761,7 @@ export function Teams({
       }
       setError(null);
       try {
-        await api.deleteTeam({ slug });
+        await api.deleteTeam({ slug, memories: memoryFate });
         await refreshList();
         return true;
       } catch (err) {
@@ -713,7 +769,7 @@ export function Teams({
         return false;
       }
     },
-    [api, refreshList],
+    [api, refreshList, memoryFate],
   );
 
   const confirmDelete = useLatestCallback(async (): Promise<void> => {
@@ -1276,9 +1332,13 @@ export function Teams({
           summaries={summaries}
           error={createOpen || pendingDelete ? null : error}
           onOpen={(slug) => void openTeam(slug)}
-          onDelete={setPendingDelete}
+          onDelete={(summary) => {
+            setMemoryFate('forget');
+            setPendingDelete(summary);
+          }}
           onNew={newTeam}
           onImport={() => void importTeam()}
+          warningsOf={(slug) => libraryHealth.get(slug)}
         />
 
         <TeamMetaDialog
@@ -1310,6 +1370,12 @@ export function Teams({
             permanently? Its file is removed from the library. Past runs of it
             are kept.
           </p>
+          <TeamMemoryFatePick
+            apis={apis}
+            slug={pendingDelete?.slug ?? null}
+            value={memoryFate}
+            onChange={setMemoryFate}
+          />
         </ConfirmDialog>
       </>
     );
@@ -1346,6 +1412,12 @@ export function Teams({
     setFocusNameOf(null);
     setSelection({ kind: 'member', id: memberId });
   };
+  const setupProblemsOf = (memberId: string) =>
+    memberProblemsOf(
+      memberId,
+      teamHealth.health?.members.find((entry) => entry.memberId === memberId),
+      signIn.get(memberId) ?? [],
+    );
   const teamProblems: TeamProblem[] = [
     ...members.flatMap((member): TeamProblem[] => {
       const issues = problems.members.get(member.id) ?? [];
@@ -1365,6 +1437,19 @@ export function Teams({
             },
           ];
     }),
+    ...members.flatMap((member): TeamProblem[] =>
+      setupProblemsOf(member.id).map((problem) => ({
+        key: problem.key,
+        member: {
+          id: member.id,
+          name: labels.get(member.id) ?? member.id,
+          avatar: member.avatar,
+        },
+        message: problem.message,
+        level: problem.level,
+        fix: memberFixes.fixOf(problem),
+      })),
+    ),
     ...teamWideProblems.map((message): TeamProblem => ({
       key: `team:${message}`,
       member: null,
@@ -1470,6 +1555,7 @@ export function Teams({
               } else if (value === 'analyze') {
                 void openAnalysis();
               } else if (value === 'delete') {
+                setMemoryFate('forget');
                 setRemoveOpen(true);
               }
             }}
@@ -1517,21 +1603,32 @@ export function Teams({
           <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {members.map((member) => {
               const issues = problems.members.get(member.id) ?? [];
+              const setup = setupProblemsOf(member.id);
+              const setupFix =
+                setup[0] === undefined
+                  ? undefined
+                  : memberFixes.fixOf(setup[0]);
+              const fix =
+                issues.length > 0
+                  ? { label: 'Fix', run: () => openMember(member.id) }
+                  : setupFix;
               return (
                 <MemberCard
                   key={member.id}
                   member={member}
                   agentLabel={agentLabelOf(member.agent)}
-                  health={issues.length > 0 ? 'warning' : 'unchecked'}
-                  reason={issues[0]?.message ?? null}
-                  {...(issues.length > 0
-                    ? {
-                        fix: {
-                          label: 'Fix',
-                          run: () => openMember(member.id),
-                        },
-                      }
-                    : {})}
+                  health={
+                    issues.length > 0
+                      ? 'warning'
+                      : memberStatusOf(
+                          teamHealth.health?.members.find(
+                            (entry) => entry.memberId === member.id,
+                          ),
+                          setup,
+                        )
+                  }
+                  reason={issues[0]?.message ?? setup[0]?.message ?? null}
+                  {...(fix === undefined ? {} : { fix })}
                   stageTitles={stagesOwnedBy(member.id)}
                   handlesFirstMessage={member.id === handlerKnown}
                   selected={selected?.id === member.id}
@@ -1854,9 +1951,20 @@ export function Teams({
               : agentLabelOf(selected.agent)
           }
           issuesFor={selectedIssues}
-          problems={(problems.members.get(selected.id) ?? []).map(
-            (issue) => issue.message,
-          )}
+          problems={[
+            ...(problems.members.get(selected.id) ?? []).map(
+              (issue) => issue.message,
+            ),
+            ...setupProblemsOf(selected.id).map((problem) => {
+              const fix = memberFixes.fixOf(problem);
+              return {
+                key: problem.key,
+                message: problem.message,
+                level: problem.level,
+                ...(fix === undefined ? {} : { fix }),
+              };
+            }),
+          ]}
           fullScreen={narrow}
           active={active}
           focusName={focusNameOf === selected.id}
@@ -1892,6 +2000,7 @@ export function Teams({
 
   return (
     <>
+      {memberFixes.dialogs}
       <TeamPage
         onBack={narrow ? leaveForPhone : () => void leaveToLibrary()}
         headerActions={headerActions}
@@ -1906,7 +2015,7 @@ export function Teams({
             }))}
             memberCount={members.length}
             stageCount={stages.length}
-            figures={UNMEASURED_FIGURES}
+            figures={teamFiguresOf(teamStats.data)}
             warning={
               <WarningPill problems={teamProblems} onGoToMember={openMember} />
             }
@@ -1915,12 +2024,43 @@ export function Teams({
         banner={banner}
         tab={tab}
         onTab={setTab}
-        memoryCount={null}
+        memoryCount={
+          memoryQuery.trim() === '' &&
+          teamMemories.entries !== null &&
+          teamMemories.entries.length > 0
+            ? teamMemories.entries.length
+            : null
+        }
         teamTab={teamTab}
         memoryTab={
-          <TeamMemoryTab query={memoryQuery} onQueryChange={setMemoryQuery} />
+          <TeamMemoryTab query={memoryQuery} onQueryChange={setMemoryQuery}>
+            {activeSlug === null ? null : (
+              <TeamMemoryPanel
+                apis={apis}
+                slug={activeSlug}
+                teamName={team.name}
+                memories={teamMemories}
+                query={memoryQuery}
+              />
+            )}
+          </TeamMemoryTab>
         }
-        statsTab={<TeamStatsTab runs={null} />}
+        statsTab={
+          <TeamStatsTab
+            stats={teamStats.data}
+            loading={teamStats.loading}
+            error={teamStats.error}
+            memberOf={(memberId) => {
+              const member = members.find((entry) => entry.id === memberId);
+              return member === undefined
+                ? null
+                : {
+                    name: labels.get(memberId) ?? memberId,
+                    avatar: member.avatar,
+                  };
+            }}
+          />
+        }
         sheet={sheet}
         dock={
           chatMounted && activeSlug !== null ? (
@@ -2108,6 +2248,12 @@ export function Teams({
           permanently? Its file is removed from the library. Past runs of it are
           kept.
         </p>
+        <TeamMemoryFatePick
+          apis={apis}
+          slug={removeOpen ? activeSlug : null}
+          value={memoryFate}
+          onChange={setMemoryFate}
+        />
       </ConfirmDialog>
 
       <ConfirmDialog

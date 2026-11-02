@@ -22,7 +22,7 @@ export class MemorySearchTool extends MemoryMcpTool {
 
   protected async answer(
     args: Record<string, unknown>,
-    { projectId }: MemoryCallScope,
+    { place }: MemoryCallScope,
   ): Promise<McpToolResult> {
     const read = readMemorySearchArgs(args);
     if (!read.ok) {
@@ -30,7 +30,7 @@ export class MemorySearchTool extends MemoryMcpTool {
     }
     const hits = await this.memory.search(
       read.query.query,
-      projectId,
+      place,
       read.query.limit,
     );
     return this.masked(memorySearchResultText(read.query.query, hits));

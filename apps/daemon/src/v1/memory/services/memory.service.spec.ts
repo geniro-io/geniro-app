@@ -17,11 +17,18 @@ import {
   MEMORY_INDEX_PREFACE,
   type MemoryActor,
   type MemoryChangedEvent,
+  type MemoryPlace,
   type MemorySaveOutcome,
   type MemoryStatusOutcome,
   type MemoryTextDatabase,
 } from '../memory.types';
 import type { MemoryService } from './memory.service';
+
+const NONE: MemoryPlace = { projectId: null, teamSlug: null };
+
+function inProject(projectId: string): MemoryPlace {
+  return { projectId, teamSlug: null };
+}
 
 const USER: MemoryActor = { kind: 'user' };
 
@@ -70,14 +77,14 @@ describe('MemoryService', () => {
       await db.service.save(
         AGENT,
         { title: 'Use pnpm', body: 'Never npm in this repo.' },
-        null,
+        NONE,
       ),
     );
     const second = created(
       await db.service.save(
         AGENT,
         { title: 'Daemon binds loopback', body: '127.0.0.1 only.' },
-        null,
+        NONE,
       ),
     );
 
@@ -97,12 +104,14 @@ describe('MemoryService', () => {
         change: 'created',
         status: 'active',
         projectId: null,
+        teamSlug: null,
       },
       {
         memoryId: second.id,
         change: 'created',
         status: 'active',
         projectId: null,
+        teamSlug: null,
       },
     ]);
   });
@@ -111,12 +120,12 @@ describe('MemoryService', () => {
     const outcome = await db.service.save(
       AGENT,
       { title: 'Long', body: 'я'.repeat(4097) },
-      null,
+      NONE,
     );
     const atLimit = await db.service.save(
       AGENT,
       { title: 'Full', body: 'я'.repeat(4096) },
-      null,
+      NONE,
     );
 
     expect(outcome).toMatchObject({ kind: 'refused', code: 'INVALID_ENTRY' });
@@ -127,7 +136,7 @@ describe('MemoryService', () => {
     const outcome = await db.service.save(
       AGENT,
       { title: 'Use\u202e pnpm', body: 'x' },
-      null,
+      NONE,
     );
 
     expect(outcome).toMatchObject({ kind: 'refused', code: 'INVALID_ENTRY' });
@@ -137,7 +146,7 @@ describe('MemoryService', () => {
     const outcome = await db.service.save(
       AGENT,
       { title: 'one\ntwo', body: 'body' },
-      null,
+      NONE,
     );
 
     expect(outcome).toMatchObject({ kind: 'refused', code: 'INVALID_ENTRY' });
@@ -150,7 +159,7 @@ describe('MemoryService', () => {
     const outcome = await db.service.save(
       AGENT,
       { title: 'API key', body: `the key is ${secret}` },
-      null,
+      NONE,
     );
 
     expect(outcome).toMatchObject({ kind: 'refused', code: 'CONTAINS_SECRET' });
@@ -163,14 +172,14 @@ describe('MemoryService', () => {
       await db.service.save(
         AGENT,
         { title: 'Always run pnpm full-check', body: 'before finishing' },
-        null,
+        NONE,
       ),
     );
 
     const duplicate = await db.service.save(
       AGENT,
       { title: 'Run pnpm full-check always', body: 'again' },
-      null,
+      NONE,
     );
     expect(duplicate.kind).toBe('near_duplicate');
     expect(
@@ -185,7 +194,7 @@ describe('MemoryService', () => {
         body: 'again',
         notDuplicateOf: [original.handle],
       },
-      null,
+      NONE,
     );
     expect(vouched.kind).toBe('created');
   });
@@ -194,13 +203,13 @@ describe('MemoryService', () => {
     await db.service.save(
       AGENT,
       { title: 'Always run pnpm full-check', body: 'global' },
-      null,
+      NONE,
     );
 
     const outcome = await db.service.save(
       AGENT,
       { title: 'Always run pnpm full-check', body: 'project' },
-      'project-1',
+      inProject('project-1'),
     );
 
     expect(outcome.kind).toBe('created');
@@ -208,13 +217,13 @@ describe('MemoryService', () => {
 
   it('refuses a stale rev and returns the current entry', async () => {
     const entry = created(
-      await db.service.save(AGENT, { title: 'Port', body: '47615' }, null),
+      await db.service.save(AGENT, { title: 'Port', body: '47615' }, NONE),
     );
     const updated = created(
       await db.service.save(
         AGENT,
         { handle: entry.handle, rev: entry.rev, title: 'Port', body: '47616' },
-        null,
+        NONE,
       ),
     );
     expect(updated.rev).toBe(entry.rev + 1);
@@ -222,7 +231,7 @@ describe('MemoryService', () => {
     const stale = await db.service.save(
       AGENT,
       { handle: entry.handle, rev: entry.rev, title: 'Port', body: '1' },
-      null,
+      NONE,
     );
 
     expect(stale).toMatchObject({
@@ -239,13 +248,13 @@ describe('MemoryService', () => {
     });
 
     const agentEntry = created(
-      await db.service.save(AGENT, { title: 'Pending', body: 'x' }, null),
+      await db.service.save(AGENT, { title: 'Pending', body: 'x' }, NONE),
     );
     const userEntry = created(
       await db.service.save(
         { kind: 'user' },
         { title: 'Mine', body: 'y' },
-        null,
+        NONE,
       ),
     );
 
@@ -267,7 +276,7 @@ describe('MemoryService', () => {
         await db.service.save(
           { kind: 'user' },
           { title: 'Reviewed fact', body: 'kept as written' },
-          null,
+          NONE,
         ),
       );
     }
@@ -278,9 +287,9 @@ describe('MemoryService', () => {
       const update = await db.service.save(
         AGENT,
         { handle: entry.handle, rev: entry.rev, title: 'x', body: 'y' },
-        null,
+        NONE,
       );
-      const forget = await db.service.forget(AGENT, entry.handle, 'no', null);
+      const forget = await db.service.forget(AGENT, entry.handle, 'no', NONE);
 
       expect(update).toMatchObject({ kind: 'refused', code: 'UNDER_REVIEW' });
       expect(forget).toMatchObject({ kind: 'refused', code: 'UNDER_REVIEW' });
@@ -297,7 +306,7 @@ describe('MemoryService', () => {
         await db.service.save(
           { ...AGENT, kind: 'analysis' },
           { title: 'From analysis', body: 'x' },
-          null,
+          NONE,
         ),
       );
 
@@ -309,13 +318,13 @@ describe('MemoryService', () => {
       await db.service.save(
         AGENT,
         { title: 'Always run pnpm full-check', body: 'unreviewed text' },
-        null,
+        NONE,
       );
 
       const again = await db.service.save(
         AGENT,
         { title: 'Run pnpm full-check always', body: 'again' },
-        null,
+        NONE,
       );
 
       expect(again).toEqual({
@@ -332,14 +341,14 @@ describe('MemoryService', () => {
           body: 'again',
           notDuplicateOf: ['m1'],
         },
-        null,
+        NONE,
       );
       expect(vouched.kind).toBe('created');
 
       const byUser = await db.service.save(
         { kind: 'user' },
         { title: 'Always run pnpm full-check', body: 'the user’s own' },
-        null,
+        NONE,
       );
       expect(byUser.kind).toBe('created');
     });
@@ -348,19 +357,19 @@ describe('MemoryService', () => {
   describe('the scope rule', () => {
     async function seed() {
       const global = created(
-        await db.service.save(AGENT, { title: 'Global kiwi', body: 'g' }, null),
+        await db.service.save(AGENT, { title: 'Global kiwi', body: 'g' }, NONE),
       );
       const p1 = created(
         await db.service.save(
           AGENT,
           { title: 'Project kiwi', body: 'p' },
-          'p1',
+          inProject('p1'),
         ),
       );
       const gone = created(
-        await db.service.save(AGENT, { title: 'Gone kiwi', body: 'x' }, null),
+        await db.service.save(AGENT, { title: 'Gone kiwi', body: 'x' }, NONE),
       );
-      await db.service.forget(AGENT, gone.handle, 'obsolete', null);
+      await db.service.forget(AGENT, gone.handle, 'obsolete', NONE);
       db.service.setConfig({
         enabled: true,
         agentWrites: 'pending',
@@ -370,7 +379,7 @@ describe('MemoryService', () => {
         await db.service.save(
           AGENT,
           { title: 'Waiting kiwi', body: 'w' },
-          null,
+          NONE,
         ),
       );
       db.service.setConfig({
@@ -385,18 +394,18 @@ describe('MemoryService', () => {
       const { global, p1, gone, waiting } = await seed();
 
       expect(
-        (await db.service.search('kiwi', null, 10)).map((h) => h.handle),
+        (await db.service.search('kiwi', NONE, 10)).map((h) => h.handle),
       ).toEqual([global.handle]);
       const read = await db.service.read(
         [global.handle, p1.handle, gone.handle],
-        null,
+        NONE,
       );
       expect(read.entries.map((e) => e.handle)).toEqual([global.handle]);
       expect(read.missing).toEqual([p1.handle, gone.handle]);
-      expect((await db.service.listVisible(null)).map((e) => e.handle)).toEqual(
+      expect((await db.service.listVisible(NONE)).map((e) => e.handle)).toEqual(
         [global.handle],
       );
-      expect((await db.service.read([waiting.handle], null)).missing).toEqual([
+      expect((await db.service.read([waiting.handle], NONE)).missing).toEqual([
         waiting.handle,
       ]);
     });
@@ -408,18 +417,18 @@ describe('MemoryService', () => {
         await db.service.save(
           AGENT,
           { handle: p1.handle, rev: p1.rev, title: 'x', body: 'y' },
-          null,
+          NONE,
         ),
       ).toMatchObject({ kind: 'refused', code: 'NOT_FOUND' });
       expect(
-        await db.service.forget(AGENT, p1.handle, 'no', null),
+        await db.service.forget(AGENT, p1.handle, 'no', NONE),
       ).toMatchObject({ kind: 'refused', code: 'NOT_FOUND' });
       expect(
         (
           await db.service.save(
             AGENT,
             { title: 'Project kiwi', body: 'global copy' },
-            null,
+            NONE,
           )
         ).kind,
       ).toBe('created');
@@ -429,16 +438,18 @@ describe('MemoryService', () => {
       const { global, p1 } = await seed();
 
       expect(
-        (await db.service.listVisible('p1')).map((e) => e.handle).sort(),
+        (await db.service.listVisible(inProject('p1')))
+          .map((e) => e.handle)
+          .sort(),
       ).toEqual([global.handle, p1.handle].sort());
     });
 
     it('changes exactly the entry a handle names', async () => {
       const first = created(
-        await db.service.save(AGENT, { title: 'First', body: 'one' }, null),
+        await db.service.save(AGENT, { title: 'First', body: 'one' }, NONE),
       );
       const second = created(
-        await db.service.save(AGENT, { title: 'Second', body: 'two' }, null),
+        await db.service.save(AGENT, { title: 'Second', body: 'two' }, NONE),
       );
 
       await db.service.save(
@@ -449,9 +460,9 @@ describe('MemoryService', () => {
           title: 'Second',
           body: 'changed',
         },
-        null,
+        NONE,
       );
-      await db.service.forget(AGENT, second.handle, 'done', null);
+      await db.service.forget(AGENT, second.handle, 'done', NONE);
 
       const row = await db.em.fork().findOneOrFail(Memory, { id: first.id });
       expect([row.status, row.body, row.rev]).toEqual([
@@ -466,22 +477,22 @@ describe('MemoryService', () => {
         await db.service.save(
           AGENT,
           { title: 'Notes', body: 'mentions papaya once' },
-          null,
+          NONE,
         ),
       );
       const strong = created(
         await db.service.save(
           AGENT,
           { title: 'Papaya papaya', body: 'papaya papaya papaya' },
-          null,
+          NONE,
         ),
       );
 
       expect(
-        (await db.service.search('papaya', null, 5)).map((h) => h.handle),
+        (await db.service.search('papaya', NONE, 5)).map((h) => h.handle),
       ).toEqual([strong.handle, weak.handle]);
       expect(
-        (await db.service.search('papaya', null, 1)).map((h) => h.handle),
+        (await db.service.search('papaya', NONE, 1)).map((h) => h.handle),
       ).toEqual([strong.handle]);
     });
   });
@@ -489,19 +500,31 @@ describe('MemoryService', () => {
   describe('an agent’s reach', () => {
     it('cannot update or forget another project’s entry, a forgotten one, or a pending one', async () => {
       const other = created(
-        await db.service.save(AGENT, { title: 'Other', body: 'p2' }, 'p2'),
+        await db.service.save(
+          AGENT,
+          { title: 'Other', body: 'p2' },
+          inProject('p2'),
+        ),
       );
       const gone = created(
-        await db.service.save(AGENT, { title: 'Gone', body: 'g' }, 'p1'),
+        await db.service.save(
+          AGENT,
+          { title: 'Gone', body: 'g' },
+          inProject('p1'),
+        ),
       );
-      await db.service.forget(AGENT, gone.handle, 'obsolete', 'p1');
+      await db.service.forget(AGENT, gone.handle, 'obsolete', inProject('p1'));
       db.service.setConfig({
         enabled: true,
         agentWrites: 'pending',
         nativeMemoryOff: false,
       });
       const waiting = created(
-        await db.service.save(AGENT, { title: 'Waiting', body: 'w' }, 'p1'),
+        await db.service.save(
+          AGENT,
+          { title: 'Waiting', body: 'w' },
+          inProject('p1'),
+        ),
       );
       db.service.setConfig({
         enabled: true,
@@ -514,11 +537,11 @@ describe('MemoryService', () => {
           await db.service.save(
             AGENT,
             { handle: entry.handle, rev: entry.rev, title: 'x', body: 'y' },
-            'p1',
+            inProject('p1'),
           ),
         ).toMatchObject({ kind: 'refused', code: 'NOT_FOUND' });
         expect(
-          await db.service.forget(AGENT, entry.handle, 'no', 'p1'),
+          await db.service.forget(AGENT, entry.handle, 'no', inProject('p1')),
         ).toMatchObject({ kind: 'refused', code: 'NOT_FOUND' });
       }
       const row = await db.em.fork().findOneOrFail(Memory, { id: other.id });
@@ -530,7 +553,7 @@ describe('MemoryService', () => {
         await db.service.save(
           AGENT,
           { title: 'x', body: 'y', scope: 'project' },
-          null,
+          NONE,
         ),
       ).toMatchObject({ kind: 'refused', code: 'NO_PROJECT' });
     });
@@ -539,7 +562,7 @@ describe('MemoryService', () => {
       const secret = 'sk-test-reason-0123456789';
       registerSecret(secret, 'test');
       const entry = created(
-        await db.service.save(AGENT, { title: 'Fact', body: 'b' }, null),
+        await db.service.save(AGENT, { title: 'Fact', body: 'b' }, NONE),
       );
 
       for (const reason of ['  ', 'one\ntwo', `leaked ${secret}`]) {
@@ -547,7 +570,7 @@ describe('MemoryService', () => {
           AGENT,
           entry.handle,
           reason,
-          null,
+          NONE,
         );
         expect(outcome.kind).toBe('refused');
       }
@@ -557,14 +580,14 @@ describe('MemoryService', () => {
 
     it('keeps the writer’s provenance when another agent forgets the entry', async () => {
       const entry = created(
-        await db.service.save(AGENT, { title: 'Fact', body: 'b' }, null),
+        await db.service.save(AGENT, { title: 'Fact', body: 'b' }, NONE),
       );
 
       await db.service.forget(
         { kind: 'agent', runId: 'run-b', agentKind: 'codex', model: null },
         entry.handle,
         'superseded',
-        null,
+        NONE,
       );
 
       const row = await db.em.fork().findOneOrFail(Memory, { id: entry.id });
@@ -578,9 +601,9 @@ describe('MemoryService', () => {
 
   it('lets the user, never an agent, restore a forgotten entry, which agents then find again', async () => {
     const entry = created(
-      await db.service.save(AGENT, { title: 'Fact', body: 'tangerine' }, null),
+      await db.service.save(AGENT, { title: 'Fact', body: 'tangerine' }, NONE),
     );
-    await db.service.forget(AGENT, entry.handle, 'wrong', null);
+    await db.service.forget(AGENT, entry.handle, 'wrong', NONE);
 
     const byAgent = await db.service.setStatus(AGENT, entry.id, 'active');
     const restored = await db.service.setStatus(
@@ -595,21 +618,29 @@ describe('MemoryService', () => {
       entry: { status: 'active' },
     });
     expect(
-      (await db.service.search('tangerine', null, 5)).map((h) => h.handle),
+      (await db.service.search('tangerine', NONE, 5)).map((h) => h.handle),
     ).toEqual([entry.handle]);
   });
 
   it('lists what a run may see, its project’s entries first, each most recently used first', async () => {
     const globalOld = created(
-      await db.service.save(AGENT, { title: 'G old', body: 'x' }, null),
+      await db.service.save(AGENT, { title: 'G old', body: 'x' }, NONE),
     );
     const globalNew = created(
-      await db.service.save(AGENT, { title: 'G new', body: 'x' }, null),
+      await db.service.save(AGENT, { title: 'G new', body: 'x' }, NONE),
     );
     const own = created(
-      await db.service.save(AGENT, { title: 'Own', body: 'x' }, 'p1'),
+      await db.service.save(
+        AGENT,
+        { title: 'Own', body: 'x' },
+        inProject('p1'),
+      ),
     );
-    await db.service.save(AGENT, { title: 'Theirs', body: 'x' }, 'p2');
+    await db.service.save(
+      AGENT,
+      { title: 'Theirs', body: 'x' },
+      inProject('p2'),
+    );
     await db.em
       .fork()
       .nativeUpdate(
@@ -617,9 +648,9 @@ describe('MemoryService', () => {
         { id: globalOld.id },
         { lastUsedAt: new Date('2020-01-01T00:00:00Z') },
       );
-    await db.service.read([globalNew.handle], 'p1');
+    await db.service.read([globalNew.handle], inProject('p1'));
 
-    const listed = await db.service.listVisible('p1');
+    const listed = await db.service.listVisible(inProject('p1'));
 
     expect(listed.map((entry) => entry.handle)).toEqual([
       own.handle,
@@ -684,15 +715,23 @@ describe('MemoryService', () => {
     it('orders project entries before global, most recently used first', async () => {
       await project();
       const globalOld = created(
-        await db.service.save(USER, { title: 'Global old', body: 'x' }, null),
+        await db.service.save(USER, { title: 'Global old', body: 'x' }, NONE),
       );
       const globalNew = created(
-        await db.service.save(USER, { title: 'Global new', body: 'x' }, null),
+        await db.service.save(USER, { title: 'Global new', body: 'x' }, NONE),
       );
       const own = created(
-        await db.service.save(USER, { title: 'Own rule', body: 'x' }, 'p1'),
+        await db.service.save(
+          USER,
+          { title: 'Own rule', body: 'x' },
+          inProject('p1'),
+        ),
       );
-      await db.service.save(USER, { title: 'Theirs', body: 'x' }, 'p2');
+      await db.service.save(
+        USER,
+        { title: 'Theirs', body: 'x' },
+        inProject('p2'),
+      );
       await db.em
         .fork()
         .nativeUpdate(
@@ -700,7 +739,7 @@ describe('MemoryService', () => {
           { id: globalOld.id },
           { lastUsedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) },
         );
-      await db.service.read([globalNew.handle], 'p1');
+      await db.service.read([globalNew.handle], inProject('p1'));
 
       const { memoryIndex } = await db.service.runSnapshot(FACTS);
 
@@ -714,18 +753,18 @@ describe('MemoryService', () => {
 
     it('omits pending and forgotten entries', async () => {
       const kept = created(
-        await db.service.save(USER, { title: 'Kept', body: 'x' }, null),
+        await db.service.save(USER, { title: 'Kept', body: 'x' }, NONE),
       );
       const gone = created(
-        await db.service.save(USER, { title: 'Gone', body: 'x' }, null),
+        await db.service.save(USER, { title: 'Gone', body: 'x' }, NONE),
       );
-      await db.service.forget(AGENT, gone.handle, 'wrong', null);
+      await db.service.forget(AGENT, gone.handle, 'wrong', NONE);
       db.service.setConfig({
         enabled: true,
         agentWrites: 'pending',
         nativeMemoryOff: false,
       });
-      await db.service.save(AGENT, { title: 'Waiting', body: 'x' }, null);
+      await db.service.save(AGENT, { title: 'Waiting', body: 'x' }, NONE);
 
       const { memoryIndex } = await db.service.runSnapshot(FACTS);
 
@@ -739,7 +778,7 @@ describe('MemoryService', () => {
       await db.service.save(
         USER,
         { title: `Key ${secret} rotates`, body: 'x' },
-        null,
+        NONE,
       );
       registerSecret(secret, 'late');
 
@@ -751,7 +790,11 @@ describe('MemoryService', () => {
     });
 
     it('carries no index for a run that may see no entry, and nothing at all while memory is off', async () => {
-      await db.service.save(USER, { title: 'Theirs', body: 'x' }, 'p2');
+      await db.service.save(
+        USER,
+        { title: 'Theirs', body: 'x' },
+        inProject('p2'),
+      );
 
       const empty = await db.service.runSnapshot(FACTS);
       db.service.setConfig({
@@ -768,7 +811,7 @@ describe('MemoryService', () => {
     it('carries nothing until the user’s settings have arrived, then the index alone', async () => {
       const fresh = await memoryDb();
       try {
-        await fresh.service.save(USER, { title: 'Kept', body: 'x' }, null);
+        await fresh.service.save(USER, { title: 'Kept', body: 'x' }, NONE);
 
         const before = await fresh.service.runSnapshot(FACTS);
         fresh.service.setConfig(DEFAULT_MEMORY_CONFIG);
@@ -815,7 +858,7 @@ describe('MemoryService', () => {
 
     it('admits an agent’s entry the user approves while it is already active', async () => {
       const theirs = created(
-        await db.service.save(AGENT, { title: 'Theirs', body: 'x' }, null),
+        await db.service.save(AGENT, { title: 'Theirs', body: 'x' }, NONE),
       );
 
       const approved = await db.service.setStatus(USER, theirs.id, 'active');
@@ -832,7 +875,7 @@ describe('MemoryService', () => {
 
     it('keeps the first approval when the user approves an entry again', async () => {
       const theirs = created(
-        await db.service.save(AGENT, { title: 'Theirs', body: 'x' }, null),
+        await db.service.save(AGENT, { title: 'Theirs', body: 'x' }, NONE),
       );
       const first = await db.service.setStatus(USER, theirs.id, 'active');
 
@@ -850,10 +893,10 @@ describe('MemoryService', () => {
 
     it('leaves an agent’s unreviewed entry out until the user approves it, and again once an agent rewrites it', async () => {
       const mine = created(
-        await db.service.save(USER, { title: 'Mine', body: 'x' }, null),
+        await db.service.save(USER, { title: 'Mine', body: 'x' }, NONE),
       );
       const theirs = created(
-        await db.service.save(AGENT, { title: 'Theirs', body: 'x' }, null),
+        await db.service.save(AGENT, { title: 'Theirs', body: 'x' }, NONE),
       );
       const listed = async () =>
         indexLines((await db.service.runSnapshot(FACTS)).memoryIndex).slice(1);
@@ -861,7 +904,7 @@ describe('MemoryService', () => {
       const before = await listed();
       await db.service.setStatus(USER, theirs.id, 'active');
       const approved = await listed();
-      const current = await db.service.read([theirs.handle], null);
+      const current = await db.service.read([theirs.handle], NONE);
       await db.service.save(
         AGENT,
         {
@@ -870,7 +913,7 @@ describe('MemoryService', () => {
           title: 'Theirs',
           body: 'rewritten',
         },
-        null,
+        NONE,
       );
       const rewritten = await listed();
 
@@ -885,7 +928,7 @@ describe('MemoryService', () => {
 
     it('starts the run without an index when the read fails, the CLIs’ own memory as the user set it', async () => {
       db.service.setConfig({ ...DEFAULT_MEMORY_CONFIG, nativeMemoryOff: true });
-      await db.service.save(USER, { title: 'Kept', body: 'x' }, null);
+      await db.service.save(USER, { title: 'Kept', body: 'x' }, NONE);
       vi.spyOn(db.service, 'listVisible').mockRejectedValueOnce(
         new Error('disk gone'),
       );
@@ -920,7 +963,7 @@ describe('MemoryService', () => {
     const outcome = await db.service.save(
       AGENT,
       { title: 'Off', body: 'x' },
-      null,
+      NONE,
     );
 
     expect(outcome).toMatchObject({ kind: 'refused', code: 'MEMORY_DISABLED' });
@@ -932,12 +975,12 @@ describe('MemoryService', () => {
       await db.service.save(
         AGENT,
         { title: 'Old note', body: `${'x '.repeat(76)}${secret} tail` },
-        null,
+        NONE,
       ),
     );
     registerSecret(secret, 'late');
 
-    const [hit] = await db.service.search('note', null, 5);
+    const [hit] = await db.service.search('note', NONE, 5);
 
     expect(hit?.handle).toBe(entry.handle);
     expect(hit?.excerpt).not.toContain(secret.slice(0, 6));
@@ -948,17 +991,17 @@ describe('MemoryService', () => {
       await db.service.save(
         AGENT,
         { title: 'Kept fact', body: 'zebra crossing' },
-        null,
+        NONE,
       ),
     );
     const forgotten = created(
       await db.service.save(
         AGENT,
         { title: 'Old fact', body: 'zebra stripes' },
-        null,
+        NONE,
       ),
     );
-    await db.service.forget(AGENT, forgotten.handle, 'wrong', null);
+    await db.service.forget(AGENT, forgotten.handle, 'wrong', NONE);
     db.service.setConfig({
       enabled: true,
       agentWrites: 'pending',
@@ -967,24 +1010,32 @@ describe('MemoryService', () => {
     await db.service.save(
       AGENT,
       { title: 'Unreviewed fact', body: 'zebra herd' },
-      null,
+      NONE,
     );
 
-    const hits = await db.service.search('zebra', null, 10);
+    const hits = await db.service.search('zebra', NONE, 10);
 
     expect(hits.map((hit) => hit.handle)).toEqual([kept.handle]);
   });
 
   it('searches global entries and the run’s own project, never another project’s', async () => {
     const global = created(
-      await db.service.save(AGENT, { title: 'Global', body: 'kiwi' }, null),
+      await db.service.save(AGENT, { title: 'Global', body: 'kiwi' }, NONE),
     );
     const own = created(
-      await db.service.save(AGENT, { title: 'Own', body: 'kiwi' }, 'p1'),
+      await db.service.save(
+        AGENT,
+        { title: 'Own', body: 'kiwi' },
+        inProject('p1'),
+      ),
     );
-    await db.service.save(AGENT, { title: 'Other', body: 'kiwi' }, 'p2');
+    await db.service.save(
+      AGENT,
+      { title: 'Other', body: 'kiwi' },
+      inProject('p2'),
+    );
 
-    const hits = await db.service.search('kiwi', 'p1', 10);
+    const hits = await db.service.search('kiwi', inProject('p1'), 10);
 
     expect(hits.map((hit) => hit.handle).sort()).toEqual(
       [global.handle, own.handle].sort(),
@@ -993,13 +1044,24 @@ describe('MemoryService', () => {
 
   it('reads whole entries, stamps lastUsedAt, and reports another project’s as missing', async () => {
     const own = created(
-      await db.service.save(AGENT, { title: 'Own', body: 'body' }, 'p1'),
+      await db.service.save(
+        AGENT,
+        { title: 'Own', body: 'body' },
+        inProject('p1'),
+      ),
     );
     const other = created(
-      await db.service.save(AGENT, { title: 'Other', body: 'body' }, 'p2'),
+      await db.service.save(
+        AGENT,
+        { title: 'Other', body: 'body' },
+        inProject('p2'),
+      ),
     );
 
-    const result = await db.service.read([own.handle, other.handle], 'p1');
+    const result = await db.service.read(
+      [own.handle, other.handle],
+      inProject('p1'),
+    );
 
     expect(result.entries.map((entry) => entry.handle)).toEqual([own.handle]);
     expect(result.missing).toEqual([other.handle]);
@@ -1036,8 +1098,265 @@ describe('MemoryService', () => {
     await db.index().ensure();
 
     expect(
-      (await db.service.search('pomegranate', null, 5)).map((h) => h.handle),
+      (await db.service.search('pomegranate', NONE, 5)).map((h) => h.handle),
     ).toEqual(['m1']);
+  });
+
+  describe('team memory', () => {
+    const TEAM_A: MemoryPlace = { projectId: null, teamSlug: 'a' };
+    const TEAM_B: MemoryPlace = { projectId: null, teamSlug: 'b' };
+    const RUN_IN_A: MemoryPlace = { projectId: 'p1', teamSlug: 'a' };
+
+    async function seedPlaces() {
+      const save = async (title: string, place: MemoryPlace) =>
+        created(
+          await db.service.save(
+            USER,
+            {
+              title,
+              body: `${title} body`,
+              scope: place.teamSlug === null ? undefined : 'team',
+            },
+            place,
+          ),
+        );
+      return {
+        global: await save('Global kiwi', NONE),
+        project: await save('Project kiwi', inProject('p1')),
+        otherProject: await save('Other project kiwi', inProject('p2')),
+        a: await save('Team a kiwi', TEAM_A),
+        b: await save('Team b kiwi', TEAM_B),
+      };
+    }
+
+    it('settles a deleted team’s entries as the user chose, leaving every other team’s alone', async () => {
+      const kept = await seedPlaces();
+      const placeOf = async (id: string) => {
+        const entry = await db.service.get(id);
+        return [entry?.status, entry?.teamSlug];
+      };
+
+      expect(await db.service.settleDeletedTeam('a', 'keep')).toBe(0);
+      expect(await placeOf(kept.a.id)).toEqual(['active', 'a']);
+
+      expect(await db.service.settleDeletedTeam('a', 'forget')).toBe(1);
+      expect(await placeOf(kept.a.id)).toEqual(['forgotten', 'a']);
+      expect(await placeOf(kept.b.id)).toEqual(['active', 'b']);
+
+      expect(await db.service.settleDeletedTeam('b', 'global')).toBe(1);
+      expect(await placeOf(kept.b.id)).toEqual(['active', null]);
+      expect(await placeOf(kept.global.id)).toEqual(['active', null]);
+    });
+
+    it('refuses filing the user’s entry under a team the library does not hold, but edits one kept under a deleted team', async () => {
+      const library = new Set(['a']);
+      db.service.useTeamLookup(async (slug) => library.has(slug));
+      const entry = savedOf(
+        await db.service.create({
+          title: 'Kept note',
+          body: 'x',
+          type: 'project',
+          projectId: null,
+          teamSlug: 'a',
+        }),
+      );
+
+      const ghost = await db.service.create({
+        title: 'Ghost note',
+        body: 'x',
+        type: 'project',
+        projectId: null,
+        teamSlug: 'ghost',
+      });
+      library.delete('a');
+      const edited = await db.service.edit(entry.id, {
+        rev: entry.rev,
+        title: 'Kept note, edited',
+        body: 'x',
+        type: 'project',
+        projectId: null,
+        teamSlug: 'a',
+      });
+
+      expect(ghost).toMatchObject({ kind: 'refused', code: 'NO_TEAM' });
+      expect(edited).toMatchObject({
+        kind: 'updated',
+        entry: { teamSlug: 'a' },
+      });
+    });
+
+    it('a team run sees global, its project and its team entries, not another team’s', async () => {
+      await db.em
+        .fork()
+        .persist(make(Project, { id: 'p1', name: 'App', folder: '/repo/app' }))
+        .flush();
+      const { global, project, a, b } = await seedPlaces();
+      db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+      const visible = [global.handle, project.handle, a.handle].sort();
+
+      expect(
+        (await db.service.search('kiwi', RUN_IN_A, 10))
+          .map((hit) => hit.handle)
+          .sort(),
+      ).toEqual(visible);
+      const read = await db.service.read(
+        [global.handle, project.handle, a.handle],
+        RUN_IN_A,
+      );
+      expect(read.entries.map((entry) => entry.handle).sort()).toEqual(visible);
+      expect((await db.service.read([b.handle], RUN_IN_A)).missing).toEqual([
+        b.handle,
+      ]);
+      expect(
+        (await db.service.listVisible(RUN_IN_A)).map((entry) => entry.handle),
+      ).toEqual([a.handle, project.handle, global.handle]);
+      const snapshot = await db.service.runSnapshot({
+        taskId: null,
+        cwd: '/repo/app',
+        teamSlug: 'a',
+      });
+      expect(snapshot.memoryIndex).toContain('Team a kiwi');
+      expect(snapshot.memoryIndex).toContain('Project kiwi');
+      expect(snapshot.memoryIndex).toContain('Global kiwi');
+      expect(snapshot.memoryIndex).not.toContain('Team b kiwi');
+      expect(snapshot.memoryIndex).toContain('Team a kiwi (team');
+    });
+
+    it('shows a run outside any team no team’s entries', async () => {
+      const { global, project } = await seedPlaces();
+
+      expect(
+        (await db.service.listVisible(inProject('p1'))).map((e) => e.handle),
+      ).toEqual([project.handle, global.handle]);
+    });
+
+    it('cannot update or forget another team’s entry', async () => {
+      const { b } = await seedPlaces();
+
+      expect(
+        await db.service.save(
+          AGENT,
+          { handle: b.handle, rev: b.rev, title: 'x', body: 'y' },
+          TEAM_A,
+        ),
+      ).toMatchObject({ kind: 'refused', code: 'NOT_FOUND' });
+      expect(
+        await db.service.forget(AGENT, b.handle, 'no', TEAM_A),
+      ).toMatchObject({ kind: 'refused', code: 'NOT_FOUND' });
+    });
+
+    describe('saving with scope: team', () => {
+      async function seedRuns() {
+        const em = db.em.fork();
+        em.persist(make(Run, { id: 'r-team', status: 'running', teamId: 'a' }));
+        em.persist(make(Run, { id: 'r-chat', status: 'running' }));
+        await em.flush();
+      }
+
+      it('files the entry under the run’s team, with no project', async () => {
+        await seedRuns();
+        const published: MemoryChangedEvent[] = [];
+        db.events.allChanges().subscribe((event) => published.push(event));
+
+        const entry = created(
+          await db.service.save(
+            AGENT,
+            { title: 'Team rule', body: 'x', scope: 'team' },
+            await db.service.scopeOf('r-team'),
+          ),
+        );
+
+        expect(entry).toMatchObject({ projectId: null, teamSlug: 'a' });
+        expect(published).toEqual([
+          {
+            memoryId: entry.id,
+            change: 'created',
+            status: 'active',
+            projectId: null,
+            teamSlug: 'a',
+          },
+        ]);
+      });
+
+      it('refuses a chat run, which has no team', async () => {
+        await seedRuns();
+
+        expect(
+          await db.service.save(
+            AGENT,
+            { title: 'Team rule', body: 'x', scope: 'team' },
+            await db.service.scopeOf('r-chat'),
+          ),
+        ).toMatchObject({ kind: 'refused', code: 'NO_TEAM' });
+      });
+
+      it('keeps an updated team entry in its team, and files other scopes elsewhere', async () => {
+        const team = created(
+          await db.service.save(
+            AGENT,
+            { title: 'Team rule', body: 'x', scope: 'team' },
+            RUN_IN_A,
+          ),
+        );
+        const updated = created(
+          await db.service.save(
+            AGENT,
+            {
+              handle: team.handle,
+              rev: team.rev,
+              title: 'Team rule',
+              body: 'y',
+            },
+            RUN_IN_A,
+          ),
+        );
+        const plain = created(
+          await db.service.save(AGENT, { title: 'Plain', body: 'p' }, RUN_IN_A),
+        );
+        const global = created(
+          await db.service.save(
+            AGENT,
+            { title: 'Mine', body: 'g', scope: 'global' },
+            RUN_IN_A,
+          ),
+        );
+
+        expect(updated).toMatchObject({ projectId: null, teamSlug: 'a' });
+        expect(plain).toMatchObject({ projectId: 'p1', teamSlug: null });
+        expect(global).toMatchObject({ projectId: null, teamSlug: null });
+      });
+
+      it('counts a same-titled entry a duplicate only in the same team', async () => {
+        await db.service.save(
+          AGENT,
+          { title: 'Use pnpm', body: 'x', scope: 'team' },
+          TEAM_A,
+        );
+
+        expect(
+          (
+            await db.service.save(
+              AGENT,
+              { title: 'Use pnpm', body: 'x', scope: 'team' },
+              TEAM_B,
+            )
+          ).kind,
+        ).toBe('created');
+        expect(
+          (
+            await db.service.save(
+              AGENT,
+              { title: 'Use pnpm', body: 'x', scope: 'team' },
+              TEAM_A,
+            )
+          ).kind,
+        ).toBe('near_duplicate');
+        expect(
+          (await db.service.save(AGENT, { title: 'Use pnpm', body: 'x' }, NONE))
+            .kind,
+        ).toBe('created');
+      });
+    });
   });
 
   describe('scopeOf', () => {
@@ -1069,22 +1388,41 @@ describe('MemoryService', () => {
       await seed();
       await run('r-task', { taskId: 'task-1', cwd: '/repo/app' });
 
-      expect(await db.service.scopeOf('r-task')).toBe('p-cards');
+      expect(await db.service.scopeOf('r-task')).toEqual(inProject('p-cards'));
     });
 
     it('takes the project whose folder the run’s worktree resolves to', async () => {
       await seed();
       await run('r-wt', { cwd: '/wt/task-1' });
 
-      expect(await db.service.scopeOf('r-wt')).toBe('p-app');
+      expect(await db.service.scopeOf('r-wt')).toEqual(inProject('p-app'));
     });
 
     it('answers global only for a folder no project owns', async () => {
       await seed();
       await run('r-free', { cwd: '/tmp/scratch' });
 
-      expect(await db.service.scopeOf('r-free')).toBeNull();
-      expect(await db.service.scopeOf('no-such-run')).toBeNull();
+      expect(await db.service.scopeOf('r-free')).toEqual(NONE);
+      expect(await db.service.scopeOf('no-such-run')).toEqual(NONE);
+    });
+
+    it('names a team run’s team beside its project, and a chat’s never', async () => {
+      await seed();
+      await run('r-team', { teamId: 'team-a', cwd: '/repo/app' });
+      await run('r-chat', { cwd: '/repo/app' });
+
+      expect(await db.service.scopeOf('r-team')).toEqual({
+        projectId: 'p-app',
+        teamSlug: 'team-a',
+      });
+      expect(await db.service.scopeOf('r-chat')).toEqual(inProject('p-app'));
+      expect(
+        await db.service.scopeFor({
+          taskId: null,
+          cwd: '/tmp/scratch',
+          teamSlug: 'team-b',
+        }),
+      ).toEqual({ projectId: null, teamSlug: 'team-b' });
     });
   });
 
@@ -1201,6 +1539,53 @@ describe('MemoryService', () => {
       expect(await titles({ handle: 'M2', status: 'active' })).toEqual([]);
     });
 
+    it('lists one team’s entries only with scope: team', async () => {
+      await seedRows([
+        { title: 'Global fact' },
+        { title: 'Project fact', projectId: 'p1' },
+        { title: 'Team a fact', teamSlug: 'a' },
+        { title: 'Team b fact', teamSlug: 'b' },
+      ]);
+      const titles = async (query: Parameters<MemoryService['list']>[0]) =>
+        (await db.service.list(query)).memories.map((e) => e.title).sort();
+
+      expect(await titles({ scope: 'team', teamSlug: 'a' })).toEqual([
+        'Team a fact',
+      ]);
+      expect(await titles({ scope: 'global' })).toEqual(['Global fact']);
+      expect(await titles({ scope: 'project', projectId: 'p1' })).toEqual([
+        'Project fact',
+      ]);
+      expect(await titles({})).toHaveLength(4);
+    });
+
+    it('creates and edits the user’s entry under a team', async () => {
+      await seedRows([]);
+
+      const entry = savedOf(
+        await db.service.create({
+          title: 'Team habit',
+          body: 'x',
+          type: 'project',
+          projectId: null,
+          teamSlug: 'a',
+        }),
+      );
+      const moved = savedOf(
+        await db.service.edit(entry.id, {
+          rev: entry.rev,
+          title: 'Team habit',
+          body: 'x',
+          type: 'project',
+          projectId: 'p1',
+          teamSlug: null,
+        }),
+      );
+
+      expect(entry).toMatchObject({ projectId: null, teamSlug: 'a' });
+      expect(moved).toMatchObject({ projectId: 'p1', teamSlug: null });
+    });
+
     it('creates the user’s entry where the user filed it, and refuses a project that does not exist', async () => {
       await seedRows([]);
 
@@ -1264,6 +1649,7 @@ describe('MemoryService', () => {
         body: 'by the user',
         type: 'reference' as const,
         projectId: 'p1',
+        teamSlug: null,
       };
 
       const stale = await db.service.change(pending!.id, {
@@ -1289,6 +1675,7 @@ describe('MemoryService', () => {
           change: 'updated',
           status: 'active',
           projectId: 'p1',
+          teamSlug: null,
         },
       ]);
     });
@@ -1303,6 +1690,7 @@ describe('MemoryService', () => {
         body: 'b',
         type: 'project',
         projectId: null,
+        teamSlug: null,
       });
 
       expect(outcome).toMatchObject({ kind: 'refused', code: 'NOT_FOUND' });
@@ -1376,6 +1764,7 @@ describe('MemoryService', () => {
           change: 'bulk',
           status: 'forgotten',
           projectId: null,
+          teamSlug: null,
         },
       ]);
       expect(restored).toMatchObject({
@@ -1396,6 +1785,7 @@ describe('MemoryService', () => {
           sourceModel: 'gpt-5',
         },
         { title: 'Gone note', status: 'forgotten' },
+        { title: 'Team note', teamSlug: 'alpha' },
         {
           title: 'Imported note',
           sourceActor: 'import',
@@ -1405,8 +1795,11 @@ describe('MemoryService', () => {
 
       const { markdown, count } = await db.service.exportMarkdown();
 
-      expect(count).toBe(3);
+      expect(count).toBe(4);
       expect(markdown).not.toContain('Gone note');
+      expect(markdown).toMatch(
+        /## Team: alpha[\s\S]*### m4 · Team note\n\n- Type: project\n- Status: active\n- Scope: Team: alpha\n/,
+      );
       expect(markdown).toMatch(
         /## Global[\s\S]*### m1 · Global note\n\n- Type: user\n- Status: active\n- Scope: Global\n- Source: user/,
       );

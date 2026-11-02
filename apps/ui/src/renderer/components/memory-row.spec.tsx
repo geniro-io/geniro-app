@@ -84,6 +84,19 @@ describe('MemoryRow', () => {
     expect(labels(row('active'))).toEqual(['Approve', 'Edit', 'Forget']);
   });
 
+  it('names the team a note is filed under', () => {
+    const el = render(
+      <MemoryRow
+        entry={memoryEntry({ teamSlug: 'review-crew' })}
+        projectName={null}
+        teamName="Review crew"
+      />,
+    );
+    expect(
+      el.querySelector('[data-slot="provenance-line"]')!.textContent,
+    ).toContain(' · Review crew · ');
+  });
+
   it('offers Approve, Edit and Forget on a pending note and badges it', () => {
     const el = row('pending');
     expect(labels(el)).toEqual(['Approve', 'Edit', 'Forget']);

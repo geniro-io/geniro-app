@@ -19,16 +19,13 @@ export class MemoryReadTool extends MemoryMcpTool {
 
   protected async answer(
     args: Record<string, unknown>,
-    { projectId }: MemoryCallScope,
+    { place }: MemoryCallScope,
   ): Promise<McpToolResult> {
     const read = readMemoryReadArgs(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
-    const { entries, missing } = await this.memory.read(
-      read.query.ids,
-      projectId,
-    );
+    const { entries, missing } = await this.memory.read(read.query.ids, place);
     return this.masked(memoryReadResultText(entries, missing, memoryFence()));
   }
 }

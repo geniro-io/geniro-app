@@ -16,6 +16,15 @@ export const Measured: Story = {};
 
 export const NotMeasured: Story = { args: { value: null, trend: null } };
 
+export const WithGapsAndNote: Story = {
+  args: {
+    caption: 'Cost',
+    value: '$41.20',
+    trend: [4, 6, null, 9, null, 8, 10],
+    note: 'incl. $6.40 estimated',
+  },
+};
+
 export const Strip: Story = {
   render: () => (
     <div className="w-[880px]">

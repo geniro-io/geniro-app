@@ -19,13 +19,13 @@ export class MemorySaveTool extends MemoryMcpTool {
 
   protected async answer(
     args: Record<string, unknown>,
-    { projectId, actor }: MemoryCallScope,
+    { place, actor }: MemoryCallScope,
   ): Promise<McpToolResult> {
     const read = readMemorySaveArgs(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
-    const outcome = await this.memory.save(actor, read.query, projectId);
+    const outcome = await this.memory.save(actor, read.query, place);
     const { text, isError } = memorySaveResultText(outcome, memoryFence());
     return this.masked(text, isError);
   }

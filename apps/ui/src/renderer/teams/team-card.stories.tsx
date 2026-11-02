@@ -42,6 +42,14 @@ export const Default: Story = {};
 
 export const NeedsSetup: Story = { args: { warningCount: 2 } };
 
+export const Blocking: Story = {
+  args: {
+    warningCount: 3,
+    blocking: true,
+    warningsCheckedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+  },
+};
+
 export const Ready: Story = { args: { warningCount: 0 } };
 
 export const DeleteHeld: Story = {

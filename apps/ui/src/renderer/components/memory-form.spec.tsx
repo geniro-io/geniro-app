@@ -3,12 +3,15 @@ import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 
-import { MEMORY_PROJECTS } from '../__fixtures__/memories';
+import { MEMORY_PROJECTS, MEMORY_TEAMS } from '../__fixtures__/memories';
 import {
   MEMORY_BODY_MAX_BYTES,
   MEMORY_TITLE_MAX_CHARS,
   MemoryForm,
   type MemoryFormValue,
+  projectIdOfScope,
+  scopeSelectValue,
+  teamSlugOfScope,
 } from './memory-form';
 
 (
@@ -32,6 +35,7 @@ const VALID: MemoryFormValue = {
   body: 'Issue a credit note.',
   type: 'feedback',
   projectId: null,
+  teamSlug: null,
 };
 
 interface Spies {
@@ -42,7 +46,11 @@ interface Spies {
 
 function render(
   initial: MemoryFormValue,
-  props: { saving?: boolean; error?: string | null } = {},
+  props: {
+    saving?: boolean;
+    error?: string | null;
+    locked?: boolean;
+  } = {},
 ): { el: HTMLDivElement; spies: Spies } {
   const spies: Spies = {
     onSubmit: vi.fn<() => void>(),
@@ -55,6 +63,8 @@ function render(
       <MemoryForm
         value={value}
         projects={MEMORY_PROJECTS}
+        teams={MEMORY_TEAMS}
+        scopeLocked={props.locked ?? false}
         saving={props.saving ?? false}
         error={props.error ?? null}
         submitLabel="Save note"
@@ -122,6 +132,19 @@ function pick(el: HTMLElement, trigger: number, label: string): void {
     option!.click();
   });
 }
+
+describe('scope encoding', () => {
+  it('round-trips global, a project and a team through the select value', () => {
+    expect(scopeSelectValue(null)).toBe('');
+    expect(scopeSelectValue('p1')).toBe('p1');
+    expect(scopeSelectValue(null, 'alpha')).toBe('team:alpha');
+    expect(projectIdOfScope('team:alpha')).toBeNull();
+    expect(teamSlugOfScope('team:alpha')).toBe('alpha');
+    expect(teamSlugOfScope('p1')).toBeNull();
+    expect(projectIdOfScope('p1')).toBe('p1');
+    expect(teamSlugOfScope('')).toBeNull();
+  });
+});
 
 describe('MemoryForm', () => {
   it('calls onSubmit from the button once title and note are filled in', () => {
@@ -214,6 +237,47 @@ describe('MemoryForm', () => {
     expect(spies.latest.value.projectId).toBeNull();
     pick(el, 1, 'Website');
     expect(spies.latest.value.projectId).toBe('project-website');
+  });
+
+  it('files a note under a team and clears the project, and back', () => {
+    const { el, spies } = render({ ...VALID, projectId: 'project-billing' });
+    pick(el, 1, 'Review crew');
+    expect(spies.latest.value).toMatchObject({
+      projectId: null,
+      teamSlug: 'review-crew',
+    });
+    pick(el, 1, 'Website');
+    expect(spies.latest.value).toMatchObject({
+      projectId: 'project-website',
+      teamSlug: null,
+    });
+    pick(el, 1, 'Release train');
+    pick(el, 1, 'Global');
+    expect(spies.latest.value).toMatchObject({
+      projectId: null,
+      teamSlug: null,
+    });
+  });
+
+  it('keeps a team the library no longer lists selectable under its slug', () => {
+    const { el } = render({ ...VALID, teamSlug: 'gone-team' });
+    act(() => {
+      el.querySelectorAll<HTMLElement>('[data-menu-trigger]')[1]!.click();
+    });
+    expect(
+      [...el.querySelectorAll('[role="option"]')].map((o) => o.textContent),
+    ).toContain('gone-team');
+  });
+
+  it('shows the scope but does not let it change when locked', () => {
+    const { el } = render(
+      { ...VALID, teamSlug: 'review-crew' },
+      { locked: true },
+    );
+    expect(
+      el.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]')[1]!
+        .disabled,
+    ).toBe(true);
   });
 
   it('shows the error it is given', () => {

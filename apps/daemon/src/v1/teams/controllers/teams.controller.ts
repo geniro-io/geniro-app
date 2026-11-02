@@ -39,11 +39,13 @@ import {
 import { runListPageOf } from '../../agents/utils/run-list-page';
 import {
   CreateTeamDto,
+  DeleteTeamQueryDto,
   ExportedDto,
   ExportTeamDto,
   ImportTeamDto,
   InstructionSizesDto,
   MeasureInstructionSizesDto,
+  MemberHealthDto,
   MoveTeamRunStageDto,
   NodeStateDto,
   ResetWakesCancelledDto,
@@ -57,6 +59,8 @@ import {
   TeamChatsDiscardedDto,
   TeamDeletedDto,
   TeamFileDto,
+  TeamHealthDto,
+  TeamHealthQueryDto,
   TeamSummaryDto,
   UploadTeamAvatarDto,
 } from '../dto/teams.dto';
@@ -68,13 +72,16 @@ import { TeamActionsService } from '../services/team-actions.service';
 import { TeamAnalysisService } from '../services/team-analysis.service';
 import { TeamChatService } from '../services/team-chat.service';
 import { TeamExecutorService } from '../services/team-executor.service';
+import { TeamHealthService } from '../services/team-health.service';
 import { TeamStoreService } from '../services/team-store.service';
 import type {
   InstructionSizesWire,
+  MemberHealth,
   NodeStateWire,
   ResetWakesCancelled,
   RunTeamSnapshotWire,
   StageMoveResultWire,
+  TeamHealth,
   TeamSummary,
   TeamWire,
 } from '../teams.types';
@@ -102,6 +109,7 @@ export class TeamsController {
     private readonly teamAnalyses: TeamAnalysisService,
     private readonly stageWakes: StageWakeService,
     private readonly avatars: AvatarStoreService,
+    private readonly health: TeamHealthService,
   ) {}
 
   /**
@@ -335,6 +343,33 @@ export class TeamsController {
     return this.store.get(slug);
   }
 
+  /**
+   * How well each member is set up. `probe=true` (the team page only) also
+   * asks `AgentMcpService` to list each distinct profile's MCP servers, which
+   * launches the user's servers behind its cache and single-flight; without
+   * it nothing is dialled.
+   */
+  @Get(':slug/health')
+  @ApiOperation({ operationId: 'readTeamHealth' })
+  @ZodResponse({ status: 200, type: TeamHealthDto })
+  readHealth(
+    @Param('slug') slug: string,
+    @Query() query: TeamHealthQueryDto,
+  ): Promise<TeamHealth> {
+    return this.health.health(slug, query.probe === 'true');
+  }
+
+  @Get(':slug/members/:memberId/health')
+  @ApiOperation({ operationId: 'readMemberHealth' })
+  @ZodResponse({ status: 200, type: MemberHealthDto })
+  readMemberHealth(
+    @Param('slug') slug: string,
+    @Param('memberId') memberId: string,
+    @Query() query: TeamHealthQueryDto,
+  ): Promise<MemberHealth> {
+    return this.health.memberHealth(slug, memberId, query.probe === 'true');
+  }
+
   @Put(':slug')
   @ApiOperation({ operationId: 'saveTeam' })
   @ZodResponse({ status: 200, type: TeamFileDto })
@@ -353,8 +388,11 @@ export class TeamsController {
   @Delete(':slug')
   @ApiOperation({ operationId: 'deleteTeam' })
   @ZodResponse({ status: 200, type: TeamDeletedDto })
-  async delete(@Param('slug') slug: string): Promise<{ deleted: boolean }> {
-    await this.teamChats.deleteTeam(slug);
+  async delete(
+    @Param('slug') slug: string,
+    @Query() query: DeleteTeamQueryDto,
+  ): Promise<{ deleted: boolean }> {
+    await this.teamChats.deleteTeam(slug, query.memories ?? 'keep');
     return { deleted: true };
   }
 

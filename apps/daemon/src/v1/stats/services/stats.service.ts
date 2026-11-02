@@ -104,6 +104,14 @@ export class StatsService {
     const byModel = new Map<string | null, ChatTotalsWire>();
     const byProject = new Map<string | null, ChatTotalsWire>();
     const byThread = new Map<string | null, ChatTotalsWire>();
+    const byTeam = new Map<string | null, ChatTotalsWire>();
+    // A thread with no team slug is in no team bucket.
+    const threadRows = await this.activityDao.threadRowsByRuns(
+      [...new Set(events.map((event) => event.runId))],
+      em,
+    );
+    const teamOf = (runId: string): string | null =>
+      threadRows.get(runId)?.slug ?? null;
 
     /**
      * Turns the ledger holds no price for, per run and per agent.
@@ -140,6 +148,10 @@ export class StatsService {
       // REPORTED as combining everything into one bucket — when the question a
       // reader brings here is which conversations cost the most.
       addUsage(bucket(byThread, event.runId), event);
+      const team = teamOf(event.runId);
+      if (team !== null) {
+        addUsage(bucket(byTeam, team), event);
+      }
       tallyUnpricedTurn(unpricedTurns, event);
     }
 
@@ -182,6 +194,10 @@ export class StatsService {
       // The polled row is keyed by its own run, so a run's bill lands on that
       // thread's row with the turns it was spread over.
       addPolledSpend(bucket(byThread, event.runId), costUsd, turns);
+      const team = teamOf(event.runId);
+      if (team !== null) {
+        addPolledSpend(bucket(byTeam, team), costUsd, turns);
+      }
     }
 
     // What the threads did over the same period. Each fact is filed under the day
@@ -254,6 +270,7 @@ export class StatsService {
       byModel: rank(byModel),
       byProject: rank(byProject),
       byThread: await this.titled(rank(byThread), em),
+      byTeam: rank(byTeam),
     };
   }
 

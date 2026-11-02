@@ -805,4 +805,92 @@ describe('StatsService (in-memory sqlite)', () => {
       ).rejects.toThrow(/must not be after/);
     });
   });
+
+  describe('by team', () => {
+    async function teamRun(runId: string, slug: string): Promise<void> {
+      await new UsageActivityDao(orm.em.fork()).stampThreadVersion(
+        runId,
+        new Date(2026, 7, 10, 8),
+        { slug, version: 'v1', inferred: false },
+      );
+    }
+
+    it('buckets a team’s runs by slug and leaves chats out of every bucket', async () => {
+      await teamRun('run-dev-1', 'dev-team');
+      await teamRun('run-dev-2', 'dev-team');
+      await teamRun('run-ops', 'ops-team');
+      await record(new Date(2026, 7, 10, 9), {
+        runId: 'run-dev-1',
+        costUsd: 2,
+      });
+      await record(new Date(2026, 7, 10, 9), {
+        runId: 'run-dev-2',
+        costUsd: 3,
+      });
+      await record(new Date(2026, 7, 10, 9), { runId: 'run-ops', costUsd: 1 });
+      await record(new Date(2026, 7, 10, 9), {
+        runId: 'run-chat',
+        costUsd: 100,
+      });
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 11),
+      );
+
+      expect(
+        stats.byTeam.map((row) => [
+          row.key,
+          row.totals.costUsd,
+          row.totals.turns,
+        ]),
+      ).toEqual([
+        ['dev-team', 5, 2],
+        ['ops-team', 1, 1],
+      ]);
+      expect(stats.totals.costUsd).toBe(106);
+    });
+
+    it('credits a team run’s polled bill, which no turn carries, to its team', async () => {
+      await teamRun('run-cursor', 'cursor-team');
+      await record(new Date(2026, 7, 10, 9), {
+        runId: 'run-cursor',
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+        costUsd: null,
+        inputTokens: null,
+        outputTokens: null,
+      });
+      const run = Object.assign(new Run(), {
+        id: 'run-cursor',
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+        cwd: '/work/project',
+        status: 'completed',
+        polledCostCents: 250,
+        updatedAt: new Date(2026, 7, 10, 9),
+      });
+      await dao.recordPolledSpend(run.id, polledSpendRows(run, 'cursor-agent'));
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 11),
+      );
+
+      expect(stats.byTeam.map((row) => [row.key, row.totals.costUsd])).toEqual([
+        ['cursor-team', 2.5],
+      ]);
+    });
+
+    it('has no rows when no thread carries a team', async () => {
+      await record(new Date(2026, 7, 10, 9), { runId: 'run-chat' });
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 11),
+      );
+
+      expect(stats.byTeam).toEqual([]);
+    });
+  });
 });

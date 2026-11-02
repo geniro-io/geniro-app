@@ -1105,6 +1105,7 @@ export interface MemoryChangedEvent {
   /** What the write did (`created`, `forgotten`, `bulk`…); opaque here. */
   change: string;
   projectId: string | null;
+  teamSlug: string | null;
 }
 
 /**
@@ -1117,7 +1118,10 @@ export function parseMemoryChanged(data: unknown): MemoryChangedEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;
   }
-  const { memoryId, change, projectId } = data as Record<string, unknown>;
+  const { memoryId, change, projectId, teamSlug } = data as Record<
+    string,
+    unknown
+  >;
   if (
     (memoryId !== null && typeof memoryId !== 'string') ||
     typeof change !== 'string'
@@ -1128,6 +1132,7 @@ export function parseMemoryChanged(data: unknown): MemoryChangedEvent | null {
     memoryId,
     change,
     projectId: typeof projectId === 'string' ? projectId : null,
+    teamSlug: typeof teamSlug === 'string' ? teamSlug : null,
   };
 }
 

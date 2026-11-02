@@ -68,6 +68,11 @@ const cliKind = z.enum(CLI_KINDS as unknown as [CliKind, ...CliKind[]]);
  */
 export const cliKindSchema = cliKind;
 
+/** How old a sign-in and install reading the caller will take; absent asks afresh. */
+export const detectClisOptionsSchema = z.strictObject({
+  maxAgeMs: z.number().int().min(0).max(3_600_000).optional(),
+});
+
 export const branchNameSchema = z
   .string()
   .min(1)

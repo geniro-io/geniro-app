@@ -18,6 +18,7 @@ function entry(handle: number, title: string): MemoryEntry {
     body: 'x',
     type: 'user',
     projectId: null,
+    teamSlug: null,
     status: 'active',
     rev: 1,
     source: {
@@ -84,6 +85,22 @@ describe('memoryIndexText', () => {
     expect(index.split('\n').at(-1)).toMatch(
       /^\(\+\d+ more — memory_search\)$/,
     );
+  });
+
+  it('labels an entry’s scope as team, project or global', () => {
+    const index =
+      memoryIndexText(
+        [
+          { ...entry(10, 'Team one'), teamSlug: 'a' },
+          { ...entry(11, 'Project one'), projectId: 'p1' },
+          entry(12, 'Global one'),
+        ],
+        NOW,
+      ) ?? '';
+
+    expect(index).toContain('- m10 [user] Team one (team)');
+    expect(index).toContain('- m11 [user] Project one (project)');
+    expect(index).toContain('- m12 [user] Global one (global)');
   });
 
   it('is null for no entries', () => {

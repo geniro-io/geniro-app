@@ -42,6 +42,7 @@ export interface MemoriesApiImportMemoriesRequest {
 export interface MemoriesApiListMemoriesRequest {
     scope?: ListMemoriesScopeEnum;
     projectId?: string;
+    teamSlug?: string;
     status?: ListMemoriesStatusEnum;
     type?: ListMemoriesTypeEnum;
     q?: string;
@@ -257,6 +258,10 @@ export class MemoriesApi extends runtime.BaseAPI {
 
         if (requestParameters['projectId'] != null) {
             queryParameters['projectId'] = requestParameters['projectId'];
+        }
+
+        if (requestParameters['teamSlug'] != null) {
+            queryParameters['teamSlug'] = requestParameters['teamSlug'];
         }
 
         if (requestParameters['status'] != null) {
@@ -567,7 +572,8 @@ export class MemoriesApi extends runtime.BaseAPI {
 export const ListMemoriesScopeEnum = {
     All: 'all',
     Global: 'global',
-    Project: 'project'
+    Project: 'project',
+    Team: 'team'
 } as const;
 export type ListMemoriesScopeEnum = typeof ListMemoriesScopeEnum[keyof typeof ListMemoriesScopeEnum];
 /**

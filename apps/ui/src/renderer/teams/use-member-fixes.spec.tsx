@@ -35,6 +35,7 @@ function problem(over: Partial<MemberProblem>): MemberProblem {
     agent: 'claude',
     configDir: null,
     server: null,
+    servers: [],
     poolMember: null,
     ...over,
   };
@@ -120,6 +121,17 @@ describe('useMemberFixes', () => {
       expect.anything(),
     );
     expect(document.body.textContent).toContain('MCP servers');
+  });
+
+  it('offers one server a sign-in and a folded row of several the MCP list', () => {
+    const apis = { agents: {}, cliAuth: {} } as unknown as DaemonApis;
+    const { fixOf } = mount(apis);
+    expect(
+      fixOf(problem({ kind: 'mcp_needs_auth', server: 'github' }))?.label,
+    ).toBe('Sign in');
+    expect(
+      fixOf(problem({ kind: 'mcp_needs_auth', server: null }))?.label,
+    ).toBe('Open MCP');
   });
 
   it('routes the setting kinds to Settings or to the member', () => {

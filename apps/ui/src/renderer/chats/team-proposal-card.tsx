@@ -1,4 +1,8 @@
-import { ChevronRight, ShieldAlert, Workflow as TeamIcon } from 'lucide-react';
+import {
+  ChevronRight,
+  ShieldAlert,
+  UsersRound as TeamIcon,
+} from 'lucide-react';
 import { useContext, useId, useMemo } from 'react';
 
 import { AgentIdentityContext, agentShortName } from '../agent-identity';

@@ -7,7 +7,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
-  Workflow as TeamIcon,
+  UsersRound as TeamIcon,
 } from 'lucide-react';
 
 import {

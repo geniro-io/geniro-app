@@ -9,6 +9,13 @@ import { SegmentBreakdown } from '../components/segment-breakdown';
 import { Spinner } from '../components/ui/spinner';
 import { formatCount } from '../stats/stats-format';
 
+/** A measured block: a member's (with the turn it measured) or one CLI's. */
+export type InstructionSizeReading = Pick<
+  MemberInstructionSize,
+  'totalChars' | 'approxTokens' | 'separatorChars' | 'parts'
+> &
+  Partial<Pick<MemberInstructionSize, 'turn'>>;
+
 /** What each part of the block is called on screen. */
 const SOURCE_LABEL: Record<InstructionSizeSource, string> = {
   preamble: 'Geniro display preamble',
@@ -41,8 +48,8 @@ export function InstructionSizeCard({
   error,
   blockName,
 }: {
-  /** This member's measurement, or null before one has landed. */
-  size: MemberInstructionSize | null;
+  /** The measurement — a member's, or one CLI's in a project — or null before one has landed. */
+  size: MemberInstructionSize | InstructionSizeReading | null;
   /** A measurement is in flight; a shown one stays up meanwhile. */
   loading: boolean;
   /** Why the last measurement failed, when it did. */

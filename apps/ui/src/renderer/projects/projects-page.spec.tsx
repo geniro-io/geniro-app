@@ -22,6 +22,8 @@ const projectsApi = vi.hoisted(() => ({
   deleteProject: vi.fn(),
   rearmProjectAutopilot: vi.fn(),
   readProjectQueue: vi.fn(),
+  resolveProjectForFolder: vi.fn(),
+  measureProjectInstructionSizes: vi.fn(),
 }));
 const teamsApi = vi.hoisted(() => ({
   listTeams: vi.fn(async () => []),
@@ -96,6 +98,28 @@ let container: HTMLDivElement | null = null;
 
 beforeEach(() => {
   projectsApi.listProjects.mockResolvedValue([aProject()]);
+  projectsApi.resolveProjectForFolder.mockResolvedValue({ project: null });
+  projectsApi.measureProjectInstructionSizes.mockResolvedValue({
+    agents: [
+      {
+        agent: 'claude',
+        totalChars: 9_000,
+        approxTokens: 2_250,
+        separatorChars: 2,
+        parts: [
+          { source: 'preamble', chars: 6_000, approxTokens: 1_500 },
+          { source: 'projectInstructions', chars: 2_998, approxTokens: 750 },
+        ],
+      },
+      {
+        agent: 'codex',
+        totalChars: 7_000,
+        approxTokens: 1_750,
+        separatorChars: 0,
+        parts: [{ source: 'preamble', chars: 7_000, approxTokens: 1_750 }],
+      },
+    ],
+  });
   projectsApi.readProjectQueue.mockImplementation(
     async ({ projectId }: { projectId: string }) => aQueue(projectId, 0, 0),
   );
@@ -565,7 +589,7 @@ describe('Projects page', () => {
     expect(pageOfEntry()).toBeUndefined();
   });
 
-  it('deletes only on confirm, then unlinks the project’s run configurations', async () => {
+  it('deletes only on confirm, keeping the project’s run configurations unbound', async () => {
     projectsApi.listProjects.mockResolvedValue([
       aProject({ id: 'p1', name: 'One' }),
       aProject({ id: 'p2', name: 'Two' }),
@@ -588,7 +612,9 @@ describe('Projects page', () => {
     const dialog = document.body.querySelector('[role="dialog"]')!;
 
     expect(dialog.textContent).toContain('Delete One?');
-    expect(dialog.textContent).toContain('2 run configurations are unlinked');
+    expect(dialog.textContent).toContain(
+      'Its 2 run configurations are kept on the Projects page',
+    );
     expect(projectsApi.deleteProject).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -638,30 +664,116 @@ describe('Projects page', () => {
     ).toContain('the disk is full');
   });
 
-  it('unlinks one run configuration and keeps the rest', async () => {
+  it('deletes one run configuration from its project page and keeps the rest', async () => {
     await seedRunConfigs([
       aRunConfig({ id: 'a', name: 'Main', projectId: 'p1' }),
       aRunConfig({ id: 'b', name: 'Review', projectId: 'p1' }),
+      aRunConfig({ id: 'c', name: 'Elsewhere', projectId: 'p2' }),
     ]);
     const el = await mountOpen();
-    expect(
-      el.querySelector('ul[aria-label="Run configurations"]')?.textContent,
-    ).toContain('Review');
+    const section = (): Element | null =>
+      el.querySelector('section[aria-label="Run configurations"]');
+    expect(section()?.textContent).toContain('Review');
+    expect(section()?.textContent).not.toContain('Elsewhere');
 
     await act(async () => {
-      buttonNamed('Unlink Review').click();
+      buttonNamed('Delete Review').click();
+    });
+    await act(async () => {
+      buttonNamed('Confirm delete Review').click();
+    });
+    await settle();
+
+    expect((await storedRunConfigs()).map((config) => config.id)).toEqual([
+      'a',
+      'c',
+    ]);
+    expect(section()?.textContent).toContain('Main');
+    expect(section()?.textContent).not.toContain('Review');
+  });
+
+  it('binds a configuration with no project to its folder’s project', async () => {
+    projectsApi.resolveProjectForFolder.mockImplementation(
+      async ({ path }: { path: string }) => ({
+        project:
+          path === '/w/app' ? { id: 'p1', name: 'One', folder: '/w' } : null,
+      }),
+    );
+    await seedRunConfigs([
+      aRunConfig({ id: 'a', cwd: '/w/app' }),
+      aRunConfig({ id: 'b', cwd: '/elsewhere' }),
+    ]);
+    await mount();
+    await settle();
+
+    expect(
+      (await storedRunConfigs()).map((config) => [
+        config.id,
+        config.projectId ?? null,
+      ]),
+    ).toEqual([
+      ['a', 'p1'],
+      ['b', null],
+    ]);
+  });
+
+  it('lists the configurations no project owns and moves one into a project', async () => {
+    projectsApi.listProjects.mockResolvedValue([
+      aProject({ id: 'p1', name: 'One' }),
+      aProject({ id: 'p2', name: 'Two' }),
+    ]);
+    await seedRunConfigs([
+      aRunConfig({ id: 'a', name: 'Loose', projectId: 'p-gone' }),
+      aRunConfig({ id: 'b', name: 'Placed', projectId: 'p1' }),
+    ]);
+    const el = await mount();
+    const unbound = el.querySelector('[data-slot="unbound-run-configs"]');
+    expect(unbound?.textContent).toContain('Loose');
+    expect(unbound?.textContent).not.toContain('Placed');
+
+    await act(async () => {
+      buttonNamed('Project for Loose').click();
+    });
+    await act(async () => {
+      [...document.body.querySelectorAll<HTMLElement>('[role="option"]')]
+        .find((option) => option.textContent?.trim() === 'Two')!
+        .click();
     });
     await settle();
 
     expect(
       (await storedRunConfigs()).map((config) => [config.id, config.projectId]),
     ).toEqual([
-      ['a', 'p1'],
-      ['b', null],
+      ['a', 'p2'],
+      ['b', 'p1'],
     ]);
-    const list = el.querySelector('ul[aria-label="Run configurations"]');
-    expect(list?.textContent).toContain('Main');
-    expect(list?.textContent).not.toContain('Review');
+    expect(el.querySelector('[data-slot="unbound-run-configs"]')).toBeNull();
+  });
+
+  it('shows what a run in the project carries per agent, opening into its parts', async () => {
+    await window.geniro.updateSettings({ customInstructions: 'MINE' });
+    const el = await mountOpen();
+
+    expect(projectsApi.measureProjectInstructionSizes).toHaveBeenCalledWith({
+      projectId: 'p1',
+      measureProjectInstructionSizesDto: { customInstructions: 'MINE' },
+    });
+    const rows = [
+      ...el.querySelectorAll<HTMLElement>(
+        '[data-slot="project-instruction-size"]',
+      ),
+    ];
+    expect(rows.map((row) => row.dataset.agent)).toEqual(['claude', 'codex']);
+    expect(rows[0]!.textContent).toContain('~2.3k tokens');
+    expect(rows[0]!.querySelector('[data-slot="instruction-size"]')).toBeNull();
+
+    await act(async () => {
+      rows[0]!.querySelector('button')!.click();
+    });
+
+    const breakdown = rows[0]!.querySelector('[data-slot="instruction-size"]');
+    expect(breakdown?.textContent).toContain('Project instructions');
+    expect(breakdown?.textContent).toContain('2,998');
   });
 
   it('creates a project from the page and opens it', async () => {

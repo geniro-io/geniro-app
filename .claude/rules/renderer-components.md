@@ -34,6 +34,9 @@ Every styled element goes through the layers in order: token → primitive → s
 - Pickable answer options: `option-list`, whose `arity` (`many` / `one` / `none`) decides the drawing. Never `chip` (labels can be sentences).
 - Dismissible error strip: `error-banner`. `error-text` alone is for a form field, where typing clears it.
 - Clipboard: `copy-button`, which owns the write and the copied feedback.
+- Asking before an action: a modal question, `confirm-dialog` — or `confirm-action-button`, the button that opens one and runs the action from it. Never a second press on the same button for a new surface.
+- A card that is clickable takes its hover from `lift-card.ts` (`LIFT_CARD_CLASS` on a `NavListItem` card, `LIFT_BUTTON_CLASS` on a card that is itself the button); never restate the lift.
+- A long free text in a header or row: `clamped-text` (`ClampedText`), which folds it and offers Show more only when it overflows.
 - Tooltips: a plain `title` attribute. `TooltipLayer` (`components/ui/tooltip.tsx`, mounted once in `boot-app.tsx`) draws every one in the design system instead of the OS; never build a per-control hover tip for plain text. A tip that holds controls or a reading is a `hover-popover`.
 - Reaching an MCP listing: `mcp-dialog-button` (opens `mcp-section` in a `dialog`); its open state belongs to the caller.
 - Memoized callbacks: `use-latest-callback` (`useLatestCallback`), never `useCallback` (eslint bans it). A kept `useCallback` function holds its render's whole scope, which holds the other kept callbacks and their renders, so every earlier render stays in memory until the renderer runs out of heap. A `useMemo` whose value holds a function made inline is the same link: build that function with `useLatestCallback`.

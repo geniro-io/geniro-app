@@ -16,9 +16,11 @@
 import * as runtime from '../runtime';
 import type {
   CreateProjectDto,
+  MeasureProjectInstructionSizesDto,
   ProjectDeletedDto,
   ProjectDto,
   ProjectForFolderDto,
+  ProjectInstructionSizesDto,
   ProjectQueueDto,
   UpdateProjectDto,
 } from '../models/index';
@@ -29,6 +31,11 @@ export interface ProjectsApiCreateProjectRequest {
 
 export interface ProjectsApiDeleteProjectRequest {
     projectId: string;
+}
+
+export interface ProjectsApiMeasureProjectInstructionSizesRequest {
+    projectId: string;
+    measureProjectInstructionSizesDto: MeasureProjectInstructionSizesDto;
 }
 
 export interface ProjectsApiReadProjectRequest {
@@ -183,6 +190,61 @@ export class ProjectsApi extends runtime.BaseAPI {
      */
     async listProjects(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<ProjectDto>> {
         const response = await this.listProjectsRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async measureProjectInstructionSizesRaw(requestParameters: ProjectsApiMeasureProjectInstructionSizesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ProjectInstructionSizesDto>> {
+        if (requestParameters['projectId'] == null) {
+            throw new runtime.RequiredError(
+                'projectId',
+                'Required parameter "projectId" was null or undefined when calling measureProjectInstructionSizes().'
+            );
+        }
+
+        if (requestParameters['measureProjectInstructionSizesDto'] == null) {
+            throw new runtime.RequiredError(
+                'measureProjectInstructionSizesDto',
+                'Required parameter "measureProjectInstructionSizesDto" was null or undefined when calling measureProjectInstructionSizes().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/projects/{projectId}/instruction-sizes`;
+        urlPath = urlPath.replace(`{${"projectId"}}`, encodeURIComponent(String(requestParameters['projectId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['measureProjectInstructionSizesDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async measureProjectInstructionSizes(requestParameters: ProjectsApiMeasureProjectInstructionSizesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ProjectInstructionSizesDto> {
+        const response = await this.measureProjectInstructionSizesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

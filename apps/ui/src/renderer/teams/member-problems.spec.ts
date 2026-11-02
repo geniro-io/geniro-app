@@ -85,6 +85,38 @@ describe('memberProblemsOf', () => {
     expect(problems[0]!.key).not.toBe(problems[1]!.key);
   });
 
+  it('folds many servers with one finding into one row per seat', () => {
+    const servers = ['a', 'b', 'c', 'd'];
+    const problems = memberProblemsOf(
+      'ada',
+      reading('warning', [
+        ...servers.map((server) => problem({ kind: 'mcp_needs_auth', server })),
+        ...servers.map((server) =>
+          problem({ kind: 'mcp_needs_auth', server, poolMember: 2 }),
+        ),
+        problem({ kind: 'mcp_failed', server: 'github' }),
+      ]),
+      [],
+    );
+    expect(problems.map((entry) => [entry.message, entry.server])).toEqual([
+      ['4 MCP servers need signing in for this member.', null],
+      ['4 MCP servers need signing in for pool agent 2.', null],
+      ['The github server did not connect', 'github'],
+    ]);
+  });
+
+  it('keeps a couple of servers with one finding as their own rows', () => {
+    const problems = memberProblemsOf(
+      'ada',
+      reading('warning', [
+        problem({ kind: 'mcp_needs_auth', server: 'a' }),
+        problem({ kind: 'mcp_needs_auth', server: 'b' }),
+      ]),
+      [],
+    );
+    expect(problems.map((entry) => entry.server)).toEqual(['a', 'b']);
+  });
+
   it('is empty without a reading and without sign-in findings', () => {
     expect(memberProblemsOf('ada', undefined, [])).toEqual([]);
   });

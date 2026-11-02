@@ -1293,7 +1293,6 @@ describe('Settings — sections', () => {
     await mount();
     expect(navButtons()).toEqual([
       'General',
-      'Run configurations',
       'Fast actions',
       'Remote access',
       'Sharing',
@@ -1302,17 +1301,9 @@ describe('Settings — sections', () => {
     ]);
   });
 
-  it('keeps run configurations and fast actions as two separate panes', async () => {
-    // They are different features — one says where and with what a chat runs,
-    // the other says what it says — and collapsing them into a single surface
-    // is what destroyed the saved configurations once. This is the cheap guard
-    // against a later tidy-up folding them back together.
-    await mount('run-configurations');
-    expect(container.textContent).toContain('No configurations yet');
-    expect(container.textContent).not.toContain('No fast actions yet');
-
+  it('keeps run configurations off Settings — they belong to their projects', async () => {
     await mount('fast-actions');
-    expect(container.textContent).toContain('No fast actions yet');
+    expect(navButtons()).not.toContain('Run configurations');
     expect(container.textContent).not.toContain('No configurations yet');
   });
 

@@ -215,4 +215,81 @@ describe('InstructionSizesService', () => {
         .members.map((entry) => entry.memberId),
     ).toEqual(['manager', 'reviewer']);
   });
+
+  it('measures every block once, in the team’s order, with how many members carry it', () => {
+    const team = {
+      ...DEV_TEAM,
+      instructionBlocks: [
+        ...DEV_TEAM.instructionBlocks,
+        { id: 'blank', title: 'Blank', text: '   ', audience: 'everyone' },
+        { id: 'nobody', title: 'Nobody', text: 'ORPHAN', audience: ['gone'] },
+      ],
+    } satisfies typeof DEV_TEAM;
+
+    expect(subject.measure({ team }).blocks).toEqual([
+      { blockId: 'settings', chars: 13, approxTokens: 4, reaches: 2 },
+      { blockId: 'intent', chars: 15, approxTokens: 4, reaches: 1 },
+      { blockId: 'blank', chars: 0, approxTokens: 0, reaches: 0 },
+      { blockId: 'nobody', chars: 6, approxTokens: 2, reaches: 0 },
+    ]);
+  });
+});
+
+describe('InstructionSizesService.measureProject', () => {
+  const PROJECT = {
+    customInstructions: 'MINE',
+    replyLanguage: 'Russian',
+    projectInstructions: 'Project: Shop\n\nShip small.',
+    memoryIndex: 'Memory index (data):\n- m1 [project] Use pnpm (project)',
+  };
+
+  it('answers for every CLI, each with the block its own adapter composes', () => {
+    const answer = subject.measureProject(PROJECT);
+
+    expect(answer.agents.map((entry) => entry.agent)).toEqual([
+      'claude',
+      'cursor-agent',
+      'codex',
+    ]);
+    const expected = joinTurnInstructionParts(
+      turnInstructionParts({
+        backgroundWorkNote: codex.getConfig().backgroundWork.agentNote,
+        ...PROJECT,
+      }),
+    );
+    const forCodex = answer.agents.find((entry) => entry.agent === 'codex')!;
+    expect(forCodex.totalChars).toBe(expected.length);
+    expect(forCodex.approxTokens).toBe(Math.ceil(expected.length / 4));
+  });
+
+  it('breaks it down by source, adding up to the total', () => {
+    const forClaude = subject
+      .measureProject(PROJECT)
+      .agents.find((entry) => entry.agent === 'claude')!;
+
+    expect(forClaude.parts.map((part) => part.source)).toEqual([
+      'preamble',
+      'backgroundWorkNote',
+      'replyLanguage',
+      'customInstructions',
+      'projectInstructions',
+      'memoryIndex',
+    ]);
+    expect(
+      forClaude.parts.reduce((sum, part) => sum + part.chars, 0) +
+        forClaude.separatorChars,
+    ).toBe(forClaude.totalChars);
+    expect(forClaude.parts[0]!.chars).toBe(GENIRO_UI_PREAMBLE.length);
+  });
+
+  it('leaves out what the project and the user have not set', () => {
+    const forClaude = subject
+      .measureProject({})
+      .agents.find((entry) => entry.agent === 'claude')!;
+
+    expect(forClaude.parts.map((part) => part.source)).toEqual([
+      'preamble',
+      'backgroundWorkNote',
+    ]);
+  });
 });

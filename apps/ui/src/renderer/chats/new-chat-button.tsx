@@ -5,8 +5,10 @@ import type { RunConfig } from '../../shared/contracts';
 import { Button } from '../components/ui/button';
 import { Menu } from '../components/ui/menu';
 import { useLatestCallback } from '../components/use-latest-callback';
+import type { ProjectRef } from '../projects/use-projects';
 import { teamSlugOf } from './composer-values';
 import { shortenPath } from './directory-select';
+import { groupRunConfigsByProject } from './run-config';
 
 /**
  * The two rows that are commands rather than configurations. Prefixed so they
@@ -37,12 +39,15 @@ const CLOSE_DELAY_MS = 180;
  */
 export function NewChatButton({
   configs,
+  projects,
   onNewChat,
   onApply,
   onCreate,
   onManage,
 }: {
   configs: readonly RunConfig[];
+  /** The projects the configurations are grouped under, in the menu. */
+  projects: readonly ProjectRef[];
   /** Plain click: the ordinary new thread, with no question attached. */
   onNewChat: () => void;
   onApply: (config: RunConfig) => void;
@@ -104,22 +109,19 @@ export function NewChatButton({
       return [commands];
     }
     return [
-      {
-        label: 'Start from a configuration',
-        items: configs.map((config) => ({
+      ...groupRunConfigsByProject(configs, projects).map((group) => ({
+        label: group.project?.name ?? 'No project',
+        items: group.configs.map((config) => ({
           value: config.id,
           label: config.name,
           icon: <Bookmark />,
-          // The agent, and the folder under it — the two facts that tell two
-          // similarly-named setups apart. Elided from the FRONT, since CSS
-          // truncation eats the end that identifies a directory.
           hint: teamSlugOf(config.target) ?? config.target,
           title: `${config.name} · ${shortenPath(config.cwd)}`,
         })),
-      },
+      })),
       commands,
     ];
-  }, [configs]);
+  }, [configs, projects]);
 
   return (
     <span

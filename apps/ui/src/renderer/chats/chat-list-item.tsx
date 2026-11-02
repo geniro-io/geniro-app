@@ -9,7 +9,7 @@ import {
   PinOff,
   Sparkles,
   Trash2,
-  Workflow as TeamIcon,
+  UsersRound as TeamIcon,
 } from 'lucide-react';
 import { memo, useContext, useEffect, useMemo, useRef, useState } from 'react';
 

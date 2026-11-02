@@ -43,7 +43,15 @@ function config(over: Partial<RunConfig> = {}): RunConfig {
   };
 }
 
-function render(configs: RunConfig[] = [config()]): {
+const PROJECTS = [
+  { id: 'p-app', name: 'Geniro', folder: '/Users/dev/geniro-app' },
+  { id: 'p-site', name: 'Website', folder: '/Users/dev/site' },
+];
+
+function render(
+  configs: RunConfig[] = [config()],
+  projects = PROJECTS,
+): {
   onNewChat: ReturnType<typeof vi.fn>;
   onApply: ReturnType<typeof vi.fn>;
   onCreate: ReturnType<typeof vi.fn>;
@@ -56,7 +64,9 @@ function render(configs: RunConfig[] = [config()]): {
     onManage: vi.fn(),
   };
   act(() => {
-    root.render(<NewChatButton configs={configs} {...handles} />);
+    root.render(
+      <NewChatButton configs={configs} projects={projects} {...handles} />,
+    );
   });
   return handles;
 }
@@ -105,6 +115,37 @@ describe('NewChatButton', () => {
     const labels = rows().map((row) => row.textContent);
     expect(labels.some((l) => l?.includes('Geniro app'))).toBe(true);
     expect(labels.some((l) => l?.includes('Sibling repo'))).toBe(true);
+  });
+
+  it('groups the configurations under their projects, the unbound ones last', () => {
+    render([
+      config({ id: 'a', name: 'Site main', projectId: 'p-site' }),
+      config({ id: 'b', name: 'Loose', projectId: null }),
+      config({ id: 'c', name: 'App main', projectId: 'p-app' }),
+      config({ id: 'd', name: 'Site preview', projectId: 'p-site' }),
+    ]);
+
+    hover(plus());
+
+    const groups = [
+      ...document.querySelectorAll<HTMLElement>('[data-slot="menu-group"]'),
+    ]
+      .map((group) => ({
+        heading:
+          group.querySelector('[data-slot="menu-group-heading"]')
+            ?.textContent ?? null,
+        rows: [...group.querySelectorAll('[role="option"]')].map(
+          (row) => row.textContent,
+        ),
+      }))
+      .filter((group) => group.heading !== null);
+    expect(groups.map((group) => group.heading)).toEqual([
+      'Website',
+      'Geniro',
+      'No project',
+    ]);
+    expect(groups[0]!.rows.join('|')).toMatch(/Site main.*\|.*Site preview/);
+    expect(groups[2]!.rows.join('|')).toContain('Loose');
   });
 
   it('picking a row hands back that whole configuration', () => {

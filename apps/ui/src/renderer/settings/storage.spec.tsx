@@ -102,9 +102,20 @@ function buttonNamed(text: string): HTMLButtonElement {
   return button;
 }
 
+function dialogButton(text: string): HTMLButtonElement {
+  const dialog = document.body.querySelector('[role="dialog"]');
+  const button = [...(dialog?.querySelectorAll('button') ?? [])].find(
+    (b) => b.textContent?.trim() === text,
+  );
+  if (!button) {
+    throw new Error(`no "${text}" in a confirm dialog`);
+  }
+  return button;
+}
+
 async function pressTwice(text: string): Promise<void> {
   await act(async () => buttonNamed(text).click());
-  await act(async () => buttonNamed('Delete?').click());
+  await act(async () => dialogButton('Delete').click());
 }
 
 describe('Storage', () => {
@@ -155,7 +166,7 @@ describe('Storage', () => {
 
     await act(async () => buttonNamed('Delete 778 archived chats').click());
     expect(api.cleanStorage).not.toHaveBeenCalled();
-    await act(async () => buttonNamed('Delete?').click());
+    await act(async () => dialogButton('Delete').click());
     await flush();
 
     expect(api.cleanStorage).toHaveBeenCalledWith({
@@ -195,7 +206,7 @@ describe('Storage', () => {
 
     await act(async () => buttonNamed('Clear cache').click());
     expect(clearBrowserCache).not.toHaveBeenCalled();
-    await act(async () => buttonNamed('Clear?').click());
+    await act(async () => dialogButton('Clear cache').click());
     await flush();
 
     expect(clearBrowserCache).toHaveBeenCalledTimes(1);
@@ -230,7 +241,7 @@ describe('Storage', () => {
 
     await act(async () => buttonNamed('Compact').click());
     expect(api.cleanStorage).not.toHaveBeenCalled();
-    await act(async () => buttonNamed('Restart & compact?').click());
+    await act(async () => dialogButton('Restart & compact').click());
     await flush();
 
     expect(api.cleanStorage).toHaveBeenCalledWith({
@@ -311,7 +322,7 @@ describe('Storage', () => {
     await flush();
 
     await act(async () => buttonNamed('Remove').click());
-    await act(async () => buttonNamed('Remove?').click());
+    await act(async () => dialogButton('Remove').click());
     await flush();
 
     expect(removeStorageWorktree).toHaveBeenCalledWith('task-1');

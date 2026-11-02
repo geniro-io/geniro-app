@@ -28,7 +28,70 @@ export interface MemberProblem {
   agent: AgentKind | null;
   configDir: string | null;
   server: string | null;
+  /** Every MCP server the finding names: its own, or those a collapsed row stands for. */
+  servers: readonly string[];
   poolMember: number | null;
+}
+
+export const SERVER_REPEATS_COLLAPSE_AT = 3;
+
+export const SERVER_REPEAT_TEXT: Partial<Record<MemberProblemKind, string>> = {
+  mcp_needs_auth: 'need signing in',
+  mcp_failed: 'failed to connect',
+  mcp_disconnected: 'are not connected',
+};
+
+function serverGroupOf(problem: Omit<MemberProblem, 'key'>): string | null {
+  if (problem.server === null || !(problem.kind in SERVER_REPEAT_TEXT)) {
+    return null;
+  }
+  return [
+    problem.kind,
+    problem.level,
+    problem.poolMember ?? 'member',
+    problem.agent ?? '',
+    problem.configDir ?? '',
+  ].join(':');
+}
+
+function collapseServerRepeats(
+  problems: readonly Omit<MemberProblem, 'key'>[],
+): Omit<MemberProblem, 'key'>[] {
+  const groups = new Map<string, Omit<MemberProblem, 'key'>[]>();
+  for (const problem of problems) {
+    const group = serverGroupOf(problem);
+    if (group !== null) {
+      groups.set(group, [...(groups.get(group) ?? []), problem]);
+    }
+  }
+  const emitted = new Set<string>();
+  return problems.flatMap((problem) => {
+    const group = serverGroupOf(problem);
+    const members = group === null ? undefined : groups.get(group);
+    if (
+      group === null ||
+      members === undefined ||
+      members.length < SERVER_REPEATS_COLLAPSE_AT
+    ) {
+      return [problem];
+    }
+    if (emitted.has(group)) {
+      return [];
+    }
+    emitted.add(group);
+    const who =
+      problem.poolMember === null
+        ? 'this member'
+        : `pool agent ${problem.poolMember}`;
+    return [
+      {
+        ...problem,
+        server: null,
+        servers: members.flatMap((entry) => entry.servers),
+        message: `${members.length} MCP servers ${SERVER_REPEAT_TEXT[problem.kind]} for ${who}.`,
+      },
+    ];
+  });
 }
 
 function keyOf(memberId: string, problem: Omit<MemberProblem, 'key'>): string {
@@ -61,6 +124,7 @@ export function memberProblemsOf(
       agent: problem.agent,
       configDir: problem.configDir,
       server: problem.server,
+      servers: problem.server === null ? [] : [problem.server],
       poolMember: problem.poolMember,
     }))
     .sort((a, b) => Number(b.level === 'error') - Number(a.level === 'error'));
@@ -72,15 +136,18 @@ export function memberProblemsOf(
     agent: problem.agent,
     configDir: problem.configDir,
     server: null,
+    servers: [],
     poolMember: problem.poolMember,
   }));
   const seen = new Map<string, number>();
-  return [...fromDaemon, ...fromSignIn].map((problem) => {
-    const base = keyOf(memberId, problem);
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    return { ...problem, key: count === 0 ? base : `${base}#${count}` };
-  });
+  return [...collapseServerRepeats(fromDaemon), ...fromSignIn].map(
+    (problem) => {
+      const base = keyOf(memberId, problem);
+      const count = seen.get(base) ?? 0;
+      seen.set(base, count + 1);
+      return { ...problem, key: count === 0 ? base : `${base}#${count}` };
+    },
+  );
 }
 
 /**

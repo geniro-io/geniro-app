@@ -55,6 +55,7 @@ function config(over: Partial<RunConfig> = {}): RunConfig {
     modelParameters: {},
     approval: null,
     configDir: null,
+    projectId: 'p-billing',
     ...over,
   };
 }
@@ -288,6 +289,7 @@ describe('RunConfigPicker — editor', () => {
       modelParameters: {},
       approval: null,
       configDir: null,
+      projectId: 'p-billing',
     };
     const { onSave } = render({ captureCurrent: () => captured });
 
@@ -338,6 +340,66 @@ describe('RunConfigPicker — editor', () => {
   });
 });
 
+function typeName(value: string): void {
+  const input = container.querySelector<HTMLInputElement>(
+    'input[aria-label="Configuration name"]',
+  );
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    setter?.call(input, value);
+    input?.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+describe('RunConfigPicker — a configuration belongs to a project', () => {
+  it('refuses saving one with no project, naming why', () => {
+    const { onSave } = render({
+      captureCurrent: (name: string) => ({
+        name,
+        cwd: '/Users/dev/app',
+        branch: null,
+        target: 'claude' as const,
+        model: null,
+        effort: null,
+        contextWindow: null,
+        modelParameters: {},
+        approval: null,
+        configDir: null,
+        projectId: null,
+      }),
+    });
+    click(button('New configuration'));
+    typeName('Projectless');
+    click(button('Create'));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(
+      'Choose the project this configuration belongs to.',
+    );
+  });
+
+  it('fills an empty folder from the project picked', () => {
+    const { onSave } = render({ captureCurrent: () => null });
+    click(button('New configuration'));
+    typeName('From the project');
+    click(button('Project this configuration binds its runs to'));
+    click(
+      [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(
+        (option) => option.textContent?.trim() === 'Shop',
+      )!,
+    );
+    click(button('Create'));
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'p-shop', cwd: '/w/shop' }),
+      null,
+    );
+  });
+});
+
 describe('RunConfigPicker — which surface an open lands on', () => {
   it('openTo="new" goes straight to a fresh editor', () => {
     // The `+` menu's "New configuration…" names what it opens. Landing on the
@@ -367,6 +429,7 @@ describe('RunConfigPicker — which surface an open lands on', () => {
         modelParameters: {},
         approval: null,
         configDir: null,
+        projectId: 'p-billing',
       }),
     });
 
@@ -427,20 +490,6 @@ describe('RunConfigPicker — state that must not survive a reopen', () => {
 });
 
 describe('RunConfigPicker — editor guards', () => {
-  function typeName(value: string): void {
-    const input = container.querySelector<HTMLInputElement>(
-      'input[aria-label="Configuration name"]',
-    );
-    act(() => {
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        'value',
-      )?.set;
-      setter?.call(input, value);
-      input?.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-  }
-
   it('refuses a name longer than the IPC schema accepts, rather than losing the save', () => {
     // Main VALIDATES the settings patch and throws on a violation, discarding
     // the whole write — so without this guard the editor closes, the row shows
@@ -473,6 +522,7 @@ describe('RunConfigPicker — editor guards', () => {
         modelParameters: {},
         approval: null,
         configDir: null,
+        projectId: 'p-billing',
       }),
     });
     click(button('New configuration'));

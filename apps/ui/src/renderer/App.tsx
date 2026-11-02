@@ -789,6 +789,10 @@ export function App(): React.JSX.Element {
                         setTeamRequest(slug);
                         setView('teams');
                       }}
+                      onOpenProject={(projectId) => {
+                        setProjectRequest({ projectId });
+                        setView('projects');
+                      }}
                       onPhoneDetailChange={setChatsPhoneDetail}
                       onWaitingChange={setWaiting}
                       phoneHomeSignal={chatsHomeSignal}

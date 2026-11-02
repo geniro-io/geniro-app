@@ -35,7 +35,6 @@ import {
 } from '../chats/approval-mode-select';
 import { AutoCompactSelect } from '../chats/auto-compact-select';
 import { ConfigDirSelect } from '../chats/config-dir-select';
-import type { DraftRequest } from '../chats/hosted-chat';
 import { mcpConfigActions } from '../chats/mcp-config-actions';
 import { ModelSelect } from '../chats/model-select';
 import { useAgentContextWindows } from '../chats/use-agent-context-windows';
@@ -70,7 +69,7 @@ import { useSharedCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
 import { AgentPoolEditor } from './agent-pool-editor';
 import { BuilderStatusBar } from './builder-status-bar';
-import { HeldProblems } from './held-problems';
+import { type HeldProblem, HeldProblems } from './held-problems';
 import { InstructionSizeCard } from './instruction-size-card';
 import { InstructionsCard } from './instructions-card';
 import { AddMemberCard, MemberCard } from './member-card';
@@ -89,7 +88,7 @@ import {
   nodeMcpHint,
   withNodeSwitches,
 } from './node-mcp-switches';
-import { StageJourney } from './stage-journey';
+import { EntryCard, StageJourney } from './stage-journey';
 import { stageTitle, validateStageFields } from './stage-validate';
 import { StagesDialog } from './stages-dialog';
 import { TeamChatPanel } from './team-chat-panel';
@@ -137,8 +136,6 @@ const NO_MEMBERS: readonly TeamMember[] = [];
 const RECENT_CONFIG_DIRS = 5;
 /** How long a one-off outcome (an export path) stays in the status bar. */
 const NOTICE_TTL_MS = 6_000;
-const ADD_STAGES_DRAFT = 'Add stages every run of this team walks: ';
-const CHANGE_STAGES_DRAFT = 'Change the stages: ';
 const HELD_FOR_PROBLEMS = 'fix the problems listed first';
 
 /** The member the sheet shows. */
@@ -279,8 +276,6 @@ export function Teams({
   // until the builder leaves that team: a turn it follows must be able to
   // report that it ended.
   const [chatMounted, setChatMounted] = useState(false);
-  const [chatDraft, setChatDraft] = useState<DraftRequest | null>(null);
-  const chatDraftCount = useRef(0);
   const [stagesDialog, setStagesDialog] = useState<{
     stageId: string | null;
     add: boolean;
@@ -354,7 +349,6 @@ export function Teams({
         openGeneration.current += 1;
         loadedHashRef.current = hash;
         setStaleCopy(false);
-        setChatDraft(null);
         setActiveSlug(slug);
         setTeam(loaded);
         setSelection(null);
@@ -416,7 +410,6 @@ export function Teams({
     setChatMounted(false);
     setChatWorking(false);
     setChatAwaiting(null);
-    setChatDraft(null);
     setStagesDialog(null);
     setTab('team');
     setLeavePrompt(false);
@@ -515,13 +508,6 @@ export function Teams({
     };
   }, [team]);
   const invalid = problems.count > 0;
-  const askChat = useLatestCallback((text: string) => {
-    setChatMounted(true);
-    setChatOpen(true);
-    chatDraftCount.current += 1;
-    setChatDraft({ id: chatDraftCount.current, text });
-  }, []);
-
   /** Persist `next` as the open team; true on success. */
   const persist = useLatestCallback(
     async (next: Team): Promise<boolean> => {
@@ -1485,8 +1471,6 @@ export function Teams({
     ];
     return parts.length === 0 ? null : parts.join(' ');
   };
-  const askStagesChat = (): void =>
-    askChat(stages.length > 0 ? CHANGE_STAGES_DRAFT : ADD_STAGES_DRAFT);
 
   const headerActions = (
     <>
@@ -1604,14 +1588,23 @@ export function Teams({
             {members.map((member) => {
               const issues = problems.members.get(member.id) ?? [];
               const setup = setupProblemsOf(member.id);
-              const setupFix =
-                setup[0] === undefined
-                  ? undefined
-                  : memberFixes.fixOf(setup[0]);
-              const fix =
-                issues.length > 0
-                  ? { label: 'Fix', run: () => openMember(member.id) }
-                  : setupFix;
+              const cardProblems: HeldProblem[] = [
+                ...issues.map((issue, index) => ({
+                  key: `editor:${index}:${issue.message}`,
+                  message: `${issue.message} Not saved until it is fixed.`,
+                  level: 'error' as const,
+                  fix: { label: 'Fix', run: () => openMember(member.id) },
+                })),
+                ...setup.map((problem): HeldProblem => {
+                  const fix = memberFixes.fixOf(problem);
+                  return {
+                    key: problem.key,
+                    message: problem.message,
+                    level: problem.level,
+                    ...(fix === undefined ? {} : { fix }),
+                  };
+                }),
+              ];
               return (
                 <MemberCard
                   key={member.id}
@@ -1627,8 +1620,7 @@ export function Teams({
                           setup,
                         )
                   }
-                  reason={issues[0]?.message ?? setup[0]?.message ?? null}
-                  {...(fix === undefined ? {} : { fix })}
+                  problems={cardProblems}
                   stageTitles={stagesOwnedBy(member.id)}
                   handlesFirstMessage={member.id === handlerKnown}
                   selected={selected?.id === member.id}
@@ -1649,68 +1641,82 @@ export function Teams({
           }
           hint={
             stages.length === 0
-              ? 'Optional — the steps every run walks. The first message starts it.'
+              ? 'Optional — split each run into steps, each with members responsible for it.'
               : 'The steps every run walks, starting from the first message.'
           }
           action={
-            <div className="flex flex-wrap items-center gap-2">
-              {activeSlug ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 gap-1.5 rounded-control"
-                  onClick={askStagesChat}>
-                  <MessagesSquare aria-hidden="true" />
-                  {stages.length > 0 ? 'Change with chat' : 'Add with chat'}
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 rounded-control"
-                onClick={() =>
-                  setStagesDialog({ stageId: null, add: stages.length === 0 })
-                }>
-                {stages.length === 0 ? 'Add stages' : 'Edit stages'}
-              </Button>
-            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 rounded-control"
+              onClick={() =>
+                setStagesDialog({ stageId: null, add: stages.length === 0 })
+              }>
+              {stages.length === 0 ? 'Add stages' : 'Edit stages'}
+            </Button>
           }>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <span className="text-sm text-muted-foreground">Who leads</span>
-            <Select
-              id="team-mode"
-              aria-label="Team mode"
-              variant="ghost"
-              value={team.mode}
-              groups={MODE_ITEMS}
-              onValueChange={(mode) =>
-                editTeam((current) => ({
-                  ...current,
-                  mode: mode as TeamMode,
-                }))
-              }
-            />
-          </div>
-          {team.mode === 'relay' ? (
-            <p data-slot="relay-note" className="text-sm text-muted-foreground">
-              Each stage is led by its first responsible member, who can call
-              the others for help. Finishing a stage hands the run to the next
-              stage&apos;s lead, and your messages go to whoever leads now.
-            </p>
-          ) : null}
-          <StageJourney
-            stages={stages}
-            members={journeyMembers}
-            triggerMemberId={handlerKnown}
-            warningStageIds={warningStageIds}
-            onPickTrigger={(memberId) =>
-              editTeam((current) => withTriggerMember(current, memberId))
-            }
-            onOpenStage={(stageId) => setStagesDialog({ stageId, add: false })}
-            onAddStage={() => setStagesDialog({ stageId: null, add: true })}
-          />
+          {stages.length === 0 && team.mode !== 'relay' ? (
+            <div
+              data-slot="stages-empty"
+              className="flex flex-col gap-4 rounded-card border border-dashed border-field-border p-5 sm:flex-row sm:items-center">
+              <EntryCard
+                members={journeyMembers}
+                memberId={handlerKnown}
+                onPick={(memberId) =>
+                  editTeam((current) => withTriggerMember(current, memberId))
+                }
+              />
+              <p className="m-0 text-sm text-muted-foreground">
+                {handlerKnown === null
+                  ? 'Choose who takes your first message. Without stages, that member runs the whole job and calls the others when it needs them.'
+                  : `No stages yet — ${labels.get(handlerKnown) ?? handlerKnown} runs every job and calls the others when it needs them.`}
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-col gap-1">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <span className="text-sm text-muted-foreground">
+                    Who leads
+                  </span>
+                  <Select
+                    id="team-mode"
+                    aria-label="Team mode"
+                    variant="ghost"
+                    value={team.mode}
+                    groups={MODE_ITEMS}
+                    onValueChange={(mode) =>
+                      editTeam((current) => ({
+                        ...current,
+                        mode: mode as TeamMode,
+                      }))
+                    }
+                  />
+                </div>
+                <p
+                  data-slot={team.mode === 'relay' ? 'relay-note' : 'lead-note'}
+                  className="m-0 text-sm text-muted-foreground">
+                  {team.mode === 'relay'
+                    ? "Each stage is led by its first responsible member, who can call the others for help. Finishing a stage hands the run to the next stage's lead, and your messages go to whoever leads now."
+                    : `${handlerKnown === null ? 'The member that takes the first message' : (labels.get(handlerKnown) ?? handlerKnown)} runs the whole job; each stage's members are the ones responsible for it.`}
+                </p>
+              </div>
+              <StageJourney
+                stages={stages}
+                members={journeyMembers}
+                triggerMemberId={handlerKnown}
+                warningStageIds={warningStageIds}
+                onPickTrigger={(memberId) =>
+                  editTeam((current) => withTriggerMember(current, memberId))
+                }
+                onOpenStage={(stageId) =>
+                  setStagesDialog({ stageId, add: false })
+                }
+                onAddStage={() => setStagesDialog({ stageId: null, add: true })}
+              />
+            </>
+          )}
         </TeamSection>
 
         <TeamSection
@@ -2074,7 +2080,6 @@ export function Teams({
               initialDraft={
                 firstChat?.slug === activeSlug ? firstChat.draft : undefined
               }
-              draftRequest={chatDraft}
               apis={apis}
               handle={handle}
               client={client}

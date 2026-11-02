@@ -40,8 +40,20 @@ export const Selected: Story = { args: { selected: true } };
 export const NeedsSetup: Story = {
   args: {
     health: 'warning',
-    reason: 'MCP github needs sign-in',
-    fix: { label: 'Sign in', run: () => {} },
+    problems: [
+      {
+        key: 'mcp',
+        message: 'MCP server "github" needs signing in for this member.',
+        level: 'warning',
+        fix: { label: 'Sign in', run: () => {} },
+      },
+      {
+        key: 'signed-out',
+        message: 'Signed out of Claude',
+        level: 'warning',
+        fix: { label: 'Sign in', run: () => {} },
+      },
+    ],
   },
 };
 
@@ -57,15 +69,21 @@ export const CannotRun: Story = {
     },
     agentLabel: 'Codex',
     health: 'error',
-    reason: 'codex is not installed on this Mac',
-    fix: { label: 'Open Settings', run: () => {} },
+    problems: [
+      {
+        key: 'cli',
+        message: 'Codex is not installed, so this member cannot run.',
+        level: 'error',
+        fix: { label: 'Open Settings', run: () => {} },
+      },
+    ],
     stageTitles: [],
     handlesFirstMessage: false,
   },
 };
 
 export const Checking: Story = {
-  args: { health: 'checking', reason: null },
+  args: { health: 'checking' },
 };
 
 export const NoRole: Story = {

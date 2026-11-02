@@ -473,21 +473,6 @@ async function type(
   });
 }
 
-/** Press the Stages section's own chat button. */
-async function pressStagesChat(label: string): Promise<void> {
-  const button = [
-    ...container.querySelectorAll<HTMLButtonElement>(
-      '[data-slot="team-stages"] button',
-    ),
-  ].find((candidate) => candidate.textContent?.trim() === label);
-  if (button === undefined) {
-    throw new Error(`no stages button ${label}`);
-  }
-  await act(async () => {
-    button.click();
-  });
-}
-
 /** Pick a row of the builder's overflow menu. */
 async function menuRow(label: string): Promise<void> {
   await press('Team actions');
@@ -1186,7 +1171,30 @@ describe('Teams — who handles the first message', () => {
 });
 
 describe('Teams — the team mode', () => {
+  it('hides the lead mode while the team has no stages, saying who runs every job', async () => {
+    await openBuilder();
+
+    expect(container.querySelector('[aria-label="Team mode"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="stages-empty"]')?.textContent,
+    ).toContain('No stages yet — Lead runs every job');
+  });
+
   it('offers One lead and Relay, and saves Relay when it is picked', async () => {
+    getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      team: teamOf({
+        stages: [
+          {
+            id: 'build',
+            title: 'Build',
+            howToWork: 'Write the change.',
+            goal: 'The change works.',
+            responsible: ['lead'],
+          },
+        ] as Team['stages'],
+      }),
+    }));
     await openBuilder();
 
     await press('Team mode');
@@ -1606,39 +1614,6 @@ describe('Teams — a team’s stages', () => {
     await wait(900);
 
     expect(lastSaved().stages?.[0]?.title).toBe('Plan it');
-  });
-
-  it('keeps what the user already typed and puts the stage request after it', async () => {
-    client = fakeClient();
-    opens(STAGES);
-    await openBuilder();
-    await press('Change with chat');
-    await wait(50);
-    const composer = panel()!.querySelector<HTMLTextAreaElement>(
-      'textarea[aria-label="Ask for a team change"]',
-    )!;
-    await type(composer, 'Rename the coder. ');
-
-    await pressStagesChat('Change with chat');
-    await wait(50);
-
-    expect(composer.value).toBe('Rename the coder.\n\nChange the stages: ');
-  });
-
-  it('hands adding stages to the chat dock from the Stages section', async () => {
-    client = fakeClient();
-    opens(undefined);
-    await openBuilder();
-
-    await pressStagesChat('Add with chat');
-    await wait(50);
-
-    expect(panel()!.hasAttribute('hidden')).toBe(false);
-    const composer = panel()!.querySelector<HTMLTextAreaElement>(
-      'textarea[aria-label="Ask for a team change"]',
-    )!;
-    expect(composer.value).toBe('Add stages every run of this team walks: ');
-    expect(document.activeElement).toBe(composer);
   });
 });
 
@@ -2552,7 +2527,7 @@ describe('Teams — the team page', () => {
     expect(container.textContent).toContain('No runs yet.');
   });
 
-  it('draws a member the daemon finds not set up with its reason and fix, and reads it with the MCP probe', async () => {
+  it('marks a member the daemon finds not set up with a corner badge whose panel holds the fix, and reads it with the MCP probe', async () => {
     readTeamHealth.mockImplementation(async ({ slug }) => ({
       slug,
       checkedAt: '2026-11-02T10:00:00.000Z',
@@ -2592,10 +2567,27 @@ describe('Teams — the team page', () => {
         '[data-slot="member-card"][data-member-id="lead"]',
       )!
       .closest('li')!;
-    expect(card.textContent).toContain(
+    const badge = card.querySelector<HTMLButtonElement>(
+      '[data-slot="member-problems"] button',
+    )!;
+    expect(badge.getAttribute('aria-label')).toContain(
       'The profile folder set for this member no longer exists.',
     );
-    expect(container.textContent).toContain('Choose profile');
+    expect(card.textContent).not.toContain('Choose profile');
+
+    await act(async () => {
+      badge.click();
+    });
+    const fix = [...document.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Choose profile',
+    )!;
+    await act(async () => {
+      fix.click();
+    });
+
+    expect(
+      container.querySelector('[data-slot="member-sheet"]'),
+    ).not.toBeNull();
     expect(
       container.querySelector('[data-slot="warning-pill"]')?.textContent,
     ).toContain('1 needs setup');

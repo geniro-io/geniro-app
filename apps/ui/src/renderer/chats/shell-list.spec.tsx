@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { confirmInDialog } from '../__tests__/confirm-in-dialog';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
 
@@ -159,24 +160,18 @@ describe('ShellRows', () => {
     expect(killButton(render([shell()]))).toBeNull();
   });
 
-  it('takes TWO presses to stop a command', () => {
-    // Killing a `pnpm dev` is destructive and there is no undo, and these rows
-    // are hover-height inside a popover — exactly where a stray click lands. So
-    // it goes through the app's one `ConfirmButton`: the first press ARMS (the
-    // control paints itself destructive) and only the second fires.
+  it('asks in a dialog, naming the command, before stopping it', async () => {
     const onKill = vi.fn();
-    const el = render([shell()], undefined, onKill);
-    const button = killButton(el)!;
-    const resting = button.className;
+    const el = render([shell({ command: 'pnpm dev' })], undefined, onKill);
 
-    act(() => button.click());
+    act(() => killButton(el)!.click());
 
     expect(onKill).not.toHaveBeenCalled();
-    // The arming has to be VISIBLE, or the second press is a surprise. jsdom
-    // computes no CSS, so the emitted class IS the mechanism here.
-    expect(button.className).not.toBe(resting);
+    expect(
+      document.querySelector('[role="dialog"][aria-modal="true"]')?.textContent,
+    ).toContain('pnpm dev');
 
-    act(() => button.click());
+    await act(async () => confirmInDialog('Stop').click());
 
     expect(onKill).toHaveBeenCalledWith(expect.objectContaining({ id: 'c1' }));
   });
@@ -196,30 +191,11 @@ describe('ShellRows', () => {
     );
   });
 
-  it('keeps the stop glyph LEGIBLE once armed, and round on hover', () => {
-    // Reported as an ugly hover: the ghost hover filled a square with the
-    // caramel accent behind a red glyph, and once armed the resting
-    // `text-muted-foreground` beat the variant's white — a grey (hovered, a
-    // red) glyph on a red fill. jsdom computes no cascade, so the pin is the
-    // classes that decide it plus the attribute they key on.
+  it('keeps the stop glyph round and tinted destructive on hover', () => {
     const el = render([shell({})], undefined, () => undefined);
     const button = killButton(el)!;
     expect(button.className).toContain('rounded-full');
     expect(button.className).toContain('hover:bg-destructive/10');
     expect(button.className).not.toContain('hover:bg-accent');
-    expect(button.hasAttribute('data-armed')).toBe(false);
-
-    act(() => {
-      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    expect(button.hasAttribute('data-armed')).toBe(true);
-    expect(button.className).toContain('bg-destructive');
-    expect(button.className).toContain(
-      'data-[armed]:text-destructive-foreground',
-    );
-    expect(button.className).toContain(
-      'data-[armed]:hover:text-destructive-foreground',
-    );
   });
 });

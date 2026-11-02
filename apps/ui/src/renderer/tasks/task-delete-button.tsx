@@ -10,10 +10,9 @@ import { Popover } from '../components/ui/popover';
  *
  * An ICON because the row it sits in is the panel's icon-only group — asked for
  * as "delete task button should be small icon with popup confirmation" against
- * a labelled Delete that out-weighed Run. And a POPUP rather than the two-press
- * arming `ConfirmButton` does, because an icon has no label to swap for "Delete
- * task?": the question needs a surface of its own, and a popover keeps it
- * beside the control that asked instead of a modal over the whole board.
+ * a labelled Delete that out-weighed Run. A popover rather than the modal
+ * `ConfirmActionButton` opens keeps the question beside the control that asked
+ * instead of over the whole board.
  *
  * The popup stays open while the delete is in flight and locks both buttons,
  * so a second press cannot send a second delete; Escape and an outside press

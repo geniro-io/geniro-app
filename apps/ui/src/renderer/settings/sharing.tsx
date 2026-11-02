@@ -17,7 +17,7 @@ import {
   revokeFailedMessage,
   revokeManyFailedMessage,
 } from '../chats/use-artifact-sharing';
-import { ConfirmButton } from '../components/confirm-button';
+import { ConfirmActionButton } from '../components/confirm-action-button';
 import { CopyButton } from '../components/copy-button';
 import { ErrorBanner } from '../components/error-banner';
 import { Field } from '../components/field';
@@ -490,12 +490,14 @@ export function Sharing({
                       onClick={() => check(destination)}>
                       Check
                     </Button>
-                    <ConfirmButton
-                      size="sm"
-                      confirmLabel="Remove?"
+                    <ConfirmActionButton
+                      question={`Remove ${destination.name}?`}
+                      description="Pages are no longer shared there. Links already shared to it keep working until you revoke them."
+                      confirmLabel="Remove"
+                      busyLabel="Removing…"
                       onConfirm={() => removeDestination(destination.id)}>
                       Remove
-                    </ConfirmButton>
+                    </ConfirmActionButton>
                   </span>
                 </div>
                 <SignInStatus
@@ -594,25 +596,29 @@ export function Sharing({
                         label="Copy link"
                       />
                     )}
-                    <ConfirmButton
-                      size="sm"
-                      confirmLabel="Revoke link?"
+                    <ConfirmActionButton
+                      question="Revoke this link?"
+                      description="The shared page is deleted where it was uploaded, and the link stops opening for everyone who has it. This cannot be undone."
+                      confirmLabel="Revoke"
+                      busyLabel="Revoking…"
                       onConfirm={() => revoke(share.id)}>
                       Revoke
-                    </ConfirmButton>
+                    </ConfirmActionButton>
                   </span>
                 </li>
               ))}
             </ul>
           )}
           {shares.length > 0 && (
-            <ConfirmButton
-              size="sm"
+            <ConfirmActionButton
               className="mt-2 self-start"
-              confirmLabel={`Revoke all ${shares.length}?`}
+              question={`Revoke all ${shares.length} links?`}
+              description="Every shared page is deleted where it was uploaded, and none of the links opens again. This cannot be undone."
+              confirmLabel="Revoke all"
+              busyLabel="Revoking…"
               onConfirm={revokeAll}>
               Revoke all
-            </ConfirmButton>
+            </ConfirmActionButton>
           )}
         </SettingsPanelRow>
       </SettingsPanel>

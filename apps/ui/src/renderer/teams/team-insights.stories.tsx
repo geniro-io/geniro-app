@@ -52,6 +52,7 @@ const MEASURED: TeamStatsDto = {
   estimatedCostUsd: 6.4,
   turns: 312,
   workedMs: 50_400_000,
+  measuredWorkedMs: 0,
   outcomes: {
     total: 9,
     accepted: 6,
@@ -180,6 +181,7 @@ const MEASURED: TeamStatsDto = {
       costUsd: 28.5,
       turns: 190,
       workedMs: 32_400_000,
+      measuredWorkedMs: 0,
     },
     {
       memberId: 'reviewer',
@@ -187,6 +189,7 @@ const MEASURED: TeamStatsDto = {
       costUsd: 9.1,
       turns: 82,
       workedMs: 14_400_000,
+      measuredWorkedMs: 0,
     },
     {
       memberId: 'planner',
@@ -194,6 +197,7 @@ const MEASURED: TeamStatsDto = {
       costUsd: null,
       turns: 40,
       workedMs: null,
+      measuredWorkedMs: 0,
     },
   ],
 };
@@ -205,6 +209,7 @@ const UNMEASURED: TeamStatsDto = {
   estimatedCostUsd: null,
   turns: 61,
   workedMs: null,
+  measuredWorkedMs: 0,
   outcomes: NO_OUTCOMES,
   days: [
     {
@@ -224,6 +229,7 @@ const UNMEASURED: TeamStatsDto = {
       costUsd: null,
       turns: 61,
       workedMs: null,
+      measuredWorkedMs: 0,
     },
   ],
 };
@@ -235,6 +241,7 @@ const EMPTY: TeamStatsDto = {
   estimatedCostUsd: null,
   turns: 0,
   workedMs: null,
+  measuredWorkedMs: 0,
   outcomes: NO_OUTCOMES,
   days: [],
   metrics: NO_METRICS,

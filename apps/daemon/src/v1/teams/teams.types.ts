@@ -1906,6 +1906,11 @@ export type AgentInstructionSize = z.infer<typeof AgentInstructionSizeSchema>;
 /** POST /v1/projects/:projectId/instruction-sizes — one entry per CLI. */
 export const ProjectInstructionSizesWireSchema = z.object({
   agents: z.array(AgentInstructionSizeSchema),
+  blocks: z
+    .array(InstructionBlockSizeSchema)
+    .describe(
+      'Each instruction block’s own text; every run carries it, so `reaches` is 1',
+    ),
 });
 export type ProjectInstructionSizesWire = z.infer<
   typeof ProjectInstructionSizesWireSchema

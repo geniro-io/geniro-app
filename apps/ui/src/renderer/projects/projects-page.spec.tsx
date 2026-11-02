@@ -100,6 +100,7 @@ beforeEach(() => {
   projectsApi.listProjects.mockResolvedValue([aProject()]);
   projectsApi.resolveProjectForFolder.mockResolvedValue({ project: null });
   projectsApi.measureProjectInstructionSizes.mockResolvedValue({
+    blocks: [{ blockId: 'b1', chars: 1_200, approxTokens: 300, reaches: 1 }],
     agents: [
       {
         agent: 'claude',
@@ -383,15 +384,15 @@ describe('Projects page', () => {
       async ({ updateProjectDto }: ProjectsApiUpdateProjectRequest) =>
         aProject({
           description: updateProjectDto.description ?? null,
-          instructions: updateProjectDto.instructions ?? null,
+          instructionBlocks: updateProjectDto.instructionBlocks ?? [],
           instructionsRevision:
             (updateProjectDto.expectedInstructionsRevision ?? 0) + 1,
         }),
     );
     await mountOpen();
-    expect(field('project-instructions').value).toBe('Use pnpm.');
+    expect(field('block-b1-text').value).toBe('Use pnpm.');
 
-    type(field('project-instructions'), 'Use pnpm. Keep diffs small.');
+    type(field('block-b1-text'), 'Use pnpm. Keep diffs small.');
     await afterDebounce();
     type(field('project-description'), '   ');
     await afterDebounce();
@@ -401,7 +402,9 @@ describe('Projects page', () => {
         projectId: 'p1',
         updateProjectDto: {
           description: 'Billing API',
-          instructions: 'Use pnpm. Keep diffs small.',
+          instructionBlocks: [
+            { id: 'b1', title: '', text: 'Use pnpm. Keep diffs small.' },
+          ],
           expectedInstructionsRevision: 4,
         },
       },
@@ -409,11 +412,85 @@ describe('Projects page', () => {
         projectId: 'p1',
         updateProjectDto: {
           description: null,
-          instructions: 'Use pnpm. Keep diffs small.',
+          instructionBlocks: [
+            { id: 'b1', title: '', text: 'Use pnpm. Keep diffs small.' },
+          ],
           expectedInstructionsRevision: 5,
         },
       },
     ]);
+  });
+
+  it('adds, titles and removes instruction blocks, saving the list in order', async () => {
+    vi.useFakeTimers();
+    projectsApi.listProjects.mockResolvedValue([
+      aProject({ instructions: 'Use pnpm.', instructionsRevision: 4 }),
+    ]);
+    projectsApi.updateProject.mockImplementation(
+      async ({ updateProjectDto }: ProjectsApiUpdateProjectRequest) =>
+        aProject({
+          instructionBlocks: updateProjectDto.instructionBlocks ?? [],
+          instructionsRevision:
+            (updateProjectDto.expectedInstructionsRevision ?? 0) + 1,
+        }),
+    );
+    await mountOpen();
+    expect(
+      document.body.querySelector(
+        '[data-block-id="b1"] [data-slot="block-tokens"]',
+      )?.textContent,
+    ).toBe('~300 tokens');
+
+    await act(async () => {
+      buttonReading('Add instruction block').click();
+    });
+    const added = [
+      ...document.body.querySelectorAll<HTMLElement>(
+        '[data-slot="block-card"]',
+      ),
+    ][1]!;
+    type(
+      added.querySelector<HTMLInputElement>('input[aria-label="Block title"]')!,
+      'Tests',
+    );
+    type(added.querySelector('textarea')!, 'Run pnpm test:unit.');
+    await afterDebounce();
+
+    expect(updates().at(-1)?.updateProjectDto.instructionBlocks).toEqual([
+      { id: 'b1', title: '', text: 'Use pnpm.' },
+      {
+        id: expect.stringMatching(/^block-/) as unknown as string,
+        title: 'Tests',
+        text: 'Run pnpm test:unit.',
+      },
+    ]);
+
+    await act(async () => {
+      buttonNamed('Remove block b1').click();
+    });
+    await afterDebounce();
+
+    expect(
+      updates()
+        .at(-1)
+        ?.updateProjectDto.instructionBlocks?.map((block) => block.title),
+    ).toEqual(['Tests']);
+  });
+
+  it('holds the save while a block has text the daemon would refuse', async () => {
+    vi.useFakeTimers();
+    projectsApi.listProjects.mockResolvedValue([
+      aProject({ instructions: 'Use pnpm.' }),
+    ]);
+    await mountOpen();
+
+    type(field('block-b1-text'), `Use pnpm.${String.fromCharCode(7)}`);
+    await afterDebounce();
+
+    expect(updates()).toEqual([]);
+    expect(document.body.textContent).toContain(
+      'Contains invisible control characters.',
+    );
   });
 
   it('keeps the typed text when the instructions changed elsewhere, and Reload loads the daemon’s', async () => {
@@ -427,10 +504,10 @@ describe('Projects page', () => {
     );
     const el = await mountOpen();
 
-    type(field('project-instructions'), 'Mine.');
+    type(field('block-b1-text'), 'Mine.');
     await afterDebounce();
 
-    expect(field('project-instructions').value).toBe('Mine.');
+    expect(field('block-b1-text').value).toBe('Mine.');
     expect(el.textContent).toContain(
       'Changed elsewhere — reload to see the latest',
     );
@@ -441,13 +518,13 @@ describe('Projects page', () => {
     await settle();
 
     expect(projectsApi.readProject).toHaveBeenCalledWith({ projectId: 'p1' });
-    expect(field('project-instructions').value).toBe('Use yarn.');
+    expect(field('block-b1-text').value).toBe('Use yarn.');
     expect(el.textContent).not.toContain('Changed elsewhere');
 
     projectsApi.updateProject.mockResolvedValue(
       aProject({ instructions: 'Use yarn!', instructionsRevision: 8 }),
     );
-    type(field('project-instructions'), 'Use yarn!');
+    type(field('block-b1-text'), 'Use yarn!');
     await afterDebounce();
 
     expect(
@@ -480,7 +557,7 @@ describe('Projects page', () => {
     ]);
     await mountOpen({ client });
 
-    type(field('project-instructions'), 'Half a sente');
+    type(field('block-b1-text'), 'Half a sente');
     projectsApi.listProjects.mockResolvedValue([
       aProject({
         description: 'New',
@@ -493,7 +570,7 @@ describe('Projects page', () => {
     });
     await settle();
 
-    expect(field('project-instructions').value).toBe('Half a sente');
+    expect(field('block-b1-text').value).toBe('Half a sente');
     expect(field('project-description').value).toBe('New');
   });
 

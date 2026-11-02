@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { ProjectInstructionBlock } from '../projects/projects.types';
 import type { Item } from '../runs/entity/item.entity';
 import type { Run } from '../runs/entity/run.entity';
 import {
@@ -2079,8 +2080,11 @@ export interface HostProjectInstructions {
   projectId: string;
   /** The project's name when the card was raised. */
   project: string;
+  /** The blocks as one document (`blocksDocument`), before and after — what the card diffs. */
   previous: string | null;
   next: string | null;
+  /** The blocks Apply writes. */
+  blocks: ProjectInstructionBlock[];
   /** The revision `previous` was read at; Apply writes only over it. */
   baseRevision: number;
   /** The `P-` ids the change carries out. */

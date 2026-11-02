@@ -10,10 +10,16 @@ export function aProject(over: Partial<ProjectDto> = {}): ProjectDto {
     groupId: null,
     description: null,
     instructions: null,
+    instructionBlocks:
+      over.instructions == null
+        ? []
+        : [{ id: 'b1', title: '', text: over.instructions }],
     instructionsRevision: 0,
     agentKind: null,
     model: null,
     effort: null,
+    contextWindow: null,
+    modelParameters: {},
     approval: null,
     configDir: null,
     teamSlug: null,

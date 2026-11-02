@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { Dialog } from './dialog';
 import { Menu } from './menu';
 import { Popover } from './popover';
 
@@ -413,5 +414,63 @@ describe('Popover — a menu opened inside it', () => {
     // That mode sets no overflow of its own, so it clips nothing and the
     // menus inside it keep the placement they already had.
     expect(menuOf(render(<Nested />))?.style.position).toBe('');
+  });
+});
+
+describe('Popover — Escape', () => {
+  function press(key: string): void {
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+      );
+    });
+  }
+
+  function mountInDialog(
+    closeDialog: () => void,
+    closePopover: () => void,
+  ): (popoverOpen: boolean) => void {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    roots.push(root);
+    return (popoverOpen) => {
+      act(() => {
+        root.render(
+          <Dialog open onClose={closeDialog} title="Outer">
+            <div className="relative">
+              <Popover open={popoverOpen} onClose={closePopover} label="Inner">
+                panel
+              </Popover>
+            </div>
+          </Dialog>,
+        );
+      });
+    };
+  }
+
+  it('closes only the popover when it is opened inside a dialog', () => {
+    const closeDialog = vi.fn();
+    const closePopover = vi.fn();
+    const draw = mountInDialog(closeDialog, closePopover);
+    draw(false);
+    draw(true);
+
+    press('Escape');
+
+    expect(closePopover).toHaveBeenCalledTimes(1);
+    expect(closeDialog).not.toHaveBeenCalled();
+  });
+
+  it('hands Escape back to the dialog once the popover has closed', () => {
+    const closeDialog = vi.fn();
+    const draw = mountInDialog(closeDialog, () => {});
+    draw(false);
+    draw(true);
+    draw(false);
+
+    press('Escape');
+
+    expect(closeDialog).toHaveBeenCalledTimes(1);
   });
 });

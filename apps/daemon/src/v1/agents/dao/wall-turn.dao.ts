@@ -85,6 +85,29 @@ export class WallTurnDao extends BaseDao<WallTurn> {
     }
   }
 
+  /** Every recorded turn of these runs, keyed `${runId}\u0000${seq}`. */
+  async turnsOfRuns(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, number>> {
+    const db = (txEm ?? this.em.fork()).getKysely<WallTurnDatabase>({
+      convertValues: false,
+    });
+    const out = new Map<string, number>();
+    for (let at = 0; at < runIds.length; at += CHAT_SUM_BATCH) {
+      const rows = await db
+        .selectFrom('wall_turns')
+        .select(['run_id', 'seq', 'ms'])
+        .where('run_id', 'in', runIds.slice(at, at + CHAT_SUM_BATCH))
+        .where('deleted_at', 'is', null)
+        .execute();
+      for (const row of rows) {
+        out.set(wallTurnKey(row.run_id, row.seq), Number(row.ms));
+      }
+    }
+    return out;
+  }
+
   /** The run's whole recorded wall time — every member's and a chat's alike. */
   async runSum(runId: string, txEm?: EntityManager): Promise<number> {
     const row = await (txEm ?? this.em.fork())
@@ -174,4 +197,9 @@ export class WallTurnDao extends BaseDao<WallTurn> {
     }
     return out;
   }
+}
+
+/** The key {@link WallTurnDao.turnsOfRuns} files a turn under. */
+export function wallTurnKey(runId: string, seq: number): string {
+  return `${runId}\u0000${seq}`;
 }

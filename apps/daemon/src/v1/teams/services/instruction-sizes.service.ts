@@ -96,7 +96,7 @@ export class InstructionSizesService {
    */
   measureProject(
     input: ProjectInstructionSizesInput,
-  ): ProjectInstructionSizesWire {
+  ): Omit<ProjectInstructionSizesWire, 'blocks'> {
     return {
       agents: [...this.adapters.all().entries()].map(
         ([agent, adapter]): AgentInstructionSize => ({
@@ -166,7 +166,10 @@ export class InstructionSizesService {
   }
 }
 
-function sizeOf(chars: number): { chars: number; approxTokens: number } {
+export function sizeOf(chars: number): {
+  chars: number;
+  approxTokens: number;
+} {
   return { chars, approxTokens: approxInstructionTokens(chars) };
 }
 

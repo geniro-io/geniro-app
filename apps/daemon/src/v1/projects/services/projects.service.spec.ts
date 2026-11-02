@@ -37,6 +37,16 @@ import type { ProjectRootsService } from './project-roots.service';
 import { ProjectScopeService } from './project-scope.service';
 import { ProjectsService } from './projects.service';
 
+function asBlock(text: string): {
+  instructionBlocks: { id: string; title: string; text: string }[];
+};
+function asBlock(text: null): { instructionBlocks: null };
+function asBlock(text: string | null) {
+  return {
+    instructionBlocks: text === null ? null : [{ id: 'b1', title: '', text }],
+  };
+}
+
 const sameFolderRoots = {
   rootsOf: async (cwds: Iterable<string | null>) =>
     new Map(
@@ -127,18 +137,126 @@ describe('ProjectsService (in-memory sqlite)', () => {
     vi.useRealTimers();
   });
 
+  describe('run defaults', () => {
+    it('keeps the context window and model parameters it was created with', async () => {
+      const project = await service.create({
+        name: 'Board',
+        folder,
+        agentKind: 'claude',
+        model: 'opus',
+        contextWindow: '1m',
+        modelParameters: { fast: 'on' },
+      });
+
+      expect(project).toMatchObject({
+        contextWindow: '1m',
+        modelParameters: { fast: 'on' },
+      });
+    });
+
+    it('clears them with an explicit null and leaves them alone when omitted', async () => {
+      const project = await service.create({
+        name: 'Board',
+        folder,
+        contextWindow: '1m',
+        modelParameters: { fast: 'on' },
+      });
+
+      const untouched = await service.update(project.id, { effort: 'high' });
+      expect(untouched).toMatchObject({
+        contextWindow: '1m',
+        modelParameters: { fast: 'on' },
+      });
+
+      const cleared = await service.update(project.id, {
+        contextWindow: null,
+        modelParameters: null,
+      });
+      expect(cleared).toMatchObject({
+        contextWindow: null,
+        modelParameters: {},
+      });
+    });
+  });
+
+  describe('instruction blocks', () => {
+    it('reads instructions written before blocks as one block', async () => {
+      const project = await service.create({ name: 'Board', folder });
+      await orm.em
+        .fork()
+        .nativeUpdate(
+          Project,
+          { id: project.id },
+          { instructions: 'Use pnpm.', instructionBlocks: null },
+        );
+
+      expect((await service.get(project.id)).instructionBlocks).toEqual([
+        { id: 'instructions', title: 'Instructions', text: 'Use pnpm.' },
+      ]);
+    });
+
+    it('gives a run the blocks’ texts in order and logs them under their titles', async () => {
+      const project = await service.create({ name: 'Board', folder });
+      const saved = await service.update(project.id, {
+        instructionBlocks: [
+          { id: 'build', title: 'Build', text: 'Use pnpm.' },
+          { id: 'empty', title: '', text: '  ' },
+          { id: 'tests', title: 'Tests', text: 'Run pnpm test:unit.' },
+        ],
+      });
+
+      expect(saved.instructions).toBe('Use pnpm.\n\nRun pnpm test:unit.');
+      expect(saved.instructionBlocks.map((block) => block.id)).toEqual([
+        'build',
+        'empty',
+        'tests',
+      ]);
+      const [logged] = await changeDao.recentFor(project.id, 1);
+      expect(logged).toMatchObject({
+        field: 'instructions',
+        previous: null,
+        next: '## Build\n\nUse pnpm.\n\n## Tests\n\nRun pnpm test:unit.',
+      });
+    });
+
+    it('bumps no revision for a block that says nothing yet', async () => {
+      const project = await service.create({ name: 'Board', folder });
+      const saved = await service.update(project.id, {
+        instructionBlocks: [{ id: 'new', title: '', text: '' }],
+      });
+
+      expect(saved.instructionsRevision).toBe(0);
+      expect(saved.instructionBlocks).toEqual([
+        { id: 'new', title: '', text: '' },
+      ]);
+    });
+
+    it('refuses two blocks with one id, writing nothing', async () => {
+      const project = await service.create({ name: 'Board', folder });
+      await expect(
+        service.update(project.id, {
+          instructionBlocks: [
+            { id: 'a', title: '', text: 'one' },
+            { id: 'a', title: '', text: 'two' },
+          ],
+        }),
+      ).rejects.toMatchObject({ errorCode: 'INVALID_PROJECT_BLOCKS' });
+      expect((await service.get(project.id)).instructionBlocks).toEqual([]);
+    });
+  });
+
   describe('instructions revision and change log', () => {
     it('refuses a stale expectedInstructionsRevision with 409 and writes nothing', async () => {
       const project = await service.create({ name: 'Board', folder });
       const saved = await service.update(project.id, {
-        instructions: 'Use pnpm.',
+        ...asBlock('Use pnpm.'),
         expectedInstructionsRevision: 0,
       });
       expect(saved.instructionsRevision).toBe(1);
 
       await expect(
         service.update(project.id, {
-          instructions: 'Stale text.',
+          ...asBlock('Stale text.'),
           expectedInstructionsRevision: 0,
         }),
       ).rejects.toMatchObject({
@@ -155,11 +273,11 @@ describe('ProjectsService (in-memory sqlite)', () => {
       const project = await service.create({ name: 'Board', folder });
       const [first, second] = await Promise.allSettled([
         service.update(project.id, {
-          instructions: 'From the page.',
+          ...asBlock('From the page.'),
           expectedInstructionsRevision: 0,
         }),
         service.update(project.id, {
-          instructions: 'From the analysis.',
+          ...asBlock('From the analysis.'),
           expectedInstructionsRevision: 0,
         }),
       ]);
@@ -180,7 +298,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
       await expect(
         service.update(
           project.id,
-          { instructions: 'Use pnpm.\u0000' },
+          { ...asBlock('Use pnpm.\u0000') },
           {
             source: 'analysis',
             recommendationIds: ['P-1'],
@@ -188,7 +306,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
             cardSeq: 1,
           },
         ),
-      ).rejects.toMatchObject({ errorCode: 'INVALID_PROJECT_TEXT' });
+      ).rejects.toMatchObject({ errorCode: 'INVALID_PROJECT_BLOCKS' });
       expect(await service.get(project.id)).toMatchObject({
         instructions: null,
         instructionsRevision: 0,
@@ -196,7 +314,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
       expect(
         (
           await service.update(project.id, {
-            instructions: 'Line one.\nLine two.',
+            ...asBlock('Line one.\nLine two.'),
           })
         ).instructions,
       ).toBe('Line one.\nLine two.');
@@ -215,9 +333,9 @@ describe('ProjectsService (in-memory sqlite)', () => {
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(new Date('2026-11-01T10:00:00Z'));
       const project = await service.create({ name: 'Board', folder });
-      await service.update(project.id, { instructions: 'Use' });
+      await service.update(project.id, { ...asBlock('Use') });
       vi.setSystemTime(new Date('2026-11-01T10:05:00Z'));
-      await service.update(project.id, { instructions: 'Use pnpm.' });
+      await service.update(project.id, { ...asBlock('Use pnpm.') });
 
       let rows = await changeDao.recentFor(project.id, 20);
       expect(rows).toHaveLength(1);
@@ -234,7 +352,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
             PROJECT_CHANGE_COALESCE_MS,
         ),
       );
-      await service.update(project.id, { instructions: 'Use pnpm only.' });
+      await service.update(project.id, { ...asBlock('Use pnpm only.') });
       rows = await changeDao.recentFor(project.id, 20);
       expect(rows.map((row) => [row.previous, row.next])).toEqual([
         ['Use pnpm.', 'Use pnpm only.'],
@@ -250,7 +368,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
       vi.setSystemTime(new Date('2026-11-01T10:02:00Z'));
       await service.update(project.id, {
         description: 'What it is.',
-        instructions: 'Use pnpm.',
+        ...asBlock('Use pnpm.'),
       });
 
       const rows = await changeDao.recentFor(project.id, 20);
@@ -266,10 +384,10 @@ describe('ProjectsService (in-memory sqlite)', () => {
       const project = await service.create({
         name: 'Board',
         folder,
-        instructions: 'Use pnpm.',
+        ...asBlock('Use pnpm.'),
       });
-      await service.update(project.id, { instructions: 'Use yarn.' });
-      await service.update(project.id, { instructions: 'Use pnpm.' });
+      await service.update(project.id, { ...asBlock('Use yarn.') });
+      await service.update(project.id, { ...asBlock('Use pnpm.') });
 
       expect(await changeDao.recentFor(project.id, 20)).toEqual([]);
       expect((await service.get(project.id)).instructionsRevision).toBe(2);
@@ -277,10 +395,10 @@ describe('ProjectsService (in-memory sqlite)', () => {
 
     it('logs an analysis write on its own row, crediting its recommendations', async () => {
       const project = await service.create({ name: 'Board', folder });
-      await service.update(project.id, { instructions: 'Use pnpm.' });
+      await service.update(project.id, { ...asBlock('Use pnpm.') });
       await service.update(
         project.id,
-        { instructions: 'Use pnpm. Run full-check.' },
+        { ...asBlock('Use pnpm. Run full-check.') },
         {
           source: 'analysis',
           recommendationIds: ['P-1'],
@@ -289,7 +407,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
         },
       );
       await service.update(project.id, {
-        instructions: 'Use pnpm. Run full-check first.',
+        ...asBlock('Use pnpm. Run full-check first.'),
       });
 
       const rows = await changeDao.recentFor(project.id, 20);
@@ -324,7 +442,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
       );
 
       await watched.update(project.id, {
-        instructions: 'Use pnpm.',
+        ...asBlock('Use pnpm.'),
         expectedInstructionsRevision: 0,
       });
       await watched.update(project.id, { name: 'Renamed' });
@@ -651,7 +769,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
       name: 'Board',
       folder,
       description: '  A billing service  ',
-      instructions: '\nUse pnpm.\n',
+      ...asBlock('\nUse pnpm.\n'),
     });
     expect(created.description).toBe('A billing service');
     expect(created.instructions).toBe('Use pnpm.');
@@ -671,7 +789,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
     expect(created.instructions).toBeNull();
 
     const updated = await service.update(created.id, {
-      instructions: ' \n ',
+      ...asBlock(' \n '),
     });
     expect(updated.instructions).toBeNull();
   });
@@ -681,7 +799,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
       name: 'Board',
       folder,
       description: 'desc',
-      instructions: 'rules',
+      ...asBlock('rules'),
     });
 
     const renamed = await service.update(created.id, { name: 'Renamed' });
@@ -690,7 +808,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
 
     const cleared = await service.update(created.id, {
       description: null,
-      instructions: null,
+      ...asBlock(null),
     });
     expect(cleared.description).toBeNull();
     expect(cleared.instructions).toBeNull();

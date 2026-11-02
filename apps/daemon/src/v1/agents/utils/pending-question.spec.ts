@@ -85,6 +85,7 @@ describe('pending question snapshots', () => {
         project: 'Billing',
         previous: null,
         next: 'Use pnpm.',
+        blocks: [{ id: 'b1', title: '', text: 'Use pnpm.' }],
         baseRevision: 2,
         ids: ['P-1', 'P-2'],
         cardSeq: 9,

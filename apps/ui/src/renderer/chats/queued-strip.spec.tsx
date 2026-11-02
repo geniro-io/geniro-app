@@ -172,10 +172,26 @@ describe('QueuedStrip', () => {
       onSteer: noop,
     };
     const el = render(
-      <QueuedStrip {...props} leading={<span data-testid="lead">chip</span>} />,
+      <QueuedStrip
+        {...props}
+        leading={(control) => (
+          <span data-testid="lead">
+            <span data-testid="chip">chip</span>
+            {control}
+            <span data-testid="counters">counters</span>
+          </span>
+        )}
+      />,
     );
     const header = el.querySelector('[data-slot="queued-header"]')!;
-    expect(header.firstElementChild?.getAttribute('data-testid')).toBe('lead');
+    const line = header.firstElementChild!;
+    expect(line.getAttribute('data-testid')).toBe('lead');
+    expect(
+      [...line.children].map(
+        (child) =>
+          child.getAttribute('data-testid') ?? child.getAttribute('data-slot'),
+      ),
+    ).toEqual(['chip', 'queue-summary', 'counters']);
     expect(header.className).toContain('min-h-7');
 
     // Without one the header keeps its own compact height — the call block's

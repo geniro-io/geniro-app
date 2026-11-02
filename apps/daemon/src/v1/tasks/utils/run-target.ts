@@ -1,4 +1,5 @@
 import type { ChatApprovalMode } from '../../agents/chat.types';
+import { readModelParameters } from '../../agents/utils/model-parameters';
 import type { AgentKind } from '../../runs/runs.types';
 import type {
   RunTargetProblem,
@@ -98,6 +99,9 @@ export interface RunTargetLevel {
   agentKind?: AgentKind | null;
   model?: string | null;
   effort?: string | null;
+  contextWindow?: string | null;
+  /** JSON `{parameterId: value}`, as the project row stores it. */
+  modelParameters?: string | null;
   approval?: ChatApprovalMode | null;
   configDir?: string | null;
   teamSlug?: string | null;
@@ -168,11 +172,22 @@ export function resolveRunTarget(
     return named === null || named === agentKind;
   });
 
+  // A window or parameter is only valid for the model it was picked under.
+  const modelLevel = compatible.find((level) => nonEmpty(level.model) !== null);
+  const axisLevels = modelLevel === undefined ? compatible : [modelLevel];
+  const parameters = axisLevels.find(
+    (level) =>
+      Object.keys(readModelParameters(level.modelParameters ?? null)).length >
+      0,
+  );
+
   return {
     kind: 'agent',
     agentKind,
     model: firstOf(compatible, 'model'),
     effort: firstOf(compatible, 'effort'),
+    contextWindow: firstOf(axisLevels, 'contextWindow'),
+    modelParameters: readModelParameters(parameters?.modelParameters ?? null),
     // The one field a level cannot decide for an unattended run.
     approval:
       startedBy === 'autopilot'
@@ -192,7 +207,7 @@ export function resolveRunTarget(
  */
 function firstOf(
   levels: readonly RunTargetLevel[],
-  field: 'model' | 'effort' | 'approval' | 'configDir',
+  field: 'model' | 'effort' | 'contextWindow' | 'approval' | 'configDir',
 ): string | null {
   for (const level of levels) {
     const value = nonEmpty(level[field]);

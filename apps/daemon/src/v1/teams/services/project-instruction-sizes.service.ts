@@ -4,7 +4,7 @@ import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectsService } from '../../projects/services/projects.service';
 import { projectInstructionsText } from '../../projects/utils/project-instructions';
 import type { ProjectInstructionSizesWire } from '../teams.types';
-import { InstructionSizesService } from './instruction-sizes.service';
+import { InstructionSizesService, sizeOf } from './instruction-sizes.service';
 
 /**
  * What a run in one project carries before its prompt, per CLI: the project's
@@ -30,11 +30,19 @@ export class ProjectInstructionSizesService {
       cwd: project.folder,
       projectId: project.id,
     });
-    return this.instructionSizes.measureProject({
+    const measured = this.instructionSizes.measureProject({
       customInstructions: settings.customInstructions,
       replyLanguage: settings.replyLanguage,
       projectInstructions: projectInstructionsText(project) ?? undefined,
       memoryIndex: memoryIndex ?? undefined,
     });
+    return {
+      ...measured,
+      blocks: project.instructionBlocks.map((block) => ({
+        blockId: block.id,
+        ...sizeOf(block.text.trim().length),
+        reaches: 1,
+      })),
+    };
   }
 }

@@ -13,7 +13,12 @@ import {
 } from '../chats/approval-mode-select';
 import { teamSlugOf } from '../chats/composer-values';
 import { ConfigDirSelect } from '../chats/config-dir-select';
+import { ContextWindowSelect } from '../chats/context-window-select';
 import { EffortSelect } from '../chats/effort-select';
+import {
+  ModelParameterSelect,
+  withModelParameter,
+} from '../chats/model-parameter-select';
 import { ModelSelect } from '../chats/model-select';
 import { TargetSelect, type TargetTeam } from '../chats/target-select';
 import { Chip, ChipChevron } from '../components/ui/chip';
@@ -29,9 +34,24 @@ export interface ProjectRunConfigPatch {
   teamSlug?: string | null;
   model?: string | null;
   effort?: string | null;
+  contextWindow?: string | null;
+  modelParameters?: Record<string, string> | null;
   approval?: ChatApprovalMode | null;
   configDir?: string | null;
 }
+
+/** The run defaults this control draws: a saved project, or a draft of one. */
+export type ProjectRunDefaults = Pick<
+  ProjectDto,
+  | 'agentKind'
+  | 'teamSlug'
+  | 'model'
+  | 'effort'
+  | 'contextWindow'
+  | 'modelParameters'
+  | 'approval'
+  | 'configDir'
+>;
 
 /**
  * What every task on this board runs as, unless the card says otherwise.
@@ -66,7 +86,7 @@ export function ProjectRunConfig({
   onOpenChange,
   onUpdate,
 }: {
-  project: ProjectDto;
+  project: ProjectRunDefaults;
   teams: readonly TargetTeam[];
   cliDetections: readonly CliDetection[] | null;
   /** For the model and effort vocabularies, which the CLI itself reports. */
@@ -117,6 +137,10 @@ export function ProjectRunConfig({
     modelsLoading,
     efforts,
     effortsLoading,
+    contextWindows,
+    contextWindowsLoading,
+    modelParameters,
+    modelParametersLoading,
     approvalModesLoading,
     approvalCapability,
     configDirUnavailableReason,
@@ -197,6 +221,8 @@ export function ProjectRunConfig({
                   ...targetPatch(next),
                   model: null,
                   effort: null,
+                  contextWindow: null,
+                  modelParameters: null,
                   approval: null,
                   configDir: null,
                 });
@@ -220,7 +246,12 @@ export function ProjectRunConfig({
                   onChange={(model) => {
                     // A model belongs to the CLI that offered it, so changing
                     // it drops an effort level picked under the old one.
-                    onUpdate({ model, effort: null });
+                    onUpdate({
+                      model,
+                      effort: null,
+                      contextWindow: null,
+                      modelParameters: null,
+                    });
                   }}
                 />
               </label>
@@ -242,6 +273,51 @@ export function ProjectRunConfig({
                   />
                 )}
               </label>
+              {contextWindowsLoading ? (
+                <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  Context
+                  <LoadingChip noun="context windows" />
+                </label>
+              ) : contextWindows.length > 0 ? (
+                <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  Context
+                  <ContextWindowSelect
+                    windows={contextWindows}
+                    value={project.contextWindow}
+                    onChange={(contextWindow) => {
+                      onUpdate({ contextWindow });
+                    }}
+                  />
+                </label>
+              ) : null}
+              {modelParametersLoading ? (
+                <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  Model settings
+                  <LoadingChip noun="model settings" />
+                </label>
+              ) : (
+                modelParameters.map((parameter) => (
+                  <label
+                    key={parameter.id}
+                    className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    {parameter.label}
+                    <ModelParameterSelect
+                      parameter={parameter}
+                      showAxisName={false}
+                      value={project.modelParameters[parameter.id] ?? null}
+                      onChange={(value) => {
+                        onUpdate({
+                          modelParameters: withModelParameter(
+                            project.modelParameters,
+                            parameter.id,
+                            value,
+                          ),
+                        });
+                      }}
+                    />
+                  </label>
+                ))
+              )}
               {/* REPORTED as missing: "у меня даже таких settings нет в модели,
                   типа proof mod agent на проекте" — the daemon has carried
                   `Project.approval` since the board shipped and nothing could

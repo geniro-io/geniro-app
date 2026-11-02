@@ -9,9 +9,11 @@ import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-voca
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { GoalDao } from '../../agents/dao/goal.dao';
+import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { ID_BATCH } from '../../agents/utils/id-batches';
 import { Goal } from '../../runs/entity/goal.entity';
+import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import { MetricLedgerDao } from '../dao/metric-ledger.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
@@ -32,7 +34,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [UsageActivity, UsageEvent, ToolCallEvent, Goal],
+        entities: [UsageActivity, UsageEvent, ToolCallEvent, Goal, WallTurn],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -61,6 +63,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       ]),
       new MetricLedgerDao(em),
       new GoalDao(em),
+      new WallTurnDao(em),
     );
   });
 
@@ -134,6 +137,37 @@ describe('TeamStatsService (in-memory sqlite)', () => {
     };
   }
 
+  it('fills a turn no CLI timed with geniro’s clock, and says how much it measured', async () => {
+    await teamRun('dev-1');
+    await turn('dev-1', { durationMs: 1_000 });
+    const timed = nextSeq;
+    await turn('dev-1', {
+      memberId: 'qa',
+      agentKind: 'cursor-agent',
+      costUsd: null,
+      durationMs: null,
+    });
+    const untimed = nextSeq;
+    await new WallTurnDao(orm.em.fork()).record('dev-1', [
+      { seq: untimed, memberId: 'qa', ms: 60_000 },
+      { seq: timed, memberId: 'lead', ms: 999_999 },
+    ]);
+
+    const stats = await service.read('dev-team');
+
+    expect(stats.workedMs).toBe(61_000);
+    expect(stats.measuredWorkedMs).toBe(60_000);
+    expect(
+      stats.byMember.find((member) => member.memberId === 'qa'),
+    ).toMatchObject({
+      workedMs: 60_000,
+      measuredWorkedMs: 60_000,
+    });
+    expect(
+      stats.byMember.find((member) => member.memberId === 'lead'),
+    ).toMatchObject({ workedMs: 1_000, measuredWorkedMs: 0 });
+  });
+
   it('counts every run of the team, not a page of them', async () => {
     const RUNS = ID_BATCH + 10;
     for (let i = 0; i < RUNS; i += 1) {
@@ -157,6 +191,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         costUsd: expect.closeTo(RUNS * 3),
         turns: RUNS * 2,
         workedMs: RUNS * 1000,
+        measuredWorkedMs: 0,
       },
     ]);
   });
@@ -195,6 +230,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       estimatedCostUsd: null,
       turns: 0,
       workedMs: null,
+      measuredWorkedMs: 0,
       outcomes: {
         total: 0,
         accepted: 0,
@@ -400,6 +436,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         costUsd: 6,
         turns: 2,
         workedMs: 500,
+        measuredWorkedMs: 0,
       },
       {
         memberId: 'dev',
@@ -407,6 +444,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         costUsd: 1,
         turns: 1,
         workedMs: 100,
+        measuredWorkedMs: 0,
       },
     ]);
     expect(stats.costUsd).toBe(17);
@@ -441,6 +479,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         costUsd: null,
         turns: 1,
         workedMs: null,
+        measuredWorkedMs: 0,
       },
     ]);
     expect(stats.days[0]).toMatchObject({ costUsd: 7, turns: 1 });

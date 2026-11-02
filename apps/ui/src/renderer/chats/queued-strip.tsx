@@ -166,12 +166,14 @@ export function QueuedStrip({
    */
   postingIds?: ReadonlySet<string>;
   /**
-   * Drawn at the START of the header line, which is then held at the composer
-   * shelf's height (`min-h-7`). The chat composer passes its shelf here while
-   * anything is queued, so the queue and the shelf share one line instead of
-   * the shelf's reserved row standing empty underneath the queue.
+   * Draws the header line around the queue's own control, which is then held
+   * at the composer shelf's height (`min-h-7`). The chat composer passes its
+   * shelf here while anything is queued, placing the control after its content
+   * chips, so the queue and the shelf share one line, the shelf's
+   * right-anchored counters keep the right end, and the shelf's reserved row
+   * does not stand empty underneath the queue.
    */
-  leading?: React.ReactNode;
+  leading?: (queueControl: React.ReactNode) => React.ReactNode;
 }): React.JSX.Element | null {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -224,6 +226,54 @@ export function QueuedStrip({
   const waiting =
     messages.length === 1 ? '1 message' : `${messages.length} messages`;
 
+  const explanation = paused
+    ? `Queue paused — ${waiting} held until you send them`
+    : advancing
+      ? `${waiting} queued — ${flowingNote}`
+      : `${waiting} queued — nothing is running, so the next waits for you to send it`;
+  const summary = paused
+    ? `${messages.length} held`
+    : advancing
+      ? `${messages.length} queued`
+      : `${messages.length} waiting for you`;
+  const queueControl = (
+    <span
+      data-slot="queue-summary"
+      className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground">
+      <span title={explanation} className="flex items-center gap-1 px-1">
+        <Clock aria-hidden="true" className="size-3 shrink-0" />
+        <span aria-hidden="true" className="whitespace-nowrap tabular-nums">
+          {summary}
+        </span>
+        <span className="sr-only">{explanation}</span>
+      </span>
+      {/* A toggle button rather than a Switch: a switch belongs to a settings
+          row with a label beside it, and this states its own action in the
+          word on it. `aria-pressed` is what makes it a toggle to a screen
+          reader — the label names what pressing does, so the state would
+          otherwise be unreadable. */}
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        aria-pressed={paused}
+        className="h-6 shrink-0 gap-1 px-1.5 text-[11px] text-muted-foreground"
+        title={
+          paused
+            ? 'Resume — the queue empties itself again as turns end'
+            : 'Pause — nothing leaves the queue until you send it'
+        }
+        onClick={onTogglePause}>
+        {paused ? (
+          <Play aria-hidden="true" className="size-3 shrink-0" />
+        ) : (
+          <Pause aria-hidden="true" className="size-3 shrink-0" />
+        )}
+        {paused ? 'Resume' : 'Pause'}
+      </Button>
+    </span>
+  );
+
   return (
     // `role="group"` is what makes the label below stick: ARIA ignores an
     // accessible name on a generic element.
@@ -252,39 +302,7 @@ export function QueuedStrip({
           'flex items-center gap-1.5 px-2 text-xs text-muted-foreground',
           leading !== undefined && 'min-h-7',
         )}>
-        {leading}
-        <Clock aria-hidden="true" className="size-3 shrink-0" />
-        <span className="min-w-0 flex-1 truncate">
-          {paused
-            ? `Queue paused — ${waiting} held until you send them`
-            : advancing
-              ? `${waiting} queued — ${flowingNote}`
-              : `${waiting} queued — nothing is running, so the next waits for you to send it`}
-        </span>
-        {/* A toggle button rather than a Switch: a switch belongs to a settings
-            row with a label beside it, and this states its own action in the
-            word on it. `aria-pressed` is what makes it a toggle to a screen
-            reader — the label names what pressing does, so the state would
-            otherwise be unreadable. */}
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-pressed={paused}
-          className="h-6 shrink-0 gap-1 px-1.5 text-xs text-muted-foreground"
-          title={
-            paused
-              ? 'Resume — the queue empties itself again as turns end'
-              : 'Pause — nothing leaves the queue until you send it'
-          }
-          onClick={onTogglePause}>
-          {paused ? (
-            <Play aria-hidden="true" className="size-3 shrink-0" />
-          ) : (
-            <Pause aria-hidden="true" className="size-3 shrink-0" />
-          )}
-          {paused ? 'Resume' : 'Pause'}
-        </Button>
+        {leading === undefined ? queueControl : leading(queueControl)}
       </div>
       {messages.map((message, index) => {
         const imageCount = message.images.length;

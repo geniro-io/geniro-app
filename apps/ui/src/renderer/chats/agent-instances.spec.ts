@@ -7,6 +7,7 @@ import {
   hasInstanceContent,
   instanceIdentity,
   isInstanceLive,
+  visibleInstances,
 } from './agent-instances';
 import type { ShellRun } from './shell-activity';
 import type { AgentTaskRow } from './task-payload';
@@ -299,5 +300,48 @@ describe('isInstanceLive', () => {
       engineer([settled, { ...lost, processEnded: true }]),
     );
     expect(isInstanceLive(ended!)).toBe(false);
+  });
+});
+
+describe('visibleInstances', () => {
+  const instanceOf = (thread: AgentThread) => ({
+    thread,
+    subagents: [],
+    shells: [],
+    tasks: [],
+  });
+
+  it('folds all but the newest finished calls, keeping live and failed ones in order', () => {
+    const instances = [
+      call('c1', 'completed'),
+      call('c2', 'failed'),
+      call('c3', 'completed'),
+      call('c4', 'running'),
+      call('c5', 'completed'),
+      call('c6', 'completed'),
+      call('c7', 'completed'),
+    ].map(instanceOf);
+
+    const { shown, folded } = visibleInstances(instances, false);
+
+    expect(shown.map((instance) => instance.thread.id)).toEqual([
+      'c2',
+      'c4',
+      'c5',
+      'c6',
+      'c7',
+    ]);
+    expect(folded).toBe(2);
+  });
+
+  it('shows every instance once asked to', () => {
+    const instances = ['c1', 'c2', 'c3', 'c4', 'c5'].map((id) =>
+      instanceOf(call(id, 'completed')),
+    );
+
+    expect(visibleInstances(instances, true)).toMatchObject({
+      folded: 0,
+      shown: instances,
+    });
   });
 });

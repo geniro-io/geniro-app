@@ -27,18 +27,26 @@ export const WithGapsAndNote: Story = {
 
 export const Strip: Story = {
   render: () => (
-    <div className="w-[880px]">
+    <div className="flex w-[880px] flex-col gap-3">
       <KpiStrip>
         <KpiTile caption="Runs" value="23" trend={[2, 3, 1, 4, 6, 5, 7]} />
         <KpiTile
           caption="Cost"
-          value="$41"
+          value="$32,151.92"
           trend={[4, 6, 5, 9, 7, 8, 10]}
           color={SERIES.spend}
         />
         <KpiTile caption="Turns" value="312" trend={null} />
-        <KpiTile caption="Worked time" value="14h" trend={[1, 2, 2, 3, 2, 4]} />
-        <KpiTile caption="Outcomes" value={null} />
+        <KpiTile
+          caption="Worked time"
+          value="1627h 49m"
+          trend={[1, 2, 2, 3, 2, 4]}
+        />
+      </KpiStrip>
+      <KpiStrip columns={3}>
+        <KpiTile caption="Outcomes" value="14 of 22" note="accepted" />
+        <KpiTile caption="Goals achieved" value={null} />
+        <KpiTile caption="Hand-offs" value={null} />
       </KpiStrip>
     </div>
   ),

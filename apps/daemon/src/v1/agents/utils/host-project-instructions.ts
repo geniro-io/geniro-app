@@ -1,5 +1,6 @@
 import { formatPatch, OMIT_HEADERS, structuredPatch } from 'diff';
 
+import { ProjectInstructionBlockSchema } from '../../projects/projects.types';
 import {
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   type HostProjectInstructions,
@@ -100,7 +101,7 @@ export function projectInstructionsCardKey(
 ): string {
   return `project:${JSON.stringify({
     projectId: change.projectId,
-    next: change.next,
+    blocks: change.blocks,
     baseRevision: change.baseRevision,
     ids: change.ids,
   })}`;
@@ -118,7 +119,9 @@ export function readHostProjectInstructions(
     value === null || typeof value === 'string';
   const count = (value: unknown): value is number =>
     typeof value === 'number' && Number.isInteger(value) && value >= 0;
+  const blocks = ProjectInstructionBlockSchema.array().safeParse(record.blocks);
   if (
+    !blocks.success ||
     typeof record.projectId !== 'string' ||
     record.projectId.length === 0 ||
     typeof record.project !== 'string' ||
@@ -141,6 +144,7 @@ export function readHostProjectInstructions(
     project: record.project,
     previous: record.previous,
     next: record.next,
+    blocks: blocks.data,
     baseRevision: record.baseRevision,
     ids: record.ids,
     cardSeq: record.cardSeq,

@@ -310,6 +310,7 @@ export function ProjectDetail({
           <ProjectInstructionsForm
             project={project}
             api={apis?.projects ?? null}
+            blockSizes={instructionSizes.blocks}
             onSaved={saved}
             onError={onError}
           />

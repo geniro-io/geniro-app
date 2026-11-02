@@ -8,11 +8,12 @@ import {
 import { AgentKindSchema } from '../../runs/runs.types';
 import { TaskSourceSchema, TaskStatusSchema } from '../../tasks/tasks.types';
 import {
+  MAX_PROJECT_INSTRUCTION_BLOCKS,
   PROJECT_DESCRIPTION_MAX,
-  PROJECT_INSTRUCTIONS_MAX,
   PROJECT_MAX_CONCURRENT_CEILING,
   PROJECT_NAME_MAX,
   ProjectForFolderSchema,
+  ProjectInstructionBlockSchema,
   ProjectQueueSchema,
   ProjectWireSchema,
 } from '../projects.types';
@@ -43,10 +44,9 @@ const projectDescriptionSchema = z
   .max(PROJECT_DESCRIPTION_MAX)
   .refine(noControlCharacters, 'must not contain control characters');
 
-const projectInstructionsSchema = z
-  .string()
-  .max(PROJECT_INSTRUCTIONS_MAX)
-  .refine(noControlCharacters, 'must not contain control characters');
+const projectInstructionBlocksSchema = z
+  .array(ProjectInstructionBlockSchema)
+  .max(MAX_PROJECT_INSTRUCTION_BLOCKS);
 
 /**
  * The autopilot POLICY — what the user decides, and the whole of what a client
@@ -83,10 +83,12 @@ export const createProjectSchema = z.object({
   folder: z.string().min(1),
   groupId: z.string().min(1).optional(),
   description: projectDescriptionSchema.optional(),
-  instructions: projectInstructionsSchema.optional(),
+  instructionBlocks: projectInstructionBlocksSchema.optional(),
   agentKind: AgentKindSchema.optional(),
   model: z.string().min(1).optional(),
   effort: z.string().min(1).optional(),
+  contextWindow: z.string().min(1).optional(),
+  modelParameters: z.record(z.string(), z.string()).optional(),
   approval: ChatApprovalModeSchema.optional(),
   configDir: z.string().min(1).optional(),
   teamSlug: z.string().min(1).optional(),
@@ -108,10 +110,12 @@ export const updateProjectSchema = z
      */
     groupId: z.string().min(1).nullable().optional(),
     description: projectDescriptionSchema.nullable().optional(),
-    instructions: projectInstructionsSchema.nullable().optional(),
+    instructionBlocks: projectInstructionBlocksSchema.nullable().optional(),
     agentKind: AgentKindSchema.nullable().optional(),
     model: z.string().min(1).nullable().optional(),
     effort: z.string().min(1).nullable().optional(),
+    contextWindow: z.string().min(1).nullable().optional(),
+    modelParameters: z.record(z.string(), z.string()).nullable().optional(),
     approval: ChatApprovalModeSchema.nullable().optional(),
     configDir: z.string().min(1).nullable().optional(),
     teamSlug: z.string().min(1).nullable().optional(),

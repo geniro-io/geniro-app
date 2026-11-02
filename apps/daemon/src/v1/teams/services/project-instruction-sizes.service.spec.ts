@@ -14,6 +14,9 @@ const PROJECT = {
   folder: '/w/shop',
   description: 'The storefront.',
   instructions: 'Ship small pull requests.',
+  instructionBlocks: [
+    { id: 'b1', title: 'Reviews', text: '  Ship small pull requests.  ' },
+  ],
 };
 const INDEX = 'Memory index (data):\n- m1 [project] Use pnpm (project)';
 
@@ -53,6 +56,14 @@ describe('ProjectInstructionSizesService', () => {
     );
     expect(parts.get('memoryIndex')).toBe(INDEX.length);
     expect(parts.get('customInstructions')).toBe(4);
+    expect(answer.blocks).toEqual([
+      {
+        blockId: 'b1',
+        chars: 'Ship small pull requests.'.length,
+        approxTokens: expect.any(Number),
+        reaches: 1,
+      },
+    ]);
   });
 
   it('leaves the memory index out when a run there would have none', async () => {

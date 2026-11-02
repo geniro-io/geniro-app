@@ -49,6 +49,16 @@ import type { McpCallContext } from '../../mcp.types';
 import { readSaveProjectInstructionsArgs } from './save-project-instructions.reader';
 import { SaveProjectInstructionsTool } from './save-project-instructions.tool';
 
+function asBlock(text: string): {
+  instructionBlocks: { id: string; title: string; text: string }[];
+};
+function asBlock(text: null): { instructionBlocks: null };
+function asBlock(text: string | null) {
+  return {
+    instructionBlocks: text === null ? null : [{ id: 'b1', title: '', text }],
+  };
+}
+
 const CONTEXT = {
   runId: 'analysis',
   memberId: 'agent',
@@ -156,7 +166,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
     const project = await projects.create({
       name: 'Billing',
       folder,
-      instructions: 'Use pnpm.',
+      ...asBlock('Use pnpm.'),
     });
     projectId = project.id;
     published = [];
@@ -259,7 +269,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
   it('refuses ids not in the latest Apply and items filed about another project, writing nothing', async () => {
     const unselected = await call({
       projectId,
-      instructions: 'Use pnpm. Run pnpm test:unit.',
+      blocks: [{ id: 'b1', title: '', text: 'Use pnpm. Run pnpm test:unit.' }],
       baseRevision: 0,
       ids: ['P-2'],
     });
@@ -270,7 +280,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
 
     const elsewhere = await call({
       projectId,
-      instructions: 'Use pnpm. Run pnpm test:unit.',
+      blocks: [{ id: 'b1', title: '', text: 'Use pnpm. Run pnpm test:unit.' }],
       baseRevision: 0,
       ids: ['P-1', 'P-3'],
     });
@@ -278,7 +288,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
 
     const foreign = await call({
       projectId: 'p-elsewhere',
-      instructions: 'x',
+      blocks: [{ id: 'b1', title: '', text: 'x' }],
       baseRevision: 0,
       ids: ['P-3'],
     });
@@ -289,11 +299,11 @@ describe('save_project_instructions (in-memory sqlite)', () => {
   });
 
   it('refuses a revision the project has moved past', async () => {
-    await projects.update(projectId, { instructions: 'Use pnpm only.' });
+    await projects.update(projectId, { ...asBlock('Use pnpm only.') });
     published = [];
     const stale = await call({
       projectId,
-      instructions: 'Use pnpm. Run pnpm test:unit.',
+      blocks: [{ id: 'b1', title: '', text: 'Use pnpm. Run pnpm test:unit.' }],
       baseRevision: 0,
       ids: ['P-1'],
     });
@@ -325,7 +335,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
 
     const replaced = await call({
       projectId,
-      instructions: 'Use pnpm. Run pnpm test:unit.',
+      blocks: [{ id: 'b1', title: '', text: 'Use pnpm. Run pnpm test:unit.' }],
       baseRevision: 0,
       ids: ['P-1'],
     });
@@ -333,7 +343,9 @@ describe('save_project_instructions (in-memory sqlite)', () => {
 
     const newest = await call({
       projectId,
-      instructions: 'Use pnpm. Name the test command.',
+      blocks: [
+        { id: 'b1', title: '', text: 'Use pnpm. Name the test command.' },
+      ],
       baseRevision: 0,
       ids: ['P-2'],
     });
@@ -347,7 +359,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
     await orm.em.fork().nativeDelete(Item, { runId: 'analysis', seq: 5 });
     const early = await call({
       projectId,
-      instructions: 'Use pnpm. Run pnpm test:unit.',
+      blocks: [{ id: 'b1', title: '', text: 'Use pnpm. Run pnpm test:unit.' }],
       baseRevision: 0,
       ids: ['P-1'],
     });
@@ -359,7 +371,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
     await applyAgain(6, 99, ['P-1']);
     const gone = await call({
       projectId,
-      instructions: 'Use pnpm. Run pnpm test:unit.',
+      blocks: [{ id: 'b1', title: '', text: 'Use pnpm. Run pnpm test:unit.' }],
       baseRevision: 0,
       ids: ['P-1'],
     });
@@ -374,7 +386,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
     };
     const deleted = await call({
       projectId,
-      instructions: 'Use pnpm. Run pnpm test:unit.',
+      blocks: [{ id: 'b1', title: '', text: 'Use pnpm. Run pnpm test:unit.' }],
       baseRevision: 0,
       ids: ['P-1'],
     });
@@ -391,7 +403,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
     press = async () => ({ status: 'declined' });
     const rejected = await call({
       projectId,
-      instructions: 'Use pnpm. Run pnpm test:unit.',
+      blocks: [{ id: 'b1', title: '', text: 'Use pnpm. Run pnpm test:unit.' }],
       baseRevision: 0,
       ids: ['P-1'],
     });
@@ -407,7 +419,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
   it('raises no card for text that changes nothing', async () => {
     const same = await call({
       projectId,
-      instructions: '  Use pnpm.  ',
+      blocks: [{ id: 'b1', title: '', text: '  Use pnpm.  ' }],
       baseRevision: 0,
       ids: ['P-1'],
     });
@@ -422,7 +434,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
   it('writes, logs source analysis, emits projects_changed', async () => {
     const saved = await call({
       projectId,
-      instructions: 'Use pnpm. Run pnpm test:unit.',
+      blocks: [{ id: 'b1', title: '', text: 'Use pnpm. Run pnpm test:unit.' }],
       baseRevision: 0,
       ids: ['P-1'],
     });
@@ -433,6 +445,9 @@ describe('save_project_instructions (in-memory sqlite)', () => {
         project: 'Billing',
         previous: 'Use pnpm.',
         next: 'Use pnpm. Run pnpm test:unit.',
+        blocks: [
+          { id: 'b1', title: '', text: 'Use pnpm. Run pnpm test:unit.' },
+        ],
         baseRevision: 0,
         ids: ['P-1'],
         cardSeq: CARD_SEQ,
@@ -458,6 +473,30 @@ describe('save_project_instructions (in-memory sqlite)', () => {
     });
     expect(published).toEqual([projectId]);
   });
+
+  it('diffs the blocks under their titles and writes the blocks it was given', async () => {
+    await call({
+      projectId,
+      blocks: [
+        { id: 'b1', title: 'Build', text: 'Use pnpm.' },
+        { id: 'b2', title: 'Tests', text: 'Run pnpm test:unit.' },
+      ],
+      baseRevision: 0,
+      ids: ['P-1'],
+    });
+
+    expect(cards[0]).toMatchObject({
+      previous: 'Use pnpm.',
+      next: '## Build\n\nUse pnpm.\n\n## Tests\n\nRun pnpm test:unit.',
+    });
+    expect(await projects.get(projectId)).toMatchObject({
+      instructions: 'Use pnpm.\n\nRun pnpm test:unit.',
+      instructionBlocks: [
+        { id: 'b1', title: 'Build', text: 'Use pnpm.' },
+        { id: 'b2', title: 'Tests', text: 'Run pnpm test:unit.' },
+      ],
+    });
+  });
 });
 
 describe('readSaveProjectInstructionsArgs', () => {
@@ -465,7 +504,7 @@ describe('readSaveProjectInstructionsArgs', () => {
     expect(
       readSaveProjectInstructionsArgs({
         projectId: 'p',
-        instructions: '',
+        blocks: [{ id: 'b1', title: '', text: '' }],
         baseRevision: 0,
         ids: ['W-1'],
       }).ok,
@@ -473,7 +512,7 @@ describe('readSaveProjectInstructionsArgs', () => {
     expect(
       readSaveProjectInstructionsArgs({
         projectId: 'p',
-        instructions: 'x',
+        blocks: [{ id: 'b1', title: '', text: 'x' }],
         description: 'y',
         baseRevision: 0,
         ids: ['P-1'],
@@ -482,15 +521,15 @@ describe('readSaveProjectInstructionsArgs', () => {
     expect(
       readSaveProjectInstructionsArgs({
         projectId: 'p',
-        instructions: 'Use pnpm.\u001b[31m',
+        blocks: [{ id: 'b1', title: '', text: 'Use pnpm.\u001b[31m' }],
         baseRevision: 0,
         ids: ['P-1'],
       }).ok,
     ).toBe(false);
-    const readsAs = (instructions: string) =>
+    const readsAs = (text: string) =>
       readSaveProjectInstructionsArgs({
         projectId: 'p',
-        instructions,
+        blocks: [{ id: 'b1', title: '', text }],
         baseRevision: 0,
         ids: ['P-1'],
       }).ok;

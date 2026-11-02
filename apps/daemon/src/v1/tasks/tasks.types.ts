@@ -466,6 +466,8 @@ export type ResolvedRunTarget =
       agentKind: AgentKind;
       model: string | null;
       effort: string | null;
+      contextWindow: string | null;
+      modelParameters: Record<string, string>;
       approval: ChatApprovalMode | null;
       configDir: string | null;
     };

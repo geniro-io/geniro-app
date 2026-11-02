@@ -1,4 +1,5 @@
 import type { ChatTotalsWire } from '../../agents/chat.types';
+import { wallTurnKey } from '../../agents/dao/wall-turn.dao';
 import {
   addPolledSpend,
   addUsage,
@@ -30,6 +31,11 @@ export interface TeamStatsInput {
   polledKinds: readonly string[];
   /** The team's pull request outcomes, one per run and pull request. */
   outcomes: readonly RunOutcomeLedgerRow[];
+  /**
+   * geniro's clock for turns no CLI timed, keyed by `wallTurnKey(runId, seq)` —
+   * the seq of the turn's own ledger row.
+   */
+  wallTurns?: ReadonlyMap<string, number>;
 }
 
 interface DayCell {
@@ -40,6 +46,7 @@ interface DayCell {
 
 interface MemberCell {
   spend: ChatTotalsWire;
+  measuredMs: number;
   agentKind: string | null;
   agentKindAt: number;
 }
@@ -48,8 +55,20 @@ interface MemberCell {
 export function foldTeamStats(
   input: TeamStatsInput,
 ): Omit<TeamStatsWire, 'metrics'> {
+  let measuredWorkedMs = 0;
+  const measuredOf = new Map<TeamStatsUsageRow, number>();
+  const usage = input.usage.map((row) => {
+    const wall = input.wallTurns?.get(wallTurnKey(row.runId, row.seq));
+    if (wall === undefined || row.durationMs !== null || isPolledSpend(row)) {
+      return row;
+    }
+    const timed = { ...row, durationMs: wall };
+    measuredWorkedMs += wall;
+    measuredOf.set(timed, wall);
+    return timed;
+  });
   const totals = emptyTotals();
-  for (const run of totalsByRun(input.usage, input.polledKinds).values()) {
+  for (const run of totalsByRun(usage, input.polledKinds).values()) {
     totals.turns += run.turns;
     totals.costUsd = sum(totals.costUsd, run.costUsd);
     totals.estimatedCostUsd = sum(
@@ -82,6 +101,7 @@ export function foldTeamStats(
     }
     const fresh: MemberCell = {
       spend: emptyTotals(),
+      measuredMs: 0,
       agentKind: null,
       agentKindAt: Number.NEGATIVE_INFINITY,
     };
@@ -89,7 +109,7 @@ export function foldTeamStats(
     return fresh;
   };
 
-  for (const row of input.usage) {
+  for (const row of usage) {
     const polled = isPolledSpend(row);
     const costUsd = row.costUsd ?? 0;
     const day = dayOf(row.occurredAt);
@@ -104,6 +124,7 @@ export function foldTeamStats(
       continue;
     }
     const member = memberOf(row.memberId);
+    member.measuredMs += measuredOf.get(row) ?? 0;
     if (polled) {
       if (costUsd > 0) {
         addPolledSpend(member.spend, costUsd, 0);
@@ -111,7 +132,7 @@ export function foldTeamStats(
     } else {
       addUsage(member.spend, row);
     }
-    const at = row.occurredAt.getTime();
+    const at = polled ? Number.NEGATIVE_INFINITY : row.occurredAt.getTime();
     if (row.agentKind !== null && at >= member.agentKindAt) {
       member.agentKind = row.agentKind;
       member.agentKindAt = at;
@@ -133,6 +154,7 @@ export function foldTeamStats(
     estimatedCostUsd: totals.estimatedCostUsd,
     turns: totals.turns,
     workedMs: totals.workedMs,
+    measuredWorkedMs,
     outcomes: {
       total: outcomes.length,
       accepted: countOf(outcomes, 'accepted'),
@@ -157,6 +179,7 @@ export function foldTeamStats(
         costUsd: cell.spend.costUsd,
         turns: cell.spend.turns,
         workedMs: cell.spend.workedMs,
+        measuredWorkedMs: cell.measuredMs,
       }))
       .sort(
         (a, b) =>

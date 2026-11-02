@@ -35,7 +35,7 @@ Every styled element goes through the layers in order: token → primitive → s
 - Dismissible error strip: `error-banner`. `error-text` alone is for a form field, where typing clears it.
 - Clipboard: `copy-button`, which owns the write and the copied feedback.
 - Asking before an action: a modal question, `confirm-dialog` — or `confirm-action-button`, the button that opens one and runs the action from it. Never a second press on the same button for a new surface.
-- A card that is clickable takes its hover from `lift-card.ts` (`LIFT_CARD_CLASS` on a `NavListItem` card, `LIFT_BUTTON_CLASS` on a card that is itself the button); never restate the lift.
+- A card that is clickable takes its hover from `card-hover.ts` (`NAV_CARD_CLASS` on a `NavListItem` card, `CARD_BUTTON_CLASS` on a card that is itself the button): a background tint only, never a translate, a shadow or a ring change; never restate it.
 - A long free text in a header or row: `clamped-text` (`ClampedText`), which folds it and offers Show more only when it overflows.
 - Tooltips: a plain `title` attribute. `TooltipLayer` (`components/ui/tooltip.tsx`, mounted once in `boot-app.tsx`) draws every one in the design system instead of the OS; never build a per-control hover tip for plain text. A tip that holds controls or a reading is a `hover-popover`.
 - Reaching an MCP listing: `mcp-dialog-button` (opens `mcp-section` in a `dialog`); its open state belongs to the caller.

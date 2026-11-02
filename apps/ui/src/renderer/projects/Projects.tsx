@@ -275,6 +275,10 @@ export function Projects({
         open={creating}
         teams={sources.teams}
         cliDetections={sources.cliDetections}
+        agentsApi={apis?.agents ?? null}
+        capabilitiesApi={apis?.capabilities ?? null}
+        recentConfigDirs={sources.recentConfigDirs}
+        configProfiles={sources.configProfiles}
         onClose={() => setCreating(false)}
         onCreate={(input) => {
           setCreating(false);

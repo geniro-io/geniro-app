@@ -5,7 +5,12 @@ import {
   MAX_RECOMMENDATIONS_PER_TARGET,
   RecommendationIdSchema,
 } from '../../../agents/chat.types';
-import { PROJECT_INSTRUCTIONS_MAX } from '../../../projects/projects.types';
+import {
+  MAX_PROJECT_INSTRUCTION_BLOCKS,
+  PROJECT_BLOCK_ID_MAX,
+  PROJECT_BLOCK_TITLE_MAX,
+  PROJECT_INSTRUCTIONS_MAX,
+} from '../../../projects/projects.types';
 import type { ToolArgs } from '../../mcp.types';
 import { readToolArgs } from '../tool-args';
 
@@ -37,16 +42,11 @@ function hidesText(value: string): boolean {
   return false;
 }
 
-/** An analysis's write of a project's instructions, and the applied items it carries out. */
-export const SaveProjectInstructionsArgsSchema = z.object({
-  projectId: z
+/** Text an agent writes: no control characters and nothing a reader cannot see. */
+function visibleText(max: number) {
+  return z
     .string()
-    .min(1)
-    .max(200)
-    .describe('The projectId view="project" named'),
-  instructions: z
-    .string()
-    .max(PROJECT_INSTRUCTIONS_MAX)
+    .max(max)
     .refine(
       (value) => !hasControlCharacters(value),
       'must not contain control characters',
@@ -54,9 +54,37 @@ export const SaveProjectInstructionsArgsSchema = z.object({
     .refine(
       (value) => !hidesText(value),
       'must not contain invisible characters (zero-width, bidi or format characters)',
+    );
+}
+
+/** An analysis's write of a project's instructions, and the applied items it carries out. */
+export const SaveProjectInstructionsArgsSchema = z.object({
+  projectId: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe('The projectId view="project" named'),
+  blocks: z
+    .array(
+      z.object({
+        id: z
+          .string()
+          .min(1)
+          .max(PROJECT_BLOCK_ID_MAX)
+          .describe(
+            'The block’s id from view="project"; a new block takes a new id of your own',
+          ),
+        title: visibleText(PROJECT_BLOCK_TITLE_MAX).describe(
+          'The block’s title, as the editor shows it',
+        ),
+        text: visibleText(PROJECT_INSTRUCTIONS_MAX).describe(
+          'The block’s instruction text',
+        ),
+      }),
     )
+    .max(MAX_PROJECT_INSTRUCTION_BLOCKS)
     .describe(
-      'The project’s instructions as they should read in full after the change — the text view="project" returned with your edits made, never only the added part; an empty string clears them',
+      'Every instruction block as it should read after the change, in order — each block view="project" returned, with your edits made; keep an id to change that block, leave a block out to remove it, add one with a new id; an empty list clears them',
     ),
   baseRevision: z
     .number()

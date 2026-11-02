@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { SLUG_RE } from '../../teams/teams.types';
 import {
+  TeamStatsWireSchema,
   TeamVersionRestoredSchema,
   TeamVersionsWireSchema,
   UsageStatsWireSchema,
@@ -51,6 +52,15 @@ export const teamVersionsQuerySchema = z.object({
 export class TeamVersionsQueryDto extends createZodDto(
   teamVersionsQuerySchema,
 ) {}
+
+/** The team a statistics route reads: a library slug, in the library's own charset. */
+export const teamStatsParamsSchema = z.object({
+  slug: z.string().min(1).regex(SLUG_RE),
+});
+export class TeamStatsParamsDto extends createZodDto(teamStatsParamsSchema) {}
+
+/** One team's runs, spend, outcomes and members — see {@link TeamStatsWireSchema}. */
+export class TeamStatsDto extends createZodDto(TeamStatsWireSchema) {}
 
 /** One team's runs by team version — see {@link TeamVersionsWireSchema}. */
 export class TeamVersionsDto extends createZodDto(TeamVersionsWireSchema) {}

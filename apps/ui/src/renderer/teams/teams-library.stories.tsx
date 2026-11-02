@@ -68,6 +68,21 @@ type Story = StoryObj<typeof meta>;
 
 export const Grid: Story = {};
 
+export const WithWarnings: Story = {
+  args: {
+    warningsOf: (slug) =>
+      slug === 'dev-team'
+        ? {
+            count: 2,
+            blocking: true,
+            mcpCheckedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+          }
+        : slug === 'research'
+          ? { count: 1, blocking: false, mcpCheckedAt: null }
+          : { count: 0, blocking: false, mcpCheckedAt: null },
+  },
+};
+
 export const Empty: Story = { args: { summaries: [] } };
 
 export const Loading: Story = { args: { summaries: null } };

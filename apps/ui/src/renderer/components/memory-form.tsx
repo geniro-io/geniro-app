@@ -14,6 +14,12 @@ export interface MemoryFormValue {
   body: string;
   type: MemoryEntry['type'];
   projectId: string | null;
+  teamSlug: string | null;
+}
+
+export interface MemoryTeamOption {
+  slug: string;
+  name: string;
 }
 
 // TWIN: MEMORY_TITLE_MAX_CHARS and MEMORY_BODY_MAX_BYTES in apps/daemon/src/v1/memory/memory.types.ts
@@ -21,6 +27,7 @@ export const MEMORY_TITLE_MAX_CHARS = 120;
 export const MEMORY_BODY_MAX_BYTES = 8192;
 
 const GLOBAL_SCOPE = '';
+const TEAM_SCOPE_PREFIX = 'team:';
 
 const TYPE_LABELS: Record<MemoryEntry['type'], string> = {
   user: 'User',
@@ -40,6 +47,7 @@ export const MEMORY_TYPE_GROUPS: SelectGroup[] = [
 
 export function memoryScopeGroups(
   projects: readonly { id: string; name: string }[],
+  teams: readonly MemoryTeamOption[] = [],
 ): SelectGroup[] {
   return [
     {
@@ -49,17 +57,35 @@ export function memoryScopeGroups(
           value: project.id,
           label: project.name,
         })),
+        ...teams.map((team) => ({
+          value: `${TEAM_SCOPE_PREFIX}${team.slug}`,
+          label: team.name,
+        })),
       ],
     },
   ];
 }
 
-export function scopeSelectValue(projectId: string | null): string {
+export function scopeSelectValue(
+  projectId: string | null,
+  teamSlug: string | null = null,
+): string {
+  if (teamSlug !== null) {
+    return `${TEAM_SCOPE_PREFIX}${teamSlug}`;
+  }
   return projectId ?? GLOBAL_SCOPE;
 }
 
 export function projectIdOfScope(value: string): string | null {
-  return value === GLOBAL_SCOPE ? null : value;
+  return value === GLOBAL_SCOPE || value.startsWith(TEAM_SCOPE_PREFIX)
+    ? null
+    : value;
+}
+
+export function teamSlugOfScope(value: string): string | null {
+  return value.startsWith(TEAM_SCOPE_PREFIX)
+    ? value.slice(TEAM_SCOPE_PREFIX.length)
+    : null;
 }
 
 export function memoryTypeOf(value: string): MemoryEntry['type'] {
@@ -78,6 +104,8 @@ export function memoryBodyBytes(body: string): number {
 export function MemoryForm({
   value,
   projects,
+  teams = [],
+  scopeLocked = false,
   saving,
   error,
   submitLabel,
@@ -87,6 +115,9 @@ export function MemoryForm({
 }: {
   value: MemoryFormValue;
   projects: readonly { id: string; name: string }[];
+  teams?: readonly MemoryTeamOption[];
+  /** The scope is the surface's own (a team's memory tab), so the picker is shown but not changeable. */
+  scopeLocked?: boolean;
   saving: boolean;
   error: string | null;
   submitLabel: string;
@@ -95,6 +126,11 @@ export function MemoryForm({
   onCancel: () => void;
 }): React.JSX.Element {
   const id = useId();
+  const teamOptions =
+    value.teamSlug === null ||
+    teams.some((team) => team.slug === value.teamSlug)
+      ? teams
+      : [...teams, { slug: value.teamSlug, name: value.teamSlug }];
   const bytes = memoryBodyBytes(value.body);
   const titleTooLong = value.title.length > MEMORY_TITLE_MAX_CHARS;
   const bodyTooLong = bytes > MEMORY_BODY_MAX_BYTES;
@@ -181,10 +217,15 @@ export function MemoryForm({
         <Field label="Scope" htmlFor={`${id}-scope`}>
           <Select
             id={`${id}-scope`}
-            groups={memoryScopeGroups(projects)}
-            value={scopeSelectValue(value.projectId)}
+            groups={memoryScopeGroups(projects, teamOptions)}
+            value={scopeSelectValue(value.projectId, value.teamSlug)}
+            disabled={scopeLocked}
             onValueChange={(scope) =>
-              onChange({ ...value, projectId: projectIdOfScope(scope) })
+              onChange({
+                ...value,
+                projectId: projectIdOfScope(scope),
+                teamSlug: teamSlugOfScope(scope),
+              })
             }
           />
         </Field>

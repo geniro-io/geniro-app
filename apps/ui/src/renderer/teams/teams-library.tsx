@@ -17,6 +17,7 @@ export function TeamsLibrary({
   onDelete,
   onNew,
   onImport,
+  warningsOf,
 }: {
   summaries: readonly TeamSummary[] | null;
   error: string | null;
@@ -24,6 +25,12 @@ export function TeamsLibrary({
   onDelete: (summary: TeamSummary) => void;
   onNew: () => void;
   onImport: () => void;
+  /** The setup problems the daemon found for a team; undefined until it has read it. */
+  warningsOf?: (
+    slug: string,
+  ) =>
+    | { count: number; blocking: boolean; mcpCheckedAt: string | null }
+    | undefined;
 }): React.JSX.Element {
   return (
     <div className="h-full min-h-0 overflow-y-auto">
@@ -89,14 +96,20 @@ export function TeamsLibrary({
           <ul
             data-slot="team-library"
             className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {summaries.map((summary) => (
-              <TeamCard
-                key={summary.slug}
-                summary={summary}
-                onOpen={() => onOpen(summary.slug)}
-                onDelete={() => onDelete(summary)}
-              />
-            ))}
+            {summaries.map((summary) => {
+              const warnings = warningsOf?.(summary.slug);
+              return (
+                <TeamCard
+                  key={summary.slug}
+                  summary={summary}
+                  warningCount={warnings?.count ?? null}
+                  warningsCheckedAt={warnings?.mcpCheckedAt ?? null}
+                  blocking={warnings?.blocking ?? false}
+                  onOpen={() => onOpen(summary.slug)}
+                  onDelete={() => onDelete(summary)}
+                />
+              );
+            })}
           </ul>
         )}
       </div>

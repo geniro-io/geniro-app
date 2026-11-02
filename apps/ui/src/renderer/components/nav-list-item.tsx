@@ -29,6 +29,7 @@ export function NavListItem({
   title,
   subtitle,
   className,
+  contentClassName,
   children,
   onActivate,
   activateLabel,
@@ -43,6 +44,8 @@ export function NavListItem({
   title?: string;
   subtitle?: string;
   className?: string;
+  /** Classes for the content box over the activation button, e.g. to fill a tall row. */
+  contentClassName?: string;
   children?: React.ReactNode;
   onActivate: () => void;
   /** Accessible name of the activation button (defaults to `title`). */
@@ -105,7 +108,11 @@ export function NavListItem({
           className="absolute inset-0 cursor-pointer rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         />
       )}
-      <div className="pointer-events-none relative flex min-w-0 flex-col gap-0.5 [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_input]:pointer-events-auto">
+      <div
+        className={cn(
+          'pointer-events-none relative flex min-w-0 flex-col gap-0.5 [&_a]:pointer-events-auto [&_button]:pointer-events-auto [&_input]:pointer-events-auto',
+          contentClassName,
+        )}>
         {children ?? (
           <>
             <span className="truncate text-sm font-medium">{title}</span>

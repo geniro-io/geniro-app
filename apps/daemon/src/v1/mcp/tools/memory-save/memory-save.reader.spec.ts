@@ -11,6 +11,7 @@ const ENTRY: MemoryEntry = {
   body: 'Never npm here.',
   type: 'project',
   projectId: 'p1',
+  teamSlug: null,
   status: 'active',
   rev: 2,
   source: {
@@ -36,6 +37,12 @@ describe('readMemorySaveArgs', () => {
       ok: true,
       query: { handle: 'm4', rev: 2, title: 't', body: 'b' },
     });
+  });
+
+  it('reads scope team', () => {
+    expect(
+      readMemorySaveArgs({ title: 't', body: 'b', scope: 'team' }),
+    ).toEqual({ ok: true, query: { title: 't', body: 'b', scope: 'team' } });
   });
 
   it('reads a new entry, treating a null optional as absent', () => {
@@ -79,6 +86,18 @@ describe('memorySaveResultText', () => {
     ).toBe(
       "Updated m4 (rev 2, this project, project) — Use pnpm. It waits for the user's review before any agent sees it.",
     );
+  });
+
+  it('words a team entry’s scope as this team', () => {
+    expect(
+      memorySaveResultText(
+        {
+          kind: 'created',
+          entry: { ...ENTRY, projectId: null, teamSlug: 'a' },
+        },
+        FENCE,
+      ).text,
+    ).toBe('Saved m4 (rev 2, this team, project) — Use pnpm.');
   });
 
   it('names the near-duplicates and how to get past them', () => {

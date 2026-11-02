@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
@@ -10,6 +10,8 @@ import {
 } from '../dto/line-snapshot.dto';
 import {
   RestoreTeamVersionDto,
+  TeamStatsDto,
+  TeamStatsParamsDto,
   TeamVersionRestoredDto,
   TeamVersionsDto,
   TeamVersionsQueryDto,
@@ -17,9 +19,11 @@ import {
   UsageStatsQueryDto,
 } from '../dto/stats.dto';
 import { StatsService } from '../services/stats.service';
+import { TeamStatsService } from '../services/team-stats.service';
 import { TeamVersionsService } from '../services/team-versions.service';
 import type {
   LineBaselineWire,
+  TeamStatsWire,
   TeamVersionRestoredWire,
   TeamVersionsWire,
   UsageStatsWire,
@@ -38,6 +42,7 @@ export class StatsController {
   constructor(
     private readonly stats: StatsService,
     private readonly versions: TeamVersionsService,
+    private readonly teamStats: TeamStatsService,
   ) {}
 
   @Get('usage')
@@ -45,6 +50,13 @@ export class StatsController {
   @ZodResponse({ status: 200, type: UsageStatsDto })
   readUsage(@Query() query: UsageStatsQueryDto): Promise<UsageStatsWire> {
     return this.stats.usage(query.from, query.to);
+  }
+
+  @Get('teams/:slug')
+  @ApiOperation({ operationId: 'readTeamStats' })
+  @ZodResponse({ status: 200, type: TeamStatsDto })
+  readTeamStats(@Param() params: TeamStatsParamsDto): Promise<TeamStatsWire> {
+    return this.teamStats.read(params.slug);
   }
 
   @Get('team-versions')

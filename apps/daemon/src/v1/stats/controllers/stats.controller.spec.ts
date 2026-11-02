@@ -2,11 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   restoreTeamVersionSchema,
+  teamStatsParamsSchema,
   teamVersionsQuerySchema,
 } from '../dto/stats.dto';
 import type { StatsService } from '../services/stats.service';
+import type { TeamStatsService } from '../services/team-stats.service';
 import type { TeamVersionsService } from '../services/team-versions.service';
 import type {
+  TeamStatsWire,
   TeamVersionRestoredWire,
   TeamVersionsWire,
   UsageStatsWire,
@@ -25,6 +28,7 @@ describe('StatsController', () => {
       route: new StatsController(
         { usage } as unknown as StatsService,
         {} as TeamVersionsService,
+        {} as TeamStatsService,
       ),
       usage,
     };
@@ -60,6 +64,7 @@ describe('StatsController', () => {
       const route = new StatsController(
         {} as StatsService,
         { read } as unknown as TeamVersionsService,
+        {} as TeamStatsService,
       );
 
       await expect(route.readTeamVersions({ slug: 'dev-team' })).resolves.toBe(
@@ -86,6 +91,30 @@ describe('StatsController', () => {
     });
   });
 
+  describe('readTeamStats', () => {
+    it('hands the slug to the team stats service and answers what it read', async () => {
+      const stats = { slug: 'dev-team' } as TeamStatsWire;
+      const read = vi.fn(async () => stats);
+      const route = new StatsController(
+        {} as StatsService,
+        {} as TeamVersionsService,
+        { read } as unknown as TeamStatsService,
+      );
+
+      await expect(route.readTeamStats({ slug: 'dev-team' })).resolves.toBe(
+        stats,
+      );
+      expect(read).toHaveBeenCalledWith('dev-team');
+    });
+
+    it.each(['', '../etc', 'has space'])(
+      'refuses the slug %j before it reaches the service',
+      (slug) => {
+        expect(teamStatsParamsSchema.safeParse({ slug }).success).toBe(false);
+      },
+    );
+  });
+
   describe('restoreTeamVersion', () => {
     it('hands the slug, version and base hash to the versions service', async () => {
       const answer = { slug: 'dev-team' } as TeamVersionRestoredWire;
@@ -93,6 +122,7 @@ describe('StatsController', () => {
       const route = new StatsController(
         {} as StatsService,
         { restore } as unknown as TeamVersionsService,
+        {} as TeamStatsService,
       );
 
       await expect(

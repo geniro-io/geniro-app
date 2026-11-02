@@ -25,6 +25,7 @@ import type {
   InstructionSizesDto,
   ItemDto,
   MeasureInstructionSizesDto,
+  MemberHealth,
   MoveTeamRunStageDto,
   NodeStateDto,
   PressActionDto,
@@ -41,6 +42,7 @@ import type {
   TeamChatsDiscardedDto,
   TeamDeletedDto,
   TeamFileDto,
+  TeamHealthDto,
   TeamSummaryDto,
   ThreadAnalysisDto,
   UploadTeamAvatarDto,
@@ -65,6 +67,7 @@ export interface TeamsApiCreateTeamRequest {
 
 export interface TeamsApiDeleteTeamRequest {
     slug: string;
+    memories?: DeleteTeamMemoriesEnum;
 }
 
 export interface TeamsApiDeleteTeamRunRequest {
@@ -135,6 +138,17 @@ export interface TeamsApiPressTeamActionRequest {
     runId: string;
     seq: number;
     pressActionDto: PressActionDto;
+}
+
+export interface TeamsApiReadMemberHealthRequest {
+    slug: string;
+    memberId: string;
+    probe?: ReadMemberHealthProbeEnum;
+}
+
+export interface TeamsApiReadTeamHealthRequest {
+    slug: string;
+    probe?: ReadTeamHealthProbeEnum;
 }
 
 export interface TeamsApiSaveTeamRequest {
@@ -372,6 +386,10 @@ export class TeamsApi extends runtime.BaseAPI {
         }
 
         const queryParameters: any = {};
+
+        if (requestParameters['memories'] != null) {
+            queryParameters['memories'] = requestParameters['memories'];
+        }
 
         const headerParameters: runtime.HTTPHeaders = {};
 
@@ -1192,6 +1210,112 @@ export class TeamsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async readMemberHealthRaw(requestParameters: TeamsApiReadMemberHealthRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemberHealth>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling readMemberHealth().'
+            );
+        }
+
+        if (requestParameters['memberId'] == null) {
+            throw new runtime.RequiredError(
+                'memberId',
+                'Required parameter "memberId" was null or undefined when calling readMemberHealth().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['probe'] != null) {
+            queryParameters['probe'] = requestParameters['probe'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/{slug}/members/{memberId}/health`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+        urlPath = urlPath.replace(`{${"memberId"}}`, encodeURIComponent(String(requestParameters['memberId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readMemberHealth(requestParameters: TeamsApiReadMemberHealthRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemberHealth> {
+        const response = await this.readMemberHealthRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readTeamHealthRaw(requestParameters: TeamsApiReadTeamHealthRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TeamHealthDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling readTeamHealth().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['probe'] != null) {
+            queryParameters['probe'] = requestParameters['probe'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/{slug}/health`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readTeamHealth(requestParameters: TeamsApiReadTeamHealthRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamHealthDto> {
+        const response = await this.readTeamHealthRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async saveTeamRaw(requestParameters: TeamsApiSaveTeamRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TeamFileDto>> {
         if (requestParameters['slug'] == null) {
             throw new runtime.RequiredError(
@@ -1477,9 +1601,34 @@ export class TeamsApi extends runtime.BaseAPI {
 /**
  * @export
  */
+export const DeleteTeamMemoriesEnum = {
+    Forget: 'forget',
+    Keep: 'keep',
+    Global: 'global'
+} as const;
+export type DeleteTeamMemoriesEnum = typeof DeleteTeamMemoriesEnum[keyof typeof DeleteTeamMemoriesEnum];
+/**
+ * @export
+ */
 export const ListTeamRunsScopeEnum = {
     Active: 'active',
     All: 'all',
     Archived: 'archived'
 } as const;
 export type ListTeamRunsScopeEnum = typeof ListTeamRunsScopeEnum[keyof typeof ListTeamRunsScopeEnum];
+/**
+ * @export
+ */
+export const ReadMemberHealthProbeEnum = {
+    True: 'true',
+    False: 'false'
+} as const;
+export type ReadMemberHealthProbeEnum = typeof ReadMemberHealthProbeEnum[keyof typeof ReadMemberHealthProbeEnum];
+/**
+ * @export
+ */
+export const ReadTeamHealthProbeEnum = {
+    True: 'true',
+    False: 'false'
+} as const;
+export type ReadTeamHealthProbeEnum = typeof ReadTeamHealthProbeEnum[keyof typeof ReadTeamHealthProbeEnum];

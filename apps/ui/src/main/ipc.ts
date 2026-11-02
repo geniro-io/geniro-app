@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { type DaemonHandle, IPC } from '../shared/contracts';
 import type { RemoteAccessState } from '../shared/remote';
 import { clearBrowserCache, readAppStorage } from './app-storage';
-import { detectClis } from './cli-detect';
+import { detectClisCached } from './cli-detect';
 import { runCliInstall } from './cli-install';
 import { runCliUpdate } from './cli-update';
 import type { DaemonSupervisor } from './daemon-supervisor';
@@ -49,6 +49,7 @@ import {
   chatExportSaveSchema,
   cliKindSchema,
   commitShaSchema,
+  detectClisOptionsSchema,
   epochMsSchema,
   gitDirSchema,
   lineFlushRequestIdSchema,
@@ -415,7 +416,12 @@ export function registerIpc(
     },
   );
 
-  handle(IPC.detectClis, ALLOW_REMOTELY, () => detectClis(readSettings()));
+  handle(IPC.detectClis, ALLOW_REMOTELY, (_event, options: unknown) =>
+    detectClisCached(
+      readSettings(),
+      detectClisOptionsSchema.parse(options ?? {}).maxAgeMs,
+    ),
+  );
 
   // Never rejects: every failure is reported IN the result, because the card
   // has somewhere to say what the updater did and an IPC rejection reaches the

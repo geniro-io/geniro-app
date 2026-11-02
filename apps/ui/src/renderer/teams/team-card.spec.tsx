@@ -245,3 +245,45 @@ describe('TeamCard — delete held', () => {
     expect(deleteButton().title).toBe('A run of this team is working');
   });
 });
+
+describe('TeamCard — warnings badge', () => {
+  function badge(props: {
+    warningsCheckedAt?: string | null;
+    blocking?: boolean;
+  }): HTMLElement {
+    act(() =>
+      root.render(
+        <ul>
+          <TeamCard
+            summary={SUMMARY}
+            warningCount={2}
+            {...props}
+            onOpen={vi.fn()}
+            onDelete={vi.fn()}
+          />
+        </ul>,
+      ),
+    );
+    return container.querySelector<HTMLElement>(
+      '[data-slot="team-card-warnings"]',
+    )!;
+  }
+
+  it('says how long ago the MCP servers were read', () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    expect(badge({ warningsCheckedAt: twoHoursAgo }).title).toBe(
+      'MCP last checked 2h ago',
+    );
+  });
+
+  it('says so when the MCP servers were never read', () => {
+    expect(badge({ warningsCheckedAt: null }).title).toBe(
+      'MCP not checked yet',
+    );
+  });
+
+  it('is red when a problem stops a run and amber otherwise', () => {
+    expect(badge({ blocking: true }).className).toContain('text-destructive');
+    expect(badge({ blocking: false }).className).toContain('text-warning');
+  });
+});

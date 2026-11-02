@@ -96,13 +96,16 @@ export class MemoryImportService {
             : claimed.length > 1
               ? 'ambiguous'
               : 'none',
-        similarTo: (await this.memory.similarTo(note.title, projectId)).map(
-          (row) => ({
-            handle: memoryHandle(row.handle),
-            title: row.title,
-            status: row.status,
-          }),
-        ),
+        similarTo: (
+          await this.memory.similarTo(note.title, {
+            projectId,
+            teamSlug: null,
+          })
+        ).map((row) => ({
+          handle: memoryHandle(row.handle),
+          title: row.title,
+          status: row.status,
+        })),
         sameAs,
         alreadyImported: imported.has(importedText(note.title, note.body)),
         problem: this.memory.problemOf(note),

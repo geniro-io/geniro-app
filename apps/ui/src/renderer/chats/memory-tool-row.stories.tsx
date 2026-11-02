@@ -15,6 +15,7 @@ function storyEntry(handle: string): MemoryEntry {
     body: 'The daemon syncs the SQLite schema at launch with `orm.schema.update({ safe: true })`. There is no Migrator, so a migration file is never written by hand.',
     type: 'project',
     projectId: 'p1',
+    teamSlug: null,
     status: 'active',
     rev: 2,
     source: {

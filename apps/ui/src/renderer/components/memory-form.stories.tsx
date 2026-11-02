@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { useState } from 'react';
 
-import { MEMORY_PROJECTS } from '../__fixtures__/memories';
+import { MEMORY_PROJECTS, MEMORY_TEAMS } from '../__fixtures__/memories';
 import { MemoryForm, type MemoryFormValue } from './memory-form';
 
 const EMPTY: MemoryFormValue = {
@@ -9,6 +9,7 @@ const EMPTY: MemoryFormValue = {
   body: '',
   type: 'feedback',
   projectId: null,
+  teamSlug: null,
 };
 
 function Demo({
@@ -26,6 +27,7 @@ function Demo({
       <MemoryForm
         value={value}
         projects={MEMORY_PROJECTS}
+        teams={MEMORY_TEAMS}
         saving={saving}
         error={error}
         submitLabel="Save note"
@@ -55,6 +57,7 @@ export const Filled: Story = {
       body: 'Issue a credit note instead of editing a sent invoice.',
       type: 'project',
       projectId: 'project-billing',
+      teamSlug: null,
     },
   },
 };
@@ -66,6 +69,7 @@ export const BodyOverTheLimit: Story = {
       body: 'x'.repeat(8300),
       type: 'reference',
       projectId: null,
+      teamSlug: null,
     },
   },
 };
@@ -81,5 +85,17 @@ export const Refused: Story = {
   args: {
     error: 'A note with this title already exists in this scope',
     initial: { ...EMPTY, title: 'Duplicate', body: 'Same again' },
+  },
+};
+
+export const FiledUnderATeam: Story = {
+  args: {
+    initial: {
+      title: 'Hand reviews to the second reviewer',
+      body: 'The first reviewer never approves their own change.',
+      type: 'feedback',
+      projectId: null,
+      teamSlug: 'review-crew',
+    },
   },
 };

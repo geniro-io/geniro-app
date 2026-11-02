@@ -51,7 +51,7 @@ export function memoryReadResultText(
   }
   if (missing.length > 0) {
     parts.push(
-      `Not found: ${missing.join(', ')} — forgotten, waiting for the user's review, or another project's.`,
+      `Not found: ${missing.join(', ')} — forgotten, waiting for the user's review, or another project's or team's.`,
     );
   }
   return parts.join('\n\n');

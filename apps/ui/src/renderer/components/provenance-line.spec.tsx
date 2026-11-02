@@ -34,6 +34,7 @@ afterEach(() => {
 function render(
   entry: MemoryEntry,
   projectName: string | null = null,
+  teamName: string | null = null,
 ): HTMLElement {
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -41,7 +42,11 @@ function render(
   act(() => {
     root!.render(
       <AgentIdentityContext.Provider value={PUBLISHED_IDENTITIES}>
-        <ProvenanceLine entry={entry} projectName={projectName} />
+        <ProvenanceLine
+          entry={entry}
+          projectName={projectName}
+          teamName={teamName}
+        />
       </AgentIdentityContext.Provider>,
     );
   });
@@ -68,6 +73,16 @@ describe('ProvenanceLine', () => {
     expect(render(entry, null).textContent).toContain(
       ' · a removed project · ',
     );
+  });
+
+  it('names the team a note belongs to, or its slug when the library lost it', () => {
+    const entry = memoryEntry({ teamSlug: 'review-crew' });
+    expect(render(entry, null, 'Review crew').textContent).toContain(
+      ' · Review crew · ',
+    );
+    act(() => root!.unmount());
+    container!.remove();
+    expect(render(entry).textContent).toContain(' · review-crew · ');
   });
 
   it('names the agent by its published short name and adds the model', () => {

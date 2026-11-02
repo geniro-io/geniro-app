@@ -14,6 +14,7 @@ const ENTRY: MemoryEntry = {
   body: 'The daemon prefers 47615.',
   type: 'reference',
   projectId: null,
+  teamSlug: null,
   status: 'active',
   rev: 3,
   source: {
@@ -50,7 +51,7 @@ describe('memoryReadResultText', () => {
       [
         MEMORY_RESULT_PREFACE,
         'm2 (rev 3, global, reference) — Port\nby claude (opus), updated 2026-10-02T00:00:00.000Z\n<memory-entry-f00d>\nThe daemon prefers 47615.\n</memory-entry-f00d>',
-        "Not found: m9 — forgotten, waiting for the user's review, or another project's.",
+        "Not found: m9 — forgotten, waiting for the user's review, or another project's or team's.",
       ].join('\n\n'),
     );
   });

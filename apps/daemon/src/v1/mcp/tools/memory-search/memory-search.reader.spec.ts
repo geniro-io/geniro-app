@@ -18,6 +18,7 @@ const HIT: MemoryHit = {
   excerpt: '127.0.0.1 only.',
   type: 'project',
   projectId: null,
+  teamSlug: null,
   status: 'active',
   rev: 1,
   source: {

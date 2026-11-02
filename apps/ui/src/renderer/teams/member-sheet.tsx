@@ -14,7 +14,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Popover } from '../components/ui/popover';
 import { useLatestCallback } from '../components/use-latest-callback';
-import { HeldProblems } from './held-problems';
+import { type HeldProblemEntry, HeldProblems } from './held-problems';
 import type { MemberField } from './member-validate';
 
 type MemberPatch = Partial<Omit<TeamMember, 'id'>>;
@@ -95,8 +95,11 @@ export function MemberSheet({
   /** "claude · handles the first message" */
   subtitle: string;
   issuesFor: (field: MemberField) => string[];
-  /** Problems to keep in view, in words. */
-  problems: readonly string[];
+  /**
+   * Problems to keep in view: a plain string is an editor refusal, an object a
+   * setup finding with the button that fixes it.
+   */
+  problems: readonly HeldProblemEntry[];
   fullScreen: boolean;
   /** Whether the screen holding the sheet is on view; a hidden one hears no keys. */
   active: boolean;

@@ -6,6 +6,7 @@ import { Injectable, type OnModuleInit } from '@nestjs/common';
 import type { RunWire } from '../../agents/chat.types';
 import { ChatService } from '../../agents/services/chat.service';
 import { ThreadAnalysisService } from '../../agents/services/thread-analysis.service';
+import type { TeamMemoryFate } from '../../memory/memory.types';
 import { MemoryService } from '../../memory/services/memory.service';
 import type { StartTeamChatInput, Team } from '../teams.types';
 import { composeTeamChatInstructions } from '../utils/team-chat-instructions';
@@ -72,6 +73,7 @@ export class TeamChatService implements OnModuleInit {
 
   onModuleInit(): void {
     this.chats.useTeamBrief((slug, cwd) => this.briefFor(slug, cwd));
+    this.memory.useTeamLookup((slug) => this.store.has(slug));
   }
 
   /**
@@ -206,9 +208,14 @@ export class TeamChatService implements OnModuleInit {
    * The file goes FIRST, so a slug the library does not hold is its 404 and no
    * chat is destroyed for a team that was never there.
    */
-  async deleteTeam(slug: string): Promise<void> {
+  /**
+   * Delete a team with what the user chose for the entries filed under it;
+   * the library file goes first, so a refused delete leaves them as they were.
+   */
+  async deleteTeam(slug: string, memories: TeamMemoryFate): Promise<void> {
     await this.store.delete(slug);
     await this.discard(slug);
     await this.analyses.deleteTeamAnalyses(slug);
+    await this.memory.settleDeletedTeam(slug, memories);
   }
 }

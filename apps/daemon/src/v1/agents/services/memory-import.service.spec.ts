@@ -319,7 +319,13 @@ describe('MemoryImportService', () => {
     });
     expect(stored[0]!.approvedAt).toBeInstanceOf(Date);
     expect(published).toEqual([
-      { memoryId: null, change: 'bulk', status: 'active', projectId: null },
+      {
+        memoryId: null,
+        change: 'bulk',
+        status: 'active',
+        projectId: null,
+        teamSlug: null,
+      },
     ]);
   });
 

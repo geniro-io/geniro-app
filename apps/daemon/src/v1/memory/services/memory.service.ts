@@ -35,6 +35,7 @@ import {
   type MemoryList,
   type MemoryListQuery,
   type MemoryPatch,
+  type MemoryPlace,
   type MemoryRefusalCode,
   type MemoryRunSnapshot,
   type MemorySaveInput,
@@ -43,6 +44,7 @@ import {
   type MemoryStatusOutcome,
   type MemoryUserStatus,
   parseMemoryHandle,
+  type TeamMemoryFate,
 } from '../memory.types';
 import { memoryExportMarkdown } from '../utils/memory-export';
 import {
@@ -84,6 +86,7 @@ const IMPORT_CHECK: MemoryActor = { kind: 'import', importedFrom: '' };
 export class MemoryService {
   private readonly logger = new Logger(MemoryService.name);
   private config: MemoryConfig = DEFAULT_MEMORY_CONFIG;
+  private teamExists: ((slug: string) => Promise<boolean>) | null = null;
   private configured = false;
   private writes: Promise<unknown> = Promise.resolve();
 
@@ -97,6 +100,39 @@ export class MemoryService {
     private readonly events: MemoryEventBus,
   ) {}
 
+  /**
+   * How the user's own writes learn whether a team exists; registered by the
+   * teams module, which this module may not import.
+   */
+  useTeamLookup(lookup: (slug: string) => Promise<boolean>): void {
+    this.teamExists = lookup;
+  }
+
+  /** Apply what the user chose for a deleted team's entries. */
+  settleDeletedTeam(slug: string, fate: TeamMemoryFate): Promise<number> {
+    return this.serialize(async () => {
+      if (fate === 'keep') {
+        return 0;
+      }
+      const now = new Date();
+      const em = this.em.fork();
+      const changed =
+        fate === 'forget'
+          ? await this.memories.forgetTeam(slug, now, em)
+          : await this.memories.refileTeamAsGlobal(slug, now, em);
+      if (changed > 0) {
+        this.events.publish({
+          memoryId: null,
+          change: 'bulk',
+          status: fate === 'forget' ? 'forgotten' : 'active',
+          projectId: null,
+          teamSlug: null,
+        });
+      }
+      return changed;
+    });
+  }
+
   get enabled(): boolean {
     return this.config.enabled;
   }
@@ -108,18 +144,28 @@ export class MemoryService {
   }
 
   /**
-   * The project a run's memory is filed under: its task card's project, else
+   * Where a run's memory is filed. The project: its task card's project, else
    * the live project whose folder the run works in (a task worktree resolves
-   * to its repository), else none — global memory only.
+   * to its repository), else none. The team: a team run's, else none — a
+   * chat, an analysis and a builder chat have global and project memory only.
    */
-  async scopeOf(runId: string): Promise<string | null> {
+  async scopeOf(runId: string): Promise<MemoryPlace> {
     const run = await this.runs.getById(runId, this.em.fork());
-    return run ? this.scopeFor(run) : null;
+    return run
+      ? this.scopeFor({
+          taskId: run.taskId,
+          cwd: run.cwd,
+          teamSlug: run.teamId,
+        })
+      : { projectId: null, teamSlug: null };
   }
 
   /** {@link scopeOf} for a run whose row does not exist yet. */
-  async scopeFor(facts: MemoryScopeFacts): Promise<string | null> {
-    return (await this.scope.projectOf(facts))?.id ?? null;
+  async scopeFor(facts: MemoryScopeFacts): Promise<MemoryPlace> {
+    return {
+      projectId: (await this.scope.projectOf(facts))?.id ?? null,
+      teamSlug: facts.teamSlug ?? null,
+    };
   }
 
   /**
@@ -177,10 +223,10 @@ export class MemoryService {
     };
   }
 
-  /** The best active entries a run in `projectId` may see, best first. */
+  /** The best active entries a run in `place` may see, best first. */
   async search(
     query: string,
-    projectId: string | null,
+    place: MemoryPlace,
     limit: number,
   ): Promise<MemoryHit[]> {
     const match = chatTextMatchQuery(query);
@@ -190,7 +236,7 @@ export class MemoryService {
     const em = this.em.fork();
     const ids = await this.memories.matchIds(
       match,
-      { statuses: ['active'], projects: { visibleTo: projectId } },
+      { statuses: ['active'], places: { visibleTo: place } },
       Math.min(Math.max(limit, 1), MEMORY_SEARCH_MAX),
       em,
     );
@@ -205,11 +251,11 @@ export class MemoryService {
 
   /**
    * Whole entries by handle, each one only if it is active and visible to
-   * `projectId`; the rest come back as `missing`. Reading stamps `lastUsedAt`.
+   * `place`; the rest come back as `missing`. Reading stamps `lastUsedAt`.
    */
   async read(
     handles: readonly string[],
-    projectId: string | null,
+    place: MemoryPlace,
   ): Promise<{ entries: MemoryEntry[]; missing: string[] }> {
     const wanted = handles.slice(0, MEMORY_READ_MAX);
     const numbers = wanted
@@ -218,7 +264,7 @@ export class MemoryService {
     const byHandle = new Map(
       (
         await this.memories.getInScope(
-          { statuses: ['active'], projects: { visibleTo: projectId } },
+          { statuses: ['active'], places: { visibleTo: place } },
           numbers,
           this.em.fork(),
         )
@@ -246,15 +292,15 @@ export class MemoryService {
    * Create an entry, or update one in place when `input.handle` names it.
    * While the user reviews agent writes, an agent's new entry lands `pending`
    * and its update of an existing one is refused, so reviewed text is never
-   * replaced unseen. `projectId` is the writer's own scope: an agent sees and
-   * writes global entries plus its run's project.
+   * replaced unseen. `place` is the writer's own scope: an agent sees and
+   * writes global entries plus its run's project and team.
    */
   save(
     actor: MemoryActor,
     input: MemorySaveInput,
-    projectId: string | null,
+    place: MemoryPlace,
   ): Promise<MemorySaveOutcome> {
-    return this.serialize(() => this.saveNow(actor, input, projectId));
+    return this.serialize(() => this.saveNow(actor, input, place));
   }
 
   /**
@@ -265,11 +311,9 @@ export class MemoryService {
     actor: MemoryActor,
     handle: string,
     reason: string,
-    projectId: string | null,
+    place: MemoryPlace,
   ): Promise<MemoryForgetOutcome> {
-    return this.serialize(() =>
-      this.forgetNow(actor, handle, reason, projectId),
-    );
+    return this.serialize(() => this.forgetNow(actor, handle, reason, place));
   }
 
   /**
@@ -302,20 +346,20 @@ export class MemoryService {
   }
 
   /**
-   * Every active entry a run in `projectId` may see, its project's first, each
-   * group most recently used first — what a run's memory index is cut from.
+   * Every active entry a run in `place` may see, its team's first, then its
+   * project's, then global, each group most recently used first — what a run's
+   * memory index is cut from.
    */
-  async listVisible(projectId: string | null): Promise<MemoryEntry[]> {
+  async listVisible(place: MemoryPlace): Promise<MemoryEntry[]> {
     const rows = await this.memories.getInScope(
-      { statuses: ['active'], projects: { visibleTo: projectId } },
+      { statuses: ['active'], places: { visibleTo: place } },
       undefined,
       this.em.fork(),
     );
     return rows
       .sort(
         (a, b) =>
-          projectRank(a, projectId) - projectRank(b, projectId) ||
-          usedAt(b) - usedAt(a),
+          placeRank(a, place) - placeRank(b, place) || usedAt(b) - usedAt(a),
       )
       .map(toEntry);
   }
@@ -342,12 +386,14 @@ export class MemoryService {
           query.handle === undefined
             ? undefined
             : (parseMemoryHandle(query.handle) ?? undefined),
-        projects:
+        places:
           query.scope === 'global'
-            ? { exactly: null }
+            ? { exactly: { projectId: null, teamSlug: null } }
             : query.scope === 'project' && query.projectId !== undefined
-              ? { exactly: query.projectId }
-              : { any: true },
+              ? { exactly: { projectId: query.projectId, teamSlug: null } }
+              : query.scope === 'team' && query.teamSlug !== undefined
+                ? { exactly: { projectId: null, teamSlug: query.teamSlug } }
+                : { any: true },
         type: query.type,
         match,
         before:
@@ -385,8 +431,12 @@ export class MemoryService {
         return invalid;
       }
       const em = this.em.fork();
-      const unknown = await this.refuseUnknownProject(input.projectId, em);
-      return unknown ?? this.writeRow(USER, input, input.projectId, null, em);
+      const unknown =
+        (await this.refuseUnknownProject(input.projectId, em)) ??
+        (await this.refuseUnknownTeam(input.teamSlug ?? null, null));
+      return (
+        unknown ?? this.writeRow(USER, input, placeOfInput(input), null, em)
+      );
     });
   }
 
@@ -412,8 +462,12 @@ export class MemoryService {
       if (input.rev !== row.rev) {
         return { kind: 'stale', current: toEntry(row) };
       }
-      const unknown = await this.refuseUnknownProject(input.projectId, em);
-      return unknown ?? this.writeRow(USER, input, input.projectId, row, em);
+      const unknown =
+        (await this.refuseUnknownProject(input.projectId, em)) ??
+        (await this.refuseUnknownTeam(input.teamSlug ?? null, row.teamSlug));
+      return (
+        unknown ?? this.writeRow(USER, input, placeOfInput(input), row, em)
+      );
     });
   }
 
@@ -425,22 +479,32 @@ export class MemoryService {
     if (patch.status !== undefined) {
       return this.setStatus(USER, id, patch.status);
     }
-    const { rev, title, body, type, projectId, notDuplicateOf } = patch;
+    const { rev, title, body, type, projectId, teamSlug, notDuplicateOf } =
+      patch;
     if (
       rev === undefined ||
       title === undefined ||
       body === undefined ||
       type === undefined ||
-      projectId === undefined
+      projectId === undefined ||
+      teamSlug === undefined
     ) {
       return Promise.resolve(
         refused(
           'INVALID_ENTRY',
-          'an edit carries rev, title, body, type and projectId',
+          'an edit carries rev, title, body, type, projectId and teamSlug',
         ),
       );
     }
-    return this.edit(id, { rev, title, body, type, projectId, notDuplicateOf });
+    return this.edit(id, {
+      rev,
+      title,
+      body,
+      type,
+      projectId,
+      teamSlug,
+      notDuplicateOf,
+    });
   }
 
   /** Forget every active and pending entry, each one restorable. */
@@ -456,6 +520,7 @@ export class MemoryService {
           change: 'bulk',
           status: 'forgotten',
           projectId: null,
+          teamSlug: null,
         });
       }
       return { forgotten };
@@ -487,11 +552,11 @@ export class MemoryService {
     return this.refuseInvalid(IMPORT_CHECK, note)?.reason ?? null;
   }
 
-  /** Active and pending entries filed in `projectId` whose title says the same. */
-  async similarTo(title: string, projectId: string | null): Promise<Memory[]> {
+  /** Active and pending entries filed in `place` whose title says the same. */
+  async similarTo(title: string, place: MemoryPlace): Promise<Memory[]> {
     return this.nearDuplicates(
       { title, body: '' },
-      projectId,
+      place,
       null,
       this.em.fork(),
     );
@@ -569,10 +634,30 @@ export class MemoryService {
           change: 'bulk',
           status: 'active',
           projectId: null,
+          teamSlug: null,
         });
       }
       return { imported, skipped };
     });
+  }
+
+  /**
+   * Refuse filing an entry under a team the library does not hold. An entry
+   * kept under a deleted team's slug can still be edited where it stands.
+   */
+  private async refuseUnknownTeam(
+    teamSlug: string | null,
+    current: string | null,
+  ): Promise<Refusal | null> {
+    if (
+      teamSlug === null ||
+      teamSlug === current ||
+      this.teamExists === null ||
+      (await this.teamExists(teamSlug))
+    ) {
+      return null;
+    }
+    return refused('NO_TEAM', `no team ${teamSlug}`);
   }
 
   private async refuseUnknownProject(
@@ -588,7 +673,7 @@ export class MemoryService {
   private async saveNow(
     actor: MemoryActor,
     input: MemorySaveInput,
-    projectId: string | null,
+    place: MemoryPlace,
   ): Promise<MemorySaveOutcome> {
     const invalid = this.refuseInvalid(actor, input);
     if (invalid) {
@@ -604,7 +689,7 @@ export class MemoryService {
     const existing =
       input.handle === undefined
         ? null
-        : await this.findVisible(input.handle, projectId, em);
+        : await this.findVisible(input.handle, place, em);
     if (input.handle !== undefined && !existing) {
       return refused(
         'NOT_FOUND',
@@ -614,12 +699,17 @@ export class MemoryService {
     if (existing && input.rev !== existing.rev) {
       return { kind: 'stale', current: toEntry(existing) };
     }
-    const target = targetProject(input, existing, projectId);
+    const target = targetPlace(input, existing, place);
     if (target === undefined) {
-      return refused(
-        'NO_PROJECT',
-        'this run works in no project, so the entry can only be global — save it with scope: global',
-      );
+      return input.scope === 'team'
+        ? refused(
+            'NO_TEAM',
+            'this run is not a team run, so the entry cannot be filed under a team — save it with scope: project or global',
+          )
+        : refused(
+            'NO_PROJECT',
+            'this run works in no project, so the entry can only be global — save it with scope: global',
+          );
     }
     return this.writeRow(actor, input, target, existing, em);
   }
@@ -627,7 +717,7 @@ export class MemoryService {
   private async writeRow(
     actor: MemoryActor,
     input: MemoryText,
-    target: string | null,
+    target: MemoryPlace,
     existing: Memory | null,
     em: EntityManager,
   ): Promise<MemorySaveOutcome> {
@@ -655,7 +745,8 @@ export class MemoryService {
     row.title = input.title.trim();
     row.body = input.body.trim();
     row.type = input.type ?? existing?.type ?? 'project';
-    row.projectId = target;
+    row.projectId = target.projectId;
+    row.teamSlug = target.teamSlug;
     row.status = status;
     stampSource(row, actor);
     em.persist(row);
@@ -668,7 +759,7 @@ export class MemoryService {
     actor: MemoryActor,
     handle: string,
     reason: string,
-    projectId: string | null,
+    place: MemoryPlace,
   ): Promise<MemoryForgetOutcome> {
     if (isAgent(actor) && !this.config.enabled) {
       return refused('MEMORY_DISABLED', 'the user has turned memory off');
@@ -697,7 +788,7 @@ export class MemoryService {
       );
     }
     const em = this.em.fork();
-    const row = await this.findVisible(handle, projectId, em);
+    const row = await this.findVisible(handle, place, em);
     if (!row) {
       return refused(
         'NOT_FOUND',
@@ -765,12 +856,13 @@ export class MemoryService {
       change,
       status: row.status,
       projectId: row.projectId,
+      teamSlug: row.teamSlug,
     });
   }
 
   private async findVisible(
     handle: string,
-    projectId: string | null,
+    place: MemoryPlace,
     em: EntityManager,
   ): Promise<Memory | null> {
     const number = parseMemoryHandle(handle);
@@ -778,7 +870,7 @@ export class MemoryService {
       return null;
     }
     const [row] = await this.memories.getInScope(
-      { statuses: ['active'], projects: { visibleTo: projectId } },
+      { statuses: ['active'], places: { visibleTo: place } },
       [number],
       em,
     );
@@ -791,7 +883,7 @@ export class MemoryService {
    */
   private async nearDuplicates(
     input: MemoryText,
-    target: string | null,
+    target: MemoryPlace,
     existing: Memory | null,
     em: EntityManager,
   ): Promise<Memory[]> {
@@ -806,7 +898,7 @@ export class MemoryService {
     );
     const ids = await this.memories.matchIds(
       query,
-      { statuses: ['active', 'pending'], projects: { exactly: target } },
+      { statuses: ['active', 'pending'], places: { exactly: target } },
       DUPLICATE_CANDIDATES,
       em,
     );
@@ -876,8 +968,18 @@ function isAgent(actor: MemoryActor): boolean {
   return actor.kind === 'agent' || actor.kind === 'analysis';
 }
 
-function projectRank(row: Memory, projectId: string | null): number {
-  return projectId !== null && row.projectId === projectId ? 0 : 1;
+function placeRank(row: Memory, place: MemoryPlace): number {
+  if (place.teamSlug !== null && row.teamSlug === place.teamSlug) {
+    return 0;
+  }
+  return place.projectId !== null && row.projectId === place.projectId ? 1 : 2;
+}
+
+function placeOfInput(input: {
+  projectId: string | null;
+  teamSlug?: string | null;
+}): MemoryPlace {
+  return { projectId: input.projectId, teamSlug: input.teamSlug ?? null };
 }
 
 function usedAt(row: Memory): number {
@@ -891,20 +993,30 @@ function refused(code: MemoryRefusalCode, reason: string): Refusal {
 /**
  * Where the entry is filed: the scope asked for, else where it already is,
  * else the writer's project when it has one. Undefined when a project scope
- * was asked for by a writer with no project.
+ * was asked for by a writer with no project, or a team scope by a writer with
+ * no team.
  */
-function targetProject(
+function targetPlace(
   input: MemorySaveInput,
   existing: Memory | null,
-  projectId: string | null,
-): string | null | undefined {
+  place: MemoryPlace,
+): MemoryPlace | undefined {
   if (input.scope === 'global') {
-    return null;
+    return { projectId: null, teamSlug: null };
   }
   if (input.scope === 'project') {
-    return projectId ?? undefined;
+    return place.projectId === null
+      ? undefined
+      : { projectId: place.projectId, teamSlug: null };
   }
-  return existing ? existing.projectId : projectId;
+  if (input.scope === 'team') {
+    return place.teamSlug === null
+      ? undefined
+      : { projectId: null, teamSlug: place.teamSlug };
+  }
+  return existing
+    ? { projectId: existing.projectId, teamSlug: existing.teamSlug }
+    : { projectId: place.projectId, teamSlug: null };
 }
 
 function stampSource(row: Memory, actor: MemoryActor): void {
@@ -924,6 +1036,7 @@ function toEntry(row: Memory): MemoryEntry {
     body: row.body,
     type: row.type,
     projectId: row.projectId,
+    teamSlug: row.teamSlug,
     status: row.status,
     rev: row.rev,
     source: {

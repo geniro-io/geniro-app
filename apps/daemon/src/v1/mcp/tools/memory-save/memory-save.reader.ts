@@ -49,10 +49,10 @@ export const MemorySaveArgsSchema = z
         'user — who the user is and how they work; feedback — a correction or preference the user gave; project — a convention, decision or fact about this codebase; reference — where something lives. Default project.',
       ),
     scope: z
-      .enum(['project', 'global'])
+      .enum(['project', 'global', 'team'])
       .optional()
       .describe(
-        "project — only runs in this project see it (the default when the run has one); global — every project's runs see it, for facts about the user or the machine.",
+        "project — only runs in this project see it (the default when the run has one); global — every project's runs see it, for facts about the user or the machine; team — only this team's runs see it, and only in a team run.",
       ),
     notDuplicateOf: z
       .array(HANDLE)

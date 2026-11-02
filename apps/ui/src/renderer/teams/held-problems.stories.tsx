@@ -20,4 +20,37 @@ type Story = StoryObj<typeof meta>;
 
 export const Problems: Story = {};
 
+export const WithFixes: Story = {
+  args: {
+    role: 'status',
+    problems: [
+      {
+        key: 'cli',
+        level: 'error',
+        message: 'The CLI is not installed on this Mac',
+        fix: { label: 'Open Settings', run: () => {} },
+      },
+      {
+        key: 'signed-out',
+        level: 'warning',
+        message: 'Signed out of its CLI',
+        fix: { label: 'Sign in', run: () => {} },
+      },
+    ],
+  },
+};
+
+export const WarningsOnly: Story = {
+  args: {
+    problems: [
+      {
+        key: 'mcp',
+        level: 'warning',
+        message: 'The “github” server did not connect',
+        fix: { label: 'Open MCP', run: () => {} },
+      },
+    ],
+  },
+};
+
 export const Nothing: Story = { args: { problems: [] } };

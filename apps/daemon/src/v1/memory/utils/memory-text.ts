@@ -84,7 +84,12 @@ export function memoryIndexText(
 }
 
 function indexLine(entry: MemoryEntry, now: Date): string {
-  const scope = entry.projectId === null ? 'global' : 'project';
+  const scope =
+    entry.teamSlug !== null
+      ? 'team'
+      : entry.projectId === null
+        ? 'global'
+        : 'project';
   const used =
     entry.lastUsedAt === null
       ? ''

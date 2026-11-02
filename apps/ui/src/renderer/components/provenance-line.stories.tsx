@@ -71,3 +71,10 @@ export const ImportedAndApproved: Story = {
 export const RemovedProject: Story = {
   args: { entry: memoryEntry({ projectId: 'gone' }), projectName: null },
 };
+
+export const TeamNote: Story = {
+  args: {
+    entry: memoryEntry({ teamSlug: 'review-crew' }),
+    teamName: 'Review crew',
+  },
+};

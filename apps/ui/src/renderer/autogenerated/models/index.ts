@@ -3246,6 +3246,12 @@ export interface CreateMemoryDto {
     projectId: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof CreateMemoryDto
+     */
+    teamSlug?: string | null;
+    /**
+     * 
      * @type {Array<string>}
      * @memberof CreateMemoryDto
      */
@@ -4154,6 +4160,89 @@ export type HandoffTargetDtoKindEnum = typeof HandoffTargetDtoKindEnum[keyof typ
 /**
  * 
  * @export
+ * @interface HealthProblem
+ */
+export interface HealthProblem {
+    /**
+     * 
+     * @type {string}
+     * @memberof HealthProblem
+     */
+    kind: HealthProblemKindEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof HealthProblem
+     */
+    level: HealthProblemLevelEnum;
+    /**
+     * One plain sentence naming the setting
+     * @type {string}
+     * @memberof HealthProblem
+     */
+    message: string;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof HealthProblem
+     */
+    agent: AgentKind | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof HealthProblem
+     */
+    poolMember: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof HealthProblem
+     */
+    configDir: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof HealthProblem
+     */
+    server: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof HealthProblem
+     */
+    model: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const HealthProblemKindEnum = {
+    CliMissing: 'cli_missing',
+    CliUnknown: 'cli_unknown',
+    ProfileMissing: 'profile_missing',
+    NoTrigger: 'no_trigger',
+    McpFailed: 'mcp_failed',
+    McpNeedsAuth: 'mcp_needs_auth',
+    McpDisconnected: 'mcp_disconnected',
+    ModelNotOffered: 'model_not_offered',
+    EffortNotOffered: 'effort_not_offered',
+    StageMemberMissing: 'stage_member_missing'
+} as const;
+export type HealthProblemKindEnum = typeof HealthProblemKindEnum[keyof typeof HealthProblemKindEnum];
+
+/**
+ * @export
+ */
+export const HealthProblemLevelEnum = {
+    Error: 'error',
+    Warning: 'warning'
+} as const;
+export type HealthProblemLevelEnum = typeof HealthProblemLevelEnum[keyof typeof HealthProblemLevelEnum];
+
+/**
+ * 
+ * @export
  * @interface ImportMemoriesDto
  */
 export interface ImportMemoriesDto {
@@ -4896,6 +4985,62 @@ export type MemberAvatarKindEnum = typeof MemberAvatarKindEnum[keyof typeof Memb
 /**
  * 
  * @export
+ * @interface MemberHealth
+ */
+export interface MemberHealth {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberHealth
+     */
+    memberId: string;
+    /**
+     * Each CLI and profile the member runs on, so a reader can add its own sign-in reading
+     * @type {Array<MemberSeat>}
+     * @memberof MemberHealth
+     */
+    seats: Array<MemberSeat>;
+    /**
+     * error if any problem blocks a run, else checking while MCP is still being read, else warning if any problem informs, else ok
+     * @type {string}
+     * @memberof MemberHealth
+     */
+    status: MemberHealthStatusEnum;
+    /**
+     * A read of the member's MCP servers is still running, whatever its status
+     * @type {boolean}
+     * @memberof MemberHealth
+     */
+    checking: boolean;
+    /**
+     * 
+     * @type {Array<HealthProblem>}
+     * @memberof MemberHealth
+     */
+    problems: Array<HealthProblem>;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberHealth
+     */
+    mcpCheckedAt: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const MemberHealthStatusEnum = {
+    Ok: 'ok',
+    Warning: 'warning',
+    Error: 'error',
+    Checking: 'checking'
+} as const;
+export type MemberHealthStatusEnum = typeof MemberHealthStatusEnum[keyof typeof MemberHealthStatusEnum];
+
+/**
+ * 
+ * @export
  * @interface MemberInstructionSize
  */
 export interface MemberInstructionSize {
@@ -4952,6 +5097,33 @@ export const MemberInstructionSizeTurnEnum = {
     Call: 'call'
 } as const;
 export type MemberInstructionSizeTurnEnum = typeof MemberInstructionSizeTurnEnum[keyof typeof MemberInstructionSizeTurnEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemberSeat
+ */
+export interface MemberSeat {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof MemberSeat
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberSeat
+     */
+    configDir: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberSeat
+     */
+    poolMember: number | null;
+}
+
 
 /**
  * 
@@ -5067,6 +5239,12 @@ export interface MemoryEntry {
      * @memberof MemoryEntry
      */
     projectId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryEntry
+     */
+    teamSlug: string | null;
     /**
      * 
      * @type {string}
@@ -10671,6 +10849,43 @@ export interface TeamFileDto {
 /**
  * 
  * @export
+ * @interface TeamHealthDto
+ */
+export interface TeamHealthDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamHealthDto
+     */
+    slug: string;
+    /**
+     * ISO time the answer was composed
+     * @type {string}
+     * @memberof TeamHealthDto
+     */
+    checkedAt: string;
+    /**
+     * A problem of level error stands, so a run cannot start
+     * @type {boolean}
+     * @memberof TeamHealthDto
+     */
+    blocking: boolean;
+    /**
+     * Problems of the team itself
+     * @type {Array<HealthProblem>}
+     * @memberof TeamHealthDto
+     */
+    team: Array<HealthProblem>;
+    /**
+     * 
+     * @type {Array<MemberHealth>}
+     * @memberof TeamHealthDto
+     */
+    members: Array<MemberHealth>;
+}
+/**
+ * 
+ * @export
  * @interface TeamMember
  */
 export interface TeamMember {
@@ -10928,6 +11143,184 @@ export interface TeamStage {
      * @memberof TeamStage
      */
     next?: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface TeamStatsDay
+ */
+export interface TeamStatsDay {
+    /**
+     * YYYY-MM-DD, the machine’s local day
+     * @type {string}
+     * @memberof TeamStatsDay
+     */
+    day: string;
+    /**
+     * runs that started that day
+     * @type {number}
+     * @memberof TeamStatsDay
+     */
+    runs: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsDay
+     */
+    costUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsDay
+     */
+    turns: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsDay
+     */
+    workedMs: number | null;
+    /**
+     * pull request outcomes recorded that day
+     * @type {number}
+     * @memberof TeamStatsDay
+     */
+    outcomes: number;
+}
+/**
+ * 
+ * @export
+ * @interface TeamStatsDto
+ */
+export interface TeamStatsDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamStatsDto
+     */
+    slug: string;
+    /**
+     * every thread row of the team
+     * @type {number}
+     * @memberof TeamStatsDto
+     */
+    runs: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsDto
+     */
+    costUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsDto
+     */
+    estimatedCostUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsDto
+     */
+    turns: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsDto
+     */
+    workedMs: number | null;
+    /**
+     * 
+     * @type {TeamStatsOutcomes}
+     * @memberof TeamStatsDto
+     */
+    outcomes: TeamStatsOutcomes;
+    /**
+     * oldest first, only the days with activity
+     * @type {Array<TeamStatsDay>}
+     * @memberof TeamStatsDto
+     */
+    days: Array<TeamStatsDay>;
+    /**
+     * most expensive first; turns recorded with no member are in the totals only
+     * @type {Array<TeamStatsMember>}
+     * @memberof TeamStatsDto
+     */
+    byMember: Array<TeamStatsMember>;
+}
+/**
+ * 
+ * @export
+ * @interface TeamStatsMember
+ */
+export interface TeamStatsMember {
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamStatsMember
+     */
+    memberId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamStatsMember
+     */
+    agentKind: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsMember
+     */
+    costUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsMember
+     */
+    turns: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsMember
+     */
+    workedMs: number | null;
+}
+/**
+ * 
+ * @export
+ * @interface TeamStatsOutcomes
+ */
+export interface TeamStatsOutcomes {
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsOutcomes
+     */
+    total: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsOutcomes
+     */
+    accepted: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsOutcomes
+     */
+    changesRequested: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsOutcomes
+     */
+    notYet: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsOutcomes
+     */
+    notNeeded: number;
 }
 /**
  * 
@@ -11815,6 +12208,12 @@ export interface UpdateMemoryDto {
     projectId?: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof UpdateMemoryDto
+     */
+    teamSlug?: string | null;
+    /**
+     * 
      * @type {Array<string>}
      * @memberof UpdateMemoryDto
      */
@@ -12222,6 +12621,12 @@ export interface UsageStatsDto {
      * @memberof UsageStatsDto
      */
     byThread: Array<UsageGroup>;
+    /**
+     * per team, keyed by slug; a thread with no team is in no row, so a chat is never pooled into one
+     * @type {Array<UsageGroup>}
+     * @memberof UsageStatsDto
+     */
+    byTeam: Array<UsageGroup>;
 }
 /**
  * 

@@ -407,6 +407,50 @@ export class AgentMcpService {
   }
 
   /**
+   * What is already known of the FOLDERLESS listing (the team editor's) for one
+   * profile, without asking anything: the newest cached reading of any CLI
+   * version, merged with the turn harvest. Never dials, never spawns, never
+   * waits on a dial in flight; `servers: null` when nothing is known or the
+   * CLI cannot be listed.
+   */
+  knownStatus(
+    agent: AgentKind,
+    configDir: string | null,
+  ): { servers: AgentMcpServer[] | null; checkedAt: string | null } {
+    const unknown = { servers: null, checkedAt: null };
+    if (
+      this.adapters.for(agent).getConfig().mcp.listingUnavailableReason !== null
+    ) {
+      return unknown;
+    }
+    let profile: string | null;
+    try {
+      profile = configDir === null ? null : resolveValidConfigDir(configDir);
+    } catch {
+      return unknown;
+    }
+    const projectDir = this.folderlessDir();
+    const prefix = keyProfilePrefixOf(agent, projectDir, profile);
+    let newest: CacheEntry | undefined;
+    for (const [key, entry] of this.cache) {
+      if (
+        key.startsWith(prefix) &&
+        (newest === undefined || entry.fetchedAt > newest.fetchedAt)
+      ) {
+        newest = entry;
+      }
+    }
+    const servers = mergeKnown(
+      newest?.servers,
+      this.harvest.getStale(agent, projectDir, profile),
+    );
+    return {
+      servers,
+      checkedAt: newest ? new Date(newest.fetchedAt).toISOString() : null,
+    };
+  }
+
+  /**
    * The servers themselves — validation, the version key, the cache and the
    * single-flight — with none of the overlay {@link composeListing} adds.
    *

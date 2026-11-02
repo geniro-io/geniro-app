@@ -119,6 +119,7 @@ import { errorOf } from '../__tests__/call-envelope';
 import { member, teamOf } from '../__tests__/team-builders';
 import {
   ApprovalModeSchema,
+  type HealthProblem,
   type InstructionBlock,
   type Team,
 } from '../teams.types';
@@ -134,6 +135,7 @@ import { RunTeamService } from './run-team.service';
 import { StageService } from './stage.service';
 import { StageWakeService } from './stage-wake.service';
 import { TeamExecutorService } from './team-executor.service';
+import type { TeamHealthService } from './team-health.service';
 import type { TeamStoreService } from './team-store.service';
 
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
@@ -1139,6 +1141,8 @@ function setup(
     memory?: Pick<MemoryService, 'runSnapshot'>;
     /** What the run's project tells it; no project when absent. */
     projectScope?: Pick<ProjectScopeService, 'instructionsSnapshot'>;
+    /** The red setup problems a run start refuses on; none when absent. */
+    health?: Pick<TeamHealthService, 'blockingProblems'>;
   } = {},
 ): {
   service: TeamExecutorService;
@@ -1581,6 +1585,7 @@ function setup(
     teamNotes,
     runOutcomes,
     stages,
+    opts.health as TeamHealthService | undefined,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -6553,7 +6558,9 @@ describe('TeamExecutorService — agent calls', () => {
     index = 'INDEX AFTER A SAVE';
     await drain();
 
-    expect(asked).toEqual([{ taskId: 'task-9', cwd: run.cwd }]);
+    expect(asked).toEqual([
+      { taskId: 'task-9', cwd: run.cwd, teamSlug: 'lin' },
+    ]);
     expect(runDao.runs.get(run.id)).toMatchObject({
       memoryIndex: 'INDEX AT START',
       nativeMemoryOff: true,
@@ -6565,6 +6572,49 @@ describe('TeamExecutorService — agent calls', () => {
         nativeMemoryOff: true,
       });
     }
+  });
+
+  it('refuses to start a run while a member has a red setup problem, naming it, and starts once none stands', async () => {
+    const asked: Team[] = [];
+    let red: HealthProblem[] = [
+      {
+        kind: 'profile_missing',
+        level: 'error',
+        message:
+          'Planner: The profile folder set for this member no longer exists.',
+        agent: 'claude',
+        poolMember: null,
+        configDir: '/gone',
+        server: null,
+        model: null,
+      },
+    ];
+    const { service, runDao, storeGet } = setup(4870, {
+      health: {
+        blockingProblems: async (team) => {
+          asked.push(team);
+          return red;
+        },
+      },
+    });
+    storeGet.mockResolvedValue({ slug: 'lin', team: LINEAR });
+
+    await expect(
+      service.startRunBySlug('lin', { cwd: dir, prompt: 'go' }),
+    ).rejects.toMatchObject({
+      errorCode: 'TEAM_NOT_READY',
+      message: expect.stringContaining(
+        'Planner: The profile folder set for this member no longer exists.',
+      ),
+    });
+    expect(runDao.runs.size).toBe(0);
+    expect(asked).toEqual([LINEAR]);
+
+    red = [];
+    const run = await service.startRunBySlug('lin', { cwd: dir, prompt: 'go' });
+    await drain();
+    expect(runDao.runs.get(run.id)?.teamId).toBe('lin');
+    expect(asked).toEqual([LINEAR, LINEAR]);
   });
 
   it('startRunBySlug snapshots the project’s instructions onto the run row and every member, whatever the project says later', async () => {

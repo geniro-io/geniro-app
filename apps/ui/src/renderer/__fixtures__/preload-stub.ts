@@ -161,7 +161,7 @@ export function createPreloadStub(
       return Promise.resolve(settings);
     },
 
-    detectClis: (): Promise<CliDetection[]> => {
+    detectClis: (_options?: { maxAgeMs?: number }): Promise<CliDetection[]> => {
       note('detectClis');
       return Promise.resolve(
         CLI_KINDS.map((kind) => ({

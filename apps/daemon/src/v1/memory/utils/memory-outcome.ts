@@ -22,7 +22,7 @@ export const NEAR_DUPLICATE_PREFIX = 'similar entries exist: ';
  * duplicate is `409 MEMORY_NEAR_DUPLICATE` naming the matching handles, which
  * the writer may vouch past with `notDuplicateOf`.
  *
- * TWIN PARSER: `nearDuplicateHandles` in `apps/ui/src/renderer/settings/memory.tsx`.
+ * TWIN PARSER: `nearDuplicateHandles` in `apps/ui/src/renderer/components/use-memory-editor.ts`.
  */
 export function savedEntryOrThrow(
   outcome: MemorySaveOutcome | MemoryStatusOutcome,

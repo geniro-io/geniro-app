@@ -948,7 +948,12 @@ describe('parseMemoryChanged — the memory_changed twin', () => {
         status: 'forgotten',
         projectId: 'p1',
       }),
-    ).toEqual({ memoryId: 'e1', change: 'forgotten', projectId: 'p1' });
+    ).toEqual({
+      memoryId: 'e1',
+      change: 'forgotten',
+      projectId: 'p1',
+      teamSlug: null,
+    });
     expect(
       parseMemoryChanged({
         memoryId: null,
@@ -956,7 +961,29 @@ describe('parseMemoryChanged — the memory_changed twin', () => {
         status: 'forgotten',
         projectId: null,
       }),
-    ).toEqual({ memoryId: null, change: 'bulk', projectId: null });
+    ).toEqual({
+      memoryId: null,
+      change: 'bulk',
+      projectId: null,
+      teamSlug: null,
+    });
+  });
+
+  it('reads the team a change was filed under', () => {
+    expect(
+      parseMemoryChanged({
+        memoryId: 'e2',
+        change: 'created',
+        status: 'active',
+        projectId: null,
+        teamSlug: 'alpha',
+      }),
+    ).toEqual({
+      memoryId: 'e2',
+      change: 'created',
+      projectId: null,
+      teamSlug: 'alpha',
+    });
   });
 
   it('refuses a payload without a change or with an entry id of the wrong type', () => {

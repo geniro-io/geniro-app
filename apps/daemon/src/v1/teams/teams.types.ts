@@ -1853,6 +1853,106 @@ export const InstructionSizesWireSchema = z.object({
 });
 export type InstructionSizesWire = z.infer<typeof InstructionSizesWireSchema>;
 
+export const HEALTH_PROBLEM_KINDS = [
+  'cli_missing',
+  'cli_unknown',
+  'profile_missing',
+  'no_trigger',
+  'mcp_failed',
+  'mcp_needs_auth',
+  'mcp_disconnected',
+  'model_not_offered',
+  'effort_not_offered',
+  'stage_member_missing',
+] as const;
+export type HealthProblemKind = (typeof HEALTH_PROBLEM_KINDS)[number];
+
+/**
+ * One thing wrong with how a team or member is set up. `error` blocks a run
+ * from starting; `warning` only informs. The renderer picks the fix by `kind`
+ * and aims it with the other fields.
+ */
+export const HealthProblemSchema = z
+  .object({
+    kind: z.enum(HEALTH_PROBLEM_KINDS),
+    level: z.enum(['error', 'warning']),
+    message: z.string().describe('One plain sentence naming the setting'),
+    agent: AgentKindSchema.nullable().describe(
+      'The CLI the problem is about; null for a team-level problem',
+    ),
+    poolMember: z
+      .number()
+      .int()
+      .nullable()
+      .describe('Null = the member itself; 2 and up = its pool position'),
+    configDir: z.string().nullable(),
+    server: z.string().nullable().describe('MCP server name'),
+    model: z.string().nullable(),
+  })
+  .meta({ id: 'HealthProblem' });
+export type HealthProblem = z.infer<typeof HealthProblemSchema>;
+
+export const MEMBER_HEALTH_STATUSES = [
+  'ok',
+  'warning',
+  'error',
+  'checking',
+] as const;
+export type MemberHealthStatus = (typeof MEMBER_HEALTH_STATUSES)[number];
+
+// No `.meta({ id })` on this ROOT (the member route's response); the copy
+// nested in `TeamHealthSchema` carries the id.
+export const MemberSeatSchema = z
+  .object({
+    agent: AgentKindSchema,
+    configDir: z.string().nullable(),
+    poolMember: z
+      .number()
+      .int()
+      .nullable()
+      .describe('null for the member itself, 2.. for a pool position'),
+  })
+  .meta({ id: 'MemberSeat' });
+export type MemberSeat = z.infer<typeof MemberSeatSchema>;
+
+export const MemberHealthSchema = z.object({
+  memberId: z.string(),
+  seats: z
+    .array(MemberSeatSchema)
+    .describe(
+      'Each CLI and profile the member runs on, so a reader can add its own sign-in reading',
+    ),
+  status: z
+    .enum(MEMBER_HEALTH_STATUSES)
+    .describe(
+      'error if any problem blocks a run, else checking while MCP is still being read, else warning if any problem informs, else ok',
+    ),
+  checking: z
+    .boolean()
+    .describe(
+      "A read of the member's MCP servers is still running, whatever its status",
+    ),
+  problems: z.array(HealthProblemSchema),
+  mcpCheckedAt: z
+    .string()
+    .nullable()
+    .describe(
+      "ISO time of the oldest MCP reading behind this member's servers; null when none is known",
+    ),
+});
+export type MemberHealth = z.infer<typeof MemberHealthSchema>;
+
+export const TeamHealthSchema = z.object({
+  slug: z.string(),
+  checkedAt: z.string().describe('ISO time the answer was composed'),
+  blocking: z
+    .boolean()
+    .describe('A problem of level error stands, so a run cannot start'),
+  team: z.array(HealthProblemSchema).describe('Problems of the team itself'),
+  members: z.array(MemberHealthSchema.meta({ id: 'MemberHealth' })),
+});
+export type TeamHealth = z.infer<typeof TeamHealthSchema>;
+
 /** What calling off a run's promised continues answers. */
 export const ResetWakesCancelledSchema = z.object({
   cancelledCallIds: z

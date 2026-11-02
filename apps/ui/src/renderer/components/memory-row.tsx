@@ -73,6 +73,7 @@ export function ClampedBody({
 export function MemoryRow({
   entry,
   projectName,
+  teamName = null,
   focused = false,
   busy = false,
   onEdit,
@@ -82,6 +83,7 @@ export function MemoryRow({
 }: {
   entry: MemoryEntry;
   projectName: string | null;
+  teamName?: string | null;
   focused?: boolean;
   busy?: boolean;
   onEdit?: () => void;
@@ -119,7 +121,11 @@ export function MemoryRow({
         <MemoryStatusBadge status={entry.status} />
       </div>
       <ClampedBody text={entry.body} lines={3} />
-      <ProvenanceLine entry={entry} projectName={projectName} />
+      <ProvenanceLine
+        entry={entry}
+        projectName={projectName}
+        teamName={teamName}
+      />
       <div className="flex flex-wrap items-center gap-2">
         {(isActive || isPending) && onApprove !== undefined ? (
           <Button type="button" size="sm" disabled={busy} onClick={onApprove}>

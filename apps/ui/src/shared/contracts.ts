@@ -1659,8 +1659,11 @@ export interface GeniroApi {
   getSettings(): Promise<Settings>;
   /** Merge a partial patch into settings; returns the updated settings. */
   updateSettings(patch: Partial<Settings>): Promise<Settings>;
-  /** Probe the host for each supported CLI agent. */
-  detectClis(): Promise<CliDetection[]>;
+  /**
+   * Probe the host for each supported CLI agent. With `maxAgeMs`, a detection
+   * main made within that long is answered instead of probing again.
+   */
+  detectClis(options?: { maxAgeMs?: number }): Promise<CliDetection[]>;
   /**
    * Update one agent CLI by running ITS OWN updater, and report what changed.
    *

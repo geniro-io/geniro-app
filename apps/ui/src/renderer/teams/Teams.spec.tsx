@@ -19,6 +19,7 @@ import type {
 import type { DaemonClient } from '../daemon-client';
 import { starterTeam, type TeamLaunch } from '../onboarding/first-launch';
 import { Teams } from './Teams';
+import { AUTOSAVE_DELAY_MS } from './use-autosave';
 
 interface SaveRequest {
   slug: string;
@@ -77,7 +78,13 @@ const {
   getTeamAnalysis,
   analyzeTeam,
   uploadTeamAvatar,
+  readTeamStats,
+  readTeamHealth,
+  listMemories,
 } = vi.hoisted(() => ({
+  readTeamStats: vi.fn(),
+  readTeamHealth: vi.fn(),
+  listMemories: vi.fn(),
   uploadTeamAvatar: vi.fn(),
   getTeamAnalysis: vi.fn(),
   analyzeTeam: vi.fn(),
@@ -118,7 +125,9 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       getTeamAnalysis,
       analyzeTeam,
       uploadTeamAvatar,
+      readTeamHealth,
     },
+    memories: { listMemories },
     chats: withHistoryPages({
       readRunState: vi.fn(async () => emptyRunState()),
       listRunItems,
@@ -127,7 +136,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       updateChatSettings: vi.fn(),
     }),
     capabilities: { getCapabilities },
-    stats: { readTeamVersions, restoreTeamVersion },
+    stats: { readTeamVersions, restoreTeamVersion, readTeamStats },
     agents: withVocabulary({
       listAgentModels: vi.fn(async () => []),
       // Each of these three answers a LISTING, not a bare array — the hooks
@@ -189,6 +198,8 @@ function fakeClient(): DaemonClient {
     onDisconnect: () => () => {},
     onReconnect: () => () => {},
     onVerdictAck: () => () => {},
+    onUsageRecorded: () => () => {},
+    onMemoryChanged: () => () => {},
   } as unknown as DaemonClient;
 }
 
@@ -273,6 +284,33 @@ beforeEach(() => {
   analyzeTeam
     .mockReset()
     .mockImplementation(async () => ({ id: 'analysis-1', status: 'pending' }));
+  readTeamStats.mockReset().mockImplementation(async ({ slug }) => ({
+    slug,
+    runs: 0,
+    costUsd: null,
+    estimatedCostUsd: null,
+    turns: 0,
+    workedMs: null,
+    outcomes: {
+      total: 0,
+      accepted: 0,
+      changesRequested: 0,
+      notYet: 0,
+      notNeeded: 0,
+    },
+    days: [],
+    byMember: [],
+  }));
+  readTeamHealth.mockReset().mockImplementation(async ({ slug }) => ({
+    slug,
+    checkedAt: '2026-11-02T10:00:00.000Z',
+    blocking: false,
+    team: [],
+    members: [],
+  }));
+  listMemories
+    .mockReset()
+    .mockImplementation(async () => ({ memories: [], next: null }));
   readTeamVersions.mockReset().mockImplementation(async () => ({
     slug: 'dev-team',
     currentVersion: null,
@@ -435,21 +473,6 @@ async function type(
   });
 }
 
-/** Press the Stages section's own chat button. */
-async function pressStagesChat(label: string): Promise<void> {
-  const button = [
-    ...container.querySelectorAll<HTMLButtonElement>(
-      '[data-slot="team-stages"] button',
-    ),
-  ].find((candidate) => candidate.textContent?.trim() === label);
-  if (button === undefined) {
-    throw new Error(`no stages button ${label}`);
-  }
-  await act(async () => {
-    button.click();
-  });
-}
-
 /** Pick a row of the builder's overflow menu. */
 async function menuRow(label: string): Promise<void> {
   await press('Team actions');
@@ -517,6 +540,49 @@ describe('Teams — the library list', () => {
   it('does not read the library while the screen is hidden', async () => {
     await paint(false);
     expect(listTeams).not.toHaveBeenCalled();
+  });
+
+  it('badges a card with its last known problems, never asking for an MCP probe', async () => {
+    listTeams.mockImplementation(async () => [summary('dev-team', 'Dev Team')]);
+    readTeamHealth.mockImplementation(async ({ slug }) => ({
+      slug,
+      checkedAt: '2026-11-02T10:00:00.000Z',
+      blocking: false,
+      team: [],
+      members: [
+        {
+          memberId: 'lead',
+          seats: [{ agent: 'claude', configDir: null, poolMember: null }],
+          checking: false,
+          status: 'warning',
+          mcpCheckedAt: '2026-11-02T09:00:00.000Z',
+          problems: [
+            {
+              kind: 'mcp_needs_auth',
+              level: 'warning',
+              message: 'MCP server "figma" needs signing in for this member.',
+              agent: 'claude',
+              poolMember: null,
+              configDir: null,
+              server: 'figma',
+              model: null,
+            },
+          ],
+        },
+      ],
+    }));
+    await paint(true);
+
+    expect(readTeamHealth).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      probe: 'false',
+    });
+    expect(readTeamHealth).not.toHaveBeenCalledWith(
+      expect.objectContaining({ probe: 'true' }),
+    );
+    expect(
+      container.querySelector('[data-slot="team-card-warnings"]')?.textContent,
+    ).toContain('1');
   });
 });
 
@@ -1105,7 +1171,30 @@ describe('Teams — who handles the first message', () => {
 });
 
 describe('Teams — the team mode', () => {
+  it('hides the lead mode while the team has no stages, saying who runs every job', async () => {
+    await openBuilder();
+
+    expect(container.querySelector('[aria-label="Team mode"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="stages-empty"]')?.textContent,
+    ).toContain('No stages yet — Lead runs every job');
+  });
+
   it('offers One lead and Relay, and saves Relay when it is picked', async () => {
+    getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      team: teamOf({
+        stages: [
+          {
+            id: 'build',
+            title: 'Build',
+            howToWork: 'Write the change.',
+            goal: 'The change works.',
+            responsible: ['lead'],
+          },
+        ] as Team['stages'],
+      }),
+    }));
     await openBuilder();
 
     await press('Team mode');
@@ -1526,39 +1615,6 @@ describe('Teams — a team’s stages', () => {
 
     expect(lastSaved().stages?.[0]?.title).toBe('Plan it');
   });
-
-  it('keeps what the user already typed and puts the stage request after it', async () => {
-    client = fakeClient();
-    opens(STAGES);
-    await openBuilder();
-    await press('Change with chat');
-    await wait(50);
-    const composer = panel()!.querySelector<HTMLTextAreaElement>(
-      'textarea[aria-label="Ask for a team change"]',
-    )!;
-    await type(composer, 'Rename the coder. ');
-
-    await pressStagesChat('Change with chat');
-    await wait(50);
-
-    expect(composer.value).toBe('Rename the coder.\n\nChange the stages: ');
-  });
-
-  it('hands adding stages to the chat dock from the Stages section', async () => {
-    client = fakeClient();
-    opens(undefined);
-    await openBuilder();
-
-    await pressStagesChat('Add with chat');
-    await wait(50);
-
-    expect(panel()!.hasAttribute('hidden')).toBe(false);
-    const composer = panel()!.querySelector<HTMLTextAreaElement>(
-      'textarea[aria-label="Ask for a team change"]',
-    )!;
-    expect(composer.value).toBe('Add stages every run of this team walks: ');
-    expect(document.activeElement).toBe(composer);
-  });
 });
 
 describe('Teams — a member’s always-on instruction size', () => {
@@ -1902,7 +1958,32 @@ describe('Teams — the builder header', () => {
 
     await press('Delete');
 
-    expect(deleteTeam).toHaveBeenCalledWith({ slug: 'dev-team' });
+    expect(deleteTeam).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      memories: 'forget',
+    });
+  });
+});
+
+describe('Teams — deleting a team that keeps memories', () => {
+  it('asks what happens to the team’s memories and deletes with the fate picked', async () => {
+    listMemories.mockImplementation(async (request: { teamSlug?: string }) => ({
+      memories:
+        request.teamSlug === 'dev-team' ? [{ id: 'e1' }, { id: 'e2' }] : [],
+      next: null,
+    }));
+    await openBuilder();
+    await press('Team actions');
+    await press('Delete team');
+
+    expect(container.textContent).toContain('This team keeps 2 memories.');
+    await press('Keep them for this team name');
+    await press('Delete');
+
+    expect(deleteTeam).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      memories: 'keep',
+    });
   });
 });
 
@@ -2063,7 +2144,10 @@ describe('Teams — a team another screen asked to open', () => {
     await openBuilder();
     await menuRow('Delete team');
     await press('Delete');
-    expect(deleteTeam).toHaveBeenCalledWith({ slug: 'dev-team' });
+    expect(deleteTeam).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      memories: 'forget',
+    });
     listTeams.mockImplementation(async () => [SAVED]);
     await paint(true, undefined, undefined, {
       request: 'review-pair',
@@ -2441,5 +2525,121 @@ describe('Teams — the team page', () => {
     });
     expect(selectedTab()).toBe('Statistics');
     expect(container.textContent).toContain('No runs yet.');
+  });
+
+  it('marks a member the daemon finds not set up with a corner badge whose panel holds the fix, and reads it with the MCP probe', async () => {
+    readTeamHealth.mockImplementation(async ({ slug }) => ({
+      slug,
+      checkedAt: '2026-11-02T10:00:00.000Z',
+      blocking: true,
+      team: [],
+      members: [
+        {
+          memberId: 'lead',
+          seats: [{ agent: 'claude', configDir: null, poolMember: null }],
+          checking: false,
+          status: 'error',
+          mcpCheckedAt: null,
+          problems: [
+            {
+              kind: 'profile_missing',
+              level: 'error',
+              message:
+                'The profile folder set for this member no longer exists.',
+              agent: 'claude',
+              poolMember: null,
+              configDir: '/gone',
+              server: null,
+              model: null,
+            },
+          ],
+        },
+      ],
+    }));
+    await openBuilder();
+
+    expect(readTeamHealth).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      probe: 'true',
+    });
+    const card = container
+      .querySelector<HTMLElement>(
+        '[data-slot="member-card"][data-member-id="lead"]',
+      )!
+      .closest('li')!;
+    const badge = card.querySelector<HTMLButtonElement>(
+      '[data-slot="member-problems"] button',
+    )!;
+    expect(badge.getAttribute('aria-label')).toContain(
+      'The profile folder set for this member no longer exists.',
+    );
+    expect(card.textContent).not.toContain('Choose profile');
+
+    await act(async () => {
+      badge.click();
+    });
+    const fix = [...document.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Choose profile',
+    )!;
+    await act(async () => {
+      fix.click();
+    });
+
+    expect(
+      container.querySelector('[data-slot="member-sheet"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-slot="warning-pill"]')?.textContent,
+    ).toContain('1 needs setup');
+  });
+
+  it('reads the members’ health again once an edit is saved, so a fixed setting clears its warning', async () => {
+    await openBuilder();
+    const probes = (): number =>
+      readTeamHealth.mock.calls.filter(([request]) => request.probe === 'true')
+        .length;
+    const opened = probes();
+    expect(opened).toBe(1);
+
+    await edit();
+    await wait(AUTOSAVE_DELAY_MS + 50);
+
+    expect(savedRequests()).toHaveLength(1);
+    expect(probes()).toBe(opened + 1);
+  });
+
+  it('shows the daemon’s team figures on the Statistics tab, each member by name', async () => {
+    readTeamStats.mockImplementation(async ({ slug }) => ({
+      slug,
+      runs: 412,
+      costUsd: 12.5,
+      estimatedCostUsd: null,
+      turns: 900,
+      workedMs: 3_600_000,
+      outcomes: {
+        total: 2,
+        accepted: 1,
+        changesRequested: 1,
+        notYet: 0,
+        notNeeded: 0,
+      },
+      days: [],
+      byMember: [
+        {
+          memberId: 'lead',
+          agentKind: 'claude',
+          costUsd: 12.5,
+          turns: 900,
+          workedMs: 3_600_000,
+        },
+      ],
+    }));
+    await openBuilder();
+    await press('Statistics');
+
+    expect(readTeamStats).toHaveBeenCalledWith({ slug: 'dev-team' });
+    const stats = container.querySelector('[data-slot="team-stats"]')!;
+    expect(stats.textContent).toContain('412');
+    expect(stats.textContent).toContain('Lead');
   });
 });

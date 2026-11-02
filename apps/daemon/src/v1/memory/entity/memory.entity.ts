@@ -20,12 +20,14 @@ import type {
 /**
  * One entry of the memory every agent shares, whichever CLI it runs on.
  *
- * `projectId` null means GLOBAL (every project's runs see it). Provenance is a
- * plain copy, never a foreign key: a deleted chat leaves its memories behind,
- * and run teardown never touches this table.
+ * Exactly one scope: `projectId` set is a project's, `teamSlug` set is a
+ * team's, both null is GLOBAL (every run sees it). Provenance is a plain copy,
+ * never a foreign key: a deleted chat leaves its memories behind, and run
+ * teardown never touches this table.
  */
 @Entity({ tableName: 'memories' })
 @Index({ properties: ['projectId', 'status'] })
+@Index({ properties: ['teamSlug', 'status'] })
 @Unique({ properties: ['handle'] })
 export class Memory extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
@@ -46,6 +48,9 @@ export class Memory extends TimestampsEntity {
 
   @Property({ type: 'string', nullable: true })
   projectId: string | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  teamSlug: string | null = null;
 
   @Property({ type: 'string' })
   status!: MemoryStatus;

@@ -41,12 +41,18 @@ function Who({ entry }: { entry: MemoryEntry }): React.ReactNode {
 export function ProvenanceLine({
   entry,
   projectName,
+  teamName = null,
 }: {
   entry: MemoryEntry;
   projectName: string | null;
+  teamName?: string | null;
 }): React.JSX.Element {
   const scope =
-    entry.projectId === null ? 'Global' : (projectName ?? 'a removed project');
+    entry.projectId !== null
+      ? (projectName ?? 'a removed project')
+      : entry.teamSlug !== null
+        ? (teamName ?? entry.teamSlug)
+        : 'Global';
   const parts: React.ReactNode[] = [
     entry.handle,
     entry.type,

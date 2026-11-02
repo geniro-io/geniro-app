@@ -103,6 +103,26 @@ export class ModelsService {
     this.ollama = options.ollama;
   }
 
+  /**
+   * The model list already filed for this CLI and profile at `version` (null
+   * when the version could not be read, as `listNative` files it), from memory
+   * or the durable cache, or null. Never spawns, never revalidates.
+   */
+  cachedModels(
+    kind: AgentKind,
+    configDir: string | null,
+    version: string | null,
+  ): AgentModelWire[] | null {
+    const profile = this.adapters.for(kind).vocabularyProfile(configDir);
+    const cached = this.cache.get(cacheKey(kind, profile));
+    if (cached && cached.version === version) {
+      return cached.models;
+    }
+    return (
+      this.store.read(kind, null, profile, version, isModelList)?.value ?? null
+    );
+  }
+
   async list(
     kind: AgentKind,
     configDir: string | null = null,

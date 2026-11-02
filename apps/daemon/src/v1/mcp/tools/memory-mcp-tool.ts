@@ -14,7 +14,7 @@ import { BaseMcpTool } from './base-mcp-tool';
  * The base of the shared memory's tools (`memory_search`, `memory_read`,
  * `memory_save`, `memory_forget`): offered on every endpoint while the user
  * has memory on, and refused at call time once it is off — a kept CLI can
- * hold a listing made while it was on. The run's project and the caller's
+ * hold a listing made while it was on. The run's project and team and the caller's
  * identity are looked up here, never taken from the arguments.
  */
 export abstract class MemoryMcpTool extends BaseMcpTool {
@@ -42,11 +42,11 @@ export abstract class MemoryMcpTool extends BaseMcpTool {
         true,
       );
     }
-    const [projectId, actor] = await Promise.all([
+    const [place, actor] = await Promise.all([
       this.memory.scopeOf(runId),
       this.memory.actorOf(runId, memberId),
     ]);
-    return this.answer(args, { projectId, actor });
+    return this.answer(args, { place, actor });
   }
 
   /**
@@ -65,9 +65,17 @@ export abstract class MemoryMcpTool extends BaseMcpTool {
  * reads this text for the transcript row; reword it there too.
  */
 export function memoryEntryLine(
-  entry: Pick<MemoryHit, 'handle' | 'rev' | 'projectId' | 'type' | 'title'>,
+  entry: Pick<
+    MemoryHit,
+    'handle' | 'rev' | 'projectId' | 'teamSlug' | 'type' | 'title'
+  >,
 ): string {
-  const scope = entry.projectId === null ? 'global' : 'this project';
+  const scope =
+    entry.teamSlug !== null
+      ? 'this team'
+      : entry.projectId === null
+        ? 'global'
+        : 'this project';
   return `${entry.handle} (rev ${entry.rev}, ${scope}, ${entry.type}) — ${entry.title}`;
 }
 

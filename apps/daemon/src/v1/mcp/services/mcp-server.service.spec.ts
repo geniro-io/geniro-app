@@ -769,7 +769,7 @@ describe('McpServerService', () => {
         const saved = await db.service.save(
           { kind: 'agent', runId: 'run-1', agentKind: 'claude', model: 'opus' },
           { title: 'Use pnpm', body: 'Never npm here.', type: 'feedback' },
-          null,
+          { projectId: null, teamSlug: null },
         );
         db.service.setConfig({
           ...DEFAULT_MEMORY_CONFIG,

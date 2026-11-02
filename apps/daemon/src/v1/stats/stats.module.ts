@@ -14,6 +14,7 @@ import { RunOutcomeLedgerService } from './services/run-outcome-ledger.service';
 import { StatsService } from './services/stats.service';
 import { TeamHistoryService } from './services/team-history.service';
 import { TeamLedgerService } from './services/team-ledger.service';
+import { TeamStatsService } from './services/team-stats.service';
 import { TeamVersionsService } from './services/team-versions.service';
 import { UsageActivityRecorderService } from './services/usage-activity-recorder.service';
 import { UsageBackfillService } from './services/usage-backfill.service';
@@ -55,6 +56,7 @@ import { UsageRecorderService } from './services/usage-recorder.service';
     TeamRecommendationDao,
     RecommendationLedgerService,
     TeamHistoryService,
+    TeamStatsService,
   ],
   // The bus, and the team history. The WS gateway announces each recorded
   // turn so an open Stats page can refresh, and the MCP host's analysis reader

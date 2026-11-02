@@ -647,6 +647,31 @@ describe('groupTranscript', () => {
     expect(pairs[0]?.result).not.toBeNull();
   });
 
+  it('hides a save_project_instructions call its card stands for, and SHOWS one refused before any card', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__save_project_instructions', 'p1', {
+        projectId: 'p-billing',
+      }),
+      result('p1', '{"saved":true,"changed":true,"instructionsRevision":4}'),
+      call('mcp__geniro-run-1__save_project_instructions', 'p2', {
+        projectId: 'p-billing',
+      }),
+      item('tool_result', {
+        id: 'p2',
+        name: null,
+        result: '{"error":"NOT_SELECTED"}',
+        isError: true,
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    const pairs = (entries[0] as ToolGroupEntry).pairs;
+    expect(pairs.map((pair) => payloadString(pair.call.payload, 'id'))).toEqual(
+      ['p2'],
+    );
+    expect(pairs[0]?.result).not.toBeNull();
+  });
+
   it('SHOWS the monitor tools as ordinary tool rows', () => {
     const entries = groupTranscript([
       call('mcp__geniro-run-1__monitor', 't1', { command: 'tail -f log' }),

@@ -123,6 +123,34 @@ describe('recommendations payload readers', () => {
     expect(card?.items[0]).toMatchObject({ kind: 'update', location: 'm12' });
   });
 
+  it('reads a project item, its location a project id and its change the instruction text', () => {
+    const [w1] = CARD.items as Record<string, unknown>[];
+    const card = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        items: [
+          {
+            ...w1,
+            id: 'P-1',
+            target: 'project',
+            kind: 'rule',
+            location: 'p-billing',
+            change: 'WHEN a change edits a sent invoice → issue a credit note',
+          },
+        ],
+      }),
+    );
+
+    expect(card?.items.map((entry) => [entry.id, entry.target])).toEqual([
+      ['P-1', 'project'],
+    ]);
+    expect(card?.items[0]).toMatchObject({
+      kind: 'rule',
+      location: 'p-billing',
+      change: 'WHEN a change edits a sent invoice → issue a credit note',
+    });
+  });
+
   it("reads the team's measured figures, the hotspots and each item's estimates, an older card's missing ones as absent", () => {
     const filedItem = item(6, 'recommendations', {
       ...CARD,

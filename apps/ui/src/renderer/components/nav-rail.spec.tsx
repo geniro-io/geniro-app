@@ -65,6 +65,7 @@ describe('NavRail', () => {
       chats: 'Chats',
       teams: 'Teams',
       tasks: 'Tasks',
+      projects: 'Projects',
       stats: 'Stats',
       settings: 'Settings',
     };
@@ -84,6 +85,7 @@ describe('NavRail', () => {
       chats: 'Chats',
       teams: 'Teams',
       tasks: 'Tasks',
+      projects: 'Projects',
       stats: 'Stats',
       settings: 'Settings',
     } satisfies Record<AppView, string>)) {
@@ -127,12 +129,21 @@ describe('NavRail', () => {
     const labels = [...el.querySelectorAll('button')]
       .map((node) => node.textContent)
       .filter((text): text is string =>
-        ['Chats', 'Teams', 'Stats', 'Settings'].includes(text ?? ''),
+        ['Chats', 'Teams', 'Tasks', 'Projects', 'Stats', 'Settings'].includes(
+          text ?? '',
+        ),
       );
 
     // Stats is a primary destination, so it belongs with Chats and Teams
-    // rather than in the utility group Settings sits in.
-    expect(labels).toEqual(['Chats', 'Teams', 'Stats', 'Settings']);
+    // rather than in the utility group Settings sits in; Projects follows Tasks.
+    expect(labels).toEqual([
+      'Chats',
+      'Teams',
+      'Tasks',
+      'Projects',
+      'Stats',
+      'Settings',
+    ]);
   });
 
   it('keeps its own width toggle, in both directions', () => {

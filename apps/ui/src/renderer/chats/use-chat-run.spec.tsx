@@ -34,6 +34,7 @@ const run1: ChatRun = {
   id: 'r1',
   status: 'running',
   taskIdentifier: null,
+  project: null,
   analysisSourceRunId: null,
   analysisSourceSeq: null,
   analysisTeamSlug: null,

@@ -73,6 +73,13 @@ export type GeniroCardKind =
 /** `propose_team` — its card stands across turns ({@link standsAcrossTurns}). */
 export const PROPOSE_TEAM = 'propose_team';
 
+/**
+ * `save_project_instructions` — an analysis's change to a project's
+ * instructions, put on a card. TWIN: `HOST_PROJECT_INSTRUCTIONS_TOOL` in the
+ * daemon's `chat.types.ts`.
+ */
+export const SAVE_PROJECT_INSTRUCTIONS = 'save_project_instructions';
+
 /** `propose_team`'s name before the rename, which the rows recorded then still carry. */
 export const LEGACY_PROPOSE_TEAM = 'propose_workflow';
 
@@ -90,6 +97,7 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   show_gallery: 'gallery',
   show_artifact: 'artifact',
   propose_patch: 'patch',
+  [SAVE_PROJECT_INSTRUCTIONS]: 'patch',
   propose_plan: 'plan',
   // The action card is drawn from the `action` / `action_outcome` rows the
   // daemon writes, so these calls need no loader of their own.
@@ -288,4 +296,9 @@ export function standsAcrossTurns(toolName: string | null): boolean {
 /** Whether a row's tool is `propose_team`, under either of its names. */
 export function isTeamProposalTool(toolName: string | null): boolean {
   return toolName === PROPOSE_TEAM || toolName === LEGACY_PROPOSE_TEAM;
+}
+
+/** Whether an approval row is one of geniro's proposed changes: a card with a heading of its own and a diff. */
+export function isProposedChange(toolName: string): boolean {
+  return GENIRO_TOOLS[toolName] === 'patch';
 }

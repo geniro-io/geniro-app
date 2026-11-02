@@ -33,7 +33,7 @@ export type RecommendationOutcomeStatus = 'applied' | 'skipped' | 'failed';
 /** One recommendation as the card draws it. */
 export interface RecommendationView {
   id: string;
-  target: 'team' | 'repo' | 'user' | 'memory';
+  target: 'team' | 'repo' | 'user' | 'memory' | 'project';
   territory: RecommendationTerritory;
   kind: string;
   location: string;
@@ -611,6 +611,7 @@ export function RecommendationsCard({
       ['repo', 'Repository'],
       ['user', 'Your agent instructions'],
       ['memory', 'Memory'],
+      ['project', 'Project instructions'],
     ] as const
   )
     .filter(([target]) => target !== 'team' || team)

@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { describe, expect, it } from 'vitest';
 
 import type { MemoryService } from '../../memory/services/memory.service';
+import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { Item } from '../../runs/entity/item.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type {
@@ -58,6 +59,7 @@ function sink(cardAt: number | null, card: unknown = CARD) {
     {} as ThreadTimelineService,
     { enabled: true } as MemoryService,
     {} as ThreadReaderService,
+    {} as ProjectScopeService,
   );
   return {
     written,
@@ -147,8 +149,112 @@ describe('checkItems', () => {
         },
         'chat',
         true,
+        new Set(),
       ),
     ).toContain('6 memory items');
+  });
+
+  const projectItem = {
+    ...CARD.items[0]!,
+    id: 'P-1',
+    target: 'project' as const,
+    kind: 'update',
+    location: 'p-billing',
+    impact: {
+      ...CARD.items[0]!.impact,
+      costSavedUsd: null,
+      outcome: 'fewer retries',
+    },
+  };
+
+  it('takes a P- item naming an analysed run’s project, in a chat analysis too', () => {
+    expect(
+      checkItems(
+        { hotspots: [], items: [projectItem] },
+        'chat',
+        true,
+        new Set(['p-billing']),
+      ),
+    ).toBeNull();
+  });
+
+  it('refuses a P- item naming another project, and any when no analysed run has one', () => {
+    expect(
+      checkItems(
+        { hotspots: [], items: [{ ...projectItem, location: 'p-other' }] },
+        'chat',
+        true,
+        new Set(['p-billing']),
+      ),
+    ).toContain('location must be the projectId');
+    expect(
+      checkItems(
+        { hotspots: [], items: [projectItem] },
+        'team',
+        true,
+        new Set(),
+      ),
+    ).toContain('belong to no project');
+  });
+});
+
+describe('AnalysisReportsService — project items', () => {
+  it('refuses a P- item for a project outside the analysed runs', async () => {
+    const written: unknown[] = [];
+    const service = new AnalysisReportsService(
+      { fork: () => ({}) } as unknown as EntityManager,
+      {
+        getById: (id: string) =>
+          Promise.resolve({ id, teamId: null, projectId: 'p-billing' } as Run),
+      } as unknown as RunDao,
+      {} as ItemDao,
+      {} as ThreadTimelineService,
+      { enabled: true } as MemoryService,
+      {} as ThreadReaderService,
+      {
+        projectOfRun: (run: Pick<Run, 'projectId'>) =>
+          Promise.resolve(run.projectId ? { id: run.projectId } : null),
+      } as unknown as ProjectScopeService,
+    );
+    const { report } = service.sinkFor(
+      {
+        analysisRunId: 'analysis',
+        sourceRunId: 'source',
+        snapshotSeq: 9,
+        sourceWorking: false,
+      },
+      (kind, payload) => {
+        written.push({ kind, payload });
+        return Promise.resolve({ seq: 20 } as ItemWire);
+      },
+    );
+
+    expect(
+      await report(
+        {
+          hotspots: [],
+          items: [
+            {
+              ...CARD.items[0]!,
+              id: 'P-1',
+              target: 'project',
+              kind: 'update',
+              location: 'p-shop',
+              impact: {
+                ...CARD.items[0]!.impact,
+                costSavedUsd: null,
+                outcome: 'fewer retries',
+              },
+            },
+          ],
+        },
+        null,
+      ),
+    ).toMatchObject({
+      status: 'refused',
+      reason: expect.stringContaining('(p-billing)'),
+    });
+    expect(written).toEqual([]);
   });
 });
 
@@ -243,6 +349,7 @@ function teamReporter() {
           })),
         ),
     } as unknown as ThreadReaderService,
+    {} as ProjectScopeService,
   );
   const report = service.sinkFor(
     {

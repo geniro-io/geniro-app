@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type GeniroApi, HISTORY_PAGE_SIZES } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
+import { aProject } from '../__fixtures__/projects';
 import { RECORDED_NEW_PROPOSAL } from '../__fixtures__/team-proposals';
 import { afterPopstate } from '../__tests__/after-popstate';
 import { withVocabulary } from '../__tests__/agent-vocabulary-api';
@@ -13,6 +14,7 @@ import { withHistoryPages } from '../__tests__/history-page';
 import { emptyRunState } from '../__tests__/run-state';
 import type {
   ItemDto as ChatItem,
+  ProjectDto,
   RunDto as ChatRun,
   RunGroupDto,
   TeamsApi,
@@ -151,7 +153,13 @@ const handoffApi = vi.hoisted(() => ({ resolveHandoff: vi.fn() }));
  * card's folder, else its project's (`task-worktree.ts`).
  */
 const tasksApi = vi.hoisted(() => ({ readTask: vi.fn() }));
-const projectsApi = vi.hoisted(() => ({ readProject: vi.fn() }));
+const projectsApi = vi.hoisted(() => ({
+  readProject: vi.fn(),
+  listProjects: vi.fn((): Promise<ProjectDto[]> => Promise.resolve([])),
+  resolveProjectForFolder: vi.fn((): Promise<{ project: ProjectDto | null }> =>
+    Promise.resolve({ project: null }),
+  ),
+}));
 vi.mock('../daemon-api', async (importOriginal) => ({
   // Only the client factory is faked. `daemonErrorStatus` is the REAL parser,
   // so a test that hands the component a daemon error proves the component
@@ -276,6 +284,7 @@ const run1: ChatRun = {
   id: 'r1',
   status: 'running',
   taskIdentifier: null,
+  project: null,
   analysisSourceRunId: null,
   analysisSourceSeq: null,
   analysisTeamSlug: null,
@@ -341,14 +350,18 @@ function makeClient(): {
   emitRunStatus: (event: RunStatusEvent) => void;
   emitRunDeleted: (runId: string) => void;
   emitRunsChanged: (runs: ChatRun[]) => void;
+  fireProjectsChanged: (textsOnly?: boolean) => void;
   joinRun: ReturnType<typeof vi.fn>;
 } {
+  const projectsChangedListeners = new Set<
+    (event: { projectId: string; textsOnly: boolean }) => void
+  >();
   /**
    * A SET for `runStatusListeners`' reason below: the open run's state hook
    * (`use-run-state.ts`) listens for structural rows beside `use-chat-run`.
    */
   const itemListeners = new Set<(item: ChatItem) => void>();
-  let reconnectListener: ((error?: Error) => void) | null = null;
+  const reconnectListeners = new Set<(error?: Error) => void>();
   let disconnectListener: (() => void) | null = null;
   let verdictAckListener: ((ack: VerdictAck) => void) | null = null;
   let groupsChangedListener: (() => void) | null = null;
@@ -372,9 +385,9 @@ function makeClient(): {
       };
     },
     onReconnect: (l: (error?: Error) => void) => {
-      reconnectListener = l;
+      reconnectListeners.add(l);
       return () => {
-        reconnectListener = null;
+        reconnectListeners.delete(l);
       };
     },
     onDisconnect: (l: () => void) => {
@@ -414,6 +427,14 @@ function makeClient(): {
       };
     },
     onSharesChanged: () => () => undefined,
+    onProjectsChanged: (
+      l: (event: { projectId: string; textsOnly: boolean }) => void,
+    ) => {
+      projectsChangedListeners.add(l);
+      return () => {
+        projectsChangedListeners.delete(l);
+      };
+    },
     onVerdictAck: (l: (ack: VerdictAck) => void) => {
       verdictAckListener = l;
       return () => {
@@ -426,13 +447,22 @@ function makeClient(): {
   } as unknown as DaemonClient;
   return {
     client,
+    fireProjectsChanged: (textsOnly = false) => {
+      for (const listener of [...projectsChangedListeners]) {
+        listener({ projectId: 'p-any', textsOnly });
+      }
+    },
     emitItem: (item) => {
       for (const listener of [...itemListeners]) {
         listener(item);
       }
     },
     fireDisconnect: () => disconnectListener?.(),
-    fireReconnect: () => reconnectListener?.(),
+    fireReconnect: () => {
+      for (const listener of [...reconnectListeners]) {
+        listener();
+      }
+    },
     fireVerdictAck: (ack) => verdictAckListener?.(ack),
     fireGroupsChanged: () => groupsChangedListener?.(),
     emitLiveText: (event) => liveTextListener?.(event),
@@ -4650,6 +4680,7 @@ describe('Chats team runs', () => {
     id: 'w1',
     status: 'running',
     taskIdentifier: null,
+    project: null,
     analysisSourceRunId: null,
     analysisSourceSeq: null,
     analysisTeamSlug: null,
@@ -6612,6 +6643,7 @@ describe('Chats — handing a conversation to the user', () => {
       id: 'w1',
       status: 'running',
       taskIdentifier: null,
+      project: null,
       analysisSourceRunId: null,
       analysisSourceSeq: null,
       analysisTeamSlug: null,
@@ -6934,6 +6966,250 @@ describe('Chats composer memory & suggestions', () => {
 
     expect(api.createChat).toHaveBeenCalledWith({
       createChatDto: expect.objectContaining({ autoCompactPercent: 70 }),
+    });
+  });
+
+  it('sends no project for the folder’s own, and shows it on the chip', async () => {
+    const app = aProject({ id: 'p-app', name: 'App', folder: '/proj' });
+    projectsApi.listProjects.mockResolvedValue([app]);
+    projectsApi.resolveProjectForFolder.mockResolvedValue({ project: app });
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const chip = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Project for the new run"]',
+    );
+    expect(chip?.textContent).toContain('App');
+    await sendTask(container);
+
+    expect(
+      Object.keys(api.createChat.mock.calls[0]![0].createChatDto),
+    ).not.toContain('projectId');
+  });
+
+  async function pickProject(
+    container: HTMLElement,
+    label: string,
+  ): Promise<void> {
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Project for the new run"]',
+        )!
+        .click();
+    });
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((option) => option.textContent?.trim() === label)!;
+    await act(async () => {
+      row.click();
+    });
+  }
+
+  async function mountWithProjects(
+    clientOf: ReturnType<typeof makeClient> = makeClient(),
+  ): Promise<HTMLElement> {
+    const app = aProject({ id: 'p-app', name: 'App', folder: '/proj' });
+    const other = aProject({ id: 'p-other', name: 'Other', folder: '/w' });
+    projectsApi.listProjects.mockResolvedValue([app, other]);
+    projectsApi.resolveProjectForFolder.mockResolvedValue({ project: app });
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const container = await mount(clientOf.client);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    return container;
+  }
+
+  it('binds the chat to the project picked on the chip', async () => {
+    const container = await mountWithProjects();
+
+    await pickProject(container, 'Other');
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenLastCalledWith({
+      createChatDto: expect.objectContaining({ projectId: 'p-other' }),
+    });
+  });
+
+  it('falls back to the folder’s project once the picked one is deleted, chip and run alike', async () => {
+    const clientOf = makeClient();
+    const container = await mountWithProjects(clientOf);
+    await pickProject(container, 'Other');
+
+    projectsApi.listProjects.mockResolvedValue([
+      aProject({ id: 'p-app', name: 'App', folder: '/proj' }),
+    ]);
+    await act(async () => {
+      clientOf.fireProjectsChanged();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(
+      container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Project for the new run"]',
+      )?.textContent,
+    ).toContain('App');
+    await sendTask(container);
+    expect(
+      Object.keys(api.createChat.mock.calls.at(-1)![0].createChatDto),
+    ).not.toContain('projectId');
+  });
+
+  it('does not read the projects again for an edit of a project’s texts', async () => {
+    const clientOf = makeClient();
+    await mountWithProjects(clientOf);
+    const reads = projectsApi.listProjects.mock.calls.length;
+
+    await act(async () => {
+      clientOf.fireProjectsChanged(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(projectsApi.listProjects.mock.calls.length).toBe(reads);
+
+    await act(async () => {
+      clientOf.fireProjectsChanged(false);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(projectsApi.listProjects.mock.calls.length).toBe(reads + 1);
+  });
+
+  it('reads the projects again after a reconnect, which may have missed a change', async () => {
+    const clientOf = makeClient();
+    const container = await mountWithProjects(clientOf);
+    const other = aProject({ id: 'p-other', name: 'Other', folder: '/w' });
+    const late = aProject({ id: 'p-late', name: 'Late', folder: '/late' });
+    projectsApi.listProjects.mockResolvedValue([
+      aProject({ id: 'p-app', name: 'App', folder: '/proj' }),
+      other,
+      late,
+    ]);
+
+    await act(async () => {
+      clientOf.fireReconnect();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Project for the new run"]',
+        )!
+        .click();
+    });
+
+    expect(
+      [...container.querySelectorAll('[role="option"]')].map((option) =>
+        option.textContent?.trim(),
+      ),
+    ).toContain('Late');
+  });
+
+  it('binds the chat to no project when No project is picked, inside a project’s folder', async () => {
+    const container = await mountWithProjects();
+
+    await pickProject(container, 'No project');
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenLastCalledWith({
+      createChatDto: expect.objectContaining({ projectId: null }),
+    });
+  });
+
+  it('starts a team under the project picked on the chip', async () => {
+    teamApi.listTeams.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        memberCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    teamApi.startTeamRun.mockResolvedValue({ ...run1, id: 'w2' });
+    const container = await mountWithProjects();
+
+    await pickMenuRow(container, targetTrigger(container), 'Review team');
+    await pickProject(container, 'Other');
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'build it');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Start run"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(teamApi.startTeamRun).toHaveBeenCalledWith({
+      slug: 'review-team',
+      runTeamDto: expect.objectContaining({ projectId: 'p-other' }),
+    });
+  });
+
+  it('sends a configuration’s project even before the projects list has answered', async () => {
+    projectsApi.listProjects.mockReturnValue(new Promise(() => {}));
+    window.geniro.getSettings = vi.fn().mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      runConfigs: [
+        {
+          id: 'cfg1',
+          name: 'Billing setup',
+          cwd: '/proj',
+          branch: null,
+          target: 'claude',
+          model: null,
+          effort: null,
+          contextWindow: null,
+          modelParameters: {},
+          approval: null,
+          configDir: null,
+          projectId: 'p-billing',
+        },
+      ],
+    });
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Saved configurations"]',
+        )!
+        .click();
+    });
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((el) => el.textContent?.includes('Billing setup'))!;
+    await act(async () => {
+      row.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenLastCalledWith({
+      createChatDto: expect.objectContaining({ projectId: 'p-billing' }),
     });
   });
 

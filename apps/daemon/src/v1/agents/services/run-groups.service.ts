@@ -204,6 +204,26 @@ export class RunGroupsService {
   }
 
   /**
+   * Which group claims a new run started under a project by choice: that
+   * project's group while it still exists — a deliberate answer about where
+   * the run belongs, as a card's project gives its task runs — else
+   * {@link resolveAutoGroupId}.
+   */
+  async groupForNewRun(run: {
+    cwd: string | null;
+    teamId?: string | null;
+    chosenProjectGroupId: string | null;
+  }): Promise<string | null> {
+    if (
+      run.chosenProjectGroupId !== null &&
+      (await this.exists(run.chosenProjectGroupId))
+    ) {
+      return run.chosenProjectGroupId;
+    }
+    return this.resolveAutoGroupId(run);
+  }
+
+  /**
    * Which group, if any, claims a new run — by the TEAM it runs, else by
    * the folder it was started in.
    *

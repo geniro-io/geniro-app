@@ -88,6 +88,12 @@ vi.mock('./daemon-client', () => ({
     onUsageRecorded(): () => void {
       return () => {};
     }
+    onProjectsChanged(): () => void {
+      return () => {};
+    }
+    onReconnect(): () => void {
+      return () => {};
+    }
   },
 }));
 vi.mock('./terminal/terminal-panel', () => ({ TerminalPanel: () => null }));

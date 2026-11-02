@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import { ConflictException, NotFoundException } from '@packages/common';
 
 import {
+  RECOMMENDATION_ID_PREFIX,
   type RecommendationApply,
   RecommendationApplySchema,
   type RecommendationsPayload,
@@ -95,4 +96,52 @@ export async function appliesOf(
   return rows
     .map((row) => applyOf(row.payload))
     .filter((apply): apply is RecommendationApply => apply !== null);
+}
+
+const WRITTEN_ITEMS = {
+  team: {
+    code: 'NOT_A_TEAM_ITEM',
+    one: 'is not a team item',
+    many: 'are not team items',
+    only: 'only W- items change the team',
+  },
+  project: {
+    code: 'NOT_A_PROJECT_ITEM',
+    one: 'is not a project item',
+    many: 'are not project items',
+    only: 'only P- items change project instructions',
+  },
+} as const;
+
+/**
+ * Why an analysis's write may not carry out `ids`: an id of another target,
+ * none at all, or one the user did not select in the newest Apply. Null when
+ * every id is the target's and selected there.
+ */
+export function unappliedRefusal(
+  target: keyof typeof WRITTEN_ITEMS,
+  ids: readonly string[],
+  apply: RecommendationApply,
+): { error: string; message: string } | null {
+  const words = WRITTEN_ITEMS[target];
+  const others = ids.filter(
+    (id) => !id.startsWith(RECOMMENDATION_ID_PREFIX[target]),
+  );
+  if (others.length > 0) {
+    return {
+      error: words.code,
+      message: `${others.join(', ')} ${others.length === 1 ? words.one : words.many} — ${words.only}`,
+    };
+  }
+  const unselected = ids.filter((id) => !apply.ids.includes(id));
+  if (ids.length === 0 || unselected.length > 0) {
+    return {
+      error: 'NOT_SELECTED',
+      message:
+        ids.length === 0
+          ? 'name the recommendation ids this change carries out'
+          : `${unselected.join(', ')} ${unselected.length === 1 ? 'was' : 'were'} not selected in the latest Apply (${apply.ids.join(', ')})`,
+    };
+  }
+  return null;
 }

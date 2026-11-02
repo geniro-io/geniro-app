@@ -74,6 +74,7 @@ import {
   HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_PUBLISH_ACTION_TOOL,
   HOST_QUESTION_TOOL,
@@ -132,6 +133,8 @@ import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
+import { ProjectInstructionsBroker } from './project-instructions.broker';
+import type { ProjectInstructionsChangeService } from './project-instructions-change.service';
 import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
@@ -151,8 +154,14 @@ const MEMORY_OFF: Pick<MemoryService, 'runSnapshot'> = {
   runSnapshot: async () => ({ nativeMemoryOff: false, memoryIndex: null }),
 };
 
-const NO_PROJECT: Pick<ProjectScopeService, 'instructionsSnapshot'> = {
-  instructionsSnapshot: async () => null,
+const NO_PROJECT: Pick<ProjectScopeService, 'placeNewRun' | 'liveNamesOf'> = {
+  placeNewRun: async () => ({
+    projectId: null,
+    chosenProjectGroupId: null,
+    source: 'none',
+    instructions: null,
+  }),
+  liveNamesOf: async () => new Map(),
 };
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
@@ -1112,7 +1121,9 @@ function setup(
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot'>;
     /** What the run's project tells it; no project when absent. */
-    projectScope?: Pick<ProjectScopeService, 'instructionsSnapshot'>;
+    projectScope?: Partial<
+      Pick<ProjectScopeService, 'placeNewRun' | 'liveNamesOf'>
+    >;
     holds?: RunHoldRegistry;
     /** Windows measured before this daemon ran, by `FakeContextWindowStore.key`. */
     contextWindows?: Record<string, number>;
@@ -1120,6 +1131,8 @@ function setup(
     resolutions?: Record<string, string>;
     /** The analysis sink a turn installs, for the cases that drive an analysis chat. */
     analysisSink?: AnalysisReportsService['sinkFor'];
+    /** What a project-instructions card's Apply writes. */
+    projectWrites?: Pick<ProjectInstructionsChangeService, 'write'>;
   } = {},
 ) {
   const runDao = new FakeRunDao();
@@ -1191,6 +1204,7 @@ function setup(
   const charts = new ChartBroker();
   const patches = new PatchBroker();
   const plans = new PlanBroker();
+  const projectCards = new ProjectInstructionsBroker();
   // Its sink is all these cases observe: whether a chat turn offers it.
   const runOutcomes = new RunOutcomeBroker(
     ...([em, runDao, {}, {}, bus] as unknown as ConstructorParameters<
@@ -1282,6 +1296,8 @@ function setup(
   const assertedGroups: string[] = [];
   const groups = {
     resolveAutoGroupId: async () => opts.autoGroupId ?? null,
+    groupForNewRun: async (run: { chosenProjectGroupId: string | null }) =>
+      run.chosenProjectGroupId ?? opts.autoGroupId ?? null,
     assertExists: async (groupId: string) => {
       assertedGroups.push(groupId);
     },
@@ -1389,7 +1405,7 @@ function setup(
     teamBuilders,
     opts.runWrites ?? new RunWriteQueue(),
     (opts.memory ?? MEMORY_OFF) as unknown as MemoryService,
-    (opts.projectScope ?? NO_PROJECT) as unknown as ProjectScopeService,
+    { ...NO_PROJECT, ...opts.projectScope } as unknown as ProjectScopeService,
     opts.holds ?? new RunHoldRegistry(),
     {
       token: 'launch',
@@ -1401,6 +1417,8 @@ function setup(
     opts.monitors,
     undefined,
     runOutcomes,
+    projectCards,
+    opts.projectWrites as ProjectInstructionsChangeService | undefined,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -1416,6 +1434,7 @@ function setup(
     charts,
     patches,
     plans,
+    projectCards,
     runOutcomes,
     metrics,
     comparisons,
@@ -3038,7 +3057,7 @@ describe('ChatService', () => {
     it('answers an ACCEPTED patch that no longer fits as stale, not as a refusal', async () => {
       // The distinction the fourth outcome arm exists for: told "rejected", an
       // agent argues with the user; told "stale", it re-reads the file.
-      const { service, claude, patches, approvals } = setup();
+      const { service, claude, patches, approvals, itemDao } = setup();
       const run = await service.createChat({ agentKind: 'claude', cwd: dir });
       await service.sendMessage(run.id, 'hello');
       writeFileSync(join(dir, 'c.ts'), 'somebody else changed this\n', 'utf8');
@@ -3062,6 +3081,14 @@ describe('ChatService', () => {
       expect(readFileSync(join(dir, 'c.ts'), 'utf8')).toBe(
         'somebody else changed this\n',
       );
+      const verdict = itemDao.items.find(
+        (item) => item.runId === run.id && item.kind === 'approval_verdict',
+      );
+      expect(JSON.parse(verdict!.payload)).toMatchObject({
+        allow: true,
+        outcome: 'not-saved',
+        answer: 'the text to replace is no longer in the file',
+      });
       await settle(claude);
     });
 
@@ -4204,7 +4231,70 @@ describe('ChatService', () => {
         expect(JSON.parse(verdict!.payload)).toEqual({
           id: requestId,
           allow: true,
+          outcome: 'saved',
           answer: 'applied to v.ts',
+        });
+      });
+
+      it('posts a project-instructions card on a CLI that will not wait, and writes it on Apply', async () => {
+        const writes: unknown[] = [];
+        const ctx = setup({
+          analysisSink: (turn) => ({ turn }) as never,
+          projectWrites: {
+            write: async (runId, change) => {
+              writes.push({ runId, change });
+              return { status: 'saved', instructionsRevision: 2 };
+            },
+          },
+        });
+        const plain = await ctx.service.createChat({
+          agentKind: 'cursor-agent',
+          cwd: dir,
+        });
+        const analysis = await ctx.service.createChat({
+          agentKind: 'cursor-agent',
+          cwd: dir,
+          analysisSource: { runId: plain.id, seq: 1, working: false },
+        });
+        await ctx.service.sendMessage(analysis.id, 'analyse');
+        const change = {
+          projectId: 'p-billing',
+          project: 'Billing',
+          previous: null,
+          next: 'Use pnpm.',
+          baseRevision: 1,
+          ids: ['P-1'],
+          cardSeq: 3,
+        };
+
+        const outcome = await postedOrPending(
+          ctx.itemDao,
+          ctx.projectCards.propose(analysis.id, SINGLE_AGENT_NODE, change),
+        );
+        expect(outcome).toEqual({ status: 'posted' });
+        await settle(ctx.cursor);
+        expect(writes).toEqual([]);
+        const [pending] = ctx.approvals.listByRun(analysis.id);
+        expect(pending?.toolName).toBe(HOST_PROJECT_INSTRUCTIONS_TOOL);
+
+        expect(
+          ctx.approvals.resolve(analysis.id, pending!.requestId, true),
+        ).toBe(true);
+        await vi.waitFor(() => {
+          expect(
+            ctx.itemDao.items.some((item) => item.kind === 'approval_verdict'),
+          ).toBe(true);
+        });
+
+        expect(writes).toEqual([{ runId: analysis.id, change }]);
+        const verdict = ctx.itemDao.items.find(
+          (item) => item.kind === 'approval_verdict',
+        );
+        expect(JSON.parse(verdict!.payload)).toEqual({
+          id: pending!.requestId,
+          allow: true,
+          outcome: 'saved',
+          answer: 'saved as revision 2',
         });
       });
 
@@ -6757,6 +6847,82 @@ describe('ChatService', () => {
     expect(analyses.canAnalyse(analysis.id, SINGLE_AGENT_NODE)).toBe(false);
   });
 
+  it('puts an analysis’s project-instructions change on a diff card even in auto, and writes only on Apply', async () => {
+    const writes: unknown[] = [];
+    const { service, projectCards, approvals, itemDao, claude } = setup({
+      analysisSink: (turn) => ({ turn }) as never,
+      projectWrites: {
+        write: async (runId, change) => {
+          writes.push({ runId, change });
+          return { status: 'saved', instructionsRevision: 4 };
+        },
+      },
+    });
+    const plain = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const analysis = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'auto',
+      analysisSource: { runId: plain.id, seq: 3, working: false },
+    });
+    await service.sendMessage(plain.id, 'hello');
+    await service.sendMessage(analysis.id, 'analyse');
+    expect(projectCards.canPropose(plain.id, SINGLE_AGENT_NODE)).toBe(false);
+    expect(projectCards.canPropose(analysis.id, SINGLE_AGENT_NODE)).toBe(true);
+
+    const change = {
+      projectId: 'p-billing',
+      project: 'Billing',
+      previous: 'Use pnpm.',
+      next: 'Use pnpm. Run pnpm test:unit.',
+      baseRevision: 3,
+      ids: ['P-1'],
+      cardSeq: 9,
+    };
+    const proposed = projectCards.propose(
+      analysis.id,
+      SINGLE_AGENT_NODE,
+      change,
+    );
+    await vi.waitFor(() =>
+      expect(approvals.listByRun(analysis.id)).toHaveLength(1),
+    );
+    const card = itemDao.items.find(
+      (item) => item.runId === analysis.id && item.kind === 'approval_request',
+    );
+    expect(JSON.parse(card!.payload)).toMatchObject({
+      toolName: HOST_PROJECT_INSTRUCTIONS_TOOL,
+      input: {
+        project: 'Billing',
+        diff: '@@ -1,1 +1,1 @@\n-Use pnpm.\n+Use pnpm. Run pnpm test:unit.',
+        old_string: 'Use pnpm.',
+        new_string: 'Use pnpm. Run pnpm test:unit.',
+        ids: ['P-1'],
+      },
+    });
+    expect(writes).toEqual([]);
+
+    const [pending] = approvals.listByRun(analysis.id);
+    expect(approvals.resolve(analysis.id, pending!.requestId, true)).toBe(true);
+    await drain();
+    await expect(proposed).resolves.toEqual({
+      status: 'saved',
+      instructionsRevision: 4,
+    });
+    expect(writes).toEqual([{ runId: analysis.id, change }]);
+    expect(
+      itemDao.items.some(
+        (item) =>
+          item.runId === analysis.id &&
+          item.kind === 'approval_verdict' &&
+          item.payload.includes('saved as revision 4') &&
+          item.payload.includes('"outcome":"saved"'),
+      ),
+    ).toBe(true);
+    claude.finish();
+    await drain();
+  });
+
   it('installs the analysis tools on a team analysis, scoped to the runs it was started on', async () => {
     const turns: unknown[] = [];
     const { service, analyses, claude } = setup({
@@ -8162,7 +8328,7 @@ describe('ChatService', () => {
     );
   });
 
-  it('snapshots the shared memory onto the run and spawns every turn with it, whatever memory holds later', async () => {
+  it('snapshots the shared memory of the run’s settled project onto the run and spawns every turn with it, whatever memory holds later', async () => {
     const asked: unknown[] = [];
     let index = 'INDEX AT CREATION';
     const { service, claude, runDao } = setup({
@@ -8171,6 +8337,14 @@ describe('ChatService', () => {
           asked.push(facts);
           return { nativeMemoryOff: true, memoryIndex: index };
         },
+      },
+      projectScope: {
+        placeNewRun: async () => ({
+          projectId: 'p-billing',
+          chosenProjectGroupId: null,
+          source: 'card',
+          instructions: null,
+        }),
       },
     });
     const run = await service.createChat({
@@ -8186,7 +8360,9 @@ describe('ChatService', () => {
     index = 'INDEX AFTER AN APPROVE';
     await service.sendMessage(run.id, 'again');
 
-    expect(asked).toEqual([{ taskId: 'task-7', cwd: run.cwd }]);
+    expect(asked).toEqual([
+      { taskId: 'task-7', cwd: run.cwd, projectId: 'p-billing' },
+    ]);
     expect(runDao.runs.get(run.id)).toMatchObject({
       memoryIndex: 'INDEX AT CREATION',
       nativeMemoryOff: true,
@@ -8205,9 +8381,14 @@ describe('ChatService', () => {
     let text: string | null = 'Project: Billing\n\nUse pnpm.';
     const { service, claude, runDao } = setup({
       projectScope: {
-        instructionsSnapshot: async (facts) => {
+        placeNewRun: async (facts) => {
           asked.push(facts);
-          return text;
+          return {
+            projectId: 'p-billing',
+            chosenProjectGroupId: null,
+            source: 'card',
+            instructions: text,
+          };
         },
       },
     });
@@ -8224,13 +8405,53 @@ describe('ChatService', () => {
     await service.sendMessage(run.id, 'again');
 
     expect(asked).toEqual([{ taskId: 'task-7', cwd: run.cwd }]);
-    expect(runDao.runs.get(run.id)?.projectInstructions).toBe(
-      'Project: Billing\n\nUse pnpm.',
-    );
+    expect(runDao.runs.get(run.id)).toMatchObject({
+      projectId: 'p-billing',
+      projectSource: 'card',
+      projectInstructions: 'Project: Billing\n\nUse pnpm.',
+    });
     expect(claude.start).toHaveBeenCalledTimes(2);
     for (const [input] of claude.start.mock.calls) {
       expect(input.projectInstructions).toBe('Project: Billing\n\nUse pnpm.');
     }
+  });
+
+  it('stores projectId/projectSource and snapshots the explicit project', async () => {
+    const asked: unknown[] = [];
+    const { service, runDao } = setup({
+      projectScope: {
+        placeNewRun: async (facts) => {
+          asked.push(facts);
+          return {
+            projectId: 'p-billing',
+            chosenProjectGroupId: 'g-billing',
+            source: 'explicit',
+            instructions: 'Project: Billing\n\nUse pnpm.',
+          };
+        },
+        liveNamesOf: async (ids) =>
+          new Map(
+            [...ids].includes('p-billing') ? [['p-billing', 'Billing']] : [],
+          ),
+      },
+    });
+
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      projectId: 'p-billing',
+    });
+
+    expect(asked).toEqual([
+      { taskId: null, cwd: run.cwd, projectId: 'p-billing' },
+    ]);
+    expect(runDao.runs.get(run.id)).toMatchObject({
+      projectId: 'p-billing',
+      projectSource: 'explicit',
+      projectInstructions: 'Project: Billing\n\nUse pnpm.',
+      groupId: 'g-billing',
+    });
+    expect(run.project).toEqual({ id: 'p-billing', name: 'Billing' });
   });
 
   it('leaves a run in no project with no project instructions on the row or the turn', async () => {

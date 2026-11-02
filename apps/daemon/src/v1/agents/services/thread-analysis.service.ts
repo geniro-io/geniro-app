@@ -10,6 +10,7 @@ import { ConflictException, NotFoundException } from '@packages/common';
 import type { Subscription } from 'rxjs';
 
 import { MemoryService } from '../../memory/services/memory.service';
+import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import {
   type AnalysedRun,
   ANALYSIS_DEFAULT_APPROVAL,
@@ -73,6 +74,7 @@ export class ThreadAnalysisService
     private readonly chats: ChatService,
     private readonly bus: AgentEventBus,
     private readonly memory: MemoryService,
+    private readonly projectScope: ProjectScopeService,
   ) {}
 
   /**
@@ -187,9 +189,14 @@ export class ThreadAnalysisService
       (analysis) => analysis.id,
     );
     const kind = analysedThreadKindOf(source);
+    // The source's project, or explicitly none: the analysis's own memory
+    // writes and instructions follow the thread it reads, whatever folder the
+    // dialog runs it in.
+    const project = await this.projectScope.projectOfRun(source);
     const run = await this.chats.createChat({
       agentKind: input.agentKind,
       cwd,
+      projectId: project?.id ?? null,
       approval: input.approval ?? ANALYSIS_DEFAULT_APPROVAL,
       model: input.model,
       effort: input.effort,
@@ -227,6 +234,25 @@ export class ThreadAnalysisService
     // Its own row as it reads after the brief, not the copy taken before it —
     // the popup opens on this, and a `pending` copy would show no Stop.
     return (await this.chats.findAnalysis(source.id, run.id)) ?? run;
+  }
+
+  /**
+   * The one project every analysed run belongs to, else none: runs that span
+   * projects, or none at all, give the analysis chat no project.
+   */
+  private async commonProjectOf(
+    runs: readonly AnalysedRun[],
+    em: EntityManager,
+  ): Promise<string | null> {
+    const ids = new Set<string | null>();
+    for (const { runId } of runs) {
+      const row = await this.runDao.getById(runId, em);
+      ids.add(
+        row ? ((await this.projectScope.projectOfRun(row))?.id ?? null) : null,
+      );
+    }
+    const [only] = ids;
+    return ids.size === 1 ? (only ?? null) : null;
   }
 
   /** The team's analysis as it reads now, or null when it has none. */
@@ -281,6 +307,7 @@ export class ThreadAnalysisService
     const run = await this.chats.createChat({
       agentKind: input.agentKind,
       cwd,
+      projectId: await this.commonProjectOf(runs, em),
       approval: input.approval ?? ANALYSIS_DEFAULT_APPROVAL,
       model: input.model,
       effort: input.effort,

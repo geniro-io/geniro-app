@@ -13,6 +13,8 @@ import type { MonitorBroker } from '../../agents/services/monitor.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
 import type { PatchBroker } from '../../agents/services/patch.broker';
 import type { PlanBroker } from '../../agents/services/plan.broker';
+import type { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
+import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
 import type { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import type { TeamBuilderBroker } from '../../agents/services/team-builder.broker';
 import type { TeamNoteBroker } from '../../agents/services/team-note.broker';
@@ -59,6 +61,7 @@ import { RecordOutcomeTool } from './record-outcome/record-outcome.tool';
 import { RemoveActionTool } from './remove-action/remove-action.tool';
 import { ReportFindingsTool } from './report-findings/report-findings.tool';
 import { ReportRecommendationsTool } from './report-recommendations/report-recommendations.tool';
+import { SaveProjectInstructionsTool } from './save-project-instructions/save-project-instructions.tool';
 import { SaveTeamChangeTool } from './save-team-change/save-team-change.tool';
 import { SearchChatsTool } from './search-chats/search-chats.tool';
 import { ShowArtifactTool } from './show-artifact/show-artifact.tool';
@@ -99,6 +102,8 @@ export interface McpToolDeps {
   analysis: AnalysisBroker;
   threads: ThreadReaderService;
   teamChanges: TeamChangeService;
+  projectInstructions: ProjectInstructionsChangeService;
+  projectInstructionCards: ProjectInstructionsBroker;
   teamHistory: TeamHistoryService;
   teamGate: TeamProposalBroker;
   teamBuilders: TeamBuilderBroker;
@@ -166,6 +171,11 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
       deps.teamBuilders,
       deps.threads,
       deps.teamChanges,
+    ),
+    new SaveProjectInstructionsTool(
+      deps.analysis,
+      deps.projectInstructions,
+      deps.projectInstructionCards,
     ),
     new BackupTeamTool(deps.teamBuilders, deps.teamChanges),
     new NotifyUserTool(deps.notices),

@@ -40,6 +40,14 @@ export function isTerminalRunStatus(status: RunStatus): boolean {
   return !LIVE_RUN_STATUSES.has(status);
 }
 
+/**
+ * How a run came by its project when it was created: chosen (`explicit`, a
+ * project or deliberately none), its task card's, the nearest project folder
+ * above the one it works in, or nothing found (`none`).
+ */
+export const PROJECT_SOURCES = ['explicit', 'card', 'folder', 'none'] as const;
+export type ProjectSource = (typeof PROJECT_SOURCES)[number];
+
 /** A member may additionally be `skipped` — it was never started before the run settled. */
 export const NodeStatusSchema = z
   .enum([...RUN_STATUSES, 'skipped'])

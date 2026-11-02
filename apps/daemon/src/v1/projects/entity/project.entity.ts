@@ -81,6 +81,15 @@ export class Project extends TimestampsEntity {
   @Property({ type: 'text', nullable: true })
   instructions: string | null = null;
 
+  /**
+   * Counts every change to {@link description} or {@link instructions}. A
+   * writer that read them quotes it back (`expectedInstructionsRevision`), so
+   * the Projects page's autosave and an analysis's write never overwrite each
+   * other unseen.
+   */
+  @Property({ type: 'integer' })
+  instructionsRevision: number = 0;
+
   // ── Run configuration ───────────────────────────────────────────────────
   // Null throughout, and null means "unset — use whatever the composer would
   // have". A project that has never been configured must not pin an agent or a

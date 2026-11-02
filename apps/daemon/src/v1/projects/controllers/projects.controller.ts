@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
@@ -14,9 +15,11 @@ import {
   CreateProjectDto,
   ProjectDeletedDto,
   ProjectDto,
+  ProjectForFolderDto,
+  ProjectForFolderQueryDto,
   UpdateProjectDto,
 } from '../dto/project.dto';
-import type { ProjectWire } from '../projects.types';
+import type { ProjectForFolder, ProjectWire } from '../projects.types';
 import { ProjectsService } from '../services/projects.service';
 
 /**
@@ -47,6 +50,20 @@ export class ProjectsController {
   @ZodResponse({ status: 201, type: ProjectDto })
   create(@Body() dto: CreateProjectDto): Promise<ProjectWire> {
     return this.projects.create(dto);
+  }
+
+  /**
+   * The project a new chat started in `path` would belong to by the folder
+   * rule — what the composer shows before a run exists. Declared before
+   * `:projectId` so the segment is not read as an id.
+   */
+  @Get('of-folder')
+  @ApiOperation({ operationId: 'resolveProjectForFolder' })
+  @ZodResponse({ status: 200, type: ProjectForFolderDto })
+  forFolder(
+    @Query() query: ProjectForFolderQueryDto,
+  ): Promise<ProjectForFolder> {
+    return this.projects.forFolder(query.path);
   }
 
   @Get(':projectId')

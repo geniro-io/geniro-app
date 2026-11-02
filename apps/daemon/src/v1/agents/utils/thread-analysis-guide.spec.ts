@@ -6,10 +6,12 @@ import {
   HOST_MEMORY_FORGET_TOOL,
   HOST_MEMORY_SAVE_TOOL,
   HOST_METRICS_TOOL,
+  HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
   HOST_TEAM_CHANGE_TOOL,
 } from '../chat.types';
 import {
+  builderChatAnalysisGuide,
   teamAnalysisBrief,
   teamAnalysisGuide,
   threadAnalysisBrief,
@@ -25,7 +27,7 @@ describe('threadAnalysisGuide', () => {
     expect(guide).toContain('W-1, W-2');
     expect(guide).toContain('U-1, U-2');
     expect(guide).toContain('M-1, M-2');
-    expect(guide).toContain('Recommend changes of four kinds');
+    expect(guide).toContain('Recommend changes of five kinds');
     expect(guide).toContain('view=team lists them under `userInstructions`');
   });
 
@@ -243,7 +245,36 @@ describe('teamAnalysisBrief', () => {
       expect(guide).not.toContain('memory item');
     }
     expect(threadAnalysisGuide('team', null, false)).toContain(
-      'changes of three kinds',
+      'changes of four kinds',
+    );
+  });
+
+  it('offers project-instruction items everywhere, applied through their own save on the description-free instructions', () => {
+    for (const guide of [
+      threadAnalysisGuide('chat', null, false),
+      threadAnalysisGuide('team', null, true),
+      teamAnalysisGuide(null, true),
+      builderChatAnalysisGuide(true, 5),
+    ]) {
+      expect(guide).toContain('target "project"');
+      expect(guide).toContain('P-1, P-2');
+      expect(guide).toContain('Read view=project');
+      expect(guide).toContain(
+        `- Last, project items: read view=project, then call \`${HOST_PROJECT_INSTRUCTIONS_TOOL}\``,
+      );
+      expect(guide).toContain("Never change the project's description");
+      expect(
+        guide.indexOf('for every selected item but the project items'),
+      ).toBeGreaterThan(-1);
+      expect(
+        guide.indexOf('for every selected item but the project items'),
+      ).toBeLessThan(guide.indexOf('- Last, project items:'));
+      expect(guide).toContain(
+        "end your turn at once; the verdict arrives as your next message — mark that project's items then",
+      );
+    }
+    expect(builderChatAnalysisGuide(true, 5)).toContain(
+      'but the project items and the team items, marked once their verdict arrives',
     );
   });
 });
@@ -252,5 +283,13 @@ describe('reportRecommendationsInstructions', () => {
   it('names M- ids only while the shared memory is on', () => {
     expect(reportRecommendationsInstructions(true)).toContain('M-1, M-2');
     expect(reportRecommendationsInstructions(false)).not.toContain('M-1');
+  });
+
+  it('names P- ids for project instructions whatever the memory says', () => {
+    for (const memory of [true, false]) {
+      expect(reportRecommendationsInstructions(memory)).toContain(
+        'P-1, P-2… for the instructions of the project',
+      );
+    }
   });
 });

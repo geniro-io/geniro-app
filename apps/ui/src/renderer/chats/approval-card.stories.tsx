@@ -50,3 +50,51 @@ export const ApprovedForTheSession: Story = {
     verdictOption: 'Allow for this session',
   },
 };
+
+/** An analysis's change to a project's instructions: its changed lines, written only on Apply. */
+export const ProjectInstructionsChange: Story = {
+  args: {
+    toolName: 'save_project_instructions',
+    input: {
+      summary: 'Change the instructions of project Billing',
+      projectId: 'p-billing',
+      project: 'Billing',
+      diff: [
+        '@@ -1,5 +1,6 @@',
+        ' Use pnpm, never npm or yarn.',
+        ' Migrations live in packages/db/migrations.',
+        '-Run the unit tests before you push.',
+        '+Run pnpm test:unit and pnpm lint before you push.',
+        ' Invoices are rounded half-even, per the finance team.',
+        ' Never log a customer email.',
+        '+Ask before changing a public API route.',
+      ].join('\n'),
+      old_string: [
+        'Use pnpm, never npm or yarn.',
+        'Migrations live in packages/db/migrations.',
+        'Run the unit tests before you push.',
+        'Invoices are rounded half-even, per the finance team.',
+        'Never log a customer email.',
+      ].join('\n'),
+      new_string: [
+        'Use pnpm, never npm or yarn.',
+        'Migrations live in packages/db/migrations.',
+        'Run pnpm test:unit and pnpm lint before you push.',
+        'Invoices are rounded half-even, per the finance team.',
+        'Never log a customer email.',
+        'Ask before changing a public API route.',
+      ].join('\n'),
+      ids: ['P-1', 'P-2'],
+    },
+  },
+};
+
+/** An Apply that could not be written reads as not saved. */
+export const ProjectInstructionsNotSaved: Story = {
+  args: {
+    ...ProjectInstructionsChange.args,
+    verdict: true,
+    answer: 'the instructions were changed after the card was raised',
+    outcome: 'not-saved',
+  },
+};

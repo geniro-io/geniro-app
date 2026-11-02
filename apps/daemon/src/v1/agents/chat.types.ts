@@ -395,6 +395,8 @@ export const HOST_ANALYZED_THREAD_TOOL = 'read_analyzed_thread';
 export const HOST_RECOMMENDATIONS_TOOL = 'report_recommendations';
 export const HOST_RECOMMENDATION_MARKS_TOOL = 'mark_recommendations';
 export const HOST_TEAM_CHANGE_TOOL = 'save_team_change';
+/** An analysis's write of applied project-instructions (`P-`) items. */
+export const HOST_PROJECT_INSTRUCTIONS_TOOL = 'save_project_instructions';
 /** A team builder chat's own backup of its file, taken when the agent decides. */
 export const HOST_BACKUP_TEAM_TOOL = 'backup_team';
 
@@ -464,6 +466,7 @@ export const ANALYSIS_VIEWS = [
   'team',
   'runs',
   'history',
+  'project',
 ] as const;
 export const ANALYSIS_SPAN_KINDS = [
   'turn',
@@ -480,7 +483,7 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
   view: z
     .enum(ANALYSIS_VIEWS)
     .describe(
-      "overview: timing summary, per-member time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and team version, the runs compared version by version, every member's totals and every member's turns per model across them, in chunks when long (team analyses only). history: every version of the team with what its runs did and how it differs from the one before, every change made to it with who made it and why, and every recommendation filed about it with what became of it, in chunks when long (team threads and analyses only)",
+      "overview: timing summary, per-member time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and team version, the runs compared version by version, every member's totals and every member's turns per model across them, in chunks when long (team analyses only). history: every version of the team with what its runs did and how it differs from the one before, every change made to it with who made it and why, and every recommendation filed about it with what became of it, in chunks when long (team threads and analyses only). project: the project each analysed run belongs to — its description and instructions as they stand now, the instructionsRevision a write quotes, each run's start copy where it differs, and the project's newest changes with who made them",
     ),
   runId: z
     .string()
@@ -515,7 +518,7 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
     .min(0)
     .optional()
     .describe(
-      'item, runs, team, history: the `next.offset` the previous chunk returned',
+      'item, runs, team, history, project: the `next.offset` the previous chunk returned',
     ),
   memberId: z
     .string()
@@ -542,22 +545,25 @@ export type ReadAnalyzedThreadArgs = z.infer<
 /**
  * What a recommendation changes: the analysed team, the repository it
  * worked in, the user's own standing-instructions file of an agent it ran
- * (`AdapterConfig.userInstructions`), or geniro's shared memory.
+ * (`AdapterConfig.userInstructions`), geniro's shared memory, or the
+ * instructions of the project the analysed runs belong to.
  */
 export const RECOMMENDATION_TARGETS = [
   'team',
   'repo',
   'user',
   'memory',
+  'project',
 ] as const;
 export type RecommendationTarget = (typeof RECOMMENDATION_TARGETS)[number];
 
-/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`. */
+/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`, `P-1`. */
 export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
   team: 'W-',
   repo: 'R-',
   user: 'U-',
   memory: 'M-',
+  project: 'P-',
 };
 
 /**
@@ -577,8 +583,8 @@ export const MAX_RECOMMENDATIONS =
 export const RecommendationIdSchema = z
   .string()
   .regex(
-    /^[WRUM]-\d{1,3}$/,
-    'an id is W-<n> for a team item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry',
+    /^[WRUMP]-\d{1,3}$/,
+    'an id is W-<n> for a team item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry, P-<n> for project instructions',
   );
 
 export const RecommendationTargetSchema = z.enum(RECOMMENDATION_TARGETS);
@@ -640,7 +646,7 @@ const RecommendationImpactSchema = z.object({
 
 export const RecommendationItemSchema = z.object({
   id: RecommendationIdSchema.describe(
-    'W-1, W-2… team; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory',
+    'W-1, W-2… team; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory; P-1, P-2… project instructions',
   ),
   target: RecommendationTargetSchema,
   territory: z
@@ -653,14 +659,14 @@ export const RecommendationItemSchema = z.object({
     .min(1)
     .max(40)
     .describe(
-      'team: role|instructions|stage|parallelize|model|effort|termination|member|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget',
+      'team: role|instructions|stage|parallelize|model|effort|termination|member|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget; project: add|update|remove',
     ),
   location: z
     .string()
     .min(1)
     .max(300)
     .describe(
-      'A team member id, a repo file:line, the user-instructions file path, or for memory the entry handle (m12) to update or forget, or new to add',
+      'A team member id, a repo file:line, the user-instructions file path, for memory the entry handle (m12) to update or forget, or new to add, or for project the projectId view=project names',
     ),
   title: z.string().min(1).max(200),
   change: z
@@ -2059,6 +2065,33 @@ export type HostPatchFingerprint = 'absent' | { sha256: string };
  */
 export type HostPatchOutcome =
   | { status: 'applied'; path: string }
+  | { status: 'declined' }
+  | { status: 'stale'; reason: string }
+  | { status: 'posted' }
+  | { status: 'unavailable'; reason: string };
+
+/**
+ * An analysis's change to a project's instructions, put on a card with the
+ * old and new text before anything is written — in every approval mode,
+ * because the text reaches every later run in the project.
+ */
+export interface HostProjectInstructions {
+  projectId: string;
+  /** The project's name when the card was raised. */
+  project: string;
+  previous: string | null;
+  next: string | null;
+  /** The revision `previous` was read at; Apply writes only over it. */
+  baseRevision: number;
+  /** The `P-` ids the change carries out. */
+  ids: string[];
+  /** The recommendations card the Apply that selected them named. */
+  cardSeq: number;
+}
+
+/** What a project-instructions card resolves to; the arms mean what {@link HostPatchOutcome}'s do. */
+export type HostProjectInstructionsOutcome =
+  | { status: 'saved'; instructionsRevision: number }
   | { status: 'declined' }
   | { status: 'stale'; reason: string }
   | { status: 'posted' }
@@ -6495,6 +6528,11 @@ export const PromptCacheTtlReasonSchema = z
   .meta({ id: 'PromptCacheTtlReason' });
 export type PromptCacheTtlReason = z.infer<typeof PromptCacheTtlReasonSchema>;
 
+/** A run's project as the run wire names it. */
+export const RunProjectRefSchema = z
+  .object({ id: z.string(), name: z.string() })
+  .meta({ id: 'RunProjectRef' });
+
 export const RunWireSchema = z.object({
   id: z.string(),
   status: RunStatusSchema,
@@ -6708,6 +6746,9 @@ export const RunWireSchema = z.object({
     .describe(
       "That card's own identifier — `GEN-12` — or null for a run no card started, and for a task run made before this was recorded. Denormalized onto the run so the chat list can label a thread with the card it is working without joining two more tables",
     ),
+  project: RunProjectRefSchema.nullable().describe(
+    'The project this run was settled into when it was created, while that project exists; null for none, a deleted one, and a run from before projects were recorded on runs. Fixed for the run’s life',
+  ),
   analysisSourceRunId: z
     .string()
     .nullable()

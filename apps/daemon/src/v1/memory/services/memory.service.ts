@@ -144,26 +144,27 @@ export class MemoryService {
   }
 
   /**
-   * Where a run's memory is filed. The project: its task card's project, else
-   * the live project whose folder the run works in (a task worktree resolves
-   * to its repository), else none. The team: a team run's, else none — a
-   * chat, an analysis and a builder chat have global and project memory only.
+   * Where a run's memory is filed. The project: the live project settled when
+   * the run was created (`ProjectScopeService.projectOfRun`; an older run's
+   * task card's project, else the project bound to its folder), else none.
+   * The team: a team run's, else none — a chat, an analysis and a builder chat
+   * have global and project memory only.
    */
   async scopeOf(runId: string): Promise<MemoryPlace> {
     const run = await this.runs.getById(runId, this.em.fork());
-    return run
-      ? this.scopeFor({
-          taskId: run.taskId,
-          cwd: run.cwd,
-          teamSlug: run.teamId,
-        })
-      : { projectId: null, teamSlug: null };
+    if (!run) {
+      return { projectId: null, teamSlug: null };
+    }
+    return {
+      projectId: (await this.scope.projectOfRun(run))?.id ?? null,
+      teamSlug: run.teamId,
+    };
   }
 
   /** {@link scopeOf} for a run whose row does not exist yet. */
   async scopeFor(facts: MemoryScopeFacts): Promise<MemoryPlace> {
     return {
-      projectId: (await this.scope.projectOf(facts))?.id ?? null,
+      projectId: (await this.scope.projectOf(facts)).project?.id ?? null,
       teamSlug: facts.teamSlug ?? null,
     };
   }

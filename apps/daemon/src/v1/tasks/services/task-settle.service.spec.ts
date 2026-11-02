@@ -23,6 +23,7 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
+import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { isBreakerOpen } from '../../projects/utils/breaker';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
@@ -56,6 +57,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
   let bus: AgentEventBus;
   let taskEvents: TaskEventBus;
   let changes: TaskChangedEvent[];
+  let projectChanges: string[];
   let projectId: string;
 
   beforeAll(async () => {
@@ -98,6 +100,11 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     );
     tasks.onModuleInit();
     bus = new AgentEventBus();
+    const projectEvents = new ProjectEventBus();
+    projectChanges = [];
+    projectEvents
+      .allChanges()
+      .subscribe((event) => projectChanges.push(event.projectId));
     service = new TaskSettleService(
       em,
       bus,
@@ -106,6 +113,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       projectDao,
       tasks,
       itemDao,
+      projectEvents,
     );
     const project = await projectDao.create({
       name: 'Board',
@@ -487,7 +495,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await em.flush();
   };
 
-  it('counts a failed run against an armed project', async () => {
+  it('counts a failed run against an armed project, and announces the project changed', async () => {
     await armProject({ enabled: true });
     const task = await working();
 
@@ -495,6 +503,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
 
     expect(await streak()).toBe(1);
     expect((await taskDao.getById(task.id))?.status).toBe('failed');
+    expect(projectChanges).toEqual([projectId]);
   });
 
   it('opens the breaker at the threshold, and not one failure sooner', async () => {
@@ -513,7 +522,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(isBreakerOpen(await freshProject())).toBe(true);
   });
 
-  it('clears the streak on a success', async () => {
+  it('clears the streak on a success, and announces the project changed', async () => {
     await armProject({
       enabled: true,
       streak: PROJECT_FAILURE_BREAKER_THRESHOLD,
@@ -523,6 +532,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await service.settle('run-1', 'completed');
 
     expect(await streak()).toBe(0);
+    expect(projectChanges).toEqual([projectId]);
   });
 
   // The agent routinely moves its card to review BEFORE its turn ends, so a

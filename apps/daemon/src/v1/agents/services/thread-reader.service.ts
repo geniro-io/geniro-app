@@ -2,6 +2,13 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Optional } from '@nestjs/common';
 
 import { redactSecrets } from '../../diagnostics/utils/redact';
+import { ProjectInstructionChangeDao } from '../../projects/dao/project-instruction-change.dao';
+import type { Project } from '../../projects/entity/project.entity';
+import { ProjectScopeService } from '../../projects/services/project-scope.service';
+import {
+  projectInstructionsBody,
+  projectInstructionsText,
+} from '../../projects/utils/project-instructions';
 import type { Item } from '../../runs/entity/item.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { type ItemKind, ItemKindSchema } from '../../runs/runs.types';
@@ -25,7 +32,7 @@ import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { WallTurnDao } from '../dao/wall-turn.dao';
-import { analysedSourceOf } from '../utils/analysed-runs';
+import { analysedRunIdsOf, analysedSourceOf } from '../utils/analysed-runs';
 import { CHAT_LANE, laneOf } from '../utils/analysis-lane';
 import { callWorkedMsByStart } from '../utils/call-worked';
 import { collapseImageBlocks } from '../utils/collapse-image-blocks';
@@ -67,6 +74,8 @@ const ENVELOPE_BYTES = 200;
 
 /** A tool's name as a page names it — ACP titles a shell call with its command. */
 const TOOL_NAME_CHARS = 80;
+/** How many of each project's newest text changes view=project lists. */
+const PROJECT_VIEW_CHANGES = 20;
 
 /** One row on an `items` page is clipped to this; `item` reads it whole. */
 export const ITEM_TEXT_CHARS = 2_000;
@@ -159,6 +168,8 @@ export class ThreadReaderService {
     private readonly wallTurns: WallTurnDao,
     private readonly outcomes: RunOutcomeHistoryService,
     private readonly kindRows: RunKindRowsCache,
+    private readonly projectScope: ProjectScopeService,
+    private readonly projectChanges: ProjectInstructionChangeDao,
     @Optional() private readonly goalDao?: GoalDao,
   ) {}
 
@@ -193,6 +204,9 @@ export class ThreadReaderService {
         error: 'UNSUPPORTED',
         message: 'The history view is answered by the tool, not the reader.',
       };
+    }
+    if (args.view === 'project') {
+      return pagedAnswer(await this.project(turn), args.offset ?? 0);
     }
     if (args.view === 'runs') {
       if (!turn.team) {
@@ -257,6 +271,79 @@ export class ThreadReaderService {
           message: 'The team view is answered by the tool, not the reader.',
         };
     }
+  }
+
+  /**
+   * view=project: every project the analysed runs belong to, with its
+   * description and instructions as they stand now and the revision a write
+   * must quote, each run's start copy where its text differs from now (a
+   * rename alone is no difference), and the project's newest changes with who
+   * made them. Masked whole, then paged.
+   */
+  private async project(turn: AnalysisReadScope): Promise<Answer> {
+    const em = this.em.fork();
+    const runIds = analysedRunIdsOf(turn);
+    const byProject = new Map<string, { project: Project; runs: Answer[] }>();
+    const withoutProject: string[] = [];
+    for (const runId of runIds) {
+      const run = await this.runDao.getById(runId, em);
+      const project = run ? await this.projectScope.projectOfRun(run) : null;
+      if (run === null || project === null) {
+        withoutProject.push(runId);
+        continue;
+      }
+      const entry = byProject.get(project.id) ?? { project, runs: [] };
+      const differs =
+        projectInstructionsBody(run.projectInstructions) !==
+        projectInstructionsBody(projectInstructionsText(project));
+      entry.runs.push({
+        runId,
+        title: run.title,
+        startedWith: differs
+          ? (run.projectInstructions ??
+            '(nothing — the project said nothing then)')
+          : 'the same text as now',
+      });
+      byProject.set(project.id, entry);
+    }
+    const projects: Answer[] = [];
+    for (const { project, runs } of byProject.values()) {
+      const changes = await this.projectChanges.recentFor(
+        project.id,
+        PROJECT_VIEW_CHANGES,
+        em,
+      );
+      projects.push({
+        projectId: project.id,
+        name: project.name,
+        key: project.taskKey,
+        instructionsRevision: project.instructionsRevision,
+        description: project.description,
+        instructions: project.instructions,
+        runs,
+        changes: changes.map((change) => ({
+          at: change.changedAt.toISOString(),
+          field: change.field,
+          by: change.source,
+          previous: change.previous,
+          next: change.next,
+          ...(change.recommendationIds.length > 0
+            ? { recommendationIds: change.recommendationIds }
+            : {}),
+          ...(change.chatRunId === null ? {} : { chatRunId: change.chatRunId }),
+        })),
+      });
+    }
+    return maskedAnswer({
+      projects,
+      ...(withoutProject.length > 0
+        ? { runsWithoutProject: withoutProject }
+        : {}),
+      next:
+        projects.length === 0
+          ? 'The analysed runs belong to no project, so there are no project instructions to improve.'
+          : 'A project-instructions recommendation (P-) names its projectId and changes only `instructions`; once applied it is written with the project’s instructionsRevision as read here.',
+    });
   }
 
   async foldRuns(analysedRuns: readonly AnalysedRun[]): Promise<RunFold[]> {
@@ -449,6 +536,14 @@ export class ThreadReaderService {
       : { slug: turn.team.slug, snapshot: null, instructions: null };
   }
 
+  /** The run's project as the overview names it, or null. */
+  private async projectRefOf(
+    run: Run,
+  ): Promise<{ id: string; name: string } | null> {
+    const project = await this.projectScope.projectOfRun(run);
+    return project ? { id: project.id, name: project.name } : null;
+  }
+
   private async overview(source: AnalysisSource, run: Run): Promise<Answer> {
     const reading = await this.timelines.read(
       source.sourceRunId,
@@ -474,6 +569,7 @@ export class ThreadReaderService {
         // `timing.working`.
         statusNow: run.status,
         cwd: run.cwd,
+        project: await this.projectRefOf(run),
         createdAt: run.createdAt.toISOString(),
         snapshotSeq: source.snapshotSeq,
         // A team's agents differ per node: view=team lists theirs.

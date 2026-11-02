@@ -121,6 +121,27 @@ export const WithMemory: Story = {
   ),
 };
 
+export const WithProject: Story = {
+  render: () => (
+    <div className="w-[420px]">
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={TIMING}
+        team={false}
+        items={[
+          recommendation('R-1'),
+          recommendation('M-1'),
+          recommendation('P-1'),
+        ]}
+        applied={null}
+        outcomes={{}}
+        onApply={() => undefined}
+      />
+    </div>
+  ),
+};
+
 export const Empty: Story = {
   render: () => (
     <div className="w-[560px]">

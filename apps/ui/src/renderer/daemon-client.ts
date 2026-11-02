@@ -1111,6 +1111,31 @@ export function parseTaskChanged(data: unknown): TaskChangedEvent | null {
   };
 }
 
+/** One project created, changed or deleted. */
+export interface ProjectsChangedEvent {
+  projectId: string;
+  /** True when only the project's description or instructions changed. */
+  textsOnly: boolean;
+}
+
+/**
+ * Read a `projects_changed` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `ProjectsChangedEvent`
+ * (`apps/daemon/src/v1/projects/projects.types.ts`). Change one and change the other.
+ */
+export function parseProjectsChanged(
+  data: unknown,
+): ProjectsChangedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { projectId, textsOnly } = data as Record<string, unknown>;
+  return typeof projectId === 'string'
+    ? { projectId, textsOnly: textsOnly === true }
+    : null;
+}
+
 /** One write to the shared memory — never an entry's text. */
 export interface MemoryChangedEvent {
   /** Null for a change to many entries at once. */
@@ -1247,6 +1272,9 @@ export class DaemonClient {
   >();
   private readonly memoryChangedListeners = new Set<
     (event: MemoryChangedEvent) => void
+  >();
+  private readonly projectsChangedListeners = new Set<
+    (event: ProjectsChangedEvent) => void
   >();
   private readonly joinWaiters = new Map<string, Set<JoinWaiter>>();
   private readonly debugListeners = new Set<(entry: DebugLogEntry) => void>();
@@ -1412,6 +1440,14 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'projects_changed') {
+        const project = parseProjectsChanged(data);
+        if (project) {
+          for (const listener of this.projectsChangedListeners) {
+            listener(project);
+          }
+        }
+      }
       if (event === 'memory_changed') {
         const memory = parseMemoryChanged(data);
         if (memory) {
@@ -1574,6 +1610,16 @@ export class DaemonClient {
     this.sharesChangedListeners.add(listener);
     return () => {
       this.sharesChangedListeners.delete(listener);
+    };
+  }
+
+  /** Subscribe to every project write, client-wide like {@link onTaskChanged}. */
+  onProjectsChanged(
+    listener: (event: ProjectsChangedEvent) => void,
+  ): () => void {
+    this.projectsChangedListeners.add(listener);
+    return () => {
+      this.projectsChangedListeners.delete(listener);
     };
   }
 

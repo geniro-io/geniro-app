@@ -2,10 +2,12 @@ import type {
   HostPatch,
   HostPatchFingerprint,
   HostPlanStep,
+  HostProjectInstructions,
   HostQuestion,
 } from '../chat.types';
 import { readHostPatch } from './host-patch';
 import { readHostPlan } from './host-plan';
+import { readHostProjectInstructions } from './host-project-instructions';
 import { readHostQuestions } from './host-question';
 
 /**
@@ -18,7 +20,7 @@ import { readHostQuestions } from './host-question';
  * registry entry itself carries, since `PendingApproval.input` is what the
  * verdict path and the badge read.
  *
- * One column, three cards, each naming its `kind`.
+ * One column, four cards, each naming its `kind`.
  */
 export interface PendingQuestionSnapshot {
   kind: 'question';
@@ -49,8 +51,18 @@ export interface PendingPatchSnapshot {
   fingerprint: HostPatchFingerprint | null;
 }
 
+/** A deferred change to a project's instructions; Apply writes `change`. */
+export interface PendingProjectInstructionsSnapshot {
+  kind: 'project';
+  requestId: string;
+  change: HostProjectInstructions;
+}
+
 export type PendingCardSnapshot =
-  PendingQuestionSnapshot | PendingPlanSnapshot | PendingPatchSnapshot;
+  | PendingQuestionSnapshot
+  | PendingPlanSnapshot
+  | PendingPatchSnapshot
+  | PendingProjectInstructionsSnapshot;
 
 /** Render one snapshot for `Run.pendingQuestion`. */
 export function serializePendingQuestion(
@@ -85,6 +97,12 @@ export function serializePendingQuestion(
         ...(patch.summary === undefined ? {} : { summary: patch.summary }),
       });
     }
+    case 'project':
+      return JSON.stringify({
+        kind: 'project',
+        requestId: snapshot.requestId,
+        change: snapshot.change,
+      });
   }
 }
 
@@ -127,6 +145,7 @@ export function readPendingQuestion(
     new_string?: unknown;
     summary?: unknown;
     fingerprint?: unknown;
+    change?: unknown;
   };
   if (typeof record.requestId !== 'string' || record.requestId.length === 0) {
     return null;
@@ -173,6 +192,12 @@ export function readPendingQuestion(
       patch: read.patch,
       fingerprint,
     };
+  }
+  if (record.kind === 'project') {
+    const change = readHostProjectInstructions(record.change);
+    return change === null
+      ? null
+      : { kind: 'project', requestId: record.requestId, change };
   }
   if (record.kind !== 'question') {
     return null;

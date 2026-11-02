@@ -36,6 +36,8 @@ export function recommendation(
 ): RecommendationView {
   const team = id.startsWith('W');
   const memory = id.startsWith('M');
+  const project = id.startsWith('P');
+  const domain = memory || project;
   return {
     id,
     target: team
@@ -44,20 +46,32 @@ export function recommendation(
         ? 'user'
         : memory
           ? 'memory'
-          : 'repo',
-    territory: memory ? 'domain' : 'process',
-    kind: team ? 'parallelize' : memory ? 'add' : 'check',
-    location: team ? 'reviewer' : memory ? 'new' : 'AGENTS.md:42',
+          : project
+            ? 'project'
+            : 'repo',
+    territory: domain ? 'domain' : 'process',
+    kind: team ? 'parallelize' : memory ? 'add' : project ? 'rule' : 'check',
+    location: team
+      ? 'reviewer'
+      : memory
+        ? 'new'
+        : project
+          ? 'p-billing'
+          : 'AGENTS.md:42',
     title: team
       ? 'Run the two reviewers in parallel'
       : memory
         ? 'Remember that a sent invoice is never edited'
-        : 'Say which test command to run before review',
+        : project
+          ? 'Tell every agent that a sent invoice is never edited'
+          : 'Say which test command to run before review',
     change: team
       ? 'edges:\n  - from: builder\n    to: reviewer-a\n  - from: builder\n    to: reviewer-b'
       : memory
         ? 'A sent invoice is never edited; issue a credit note instead.'
-        : 'WHEN a change touches apps/daemon → run `pnpm --filter @geniro/daemon test:unit` before asking for review',
+        : project
+          ? 'WHEN a change edits an invoice that was already sent → issue a credit note instead'
+          : 'WHEN a change touches apps/daemon → run `pnpm --filter @geniro/daemon test:unit` before asking for review',
     evidence: [
       {
         seq: 1204,

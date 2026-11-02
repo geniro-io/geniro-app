@@ -7,6 +7,7 @@ import {
   captureRunConfig,
   moveRunConfig,
   replaceRunConfig,
+  upsertRunConfig,
 } from './run-config';
 
 function config(over: Partial<RunConfig> = {}): RunConfig {
@@ -55,10 +56,29 @@ describe('captureRunConfig', () => {
       contextWindows: { claude: '1m', 'cursor-agent': '300k' },
       modelParameters: {},
       approval: 'acceptEdits',
+      projectId: null,
     });
 
     expect(draft.model).toBe('auto-smart');
     expect(draft.effort).toBe('low');
+  });
+
+  it('stores projectId for a team target as for a chat', () => {
+    const draft = captureRunConfig({
+      name: 'Team',
+      target: 'team:ship-it',
+      cwd: '/Users/dev/app',
+      branch: null,
+      configDir: null,
+      models: {},
+      efforts: {},
+      contextWindows: {},
+      modelParameters: {},
+      approval: null,
+      projectId: 'p-billing',
+    });
+
+    expect(draft.projectId).toBe('p-billing');
   });
 
   it('trims the name', () => {
@@ -74,6 +94,7 @@ describe('captureRunConfig', () => {
         contextWindows: {},
         modelParameters: {},
         approval: null,
+        projectId: null,
       }).name,
     ).toBe('Padded');
   });
@@ -93,6 +114,7 @@ describe('captureRunConfig', () => {
       contextWindows: { claude: '1m' },
       modelParameters: {},
       approval: 'acceptEdits',
+      projectId: null,
     });
 
     expect(draft).toMatchObject({
@@ -133,6 +155,7 @@ describe('applyRunConfig', () => {
       modelParameters: { optimize_for: 'cost' },
       approval: ChatApprovalMode.AcceptEdits,
       branch: 'feat/x',
+      projectId: null,
     });
   });
 
@@ -194,6 +217,17 @@ describe('applyRunConfig', () => {
     expect(applyRunConfig(config({ target: 'claude' }))?.isTeam).toBe(false);
   });
 
+  it('carries projectId for a chat and a team, and reads an entry saved before it as none', () => {
+    expect(applyRunConfig(config({ projectId: 'p-billing' }))?.projectId).toBe(
+      'p-billing',
+    );
+    expect(
+      applyRunConfig(config({ target: 'team:ship-it', projectId: 'p-billing' }))
+        ?.projectId,
+    ).toBe('p-billing');
+    expect(applyRunConfig(config())?.projectId).toBeNull();
+  });
+
   it('carries the branch through so the caller can attempt the switch', () => {
     expect(applyRunConfig(config({ branch: 'feat/x' }))?.branch).toBe('feat/x');
   });
@@ -215,6 +249,24 @@ describe('replaceRunConfig', () => {
   it('leaves the list alone when no entry matches', () => {
     const list = [config({ id: 'a' })];
     expect(replaceRunConfig(list, config({ id: 'gone' }))).toEqual(list);
+  });
+});
+
+describe('upsertRunConfig', () => {
+  it('replaces the entry an id names in place and appends a new one, trimming the name', () => {
+    const list = [config({ id: 'a' }), config({ id: 'b' })];
+    const { id: _b, ...draftB } = config({ id: 'b', name: '  Renamed  ' });
+    const replaced = upsertRunConfig(list, draftB, 'b');
+    expect(replaced.map((c) => [c.id, c.name])).toEqual([
+      ['a', 'Geniro app'],
+      ['b', 'Renamed'],
+    ]);
+
+    const { id: _new, ...draftNew } = config({ name: ' Fresh ' });
+    const appended = upsertRunConfig(list, draftNew, null);
+    expect(appended).toHaveLength(3);
+    expect(appended[2]?.name).toBe('Fresh');
+    expect(['a', 'b']).not.toContain(appended[2]?.id);
   });
 });
 

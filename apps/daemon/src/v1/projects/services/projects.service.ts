@@ -1,21 +1,62 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
-import { BadRequestException, NotFoundException } from '@packages/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@packages/common';
 
+import { hasControlCharacters } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { RunGroupDao } from '../../agents/dao/run-group.dao';
+import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { resolveValidDirectory } from '../../agents/utils/resolve-directory';
 import { LabelInstructionDao } from '../../tasks/dao/label-instruction.dao';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import { releaseTaskRuns } from '../../tasks/utils/release-task-runs';
 import { removeTaskAttachments } from '../../tasks/utils/task-attachments';
 import { ProjectDao } from '../dao/project.dao';
+import { ProjectInstructionChangeDao } from '../dao/project-instruction-change.dao';
 import { Project } from '../entity/project.entity';
-import type { ProjectWire } from '../projects.types';
+import { ProjectInstructionChange } from '../entity/project-instruction-change.entity';
+import {
+  MAX_PROJECTS,
+  PROJECT_CHANGE_COALESCE_MS,
+  PROJECT_INSTRUCTION_FIELDS,
+  type ProjectChangeOrigin,
+  type ProjectForFolder,
+  type ProjectInstructionField,
+  type ProjectWire,
+} from '../projects.types';
 import { projectKey } from '../utils/project-key';
+import { ProjectEventBus } from './project-events.bus';
+import { ProjectScopeService } from './project-scope.service';
 
-/** How many projects one machine may hold — a guard, not a design limit. */
-const MAX_PROJECTS = 200;
+/** What one project update may change; an omitted key is left alone. */
+type ProjectPatch = {
+  name?: string;
+  folder?: string;
+  groupId?: string | null;
+  description?: string | null;
+  instructions?: string | null;
+  agentKind?: Project['agentKind'];
+  model?: string | null;
+  effort?: string | null;
+  approval?: Project['approval'];
+  configDir?: string | null;
+  teamSlug?: string | null;
+  autopilotEnabled?: boolean;
+  autopilotIntakeStatus?: Project['autopilotIntakeStatus'];
+  autopilotMaxConcurrent?: number;
+  expectedInstructionsRevision?: number;
+};
+
+/** A change one write makes to one of a project's texts. */
+interface TextChange {
+  field: ProjectInstructionField;
+  previous: string | null;
+  next: string | null;
+}
 
 /**
  * Projects: a folder, and the standing answers for every task worked in it.
@@ -42,7 +83,13 @@ export class ProjectsService {
     private readonly labelInstructionDao: LabelInstructionDao,
     private readonly runDao: RunDao,
     private readonly groupDao: RunGroupDao,
+    private readonly changes: ProjectInstructionChangeDao,
+    private readonly events: ProjectEventBus,
+    private readonly scope: ProjectScopeService,
   ) {}
+
+  /** Writes to one project, in arrival order: a revision check and its write must not interleave with another's. */
+  private writes: Promise<unknown> = Promise.resolve();
 
   async list(): Promise<ProjectWire[]> {
     const em = this.em.fork();
@@ -52,6 +99,22 @@ export class ProjectsService {
   async get(projectId: string): Promise<ProjectWire> {
     const em = this.em.fork();
     return toWire(await this.require(projectId, em));
+  }
+
+  /**
+   * The project a new chat in `folder` would belong to by the folder rule
+   * (`ProjectScopeService.projectOf`: the project bound to it or to the
+   * closest folder above it); none for a folder that does not exist.
+   */
+  async forFolder(folder: string): Promise<ProjectForFolder> {
+    let cwd: string;
+    try {
+      cwd = resolveValidCwd(folder);
+    } catch {
+      return { project: null };
+    }
+    const { project } = await this.scope.projectOf({ taskId: null, cwd });
+    return { project: project ? toWire(project) : null };
   }
 
   async create(input: {
@@ -120,37 +183,51 @@ export class ProjectsService {
       },
       em,
     );
+    this.events.publish({ projectId: created.id });
     return toWire(created);
   }
 
   /**
-   * Change a project's name, folder, run defaults or autopilot policy.
+   * Change a project's name, folder, texts, run defaults or autopilot policy.
    *
    * An explicit `null` on a nullable field clears it; an omitted key leaves it
    * alone. Nothing here touches the project's tasks: repointing a folder is
    * not a claim about the work already on the board.
+   *
+   * A change to the description or instructions bumps
+   * `instructionsRevision` and is logged (`project_instruction_changes`),
+   * credited to `origin` or else to the user. A quoted
+   * `expectedInstructionsRevision` the project has moved past is refused
+   * `409 PROJECT_INSTRUCTIONS_DRIFT` with nothing written.
    */
-  async update(
+  update(
     projectId: string,
-    patch: {
-      name?: string;
-      folder?: string;
-      groupId?: string | null;
-      description?: string | null;
-      instructions?: string | null;
-      agentKind?: Project['agentKind'];
-      model?: string | null;
-      effort?: string | null;
-      approval?: Project['approval'];
-      configDir?: string | null;
-      teamSlug?: string | null;
-      autopilotEnabled?: boolean;
-      autopilotIntakeStatus?: Project['autopilotIntakeStatus'];
-      autopilotMaxConcurrent?: number;
-    },
+    patch: ProjectPatch,
+    origin?: ProjectChangeOrigin,
+  ): Promise<ProjectWire> {
+    const write = this.writes.then(() =>
+      this.applyUpdate(projectId, patch, origin),
+    );
+    this.writes = write.catch(() => undefined);
+    return write;
+  }
+
+  private async applyUpdate(
+    projectId: string,
+    patch: ProjectPatch,
+    origin: ProjectChangeOrigin | undefined,
   ): Promise<ProjectWire> {
     const em = this.em.fork();
     const project = await this.require(projectId, em);
+    if (
+      patch.expectedInstructionsRevision !== undefined &&
+      patch.expectedInstructionsRevision !== project.instructionsRevision
+    ) {
+      throw new ConflictException(
+        'PROJECT_INSTRUCTIONS_DRIFT',
+        `the project's description or instructions changed since revision ${patch.expectedInstructionsRevision} (now ${project.instructionsRevision}); read them again`,
+      );
+    }
 
     if (patch.name !== undefined) {
       project.name = patch.name;
@@ -169,11 +246,27 @@ export class ProjectsService {
       }
       project.groupId = patch.groupId;
     }
-    if (patch.description !== undefined) {
-      project.description = blankToNull(patch.description);
+    const textChanges: TextChange[] = [];
+    for (const field of PROJECT_INSTRUCTION_FIELDS) {
+      const value = patch[field];
+      if (value === undefined) {
+        continue;
+      }
+      const next = blankToNull(value);
+      if (next !== null && hasControlCharacters(next)) {
+        throw new BadRequestException(
+          'INVALID_PROJECT_TEXT',
+          `the project's ${field} must not contain control characters`,
+        );
+      }
+      if (next !== project[field]) {
+        textChanges.push({ field, previous: project[field], next });
+        project[field] = next;
+      }
     }
-    if (patch.instructions !== undefined) {
-      project.instructions = blankToNull(patch.instructions);
+    if (textChanges.length > 0) {
+      project.instructionsRevision += 1;
+      await this.logTextChanges(project.id, textChanges, origin, em);
     }
     if (patch.agentKind !== undefined) {
       project.agentKind = patch.agentKind;
@@ -210,7 +303,59 @@ export class ProjectsService {
     }
 
     await em.flush();
+    this.events.publish({
+      projectId: project.id,
+      ...(textsOnly(patch) ? { textsOnly: true } : {}),
+    });
     return toWire(project);
+  }
+
+  /**
+   * Log each changed text in the same flush as the project. A user's edit to
+   * a field whose newest logged change is the user's own, younger than
+   * `PROJECT_CHANGE_COALESCE_MS`, extends that row instead (autosave would
+   * otherwise log every pause in typing), and one that lands back where that
+   * row started removes it.
+   */
+  private async logTextChanges(
+    projectId: string,
+    textChanges: readonly TextChange[],
+    origin: ProjectChangeOrigin | undefined,
+    em: EntityManager,
+  ): Promise<void> {
+    const now = new Date();
+    for (const change of textChanges) {
+      if (origin === undefined) {
+        const newest = await this.changes.newestOf(projectId, change.field, em);
+        if (
+          newest?.source === 'user' &&
+          now.getTime() - newest.changedAt.getTime() <
+            PROJECT_CHANGE_COALESCE_MS
+        ) {
+          newest.next = change.next;
+          newest.changedAt = now;
+          if (newest.previous === newest.next) {
+            em.remove(newest);
+          }
+          continue;
+        }
+      }
+      em.persist(
+        Object.assign(new ProjectInstructionChange(), {
+          projectId,
+          changedAt: now,
+          field: change.field,
+          source: origin?.source ?? 'user',
+          previous: change.previous,
+          next: change.next,
+          recommendationIds: ProjectInstructionChangeDao.idsJson(
+            origin?.recommendationIds ?? [],
+          ),
+          chatRunId: origin?.chatRunId ?? null,
+          cardSeq: origin?.cardSeq ?? null,
+        }),
+      );
+    }
   }
 
   /**
@@ -231,6 +376,7 @@ export class ProjectsService {
     if (project.autopilotFailureStreak !== 0) {
       project.autopilotFailureStreak = 0;
       await em.flush();
+      this.events.publish({ projectId: project.id });
     }
     return toWire(project);
   }
@@ -286,6 +432,7 @@ export class ProjectsService {
         );
       }
     }
+    this.events.publish({ projectId });
     return { deleted: true, tasksRemoved };
   }
 
@@ -391,6 +538,16 @@ export class ProjectsService {
   }
 }
 
+/** Whether a patch names nothing but the project's texts and the revision they quote. */
+function textsOnly(patch: ProjectPatch): boolean {
+  return Object.entries(patch).every(
+    ([key, value]) =>
+      value === undefined ||
+      key === 'expectedInstructionsRevision' ||
+      (PROJECT_INSTRUCTION_FIELDS as readonly string[]).includes(key),
+  );
+}
+
 function blankToNull(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
@@ -405,6 +562,7 @@ function toWire(project: Project): ProjectWire {
     groupId: project.groupId,
     description: project.description,
     instructions: project.instructions,
+    instructionsRevision: project.instructionsRevision,
     agentKind: project.agentKind,
     model: project.model,
     effort: project.effort,

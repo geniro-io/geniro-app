@@ -1398,6 +1398,29 @@ describe('MemoryService', () => {
       expect(await db.service.scopeOf('r-wt')).toEqual(inProject('p-app'));
     });
 
+    it('uses the stored project; a deleted one means no project', async () => {
+      await seed();
+      await run('r-bound', {
+        cwd: '/repo/app',
+        projectId: 'p-cards',
+        projectSource: 'explicit',
+      });
+      await run('r-unbound', {
+        cwd: '/repo/app',
+        taskId: 'task-1',
+        projectId: null,
+        projectSource: 'explicit',
+      });
+
+      expect(await db.service.scopeOf('r-bound')).toEqual(inProject('p-cards'));
+      expect(await db.service.scopeOf('r-unbound')).toEqual(NONE);
+
+      const em = db.em.fork();
+      em.remove(await em.findOneOrFail(Project, 'p-cards'));
+      await em.flush();
+      expect(await db.service.scopeOf('r-bound')).toEqual(NONE);
+    });
+
     it('answers global only for a folder no project owns', async () => {
       await seed();
       await run('r-free', { cwd: '/tmp/scratch' });

@@ -11,6 +11,7 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { ProjectDao } from '../../projects/dao/project.dao';
+import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { isBreakerOpen } from '../../projects/utils/breaker';
 import {
   isTerminalRunStatus,
@@ -110,6 +111,7 @@ export class TaskSettleService implements OnModuleInit {
      * run's status cannot say it: an interrupted run is closed `failed`.
      */
     private readonly itemDao: ItemDao,
+    private readonly projectEvents: ProjectEventBus,
   ) {}
 
   onModuleInit(): void {
@@ -437,6 +439,7 @@ export class TaskSettleService implements OnModuleInit {
       if (project.autopilotFailureStreak !== 0) {
         project.autopilotFailureStreak = 0;
         await em.flush();
+        this.projectEvents.publish({ projectId });
       }
       return;
     }
@@ -445,6 +448,7 @@ export class TaskSettleService implements OnModuleInit {
     }
     project.autopilotFailureStreak += 1;
     await em.flush();
+    this.projectEvents.publish({ projectId });
     if (isBreakerOpen(project)) {
       this.logger.warn(
         `project ${project.id} has ${project.autopilotFailureStreak} failed runs in a row — the autopilot has stopped picking work up`,

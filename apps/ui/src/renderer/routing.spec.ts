@@ -25,6 +25,16 @@ const EXAMPLES: readonly { label: string; hash: string; route: Route }[] = [
     route: { view: 'teams', slug: null },
   },
   {
+    label: 'an open project page',
+    hash: '#/projects/proj-9',
+    route: { view: 'projects', projectId: 'proj-9' },
+  },
+  {
+    label: 'the projects page with nothing chosen',
+    hash: '#/projects',
+    route: { view: 'projects', projectId: null },
+  },
+  {
     label: 'an open task project',
     hash: '#/tasks/proj-9',
     route: { view: 'tasks', projectId: 'proj-9' },

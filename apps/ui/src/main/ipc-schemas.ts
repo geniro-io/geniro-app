@@ -117,6 +117,7 @@ const runConfigSchema = z.strictObject({
   ),
   approval: z.string().min(1).max(32).nullable(),
   configDir: absolutePath.nullable(),
+  projectId: z.string().min(1).max(64).nullable().optional(),
 });
 
 /**

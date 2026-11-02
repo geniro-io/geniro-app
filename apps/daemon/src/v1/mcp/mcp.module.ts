@@ -16,6 +16,8 @@ import { MonitorBroker } from '../agents/services/monitor.broker';
 import { NotifyBroker } from '../agents/services/notify.broker';
 import { PatchBroker } from '../agents/services/patch.broker';
 import { PlanBroker } from '../agents/services/plan.broker';
+import { ProjectInstructionsBroker } from '../agents/services/project-instructions.broker';
+import { ProjectInstructionsChangeService } from '../agents/services/project-instructions-change.service';
 import { RunOutcomeBroker } from '../agents/services/run-outcome.broker';
 import { TeamBuilderBroker } from '../agents/services/team-builder.broker';
 import { TeamNoteBroker } from '../agents/services/team-note.broker';
@@ -84,6 +86,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         analysis: AnalysisBroker,
         threads: ThreadReaderService,
         teamChanges: TeamChangeService,
+        projectInstructions: ProjectInstructionsChangeService,
+        projectInstructionCards: ProjectInstructionsBroker,
         teamHistory: TeamHistoryService,
         teamGate: TeamProposalBroker,
         teamBuilders: TeamBuilderBroker,
@@ -116,6 +120,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           analysis,
           threads,
           teamChanges,
+          projectInstructions,
+          projectInstructionCards,
           teamHistory,
           teamGate,
           teamBuilders,
@@ -148,6 +154,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         AnalysisBroker,
         ThreadReaderService,
         TeamChangeService,
+        ProjectInstructionsChangeService,
+        ProjectInstructionsBroker,
         TeamHistoryService,
         TeamProposalBroker,
         TeamBuilderBroker,

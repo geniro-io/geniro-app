@@ -12,6 +12,7 @@ import {
   PROJECT_INSTRUCTIONS_MAX,
   PROJECT_MAX_CONCURRENT_CEILING,
   PROJECT_NAME_MAX,
+  ProjectForFolderSchema,
   ProjectQueueSchema,
   ProjectWireSchema,
 } from '../projects.types';
@@ -123,9 +124,16 @@ export const updateProjectSchema = z
     autopilotEnabled: autopilotPolicy.autopilotEnabled.optional(),
     autopilotIntakeStatus: autopilotPolicy.autopilotIntakeStatus.optional(),
     autopilotMaxConcurrent: autopilotPolicy.autopilotMaxConcurrent.optional(),
+    /**
+     * The `instructionsRevision` the writer read the texts at. A project that
+     * has moved past it refuses the patch `409 PROJECT_INSTRUCTIONS_DRIFT`;
+     * omitted, nothing is checked.
+     */
+    expectedInstructionsRevision: z.number().int().min(0).optional(),
   })
   .refine(
-    (dto) => Object.values(dto).some((value) => value !== undefined),
+    ({ expectedInstructionsRevision: _, ...fields }) =>
+      Object.values(fields).some((value) => value !== undefined),
     'a project patch must change at least one field',
   );
 export class UpdateProjectDto extends createZodDto(updateProjectSchema) {}
@@ -134,6 +142,17 @@ export class UpdateProjectDto extends createZodDto(updateProjectSchema) {}
 
 /** One project. */
 export class ProjectDto extends createZodDto(ProjectWireSchema) {}
+
+/** `GET /v1/projects/of-folder` — the folder a new chat would start in. */
+export const projectForFolderQuerySchema = z.object({
+  path: z.string().min(1),
+});
+export class ProjectForFolderQueryDto extends createZodDto(
+  projectForFolderQuerySchema,
+) {}
+
+/** The project a folder belongs to, or none. */
+export class ProjectForFolderDto extends createZodDto(ProjectForFolderSchema) {}
 
 /** What one project's autopilot may start right now. */
 export class ProjectQueueDto extends createZodDto(ProjectQueueSchema) {}

@@ -169,6 +169,13 @@ export const createChatSchema = z.object({
    * starts reasoning about the wrong tree.
    */
   resumeSessionId: z.string().min(1).optional(),
+  /**
+   * The project this chat is started under by choice (a run configuration's
+   * or the composer's): an id binds it, null means none even inside a
+   * project's folder, omitted leaves it to the folder. An unknown id is passed
+   * over as omitted.
+   */
+  projectId: z.string().min(1).nullable().optional(),
 });
 export class CreateChatDto extends createZodDto(createChatSchema) {}
 

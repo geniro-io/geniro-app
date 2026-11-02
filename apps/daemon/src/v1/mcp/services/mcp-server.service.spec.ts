@@ -33,6 +33,7 @@ import {
   HOST_NOTIFY_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_PUBLISH_ACTION_TOOL,
   HOST_QUESTION_TOOL,
@@ -69,6 +70,8 @@ import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
+import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import { TeamBuilderBroker } from '../../agents/services/team-builder.broker';
 import {
@@ -217,6 +220,8 @@ function service(
   // Off unless a case turns it on: no memory tool is listed.
   memory = fakeMemory(false).service,
   goals = {} as GoalsService,
+  // Off unless a case registers a sink: the tool is not listed.
+  projectInstructionCards = new ProjectInstructionsBroker(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -243,6 +248,8 @@ function service(
       analysis,
       threads,
       teamChanges,
+      projectInstructions: {} as ProjectInstructionsChangeService,
+      projectInstructionCards,
       // Never asked by the cases that list tools.
       teamHistory: {} as TeamHistoryService,
       teamGate,
@@ -296,6 +303,8 @@ async function everyHostTool(): Promise<ToolListing[]> {
   teamNotes.register('run-1', 'agent', noop as never);
   const runOutcomes = runOutcomeBroker();
   runOutcomes.register('run-1', 'agent', noop as never);
+  const projectCards = new ProjectInstructionsBroker();
+  projectCards.register('run-1', 'agent', noop as never);
   for (const broker of [
     questions,
     findings,
@@ -354,6 +363,8 @@ async function everyHostTool(): Promise<ToolListing[]> {
       stageService({ runId: 'run-1', memberId: 'agent' }),
       undefined,
       fakeMemory(true).service,
+      undefined,
+      projectCards,
     ),
     'run-1',
     'agent',
@@ -3403,6 +3414,7 @@ const PREAMBLE_EXEMPT: Readonly<Record<string, string>> = {
   [HOST_RECOMMENDATION_MARKS_TOOL]: 'analysis chats only; their brief names it',
   [HOST_TEAM_CHANGE_TOOL]:
     'analysis and builder chats only; their brief names it',
+  [HOST_PROJECT_INSTRUCTIONS_TOOL]: 'analysis chats only; their brief names it',
 };
 
 describe('McpServerService — the host preamble names every tool', () => {
@@ -4040,6 +4052,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_RECOMMENDATIONS_TOOL,
       HOST_RECOMMENDATION_MARKS_TOOL,
       HOST_TEAM_CHANGE_TOOL,
+      HOST_PROJECT_INSTRUCTIONS_TOOL,
       HOST_PUBLISH_ACTION_TOOL,
       HOST_REMOVE_ACTION_TOOL,
       HOST_READ_TEAMS_TOOL,
@@ -4064,6 +4077,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_RECOMMENDATIONS_TOOL,
       HOST_RECOMMENDATION_MARKS_TOOL,
       HOST_TEAM_CHANGE_TOOL,
+      HOST_PROJECT_INSTRUCTIONS_TOOL,
       HOST_PUBLISH_ACTION_TOOL,
       HOST_PROPOSE_TEAM_TOOL,
       ...HOST_BOARD_TOOLS,
@@ -4213,6 +4227,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       analysis: new AnalysisBroker(),
       threads: {} as ThreadReaderService,
       teamChanges: {} as TeamChangeService,
+      projectInstructions: {} as ProjectInstructionsChangeService,
+      projectInstructionCards: new ProjectInstructionsBroker(),
       teamHistory: {} as TeamHistoryService,
       teamGate: new TeamProposalBroker(),
       teamBuilders: builders,
@@ -4302,6 +4318,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       analysis: new AnalysisBroker(),
       threads: {} as ThreadReaderService,
       teamChanges: {} as TeamChangeService,
+      projectInstructions: {} as ProjectInstructionsChangeService,
+      projectInstructionCards: new ProjectInstructionsBroker(),
       teamHistory: {} as TeamHistoryService,
       teamGate: new TeamProposalBroker(),
       teamBuilders: builders,
@@ -4367,6 +4385,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       analysis: new AnalysisBroker(),
       threads: {} as ThreadReaderService,
       teamChanges: {} as TeamChangeService,
+      projectInstructions: {} as ProjectInstructionsChangeService,
+      projectInstructionCards: new ProjectInstructionsBroker(),
       teamHistory: {} as TeamHistoryService,
       teamGate: new TeamProposalBroker(),
       teamBuilders: builders,
@@ -4442,6 +4462,8 @@ describe('McpServerService — what the descriptions tell a model', () => {
       analysis: new AnalysisBroker(),
       threads: {} as ThreadReaderService,
       teamChanges: {} as TeamChangeService,
+      projectInstructions: {} as ProjectInstructionsChangeService,
+      projectInstructionCards: new ProjectInstructionsBroker(),
       teamHistory: {} as TeamHistoryService,
       teamGate: gate,
       teamBuilders: new TeamBuilderBroker(),

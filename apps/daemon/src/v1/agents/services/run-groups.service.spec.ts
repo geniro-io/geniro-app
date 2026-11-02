@@ -220,6 +220,28 @@ describe('RunGroupsService', () => {
     expect(await service.resolveAutoGroupId({ cwd: nested })).toBe(byFolder.id);
   });
 
+  it('files a run started under a project by choice in that project’s group while the group exists', async () => {
+    const { service } = setup();
+    const byFolder = await service.create({ name: 'App', autoCwd: nested });
+    const projectGroup = await service.create({ name: 'Billing' });
+
+    expect(
+      await service.groupForNewRun({
+        cwd: nested,
+        chosenProjectGroupId: projectGroup.id,
+      }),
+    ).toBe(projectGroup.id);
+    expect(
+      await service.groupForNewRun({
+        cwd: nested,
+        chosenProjectGroupId: 'deleted-group',
+      }),
+    ).toBe(byFolder.id);
+    expect(
+      await service.groupForNewRun({ cwd: nested, chosenProjectGroupId: null }),
+    ).toBe(byFolder.id);
+  });
+
   it('clears the TEAM rule on an explicit null too', async () => {
     const { service } = setup();
     const group = await service.create({

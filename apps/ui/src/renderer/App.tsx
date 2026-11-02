@@ -63,6 +63,9 @@ const Stats = lazy(() =>
 const Tasks = lazy(() =>
   import('./tasks/Tasks').then((m) => ({ default: m.Tasks })),
 );
+const Projects = lazy(() =>
+  import('./projects/Projects').then((m) => ({ default: m.Projects })),
+);
 
 type Phase = 'loading' | 'onboarding' | 'ready';
 
@@ -77,6 +80,7 @@ const VIEW_TITLE: Record<AppView, string> = {
   chats: 'Chats',
   teams: 'Teams',
   tasks: 'Tasks',
+  projects: 'Projects',
   stats: 'Stats',
   settings: 'Settings',
 };
@@ -94,9 +98,13 @@ const VIEW_TITLE: Record<AppView, string> = {
  *
  * `teams`/`tasks` pick their own open item internally (the builder's
  * selection, the board's project), so from here they are addressed by view
- * alone.
+ * alone. `projects` is addressed by the project its page reports on show.
  */
-function currentRoute(view: AppView, openRunId: string | null): Route {
+function currentRoute(
+  view: AppView,
+  openRunId: string | null,
+  shownProjectId: string | null,
+): Route {
   switch (view) {
     case 'chats':
       return { view: 'chats', runId: openRunId };
@@ -104,6 +112,8 @@ function currentRoute(view: AppView, openRunId: string | null): Route {
       return { view: 'teams', slug: null };
     case 'tasks':
       return { view: 'tasks', projectId: null };
+    case 'projects':
+      return { view: 'projects', projectId: shownProjectId };
     case 'settings':
       return { view: 'settings' };
     case 'stats':
@@ -153,6 +163,17 @@ export function App(): React.JSX.Element {
    */
   const [openRunId, setOpenRunId] = useState<string | null>(() =>
     initialRoute?.view === 'chats' ? initialRoute.runId : null,
+  );
+  /** Inbound and one-shot, like `threadRequest`; `shownProjectId` is its outbound twin. */
+  const [projectRequest, setProjectRequest] = useState<string | null>(() =>
+    initialRoute?.view === 'projects' ? initialRoute.projectId : null,
+  );
+  const [shownProjectId, setShownProjectId] = useState<string | null>(() =>
+    initialRoute?.view === 'projects' ? initialRoute.projectId : null,
+  );
+  const [boardProjectId, setBoardProjectId] = useState<string | null>(null);
+  const [boardProjectRequest, setBoardProjectRequest] = useState<string | null>(
+    null,
   );
   /** Every thread's wait, ranked, as `Chats` reports it. */
   const [waiting, setWaiting] = useState<readonly WaitReading[]>([]);
@@ -531,14 +552,14 @@ export function App(): React.JSX.Element {
    */
   const lastWrittenHashRef = useRef<string | null>(null);
   useEffect(() => {
-    const hash = formatRoute(currentRoute(view, openRunId));
+    const hash = formatRoute(currentRoute(view, openRunId, shownProjectId));
     if (hash !== window.location.hash) {
       // `history.state` is kept: it carries the phone back-entry marks
       // (`components/use-phone-back-entry.ts`).
       history.replaceState(history.state, '', hash);
     }
     lastWrittenHashRef.current = hash;
-  }, [view, openRunId]);
+  }, [view, openRunId, shownProjectId]);
 
   // A link pasted into this SAME already-open tab fires `hashchange` rather
   // than a reload, so this is what makes that act like a navigation. Guarded
@@ -560,6 +581,9 @@ export function App(): React.JSX.Element {
       setView(route.view);
       if (route.view === 'chats') {
         setThreadRequest(route.runId);
+      }
+      if (route.view === 'projects' && route.projectId !== null) {
+        setProjectRequest(route.projectId);
       }
     };
     window.addEventListener('hashchange', onHashChange);
@@ -817,9 +841,34 @@ export function App(): React.JSX.Element {
                           setThreadRequest(runId);
                           setView('chats');
                         }}
+                        projectRequest={boardProjectRequest}
+                        onProjectRequestHandled={() =>
+                          setBoardProjectRequest(null)
+                        }
+                        onSelectedProjectChange={setBoardProjectId}
+                        onOpenProjectPage={(projectId) => {
+                          setProjectRequest(projectId);
+                          setView('projects');
+                        }}
                       />
                     ) : null}
                   </div>
+                  {view === 'projects' && !showStartup ? (
+                    <div className="min-h-0 flex-1">
+                      <Projects
+                        handle={handle}
+                        client={clientRef.current}
+                        requestedProjectId={projectRequest}
+                        fallbackProjectId={boardProjectId}
+                        onRequestHandled={() => setProjectRequest(null)}
+                        onProjectShown={setShownProjectId}
+                        onOpenBoard={(projectId) => {
+                          setBoardProjectRequest(projectId);
+                          setView('tasks');
+                        }}
+                      />
+                    </div>
+                  ) : null}
                   {/* Unmounted when hidden, like Settings and unlike Chats/Teams:
               the page holds no unsaved edit and no live subscription, and a
               fresh mount is how a revisit gets figures that are current

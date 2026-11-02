@@ -8,12 +8,15 @@ import type {
 import { BaseMcpTool } from '../base-mcp-tool';
 import { recordOutcomeInstructions } from './record-outcome.instructions';
 import {
+  isThreadOutcomeCall,
   readRecordOutcome,
+  readThreadOutcomeCall,
   recordOutcomeResultText,
+  threadOutcomeResultText,
 } from './record-outcome.reader';
 import { recordOutcomeSchema } from './record-outcome.schema';
 
-/** `record_outcome` — record where one pull request of this team run stands. */
+/** `record_outcome` — record how this thread ended, or where one pull request of it stands. */
 export class RecordOutcomeTool extends BaseMcpTool {
   readonly name = HOST_RECORD_OUTCOME_TOOL;
 
@@ -37,6 +40,21 @@ export class RecordOutcomeTool extends BaseMcpTool {
     args: Record<string, unknown>,
     { runId, memberId, caller }: McpCallContext,
   ): Promise<McpToolResult> {
+    if (isThreadOutcomeCall(args)) {
+      const thread = readThreadOutcomeCall(args);
+      if ('error' in thread) {
+        return this.invalidArgs(thread.error);
+      }
+      const recorded = await this.outcomes.recordThread(
+        runId,
+        memberId,
+        caller,
+        thread,
+      );
+      return recorded.status === 'refused'
+        ? this.invalidArgs(recorded.reason)
+        : this.text(threadOutcomeResultText(recorded));
+    }
     const input = readRecordOutcome(args);
     if ('error' in input) {
       return this.invalidArgs(input.error);

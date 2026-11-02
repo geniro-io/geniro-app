@@ -33,6 +33,7 @@ export class UsageActivityRecorderService implements OnModuleInit {
   private async recordThread(runId: string, createdAt: string): Promise<void> {
     try {
       await this.activityDao.insertThreadOnce(runId, new Date(createdAt));
+      await this.activityDao.markMetricsMeasured(runId);
     } catch (err) {
       this.logger.warn(
         `could not record thread ${runId}: ${err instanceof Error ? err.message : String(err)}`,

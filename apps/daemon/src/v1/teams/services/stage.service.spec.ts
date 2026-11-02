@@ -11,6 +11,7 @@ import type {
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import type { AgentEventBus } from '../../agents/services/agent-events.bus';
+import type { GoalsService } from '../../agents/services/goals.service';
 import type { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import type { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { MonitorRegistry } from '../../agents/services/monitor.registry';
@@ -69,6 +70,7 @@ function setUp(
     monitorRunning?: boolean;
     withLead?: boolean;
     team?: Team;
+    goals?: number;
   } = {},
 ): Harness {
   const harness: Harness = {
@@ -178,9 +180,25 @@ function setUp(
   } as unknown as RunTeamService;
   const writes = new RunWriteQueue();
   const build = (): StageService =>
-    new StageService(em, runDao, itemDao, seqs, calls, bus, runTeams, writes, {
-      isRunning: () => options.monitorRunning === true,
-    } as unknown as MonitorRegistry);
+    new StageService(
+      em,
+      runDao,
+      itemDao,
+      seqs,
+      calls,
+      bus,
+      runTeams,
+      writes,
+      {
+        isRunning: () => options.monitorRunning === true,
+      } as unknown as MonitorRegistry,
+      {
+        list: async () =>
+          Array.from({ length: options.goals ?? 0 }, (_, i) => ({
+            id: `g${i + 1}`,
+          })),
+      } as unknown as GoalsService,
+    );
   harness.service = build();
   harness.service.onModuleInit();
   harness.fresh = build;
@@ -245,6 +263,40 @@ describe('StageService.move', () => {
     expect(error).toHaveBeenCalledWith(
       expect.stringMatching(/run run-1:.*rev 1.*the column is locked/),
     );
+  });
+
+  it('refuses to complete a stage that requires goals until the run has recorded some', async () => {
+    const gated = STAGES.map((stage) =>
+      stage.id === 'investigation' ? { ...stage, requireGoals: true } : stage,
+    );
+    const without = setUp(gated);
+    const refused = await without.service.move(
+      'run-1',
+      {
+        action: 'complete',
+        stage: 'investigation',
+        text: 'found it',
+        next: 'fix',
+      },
+      AGENT,
+    );
+    expect(refused).toMatchObject({ ok: false, code: 'GOALS_REQUIRED' });
+    expect(!refused.ok && refused.message).toContain('goals');
+    expect(without.rows).toEqual([]);
+
+    const recorded = setUp(gated, { goals: 2 });
+    expect(
+      await recorded.service.move(
+        'run-1',
+        {
+          action: 'complete',
+          stage: 'investigation',
+          text: 'found it',
+          next: 'fix',
+        },
+        AGENT,
+      ),
+    ).toMatchObject({ ok: true });
   });
 
   it('refuses NEXT_REQUIRED at a fork, listing the branches', async () => {

@@ -712,6 +712,21 @@ export class Run extends TimestampsEntity {
   currentLead: string | null = null;
 
   /**
+   * The run's goals as `run_goals` holds them, JSON, rewritten after every
+   * goals write: the wire projection is synchronous over the row's columns.
+   * The table is the record and outlives the run; null when none was set.
+   */
+  @Property({ type: 'text', nullable: true })
+  goals: string | null = null;
+
+  /**
+   * The newest `thread_outcome` row's outcome, JSON; the rows stay the
+   * record. Null when no agent recorded one.
+   */
+  @Property({ type: 'text', nullable: true })
+  threadOutcome: string | null = null;
+
+  /**
    * Which capture rule {@link pullRequestsScannedSeq} was reached under
    * (`PULL_REQUEST_SCAN_VERSION`), or null for a run scanned before rules were
    * versioned. A marker reached under another rule says nothing about what the

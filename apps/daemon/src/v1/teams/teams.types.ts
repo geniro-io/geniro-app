@@ -515,6 +515,12 @@ export const TeamStageSchema = z
       .max(MAX_STAGE_DONE_WHEN_LENGTH)
       .refine(argvSafe, NO_CONTROL_CHARACTERS)
       .describe('The condition that makes this stage done'),
+    requireGoals: z
+      .boolean()
+      .optional()
+      .describe(
+        'When true, the stage cannot be completed until the run has recorded its goals with the goals tool',
+      ),
     responsible: z
       .array(z.string().min(1).refine(argvSafe, NO_CONTROL_CHARACTERS))
       .optional()
@@ -2227,7 +2233,8 @@ export type StageRefusalCode =
   | 'TEXT_REQUIRED'
   | 'TEXT_TOO_LONG'
   | 'STAGE_PROGRESS_CHANGED'
-  | 'RUN_ARCHIVED';
+  | 'RUN_ARCHIVED'
+  | 'GOALS_REQUIRED';
 
 export type StageMoveResult =
   | {

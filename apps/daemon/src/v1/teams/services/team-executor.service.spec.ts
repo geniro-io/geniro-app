@@ -1427,6 +1427,7 @@ function setup(
     {
       announceOutcome: async () => undefined,
     } as unknown as PullRequestCaptureService,
+    bus,
   );
   const chatActions = new ChatActionsService(
     em,

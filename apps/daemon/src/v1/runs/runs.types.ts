@@ -211,6 +211,7 @@ export const ItemKindSchema = z
     'team_note',
     'run_outcome',
     'stage_change',
+    'thread_outcome',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

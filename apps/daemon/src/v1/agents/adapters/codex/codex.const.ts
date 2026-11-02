@@ -195,6 +195,9 @@ export const CODEX_MCP_APPROVAL_PERSIST_KEY = 'persist';
  */
 export const CODEX_QUESTION_TOOL_NAME = 'request_user_input';
 
+/** How geniro names an `mcpToolCall` item's tool: `mcp__<server>__<tool>`. */
+export const CODEX_MCP_TOOL_PREFIX = 'mcp__';
+
 /** Tool names geniro gives codex's item types, for the transcript's rows. */
 export const CODEX_TOOL_NAMES = {
   command: 'shell',

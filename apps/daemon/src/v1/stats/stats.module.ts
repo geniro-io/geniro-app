@@ -5,6 +5,7 @@ import { ProjectsModule } from '../projects/projects.module';
 import { TeamsModule } from '../teams/teams.module';
 import { StatsController } from './controllers/stats.controller';
 import { LineBaselineDao } from './dao/line-baseline.dao';
+import { MetricLedgerDao } from './dao/metric-ledger.dao';
 import { TeamRecommendationDao } from './dao/team-recommendation.dao';
 import { TeamVersionDao } from './dao/team-version.dao';
 import { UsageActivityDao } from './dao/usage-activity.dao';
@@ -16,6 +17,7 @@ import { TeamHistoryService } from './services/team-history.service';
 import { TeamLedgerService } from './services/team-ledger.service';
 import { TeamStatsService } from './services/team-stats.service';
 import { TeamVersionsService } from './services/team-versions.service';
+import { ThreadMetricsLedgerService } from './services/thread-metrics-ledger.service';
 import { UsageActivityRecorderService } from './services/usage-activity-recorder.service';
 import { UsageBackfillService } from './services/usage-backfill.service';
 import { UsageEventBus } from './services/usage-events.bus';
@@ -57,6 +59,8 @@ import { UsageRecorderService } from './services/usage-recorder.service';
     RecommendationLedgerService,
     TeamHistoryService,
     TeamStatsService,
+    MetricLedgerDao,
+    ThreadMetricsLedgerService,
   ],
   // The bus, and the team history. The WS gateway announces each recorded
   // turn so an open Stats page can refresh, and the MCP host's analysis reader

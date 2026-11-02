@@ -10,6 +10,33 @@ import { TeamStatsTab } from './team-insights';
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
+const NO_METRICS: TeamStatsDto['metrics'] = {
+  goals: {
+    recorded: 0,
+    achieved: 0,
+    notAchieved: 0,
+    dropped: 0,
+    open: 0,
+    achievedShare: null,
+    runsWithGoals: 0,
+    measuredRuns: 0,
+    coverage: null,
+  },
+  outcomes: {
+    success: 0,
+    partial: 0,
+    failed: 0,
+    abandoned: 0,
+    recorded: 0,
+    derived: 0,
+  },
+  handOffs: null,
+  tools: [],
+  mcpServers: [],
+  stages: [],
+  calls: [],
+};
+
 const NO_OUTCOMES = {
   total: 0,
   accepted: 0,
@@ -50,6 +77,7 @@ const STATS: TeamStatsDto = {
       outcomes: 6,
     },
   ],
+  metrics: NO_METRICS,
   byMember: [
     {
       memberId: 'engineer',
@@ -132,6 +160,82 @@ describe('TeamStatsTab', () => {
     expect(tile('Runs').textContent).toContain('23');
   });
 
+  it('shows goals achieved, hand-offs, the call matrix, tools and stages from the daemon', () => {
+    render({
+      ...STATS,
+      metrics: {
+        ...NO_METRICS,
+        goals: {
+          ...NO_METRICS.goals,
+          recorded: 3,
+          achieved: 2,
+          open: 1,
+          achievedShare: 2 / 3,
+          runsWithGoals: 1,
+          measuredRuns: 1,
+          coverage: 1,
+        },
+        handOffs: 4,
+        tools: [
+          { tool: 'Bash', mcpServer: null, calls: 9, errors: 1, avgMs: 1_000 },
+          {
+            tool: 'codegraph_explore',
+            mcpServer: 'codegraph',
+            calls: 2,
+            errors: 0,
+            avgMs: null,
+          },
+        ],
+        mcpServers: [{ server: 'codegraph', calls: 2, errors: 0, tools: 1 }],
+        stages: [
+          {
+            stageId: 'build',
+            completed: 2,
+            skipped: 0,
+            reopened: 1,
+            avgMs: 60_000,
+          },
+        ],
+        calls: [
+          {
+            caller: 'engineer',
+            callee: 'gone-member',
+            calls: 3,
+            failed: 1,
+            turns: 6,
+            costUsd: 1.5,
+            avgMs: 2_000,
+          },
+        ],
+      },
+    });
+
+    expect(tile('Goals achieved').textContent).toContain('67%');
+    expect(tile('Goals achieved').textContent).toContain('2 of 3 goals');
+    expect(tile('Hand-offs').textContent).toContain('4');
+    const matrix = container.querySelector(
+      'table[aria-label="Calls between members"]',
+    );
+    expect(matrix?.textContent).toContain('Engineer');
+    expect(matrix?.textContent).toContain('gone-member (removed)');
+    expect(matrix?.textContent).toContain('3 (1 failed)');
+    const tools = container.querySelector('table[aria-label="Tools"]');
+    expect(tools?.textContent).toContain('codegraph_explore · codegraph');
+    expect(
+      container.querySelector('table[aria-label="MCP servers"]')?.textContent,
+    ).toContain('codegraph');
+    expect(
+      container.querySelector('table[aria-label="Stages"]')?.textContent,
+    ).toContain('build');
+  });
+
+  it('keeps unmeasured goals and hand-offs a dash', () => {
+    render(STATS);
+
+    expect(tile('Goals achieved').textContent).toBe('Goals achieved—');
+    expect(tile('Hand-offs').textContent).toBe('Hand-offs—');
+  });
+
   it('lists each member by name, and a removed member by id', () => {
     render(STATS);
 
@@ -157,6 +261,7 @@ describe('TeamStatsTab', () => {
       workedMs: null,
       outcomes: NO_OUTCOMES,
       days: [],
+      metrics: NO_METRICS,
       byMember: [],
     });
 

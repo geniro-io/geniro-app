@@ -9,17 +9,21 @@ import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-voca
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
+import { GoalDao } from '../../agents/dao/goal.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { ProjectRootsService } from '../../projects/services/project-roots.service';
+import { Goal } from '../../runs/entity/goal.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { teamSnapshotOf } from '../../teams/utils/team-snapshot';
 import { LineBaselineDao } from '../dao/line-baseline.dao';
+import { MetricLedgerDao } from '../dao/metric-ledger.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { LineBaseline } from '../entity/line-baseline.entity';
+import { ToolCallEvent } from '../entity/tool-call-event.entity';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageEventInput } from '../stats.types';
@@ -44,7 +48,14 @@ describe('StatsService (in-memory sqlite)', () => {
         dbName: ':memory:',
         // `Run` rides along so a spec can put a priced run row BESIDE the
         // ledger and prove the service reads only the ledger's copy of it.
-        entities: [UsageActivity, UsageEvent, Run, LineBaseline],
+        entities: [
+          UsageActivity,
+          UsageEvent,
+          Run,
+          LineBaseline,
+          ToolCallEvent,
+          Goal,
+        ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -77,6 +88,8 @@ describe('StatsService (in-memory sqlite)', () => {
       new UsageActivityDao(em),
       new UsageEventBus(),
       new LineBaselineDao(em),
+      new MetricLedgerDao(em),
+      new GoalDao(em),
     );
   });
 
@@ -892,5 +905,190 @@ describe('StatsService (in-memory sqlite)', () => {
 
       expect(stats.byTeam).toEqual([]);
     });
+  });
+});
+
+describe('StatsService — tools and MCP servers in a period', () => {
+  let orm: MikroORM;
+
+  beforeAll(async () => {
+    orm = await MikroORM.init(
+      defineConfig({
+        dbName: ':memory:',
+        entities: [
+          UsageActivity,
+          UsageEvent,
+          Run,
+          LineBaseline,
+          ToolCallEvent,
+          Goal,
+        ],
+        ignoreUndefinedInQuery: true,
+        allowGlobalContext: true,
+        namingStrategy: UnderscoreNamingStrategy,
+        discovery: { checkDuplicateFieldNames: false },
+      }),
+    );
+    await orm.schema.create();
+  });
+
+  afterAll(async () => {
+    await orm.close(true);
+  });
+
+  it('breaks the period’s tool calls down per tool and per MCP server, outside the period left out', async () => {
+    const em = orm.em.fork();
+    const ledger = new MetricLedgerDao(em);
+    const call = (
+      seq: number,
+      day: number,
+      tool: string,
+      mcpServer: string | null,
+      ok = true,
+    ) =>
+      ledger.insertToolCall({
+        runId: 'chat-1',
+        seq,
+        occurredAt: new Date(2026, 9, day, 12),
+        teamSlug: null,
+        memberId: null,
+        agentKind: 'claude',
+        tool,
+        mcpServer,
+        ok,
+        durationMs: 100 * seq,
+      });
+    await call(1, 5, 'Bash', null);
+    await call(2, 5, 'Bash', null, false);
+    await call(3, 5, 'codegraph_explore', 'codegraph');
+    await call(4, 5, 'show_chart', 'geniro');
+    await call(5, 5, 'codegraph_search', 'codegraph');
+    await call(6, 20, 'Read', null);
+    const service = new StatsService(
+      em,
+      new UsageEventDao(em),
+      new AgentAdapterRegistry([]),
+      new ProjectRootsService(em),
+      new RunDao(em),
+      new UsageActivityDao(em),
+      new UsageEventBus(),
+      new LineBaselineDao(em),
+      ledger,
+      new GoalDao(em),
+    );
+
+    const { metrics } = await service.usage(
+      new Date(2026, 9, 1).toISOString(),
+      new Date(2026, 9, 10).toISOString(),
+    );
+
+    expect(
+      metrics.tools.map((tool) => [tool.tool, tool.calls, tool.errors]),
+    ).toEqual([
+      ['Bash', 2, 1],
+      ['codegraph_explore', 1, 0],
+      ['codegraph_search', 1, 0],
+      ['show_chart', 1, 0],
+    ]);
+    expect(metrics.mcpServers).toEqual([
+      { server: 'codegraph', calls: 2, errors: 0, tools: 2 },
+      { server: 'geniro', calls: 1, errors: 0, tools: 1 },
+    ]);
+    expect(metrics.goals.measuredRuns).toBe(0);
+  });
+
+  it('folds the goals, outcomes and hand-offs of the threads started in the period, and leaves the others out', async () => {
+    const em = orm.em.fork();
+    const activity = new UsageActivityDao(em);
+    const ledger = new MetricLedgerDao(em);
+    const inside = new Date(2026, 8, 5, 12);
+    const outside = new Date(2026, 7, 1, 12);
+    for (const [runId, at] of [
+      ['r-in-1', inside],
+      ['r-in-2', inside],
+      ['r-in-old', inside],
+      ['r-out', outside],
+    ] as const) {
+      await activity.insertThreadOnce(runId, at, em);
+      if (runId !== 'r-in-old') {
+        await activity.markMetricsMeasured(runId, em);
+      }
+    }
+    for (const [runId, number, status] of [
+      ['r-in-1', 1, 'achieved'],
+      ['r-in-1', 2, 'achieved'],
+      ['r-in-1', 3, 'not_achieved'],
+      ['r-out', 1, 'achieved'],
+    ] as const) {
+      em.persist(
+        Object.assign(new Goal(), {
+          runId,
+          number,
+          text: `goal ${number}`,
+          source: 'agent',
+          status,
+        }),
+      );
+    }
+    await em.flush();
+    await ledger.insertStage(
+      {
+        runId: 'r-in-2',
+        seq: 4,
+        occurredAt: inside,
+        teamSlug: 'dev-team',
+        memberId: null,
+        lead: 'dev',
+        stageId: 'build',
+        action: 'handoff',
+        enteredAt: null,
+        durationMs: null,
+      },
+      em,
+    );
+    await ledger.upsertThreadOutcome(
+      {
+        runId: 'r-in-2',
+        seq: 9,
+        occurredAt: inside,
+        teamSlug: 'dev-team',
+        memberId: 'dev',
+        kind: 'abandoned',
+      },
+      em,
+    );
+    const service = new StatsService(
+      em,
+      new UsageEventDao(em),
+      new AgentAdapterRegistry([]),
+      new ProjectRootsService(em),
+      new RunDao(em),
+      activity,
+      new UsageEventBus(),
+      new LineBaselineDao(em),
+      ledger,
+      new GoalDao(em),
+    );
+
+    const { metrics } = await service.usage(
+      new Date(2026, 8, 1).toISOString(),
+      new Date(2026, 8, 10).toISOString(),
+    );
+
+    expect(metrics.goals).toMatchObject({
+      recorded: 3,
+      achieved: 2,
+      achievedShare: 2 / 3,
+      runsWithGoals: 1,
+      measuredRuns: 2,
+      coverage: 0.5,
+    });
+    expect(metrics.outcomes).toMatchObject({
+      partial: 1,
+      abandoned: 1,
+      recorded: 1,
+      derived: 1,
+    });
+    expect(metrics.handOffs).toBe(1);
   });
 });

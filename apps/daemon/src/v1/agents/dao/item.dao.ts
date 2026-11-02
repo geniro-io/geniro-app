@@ -489,6 +489,33 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * One agent-to-agent call's rows of these kinds — its `call_started` and the
+   * callee's turns inside it — by the call id the rows carry.
+   */
+  async rowsOfCall(
+    runId: string,
+    callId: string,
+    kinds: readonly ItemKind[],
+    txEm?: EntityManager,
+  ): Promise<Item[]> {
+    const em = txEm ?? this.em.fork();
+    const stamped = await this.payloadRefsStamped(runId, em);
+    const heads = await em
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('items')
+      .select('id')
+      .where('run_id', '=', runId)
+      .where('kind', 'in', [...kinds])
+      .where('deleted_at', 'is', null)
+      .where((eb) => payloadRef(eb, 'call_id', stamped), '=', callId)
+      .execute();
+    return this.rowsWithIds(
+      heads.map((head) => head.id),
+      em,
+    );
+  }
+
+  /**
    * The two halves of ONE tool call of a run, by the CLI's own call id.
    *
    * Looked up by `payload_id` rather than by scanning the transcript, because

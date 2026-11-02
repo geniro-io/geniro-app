@@ -20,6 +20,7 @@ import { inCallWire } from './item-wire';
 import { threadPreviewOf } from './message-preview';
 import { readModelParameters } from './model-parameters';
 import { readDisplayedPullRequests } from './pull-request-capture';
+import { readRunGoals, readThreadOutcome, threadOutcomeOf } from './run-goals';
 import { readRunOutcomes } from './run-outcomes';
 import { readRunResetWakes } from './run-reset-wakes';
 import { searchIndexText } from './searchable-text';
@@ -272,5 +273,10 @@ export function runToWire(
     taskList: readRunTaskList(run.taskList),
     stages: readRunStageProgress(run.stageProgress),
     currentLead: run.currentLead,
+    goals: readRunGoals(run.goals),
+    outcome: threadOutcomeOf(
+      readThreadOutcome(run.threadOutcome),
+      readRunGoals(run.goals),
+    ),
   };
 }

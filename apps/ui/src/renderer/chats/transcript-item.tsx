@@ -60,6 +60,8 @@ import {
   reasoningHeadings,
   ThinkingDisclosure,
 } from './thinking-block';
+import { readThreadOutcomePayload } from './thread-outcome-payload';
+import { ThreadOutcomeRow } from './thread-outcome-row';
 import { ToolBodyView } from './tool-body-view';
 import { toolRowAccent } from './tool-icon';
 import {
@@ -800,6 +802,12 @@ export const TranscriptItem = memo(function TranscriptItem({
           recordedAt={item.createdAt}
           memoryKey={`outcome:${item.id}`}
         />
+      );
+    }
+    case 'thread_outcome': {
+      const outcome = readThreadOutcomePayload(item.payload);
+      return outcome === null ? null : (
+        <ThreadOutcomeRow outcome={outcome} author={nodeName(item.memberId)} />
       );
     }
     case 'stage_change': {

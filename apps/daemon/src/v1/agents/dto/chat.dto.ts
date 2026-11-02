@@ -27,6 +27,10 @@ import {
   RecommendationApplySchema,
   ReplyLanguageSchema,
   RunArtifactsWireSchema,
+  RunGoalCloseSchema,
+  RunGoalCreateSchema,
+  RunGoalEditSchema,
+  RunGoalsWireSchema,
   RunOutcomesWireSchema,
   RunProcessesWireSchema,
   RunSeenWireSchema,
@@ -822,3 +826,11 @@ export class NamedPathsResultDto extends createZodDto(
       .describe('The asked-for paths a tool call of this run names'),
   }),
 ) {}
+
+export class RunGoalsDto extends createZodDto(RunGoalsWireSchema) {}
+
+export class CreateRunGoalDto extends createZodDto(RunGoalCreateSchema) {}
+
+export class EditRunGoalDto extends createZodDto(RunGoalEditSchema) {}
+
+export class CloseRunGoalDto extends createZodDto(RunGoalCloseSchema) {}

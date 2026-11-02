@@ -1,3 +1,4 @@
+import type { ToolCallMetric } from '../../adapter.types';
 import {
   CLAUDE_DISALLOWED_TOOLS_FLAG,
   CLAUDE_MCP_TOOL_PREFIX,
@@ -73,4 +74,21 @@ export function claudeDisallowedToolArgs(
     ),
   ];
   return [CLAUDE_DISALLOWED_TOOLS_FLAG, ...CLAUDE_WITHHELD_TOOLS, ...rules];
+}
+
+/**
+ * A claude tool call as the tool ledger counts it: `mcp__<server>__<tool>` is
+ * an MCP tool of `<server>` (the server's segment, as {@link claudeMcpServerSegment}
+ * names it; one holding `__` itself is read as far as its first `__`), and
+ * every other name is one of claude's own tools.
+ */
+export function claudeToolCallMetric(name: string): ToolCallMetric {
+  if (!name.startsWith(CLAUDE_MCP_TOOL_PREFIX)) {
+    return { tool: name, server: null };
+  }
+  const rest = name.slice(CLAUDE_MCP_TOOL_PREFIX.length);
+  const split = rest.indexOf('__');
+  return split <= 0 || split + 2 >= rest.length
+    ? { tool: name, server: null }
+    : { tool: rest.slice(split + 2), server: rest.slice(0, split) };
 }

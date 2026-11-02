@@ -440,6 +440,61 @@ describe('parseRunStatus — the run_status twin', () => {
     ).not.toHaveProperty('pullRequests');
   });
 
+  describe('goals and outcome', () => {
+    const goal = {
+      id: 'g1',
+      text: 'the export saves a csv',
+      source: 'agent',
+      status: 'achieved',
+      evidence: 'saved report.csv',
+      memberId: 'dev',
+      createdAt: '2026-11-01T00:00:00.000Z',
+      closedAt: '2026-11-01T00:05:00.000Z',
+    };
+    const outcome = {
+      kind: 'success',
+      summary: null,
+      source: 'goals',
+      seq: null,
+    };
+
+    it('reads the goal list whole and the outcome', () => {
+      const event = parseRunStatus({
+        runId: 'r1',
+        status: null,
+        goals: [goal],
+        outcome,
+      });
+      expect(event?.goals).toEqual([goal]);
+      expect(event?.outcome).toEqual(outcome);
+    });
+
+    it('drops a list with an unreadable goal, keeps an empty one and a null outcome', () => {
+      expect(
+        parseRunStatus({
+          runId: 'r1',
+          status: null,
+          goals: [goal, { ...goal, status: 'won' }],
+        }),
+      ).not.toHaveProperty('goals');
+      const cleared = parseRunStatus({
+        runId: 'r1',
+        status: null,
+        goals: [],
+        outcome: null,
+      });
+      expect(cleared?.goals).toEqual([]);
+      expect(cleared).toHaveProperty('outcome', null);
+      expect(
+        parseRunStatus({
+          runId: 'r1',
+          status: null,
+          outcome: { kind: 'great' },
+        }),
+      ).not.toHaveProperty('outcome');
+    });
+  });
+
   describe('stages', () => {
     const progress = {
       rev: 2,

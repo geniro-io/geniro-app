@@ -15,6 +15,7 @@ import {
 } from 'vitest';
 
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
+import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
@@ -24,6 +25,8 @@ import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { TeamSchema } from '../../teams/teams.types';
 import { teamVersionOf } from '../../teams/utils/team-version';
 import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
+import { claudeToolCallMetric } from '../adapters/claude/utils/claude-mcp-tool-name.utils';
+import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -53,7 +56,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Run, Item, NodeState, WallTurn],
+        entities: [Run, Item, NodeState, WallTurn, Goal],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -93,7 +96,10 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           userInstructionsFile: (configDir: string | null) => ({
             path: `${configDir ?? `home-of-${agent}`}/RULES.md`,
           }),
+          toolCallMetric: claudeToolCallMetric,
         }),
+        all: () =>
+          new Map([['claude', { toolCallMetric: claudeToolCallMetric }]]),
       } as unknown as AgentAdapterRegistry,
       wallTurns,
       new RunOutcomeHistoryService(em, itemDao, {
@@ -106,6 +112,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           ]),
       } as unknown as AgentAdapterRegistry),
       kindRowsPassthrough(itemDao),
+      new GoalDao(em),
     );
     const run = new Run();
     run.id = 'source';
@@ -242,6 +249,117 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
         expect.objectContaining({ name: 'Read', failed: 0 }),
       ]),
     );
+  });
+
+  it('lists the goals with their evidence, the outcome, each MCP server and the stage moves', async () => {
+    await insert(0, 'message', { text: 'go' }, 0);
+    await insert(
+      1,
+      'tool_call',
+      { id: 't1', name: 'mcp__codegraph__codegraph_explore' },
+      1,
+    );
+    await insert(2, 'tool_result', { id: 't1', isError: true }, 2);
+    await insert(3, 'tool_call', { id: 't2', name: 'Bash' }, 3);
+    await insert(4, 'tool_result', { id: 't2' }, 4);
+    await insert(
+      5,
+      'stage_change',
+      {
+        action: 'complete',
+        stageId: 'build',
+        stageTitle: 'Build',
+        text: 'built',
+        rev: 1,
+        by: { kind: 'agent', nodeId: 'agent' },
+      },
+      5,
+    );
+    await insert(6, 'turn_complete', { usage: { durationMs: 1_000 } }, 6);
+    await insert(
+      7,
+      'thread_outcome',
+      {
+        kind: 'partial',
+        summary: 'after the snapshot',
+        teamSlug: null,
+        nodeId: 'agent',
+        conversationId: null,
+      },
+      7,
+    );
+    const em = orm.em.fork();
+    for (const [number, status, evidence] of [
+      [1, 'achieved', 'spec passes'],
+      [2, 'achieved', 'csv saved'],
+      [3, 'open', null],
+    ] as const) {
+      em.persist(
+        Object.assign(new Goal(), {
+          runId: 'source',
+          number,
+          text: `goal ${number}`,
+          source: 'agent',
+          status,
+          evidence,
+        }),
+      );
+    }
+    await em.flush();
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 6, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    expect(answer.goals).toEqual([
+      {
+        id: 'g1',
+        text: 'goal 1',
+        source: 'agent',
+        status: 'achieved',
+        evidence: 'spec passes',
+      },
+      {
+        id: 'g2',
+        text: 'goal 2',
+        source: 'agent',
+        status: 'achieved',
+        evidence: 'csv saved',
+      },
+      {
+        id: 'g3',
+        text: 'goal 3',
+        source: 'agent',
+        status: 'open',
+        evidence: null,
+      },
+    ]);
+    // The outcome row lies past the snapshot, and a goal is still open, so
+    // the thread has no outcome yet.
+    expect(answer.outcome).toBeNull();
+    const later = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 7, sourceWorking: false },
+      { view: 'overview' },
+    );
+    expect(later.outcome).toEqual({
+      kind: 'partial',
+      summary: 'after the snapshot',
+      source: 'recorded',
+      seq: 7,
+    });
+    expect(answer.mcpServers).toEqual([
+      {
+        server: 'codegraph',
+        calls: 1,
+        failed: 1,
+        tools: ['codegraph_explore'],
+      },
+    ]);
+    expect(answer.stages).toEqual([
+      expect.objectContaining({ seq: 5, action: 'complete', stage: 'build' }),
+    ]);
+    expect(answer.handOffs).toBe(0);
   });
 
   it('tells the analysis which part of the cost geniro priced itself', async () => {

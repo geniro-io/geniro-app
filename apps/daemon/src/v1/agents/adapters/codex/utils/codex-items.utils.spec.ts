@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  codexToolCallMetric,
   fileChangeDiffs,
   finishedAgentsOf,
   firstLine,
@@ -284,5 +285,18 @@ describe('sub-agent collab calls', () => {
       { threadId: 'thread-a', outcome: 'completed' },
       { threadId: 'thread-c', outcome: 'failed' },
     ]);
+  });
+});
+
+describe('codexToolCallMetric', () => {
+  it('reads the MCP server off the name an mcpToolCall item is given, and counts codex’s own tools by name', () => {
+    expect(codexToolCallMetric('mcp__codegraph__codegraph_explore')).toEqual({
+      tool: 'codegraph_explore',
+      server: 'codegraph',
+    });
+    expect(codexToolCallMetric('shell')).toEqual({
+      tool: 'shell',
+      server: null,
+    });
   });
 });

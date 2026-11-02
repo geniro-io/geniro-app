@@ -12,6 +12,7 @@ import type { ItemDao } from '../dao/item.dao';
 import type { RunDao } from '../dao/run.dao';
 import { readRunOutcomes } from '../utils/run-outcomes';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
+import { AgentEventBus } from './agent-events.bus';
 import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunOutcomeBroker, type RunOutcomeSink } from './run-outcome.broker';
 import { RunOutcomeHistoryService } from './run-outcome-history.service';
@@ -20,7 +21,12 @@ const PR_URL = 'https://github.com/acme/platform/pull/87';
 
 type RunColumns = Pick<
   Run,
-  'teamId' | 'pullRequests' | 'touchedPullRequests' | 'runOutcomes'
+  | 'teamId'
+  | 'pullRequests'
+  | 'touchedPullRequests'
+  | 'runOutcomes'
+  | 'goals'
+  | 'threadOutcome'
 >;
 
 interface Harness {
@@ -45,6 +51,8 @@ function setUp(): Harness {
       ]),
       touchedPullRequests: null,
       runOutcomes: null,
+      goals: null,
+      threadOutcome: null,
     },
     announced: [],
     approvals: [],
@@ -73,6 +81,7 @@ function setUp(): Harness {
     },
   } as unknown as ItemDao;
   const runDao = {
+    getById: async () => (harness.run === null ? null : { ...harness.run }),
     outcomeContextOf: async () =>
       harness.run === null ? null : { ...harness.run },
     updateWithoutActivity: async (_id: string, data: Partial<Run>) => {
@@ -108,6 +117,7 @@ function setUp(): Harness {
     runDao,
     new RunOutcomeHistoryService(em, itemDao, adapters),
     captures,
+    new AgentEventBus(),
   );
   return harness;
 }
@@ -518,6 +528,82 @@ describe('RunOutcomeBroker', () => {
     expect(harness.broker.canUse('run-1', 'manager')).toBe(false);
     expect(
       await harness.broker.record('run-1', 'manager', 'manager', INPUT),
+    ).toMatchObject({ status: 'unavailable' });
+  });
+});
+
+describe('RunOutcomeBroker — how the thread ended', () => {
+  it('records a thread_outcome row, keeps it in the run column, and announces it', async () => {
+    const harness = setUp();
+    const bus = new AgentEventBus();
+    const announced: unknown[] = [];
+    bus.allStatuses().subscribe((event) => announced.push(event));
+    (harness.broker as unknown as { bus: AgentEventBus }).bus = bus;
+    harness.broker.register('run-1', 'agent', sinkFor(harness));
+
+    const outcome = await harness.broker.recordThread(
+      'run-1',
+      'agent',
+      'agent',
+      {
+        kind: 'partial',
+        summary: 'Export works; the README is still open.',
+      },
+    );
+
+    expect(outcome).toEqual({ status: 'recorded', seq: 101 });
+    expect(harness.rows).toEqual([
+      {
+        memberId: 'agent',
+        kind: 'thread_outcome',
+        payload: {
+          kind: 'partial',
+          summary: 'Export works; the README is still open.',
+          teamSlug: 'dev-team',
+          nodeId: 'agent',
+          conversationId: null,
+        },
+      },
+    ]);
+    expect(JSON.parse(harness.run!.threadOutcome!)).toEqual({
+      kind: 'partial',
+      summary: 'Export works; the README is still open.',
+      source: 'recorded',
+      seq: 101,
+    });
+    expect(announced).toEqual([
+      {
+        runId: 'run-1',
+        status: null,
+        outcome: {
+          kind: 'partial',
+          summary: 'Export works; the README is still open.',
+          source: 'recorded',
+          seq: 101,
+        },
+      },
+    ]);
+  });
+
+  it('writes nothing when the same outcome already stands', async () => {
+    const harness = setUp();
+    harness.broker.register('run-1', 'agent', sinkFor(harness));
+    const input = { kind: 'success' as const, summary: 'Done.' };
+    await harness.broker.recordThread('run-1', 'agent', 'agent', input);
+
+    expect(
+      await harness.broker.recordThread('run-1', 'agent', 'agent', input),
+    ).toEqual({ status: 'unchanged', seq: 101 });
+    expect(harness.rows).toHaveLength(1);
+  });
+
+  it('says it cannot record without a sink for the asker', async () => {
+    const harness = setUp();
+    expect(
+      await harness.broker.recordThread('run-1', 'agent', 'agent', {
+        kind: 'failed',
+        summary: 'x',
+      }),
     ).toMatchObject({ status: 'unavailable' });
   });
 });

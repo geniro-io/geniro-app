@@ -46,6 +46,7 @@ import type {
   NativeMemoryReading,
   RecoveredSubagentOutcome,
   SubagentRecoveryRef,
+  ToolCallMetric,
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
@@ -116,6 +117,7 @@ import {
   codexWindowTokens,
   readCodexModelWindows,
 } from './utils/codex-context-windows.utils';
+import { codexToolCallMetric } from './utils/codex-items.utils';
 import {
   CodexMcpListing,
   codexMcpServerKey,
@@ -537,6 +539,10 @@ export class CodexAdapter extends AgentAdapter {
       ...this.configDirEnv(input.configDir),
       ...input.env,
     };
+  }
+
+  override toolCallMetric(name: string): ToolCallMetric {
+    return codexToolCallMetric(name);
   }
 
   protected mapMessage(): never {

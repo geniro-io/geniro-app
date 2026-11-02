@@ -45,7 +45,9 @@ interface MemberCell {
 }
 
 /** One team's statistics, folded over every row its runs left in the ledgers. */
-export function foldTeamStats(input: TeamStatsInput): TeamStatsWire {
+export function foldTeamStats(
+  input: TeamStatsInput,
+): Omit<TeamStatsWire, 'metrics'> {
   const totals = emptyTotals();
   for (const run of totalsByRun(input.usage, input.polledKinds).values()) {
     totals.turns += run.turns;

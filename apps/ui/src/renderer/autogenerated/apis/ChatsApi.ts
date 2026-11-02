@@ -29,7 +29,10 @@ import type {
   ChatTimelineDto,
   ChatTotalsDto,
   ChatUploadDto,
+  CloseRunGoalDto,
   CreateChatDto,
+  CreateRunGoalDto,
+  EditRunGoalDto,
   ForgottenInstructionsDto,
   GlobalChatSearchResultDto,
   ItemDto,
@@ -42,6 +45,7 @@ import type {
   RetriedDto,
   RunArtifactsDto,
   RunDto,
+  RunGoalsDto,
   RunOutcomesDto,
   RunProcessesDto,
   RunSeenDto,
@@ -65,6 +69,11 @@ import type {
   UploadChatFileDto,
 } from '../models/index';
 
+export interface ChatsApiAddRunGoalRequest {
+    runId: string;
+    createRunGoalDto: CreateRunGoalDto;
+}
+
 export interface ChatsApiAnalyzeThreadRequest {
     runId: string;
     analyzeThreadDto: AnalyzeThreadDto;
@@ -83,6 +92,12 @@ export interface ChatsApiCancelChatRequest {
     runId: string;
 }
 
+export interface ChatsApiCloseRunGoalRequest {
+    runId: string;
+    goalId: string;
+    closeRunGoalDto: CloseRunGoalDto;
+}
+
 export interface ChatsApiCreateChatRequest {
     createChatDto: CreateChatDto;
 }
@@ -94,6 +109,12 @@ export interface ChatsApiDeleteChatRequest {
 export interface ChatsApiDismissChatActionRequest {
     runId: string;
     seq: number;
+}
+
+export interface ChatsApiEditRunGoalRequest {
+    runId: string;
+    goalId: string;
+    editRunGoalDto: EditRunGoalDto;
 }
 
 export interface ChatsApiExportChatRequest {
@@ -115,6 +136,10 @@ export interface ChatsApiListChatsRequest {
     beforeCreatedAt?: string;
     beforeId?: string;
     runId?: string;
+}
+
+export interface ChatsApiListRunGoalsRequest {
+    runId: string;
 }
 
 export interface ChatsApiListRunItemsRequest {
@@ -207,6 +232,11 @@ export interface ChatsApiRenameRunRequest {
     renameRunDto: RenameRunDto;
 }
 
+export interface ChatsApiReopenRunGoalRequest {
+    runId: string;
+    goalId: string;
+}
+
 export interface ChatsApiReorderPinnedRunsRequest {
     reorderPinnedDto: ReorderPinnedDto;
 }
@@ -280,6 +310,61 @@ export interface ChatsApiUploadChatFileRequest {
  * 
  */
 export class ChatsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async addRunGoalRaw(requestParameters: ChatsApiAddRunGoalRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunGoalsDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling addRunGoal().'
+            );
+        }
+
+        if (requestParameters['createRunGoalDto'] == null) {
+            throw new runtime.RequiredError(
+                'createRunGoalDto',
+                'Required parameter "createRunGoalDto" was null or undefined when calling addRunGoal().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/goals`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['createRunGoalDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async addRunGoal(requestParameters: ChatsApiAddRunGoalRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunGoalsDto> {
+        const response = await this.addRunGoalRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -484,6 +569,69 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async closeRunGoalRaw(requestParameters: ChatsApiCloseRunGoalRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunGoalsDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling closeRunGoal().'
+            );
+        }
+
+        if (requestParameters['goalId'] == null) {
+            throw new runtime.RequiredError(
+                'goalId',
+                'Required parameter "goalId" was null or undefined when calling closeRunGoal().'
+            );
+        }
+
+        if (requestParameters['closeRunGoalDto'] == null) {
+            throw new runtime.RequiredError(
+                'closeRunGoalDto',
+                'Required parameter "closeRunGoalDto" was null or undefined when calling closeRunGoal().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/goals/{goalId}/close`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"goalId"}}`, encodeURIComponent(String(requestParameters['goalId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['closeRunGoalDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async closeRunGoal(requestParameters: ChatsApiCloseRunGoalRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunGoalsDto> {
+        const response = await this.closeRunGoalRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async createChatRaw(requestParameters: ChatsApiCreateChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
         if (requestParameters['createChatDto'] == null) {
             throw new runtime.RequiredError(
@@ -623,6 +771,69 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async dismissChatAction(requestParameters: ChatsApiDismissChatActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ActionPressDto> {
         const response = await this.dismissChatActionRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async editRunGoalRaw(requestParameters: ChatsApiEditRunGoalRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunGoalsDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling editRunGoal().'
+            );
+        }
+
+        if (requestParameters['goalId'] == null) {
+            throw new runtime.RequiredError(
+                'goalId',
+                'Required parameter "goalId" was null or undefined when calling editRunGoal().'
+            );
+        }
+
+        if (requestParameters['editRunGoalDto'] == null) {
+            throw new runtime.RequiredError(
+                'editRunGoalDto',
+                'Required parameter "editRunGoalDto" was null or undefined when calling editRunGoal().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/goals/{goalId}`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"goalId"}}`, encodeURIComponent(String(requestParameters['goalId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PATCH',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['editRunGoalDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async editRunGoal(requestParameters: ChatsApiEditRunGoalRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunGoalsDto> {
+        const response = await this.editRunGoalRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -863,6 +1074,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async listChats(requestParameters: ChatsApiListChatsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<RunDto>> {
         const response = await this.listChatsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listRunGoalsRaw(requestParameters: ChatsApiListRunGoalsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunGoalsDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling listRunGoals().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/goals`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listRunGoals(requestParameters: ChatsApiListRunGoalsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunGoalsDto> {
+        const response = await this.listRunGoalsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -1829,6 +2085,59 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async renameRun(requestParameters: ChatsApiRenameRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
         const response = await this.renameRunRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async reopenRunGoalRaw(requestParameters: ChatsApiReopenRunGoalRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunGoalsDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling reopenRunGoal().'
+            );
+        }
+
+        if (requestParameters['goalId'] == null) {
+            throw new runtime.RequiredError(
+                'goalId',
+                'Required parameter "goalId" was null or undefined when calling reopenRunGoal().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/goals/{goalId}/reopen`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"goalId"}}`, encodeURIComponent(String(requestParameters['goalId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async reopenRunGoal(requestParameters: ChatsApiReopenRunGoalRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunGoalsDto> {
+        const response = await this.reopenRunGoalRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

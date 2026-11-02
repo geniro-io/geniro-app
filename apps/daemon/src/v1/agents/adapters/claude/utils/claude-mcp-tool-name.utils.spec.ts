@@ -4,6 +4,7 @@ import {
   claudeDisallowedToolArgs,
   claudeMcpServerRule,
   claudeMcpServerSegment,
+  claudeToolCallMetric,
 } from './claude-mcp-tool-name.utils';
 
 describe('claudeMcpServerSegment — the CLI’s own normalizer', () => {
@@ -72,5 +73,28 @@ describe('claudeDisallowedToolArgs', () => {
       '--disallowedTools',
       'Monitor',
     ]);
+  });
+});
+
+describe('claudeToolCallMetric', () => {
+  it('reads the MCP server and tool off an mcp__ name, and counts any other name as itself', () => {
+    expect(claudeToolCallMetric('mcp__codegraph__codegraph_explore')).toEqual({
+      tool: 'codegraph_explore',
+      server: 'codegraph',
+    });
+    expect(
+      claudeToolCallMetric('mcp__claude_ai_Booking_com__accommodations_search'),
+    ).toEqual({
+      tool: 'accommodations_search',
+      server: 'claude_ai_Booking_com',
+    });
+    expect(claudeToolCallMetric('Bash')).toEqual({
+      tool: 'Bash',
+      server: null,
+    });
+    expect(claudeToolCallMetric('mcp__broken')).toEqual({
+      tool: 'mcp__broken',
+      server: null,
+    });
   });
 });

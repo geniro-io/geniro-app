@@ -2844,6 +2844,39 @@ export type CheckShareDestinationDtoShareDestination = ShareConfigDtoShareDestin
 /**
  * 
  * @export
+ * @interface CloseRunGoalDto
+ */
+export interface CloseRunGoalDto {
+    /**
+     * 
+     * @type {CloseRunGoalDtoGoalClosingStatus}
+     * @memberof CloseRunGoalDto
+     */
+    status: CloseRunGoalDtoGoalClosingStatus;
+    /**
+     * 
+     * @type {string}
+     * @memberof CloseRunGoalDto
+     */
+    evidence: string;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const CloseRunGoalDtoGoalClosingStatus = {
+    Achieved: 'achieved',
+    NotAchieved: 'not_achieved',
+    Dropped: 'dropped'
+} as const;
+export type CloseRunGoalDtoGoalClosingStatus = typeof CloseRunGoalDtoGoalClosingStatus[keyof typeof CloseRunGoalDtoGoalClosingStatus];
+
+/**
+ * 
+ * @export
  * @interface ConfigDirPin
  */
 export interface ConfigDirPin {
@@ -3369,6 +3402,19 @@ export interface CreateProjectDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface CreateRunGoalDto
+ */
+export interface CreateRunGoalDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateRunGoalDto
+     */
+    text: string;
+}
 /**
  * 
  * @export
@@ -3922,6 +3968,19 @@ export interface DisplayedPullRequest {
 /**
  * 
  * @export
+ * @interface EditRunGoalDto
+ */
+export interface EditRunGoalDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof EditRunGoalDto
+     */
+    text: string;
+}
+/**
+ * 
+ * @export
  * @interface ExportTeamDto
  */
 export interface ExportTeamDto {
@@ -4097,6 +4156,91 @@ export interface GlobalChatSearchResultDto {
      */
     partialReason: string | null;
 }
+/**
+ * 
+ * @export
+ * @interface GoalFigures
+ */
+export interface GoalFigures {
+    /**
+     * every goal recorded, dropped ones included
+     * @type {number}
+     * @memberof GoalFigures
+     */
+    recorded: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof GoalFigures
+     */
+    achieved: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof GoalFigures
+     */
+    notAchieved: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof GoalFigures
+     */
+    dropped: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof GoalFigures
+     */
+    open: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof GoalFigures
+     */
+    achievedShare: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof GoalFigures
+     */
+    runsWithGoals: number;
+    /**
+     * runs the ledgers watched from their start — what coverage is out of
+     * @type {number}
+     * @memberof GoalFigures
+     */
+    measuredRuns: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof GoalFigures
+     */
+    coverage: number | null;
+}
+
+/**
+ * 
+ * @export
+ */
+export const GoalSource = {
+    User: 'user',
+    Agent: 'agent'
+} as const;
+export type GoalSource = typeof GoalSource[keyof typeof GoalSource];
+
+
+/**
+ * 
+ * @export
+ */
+export const GoalStatus = {
+    Open: 'open',
+    Achieved: 'achieved',
+    NotAchieved: 'not_achieved',
+    Dropped: 'dropped'
+} as const;
+export type GoalStatus = typeof GoalStatus[keyof typeof GoalStatus];
+
 /**
  * 
  * @export
@@ -4520,7 +4664,8 @@ export const ItemKind = {
     ActionOutcome: 'action_outcome',
     TeamNote: 'team_note',
     RunOutcome: 'run_outcome',
-    StageChange: 'stage_change'
+    StageChange: 'stage_change',
+    ThreadOutcome: 'thread_outcome'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 
@@ -4923,6 +5068,37 @@ export interface LogoutResultDto {
 /**
  * 
  * @export
+ * @interface McpServerUse
+ */
+export interface McpServerUse {
+    /**
+     * 
+     * @type {string}
+     * @memberof McpServerUse
+     */
+    server: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof McpServerUse
+     */
+    calls: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof McpServerUse
+     */
+    errors: number;
+    /**
+     * distinct tools of it that were called
+     * @type {number}
+     * @memberof McpServerUse
+     */
+    tools: number;
+}
+/**
+ * 
+ * @export
  * @interface MeasureInstructionSizesDto
  */
 export interface MeasureInstructionSizesDto {
@@ -4982,6 +5158,55 @@ export const MemberAvatarKindEnum = {
 } as const;
 export type MemberAvatarKindEnum = typeof MemberAvatarKindEnum[keyof typeof MemberAvatarKindEnum];
 
+/**
+ * 
+ * @export
+ * @interface MemberCall
+ */
+export interface MemberCall {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberCall
+     */
+    caller: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberCall
+     */
+    callee: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberCall
+     */
+    calls: number;
+    /**
+     * calls that ended without an answer
+     * @type {number}
+     * @memberof MemberCall
+     */
+    failed: number;
+    /**
+     * the callee's turns inside them
+     * @type {number}
+     * @memberof MemberCall
+     */
+    turns: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberCall
+     */
+    costUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberCall
+     */
+    avgMs: number | null;
+}
 /**
  * 
  * @export
@@ -7354,6 +7579,18 @@ export interface RunDto {
      */
     currentLead: string | null;
     /**
+     * The run's goals as the goals tool and the user left them, open and closed
+     * @type {Array<RunGoal>}
+     * @memberof RunDto
+     */
+    goals: Array<RunGoal>;
+    /**
+     * 
+     * @type {ThreadOutcome}
+     * @memberof RunDto
+     */
+    outcome: ThreadOutcome | null;
+    /**
      * 
      * @type {number}
      * @memberof RunDto
@@ -7386,6 +7623,76 @@ export interface RunDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface RunGoal
+ */
+export interface RunGoal {
+    /**
+     * The goal within its run: g1, g2, …
+     * @type {string}
+     * @memberof RunGoal
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunGoal
+     */
+    text: string;
+    /**
+     * Who the goal came from: the user, or the agent working the task
+     * @type {GoalSource}
+     * @memberof RunGoal
+     */
+    source: GoalSource;
+    /**
+     * 
+     * @type {GoalStatus}
+     * @memberof RunGoal
+     */
+    status: GoalStatus;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunGoal
+     */
+    evidence: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunGoal
+     */
+    memberId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunGoal
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunGoal
+     */
+    closedAt: string | null;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface RunGoalsDto
+ */
+export interface RunGoalsDto {
+    /**
+     * 
+     * @type {Array<RunGoal>}
+     * @memberof RunGoalsDto
+     */
+    goals: Array<RunGoal>;
+}
 
 /**
  * 
@@ -9621,6 +9928,43 @@ export type StageActorOneOf2KindEnum = typeof StageActorOneOf2KindEnum[keyof typ
 /**
  * 
  * @export
+ * @interface StageFigures
+ */
+export interface StageFigures {
+    /**
+     * 
+     * @type {string}
+     * @memberof StageFigures
+     */
+    stageId: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof StageFigures
+     */
+    completed: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof StageFigures
+     */
+    skipped: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof StageFigures
+     */
+    reopened: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof StageFigures
+     */
+    avgMs: number | null;
+}
+/**
+ * 
+ * @export
  * @interface StageMoveResultDto
  */
 export interface StageMoveResultDto {
@@ -11132,6 +11476,12 @@ export interface TeamStage {
      */
     goal: string;
     /**
+     * When true, the stage cannot be completed until the run has recorded its goals with the goals tool
+     * @type {boolean}
+     * @memberof TeamStage
+     */
+    requireGoals?: boolean;
+    /**
      * Ids of the members responsible for this stage; the first one leads it
      * @type {Array<string>}
      * @memberof TeamStage
@@ -11247,6 +11597,12 @@ export interface TeamStatsDto {
      * @memberof TeamStatsDto
      */
     byMember: Array<TeamStatsMember>;
+    /**
+     * 
+     * @type {ThreadMetrics}
+     * @memberof TeamStatsDto
+     */
+    metrics: ThreadMetrics;
 }
 /**
  * 
@@ -11548,6 +11904,153 @@ export interface ThreadAnalysisDto {
      */
     analysis: ThreadOverviewDtoAnalysisAnalysis | null;
 }
+/**
+ * 
+ * @export
+ * @interface ThreadMetrics
+ */
+export interface ThreadMetrics {
+    /**
+     * 
+     * @type {GoalFigures}
+     * @memberof ThreadMetrics
+     */
+    goals: GoalFigures;
+    /**
+     * 
+     * @type {ThreadOutcomeCounts}
+     * @memberof ThreadMetrics
+     */
+    outcomes: ThreadOutcomeCounts;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadMetrics
+     */
+    handOffs: number | null;
+    /**
+     * most called first
+     * @type {Array<ToolUse>}
+     * @memberof ThreadMetrics
+     */
+    tools: Array<ToolUse>;
+    /**
+     * most called first
+     * @type {Array<McpServerUse>}
+     * @memberof ThreadMetrics
+     */
+    mcpServers: Array<McpServerUse>;
+    /**
+     * 
+     * @type {Array<StageFigures>}
+     * @memberof ThreadMetrics
+     */
+    stages: Array<StageFigures>;
+    /**
+     * one row per caller and callee, most calls first
+     * @type {Array<MemberCall>}
+     * @memberof ThreadMetrics
+     */
+    calls: Array<MemberCall>;
+}
+/**
+ * 
+ * @export
+ * @interface ThreadOutcome
+ */
+export interface ThreadOutcome {
+    /**
+     * 
+     * @type {ThreadOutcomeKind}
+     * @memberof ThreadOutcome
+     */
+    kind: ThreadOutcomeKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof ThreadOutcome
+     */
+    summary: string | null;
+    /**
+     * recorded: an agent called record_outcome; goals: derived from how its goals closed
+     * @type {string}
+     * @memberof ThreadOutcome
+     */
+    source: ThreadOutcomeSourceEnum;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadOutcome
+     */
+    seq: number | null;
+}
+
+
+/**
+ * @export
+ */
+export const ThreadOutcomeSourceEnum = {
+    Recorded: 'recorded',
+    Goals: 'goals'
+} as const;
+export type ThreadOutcomeSourceEnum = typeof ThreadOutcomeSourceEnum[keyof typeof ThreadOutcomeSourceEnum];
+
+/**
+ * 
+ * @export
+ * @interface ThreadOutcomeCounts
+ */
+export interface ThreadOutcomeCounts {
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadOutcomeCounts
+     */
+    success: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadOutcomeCounts
+     */
+    partial: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadOutcomeCounts
+     */
+    failed: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadOutcomeCounts
+     */
+    abandoned: number;
+    /**
+     * runs whose outcome an agent recorded
+     * @type {number}
+     * @memberof ThreadOutcomeCounts
+     */
+    recorded: number;
+    /**
+     * runs whose outcome is read from their goals
+     * @type {number}
+     * @memberof ThreadOutcomeCounts
+     */
+    derived: number;
+}
+
+/**
+ * 
+ * @export
+ */
+export const ThreadOutcomeKind = {
+    Success: 'success',
+    Partial: 'partial',
+    Failed: 'failed',
+    Abandoned: 'abandoned'
+} as const;
+export type ThreadOutcomeKind = typeof ThreadOutcomeKind[keyof typeof ThreadOutcomeKind];
+
 /**
  * 
  * @export
@@ -11887,6 +12390,18 @@ export interface ThreadOverviewDtoAnalysisAnalysis {
      */
     currentLead: string | null;
     /**
+     * The run's goals as the goals tool and the user left them, open and closed
+     * @type {Array<RunGoal>}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    goals: Array<RunGoal>;
+    /**
+     * 
+     * @type {ThreadOutcome}
+     * @memberof ThreadOverviewDtoAnalysisAnalysis
+     */
+    outcome: ThreadOutcome | null;
+    /**
      * 
      * @type {number}
      * @memberof ThreadOverviewDtoAnalysisAnalysis
@@ -12060,6 +12575,43 @@ export interface ThreadOverviewDtoTotals {
      * @memberof ThreadOverviewDtoTotals
      */
     pausedSpans: Array<PausedSpan>;
+}
+/**
+ * 
+ * @export
+ * @interface ToolUse
+ */
+export interface ToolUse {
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUse
+     */
+    tool: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ToolUse
+     */
+    mcpServer: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUse
+     */
+    calls: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUse
+     */
+    errors: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ToolUse
+     */
+    avgMs: number | null;
 }
 /**
  * 
@@ -12627,6 +13179,12 @@ export interface UsageStatsDto {
      * @memberof UsageStatsDto
      */
     byTeam: Array<UsageGroup>;
+    /**
+     * the threads started in the period: goals, outcomes, and every tool and MCP server called in it
+     * @type {ThreadMetrics}
+     * @memberof UsageStatsDto
+     */
+    metrics: ThreadMetrics;
 }
 /**
  * 

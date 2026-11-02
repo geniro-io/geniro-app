@@ -5497,3 +5497,10 @@ export interface NativeMemoryReading {
   location: string;
   notes: NativeMemoryNote[];
 }
+
+/** One tool call as the tool ledger counts it (`AgentAdapter.toolCallMetric`). */
+export interface ToolCallMetric {
+  tool: string;
+  /** The MCP server the tool came from, as the CLI names it; null for the CLI's own tool. */
+  server: string | null;
+}

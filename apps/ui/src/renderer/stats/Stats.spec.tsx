@@ -120,6 +120,32 @@ function stats(overrides: Partial<UsageStatsDto> = {}): UsageStatsDto {
     byAgent: [{ key: 'claude', totals: totals() }],
     byModel: [{ key: 'claude-opus-5', totals: totals() }],
     byProject: [{ key: '/Users/me/work/geniro-app', totals: totals() }],
+    metrics: {
+      goals: {
+        recorded: 0,
+        achieved: 0,
+        notAchieved: 0,
+        dropped: 0,
+        open: 0,
+        achievedShare: null,
+        runsWithGoals: 0,
+        measuredRuns: 0,
+        coverage: null,
+      },
+      outcomes: {
+        success: 0,
+        partial: 0,
+        failed: 0,
+        abandoned: 0,
+        recorded: 0,
+        derived: 0,
+      },
+      handOffs: null,
+      tools: [],
+      mcpServers: [],
+      stages: [],
+      calls: [],
+    },
     byTeam: [
       { key: 'dev-team', totals: totals() },
       { key: 'review-team', totals: totals() },
@@ -179,6 +205,50 @@ describe('Stats', () => {
       'Tokens in': '1k',
       'Agent time': '1h 0m',
     });
+  });
+
+  it('shows the goals of the period’s threads and every tool and MCP server called', async () => {
+    const base = stats();
+    mocks.readUsageStats.mockResolvedValue(
+      stats({
+        metrics: {
+          ...base.metrics,
+          goals: {
+            ...base.metrics.goals,
+            recorded: 4,
+            achieved: 3,
+            achievedShare: 0.75,
+            runsWithGoals: 2,
+            measuredRuns: 3,
+            coverage: 2 / 3,
+          },
+          tools: [
+            { tool: 'Bash', mcpServer: null, calls: 7, errors: 1, avgMs: 900 },
+            {
+              tool: 'codegraph_explore',
+              mcpServer: 'codegraph',
+              calls: 3,
+              errors: 0,
+              avgMs: null,
+            },
+          ],
+          mcpServers: [{ server: 'codegraph', calls: 3, errors: 0, tools: 1 }],
+        },
+      }),
+    );
+    const el = await render(<Stats handle={HANDLE} />);
+
+    expect(cards(el)).toMatchObject({
+      'Threads with goals': '67%',
+      'Goals achieved': '75%',
+      'Thread outcomes': '—',
+    });
+    expect(
+      el.querySelector('table[aria-label="Tools"]')?.textContent,
+    ).toContain('codegraph_explore · codegraph');
+    expect(
+      el.querySelector('table[aria-label="MCP servers"]')?.textContent,
+    ).toContain('codegraph');
   });
 
   it('puts the measured figures above the charts, not below them', async () => {

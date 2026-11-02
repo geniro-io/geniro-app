@@ -1,4 +1,5 @@
 import {
+  HOST_GOALS_TOOL,
   HOST_MOVE_STAGE_TOOL,
   HOST_TEAM_NOTES_TOOL,
   type StageActor,
@@ -99,7 +100,7 @@ export function stageMapPrompt(
       stage.howToWork?.trim()
         ? `   How to work: ${stage.howToWork.trim()}`
         : null,
-      `   Goal: ${stage.goal.trim()}`,
+      `   Goal: ${stage.goal.trim()}${stage.requireGoals === true ? GOALS_REQUIRED_NOTE : ''}`,
     ].filter((line): line is string => line !== null);
     return [head, ...body].join('\n');
   });
@@ -164,7 +165,9 @@ export function currentStageBrief(
   if (stage.howToWork?.trim()) {
     lines.push(`How to work: ${stage.howToWork.trim()}`);
   }
-  lines.push(`Goal: ${stage.goal.trim()}`);
+  lines.push(
+    `Goal: ${stage.goal.trim()}${stage.requireGoals === true ? GOALS_REQUIRED_NOTE : ''}`,
+  );
   const next = stage.next ?? [];
   if (next.length > 1) {
     lines.push(
@@ -298,8 +301,17 @@ export interface HandOffBriefInput {
   previousLead: string | null;
   request: string | null;
   unreadTeamNotes: number;
+  /** The run's goals still open, as the goals tool lists them. */
+  openGoals?: readonly { id: string; text: string }[];
   userReason?: { action: StageMoveAction; stageId: string; text: string };
 }
+
+/** What a stage that requires goals adds to its goal line. */
+const GOALS_REQUIRED_NOTE = ` (the run's goals must be recorded with ${HOST_GOALS_TOOL} before it is done)`;
+
+/** Open goals a hand-off brief lists by name; the rest are counted. */
+const MAX_HANDOFF_GOALS = 8;
+const MAX_HANDOFF_GOAL_LENGTH = 160;
 
 /**
  * What the next stage's lead is woken with when a relay run is handed to it:
@@ -338,6 +350,25 @@ export function handOffBrief(input: HandOffBriefInput): string {
     );
   }
   const closing: string[] = [];
+  const openGoals = input.openGoals ?? [];
+  if (openGoals.length > 0) {
+    closing.push(
+      [
+        `Open goals (${openGoals.length}) — close each with evidence using ${HOST_GOALS_TOOL} once it is met:`,
+        ...openGoals
+          .slice(0, MAX_HANDOFF_GOALS)
+          .map(
+            (goal) =>
+              `- ${goal.id}: ${capped(goal.text, MAX_HANDOFF_GOAL_LENGTH)}`,
+          ),
+        ...(openGoals.length > MAX_HANDOFF_GOALS
+          ? [
+              `- …and ${openGoals.length - MAX_HANDOFF_GOALS} more (${HOST_GOALS_TOOL} action "list")`,
+            ]
+          : []),
+      ].join('\n'),
+    );
+  }
   if (input.unreadTeamNotes > 0) {
     closing.push(
       `Unread team notes: ${input.unreadTeamNotes} — read them with ${HOST_TEAM_NOTES_TOOL}.`,

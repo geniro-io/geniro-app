@@ -2065,6 +2065,9 @@ export function Teams({
                     avatar: member.avatar,
                   };
             }}
+            stageTitleOf={(stageId) =>
+              stages.find((stage) => stage.id === stageId)?.title ?? stageId
+            }
           />
         }
         sheet={sheet}

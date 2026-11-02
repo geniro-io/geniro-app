@@ -251,6 +251,12 @@ export const MemberAvatarSchema = z
   .meta({ id: 'MemberAvatar' });
 export type MemberAvatar = z.infer<typeof MemberAvatarSchema>;
 
+/** The most a member's uploaded picture may weigh, in bytes. */
+export const MAX_AVATAR_BYTES = 1_048_576;
+
+/** How many members a library card's portrait row draws. */
+export const TEAM_PORTRAIT_SIZE = 6;
+
 const memberSettingsShape = {
   agent: AgentKindSchema.describe('CLI agent this member runs'),
   model: z
@@ -704,9 +710,36 @@ export const TeamSummarySchema = z.object({
         .meta({ id: 'AgentCount' }),
     )
     .describe('Per-agent-kind member counts, only kinds present, stable order'),
+  portrait: z
+    .array(
+      z
+        .object({
+          id: z.string(),
+          name: z.string(),
+          avatar: MemberAvatarSchema.optional(),
+        })
+        .meta({ id: 'TeamPortraitMember' }),
+    )
+    .describe('The first members in team order, drawn on the library card'),
   updatedAt: z.string(),
 });
 export type TeamSummary = z.infer<typeof TeamSummarySchema>;
+
+export const TeamAvatarUploadSchema = z.object({
+  data: z
+    .string()
+    .min(1)
+    .max(Math.ceil(MAX_AVATAR_BYTES / 3) * 4)
+    .describe('The picture’s bytes, base64-encoded'),
+});
+
+export const TeamAvatarIdSchema = z.object({
+  id: z.string().describe('The stored file id, `<sha256>.<ext>`'),
+});
+
+export const TeamAvatarDataSchema = z.object({
+  dataUri: z.string().describe('`data:<mediaType>;base64,<bytes>`'),
+});
 
 /** One team definition addressed by its library slug. */
 export const TeamWireSchema = z.object({

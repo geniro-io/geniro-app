@@ -163,6 +163,18 @@ describe('StorageService', () => {
     expect(usage.unclaimed).toEqual([]);
   });
 
+  it('files member pictures with the teams, never as a leftover or unclaimed', async () => {
+    write(join(root, 'avatars', `${'a'.repeat(64)}.png`), 4_000);
+
+    const usage = await service.usage();
+
+    expect(group(usage, 'teams')?.entries.map((e) => e.name)).toEqual([
+      'avatars',
+    ]);
+    expect(group(usage, 'leftovers')?.entries ?? []).toEqual([]);
+    expect(usage.unclaimed).toEqual([]);
+  });
+
   it('counts team backups apart from the teams and never twice', async () => {
     write(join(root, 'teams', 'a.team.yaml'), 100);
     write(join(root, 'teams', '.backups', 'a.2026.yaml'), 50_000);

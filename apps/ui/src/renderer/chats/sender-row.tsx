@@ -1,4 +1,4 @@
-import { InitialsAvatar } from '../components/ui/avatar';
+import { MemberAvatar } from '../components/member-avatar';
 import { cn } from '../components/ui/utils';
 
 /**
@@ -37,7 +37,7 @@ export function SenderRow({
     <div
       data-slot="sender-row"
       className={cn('flex w-full gap-3', reversed && 'flex-row-reverse')}>
-      <InitialsAvatar
+      <MemberAvatar
         name={avatarName ?? name}
         colorKey={colorKey}
         solid={solid}

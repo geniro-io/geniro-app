@@ -5823,6 +5823,7 @@ export function Chats({
         ...(node.pool?.length
           ? { pool: [node.agent, ...node.pool.map((member) => member.agent)] }
           : {}),
+        ...(node.avatar ? { avatar: node.avatar } : {}),
       });
     }
     return map;
@@ -10706,6 +10707,7 @@ export function Chats({
                       // to prevent, merely moved to the second chat.
                       key={activeRun?.id ?? 'no-run'}
                       agents={agents}
+                      nodes={nodeMeta}
                       // Both act on the WHOLE conversation, which is what the
                       // panel's own control row is already for — and being on
                       // its rail is what keeps them reachable with the column

@@ -150,6 +150,27 @@ describe('theme token files', () => {
     expect(unmapped).toEqual([]);
   });
 
+  it.each([
+    ['--radius-control', '--control-radius'],
+    ['--radius-card', '--card-radius'],
+    ['--radius-pill', '--pill-radius'],
+    ['--color-surface-raised', '--surface-raised'],
+    ['--color-field-border', '--field-border'],
+    ['--text-title', '--title-size'],
+    ['--text-kpi', '--kpi-size'],
+    ['--shadow-panel-lift', '--lift-shadow'],
+  ])(
+    'exposes the %s utility from the %s token every theme declares',
+    (utility, token) => {
+      expect(readFileSync(GLOBAL_CSS, 'utf8')).toContain(
+        `${utility}: var(${token});`,
+      );
+      for (const file of themeFiles) {
+        expect(declaredTokens(file).has(token)).toBe(true);
+      }
+    },
+  );
+
   it.each(THEMES)('$id declares its own [data-theme] selector', (theme) => {
     // The other half of the silent failure the import check covers: file
     // present, manifest row matching, import present — and the block keyed to

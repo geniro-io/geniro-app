@@ -16,14 +16,21 @@ const TONE = {
  */
 export function StatusDot({
   tone,
+  label,
   className,
 }: {
   tone: StatusTone;
+  /** The state in words, announced and shown on hover, where no word stands beside the dot. */
+  label?: string;
   className?: string;
 }): React.JSX.Element {
   return (
     <span
-      aria-hidden="true"
+      data-slot="status-dot"
+      data-tone={tone}
+      {...(label === undefined
+        ? { 'aria-hidden': true }
+        : { role: 'img', 'aria-label': label, title: label })}
       className={cn('inline-block size-2 rounded-full', TONE[tone], className)}
     />
   );

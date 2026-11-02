@@ -1,12 +1,14 @@
 import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
+import { RunDao } from '../agents/dao/run.dao';
 import { ConfigDirPinService } from '../agents/services/config-dir-pin.service';
 import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { CapabilitiesController } from './controllers/capabilities.controller';
 import { TeamsController } from './controllers/teams.controller';
 import { TeamChangeLogDao } from './dao/team-change-log.dao';
+import { AvatarStoreService } from './services/avatar-store.service';
 import { CallBroker } from './services/call-broker.service';
 import { CapabilitiesService } from './services/capabilities.service';
 import { HostWakeGraphDelivery } from './services/host-wake-graph-delivery.service';
@@ -43,8 +45,15 @@ import { TeamStoreService } from './services/team-store.service';
   controllers: [TeamsController, CapabilitiesController],
   providers: [
     {
+      provide: AvatarStoreService,
+      useFactory: (runs: RunDao) => new AvatarStoreService(runs),
+      inject: [RunDao],
+    },
+    {
       provide: TeamStoreService,
-      useFactory: () => new TeamStoreService(),
+      useFactory: (avatars: AvatarStoreService) =>
+        new TeamStoreService({}, avatars),
+      inject: [AvatarStoreService],
     },
     CapabilitiesService,
     InstructionSizesService,

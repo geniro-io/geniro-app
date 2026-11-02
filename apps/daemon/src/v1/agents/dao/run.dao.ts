@@ -24,6 +24,18 @@ export class RunDao extends BaseDao<Run> {
     super(em, Run);
   }
 
+  /** Whether any run's frozen copy of its team contains `text` (a stored file's id). */
+  async teamSnapshotMentions(text: string): Promise<boolean> {
+    const found = await this.em
+      .fork()
+      .findOne(
+        Run,
+        { teamSnapshot: { $like: `%${text}%` } },
+        { fields: ['id'], filters: false },
+      );
+    return found !== null;
+  }
+
   /**
    * Single-agent chat runs (no team), newest first, filtered by how much
    * of the archive the caller asked for.

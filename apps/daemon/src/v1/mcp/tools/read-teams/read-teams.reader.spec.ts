@@ -44,6 +44,13 @@ describe('read_teams result text', () => {
         memberCount: 3,
         stageCount: 2,
         agentCounts: [{ kind: 'claude', count: 2 }],
+        portrait: [
+          {
+            id: 'lead',
+            name: 'Lead',
+            avatar: { kind: 'emoji', value: '🦊' },
+          },
+        ],
         updatedAt: '2026-10-20T10:00:00.000Z',
       },
     ]);

@@ -16,6 +16,8 @@ type Story = StoryObj<typeof meta>;
 
 export const Playground: Story = {};
 
+export const Labelled: Story = { args: { tone: 'warn', label: 'needs setup' } };
+
 export const AllTones: Story = {
   render: () => (
     <div className="flex items-center gap-4 text-sm text-muted-foreground">

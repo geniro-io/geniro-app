@@ -87,6 +87,17 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --radius-control: var(--control-radius);
+  --radius-card: var(--card-radius);
+  --radius-pill: var(--pill-radius);
+  --color-surface-raised: var(--surface-raised);
+  --color-field-border: var(--field-border);
+  --text-title: var(--title-size);
+  --text-title--line-height: var(--title-line-height);
+  --text-title--letter-spacing: var(--title-tracking);
+  --text-kpi: var(--kpi-size);
+  --text-kpi--line-height: var(--kpi-line-height);
+  --shadow-panel-lift: var(--lift-shadow);
   --shadow-panel-sm: var(--shadow-sm);
   --shadow-panel-md: var(--shadow-md);
   --shadow-panel-lg: var(--shadow-lg);

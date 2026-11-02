@@ -43,6 +43,24 @@ describe('teamVersionOf', () => {
     expect(teamVersionOf(base)).toMatch(/^[0-9a-f]{16}$/);
   });
 
+  it('does not move when a member only changes its face', () => {
+    expect(
+      edit((team) => ({
+        ...team,
+        members: team.members.map((one) => ({
+          ...one,
+          avatar: { kind: 'emoji', value: '🦊', tone: 'avatar-3' },
+        })),
+      })),
+    ).toBe(teamVersionOf(base));
+    expect(
+      canonicalGraphOf({
+        ...base,
+        members: [{ ...base.members[0]!, avatar: { kind: 'initials' } }],
+      }).members[0],
+    ).not.toHaveProperty('avatar');
+  });
+
   it('hashes a stage-less team as the canonical JSON without a stages key', () => {
     const json = canonicalGraphJson(canonicalGraphOf(base));
 

@@ -20,6 +20,7 @@ import {
 } from '../../migrations/migrations.types';
 import { LEGACY_LIBRARY_DIR } from '../../migrations/utils/m0003-team-library-files';
 import { TASK_ATTACHMENTS_DIR_NAME } from '../../tasks/utils/task-attachments';
+import { AVATARS_DIR_NAME } from '../../teams/services/avatar-store.service';
 import { TEAMS_DIR_NAME } from '../../teams/services/team-store.service';
 import type { StorageClassifier, StorageGroupId } from '../storage.types';
 
@@ -57,6 +58,7 @@ const NAMED: Readonly<Record<string, StorageGroupId>> = {
   [CHAT_UPLOADS_DIR_NAME]: 'chatFiles',
   [TASK_ATTACHMENTS_DIR_NAME]: 'taskFiles',
   [TEAMS_DIR_NAME]: 'teams',
+  [AVATARS_DIR_NAME]: 'teams',
   [DEBUG_LOG_DIR_NAME]: 'logs',
   [FOLDERLESS_DIR_NAME]: 'caches',
   [SKILL_HARVEST_FILE_NAME]: 'caches',

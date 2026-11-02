@@ -97,6 +97,139 @@ describe('usePhoneBackEntry', () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it('keeps a page’s entry when a page stacked on it pops, so the next back closes it', async () => {
+    const closeTeam = vi.fn();
+    const closeMember = vi.fn();
+    function Stack({ member }: { member: boolean }): null {
+      usePhoneBackEntry('team', true, closeTeam);
+      usePhoneBackEntry('team-member', member, closeMember);
+      return null;
+    }
+    await act(async () => {
+      root.render(<Stack member={false} />);
+    });
+    await act(async () => {
+      root.render(<Stack member />);
+    });
+
+    await systemBack();
+    expect(closeMember).toHaveBeenCalledTimes(1);
+    expect(closeTeam).not.toHaveBeenCalled();
+    await act(async () => {
+      root.render(<Stack member={false} />);
+    });
+
+    await systemBack();
+    expect(closeTeam).toHaveBeenCalledTimes(1);
+  });
+
+  it('adopts both entries of a stack closed by a tab switch, so every later back closes one page', async () => {
+    const push = vi.spyOn(history, 'pushState');
+    const closeTeam = vi.fn();
+    const closeMember = vi.fn();
+    function Stack({ active }: { active: boolean }): null {
+      usePhoneBackEntry('team', active, closeTeam, {
+        stackedOwners: ['team-member'],
+      });
+      usePhoneBackEntry('team-member', active, closeMember);
+      return null;
+    }
+    await act(async () => {
+      root.render(<Stack active />);
+    });
+    await act(async () => {
+      root.render(<Stack active={false} />);
+    });
+    await act(async () => {
+      root.render(<Stack active />);
+    });
+
+    expect(push).toHaveBeenCalledTimes(2);
+    await systemBack();
+    expect(closeMember).toHaveBeenCalledTimes(1);
+    expect(closeTeam).not.toHaveBeenCalled();
+    await systemBack();
+    expect(closeTeam).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes the platform back past the entry of a stacked page that closed itself, closing the page under it', async () => {
+    // The member removed from its own sheet: the sheet closes without a pop.
+    const closeTeam = vi.fn();
+    function Stack({ member }: { member: boolean }): null {
+      usePhoneBackEntry('team', true, closeTeam, {
+        stackedOwners: ['team-member'],
+      });
+      usePhoneBackEntry('team-member', member, vi.fn());
+      return null;
+    }
+    await act(async () => {
+      root.render(<Stack member />);
+    });
+    await act(async () => {
+      root.render(<Stack member={false} />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await systemBack();
+    await act(async () => {
+      await vi.waitFor(() => expect(closeTeam).toHaveBeenCalledTimes(1));
+    });
+    expect(
+      (history.state as Record<string, unknown> | null)?.geniroPhonePage,
+    ).toBeUndefined();
+  });
+
+  describe('when a stacked page closed by a tab switch does not come back', () => {
+    const closeTeam = vi.fn();
+    let teamBack: () => void = () => undefined;
+    function Stack({
+      active,
+      member,
+    }: {
+      active: boolean;
+      member: boolean;
+    }): null {
+      teamBack = usePhoneBackEntry('team', active, closeTeam, {
+        stackedOwners: ['team-member'],
+      });
+      usePhoneBackEntry('team-member', active && member, vi.fn());
+      return null;
+    }
+    const pageOfEntry = (): unknown =>
+      (history.state as Record<string, unknown> | null)?.geniroPhonePage;
+
+    beforeEach(async () => {
+      closeTeam.mockReset();
+      await act(async () => {
+        root.render(<Stack active member />);
+      });
+      await act(async () => {
+        root.render(<Stack active={false} member />);
+      });
+      await act(async () => {
+        root.render(<Stack active member={false} />);
+      });
+    });
+
+    it('takes the platform back past the entry left on top, closing the team', async () => {
+      await systemBack();
+      await act(async () => {
+        await vi.waitFor(() => expect(closeTeam).toHaveBeenCalledTimes(1));
+      });
+
+      expect(pageOfEntry()).toBeUndefined();
+    });
+
+    it('takes the team’s own Back past the entry left on top, in one pop', async () => {
+      await afterPopstate(() => teamBack(), '‹ Back');
+
+      expect(closeTeam).toHaveBeenCalledTimes(1);
+      expect(pageOfEntry()).toBeUndefined();
+    });
+  });
+
   it('runs onBack once when the platform pops that entry, and not for the next pop', async () => {
     const onBack = vi.fn();
     await draw(true, onBack);

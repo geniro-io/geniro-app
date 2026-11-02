@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DaemonHandle } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { DEV_TEAM_VERSIONS } from '../__fixtures__/team-versions';
+import { afterPopstate } from '../__tests__/after-popstate';
 import { withVocabulary } from '../__tests__/agent-vocabulary-api';
 import { withHistoryPages } from '../__tests__/history-page';
 import { emptyRunState } from '../__tests__/run-state';
@@ -75,7 +76,9 @@ const {
   restoreTeamVersion,
   getTeamAnalysis,
   analyzeTeam,
+  uploadTeamAvatar,
 } = vi.hoisted(() => ({
+  uploadTeamAvatar: vi.fn(),
   getTeamAnalysis: vi.fn(),
   analyzeTeam: vi.fn(),
   measureInstructionSizes: vi.fn(),
@@ -93,10 +96,12 @@ const {
 }));
 
 vi.mock('../daemon-api', async (importOriginal) => ({
-  // The real reader of a refusal's code — the builder branches on it.
+  // The real readers of a refusal — the builder branches on its code and
+  // shows its message.
   daemonErrorCode: (await importOriginal<typeof import('../daemon-api')>())
     .daemonErrorCode,
-  describeDaemonError: (err: unknown) => String(err),
+  describeDaemonError: (await importOriginal<typeof import('../daemon-api')>())
+    .describeDaemonError,
   // Read by the MCP listing a selected member asks for.
   MCP_ROUTE_TIMEOUT_MS: 60_000,
   createDaemonApis: () => ({
@@ -112,6 +117,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       measureInstructionSizes,
       getTeamAnalysis,
       analyzeTeam,
+      uploadTeamAvatar,
     },
     chats: withHistoryPages({
       readRunState: vi.fn(async () => emptyRunState()),
@@ -212,6 +218,7 @@ function summary(slug: string, name: string): TeamSummaryDto {
     memberCount: 1,
     stageCount: 0,
     agentCounts: [],
+    portrait: [],
     updatedAt: '2026-09-01T00:00:00.000Z',
   } as unknown as TeamSummaryDto;
 }
@@ -247,6 +254,9 @@ beforeEach(() => {
       team: EMPTY,
       hash: 'loaded-1',
     }));
+  uploadTeamAvatar
+    .mockReset()
+    .mockImplementation(async () => ({ id: `${'a'.repeat(64)}.png` }));
   saveTeam.mockReset().mockImplementation(async (request: SaveRequest) => ({
     slug: request.slug,
     team: request.saveTeamDto.team,
@@ -282,6 +292,7 @@ afterEach(() => {
   container.remove();
   document.body.innerHTML = '';
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 async function paint(
@@ -329,6 +340,50 @@ async function press(label: string): Promise<void> {
   });
 }
 
+/**
+ * jsdom decodes no image and draws on no canvas: a decoded 4×2 picture and a
+ * canvas that answers a fixed PNG stand in, so the picker's own crop runs.
+ */
+function stubPictureDrawing(): ReturnType<typeof vi.fn> {
+  vi.stubGlobal(
+    'Image',
+    class {
+      naturalWidth = 4;
+      naturalHeight = 2;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    },
+  );
+  const drawImage = vi.fn();
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    drawImage,
+  } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(
+    'data:image/png;base64,UElDVFVSRQ==',
+  );
+  return drawImage;
+}
+
+/** The user picks a file in the avatar picker's file chooser. */
+async function choosePictureFile(): Promise<void> {
+  const input = document.querySelector<HTMLInputElement>(
+    '[data-slot="avatar-picker"] input[type="file"]',
+  )!;
+  Object.defineProperty(input, 'files', {
+    configurable: true,
+    value: [new File(['png'], 'face.png', { type: 'image/png' })],
+  });
+  await act(async () => {
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 /** One edit to the open team: a member added. */
 async function edit(): Promise<void> {
   await press('Add member');
@@ -347,11 +402,13 @@ async function pickOption(label: string): Promise<void> {
   });
 }
 
-/** Select a member in the outline, opening it in the inspector. */
+/** Open a member's card, showing it in the member sheet. */
 async function selectMember(id: string): Promise<void> {
-  const row = container.querySelector<HTMLButtonElement>(
-    `[data-slot="member-row"][data-member-id="${id}"] button`,
-  );
+  const row =
+    container
+      .querySelector(`[data-slot="member-card"][data-member-id="${id}"]`)
+      ?.closest('li')
+      ?.querySelector<HTMLButtonElement>(':scope > button') ?? null;
   if (row === null) {
     throw new Error(`no member ${id}`);
   }
@@ -375,6 +432,21 @@ async function type(
   await act(async () => {
     Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(field, text);
     field.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+/** Press the Stages section's own chat button. */
+async function pressStagesChat(label: string): Promise<void> {
+  const button = [
+    ...container.querySelectorAll<HTMLButtonElement>(
+      '[data-slot="team-stages"] button',
+    ),
+  ].find((candidate) => candidate.textContent?.trim() === label);
+  if (button === undefined) {
+    throw new Error(`no stages button ${label}`);
+  }
+  await act(async () => {
+    button.click();
   });
 }
 
@@ -406,8 +478,8 @@ const statusLine = (): string =>
   container.querySelector('[role="status"]')?.textContent?.trim() ?? '';
 
 const memberIds = (): (string | undefined)[] =>
-  [...container.querySelectorAll<HTMLElement>('[data-slot="member-row"]')].map(
-    (row) => row.dataset.memberId,
+  [...container.querySelectorAll<HTMLElement>('[data-slot="member-card"]')].map(
+    (card) => card.dataset.memberId,
   );
 
 const savedRequests = (): SaveRequest[] =>
@@ -415,7 +487,7 @@ const savedRequests = (): SaveRequest[] =>
 
 /** Whether the builder (rather than the library grid) is on screen. */
 const inBuilder = (): boolean =>
-  container.querySelector('[aria-label="Back to library"]') !== null;
+  container.querySelector('[aria-label="Back to teams"]') !== null;
 
 const lastSaved = (): Team => savedRequests().at(-1)!.saveTeamDto.team;
 
@@ -688,7 +760,7 @@ describe('Teams — edits made while the chat agent works', () => {
     await press('Change with chat');
     await edit();
 
-    await press('Back to library');
+    await press('Back to teams');
 
     expect(inBuilder()).toBe(true);
     expect(container.textContent).toContain('Leave without saving?');
@@ -711,18 +783,50 @@ describe('Teams — leaving the builder', () => {
     await openBuilder();
     await edit();
 
-    await press('Back to library');
+    await press('Back to teams');
 
     expect(inBuilder()).toBe(true);
     expect(container.textContent).toContain('the disk is full');
     expect(container.textContent).toContain('Leave without saving?');
   });
 
+  it('on a phone, keeps a back entry for the team after Leave without saving? is cancelled', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    history.replaceState(null, '');
+    saveTeam.mockRejectedValue(
+      new Error('daemon PUT failed (400): the disk is full'),
+    );
+    await openBuilder();
+    await edit();
+    const pageOfEntry = (): unknown =>
+      (history.state as Record<string, unknown> | null)?.geniroPhonePage;
+    // The member just added opened its sheet over the team.
+    expect(pageOfEntry()).toEqual(expect.stringMatching(/^team-member:/));
+    await afterPopstate(() => history.back(), 'closing the sheet');
+    await wait(50);
+    expect(pageOfEntry()).toEqual(expect.stringMatching(/^team:/));
+
+    await afterPopstate(() => history.back(), 'the platform back');
+    await wait(50);
+    expect(container.textContent).toContain('Leave without saving?');
+    expect(pageOfEntry()).toBeUndefined();
+    await press('Cancel');
+    await wait(50);
+
+    expect(inBuilder()).toBe(true);
+    expect(pageOfEntry()).toEqual(expect.stringMatching(/^team:/));
+  });
+
   it('leaves at once when the team is saved', async () => {
     await openBuilder();
     await edit();
 
-    await press('Back to library');
+    await press('Back to teams');
     await wait(0);
 
     expect(inBuilder()).toBe(false);
@@ -746,7 +850,7 @@ describe('Teams — leaving the builder', () => {
     await act(async () => {
       [
         ...container.querySelectorAll<HTMLButtonElement>(
-          '[aria-label="Back to library"]',
+          '[aria-label="Back to teams"]',
         ),
       ][0]!.click();
     });
@@ -830,7 +934,7 @@ describe('Teams — an answer that arrives after the builder moved on', () => {
     getTeam.mockImplementationOnce(async () => reread.promise);
 
     await endTurn('done-1');
-    await press('Back to library');
+    await press('Back to teams');
     await press('Open Beta');
     await act(async () => {
       reread.resolve({
@@ -895,11 +999,16 @@ describe('Teams — the members', () => {
   it('removes a member from every block audience and stage, and hands its first message on', async () => {
     await openBuilder();
 
-    await press('Options for QA');
-    await pickOption('Remove');
+    await selectMember('qa');
+    await press('Remove member');
+    expect(document.body.textContent).toContain(
+      'It is responsible for the stages Plan, Build. It handles the first message',
+    );
+    await press('Remove');
     await wait(900);
 
     expect(memberIds()).toEqual(['lead']);
+    expect(container.querySelector('[data-slot="member-sheet"]')).toBeNull();
     const saved = lastSaved();
     expect(saved.members.map((m) => m.id)).toEqual(['lead']);
     expect(saved.triggers).toEqual([{ kind: 'first-message', member: 'lead' }]);
@@ -920,18 +1029,22 @@ describe('Teams — the members', () => {
     }));
     await openBuilder();
 
-    await press('Options for Lead');
-    const remove = [
-      ...document.body.querySelectorAll<HTMLButtonElement>('[role="option"]'),
-    ].find((option) => option.textContent?.includes('Remove'));
-    expect(remove?.disabled).toBe(true);
+    await selectMember('lead');
+    expect(
+      [...container.querySelectorAll('button')].some(
+        (button) => button.textContent?.trim() === 'Remove member',
+      ),
+    ).toBe(false);
+    expect(container.textContent).toContain(
+      'A team keeps at least one member.',
+    );
   });
 
-  it('reorders members from a row’s menu', async () => {
+  it('reorders members from the member sheet', async () => {
     await openBuilder();
 
-    await press('Options for QA');
-    await pickOption('Move up');
+    await selectMember('qa');
+    await press('Move earlier');
     await wait(900);
 
     expect(memberIds()).toEqual(['qa', 'lead']);
@@ -973,20 +1086,21 @@ describe('Teams — who handles the first message', () => {
 
   it('hands the trigger to the member picked', async () => {
     await openBuilder();
-    expect(
-      container.querySelector('[data-member-id="lead"]')!.textContent,
-    ).toContain('first message');
+    const handles = (id: string): boolean =>
+      container.querySelector(
+        `[data-slot="member-card"][data-member-id="${id}"] [aria-label="handles the first message"]`,
+      ) !== null;
+    expect(handles('lead')).toBe(true);
 
-    await press('Member that handles the first message');
+    await press('First message goes to Lead');
     await pickOption('QA');
     await wait(900);
 
     expect(lastSaved().triggers).toEqual([
       { kind: 'first-message', member: 'qa' },
     ]);
-    expect(
-      container.querySelector('[data-member-id="qa"]')!.textContent,
-    ).toContain('first message');
+    expect(handles('qa')).toBe(true);
+    expect(handles('lead')).toBe(false);
   });
 });
 
@@ -1047,14 +1161,15 @@ describe('Teams — instruction blocks', () => {
       },
     ]);
 
+    await press('Reaches Everyone');
     await press('Only the members picked below');
     await press('QA');
     await wait(900);
 
     expect(lastSaved().instructionBlocks[0]!.audience).toEqual(['qa']);
     expect(
-      container.querySelector('[data-slot="block-row"]')!.textContent,
-    ).toContain('QA');
+      container.querySelector('[data-slot="block-card"]')!.textContent,
+    ).toContain('Reaches QA');
   });
 
   it('removes a block', async () => {
@@ -1063,7 +1178,7 @@ describe('Teams — instruction blocks', () => {
     await wait(900);
     expect(lastSaved().instructionBlocks).toHaveLength(1);
 
-    await press('Remove block');
+    await press('Remove block block-1');
     await wait(900);
 
     expect(lastSaved().instructionBlocks).toEqual([]);
@@ -1114,7 +1229,7 @@ describe('Teams — a team the daemon would refuse', () => {
     await selectMember('lead');
     await type(container.querySelector('#member-name'), '');
 
-    await press('Back to library');
+    await press('Back to teams');
 
     expect(inBuilder()).toBe(true);
     expect(container.textContent).toContain(
@@ -1363,19 +1478,19 @@ describe('Teams — a team’s stages', () => {
     expect('stages' in savedRequests()[0]!.saveTeamDto.team).toBe(false);
   });
 
-  it('counts the stages in the outline, and offers to add them when there are none', async () => {
+  it('counts the stages in their section, and offers to add them when there are none', async () => {
     opens(STAGES);
     await openBuilder();
     expect(
       container.querySelector('[data-slot="team-stages-count"]')!.textContent,
-    ).toBe('2 stages');
+    ).toBe('Stages · 2');
 
     opens(undefined);
-    await press('Back to library');
+    await press('Back to teams');
     await press('Open Dev Team');
     expect(
       container.querySelector('[data-slot="team-stages-count"]')!.textContent,
-    ).toBe('No stages');
+    ).toBe('Stages');
     expect(
       [...container.querySelectorAll('button')].some(
         (button) => button.textContent?.trim() === 'Add stages',
@@ -1423,28 +1538,20 @@ describe('Teams — a team’s stages', () => {
     )!;
     await type(composer, 'Rename the coder. ');
 
-    await menuRow('Edit name and description');
-    const dialogAsk = [
-      ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
-    ].find((button) => button.textContent?.trim() === 'Change with chat')!;
-    await act(async () => {
-      dialogAsk.click();
-    });
+    await pressStagesChat('Change with chat');
     await wait(50);
 
     expect(composer.value).toBe('Rename the coder.\n\nChange the stages: ');
   });
 
-  it("hands the Change team dialog's stages to the chat dock, closing the dialog", async () => {
+  it('hands adding stages to the chat dock from the Stages section', async () => {
     client = fakeClient();
     opens(undefined);
     await openBuilder();
-    await menuRow('Edit name and description');
 
-    await press('Add with chat');
+    await pressStagesChat('Add with chat');
     await wait(50);
 
-    expect(document.body.textContent).not.toContain('No stages yet');
     expect(panel()!.hasAttribute('hidden')).toBe(false);
     const composer = panel()!.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Ask for a team change"]',
@@ -1637,13 +1744,15 @@ describe('Teams — the builder header', () => {
     // pressed once a session.
     await openBuilder();
 
-    const header = container.querySelector('h2')!.parentElement!;
+    const header = container.querySelector(
+      'button[aria-label="Back to teams"]',
+    )!.parentElement!;
     const labels = [...header.querySelectorAll('button')].map(
       (button) => button.getAttribute('aria-label') ?? button.textContent,
     );
 
     expect(labels).toEqual([
-      'Back to library',
+      'Back to teams',
       'Change with chat',
       'Team actions',
     ]);
@@ -1698,7 +1807,7 @@ describe('Teams — the builder header', () => {
       null,
     );
 
-    await press('Back to library');
+    await press('Back to teams');
     await press('Open Dev Team');
 
     expect(document.querySelector('[data-slot="analysis-dialog"]')).toBe(null);
@@ -2126,5 +2235,211 @@ describe('Teams — a save over a file changed outside the builder', () => {
     await wait(900);
 
     expect(savedRequests().at(-1)!.saveTeamDto.baseHash).toBe('reread-2');
+  });
+});
+
+describe('Teams — the team page', () => {
+  const QA = {
+    id: 'qa',
+    name: 'QA',
+    agent: 'claude',
+    approval: 'auto',
+  } as const;
+
+  it('requires a trigger member and shows the entry card error when missing', async () => {
+    getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      team: teamOf({ members: [{ ...LEAD }, { ...QA }], triggers: [] }),
+      hash: 'loaded-1',
+    }));
+    await openBuilder();
+
+    const entry = (): HTMLButtonElement =>
+      container.querySelector<HTMLButtonElement>('[data-slot="entry-card"]')!;
+    expect(entry().getAttribute('aria-required')).toBe('true');
+    expect(entry().getAttribute('aria-invalid')).toBe('true');
+    const describedBy = entry().getAttribute('aria-describedby')!;
+    expect(document.getElementById(describedBy)?.textContent).toBe(
+      'Choose who receives the first message',
+    );
+    await selectMember('qa');
+    await type(
+      container.querySelector<HTMLInputElement>('#member-name'),
+      'QA lead',
+    );
+    await wait(900);
+    expect(saveTeam).not.toHaveBeenCalled();
+
+    await act(async () => {
+      entry().click();
+    });
+    await pickOption('QA');
+    await wait(900);
+
+    expect(entry().getAttribute('aria-invalid')).toBeNull();
+    expect(entry().getAttribute('aria-label')).toBe(
+      'First message goes to QA lead',
+    );
+    expect(lastSaved().triggers).toEqual([
+      { kind: 'first-message', member: 'qa' },
+    ]);
+    expect(lastSaved().members[1]!.name).toBe('QA lead');
+  });
+
+  it('saves the face picked in the member sheet, and draws it on the member card', async () => {
+    await openBuilder();
+    await selectMember('lead');
+    await press('Change Lead’s avatar');
+    await press('Emoji');
+    await press('🦉');
+    await wait(900);
+
+    expect(lastSaved().members[0]!.avatar).toEqual(
+      expect.objectContaining({ kind: 'emoji', value: '🦉' }),
+    );
+    expect(
+      container.querySelector(
+        '[data-slot="member-card"][data-member-id="lead"] [data-slot="avatar"]',
+      )?.textContent,
+    ).toBe('🦉');
+  });
+
+  it('uploads a picture chosen in the member sheet, cropped, and saves the stored picture as the face', async () => {
+    const drawImage = stubPictureDrawing();
+    await openBuilder();
+    await selectMember('lead');
+    await press('Change Lead’s avatar');
+    await press('Picture');
+    await choosePictureFile();
+    await wait(900);
+
+    expect(drawImage).toHaveBeenCalledTimes(1);
+    expect(drawImage).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      0,
+      2,
+      2,
+      0,
+      0,
+      2,
+      2,
+    );
+    expect(uploadTeamAvatar).toHaveBeenCalledWith({
+      uploadTeamAvatarDto: { data: 'UElDVFVSRQ==' },
+    });
+    expect(lastSaved().members[0]!.avatar).toEqual(
+      expect.objectContaining({
+        kind: 'picture',
+        value: `${'a'.repeat(64)}.png`,
+      }),
+    );
+  });
+
+  it('shows the daemon’s refusal of a picture and saves no face', async () => {
+    stubPictureDrawing();
+    uploadTeamAvatar.mockRejectedValue(
+      new Error(
+        'daemon POST /v1/teams/avatars failed (400): {"code":"AVATAR_NOT_AN_IMAGE","message":"not a png, jpeg, gif or webp image"}',
+      ),
+    );
+    await openBuilder();
+    await selectMember('lead');
+    await press('Change Lead’s avatar');
+    await press('Picture');
+    await choosePictureFile();
+    await wait(900);
+
+    const picker = document.querySelector(
+      '[data-slot="avatar-picker"]',
+    )?.textContent;
+    expect(picker).toContain('not a png, jpeg, gif or webp image');
+    expect(picker).not.toContain('daemon POST');
+    expect(
+      savedRequests().some(
+        (request) => request.saveTeamDto.team.members[0]!.avatar !== undefined,
+      ),
+    ).toBe(false);
+  });
+
+  it('opens the member sheet and keeps it open when another card is clicked', async () => {
+    getTeam.mockImplementation(async ({ slug }: { slug: string }) => ({
+      slug,
+      team: teamOf({ members: [{ ...LEAD }, { ...QA }] }),
+      hash: 'loaded-1',
+    }));
+    await openBuilder();
+    const sheets = (): HTMLElement[] => [
+      ...container.querySelectorAll<HTMLElement>('[data-slot="member-sheet"]'),
+    ];
+    expect(sheets()).toEqual([]);
+
+    await selectMember('lead');
+    expect(sheets().map((sheet) => sheet.dataset.memberId)).toEqual(['lead']);
+
+    await selectMember('qa');
+    expect(sheets().map((sheet) => sheet.dataset.memberId)).toEqual(['qa']);
+    expect(
+      container.querySelector<HTMLInputElement>('#member-name')!.value,
+    ).toBe('QA');
+
+    await press('Close member');
+    expect(sheets()).toEqual([]);
+  });
+
+  it('closes the member sheet on Escape', async () => {
+    await openBuilder();
+    await selectMember('lead');
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(container.querySelector('[data-slot="member-sheet"]')).toBeNull();
+  });
+
+  it('closes only the avatar picker on Escape, keeping the member sheet open', async () => {
+    await openBuilder();
+    await selectMember('lead');
+    await press('Change Lead’s avatar');
+    expect(
+      document.querySelector('[data-slot="avatar-picker"]'),
+    ).not.toBeNull();
+
+    await act(async () => {
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    });
+
+    expect(document.querySelector('[data-slot="avatar-picker"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="member-sheet"]'),
+    ).not.toBeNull();
+  });
+
+  it('switches between the Team, Memory and Statistics tabs with the arrow keys', async () => {
+    await openBuilder();
+    const selectedTab = (): string | null | undefined =>
+      container.querySelector('[role="tab"][aria-selected="true"]')
+        ?.textContent;
+    expect(selectedTab()).toBe('Team');
+
+    const tab = container.querySelector<HTMLButtonElement>(
+      '[role="tab"][aria-selected="true"]',
+    )!;
+    await act(async () => {
+      tab.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }),
+      );
+    });
+    expect(selectedTab()).toBe('Memory');
+    expect(container.textContent).toContain('No team memories yet.');
+
+    await act(async () => {
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'End', bubbles: true }),
+      );
+    });
+    expect(selectedTab()).toBe('Statistics');
+    expect(container.textContent).toContain('No runs yet.');
   });
 });

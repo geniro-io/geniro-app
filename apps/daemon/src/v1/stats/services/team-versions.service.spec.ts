@@ -268,6 +268,45 @@ describe('TeamVersionsService (in-memory sqlite)', () => {
       expect(await readFile(join(dir, restored.backup), 'utf8')).toBe(before);
     });
 
+    it('keeps every member’s current face when restoring, whatever the version recorded', async () => {
+      const recordedFace = {
+        ...newer,
+        members: newer.members.map((one) => ({
+          ...one,
+          avatar: { kind: 'emoji' as const, value: '🐢' },
+        })),
+      };
+      const TARGET = teamVersionOf(recordedFace);
+      await versionDao.register(
+        'dev-team',
+        TARGET,
+        canonicalGraphJson({
+          ...canonicalGraphOf(recordedFace),
+          members: recordedFace.members,
+        }),
+        created,
+      );
+      const nowFaced: Team = {
+        ...newer,
+        mode: 'relay',
+        members: newer.members.map((one, index) =>
+          index === 0
+            ? { ...one, avatar: { kind: 'emoji' as const, value: '🦊' } }
+            : one,
+        ),
+      };
+      await store.save('dev-team', nowFaced);
+      const { hash } = await store.get('dev-team');
+
+      await restoring.restore('dev-team', TARGET, hash);
+
+      const { team } = await store.get('dev-team');
+      expect(team.mode).toBe(newer.mode);
+      expect(team.members.map((one) => one.avatar)).toEqual(
+        nowFaced.members.map((one) => one.avatar),
+      );
+    });
+
     it('restores the mode, cap, trigger and blocks of a version over a file that differs in each', async () => {
       const differingFile: Team = {
         ...newer,

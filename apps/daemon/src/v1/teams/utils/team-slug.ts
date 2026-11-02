@@ -17,6 +17,7 @@ export const RESERVED_TEAM_SLUGS: ReadonlySet<string> = new Set([
   'runs',
   'import',
   'instruction-sizes',
+  'avatars',
 ]);
 
 /** Whether `slug` is a segment a route owns — see {@link RESERVED_TEAM_SLUGS}. */

@@ -12,8 +12,8 @@ import {
  * The part of a team that decides how a run executes: the coordination mode,
  * the members, the trigger, the instruction blocks and the stage graph, each
  * list in its authored order (member and block order shape every prompt), and
- * the active-turn cap. The team's own name and description are left out, so
- * editing them never makes a new version.
+ * the active-turn cap. The team's own name and description, and its members'
+ * avatars, are left out, so editing them never makes a new version.
  */
 export interface CanonicalTeam {
   maxActiveTurns: number | null;
@@ -53,7 +53,8 @@ export function canonicalGraphOf(team: Team): CanonicalTeam {
   return {
     maxActiveTurns: team.maxActiveTurns ?? null,
     mode: team.mode,
-    members: team.members,
+    // A member's face is display only: changing it is not a new version.
+    members: team.members.map(({ avatar: _avatar, ...member }) => member),
     triggers: team.triggers,
     instructionBlocks: team.instructionBlocks,
     stages: team.stages?.length ? team.stages : undefined,

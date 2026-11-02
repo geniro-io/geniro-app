@@ -36,11 +36,14 @@ import type {
   SendMessageDto,
   StageMoveResultDto,
   StartTeamChatDto,
+  TeamAvatarDataDto,
+  TeamAvatarIdDto,
   TeamChatsDiscardedDto,
   TeamDeletedDto,
   TeamFileDto,
   TeamSummaryDto,
   ThreadAnalysisDto,
+  UploadTeamAvatarDto,
 } from '../models/index';
 
 export interface TeamsApiAnalyzeTeamRequest {
@@ -88,6 +91,10 @@ export interface TeamsApiGetTeamRequest {
 
 export interface TeamsApiGetTeamAnalysisRequest {
     slug: string;
+}
+
+export interface TeamsApiGetTeamAvatarRequest {
+    id: string;
 }
 
 export interface TeamsApiGetTeamRunSnapshotRequest {
@@ -150,6 +157,10 @@ export interface TeamsApiSendTeamRunMessageRequest {
 export interface TeamsApiStartTeamRunRequest {
     slug: string;
     runTeamDto: RunTeamDto;
+}
+
+export interface TeamsApiUploadTeamAvatarRequest {
+    uploadTeamAvatarDto: UploadTeamAvatarDto;
 }
 
 /**
@@ -679,6 +690,51 @@ export class TeamsApi extends runtime.BaseAPI {
      */
     async getTeamAnalysis(requestParameters: TeamsApiGetTeamAnalysisRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ThreadAnalysisDto> {
         const response = await this.getTeamAnalysisRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async getTeamAvatarRaw(requestParameters: TeamsApiGetTeamAvatarRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TeamAvatarDataDto>> {
+        if (requestParameters['id'] == null) {
+            throw new runtime.RequiredError(
+                'id',
+                'Required parameter "id" was null or undefined when calling getTeamAvatar().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/avatars/{id}`;
+        urlPath = urlPath.replace(`{${"id"}}`, encodeURIComponent(String(requestParameters['id'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async getTeamAvatar(requestParameters: TeamsApiGetTeamAvatarRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamAvatarDataDto> {
+        const response = await this.getTeamAvatarRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -1366,6 +1422,53 @@ export class TeamsApi extends runtime.BaseAPI {
      */
     async startTeamRun(requestParameters: TeamsApiStartTeamRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
         const response = await this.startTeamRunRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async uploadTeamAvatarRaw(requestParameters: TeamsApiUploadTeamAvatarRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TeamAvatarIdDto>> {
+        if (requestParameters['uploadTeamAvatarDto'] == null) {
+            throw new runtime.RequiredError(
+                'uploadTeamAvatarDto',
+                'Required parameter "uploadTeamAvatarDto" was null or undefined when calling uploadTeamAvatar().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/avatars`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['uploadTeamAvatarDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async uploadTeamAvatar(requestParameters: TeamsApiUploadTeamAvatarRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamAvatarIdDto> {
+        const response = await this.uploadTeamAvatarRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

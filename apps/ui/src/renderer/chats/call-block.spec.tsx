@@ -290,6 +290,37 @@ describe('CallBlock', () => {
     );
   });
 
+  it('draws both sides of the caller → callee pair with their own avatars', () => {
+    const nodes: ReadonlyMap<string, TranscriptNodeMeta> = new Map([
+      [
+        'orch',
+        {
+          name: 'Orchestrator',
+          kind: 'agent',
+          avatar: { kind: 'emoji', value: '🦊' },
+        },
+      ],
+      [
+        'poet',
+        {
+          name: 'Poet',
+          kind: 'agent',
+          avatar: { kind: 'emoji', value: '🐙' },
+        },
+      ],
+    ]);
+    act(() =>
+      root.render(<TranscriptEntryView entry={makeBlock()} nodes={nodes} />),
+    );
+
+    const emojis = [
+      ...container.querySelectorAll(
+        '[data-slot="avatar"][data-avatar-kind="emoji"]',
+      ),
+    ].map((avatar) => avatar.textContent);
+    expect(emojis).toEqual(['🦊', '🐙']);
+  });
+
   it('renders the geniro communication card: eyebrow, avatar pair, name line, status chip', () => {
     act(() =>
       root.render(<TranscriptEntryView entry={makeBlock()} nodes={NODES} />),

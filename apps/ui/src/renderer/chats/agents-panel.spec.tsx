@@ -286,6 +286,32 @@ describe('AgentsPanel — Pages', () => {
 });
 
 describe('AgentsPanel', () => {
+  it('draws each member’s avatar beside its name from the node meta', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[agents[0]!]}
+        nodes={
+          new Map([
+            [
+              agents[0]!.id,
+              {
+                name: agents[0]!.name,
+                kind: 'agent',
+                avatar: { kind: 'emoji', value: '🦊' },
+              },
+            ],
+          ])
+        }
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const avatar = cardFor(el, agents[0]!.name).querySelector(
+      '[data-slot="avatar"][data-avatar-kind="emoji"]',
+    );
+    expect(avatar?.textContent).toBe('🦊');
+  });
+
   it('names a POOL in ONE label and lists every member behind it', () => {
     const el = render(
       <AgentsPanel

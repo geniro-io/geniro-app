@@ -1,6 +1,6 @@
 import { memo, useContext } from 'react';
 
-import { InitialsAvatar } from '../components/ui/avatar';
+import { MemberAvatar } from '../components/member-avatar';
 import { cn } from '../components/ui/utils';
 import { CallBlock } from './call-block';
 import { EntryCard } from './entry-card';
@@ -224,7 +224,15 @@ export const TurnBlock = memo(function TurnBlock({
       data-role="turn-block"
       data-subagent={block.subagentId ?? undefined}
       className="flex w-full gap-3">
-      <InitialsAvatar name={name} colorKey={block.memberId ?? name} />
+      <MemberAvatar
+        name={name}
+        colorKey={block.memberId ?? name}
+        avatar={
+          block.memberId === null
+            ? undefined
+            : nodes?.get(block.memberId)?.avatar
+        }
+      />
       <div className="flex min-w-0 flex-1 flex-col gap-2.5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-relaxed">
         <div
           data-slot="turn-block-header"

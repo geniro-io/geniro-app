@@ -16,6 +16,9 @@ import {
   StageMoveRequestSchema,
   StageMoveResultSchema,
   StartTeamChatSchema,
+  TeamAvatarDataSchema,
+  TeamAvatarIdSchema,
+  TeamAvatarUploadSchema,
   TeamChatsDiscardedSchema,
   TeamSchema,
   TeamSummarySchema,
@@ -155,6 +158,15 @@ export class NodeStateDto extends createZodDto(NodeStateWireSchema) {}
 export class ResetWakesCancelledDto extends createZodDto(
   ResetWakesCancelledSchema,
 ) {}
+
+/** A member's picture as the user picked it, base64 in JSON like every other body here. */
+export class UploadTeamAvatarDto extends createZodDto(TeamAvatarUploadSchema) {}
+
+/** Where an uploaded picture was stored. */
+export class TeamAvatarIdDto extends createZodDto(TeamAvatarIdSchema) {}
+
+/** A stored picture as a data URI — an `<img src>` cannot carry the bearer token. */
+export class TeamAvatarDataDto extends createZodDto(TeamAvatarDataSchema) {}
 
 /** Acknowledgement of a delete — a library team, or one run's history. */
 export class TeamDeletedDto extends createZodDto(

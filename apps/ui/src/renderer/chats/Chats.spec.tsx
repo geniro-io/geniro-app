@@ -12661,6 +12661,68 @@ describe('Chats sidebar list', () => {
     });
   });
 
+  it('draws a snapshot member’s avatar on its card even when the library no longer has that member', async () => {
+    teamApi.listTeamRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'completed',
+        awaiting: null,
+        holdingFor: 0,
+        awaitingCalls: 0,
+        shellsOpen: 0,
+        subagentsOut: 0,
+        title: 'Old run',
+        agentKind: null,
+        teamId: 'dev-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    teamApi.getTeam.mockResolvedValue({
+      slug: 'dev-team',
+      team: {
+        name: 'Dev team',
+        mode: 'lead',
+        members: [
+          { id: 'other', name: 'Other', agent: 'claude', approval: 'auto' },
+        ],
+        triggers: [{ kind: 'first-message', member: 'other' }],
+        instructionBlocks: [],
+      },
+    });
+    teamApi.getTeamRunSnapshot.mockResolvedValue({
+      team: {
+        name: 'Dev team',
+        mode: 'lead',
+        members: [
+          {
+            id: 'eng',
+            name: 'Engineer',
+            agent: 'claude',
+            approval: 'auto',
+            avatar: { kind: 'emoji', value: '🦊' },
+          },
+        ],
+        triggers: [{ kind: 'first-message', member: 'eng' }],
+        instructionBlocks: [],
+      },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Old run');
+
+    const card = [
+      ...container.querySelectorAll('[data-slot="agent-cards"] li'),
+    ].find((li) => li.textContent?.includes('Engineer'))!;
+    expect(
+      card.querySelector('[data-slot="avatar"][data-avatar-kind="emoji"]')
+        ?.textContent,
+    ).toBe('🦊');
+  });
+
   it('the side panel tracks live agent state — at-work status, context ring, spend', async () => {
     teamApi.listTeamRuns.mockResolvedValue([
       {

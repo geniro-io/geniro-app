@@ -1,17 +1,11 @@
 import {
-  ArrowLeft,
   Download,
   History,
-  ListOrdered,
   MessagesSquare,
   MoreHorizontal,
   Pencil,
-  Plus,
   Sparkles,
   Trash2,
-  TriangleAlert,
-  Upload,
-  Users,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -21,6 +15,7 @@ import type {
   ConfigProfile,
   DaemonHandle,
 } from '../../shared/contracts';
+import { agentDisplayName } from '../agent-identity';
 import type {
   AgentKind,
   ApprovalMode as TeamApproval,
@@ -52,17 +47,16 @@ import { ConfirmDialog } from '../components/confirm-dialog';
 import { EmptyState } from '../components/empty-state';
 import { ErrorBanner } from '../components/error-banner';
 import { ErrorText } from '../components/error-text';
-import { ExpandableTextarea } from '../components/expandable-textarea';
-import { Field } from '../components/field';
 import { McpDialogButton } from '../components/mcp-dialog-button';
 import { NoteBox } from '../components/note-box';
 import { SettingRow } from '../components/setting-row';
 import { Button } from '../components/ui/button';
-import { Input } from '../components/ui/input';
 import { Menu, type MenuGroup } from '../components/ui/menu';
 import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { Select } from '../components/ui/select';
 import { useLatestCallback } from '../components/use-latest-callback';
+import { useNarrowViewport } from '../components/use-narrow-viewport';
+import { usePhoneBackEntry } from '../components/use-phone-back-entry';
 import {
   createDaemonApis,
   daemonErrorCode,
@@ -74,31 +68,29 @@ import { randomId } from '../random-id';
 import { currentRunSettings } from '../run-settings';
 import { useSharedCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
-import { AgentAvatar } from './agent-avatar';
 import { AgentPoolEditor } from './agent-pool-editor';
 import { BuilderStatusBar } from './builder-status-bar';
-import {
-  InstructionBlockEditor,
-  InstructionBlocksList,
-} from './instruction-blocks';
+import { HeldProblems } from './held-problems';
 import { InstructionSizeCard } from './instruction-size-card';
+import { InstructionsCard } from './instructions-card';
+import { AddMemberCard, MemberCard } from './member-card';
 import { memberLabels } from './member-pick';
 import { modelChangePatch } from './member-schema';
+import { MemberSheet } from './member-sheet';
 import {
   type MemberField,
   validateInstructionBlock,
   validateMember,
 } from './member-validate';
-import { MembersList } from './members-list';
 import { ModelSettingsRows } from './model-settings-rows';
 import {
   nextMcpDisabled,
   nodeMcpHint,
   withNodeSwitches,
 } from './node-mcp-switches';
-import { StageSchemaEditor } from './stage-schema-editor';
-import { validateStageFields } from './stage-validate';
-import { TeamCard } from './team-card';
+import { StageJourney } from './stage-journey';
+import { stageTitle, validateStageFields } from './stage-validate';
+import { StagesDialog } from './stages-dialog';
 import { TeamChatPanel } from './team-chat-panel';
 import {
   defaultMemberAgent,
@@ -115,14 +107,19 @@ import {
   withoutMember,
   withTriggerMember,
 } from './team-doc';
-import { stageCount, TeamMetaDialog } from './team-meta-dialog';
+import { TeamHero, UNMEASURED_FIGURES } from './team-hero';
+import { TeamMemoryTab, TeamStatsTab } from './team-insights';
+import { TeamMetaDialog } from './team-meta-dialog';
+import { TeamPage, TeamSection, type TeamTab } from './team-page';
 import { validateTeam } from './team-validate';
 import { TeamVersionsDialog } from './team-versions-dialog';
+import { TeamsLibrary } from './teams-library';
 import { useAutosave } from './use-autosave';
 import { configDirCapabilityFrom } from './use-config-dir-capability';
 import { useInstructionSizes } from './use-instruction-sizes';
 import { useNodeMcp } from './use-node-mcp';
 import { useTeamVersions } from './use-team-versions';
+import { type TeamProblem, WarningPill } from './warning-pill';
 
 const NO_MEMBERS: readonly TeamMember[] = [];
 /**
@@ -136,8 +133,8 @@ const ADD_STAGES_DRAFT = 'Add stages every run of this team walks: ';
 const CHANGE_STAGES_DRAFT = 'Change the stages: ';
 const HELD_FOR_PROBLEMS = 'fix the problems listed first';
 
-/** What the inspector shows: a member, or an instruction block. */
-type Selection = { kind: 'member' | 'block'; id: string } | null;
+/** The member the sheet shows. */
+type Selection = { kind: 'member'; id: string } | null;
 
 /** An inspector edit to a member: any field but its id. */
 type MemberPatch = Partial<Omit<TeamMember, 'id'>>;
@@ -272,7 +269,15 @@ export function Teams({
   const [chatMounted, setChatMounted] = useState(false);
   const [chatDraft, setChatDraft] = useState<DraftRequest | null>(null);
   const chatDraftCount = useRef(0);
-  const [stagesEditorOpen, setStagesEditorOpen] = useState(false);
+  const [stagesDialog, setStagesDialog] = useState<{
+    stageId: string | null;
+    add: boolean;
+  } | null>(null);
+  const [tab, setTab] = useState<TeamTab>('team');
+  const [memoryQuery, setMemoryQuery] = useState('');
+  /** A member just added, whose Name field takes the cursor. */
+  const [focusNameOf, setFocusNameOf] = useState<string | null>(null);
+  const narrow = useNarrowViewport();
   const [firstChat, setFirstChat] = useState<{
     slug: string;
     agent: CliKind;
@@ -398,7 +403,8 @@ export function Teams({
     setChatWorking(false);
     setChatAwaiting(null);
     setChatDraft(null);
-    setStagesEditorOpen(false);
+    setStagesDialog(null);
+    setTab('team');
     setLeavePrompt(false);
     void refreshList();
   }, [refreshList]);
@@ -453,25 +459,6 @@ export function Teams({
     };
   }, [team]);
   const invalid = problems.count > 0;
-  const memberProblemIds = useMemo(
-    () =>
-      new Set(
-        [...problems.members].flatMap(([id, list]) =>
-          list.length > 0 ? [id] : [],
-        ),
-      ),
-    [problems],
-  );
-  const blockProblemIds = useMemo(
-    () =>
-      new Set(
-        [...problems.blocks].flatMap(([id, list]) =>
-          list.length > 0 ? [id] : [],
-        ),
-      ),
-    [problems],
-  );
-
   const askChat = useLatestCallback((text: string) => {
     setChatMounted(true);
     setChatOpen(true);
@@ -585,9 +572,7 @@ export function Teams({
       setTeam(loaded);
       setSelection((current) =>
         current !== null &&
-        (current.kind === 'member'
-          ? loaded.members.some((member) => member.id === current.id)
-          : loaded.instructionBlocks.some((block) => block.id === current.id))
+        loaded.members.some((member) => member.id === current.id)
           ? current
           : null,
       );
@@ -700,7 +685,6 @@ export function Teams({
           name: meta.name,
           description: meta.description,
           maxActiveTurns: meta.maxActiveTurns,
-          stages: meta.stages,
         };
         if (await persist(next)) {
           setTeam(next);
@@ -984,7 +968,11 @@ export function Teams({
         slug: activeSlug,
         exportTeamDto: { path },
       });
-      setNotice(`Exported to ${path}`);
+      setNotice(
+        team?.members.some((member) => member.avatar?.kind === 'picture')
+          ? `Exported to ${path}. Member pictures stay on this Mac.`
+          : `Exported to ${path}`,
+      );
     } catch (err) {
       setError(String(err));
     }
@@ -1007,6 +995,7 @@ export function Teams({
     );
     editTeam((current) => withMember(current, member));
     setSelection({ kind: 'member', id: member.id });
+    setFocusNameOf(member.id);
   }, [team, capabilities, editTeam]);
 
   const removeMember = useLatestCallback(
@@ -1014,12 +1003,9 @@ export function Teams({
       if (team === null || team.members.length <= 1) {
         return;
       }
-      const index = team.members.findIndex((member) => member.id === memberId);
-      const rest = team.members.filter((member) => member.id !== memberId);
       editTeam((current) => withoutMember(current, memberId));
       if (selection?.kind === 'member' && selection.id === memberId) {
-        const next = rest[index] ?? rest[index - 1];
-        setSelection(next ? { kind: 'member', id: next.id } : null);
+        setSelection(null);
       }
     },
     [team, selection, editTeam],
@@ -1049,7 +1035,6 @@ export function Teams({
         { id, title: '', text: '', audience: 'everyone' },
       ],
     }));
-    setSelection({ kind: 'block', id });
   }, [team, editTeam]);
 
   const patchBlock = useLatestCallback(
@@ -1072,7 +1057,6 @@ export function Teams({
           (block) => block.id !== blockId,
         ),
       }));
-      setSelection(null);
     },
     [editTeam],
   );
@@ -1080,11 +1064,6 @@ export function Teams({
   const selected =
     selection?.kind === 'member'
       ? (members.find((member) => member.id === selection.id) ?? null)
-      : null;
-  const selectedBlock =
-    selection?.kind === 'block'
-      ? (team?.instructionBlocks.find((block) => block.id === selection.id) ??
-        null)
       : null;
   const patchSelected = useLatestCallback(
     (patch: MemberPatch): void => {
@@ -1259,82 +1238,48 @@ export function Teams({
     [team],
   );
 
+  const leaveForPhone = usePhoneBackEntry(
+    'team',
+    narrow && active && team !== null && !leavePrompt,
+    () => void leaveToLibrary(),
+    { stackedOwners: ['team-member'] },
+  );
+  const closeSheetForPhone = usePhoneBackEntry(
+    'team-member',
+    narrow && active && selected !== null,
+    () => setSelection(null),
+  );
+
+  const uploadAvatar = useLatestCallback(
+    async (data: string): Promise<string> => {
+      if (!api) {
+        throw new Error('daemon unavailable');
+      }
+      try {
+        return (await api.uploadTeamAvatar({ uploadTeamAvatarDto: { data } }))
+          .id;
+      } catch (err) {
+        throw new Error(describeDaemonError(err), { cause: err });
+      }
+    },
+    [api],
+  );
+
   if (!handle) {
     return <EmptyState>Connecting to the daemon…</EmptyState>;
   }
 
   if (team === null) {
     return (
-      <div className="flex h-full min-h-0 flex-col">
-        <header className="flex items-center gap-2 border-b border-border px-4 py-3 max-sm:flex-wrap max-sm:gap-y-2">
-          <div className="flex flex-col">
-            <div className="flex items-baseline gap-2">
-              <h2 className="text-lg font-semibold">Teams</h2>
-              {summaries === null ? null : (
-                <span className="text-sm text-muted-foreground tabular-nums">
-                  {summaries.length}
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Compose a team of agents that work together. Runs start from the
-              Chats page.
-            </p>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              className="gap-2"
-              onClick={() => void importTeam()}>
-              <Upload className="shrink-0" /> Import YAML…
-            </Button>
-            <Button type="button" className="gap-2" onClick={newTeam}>
-              <Plus className="shrink-0" /> New team
-            </Button>
-          </div>
-        </header>
-
-        {error ? (
-          <ErrorText className="border-b border-border px-4 py-1.5">
-            {error}
-          </ErrorText>
-        ) : null}
-
-        {summaries === null ? (
-          <p className="flex-1 p-4 text-sm text-muted-foreground">
-            Loading teams…
-          </p>
-        ) : summaries.length === 0 ? (
-          <EmptyState className="flex-1">
-            <div className="flex flex-col items-center gap-4">
-              <Users
-                aria-hidden="true"
-                className="size-10 text-muted-foreground/50"
-              />
-              <p className="max-w-sm text-sm text-muted-foreground">
-                No teams yet. Create one to start composing your agent team, or
-                import an existing <code>.team.yaml</code>.
-              </p>
-              <Button type="button" className="gap-2" onClick={newTeam}>
-                <Plus className="shrink-0" /> New team
-              </Button>
-            </div>
-          </EmptyState>
-        ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            <ul className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
-              {summaries.map((summary) => (
-                <TeamCard
-                  key={summary.slug}
-                  summary={summary}
-                  onOpen={() => void openTeam(summary.slug)}
-                  onDelete={() => setPendingDelete(summary)}
-                />
-              ))}
-            </ul>
-          </div>
-        )}
+      <>
+        <TeamsLibrary
+          summaries={summaries}
+          error={createOpen || pendingDelete ? null : error}
+          onOpen={(slug) => void openTeam(slug)}
+          onDelete={setPendingDelete}
+          onNew={newTeam}
+          onImport={() => void importTeam()}
+        />
 
         <TeamMetaDialog
           open={createOpen}
@@ -1344,7 +1289,6 @@ export function Teams({
           submitLabel="Create"
           busyLabel="Creating…"
           maxActiveTurnsCeiling={capabilities?.maxActiveTurnsCeiling ?? null}
-          members={NO_MEMBERS}
           onClose={() => setCreateOpen(false)}
           onSubmit={(meta) => void createTeam(meta)}
         />
@@ -1363,135 +1307,185 @@ export function Teams({
             <span className="font-medium text-foreground">
               {pendingDelete?.name}
             </span>{' '}
-            permanently? Its <code>{pendingDelete?.slug}.team.yaml</code> file
-            is removed from the library. Past runs of it are kept.
+            permanently? Its file is removed from the library. Past runs of it
+            are kept.
           </p>
         </ConfirmDialog>
-      </div>
+      </>
     );
   }
 
   const labels = memberLabels(members);
+  const agentLabelOf = (agent: AgentKind): string =>
+    agentDisplayName(capabilities?.agents ?? [], agent);
   const selectedIssues = (field: MemberField): string[] =>
     selected === null
       ? []
       : (problems.members.get(selected.id) ?? [])
           .filter((issue) => issue.field === field)
           .map((issue) => issue.message);
-  const fieldErrors = (field: MemberField): React.JSX.Element | null => {
-    const messages = selectedIssues(field);
-    return messages.length === 0 ? null : (
-      <>
-        {messages.map((message) => (
-          <ErrorText key={message} className="text-xs break-words">
-            {message}
-          </ErrorText>
-        ))}
-      </>
-    );
-  };
   const teamWideProblems = [
     ...problems.team.errors.map((issue) => issue.message),
     ...problems.stageFields.map((issue) => issue.message),
   ];
   const stages = team.stages ?? [];
+  const journeyMembers = members.map((member) => ({
+    id: member.id,
+    name: labels.get(member.id) ?? member.id,
+    avatar: member.avatar,
+  }));
+  const handlerKnown =
+    handlerId !== null && members.some((member) => member.id === handlerId)
+      ? handlerId
+      : null;
+  const stagesOwnedBy = (memberId: string): string[] =>
+    stages
+      .filter((stage) => stage.responsible?.includes(memberId))
+      .map(stageTitle);
+  const openMember = (memberId: string): void => {
+    setFocusNameOf(null);
+    setSelection({ kind: 'member', id: memberId });
+  };
+  const teamProblems: TeamProblem[] = [
+    ...members.flatMap((member): TeamProblem[] => {
+      const issues = problems.members.get(member.id) ?? [];
+      return issues.length === 0
+        ? []
+        : [
+            {
+              key: `member:${member.id}`,
+              member: {
+                id: member.id,
+                name: labels.get(member.id) ?? member.id,
+                avatar: member.avatar,
+              },
+              message: issues[0]!.message,
+              level: 'error',
+              fix: { label: 'Fix', run: () => openMember(member.id) },
+            },
+          ];
+    }),
+    ...teamWideProblems.map((message): TeamProblem => ({
+      key: `team:${message}`,
+      member: null,
+      message,
+      level: 'error',
+    })),
+  ];
+  const warningStageIds = new Set(
+    problems.team.warnings.flatMap((issue) =>
+      issue.stageId === undefined ? [] : [issue.stageId],
+    ),
+  );
+  const blockWarnings = new Map<string, string[]>();
+  for (const issue of problems.team.warnings) {
+    if (issue.blockId !== undefined) {
+      blockWarnings.set(issue.blockId, [
+        ...(blockWarnings.get(issue.blockId) ?? []),
+        issue.message,
+      ]);
+    }
+  }
+  const removeWarningOf = (memberId: string): string | null => {
+    const owned = stagesOwnedBy(memberId);
+    const parts = [
+      ...(owned.length > 0
+        ? [
+            `It is responsible for ${owned.length === 1 ? 'the stage' : 'the stages'} ${owned.join(', ')}.`,
+          ]
+        : []),
+      ...(memberId === handlerKnown
+        ? ['It handles the first message, which goes to the first member left.']
+        : []),
+    ];
+    return parts.length === 0 ? null : parts.join(' ');
+  };
+  const askStagesChat = (): void =>
+    askChat(stages.length > 0 ? CHANGE_STAGES_DRAFT : ADD_STAGES_DRAFT);
 
-  return (
-    <section className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+  const headerActions = (
+    <>
+      {activeSlug ? (
         <Button
           type="button"
-          variant="ghost"
-          className="gap-1.5"
-          aria-label="Back to library"
-          onClick={() => void leaveToLibrary()}>
-          <ArrowLeft className="shrink-0" /> Library
+          variant={chatOpen ? 'secondary' : 'ghost'}
+          aria-label={
+            chatAwaiting !== null && !chatOpen
+              ? 'Change with chat — the agent is waiting for your answer'
+              : 'Change with chat'
+          }
+          title={
+            chatAwaiting !== null && !chatOpen
+              ? 'The agent is waiting for your answer'
+              : 'Describe a change and let an agent make it'
+          }
+          aria-pressed={chatOpen}
+          className="relative h-8 gap-1.5 rounded-control px-2.5"
+          onClick={() => {
+            setChatMounted(true);
+            setChatOpen((open) => !open);
+          }}>
+          <MessagesSquare className="shrink-0" />
+          <span className="max-sm:sr-only">Change with chat</span>
+          {chatAwaiting !== null && !chatOpen ? (
+            <span
+              data-slot="chat-awaiting-mark"
+              aria-hidden="true"
+              className="absolute top-1 right-1 size-2 rounded-pill bg-warning"
+            />
+          ) : null}
         </Button>
-        <h2 className="min-w-0 truncate font-medium">{team.name}</h2>
-        <div className="ml-auto flex items-center gap-1">
-          {activeSlug ? (
-            <Button
-              type="button"
-              variant={chatOpen ? 'secondary' : 'ghost'}
-              size="icon"
-              aria-label={
-                chatAwaiting !== null && !chatOpen
-                  ? 'Change with chat — the agent is waiting for your answer'
-                  : 'Change with chat'
-              }
-              title={
-                chatAwaiting !== null && !chatOpen
-                  ? 'The agent is waiting for your answer'
-                  : 'Describe a change and let an agent make it'
-              }
-              aria-pressed={chatOpen}
-              className="relative"
-              onClick={() => {
-                setChatMounted(true);
-                setChatOpen((open) => !open);
-              }}>
-              <MessagesSquare className="shrink-0" />
-              {chatAwaiting !== null && !chatOpen ? (
-                <span
-                  data-slot="chat-awaiting-mark"
-                  aria-hidden="true"
-                  className="absolute right-1 top-1 size-2 rounded-full bg-warning"
-                />
-              ) : null}
-            </Button>
-          ) : null}
-          {builderActions.length > 0 ? (
-            <span className="relative inline-flex">
-              <Button
-                ref={moreRef}
-                type="button"
-                variant="ghost"
-                size="icon"
-                data-menu-trigger
-                aria-haspopup="listbox"
-                aria-expanded={moreOpen}
-                aria-label="Team actions"
-                title="Team actions"
-                onClick={() => setMoreOpen((wasOpen) => !wasOpen)}>
-                <MoreHorizontal className="shrink-0" />
-              </Button>
-              <Menu
-                open={moreOpen}
-                side="bottom"
-                align="end"
-                anchor="viewport"
-                triggerRef={moreRef}
-                groups={builderActions}
-                onSelect={(value) => {
-                  setMoreOpen(false);
-                  if (value === 'export') {
-                    void exportTeam();
-                  } else if (value === 'rename') {
-                    setRenameOpen(true);
-                  } else if (value === 'versions') {
-                    setVersionsOpen(true);
-                  } else if (value === 'analyze') {
-                    void openAnalysis();
-                  } else if (value === 'delete') {
-                    setRemoveOpen(true);
-                  }
-                }}
-                onClose={() => setMoreOpen(false)}
-              />
-            </span>
-          ) : null}
-        </div>
-      </div>
-
-      {error ? (
-        <ErrorText className="border-b border-border px-3 py-1.5">
-          {error}
-        </ErrorText>
       ) : null}
+      {builderActions.length > 0 ? (
+        <span className="relative inline-flex">
+          <Button
+            ref={moreRef}
+            type="button"
+            variant="ghost"
+            size="icon"
+            data-menu-trigger
+            aria-haspopup="listbox"
+            aria-expanded={moreOpen}
+            aria-label="Team actions"
+            title="Team actions"
+            className="size-8 rounded-control"
+            onClick={() => setMoreOpen((wasOpen) => !wasOpen)}>
+            <MoreHorizontal className="shrink-0" />
+          </Button>
+          <Menu
+            open={moreOpen}
+            side="bottom"
+            align="end"
+            anchor="viewport"
+            triggerRef={moreRef}
+            groups={builderActions}
+            onSelect={(value) => {
+              setMoreOpen(false);
+              if (value === 'export') {
+                void exportTeam();
+              } else if (value === 'rename') {
+                setRenameOpen(true);
+              } else if (value === 'versions') {
+                setVersionsOpen(true);
+              } else if (value === 'analyze') {
+                void openAnalysis();
+              } else if (value === 'delete') {
+                setRemoveOpen(true);
+              }
+            }}
+            onClose={() => setMoreOpen(false)}
+          />
+        </span>
+      ) : null}
+    </>
+  );
+
+  const banner = (
+    <>
+      {error ? <ErrorText>{error}</ErrorText> : null}
       {staleCopy && activeSlug !== null ? (
         <ErrorBanner
           tone="warning"
-          className="rounded-none border-x-0 border-t-0"
           message="This team changed outside the builder (an analysis applied a change), so your latest edits were not saved. Reload to see the saved version — the unsaved edits will be replaced."
           action={
             <Button
@@ -1505,533 +1499,476 @@ export function Teams({
           onDismiss={() => setStaleCopy(false)}
         />
       ) : null}
+      <HeldProblems
+        problems={teamWideProblems}
+        slot="team-problems"
+        className="rounded-card p-4"
+      />
+    </>
+  );
 
-      <MenuAnchorContext.Provider value="viewport">
-        <div className="flex min-h-0 flex-1 max-sm:flex-col max-sm:overflow-y-auto">
-          <aside
-            data-slot="team-outline"
-            className="flex shrink-0 flex-col gap-5 overflow-y-auto border-r border-border bg-muted/30 p-3 sm:w-80 max-sm:border-r-0 max-sm:border-b">
-            {teamWideProblems.length > 0 ? (
-              <div
-                role="alert"
-                data-slot="team-problems"
-                className="flex flex-col gap-1 rounded-md border border-destructive/40 p-2 text-xs">
-                <p className="flex items-center gap-1.5 font-medium text-destructive">
-                  <TriangleAlert aria-hidden="true" className="size-3.5" />
-                  Not saved until this is fixed
-                </p>
-                <ul className="flex flex-col gap-0.5 pl-5 text-muted-foreground">
-                  {teamWideProblems.map((message) => (
-                    <li key={message} className="list-disc">
-                      {message}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-
-            <section className="flex flex-col gap-3">
-              <Field label="Mode" htmlFor="team-mode">
-                <Select
-                  id="team-mode"
-                  aria-label="Team mode"
-                  value={team.mode}
-                  groups={MODE_ITEMS}
-                  onValueChange={(mode) =>
-                    editTeam((current) => ({
-                      ...current,
-                      mode: mode as TeamMode,
-                    }))
-                  }
+  const teamTab = (
+    <MenuAnchorContext.Provider value="viewport">
+      <div className="flex flex-col gap-10">
+        <TeamSection
+          slot="team-members"
+          title="Members"
+          hint="Who is on the team. Open one to change how it works.">
+          <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {members.map((member) => {
+              const issues = problems.members.get(member.id) ?? [];
+              return (
+                <MemberCard
+                  key={member.id}
+                  member={member}
+                  agentLabel={agentLabelOf(member.agent)}
+                  health={issues.length > 0 ? 'warning' : 'unchecked'}
+                  reason={issues[0]?.message ?? null}
+                  {...(issues.length > 0
+                    ? {
+                        fix: {
+                          label: 'Fix',
+                          run: () => openMember(member.id),
+                        },
+                      }
+                    : {})}
+                  stageTitles={stagesOwnedBy(member.id)}
+                  handlesFirstMessage={member.id === handlerKnown}
+                  selected={selected?.id === member.id}
+                  onOpen={() => openMember(member.id)}
                 />
-                {team.mode === 'relay' ? (
-                  <p
-                    data-slot="relay-note"
-                    className="text-xs text-muted-foreground">
-                    Each stage is led by its first responsible member, who can
-                    call the others for help. Finishing a stage hands the run to
-                    the next stage's lead, and your messages go to whoever leads
-                    now.
-                  </p>
-                ) : null}
-              </Field>
-              <Field
-                label="Handled by"
-                htmlFor="team-trigger"
-                hint={
-                  team.mode === 'relay'
-                    ? "The member that leads while no stage names a lead — the first message goes to the first stage's lead when it has one."
-                    : 'The member the first message goes to. It runs the job and calls the others.'
-                }>
-                <Select
-                  id="team-trigger"
-                  aria-label="Member that handles the first message"
-                  value={
-                    handlerId !== null &&
-                    members.some((member) => member.id === handlerId)
-                      ? handlerId
-                      : null
-                  }
-                  placeholder="Pick a member"
-                  groups={[
-                    {
-                      items: members.map((member) => ({
-                        value: member.id,
-                        label: labels.get(member.id)!,
-                      })),
-                    },
-                  ]}
-                  onValueChange={(memberId) =>
-                    editTeam((current) => withTriggerMember(current, memberId))
-                  }
-                />
-              </Field>
-            </section>
+              );
+            })}
+            <AddMemberCard onAdd={addMember} />
+          </ul>
+        </TeamSection>
 
-            <section className="flex flex-col gap-1.5">
-              <h3 className="px-2 text-xs font-medium text-muted-foreground">
-                Members
-              </h3>
-              <MembersList
-                members={members}
-                selectedId={selection?.kind === 'member' ? selection.id : null}
-                handlerId={handlerId}
-                problemIds={memberProblemIds}
-                onSelect={(id) => setSelection({ kind: 'member', id })}
-                onAdd={addMember}
-                onMove={(id, by) =>
-                  editTeam((current) => withMemberMoved(current, id, by))
-                }
-                onRemove={removeMember}
-              />
-            </section>
-
-            <section className="flex flex-col gap-1.5">
-              <h3 className="px-2 text-xs font-medium text-muted-foreground">
-                Instruction blocks
-              </h3>
-              <InstructionBlocksList
-                blocks={team.instructionBlocks}
-                members={members}
-                selectedId={selection?.kind === 'block' ? selection.id : null}
-                problemIds={blockProblemIds}
-                onSelect={(id) => setSelection({ kind: 'block', id })}
-                onAdd={addBlock}
-              />
-            </section>
-
-            <section className="flex flex-col gap-1.5">
-              <h3 className="px-2 text-xs font-medium text-muted-foreground">
-                Stages
-              </h3>
-              <div className="flex items-center gap-2 px-2">
-                <ListOrdered
-                  aria-hidden="true"
-                  className="size-4 shrink-0 text-muted-foreground"
-                />
-                <span
-                  data-slot="team-stages-count"
-                  className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
-                  {stages.length === 0 ? 'No stages' : stageCount(stages)}
-                </span>
+        <TeamSection
+          slot="team-stages"
+          title={
+            <span data-slot="team-stages-count">
+              {stages.length === 0 ? 'Stages' : `Stages · ${stages.length}`}
+            </span>
+          }
+          hint={
+            stages.length === 0
+              ? 'Optional — the steps every run walks. The first message starts it.'
+              : 'The steps every run walks, starting from the first message.'
+          }
+          action={
+            <div className="flex flex-wrap items-center gap-2">
+              {activeSlug ? (
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
-                  onClick={() => setStagesEditorOpen(true)}>
-                  {stages.length === 0 ? 'Add stages' : 'Edit stages'}
+                  className="h-8 gap-1.5 rounded-control"
+                  onClick={askStagesChat}>
+                  <MessagesSquare aria-hidden="true" />
+                  {stages.length > 0 ? 'Change with chat' : 'Add with chat'}
                 </Button>
-              </div>
-            </section>
-          </aside>
-
-          <div className="min-w-0 flex-1 overflow-y-auto sm:min-h-0">
-            {selected ? (
-              <div
-                data-slot="member-inspector"
-                className="mx-auto flex max-w-2xl flex-col gap-4 p-4">
-                <div className="flex items-center gap-2">
-                  <AgentAvatar
-                    label={selected.name || selected.id}
-                    className="size-7 text-xs"
-                  />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">
-                      {labels.get(selected.id)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {selected.id === handlerId
-                        ? `${selected.agent} · handles the first message`
-                        : selected.agent}
-                    </p>
-                  </div>
-                </div>
-                <Field label="Name" htmlFor="member-name">
-                  <Input
-                    id="member-name"
-                    value={selected.name}
-                    aria-invalid={
-                      selectedIssues('name').length > 0 || undefined
-                    }
-                    onChange={(event) =>
-                      patchSelected({ name: event.target.value })
-                    }
-                  />
-                  {fieldErrors('name')}
-                </Field>
-                <Field
-                  label="Role"
-                  htmlFor="member-role"
-                  hint="What it does — public: shown to every other member, so they can hand it work.">
-                  <ExpandableTextarea
-                    id="member-role"
-                    title="Role"
-                    value={selected.role ?? ''}
-                    rows={3}
-                    placeholder="Reviews a diff or branch and reports findings by severity."
-                    onChange={(next) =>
-                      patchSelected({ role: next || undefined })
-                    }
-                  />
-                  {fieldErrors('role')}
-                </Field>
-                <Field
-                  label="Instructions"
-                  htmlFor="member-instructions"
-                  hint="How it works — private: only its own turns carry it.">
-                  <ExpandableTextarea
-                    id="member-instructions"
-                    title="Instructions"
-                    value={selected.instructions ?? ''}
-                    rows={5}
-                    onChange={(next) =>
-                      patchSelected({ instructions: next || undefined })
-                    }
-                  />
-                  {fieldErrors('instructions')}
-                </Field>
-                <Field
-                  label="Character"
-                  htmlFor="member-character"
-                  hint="Optional — its manner and tone. Only its own turns carry it.">
-                  <ExpandableTextarea
-                    id="member-character"
-                    title="Character"
-                    value={selected.character ?? ''}
-                    rows={2}
-                    placeholder="Terse and precise."
-                    onChange={(next) =>
-                      patchSelected({ character: next || undefined })
-                    }
-                  />
-                  {fieldErrors('character')}
-                </Field>
-                <Field label="Agent settings">
-                  <div className="@container flex flex-col divide-y divide-border rounded-md border border-border bg-card">
-                    <SettingRow width="compact" label="Agent">
-                      <Select
-                        variant="ghost"
-                        aria-label="CLI for this member"
-                        value={selected.agent}
-                        groups={[
-                          {
-                            items: (capabilities?.agents ?? []).map(
-                              (identity) => ({
-                                value: identity.agent,
-                                label: identity.displayName,
-                              }),
-                            ),
-                          },
-                        ]}
-                        onValueChange={(next) => {
-                          const agent = next as AgentKind;
-                          if (agent === selected.agent) {
-                            return;
-                          }
-                          rememberMemberAgent(agent);
-                          // Another CLI starts from its own defaults.
-                          patchSelected({
-                            agent,
-                            model: undefined,
-                            effort: undefined,
-                            contextWindow: undefined,
-                            modelParameters: undefined,
-                            configDir: undefined,
-                            mcpDisabled: undefined,
-                          });
-                        }}
-                      />
-                    </SettingRow>
-                    {configDirCapability.unavailableReasonFor(
-                      selected.agent,
-                    ) === null ? (
-                      <SettingRow width="compact" label="Profile">
-                        <ConfigDirSelect
-                          configDir={selected.configDir ?? null}
-                          recentConfigDirs={
-                            recentConfigDirs[selected.agent] ?? []
-                          }
-                          configProfiles={configProfiles.filter(
-                            (profile) => profile.agent === selected.agent,
-                          )}
-                          unavailableReason={null}
-                          ariaLabel="Agent config directory for this member"
-                          onChange={(configDir) =>
-                            patchSelected({
-                              configDir: configDir ?? undefined,
-                            })
-                          }
-                          onBrowse={() => void chooseMemberConfigDir()}
-                        />
-                      </SettingRow>
-                    ) : null}
-                    <SettingRow width="compact" label="Approval">
-                      <ApprovalModeSelect
-                        capability={memberApprovalCapability}
-                        withheld={PLAN_WITHHELD}
-                        value={selected.approval}
-                        onChange={(approval) =>
-                          patchSelected({
-                            approval: approval as TeamApproval,
-                          })
-                        }
-                      />
-                    </SettingRow>
-                    <SettingRow width="compact" label="Model">
-                      <ModelSelect
-                        key={selected.id}
-                        agentKind={selected.agent}
-                        models={agentModels}
-                        loading={agentModelsLoading}
-                        allowCustom
-                        value={selected.model ?? null}
-                        onChange={(model) =>
-                          patchSelected(modelChangePatch(model))
-                        }
-                      />
-                    </SettingRow>
-                    <ModelSettingsRows
-                      efforts={agentEfforts.efforts}
-                      windows={agentContextWindows.windows}
-                      parameters={agentModelParameters.parameters}
-                      loading={
-                        agentEfforts.loading ||
-                        agentContextWindows.loading ||
-                        agentModelParameters.loading
-                      }
-                      value={selected}
-                      onPatch={patchSelected}
-                      afterContext={
-                        <SettingRow width="compact" label="Auto-compact">
-                          <AutoCompactSelect
-                            value={selected.autoCompactPercent ?? null}
-                            onChange={(percent) =>
-                              patchSelected({
-                                autoCompactPercent: percent ?? undefined,
-                              })
-                            }
-                          />
-                        </SettingRow>
-                      }
-                    />
-                    {configDirError === null ? (
-                      <SettingRow width="compact" label="MCP">
-                        <McpDialogButton
-                          variant="chip"
-                          chipNamesItself={false}
-                          title={`MCP servers — ${labels.get(selected.id)}`}
-                          open={mcpOpen}
-                          onOpenChange={setMcpOpen}
-                          listing={withNodeSwitches(
-                            memberMcp.listing,
-                            selected.mcpDisabled,
-                          )}
-                          loading={memberMcp.loading}
-                          hint={nodeMcpHint(
-                            'member',
-                            Boolean(selected.configDir),
-                          )}
-                          onSetEnabled={(server, enabled) =>
-                            patchSelected({
-                              mcpDisabled: nextMcpDisabled(
-                                selected.mcpDisabled,
-                                server,
-                                enabled,
-                              ),
-                            })
-                          }
-                          onRefresh={memberMcp.refresh}
-                          onSignIn={(server) => {
-                            setPoolMcpScope(null);
-                            void login.startMcp({
-                              kind: selected.agent,
-                              server,
-                              configDir: selected.configDir ?? null,
-                            });
-                          }}
-                          signingIn={
-                            poolMcpScope === null
-                              ? (login.starting?.server ??
-                                login.login?.server ??
-                                null)
-                              : null
-                          }
-                          loginServer={
-                            poolMcpScope === null
-                              ? (login.login?.server ?? null)
-                              : null
-                          }
-                          loginPanel={
-                            poolMcpScope === null ? mcpLoginPanel : null
-                          }
-                          configActions={
-                            apis
-                              ? mcpConfigActions(apis.agents, {
-                                  agent: selected.agent,
-                                  configDir: selected.configDir ?? null,
-                                })
-                              : undefined
-                          }
-                        />
-                      </SettingRow>
-                    ) : null}
-                  </div>
-                  {configDirError ? (
-                    <ErrorText
-                      id="member-config-dir-error"
-                      className="text-xs break-words">
-                      {configDirError}
-                    </ErrorText>
-                  ) : null}
-                  {selected.configDir &&
-                  configDirCapability.unavailableReasonFor(selected.agent) ? (
-                    <NoteBox aria-label="Config directory" className="text-xs">
-                      <span className="block">
-                        {configDirCapability.unavailableReasonFor(
-                          selected.agent,
-                        )}
-                      </span>
-                      <span className="block text-warning">
-                        This member names {selected.configDir}, which will be
-                        ignored when it runs.
-                      </span>
-                    </NoteBox>
-                  ) : null}
-                  {fieldErrors('settings')}
-                </Field>
-                <Field label="Agent pool">
-                  <AgentPoolEditor
-                    key={selected.id}
-                    members={selected.pool ?? []}
-                    agents={capabilities?.agents ?? []}
-                    agentsApi={apis?.agents ?? null}
-                    defaultAgent={selected.agent}
-                    configDirAvailable={(agent) =>
-                      configDirCapability.unavailableReasonFor(agent) === null
-                    }
-                    approvals={capabilities?.approvals ?? []}
-                    nodeApproval={selected.approval}
-                    nodeAutoCompactPercent={selected.autoCompactPercent}
-                    recentConfigDirs={recentConfigDirs}
-                    configProfiles={configProfiles}
-                    pickFolder={() => window.geniro.pickProjectFolder()}
-                    mcpSignIn={{
-                      start: (agent, server, configDir) => {
-                        setPoolMcpScope({ agent, configDir });
-                        void login.startMcp({
-                          kind: agent,
-                          server,
-                          configDir,
-                        });
-                      },
-                      scope: poolMcpScope,
-                      signingIn:
-                        login.starting?.server ?? login.login?.server ?? null,
-                      loginServer: login.login?.server ?? null,
-                      loginPanel: mcpLoginPanel,
-                      settledToken: poolMcpSettled,
-                    }}
-                    onChange={(pool) => patchSelected({ pool })}
-                  />
-                  {fieldErrors('pool')}
-                </Field>
-                <Field
-                  label="Always-on instructions"
-                  hint="Carried in this member's context on every turn. The token count is an estimate.">
-                  <InstructionSizeCard
-                    size={instructionSizes.sizes?.get(selected.id) ?? null}
-                    loading={instructionSizes.loading}
-                    error={instructionSizes.error}
-                    blockName={blockName}
-                  />
-                </Field>
-              </div>
-            ) : selectedBlock ? (
-              <div className="mx-auto max-w-2xl p-4">
-                <InstructionBlockEditor
-                  key={selectedBlock.id}
-                  block={selectedBlock}
-                  members={members}
-                  issues={problems.blocks.get(selectedBlock.id) ?? []}
-                  warnings={problems.team.warnings
-                    .filter((issue) => issue.blockId === selectedBlock.id)
-                    .map((issue) => issue.message)}
-                  onChange={(patch) => patchBlock(selectedBlock.id, patch)}
-                  onRemove={() => removeBlock(selectedBlock.id)}
-                />
-              </div>
-            ) : (
-              <p className="flex h-full min-h-32 items-center justify-center p-4 text-center text-sm text-muted-foreground">
-                Pick a member or an instruction block to edit it.
-              </p>
-            )}
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 rounded-control"
+                onClick={() =>
+                  setStagesDialog({ stageId: null, add: stages.length === 0 })
+                }>
+                {stages.length === 0 ? 'Add stages' : 'Edit stages'}
+              </Button>
+            </div>
+          }>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-sm text-muted-foreground">Who leads</span>
+            <Select
+              id="team-mode"
+              aria-label="Team mode"
+              variant="ghost"
+              value={team.mode}
+              groups={MODE_ITEMS}
+              onValueChange={(mode) =>
+                editTeam((current) => ({
+                  ...current,
+                  mode: mode as TeamMode,
+                }))
+              }
+            />
           </div>
-        </div>
-      </MenuAnchorContext.Provider>
+          {team.mode === 'relay' ? (
+            <p data-slot="relay-note" className="text-sm text-muted-foreground">
+              Each stage is led by its first responsible member, who can call
+              the others for help. Finishing a stage hands the run to the next
+              stage&apos;s lead, and your messages go to whoever leads now.
+            </p>
+          ) : null}
+          <StageJourney
+            stages={stages}
+            members={journeyMembers}
+            triggerMemberId={handlerKnown}
+            warningStageIds={warningStageIds}
+            onPickTrigger={(memberId) =>
+              editTeam((current) => withTriggerMember(current, memberId))
+            }
+            onOpenStage={(stageId) => setStagesDialog({ stageId, add: false })}
+            onAddStage={() => setStagesDialog({ stageId: null, add: true })}
+          />
+        </TeamSection>
 
-      {chatMounted && activeSlug !== null ? (
-        <TeamChatPanel
-          key={activeSlug}
-          slug={activeSlug}
-          teamName={team.name}
-          initialAgent={
-            firstChat?.slug === activeSlug ? firstChat.agent : undefined
+        <TeamSection
+          slot="team-instructions"
+          title="Team instructions"
+          hint="Shared by every member. Joined with your project’s instructions at run time.">
+          <InstructionsCard
+            blocks={team.instructionBlocks}
+            members={members}
+            issues={problems.blocks}
+            warnings={blockWarnings}
+            onAdd={addBlock}
+            onChange={patchBlock}
+            onRemove={removeBlock}
+          />
+        </TeamSection>
+      </div>
+    </MenuAnchorContext.Provider>
+  );
+
+  const modelGroup =
+    selected === null ? null : (
+      <div className="@container flex flex-col divide-y divide-border rounded-card bg-card ring-1 ring-border">
+        <SettingRow width="compact" label="Agent">
+          <Select
+            variant="ghost"
+            aria-label="CLI for this member"
+            value={selected.agent}
+            groups={[
+              {
+                items: (capabilities?.agents ?? []).map((identity) => ({
+                  value: identity.agent,
+                  label: identity.displayName,
+                })),
+              },
+            ]}
+            onValueChange={(next) => {
+              const agent = next as AgentKind;
+              if (agent === selected.agent) {
+                return;
+              }
+              rememberMemberAgent(agent);
+              // Another CLI starts from its own defaults.
+              patchSelected({
+                agent,
+                model: undefined,
+                effort: undefined,
+                contextWindow: undefined,
+                modelParameters: undefined,
+                configDir: undefined,
+                mcpDisabled: undefined,
+              });
+            }}
+          />
+        </SettingRow>
+        {configDirCapability.unavailableReasonFor(selected.agent) === null ? (
+          <SettingRow width="compact" label="Profile">
+            <ConfigDirSelect
+              configDir={selected.configDir ?? null}
+              recentConfigDirs={recentConfigDirs[selected.agent] ?? []}
+              configProfiles={configProfiles.filter(
+                (profile) => profile.agent === selected.agent,
+              )}
+              unavailableReason={null}
+              ariaLabel="Agent config directory for this member"
+              onChange={(configDir) =>
+                patchSelected({ configDir: configDir ?? undefined })
+              }
+              onBrowse={() => void chooseMemberConfigDir()}
+            />
+          </SettingRow>
+        ) : null}
+        <SettingRow width="compact" label="Approval">
+          <ApprovalModeSelect
+            capability={memberApprovalCapability}
+            withheld={PLAN_WITHHELD}
+            value={selected.approval}
+            onChange={(approval) =>
+              patchSelected({ approval: approval as TeamApproval })
+            }
+          />
+        </SettingRow>
+        <SettingRow width="compact" label="Model">
+          <ModelSelect
+            key={selected.id}
+            agentKind={selected.agent}
+            models={agentModels}
+            loading={agentModelsLoading}
+            allowCustom
+            value={selected.model ?? null}
+            onChange={(model) => patchSelected(modelChangePatch(model))}
+          />
+        </SettingRow>
+        <ModelSettingsRows
+          efforts={agentEfforts.efforts}
+          windows={agentContextWindows.windows}
+          parameters={agentModelParameters.parameters}
+          loading={
+            agentEfforts.loading ||
+            agentContextWindows.loading ||
+            agentModelParameters.loading
           }
-          initialDraft={
-            firstChat?.slug === activeSlug ? firstChat.draft : undefined
+          value={selected}
+          onPatch={patchSelected}
+          afterContext={
+            <SettingRow width="compact" label="Auto-compact">
+              <AutoCompactSelect
+                value={selected.autoCompactPercent ?? null}
+                onChange={(percent) =>
+                  patchSelected({ autoCompactPercent: percent ?? undefined })
+                }
+              />
+            </SettingRow>
           }
-          draftRequest={chatDraft}
-          apis={apis}
-          handle={handle}
-          client={client}
-          capabilities={capabilities}
-          capabilitiesLoading={capabilitiesLoading}
-          recentConfigDirs={recentConfigDirs}
-          configProfiles={configProfiles}
-          hidden={!chatOpen}
-          active={active}
-          onClose={() => setChatOpen(false)}
-          onBeforeSend={autosave.flush}
-          onWorkingChange={setChatWorking}
-          onAwaitingChange={setChatAwaiting}
-          onTurnSettled={reloadAfterAgentEdit}
-          applyRecommendations={applyRecommendations}
         />
-      ) : null}
+      </div>
+    );
 
-      <BuilderStatusBar
-        memberCount={members.length}
-        stageCount={stages.length}
-        message={error ? null : notice}
-        saveState={autosave.state}
-        pausedReason={invalid ? HELD_FOR_PROBLEMS : null}
+  const toolsGroup =
+    selected === null ? null : (
+      <>
+        {configDirError === null ? (
+          <div className="@container flex flex-col rounded-card bg-card ring-1 ring-border">
+            <SettingRow width="compact" label="MCP">
+              <McpDialogButton
+                variant="chip"
+                chipNamesItself={false}
+                title={`MCP servers — ${labels.get(selected.id)}`}
+                open={mcpOpen}
+                onOpenChange={setMcpOpen}
+                listing={withNodeSwitches(
+                  memberMcp.listing,
+                  selected.mcpDisabled,
+                )}
+                loading={memberMcp.loading}
+                hint={nodeMcpHint('member', Boolean(selected.configDir))}
+                onSetEnabled={(server, enabled) =>
+                  patchSelected({
+                    mcpDisabled: nextMcpDisabled(
+                      selected.mcpDisabled,
+                      server,
+                      enabled,
+                    ),
+                  })
+                }
+                onRefresh={memberMcp.refresh}
+                onSignIn={(server) => {
+                  setPoolMcpScope(null);
+                  void login.startMcp({
+                    kind: selected.agent,
+                    server,
+                    configDir: selected.configDir ?? null,
+                  });
+                }}
+                signingIn={
+                  poolMcpScope === null
+                    ? (login.starting?.server ?? login.login?.server ?? null)
+                    : null
+                }
+                loginServer={
+                  poolMcpScope === null ? (login.login?.server ?? null) : null
+                }
+                loginPanel={poolMcpScope === null ? mcpLoginPanel : null}
+                configActions={
+                  apis
+                    ? mcpConfigActions(apis.agents, {
+                        agent: selected.agent,
+                        configDir: selected.configDir ?? null,
+                      })
+                    : undefined
+                }
+              />
+            </SettingRow>
+          </div>
+        ) : (
+          <ErrorText
+            id="member-config-dir-error"
+            className="text-xs break-words">
+            {configDirError}
+          </ErrorText>
+        )}
+        {selected.configDir &&
+        configDirCapability.unavailableReasonFor(selected.agent) ? (
+          <NoteBox aria-label="Config directory" className="text-xs">
+            <span className="block">
+              {configDirCapability.unavailableReasonFor(selected.agent)}
+            </span>
+            <span className="block text-warning">
+              This member names {selected.configDir}, which will be ignored when
+              it runs.
+            </span>
+          </NoteBox>
+        ) : null}
+      </>
+    );
+
+  const poolGroup =
+    selected === null ? null : (
+      <AgentPoolEditor
+        key={selected.id}
+        members={selected.pool ?? []}
+        agents={capabilities?.agents ?? []}
+        agentsApi={apis?.agents ?? null}
+        defaultAgent={selected.agent}
+        configDirAvailable={(agent) =>
+          configDirCapability.unavailableReasonFor(agent) === null
+        }
+        approvals={capabilities?.approvals ?? []}
+        nodeApproval={selected.approval}
+        nodeAutoCompactPercent={selected.autoCompactPercent}
+        recentConfigDirs={recentConfigDirs}
+        configProfiles={configProfiles}
+        pickFolder={() => window.geniro.pickProjectFolder()}
+        mcpSignIn={{
+          start: (agent, server, configDir) => {
+            setPoolMcpScope({ agent, configDir });
+            void login.startMcp({ kind: agent, server, configDir });
+          },
+          scope: poolMcpScope,
+          signingIn: login.starting?.server ?? login.login?.server ?? null,
+          loginServer: login.login?.server ?? null,
+          loginPanel: mcpLoginPanel,
+          settledToken: poolMcpSettled,
+        }}
+        onChange={(pool) => patchSelected({ pool })}
+      />
+    );
+
+  const sheet =
+    selected === null ? null : (
+      <MenuAnchorContext.Provider value="viewport">
+        <MemberSheet
+          key={selected.id}
+          member={selected}
+          subtitle={
+            selected.id === handlerKnown
+              ? `${agentLabelOf(selected.agent)} · handles the first message`
+              : agentLabelOf(selected.agent)
+          }
+          issuesFor={selectedIssues}
+          problems={(problems.members.get(selected.id) ?? []).map(
+            (issue) => issue.message,
+          )}
+          fullScreen={narrow}
+          active={active}
+          focusName={focusNameOf === selected.id}
+          modelGroup={modelGroup}
+          toolsGroup={toolsGroup}
+          poolGroup={poolGroup}
+          sizeLine={
+            <div data-slot="member-instruction-size">
+              <InstructionSizeCard
+                size={instructionSizes.sizes?.get(selected.id) ?? null}
+                loading={instructionSizes.loading}
+                error={instructionSizes.error}
+                blockName={blockName}
+              />
+            </div>
+          }
+          removeWarning={removeWarningOf(selected.id)}
+          canRemove={members.length > 1}
+          place={{
+            index: members.findIndex((member) => member.id === selected.id),
+            of: members.length,
+          }}
+          onMove={(by) =>
+            editTeam((current) => withMemberMoved(current, selected.id, by))
+          }
+          uploadAvatar={uploadAvatar}
+          onPatch={patchSelected}
+          onRemove={() => removeMember(selected.id)}
+          onClose={narrow ? closeSheetForPhone : () => setSelection(null)}
+        />
+      </MenuAnchorContext.Provider>
+    );
+
+  return (
+    <>
+      <TeamPage
+        onBack={narrow ? leaveForPhone : () => void leaveToLibrary()}
+        headerActions={headerActions}
+        hero={
+          <TeamHero
+            name={team.name}
+            description={team.description}
+            people={members.map((member) => ({
+              key: member.id,
+              name: labels.get(member.id) ?? member.id,
+              avatar: member.avatar,
+            }))}
+            memberCount={members.length}
+            stageCount={stages.length}
+            figures={UNMEASURED_FIGURES}
+            warning={
+              <WarningPill problems={teamProblems} onGoToMember={openMember} />
+            }
+          />
+        }
+        banner={banner}
+        tab={tab}
+        onTab={setTab}
+        memoryCount={null}
+        teamTab={teamTab}
+        memoryTab={
+          <TeamMemoryTab query={memoryQuery} onQueryChange={setMemoryQuery} />
+        }
+        statsTab={<TeamStatsTab runs={null} />}
+        sheet={sheet}
+        dock={
+          chatMounted && activeSlug !== null ? (
+            <TeamChatPanel
+              key={activeSlug}
+              slug={activeSlug}
+              teamName={team.name}
+              initialAgent={
+                firstChat?.slug === activeSlug ? firstChat.agent : undefined
+              }
+              initialDraft={
+                firstChat?.slug === activeSlug ? firstChat.draft : undefined
+              }
+              draftRequest={chatDraft}
+              apis={apis}
+              handle={handle}
+              client={client}
+              capabilities={capabilities}
+              capabilitiesLoading={capabilitiesLoading}
+              recentConfigDirs={recentConfigDirs}
+              configProfiles={configProfiles}
+              hidden={!chatOpen}
+              active={active}
+              onClose={() => setChatOpen(false)}
+              onBeforeSend={autosave.flush}
+              onWorkingChange={setChatWorking}
+              onAwaitingChange={setChatAwaiting}
+              onTurnSettled={reloadAfterAgentEdit}
+              applyRecommendations={applyRecommendations}
+            />
+          ) : null
+        }
+        footer={
+          <BuilderStatusBar
+            memberCount={members.length}
+            stageCount={stages.length}
+            message={error ? null : notice}
+            saveState={autosave.state}
+            pausedReason={invalid ? HELD_FOR_PROBLEMS : null}
+          />
+        }
       />
 
       <TeamMetaDialog
         open={renameOpen}
         busy={renaming}
         error={renameOpen ? error : null}
-        title="Change team"
+        title="Edit team"
         submitLabel="Save"
         busyLabel="Saving…"
         initial={{
@@ -2042,33 +1979,26 @@ export function Teams({
           ...(team.maxActiveTurns !== undefined
             ? { maxActiveTurns: team.maxActiveTurns }
             : {}),
-          ...(team.stages !== undefined ? { stages: team.stages } : {}),
         }}
         maxActiveTurnsCeiling={capabilities?.maxActiveTurnsCeiling ?? null}
-        members={members}
         onClose={() => setRenameOpen(false)}
         onSubmit={(meta) => void renameTeam(meta)}
-        {...(activeSlug === null
-          ? {}
-          : {
-              onAskChat: (hasStages: boolean) => {
-                setRenameOpen(false);
-                askChat(hasStages ? CHANGE_STAGES_DRAFT : ADD_STAGES_DRAFT);
-              },
-            })}
       />
 
-      <StageSchemaEditor
-        open={stagesEditorOpen}
+      <StagesDialog
+        open={stagesDialog !== null}
         stages={team.stages}
         members={members}
-        onClose={() => setStagesEditorOpen(false)}
+        triggerMemberId={handlerKnown}
+        initialSelectedId={stagesDialog?.stageId ?? null}
+        addOnOpen={stagesDialog?.add ?? false}
+        onClose={() => setStagesDialog(null)}
         onSave={(saved) => {
           editTeam((current) => ({
             ...current,
             stages: saved.length > 0 ? saved : undefined,
           }));
-          setStagesEditorOpen(false);
+          setStagesDialog(null);
         }}
       />
 
@@ -2175,8 +2105,8 @@ export function Teams({
         <p>
           Delete{' '}
           <span className="font-medium text-foreground">{team.name}</span>{' '}
-          permanently? Its <code>{activeSlug}.team.yaml</code> file is removed
-          from the library. Past runs of it are kept.
+          permanently? Its file is removed from the library. Past runs of it are
+          kept.
         </p>
       </ConfirmDialog>
 
@@ -2207,6 +2137,6 @@ export function Teams({
           Leaving now discards them.
         </p>
       </ConfirmDialog>
-    </section>
+    </>
   );
 }

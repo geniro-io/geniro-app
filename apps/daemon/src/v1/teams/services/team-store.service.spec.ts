@@ -16,10 +16,11 @@ import {
   ConflictException,
   NotFoundException,
 } from '@packages/common';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { member, teamOf } from '../__tests__/team-builders';
 import type { Team } from '../teams.types';
+import type { AvatarStoreService } from './avatar-store.service';
 import { TeamStoreService } from './team-store.service';
 
 const WF: Team = teamOf(
@@ -165,6 +166,92 @@ describe('TeamStoreService', () => {
     });
     const [summary] = await store.list();
     expect(summary).toMatchObject({ memberCount: 2, stageCount: 2 });
+  });
+
+  it('draws the first six members, in team order, on the library card', async () => {
+    const picture = {
+      kind: 'picture' as const,
+      value: `${'a'.repeat(64)}.png`,
+    };
+    await store.create(
+      teamOf(
+        [
+          member('m1', { avatar: picture }),
+          ...['m2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8'].map((id) => member(id)),
+        ],
+        { name: 'Big Team' },
+      ),
+    );
+
+    const [summary] = await store.list();
+
+    expect(summary?.memberCount).toBe(8);
+    expect(summary?.portrait.map((m) => m.id)).toEqual([
+      'm1',
+      'm2',
+      'm3',
+      'm4',
+      'm5',
+      'm6',
+    ]);
+    expect(summary?.portrait[0]).toMatchObject({ name: 'm1', avatar: picture });
+  });
+
+  describe('avatar sweep', () => {
+    function storeWithSweep() {
+      const sweep = vi.fn(async () => 0);
+      const swept = new TeamStoreService({ teamsDir: dir }, {
+        sweep,
+      } as unknown as AvatarStoreService);
+      return { swept, sweep };
+    }
+
+    const PICTURE = `${'a'.repeat(64)}.png`;
+    const withPicture = (team: typeof WF): typeof WF => ({
+      ...team,
+      members: team.members.map((member, index) =>
+        index === 0
+          ? { ...member, avatar: { kind: 'picture', value: PICTURE } }
+          : member,
+      ),
+    });
+
+    it('hands the sweep only the pictures a save dropped', async () => {
+      const { swept, sweep } = storeWithSweep();
+      const created = await swept.create(withPicture(WF), 'review-team');
+
+      const kept = await swept.save(
+        'review-team',
+        withPicture(WF),
+        created.hash,
+      );
+      expect(sweep).toHaveBeenLastCalledWith(new Set());
+
+      await swept.save('review-team', WF, kept.hash);
+      expect(sweep).toHaveBeenLastCalledWith(new Set([PICTURE]));
+    });
+
+    it('does not sweep for a refused save, and hands it every picture of a deleted team', async () => {
+      const { swept, sweep } = storeWithSweep();
+      await swept.create(withPicture(WF), 'review-team');
+
+      await expect(
+        swept.save('review-team', WF, 'stale-hash'),
+      ).rejects.toMatchObject({ errorCode: 'TEAM_CHANGED' });
+      expect(sweep).not.toHaveBeenCalled();
+
+      await swept.delete('review-team');
+      expect(sweep).toHaveBeenCalledWith(new Set([PICTURE]));
+    });
+
+    it('does not run when the delete finds no team', async () => {
+      const { swept, sweep } = storeWithSweep();
+
+      await expect(swept.delete('nobody')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(sweep).not.toHaveBeenCalled();
+    });
   });
 
   it('lists teams newest-updated first', async () => {

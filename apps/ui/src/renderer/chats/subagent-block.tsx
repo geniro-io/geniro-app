@@ -1,7 +1,7 @@
 import { Bot, Maximize2 } from 'lucide-react';
 import { memo, useContext } from 'react';
 
-import { InitialsAvatar } from '../components/ui/avatar';
+import { MemberAvatar } from '../components/member-avatar';
 import { Button } from '../components/ui/button';
 import { formatExactUsd, formatTokens } from './agent-activity';
 import {
@@ -564,7 +564,7 @@ export const SubagentBlock = memo(function SubagentBlock({
                 44px band for one line of text. It is still the thing that tells
                 two parallel delegates apart at a glance, which is why it is
                 shrunk rather than dropped. */}
-            <InitialsAvatar name={title} colorKey={block.id} size="sm" />
+            <MemberAvatar name={title} colorKey={block.id} size={20} />
             <BlockTitle>{title}</BlockTitle>
             {/* Every fact about the delegate as ONE run of text with middots,
                 not a span per fact that the header's `gap-2` pushes apart. They

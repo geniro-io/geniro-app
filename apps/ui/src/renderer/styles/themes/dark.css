@@ -189,6 +189,19 @@
   --chart-4: #9b97ce;
   --chart-5: #c48db5;
   --radius: 0.5rem;
+  --control-radius: 8px;
+  --card-radius: 12px;
+  --pill-radius: 9999px;
+  /* Depth on this ground is lightness, not shadow: one step above --popover. */
+  --surface-raised: #2d2b28;
+  --field-border: #55514b;
+  --title-size: 24px;
+  --kpi-size: 28px;
+  --title-line-height: 1.25;
+  --title-tracking: -0.015em;
+  --kpi-line-height: 1.15;
+  /* No shadow on this ground: a lifted card is told by its ring and lightness. */
+  --lift-shadow: none;
 
   /* Elevation. The light theme tints its shadows with the foreground brown at
      6–13% alpha; here they are near-black and much stronger, because a shadow

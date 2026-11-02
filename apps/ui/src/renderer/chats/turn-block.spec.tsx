@@ -15,6 +15,14 @@ import type { TranscriptNodeMeta } from './transcript-item';
 
 const NODES: ReadonlyMap<string, TranscriptNodeMeta> = new Map([
   ['writer', { name: 'Writer', kind: 'agent' }],
+  [
+    'fox',
+    {
+      name: 'Fox',
+      kind: 'agent',
+      avatar: { kind: 'emoji', value: '🦊' },
+    },
+  ],
 ]);
 
 let seq = 0;
@@ -113,6 +121,15 @@ describe('TurnBlock identity frame', () => {
         ?.getAttribute('data-solo'),
     ).toBeNull();
     expect(container.querySelector('[data-slot="avatar"]')).not.toBeNull();
+  });
+
+  it('draws the member’s own avatar from its node meta', () => {
+    renderTurn(false, 'fox');
+
+    const avatar = container.querySelector(
+      '[data-slot="avatar"][data-avatar-kind="emoji"]',
+    );
+    expect(avatar?.textContent).toBe('🦊');
   });
 
   it('drops the avatar, the card and the sender line for a solo agent', () => {

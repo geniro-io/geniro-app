@@ -90,7 +90,7 @@ Pick the agent, model, effort, context window and approval mode. Queue follow-up
 <td width="33%" valign="top">
 
 <b>🧩 Teams</b><br>
-Give each member a role and its own instructions. A lead takes your message; any member can call, message, question and cancel any other.
+Give each member a face, a role and its own instructions. A lead takes your message; any member can call, message, question and cancel any other.
 
 </td>
 <td width="33%" valign="top">
@@ -210,7 +210,13 @@ flowchart LR
   F -. call_agent .-> X["📚 Researcher"]
 ```
 
-![The team editor: the mode, who handles the first message, the members with the selected Manager's public role, private instructions and character, the instruction blocks with their audiences, and the stages](docs/screenshots/team-editor.png)
+![A team's page: its members' faces as a portrait over the name and description, the Team, Memory and Statistics tabs, and a profile card per member with its role, character, CLI and model, and the stages it owns](docs/screenshots/team-page.png)
+
+- **A page per team.** The library shows each team as a card with its members' faces. Open one for its page: the team's people, what it is for and what its runs have done, then three tabs — **Team** (members, stages, team instructions), **Memory** and **Statistics**.
+- **Members as profiles.** Each member is a card with its face, role, character, CLI and model, and the stages it is responsible for; a dot and a line in words say when it needs setting up. Click a card to open the member beside the page and change anything about it; another card switches it, and on a phone it opens as a page of its own.
+- **Faces.** Give a member your own picture (cropped to a square on your Mac and stored there), an emoji, or initials on a colour. The face follows the member into every chat it works in, so you can tell at a glance who said what.
+
+![A member opened beside the team page: a picture avatar with a pencil to change it, the character, the public role and private instructions, and how much its always-on instructions take](docs/screenshots/team-member.png)
 
 - **Members, not wires.** Each member has a **name**, a public **role** (what it does — every other member reads it to decide whom to call), private **instructions** (how it works — only its own turns see them) and an optional **character** (its manner and tone). Nothing is wired: any member may call any other.
 - **One lead or a relay.** Each team picks how its stages run:
@@ -219,12 +225,14 @@ flowchart LR
 
   Either way, a member never calls one that is waiting on its own answer, so calls cannot loop back on themselves.
 - **Instruction blocks** hold text several members need, like a house style guide, addressed to **everyone** or to the members you pick.
-- **Stages** are the steps every run walks, each with how to work in it, its goal and the members responsible for it (the first one leads it).
+- **Stages** are the steps every run walks, each with how to work in it, its goal and the members responsible for it (the first one leads it). The page draws them left to right, starting from the card that says who takes your first message, with alternatives stacked side by side; click a stage to edit it.
+
+![The stages as a journey: the First message card handing to Ada, then Plan, Build and Review, each with its goal and the faces of the members responsible for it, and the team instructions below](docs/screenshots/team-stages.png)
 - **Agents talk to each other.** A member can `call_agent` a teammate, `message_agent` it mid-task, `await_agent` its answer, `answer_agent` its questions, or `cancel_agent` it when plans change. Each call's card, and each of an agent's conversations in the side panel, shows how long the called agent has worked in it, ticking while it works, beside its context and cost (when the agent has ended its turn and the call waits on its monitor or its own calls, the card says `waiting` and the clock stands); an analysis reads the same figure, so it can tell a callee that worked from one that waited.
 - **Team notes:** every agent in a run can write to and read from one shared notebook.
 - **Pull request outcomes.** An agent records where each pull request stands: draft or ready, review rounds, and whether you accepted it. Geniro counts the questions it asked you. Each record shows in the chat, and the side panel lists a pull request's whole history under it: how many times it was sent back and how long it took to be accepted.
 - **Analyze & improve.** An analysis reads the team's latest runs and its whole history: every version with what its runs cost and took, how often its pull requests were sent back and how many questions they asked you, every change made to it with who made it and why, and what earlier analyses recommended and whether you applied, skipped or passed over each item. It compares runs within a version, says whether each earlier change helped, and proposes undoing one that made the runs worse. Its card opens with what Geniro measured over those runs: time and cost per run, failed turns, each agent's share of the working time with its model and cost, and folds for every model, run and call between agents, with how much of each call's time the called agent spent working. It then says what costs the most and why, beside the measured figures of the agent at fault, and projects the time and cost per run with the items you tick. It does not suggest again what you passed over unless newer runs give new evidence. Nothing changes until you tick the items and press **Apply selected**.
-- **Build it by talking.** A chat dock in the team editor edits the team from plain-language requests. It also reads the team's latest runs, so you can ask it what to change ("which stages should we add?"): it answers with the same report and recommendations card as **Analyze & improve**, and each team change you apply comes back as a card showing the exact diff. A chat agent can also propose a whole team as a card for you to approve.
+- **Build it by talking.** A chat dock on the team's page edits the team from plain-language requests. It also reads the team's latest runs, so you can ask it what to change ("which stages should we add?"): it answers with the same report and recommendations card as **Analyze & improve**, and each team change you apply comes back as a card showing the exact diff. A chat agent can also propose a whole team as a card for you to approve.
 - **Teams from before members** (graphs of nodes and wires) are converted when Geniro starts, with the original kept in `backups/`; older runs keep showing the team they ran.
 
 ### 🏊 Agent pools

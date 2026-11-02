@@ -9,6 +9,7 @@ import { useNextWaitingShortcut } from './chats/use-next-waiting-shortcut';
 import { nextWaiting, type WaitReading, waitsOnUser } from './chats/waiting';
 import { WaitingStatus } from './chats/waiting-status';
 import { AppUsageButton } from './components/app-usage-button';
+import { AvatarImageLoaderContext } from './components/avatar-images';
 import { BottomTabBar } from './components/bottom-tab-bar';
 import { ConnectionBanner } from './components/connection-banner';
 import { EmptyState } from './components/empty-state';
@@ -259,6 +260,15 @@ export function App(): React.JSX.Element {
   // The app's ONE capabilities read, provided around every view — the whole
   // answer, and the agent identities out of it — so no screen reads it again.
   const capabilities = useCapabilities(apis?.capabilities ?? null);
+  const loadAvatarImage = useLatestCallback(
+    async (id: string): Promise<string> => {
+      if (apis === null) {
+        throw new Error('daemon unavailable');
+      }
+      return (await apis.teams.getTeamAvatar({ id })).dataUri;
+    },
+    [apis],
+  );
   /** Whether the title bar's usage panel is open — the only time it polls. */
   const [usageOpen, setUsageOpen] = useState(false);
   const appProcesses = useAppProcesses(apis, usageOpen);
@@ -591,304 +601,311 @@ export function App(): React.JSX.Element {
   return (
     <CapabilitiesContext.Provider value={capabilities}>
       <AgentIdentityContext.Provider value={agentIdentities}>
-        <div className="flex h-full flex-col">
-          {/* ONE band across the window, above the columns — see `title-bar.tsx`
+        <AvatarImageLoaderContext.Provider value={loadAvatarImage}>
+          <div className="flex h-full flex-col">
+            {/* ONE band across the window, above the columns — see `title-bar.tsx`
           for why it is not three rows in three columns any more. */}
-          <TitleBar
-            title={
-              // No chat exists to name until the daemon answers.
-              view !== 'chats' || showStartup
-                ? VIEW_TITLE[view]
-                : narrowViewport && !chatsPhoneDetail
-                  ? // The phone's chat LIST page names the place, like
-                    // every other tab, rather than a chat nobody opened.
-                    VIEW_TITLE.chats
-                  : (chatTitle ?? 'New chat')
-            }
-            // The offer, resolved HERE from main's one state so the bar renders it
-            // rather than deciding it — including `canInstall`, main's own answer
-            // about this install (read-only volume, another account, a translocated
-            // copy), so the control only appears where pressing it can work.
-            //
-            // NOTHING in a browser reached through the LAN gateway: install and
-            // relaunch are both `denyRemotely` (they swap and restart the app on
-            // the MAC), so a phone could only ever press a dead control — and on a
-            // phone the bar's trailing edge belongs to the run-details opener,
-            // which the version was drawn straight over.
-            update={
-              isRemoteRuntime()
-                ? { kind: 'none' }
-                : footerUpdate(update.state, updateEngaged)
-            }
-            onInstallUpdate={() => {
-              setUpdateEngaged(true);
-              void update.install();
-            }}
-            onRelaunchUpdate={() => void update.relaunch()}
-            // Not on a phone, for the usage control's reason below — and a
-            // phone has no keyboard for the chord the line names.
-            waiting={
-              narrowViewport || showStartup ? null : (
-                <WaitingStatus readings={waiting} onJump={jumpToNextWaiting} />
-              )
-            }
-            // Not on a phone, for the update control's reason: the bar's
-            // trailing edge there belongs to the run-details opener, which
-            // floats over it and would cover this glyph.
-            usage={
-              apis && !narrowViewport ? (
-                <AppUsageButton
-                  open={usageOpen}
-                  onOpenChange={setUsageOpen}
-                  data={appProcesses.data}
-                  loading={appProcesses.loading}
-                  error={appProcesses.error}
-                  // Both writes, in this order, on `Tasks`' reason: the
-                  // request is what `Chats` acts on.
-                  onOpenThread={(runId) => {
-                    setThreadRequest(runId);
-                    setView('chats');
-                  }}
-                />
-              ) : null
-            }
-          />
-          <div className="flex min-h-0 flex-1">
-            {/* The rail is the navigation at `sm` and wider; below it the
+            <TitleBar
+              title={
+                // No chat exists to name until the daemon answers.
+                view !== 'chats' || showStartup
+                  ? VIEW_TITLE[view]
+                  : narrowViewport && !chatsPhoneDetail
+                    ? // The phone's chat LIST page names the place, like
+                      // every other tab, rather than a chat nobody opened.
+                      VIEW_TITLE.chats
+                    : (chatTitle ?? 'New chat')
+              }
+              // The offer, resolved HERE from main's one state so the bar renders it
+              // rather than deciding it — including `canInstall`, main's own answer
+              // about this install (read-only volume, another account, a translocated
+              // copy), so the control only appears where pressing it can work.
+              //
+              // NOTHING in a browser reached through the LAN gateway: install and
+              // relaunch are both `denyRemotely` (they swap and restart the app on
+              // the MAC), so a phone could only ever press a dead control — and on a
+              // phone the bar's trailing edge belongs to the run-details opener,
+              // which the version was drawn straight over.
+              update={
+                isRemoteRuntime()
+                  ? { kind: 'none' }
+                  : footerUpdate(update.state, updateEngaged)
+              }
+              onInstallUpdate={() => {
+                setUpdateEngaged(true);
+                void update.install();
+              }}
+              onRelaunchUpdate={() => void update.relaunch()}
+              // Not on a phone, for the usage control's reason below — and a
+              // phone has no keyboard for the chord the line names.
+              waiting={
+                narrowViewport || showStartup ? null : (
+                  <WaitingStatus
+                    readings={waiting}
+                    onJump={jumpToNextWaiting}
+                  />
+                )
+              }
+              // Not on a phone, for the update control's reason: the bar's
+              // trailing edge there belongs to the run-details opener, which
+              // floats over it and would cover this glyph.
+              usage={
+                apis && !narrowViewport ? (
+                  <AppUsageButton
+                    open={usageOpen}
+                    onOpenChange={setUsageOpen}
+                    data={appProcesses.data}
+                    loading={appProcesses.loading}
+                    error={appProcesses.error}
+                    // Both writes, in this order, on `Tasks`' reason: the
+                    // request is what `Chats` acts on.
+                    onOpenThread={(runId) => {
+                      setThreadRequest(runId);
+                      setView('chats');
+                    }}
+                  />
+                ) : null
+              }
+            />
+            <div className="flex min-h-0 flex-1">
+              {/* The rail is the navigation at `sm` and wider; below it the
             bottom tab bar is. `flex` because NavRail carries no `h-full` of
             its own and stretches only as a flex row's child. */}
-            <div className="flex max-sm:hidden">
-              <NavRail
-                view={view}
-                onNavigate={setView}
-                collapsed={sidebar.collapsed}
-                hydrated={sidebar.hydrated}
-                onToggleCollapsed={sidebar.toggle}
-              />
-            </div>
-            {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its
+              <div className="flex max-sm:hidden">
+                <NavRail
+                  view={view}
+                  onNavigate={setView}
+                  collapsed={sidebar.collapsed}
+                  hydrated={sidebar.hydrated}
+                  onToggleCollapsed={sidebar.toggle}
+                />
+              </div>
+              {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its
           content, so one long unbreakable string (a cwd path) would otherwise
           push the whole layout wider than the window and the transcript
           auto-scroll would then drag the document sideways, clipping the rail. */}
-            <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-              {/* Above every view, because every view is made of daemon calls: a
+              <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                {/* Above every view, because every view is made of daemon calls: a
             failure here explains an empty chat list, a Send that does nothing
             and a builder that cannot save, all at once. Outside the per-view
             wrappers so it survives a nav switch — the connection is app state,
             not any one screen's. */}
-              {/* Not while the daemon is still starting: that is the startup
+                {/* Not while the daemon is still starting: that is the startup
             screen's to say, and a start is not a failure. On Settings, with no
             daemon yet, it appears once the start has actually failed. */}
-              {connected ||
-              showStartup ||
-              (handle === null && startError === null) ? null : (
-                <ConnectionBanner
-                  reason={connectionError ?? startError}
-                  retrying={reconnecting}
-                  onRetry={() => void connectDaemon()}
-                />
-              )}
-              {showStartup ? (
-                <StartupScreen
-                  since={waitingSince}
-                  reason={startError}
-                  migrating={migrating}
-                  onRetry={() => {
-                    // Back to the starting view, clock and all: this is a
-                    // fresh start, and its failure brings the reason back.
-                    setStartError(null);
-                    setWaitingSince(Date.now());
-                    void connectDaemon();
-                  }}
-                />
-              ) : null}
-              {/* No update strip here. It and the nav rail's version row were two
+                {connected ||
+                showStartup ||
+                (handle === null && startError === null) ? null : (
+                  <ConnectionBanner
+                    reason={connectionError ?? startError}
+                    retrying={reconnecting}
+                    onRetry={() => void connectDaemon()}
+                  />
+                )}
+                {showStartup ? (
+                  <StartupScreen
+                    since={waitingSince}
+                    reason={startError}
+                    migrating={migrating}
+                    onRetry={() => {
+                      // Back to the starting view, clock and all: this is a
+                      // fresh start, and its failure brings the reason back.
+                      setStartError(null);
+                      setWaitingSince(Date.now());
+                      void connectDaemon();
+                    }}
+                  />
+                ) : null}
+                {/* No update strip here. It and the nav rail's version row were two
             controls for one action in one window; the row is where the running
             version is already written, so that is the one that stayed. The
             connection banner above is NOT the same case and keeps its strip: a
             daemon that is not answering breaks the view under it, while an
             update is an offer with no deadline. */}
-              {/* Chats stays mounted (hidden) across nav switches so its live WS room
+                {/* Chats stays mounted (hidden) across nav switches so its live WS room
             and active-run selection survive a trip to Settings/Teams. */}
-              <div
-                className={cn(
-                  'min-h-0 flex-1',
-                  (view !== 'chats' || showStartup) && 'hidden',
-                )}>
-                {handle && clientRef.current ? (
-                  <Chats
-                    client={clientRef.current}
-                    handle={handle}
-                    active={view === 'chats'}
-                    transcriptPageCap={
-                      isRemoteRuntime() ? REMOTE_HISTORY_PAGE : undefined
-                    }
-                    firstLaunchAgent={chatLaunch}
-                    onFirstLaunchHandled={() => setChatLaunch(null)}
-                    onActiveRunChange={setOpenRunId}
-                    onTitleChange={setChatTitle}
-                    onOpenTerminal={terminals.openTab}
-                    onFolderChange={setChatFolder}
-                    // Chats has no route of its own to Settings — the nav rail is
-                    // this component's. Handing it one callback is what lets the
-                    // composer's "Manage fast actions" land ON the editor rather
-                    // than on General with a hunt for it.
-                    onOpenSettings={(section) => {
-                      setSettingsSection(section);
-                      setSettingsSectionOpen(true);
-                      setView('settings');
-                    }}
-                    onOpenMemory={(memoryHandle) => {
-                      setMemoryFocus(memoryHandle);
-                      setSettingsSection('memory');
-                      setSettingsSectionOpen(true);
-                      setView('settings');
-                    }}
-                    onOpenTeam={(slug) => {
-                      setTeamRequest(slug);
-                      setView('teams');
-                    }}
-                    onPhoneDetailChange={setChatsPhoneDetail}
-                    onWaitingChange={setWaiting}
-                    phoneHomeSignal={chatsHomeSignal}
-                    openRunId={threadRequest}
-                    onRunOpened={() => {
-                      setThreadRequest(null);
-                    }}
-                  />
-                ) : null}
-              </div>
-              <Suspense fallback={<EmptyState>Loading…</EmptyState>}>
-                {/* `min-h-0 flex-1`, not `h-full`: `main` is now a flex COLUMN whose
+                <div
+                  className={cn(
+                    'min-h-0 flex-1',
+                    (view !== 'chats' || showStartup) && 'hidden',
+                  )}>
+                  {handle && clientRef.current ? (
+                    <Chats
+                      client={clientRef.current}
+                      handle={handle}
+                      active={view === 'chats'}
+                      transcriptPageCap={
+                        isRemoteRuntime() ? REMOTE_HISTORY_PAGE : undefined
+                      }
+                      firstLaunchAgent={chatLaunch}
+                      onFirstLaunchHandled={() => setChatLaunch(null)}
+                      onActiveRunChange={setOpenRunId}
+                      onTitleChange={setChatTitle}
+                      onOpenTerminal={terminals.openTab}
+                      onFolderChange={setChatFolder}
+                      // Chats has no route of its own to Settings — the nav rail is
+                      // this component's. Handing it one callback is what lets the
+                      // composer's "Manage fast actions" land ON the editor rather
+                      // than on General with a hunt for it.
+                      onOpenSettings={(section) => {
+                        setSettingsSection(section);
+                        setSettingsSectionOpen(true);
+                        setView('settings');
+                      }}
+                      onOpenMemory={(memoryHandle) => {
+                        setMemoryFocus(memoryHandle);
+                        setSettingsSection('memory');
+                        setSettingsSectionOpen(true);
+                        setView('settings');
+                      }}
+                      onOpenTeam={(slug) => {
+                        setTeamRequest(slug);
+                        setView('teams');
+                      }}
+                      onPhoneDetailChange={setChatsPhoneDetail}
+                      onWaitingChange={setWaiting}
+                      phoneHomeSignal={chatsHomeSignal}
+                      openRunId={threadRequest}
+                      onRunOpened={() => {
+                        setThreadRequest(null);
+                      }}
+                    />
+                  ) : null}
+                </div>
+                <Suspense fallback={<EmptyState>Loading…</EmptyState>}>
+                  {/* `min-h-0 flex-1`, not `h-full`: `main` is now a flex COLUMN whose
               first child can be the connection strip, so a child claiming the
               full height would push the views past the bottom of the window
               by exactly the strip's height. */}
-                <div
-                  className={cn(
-                    'min-h-0 flex-1',
-                    (view !== 'teams' || showStartup) && 'hidden',
-                  )}>
-                  {teamsMounted ? (
-                    <Teams
-                      handle={handle}
-                      client={clientRef.current}
-                      active={view === 'teams'}
-                      firstLaunch={teamLaunch}
-                      onFirstLaunchHandled={() => setTeamLaunch(null)}
-                      openRequest={teamRequest}
-                      onOpenRequestHandled={() => setTeamRequest(null)}
-                    />
-                  ) : null}
-                </div>
-                <div
-                  className={cn(
-                    'min-h-0 flex-1',
-                    (view !== 'tasks' || showStartup) && 'hidden',
-                  )}>
-                  {tasksMounted ? (
-                    <Tasks
-                      handle={handle}
-                      client={clientRef.current}
-                      active={view === 'tasks'}
-                      waitingByRun={waitingByRun}
-                      // Both writes, in this order: the request is what `Chats`
-                      // acts on, and switching first would show the previous
-                      // thread for a frame.
-                      onOpenThread={(runId) => {
-                        setThreadRequest(runId);
-                        setView('chats');
-                      }}
-                    />
-                  ) : null}
-                </div>
-                {/* Unmounted when hidden, like Settings and unlike Chats/Teams:
+                  <div
+                    className={cn(
+                      'min-h-0 flex-1',
+                      (view !== 'teams' || showStartup) && 'hidden',
+                    )}>
+                    {teamsMounted ? (
+                      <Teams
+                        handle={handle}
+                        client={clientRef.current}
+                        active={view === 'teams'}
+                        firstLaunch={teamLaunch}
+                        onFirstLaunchHandled={() => setTeamLaunch(null)}
+                        openRequest={teamRequest}
+                        onOpenRequestHandled={() => setTeamRequest(null)}
+                      />
+                    ) : null}
+                  </div>
+                  <div
+                    className={cn(
+                      'min-h-0 flex-1',
+                      (view !== 'tasks' || showStartup) && 'hidden',
+                    )}>
+                    {tasksMounted ? (
+                      <Tasks
+                        handle={handle}
+                        client={clientRef.current}
+                        active={view === 'tasks'}
+                        waitingByRun={waitingByRun}
+                        // Both writes, in this order: the request is what `Chats`
+                        // acts on, and switching first would show the previous
+                        // thread for a frame.
+                        onOpenThread={(runId) => {
+                          setThreadRequest(runId);
+                          setView('chats');
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                  {/* Unmounted when hidden, like Settings and unlike Chats/Teams:
               the page holds no unsaved edit and no live subscription, and a
               fresh mount is how a revisit gets figures that are current
               rather than however stale the last visit left them. */}
-                {view === 'stats' && !showStartup ? (
-                  <div className="min-h-0 flex-1">
-                    <Stats handle={handle} client={clientRef.current} />
-                  </div>
-                ) : null}
-                {view === 'settings' ? (
-                  <div className="min-h-0 flex-1">
-                    <Settings
-                      handle={handle}
-                      client={clientRef.current}
-                      memoryFocus={
-                        settingsSection === 'memory' ? memoryFocus : null
-                      }
-                      onMemoryFocusDone={() => setMemoryFocus(null)}
-                      onOpenOnboarding={
-                        isRemoteRuntime() ? undefined : () => setGuideOpen(true)
-                      }
-                      section={settingsSection}
-                      onSectionChange={setSettingsSection}
-                      sectionOpen={settingsSectionOpen}
-                      onSectionOpenChange={(open) => {
-                        if (open) {
-                          setSettingsSectionOpen(true);
-                        } else {
-                          settingsBack();
+                  {view === 'stats' && !showStartup ? (
+                    <div className="min-h-0 flex-1">
+                      <Stats handle={handle} client={clientRef.current} />
+                    </div>
+                  ) : null}
+                  {view === 'settings' ? (
+                    <div className="min-h-0 flex-1">
+                      <Settings
+                        handle={handle}
+                        client={clientRef.current}
+                        memoryFocus={
+                          settingsSection === 'memory' ? memoryFocus : null
                         }
-                      }}
-                    />
-                  </div>
-                ) : null}
-              </Suspense>
-              {/* Above the debug drawer and, like it, below every view. */}
-              <TerminalPanel
-                terminals={terminals}
-                onNewTab={() =>
-                  terminals.openTab(
-                    newTerminalFolder(
-                      view === 'chats' ? chatFolder : null,
-                      terminals,
-                    ),
-                  )
-                }
-              />
-              {/* BELOW the views and inside `main`, so it spans whatever screen is
+                        onMemoryFocusDone={() => setMemoryFocus(null)}
+                        onOpenOnboarding={
+                          isRemoteRuntime()
+                            ? undefined
+                            : () => setGuideOpen(true)
+                        }
+                        section={settingsSection}
+                        onSectionChange={setSettingsSection}
+                        sectionOpen={settingsSectionOpen}
+                        onSectionOpenChange={(open) => {
+                          if (open) {
+                            setSettingsSectionOpen(true);
+                          } else {
+                            settingsBack();
+                          }
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                </Suspense>
+                {/* Above the debug drawer and, like it, below every view. */}
+                <TerminalPanel
+                  terminals={terminals}
+                  onNewTab={() =>
+                    terminals.openTab(
+                      newTerminalFolder(
+                        view === 'chats' ? chatFolder : null,
+                        terminals,
+                      ),
+                    )
+                  }
+                />
+                {/* BELOW the views and inside `main`, so it spans whatever screen is
             open rather than belonging to one — the question it answers ("what
             just happened when I did that") is always about the thing still on
             screen above it. Mounted only while open: mounting it hidden would
             keep the daemon streaming every agent-stdio line to a panel nobody
             is looking at. */}
-              {debugOpen && apis && clientRef.current ? (
-                <DebugPanel
-                  apis={apis}
-                  client={clientRef.current}
-                  onClose={() => setDebugOpen(false)}
-                />
-              ) : null}
-            </main>
-          </div>
-          {/* On every phone page: it is the phone's only navigation. */}
-          <BottomTabBar
-            view={view}
-            onNavigate={(next) => {
-              // Pressing the tab already on show goes back to its first
-              // page, the way a phone's tab bar does.
-              if (next === view && next === 'settings') {
-                settingsBack();
-              }
-              if (next === view && next === 'chats') {
-                setChatsHomeSignal((value) => value + 1);
-              }
-              setView(next);
-            }}
-          />
-        </div>
-        {guideOpen ? (
-          <div className="fixed inset-0 z-50 bg-background">
-            <WindowDragStrip />
-            <Onboarding
-              identities={agentIdentities}
-              onDone={handleOnboardingDone}
-              onClose={() => setGuideOpen(false)}
+                {debugOpen && apis && clientRef.current ? (
+                  <DebugPanel
+                    apis={apis}
+                    client={clientRef.current}
+                    onClose={() => setDebugOpen(false)}
+                  />
+                ) : null}
+              </main>
+            </div>
+            {/* On every phone page: it is the phone's only navigation. */}
+            <BottomTabBar
+              view={view}
+              onNavigate={(next) => {
+                // Pressing the tab already on show goes back to its first
+                // page, the way a phone's tab bar does.
+                if (next === view && next === 'settings') {
+                  settingsBack();
+                }
+                if (next === view && next === 'chats') {
+                  setChatsHomeSignal((value) => value + 1);
+                }
+                setView(next);
+              }}
             />
           </div>
-        ) : null}
+          {guideOpen ? (
+            <div className="fixed inset-0 z-50 bg-background">
+              <WindowDragStrip />
+              <Onboarding
+                identities={agentIdentities}
+                onDone={handleOnboardingDone}
+                onClose={() => setGuideOpen(false)}
+              />
+            </div>
+          ) : null}
+        </AvatarImageLoaderContext.Provider>
       </AgentIdentityContext.Provider>
     </CapabilitiesContext.Provider>
   );

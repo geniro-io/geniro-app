@@ -42,6 +42,7 @@ import { CopyButton } from '../components/copy-button';
 import { ErrorBanner } from '../components/error-banner';
 import type { McpConfigActions } from '../components/mcp-add-dialog';
 import { McpDialogButton } from '../components/mcp-dialog-button';
+import { MemberAvatar } from '../components/member-avatar';
 import { PanelActionRow, PanelLinkRow } from '../components/panel-link-row';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { PanelSection } from '../components/panel-section';
@@ -106,6 +107,7 @@ import { type AgentTaskRow, taskProgress } from './task-payload';
 import { agentNameOf } from './team-note-author';
 import { useThreadFlag, useThreadFlags } from './thread-ui-memory';
 import type { WorkflowEntry } from './transcript-groups';
+import type { TranscriptNodeMeta } from './transcript-payload';
 import {
   formatDuration,
   type OpenTurn,
@@ -1824,6 +1826,7 @@ function WorkflowsSection({
 
 export function AgentsPanel({
   agents,
+  nodes,
   artifacts = [],
   publishedArtifacts = [],
   threadPullRequests = [],
@@ -1870,6 +1873,8 @@ export function AgentsPanel({
   notes,
 }: {
   agents: AgentDisplay[];
+  /** The run snapshot's members by id, for each card's avatar. */
+  nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
   /**
    * The pages this thread has published to claude.ai, newest first.
    *
@@ -2721,6 +2726,13 @@ export function AgentsPanel({
                     the whole header doubling as a hit target. */}
                   <div className="flex flex-col rounded-lg px-2.5 pt-1.5 text-left">
                     <span className="flex items-center gap-1.5">
+                      {nodes?.has(agent.id) ? (
+                        <MemberAvatar
+                          name={agent.name}
+                          colorKey={agent.id}
+                          avatar={nodes.get(agent.id)?.avatar}
+                        />
+                      ) : null}
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">
                         {agent.name}
                       </span>

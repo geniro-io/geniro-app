@@ -6,8 +6,29 @@ import { useLatestCallback } from './use-latest-callback';
 /** Marks, in `history.state`, the page's own entry (`PAGE`) and the one under it (`UNDER`). */
 const PAGE = 'geniroPhonePage';
 const UNDER = 'geniroPhoneUnder';
+/** The page tokens of the entries a stack of pages pushed, bottom first. */
+const STACK = 'geniroPhoneStack';
+
+function stackOf(state: EntryState): string[] {
+  const stack = state?.[STACK];
+  if (Array.isArray(stack)) {
+    return stack.filter((token): token is string => typeof token === 'string');
+  }
+  const page = state?.[PAGE];
+  return typeof page === 'string' ? [page] : [];
+}
 
 type EntryState = Record<string, unknown> | null;
+
+/** Whether `token` names a page of one of the `stacked` kinds (space-separated). */
+function isStacked(stacked: string, token: string): boolean {
+  return stacked
+    .split(' ')
+    .some((kind) => kind !== '' && token.startsWith(`${kind}:`));
+}
+
+/** The page tokens whose entries an open page holds right now. */
+const held = new Set<string>();
 
 function entryState(): EntryState {
   const state: unknown = history.state;
@@ -49,28 +70,60 @@ function entryState(): EntryState {
  * screen, so a hidden view never holds an entry another view's back would pop.
  * `owner` names the page kind: an entry is adopted only by the kind that
  * pushed it, or a Settings section opened by a jump from the chat composer
- * would adopt the composer's entry and pop back to Chats.
+ * would adopt the composer's entry and pop back to Chats. A page that other
+ * pages open on top of (a team, whose member opens over it) names their kinds
+ * in `stackedOwners`: reopening while one of them is current, it adopts its
+ * own entry under them rather than pushing a second one above.
  */
 export function usePhoneBackEntry(
   owner: string,
   open: boolean,
   onBack: () => void,
+  { stackedOwners = [] }: { stackedOwners?: readonly string[] } = {},
 ): () => void {
+  const stacked = stackedOwners.join(' ');
   const openRef = useRef(open);
   const pushedRef = useRef(false);
   /** The token the entry under the page carries. */
   const tokenRef = useRef<string | null>(null);
   /** The app's own back asked for a pop that has not been delivered yet. */
   const poppingRef = useRef(false);
+  /** A stacked page's entry this page reopened under, while it stays on top. */
+  const aboveRef = useRef<string | null>(null);
   const onBackRef = useRef(onBack);
   useEffect(() => {
     onBackRef.current = onBack;
   }, [onBack]);
+  const stackedRef = useRef(stacked);
+  useEffect(() => {
+    stackedRef.current = stacked;
+  }, [stacked]);
+
+  const hold = (token: string): void => {
+    tokenRef.current = token;
+    pushedRef.current = true;
+    held.add(token);
+  };
+  // Every hook's popstate listener sees one pop: a token is let go after the
+  // dispatch, unless this page has taken it again by then.
+  const letGo = (): void => {
+    const token = tokenRef.current;
+    pushedRef.current = false;
+    if (token === null) {
+      return;
+    }
+    setTimeout(() => {
+      if (!pushedRef.current || tokenRef.current !== token) {
+        held.delete(token);
+      }
+    }, 0);
+  };
 
   useEffect(() => {
     openRef.current = open;
     if (!open) {
-      pushedRef.current = false;
+      letGo();
+      aboveRef.current = null;
       return;
     }
     queueMicrotask(() => {
@@ -81,17 +134,27 @@ export function usePhoneBackEntry(
       }
       const current = entryState();
       const adopted = current?.[PAGE];
+      const stack = stackOf(current);
+      const under =
+        typeof adopted === 'string' && isStacked(stacked, adopted)
+          ? stack.findLast((token) => token.startsWith(`${owner}:`))
+          : undefined;
       if (typeof adopted === 'string' && adopted.startsWith(`${owner}:`)) {
-        tokenRef.current = adopted;
+        hold(adopted);
+      } else if (under !== undefined && typeof adopted === 'string') {
+        aboveRef.current = adopted;
+        hold(under);
       } else {
         const token = `${owner}:${randomId()}`;
         history.replaceState({ ...current, [UNDER]: token }, '');
-        history.pushState({ ...current, [PAGE]: token }, '');
-        tokenRef.current = token;
+        history.pushState(
+          { ...current, [PAGE]: token, [STACK]: [...stack, token] },
+          '',
+        );
+        hold(token);
       }
-      pushedRef.current = true;
     });
-  }, [open, owner]);
+  }, [open, owner, stacked]);
 
   useEffect(() => {
     const onPopState = (): void => {
@@ -99,13 +162,35 @@ export function usePhoneBackEntry(
         tokenRef.current !== null && entryState()?.[UNDER] === tokenRef.current;
       if (poppingRef.current) {
         poppingRef.current = false;
+        letGo();
         onBackRef.current();
         return;
       }
       if (!pushedRef.current) {
         return;
       }
-      pushedRef.current = false;
+      if (
+        tokenRef.current !== null &&
+        entryState()?.[PAGE] === tokenRef.current
+      ) {
+        const marked = entryState()?.[UNDER];
+        const above =
+          aboveRef.current ??
+          (typeof marked === 'string' && isStacked(stackedRef.current, marked)
+            ? marked
+            : null);
+        aboveRef.current = null;
+        // A stacked page popped, and this page's own entry is current again.
+        // When no open page held the entry popped, the back was meant for
+        // this page: pop its own entry too.
+        if (above !== null && !held.has(above)) {
+          pushedRef.current = false;
+          poppingRef.current = true;
+          history.back();
+        }
+        return;
+      }
+      letGo();
       if (landedUnder) {
         onBackRef.current();
       }
@@ -116,9 +201,18 @@ export function usePhoneBackEntry(
 
   return useLatestCallback((): void => {
     if (pushedRef.current) {
+      // Entries a stacked page left above this one's go too.
+      const stack = stackOf(entryState());
+      const index =
+        tokenRef.current === null ? -1 : stack.lastIndexOf(tokenRef.current);
       pushedRef.current = false;
       poppingRef.current = true;
-      history.back();
+      const depth = index < 0 ? 1 : stack.length - index;
+      if (depth === 1) {
+        history.back();
+      } else {
+        history.go(-depth);
+      }
     } else if (!poppingRef.current) {
       onBackRef.current();
     }

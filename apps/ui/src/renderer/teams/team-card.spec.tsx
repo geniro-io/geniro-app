@@ -20,6 +20,15 @@ const SUMMARY: TeamSummary = {
     { kind: 'claude', count: 2 },
     { kind: 'cursor-agent', count: 1 },
   ],
+  portrait: [
+    { id: 'coder', name: 'Coder' },
+    {
+      id: 'reviewer',
+      name: 'Reviewer',
+      avatar: { kind: 'emoji', value: '🦉' },
+    },
+    { id: 'tester', name: 'Tester' },
+  ],
   updatedAt: new Date().toISOString(),
 };
 
@@ -45,8 +54,6 @@ function render(
 ): HTMLElement {
   act(() => {
     root.render(
-      // A bare `<ul>` here — the library's two-column grid classes live on
-      // `Teams.tsx`'s wrapper; this pins the CARD's shape alone.
       <ul>
         <TeamCard summary={summary} onOpen={onOpen} onDelete={onDelete} />
       </ul>,
@@ -79,55 +86,63 @@ function clickDelete(): void {
 }
 
 describe('TeamCard', () => {
-  it('is built on the Card primitive, not a hand-rolled look-alike', () => {
-    // The whole point of reusing `ui/card.tsx` rather than copying its class
-    // list onto a plain div: this fails if the card look is ever re-hand-rolled.
-    render(SUMMARY);
-    expect(container.querySelector('[data-slot="card"]')).not.toBeNull();
+  it('draws the team as a portrait of its members, then how many more', () => {
+    render({ ...SUMMARY, memberCount: 9 });
+    const faces = container.querySelectorAll('[data-slot="avatar"]');
+    expect(faces.length).toBe(3);
+    expect(faces[1]?.getAttribute('data-avatar-kind')).toBe('emoji');
+    expect(
+      container.querySelector('[data-slot="avatar-stack-rest"]')?.textContent,
+    ).toBe('+6');
   });
 
-  it('shows the name, description, agent breakdown, and member/stage counts', () => {
+  it('shows the name, description and member/stage counts — no node or edge counters', () => {
     render(SUMMARY);
     const text = container.textContent ?? '';
     expect(text).toContain('Review Team');
     expect(text).toContain('Coder then reviewer');
-    // The agent breakdown is the "how many agents" signal — a real tally per
-    // kind, not just the member count.
-    expect(text).toContain('claude ×2');
-    expect(text).toContain('cursor-agent ×1');
-    expect(text).toContain('3 members');
-    expect(text).toContain('2 stages');
+    expect(text).toContain('3 members · 2 stages');
+    expect(text).not.toContain('claude ×2');
   });
 
-  it('lets the description WRAP across a few lines rather than truncating to one', () => {
-    // The whole reason for the card shape: the row this replaced clamped
-    // the description to a single truncated line. jsdom computes no layout,
-    // so it cannot see the clamp taking effect — what it CAN pin is the
-    // class that produces it, which fails the moment someone reverts this to
-    // a single-line `truncate`.
+  it('lets the description wrap to two lines rather than truncating to one', () => {
     render(SUMMARY);
-    const description = container.querySelector(
-      '[data-slot="card-description"]',
+    const description = [...container.querySelectorAll('p')].find(
+      (p) => p.textContent === 'Coder then reviewer',
     );
-    expect(description).not.toBeNull();
-    expect(description?.className).toContain('line-clamp-3');
+    expect(description?.className).toContain('line-clamp-2');
     expect(description?.className).not.toContain('truncate');
   });
 
-  it('puts the tallying facts in a FOOTER of the card, not the header', () => {
-    render(SUMMARY);
-    const footer = container.querySelector('[data-slot="card-footer"]');
-    expect(footer).not.toBeNull();
-    const footerText = footer?.textContent ?? '';
-    expect(footerText).toContain('claude ×2');
-    expect(footerText).toContain('3 members');
-    expect(footerText).toContain('2 stages');
-
-    // And the header holds only the name and description — not the facts.
-    const header = container.querySelector('[data-slot="card-header"]');
-    const headerText = header?.textContent ?? '';
-    expect(headerText).not.toContain('members');
-    expect(headerText).not.toContain('stages');
+  it('marks open setup problems with a count, and a checked team with a word', () => {
+    act(() =>
+      root.render(
+        <ul>
+          <TeamCard
+            summary={SUMMARY}
+            warningCount={2}
+            onOpen={vi.fn()}
+            onDelete={vi.fn()}
+          />
+        </ul>,
+      ),
+    );
+    expect(
+      container.querySelector('[data-slot="team-card-warnings"]')?.textContent,
+    ).toBe('2 need setup');
+    act(() =>
+      root.render(
+        <ul>
+          <TeamCard
+            summary={SUMMARY}
+            warningCount={0}
+            onOpen={vi.fn()}
+            onDelete={vi.fn()}
+          />
+        </ul>,
+      ),
+    );
+    expect(container.querySelector('[aria-label="ready"]')).not.toBeNull();
   });
 
   it('pluralizes a single member/stage without a trailing "s"', () => {
@@ -208,5 +223,25 @@ describe('TeamCard — delete', () => {
     expect(deleteButton().getAttribute('aria-label')).toBe(
       'Delete Review Team',
     );
+  });
+});
+
+describe('TeamCard — delete held', () => {
+  it('holds delete while a run of the team is live, saying why', () => {
+    const onDelete = vi.fn();
+    act(() =>
+      root.render(
+        <ul>
+          <TeamCard
+            summary={SUMMARY}
+            deleteDisabledReason="A run of this team is working"
+            onOpen={vi.fn()}
+            onDelete={onDelete}
+          />
+        </ul>,
+      ),
+    );
+    expect(deleteButton().disabled).toBe(true);
+    expect(deleteButton().title).toBe('A run of this team is working');
   });
 });

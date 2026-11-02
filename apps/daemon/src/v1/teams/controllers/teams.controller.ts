@@ -52,11 +52,15 @@ import {
   SaveTeamDto,
   StageMoveResultDto,
   StartTeamChatDto,
+  TeamAvatarDataDto,
+  TeamAvatarIdDto,
   TeamChatsDiscardedDto,
   TeamDeletedDto,
   TeamFileDto,
   TeamSummaryDto,
+  UploadTeamAvatarDto,
 } from '../dto/teams.dto';
+import { AvatarStoreService } from '../services/avatar-store.service';
 import { InstructionSizesService } from '../services/instruction-sizes.service';
 import { RunTeamService } from '../services/run-team.service';
 import { StageWakeService } from '../services/stage-wake.service';
@@ -97,6 +101,7 @@ export class TeamsController {
     private readonly instructionSizes: InstructionSizesService,
     private readonly teamAnalyses: TeamAnalysisService,
     private readonly stageWakes: StageWakeService,
+    private readonly avatars: AvatarStoreService,
   ) {}
 
   /**
@@ -302,6 +307,25 @@ export class TeamsController {
     @Body() dto: MeasureInstructionSizesDto,
   ): InstructionSizesWire {
     return this.instructionSizes.measure(dto);
+  }
+
+  @Post('avatars')
+  @ApiOperation({ operationId: 'uploadTeamAvatar' })
+  @ZodResponse({ status: 201, type: TeamAvatarIdDto })
+  async uploadAvatar(
+    @Body() dto: UploadTeamAvatarDto,
+  ): Promise<{ id: string }> {
+    return {
+      id: await this.avatars.save(Buffer.from(dto.data, 'base64')),
+    };
+  }
+
+  @Get('avatars/:id')
+  @ApiOperation({ operationId: 'getTeamAvatar' })
+  @ZodResponse({ status: 200, type: TeamAvatarDataDto })
+  async getAvatar(@Param('id') id: string): Promise<{ dataUri: string }> {
+    const { mediaType, base64 } = await this.avatars.read(id);
+    return { dataUri: `data:${mediaType};base64,${base64}` };
   }
 
   @Get(':slug')

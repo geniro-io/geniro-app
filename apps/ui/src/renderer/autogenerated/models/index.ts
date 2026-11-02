@@ -10594,6 +10594,32 @@ export interface TeamAgentPoolMember {
 /**
  * 
  * @export
+ * @interface TeamAvatarDataDto
+ */
+export interface TeamAvatarDataDto {
+    /**
+     * `data:<mediaType>;base64,<bytes>`
+     * @type {string}
+     * @memberof TeamAvatarDataDto
+     */
+    dataUri: string;
+}
+/**
+ * 
+ * @export
+ * @interface TeamAvatarIdDto
+ */
+export interface TeamAvatarIdDto {
+    /**
+     * The stored file id, `<sha256>.<ext>`
+     * @type {string}
+     * @memberof TeamAvatarIdDto
+     */
+    id: string;
+}
+/**
+ * 
+ * @export
  * @interface TeamChatsDiscardedDto
  */
 export interface TeamChatsDiscardedDto {
@@ -10838,6 +10864,31 @@ export type TeamNoteKind = typeof TeamNoteKind[keyof typeof TeamNoteKind];
 /**
  * 
  * @export
+ * @interface TeamPortraitMember
+ */
+export interface TeamPortraitMember {
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamPortraitMember
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamPortraitMember
+     */
+    name: string;
+    /**
+     * 
+     * @type {MemberAvatar}
+     * @memberof TeamPortraitMember
+     */
+    avatar?: MemberAvatar;
+}
+/**
+ * 
+ * @export
  * @interface TeamStage
  */
 export interface TeamStage {
@@ -10920,6 +10971,12 @@ export interface TeamSummaryDto {
      * @memberof TeamSummaryDto
      */
     agentCounts: Array<AgentCount>;
+    /**
+     * The first members in team order, drawn on the library card
+     * @type {Array<TeamPortraitMember>}
+     * @memberof TeamSummaryDto
+     */
+    portrait: Array<TeamPortraitMember>;
     /**
      * 
      * @type {string}
@@ -12033,6 +12090,19 @@ export interface UploadTaskFileDto {
      * The file’s bytes, base64-encoded
      * @type {string}
      * @memberof UploadTaskFileDto
+     */
+    data: string;
+}
+/**
+ * 
+ * @export
+ * @interface UploadTeamAvatarDto
+ */
+export interface UploadTeamAvatarDto {
+    /**
+     * The picture’s bytes, base64-encoded
+     * @type {string}
+     * @memberof UploadTeamAvatarDto
      */
     data: string;
 }

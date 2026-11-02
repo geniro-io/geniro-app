@@ -216,6 +216,15 @@ export class TeamVersionsService {
   }
 }
 
+/** A restored member keeps the face it has now; a version records none. */
+function facedAs(member: Team['members'][number], current: Team) {
+  const { avatar: _recorded, ...rest } = member;
+  const avatar = current.members.find(
+    (other) => other.id === member.id,
+  )?.avatar;
+  return avatar === undefined ? rest : { ...rest, avatar };
+}
+
 /** `graph`'s members, trigger, blocks, mode, cap and stages under `current`'s name and description. */
 function restoredTeam(graph: Team, current: Team): Team {
   return {
@@ -227,7 +236,7 @@ function restoredTeam(graph: Team, current: Team): Team {
       ? {}
       : { maxActiveTurns: graph.maxActiveTurns }),
     mode: graph.mode,
-    members: graph.members,
+    members: graph.members.map((member) => facedAs(member, current)),
     triggers: graph.triggers,
     instructionBlocks: graph.instructionBlocks,
     ...(graph.stages === undefined ? {} : { stages: graph.stages }),

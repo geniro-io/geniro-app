@@ -19,15 +19,18 @@ describe('slugifyTeamName', () => {
 describe('RESERVED_TEAM_SLUGS', () => {
   // `GET /v1/teams/runs` is the run list, `POST /v1/teams/import`
   // the importer and `POST /v1/teams/instruction-sizes` the inspector's
-  // size readout — static routes Fastify matches before `:slug`.
+  // size readout, `/v1/teams/avatars` the picture upload and read — static
+  // routes Fastify matches before `:slug`.
   it('reserves the static segments the teams controller owns', () => {
     expect([...RESERVED_TEAM_SLUGS].sort()).toEqual([
+      'avatars',
       'import',
       'instruction-sizes',
       'runs',
     ]);
     expect(isReservedTeamSlug('runs')).toBe(true);
     expect(isReservedTeamSlug('import')).toBe(true);
+    expect(isReservedTeamSlug('avatars')).toBe(true);
     expect(isReservedTeamSlug('runs-1')).toBe(false);
   });
 });

@@ -24,6 +24,7 @@ import {
   SLUG_RE,
   type Team,
   TEAM_AGENT_KINDS,
+  TEAM_PORTRAIT_SIZE,
   type TeamLocation,
   type TeamSummary,
   type TeamWire,
@@ -34,6 +35,7 @@ import {
   TEAM_SCHEMA_FILE_NAME,
   teamJsonSchema,
 } from '../utils/team-json-schema';
+import { TEAM_SUFFIX, TEAMS_DIR_NAME } from '../utils/team-library-paths';
 import { isReservedTeamSlug, slugifyTeamName } from '../utils/team-slug';
 import { assertValidTeam } from '../utils/team-validate';
 import {
@@ -41,12 +43,9 @@ import {
   parseTeamYamlDocument,
   serializeTeamYaml,
 } from '../utils/team-yaml';
+import { avatarIdsIn, AvatarStoreService } from './avatar-store.service';
 
-/** `<userData>/` directory the team library lives in. */
-export const TEAMS_DIR_NAME = 'teams';
-
-/** Library file suffix — a team `foo` lives at `<dir>/foo.team.yaml`. */
-export const TEAM_SUFFIX = '.team.yaml';
+export { TEAM_SUFFIX, TEAMS_DIR_NAME };
 
 /** What a library file was named before the rename; an import of one still takes its slug from the name. */
 export const LEGACY_TEAM_SUFFIX = '.geniro.yaml';
@@ -67,6 +66,12 @@ function agentCountsOf(team: Team): { kind: AgentKind; count: number }[] {
   });
 }
 
+function portraitOf(team: Team): TeamSummary['portrait'] {
+  return team.members
+    .slice(0, TEAM_PORTRAIT_SIZE)
+    .map(({ id, name, avatar }) => ({ id, name, avatar }));
+}
+
 export interface TeamStoreOptions {
   /** Library directory override (test seam); default `<userData>/teams`. */
   teamsDir?: string;
@@ -85,9 +90,15 @@ export class TeamStoreService {
   private readonly dir: string;
 
   /** The save in flight per slug — see {@link save}. */
-  private readonly saving = new Map<string, Promise<TeamWire>>();
+  private readonly saving = new Map<
+    string,
+    Promise<{ wire: TeamWire; dropped: Set<string> }>
+  >();
 
-  constructor(options: TeamStoreOptions = {}) {
+  constructor(
+    options: TeamStoreOptions = {},
+    private readonly avatars?: AvatarStoreService,
+  ) {
     this.dir =
       options.teamsDir ?? join(environment.userDataDir, TEAMS_DIR_NAME);
   }
@@ -157,6 +168,7 @@ export class TeamStoreService {
                 memberCount: team.members.length,
                 stageCount: team.stages?.length ?? 0,
                 agentCounts: agentCountsOf(team),
+                portrait: portraitOf(team),
                 updatedAt: stats.mtime.toISOString(),
               };
             } catch (err) {
@@ -262,7 +274,9 @@ export class TeamStoreService {
       .then(() => this.saveNow(slug, team, baseHash));
     this.saving.set(slug, next);
     try {
-      return await next;
+      const { wire, dropped } = await next;
+      void this.avatars?.sweep(dropped);
+      return wire;
     } finally {
       if (this.saving.get(slug) === next) {
         this.saving.delete(slug);
@@ -274,7 +288,7 @@ export class TeamStoreService {
     slug: string,
     team: Team,
     baseHash: string | undefined,
-  ): Promise<TeamWire> {
+  ): Promise<{ wire: TeamWire; dropped: Set<string> }> {
     assertValidTeam(team);
     await mkdir(this.dir, { recursive: true });
     const path = this.fileFor(slug);
@@ -296,7 +310,13 @@ export class TeamStoreService {
     }
     const content = serializeTeamYaml(team, existing);
     await atomicWrite(path, content);
-    return { slug, team, hash: teamFileHash(content) };
+    const kept = avatarIdsIn(content);
+    return {
+      wire: { slug, team, hash: teamFileHash(content) },
+      dropped: new Set(
+        [...avatarIdsIn(existing)].filter((id) => !kept.has(id)),
+      ),
+    };
   }
 
   async delete(slug: string): Promise<void> {
@@ -307,7 +327,9 @@ export class TeamStoreService {
         `No team '${slug}' in the library`,
       );
     }
+    const named = avatarIdsIn(await readFile(path, 'utf8').catch(() => null));
     await rm(path);
+    void this.avatars?.sweep(named);
   }
 
   /**

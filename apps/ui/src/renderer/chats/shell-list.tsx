@@ -1,6 +1,6 @@
 import { CircleStop, SquareTerminal } from 'lucide-react';
 
-import { ConfirmButton } from '../components/confirm-button';
+import { ConfirmActionButton } from '../components/confirm-action-button';
 import { cn } from '../components/ui/utils';
 import { formatElapsed, useSecondsTick } from './live-row';
 import type { ShellRun } from './shell-activity';
@@ -189,40 +189,37 @@ function ShellRow({
           is the only thing here that CHANGES the machine, so it sits outside
           the three readings rather than among them.
 
-          TWO PRESSES, through the app's one `ConfirmButton` — killing a
-          `pnpm dev` is destructive and there is no undo, and these rows are
+          It asks first, in the app's one confirm dialog — killing a `pnpm
+          dev` is destructive and there is no undo, and these rows are
           hover-height in a popover, which is exactly where a stray click
-          lands. The colour carries the arming (`ConfirmButton` paints itself
-          destructive) and the glyph does not change with it: two icons a
-          click apart on a 20px control read as two different controls, where
-          one turning red reads as the same control asking again.
+          lands.
 
           `size-5` OVERRIDES the `icon` size's `size-9` through `cn`'s merge —
           36px beside an 11px monospace row would be the tallest thing in the
           list, and the row's own height is what keeps a dozen commands
           readable at a glance. */}
         {onKill === undefined ? null : (
-          <ConfirmButton
+          <ConfirmActionButton
             data-slot="shell-kill"
             size="icon"
             variant="ghost"
-            // ROUND, like the stop glyph it holds, and tinted in the destructive
-            // colour alone. The ghost hover was the caramel accent behind a red
-            // icon — two warm tones that read as a mistake — and once armed the
-            // resting `text-muted-foreground` beat the variant's white, leaving a
-            // grey (and, hovered, a red) icon on a red fill: the one state that
-            // must be unmistakable was the hardest to see.
-            className="size-5 shrink-0 rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive data-[armed]:text-destructive-foreground data-[armed]:hover:bg-destructive/90 data-[armed]:hover:text-destructive-foreground"
-            // ONE title for both states, since the control has one job and the
-            // press count is part of describing it. The command is named because
-            // the row above truncates, and this is the press that cannot be
-            // taken back.
-            title={`Stop this command — press twice to confirm (${shell.command})`}
+            className="size-5 shrink-0 rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+            title={`Stop this command (${shell.command})`}
             aria-label={`Stop ${shell.command}`}
-            confirmLabel={<CircleStop className="size-3.5" />}
+            question="Stop this command?"
+            description={
+              <span className="flex flex-col gap-2">
+                <code className="font-mono text-xs break-all text-foreground">
+                  {shell.command}
+                </code>
+                It is killed with everything it started. This cannot be undone.
+              </span>
+            }
+            confirmLabel="Stop"
+            busyLabel="Stopping…"
             onConfirm={() => onKill(shell)}>
             <CircleStop className="size-3.5" />
-          </ConfirmButton>
+          </ConfirmActionButton>
         )}
       </div>
       {shell.background || shell.description !== null ? (

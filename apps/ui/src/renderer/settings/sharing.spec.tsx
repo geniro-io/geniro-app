@@ -9,6 +9,7 @@ import {
   type SharingSettings,
 } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
+import { confirmInDialog } from '../__tests__/confirm-in-dialog';
 import type {
   RevokeAllSharesDto,
   Share,
@@ -469,7 +470,7 @@ describe('Settings → Sharing', () => {
     expect(button('Get link')).toBeTruthy();
 
     await press(button('Revoke'));
-    await press(button('Revoke link?'));
+    await press(confirmInDialog('Revoke'));
 
     expect(api.revokeShare).toHaveBeenCalledWith({ shareId: 'share-1' });
   });
@@ -527,7 +528,7 @@ describe('Settings → Sharing', () => {
 
     await press(button('Revoke all'));
     expect(api.revokeAllShares).not.toHaveBeenCalled();
-    await press(button('Revoke all 2?'));
+    await press(confirmInDialog('Revoke all'));
 
     expect(api.revokeAllShares).toHaveBeenCalledWith(
       { revokeSharesDto: { shareIds: ['share-1', 'share-2'] } },
@@ -550,7 +551,7 @@ describe('Settings → Sharing', () => {
     await render(api);
 
     await press(button('Revoke all'));
-    await press(button('Revoke all 1?'));
+    await press(confirmInDialog('Revoke all'));
 
     expect(container.textContent).toContain('daemon unreachable');
     expect(api.listShares).toHaveBeenCalledTimes(2);
@@ -572,7 +573,7 @@ describe('Settings → Sharing', () => {
     await render(api);
 
     await press(button('Revoke all'));
-    await press(button('Revoke all 2?'));
+    await press(confirmInDialog('Revoke all'));
 
     expect(container.textContent).toContain(
       '1 of 2 links could not be removed: ERROR: permission denied',

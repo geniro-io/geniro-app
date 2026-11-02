@@ -8,6 +8,7 @@ import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { DEV_TEAM_VERSIONS } from '../__fixtures__/team-versions';
 import { afterPopstate } from '../__tests__/after-popstate';
 import { withVocabulary } from '../__tests__/agent-vocabulary-api';
+import { confirmInDialog } from '../__tests__/confirm-in-dialog';
 import { withHistoryPages } from '../__tests__/history-page';
 import { emptyRunState } from '../__tests__/run-state';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
@@ -1944,7 +1945,7 @@ describe('Teams — the builder header', () => {
     await menuRow('Versions…');
     await press('Show version 5d06e8b7');
     await press('Restore this version');
-    await press('Restore #1?');
+    await act(async () => confirmInDialog('Restore').click());
 
     expect(restoreTeamVersion).toHaveBeenCalledWith({
       restoreTeamVersionDto: {
@@ -1971,7 +1972,7 @@ describe('Teams — the builder header', () => {
     await menuRow('Versions…');
     await press('Show version 5d06e8b7');
     await press('Restore this version');
-    await press('Restore #1?');
+    await act(async () => confirmInDialog('Restore').click());
 
     expect(document.body.querySelector('[role="alert"]')).not.toBeNull();
     expect(document.body.textContent).toContain(
@@ -1980,10 +1981,8 @@ describe('Teams — the builder header', () => {
   });
 
   it('does not delete on the menu row alone — it asks first', async () => {
-    // A menu row cannot arm itself the way the `ConfirmButton` this replaced
-    // did: it commits and the panel closes. Without the dialog, moving the
-    // delete behind the overflow would have made destroying a team one
-    // click.
+    // A menu row commits and the panel closes. Without the dialog, a delete
+    // behind the overflow would make destroying a team one click.
     await openBuilder();
     await press('Team actions');
     await press('Delete team');
@@ -2149,7 +2148,7 @@ describe('Teams — a team another screen asked to open', () => {
     await menuRow('Versions…');
     await press('Show version 5d06e8b7');
     await press('Restore this version');
-    await press('Restore #1?');
+    await act(async () => confirmInDialog('Restore').click());
     expect(restoreTeamVersion).toHaveBeenCalled();
     listTeams.mockImplementation(async () => [
       summary('dev-team', 'Dev Team'),

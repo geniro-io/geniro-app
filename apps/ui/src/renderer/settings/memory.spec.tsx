@@ -15,6 +15,7 @@ import {
 } from '../__fixtures__/memories';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { withVocabulary } from '../__tests__/agent-vocabulary-api';
+import { confirmInDialog } from '../__tests__/confirm-in-dialog';
 import type {
   MemoryEntry,
   MemoryImportPreviewDto,
@@ -280,9 +281,8 @@ describe('Memory', () => {
   it('forgets, restores and approves through the entry’s status', async () => {
     const api = await render({ api: fakeApi([ACTIVE, WAITING, GONE]) });
 
-    const forget = button(rowOf('m1'), 'Forget');
-    await press(forget);
-    await press(forget);
+    await press(button(rowOf('m1'), 'Forget'));
+    await press(confirmInDialog('Forget'));
     await press(button(rowOf('m3'), 'Restore'));
     await press(
       button(

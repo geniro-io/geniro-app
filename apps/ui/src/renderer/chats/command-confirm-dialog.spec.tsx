@@ -217,7 +217,13 @@ describe('CommandConfirmDialog', () => {
     expect(shelf.api.pressChatAction).not.toHaveBeenCalled();
 
     await shelf.click(shelf.button('Cancel'));
-    await shelf.click(shelf.chip('Ping'));
+    await shelf.click(
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          '[data-slot="action-row"] > button',
+        ),
+      ].find((row) => row.textContent?.includes('Ping')),
+    );
 
     expect(shelf.api.pressChatAction).toHaveBeenCalledTimes(1);
     expect(shelf.dialog()).toBeNull();

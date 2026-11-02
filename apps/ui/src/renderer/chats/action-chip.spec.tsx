@@ -138,34 +138,34 @@ function harness(
 }
 
 describe('ChatActionChips', () => {
-  it('one-shot chip leaves the shelf after press; overflow collapses past the fit', async () => {
-    const shelf = harness([
-      action(3, 'Deploy'),
-      action(2, 'Merged'),
-      action(1, 'Ping', false),
-    ]);
+  it('collapses several buttons into ONE chip with their count, and a lone one is its own chip', async () => {
+    const shelf = harness([action(2, 'Deploy'), action(1, 'Merged')]);
     await shelf.render();
 
-    // Newest first, two in the row, the rest behind `All 3`.
-    expect(shelf.chips()).toEqual(['Deploy', 'Merged']);
-    const overflow = shelf.container.querySelector(
-      '[data-slot="action-overflow"]',
-    );
-    expect(overflow?.textContent).toContain('All3');
-    expect(overflow?.className).not.toContain('sm:hidden');
+    expect(shelf.chips()).toEqual([]);
+    const overflow = (): Element | null =>
+      shelf.container.querySelector('[data-slot="action-overflow"]');
+    expect(overflow()?.textContent).toBe('2');
+
+    shelf.server.actions = [action(2, 'Deploy')];
+    await shelf.reread();
+
+    expect(shelf.chips()).toEqual(['Deploy']);
+    expect(overflow()).toBeNull();
+  });
+
+  it('a one-shot chip leaves the shelf after its press', async () => {
+    const shelf = harness([action(1, 'Merged')]);
+    await shelf.render();
 
     await shelf.press('Merged');
 
     expect(shelf.api.pressChatAction).toHaveBeenCalledWith({
       runId: 'run',
-      seq: 2,
+      seq: 1,
       pressActionDto: { clientMessageId: expect.any(String) as string },
     });
-    expect(shelf.chips()).toEqual(['Deploy', 'Ping']);
-    // Two left fit the row, so the list is for the phone alone.
-    expect(
-      shelf.container.querySelector('[data-slot="action-overflow"]')?.className,
-    ).toContain('sm:hidden');
+    expect(shelf.chips()).toEqual([]);
   });
 
   it('a reusable chip shows a brief check after a press, then returns', async () => {
@@ -184,17 +184,22 @@ describe('ChatActionChips', () => {
     expect(shelf.chips()).toEqual(['Ping']);
   });
 
-  it('keeps the shelf chip height on a phone, for the chips and their `All N`', async () => {
-    const shelf = harness([action(2, 'Deploy'), action(1, 'Merged')]);
-    await shelf.render();
+  it('keeps the shelf chip height on a phone, for a chip and the count chip', async () => {
+    const lone = harness([action(1, 'Merged')]);
+    await lone.render();
+    const chip = lone.container.querySelector<HTMLElement>(
+      '[data-slot="action-chip"]',
+    );
+    act(() => root!.unmount());
+    const many = harness([action(2, 'Deploy'), action(1, 'Merged')]);
+    await many.render();
+    const count = many.container.querySelector<HTMLElement>(
+      '[data-slot="action-overflow"] button',
+    );
 
-    const buttons = [
-      ...shelf.container.querySelectorAll<HTMLElement>(
-        '[data-slot="action-chip"], [data-slot="action-overflow"] button',
-      ),
-    ];
-    expect(buttons).toHaveLength(3);
-    for (const button of buttons) {
+    const buttons = [chip, count];
+    expect(buttons.every((button) => button !== null)).toBe(true);
+    for (const button of buttons as HTMLElement[]) {
       expect(button.className).toContain('h-[22px]');
       expect(button.className).not.toMatch(/max-sm:h-/);
     }
@@ -262,8 +267,9 @@ describe('ChatActionChips', () => {
     });
     expect(shelf.api.pressChatAction).not.toHaveBeenCalled();
     expect(
-      shelf.container.querySelector('[data-slot="action-overflow"]')?.className,
-    ).toContain('sm:hidden');
+      shelf.container.querySelector('[data-slot="action-overflow"] button')
+        ?.textContent,
+    ).toBe('2');
   });
 
   it('re-reads the live set when the press finds the button gone', async () => {
@@ -407,7 +413,7 @@ describe('ActionChip attribution', () => {
     await act(async () =>
       root!.render(
         <ChatActionChips
-          actions={[callee, action(1, 'Ping')]}
+          actions={[callee]}
           phases={new Map()}
           onPress={() => {}}
           onDismiss={() => {}}
@@ -415,15 +421,28 @@ describe('ActionChip attribution', () => {
       ),
     );
 
-    const [chip, own] = [
-      ...container.querySelectorAll('[data-slot="action-chip"]'),
-    ];
+    const chip = container.querySelector('[data-slot="action-chip"]');
     expect(chip?.textContent).toBe('Merged· Engineer');
     expect(chip?.getAttribute('aria-label')).toBe(
       'Merged, from Engineer, sends a message',
     );
     expect(chip?.getAttribute('title')).toContain('From Engineer');
-    expect(own?.querySelector('[data-slot="action-agent"]')).toBeNull();
+
+    await act(async () =>
+      root!.render(
+        <ChatActionChips
+          actions={[action(1, 'Ping')]}
+          phases={new Map()}
+          onPress={() => {}}
+          onDismiss={() => {}}
+        />,
+      ),
+    );
+    expect(
+      container.querySelector(
+        '[data-slot="action-chip"] [data-slot="action-agent"]',
+      ),
+    ).toBeNull();
 
     // The list behind `All N` names it too.
     await act(async () =>

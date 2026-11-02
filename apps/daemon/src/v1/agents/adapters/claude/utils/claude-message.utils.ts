@@ -245,14 +245,15 @@ function describesNoWork(
  *   {'pending': 3, 'connected': 8, 'needs-auth': 1}
  *   {name: 'claude.ai Wispr Flow', status: 'needs-auth'}
  *
- * `loading` is deliberately NOT here: it is cursor's own sixth status, and
- * nothing has observed claude reporting one. This map holds what this CLI was
- * seen to send.
+ * init's `pending` is `loading`, never the app's `pending` (awaiting approval):
+ * measured on 2.1.316, init reads `pending` for a user-scope server and a
+ * claude.ai connector that were still connecting, neither of which can need
+ * approval. Only `claude mcp list` says which servers await approval.
  */
 const INIT_STATUSES: Readonly<Record<string, AgentMcpServerStatus>> = {
   connected: 'connected',
   failed: 'failed',
-  pending: 'pending',
+  pending: 'loading',
   disabled: 'disabled',
   'needs-auth': 'needs_auth',
 };

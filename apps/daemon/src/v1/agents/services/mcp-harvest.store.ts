@@ -74,10 +74,9 @@ const STATUSES: ReadonlySet<string> = new Set<AgentMcpServerStatus>([
  *   else, so the command line is unknown here. `AgentMcpService` fills it from
  *   a previous `mcp list` reading when it has one.
  * - **A settled status.** Init is a SNAPSHOT at turn start: a server still
- *   connecting reads `pending` and nothing later in that stream ever updates it
- *   (probe-verified on 2.1.222 — no MCP message follows init). `pending` here
- *   means "was still connecting when the turn began", which is true and useful,
- *   and the explicit Reconnect control is what settles it.
+ *   connecting reads `loading` and nothing later in that stream ever updates it
+ *   (probe-verified on 2.1.222 — no MCP message follows init). A harvest with
+ *   such a row only paints the panel while `AgentMcpService` dials the folder.
  */
 @Injectable()
 export class McpHarvestStore extends HarvestStore<AgentMcpServer> {

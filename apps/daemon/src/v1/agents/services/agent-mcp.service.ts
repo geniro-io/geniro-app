@@ -543,7 +543,7 @@ export class AgentMcpService {
     // It PAINTS a refresh without ANSWERING one — the same split the cache
     // already gets one branch down, and for the same reason. Answering would
     // make Reconnect inert (init reports the state at TURN START, so a server
-    // still connecting stays `pending` in the harvest for as long as it lives);
+    // still connecting stays `loading` in the harvest for as long as it lives);
     // painting only decides what is on screen while the re-dial runs, which
     // used to be nothing at all for the whole ~30s.
     // UNION rather than first-non-null, because the two sources know different
@@ -611,13 +611,18 @@ export class AgentMcpService {
     //
     // Skipped on `refresh`, which is the one thing that must always reach the
     // CLI. Init reports the state at TURN START and nothing later updates it,
-    // so a server that was still connecting stays `pending` in the harvest for
-    // as long as the harvest lives — and Reconnect is the only way it ever
-    // settles. Serving the harvest here would make that button inert.
+    // so a server that was still connecting stays `loading` in the harvest for
+    // as long as the harvest lives. Such a harvest only paints (`previous`)
+    // while the dial settles it: a server init saw connecting may since have
+    // connected, failed, or be one awaiting approval, which only the listing
+    // tells apart.
     const harvested = refresh
       ? null
       : this.harvest.get(agent, projectDir, profile);
-    if (harvested !== null) {
+    if (
+      harvested !== null &&
+      !harvested.some((row) => row.status === 'loading')
+    ) {
       return {
         projectDir,
         adapter,

@@ -2075,13 +2075,13 @@ describe('the turn harvest', () => {
 
   it('still dials when the user asks for a refresh', async () => {
     // Reconnect is the ONE way a settled status is re-read: init reports the
-    // state at turn start and nothing later updates it, so a `pending` server
-    // stays pending in the harvest forever. Serving the harvest here would
+    // state at turn start and nothing later updates it, so a `failed` server
+    // stays failed in the harvest forever. Serving the harvest here would
     // make the button inert.
     const cwd = realDir();
     const { service, listMcpServers } = harness(
       () => Promise.resolve([server('dialled')]),
-      { harvest: harvestOf(cwd, [harvested('codegraph', 'pending')]) },
+      { harvest: harvestOf(cwd, [harvested('codegraph', 'failed')]) },
     );
 
     const listing = await service.list(AgentKind.Claude, cwd, {
@@ -2090,6 +2090,36 @@ describe('the turn harvest', () => {
 
     expect(listMcpServers).toHaveBeenCalledTimes(1);
     expect(listing.servers.map((s) => s.name)).toEqual(['dialled']);
+  });
+
+  it('dials instead of answering when the turn saw a server still connecting', async () => {
+    const cwd = realDir();
+    const { service, listMcpServers } = harness(
+      () =>
+        Promise.resolve([
+          server('codegraph'),
+          server('datadog-mcp'),
+          { ...server('project-only'), status: 'pending' as const },
+        ]),
+      {
+        harvest: harvestOf(cwd, [
+          harvested('codegraph'),
+          harvested('datadog-mcp', 'loading'),
+          harvested('project-only', 'loading'),
+        ]),
+      },
+    );
+
+    const listing = await service.list(AgentKind.Claude, cwd);
+
+    expect(listMcpServers).toHaveBeenCalledTimes(1);
+    expect(
+      Object.fromEntries(listing.servers.map((s) => [s.name, s.status])),
+    ).toEqual({
+      codegraph: 'connected',
+      'datadog-mcp': 'connected',
+      'project-only': 'pending',
+    });
   });
 
   it('prefers a FRESH dialled reading over the harvest', async () => {

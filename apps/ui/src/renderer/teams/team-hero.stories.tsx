@@ -37,6 +37,16 @@ type Story = StoryObj<typeof meta>;
 
 export const Measured: Story = {};
 
+export const LongDescription: Story = {
+  args: {
+    description: Array.from(
+      { length: 8 },
+      () =>
+        'The Senior Engineer owns a piece of work end to end — it scopes it, builds from a spec when the user wanted one, debugs a bug of unknown cause and reports a computed delivery verdict.',
+    ).join(' '),
+  },
+};
+
 export const NotMeasured: Story = { args: { figures: UNMEASURED_FIGURES } };
 
 export const NeedsSetup: Story = {
@@ -47,13 +57,13 @@ export const NeedsSetup: Story = {
         problems={[
           {
             key: 'a',
-            member: { id: 'ada', name: 'Ada' },
+            members: [{ id: 'ada', name: 'Ada' }],
             message: 'MCP github needs sign-in',
             level: 'warning',
           },
           {
             key: 'b',
-            member: { id: 'linus', name: 'Linus' },
+            members: [{ id: 'linus', name: 'Linus' }],
             message: 'codex is not installed',
             level: 'error',
           },

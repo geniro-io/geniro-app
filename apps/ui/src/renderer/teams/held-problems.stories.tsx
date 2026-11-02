@@ -53,4 +53,16 @@ export const WarningsOnly: Story = {
   },
 };
 
+export const ManyProblems: Story = {
+  args: {
+    role: 'status',
+    problems: Array.from({ length: 24 }, (_, index) => ({
+      key: `mcp-${index}`,
+      level: 'warning' as const,
+      message: `MCP server "server-${index + 1}" needs signing in for this member.`,
+      fix: { label: 'Sign in', run: () => {} },
+    })),
+  },
+};
+
 export const Nothing: Story = { args: { problems: [] } };

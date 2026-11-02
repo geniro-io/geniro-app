@@ -1,15 +1,20 @@
 import { Injectable } from '@nestjs/common';
 
+import type { TurnInstructionInput } from '../../agents/adapters/adapter.types';
+import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import {
   approxInstructionTokens,
   joinTurnInstructionParts,
 } from '../../agents/utils/agent-instructions';
 import type {
+  AgentInstructionSize,
   ComposedInstructionBlock,
+  InstructionBlockSize,
   InstructionSizePart,
   InstructionSizesWire,
   MemberInstructionSize,
+  ProjectInstructionSizesWire,
   Team,
   TeamMember,
 } from '../teams.types';
@@ -19,6 +24,14 @@ import {
 } from '../utils/member-instructions';
 import { stageMapOf } from '../utils/stage-text';
 import { calleesOf, onDemandMemberIds } from '../utils/team-roster';
+
+/** What every run in one project carries, whatever its CLI or team. */
+export interface ProjectInstructionSizesInput {
+  customInstructions?: string;
+  replyLanguage?: string;
+  projectInstructions?: string;
+  memoryIndex?: string;
+}
 
 export interface InstructionSizesInput {
   team: Pick<
@@ -73,7 +86,25 @@ export class InstructionSizesService {
         }),
       );
     }
-    return { members };
+    return { members, blocks: blockSizesOf(team, blocksOf) };
+  }
+
+  /**
+   * The block each CLI's turn in a project carries before any team or task
+   * adds to it: the preamble, the user's own settings, the project's
+   * instructions and the memory index a run there would snapshot.
+   */
+  measureProject(
+    input: ProjectInstructionSizesInput,
+  ): ProjectInstructionSizesWire {
+    return {
+      agents: [...this.adapters.all().entries()].map(
+        ([agent, adapter]): AgentInstructionSize => ({
+          agent,
+          ...measuredParts(adapter, { ...input }),
+        }),
+      ),
+    };
   }
 
   private measureMember(
@@ -137,4 +168,41 @@ export class InstructionSizesService {
 
 function sizeOf(chars: number): { chars: number; approxTokens: number } {
   return { chars, approxTokens: approxInstructionTokens(chars) };
+}
+
+function measuredParts(
+  adapter: AgentAdapter,
+  input: TurnInstructionInput,
+): Omit<AgentInstructionSize, 'agent'> {
+  const parts = adapter.turnInstructionParts(input, true);
+  const totalChars = joinTurnInstructionParts(parts).length;
+  const measured = parts.map((part): InstructionSizePart => ({
+    source: part.source,
+    ...sizeOf(part.text.length),
+  }));
+  return {
+    totalChars,
+    approxTokens: sizeOf(totalChars).approxTokens,
+    separatorChars:
+      totalChars - measured.reduce((sum, part) => sum + part.chars, 0),
+    parts: measured,
+  };
+}
+
+/** Every block in the team's order, with how many members' turns carry it. */
+function blockSizesOf(
+  team: Pick<Team, 'members' | 'instructionBlocks'>,
+  blocksOf: ReadonlyMap<string, readonly ComposedInstructionBlock[]>,
+): InstructionBlockSize[] {
+  const reaches = new Map<string, number>();
+  for (const member of team.members) {
+    for (const block of blocksOf.get(member.id) ?? []) {
+      reaches.set(block.blockId, (reaches.get(block.blockId) ?? 0) + 1);
+    }
+  }
+  return team.instructionBlocks.map((block) => ({
+    blockId: block.id,
+    ...sizeOf(block.text.trim().length),
+    reaches: reaches.get(block.id) ?? 0,
+  }));
 }

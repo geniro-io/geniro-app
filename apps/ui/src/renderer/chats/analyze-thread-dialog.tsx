@@ -1,4 +1,4 @@
-import { FolderOpen, Sparkles, Workflow as TeamIcon } from 'lucide-react';
+import { FolderOpen, Sparkles, UsersRound as TeamIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import type {

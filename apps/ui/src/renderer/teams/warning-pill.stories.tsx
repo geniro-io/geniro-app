@@ -10,14 +10,14 @@ const meta = {
     problems: [
       {
         key: 'ada-mcp',
-        member: { id: 'ada', name: 'Ada' },
+        members: [{ id: 'ada', name: 'Ada' }],
         message: 'MCP github needs sign-in',
         level: 'warning',
         fix: { label: 'Fix', run: () => {} },
       },
       {
         key: 'linus-cli',
-        member: { id: 'linus', name: 'Linus' },
+        members: [{ id: 'linus', name: 'Linus' }],
         message: 'codex is not installed on this Mac',
         level: 'error',
         fix: { label: 'Open Settings', run: () => {} },
@@ -37,9 +37,38 @@ export const Informing: Story = {
     problems: [
       {
         key: 'grace-role',
-        member: { id: 'grace', name: 'Grace' },
+        members: [{ id: 'grace', name: 'Grace' }],
         message: 'Has no role — the others will not know what to ask her',
         level: 'warning',
+      },
+    ],
+  },
+};
+
+export const SharedAccount: Story = {
+  args: {
+    problems: [
+      {
+        key: 'servers',
+        members: [
+          { id: 'manager', name: 'Manager' },
+          { id: 'senior', name: 'Senior Engineer' },
+          { id: 'middle', name: 'Middle Engineer' },
+          { id: 'researcher', name: 'Researcher' },
+          { id: 'qa', name: 'QA' },
+        ],
+        message: '24 MCP servers need signing in.',
+        level: 'warning',
+        account: 'Claude Code · default profile',
+        details: [
+          'claude.ai Rebrandly',
+          'claude.ai Document360',
+          'claude.ai Zoom for Claude',
+          'claude.ai Luma',
+          'claude.ai Miro',
+          'claude.ai Asana',
+        ],
+        fix: { label: 'Open MCP', run: () => {} },
       },
     ],
   },

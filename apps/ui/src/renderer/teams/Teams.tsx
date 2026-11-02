@@ -109,10 +109,12 @@ import {
 } from './team-doc';
 import { teamFiguresOf, TeamHero } from './team-hero';
 import { TeamMemoryTab, TeamStatsTab } from './team-insights';
+import { TeamInstructionSizes } from './team-instruction-sizes';
 import { type TeamMemoryFate, TeamMemoryFatePick } from './team-memory-fate';
 import { TeamMemoryPanel } from './team-memory-panel';
 import { TeamMetaDialog } from './team-meta-dialog';
 import { TeamPage, TeamSection, type TeamTab } from './team-page';
+import { groupMemberFindings } from './team-problems';
 import { validateTeam } from './team-validate';
 import { TeamVersionsDialog } from './team-versions-dialog';
 import { TeamsLibrary } from './teams-library';
@@ -126,7 +128,11 @@ import { useLibraryHealth, useTeamHealth } from './use-team-health';
 import { useTeamMemories } from './use-team-memories';
 import { useTeamStats } from './use-team-stats';
 import { useTeamVersions } from './use-team-versions';
-import { type TeamProblem, WarningPill } from './warning-pill';
+import {
+  type TeamProblem,
+  type TeamProblemMember,
+  WarningPill,
+} from './warning-pill';
 
 const NO_MEMBERS: readonly TeamMember[] = [];
 /**
@@ -1270,7 +1276,7 @@ export function Teams({
     api,
     activeSlug ?? '',
     liveSnapshot,
-    selected !== null && active,
+    active && (selected !== null || tab === 'team'),
   );
   const blockName = useLatestCallback(
     (blockId: string): string => {
@@ -1404,6 +1410,11 @@ export function Teams({
       teamHealth.health?.members.find((entry) => entry.memberId === memberId),
       signIn.get(memberId) ?? [],
     );
+  const problemMemberOf = (member: TeamMember): TeamProblemMember => ({
+    id: member.id,
+    name: labels.get(member.id) ?? member.id,
+    avatar: member.avatar,
+  });
   const teamProblems: TeamProblem[] = [
     ...members.flatMap((member): TeamProblem[] => {
       const issues = problems.members.get(member.id) ?? [];
@@ -1412,33 +1423,26 @@ export function Teams({
         : [
             {
               key: `member:${member.id}`,
-              member: {
-                id: member.id,
-                name: labels.get(member.id) ?? member.id,
-                avatar: member.avatar,
-              },
+              members: [problemMemberOf(member)],
               message: issues[0]!.message,
               level: 'error',
               fix: { label: 'Fix', run: () => openMember(member.id) },
             },
           ];
     }),
-    ...members.flatMap((member): TeamProblem[] =>
-      setupProblemsOf(member.id).map((problem) => ({
-        key: problem.key,
-        member: {
-          id: member.id,
-          name: labels.get(member.id) ?? member.id,
-          avatar: member.avatar,
-        },
-        message: problem.message,
-        level: problem.level,
-        fix: memberFixes.fixOf(problem),
-      })),
+    ...groupMemberFindings(
+      members.flatMap((member) =>
+        setupProblemsOf(member.id).map((problem) => ({
+          member: problemMemberOf(member),
+          problem,
+        })),
+      ),
+      agentLabelOf,
+      memberFixes.fixOf,
     ),
     ...teamWideProblems.map((message): TeamProblem => ({
       key: `team:${message}`,
-      member: null,
+      members: [],
       message,
       level: 'error',
     })),
@@ -1728,9 +1732,23 @@ export function Teams({
             members={members}
             issues={problems.blocks}
             warnings={blockWarnings}
+            blockSizes={instructionSizes.blocks}
             onAdd={addBlock}
             onChange={patchBlock}
             onRemove={removeBlock}
+          />
+        </TeamSection>
+
+        <TeamSection
+          slot="team-instruction-size"
+          title="Instruction size"
+          hint="What each member’s every turn carries before its prompt: Geniro’s preamble, your custom instructions, these blocks and the member’s own. A project adds its instructions on top — its page measures them.">
+          <TeamInstructionSizes
+            members={members}
+            labels={labels}
+            sizes={instructionSizes.sizes}
+            loading={instructionSizes.loading}
+            error={instructionSizes.error}
           />
         </TeamSection>
       </div>

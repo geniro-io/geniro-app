@@ -779,6 +779,45 @@ export interface AgentIdentityCapability {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface AgentInstructionSize
+ */
+export interface AgentInstructionSize {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof AgentInstructionSize
+     */
+    agent: AgentKind;
+    /**
+     * Length of the composed block, exactly
+     * @type {number}
+     * @memberof AgentInstructionSize
+     */
+    totalChars: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof AgentInstructionSize
+     */
+    approxTokens: number;
+    /**
+     * The paragraph breaks between parts — totalChars less the parts
+     * @type {number}
+     * @memberof AgentInstructionSize
+     */
+    separatorChars: number;
+    /**
+     * 
+     * @type {Array<InstructionSizePart>}
+     * @memberof AgentInstructionSize
+     */
+    parts: Array<InstructionSizePart>;
+}
+
+
 
 /**
  * 
@@ -4501,6 +4540,37 @@ export interface InstructionBlockAudience {
 /**
  * 
  * @export
+ * @interface InstructionBlockSize
+ */
+export interface InstructionBlockSize {
+    /**
+     * 
+     * @type {string}
+     * @memberof InstructionBlockSize
+     */
+    blockId: string;
+    /**
+     * Length of the text composed into a turn — 0 for a blank block
+     * @type {number}
+     * @memberof InstructionBlockSize
+     */
+    chars: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof InstructionBlockSize
+     */
+    approxTokens: number;
+    /**
+     * How many members’ turns carry it
+     * @type {number}
+     * @memberof InstructionBlockSize
+     */
+    reaches: number;
+}
+/**
+ * 
+ * @export
  * @interface InstructionSizePart
  */
 export interface InstructionSizePart {
@@ -4566,6 +4636,12 @@ export interface InstructionSizesDto {
      * @memberof InstructionSizesDto
      */
     members: Array<MemberInstructionSize>;
+    /**
+     * 
+     * @type {Array<InstructionBlockSize>}
+     * @memberof InstructionSizesDto
+     */
+    blocks: Array<InstructionBlockSize>;
 }
 /**
  * 
@@ -5124,6 +5200,25 @@ export interface MeasureInstructionSizesDto {
      * 
      * @type {string}
      * @memberof MeasureInstructionSizesDto
+     */
+    replyLanguage?: string;
+}
+/**
+ * 
+ * @export
+ * @interface MeasureProjectInstructionSizesDto
+ */
+export interface MeasureProjectInstructionSizesDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof MeasureProjectInstructionSizesDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MeasureProjectInstructionSizesDto
      */
     replyLanguage?: string;
 }
@@ -6781,6 +6876,19 @@ export interface ProjectForFolderDtoProject {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface ProjectInstructionSizesDto
+ */
+export interface ProjectInstructionSizesDto {
+    /**
+     * 
+     * @type {Array<AgentInstructionSize>}
+     * @memberof ProjectInstructionSizesDto
+     */
+    agents: Array<AgentInstructionSize>;
+}
 /**
  * 
  * @export

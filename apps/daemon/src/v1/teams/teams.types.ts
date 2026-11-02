@@ -1853,11 +1853,63 @@ export const MemberInstructionSizeSchema = z
   .meta({ id: 'MemberInstructionSize' });
 export type MemberInstructionSize = z.infer<typeof MemberInstructionSizeSchema>;
 
-/** POST /v1/teams/instruction-sizes — one entry per member. */
+/** One team instruction block's own text, measured once whoever it reaches. */
+export const InstructionBlockSizeSchema = z
+  .object({
+    blockId: z.string(),
+    chars: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe(
+        'Length of the text composed into a turn — 0 for a blank block',
+      ),
+    approxTokens: z.number().int().nonnegative(),
+    reaches: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe('How many members’ turns carry it'),
+  })
+  .meta({ id: 'InstructionBlockSize' });
+export type InstructionBlockSize = z.infer<typeof InstructionBlockSizeSchema>;
+
+/** POST /v1/teams/instruction-sizes — one entry per member, one per block. */
 export const InstructionSizesWireSchema = z.object({
   members: z.array(MemberInstructionSizeSchema),
+  blocks: z.array(InstructionBlockSizeSchema),
 });
 export type InstructionSizesWire = z.infer<typeof InstructionSizesWireSchema>;
+
+/** What one CLI's every turn in a project carries before the prompt. */
+export const AgentInstructionSizeSchema = z
+  .object({
+    agent: AgentKindSchema,
+    totalChars: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe('Length of the composed block, exactly'),
+    approxTokens: z.number().int().nonnegative(),
+    separatorChars: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe(
+        'The paragraph breaks between parts — totalChars less the parts',
+      ),
+    parts: z.array(InstructionSizePartSchema),
+  })
+  .meta({ id: 'AgentInstructionSize' });
+export type AgentInstructionSize = z.infer<typeof AgentInstructionSizeSchema>;
+
+/** POST /v1/projects/:projectId/instruction-sizes — one entry per CLI. */
+export const ProjectInstructionSizesWireSchema = z.object({
+  agents: z.array(AgentInstructionSizeSchema),
+});
+export type ProjectInstructionSizesWire = z.infer<
+  typeof ProjectInstructionSizesWireSchema
+>;
 
 export const HEALTH_PROBLEM_KINDS = [
   'cli_missing',

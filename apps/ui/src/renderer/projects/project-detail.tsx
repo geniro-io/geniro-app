@@ -20,9 +20,11 @@ import { AutopilotControl } from '../tasks/autopilot-control';
 import { ProjectRunConfig } from '../tasks/project-run-config';
 import { taskStatusMeta } from '../tasks/task-status';
 import { AutopilotPill, ProjectMonogram, RunsAs } from './project-card';
+import { ProjectInstructionSizes } from './project-instruction-sizes';
 import { ProjectInstructionsForm } from './project-instructions-form';
 import { ProjectRunConfigs } from './project-run-configs';
 import { ProjectSection } from './project-section';
+import { useProjectInstructionSizes } from './use-project-instruction-sizes';
 import type { ProjectQueueReading } from './use-project-queues';
 import type { RunConfigSources } from './use-run-config-sources';
 
@@ -154,6 +156,11 @@ export function ProjectDetail({
   };
 
   const [runConfigOpen, setRunConfigOpen] = useState(false);
+  const instructionSizes = useProjectInstructionSizes(
+    apis?.projects ?? null,
+    project.id,
+    `${project.name}\u0000${project.instructionsRevision}`,
+  );
 
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -350,6 +357,12 @@ export function ProjectDetail({
             </div>
           </ProjectSection>
 
+          <ProjectInstructionSizes
+            agents={instructionSizes.agents}
+            loading={instructionSizes.loading}
+            error={instructionSizes.error}
+          />
+
           <ProjectRunConfigs
             project={project}
             projects={projects}
@@ -373,7 +386,7 @@ export function ProjectDetail({
         Its tasks are deleted with it. This cannot be undone — there is no
         trash, and nothing in the app can bring them back.
         {linkedCount > 0
-          ? ` ${linkedCount} run ${linkedCount === 1 ? 'configuration is' : 'configurations are'} unlinked.`
+          ? ` Its ${linkedCount} run ${linkedCount === 1 ? 'configuration is' : 'configurations are'} kept on the Projects page, waiting for another project.`
           : null}
       </ConfirmDialog>
     </>

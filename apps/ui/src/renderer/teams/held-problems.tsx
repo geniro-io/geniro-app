@@ -1,4 +1,5 @@
 import { TriangleAlert } from 'lucide-react';
+import { useState } from 'react';
 
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
@@ -16,6 +17,8 @@ export interface HeldProblem {
  * {@link HeldProblem} is a setup finding; only an `error` stops a run.
  */
 export type HeldProblemEntry = string | HeldProblem;
+
+export const HELD_PROBLEMS_SHOWN = 4;
 
 function asProblem(entry: HeldProblemEntry): HeldProblem {
   return typeof entry === 'string'
@@ -52,11 +55,14 @@ export function HeldProblems({
   heading?: string;
   className?: string;
 }): React.JSX.Element | null {
+  const [showAll, setShowAll] = useState(false);
   if (problems.length === 0) {
     return null;
   }
   const rows = problems.map(asProblem);
   const blocking = rows.some((problem) => problem.level === 'error');
+  const capped = rows.length > HELD_PROBLEMS_SHOWN + 1;
+  const shown = capped && !showAll ? rows.slice(0, HELD_PROBLEMS_SHOWN) : rows;
   return (
     <div
       role={role}
@@ -74,8 +80,10 @@ export function HeldProblems({
         <TriangleAlert aria-hidden="true" className="size-3.5" />
         {heading ?? headingOf(problems)}
       </p>
-      <ul className="flex flex-col gap-1 text-foreground/80">
-        {rows.map((problem) => (
+      <ul
+        data-slot="held-problems-list"
+        className="-mr-2 flex max-h-[min(40vh,20rem)] flex-col gap-1 overflow-y-auto pr-2 text-foreground/80">
+        {shown.map((problem) => (
           <li
             key={problem.key}
             data-level={problem.level}
@@ -94,6 +102,17 @@ export function HeldProblems({
           </li>
         ))}
       </ul>
+      {capped ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          aria-expanded={showAll}
+          className="h-7 self-start rounded-control px-2 text-sm text-muted-foreground"
+          onClick={() => setShowAll((open) => !open)}>
+          {showAll ? 'Show fewer' : `Show all ${rows.length}`}
+        </Button>
+      ) : null}
     </div>
   );
 }

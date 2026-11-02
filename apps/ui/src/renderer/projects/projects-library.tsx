@@ -23,6 +23,7 @@ export function ProjectsLibrary({
   queues,
   onOpen,
   onNew,
+  footer = null,
 }: {
   projects: readonly ProjectDto[] | null;
   banner?: React.ReactNode;
@@ -34,6 +35,8 @@ export function ProjectsLibrary({
   queues: ReadonlyMap<string, ProjectQueueReading>;
   onOpen: (projectId: string) => void;
   onNew: () => void;
+  /** Drawn under the gallery once the list has been read. */
+  footer?: React.ReactNode;
 }): React.JSX.Element {
   const newProject = (
     <Button
@@ -84,6 +87,7 @@ export function ProjectsLibrary({
             ))}
           </ul>
         )}
+        {projects === null ? null : footer}
       </div>
     </div>
   );

@@ -8,7 +8,7 @@ import {
   ScrollText,
   Sparkles,
   Table2,
-  Workflow as TeamIcon,
+  UsersRound as TeamIcon,
 } from 'lucide-react';
 
 import { cn } from '../components/ui/utils';

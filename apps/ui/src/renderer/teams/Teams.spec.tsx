@@ -1657,6 +1657,18 @@ describe('Teams — a member’s always-on instruction size', () => {
             { source: 'instructions', chars: 4, approxTokens: 1 },
           ],
         },
+        {
+          memberId: 'lead',
+          agent: 'claude',
+          turn: 'own',
+          totalChars: 4_800,
+          approxTokens: 1_200,
+          separatorChars: 0,
+          parts: [{ source: 'preamble', chars: 4_800, approxTokens: 1_200 }],
+        },
+      ],
+      blocks: [
+        { blockId: 'settings', chars: 6_000, approxTokens: 1_500, reaches: 1 },
       ],
     }));
   });
@@ -1760,8 +1772,31 @@ describe('Teams — a member’s always-on instruction size', () => {
     ).toBe('Russian');
   });
 
-  it('asks nothing while no member is selected', async () => {
+  it('shows each block’s tokens and every member’s total on the Team tab, with no member selected', async () => {
     await openBuilder();
+    await wait(700);
+
+    expect(measureInstructionSizes).toHaveBeenCalled();
+    expect(
+      container.querySelector(
+        '[data-block-id="settings"] [data-slot="block-tokens"]',
+      )?.textContent,
+    ).toBe('~1.5k tokens');
+    const totals = container.querySelector(
+      '[data-slot="team-instruction-sizes"]',
+    );
+    expect(
+      totals?.querySelector('[data-slot="team-instruction-total"]')
+        ?.textContent,
+    ).toBe('~1.8k tokens');
+    expect(totals?.textContent).toContain('Manager');
+    expect(totals?.textContent).toContain('~603');
+    expect(totals?.textContent).toContain('~1.2k');
+  });
+
+  it('asks nothing on another tab while no member is selected', async () => {
+    await openBuilder();
+    await press('Statistics');
     await wait(700);
 
     expect(measureInstructionSizes).not.toHaveBeenCalled();

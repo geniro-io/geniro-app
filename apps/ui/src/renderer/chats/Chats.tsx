@@ -747,6 +747,7 @@ export function Chats({
   onOpenSettings,
   onOpenMemory,
   onOpenTeam,
+  onOpenProject,
   onOpenTerminal,
   onFolderChange,
   onPhoneDetailChange,
@@ -781,6 +782,12 @@ export function Chats({
    * saved proposal card's "Open team". Absent, the card offers none.
    */
   onOpenTeam?: (slug: string) => void;
+  /**
+   * Open the Projects screen on one project, or on the gallery for null — where
+   * the + menu's "Manage configurations…" leads, since each project keeps its
+   * own. Absent, the menu opens the configurations dialog instead.
+   */
+  onOpenProject?: (projectId: string | null) => void;
   /**
    * A thread another screen has asked to have opened, or null.
    *
@@ -5513,10 +5520,7 @@ export function Chats({
             contextWindows,
             modelParameters,
             approval: approvalMode,
-            projectId:
-              composerProject.source === 'folder'
-                ? null
-                : composerProject.projectId,
+            projectId: composerProject.projectId,
           }),
     [
       composerProject,
@@ -9334,6 +9338,7 @@ export function Chats({
                           means the plain new thread. */}
                       <NewChatButton
                         configs={runConfigs}
+                        projects={projects}
                         onNewChat={() => {
                           newChat();
                           setMobileComposeOpen(true);
@@ -9346,6 +9351,10 @@ export function Chats({
                           setRunConfigPickerOpen(true);
                         }}
                         onManage={() => {
+                          if (onOpenProject) {
+                            onOpenProject(composerProject.projectId);
+                            return;
+                          }
                           setRunConfigPickerMode('list');
                           setRunConfigPickerOpen(true);
                         }}

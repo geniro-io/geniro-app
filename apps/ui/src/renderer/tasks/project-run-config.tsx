@@ -1,4 +1,4 @@
-import { Bot, Workflow as TeamIcon } from 'lucide-react';
+import { Bot, UsersRound as TeamIcon } from 'lucide-react';
 import { useRef } from 'react';
 
 import type {

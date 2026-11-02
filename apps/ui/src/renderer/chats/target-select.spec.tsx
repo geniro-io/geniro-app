@@ -200,7 +200,7 @@ describe('TargetSelect', () => {
       'Codex',
       'Dev team',
     ]);
-    expect(team.querySelector('svg.lucide-workflow')).not.toBeNull();
+    expect(team.querySelector('svg.lucide-users-round')).not.toBeNull();
 
     act(() => {
       team.click();

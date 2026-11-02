@@ -193,7 +193,7 @@ export function useMemberFixes({
         return agent === null || apis === null
           ? undefined
           : {
-              label: 'Sign in',
+              label: problem.server === null ? 'Open MCP' : 'Sign in',
               run: () => {
                 setMcpTarget({ agent, configDir: problem.configDir });
                 if (problem.server !== null) {

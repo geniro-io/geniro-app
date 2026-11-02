@@ -73,6 +73,7 @@ export function runConfigRefusal(
   draft: RunConfigDraft,
   isNew: boolean,
   count: number,
+  projects: readonly { id: string }[],
 ): string | null {
   const name = draft.name.trim();
   if (name === '') {
@@ -80,6 +81,9 @@ export function runConfigRefusal(
   }
   if (draft.cwd === '') {
     return 'Choose the folder this configuration opens in.';
+  }
+  if (!projects.some((project) => project.id === draft.projectId)) {
+    return 'Choose the project this configuration belongs to.';
   }
   if (name.length > MAX_RUN_CONFIG_NAME) {
     return `That name is ${name.length} characters — keep it to ${MAX_RUN_CONFIG_NAME}.`;
@@ -270,4 +274,62 @@ export function moveRunConfig(
   const [moved] = next.splice(from, 1);
   next.splice(to, 0, moved!);
   return next;
+}
+
+/** A configuration whose project is unset or no longer listed. */
+export function isUnboundRunConfig(
+  config: RunConfig,
+  projects: readonly { id: string }[],
+): boolean {
+  return !projects.some((project) => project.id === config.projectId);
+}
+
+export interface RunConfigGroup<P extends { id: string }> {
+  /** Null for the configurations bound to no listed project. */
+  project: P | null;
+  configs: RunConfig[];
+}
+
+/**
+ * The configurations under their projects, each project where its first
+ * configuration stands in the user's order, the unbound ones last.
+ */
+export function groupRunConfigsByProject<P extends { id: string }>(
+  configs: readonly RunConfig[],
+  projects: readonly P[],
+): RunConfigGroup<P>[] {
+  const groups = new Map<string, RunConfigGroup<P>>();
+  const unbound: RunConfig[] = [];
+  for (const config of configs) {
+    const project = projects.find((entry) => entry.id === config.projectId);
+    if (project === undefined) {
+      unbound.push(config);
+      continue;
+    }
+    const group = groups.get(project.id);
+    if (group === undefined) {
+      groups.set(project.id, { project, configs: [config] });
+    } else {
+      group.configs.push(config);
+    }
+  }
+  const grouped = [...groups.values()];
+  return unbound.length === 0
+    ? grouped
+    : [...grouped, { project: null, configs: unbound }];
+}
+
+/**
+ * The whole list with the entries of `reordered` laid back into the places
+ * those entries held, in their new order; every other entry stays put.
+ */
+export function withSubsetOrder(
+  configs: readonly RunConfig[],
+  reordered: readonly RunConfig[],
+): RunConfig[] {
+  const ids = new Set(reordered.map((config) => config.id));
+  const queue = [...reordered];
+  return configs.map((config) =>
+    ids.has(config.id) ? (queue.shift() ?? config) : config,
+  );
 }

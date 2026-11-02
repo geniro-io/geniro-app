@@ -106,6 +106,9 @@ export function RunConfigPicker({
   onDelete,
   onReorder,
   onClose,
+  totalCount,
+  showProject = true,
+  emptyNote = 'A new one starts from the setup you have now — change whichever chips you like, and give it a name.',
 }: {
   open: boolean;
   /**
@@ -158,6 +161,12 @@ export function RunConfigPicker({
   onReorder?: (next: RunConfig[]) => void;
   /** Dismiss the dialog. Unused, and unneeded, when rendered inline. */
   onClose?: () => void;
+  /** How many configurations exist in all, when `configs` is one project's share. */
+  totalCount?: number;
+  /** False where every row belongs to one project, so naming it says nothing. */
+  showProject?: boolean;
+  /** The line under "No configurations yet". */
+  emptyNote?: string;
 }): React.JSX.Element {
   /**
    * `null` is the list; anything else is the editor, carrying the id it will
@@ -223,7 +232,8 @@ export function RunConfigPicker({
     const refusal = runConfigRefusal(
       editing.draft,
       editing.id === null,
-      configs.length,
+      totalCount ?? configs.length,
+      projects,
     );
     if (refusal !== null) {
       setError(refusal);
@@ -236,7 +246,7 @@ export function RunConfigPicker({
     setError(null);
     onSave(editing.draft, editing.id);
     setEditing(null);
-  }, [editing, configs.length, onSave]);
+  }, [editing, configs.length, totalCount, projects, onSave]);
 
   const body = (
     <>
@@ -307,10 +317,7 @@ export function RunConfigPicker({
                     its label and its description: the line under the title is
                     a note about it, and at the title's own size the two read
                     as one paragraph in two colours. */}
-                <span className="max-w-sm text-xs">
-                  A new one starts from the setup you have now — change
-                  whichever chips you like, and give it a name.
-                </span>
+                <span className="max-w-sm text-xs">{emptyNote}</span>
               </EmptyState>
             </SettingsPanel>
           ) : (
@@ -322,8 +329,11 @@ export function RunConfigPicker({
                   key={config.id}
                   config={config}
                   projectName={
-                    projects.find((project) => project.id === config.projectId)
-                      ?.name ?? null
+                    showProject
+                      ? (projects.find(
+                          (project) => project.id === config.projectId,
+                        )?.name ?? null)
+                      : null
                   }
                   confirmingDelete={confirmingDelete === config.id}
                   reorder={
@@ -817,8 +827,18 @@ export function RunConfigEditor({
             <ProjectSelect
               projects={projects}
               value={draft.projectId ?? null}
+              noneLabel="Choose a project"
               aria-label="Project this configuration binds its runs to"
-              onChange={(projectId) => set({ projectId })}
+              onChange={(projectId) => {
+                const chosen = projects.find(
+                  (project) => project.id === projectId,
+                );
+                if (draft.cwd === '' && chosen !== undefined) {
+                  onChange({ ...draft, projectId, cwd: chosen.folder });
+                  return;
+                }
+                set({ projectId });
+              }}
             />
           </SettingRow>
           {team ? null : (

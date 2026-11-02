@@ -1,4 +1,4 @@
-import { Workflow as TeamIcon } from 'lucide-react';
+import { UsersRound as TeamIcon } from 'lucide-react';
 import { useContext } from 'react';
 
 import type { CliDetection } from '../../shared/contracts';

@@ -12,6 +12,7 @@ import {
   SHELF_CHIP_WRAPPER_CLASS,
   SHELF_STATUS_TRIGGER_CLASS,
 } from './shelf-chip';
+import { ShelfPanelHeader } from './shelf-panel-header';
 import {
   ClampedText,
   stageActorLabel,
@@ -202,15 +203,15 @@ export function StageProgressChip({
         </>
       }>
       {(close) => (
-        <div className="flex flex-col gap-3 p-1 text-xs">
-          <header className="flex items-baseline gap-1.5 px-1">
-            <span className="text-sm font-semibold">Stages</span>
-            <span
-              data-slot="stage-position"
-              className="ml-auto text-muted-foreground tabular-nums">
-              {finished ? `All ${total} done` : `${index} of ${total}`}
-            </span>
-          </header>
+        <div className="flex flex-col gap-2 text-xs">
+          <ShelfPanelHeader
+            title="Stages"
+            aside={
+              <span data-slot="stage-position">
+                {finished ? `All ${total} done` : `${index} of ${total}`}
+              </span>
+            }
+          />
           <StageGraph stages={progress.stages} className="px-1" />
           <ol
             aria-label="Stages"

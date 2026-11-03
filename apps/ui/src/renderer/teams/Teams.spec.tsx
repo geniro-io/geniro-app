@@ -2665,6 +2665,17 @@ describe('Teams — the team page', () => {
     expect(sheets()).toEqual([]);
   });
 
+  it('leaves the open member sheet untransformed, so its fixed menus are placed against the window', async () => {
+    await openBuilder();
+    await selectMember('lead');
+    const sheet = container.querySelector<HTMLElement>(
+      '[data-slot="member-sheet"]',
+    )!;
+    await vi.waitFor(() => expect(sheet.className).toContain('opacity-100'));
+    expect(sheet.classList).toContain('translate-none');
+    expect(sheet.className).not.toMatch(/(^|\s)translate-[xy]-/);
+  });
+
   it('closes the member sheet on Escape', async () => {
     await openBuilder();
     await selectMember('lead');

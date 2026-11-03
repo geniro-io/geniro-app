@@ -129,22 +129,6 @@ function ShellRow({
           of what it takes off the leading, so the ink does not move at all.
           Verified twice, here and on the shelf chip. */}
         <ShellIcon className="-translate-y-px text-muted-foreground" />
-        {/* BEFORE the command and `shrink-0`, which is the whole of its layout
-          argument: the command is the row's subject and the one part worth the
-          flex space, while the name identifies the row and must not truncate to
-          nothing — an agent called `Engineer` clipped to `Eng…` answers the
-          question worse than not asking it. It is set in the muted colour the
-          clock beside it uses rather than as a `Badge`: a badge on every row of
-          a dozen is a second column of chrome, and this is a caption on the
-          command, not a status about it. */}
-        {agentName === null ? null : (
-          <span
-            data-slot="shell-agent"
-            className="shrink-0 text-[11px] text-muted-foreground"
-            title={`Started by ${agentName}`}>
-            {agentName}
-          </span>
-        )}
         {onOpen === undefined ? (
           <span
             className="min-w-0 flex-1 truncate font-mono text-[11px]"
@@ -222,11 +206,24 @@ function ShellRow({
           </ConfirmActionButton>
         )}
       </div>
-      {shell.background || shell.description !== null ? (
+      {agentName !== null || shell.background || shell.description !== null ? (
         <div
           data-slot="shell-detail"
           // Indented to the command, past the 12px glyph and the row's gap.
           className="flex min-w-0 items-center gap-1.5 pl-[18px] text-[11px] text-muted-foreground">
+          {/* `shrink-0`: an agent called `Engineer` clipped to `Eng…` answers
+              "whose is this" worse than not asking it. */}
+          {agentName === null ? null : (
+            <span
+              data-slot="shell-agent"
+              className="shrink-0 font-medium text-foreground/80"
+              title={`Started by ${agentName}`}>
+              {agentName}
+            </span>
+          )}
+          {agentName !== null && shell.description !== null ? (
+            <span aria-hidden="true">·</span>
+          ) : null}
           {shell.description === null ? null : (
             <span className="min-w-0 flex-1 truncate" title={shell.description}>
               {shell.description}

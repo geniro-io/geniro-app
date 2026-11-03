@@ -234,7 +234,8 @@ describe('RunningMonitorChips', () => {
       expect.stringContaining('preview deploy'),
     ]);
     expect(rows[0]!.textContent).toContain('gh pr checks 42 --watch');
-    expect(rows[0]!.textContent).toContain('m1');
+    expect(rows[0]!.textContent).not.toContain('m1');
+    expect(rows[0]!.querySelector('[title="CI on #42 (m1)"]')).not.toBeNull();
     // A chat's own monitor names no agent; a team node's does.
     expect(rows[0]!.querySelector('[data-slot="monitor-agent"]')).toBeNull();
     expect(
@@ -268,7 +269,9 @@ describe('RunningCallChips', () => {
     blockId: 'call-1',
     callId: 'call-1',
     callee: 'Engineer',
+    calleeKey: 'engineer',
     caller: 'Manager',
+    callerKey: 'manager',
     title: 'Fix the drop zone',
     startedAt: Date.now() - 125_000,
     stalled: false,
@@ -293,11 +296,13 @@ describe('RunningCallChips', () => {
     ).toBe('1 agent working · 1 queued');
     await press(el, 'running-calls');
     expect(
-      document.querySelector('[data-slot="running-call-rows"] p')?.textContent,
-    ).toMatch(/^1 agent working · 1 queued/);
-    const rows = document.querySelectorAll('[data-slot="running-call-row"]');
-    expect(rows[1]?.textContent).toContain('queued');
-    expect(rows[0]?.textContent).not.toContain('queued');
+      document.querySelector('[data-slot="shelf-panel-summary"]')?.textContent,
+    ).toBe('1 working · 1 queued');
+    const states = [
+      ...document.querySelectorAll('[data-slot="running-call-state"]'),
+    ].map((state) => state.textContent);
+    expect(states[0]).toMatch(/^working/);
+    expect(states[1]).toMatch(/^queued/);
   });
 
   it('does not tint or animate its glyph while every call out is queued', () => {
@@ -351,6 +356,71 @@ describe('RunningCallChips', () => {
     ).toHaveLength(2);
   });
 
+  it('draws who called whom as faces, and names the call only in the row’s hint', async () => {
+    const el = mount(
+      <RunningCallChips
+        calls={[
+          call(),
+          call({
+            blockId: 'call-4',
+            callId: 'call-6',
+            caller: null,
+            callerKey: null,
+          }),
+        ]}
+        onReveal={() => {}}
+      />,
+    );
+    await press(el, 'running-calls');
+    const rows = [
+      ...document.querySelectorAll<HTMLElement>(
+        '[data-slot="running-call-row"]',
+      ),
+    ];
+    expect(
+      [...rows[0]!.querySelectorAll('[data-slot="avatar"]')].map((face) =>
+        face.getAttribute('title'),
+      ),
+    ).toEqual(['Manager', 'Engineer']);
+    expect(rows[1]!.querySelector('[data-slot="avatar-pair"]')).toBeNull();
+    expect(
+      [...rows[1]!.querySelectorAll('[data-slot="avatar"]')].map((face) =>
+        face.getAttribute('title'),
+      ),
+    ).toEqual(['Engineer']);
+    expect(rows[0]!.textContent).not.toContain('call-1');
+    expect(rows[0]!.title).toBe('Show call-1 in the conversation');
+  });
+
+  it('gives every row the pair’s face width once any row draws a pair, so the names line up', async () => {
+    const faces = async (calls: OpenCallChipRow[]): Promise<string[]> => {
+      const el = mount(<RunningCallChips calls={calls} onReveal={() => {}} />);
+      await press(el, 'running-calls');
+      const classes = [
+        ...document.querySelectorAll('[data-slot="running-call-faces"]'),
+      ].map((face) => face.className);
+      await act(async () => {
+        document.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+        );
+      });
+      return classes;
+    };
+    const mixed = await faces([
+      call(),
+      call({
+        blockId: 'call-4',
+        callId: 'call-6',
+        caller: null,
+        callerKey: null,
+      }),
+    ]);
+    expect(mixed).toHaveLength(2);
+    expect(mixed.every((face) => face.includes('w-15'))).toBe(true);
+    const single = await faces([call({ caller: null, callerKey: null })]);
+    expect(single[0]).not.toContain('w-15');
+  });
+
   it('reveals the pressed row’s call and puts the list away', async () => {
     // REPORTED as "нажимаю на одного из агентов, ничего не происходит". The
     // press is driven the way a real one arrives: focus leaves the chip for
@@ -379,7 +449,7 @@ describe('RunningCallChips', () => {
     expect(document.querySelector('[data-slot="running-call-row"]')).toBeNull();
   });
 
-  it('times each call from its START and states the total wait', async () => {
+  it('times each call from its START, with no total for agents working side by side', async () => {
     // The row this replaces counted from the callee's LAST row, so it read 0s
     // after every tool call. A start time does not move.
     vi.useFakeTimers();
@@ -402,10 +472,18 @@ describe('RunningCallChips', () => {
       );
       await press(el, 'running-calls');
       const text = document.body.textContent ?? '';
-      expect(text).toContain('waiting 2m 5s');
+      expect(
+        document.querySelector('[data-slot="shelf-panel-header"]')?.textContent,
+      ).toBe('Agents2 working');
+      expect(text).toContain('2m 5s');
       expect(text).toContain('Researcher');
       expect(text).toContain('4s');
-      expect(text).toContain('from Manager · Fix the drop zone');
+      expect(
+        document.querySelector('[data-slot="running-call-state"]')?.textContent,
+      ).toBe('working·from Manager');
+      expect(
+        document.querySelector('[data-slot="running-call-title"]')?.textContent,
+      ).toBe('Fix the drop zone');
       const rows = [
         ...document.querySelectorAll('[data-slot="running-call-row"]'),
       ].map((row) => row.textContent);
@@ -428,7 +506,9 @@ describe('RunningCallChips — a callee gone quiet', () => {
               blockId: 'call-1',
               callId: 'call-1',
               callee: 'Engineer',
+              calleeKey: 'engineer',
               caller: null,
+              callerKey: null,
               title: null,
               startedAt: null,
               stalled: true,
@@ -1197,7 +1277,9 @@ describe('every shelf chip opens on a CLICK alone', () => {
             blockId: 'call-1',
             callId: 'call-1',
             callee: 'Engineer',
+            calleeKey: 'engineer',
             caller: null,
+            callerKey: null,
             title: null,
             startedAt: null,
             stalled: false,

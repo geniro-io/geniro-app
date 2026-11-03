@@ -36,7 +36,7 @@ const sheetVariants = cva(
           'relative h-full shrink-0 rounded-l-card shadow-panel-lg ring-1 ring-border',
       },
       entered: {
-        true: 'translate-x-0 opacity-100',
+        true: 'translate-none opacity-100',
         false: 'translate-x-4 opacity-0',
       },
     },

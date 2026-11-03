@@ -120,6 +120,15 @@ describe('formatDuration', () => {
   it('drops the minutes on a whole number of hours', () => {
     expect(formatDuration(2 * 60 * 60_000)).toBe('2h 0m');
   });
+
+  it('says days and hours from a day on', () => {
+    expect(formatDuration((1852 * 60 + 34) * 60_000)).toBe('77d 5h');
+    expect(formatDuration((23 * 60 + 59) * 60_000)).toBe('23h 59m');
+  });
+
+  it('says whole days without an hour part', () => {
+    expect(formatDuration(3 * 24 * 3_600_000)).toBe('3d');
+  });
 });
 
 describe('formatUsdAxis', () => {
@@ -334,6 +343,12 @@ describe('durationAxisTicks', () => {
       4 * 3_600_000,
       6 * 3_600_000,
     ]);
+  });
+
+  it('ticks whole days past a day', () => {
+    const ticks = durationAxisTicks(9 * 86_400_000)!;
+    expect(ticks.every((tick) => tick % 86_400_000 === 0)).toBe(true);
+    expect(ticks.map(formatDuration)).toEqual(['0s', '5d', '10d']);
   });
 
   it('has nothing to scale when nothing was measured', () => {

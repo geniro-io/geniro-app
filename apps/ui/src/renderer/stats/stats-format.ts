@@ -200,8 +200,16 @@ export function formatLineCount(
   return `${direction === 'added' ? '+' : '−'}${formatCount(value)}`;
 }
 
-/** Working time as a person would say it: `45s`, `12m`, `3h 12m`. */
+const DAY_MS = 86_400_000;
+
+/** Working time as a person would say it: `45s`, `12m`, `3h 12m`, `77d 5h`. */
 export function formatDuration(ms: number): string {
+  if (ms >= DAY_MS) {
+    const totalHours = Math.round(ms / 3_600_000);
+    const days = Math.floor(totalHours / 24);
+    const hours = totalHours % 24;
+    return hours === 0 ? `${days}d` : `${days}d ${hours}h`;
+  }
   // Tested against the RAW value, not the rounded minute count: 45s rounds to
   // one minute, so a `totalMinutes < 1` guard would report three quarters of a
   // minute as "1m" and the seconds branch would be unreachable.
@@ -227,7 +235,14 @@ export function durationAxisTicks(max: number): number[] | undefined {
   if (!(max > 0)) {
     return undefined;
   }
-  const unit = max < 60_000 ? 1_000 : max < 3_600_000 ? 60_000 : 3_600_000;
+  const unit =
+    max < 60_000
+      ? 1_000
+      : max < 3_600_000
+        ? 60_000
+        : max < DAY_MS
+          ? 3_600_000
+          : DAY_MS;
   const span = max / unit;
   const step =
     DURATION_STEPS.find((candidate) => Math.ceil(span / candidate) <= 4) ??

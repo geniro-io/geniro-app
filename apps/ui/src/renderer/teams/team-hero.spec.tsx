@@ -73,6 +73,44 @@ describe('TeamHero', () => {
     expect(toggle()).toBeUndefined();
   });
 
+  it('draws each figure with its icon, value and noun', () => {
+    act(() =>
+      root.render(
+        <TeamHero
+          name="Dev Team"
+          description={null}
+          people={[{ key: 'ada', name: 'Ada' }]}
+          memberCount={1}
+          stageCount={9}
+          figures={{ runs: 1_199, cost: '$32,425.97', worked: '77d 5h' }}
+        />,
+      ),
+    );
+    const figures = [
+      ...container.querySelectorAll('[data-slot="team-figure"]'),
+    ];
+    expect(figures.map((figure) => figure.textContent)).toEqual([
+      '1member',
+      '9stages',
+      '1,199runs',
+      '$32,425.97spent',
+      '77d 5hworked',
+    ]);
+    expect(figures.every((figure) => figure.querySelector('svg'))).toBe(true);
+  });
+
+  it('draws a dash for a figure nothing measured', () => {
+    hero(null);
+    const figures = [
+      ...container.querySelectorAll('[data-slot="team-figure"]'),
+    ].slice(2);
+    expect(figures.map((figure) => figure.textContent)).toEqual([
+      '—runs',
+      '—spent',
+      '—worked',
+    ]);
+  });
+
   it('draws no description for a blank one', () => {
     hero('   ');
     expect(container.querySelector('[data-slot="team-description"]')).toBe(

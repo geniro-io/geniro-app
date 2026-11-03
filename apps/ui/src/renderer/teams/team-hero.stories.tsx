@@ -27,7 +27,7 @@ const meta = {
     people: PEOPLE,
     memberCount: 7,
     stageCount: 4,
-    figures: { runs: 23, cost: '$41', worked: '14h' },
+    figures: { runs: 199, cost: '$32,425.97', worked: '77d 5h' },
   },
   decorators: [(story) => <div className="w-[880px] p-6">{story()}</div>],
 } satisfies Meta<typeof TeamHero>;

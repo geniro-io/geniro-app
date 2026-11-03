@@ -23,6 +23,7 @@ import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { ChatService } from '../../agents/services/chat.service';
+import type { ProjectDao } from '../../projects/dao/project.dao';
 import { member, teamOf } from '../__tests__/team-builders';
 import type { TeamChangeLogDao } from '../dao/team-change-log.dao';
 import type { Team, TeamChangeLogRecord, TeamProposal } from '../teams.types';
@@ -35,6 +36,8 @@ import type { TeamEdit } from '../utils/team-edits';
 import { teamVersionOf } from '../utils/team-version';
 import { TeamChangeLogService } from './team-change-log.service';
 import type { TeamExecutorService } from './team-executor.service';
+import { TeamOverlayService } from './team-overlay.service';
+import { TeamOverlayStoreService } from './team-overlay-store.service';
 import { TeamProposalService } from './team-proposal.service';
 import { TeamStoreService } from './team-store.service';
 
@@ -174,6 +177,7 @@ describe('TeamProposalService', () => {
   /** The card ids the transcript already closes, per run. */
   let closedCards: Map<string, string[]>;
   let logged: TeamChangeLogRecord[];
+  let overlayStore: TeamOverlayStoreService;
   let service: TeamProposalService;
 
   beforeEach(async () => {
@@ -187,6 +191,20 @@ describe('TeamProposalService', () => {
     chats = fakeChats(approvals);
     closedCards = new Map();
     logged = [];
+    overlayStore = new TeamOverlayStoreService({ teamsDir: dir });
+    const overlays = new TeamOverlayService(
+      overlayStore,
+      store,
+      {
+        getById: async (id: string) =>
+          id === 'p1'
+            ? { id, name: 'Geniro', teamSlug: 'team' }
+            : id === 'p2'
+              ? { id, name: 'Manifest', teamSlug: 'other-team' }
+              : null,
+      } as unknown as ProjectDao,
+      { fork: () => ({}) } as never,
+    );
     service = new TeamProposalService(
       store,
       { assertRunnable } as unknown as TeamExecutorService,
@@ -207,6 +225,7 @@ describe('TeamProposalService', () => {
           return Promise.resolve();
         },
       } as unknown as TeamChangeLogDao),
+      overlays,
     );
   });
 
@@ -455,6 +474,163 @@ describe('TeamProposalService', () => {
       expect((await store.get('team')).team).toEqual(TEAM);
     });
 
+    describe('bound to a project', () => {
+      const CODER_AUTO = {
+        members: { coder: { settings: { approval: 'auto' as const } } },
+      };
+
+      it('cards an overlay-only change with its own diff, listing an agent the overlay puts on auto', async () => {
+        const { hash } = await store.create(TEAM, 'team');
+
+        const prepared = await service.prepareChange({
+          slug: 'team',
+          edits: [],
+          overlay: CODER_AUTO,
+          projectId: 'p1',
+        });
+
+        expect(prepared).toMatchObject({
+          ok: true,
+          proposal: {
+            mode: 'replace',
+            baseHash: hash,
+            diff: expect.objectContaining({ identical: true }),
+            autoAgents: expect.arrayContaining(['coder', 'reviewer']),
+            overlay: {
+              projectId: 'p1',
+              projectName: 'Geniro',
+              baseHash: null,
+              overlay: CODER_AUTO,
+              diffText: expect.stringContaining('+      approval: auto'),
+            },
+          },
+        });
+      });
+
+      it('writes the overlay, then the team, on one approval', async () => {
+        await store.create(TEAM, 'team');
+        const prepared = await service.prepareChange({
+          slug: 'team',
+          edits: TO_SONNET,
+          overlay: CODER_AUTO,
+          projectId: 'p1',
+        });
+        if (!prepared.ok) {
+          throw new Error(prepared.message);
+        }
+
+        const applied = await service.apply(prepared.proposal);
+
+        expect(applied.outcome).toBe('saved');
+        expect((await store.get('team')).team).toEqual(FASTER);
+        expect((await overlayStore.get('team', 'p1'))?.overlay).toEqual(
+          CODER_AUTO,
+        );
+        expect(logged.map((entry) => entry.projectId)).toEqual([null, 'p1']);
+      });
+
+      it('puts the overlay back when the team write fails', async () => {
+        await store.create(TEAM, 'team');
+        const before = await overlayStore.save('team', 'p1', {
+          members: { reviewer: { extraInstructions: 'keep' } },
+        });
+        const prepared = await service.prepareChange({
+          slug: 'team',
+          edits: TO_SONNET,
+          overlay: CODER_AUTO,
+          projectId: 'p1',
+        });
+        if (!prepared.ok) {
+          throw new Error(prepared.message);
+        }
+        vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk full'));
+
+        await expect(service.apply(prepared.proposal)).rejects.toThrow(
+          'disk full',
+        );
+        expect((await overlayStore.get('team', 'p1'))?.hash).toBe(before.hash);
+        expect((await store.get('team')).team).toEqual(TEAM);
+      });
+
+      it('writes nothing when the overlay changed after the card was raised', async () => {
+        await store.create(TEAM, 'team');
+        const prepared = await service.prepareChange({
+          slug: 'team',
+          edits: TO_SONNET,
+          overlay: CODER_AUTO,
+          projectId: 'p1',
+        });
+        if (!prepared.ok) {
+          throw new Error(prepared.message);
+        }
+        await overlayStore.save('team', 'p1', {
+          members: { reviewer: { extraInstructions: 'typed meanwhile' } },
+        });
+
+        expect(await service.apply(prepared.proposal)).toEqual({
+          outcome: 'changed',
+          overlay: 'changed',
+        });
+        expect((await store.get('team')).team).toEqual(TEAM);
+        expect(
+          (await overlayStore.get('team', 'p1'))?.overlay.members?.reviewer,
+        ).toEqual({ extraInstructions: 'typed meanwhile' });
+      });
+
+      it('writes nothing when the project stopped defaulting to the team before Approve', async () => {
+        await store.create(TEAM, 'team');
+        const prepared = await service.prepareChange({
+          slug: 'team',
+          edits: TO_SONNET,
+          overlay: CODER_AUTO,
+          projectId: 'p1',
+        });
+        if (!prepared.ok) {
+          throw new Error(prepared.message);
+        }
+        if (
+          prepared.proposal.mode !== 'replace' ||
+          !prepared.proposal.overlay
+        ) {
+          throw new Error('expected an overlay card');
+        }
+
+        expect(
+          await service.apply({
+            ...prepared.proposal,
+            overlay: { ...prepared.proposal.overlay, projectId: 'p2' },
+          }),
+        ).toEqual({ outcome: 'changed', overlay: 'inactive' });
+        expect((await store.get('team')).team).toEqual(TEAM);
+      });
+
+      it('raises no card for an overlay of a project that defaults to another team', async () => {
+        await store.create(TEAM, 'team');
+
+        await expect(
+          service.prepareChange({
+            slug: 'team',
+            edits: [],
+            overlay: CODER_AUTO,
+            projectId: 'p2',
+          }),
+        ).resolves.toMatchObject({ ok: false, code: 'OVERLAY_INACTIVE' });
+      });
+
+      it('refuses an overlay the team cannot run with', async () => {
+        await store.create(TEAM, 'team');
+
+        await expect(
+          service.prepareChange({
+            slug: 'team',
+            edits: [],
+            overlay: { members: { coder: { settings: { model: '' } } } },
+            projectId: 'p1',
+          }),
+        ).resolves.toMatchObject({ ok: false, code: 'TEAM_OVERLAY_INVALID' });
+      });
+    });
+
     it('holds a change to the team rules, not to whether it could run yet', async () => {
       // A team is built up over several changes: a team in relay mode
       // would fail a run start, and is still a change worth carding.
@@ -587,6 +763,7 @@ describe('TeamProposalService', () => {
       expect(logged).toEqual([
         {
           slug: 'team',
+          projectId: null,
           changedAt: expect.any(Date),
           source: 'builder',
           fromVersion: before,

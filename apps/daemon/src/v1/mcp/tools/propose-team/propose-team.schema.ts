@@ -4,6 +4,7 @@ import { HOST_READ_TEAMS_TOOL } from '../../../agents/chat.types';
 import {
   TEAM_REASON_MAX,
   TEAM_SUMMARY_MAX,
+  TeamOverlaySchema,
   TeamSchema,
 } from '../../../teams/teams.types';
 import { CONFIG_DIR_TOKEN_PREFIX } from '../../../teams/utils/config-dir-redaction';
@@ -18,6 +19,13 @@ const REASON_DESCRIPTION = `Why, for the card, at most ${TEAM_REASON_MAX} charac
  * cannot drift from the one it is held to. A builder chat's are generated from
  * the schema they are parsed with: edits, what they change and why.
  */
+function overlayJsonSchema(): Record<string, unknown> {
+  const { $schema: _dialect, ...overlay } = z.toJSONSchema(TeamOverlaySchema, {
+    io: 'input',
+  });
+  return overlay;
+}
+
 export function proposeTeamSchema(
   forBuilder: boolean,
 ): Record<string, unknown> {
@@ -35,6 +43,11 @@ export function proposeTeamSchema(
         reason: {
           ...(properties.reason as Record<string, unknown>),
           description: REASON_DESCRIPTION,
+        },
+        overlay: {
+          ...overlayJsonSchema(),
+          description:
+            "Only in a chat bound to a project: that project's WHOLE overlay document as it should stand (read the file first; a missing file is an empty overlay). Shown beside the team edits on the same card and written by the same approval.",
         },
       },
     };

@@ -33,7 +33,7 @@ import { RunGroup } from '../../runs/entity/run-group.entity';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
 import type { RunTeamService } from '../../teams/services/run-team.service';
 import type { TeamExecutorService } from '../../teams/services/team-executor.service';
-import type { TeamStoreService } from '../../teams/services/team-store.service';
+import type { TeamOverlayService } from '../../teams/services/team-overlay.service';
 import type { TeamMember } from '../../teams/teams.types';
 import { fakeLiveWork } from '../__tests__/fake-live-work';
 import { aLabelInstruction } from '../__tests__/fixtures';
@@ -338,24 +338,27 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       groups,
       labelInstructions,
       {
-        get: vi.fn(async (slug: string) => {
-          const approval = teamApprovals[slug];
-          if (approval === undefined) {
-            throw new Error(`no team ${slug}`);
-          }
-          return {
-            slug,
-            team: teamOf(
-              [
-                member('coder', {
-                  approval: approval as TeamMember['approval'],
-                }),
-              ],
-              { name: slug },
-            ),
-          };
-        }),
-      } as unknown as TeamStoreService,
+        effectiveBySlug: vi.fn(
+          async (slug: string, projectId: string | null) => {
+            const approval =
+              teamApprovals[`${slug}@${projectId}`] ?? teamApprovals[slug];
+            if (approval === undefined) {
+              throw new Error(`no team ${slug}`);
+            }
+            return {
+              overlay: null,
+              team: teamOf(
+                [
+                  member('coder', {
+                    approval: approval as TeamMember['approval'],
+                  }),
+                ],
+                { name: slug },
+              ),
+            };
+          },
+        ),
+      } as unknown as TeamOverlayService,
       runTeams,
     );
     // Asks by default, so a team card is unattended-incapable unless a test
@@ -587,6 +590,23 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       const task = await seedTeamCard();
 
       await service.start(task.id, { ...start(), startedBy: 'autopilot' });
+
+      expect(startTeamRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads the team as the card’s project runs it: an ask member overridden to auto there passes only there', async () => {
+      teamApprovals = { 'dev-team': 'ask', 'dev-team@other-project': 'auto' };
+      const elsewhere = await seedTeamCard();
+
+      await expect(
+        service.start(elsewhere.id, { ...start(), startedBy: 'autopilot' }),
+      ).rejects.toMatchObject({
+        errorCode: RUN_TARGET_PROBLEM_CODE['team-unattended'],
+      });
+
+      teamApprovals = { 'dev-team': 'ask', [`dev-team@${projectId}`]: 'auto' };
+      const here = await seedTeamCard();
+      await service.start(here.id, { ...start(), startedBy: 'autopilot' });
 
       expect(startTeamRun).toHaveBeenCalledTimes(1);
     });

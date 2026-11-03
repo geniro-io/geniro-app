@@ -7034,9 +7034,15 @@ describe('Chats composer memory & suggestions', () => {
 
   async function mountWithProjects(
     clientOf: ReturnType<typeof makeClient> = makeClient(),
+    otherDefault: Partial<ProjectDto> = {},
   ): Promise<HTMLElement> {
     const app = aProject({ id: 'p-app', name: 'App', folder: '/proj' });
-    const other = aProject({ id: 'p-other', name: 'Other', folder: '/w' });
+    const other = aProject({
+      id: 'p-other',
+      name: 'Other',
+      folder: '/w',
+      ...otherDefault,
+    });
     projectsApi.listProjects.mockResolvedValue([app, other]);
     projectsApi.resolveProjectForFolder.mockResolvedValue({ project: app });
     api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
@@ -7142,6 +7148,58 @@ describe('Chats composer memory & suggestions', () => {
 
     expect(api.createChat).toHaveBeenLastCalledWith({
       createChatDto: expect.objectContaining({ projectId: null }),
+    });
+  });
+
+  it('preselects the team a picked project runs by default', async () => {
+    teamApi.listTeams.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        memberCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    teamApi.startTeamRun.mockResolvedValue({ ...run1, id: 'w2' });
+    const container = await mountWithProjects(makeClient(), {
+      teamSlug: 'review-team',
+    });
+
+    await pickProject(container, 'Other');
+
+    expect(targetTrigger(container).textContent).toContain('Review team');
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      lastChatTarget: 'team:review-team',
+    });
+  });
+
+  it('preselects the agent and model a picked project runs by default', async () => {
+    const container = await mountWithProjects(makeClient(), {
+      agentKind: 'codex',
+      model: 'gpt-5',
+    });
+
+    await pickProject(container, 'Other');
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenLastCalledWith({
+      createChatDto: expect.objectContaining({
+        agentKind: 'codex',
+        model: 'gpt-5',
+      }),
+    });
+  });
+
+  it('leaves the target as it is for a project that names none', async () => {
+    stubSettings({ lastChatTarget: 'codex' });
+    const container = await mountWithProjects();
+
+    await pickProject(container, 'Other');
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenLastCalledWith({
+      createChatDto: expect.objectContaining({ agentKind: 'codex' }),
     });
   });
 

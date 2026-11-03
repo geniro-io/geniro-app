@@ -74,6 +74,8 @@ export function InstructionsCard({
   issues,
   warnings,
   blockSizes = null,
+  emptyLabel = 'No team instructions yet.',
+  addLabel,
   onAdd,
   onChange,
   onRemove,
@@ -85,6 +87,8 @@ export function InstructionsCard({
   warnings: ReadonlyMap<string, readonly string[]>;
   /** Each block's measured size, by block id; null before a measurement lands. */
   blockSizes?: ReadonlyMap<string, InstructionBlockSize> | null;
+  emptyLabel?: string;
+  addLabel?: string;
   onAdd: () => void;
   onChange: (
     blockId: string,
@@ -95,7 +99,8 @@ export function InstructionsCard({
   return (
     <InstructionBlockList
       empty={blocks.length === 0}
-      emptyLabel="No team instructions yet."
+      emptyLabel={emptyLabel}
+      {...(addLabel === undefined ? {} : { addLabel })}
       onAdd={onAdd}>
       {blocks.map((block) => (
         <BlockCard

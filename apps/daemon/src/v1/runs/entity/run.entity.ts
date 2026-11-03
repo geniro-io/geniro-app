@@ -439,6 +439,14 @@ export class Run extends TimestampsEntity {
   editsTeamSlug: string | null = null;
 
   /**
+   * The project whose overlay of {@link editsTeamSlug} this builder chat
+   * edits beside the shared team; null for a chat bound to the shared team
+   * only.
+   */
+  @Property({ type: 'string', nullable: true })
+  editsProjectId: string | null = null;
+
+  /**
    * What geniro tells that chat's agent about the file it owns — where it is,
    * and what a team document may contain; null for every run outside the
    * builder's panel.
@@ -877,6 +885,24 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'text', nullable: true })
   teamSnapshot: string | null = null;
+
+  /**
+   * The SHARED team this run started from, before its project's overlay —
+   * what every team version, version restore and drift reader reads
+   * (`baseTeamSnapshotOf`), so a project's overrides never mint a version of
+   * their own. {@link teamSnapshot} holds the effective team the run runs.
+   * Null on a run started before overlays, whose snapshot is its base.
+   */
+  @Property({ type: 'text', nullable: true })
+  teamBaseSnapshot: string | null = null;
+
+  /**
+   * JSON `{projectId, hash, overlay}` of the project overlay applied at start
+   * (`TeamOverlaySnapshot`); null when the run's project does not default to
+   * its team or holds no overlay.
+   */
+  @Property({ type: 'text', nullable: true })
+  teamOverlaySnapshot: string | null = null;
 
   /**
    * What this run's POLLED conversations have cost, in CENTS, as the account

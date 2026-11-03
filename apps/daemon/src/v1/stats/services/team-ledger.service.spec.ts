@@ -96,10 +96,12 @@ describe('TeamLedgerService (in-memory sqlite)', () => {
     options: {
       createdAt?: Date;
       snapshot?: string | null;
+      baseSnapshot?: string | null;
       teamId?: string | null;
     } = {},
   ): Promise<void> {
     await runDao.create({
+      teamBaseSnapshot: options.baseSnapshot ?? null,
       id,
       teamId: options.teamId === undefined ? 'dev-team' : options.teamId,
       status: 'completed',
@@ -137,6 +139,26 @@ describe('TeamLedgerService (in-memory sqlite)', () => {
         version: teamVersionOf(graph),
         inferred: false,
       });
+      expect(
+        (await versionDao.graphsOf('dev-team')).map((v) => v.version),
+      ).toEqual([teamVersionOf(graph)]);
+    });
+
+    it('stamps a project run with its project overlay and a shared run of one team with the same version', async () => {
+      const effective = {
+        ...graph,
+        members: graph.members.map((m) => ({ ...m, effort: 'max' })),
+      };
+      await teamRun('shared-run');
+      await teamRun('project-run', {
+        snapshot: teamSnapshotOf(effective),
+        baseSnapshot: teamSnapshotOf(graph),
+      });
+      await created('shared-run');
+      await created('project-run');
+
+      expect((await row('project-run'))?.version).toBe(teamVersionOf(graph));
+      expect((await row('shared-run'))?.version).toBe(teamVersionOf(graph));
       expect(
         (await versionDao.graphsOf('dev-team')).map((v) => v.version),
       ).toEqual([teamVersionOf(graph)]);

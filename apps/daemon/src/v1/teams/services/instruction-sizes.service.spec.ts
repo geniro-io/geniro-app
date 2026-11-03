@@ -235,6 +235,54 @@ describe('InstructionSizesService', () => {
   });
 });
 
+describe('InstructionSizesService.measureFor', () => {
+  const team = teamOf([manager, reviewer], {
+    instructionBlocks: DEV_TEAM.instructionBlocks,
+  });
+  const total = (sizes: ReturnType<typeof subject.measure>, id: string) =>
+    sizes.members.find((entry) => entry.memberId === id)!.totalChars;
+
+  it('measures the team as the project runs it when given its overlay', () => {
+    const shared = subject.measureFor({ team, ...SETTINGS });
+    const inProject = subject.measureFor({
+      team,
+      ...SETTINGS,
+      projectId: 'p1',
+      overlay: {
+        members: { manager: { extraInstructions: 'USE STAGING' } },
+        instructionBlocks: [
+          {
+            id: 'x',
+            title: 'Project',
+            text: 'PROJECT RULE',
+            audience: ['manager'],
+          },
+        ],
+      },
+    });
+
+    expect(shared).toEqual(subject.measure({ team, ...SETTINGS }));
+    expect(total(inProject, 'manager')).toBeGreaterThan(
+      total(shared, 'manager') + 'USE STAGING'.length + 'PROJECT RULE'.length,
+    );
+    expect(total(inProject, 'reviewer')).toBe(total(shared, 'reviewer'));
+    expect(inProject.blocks.map((block) => block.blockId)).toEqual([
+      'settings',
+      'intent',
+      'project:p1:x',
+    ]);
+  });
+
+  it('measures the shared team when the overlay comes without its project', () => {
+    expect(
+      subject.measureFor({
+        team,
+        overlay: { members: { manager: { extraInstructions: 'X' } } },
+      }),
+    ).toEqual(subject.measure({ team }));
+  });
+});
+
 describe('InstructionSizesService.measureProject', () => {
   const PROJECT = {
     customInstructions: 'MINE',

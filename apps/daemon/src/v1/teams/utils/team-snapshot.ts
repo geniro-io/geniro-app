@@ -17,6 +17,18 @@ export function teamSnapshotOf(team: Team): string {
 }
 
 /**
+ * The shared team a run started from, as stored: `Run.teamBaseSnapshot`, or
+ * the effective snapshot of a run started before overlays. Every version and
+ * drift reader reads this, never the effective copy.
+ */
+export function baseTeamSnapshotOf(run: {
+  teamSnapshot: string | null;
+  teamBaseSnapshot?: string | null;
+}): string | null {
+  return run.teamBaseSnapshot ?? run.teamSnapshot;
+}
+
+/**
  * What a run's snapshot column holds, told apart three ways.
  *
  * `absent` and `unreadable` are different facts and the difference is the

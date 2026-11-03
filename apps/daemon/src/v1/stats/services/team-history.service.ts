@@ -76,7 +76,7 @@ export class TeamHistoryService {
         [...adapters.keys()].filter((kind) => pollsSpendFor(adapters, kind)),
       ),
       outcomes: await this.activityDao.runOutcomes({ teamSlug: slug }, em),
-      changeLog: await this.changeLog.entriesOf(slug),
+      changeLog: await this.changeLog.entriesWithOverlaysOf(slug),
       recommendations,
       liveChats,
       analysedRunIds: scope.analysedRunIds,

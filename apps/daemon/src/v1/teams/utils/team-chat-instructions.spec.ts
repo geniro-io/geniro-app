@@ -154,7 +154,7 @@ describe('composeTeamChatInstructions', () => {
   it('applies a selected team item on a proposal card, never a save', () => {
     const analysis = BRIEF.slice(BRIEF.indexOf('<team-analysis>'));
     expect(analysis).toContain(
-      `- Team items: put every selected team item on ONE \`${HOST_PROPOSE_TEAM_TOOL}\` card`,
+      `- Team items, and overlay items of the project this chat is bound to (as \`overlay\`, the whole document): put every selected one on ONE \`${HOST_PROPOSE_TEAM_TOOL}\` card`,
     );
     expect(analysis).not.toContain(HOST_TEAM_CHANGE_TOOL);
   });

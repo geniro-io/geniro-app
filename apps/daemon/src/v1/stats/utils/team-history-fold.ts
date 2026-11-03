@@ -218,6 +218,7 @@ export function foldTeamHistory(input: TeamHistoryInput): TeamHistory {
     .map((entry) => ({
       at: entry.changedAt.toISOString(),
       source: entry.source,
+      projectId: entry.projectId,
       from: entry.fromVersion === null ? null : ref(entry.fromVersion),
       to: ref(entry.toVersion),
       summary: entry.summary,
@@ -249,7 +250,11 @@ export function foldTeamHistory(input: TeamHistoryInput): TeamHistory {
         row.version === null
           ? []
           : changeLog
-              .filter((change) => change.to.version === row.version)
+              .filter(
+                (change) =>
+                  change.projectId === null &&
+                  change.to.version === row.version,
+              )
               .map(({ at, source, summary, recommendationIds }) => ({
                 at,
                 source,

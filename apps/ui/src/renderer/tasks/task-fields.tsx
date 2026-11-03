@@ -17,6 +17,7 @@ import { EffortSelect } from '../chats/effort-select';
 import { ModelSelect } from '../chats/model-select';
 import { TargetSelect, type TargetTeam } from '../chats/target-select';
 import { HoverPopover } from '../components/hover-popover';
+import { InheritedTag } from '../components/inherited-tag';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { LoadingChip } from '../components/ui/loading-chip';
@@ -148,18 +149,6 @@ export function PropertyGroup({
       </h3>
       {children}
     </section>
-  );
-}
-
-/**
- * The muted `project` tag beside an inherited value — one component, because
- * several rows now say it and they read as one column only while they agree.
- */
-export function InheritedTag(): React.JSX.Element {
-  return (
-    <span className="shrink-0 text-[10px] tracking-wide text-muted-foreground uppercase">
-      project
-    </span>
   );
 }
 

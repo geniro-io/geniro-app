@@ -44,6 +44,8 @@ const PROJECT_TARGET = `project-instruction changes (target "project": the stand
 
 const PROJECT_TARGET_CAVEAT = `A project instruction reaches every agent — every member of a team — in every later run of that project, whichever repository or agent it runs: recommend one only for what holds for the project's work (a convention, a standing decision, where something lives), and file a fact about one repository's files in that repository instead. Read view=project first: never repeat what its instructions already say, judge a change made since the last analysis by the runs after it, and recommend none when the runs belong to no project.`;
 
+const OVERLAY_TARGET = `project overlay changes (target "overlay", only for a team whose runs belong to a project: what only that project changes about the shared team — a member's model group or pool there, \`allMembers\` defaults per CLI, extra instructions for a member, overlay instruction blocks, a stage's addendum; view=team shows the overlay the run started with under \`overlay\` and the project's overlay as it stands now under \`overlayNow\` (\`active\` false when the project defaults to another team: its runs would not use an overlay, so file no O- item for it); \`location\` is the projectId; \`change\` is the overlay YAML fragment. A W- item changes the team every project shares; an O- item changes it for that project only; a P- item reaches every agent of the project, whatever team or chat)`;
+
 const PROJECT_APPLY = `- Last, project items: read view=project, then call \`${HOST_PROJECT_INSTRUCTIONS_TOOL}\` once per project with the instructions as they should read in full, every selected item for that project made in them, the \`instructionsRevision\` you read as baseRevision and those items' ids. The user sees what changes on a card and nothing is written without their Apply there. When the call answers, mark that project's items with \`${HOST_RECOMMENDATION_MARKS_TOOL}\`: applied when saved, skipped when the user rejected it, failed when it was not saved. When it answers that the card is posted instead, end your turn at once; the verdict arrives as your next message — mark that project's items then, and only then raise the next project's card. Never change the project's description, and never write its instructions any other way. If it is refused because the revision changed, read view=project again and re-apply.`;
 
 const INSTRUCTION_AUDIT =
@@ -118,17 +120,18 @@ function whatToSend(team: boolean, memory: boolean, summary: string): string {
   return `## What to send
 
 1. ${summary}
-2. Then call \`${HOST_RECOMMENDATIONS_TOOL}\` ONCE with every item, costliest first${team ? ', and in `members` your assessment of each member' : ''}. Ids are ${team ? 'W-1, W-2… for team items, ' : ''}R-1, R-2… for repo items, U-1, U-2… for user items${memory ? ', M-1, M-2… for memory items' : ''} and P-1, P-2… for project items. Do not list the items${team ? ' or the marks' : ''} again in text — the user sees them as a card with checkboxes${team ? ", each member's marks and verdict beside its measured figures" : ''}.
+2. Then call \`${HOST_RECOMMENDATIONS_TOOL}\` ONCE with every item, costliest first${team ? ', and in `members` your assessment of each member' : ''}. Ids are ${team ? 'W-1, W-2… for team items, ' : ''}R-1, R-2… for repo items, U-1, U-2… for user items${memory ? ', M-1, M-2… for memory items' : ''}${team ? ', P-1, P-2… for project items and O-1, O-2… for overlay items' : ' and P-1, P-2… for project items'}. Do not list the items${team ? ' or the marks' : ''} again in text — the user sees them as a card with checkboxes${team ? ", each member's marks and verdict beside its measured figures" : ''}.
 3. The card is where the user decides, so it explains itself: its \`hotspots\` are where the time and money went, costliest first — each one line, then why it costs that (the mechanism, with the tool's figures), ${team ? 'the member it is about, ' : ''}and the ids of the items that address it; each item's \`impact\` gives minutes and dollars saved per run (dollars null when the runs report no cost, negative when the change adds) and its \`outcome\`, the figure it moves from what to what. The card draws the measured figures${team ? ' over every analysed run' : ''} itself and projects them with the items the user ticks.
 
 Then stop. Change nothing until the user applies.`;
 }
 
 /** How an analysis writes a selected team item: its own save, behind the Apply. */
-const SAVE_TEAM_ITEMS = `- Team items: read view=team, then save only your edits with \`${HOST_TEAM_CHANGE_TOOL}\` passing the hash you read (dryRun first if unsure) — never re-send the whole team. Never write the team file yourself. If the save is refused because the hash changed, read it again and re-apply.`;
+const SAVE_TEAM_ITEMS = `- Team items: read view=team, then save only your edits with \`${HOST_TEAM_CHANGE_TOOL}\` passing the hash you read (dryRun first if unsure) — never re-send the whole team. Never write the team file yourself. If the save is refused because the hash changed, read it again and re-apply.
+- Overlay items: read view=team, then call \`${HOST_TEAM_CHANGE_TOOL}\` with \`overlay\`: the project's WHOLE overlay document as it should stand with the selected O- items made in it, \`overlayProjectId\`, \`overlayHash\` as view=team's \`overlayNow.hash\` (null when it has none) and those items' ids, in a call of its own (one call carries either team edits or an overlay).`;
 
 /** How a builder chat writes a selected team item: on its proposal card. */
-const PROPOSE_TEAM_ITEMS = `- Team items: put every selected team item on ONE \`${HOST_PROPOSE_TEAM_TOOL}\` card, its \`reason\` naming the item ids, and end your turn once the rest is applied. When its verdict arrives, mark each of them: applied when the change was saved, skipped with the user's note when they declined it, failed with the cause when it was not saved.`;
+const PROPOSE_TEAM_ITEMS = `- Team items, and overlay items of the project this chat is bound to (as \`overlay\`, the whole document): put every selected one on ONE \`${HOST_PROPOSE_TEAM_TOOL}\` card, its \`reason\` naming the item ids, and end your turn once the rest is applied. When its verdict arrives, mark each of them: applied when the change was saved, skipped with the user's note when they declined it, failed with the cause when it was not saved.`;
 
 function whenTheUserApplies(
   teamItems: string | null,
@@ -186,7 +189,7 @@ You are analysing ANOTHER thread of this app to find where its time went, and wh
 
 ${
   team
-    ? `This is a TEAM thread. Recommend changes of ${memory ? 'five' : 'four'} kinds: team changes (target "team": a member's role or instructions, model, effort, which member a stage is given to, parallelising work, a termination or verification rule, adding or removing a member), ${repo}, ${userTarget}, ${memory ? `${MEMORY_TARGET}, ` : ''}and ${PROJECT_TARGET}.`
+    ? `This is a TEAM thread. Recommend changes of ${memory ? 'six' : 'five'} kinds: team changes (target "team": a member's role or instructions, model, effort, which member a stage is given to, parallelising work, a termination or verification rule, adding or removing a member), ${repo}, ${userTarget}, ${memory ? `${MEMORY_TARGET}, ` : ''}${PROJECT_TARGET}, and ${OVERLAY_TARGET}.`
     : `This is a plain CHAT thread. Recommend ${repo}, ${userTarget}, ${memory ? `${MEMORY_TARGET}, ` : ''}and ${PROJECT_TARGET}. Never recommend a team change — the tool refuses one.`
 }
 
@@ -266,7 +269,7 @@ function teamAnalysisSections(memory: boolean, folder: string): string[] {
   return [
     `## Scope
 
-Recommend changes of ${memory ? 'five' : 'four'} kinds: team changes (target "team": a member's role or instructions, its model or effort, which member a stage is given to, parallelising work, a termination or verification rule, adding, merging or removing a member, a stage every run walks — the stage graph's structure — or undoing an earlier change that made the runs worse — each member's verdict among them), ${repoTarget(folder)}, user-instruction changes (target "user": the user's own instruction file of an agent the team runs — view=team lists them under \`userInstructions\`), ${memory ? `${MEMORY_TARGET}, ` : ''}and ${PROJECT_TARGET}.
+Recommend changes of ${memory ? 'six' : 'five'} kinds: team changes (target "team": a member's role or instructions, its model or effort, which member a stage is given to, parallelising work, a termination or verification rule, adding, merging or removing a member, a stage every run walks — the stage graph's structure — or undoing an earlier change that made the runs worse — each member's verdict among them), ${repoTarget(folder)}, user-instruction changes (target "user": the user's own instruction file of an agent the team runs — view=team lists them under \`userInstructions\`), ${memory ? `${MEMORY_TARGET}, ` : ''}${PROJECT_TARGET}, and ${OVERLAY_TARGET}.
 
 ${USER_TARGET_CAVEAT}${memory ? `\n\n${MEMORY_TARGET_CAVEAT}` : ''}\n\n${PROJECT_TARGET_CAVEAT}`,
     `## Method

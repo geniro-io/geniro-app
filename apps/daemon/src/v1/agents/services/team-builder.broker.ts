@@ -9,6 +9,8 @@ import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
  */
 export interface TeamBuilderSink {
   slug: string;
+  /** The project whose overlay this chat edits beside the team (`Run.editsProjectId`); null in shared scope. */
+  projectId: string | null;
   /**
    * When the turn began (epoch ms). The team editor does not save while the chat
    * works, so a file written after this, before the turn's own first check,

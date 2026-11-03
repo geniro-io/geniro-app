@@ -35,7 +35,7 @@ import {
   type TeamFacts,
 } from '../utils/member-health';
 import { startingLeadOf } from '../utils/team-roster';
-import { TeamStoreService } from './team-store.service';
+import { TeamOverlayService } from './team-overlay.service';
 
 type McpMode = 'none' | 'known' | 'probe';
 
@@ -63,7 +63,7 @@ const NO_MCP: McpFacts = { servers: null, checking: false };
 @Injectable()
 export class TeamHealthService {
   constructor(
-    private readonly store: TeamStoreService,
+    private readonly overlays: TeamOverlayService,
     private readonly adapters: AgentAdapterRegistry,
     private readonly versions: AgentVersionService,
     private readonly mcp: AgentMcpService,
@@ -71,8 +71,12 @@ export class TeamHealthService {
     private readonly models: ModelsService,
   ) {}
 
-  async health(slug: string, probe: boolean): Promise<TeamHealth> {
-    const { team } = await this.store.get(slug);
+  async health(
+    slug: string,
+    probe: boolean,
+    projectId: string | null = null,
+  ): Promise<TeamHealth> {
+    const { team } = await this.overlays.effectiveBySlug(slug, projectId);
     const facts = await this.gather(
       team,
       team.members,
@@ -85,8 +89,9 @@ export class TeamHealthService {
     slug: string,
     memberId: string,
     probe: boolean,
+    projectId: string | null = null,
   ): Promise<MemberHealth> {
-    const { team } = await this.store.get(slug);
+    const { team } = await this.overlays.effectiveBySlug(slug, projectId);
     const member = team.members.find((entry) => entry.id === memberId);
     if (member === undefined) {
       throw new NotFoundException(

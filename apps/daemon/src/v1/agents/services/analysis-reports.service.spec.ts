@@ -201,6 +201,58 @@ describe('checkItems', () => {
       ),
     ).toContain('belong to no project');
   });
+
+  const overlayItem = { ...projectItem, id: 'O-1', target: 'overlay' as const };
+
+  it('takes an O- item naming an analysed team run’s project', () => {
+    expect(
+      checkItems(
+        { hotspots: [], items: [overlayItem] },
+        'team',
+        true,
+        new Set(['p-billing']),
+      ),
+    ).toBeNull();
+  });
+
+  it('refuses an O- item for a plain chat, for another project, and when no analysed run has one', () => {
+    expect(
+      checkItems(
+        { hotspots: [], items: [overlayItem] },
+        'chat',
+        true,
+        new Set(['p-billing']),
+      ),
+    ).toContain('no team overlay to change');
+    expect(
+      checkItems(
+        { hotspots: [], items: [{ ...overlayItem, location: 'p-other' }] },
+        'team',
+        true,
+        new Set(['p-billing']),
+      ),
+    ).toContain('location must be the projectId whose overlay it changes');
+    expect(
+      checkItems(
+        { hotspots: [], items: [overlayItem] },
+        'team',
+        true,
+        new Set(),
+      ),
+    ).toContain('overlay recommendations cannot apply');
+  });
+
+  it('refuses an O- item for a project that defaults to another team', () => {
+    expect(
+      checkItems(
+        { hotspots: [], items: [overlayItem] },
+        'team',
+        true,
+        new Set(['p-billing']),
+        new Set(),
+      ),
+    ).toContain('defaults to another team');
+  });
 });
 
 describe('AnalysisReportsService — project items', () => {

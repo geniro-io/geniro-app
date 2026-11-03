@@ -121,6 +121,11 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
                 team.slug,
                 team.snapshot,
                 team.instructions,
+                team.baseSnapshot,
+                {
+                  snapshot: team.overlaySnapshot,
+                  projectId: team.projectId ?? null,
+                },
               ),
             ),
             read.query.offset ?? 0,

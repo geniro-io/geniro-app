@@ -13,6 +13,7 @@ import {
 import type { Item } from '../../runs/entity/item.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { type ItemKind, ItemKindSchema } from '../../runs/runs.types';
+import { baseTeamSnapshotOf } from '../../teams/utils/team-snapshot';
 import {
   type AnalysedRun,
   type AnalysedTeamRef,
@@ -383,7 +384,7 @@ export class ThreadReaderService {
                   em,
                 ),
                 costUsd: reading.fold.totals.costUsd,
-                version: snapshotVersion(run.teamSnapshot),
+                version: snapshotVersion(baseTeamSnapshotOf(run)),
                 ...configuredModels(run.teamSnapshot),
                 timeline: reading.timeline,
               },
@@ -439,7 +440,9 @@ export class ThreadReaderService {
         createdAt: run.createdAt.toISOString(),
         statusNow: run.status,
         version: versionRef(
-          entry === null ? snapshotVersion(run.teamSnapshot) : entry.version,
+          entry === null
+            ? snapshotVersion(baseTeamSnapshotOf(run))
+            : entry.version,
           index,
         ),
         snapshotSeq: analysed.snapshotSeq,
@@ -507,6 +510,9 @@ export class ThreadReaderService {
     return {
       slug: run.teamId,
       snapshot: run.teamSnapshot,
+      baseSnapshot: baseTeamSnapshotOf(run),
+      overlaySnapshot: run.teamOverlaySnapshot,
+      projectId: run.projectId,
       instructions: {
         customInstructions: run.customInstructions,
         replyLanguage: run.replyLanguage,
@@ -534,7 +540,13 @@ export class ThreadReaderService {
     }
     return source?.slug === turn.team.slug
       ? source
-      : { slug: turn.team.slug, snapshot: null, instructions: null };
+      : {
+          slug: turn.team.slug,
+          snapshot: null,
+          baseSnapshot: null,
+          overlaySnapshot: null,
+          instructions: null,
+        };
   }
 
   /** The run's project as the overview names it, or null. */

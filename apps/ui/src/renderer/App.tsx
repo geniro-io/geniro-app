@@ -827,6 +827,10 @@ export function App(): React.JSX.Element {
                           setSettingsSectionOpen(true);
                           setView('settings');
                         }}
+                        onOpenProject={(projectId) => {
+                          setProjectRequest({ projectId });
+                          setView('projects');
+                        }}
                       />
                     ) : null}
                   </div>
@@ -870,6 +874,10 @@ export function App(): React.JSX.Element {
                         onOpenBoard={(projectId) => {
                           setBoardProjectRequest(projectId);
                           setView('tasks');
+                        }}
+                        onOpenTeam={(slug) => {
+                          setTeamRequest(slug);
+                          setView('teams');
                         }}
                       />
                     </div>

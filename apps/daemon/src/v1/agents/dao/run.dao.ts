@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { Run } from '../../runs/entity/run.entity';
+import { baseTeamSnapshotOf } from '../../teams/utils/team-snapshot';
 import type {
   ChatListScope,
   ContextLevel,
@@ -333,8 +334,12 @@ export class RunDao extends BaseDao<Run> {
     return facts;
   }
 
-  /** These runs' team copies (`Run.teamSnapshot`), by run id; a run that no longer exists is absent. */
-  async teamSnapshots(
+  /**
+   * The SHARED team each of these runs started from (`baseTeamSnapshotOf`:
+   * `Run.teamBaseSnapshot`, else `Run.teamSnapshot`), by run id — what a team
+   * version is hashed over; a run that no longer exists is absent.
+   */
+  async baseTeamSnapshots(
     runIds: readonly string[],
     txEm?: EntityManager,
   ): Promise<Map<string, string | null>> {
@@ -342,10 +347,13 @@ export class RunDao extends BaseDao<Run> {
     for (const batch of idBatches(runIds)) {
       const rows = await this.getRepo(txEm).find(
         { id: { $in: batch } },
-        { fields: ['id', 'teamSnapshot'], disableIdentityMap: true },
+        {
+          fields: ['id', 'teamSnapshot', 'teamBaseSnapshot'],
+          disableIdentityMap: true,
+        },
       );
       for (const run of rows) {
-        out.set(run.id, run.teamSnapshot);
+        out.set(run.id, baseTeamSnapshotOf(run));
       }
     }
     return out;

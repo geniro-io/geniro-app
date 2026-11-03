@@ -146,6 +146,29 @@ export async function analysedProjectIdsOf(
 }
 
 /**
+ * The analysed runs' projects whose default team is the team the run ran —
+ * the only projects whose overlay of that team a run would use.
+ */
+export async function overlayProjectIdsOf(
+  turn: AnalysisReadScope,
+  readers: {
+    runDao: Pick<RunDao, 'getById'>;
+    projectScope: Pick<ProjectScopeService, 'projectOfRun'>;
+  },
+  em: EntityManager,
+): Promise<Set<string>> {
+  const ids = new Set<string>();
+  for (const runId of analysedRunIdsOf(turn)) {
+    const run = await readers.runDao.getById(runId, em);
+    const project = run ? await readers.projectScope.projectOfRun(run) : null;
+    if (project && run?.teamId && project.teamSlug === run.teamId) {
+      ids.add(project.id);
+    }
+  }
+  return ids;
+}
+
+/**
  * The run a read is about: the one `runId` names among those the analysis
  * reads, or — named none — its source (a team analysis's newest run).
  * Never a run outside them: the model names it, and the analysis reads only

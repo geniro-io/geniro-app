@@ -4,6 +4,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -136,6 +137,8 @@ import { StageService } from './stage.service';
 import { StageWakeService } from './stage-wake.service';
 import { TeamExecutorService } from './team-executor.service';
 import type { TeamHealthService } from './team-health.service';
+import { TeamOverlayService } from './team-overlay.service';
+import { TeamOverlayStoreService } from './team-overlay-store.service';
 import type { TeamStoreService } from './team-store.service';
 
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
@@ -1145,6 +1148,8 @@ function setup(
     >;
     /** The red setup problems a run start refuses on; none when absent. */
     health?: Pick<TeamHealthService, 'blockingProblems'>;
+    /** The project overlays a run start applies; the shared team when absent. */
+    overlays?: Pick<TeamOverlayService, 'effective'>;
   } = {},
 ): {
   service: TeamExecutorService;
@@ -1576,6 +1581,12 @@ function setup(
       liveNamesOf: async () => new Map(),
       ...opts.projectScope,
     } as unknown as ProjectScopeService,
+    (opts.overlays ?? {
+      effective: async (_slug: string, team: Team) => ({
+        team,
+        overlay: null,
+      }),
+    }) as unknown as TeamOverlayService,
     artifacts,
     // A stub store: the real one refuses the short run ids these fakes mint,
     // and what it writes is pinned in its own spec.
@@ -17513,5 +17524,215 @@ describe('TeamExecutorService — relay mode', () => {
     ).toBe(false);
     completeTurn(resumed!, 'done');
     await drain();
+  });
+
+  describe('project overlays', () => {
+    const SHARED: Team = teamOf(
+      [
+        member('a', {
+          name: 'Planner',
+          effort: 'low',
+          pool: [{ agent: 'claude', model: 'team-pool-model' }],
+        }),
+        member('b', { name: 'Reviewer' }),
+      ],
+      { name: 'shared' },
+    );
+
+    async function overlaysFor(defaults: Record<string, string | null>) {
+      const overlayStore = new TeamOverlayStoreService({
+        teamsDir: mkdtempSync(join(tmpdir(), 'geniro-overlay-run-')),
+      });
+      const projects = {
+        getById: async (id: string) =>
+          id in defaults ? { id, teamSlug: defaults[id] } : null,
+      };
+      const service = new TeamOverlayService(
+        overlayStore,
+        {} as never,
+        projects as never,
+        { fork: () => ({}) } as never,
+      );
+      return { overlayStore, service };
+    }
+
+    function placedIn(projectId: string | null) {
+      return {
+        placeNewRun: async () => ({
+          projectId,
+          chosenProjectGroupId: null,
+          source:
+            projectId === null ? ('none' as const) : ('explicit' as const),
+          instructions: null,
+        }),
+      };
+    }
+
+    const level = (index: number) =>
+      new ClaudeAdapter().listEfforts()[index]!.id;
+
+    it('runs the project’s default team on its overlay, keeping the shared team as the base', async () => {
+      const { overlayStore, service: overlays } = await overlaysFor({
+        p1: 'dev',
+      });
+      await overlayStore.save('dev', 'p1', {
+        members: {
+          a: {
+            settings: { effort: level(1) },
+            pool: [{ agent: 'claude', model: 'project-pool-model' }],
+          },
+        },
+        instructionBlocks: [
+          { id: 'x', title: 'P', text: 'Project rule', audience: 'everyone' },
+        ],
+      });
+      const { service, claude, runDao } = setup(4870, {
+        overlays,
+        projectScope: placedIn('p1'),
+      });
+
+      const run = await service.startRun({
+        slug: 'dev',
+        team: SHARED,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      expect(claude.starts[0]!.input.effort).toBe(level(1));
+      const row = runDao.runs.get(run.id)!;
+      const effective = JSON.parse(row.teamSnapshot!) as Team;
+      expect(effective.members[0]!.pool).toEqual([
+        { agent: 'claude', model: 'project-pool-model' },
+      ]);
+      expect(effective.instructionBlocks.map((b) => b.text)).toContain(
+        'Project rule',
+      );
+      expect(JSON.parse(row.teamBaseSnapshot!)).toEqual(SHARED);
+      expect(JSON.parse(row.teamOverlaySnapshot!)).toMatchObject({
+        projectId: 'p1',
+        overlay: { members: { a: { settings: { effort: level(1) } } } },
+      });
+    });
+
+    it('hands the lead on to the pool the project’s overlay gives it, not the team’s', async () => {
+      const { overlayStore, service: overlays } = await overlaysFor({
+        p1: 'dev',
+      });
+      await overlayStore.save('dev', 'p1', {
+        members: { a: { pool: [{ agent: 'cursor-agent' }] } },
+      });
+      const { service, claude, cursor } = setup(4870, {
+        overlays,
+        projectScope: placedIn('p1'),
+      });
+
+      await service.startRun({
+        slug: 'dev',
+        team: SHARED,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      claude.starts[0]!.emit({
+        type: 'error',
+        message: "You've hit your session limit · resets 7:30pm (Asia/Almaty)",
+      });
+      claude.starts[0]!.finish();
+      await drain();
+
+      expect(cursor.starts).toHaveLength(1);
+      expect(cursor.starts[0]!.input.prompt).toContain('go');
+      expect(
+        claude.starts.some((start) => start.input.model === 'team-pool-model'),
+      ).toBe(false);
+      completeTurn(cursor.starts[0]!, 'done');
+      await drain();
+    });
+
+    it('ignores the overlay for a team that is not the project’s default team', async () => {
+      const { overlayStore, service: overlays } = await overlaysFor({
+        p1: 'other',
+      });
+      await overlayStore.save('dev', 'p1', {
+        members: { a: { settings: { effort: level(1) } } },
+      });
+      const { service, claude, runDao } = setup(4870, {
+        overlays,
+        projectScope: placedIn('p1'),
+      });
+
+      const run = await service.startRun({
+        slug: 'dev',
+        team: SHARED,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      expect(claude.starts[0]!.input.effort).not.toBe(level(1));
+      const row = runDao.runs.get(run.id)!;
+      expect(row.teamOverlaySnapshot).toBeNull();
+      expect(JSON.parse(row.teamSnapshot!)).toEqual(SHARED);
+    });
+
+    it('runs a run without a project on the shared team', async () => {
+      const { service: overlays } = await overlaysFor({});
+      const { service, runDao } = setup(4870, {
+        overlays,
+        projectScope: placedIn(null),
+      });
+
+      const run = await service.startRun({
+        slug: 'dev',
+        team: SHARED,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      const row = runDao.runs.get(run.id)!;
+      expect(JSON.parse(row.teamSnapshot!)).toEqual(SHARED);
+      expect(row.teamOverlaySnapshot).toBeNull();
+    });
+
+    it('refuses a run whose default team’s overlay cannot be read, creating no run', async () => {
+      const { overlayStore, service: overlays } = await overlaysFor({
+        p1: 'dev',
+      });
+      await overlayStore.save('dev', 'p1', {});
+      writeFileSync(overlayStore.pathOf('dev', 'p1'), 'members: [');
+      const { service, runDao } = setup(4870, {
+        overlays,
+        projectScope: placedIn('p1'),
+      });
+
+      await expect(
+        service.startRun({ slug: 'dev', team: SHARED, cwd: dir, prompt: 'go' }),
+      ).rejects.toMatchObject({ errorCode: 'TEAM_OVERLAY_UNREADABLE' });
+      expect(runDao.runs.size).toBe(0);
+    });
+
+    it('refuses a run whose overlay makes the team invalid', async () => {
+      const { overlayStore, service: overlays } = await overlaysFor({
+        p1: 'dev',
+      });
+      const staged = teamOf([member('a')], {
+        name: 'staged',
+        stages: [{ id: 's', title: 'S', goal: 'done', howToWork: 'x' }],
+      });
+      await overlayStore.save('dev', 'p1', {
+        stages: { s: { howToWorkAddendum: 'y'.repeat(4000) } },
+      });
+      const { service, runDao } = setup(4870, {
+        overlays,
+        projectScope: placedIn('p1'),
+      });
+
+      await expect(
+        service.startRun({ slug: 'dev', team: staged, cwd: dir, prompt: 'go' }),
+      ).rejects.toMatchObject({ errorCode: 'TEAM_OVERLAY_INVALID' });
+      expect(runDao.runs.size).toBe(0);
+    });
   });
 });

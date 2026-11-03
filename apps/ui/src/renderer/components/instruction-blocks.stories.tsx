@@ -1,9 +1,11 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { useState } from 'react';
 
+import { InheritedTag } from './inherited-tag';
 import {
   InstructionBlockCard,
   InstructionBlockList,
+  ReadOnlyInstructionBlockCard,
 } from './instruction-blocks';
 
 interface Block {
@@ -98,5 +100,24 @@ export const WithIssues: Story = {
         onRemove={() => undefined}
       />
     </ul>
+  ),
+};
+
+export const ReadOnly: Story = {
+  args: { initial: [] },
+  render: () => (
+    <div className="w-[640px]">
+      <InstructionBlockList empty={false} emptyLabel="No instructions yet.">
+        {BLOCKS.map((block) => (
+          <ReadOnlyInstructionBlockCard
+            key={block.id}
+            id={block.id}
+            title={block.title}
+            text={block.text}
+            tag={<InheritedTag variant="team" />}
+          />
+        ))}
+      </InstructionBlockList>
+    </div>
   ),
 };

@@ -240,3 +240,51 @@ export const STAGES_PROPOSAL: unknown = {
     ],
   },
 };
+
+const BILLING_OVERLAY_DIFF = [
+  '--- billing/review-pair.overlay.yaml',
+  '+++ billing/review-pair.overlay.yaml',
+  '@@ -1,3 +1,5 @@',
+  ' members:',
+  '   reviewer:',
+  '-    model: sonnet',
+  '+    model: opus',
+  '+    effort: high',
+  ' ',
+].join('\n');
+
+export const BILLING_OVERLAY: unknown = {
+  'projectId': 'p-billing',
+  'projectName': 'Billing',
+  'overlay': {
+    'members': { 'reviewer': { 'model': 'opus', 'effort': 'high' } },
+  },
+  'baseHash': '9f2c41d07a1b3e55',
+  'diffText': BILLING_OVERLAY_DIFF,
+};
+
+/** The recorded replacement with a change to one project's overlay beside it. */
+export const REPLACE_WITH_OVERLAY_PROPOSAL: unknown = {
+  ...(RECORDED_REPLACE_PROPOSAL as object),
+  'overlay': BILLING_OVERLAY,
+};
+
+/** Only the overlay changes: the shared team is unchanged. */
+export const OVERLAY_ONLY_PROPOSAL: unknown = {
+  ...(RECORDED_REPLACE_PROPOSAL as object),
+  'summary': "Run Billing's reviewer on opus.",
+  'diff': {
+    'identical': true,
+    'teamFields': [],
+    'addedMembers': [],
+    'removedMembers': [],
+    'changedMembers': [],
+    'addedBlocks': [],
+    'removedBlocks': [],
+    'changedBlocks': [],
+    'addedStages': [],
+    'removedStages': [],
+    'changedStages': [],
+  },
+  'overlay': BILLING_OVERLAY,
+};

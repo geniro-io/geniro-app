@@ -12,6 +12,7 @@ import { createDaemonApis, describeDaemonError } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { NewProjectDialog } from '../tasks/new-project-dialog';
 import { ProjectDetail } from './project-detail';
+import { ProjectPageSlotsContext } from './project-page-slots';
 import { LIST_UNREAD, ProjectsLibrary } from './projects-library';
 import { UnboundRunConfigs } from './unbound-run-configs';
 import { useBindRunConfigsByFolder } from './use-bind-run-configs';
@@ -37,6 +38,7 @@ export function Projects({
   onRequestHandled,
   onProjectShown,
   onOpenBoard,
+  onOpenTeam,
 }: {
   handle: DaemonHandle | null;
   client: DaemonClient | null;
@@ -46,6 +48,8 @@ export function Projects({
   /** The project on show (null for the gallery), for the address bar. */
   onProjectShown: (projectId: string | null) => void;
   onOpenBoard: (projectId: string) => void;
+  /** Open a library team on its own page — the shared team. */
+  onOpenTeam: (slug: string) => void;
 }): React.JSX.Element {
   const apis = useMemo(
     () => (handle ? createDaemonApis(handle) : null),
@@ -59,6 +63,12 @@ export function Projects({
     request?.projectId ?? null,
   );
   const [created, setCreated] = useState<ProjectDto | null>(null);
+  const [sheetSlot, setSheetSlot] = useState<HTMLElement | null>(null);
+  const [dockSlot, setDockSlot] = useState<HTMLElement | null>(null);
+  const slots = useMemo(
+    () => ({ sheet: sheetSlot, dock: dockSlot }),
+    [sheetSlot, dockSlot],
+  );
   const [gone, setGone] = useState<ReadonlySet<string>>(NO_IDS);
   const [creating, setCreating] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -238,37 +248,58 @@ export function Projects({
           }
         />
       ) : (
-        <div
-          data-slot="project-page"
-          className="h-full min-h-0 overflow-y-auto"
-          style={{ scrollbarGutter: 'stable' }}>
-          <div className="mx-auto flex max-w-[1080px] flex-col gap-5 px-4 pt-3 pb-16 sm:px-6">
-            <div className="flex items-center">
-              <BackLink label="Projects" onClick={back} />
-            </div>
-            {banner}
-            {projects === null ? (
-              <EmptyState>
-                {listed.error === null ? 'Loading projects…' : LIST_UNREAD}
-              </EmptyState>
-            ) : shown === null ? (
-              <EmptyState>This project no longer exists</EmptyState>
-            ) : (
-              <ProjectDetail
-                key={shown.id}
-                project={shown}
-                projects={projects}
-                apis={apis}
-                sources={sources}
-                queue={queues.get(shown.id) ?? null}
-                onChanged={listed.reload}
-                onError={setActionError}
-                onOpenBoard={onOpenBoard}
-                onDeleted={deleted}
+        <ProjectPageSlotsContext.Provider value={slots}>
+          <div className="flex h-full min-h-0">
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div
+                data-slot="project-page"
+                className="min-h-0 flex-1 overflow-y-auto"
+                style={{ scrollbarGutter: 'stable' }}>
+                <div className="mx-auto flex max-w-[1080px] flex-col gap-5 px-4 pt-3 pb-16 sm:px-6">
+                  <div className="flex items-center">
+                    <BackLink label="Projects" onClick={back} />
+                  </div>
+                  {banner}
+                  {projects === null ? (
+                    <EmptyState>
+                      {listed.error === null
+                        ? 'Loading projects…'
+                        : LIST_UNREAD}
+                    </EmptyState>
+                  ) : shown === null ? (
+                    <EmptyState>This project no longer exists</EmptyState>
+                  ) : (
+                    <ProjectDetail
+                      key={shown.id}
+                      project={shown}
+                      projects={projects}
+                      apis={apis}
+                      handle={handle}
+                      client={client}
+                      sources={sources}
+                      queue={queues.get(shown.id) ?? null}
+                      onChanged={listed.reload}
+                      onError={setActionError}
+                      onOpenBoard={onOpenBoard}
+                      onOpenTeam={onOpenTeam}
+                      onDeleted={deleted}
+                    />
+                  )}
+                </div>
+              </div>
+              <div
+                ref={setDockSlot}
+                data-slot="project-page-dock"
+                className="contents"
               />
-            )}
+            </div>
+            <div
+              ref={setSheetSlot}
+              data-slot="project-page-sheet"
+              className="contents"
+            />
           </div>
-        </div>
+        </ProjectPageSlotsContext.Provider>
       )}
 
       <NewProjectDialog

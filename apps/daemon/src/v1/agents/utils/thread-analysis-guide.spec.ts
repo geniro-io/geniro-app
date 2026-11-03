@@ -27,8 +27,17 @@ describe('threadAnalysisGuide', () => {
     expect(guide).toContain('W-1, W-2');
     expect(guide).toContain('U-1, U-2');
     expect(guide).toContain('M-1, M-2');
-    expect(guide).toContain('Recommend changes of five kinds');
+    expect(guide).toContain('Recommend changes of six kinds');
     expect(guide).toContain('view=team lists them under `userInstructions`');
+    expect(guide).toContain('O-1, O-2… for overlay items');
+    expect(guide).toContain('target "overlay"');
+  });
+
+  it('offers no overlay items for a plain chat', () => {
+    const guide = threadAnalysisGuide('chat', null, true);
+
+    expect(guide).not.toContain('target "overlay"');
+    expect(guide).not.toContain('O-1');
   });
 
   it("has a team thread assess each member as one run's thin sample, and a plain chat none", () => {
@@ -299,7 +308,7 @@ describe('teamAnalysisBrief', () => {
       expect(guide).not.toContain('memory item');
     }
     expect(threadAnalysisGuide('team', null, false)).toContain(
-      'changes of four kinds',
+      'changes of five kinds',
     );
   });
 

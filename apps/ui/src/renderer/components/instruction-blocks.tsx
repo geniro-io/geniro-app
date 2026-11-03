@@ -117,16 +117,67 @@ export function InstructionBlockCard({
   );
 }
 
-/** The blocks in order, a line when there are none, and the add button. */
+/**
+ * One block shown as it stands, editable elsewhere: its title, a tag saying
+ * where it lives, its size and its text. `children` sits under the title.
+ */
+export function ReadOnlyInstructionBlockCard({
+  id,
+  title,
+  text,
+  tag,
+  size,
+  sizeTitle,
+  children,
+}: {
+  id: string;
+  title: string;
+  text: string;
+  tag?: React.ReactNode;
+  size?: InstructionBlockMeasure;
+  sizeTitle?: string;
+  children?: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <li
+      data-slot="block-card"
+      data-block-id={id}
+      data-read-only="true"
+      className="flex flex-col gap-2 rounded-card bg-muted/30 p-5 ring-1 ring-border">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-base font-semibold">
+          {title.trim() || 'Untitled block'}
+        </span>
+        {size === undefined || size.chars === 0 ? null : (
+          <span
+            data-slot="block-tokens"
+            title={sizeTitle}
+            className="shrink-0 text-sm text-muted-foreground tabular-nums">
+            ~{formatTokens(size.approxTokens)} tokens
+          </span>
+        )}
+        {tag}
+      </div>
+      {children}
+      <p className="text-sm whitespace-pre-wrap text-muted-foreground">
+        {text.trim() === '' ? 'No text yet.' : text}
+      </p>
+    </li>
+  );
+}
+
+/** The blocks in order, a line when there are none, and the add button when blocks can be added here. */
 export function InstructionBlockList({
   empty,
   emptyLabel,
   onAdd,
+  addLabel = 'Add instruction block',
   children,
 }: {
   empty: boolean;
   emptyLabel: string;
-  onAdd: () => void;
+  onAdd?: () => void;
+  addLabel?: string;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -136,14 +187,16 @@ export function InstructionBlockList({
       ) : (
         <ul className="flex flex-col gap-3">{children}</ul>
       )}
-      <Button
-        type="button"
-        variant="ghost"
-        className="h-8 self-start gap-2 rounded-control text-muted-foreground"
-        onClick={onAdd}>
-        <Plus aria-hidden="true" />
-        Add instruction block
-      </Button>
+      {onAdd === undefined ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-8 self-start gap-2 rounded-control text-muted-foreground"
+          onClick={onAdd}>
+          <Plus aria-hidden="true" />
+          {addLabel}
+        </Button>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { AgentKind } from '../../runs/runs.types';
-import type { Team, TeamMember } from '../teams.types';
+import type { Team, TeamMember, TeamOverlay } from '../teams.types';
 
 /**
  * How `read_teams` shows an agent's `configDir`: the path of a profile
@@ -106,6 +106,95 @@ export function restoreConfigDirs(
   };
   return refusal === null
     ? { ok: true, team: restored }
+    : { ok: false, message: refusal };
+}
+
+export type RestoredOverlayConfigDirs =
+  { ok: true; overlay: TeamOverlay } | { ok: false; message: string };
+
+/**
+ * {@link restoreConfigDirs} for a project's overlay of `team`: a token is put
+ * back from the profiles `known` name (the shared team, the overlay as
+ * stored), for an agent of a CLI that profile served there, and any other
+ * token refuses the overlay.
+ */
+export function restoreOverlayConfigDirs(
+  overlay: TeamOverlay,
+  team: Team,
+  known: Team[],
+): RestoredOverlayConfigDirs {
+  const paths = new Map<string, { path: string; agents: Set<AgentKind> }>();
+  for (const { path, agent } of known.flatMap(profilesOf)) {
+    const token = configDirToken(path);
+    const entry = paths.get(token) ?? { path, agents: new Set<AgentKind>() };
+    entry.agents.add(agent);
+    paths.set(token, entry);
+  }
+  let refusal: string | null = null;
+  const restore = <T extends { configDir?: string }>(
+    holder: T,
+    agent: AgentKind | undefined,
+  ): T => {
+    if (!holder.configDir?.startsWith(CONFIG_DIR_TOKEN_PREFIX.slice(0, -1))) {
+      return holder;
+    }
+    const entry = paths.get(holder.configDir);
+    if (
+      entry === undefined ||
+      agent === undefined ||
+      !entry.agents.has(agent)
+    ) {
+      refusal ??= `configDir "${holder.configDir}" names no ${agent ?? ''} profile of this team or its overlay: leave configDir out, or name the folder`;
+      return holder;
+    }
+    return { ...holder, configDir: entry.path };
+  };
+  const agentOf = (id: string): AgentKind | undefined =>
+    team.members.find((member) => member.id === id)?.agent;
+  const restored: TeamOverlay = {
+    ...overlay,
+    ...(overlay.allMembers === undefined
+      ? {}
+      : {
+          allMembers: Object.fromEntries(
+            Object.entries(overlay.allMembers).map(([agent, defaults]) => [
+              agent,
+              defaults === undefined
+                ? defaults
+                : restore(defaults, agent as AgentKind),
+            ]),
+          ),
+        }),
+    ...(overlay.members === undefined
+      ? {}
+      : {
+          members: Object.fromEntries(
+            Object.entries(overlay.members).map(([id, member]) => [
+              id,
+              {
+                ...member,
+                ...(member.settings === undefined
+                  ? {}
+                  : {
+                      settings: restore(
+                        member.settings,
+                        member.settings.agent ?? agentOf(id),
+                      ),
+                    }),
+                ...(member.pool === undefined
+                  ? {}
+                  : {
+                      pool: member.pool.map((entry) =>
+                        restore(entry, entry.agent),
+                      ),
+                    }),
+              },
+            ]),
+          ),
+        }),
+  };
+  return refusal === null
+    ? { ok: true, overlay: restored }
     : { ok: false, message: refusal };
 }
 

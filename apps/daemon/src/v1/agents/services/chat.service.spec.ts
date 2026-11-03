@@ -2907,6 +2907,7 @@ describe('ChatService', () => {
         teamBuilders.teamOf(builder.id, SINGLE_AGENT_NODE),
       ).resolves.toEqual({
         slug: 'team',
+        projectId: null,
         turnStartedAt: expect.any(Number),
         savedHash: null,
         acceptsAnyVersion: false,

@@ -83,7 +83,7 @@ export class TeamLedgerService implements OnModuleInit {
     let versions = 0;
     for (let at = 0; at < unversioned.length; at += SWEEP_WINDOW) {
       const window = unversioned.slice(at, at + SWEEP_WINDOW);
-      const snapshots = await this.runDao.teamSnapshots(
+      const snapshots = await this.runDao.baseTeamSnapshots(
         window.map((run) => run.id),
         em,
       );
@@ -124,7 +124,7 @@ export class TeamLedgerService implements OnModuleInit {
     if (run === undefined || run.teamId === null) {
       return;
     }
-    const snapshots = await this.runDao.teamSnapshots([runId], em);
+    const snapshots = await this.runDao.baseTeamSnapshots([runId], em);
     await this.stampVersion(run, snapshots.get(runId) ?? null, em);
   }
 

@@ -23,7 +23,11 @@ import {
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
-import { analysedProjectIdsOf, analysedSourceOf } from '../utils/analysed-runs';
+import {
+  analysedProjectIdsOf,
+  analysedSourceOf,
+  overlayProjectIdsOf,
+} from '../utils/analysed-runs';
 import { laneOf } from '../utils/analysis-lane';
 import { readCard } from '../utils/recommendations-card';
 import { teamCardStats } from '../utils/team-runs-fold';
@@ -84,16 +88,18 @@ export class AnalysisReportsService {
       }
       sourceKind = analysedThreadKindOf(source);
     }
+    const readers = { runDao: this.runDao, projectScope: this.projectScope };
     const problem = checkItems(
       report,
       sourceKind,
       this.memory.enabled,
-      report.items.some((item) => item.target === 'project')
-        ? await analysedProjectIdsOf(
-            turn,
-            { runDao: this.runDao, projectScope: this.projectScope },
-            em,
-          )
+      report.items.some(
+        (item) => item.target === 'project' || item.target === 'overlay',
+      )
+        ? await analysedProjectIdsOf(turn, readers, em)
+        : new Set(),
+      report.items.some((item) => item.target === 'overlay')
+        ? await overlayProjectIdsOf(turn, readers, em)
         : new Set(),
     );
     if (problem !== null) {
@@ -334,6 +340,8 @@ export function checkItems(
   memoryEnabled: boolean,
   /** The projects the analysed runs belong to — a project item must name one. */
   projectIds: ReadonlySet<string>,
+  /** Of those, the ones defaulting to the analysed team — an overlay item must name one. */
+  overlayProjectIds: ReadonlySet<string> = projectIds,
 ): string | null {
   const seen = new Set<string>();
   for (const item of report.items) {
@@ -350,6 +358,18 @@ export function checkItems(
     }
     if (item.target === 'team' && sourceKind === 'chat') {
       return `${item.id}: the analysed thread is a plain chat, so only repo, user, memory and project recommendations apply`;
+    }
+    if (item.target === 'overlay' && sourceKind === 'chat') {
+      return `${item.id}: the analysed thread is a plain chat, so it has no team overlay to change`;
+    }
+    if (item.target === 'overlay' && projectIds.size === 0) {
+      return `${item.id}: the analysed runs belong to no project, so overlay recommendations cannot apply`;
+    }
+    if (item.target === 'overlay' && !projectIds.has(item.location)) {
+      return `${item.id}: location must be the projectId whose overlay it changes, the project of an analysed run (${[...projectIds].join(', ')}) — view=project names it`;
+    }
+    if (item.target === 'overlay' && !overlayProjectIds.has(item.location)) {
+      return `${item.id}: project ${item.location} defaults to another team, so its runs would not use an overlay of this one — file a team or project item instead`;
     }
     if (item.target === 'project' && projectIds.size === 0) {
       return `${item.id}: the analysed runs belong to no project, so project-instructions recommendations cannot apply`;

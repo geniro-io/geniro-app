@@ -13,30 +13,41 @@ function stampOf(at: Date): string {
 }
 
 /**
- * Copy a team file as it stands to `.backups/<slug>.<timestamp>.yaml` under
- * the library `directory` — never a `*.team.yaml` name, so nothing reads it as
- * a team. Exclusive, so two saves in one second keep both copies. Answers
- * the backup's path relative to the library.
+ * Write `source` to `<dir>/<baseName>.<timestamp>.yaml`, exclusively, so two
+ * copies in one second keep both. Answers the file's name.
  */
-export async function backUpTeam(
-  directory: string,
-  slug: string,
+export async function backUpFile(
+  dir: string,
+  baseName: string,
   source: string,
 ): Promise<string> {
-  const dir = join(directory, TEAM_BACKUP_DIR);
   await mkdir(dir, { recursive: true });
   const stamp = stampOf(new Date());
   for (let attempt = 1; ; attempt += 1) {
-    const name = `${slug}.${stamp}${attempt === 1 ? '' : `-${attempt}`}.yaml`;
+    const name = `${baseName}.${stamp}${attempt === 1 ? '' : `-${attempt}`}.yaml`;
     try {
       await atomicCreate(join(dir, name), source);
-      return `${TEAM_BACKUP_DIR}/${name}`;
+      return name;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 50) {
         throw error;
       }
     }
   }
+}
+
+/**
+ * Copy a team file as it stands to `.backups/<slug>.<timestamp>.yaml` under
+ * the library `directory` — never a `*.team.yaml` name, so nothing reads it as
+ * a team. Answers the backup's path relative to the library.
+ */
+export async function backUpTeam(
+  directory: string,
+  slug: string,
+  source: string,
+): Promise<string> {
+  const name = await backUpFile(join(directory, TEAM_BACKUP_DIR), slug, source);
+  return `${TEAM_BACKUP_DIR}/${name}`;
 }
 
 /**

@@ -24,15 +24,16 @@ export interface TeamHealthState {
  * page only: it makes the daemon list each profile's MCP servers once, and
  * while a member still reads `checking` this asks again every couple of
  * seconds, a bounded number of times. `probe: false` never dials anything and
- * never polls.
+ * never polls. With `projectId`, the team is read as that project runs it.
  */
 export function useTeamHealth(
   apis: DaemonApis | null,
   slug: string | null,
-  options: { probe: boolean },
+  options: { probe: boolean; projectId?: string | null },
 ): TeamHealthState {
   const teamsApi = apis?.teams ?? null;
   const { probe } = options;
+  const projectId = options.projectId ?? null;
   const [answered, setAnswered] = useState<{
     slug: string;
     health: TeamHealthDto;
@@ -56,6 +57,7 @@ export function useTeamHealth(
       teamsApi
         .readTeamHealth({
           slug,
+          ...(projectId === null ? {} : { projectId }),
           probe: probe
             ? ReadTeamHealthProbeEnum.True
             : ReadTeamHealthProbeEnum.False,
@@ -88,7 +90,7 @@ export function useTeamHealth(
       live = false;
       clearTimeout(timer);
     };
-  }, [teamsApi, slug, probe, reloadToken]);
+  }, [teamsApi, slug, probe, projectId, reloadToken]);
 
   const reload = useLatestCallback(() => {
     setReloadToken((token) => token + 1);

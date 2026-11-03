@@ -2,9 +2,11 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { fn } from 'storybook/test';
 
 import {
+  OVERLAY_ONLY_PROPOSAL,
   RECORDED_NEW_PROPOSAL,
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
+  REPLACE_WITH_OVERLAY_PROPOSAL,
   STAGES_PROPOSAL,
 } from './__fixtures__/member-team-proposals';
 import { ApprovalCard } from './approval-card';
@@ -42,6 +44,16 @@ export const PendingReplaceWithAuto: Story = {
 /** A builder chat's stage change: the walk it proposes and each stage it touches. */
 export const PendingStages: Story = {
   args: { input: STAGES_PROPOSAL },
+};
+
+/** A replacement that also changes one project's overlay of the team. */
+export const PendingReplaceWithOverlay: Story = {
+  args: { input: REPLACE_WITH_OVERLAY_PROPOSAL },
+};
+
+/** Only the project's overlay changes; the shared team section is left out. */
+export const PendingOverlayOnly: Story = {
+  args: { input: OVERLAY_ONLY_PROPOSAL },
 };
 
 export const SettledSaved: Story = {

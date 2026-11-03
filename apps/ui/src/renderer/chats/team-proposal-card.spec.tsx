@@ -10,9 +10,12 @@ import {
 import { settleStageGraphs } from '../__tests__/settle-stage-graphs';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import {
+  BILLING_OVERLAY,
+  OVERLAY_ONLY_PROPOSAL,
   RECORDED_NEW_PROPOSAL,
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
+  REPLACE_WITH_OVERLAY_PROPOSAL,
   STAGES_PROPOSAL,
 } from './__fixtures__/member-team-proposals';
 import { ApprovalCard } from './approval-card';
@@ -234,6 +237,63 @@ describe('TeamProposalCard', () => {
     expect(el.textContent).toContain(
       'Approving overwrites Review Pair; the current file is backed up first.',
     );
+  });
+
+  it('draws the team change and the project’s overlay diff as two sections under one Approve', () => {
+    const el = render(card({ input: REPLACE_WITH_OVERLAY_PROPOSAL }));
+    const shared = el.querySelector('[data-slot="team-proposal-shared"]');
+    const overlay = el.querySelector('[data-slot="team-proposal-overlay"]');
+    expect(shared?.querySelector('h4')?.textContent).toBe('Shared team');
+    expect(shared?.querySelector('[data-slot="team-diff"]')).not.toBeNull();
+    expect(overlay?.querySelector('h4')?.textContent).toBe('Billing overlay');
+    expect(
+      overlay?.querySelector('[data-slot="unified-diff"]')?.textContent,
+    ).toContain('+    model: opus');
+    expect(
+      [...el.querySelectorAll('button')].filter(
+        (b) => b.textContent === 'Approve',
+      ),
+    ).toHaveLength(1);
+    expect(el.textContent).toContain(
+      'Approving overwrites Review Pair and changes Billing’s overlay of it',
+    );
+  });
+
+  it('hides the shared team section when only the overlay changes', () => {
+    const el = render(card({ input: OVERLAY_ONLY_PROPOSAL }));
+    expect(el.querySelector('[data-slot="team-proposal-shared"]')).toBeNull();
+    expect(el.querySelector('[data-slot="team-diff"]')).toBeNull();
+    expect(
+      el.querySelector('[data-slot="team-proposal-overlay"]'),
+    ).not.toBeNull();
+    expect(el.textContent).toContain(
+      'Approving changes Billing’s overlay of Review Pair; the shared team stays as it is.',
+    );
+  });
+
+  it('draws no overlay section and no section titles for a card without an overlay', () => {
+    const el = render(card());
+    expect(el.querySelector('[data-slot="team-proposal-overlay"]')).toBeNull();
+    expect(el.querySelector('[data-slot="team-proposal-shared"]')).toBeNull();
+  });
+
+  it('holds Approve over a hidden character in the overlay’s diff', () => {
+    const el = render(
+      card({
+        input: {
+          ...(REPLACE_WITH_OVERLAY_PROPOSAL as object),
+          overlay: {
+            ...(BILLING_OVERLAY as object),
+            diffText: '+    model: op\u202Eus',
+          },
+        },
+      }),
+    );
+    expect(
+      el.querySelector('[data-slot="hazard-warning"]')?.textContent,
+    ).toContain('U+202E');
+    expect(buttonNamed(el, 'Approve')!.disabled).toBe(true);
+    expect(buttonNamed(el, 'Decline')!.disabled).toBe(false);
   });
 
   it('sends the decline note as the verdict answer', () => {

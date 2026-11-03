@@ -297,6 +297,25 @@ describe('BoardColumn — the autopilot banner', () => {
         },
       );
 
+      it('does not offer the run settings for a card its project overrides hold — the team page answers it', () => {
+        const el = column({
+          ...armed,
+          waiting: 1,
+          blocked: stuck(
+            1,
+            'This project’s overrides of its team cannot be applied',
+            'overlay',
+          ),
+          onFixBlocked: vi.fn(),
+        });
+
+        act(() => {
+          line(el)?.click();
+        });
+
+        expect(panel()?.textContent).not.toContain('Set the board');
+      });
+
       it('still offers the run settings when one of several cards needs them', () => {
         const el = column({
           ...armed,

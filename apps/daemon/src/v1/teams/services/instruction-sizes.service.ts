@@ -17,12 +17,14 @@ import type {
   ProjectInstructionSizesWire,
   Team,
   TeamMember,
+  TeamOverlay,
 } from '../teams.types';
 import {
   instructionBlocksByMember,
   memberInstructionFields,
 } from '../utils/member-instructions';
 import { stageMapOf } from '../utils/stage-text';
+import { applyTeamOverlay } from '../utils/team-overlay';
 import { calleesOf, onDemandMemberIds } from '../utils/team-roster';
 
 /** What every run in one project carries, whatever its CLI or team. */
@@ -63,6 +65,24 @@ export interface InstructionSizesInput {
 @Injectable()
 export class InstructionSizesService {
   constructor(private readonly adapters: AgentAdapterRegistry) {}
+
+  /** {@link measure} for the team editor: with a project's overlay, the team as that project runs it. */
+  measureFor(
+    input: InstructionSizesInput & {
+      team: Team;
+      projectId?: string;
+      overlay?: TeamOverlay;
+    },
+  ): InstructionSizesWire {
+    const { projectId, overlay, ...rest } = input;
+    if (projectId === undefined || overlay === undefined) {
+      return this.measure(rest);
+    }
+    return this.measure({
+      ...rest,
+      team: applyTeamOverlay(input.team, overlay, projectId).team,
+    });
+  }
 
   measure(input: InstructionSizesInput): InstructionSizesWire {
     const { team } = input;

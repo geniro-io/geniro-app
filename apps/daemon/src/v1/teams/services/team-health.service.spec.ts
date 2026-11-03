@@ -24,7 +24,7 @@ import { CLI_PATHS_ENV } from '../../agents/utils/agent-binary';
 import { member, teamOf } from '../__tests__/team-builders';
 import type { Team, TeamMember } from '../teams.types';
 import { TeamHealthService } from './team-health.service';
-import type { TeamStoreService } from './team-store.service';
+import type { TeamOverlayService } from './team-overlay.service';
 
 const dirs: string[] = [];
 
@@ -59,9 +59,12 @@ interface Harness {
 
 function harness(
   team: Team,
-  options: { version?: string | null } = {},
+  options: {
+    version?: string | null;
+    projects?: Record<string, Team>;
+  } = {},
 ): Harness {
-  const { version = '1.0.0' } = options;
+  const { version = '1.0.0', projects = {} } = options;
   const listMcpServers = vi.fn(() =>
     Promise.resolve({
       ok: true as const,
@@ -118,11 +121,15 @@ function harness(
     },
   );
   const vocabularies = freshVocabularyStore();
-  const store = {
-    get: () => Promise.resolve({ slug: 'team', team, hash: 'h' }),
-  } as unknown as TeamStoreService;
+  const overlays = {
+    effectiveBySlug: (_slug: string, projectId: string | null) =>
+      Promise.resolve({
+        team: (projectId === null ? undefined : projects[projectId]) ?? team,
+        overlay: null,
+      }),
+  } as unknown as TeamOverlayService;
   const service = new TeamHealthService(
-    store,
+    overlays,
     adapters,
     versions,
     mcp,
@@ -164,6 +171,24 @@ describe('TeamHealthService', () => {
     expect(await h.service.blockingProblems(team)).toMatchObject([
       { kind: 'profile_missing' },
     ]);
+  });
+
+  it('checks the team as the asked project runs it', async () => {
+    const gone = join(realDir(), 'gone');
+    const shared = teamOf([member('dev')]);
+    const h = harness(shared, {
+      projects: { p1: teamOf([member('dev', { configDir: gone })]) },
+    });
+
+    expect((await h.service.health('team', false)).blocking).toBe(false);
+    const inProject = await h.service.health('team', false, 'p1');
+    expect(inProject.blocking).toBe(true);
+    expect(inProject.members[0]?.problems).toMatchObject([
+      { kind: 'profile_missing', configDir: gone },
+    ]);
+    expect(
+      (await h.service.memberHealth('team', 'dev', false, 'p1')).problems,
+    ).toMatchObject([{ kind: 'profile_missing' }]);
   });
 
   it('marks needs_auth amber and does not block', async () => {

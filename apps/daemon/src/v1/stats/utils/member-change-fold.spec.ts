@@ -89,6 +89,7 @@ describe('foldMemberChanges', () => {
   const changeLog: TeamChangeLogRecord[] = [
     {
       slug: 'dev-team',
+      projectId: null,
       changedAt: at(2),
       source: 'analysis',
       fromVersion: 'v1',

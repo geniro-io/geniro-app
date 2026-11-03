@@ -27,16 +27,44 @@ const projectsApi = vi.hoisted(() => ({
 }));
 const teamsApi = vi.hoisted(() => ({
   listTeams: vi.fn(async () => []),
+  listTeamOverlays: vi.fn(),
+  listProjectTeamOverlays: vi.fn(),
+  getTeam: vi.fn(),
+  getTeamOverlay: vi.fn(),
+  saveTeamOverlay: vi.fn(),
+  deleteTeamOverlay: vi.fn(),
+  saveTeam: vi.fn(),
+  readTeamHealth: vi.fn(),
+  measureInstructionSizes: vi.fn(),
 }));
 
-vi.mock('../daemon-api', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../daemon-api')>()),
-  createDaemonApis: () => ({
-    projects: projectsApi,
-    teams: teamsApi,
-    agents: {},
-  }),
-}));
+vi.mock('../daemon-api', async (importOriginal) => {
+  const { withVocabulary } = await import('../__tests__/agent-vocabulary-api');
+  return {
+    ...(await importOriginal<typeof import('../daemon-api')>()),
+    createDaemonApis: () => ({
+      projects: projectsApi,
+      teams: teamsApi,
+      capabilities: { getCapabilities: async () => ({}) },
+      agents: withVocabulary({
+        listAgentModels: async () => [],
+        listAgentEfforts: async () => ({
+          efforts: [],
+          unavailableReason: null,
+        }),
+        listAgentContextWindows: async () => ({
+          windows: [],
+          unavailableReason: null,
+          unavailableKind: null,
+        }),
+        listAgentModelParameters: async () => ({
+          parameters: [],
+          unavailableReason: null,
+        }),
+      }),
+    }),
+  };
+});
 
 const { Projects } = await import('./Projects');
 const { LIST_UNREAD } = await import('./projects-library');
@@ -177,6 +205,7 @@ async function mount(
         onRequestHandled={() => undefined}
         onProjectShown={() => undefined}
         onOpenBoard={() => undefined}
+        onOpenTeam={() => undefined}
         {...props}
       />,
     );
@@ -356,6 +385,7 @@ describe('Projects page', () => {
       onRequestHandled: handled,
       onProjectShown: shown,
       onOpenBoard: () => undefined,
+      onOpenTeam: () => undefined,
     };
     const el = await mount({ ...props, request: { projectId: 'p1' } });
     expect(el.querySelector('h1')?.textContent).toBe('One');
@@ -851,6 +881,357 @@ describe('Projects page', () => {
     const breakdown = rows[0]!.querySelector('[data-slot="instruction-size"]');
     expect(breakdown?.textContent).toContain('Project instructions');
     expect(breakdown?.textContent).toContain('2,998');
+  });
+
+  it('keeps the default agent or team in its own section ahead of the task board', async () => {
+    const el = await mountOpen();
+
+    const sections = [...el.querySelectorAll<HTMLElement>('section[data-slot]')]
+      .map((section) => section.dataset.slot)
+      .filter((slot) => slot !== 'project-hero');
+    expect(sections.indexOf('project-default-target')).toBeGreaterThan(-1);
+    expect(sections.indexOf('project-default-target')).toBeLessThan(
+      sections.indexOf('project-board'),
+    );
+    const board = el.querySelector('[data-slot="project-board"]')!;
+    expect(board.textContent).not.toContain('Default agent or team');
+    expect(board.textContent).toContain('Autopilot');
+    expect(
+      el.querySelector('[data-slot="project-default-target"]')?.textContent,
+    ).toContain('Default agent or team');
+    expect(el.querySelector('[data-slot="project-team"]')).toBeNull();
+    expect(teamsApi.listTeamOverlays).not.toHaveBeenCalled();
+  });
+
+  describe('when the default is a team', () => {
+    const CREW = {
+      name: 'Crew',
+      mode: 'lead',
+      members: [
+        {
+          id: 'lead',
+          name: 'Lead',
+          agent: 'claude',
+          approval: 'auto',
+          model: 'opus',
+          instructions: 'Plan it.',
+        },
+      ],
+      triggers: [{ kind: 'first-message', member: 'lead' }],
+      instructionBlocks: [
+        { id: 'b1', title: 'Shared', text: 'Be brief.', audience: 'everyone' },
+      ],
+    };
+    const overlayWire = (overlay: Record<string, unknown>, hash: string) => ({
+      slug: 'crew',
+      projectId: 'p1',
+      overlay,
+      hash,
+      orphans: [],
+    });
+
+    beforeEach(() => {
+      projectsApi.listProjects.mockResolvedValue([
+        aProject({ teamSlug: 'crew' }),
+      ]);
+      teamsApi.getTeam.mockReset().mockResolvedValue({
+        slug: 'crew',
+        hash: 'team-1',
+        team: CREW,
+      });
+      teamsApi.getTeamOverlay
+        .mockReset()
+        .mockResolvedValue(overlayWire({}, 'o-1'));
+      teamsApi.saveTeamOverlay
+        .mockReset()
+        .mockImplementation(async ({ saveTeamOverlayDto }) =>
+          overlayWire(saveTeamOverlayDto.overlay as never, 'o-2'),
+        );
+      teamsApi.deleteTeamOverlay
+        .mockReset()
+        .mockResolvedValue({ deleted: true });
+      teamsApi.saveTeam.mockReset();
+      teamsApi.listProjectTeamOverlays
+        .mockReset()
+        .mockResolvedValue({ overlays: [] });
+      teamsApi.readTeamHealth.mockReset().mockResolvedValue({
+        slug: 'crew',
+        checkedAt: '2026-11-03T10:00:00.000Z',
+        blocking: false,
+        team: [],
+        members: [],
+      });
+      teamsApi.measureInstructionSizes
+        .mockReset()
+        .mockResolvedValue({ members: [], blocks: [] });
+    });
+
+    const memberCard = (el: HTMLElement): HTMLElement =>
+      el.querySelector<HTMLElement>(
+        '[data-slot="project-team"] [data-slot="member-card"]',
+      )!;
+    const openMember = async (el: HTMLElement): Promise<HTMLElement> => {
+      await act(async () => {
+        memberCard(el)
+          .closest('li')!
+          .querySelector<HTMLButtonElement>(':scope > button')!
+          .click();
+      });
+      await settle();
+      return document.querySelector<HTMLElement>('[data-slot="member-sheet"]')!;
+    };
+
+    it('draws the team as this project runs it, its health read for the project', async () => {
+      teamsApi.getTeamOverlay.mockResolvedValue(
+        overlayWire(
+          { members: { lead: { settings: { model: 'haiku' } } } },
+          'o-1',
+        ),
+      );
+      const el = await mountOpen();
+
+      const section = el.querySelector('[data-slot="project-team"]')!;
+      expect(section.textContent).toContain('Team · Crew');
+      expect(teamsApi.getTeamOverlay).toHaveBeenCalledWith({
+        slug: 'crew',
+        projectId: 'p1',
+      });
+      expect(teamsApi.readTeamHealth).toHaveBeenCalledWith(
+        expect.objectContaining({ slug: 'crew', projectId: 'p1' }) as unknown,
+      );
+      expect(section.textContent).toContain('Be brief.');
+    });
+
+    it('opens a member beside the page in the project’s mode and saves an extra instruction to the overlay, never the team', async () => {
+      const el = await mountOpen();
+      const sheet = await openMember(el);
+
+      expect(
+        document
+          .querySelector('[data-slot="project-page-sheet"]')
+          ?.contains(sheet),
+      ).toBe(true);
+      expect(
+        sheet.querySelector('[data-slot="member-sheet-project"]')?.textContent,
+      ).toBe('One');
+      const notes = sheet.querySelector<HTMLTextAreaElement>(
+        '#member-project-instructions',
+      )!;
+      type(notes, 'Use the staging DB.');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      });
+
+      expect(teamsApi.saveTeamOverlay).toHaveBeenCalledWith({
+        slug: 'crew',
+        projectId: 'p1',
+        saveTeamOverlayDto: {
+          overlay: {
+            members: { lead: { extraInstructions: 'Use the staging DB.' } },
+          },
+          baseHash: 'o-1',
+        },
+      });
+      expect(teamsApi.saveTeam).not.toHaveBeenCalled();
+    });
+
+    it('overrides a Model row from the team’s value and resets it', async () => {
+      const el = await mountOpen();
+      const sheet = await openMember(el);
+
+      await act(async () => {
+        sheet
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Override Model for One"]',
+          )!
+          .click();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      });
+      expect(teamsApi.saveTeamOverlay).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          saveTeamOverlayDto: expect.objectContaining({
+            overlay: { members: { lead: { settings: { model: 'opus' } } } },
+          }) as unknown,
+        }) as unknown,
+      );
+      expect(sheet.textContent).toContain('Team: opus');
+
+      await act(async () => {
+        sheet
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Reset Model to the team’s for One"]',
+          )!
+          .click();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      });
+      expect(teamsApi.saveTeamOverlay).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          saveTeamOverlayDto: expect.objectContaining({
+            overlay: { members: {} },
+          }) as unknown,
+        }) as unknown,
+      );
+    });
+
+    it('keeps the typed text when the overlay changed elsewhere, and says so', async () => {
+      teamsApi.saveTeamOverlay.mockRejectedValue(
+        new Error(
+          'daemon PUT /v1/teams/crew/overlays/p1 failed (409): {"code":"TEAM_OVERLAY_CHANGED","message":"changed"}',
+        ),
+      );
+      const el = await mountOpen();
+      const sheet = await openMember(el);
+      const notes = sheet.querySelector<HTMLTextAreaElement>(
+        '#member-project-instructions',
+      )!;
+      type(notes, 'Mine.');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      });
+
+      expect(
+        el.querySelector('[data-slot="project-team"]')?.textContent,
+      ).toContain('Changed elsewhere — reload.');
+      expect(notes.value).toBe('Mine.');
+    });
+
+    it('writes what was just typed before leaving for the team’s page', async () => {
+      const onOpenTeam = vi.fn(() => {
+        expect(teamsApi.saveTeamOverlay).toHaveBeenCalledTimes(1);
+      });
+      const el = await mountOpen({ onOpenTeam });
+      const sheet = await openMember(el);
+      type(
+        sheet.querySelector<HTMLTextAreaElement>(
+          '#member-project-instructions',
+        )!,
+        'Typed just now.',
+      );
+
+      await act(async () => {
+        [
+          ...el.querySelectorAll<HTMLButtonElement>(
+            '[data-slot="project-team"] button',
+          ),
+        ]
+          .find((b) => b.textContent === 'Open team')!
+          .click();
+      });
+      await settle();
+
+      expect(onOpenTeam).toHaveBeenCalledWith('crew');
+      expect(teamsApi.saveTeamOverlay).toHaveBeenCalledWith(
+        expect.objectContaining({
+          saveTeamOverlayDto: expect.objectContaining({
+            overlay: {
+              members: { lead: { extraInstructions: 'Typed just now.' } },
+            },
+          }) as unknown,
+        }) as unknown,
+      );
+    });
+
+    it('writes what was just typed when the page goes away', async () => {
+      const el = await mountOpen();
+      const sheet = await openMember(el);
+      type(
+        sheet.querySelector<HTMLTextAreaElement>(
+          '#member-project-instructions',
+        )!,
+        'Before I go.',
+      );
+
+      act(() => {
+        root?.unmount();
+      });
+      root = null;
+      await act(async () => {});
+
+      expect(teamsApi.saveTeamOverlay).toHaveBeenCalledWith(
+        expect.objectContaining({
+          saveTeamOverlayDto: expect.objectContaining({
+            overlay: {
+              members: { lead: { extraInstructions: 'Before I go.' } },
+            },
+          }) as unknown,
+        }) as unknown,
+      );
+    });
+
+    it('opens the shared team on its own page', async () => {
+      const onOpenTeam = vi.fn();
+      const el = await mountOpen({ onOpenTeam });
+
+      await act(async () => {
+        [
+          ...el.querySelectorAll<HTMLButtonElement>(
+            '[data-slot="project-team"] button',
+          ),
+        ]
+          .find((b) => b.textContent === 'Open team')!
+          .click();
+      });
+
+      expect(onOpenTeam).toHaveBeenCalledWith('crew');
+    });
+
+    it('lists the overrides it kept of a team it no longer defaults to, and removes them', async () => {
+      teamsApi.listProjectTeamOverlays.mockResolvedValue({
+        overlays: [
+          {
+            slug: 'old-crew',
+            teamName: 'Old crew',
+            projectId: 'p1',
+            projectName: 'One',
+            active: false,
+            defaultTeamSlug: 'crew',
+            defaultTeamName: 'Crew',
+            hasOverlay: true,
+            hash: 'h',
+            overrides: 1,
+            blocks: 0,
+            notes: 0,
+            orphans: [],
+            unreadable: null,
+          },
+        ],
+      });
+      const el = await mountOpen();
+
+      const kept = el.querySelector('[data-slot="project-kept-overlays"]')!;
+      expect(kept.textContent).toContain('Old crew');
+      await act(async () => {
+        [...kept.querySelectorAll<HTMLButtonElement>('button')]
+          .find((b) => b.textContent === 'Remove')!
+          .click();
+      });
+      await act(async () => {
+        [
+          ...document.querySelectorAll<HTMLButtonElement>(
+            '[role="dialog"] button',
+          ),
+        ]
+          .find((b) => b.textContent === 'Remove')!
+          .click();
+      });
+      await settle();
+
+      expect(teamsApi.deleteTeamOverlay).toHaveBeenCalledWith({
+        slug: 'old-crew',
+        projectId: 'p1',
+      });
+    });
+  });
+
+  it('draws no team section for a project that defaults to an agent', async () => {
+    teamsApi.listProjectTeamOverlays.mockResolvedValue({ overlays: [] });
+    const el = await mountOpen();
+
+    expect(el.querySelector('[data-slot="project-team"]')).toBeNull();
   });
 
   it('creates a project from the page and opens it', async () => {

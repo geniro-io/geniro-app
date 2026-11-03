@@ -131,9 +131,12 @@ export function MemberCard({
   stageTitles,
   handlesFirstMessage,
   selected,
+  overlayBadges,
   onOpen,
 }: {
   member: TeamMember;
+  /** In a project's scope: what that project's overlay changes about this member. */
+  overlayBadges?: { overrides: number; notes: boolean };
   agentLabel: string;
   health: MemberStatus;
   /** What keeps the member from running well, each with its fix. */
@@ -216,6 +219,22 @@ export function MemberCard({
         <div data-slot="member-setup" className="flex flex-wrap gap-1.5">
           <span className={CHIP_CLASS}>{agentLabel}</span>
           <span className={CHIP_CLASS}>{member.model ?? 'default model'}</span>
+          {overlayBadges === undefined ||
+          overlayBadges.overrides === 0 ? null : (
+            <span
+              data-slot="member-overrides"
+              className={cn(CHIP_CLASS, 'bg-primary/10 text-primary')}>
+              {overlayBadges.overrides} override
+              {overlayBadges.overrides === 1 ? '' : 's'}
+            </span>
+          )}
+          {overlayBadges?.notes ? (
+            <span
+              data-slot="member-project-notes"
+              className={cn(CHIP_CLASS, 'bg-primary/10 text-primary')}>
+              project notes
+            </span>
+          ) : null}
         </div>
         {stageTitles.length === 0 ? null : (
           <div data-slot="member-stages" className="flex flex-wrap gap-1.5">

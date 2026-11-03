@@ -18,6 +18,7 @@ import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import type { ProjectDao } from '../../projects/dao/project.dao';
 import { member, teamOf } from '../__tests__/team-builders';
 import type { TeamChangeLogDao } from '../dao/team-change-log.dao';
 import type { Team, TeamChangeLogRecord } from '../teams.types';
@@ -32,6 +33,8 @@ import {
   TeamChangeService,
 } from './team-change.service';
 import { TeamChangeLogService } from './team-change-log.service';
+import { TeamOverlayService } from './team-overlay.service';
+import { TeamOverlayStoreService } from './team-overlay-store.service';
 import { TeamStoreService } from './team-store.service';
 
 const WF: Team = teamOf([member('builder'), member('reviewer')], {
@@ -57,6 +60,15 @@ const CARD = {
     risk: { level: 'low', note: 'reviews may miss more' },
   })),
 };
+CARD.items.push(
+  ...['O-1', 'O-2'].map((id, index) => ({
+    ...CARD.items[0]!,
+    id,
+    target: 'overlay',
+    location: index === 0 ? 'p1' : 'p2',
+    title: `Title of ${id}`,
+  })),
+);
 
 const FASTER: Team = {
   ...WF,
@@ -68,6 +80,7 @@ describe('TeamChangeService', () => {
   let store: TeamStoreService;
   let applies: unknown[];
   let logged: TeamChangeLogRecord[];
+  let overlayStore: TeamOverlayStoreService;
   let service: TeamChangeService;
 
   beforeEach(async () => {
@@ -76,6 +89,7 @@ describe('TeamChangeService', () => {
     await store.create(WF, 'dev-team');
     applies = [{ cardSeq: 3, ids: ['W-1', 'W-2'] }];
     logged = [];
+    overlayStore = new TeamOverlayStoreService({ teamsDir: dir });
     service = new TeamChangeService(
       { fork: () => ({}) } as unknown as EntityManager,
       store,
@@ -118,6 +132,18 @@ describe('TeamChangeService', () => {
           return Promise.resolve();
         },
       } as unknown as TeamChangeLogDao),
+      new TeamOverlayService(
+        overlayStore,
+        store,
+        {
+          getById: async (id: string) => ({
+            id,
+            name: id,
+            teamSlug: id === 'p2' ? 'other-team' : 'dev-team',
+          }),
+        } as unknown as ProjectDao,
+        { fork: () => ({}) } as never,
+      ),
     );
   });
 
@@ -249,6 +275,7 @@ describe('TeamChangeService', () => {
       new TeamChangeLogService({
         append: () => Promise.reject(new Error('SQLITE_BUSY')),
       } as unknown as TeamChangeLogDao),
+      {} as TeamOverlayService,
     );
 
     await expect(
@@ -633,6 +660,77 @@ describe('TeamChangeService', () => {
     expect(await readdir(join(dir, TEAM_BACKUP_DIR))).toHaveLength(2);
   });
 
+  describe('an O- item', () => {
+    const OVERLAY = { members: { reviewer: { settings: { effort: 'low' } } } };
+    const overlaySave = (
+      over: Partial<Parameters<TeamChangeService['saveOverlay']>[0]> = {},
+    ) =>
+      service.saveOverlay({
+        analysisRunId: 'analysis',
+        ids: ['O-1'],
+        slug: 'dev-team',
+        projectId: 'p1',
+        overlay: OVERLAY,
+        baseHash: null,
+        dryRun: false,
+        ...over,
+      });
+
+    it('writes the project overlay for an item the newest Apply selected, and logs it under the project', async () => {
+      applies = [{ cardSeq: 3, ids: ['O-1'] }];
+
+      const answer = await overlaySave();
+
+      expect(answer).toMatchObject({ saved: true, hash: expect.any(String) });
+      expect((await overlayStore.get('dev-team', 'p1'))?.overlay).toEqual(
+        OVERLAY,
+      );
+      expect(logged).toMatchObject([
+        {
+          slug: 'dev-team',
+          projectId: 'p1',
+          source: 'analysis',
+          recommendationIds: ['O-1'],
+          cardSeq: 3,
+        },
+      ]);
+      expect((await store.get('dev-team')).team).toEqual(WF);
+    });
+
+    it('refuses an id not in the newest Apply', async () => {
+      await expect(overlaySave()).resolves.toMatchObject({
+        error: 'NOT_SELECTED',
+      });
+      expect(await overlayStore.get('dev-team', 'p1')).toBeNull();
+    });
+
+    it('refuses an item filed about another project', async () => {
+      applies = [{ cardSeq: 3, ids: ['O-2'] }];
+
+      await expect(overlaySave({ ids: ['O-2'] })).resolves.toMatchObject({
+        error: 'WRONG_PROJECT',
+      });
+    });
+
+    it('refuses an overlay of a project that defaults to another team, where no run would use it', async () => {
+      applies = [{ cardSeq: 3, ids: ['O-2'] }];
+
+      await expect(
+        overlaySave({ ids: ['O-2'], projectId: 'p2' }),
+      ).resolves.toMatchObject({ error: 'OVERLAY_INACTIVE' });
+      expect(await overlayStore.get('dev-team', 'p2')).toBeNull();
+    });
+
+    it('refuses a stale overlay hash', async () => {
+      applies = [{ cardSeq: 3, ids: ['O-1'] }];
+      await overlayStore.save('dev-team', 'p1', {});
+
+      await expect(overlaySave()).resolves.toMatchObject({
+        error: 'HASH_DRIFT',
+      });
+    });
+  });
+
   it("describes the library copy against the run's own snapshot", async () => {
     await writeFile(join(dir, 'unrelated.txt'), 'x');
     const described = await service.describe(
@@ -646,6 +744,29 @@ describe('TeamChangeService', () => {
       changedSinceThisRun: { changedMembers: [{ id: 'reviewer' }] },
     });
     expect(typeof described.hash).toBe('string');
+  });
+
+  it('reports no drift for values only the run’s project overlay set', async () => {
+    const effective: Team = {
+      ...WF,
+      members: WF.members.map((member) => ({ ...member, effort: 'max' })),
+    };
+
+    const described = await service.describe(
+      'dev-team',
+      teamSnapshotOf(effective),
+      null,
+      teamSnapshotOf(WF),
+    );
+
+    expect(described.changedSinceThisRun).toEqual(
+      (await service.describe('dev-team', teamSnapshotOf(WF)))
+        .changedSinceThisRun,
+    );
+    expect(
+      (await service.describe('dev-team', teamSnapshotOf(effective)))
+        .changedSinceThisRun,
+    ).not.toEqual(described.changedSinceThisRun);
   });
 
   it('lists the instructions file of every agent and pool member the run itself ran', async () => {
@@ -757,6 +878,7 @@ describe('TeamChangeService', () => {
         new AgentAdapterRegistry([new ClaudeAdapter()]),
       ),
       new TeamChangeLogService({} as TeamChangeLogDao),
+      {} as TeamOverlayService,
     );
 
     const described = await sized.describe('dev-team', null);

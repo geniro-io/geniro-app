@@ -24,6 +24,7 @@ import {
   type Team,
   type TeamChangeProposalRequest,
   type TeamProposal,
+  type TeamProposalOverlay,
   type TeamProposalRequest,
 } from '../teams.types';
 import {
@@ -40,6 +41,10 @@ import { parseTeamYaml } from '../utils/team-yaml';
 import { agentsThatRunAuto } from '../utils/unattended';
 import { TeamChangeLogService } from './team-change-log.service';
 import { TeamExecutorService } from './team-executor.service';
+import {
+  TeamOverlayService,
+  type WrittenOverlay,
+} from './team-overlay.service';
 import { TeamStoreService } from './team-store.service';
 
 export type PreparedProposal =
@@ -48,8 +53,12 @@ export type PreparedProposal =
 
 export type AppliedProposal =
   | { outcome: 'saved'; slug: string; backup: string | null }
-  /** A replacement whose file changed since the card was raised. */
-  | { outcome: 'changed' }
+  /**
+   * A replacement whose file changed since the card was raised; `overlay`
+   * when it was the project's overlay that moved, or the project that stopped
+   * defaulting to this team (`inactive`).
+   */
+  | { outcome: 'changed'; overlay?: 'changed' | 'inactive' }
   /** A new team whose slug was taken since the card was raised. */
   | { outcome: 'exists' }
   /** A replacement whose file was deleted since the card was raised. */
@@ -91,6 +100,7 @@ export class TeamProposalService {
     private readonly itemDao: ItemDao,
     private readonly chats: ChatService,
     private readonly changeLog: TeamChangeLogService,
+    private readonly overlays: TeamOverlayService,
   ) {}
 
   /**
@@ -520,30 +530,92 @@ export class TeamProposalService {
         message: `the file cannot be loaded (${firstLineOf(error instanceof Error ? error.message : String(error))}) — fix only what this names, in the file, with your own file tools, then propose the change again`,
       };
     }
-    const edited = editTeam(current, request.edits, TEAM_FILE_EDIT_COPY, true);
+    const edited =
+      request.edits.length === 0
+        ? ({ ok: true, team: current } as const)
+        : editTeam(current, request.edits, TEAM_FILE_EDIT_COPY, true);
     if (!edited.ok) {
       return { ok: false, code: edited.error, message: edited.message };
     }
     const team = edited.team;
     const diff = diffTeams(current, team);
-    if (diff.identical) {
+    const overlay = await this.overlayHalf(request, team);
+    if ('code' in overlay) {
+      return { ok: false, code: overlay.code, message: overlay.message };
+    }
+    if (diff.identical && overlay.half === null) {
       return {
         ok: false,
         code: 'NOTHING_TO_CHANGE',
-        message: `the edits leave '${request.slug}' as it stands`,
+        message: `the ${request.overlay === undefined ? 'edits leave' : 'edits and overlay leave'} '${request.slug}' as it stands`,
       };
     }
     return {
       ok: true,
       proposal: {
         mode: 'replace',
-        ...summarizedFor(team, request),
+        ...summarizedFor(overlay.effective, request),
         slug: request.slug,
         replacesName: current.name,
         diff,
         baseHash: file.hash,
         team,
+        ...(overlay.half === null ? {} : { overlay: overlay.half }),
       },
+    };
+  }
+
+  /**
+   * The overlay half of a builder card, pinned to the overlay file's version:
+   * null when the agent sent none or it changes nothing. `effective` is the
+   * team the card's auto list is worked out on.
+   */
+  private async overlayHalf(
+    request: TeamChangeProposalRequest,
+    team: Team,
+  ): Promise<
+    | { half: TeamProposalOverlay | null; effective: Team }
+    | { code: string; message: string }
+  > {
+    const projectId = request.projectId ?? null;
+    if (request.overlay === undefined || projectId === null) {
+      return { half: null, effective: team };
+    }
+    let projectName: string;
+    try {
+      projectName = await this.overlays.projectName(projectId);
+    } catch (error) {
+      return refusalOf(error, 'TEAM_OVERLAY_UNREADABLE', firstLineOf);
+    }
+    const prepared = await this.overlays.prepareChange(
+      request.slug,
+      team,
+      projectId,
+      request.overlay,
+      { tokens: true },
+    );
+    if (!prepared.ok) {
+      return {
+        code: prepared.code,
+        message:
+          prepared.code === 'OVERLAY_INACTIVE'
+            ? `the project this chat is bound to does not default to team '${request.slug}', so its runs would not use the overlay — change the shared team instead`
+            : prepared.message,
+      };
+    }
+    const { overlay: next, current, effective, diffText } = prepared;
+    if (diffText === '') {
+      return { half: null, effective };
+    }
+    return {
+      half: {
+        projectId,
+        projectName,
+        overlay: next,
+        baseHash: current?.hash ?? null,
+        diffText,
+      },
+      effective,
     };
   }
 
@@ -577,17 +649,86 @@ export class TeamProposalService {
     if (current.hash !== proposal.baseHash) {
       return { outcome: 'changed' };
     }
-    const backup = await backUpTeam(directory, proposal.slug, current.source);
-    try {
+    const overlay = proposal.overlay;
+    if (
+      overlay !== undefined &&
+      !(await this.overlays.isDefaultTeam(proposal.slug, overlay.projectId))
+    ) {
+      return { outcome: 'changed', overlay: 'inactive' };
+    }
+    const writeTeam = async (): Promise<string | null> => {
+      if (proposal.diff.identical) {
+        return null;
+      }
+      const copy = await backUpTeam(directory, proposal.slug, current.source);
       await this.store.save(proposal.slug, proposal.team, proposal.baseHash);
+      return copy;
+    };
+    let backup: string | null;
+    let overlayWrite: WrittenOverlay | null = null;
+    try {
+      if (overlay === undefined) {
+        backup = await writeTeam();
+      } else {
+        const written = await this.overlays.writeWithTeam(
+          proposal.slug,
+          overlay.projectId,
+          overlay.overlay,
+          overlay.baseHash,
+          writeTeam,
+        );
+        overlayWrite = written.overlay;
+        backup = written.team;
+      }
     } catch (error) {
+      if (isConflict(error, 'TEAM_OVERLAY_CHANGED')) {
+        return { outcome: 'changed', overlay: 'changed' };
+      }
       if (isConflict(error, 'TEAM_CHANGED')) {
         return { outcome: 'changed' };
       }
       throw error;
     }
-    await this.logApproved(proposal, readableTeam(current.source), backup, by);
-    return { outcome: 'saved', slug: proposal.slug, backup };
+    if (!proposal.diff.identical) {
+      await this.logApproved(
+        proposal,
+        readableTeam(current.source),
+        backup,
+        by,
+      );
+    }
+    if (overlay !== undefined && overlayWrite !== null) {
+      await this.logApprovedOverlay(proposal, overlay, overlayWrite, by);
+    }
+    return {
+      outcome: 'saved',
+      slug: proposal.slug,
+      backup: backup ?? overlayWrite?.backup ?? null,
+    };
+  }
+
+  private async logApprovedOverlay(
+    proposal: TeamProposal,
+    overlay: TeamProposalOverlay,
+    written: { hash: string; backup: string | null },
+    by: { runId: string; note: string | null } | null,
+  ): Promise<void> {
+    await this.changeLog.recordOverlay({
+      slug: proposal.slug,
+      projectId: overlay.projectId,
+      source: 'builder',
+      fromHash: overlay.baseHash,
+      toHash: written.hash,
+      summary: proposal.summary,
+      reason: proposal.reason,
+      userNote: by?.note,
+      recommendationIds: teamItemIdsIn(
+        `${proposal.summary ?? ''}\n${proposal.reason ?? ''}`,
+        /\b[WO]-\d{1,3}\b/g,
+      ),
+      chatRunId: by?.runId,
+      backup: written.backup,
+    });
   }
 
   /**
@@ -633,8 +774,8 @@ function readableTeam(source: string): Team | null {
 }
 
 /** Every team recommendation id (`W-2`) a text names, in order. */
-function teamItemIdsIn(text: string): string[] {
-  return [...text.matchAll(/\bW-\d{1,3}\b/g)].map((match) => match[0]);
+function teamItemIdsIn(text: string, pattern = /\bW-\d{1,3}\b/g): string[] {
+  return [...text.matchAll(pattern)].map((match) => match[0]);
 }
 
 /**
@@ -671,7 +812,12 @@ function verdictOf(
       return {
         kind: 'not-saved',
         cause: 'changed',
-        reason: `the team '${proposal.slug}' changed after you proposed replacing it`,
+        reason:
+          applied.overlay === 'changed'
+            ? `this project's overlay of '${proposal.slug}' changed after you proposed this — read the overlay file again and propose on what it holds now`
+            : applied.overlay === 'inactive'
+              ? `the project stopped defaulting to team '${proposal.slug}' after you proposed this, so its runs would not use the overlay`
+              : `the team '${proposal.slug}' changed after you proposed replacing it`,
         note,
       };
     case 'exists':

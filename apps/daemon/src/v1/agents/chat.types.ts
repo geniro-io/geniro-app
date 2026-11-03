@@ -546,8 +546,9 @@ export type ReadAnalyzedThreadArgs = z.infer<
 /**
  * What a recommendation changes: the analysed team, the repository it
  * worked in, the user's own standing-instructions file of an agent it ran
- * (`AdapterConfig.userInstructions`), geniro's shared memory, or the
- * instructions of the project the analysed runs belong to.
+ * (`AdapterConfig.userInstructions`), geniro's shared memory, the
+ * instructions of the project the analysed runs belong to, or that
+ * project's overlay of the analysed team.
  */
 export const RECOMMENDATION_TARGETS = [
   'team',
@@ -555,16 +556,18 @@ export const RECOMMENDATION_TARGETS = [
   'user',
   'memory',
   'project',
+  'overlay',
 ] as const;
 export type RecommendationTarget = (typeof RECOMMENDATION_TARGETS)[number];
 
-/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`, `P-1`. */
+/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`, `P-1`, `O-1`. */
 export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
   team: 'W-',
   repo: 'R-',
   user: 'U-',
   memory: 'M-',
   project: 'P-',
+  overlay: 'O-',
 };
 
 /**
@@ -584,8 +587,8 @@ export const MAX_RECOMMENDATIONS =
 export const RecommendationIdSchema = z
   .string()
   .regex(
-    /^[WRUMP]-\d{1,3}$/,
-    'an id is W-<n> for a team item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry, P-<n> for project instructions',
+    /^[WRUMPO]-\d{1,3}$/,
+    "an id is W-<n> for a team item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry, P-<n> for project instructions, O-<n> for the project's overlay of the team",
   );
 
 export const RecommendationTargetSchema = z.enum(RECOMMENDATION_TARGETS);
@@ -1168,7 +1171,14 @@ export type AnalysisSource = Pick<
  */
 export interface AnalysedTeamRef {
   slug: string;
+  /** The team the run ran — its project's overlay applied (`Run.teamSnapshot`). */
   snapshot: string | null;
+  /** The shared team it started from (`baseTeamSnapshotOf`): what drift is measured against. */
+  baseSnapshot: string | null;
+  /** `Run.teamOverlaySnapshot`: the project overlay the run started with, or null. */
+  overlaySnapshot: string | null;
+  /** The run's project (`Run.projectId`), whose overlay `view=team` reads as it stands now. */
+  projectId?: string | null;
   instructions: {
     customInstructions: string | null;
     replyLanguage: string | null;

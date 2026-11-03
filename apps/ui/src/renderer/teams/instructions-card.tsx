@@ -1,6 +1,3 @@
-import { ChevronDown } from 'lucide-react';
-import { useState } from 'react';
-
 import type {
   InstructionBlock,
   InstructionBlockSize,
@@ -10,31 +7,16 @@ import {
   InstructionBlockCard,
   InstructionBlockList,
 } from '../components/instruction-blocks';
-import { Button } from '../components/ui/button';
-import { AudiencePick, memberLabels } from './member-pick';
-import { audienceOf, type BlockAudience } from './member-schema';
+import { AudiencePick } from './member-pick';
+import { audienceOf } from './member-schema';
 import type { BlockIssue } from './member-validate';
 
-type MemberRef = Pick<TeamMember, 'id' | 'name'>;
-
-/** Whom a block reaches, in words. */
-export function audienceSummary(
-  audience: BlockAudience,
-  labels: ReadonlyMap<string, string>,
-): string {
-  if (audience === 'everyone') {
-    return 'Everyone';
-  }
-  if (audience.length === 0) {
-    return 'Nobody yet';
-  }
-  return audience.map((id) => labels.get(id) ?? id).join(', ');
-}
+type MemberRef = Pick<TeamMember, 'id' | 'name'> &
+  Partial<Pick<TeamMember, 'avatar'>>;
 
 function BlockCard({
   block,
   members,
-  labels,
   issues,
   warnings,
   size,
@@ -43,15 +25,12 @@ function BlockCard({
 }: {
   block: InstructionBlock;
   members: readonly MemberRef[];
-  labels: ReadonlyMap<string, string>;
   issues: readonly BlockIssue[];
   warnings: readonly string[];
   size: InstructionBlockSize | undefined;
   onChange: (patch: Partial<Omit<InstructionBlock, 'id'>>) => void;
   onRemove: () => void;
 }): React.JSX.Element {
-  const [reachOpen, setReachOpen] = useState(false);
-  const audience = audienceOf(block);
   return (
     <InstructionBlockCard
       id={block.id}
@@ -65,29 +44,17 @@ function BlockCard({
           : `${size.chars.toLocaleString('en-US')} characters, carried by ${size.reaches} ${size.reaches === 1 ? 'member' : 'members'} on every turn`
       }
       headerExtra={
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-expanded={reachOpen}
-          className="h-7 max-w-[45%] shrink gap-1 rounded-pill bg-muted px-2.5 text-sm font-normal text-muted-foreground"
-          onClick={() => setReachOpen((open) => !open)}>
-          <span className="truncate">
-            Reaches {audienceSummary(audience, labels)}
-          </span>
-          <ChevronDown aria-hidden="true" className="size-3.5 shrink-0" />
-        </Button>
+        <div className="flex max-w-[50%] min-w-0 shrink">
+          <AudiencePick
+            members={members}
+            audience={audienceOf(block)}
+            onChange={(next) => onChange({ audience: next })}
+          />
+        </div>
       }
       onTitleChange={(title) => onChange({ title })}
       onTextChange={(text) => onChange({ text })}
       onRemove={onRemove}>
-      {reachOpen ? (
-        <AudiencePick
-          members={members}
-          audience={audience}
-          onChange={(next) => onChange({ audience: next })}
-        />
-      ) : null}
       {warnings.map((warning) => (
         <p key={warning} className="text-sm text-warning">
           {warning}
@@ -125,7 +92,6 @@ export function InstructionsCard({
   ) => void;
   onRemove: (blockId: string) => void;
 }): React.JSX.Element {
-  const labels = memberLabels(members);
   return (
     <InstructionBlockList
       empty={blocks.length === 0}
@@ -136,7 +102,6 @@ export function InstructionsCard({
           key={block.id}
           block={block}
           members={members}
-          labels={labels}
           issues={issues.get(block.id) ?? []}
           warnings={warnings.get(block.id) ?? []}
           size={blockSizes?.get(block.id)}

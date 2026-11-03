@@ -7,6 +7,12 @@ import { InstructionsCard } from './instructions-card';
 const MEMBERS = [
   { id: 'ada', name: 'Ada' },
   { id: 'grace', name: 'Grace' },
+  {
+    id: 'linus',
+    name: 'Linus',
+    avatar: { kind: 'emoji' as const, value: '🐧' },
+  },
+  { id: 'margaret', name: 'Margaret Hamilton' },
 ];
 
 const BLOCKS: InstructionBlock[] = [
@@ -20,7 +26,13 @@ const BLOCKS: InstructionBlock[] = [
     id: 'block-2',
     title: 'Review style',
     text: 'Group findings by severity; quote the line you mean.',
-    audience: ['grace'],
+    audience: ['grace', 'linus', 'margaret'],
+  },
+  {
+    id: 'block-3',
+    title: 'Release checklist',
+    text: 'Tag the release and update the changelog.',
+    audience: [],
   },
 ];
 

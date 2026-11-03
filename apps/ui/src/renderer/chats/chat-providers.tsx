@@ -13,17 +13,9 @@ import {
   type CallMessageChannel,
   CallMessageChannelContext,
 } from './call-message-box';
-import {
-  type ChatMetricsLoader,
-  ChatMetricsLoaderContext,
-} from './chat-metrics';
 import { CliLoginContext, type SignInResolver } from './cli-login-context';
 import { CommandConfirmDialog } from './command-confirm-dialog';
 import { RunActivityContext, RunSettledContext } from './live-row';
-import {
-  type LocalImageLoader,
-  LocalImageLoaderContext,
-} from './local-image-loader';
 import {
   type MemoryLoader,
   MemoryLoaderContext,
@@ -53,17 +45,12 @@ import { TeamNoteOpenContext } from './team-note-row';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import { CollapseToolStepsContext } from './tool-group';
 import type { RunSettleAt, SubagentBlockEntry } from './transcript-groups';
-import { CardBackedRequestsContext } from './transcript-item';
 import { type TurnDuration, TurnDurationContext } from './turn-duration';
 import type { ArtifactSharing } from './use-artifact-sharing';
 import { type ChatActions, ChatActionsContext } from './use-chat-actions';
 import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
 
-/**
- * The values only a transcript row reads. {@link TranscriptContexts} provides
- * them: the chat screen around its transcript alone, the team dock (through
- * `ChatProviders`' `transcript`) around its whole surface.
- */
+/** The values only a transcript row reads, provided by {@link TranscriptContexts}. */
 export interface TranscriptValues {
   /** Whether a turn's tool rows start folded — see `CollapseToolStepsContext`. */
   collapseToolSteps: boolean;
@@ -84,20 +71,6 @@ export interface TranscriptValues {
   openTeamNote: ((seq: number) => void) | null;
   /** Open Settings → Memory on one entry — see `MemoryOpenContext`. */
   openMemory?: ((handle: string) => void) | null;
-}
-
-/**
- * The {@link TranscriptValues} plus the readers the chat screen provides
- * screen-wide on its own: what a surface that is ALL transcript (the team
- * dock) hands {@link ChatProviders} in one piece.
- */
-export interface TranscriptSurface extends TranscriptValues {
-  /** The requests that have a card — see `CardBackedRequestsContext`. */
-  cardBacked: ReadonlySet<string>;
-  /** How a local picture is read — see `LocalImageLoaderContext`. */
-  loadImage: LocalImageLoader | null;
-  /** How the context readout is read — see `ChatMetricsLoaderContext`. */
-  loadMetrics: ChatMetricsLoader | null;
 }
 
 /**
@@ -124,7 +97,6 @@ export function ChatProviders({
   artifactSharing = null,
   threadId,
   runSettledAt,
-  transcript,
   loadAttachment = null,
   callConversations = null,
   jumpMark = null,
@@ -147,12 +119,6 @@ export function ChatProviders({
    * read it, so it is provided for the whole surface.
    */
   runSettledAt: RunSettleAt;
-  /**
-   * Everything a transcript row reads, for a surface that is ALL transcript
-   * (the team dock). The chat screen leaves it out: it provides the
-   * transcript values around its transcript alone, and the readers itself.
-   */
-  transcript?: TranscriptSurface;
   /** Which sign-in cures a given row's failure — see `SignInResolver`. */
   signIn: SignInResolver | null;
   retry: (() => void) | null;
@@ -178,7 +144,7 @@ export function ChatProviders({
    * `ArtifactShareContext`. Absent (or null) draws no Share control.
    */
   artifactSharing?: ArtifactSharing | null;
-  /** Read images attached to this conversation, including in the team dock. */
+  /** Read images attached to this conversation. */
   loadAttachment?: AttachmentLoader | null;
   /**
    * How an opened call card reads its own conversation — see
@@ -193,7 +159,7 @@ export function ChatProviders({
   jumpMark?: JumpMark | null;
   /**
    * A recommendations card's Apply — see `RecommendationsApplyContext`.
-   * Absent draws the card read-only (the team dock has no analysis).
+   * Absent draws the card read-only.
    */
   applyRecommendations?: RecommendationsApplier | null;
   /**
@@ -229,13 +195,7 @@ export function ChatProviders({
                               <ChatActionsContext.Provider value={chatActions}>
                                 <MemoryLoaderContext.Provider
                                   value={loadMemory}>
-                                  {transcript === undefined ? (
-                                    children
-                                  ) : (
-                                    <SurfaceContexts {...transcript}>
-                                      {children}
-                                    </SurfaceContexts>
-                                  )}
+                                  {children}
                                   {chatActions === null ? null : (
                                     <CommandConfirmDialog
                                       action={chatActions.confirming}
@@ -266,24 +226,6 @@ export function ChatProviders({
         </CalleeContextResolverContext.Provider>
       </RetryContext.Provider>
     </CliLoginContext.Provider>
-  );
-}
-
-function SurfaceContexts({
-  cardBacked,
-  loadImage,
-  loadMetrics,
-  children,
-  ...values
-}: TranscriptSurface & { children: React.ReactNode }): React.JSX.Element {
-  return (
-    <CardBackedRequestsContext.Provider value={cardBacked}>
-      <LocalImageLoaderContext.Provider value={loadImage}>
-        <ChatMetricsLoaderContext.Provider value={loadMetrics}>
-          <TranscriptContexts {...values}>{children}</TranscriptContexts>
-        </ChatMetricsLoaderContext.Provider>
-      </LocalImageLoaderContext.Provider>
-    </CardBackedRequestsContext.Provider>
   );
 }
 

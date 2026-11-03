@@ -32,6 +32,15 @@ export interface QueueStateToStore {
 const STORAGE_KEY = 'geniro.queuedMessages';
 
 /**
+ * Where one surface's queues are stored: the chat screen's under the bare key,
+ * a hosted conversation's (the builder dock, an analysis) under its own, so no
+ * two surfaces ever restore, or overwrite, each other's.
+ */
+function storageKeyOf(scope: string | null): string {
+  return scope === null ? STORAGE_KEY : `${STORAGE_KEY}:${scope}`;
+}
+
+/**
  * The composer's queues, kept in the browser's storage as well as in memory.
  *
  * The composer is CLEARED the moment a message is queued, so with the queues
@@ -50,11 +59,13 @@ const STORAGE_KEY = 'geniro.queuedMessages';
  * outright (a private window), and a queue that could not be saved must still
  * WORK — it simply stops surviving a reload.
  */
-export function readStoredQueueState(): RestoredQueueState {
+export function readStoredQueueState(
+  scope: string | null = null,
+): RestoredQueueState {
   const empty: RestoredQueueState = { queues: {}, paused: new Set() };
   let raw: string | null;
   try {
-    raw = localStorage.getItem(STORAGE_KEY);
+    raw = localStorage.getItem(storageKeyOf(scope));
   } catch {
     return empty;
   }
@@ -111,7 +122,11 @@ export function readStoredQueueState(): RestoredQueueState {
  * a message, and keeping them beats keeping nothing. A pause is only stored for
  * a run that still has a queue, so it can never outlive the messages it held.
  */
-export function writeStoredQueueState(state: QueueStateToStore): void {
+export function writeStoredQueueState(
+  state: QueueStateToStore,
+  scope: string | null = null,
+): void {
+  const key = storageKeyOf(scope);
   const queues = Object.fromEntries(
     Object.entries(state.queues).filter(([, list]) => list.length > 0),
   );
@@ -121,13 +136,10 @@ export function writeStoredQueueState(state: QueueStateToStore): void {
   );
   try {
     if (Object.keys(queues).length === 0) {
-      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(key);
       return;
     }
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ queues, paused, sending }),
-    );
+    localStorage.setItem(key, JSON.stringify({ queues, paused, sending }));
   } catch {
     try {
       const textOnly = Object.fromEntries(
@@ -137,7 +149,7 @@ export function writeStoredQueueState(state: QueueStateToStore): void {
         ]),
       );
       localStorage.setItem(
-        STORAGE_KEY,
+        key,
         JSON.stringify({ queues: textOnly, paused, sending }),
       );
     } catch {

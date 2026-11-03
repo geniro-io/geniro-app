@@ -28,6 +28,7 @@ import type { SettingsSection } from '../settings/Settings';
 import { Chats } from './Chats';
 import { COMPOSER_MAX_LINES } from './composer-card';
 import { PARKED_SEND_TITLE } from './follow-up-delivery';
+import type { HostedThread } from './hosted-thread';
 import type { LiveTextEvent } from './live-text';
 import { RUN_LIST_PAGE } from './run-list-pages';
 import { HISTORY_PAGE } from './use-chat-run';
@@ -75,6 +76,8 @@ const api = vi.hoisted(() => ({
   readRunProcesses: vi.fn(),
   getThreadAnalysis: vi.fn(),
   analyzeThread: vi.fn(),
+  applyRecommendations: vi.fn(),
+  retryChat: vi.fn(),
 }));
 /** `api` answering `listRunItems` with pages, built once like the mock it wraps. */
 const pagedApi = withHistoryPages(api);
@@ -362,20 +365,21 @@ function makeClient(): {
    */
   const itemListeners = new Set<(item: ChatItem) => void>();
   const reconnectListeners = new Set<(error?: Error) => void>();
-  let disconnectListener: (() => void) | null = null;
-  let verdictAckListener: ((ack: VerdictAck) => void) | null = null;
-  let groupsChangedListener: (() => void) | null = null;
-  let liveTextListener: ((event: LiveTextEvent) => void) | null = null;
+  const disconnectListeners = new Set<() => void>();
+  const verdictAckListeners = new Set<(ack: VerdictAck) => void>();
+  const groupsChangedListeners = new Set<() => void>();
+  const liveTextListeners = new Set<(event: LiveTextEvent) => void>();
   /**
-   * A SET, unlike its one-listener neighbours: the real client fans a
-   * `run_status` out to every subscriber, and this screen has more than one —
-   * `use-chat-run` for the badge and `use-chat-totals` for the fetched spend.
-   * Holding a single listener let whichever subscribed last silence the other,
-   * which is a defect of the double and never of the client.
+   * Every listener is a SET: the real client fans each event out to every
+   * subscriber, and this screen has more than one — `use-chat-run` for the
+   * badge, `use-chat-totals` for the fetched spend, and a whole second chat
+   * screen inside an analysis popup. Holding a single listener let whichever
+   * subscribed last silence the other, which is a defect of the double and
+   * never of the client.
    */
   const runStatusListeners = new Set<(event: RunStatusEvent) => void>();
-  let runDeletedListener: ((runId: string) => void) | null = null;
-  let runsChangedListener: ((runs: ChatRun[]) => void) | null = null;
+  const runDeletedListeners = new Set<(runId: string) => void>();
+  const runsChangedListeners = new Set<(runs: ChatRun[]) => void>();
   const joinRun = vi.fn(async () => {});
   const client = {
     onItem: (l: (item: ChatItem) => void) => {
@@ -391,15 +395,15 @@ function makeClient(): {
       };
     },
     onDisconnect: (l: () => void) => {
-      disconnectListener = l;
+      disconnectListeners.add(l);
       return () => {
-        disconnectListener = null;
+        disconnectListeners.delete(l);
       };
     },
     onLiveText: (l: (event: LiveTextEvent) => void) => {
-      liveTextListener = l;
+      liveTextListeners.add(l);
       return () => {
-        liveTextListener = null;
+        liveTextListeners.delete(l);
       };
     },
     onRunStatus: (l: (event: RunStatusEvent) => void) => {
@@ -409,21 +413,21 @@ function makeClient(): {
       };
     },
     onRunDeleted: (l: (runId: string) => void) => {
-      runDeletedListener = l;
+      runDeletedListeners.add(l);
       return () => {
-        runDeletedListener = null;
+        runDeletedListeners.delete(l);
       };
     },
     onRunsChanged: (l: (runs: ChatRun[]) => void) => {
-      runsChangedListener = l;
+      runsChangedListeners.add(l);
       return () => {
-        runsChangedListener = null;
+        runsChangedListeners.delete(l);
       };
     },
     onGroupsChanged: (l: () => void) => {
-      groupsChangedListener = l;
+      groupsChangedListeners.add(l);
       return () => {
-        groupsChangedListener = null;
+        groupsChangedListeners.delete(l);
       };
     },
     onSharesChanged: () => () => undefined,
@@ -436,9 +440,9 @@ function makeClient(): {
       };
     },
     onVerdictAck: (l: (ack: VerdictAck) => void) => {
-      verdictAckListener = l;
+      verdictAckListeners.add(l);
       return () => {
-        verdictAckListener = null;
+        verdictAckListeners.delete(l);
       };
     },
     joinRun,
@@ -457,22 +461,46 @@ function makeClient(): {
         listener(item);
       }
     },
-    fireDisconnect: () => disconnectListener?.(),
+    fireDisconnect: () => {
+      for (const listener of [...disconnectListeners]) {
+        listener();
+      }
+    },
     fireReconnect: () => {
       for (const listener of [...reconnectListeners]) {
         listener();
       }
     },
-    fireVerdictAck: (ack) => verdictAckListener?.(ack),
-    fireGroupsChanged: () => groupsChangedListener?.(),
-    emitLiveText: (event) => liveTextListener?.(event),
+    fireVerdictAck: (ack) => {
+      for (const listener of [...verdictAckListeners]) {
+        listener(ack);
+      }
+    },
+    fireGroupsChanged: () => {
+      for (const listener of [...groupsChangedListeners]) {
+        listener();
+      }
+    },
+    emitLiveText: (event) => {
+      for (const listener of [...liveTextListeners]) {
+        listener(event);
+      }
+    },
     emitRunStatus: (event) => {
       for (const listener of [...runStatusListeners]) {
         listener(event);
       }
     },
-    emitRunDeleted: (runId: string) => runDeletedListener?.(runId),
-    emitRunsChanged: (runs: ChatRun[]) => runsChangedListener?.(runs),
+    emitRunDeleted: (runId: string) => {
+      for (const listener of [...runDeletedListeners]) {
+        listener(runId);
+      }
+    },
+    emitRunsChanged: (runs: ChatRun[]) => {
+      for (const listener of [...runsChangedListeners]) {
+        listener(runs);
+      }
+    },
     joinRun,
   };
 }
@@ -757,6 +785,7 @@ beforeEach(() => {
   // and every spec here reuses the same run ids — so a queue one test left
   // behind would be drained into the next one's run.
   localStorage.removeItem('geniro.queuedMessages');
+  localStorage.removeItem('geniro.queuedMessages:team-chat:dev-team');
   // jsdom implements no element scrolling at all; the transcript auto-scroll
   // effect calls `scrollTo` on the scroll box itself — never `scrollIntoView`,
   // which would take every scrollable ancestor, the window included, with it.
@@ -19999,5 +20028,489 @@ describe('Chats — searching every chat', () => {
     expect(api.listRunItems).not.toHaveBeenCalledWith(
       expect.objectContaining({ beforeSeq: 62 }),
     );
+  });
+});
+
+/**
+ * The team builder's chat dock and the analysis popups draw their one
+ * conversation with this screen itself (`hosted`), so it reads, queues and
+ * shows exactly as a thread does. What the surface is told back is pinned here.
+ */
+describe('Chats — one hosted conversation', () => {
+  const HOSTED: ChatRun = {
+    ...run1,
+    id: 'h1',
+    title: 'Change Dev Team',
+    status: 'completed',
+  };
+  const hostedRow = (item: ChatItem): ChatItem => ({
+    ...item,
+    id: `h-${item.id}`,
+    runId: 'h1',
+  });
+
+  function hostedThread(overrides: Partial<HostedThread> = {}): HostedThread & {
+    open: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      open: vi.fn(async () => HOSTED),
+      queueScope: 'team-chat:dev-team',
+      emptyText: 'Ask for a team change.',
+      composerLabel: 'Ask for a team change',
+      composerPlaceholder: 'Describe the change…',
+      ...overrides,
+    } as HostedThread & { open: ReturnType<typeof vi.fn> };
+  }
+
+  async function typeAndSend(
+    container: HTMLElement,
+    text: string,
+  ): Promise<void> {
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, text);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      textarea.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+    });
+  }
+
+  it('draws the one conversation the surface opens, with no list and no new-chat composer', async () => {
+    const { client } = makeClient();
+    const hosted = hostedThread({
+      headerActions: () => <button type="button">Hide the dock</button>,
+    });
+
+    const container = await mount(client, undefined, { hosted });
+
+    expect(hosted.open).toHaveBeenCalledTimes(1);
+    expect(api.listChats).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-slot="chat-list"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="chat-header"]')?.textContent,
+    ).toContain('Change Dev Team');
+    expect(
+      container.querySelector('[data-slot="chat-header-actions"]')?.textContent,
+    ).toBe('Hide the dock');
+    expect(
+      container.querySelector('[data-slot="composer-shelf"]'),
+    ).not.toBeNull();
+  });
+
+  it('says what an empty conversation is for, in the composer the surface names', async () => {
+    const { client } = makeClient();
+
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({ initialDraft: 'Add a QA member' }),
+    });
+
+    expect(
+      container.querySelector('[data-slot="hosted-thread-empty"]')?.textContent,
+    ).toBe('Ask for a team change.');
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Ask for a team change"]',
+    );
+    expect(textarea?.placeholder).toBe('Describe the change…');
+    expect(textarea?.value).toBe('Add a QA member');
+  });
+
+  it('runs the surface’s step before a message goes out', async () => {
+    api.sendChatMessage.mockResolvedValue(hostedRow(msg(0, 'user', 'go')));
+    const onBeforeSend = vi.fn(async () => true);
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({ onBeforeSend }),
+    });
+
+    await typeAndSend(container, 'go');
+
+    expect(onBeforeSend).toHaveBeenCalledTimes(1);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(onBeforeSend.mock.invocationCallOrder[0]!).toBeLessThan(
+      api.sendChatMessage.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('reports each turn: working while it runs, and its end once per turn', async () => {
+    api.sendChatMessage.mockResolvedValue(hostedRow(msg(0, 'user', 'go')));
+    const onWorkingChange = vi.fn();
+    const onTurnSettled = vi.fn();
+    const { client, emitItem } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({ onWorkingChange, onTurnSettled }),
+    });
+
+    await typeAndSend(container, 'go');
+    expect(onWorkingChange).toHaveBeenLastCalledWith(true);
+    await act(async () => {
+      emitItem(hostedRow(terminal(1)));
+    });
+    expect(onWorkingChange).toHaveBeenLastCalledWith(false);
+    expect(onTurnSettled).toHaveBeenCalledTimes(1);
+
+    api.sendChatMessage.mockResolvedValue(hostedRow(msg(2, 'user', 'again')));
+    await typeAndSend(container, 'again');
+    await act(async () => {
+      emitItem(hostedRow(terminal(3)));
+    });
+    expect(onTurnSettled).toHaveBeenCalledTimes(2);
+  });
+
+  it('tells the surface what the agent is waiting on', async () => {
+    const onAwaitingChange = vi.fn();
+    const { client, emitRunStatus } = makeClient();
+    await mount(client, undefined, {
+      hosted: hostedThread({ onAwaitingChange }),
+    });
+
+    await act(async () => {
+      emitRunStatus({ runId: 'h1', status: null, awaiting: 'question' });
+    });
+    expect(onAwaitingChange).toHaveBeenLastCalledWith('question');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'h1', status: null, awaiting: null });
+    });
+    expect(onAwaitingChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('queues a message typed while the agent works, as a thread does', async () => {
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({
+        open: vi.fn(async () => ({ ...HOSTED, status: 'running' as const })),
+      }),
+    });
+
+    await typeAndSend(container, 'and the reviewer too');
+
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[data-slot="queued-message"]')?.textContent,
+    ).toContain('and the reviewer too');
+  });
+
+  it('starts over from the surface’s control: throws the conversation away and opens the next', async () => {
+    const discard = vi.fn(async () => undefined);
+    const open = vi
+      .fn()
+      .mockResolvedValueOnce(HOSTED)
+      .mockResolvedValueOnce({ ...HOSTED, id: 'h2', title: 'Fresh chat' });
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({
+        open,
+        discard,
+        headerActions: ({ discard: startOver }) => (
+          <button type="button" onClick={() => startOver?.()}>
+            Start over
+          </button>
+        ),
+      }),
+    });
+
+    const button = [...container.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent === 'Start over',
+    );
+    await act(async () => {
+      button!.click();
+    });
+
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(
+      container.querySelector('[data-slot="chat-header"]')?.textContent,
+    ).toContain('Fresh chat');
+  });
+
+  it('does none of the whole app’s work: no notifications, no archive sweep, no Analyze', async () => {
+    (
+      window as unknown as { geniro: { getSettings: ReturnType<typeof vi.fn> } }
+    ).geniro.getSettings.mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      archiveRetentionDays: 30,
+    });
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({
+        open: vi.fn(async () => ({ ...HOSTED, status: 'running' as const })),
+      }),
+    });
+    notify.mockClear();
+
+    await act(async () => {
+      emitItem(hostedRow(terminal(1)));
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+    hasFocus.mockRestore();
+    expect(window.geniro.onNotificationActivated).not.toHaveBeenCalled();
+    expect(api.sweepArchivedChats).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('button[aria-label="Analyze thread"]'),
+    ).toBeNull();
+  });
+
+  // Closing the dock or the popup, or a reload, must not lose what was queued:
+  // the queue is stored under the surface's own key and goes out once the
+  // surface is back and its agent is free.
+  it('keeps its queue under its own key, and sends it once the surface is back', async () => {
+    localStorage.removeItem('geniro.queuedMessages:team-chat:dev-team');
+    const first = makeClient();
+    const working = await mount(first.client, undefined, {
+      hosted: hostedThread({
+        open: vi.fn(async () => ({ ...HOSTED, status: 'running' as const })),
+      }),
+    });
+    await typeAndSend(working, 'and the reviewer too');
+
+    const stored = JSON.parse(
+      localStorage.getItem('geniro.queuedMessages:team-chat:dev-team') ??
+        'null',
+    ) as { queues: Record<string, { text: string }[]> } | null;
+    expect(stored?.queues.h1?.[0]?.text).toBe('and the reviewer too');
+    expect(localStorage.getItem('geniro.queuedMessages')).toBeNull();
+
+    act(() => {
+      roots.pop()?.unmount();
+    });
+    api.sendChatMessage.mockResolvedValue(
+      hostedRow(msg(4, 'user', 'and the reviewer too')),
+    );
+    const second = makeClient();
+    await mount(second.client, undefined, { hosted: hostedThread() });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(api.sendChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'h1',
+        sendMessageDto: expect.objectContaining({
+          text: 'and the reviewer too',
+        }),
+      }),
+    );
+    localStorage.removeItem('geniro.queuedMessages:team-chat:dev-team');
+  });
+
+  // The builder re-reads the team when a turn ends, and its next send waits on
+  // that re-read; the message queued behind the turn goes out in the same tick.
+  it('reports a turn’s end before the message queued behind it goes out', async () => {
+    api.sendChatMessage.mockResolvedValue(hostedRow(msg(2, 'user', 'next')));
+    const onTurnSettled = vi.fn();
+    const { client, emitItem } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({
+        open: vi.fn(async () => ({ ...HOSTED, status: 'running' as const })),
+        onTurnSettled,
+      }),
+    });
+    await typeAndSend(container, 'next');
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+
+    await act(async () => {
+      emitItem(hostedRow(terminal(1)));
+    });
+
+    expect(onTurnSettled).toHaveBeenCalledTimes(1);
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(onTurnSettled.mock.invocationCallOrder[0]!).toBeLessThan(
+      api.sendChatMessage.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('runs the surface’s step before an agent’s button press reaches the daemon', async () => {
+    api.readRunState.mockResolvedValue({
+      ...emptyRunState(),
+      actions: [
+        {
+          seq: 5,
+          actionId: 'go-on',
+          memberId: null,
+          conversationId: null,
+          label: 'Go on',
+          once: true,
+          spec: { kind: 'message', text: 'go on' },
+          publisher: {
+            nodeId: null,
+            conversationId: null,
+            callId: null,
+            agentLabel: null,
+          },
+          pending: false,
+        },
+      ],
+    });
+    api.pressChatAction.mockResolvedValue({
+      outcome: {
+        actionSeq: 5,
+        actionId: 'go-on',
+        memberId: null,
+        conversationId: null,
+        state: 'succeeded',
+      },
+    });
+    const onBeforeSend = vi.fn(async () => true);
+    const onWorkingChange = vi.fn();
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({ onBeforeSend, onWorkingChange }),
+    });
+
+    const chip = container.querySelector<HTMLButtonElement>(
+      '[data-slot="chat-actions"] [data-slot="action-chip"]',
+    );
+    await act(async () => chip!.click());
+
+    expect(onBeforeSend).toHaveBeenCalledTimes(1);
+    expect(api.pressChatAction).toHaveBeenCalledTimes(1);
+    expect(onBeforeSend.mock.invocationCallOrder[0]!).toBeLessThan(
+      api.pressChatAction.mock.invocationCallOrder[0]!,
+    );
+    expect(onWorkingChange).toHaveBeenLastCalledWith(true);
+  });
+
+  // An Apply starts a turn, so the surface's step runs before it as before a send.
+  it('applies the card’s selection for its run, after the surface’s step', async () => {
+    api.listRunItems.mockResolvedValue([
+      {
+        id: 'h-card',
+        runId: 'h1',
+        memberId: null,
+        seq: 7,
+        kind: 'recommendations',
+        role: null,
+        payload: {
+          sourceRunId: 'source',
+          sourceKind: 'chat',
+          summary: 'the reply named no pull request',
+          timing: null,
+          items: [
+            {
+              id: 'R-1',
+              target: 'repo',
+              territory: 'process',
+              kind: 'ADD',
+              location: 'AGENTS.md',
+              title: 'Report every opened PR by URL',
+              change: 'WHEN a PR is opened → name its URL',
+              evidence: [{ seq: 2, quote: 'Done.' }],
+              rootCause: 'termination',
+              impact: {
+                minutesSaved: 1,
+                basis: 'one follow-up turn',
+                confidence: 2,
+              },
+              risk: { level: 'low', note: 'longer replies' },
+            },
+          ],
+        },
+        createdAt: '2026-10-15T00:00:07.000Z',
+      } as unknown as ChatItem,
+    ]);
+    api.applyRecommendations.mockReset().mockResolvedValue(undefined);
+    const onBeforeSend = vi.fn(async () => true);
+    const onWorkingChange = vi.fn();
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({ onBeforeSend, onWorkingChange }),
+    });
+    const buttons = (): HTMLButtonElement[] => [
+      ...container.querySelectorAll<HTMLButtonElement>('button'),
+    ];
+
+    await act(async () => {
+      buttons()
+        .find((b) => b.textContent?.includes('R-1'))!
+        .click();
+    });
+    await act(async () => {
+      buttons()
+        .find((b) => b.textContent?.includes('Apply selected'))!
+        .click();
+    });
+
+    expect(api.applyRecommendations).toHaveBeenCalledWith({
+      runId: 'h1',
+      applyRecommendationsDto: expect.objectContaining({
+        cardSeq: 7,
+        ids: ['R-1'],
+      }),
+    });
+    expect(onBeforeSend.mock.invocationCallOrder[0]!).toBeLessThan(
+      api.applyRecommendations.mock.invocationCallOrder[0]!,
+    );
+    expect(onWorkingChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it('runs the surface’s step before a Retry reopens the conversation', async () => {
+    api.listRunItems.mockResolvedValue([
+      hostedRow(msg(0, 'user', 'go')),
+      {
+        ...hostedRow(msg(1, 'assistant', '')),
+        kind: 'error',
+        role: null,
+        payload: { message: 'the CLI exited' },
+      },
+    ]);
+    api.retryChat.mockReset().mockResolvedValue(undefined);
+    const onBeforeSend = vi.fn(async () => true);
+    const onWorkingChange = vi.fn();
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({
+        open: vi.fn(async () => ({ ...HOSTED, status: 'failed' as const })),
+        onBeforeSend,
+        onWorkingChange,
+      }),
+    });
+
+    const retry = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Retry',
+    );
+    await act(async () => {
+      retry!.click();
+    });
+
+    expect(api.retryChat).toHaveBeenCalledWith({ runId: 'h1' });
+    expect(onBeforeSend.mock.invocationCallOrder[0]!).toBeLessThan(
+      api.retryChat.mock.invocationCallOrder[0]!,
+    );
+    expect(onWorkingChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it('says why the conversation could not be opened, and asks again on Try again', async () => {
+    const open = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('This thread has no analysis yet.'))
+      .mockResolvedValueOnce(HOSTED);
+    const { client } = makeClient();
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({ open }),
+    });
+
+    expect(container.textContent).toContain('This thread has no analysis yet.');
+    const retry = [...container.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent === 'Try again',
+    );
+    await act(async () => {
+      retry!.click();
+    });
+
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[data-slot="chat-header"]')).not.toBeNull();
   });
 });

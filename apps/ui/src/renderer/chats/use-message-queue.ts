@@ -61,23 +61,28 @@ export type SteerStatus = { id: string; state: 'sending' | 'held' } | null;
  * dropped on the way through the queue would have the agent answer about a
  * screenshot it never received.
  *
- * The chat screen and the team builder's dock both queue through here, so
- * the order, the pause, Send-now and the RUN_BUSY backoff are one set of rules.
  * The surface fills {@link MessageQueueHandlers} through `handlersRef` once its
  * turn start exists, and fires `drain` on whatever tells it a turn ended.
  *
  * `persist` keeps the queues in the browser's storage beside memory: the
  * composer is cleared the moment a message is queued, so a reload before the
  * drain — routine on a phone, where iOS discards a background tab — lost it
- * outright (`queued-message-store.ts`). Only ONE surface may persist: the store
- * is one key, and two readers would each restore, and drain, the other's runs.
+ * outright (`queued-message-store.ts`). Each persisting surface names its own
+ * `scope`: one store key per surface, since two readers of one key would each
+ * restore, and drain, the other's runs.
  */
-export function useMessageQueue({ persist }: { persist: boolean }) {
+export function useMessageQueue({
+  persist,
+  scope = null,
+}: {
+  persist: boolean;
+  scope?: string | null;
+}) {
   const handlersRef = useRef<MessageQueueHandlers>(NO_HANDLERS);
   // Read ONCE, for both halves below: the queues and which of them come back
   // paused (the user's pause, or a head that was mid-send when the page went).
   const [restored] = useState(() =>
-    persist ? readStoredQueueState() : EMPTY_RESTORE,
+    persist ? readStoredQueueState(scope) : EMPTY_RESTORE,
   );
   const [queues, setQueues] = useState<Record<string, QueuedMessage[]>>(
     () => restored.queues,
@@ -110,12 +115,15 @@ export function useMessageQueue({ persist }: { persist: boolean }) {
     if (!persist) {
       return;
     }
-    writeStoredQueueState({
-      queues: queuesRef.current,
-      paused: pausedRef.current,
-      sending: sendingRef.current,
-    });
-  }, [persist]);
+    writeStoredQueueState(
+      {
+        queues: queuesRef.current,
+        paused: pausedRef.current,
+        sending: sendingRef.current,
+      },
+      scope,
+    );
+  }, [persist, scope]);
   useEffect(() => {
     queuesRef.current = queues;
     store();
@@ -340,6 +348,26 @@ export function useMessageQueue({ persist }: { persist: boolean }) {
     }
   }, [drain]);
 
+  /** Drop a whole run's queue and its pause — a conversation thrown away. */
+  const forgetRun = useLatestCallback((runId: string): void => {
+    setQueues((prev) => {
+      if (prev[runId] === undefined) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[runId];
+      return next;
+    });
+    setPausedQueues((prev) => {
+      if (!prev.has(runId)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.delete(runId);
+      return next;
+    });
+  }, []);
+
   const remove = useLatestCallback((id: string): void => {
     const runId = handlersRef.current.activeRunId();
     if (!runId) {
@@ -453,6 +481,7 @@ export function useMessageQueue({ persist }: { persist: boolean }) {
     drain,
     edit,
     remove,
+    forgetRun,
     reorder,
     togglePause,
     steer,

@@ -42,6 +42,7 @@ import type {
   GlobalChatSearchHit,
   HandoffTargetDto,
   ItemDto as ChatItem,
+  LiveAction,
   OpenMonitor,
   RunAwaiting,
   RunCallState,
@@ -201,6 +202,7 @@ import { GlobalChatSearchDialog } from './global-chat-search-dialog';
 import type { GoalsActions } from './goals-list';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { isCallRow, mergeAnchorRows, withAnchors } from './history-anchors';
+import type { HostedThread } from './hosted-thread';
 import { foldsHolding } from './jump-folds';
 import { jumpAnchorProps } from './jump-target';
 import { JumpToLatest } from './jump-to-latest';
@@ -378,9 +380,17 @@ import {
   type CallTarget,
   useCallMessageQueues,
 } from './use-call-message-queues';
-import { useChatActions } from './use-chat-actions';
+import {
+  type PressHooks,
+  pressStartsTurn,
+  useChatActions,
+} from './use-chat-actions';
 import { useChatChanges } from './use-chat-changes';
-import { type ChatListScope, useChatRun } from './use-chat-run';
+import {
+  type ChatListScope,
+  REMOTE_HISTORY_PAGE,
+  useChatRun,
+} from './use-chat-run';
 import { useChatSearch } from './use-chat-search';
 import { useChatTimeline } from './use-chat-timeline';
 import { useChatTotals } from './use-chat-totals';
@@ -466,6 +476,7 @@ interface ComposerProject {
 }
 const FOLDER_PROJECT: ComposerProject = { projectId: null, source: 'folder' };
 const NO_PROJECTS: ProjectRef[] = [];
+const NO_NOTIFIED_RUNS: ChatRun[] = [];
 
 /**
  * What a new run is told about its project: nothing for the folder's own (the
@@ -756,9 +767,16 @@ export function Chats({
   firstLaunchAgent = null,
   onFirstLaunchHandled,
   transcriptPageCap,
+  hosted = null,
 }: {
   client: DaemonClient;
   handle: DaemonHandle;
+  /**
+   * Draw ONE conversation the sidebar never lists, inside another surface:
+   * the thread alone, with no list, no new-chat composer and nothing that
+   * belongs to the whole app (notifications, the archive sweep, global search).
+   */
+  hosted?: HostedThread | null;
   firstLaunchAgent?: CliKind | null;
   onFirstLaunchHandled?: () => void;
   /** The most one transcript page holds whatever `Settings.historyPageSize` says. */
@@ -873,7 +891,10 @@ export function Chats({
    * inline style, and an inline style always wins over a class targeting
    * the same property.
    */
-  const narrowViewport = useNarrowViewport();
+  const hostedRef = useRef(hosted);
+  hostedRef.current = hosted;
+  const isHosted = hosted !== null;
+  const narrowViewport = useNarrowViewport() && !isHosted;
   /**
    * Whether a phone shows the new-chat COMPOSER page rather than the chat
    * list. A phone has three pages — the list, the composer, an open thread —
@@ -1172,10 +1193,12 @@ export function Chats({
   const loadOlderRef = useRef<(() => Promise<boolean>) | null>(null);
   /** Previous `scrollTop`, so a scroll can be told to have moved UP. */
   const lastScrollTopRef = useRef(0);
-  // The message queue — one set of rules shared with the team dock; see
-  // `use-message-queue.ts`. The chat screen is the one surface that keeps it
-  // across a reload.
-  const messageQueue = useMessageQueue({ persist: true });
+  // The message queue — see `use-message-queue.ts`. Kept across a reload, a
+  // hosted conversation's under its surface's own key.
+  const messageQueue = useMessageQueue({
+    persist: true,
+    scope: hosted?.queueScope ?? null,
+  });
   const {
     queues,
     pausedQueues,
@@ -1193,6 +1216,12 @@ export function Chats({
   const onLiveUnsentRef = useRef<
     (runId: string, deliveryIds: string[], rowId: string) => void
   >(() => {});
+  /** A turn's ending already reported to the hosting surface, since the turn started. */
+  const turnEndReportedRef = useRef(false);
+  const onTurnEndRef = useRef<(runId: string) => void>(() => {
+    turnEndReportedRef.current = true;
+    void hostedRef.current?.onTurnSettled?.();
+  });
 
   /**
    * Park the composer's contents under `from`, and put `to`'s back.
@@ -1318,13 +1347,48 @@ export function Chats({
     chatApi,
     teamApi,
     historyPageSize,
-    pageCap: transcriptPageCap,
+    pageCap:
+      transcriptPageCap ??
+      (isHosted && isRemoteRuntime() ? REMOTE_HISTORY_PAGE : undefined),
     swapDraft,
     resetSteerStatus,
     hasQueuedMessages,
     drainQueueRef,
     onLiveUnsentRef,
+    onTurnEndRef,
+    pinned: hosted === null ? null : { open: hosted.open },
   });
+
+  /**
+   * Every turn a hosted conversation starts other than a typed send (a
+   * button, an Apply, a Retry) runs the surface's step first and reports the
+   * conversation working at once, as a send does; `refuseHostedTurn` takes
+   * that back when the daemon refuses the start.
+   */
+  const startHostedTurn = useLatestCallback(
+    async (runId: string | null): Promise<boolean> => {
+      const surface = hostedRef.current;
+      if (surface === null) {
+        return false;
+      }
+      await surface.onBeforeSend?.();
+      if (
+        runId === null ||
+        runId !== activeRunIdRef.current ||
+        streamingRef.current
+      ) {
+        return false;
+      }
+      setStreaming(true);
+      turnEndReportedRef.current = false;
+      return true;
+    },
+    [setStreaming],
+  );
+  const refuseHostedTurn = useLatestCallback((): void => {
+    turnEndReportedRef.current = true;
+    setStreaming(false);
+  }, [setStreaming]);
 
   // A thread opening (a row tapped, a jump from Tasks, the composer's first
   // send creating one) replaces the composer page, so going back from that
@@ -2222,17 +2286,32 @@ export function Chats({
   /** A recommendations card's Apply, for `RecommendationsApplyContext`. */
   const applyRecommendations = useLatestCallback<RecommendationsApplier>(
     async (runId, cardSeq, ids) => {
-      await chatApi.applyRecommendations({
-        runId,
-        applyRecommendationsDto: { cardSeq, ids, clientMessageId: randomId() },
-      });
+      const raised = await startHostedTurn(runId);
+      try {
+        await chatApi.applyRecommendations({
+          runId,
+          applyRecommendationsDto: {
+            cardSeq,
+            ids,
+            clientMessageId: randomId(),
+          },
+        });
+      } catch (err) {
+        if (raised) {
+          refuseHostedTurn();
+        }
+        throw err;
+      }
     },
-    [chatApi],
+    [chatApi, startHostedTurn, refuseHostedTurn],
   );
 
   /** An analysis chat's header chip: the thread it reads, one press away. */
   const analysisSourceOf = useLatestCallback(
     (run: ChatRun): { label: string; onOpen: () => void } | null => {
+      if (isHosted) {
+        return null;
+      }
       const teamSlug = run.analysisTeamSlug;
       if (teamSlug != null) {
         return {
@@ -2346,8 +2425,7 @@ export function Chats({
 
   // The app's shared answer, and only the data — every read below is a plain
   // `capabilities?.…`, never a loading readout of its own.
-  const { capabilities, loading: capabilitiesLoading } =
-    useSharedCapabilities(capabilitiesApi);
+  const { capabilities } = useSharedCapabilities(capabilitiesApi);
   /**
    * Per CLI: `null` if it can reopen a conversation interactively
    * (`--resume`), else the daemon's own sentence for why it cannot. Derived,
@@ -2565,7 +2643,7 @@ export function Chats({
    * steady state the answer is zero and this costs one request a day.
    */
   useEffect(() => {
-    if (!chatApi) {
+    if (!chatApi || isHosted) {
       return;
     }
     let cancelled = false;
@@ -2600,7 +2678,7 @@ export function Chats({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [chatApi, refreshRuns]);
+  }, [chatApi, refreshRuns, isHosted]);
 
   useEffect(() => {
     void window.geniro.getSettings().then((s) => {
@@ -2630,9 +2708,19 @@ export function Chats({
     // known kind unconditionally, so an agent that is not installed — or whose
     // binary is too old to be driven — looked exactly like a working one and
     // failed only AFTER a run had been created, as "exited with code 1".
-    void window.geniro.detectClis().then(setCliDetections);
-    refreshGroups();
-  }, [client, chatApi, addItem, activateRun, refreshRuns, refreshGroups]);
+    if (!isHosted) {
+      void window.geniro.detectClis().then(setCliDetections);
+      refreshGroups();
+    }
+  }, [
+    client,
+    chatApi,
+    addItem,
+    activateRun,
+    refreshRuns,
+    refreshGroups,
+    isHosted,
+  ]);
 
   useEffect(() => {
     // Follow the tail only when the user is already AT it. Scrolling them back
@@ -3129,7 +3217,7 @@ export function Chats({
   useEffect(() => {
     // While another view is shown this screen is mounted but hidden, and a
     // dialog opened then is invisible yet holds the Escape stack.
-    if (!active) {
+    if (!active || isHosted) {
       return;
     }
     const onKey = (event: KeyboardEvent): void => {
@@ -3144,7 +3232,7 @@ export function Chats({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active]);
+  }, [active, isHosted]);
 
   const openGlobalSearchHit = useLatestCallback(
     (hit: GlobalChatSearchHit): void => {
@@ -4108,6 +4196,7 @@ export function Chats({
       statusBefore?: ChatRun['status'],
       clientMessageId = randomId(),
     ): Promise<void> => {
+      await hostedRef.current?.onBeforeSend?.();
       // The live plane belongs to the chat that is ON SCREEN. A background
       // drain (see the `run_status` handler) starts a real turn in a thread
       // the user is not looking at — clearing THIS chat's error banner and
@@ -4119,6 +4208,7 @@ export function Chats({
       if (runId === activeRunIdRef.current) {
         setError(null);
         setStreaming(true);
+        turnEndReportedRef.current = false;
         // A message goes to the END of the conversation, so the reader has to be
         // AT the end to see it. Parked on a window fetched around a search hit,
         // the append is suppressed (`useChatRun`'s `awayFromTail`, which exists
@@ -4694,12 +4784,41 @@ export function Chats({
     activeRunId,
     reconnectNonce,
   );
+  const pressRaisedWorkingRef = useRef(false);
+  const beforeHostedPress = useLatestCallback(
+    async (action: LiveAction): Promise<void> => {
+      if (pressStartsTurn(action)) {
+        pressRaisedWorkingRef.current = await startHostedTurn(
+          activeRunIdRef.current,
+        );
+        return;
+      }
+      await hostedRef.current?.onBeforeSend?.();
+    },
+    [startHostedTurn],
+  );
+  const hostedPressSettled = useLatestCallback(
+    (taken: boolean, action: LiveAction): void => {
+      if (!pressStartsTurn(action)) {
+        return;
+      }
+      if (pressRaisedWorkingRef.current && !taken) {
+        refuseHostedTurn();
+      }
+      pressRaisedWorkingRef.current = false;
+    },
+    [refuseHostedTurn],
+  );
+  const pressHooks: PressHooks | undefined = isHosted
+    ? { beforePress: beforeHostedPress, onPressSettled: hostedPressSettled }
+    : undefined;
   /** The agents' buttons on this chat, and their press — see `useChatActions`. */
   const pressableActions = useChatActions(
     activeTeamId === null ? chatApi : teamApi,
     activeRunId,
     runState,
     refreshRunState,
+    pressHooks,
   );
   /**
    * The card rows to read open requests from: the window's, and every card the
@@ -4812,6 +4931,60 @@ export function Chats({
   );
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
+
+  useEffect(() => {
+    hostedRef.current?.onWorkingChange?.(streaming);
+  }, [streaming]);
+  const hostedAwaiting = activeRun?.awaiting ?? null;
+  useEffect(() => {
+    hostedRef.current?.onAwaitingChange?.(hostedAwaiting);
+  }, [hostedAwaiting]);
+  // A turn whose ending reached this screen only as a replay (the socket was
+  // down when it ended) is reported when the working state comes down.
+  const wasStreamingRef = useRef(streaming);
+  useEffect(() => {
+    if (streaming) {
+      turnEndReportedRef.current = false;
+    } else if (wasStreamingRef.current && !turnEndReportedRef.current) {
+      turnEndReportedRef.current = true;
+      void hostedRef.current?.onTurnSettled?.();
+    }
+    wasStreamingRef.current = streaming;
+  }, [streaming]);
+  const initialDraftUsedRef = useRef(false);
+  useEffect(() => {
+    const initial = hostedRef.current?.initialDraft ?? '';
+    if (activeRunId === null || initialDraftUsedRef.current) {
+      return;
+    }
+    initialDraftUsedRef.current = true;
+    if (initial !== '' && composerText.get() === '') {
+      setInput(initial);
+    }
+  }, [activeRunId, composerText, setInput]);
+  // A hosted surface shows one conversation; a queue left under any other run
+  // (one thrown away, an analysis replaced) can never be drawn or sent.
+  const { forgetRun, queues: queuedByRun } = messageQueue;
+  useEffect(() => {
+    if (!isHosted || activeRunId === null) {
+      return;
+    }
+    for (const runId of Object.keys(queuedByRun)) {
+      if (runId !== activeRunId) {
+        forgetRun(runId);
+      }
+    }
+  }, [isHosted, activeRunId, queuedByRun, forgetRun]);
+  const discardHosted = useLatestCallback((): void => {
+    const discard = hostedRef.current?.discard;
+    if (discard === undefined) {
+      return;
+    }
+    deactivateRun();
+    void discard()
+      .then(refreshRuns)
+      .catch((err: unknown) => setError(describeDaemonError(err)));
+  }, [deactivateRun, refreshRuns, setError]);
   // The open thread's analysis, for its Analyze button — see `useThreadAnalysis`.
   const analysisMark = useThreadAnalysis({
     chatApi,
@@ -8585,15 +8758,30 @@ export function Chats({
     return () => {
       // Retry after a task's worktree was collected is the reported case
       // itself — the transcript's failure row offers exactly this press.
-      void sendRestoringWorktree(
-        () => chatApi.retryChat({ runId }),
-        taskId,
-        restoreWorktree,
-      ).catch((err: unknown) => {
-        setError(daemonErrorDetail(err) ?? String(err));
-      });
+      void (async () => {
+        const raised = await startHostedTurn(runId);
+        try {
+          await sendRestoringWorktree(
+            () => chatApi.retryChat({ runId }),
+            taskId,
+            restoreWorktree,
+          );
+        } catch (err) {
+          if (raised) {
+            refuseHostedTurn();
+          }
+          setError(daemonErrorDetail(err) ?? String(err));
+        }
+      })();
     };
-  }, [activeRun?.id, activeRun?.taskId, chatApi, restoreWorktree]);
+  }, [
+    activeRun?.id,
+    activeRun?.taskId,
+    chatApi,
+    restoreWorktree,
+    startHostedTurn,
+    refuseHostedTurn,
+  ]);
 
   /**
    * The badge a sidebar row shows for a run — the ONE reading, so a group
@@ -8766,8 +8954,13 @@ export function Chats({
    * unread mark was wiped by the switch itself.
    */
   const notifiedRuns = useMemo(
-    () => (offScopeRuns.length === 0 ? runs : [...runs, ...offScopeRuns]),
-    [runs, offScopeRuns],
+    () =>
+      isHosted
+        ? NO_NOTIFIED_RUNS
+        : offScopeRuns.length === 0
+          ? runs
+          : [...runs, ...offScopeRuns],
+    [runs, offScopeRuns, isHosted],
   );
 
   /**
@@ -8804,7 +8997,7 @@ export function Chats({
   // An agent's share waiting on the user signing in — desktop only, like the
   // Share control that answers it.
   useShareSignInNotifications({
-    client: isRemoteRuntime() ? null : client,
+    client: isRemoteRuntime() || isHosted ? null : client,
     runs: notifiedRuns,
     labelOf: notificationLabel,
     activeRunId: active && showsRequestedThread ? activeRunId : null,
@@ -8864,8 +9057,11 @@ export function Chats({
    * the window; this is the half that decides what it shows.
    */
   useEffect(
-    () => window.geniro.onNotificationActivated(handleActivateRun),
-    [handleActivateRun],
+    () =>
+      isHosted
+        ? undefined
+        : window.geniro.onNotificationActivated(handleActivateRun),
+    [handleActivateRun, isHosted],
   );
 
   /**
@@ -9249,20 +9445,26 @@ export function Chats({
                 style={{
                   gridTemplateColumns: narrowViewport
                     ? 'minmax(0,1fr)'
-                    : showAgentsPanel
-                      ? `${listWidth}px minmax(0,1fr) auto`
-                      : `${listWidth}px minmax(0,1fr)`,
+                    : isHosted
+                      ? showAgentsPanel
+                        ? 'minmax(0,1fr) auto'
+                        : 'minmax(0,1fr)'
+                      : showAgentsPanel
+                        ? `${listWidth}px minmax(0,1fr) auto`
+                        : `${listWidth}px minmax(0,1fr)`,
                 }}>
                 {/* On a phone the list is a PAGE of its own: hidden (and its
                     scroll position kept) while a thread or the composer is on
                     show, the whole screen otherwise. */}
-                <aside
-                  data-slot="chat-list"
-                  className={cn(
-                    'relative flex min-h-0 flex-col border-r border-border bg-sidebar',
-                    narrowViewport && (phoneListPage ? 'border-r-0' : 'hidden'),
-                  )}>
-                  {/* `relative` on the aside above is what this needs: the
+                {isHosted ? null : (
+                  <aside
+                    data-slot="chat-list"
+                    className={cn(
+                      'relative flex min-h-0 flex-col border-r border-border bg-sidebar',
+                      narrowViewport &&
+                        (phoneListPage ? 'border-r-0' : 'hidden'),
+                    )}>
+                    {/* `relative` on the aside above is what this needs: the
                       handle is absolutely positioned inside it, exactly as the
                       agents panel's is. On the RIGHT edge, because that is the
                       edge this column shares with the transcript — and the
@@ -9270,388 +9472,422 @@ export function Chats({
                       list grow it. Omitted at phone width, where the list is a
                       full-width page with nothing beside it to trade width
                       with. */}
-                  {narrowViewport ? null : (
-                    <PanelResizeHandle
-                      edge="right"
-                      label="Resize chat list"
-                      onMouseDown={startListResize}
-                      value={listWidth}
-                      min={listMinWidth}
-                      max={listMaxWidth}
-                      onResize={resizeListTo}
-                    />
-                  )}
-                  {/* A column heading, NOT part of the window's title bar —
+                    {narrowViewport ? null : (
+                      <PanelResizeHandle
+                        edge="right"
+                        label="Resize chat list"
+                        onMouseDown={startListResize}
+                        value={listWidth}
+                        min={listMinWidth}
+                        max={listMaxWidth}
+                        onResize={resizeListTo}
+                      />
+                    )}
+                    {/* A column heading, NOT part of the window's title bar —
                       that is one band above every column now (`title-bar.tsx`).
                       It keeps `h-11` so it still shares a baseline with the
                       transcript's header beside it. */}
-                  <div className="flex h-11 items-center justify-between pr-2 pl-3">
-                    <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                      Chats
-                    </span>
-                    <span className="flex items-center gap-0.5">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-7"
-                        aria-label="Search all chats"
-                        title="Search all chats (⌘⇧F / Ctrl+Shift+F)"
-                        onClick={() => setGlobalSearchOpen(true)}>
-                        <Search className="shrink-0" />
-                      </Button>
-                      {/* Before the add controls because it acts on the LIST
+                    <div className="flex h-11 items-center justify-between pr-2 pl-3">
+                      <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                        Chats
+                      </span>
+                      <span className="flex items-center gap-0.5">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          aria-label="Search all chats"
+                          title="Search all chats (⌘⇧F / Ctrl+Shift+F)"
+                          onClick={() => setGlobalSearchOpen(true)}>
+                          <Search className="shrink-0" />
+                        </Button>
+                        {/* Before the add controls because it acts on the LIST
                           the row sits above, where the three after it each add
                           something to that list. */}
-                      <ChatScopeFilter
-                        scope={chatScope}
-                        onChange={handleShowScope}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-7"
-                        aria-label="New group"
-                        title="New group"
-                        onClick={handleNewGroup}>
-                        <FolderPlus className="shrink-0" />
-                      </Button>
-                      {/*
+                        <ChatScopeFilter
+                          scope={chatScope}
+                          onChange={handleShowScope}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          aria-label="New group"
+                          title="New group"
+                          onClick={handleNewGroup}>
+                          <FolderPlus className="shrink-0" />
+                        </Button>
+                        {/*
                         Beside the +, not inside it. The + is a one-click new
                         thread and has to stay one; picking up an existing
                         conversation is a different act with a question attached
                         to it, so it gets its own control.
                       */}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-7"
-                        aria-label="Continue a session"
-                        title="Continue a session you already have"
-                        onClick={() => {
-                          setSessionAgent(agentKind);
-                          setSessionPickerOpen(true);
-                        }}>
-                        <History className="shrink-0" />
-                      </Button>
-                      {/* The saved setups hang off the + itself: they are ways
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          aria-label="Continue a session"
+                          title="Continue a session you already have"
+                          onClick={() => {
+                            setSessionAgent(agentKind);
+                            setSessionPickerOpen(true);
+                          }}>
+                          <History className="shrink-0" />
+                        </Button>
+                        {/* The saved setups hang off the + itself: they are ways
                           of starting a new chat, so the control that starts one
                           is where the user is already aiming. A click still
                           means the plain new thread. */}
-                      <NewChatButton
-                        configs={runConfigs}
-                        projects={projects}
-                        onNewChat={() => {
-                          newChat();
-                          setMobileComposeOpen(true);
-                        }}
-                        onApply={(config) =>
-                          void applyRunConfigToComposer(config)
-                        }
-                        onCreate={() => {
-                          setRunConfigPickerMode('new');
-                          setRunConfigPickerOpen(true);
-                        }}
-                        onManage={() => {
-                          if (onOpenProject) {
-                            onOpenProject(composerProject.projectId);
-                            return;
+                        <NewChatButton
+                          configs={runConfigs}
+                          projects={projects}
+                          onNewChat={() => {
+                            newChat();
+                            setMobileComposeOpen(true);
+                          }}
+                          onApply={(config) =>
+                            void applyRunConfigToComposer(config)
                           }
-                          setRunConfigPickerMode('list');
-                          setRunConfigPickerOpen(true);
-                        }}
-                      />
-                    </span>
-                  </div>
-                  {/* The list's own actions (listing, groups, pins) report
+                          onCreate={() => {
+                            setRunConfigPickerMode('new');
+                            setRunConfigPickerOpen(true);
+                          }}
+                          onManage={() => {
+                            if (onOpenProject) {
+                              onOpenProject(composerProject.projectId);
+                              return;
+                            }
+                            setRunConfigPickerMode('list');
+                            setRunConfigPickerOpen(true);
+                          }}
+                        />
+                      </span>
+                    </div>
+                    {/* The list's own actions (listing, groups, pins) report
                       through the shared error, whose strip lives on the
                       composer and thread pages — off screen while a phone
                       shows this page, where a failed listing would otherwise
                       read as "No chats yet". */}
-                  {phoneListPage && error !== null ? (
-                    <ErrorBanner
-                      className="mx-3 mb-2"
-                      message={error}
-                      onDismiss={dismissError}
-                    />
-                  ) : null}
-                  <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
-                    {!runsLoaded && runs.length === 0 ? (
-                      <li className="px-2 py-1.5 text-sm text-muted-foreground">
-                        Loading chats…
-                      </li>
-                    ) : (
-                      <>
-                        {sections.map(({ group, runs: sectionRuns }) => {
-                          // From the statuses the ROWS are showing, never from
-                          // the daemon column: a header computed from the row
-                          // would contradict its own children in exactly the
-                          // cases that matter (a live turn under a stale
-                          // `completed`, a parked question).
-                          const summary = runGroupSummary(
-                            sectionRuns.map(sidebarRunStatus),
-                          );
-                          const sectionId = group?.id ?? null;
-                          const sectionKey = sectionId ?? 'loose';
-                          const isDropTarget =
-                            drag?.kind === 'run' && dropSectionId === sectionId;
-                          // A long section is folded to its WORKING set — the
-                          // threads that are running or waiting on the user,
-                          // plus the one that is open — and the rest go behind
-                          // "Show all". A group of a hundred finished chats
-                          // otherwise pushed every group below it off the
-                          // screen, so the next group could only be reached by
-                          // scrolling past conversations nobody was returning
-                          // to. The header's count stays the section's TOTAL,
-                          // so what the fold holds back is never in doubt.
-                          // The PINNED band leads the section and the fold is
-                          // computed over what is left. Two reasons it is
-                          // taken out first rather than kept and `keep`-ed
-                          // through: the fold preserves the caller's order, so
-                          // a pinned row would sit wherever activity had put
-                          // it — pinned and third — and `Show all` could
-                          // otherwise hide one, which is the one thing a pin
-                          // is a promise against.
-                          const { pinned, rest } = splitPinnedRuns(sectionRuns);
-                          const folded = previewSectionRuns(rest, {
-                            keep: (run) => {
-                              if (run.id === activeRunId) {
-                                return true;
-                              }
-                              const status = sidebarRunStatus(run);
-                              return (
-                                status === 'running' || status === 'needs-input'
-                              );
-                            },
-                          });
-                          const showingAll = expandedSections.has(sectionKey);
-                          const rows = [
-                            ...pinned,
-                            ...(showingAll ? rest : folded.visible),
-                          ].map((run) => (
-                            <ChatListItem
-                              key={run.id}
-                              runId={run.id}
-                              active={run.id === activeRunId}
-                              unseen={unseen.has(run.id)}
-                              naming={namingRunIds.has(run.id)}
-                              label={runLabel(run, teamNames)}
-                              isTeam={run.teamId != null}
-                              teamName={
-                                run.teamId
-                                  ? (teamNames.get(run.teamId) ?? null)
-                                  : null
-                              }
-                              status={sidebarRunStatus(run)}
-                              lastMessage={run.lastMessage}
-                              lastActivityAt={lastActivityOf(run)}
-                              createdAt={run.createdAt}
-                              archivedAt={run.archivedAt ?? null}
-                              activity={activities.get(run.id) ?? null}
-                              awaiting={run.awaiting}
-                              monitors={run.monitorsOpen}
-                              agentKind={run.agentKind}
-                              taskIdentifier={run.taskIdentifier}
-                              pullRequest={
-                                rowPullRequestByRun.get(run.id) ?? null
-                              }
-                              dragging={
-                                drag?.kind === 'run' && drag.id === run.id
-                              }
-                              onActivate={handleActivateRun}
-                              onRename={handleRenameRun}
-                              onDelete={handleDeleteRun}
-                              // Read off the ROW, never off the scope: under
-                              // `Show all` both kinds of row are listed
-                              // together, so a view-wide flag would offer
-                              // Unarchive on a live thread and Archive on a
-                              // shelved one, in the same list.
-                              archived={run.archivedAt != null}
-                              // Both kinds. It was chats only for a release,
-                              // which left a finished team run with Delete
-                              // as its one row action — the thread whose
-                              // history is most worth keeping had no way off
-                              // the desk but destroying it.
-                              onArchive={handleArchiveRun}
-                              onUnarchive={handleUnarchiveRun}
-                              // An analysis is not itself analysed.
-                              onAnalyze={
-                                !isAnalysisRun(run)
-                                  ? handleAnalyzeRun
-                                  : undefined
-                              }
-                              // Read off the ROW, like `archived` above and
-                              // for its reason: under `Show all` the band and
-                              // the rest are one list, so a flag derived from
-                              // where the row was drawn would offer Unpin to
-                              // whatever happened to come first.
-                              pinned={run.pinnedPosition !== null}
-                              notes={run.notes}
-                              onSetPinned={handleSetRunPinned}
-                              color={run.color}
-                              onSetColor={handleSetRunColor}
-                              onDragStartRun={handleRunDragStart}
-                              onDragOverRun={handleRunDragOver}
-                              onDragEndRun={handleDragEnd}
-                            />
-                          ));
-                          // Only when the fold is actually holding something
-                          // back — a short section shows every row and needs no
-                          // control saying so. It rides INSIDE the row list so
-                          // it sits against the group's rail, where it reads as
-                          // the end of these chats rather than as a stray
-                          // sidebar action.
-                          const foldRow =
-                            folded.hidden > 0 ? (
-                              <li key="fold" className="list-none">
-                                <button
-                                  type="button"
-                                  data-slot="section-fold"
-                                  className="w-full cursor-pointer rounded-md px-2 py-1 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                                  onClick={() =>
-                                    handleToggleSectionAll(sectionKey)
-                                  }>
-                                  {showingAll
-                                    ? 'Show fewer'
-                                    : `Show all ${sectionRuns.length}`}
-                                </button>
-                              </li>
-                            ) : null;
-                          return (
-                            // The WHOLE section is the drop zone — its header, its
-                            // rail, its rows and the space between them. Hanging
-                            // the target off the header alone left the body of an
-                            // expanded group inert: a chat dragged into it lit
-                            // nothing up and landed nowhere, which is the reported
-                            // "gets selected, but doesn't drag". `dragover`
-                            // bubbles, so one handler here covers every child and
-                            // the rows need none of their own.
-                            <li
-                              key={group?.id ?? 'loose'}
-                              data-slot="group-section"
-                              data-section-id={sectionId ?? 'loose'}
-                              className={cn(
-                                // The bottom padding is PERMANENT, not part of
-                                // the highlight: it is what keeps the colour rail
-                                // from running flush into the edge below it, and
-                                // adding it only while a drag hovers would shift
-                                // every row down at the moment the user is aiming
-                                // at one.
-                                'list-none rounded-lg pb-1.5',
-                                // Soft and NEUTRAL: `muted` rather than `accent`,
-                                // which is the palette's warm caramel and read as
-                                // a coloured state rather than as a destination —
-                                // and a hairline rather than a 2px ring, since a
-                                // heavy outline on a block this size in a 260px
-                                // sidebar reads as an error.
-                                isDropTarget &&
-                                  'bg-muted/70 ring-1 ring-border',
-                              )}
-                              onDragOver={(event) => {
-                                // Without preventDefault this is not a drop
-                                // target at all, and the cursor shows the
-                                // no-entry glyph over the whole list.
-                                event.preventDefault();
-                                if (dragRef.current?.kind === 'run') {
-                                  event.dataTransfer.dropEffect = 'move';
-                                  handleSectionDragOver(sectionId);
-                                } else if (group !== null) {
-                                  handleGroupDragOver(group.id);
+                    {phoneListPage && error !== null ? (
+                      <ErrorBanner
+                        className="mx-3 mb-2"
+                        message={error}
+                        onDismiss={dismissError}
+                      />
+                    ) : null}
+                    <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
+                      {!runsLoaded && runs.length === 0 ? (
+                        <li className="px-2 py-1.5 text-sm text-muted-foreground">
+                          Loading chats…
+                        </li>
+                      ) : (
+                        <>
+                          {sections.map(({ group, runs: sectionRuns }) => {
+                            // From the statuses the ROWS are showing, never from
+                            // the daemon column: a header computed from the row
+                            // would contradict its own children in exactly the
+                            // cases that matter (a live turn under a stale
+                            // `completed`, a parked question).
+                            const summary = runGroupSummary(
+                              sectionRuns.map(sidebarRunStatus),
+                            );
+                            const sectionId = group?.id ?? null;
+                            const sectionKey = sectionId ?? 'loose';
+                            const isDropTarget =
+                              drag?.kind === 'run' &&
+                              dropSectionId === sectionId;
+                            // A long section is folded to its WORKING set — the
+                            // threads that are running or waiting on the user,
+                            // plus the one that is open — and the rest go behind
+                            // "Show all". A group of a hundred finished chats
+                            // otherwise pushed every group below it off the
+                            // screen, so the next group could only be reached by
+                            // scrolling past conversations nobody was returning
+                            // to. The header's count stays the section's TOTAL,
+                            // so what the fold holds back is never in doubt.
+                            // The PINNED band leads the section and the fold is
+                            // computed over what is left. Two reasons it is
+                            // taken out first rather than kept and `keep`-ed
+                            // through: the fold preserves the caller's order, so
+                            // a pinned row would sit wherever activity had put
+                            // it — pinned and third — and `Show all` could
+                            // otherwise hide one, which is the one thing a pin
+                            // is a promise against.
+                            const { pinned, rest } =
+                              splitPinnedRuns(sectionRuns);
+                            const folded = previewSectionRuns(rest, {
+                              keep: (run) => {
+                                if (run.id === activeRunId) {
+                                  return true;
                                 }
-                              }}
-                              onDrop={(event) => {
-                                event.preventDefault();
-                                handleDropInSection(sectionId);
-                              }}>
-                              {group ? (
-                                <GroupHeader
-                                  group={group}
-                                  summary={summary}
-                                  unseen={sectionRuns.some((run) =>
-                                    unseen.has(run.id),
-                                  )}
-                                  dragging={
-                                    drag?.kind === 'group' &&
-                                    drag.id === group.id
+                                const status = sidebarRunStatus(run);
+                                return (
+                                  status === 'running' ||
+                                  status === 'needs-input'
+                                );
+                              },
+                            });
+                            const showingAll = expandedSections.has(sectionKey);
+                            const rows = [
+                              ...pinned,
+                              ...(showingAll ? rest : folded.visible),
+                            ].map((run) => (
+                              <ChatListItem
+                                key={run.id}
+                                runId={run.id}
+                                active={run.id === activeRunId}
+                                unseen={unseen.has(run.id)}
+                                naming={namingRunIds.has(run.id)}
+                                label={runLabel(run, teamNames)}
+                                isTeam={run.teamId != null}
+                                teamName={
+                                  run.teamId
+                                    ? (teamNames.get(run.teamId) ?? null)
+                                    : null
+                                }
+                                status={sidebarRunStatus(run)}
+                                lastMessage={run.lastMessage}
+                                lastActivityAt={lastActivityOf(run)}
+                                createdAt={run.createdAt}
+                                archivedAt={run.archivedAt ?? null}
+                                activity={activities.get(run.id) ?? null}
+                                awaiting={run.awaiting}
+                                monitors={run.monitorsOpen}
+                                agentKind={run.agentKind}
+                                taskIdentifier={run.taskIdentifier}
+                                pullRequest={
+                                  rowPullRequestByRun.get(run.id) ?? null
+                                }
+                                dragging={
+                                  drag?.kind === 'run' && drag.id === run.id
+                                }
+                                onActivate={handleActivateRun}
+                                onRename={handleRenameRun}
+                                onDelete={handleDeleteRun}
+                                // Read off the ROW, never off the scope: under
+                                // `Show all` both kinds of row are listed
+                                // together, so a view-wide flag would offer
+                                // Unarchive on a live thread and Archive on a
+                                // shelved one, in the same list.
+                                archived={run.archivedAt != null}
+                                // Both kinds. It was chats only for a release,
+                                // which left a finished team run with Delete
+                                // as its one row action — the thread whose
+                                // history is most worth keeping had no way off
+                                // the desk but destroying it.
+                                onArchive={handleArchiveRun}
+                                onUnarchive={handleUnarchiveRun}
+                                // An analysis is not itself analysed.
+                                onAnalyze={
+                                  !isAnalysisRun(run)
+                                    ? handleAnalyzeRun
+                                    : undefined
+                                }
+                                // Read off the ROW, like `archived` above and
+                                // for its reason: under `Show all` the band and
+                                // the rest are one list, so a flag derived from
+                                // where the row was drawn would offer Unpin to
+                                // whatever happened to come first.
+                                pinned={run.pinnedPosition !== null}
+                                notes={run.notes}
+                                onSetPinned={handleSetRunPinned}
+                                color={run.color}
+                                onSetColor={handleSetRunColor}
+                                onDragStartRun={handleRunDragStart}
+                                onDragOverRun={handleRunDragOver}
+                                onDragEndRun={handleDragEnd}
+                              />
+                            ));
+                            // Only when the fold is actually holding something
+                            // back — a short section shows every row and needs no
+                            // control saying so. It rides INSIDE the row list so
+                            // it sits against the group's rail, where it reads as
+                            // the end of these chats rather than as a stray
+                            // sidebar action.
+                            const foldRow =
+                              folded.hidden > 0 ? (
+                                <li key="fold" className="list-none">
+                                  <button
+                                    type="button"
+                                    data-slot="section-fold"
+                                    className="w-full cursor-pointer rounded-md px-2 py-1 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                                    onClick={() =>
+                                      handleToggleSectionAll(sectionKey)
+                                    }>
+                                    {showingAll
+                                      ? 'Show fewer'
+                                      : `Show all ${sectionRuns.length}`}
+                                  </button>
+                                </li>
+                              ) : null;
+                            return (
+                              // The WHOLE section is the drop zone — its header, its
+                              // rail, its rows and the space between them. Hanging
+                              // the target off the header alone left the body of an
+                              // expanded group inert: a chat dragged into it lit
+                              // nothing up and landed nowhere, which is the reported
+                              // "gets selected, but doesn't drag". `dragover`
+                              // bubbles, so one handler here covers every child and
+                              // the rows need none of their own.
+                              <li
+                                key={group?.id ?? 'loose'}
+                                data-slot="group-section"
+                                data-section-id={sectionId ?? 'loose'}
+                                className={cn(
+                                  // The bottom padding is PERMANENT, not part of
+                                  // the highlight: it is what keeps the colour rail
+                                  // from running flush into the edge below it, and
+                                  // adding it only while a drag hovers would shift
+                                  // every row down at the moment the user is aiming
+                                  // at one.
+                                  'list-none rounded-lg pb-1.5',
+                                  // Soft and NEUTRAL: `muted` rather than `accent`,
+                                  // which is the palette's warm caramel and read as
+                                  // a coloured state rather than as a destination —
+                                  // and a hairline rather than a 2px ring, since a
+                                  // heavy outline on a block this size in a 260px
+                                  // sidebar reads as an error.
+                                  isDropTarget &&
+                                    'bg-muted/70 ring-1 ring-border',
+                                )}
+                                onDragOver={(event) => {
+                                  // Without preventDefault this is not a drop
+                                  // target at all, and the cursor shows the
+                                  // no-entry glyph over the whole list.
+                                  event.preventDefault();
+                                  if (dragRef.current?.kind === 'run') {
+                                    event.dataTransfer.dropEffect = 'move';
+                                    handleSectionDragOver(sectionId);
+                                  } else if (group !== null) {
+                                    handleGroupDragOver(group.id);
                                   }
-                                  autoFocusName={namingGroupId === group.id}
-                                  onNameFocused={clearNamingGroup}
-                                  onToggle={handleToggleGroup}
-                                  onRename={handleRenameGroup}
-                                  onCommand={handleGroupCommand}
-                                  teams={teams}
-                                  onDragStart={handleGroupDragStart}
-                                  onDragEnd={handleDragEnd}
-                                />
-                              ) : groups.length > 0 &&
-                                sectionRuns.length > 0 ? (
-                                // Only once a group exists: with none, this label
-                                // would restate the panel heading directly above
-                                // it. The loose runs need a name of their own the
-                                // moment anything sits above them.
-                                <p
-                                  data-slot="ungrouped-label"
-                                  className="m-0 px-2 pt-1 pb-0.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                                  Ungrouped
-                                </p>
-                              ) : null}
-                              {group === null ? (
-                                <ul className="m-0 flex list-none flex-col gap-1 p-0">
-                                  {rows}
-                                  {foldRow}
-                                </ul>
-                              ) : // An EMPTY group draws no rail: the container
-                              // exists to enclose rows, and with none it rendered
-                              // as a 4px orphan tick under the header. The
-                              // section is the drop target either way, so an
-                              // empty group can still be dropped into.
-                              group.collapsed || rows.length === 0 ? null : (
-                                // The group's chats are ENCLOSED: indented, and
-                                // hung off a rail in the group's own colour, so
-                                // where one group's threads end and the next
-                                // begins is visible without counting. Without it
-                                // an expanded group ran straight into the one
-                                // below and the whole list read as flat.
-                                <ul
-                                  data-slot="group-runs"
-                                  className={cn(
-                                    'm-0 ml-3 flex list-none flex-col gap-1 border-l-2 py-1 pl-2',
-                                    GROUP_RAIL_CLASS[group.color],
-                                  )}>
-                                  {rows}
-                                  {foldRow}
-                                </ul>
-                              )}
+                                }}
+                                onDrop={(event) => {
+                                  event.preventDefault();
+                                  handleDropInSection(sectionId);
+                                }}>
+                                {group ? (
+                                  <GroupHeader
+                                    group={group}
+                                    summary={summary}
+                                    unseen={sectionRuns.some((run) =>
+                                      unseen.has(run.id),
+                                    )}
+                                    dragging={
+                                      drag?.kind === 'group' &&
+                                      drag.id === group.id
+                                    }
+                                    autoFocusName={namingGroupId === group.id}
+                                    onNameFocused={clearNamingGroup}
+                                    onToggle={handleToggleGroup}
+                                    onRename={handleRenameGroup}
+                                    onCommand={handleGroupCommand}
+                                    teams={teams}
+                                    onDragStart={handleGroupDragStart}
+                                    onDragEnd={handleDragEnd}
+                                  />
+                                ) : groups.length > 0 &&
+                                  sectionRuns.length > 0 ? (
+                                  // Only once a group exists: with none, this label
+                                  // would restate the panel heading directly above
+                                  // it. The loose runs need a name of their own the
+                                  // moment anything sits above them.
+                                  <p
+                                    data-slot="ungrouped-label"
+                                    className="m-0 px-2 pt-1 pb-0.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                                    Ungrouped
+                                  </p>
+                                ) : null}
+                                {group === null ? (
+                                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                                    {rows}
+                                    {foldRow}
+                                  </ul>
+                                ) : // An EMPTY group draws no rail: the container
+                                // exists to enclose rows, and with none it rendered
+                                // as a 4px orphan tick under the header. The
+                                // section is the drop target either way, so an
+                                // empty group can still be dropped into.
+                                group.collapsed || rows.length === 0 ? null : (
+                                  // The group's chats are ENCLOSED: indented, and
+                                  // hung off a rail in the group's own colour, so
+                                  // where one group's threads end and the next
+                                  // begins is visible without counting. Without it
+                                  // an expanded group ran straight into the one
+                                  // below and the whole list read as flat.
+                                  <ul
+                                    data-slot="group-runs"
+                                    className={cn(
+                                      'm-0 ml-3 flex list-none flex-col gap-1 border-l-2 py-1 pl-2',
+                                      GROUP_RAIL_CLASS[group.color],
+                                    )}>
+                                    {rows}
+                                    {foldRow}
+                                  </ul>
+                                )}
+                              </li>
+                            );
+                          })}
+                          {runs.length === 0 ? (
+                            <li className="px-2 py-1.5 text-sm text-muted-foreground">
+                              {chatScope === 'archived'
+                                ? 'Nothing archived yet'
+                                : 'No chats yet'}
                             </li>
-                          );
-                        })}
-                        {runs.length === 0 ? (
-                          <li className="px-2 py-1.5 text-sm text-muted-foreground">
-                            {chatScope === 'archived'
-                              ? 'Nothing archived yet'
-                              : 'No chats yet'}
-                          </li>
-                        ) : null}
-                        {hasOlderRuns ? (
-                          <li>
-                            <OlderMessagesControl
-                              slot="older-runs"
-                              className="px-1"
-                              loading={loadingOlderRuns}
-                              onLoad={loadOlderRuns}
-                              label="Load older chats"
-                              loadingLabel="Loading older chats…"
-                            />
-                          </li>
-                        ) : null}
-                      </>
-                    )}
-                  </ul>
-                </aside>
+                          ) : null}
+                          {hasOlderRuns ? (
+                            <li>
+                              <OlderMessagesControl
+                                slot="older-runs"
+                                className="px-1"
+                                loading={loadingOlderRuns}
+                                onLoad={loadOlderRuns}
+                                label="Load older chats"
+                                loadingLabel="Loading older chats…"
+                              />
+                            </li>
+                          ) : null}
+                        </>
+                      )}
+                    </ul>
+                  </aside>
+                )}
 
-                {activeRunId === null ? (
+                {activeRunId === null && isHosted ? (
+                  <section
+                    data-slot="hosted-thread-opening"
+                    className="flex min-h-0 flex-col items-center justify-center gap-3 p-4 text-sm text-muted-foreground">
+                    {error === null ? (
+                      <span role="status" className="flex items-center gap-2">
+                        <Spinner />
+                        Opening the chat…
+                      </span>
+                    ) : (
+                      <ErrorBanner
+                        className="w-full max-w-xl"
+                        message={error}
+                        action={
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 shrink-0"
+                            onClick={() => {
+                              setError(null);
+                              refreshRuns();
+                            }}>
+                            Try again
+                          </Button>
+                        }
+                        onDismiss={() => setError(null)}
+                      />
+                    )}
+                  </section>
+                ) : activeRunId === null ? (
                   // The new-run composer — the landing view, one Cursor-style card: the
                   // task text on top and, inside the same card, the graph/agent it
                   // targets, the folder it runs in, and the trigger the run starts from
@@ -9979,6 +10215,14 @@ export function Chats({
                       <ChatHeader
                         label={runLabel(activeRun, teamNames)}
                         analysisSource={analysisSourceOf(activeRun)}
+                        actions={
+                          hosted?.headerActions?.({
+                            discard:
+                              hosted.discard === undefined
+                                ? null
+                                : discardHosted,
+                          }) ?? null
+                        }
                         isTeam={activeRun.teamId != null}
                         agentKind={activeRun.agentKind}
                         // Where this conversation happens. Beside the agent
@@ -10144,6 +10388,15 @@ export function Chats({
                             <Spinner />
                             Loading conversation…
                           </div>
+                        ) : null}
+                        {hosted !== null &&
+                        !loadingHistory &&
+                        transcriptEntries.length === 0 ? (
+                          <p
+                            data-slot="hosted-thread-empty"
+                            className="m-0 text-sm text-muted-foreground">
+                            {hosted.emptyText}
+                          </p>
                         ) : null}
                         {hasOlder ? (
                           <OlderMessagesControl
@@ -10523,15 +10776,19 @@ export function Chats({
                           text={composerText}
                           textareaProps={{
                             rows: 2,
-                            'aria-label': 'Message the agent',
+                            'aria-label':
+                              hosted?.composerLabel ?? 'Message the agent',
                             disabled: activeRunArchived,
-                            placeholder: followUpPlaceholder({
-                              archived: activeRunArchived,
-                              working: streaming && !activeRunHeld,
-                              team: Boolean(activeRun?.teamId),
-                              narrow: narrowViewport,
-                              lead: relayLeadName,
-                            }),
+                            placeholder:
+                              hosted !== null && !streaming
+                                ? hosted.composerPlaceholder
+                                : followUpPlaceholder({
+                                    archived: activeRunArchived,
+                                    working: streaming && !activeRunHeld,
+                                    team: Boolean(activeRun?.teamId),
+                                    narrow: narrowViewport,
+                                    lead: relayLeadName,
+                                  }),
                             onKeyDown: (event) => {
                               if (handleSkillMenuKeys(event)) {
                                 return;
@@ -10946,7 +11203,7 @@ export function Chats({
                           : undefined
                       }
                       onAnalyzeThread={
-                        activeRun && !isAnalysisRun(activeRun)
+                        activeRun && !isAnalysisRun(activeRun) && !isHosted
                           ? () => handleAnalyzeRun(activeRun.id)
                           : undefined
                       }
@@ -11244,13 +11501,9 @@ export function Chats({
                     analysisOf ? runLabel(analysisOf, teamNames) : ''
                   }
                   apis={apis}
-                  handle={handle}
-                  client={client}
-                  capabilities={capabilities}
-                  capabilitiesLoading={capabilitiesLoading}
-                  recentConfigDirs={recentConfigDirsByAgent}
-                  configProfiles={configProfiles}
-                  applyRecommendations={applyRecommendations}
+                  renderThread={(thread) => (
+                    <Chats client={client} handle={handle} hosted={thread} />
+                  )}
                   onNewAnalysis={() => setAnalyzingRun(analysisOf)}
                   onClose={() => {
                     setAnalysisOf(null);

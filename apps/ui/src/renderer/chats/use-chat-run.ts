@@ -350,6 +350,12 @@ export interface ChatRunScope {
    * messages the user sent into it — with the delivery ids it names. Never for a
    * replayed one: reopening a thread must not refill the composer.
    */
+  /**
+   * Told the moment the open thread's turn ends — its live terminal row, or a
+   * settle no row stands behind — ahead of the drain that may send the next
+   * queued message in the same tick.
+   */
+  onTurnEndRef?: RefObject<(runId: string) => void>;
   onLiveUnsentRef?: RefObject<
     (runId: string, deliveryIds: string[], rowId: string) => void
   >;
@@ -361,6 +367,17 @@ export interface ChatRunScope {
   historyPageSize?: number;
   /** The most one fetch may bring back whatever the setting says — see {@link REMOTE_HISTORY_PAGE}. */
   pageCap?: number;
+  /**
+   * The one run this screen shows in place of the sidebar's listing — a
+   * conversation the daemon never lists (the team builder's chat, an
+   * analysis). Every listing is answered by `open`, which is re-asked on a
+   * reconnect, and no other run is ever taken in.
+   */
+  pinned?: PinnedRun | null;
+}
+
+export interface PinnedRun {
+  open: () => Promise<ChatRun>;
 }
 
 /** The sidebar's run list, the open transcript, and the live plane over both. */
@@ -644,10 +661,14 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     resetSteerStatus,
     hasQueuedMessages,
     drainQueueRef,
+    onTurnEndRef,
     onLiveUnsentRef,
     historyPageSize = HISTORY_PAGE,
     pageCap,
+    pinned = null,
   } = scope;
+  const pinnedRef = useRef(pinned);
+  pinnedRef.current = pinned;
   const windowSize =
     pageCap === undefined
       ? historyPageSize
@@ -755,6 +776,19 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   const [error, setError] = useState<string | null>(null);
 
   const activeRunIdRef = useRef<string | null>(null);
+  /**
+   * The run whose room this hook holds one join of. Rooms are counted per
+   * surface (`DaemonClient.joinRun`), so re-opening the thread already open
+   * must give its older join back rather than hold two.
+   */
+  const heldRoomRef = useRef<string | null>(null);
+  const releaseRoom = (): void => {
+    const held = heldRoomRef.current;
+    if (held !== null) {
+      heldRoomRef.current = null;
+      client.leaveRun(held);
+    }
+  };
   const pendingScrollRef = useRef(false);
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const runsRef = useRef<ChatRun[]>([]);
@@ -950,9 +984,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   const agentNoticeIdRef = useRef(0);
 
   // The per-run stream — rows, anchors, the live plane, request expiry and the
-  // socket's replay — shared with the team dock (`use-run-stream.ts`). What
-  // is particular to this screen is the callbacks: the sidebar's row, the queue
-  // and the streaming flag.
+  // socket's replay (`use-run-stream.ts`). What is particular to this screen is
+  // the callbacks: the sidebar's row, the queue and the streaming flag.
   const {
     items,
     structure,
@@ -1054,6 +1087,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // item that can describe the present.
         if (live) {
           setStreaming(false);
+          onTurnEndRef?.current(item.runId);
           // Mirror the daemon's settle write into the sidebar list — without this
           // a finished run keeps its stale 'running' badge until an app restart.
           // The STATUS only: the same settle announces `RunStatusEvent.at`, which
@@ -1615,7 +1649,52 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    */
   const takenInRef = useRef(new Map<string, number>());
 
+  const refreshPinned = (pin: PinnedRun): void => {
+    const generation = ++refreshGenerationRef.current;
+    const askedAfter = liveAnnounceCountRef.current;
+    void pin
+      .open()
+      .then((opened) => {
+        if (generation !== refreshGenerationRef.current) {
+          return;
+        }
+        const [row] = keepFresherRows(
+          [opened],
+          runsRef.current,
+          (runId) => (liveAnnouncedAtRef.current.get(runId) ?? 0) <= askedAfter,
+        );
+        if (row === undefined) {
+          return;
+        }
+        resolvedRunIdsRef.current.add(row.id);
+        deletedRunIdsRef.current.delete(row.id);
+        // Ahead of the mirroring effect: the activation below reads the row's
+        // status to decide whether a turn is in flight.
+        runsRef.current = [row];
+        setRuns([row]);
+        setOffScopeRuns(NO_OFF_SCOPE_RUNS);
+        seedRowFacts([row], true);
+        if (activeRunIdRef.current !== row.id) {
+          void activateRun(row.id);
+        }
+      })
+      .catch((err: unknown) => {
+        if (generation === refreshGenerationRef.current) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (generation === refreshGenerationRef.current) {
+          setRunsLoaded(true);
+        }
+      });
+  };
+
   const refreshRuns = useLatestCallback((): void => {
+    if (pinnedRef.current !== null) {
+      refreshPinned(pinnedRef.current);
+      return;
+    }
     const scope = chatScopeRef.current;
     // ONE listing per scope at a time, and one more after it however many were
     // asked for meanwhile: callers fire in bursts (a reconnect, a refile, a
@@ -1840,6 +1919,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    */
   const takeInRun = useLatestCallback(
     (runId: string): void => {
+      if (pinnedRef.current !== null) {
+        return;
+      }
       const askedAfter = liveAnnounceCountRef.current;
       void Promise.all([
         chatApi.listChats({ scope: 'all', runId }),
@@ -2118,8 +2200,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // and no Stop — the thread opens as "New chat" over its own transcript.
       adoptUnknownRun(runId);
       const previous = activeRunIdRef.current;
-      if (previous && previous !== runId) {
-        client.leaveRun(previous);
+      if (previous !== runId) {
+        releaseRoom();
       }
       // Only on a genuine CHANGE of thread. `activateRun` is also called to
       // re-open the thread already showing (a refresh, a re-select), and
@@ -2177,7 +2259,10 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // whole open on it left a phone behind a tunnel on an empty thread under
       // `timed out joining run`, a red strip nothing would ever clear.
       try {
-        await client.joinRun(runId).catch(() => undefined);
+        const joining = client.joinRun(runId);
+        releaseRoom();
+        heldRoomRef.current = runId;
+        await joining.catch(() => undefined);
         if (activeRunIdRef.current !== runId) {
           return;
         }
@@ -2278,9 +2363,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    */
   const deactivateRun = useLatestCallback((): void => {
     const previous = activeRunIdRef.current;
-    if (previous) {
-      client.leaveRun(previous);
-    }
+    releaseRoom();
     swapDraft(previous, null);
     activeRunIdRef.current = null;
     setActiveRunId(null);
@@ -2666,6 +2749,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         isSettledRunStatus(status)
       ) {
         setStreaming(false);
+        onTurnEndRef?.current(event.runId);
         if (settleReleasesQueue(status) && hasQueuedMessages(event.runId)) {
           drainQueueRef.current(event.runId);
         }
@@ -2699,7 +2783,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         drainQueueRef.current(event.runId);
       }
       setActivities((prev) => {
-        // The rule is `activityAfterAnnounce`, which the team dock applies too:
+        // The rule is `activityAfterAnnounce`:
         // an announce with no activity key leaves the phrase standing, and a
         // terminal status clears it, since a stopped run has no current activity.
         const phrase = activityAfterAnnounce(event);
@@ -2973,10 +3057,10 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     }
     return () => {
       unsubscribeRunStatus();
-      const active = activeRunIdRef.current;
-      if (active) {
-        client.leaveRun(active);
-      }
+      // A listing or a pinned open still in flight answers for a screen that
+      // is gone; activating its run would join a room nothing leaves.
+      refreshGenerationRef.current += 1;
+      releaseRoom();
     };
   }, [client, activateRun, refreshRuns, adoptUnknownRun]);
 

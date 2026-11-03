@@ -41,7 +41,7 @@ export function Dialog({
   fullScreen?: boolean;
   /**
    * No content padding, in a card: the content draws its own edges and
-   * scrolls its own parts (a hosted chat's transcript over its composer).
+   * scrolls its own parts (a hosted chat screen's transcript over its composer).
    */
   flush?: boolean;
   /**

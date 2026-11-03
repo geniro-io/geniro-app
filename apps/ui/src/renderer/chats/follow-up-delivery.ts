@@ -125,10 +125,9 @@ export function followUpDelivery(facts: FollowUpFacts): FollowUpDecision {
  * stop, and a drain on it starts a fresh turn in answer. The message stays at
  * the head, where Send, Edit and Remove still reach it.
  *
- * Every surface that drains on a settle asks this — the chat screen's live
- * terminal item and its replay, and a hosted chat's (`hosted-chat.tsx`). The
- * builder's dock once drained on every settle, Stop included, and sent the
- * queued message ~50 ms after the user pressed Stop.
+ * Every drain on a settle asks this — the chat screen's live terminal item and
+ * its replay, which is also what the builder's dock and the analysis popups
+ * run, since they draw their conversation with the chat screen.
  */
 export function settleReleasesQueue(status: RunDto['status'] | null): boolean {
   return status !== 'cancelled';

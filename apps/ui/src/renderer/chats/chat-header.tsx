@@ -456,8 +456,14 @@ export function ChatHeader({
   activeSpans = null,
   pausedSpans = EMPTY_SPANS,
   analysisSource = null,
+  actions = null,
 }: {
   label: string;
+  /**
+   * Controls of the surface the thread is drawn in — the team dock's Hide and
+   * New conversation, an analysis popup's New analysis — at the row's end.
+   */
+  actions?: React.ReactNode;
   /**
    * The thread this chat analyses, and how to open it — an analysis chat's
    * header chip ("Analyzing: <source> ↗"); null on every other chat.
@@ -714,6 +720,13 @@ export function ChatHeader({
           estimatedCostUsd={estimatedCostUsd}
           costedTurns={costedTurns}
         />
+        {actions === null ? null : (
+          <div
+            data-slot="chat-header-actions"
+            className="flex shrink-0 items-center gap-1">
+            {actions}
+          </div>
+        )}
         {/* The three COUNTERS that used to end this row — running terminals,
             working delegates, the agents' task list — are gone from the header
             entirely. Each is now a chip on the COMPOSER SHELF, one row above

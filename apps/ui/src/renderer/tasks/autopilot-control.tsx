@@ -72,11 +72,12 @@ export function AutopilotControl({
   const armed = project.autopilotEnabled;
 
   return (
-    <div className="relative">
+    <div className="relative max-w-full min-w-0">
       <Chip
         asChild
         interactive
         tone={armed ? 'active' : 'muted'}
+        className="max-w-full"
         data-menu-trigger>
         <button
           type="button"
@@ -98,11 +99,13 @@ export function AutopilotControl({
           )}
           {/* The STATE, not the word alone: a chip reading only "Autopilot"
               makes the reader open it to learn the one thing they wanted. */}
-          {stopped
-            ? 'Autopilot stopped'
-            : armed
-              ? `Autopilot · ${taskStatusMeta(project.autopilotIntakeStatus).label}`
-              : 'Autopilot off'}
+          <span className="min-w-0 truncate">
+            {stopped
+              ? 'Autopilot stopped'
+              : armed
+                ? `Autopilot · ${taskStatusMeta(project.autopilotIntakeStatus).label}`
+                : 'Autopilot off'}
+          </span>
           <ChipChevron />
         </button>
       </Chip>

@@ -152,6 +152,26 @@ export function AcceptanceBadge({
   return <Badge variant={muted ? 'muted' : look.variant}>{look.word}</Badge>;
 }
 
+/** The acceptance as its glyph and its word, for a list row that has room for both. */
+export function AcceptanceLabel({
+  acceptance,
+}: {
+  acceptance: RunOutcomeAcceptance;
+}): React.JSX.Element {
+  const look = ACCEPTANCE_LOOK[acceptance];
+  const Icon = look.icon;
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1">
+      <Icon
+        aria-hidden="true"
+        data-slot="pull-request-outcome"
+        className={cn('size-3 shrink-0', look.iconClassName)}
+      />
+      {look.word}
+    </span>
+  );
+}
+
 /**
  * The acceptance as a glyph for the shelf chip, which has no room for the word;
  * the word rides along for a reader who cannot see the icon.

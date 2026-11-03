@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { GitChange, GitChanges } from '../../shared/contracts';
 import { useLatestCallback } from '../components/use-latest-callback';
-import { type ChangesSummary, summarizeChanges } from './changes-tree';
+import { type ChangesSummary, summarizeAcrossFolders } from './changes-tree';
 
 /**
  * How long an automatic re-read is skipped for.
@@ -205,7 +205,7 @@ export function useChatChanges(
   const summary = useMemo(
     () =>
       read
-        ? summarizeChanges([
+        ? summarizeAcrossFolders([
             ...changes,
             ...shown.flatMap((folder) => folder.changes),
           ])

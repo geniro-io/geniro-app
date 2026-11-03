@@ -127,7 +127,7 @@ describe('ThreadPullRequestChips', () => {
   const listed = (): string[] =>
     [
       ...container.querySelectorAll(
-        '[data-slot="thread-pull-request-list"] [data-slot="panel-link-detail"]',
+        '[data-slot="thread-pull-request-list"] [data-slot="pull-request-list-detail"]',
       ),
     ].map((detail) => detail.textContent ?? '');
 

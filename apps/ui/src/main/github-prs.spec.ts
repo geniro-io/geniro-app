@@ -28,7 +28,16 @@ let argsLog = '';
 let headJson = '';
 let originalPath = '';
 
-/** One row shaped exactly as `gh pr list --json` emits it. */
+/** A `gh api graphql` answer about one repository, one alias per row. */
+function answer(rows: readonly unknown[]): string {
+  return JSON.stringify({
+    data: {
+      repository: Object.fromEntries(rows.map((row, at) => [`p${at}`, row])),
+    },
+  });
+}
+
+/** One pull request shaped as GitHub's GraphQL answers it. */
 function ghRow(
   number: number,
   state: string,
@@ -104,7 +113,7 @@ describe('parsePullRequests', () => {
 
   it('maps gh’s own state enum and flattens the author to its login', () => {
     const parsed = parsePullRequests(
-      JSON.stringify([row(1, 'OPEN'), row(2, 'MERGED'), row(3, 'CLOSED')]),
+      answer([row(1, 'OPEN'), row(2, 'MERGED'), row(3, 'CLOSED')]),
     );
 
     expect(parsed?.map((entry) => entry.state)).toEqual([
@@ -117,7 +126,7 @@ describe('parsePullRequests', () => {
 
   it('reads the diff figures gh reports', () => {
     const parsed = parsePullRequests(
-      JSON.stringify([
+      answer([
         {
           ...row(1, 'OPEN'),
           additions: 6757,
@@ -139,7 +148,7 @@ describe('parsePullRequests', () => {
     // does not answer them. Requiring them would make one version gap the
     // difference between a populated panel and an empty one — a pull request
     // without its size is still a pull request.
-    const parsed = parsePullRequests(JSON.stringify([row(1, 'OPEN')]));
+    const parsed = parsePullRequests(answer([row(1, 'OPEN')]));
 
     expect(parsed).toHaveLength(1);
     expect(parsed?.[0]).toMatchObject({
@@ -154,7 +163,7 @@ describe('parsePullRequests', () => {
     // gh answering a string, or nothing at all, must not become a confident
     // `+0 −0` — that asserts a pull request changed nothing.
     const parsed = parsePullRequests(
-      JSON.stringify([
+      answer([
         {
           ...row(1, 'OPEN'),
           additions: 'lots',
@@ -176,7 +185,7 @@ describe('parsePullRequests', () => {
     // that happened after it got there — this time is the whole of that.
     // Measured on gh 2.72.0: `null` for an open pull request.
     const parsed = parsePullRequests(
-      JSON.stringify([
+      answer([
         { ...row(1, 'MERGED'), mergedAt: '2026-09-27T11:45:45Z' },
         { ...row(2, 'OPEN'), mergedAt: null },
         // A time on a row that has not merged is not a merge time.
@@ -196,7 +205,7 @@ describe('parsePullRequests', () => {
 
   it('drops a malformed row and keeps the rest', () => {
     const parsed = parsePullRequests(
-      JSON.stringify([
+      answer([
         row(1, 'OPEN'),
         { number: 2, title: 'every other field missing' },
         row(3, 'OPEN'),
@@ -210,19 +219,15 @@ describe('parsePullRequests', () => {
   it('drops a state outside gh’s enum rather than relabelling it', () => {
     // Relabelling would file a pull request under the wrong heading, and the
     // heading is the entire reading of the section.
-    expect(
-      parsePullRequests(JSON.stringify([row(1, 'SOMETHING_NEW')])),
-    ).toEqual([]);
+    expect(parsePullRequests(answer([row(1, 'SOMETHING_NEW')]))).toEqual([]);
   });
 
   it('drops a row whose state collides with an Object.prototype member', () => {
     // A bare object literal inherits `constructor` and `toString`, so a plain
     // index would resolve those to a FUNCTION that passes an `undefined` check
     // and then fails structured clone on its way across IPC.
-    expect(parsePullRequests(JSON.stringify([row(1, 'constructor')]))).toEqual(
-      [],
-    );
-    expect(parsePullRequests(JSON.stringify([row(1, 'toString')]))).toEqual([]);
+    expect(parsePullRequests(answer([row(1, 'constructor')]))).toEqual([]);
+    expect(parsePullRequests(answer([row(1, 'toString')]))).toEqual([]);
   });
 
   it('drops a row carrying no isCrossRepository rather than defaulting it', () => {
@@ -233,7 +238,7 @@ describe('parsePullRequests', () => {
     const withoutField: Record<string, unknown> = { ...row(1, 'OPEN') };
     delete withoutField.isCrossRepository;
 
-    expect(parsePullRequests(JSON.stringify([withoutField]))).toEqual([]);
+    expect(parsePullRequests(answer([withoutField]))).toEqual([]);
   });
 
   it('KEEPS a row whose head repository is gone', () => {
@@ -244,7 +249,7 @@ describe('parsePullRequests', () => {
     // way on purpose.
     const deletedFork = { ...row(1, 'OPEN'), headRepositoryOwner: null };
 
-    expect(parsePullRequests(JSON.stringify([deletedFork]))).toEqual([
+    expect(parsePullRequests(answer([deletedFork]))).toEqual([
       expect.objectContaining({ number: 1, headRepositoryOwner: null }),
     ]);
   });
@@ -254,12 +259,19 @@ describe('parsePullRequests', () => {
     // the renderer's CSP and main's window-open handler alone.
     const hostile = { ...row(1, 'OPEN'), url: 'javascript:alert(1)' };
 
-    expect(parsePullRequests(JSON.stringify([hostile]))).toEqual([]);
+    expect(parsePullRequests(answer([hostile]))).toEqual([]);
   });
 
-  it('answers null for output that is not a JSON array', () => {
+  it('drops an alias GitHub could not resolve and keeps the rest', () => {
+    const parsed = parsePullRequests(answer([row(1, 'OPEN'), null]));
+
+    expect(parsed?.map((entry) => entry.number)).toEqual([1]);
+  });
+
+  it('answers null for output that carries no repository', () => {
     expect(parsePullRequests('not json at all')).toBeNull();
-    expect(parsePullRequests('{"pullRequests":[]}')).toBeNull();
+    expect(parsePullRequests('[]')).toBeNull();
+    expect(parsePullRequests('{"data":{"repository":null}}')).toBeNull();
   });
 });
 
@@ -271,14 +283,10 @@ describe('readPullRequestsByRef', () => {
     url: `https://github.com/${owner}/${repo}/pull/${number}`,
   });
 
-  it('asks ONE query per repository, not one per pull request', async () => {
-    // The shape this exists for: a thread that spans repositories. Three pull
-    // requests in two of them must cost two round trips, not three — resolving
-    // one at a time is what made the obvious implementation unusable (31 pull
-    // requests measured on one real thread).
+  it('asks ONE query per repository, naming exactly its pull requests', async () => {
     writeFileSync(
       headJson,
-      JSON.stringify([
+      answer([
         ghRow(1, 'OPEN', '2026-01-01T00:00:00Z'),
         ghRow(2, 'MERGED', '2026-01-02T00:00:00Z'),
         ghRow(3, 'OPEN', '2026-01-03T00:00:00Z'),
@@ -294,47 +302,76 @@ describe('readPullRequestsByRef', () => {
 
     const calls = ghCalls();
     expect(calls).toHaveLength(2);
-    expect(calls[0]).toContain('--repo acme/platform');
-    expect(calls[1]).toContain('--repo acme/mobile-app');
-    // Never `--head`: this list is addressed by URL precisely because the
-    // branch is the key that loses them.
-    expect(calls.join(' ')).not.toContain('--head');
+    expect(calls[0]).toMatch(/^api graphql /u);
+    expect(calls[0]).toContain('owner=acme');
+    expect(calls[0]).toContain('name=platform');
+    expect(calls[0]).toContain('pullRequest(number: 1)');
+    expect(calls[0]).toContain('pullRequest(number: 2)');
+    expect(calls[0]).not.toContain('pullRequest(number: 3)');
+    expect(calls[1]).toContain('name=mobile-app');
+    expect(calls[1]).toContain('pullRequest(number: 3)');
   });
 
-  it('asks about a pull request the listing did not carry, one by one', async () => {
-    // A pull request older than the repository's first page still belongs to
-    // the thread, and `gh pr view <url>` is the only way to reach it.
+  it('answers every pull request of a busy repository, however old', async () => {
+    const numbers = Array.from({ length: 10 }, (_, at) => 7600 + at);
     writeFileSync(
       headJson,
-      JSON.stringify([ghRow(2, 'OPEN', '2026-01-02T00:00:00Z')]),
+      answer(
+        numbers.map((number) =>
+          ghRow(number, 'CLOSED', '2026-01-01T00:00:00Z'),
+        ),
+      ),
     );
-    const viewJson = join(binDir, 'view.json');
+    installGhShim(recordingShim());
+
+    const results = await readPullRequestsByRef(
+      numbers.map((number) => ref('acme', 'platform', number)),
+    );
+
+    expect(ghCalls()).toHaveLength(1);
+    expect(results.map((row) => row.pullRequest?.number ?? null)).toEqual(
+      numbers,
+    );
+  });
+
+  it('splits a repository past the per-query bound into several queries', async () => {
+    const numbers = Array.from({ length: 25 }, (_, at) => at + 1);
+    installGhShim(recordingShim());
+
+    await readPullRequestsByRef(
+      numbers.map((number) => ref('acme', 'platform', number)),
+    );
+
+    const calls = ghCalls();
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toContain('pullRequest(number: 10)');
+    expect(calls[0]).not.toContain('pullRequest(number: 11)');
+    expect(calls[1]).toContain('pullRequest(number: 11)');
+    expect(calls[2]).toContain('pullRequest(number: 25)');
+  });
+
+  it('keeps the answered pull requests when gh exits 1 over one it could not resolve', async () => {
     writeFileSync(
-      viewJson,
-      JSON.stringify(ghRow(1, 'MERGED', '2026-01-01T00:00:00Z')),
+      headJson,
+      answer([ghRow(1, 'OPEN', '2026-01-01T00:00:00Z'), null]),
     );
-    installGhShim(
-      `printf '%s\\n' "$*" >> "${argsLog}"\n` +
-        `if [ "$2" = "view" ]; then cat "${viewJson}"; else cat "${headJson}"; fi`,
-    );
+    installGhShim(`${recordingShim()}\nexit 1`);
 
     const results = await readPullRequestsByRef([
       ref('acme', 'platform', 1),
-      ref('acme', 'platform', 2),
+      ref('acme', 'platform', 99),
     ]);
 
-    expect(ghCalls().some((call) => call.includes('pr view'))).toBe(true);
     expect(results.map((row) => row.pullRequest?.number ?? null)).toEqual([
-      1, 2,
+      1,
+      null,
     ]);
   });
 
   it('asks gh for the merge time and hands it on', async () => {
-    // The `--json` list and the parser are coupled: a field the parser reads
-    // but the query never asks for is simply always absent.
     writeFileSync(
       headJson,
-      JSON.stringify([
+      answer([
         {
           ...ghRow(1, 'MERGED', '2026-01-01T00:00:00Z'),
           mergedAt: '2026-01-01T00:00:00Z',
@@ -345,8 +382,7 @@ describe('readPullRequestsByRef', () => {
 
     const results = await readPullRequestsByRef([ref('acme', 'platform', 1)]);
 
-    const jsonFields = /--json (\S+)/u.exec(ghCalls()[0] ?? '')?.[1] ?? '';
-    expect(jsonFields.split(',')).toContain('mergedAt');
+    expect(ghCalls()[0]).toContain(' mergedAt ');
     expect(results[0]?.pullRequest?.mergedAt).toBe('2026-01-01T00:00:00Z');
   });
 

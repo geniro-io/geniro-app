@@ -120,6 +120,47 @@ describe('useChatChanges', () => {
     ]);
   });
 
+  it('counts a change once when two worktrees on one commit both hold it', async () => {
+    const releaseWorktree = '/repo/.claude/worktrees/release';
+    const sameCommit = [
+      change('apps/web/case-page.tsx', 10, 4),
+      change('apps/web/tabs.tsx', 5, 1),
+    ];
+    vi.stubGlobal('geniro', {
+      getChangesSince: async (dir: string): Promise<GitChanges> =>
+        dir === RUN_FOLDER
+          ? reading([change('DESIGN.md', 1, 1)])
+          : reading(sameCommit),
+    });
+
+    const current = await readHook(RUN_FOLDER, START_SHA, [
+      AGENT_WORKTREE,
+      releaseWorktree,
+    ]);
+
+    expect(current().summary).toEqual({ files: 3, added: 16, removed: 6 });
+    expect(current().elsewhere).toHaveLength(2);
+  });
+
+  it('counts one path changed differently in two worktrees as one file with both changes’ lines', async () => {
+    const releaseWorktree = '/repo/.claude/worktrees/release';
+    vi.stubGlobal('geniro', {
+      getChangesSince: async (dir: string): Promise<GitChanges> =>
+        dir === AGENT_WORKTREE
+          ? reading([change('apps/web/case-page.tsx', 10, 4)])
+          : dir === releaseWorktree
+            ? reading([change('apps/web/case-page.tsx', 7, 2)])
+            : reading([]),
+    });
+
+    const current = await readHook(RUN_FOLDER, START_SHA, [
+      AGENT_WORKTREE,
+      releaseWorktree,
+    ]);
+
+    expect(current().summary).toEqual({ files: 1, added: 17, removed: 6 });
+  });
+
   it.each([
     ['holds no changes', reading([])],
     [

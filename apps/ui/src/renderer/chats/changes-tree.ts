@@ -60,6 +60,37 @@ export function summarizeChanges(
   return { files: changes.length, added, removed };
 }
 
+/**
+ * Total the reads of several folders of ONE repository (the run folder and the
+ * worktrees its agents made): a path is one file of that repository wherever it
+ * was changed, and an identical change held by two worktrees on one commit was
+ * made once, so its lines count once. Two different changes to one path are
+ * both counted.
+ */
+export function summarizeAcrossFolders(
+  changes: readonly GitChange[],
+): ChangesSummary {
+  const seen = new Set<string>();
+  const distinct = changes.filter((change) => {
+    const key = JSON.stringify([
+      change.path,
+      change.status,
+      change.added,
+      change.removed,
+      change.diff,
+    ]);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+  return {
+    ...summarizeChanges(distinct),
+    files: new Set(distinct.map((change) => change.path)).size,
+  };
+}
+
 interface Building {
   dirs: Map<string, Building>;
   files: ChangeTreeFile[];

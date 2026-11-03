@@ -1095,6 +1095,10 @@ describe('the shelf — separate chips, one per kind', () => {
     expect(marked.map((row) => row.getAttribute('href'))).toEqual([
       'https://github.com/geniro-io/geniro-app/pull/2',
     ]);
+    expect(
+      marked[0]?.querySelector('[data-slot="pull-request-list-detail"]')
+        ?.textContent,
+    ).toContain('accepted');
   });
 });
 

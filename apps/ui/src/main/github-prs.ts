@@ -17,32 +17,23 @@ const execFileAsync = promisify(execFile);
 const GH_TIMEOUT_MS = 15_000;
 
 /**
- * How many pull requests one repository's listing returns — the newest page.
+ * The GraphQL selection {@link readPullRequestRow} reads. A row missing any of
+ * the REQUIRED fields is dropped; the three diff figures and `mergedAt` are
+ * optional and their absence costs those figures alone.
  *
- * The listing is the fast path for a thread's own pull requests, which are
- * recent by nature; one older than this page is read on its own by URL
- * (`viewPullRequest`, bounded by {@link REF_VIEW_LIMIT}). It is here so a
- * pathological repository cannot hand the renderer an unbounded list.
+ * The names are gh's own `--json` names, which are GitHub's GraphQL field
+ * names, so the row reader is the same for both.
  */
-const PULL_REQUEST_LIMIT = 50;
+const PULL_REQUEST_SELECTION =
+  'number title state isDraft headRefName isCrossRepository headRepositoryOwner { login } author { login } url updatedAt mergedAt additions deletions changedFiles';
 
 /**
- * The fields {@link readPullRequestRow} reads. A row missing any of the REQUIRED
- * ones is dropped; the three diff figures are optional and their absence costs
- * the figures alone.
- *
- * `additions` / `deletions` / `changedFiles` are what let a pull request state
- * its own size, and they are not free: measured on 2.72.0 against this repo, a
- * five-row query went from 0.68s to 1.18s with them. That is paid once per
- * repository per read, gated behind the resolve's five-minute freshness floor,
- * for the figure a reader wants first about a pull request.
- *
- * `mergedAt` is optional too, and is what the merge watcher decides a card's
- * round by. Measured on 2.72.0: `null` for an open pull request, an ISO time
- * ending `Z` for a merged one.
+ * How many pull requests one GraphQL query asks about, by alias. GitHub counts
+ * a pull request's figures on first ask, which measured past
+ * {@link GH_TIMEOUT_MS} for 24 old ones at once, and a timed-out query costs
+ * every pull request in it.
  */
-const PULL_REQUEST_FIELDS =
-  'number,title,state,isDraft,headRefName,isCrossRepository,headRepositoryOwner,author,url,updatedAt,mergedAt,additions,deletions,changedFiles';
+const PULL_REQUESTS_PER_QUERY = 10;
 
 /**
  * Run one `gh` command in `cwd`. Never throws, on the same rule the git helpers
@@ -58,13 +49,15 @@ async function gh(
     const { stdout } = await execFileAsync(binary, args, {
       cwd,
       timeout: GH_TIMEOUT_MS,
-      // A repo with hundreds of pull requests must not blow up the IPC payload.
       maxBuffer: 1024 * 1024,
       env: neutralEnv(),
     });
     return stdout;
-  } catch {
-    return null;
+  } catch (err) {
+    // `gh api graphql` exits 1 when one alias fails (a deleted pull request)
+    // and still prints the data it has for the others.
+    const stdout = (err as { stdout?: unknown }).stdout;
+    return typeof stdout === 'string' && stdout.length > 0 ? stdout : null;
   }
 }
 
@@ -163,15 +156,13 @@ function timeOrUndefined(value: unknown): string | undefined {
 }
 
 /**
- * Read gh's `--json` array into the wire shape.
+ * Read a `gh api graphql` answer about one repository's pull requests into the
+ * wire shape: every alias under `data.repository` is one pull request.
  *
- * Separated from the call that produces it so the mapping can be entered by a
- * test without a GitHub repo, an installed `gh` and a logged-in account.
- *
- * A row that does not parse is DROPPED rather than failing the batch — one
- * unrecognised entry should cost that entry and not the whole section — and a
- * state outside gh's enum is one such row rather than being relabelled as
- * something it might not be.
+ * A row that does not parse is DROPPED rather than failing the batch, and an
+ * alias GitHub could not resolve (null) is one such row. A state outside gh's
+ * enum is dropped too rather than being relabelled as something it might not
+ * be. Null when the answer carries no repository at all.
  */
 export function parsePullRequests(stdout: string): PullRequestInfo[] | null {
   let parsed: unknown;
@@ -180,11 +171,18 @@ export function parsePullRequests(stdout: string): PullRequestInfo[] | null {
   } catch {
     return null;
   }
-  if (!Array.isArray(parsed)) {
+  const repository = (
+    (parsed as { data?: { repository?: unknown } } | null)?.data ?? null
+  )?.repository;
+  if (
+    typeof repository !== 'object' ||
+    repository === null ||
+    Array.isArray(repository)
+  ) {
     return null;
   }
   const rows: PullRequestInfo[] = [];
-  for (const entry of parsed) {
+  for (const entry of Object.values(repository)) {
     const row = readPullRequestRow(entry);
     if (row !== null) {
       rows.push(row);
@@ -193,66 +191,49 @@ export function parsePullRequests(stdout: string): PullRequestInfo[] | null {
   return rows;
 }
 
-async function listPullRequests(
+function pullRequestsQuery(numbers: readonly number[]): string {
+  const aliases = numbers
+    .map(
+      (number) =>
+        `p${number}: pullRequest(number: ${number}) { ${PULL_REQUEST_SELECTION} }`,
+    )
+    .join(' ');
+  return `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${aliases} } }`;
+}
+
+/** Exactly the pull requests asked about, one GraphQL round trip per batch. */
+async function readRepositoryPullRequests(
   binary: string,
   dir: string,
-  selector: string[],
-): Promise<PullRequestInfo[] | null> {
-  const stdout = await gh(binary, dir, [
-    'pr',
-    'list',
-    ...selector,
-    '--limit',
-    String(PULL_REQUEST_LIMIT),
-    '--json',
-    PULL_REQUEST_FIELDS,
-  ]);
-  return stdout === null ? null : parsePullRequests(stdout);
+  owner: string,
+  name: string,
+  numbers: readonly number[],
+): Promise<PullRequestInfo[]> {
+  const rows: PullRequestInfo[] = [];
+  for (let at = 0; at < numbers.length; at += PULL_REQUESTS_PER_QUERY) {
+    const stdout = await gh(binary, dir, [
+      'api',
+      'graphql',
+      '-f',
+      `query=${pullRequestsQuery(numbers.slice(at, at + PULL_REQUESTS_PER_QUERY))}`,
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `name=${name}`,
+    ]);
+    rows.push(...((stdout === null ? null : parsePullRequests(stdout)) ?? []));
+  }
+  return rows;
 }
 
 /**
  * How many distinct REPOSITORIES one resolve may ask about.
  *
- * A thread that spans repositories is the case this whole path exists for — the
- * one measured here touched six — and each is a round trip to GitHub, so the
- * bound is on repositories rather than on pull requests: thirty-one pull
- * requests across six repositories cost six queries.
+ * Each is a round trip to GitHub, so the bound is on repositories rather than
+ * on pull requests: thirty-one pull requests across six repositories cost six
+ * queries.
  */
 const REF_REPO_LIMIT = 24;
-
-/**
- * How many pull requests may be fetched ONE BY ONE when a repository's listing
- * did not contain them.
- *
- * The per-repository listing is the fast path and covers everything opened
- * recently; a pull request older than that page needs its own query, and a
- * thread that somehow references a hundred such would otherwise spend a minute
- * of round trips before the panel could draw anything.
- */
-const REF_VIEW_LIMIT = 12;
-
-/** One pull request read by URL, for a ref the repository listing did not carry. */
-async function viewPullRequest(
-  binary: string,
-  dir: string,
-  url: string,
-): Promise<PullRequestInfo | null> {
-  const stdout = await gh(binary, dir, [
-    'pr',
-    'view',
-    url,
-    '--json',
-    PULL_REQUEST_FIELDS,
-  ]);
-  if (stdout === null) {
-    return null;
-  }
-  try {
-    return readPullRequestRow(JSON.parse(stdout));
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Live state for pull requests a THREAD opened, addressed by URL rather than by
@@ -264,14 +245,17 @@ async function viewPullRequest(
  * the two apart is deliberate — a title and a state stored at capture time
  * would be a stale second answer beside this one.
  *
- * Addressing by URL is what makes a MULTI-REPOSITORY thread work at all: `gh`
- * resolves `--repo owner/name` and a pull request URL from any working
- * directory, so nothing here has to know where the agent was standing when it
- * ran `gh pr create` — which is unknowable in the general case, since the agent
- * `cd`s inside its own shell commands.
+ * Addressing by owner, repository and number is what makes a MULTI-REPOSITORY
+ * thread work at all: nothing here has to know where the agent was standing
+ * when it ran `gh pr create` — which is unknowable in the general case, since
+ * the agent `cd`s inside its own shell commands.
  *
- * Runs from the user's HOME rather than any checkout, for the same reason: no
- * folder here is the right one, and `--repo` makes the question explicit.
+ * Each repository is ONE query naming exactly the pull requests asked about,
+ * so a pull request is answered however old it is and however many other
+ * threads on screen share its repository.
+ *
+ * Runs from the user's HOME rather than any checkout: no folder here is the
+ * right one, and the query names the repository itself.
  *
  * Never throws, on the rule the whole file follows: an absent binary, a
  * logged-out CLI and a repository this account cannot see are all "no answer"
@@ -288,45 +272,43 @@ export async function readPullRequestsByRef(
     return unresolved;
   }
   const dir = homedir();
-  const byRepo = new Map<string, PullRequestRef[]>();
+  const byRepo = new Map<
+    string,
+    { owner: string; name: string; numbers: Set<number> }
+  >();
   for (const ref of refs) {
+    if (!Number.isSafeInteger(ref.number) || ref.number <= 0) {
+      continue;
+    }
     const key = `${ref.owner}/${ref.repo}`;
     const group = byRepo.get(key);
     if (group === undefined) {
       if (byRepo.size >= REF_REPO_LIMIT) {
         continue;
       }
-      byRepo.set(key, [ref]);
+      byRepo.set(key, {
+        owner: ref.owner,
+        name: ref.repo,
+        numbers: new Set([ref.number]),
+      });
       continue;
     }
-    group.push(ref);
+    group.numbers.add(ref.number);
   }
 
   const found = new Map<string, PullRequestInfo>();
   // SEQUENTIAL: each iteration is a process talking to GitHub, and a thread spanning six
   // repositories would otherwise open six at once on the first paint.
   for (const [repo, group] of byRepo) {
-    const rows = await listPullRequests(binary, dir, [
-      '--repo',
-      repo,
-      '--state',
-      'all',
-    ]);
-    for (const row of rows ?? []) {
+    const rows = await readRepositoryPullRequests(
+      binary,
+      dir,
+      group.owner,
+      group.name,
+      [...group.numbers],
+    );
+    for (const row of rows) {
       found.set(`${repo}#${row.number}`, row);
-    }
-    // A pull request older than that page is not in it. Ask about those alone.
-    let views = 0;
-    for (const ref of group) {
-      const key = `${repo}#${ref.number}`;
-      if (found.has(key) || views >= REF_VIEW_LIMIT) {
-        continue;
-      }
-      views += 1;
-      const row = await viewPullRequest(binary, dir, ref.url);
-      if (row !== null) {
-        found.set(key, row);
-      }
     }
   }
 

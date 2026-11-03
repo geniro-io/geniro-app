@@ -29,10 +29,7 @@ import { type GoalsActions, goalsFigure, GoalsList } from './goals-list';
 import { formatElapsed, RunSettledContext, useSecondsTick } from './live-row';
 import { MonitorRows } from './monitor-list';
 import { revealThreadPullRequests, revealWorkflows } from './panel-flags';
-import {
-  ThreadPullRequestChip,
-  ThreadPullRequestRow,
-} from './pull-request-row';
+import { PullRequestListRow, ThreadPullRequestChip } from './pull-request-row';
 import { formatClockTime, formatRelativeTime } from './relative-time';
 import { pullRequestOutcomeKey } from './run-outcome';
 import {
@@ -354,7 +351,7 @@ export function ThreadPullRequestChips({
       align="start"
       className={SHELF_CHIP_WRAPPER_CLASS}
       triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
-      panelClassName="w-[22rem]"
+      panelClassName="w-[24rem] p-1.5"
       trigger={
         <>
           <GitPullRequest
@@ -371,15 +368,13 @@ export function ThreadPullRequestChips({
         </>
       }>
       {(close) => (
-        <div
-          data-slot="thread-pull-request-list"
-          className="flex flex-col gap-1 p-1">
-          <p className="m-0 px-1 text-[11px] text-muted-foreground">
+        <div data-slot="thread-pull-request-list" className="flex flex-col">
+          <p className="m-0 px-2 pt-0.5 pb-1 text-[11px] text-muted-foreground">
             {summary}
           </p>
-          <div className="flex max-h-72 flex-col overflow-y-auto">
+          <div className="flex max-h-80 flex-col gap-0.5 overflow-y-auto overscroll-contain">
             {ordered.map((result) => (
-              <ThreadPullRequestRow
+              <PullRequestListRow
                 key={result.ref.url}
                 result={result}
                 showRepo={showRepo}
@@ -387,17 +382,19 @@ export function ThreadPullRequestChips({
               />
             ))}
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="self-start"
-            onClick={() => {
-              close();
-              revealThreadPullRequests(runId);
-            }}>
-            Show in the panel
-          </Button>
+          <div className="mt-1 border-t border-border/60 pt-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start px-2 font-normal text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                close();
+                revealThreadPullRequests(runId);
+              }}>
+              Show in the panel
+            </Button>
+          </div>
         </div>
       )}
     </HoverPopover>

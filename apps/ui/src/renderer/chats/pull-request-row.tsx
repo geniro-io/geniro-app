@@ -1,4 +1,5 @@
 import {
+  ExternalLink,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
@@ -15,7 +16,11 @@ import { DiffFigures } from '../components/diff-figures';
 import { PanelLinkRow } from '../components/panel-link-row';
 import { Badge } from '../components/ui/badge';
 import { cn } from '../components/ui/utils';
-import { AcceptanceIcon, outcomeSentence } from './run-outcome';
+import {
+  AcceptanceIcon,
+  AcceptanceLabel,
+  outcomeSentence,
+} from './run-outcome';
 import { SHELF_CHIP_CLASS } from './shelf-chip';
 
 /**
@@ -255,6 +260,86 @@ export function ThreadPullRequestRow({
         />
       }
     />
+  );
+}
+
+/**
+ * One pull request in the shelf's list: a flat row like every other row of a
+ * shelf popover, the title over two lines at most, and under it the number, the
+ * recorded acceptance in words and the size in right-aligned columns, so the
+ * figures of every row line up.
+ */
+export function PullRequestListRow({
+  result,
+  showRepo,
+  outcome = null,
+}: {
+  result: PullRequestRefResult;
+  showRepo: boolean;
+  outcome?: PullRequestOutcome | null;
+}): React.JSX.Element {
+  const { ref, pullRequest } = result;
+  const name = pullRequestLabel(ref, showRepo);
+  const identity =
+    pullRequest === null
+      ? `${ref.owner}/${ref.repo}#${ref.number}`
+      : `${ref.owner}/${ref.repo}#${ref.number} ${pullRequest.title} · ${lookOf(pullRequest).word}${sizeSentence(pullRequest)}`;
+  return (
+    <a
+      data-slot="pull-request-list-row"
+      href={pullRequest?.url ?? ref.url}
+      target="_blank"
+      rel="noreferrer"
+      title={
+        outcome === null ? identity : `${identity}\n${outcomeSentence(outcome)}`
+      }
+      className="group flex items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted">
+      <span className="flex h-5 shrink-0 items-center">
+        {pullRequest === null ? (
+          <GitPullRequest
+            aria-hidden="true"
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
+        ) : (
+          <PullRequestStateIcon pullRequest={pullRequest} />
+        )}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex items-start gap-2">
+          <span className="line-clamp-2 min-w-0 flex-1 text-sm leading-5 text-foreground">
+            {pullRequest?.title ?? name}
+          </span>
+          <ExternalLink
+            aria-hidden="true"
+            className="mt-1 size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+          />
+        </span>
+        <span
+          data-slot="pull-request-list-detail"
+          className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="shrink-0 tabular-nums">{name}</span>
+          {outcome === null ? null : (
+            <AcceptanceLabel acceptance={outcome.acceptance} />
+          )}
+          {pullRequest === null ? null : (
+            <span className="ml-auto flex shrink-0 items-center gap-2">
+              {pullRequest.changedFiles === null ? null : (
+                <span className="tabular-nums">
+                  {pullRequest.changedFiles}{' '}
+                  {pullRequest.changedFiles === 1 ? 'file' : 'files'}
+                </span>
+              )}
+              <DiffFigures
+                added={pullRequest.added}
+                removed={pullRequest.removed}
+                layout="columns"
+                className="gap-1"
+              />
+            </span>
+          )}
+        </span>
+      </span>
+    </a>
   );
 }
 

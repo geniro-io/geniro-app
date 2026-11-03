@@ -2332,3 +2332,29 @@ export const StageMoveResultSchema = z.object({
     ),
 });
 export type StageMoveResultWire = z.infer<typeof StageMoveResultSchema>;
+
+/** The judge an analysis would run as: which agent and model. */
+export const AnalysisJudgeQuerySchema = z.object({
+  agent: z.string().min(1),
+  model: z.string().min(1).optional().describe('omitted for the CLI’s default'),
+});
+
+/**
+ * Whether a would-be judge runs the same vendor's models as the members it
+ * would mark — a judge favours its own vendor's work.
+ */
+export const AnalysisJudgeCheckSchema = z.object({
+  judgeVendor: z
+    .string()
+    .nullable()
+    .describe('whose models the judge runs; null when not known'),
+  members: z.number().describe('members of the team'),
+  sameVendor: z
+    .array(z.string())
+    .describe('the members whose own model is the judge’s vendor'),
+  alternatives: z
+    .array(AgentKindSchema)
+    .describe('agents whose every model is another vendor’s'),
+});
+// No `.meta({ id })`: a response DTO root (see UsageStatsWireSchema).
+export type AnalysisJudgeCheckWire = z.infer<typeof AnalysisJudgeCheckSchema>;

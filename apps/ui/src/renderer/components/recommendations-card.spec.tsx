@@ -693,4 +693,62 @@ describe('RecommendationsCard', () => {
 
     expect(el.querySelector('[data-slot="analysis-members"]')).toBeNull();
   });
+
+  it("takes the user's verdict on a member's marks when the card is given a setter, and draws none without one", async () => {
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        teamStats={TEAM_STATS}
+        members={MEMBERS}
+        memberVerdicts={{
+          verdicts: {
+            qa: { verdict: 'disagree', note: 'it ran the wrong suite' },
+          },
+          onChange,
+        }}
+        team
+        items={ITEMS}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+    const rows = [
+      ...el.querySelectorAll<HTMLElement>('[data-slot="analysis-member"]'),
+    ];
+
+    expect(
+      rows.map((row) =>
+        row
+          .querySelector('[data-slot="assessment-verdict"]')
+          ?.getAttribute('data-verdict'),
+      ),
+    ).toEqual(['none', 'disagree', 'none']);
+    expect(rows[1]!.textContent).toContain('it ran the wrong suite');
+
+    await act(async () => {
+      button(rows[0]!, 'Agree').click();
+    });
+
+    expect(onChange).toHaveBeenCalledWith('reviewer', {
+      verdict: 'agree',
+      note: null,
+    });
+
+    const bare = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        members={MEMBERS}
+        team
+        items={ITEMS}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+    expect(bare.querySelector('[data-slot="assessment-verdict"]')).toBeNull();
+  });
 });

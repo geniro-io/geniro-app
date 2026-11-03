@@ -180,6 +180,7 @@ const MEASURED: TeamStatsDto = {
     ],
   },
   byMember: [ENGINEER, REVIEWER, PLANNER],
+  assessmentVerdicts: { assessments: 4, agreed: 2, disagreed: 1 },
 };
 
 const UNMEASURED: TeamStatsDto = {
@@ -203,6 +204,7 @@ const UNMEASURED: TeamStatsDto = {
   ],
   metrics: NO_METRICS,
   byMember: [{ ...PLANNER, turns: 61, runs: 5 }],
+  assessmentVerdicts: { assessments: 0, agreed: 0, disagreed: 0 },
 };
 
 const EMPTY: TeamStatsDto = {
@@ -217,6 +219,7 @@ const EMPTY: TeamStatsDto = {
   days: [],
   metrics: NO_METRICS,
   byMember: [],
+  assessmentVerdicts: { assessments: 0, agreed: 0, disagreed: 0 },
 };
 
 const meta = {

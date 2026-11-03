@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { vi } from 'vitest';
 
 import {
   assessment,
@@ -29,9 +30,15 @@ afterEach(() => {
   container.remove();
 });
 
-function render(row: TeamStatsMember | null, loading = false): void {
+function render(
+  row: TeamStatsMember | null,
+  loading = false,
+  onVerdict?: Parameters<typeof MemberPerformance>[0]['onVerdict'],
+): void {
   act(() => {
-    root.render(<MemberPerformance row={row} loading={loading} />);
+    root.render(
+      <MemberPerformance row={row} loading={loading} onVerdict={onVerdict} />,
+    );
   });
 }
 
@@ -158,5 +165,60 @@ describe('MemberPerformance — an unjudged mark', () => {
       'Quality 4 of 5',
     ]);
     expect(meters[0]!.textContent).toBe('Usefulness—');
+  });
+});
+
+describe('MemberPerformance — reliability, changes, judges and verdicts', () => {
+  it('reads its clean runs and the spread of its cost and time per run', () => {
+    render(REVIEWER);
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('Clean runs4 of 6');
+    expect(text).toContain('Cost per run$0.30 ($0.18–$0.52)');
+    expect(text).toContain('Time per run14m (10m–25m)');
+  });
+
+  it('lists each change that touched it with who made it, the measured effect and the figures that moved', () => {
+    render(REVIEWER);
+
+    const change = container.querySelector('[data-slot="member-change"]')!;
+    expect(change.getAttribute('data-effect')).toBe('better');
+    expect(change.textContent).toContain('v3 → v4 (current)');
+    expect(change.textContent).toContain('instructions');
+    expect(change.textContent).toContain('by an analysis · W-1');
+    expect(change.textContent).toContain('rework 50% → 0%');
+  });
+
+  it('names the judge, warns when it shares the member’s vendor, and sends the verdict on its marks', async () => {
+    const onVerdict = vi.fn().mockResolvedValue(undefined);
+    render(
+      {
+        ...REVIEWER,
+        assessments: [
+          assessment({
+            judge: { agent: 'claude', model: 'opus', sameVendor: true },
+          }),
+        ],
+      },
+      false,
+      onVerdict,
+    );
+
+    const latest = container.querySelector('[data-slot="member-assessment"]')!;
+    expect(latest.textContent).toContain('judged by claude · opus');
+    expect(
+      latest.querySelector('[data-slot="member-assessment-same-vendor"]'),
+    ).not.toBeNull();
+
+    await act(async () => {
+      [...latest.querySelectorAll('button')]
+        .find((button) => button.textContent?.includes('Agree'))!
+        .click();
+    });
+
+    expect(onVerdict).toHaveBeenCalledWith(
+      expect.objectContaining({ chatRunId: 'analysis-2', cardSeq: 40 }),
+      { verdict: 'agree', note: null },
+    );
   });
 });

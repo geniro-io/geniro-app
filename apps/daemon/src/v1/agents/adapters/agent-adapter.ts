@@ -339,6 +339,26 @@ export abstract class AgentAdapter {
    * The id is matched exactly: a CLI that reports its models under spellings
    * of its own canonicalises them before asking (see `ModelPriceLookup`).
    */
+  /**
+   * Whose model `model` is under this CLI (`AdapterConfig.modelVendor`), or
+   * null when that is not known — a local `ollama/` model, an `auto` pick, a
+   * CLI that declares none.
+   */
+  modelVendorOf(model: string | null): string | null {
+    const vendor = this.getConfig().modelVendor;
+    if (vendor === undefined || model?.startsWith('ollama/')) {
+      return null;
+    }
+    if (vendor.kind === 'fixed') {
+      return vendor.vendor;
+    }
+    const id = model?.toLowerCase() ?? '';
+    return (
+      vendor.prefixes.find((entry) => id.startsWith(entry.prefix))?.vendor ??
+      null
+    );
+  }
+
   protected listPriceOf(model: string | null): ModelPrice | null {
     const listPrice = this.getConfig().usage.listPrice;
     if (model === null || model === '' || listPrice.kind !== 'catalog') {

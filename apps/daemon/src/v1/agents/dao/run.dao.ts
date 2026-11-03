@@ -165,7 +165,12 @@ export class RunDao extends BaseDao<Run> {
   ): Promise<
     Pick<
       Run,
-      'id' | 'analysisTeamSlug' | 'editsTeamSlug' | 'analysisSourceRunId'
+      | 'id'
+      | 'analysisTeamSlug'
+      | 'editsTeamSlug'
+      | 'analysisSourceRunId'
+      | 'agentKind'
+      | 'model'
     >[]
   > {
     return this.getRepo(txEm).find(
@@ -182,6 +187,8 @@ export class RunDao extends BaseDao<Run> {
           'analysisTeamSlug',
           'editsTeamSlug',
           'analysisSourceRunId',
+          'agentKind',
+          'model',
         ],
         disableIdentityMap: true,
       },

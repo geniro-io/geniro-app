@@ -89,6 +89,8 @@ const STATS: TeamStatsDto = {
       workedMs: 32_400_000,
       measuredWorkedMs: 0,
       runs: 6,
+      perRun: { costUsd: null, workedMs: null },
+      changes: [],
       work: WORK,
       assessments: [
         assessment(),
@@ -103,10 +105,13 @@ const STATS: TeamStatsDto = {
       workedMs: null,
       measuredWorkedMs: 0,
       runs: 1,
+      perRun: { costUsd: null, workedMs: null },
+      changes: [],
       work: null,
       assessments: [],
     },
   ],
+  assessmentVerdicts: { assessments: 2, agreed: 1, disagreed: 0 },
 };
 
 let container: HTMLDivElement;
@@ -262,6 +267,8 @@ describe('TeamStatsTab', () => {
           workedMs: 7_200_000,
           measuredWorkedMs: 7_200_000,
           runs: 2,
+          perRun: { costUsd: null, workedMs: null },
+          changes: [],
           work: null,
           assessments: [],
         },
@@ -306,6 +313,7 @@ describe('TeamStatsTab', () => {
       rows[0]!.querySelector('[data-slot="member-marks-scope"]')?.textContent,
     ).toBe('6 runs of versions 3–4 (current)');
     expect(cells(rows[0]!).slice(2)).toEqual([
+      '4 of 6',
       '14 (1 failed)',
       '9 of 212',
       '75% (3 of 4)',
@@ -313,6 +321,7 @@ describe('TeamStatsTab', () => {
     ]);
     expect(cells(rows[1]!).slice(1)).toEqual([
       'Not assessed',
+      '—',
       '—',
       '—',
       '—',

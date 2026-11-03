@@ -383,6 +383,7 @@ export class CodexAdapter extends AgentAdapter {
         interrupts: false,
         consumptionReported: false,
       },
+      modelVendor: { kind: 'fixed', vendor: 'openai' },
       usage: {
         // Every turn reports its tokens; its MONEY is not on the wire (only an
         // Enterprise workspace sees codex's own dollar estimate), so a turn is

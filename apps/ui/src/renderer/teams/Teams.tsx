@@ -2018,6 +2018,26 @@ export function Teams({
                 ) ?? null
               }
               loading={teamStats.loading}
+              onVerdict={
+                apis === null
+                  ? undefined
+                  : async (entry, next) => {
+                      await apis.stats
+                        .setMemberAssessmentVerdict({
+                          memberAssessmentVerdictDto: {
+                            chatRunId: entry.chatRunId,
+                            cardSeq: entry.cardSeq,
+                            memberId: selected.id,
+                            verdict: next?.verdict ?? null,
+                            note: next?.note ?? null,
+                          },
+                        })
+                        .catch((err: unknown) => {
+                          throw new Error(describeDaemonError(err));
+                        });
+                      teamStats.reload();
+                    }
+              }
             />
           }
           removeWarning={removeWarningOf(selected.id)}
@@ -2231,6 +2251,9 @@ export function Teams({
                 : null
             }
             replaces={hasAnalysis}
+            agentLabelOf={(kind) =>
+              agentDisplayName(capabilities?.agents ?? [], kind)
+            }
             sourceLabel={team.name}
             chatApi={apis.chats}
             agentsApi={apis.agents}

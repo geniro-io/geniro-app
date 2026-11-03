@@ -38,6 +38,8 @@ import {
 } from '../../agents/dto/chat.dto';
 import { runListPageOf } from '../../agents/utils/run-list-page';
 import {
+  AnalysisJudgeCheckDto,
+  AnalysisJudgeQueryDto,
   CreateTeamDto,
   DeleteTeamQueryDto,
   ExportedDto,
@@ -64,6 +66,7 @@ import {
   TeamSummaryDto,
   UploadTeamAvatarDto,
 } from '../dto/teams.dto';
+import { AnalysisJudgeService } from '../services/analysis-judge.service';
 import { AvatarStoreService } from '../services/avatar-store.service';
 import { InstructionSizesService } from '../services/instruction-sizes.service';
 import { RunTeamService } from '../services/run-team.service';
@@ -75,6 +78,7 @@ import { TeamExecutorService } from '../services/team-executor.service';
 import { TeamHealthService } from '../services/team-health.service';
 import { TeamStoreService } from '../services/team-store.service';
 import type {
+  AnalysisJudgeCheckWire,
   InstructionSizesWire,
   MemberHealth,
   NodeStateWire,
@@ -107,6 +111,7 @@ export class TeamsController {
     private readonly actions: TeamActionsService,
     private readonly instructionSizes: InstructionSizesService,
     private readonly teamAnalyses: TeamAnalysisService,
+    private readonly analysisJudge: AnalysisJudgeService,
     private readonly stageWakes: StageWakeService,
     private readonly avatars: AvatarStoreService,
     private readonly health: TeamHealthService,
@@ -434,6 +439,21 @@ export class TeamsController {
   @ZodResponse({ status: 200, type: ThreadAnalysisDto })
   async getAnalysis(@Param('slug') slug: string): Promise<ThreadAnalysisWire> {
     return { analysis: await this.teamAnalyses.find(slug) };
+  }
+
+  /**
+   * Whether an analysis run as `agent` / `model` would judge members that
+   * run the same vendor's models — the dialog's hint to pick another judge.
+   * 404 for a team the library does not hold.
+   */
+  @Get(':slug/analysis-judge')
+  @ApiOperation({ operationId: 'checkTeamAnalysisJudge' })
+  @ZodResponse({ status: 200, type: AnalysisJudgeCheckDto })
+  checkAnalysisJudge(
+    @Param('slug') slug: string,
+    @Query() query: AnalysisJudgeQueryDto,
+  ): Promise<AnalysisJudgeCheckWire> {
+    return this.analysisJudge.check(slug, query);
   }
 
   /**

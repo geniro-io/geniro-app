@@ -1073,6 +1073,19 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         consumptionReported: false,
       },
+      // Its model ids name their maker; `auto` names none. Read off
+      // `cursor-agent models` on 2026-11-03.
+      modelVendor: {
+        kind: 'by-model-id',
+        prefixes: [
+          { prefix: 'claude-', vendor: 'anthropic' },
+          { prefix: 'gpt-', vendor: 'openai' },
+          { prefix: 'gemini-', vendor: 'google' },
+          { prefix: 'grok-', vendor: 'xai' },
+          { prefix: 'cursor-grok-', vendor: 'xai' },
+          { prefix: 'composer-', vendor: 'cursor' },
+        ],
+      },
       usage: {
         /**
          * It reports NONE. Measured 2026-08-12 on 2026.08.11-e8db854, from a

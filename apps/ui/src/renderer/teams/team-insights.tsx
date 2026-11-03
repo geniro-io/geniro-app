@@ -167,6 +167,22 @@ export function TeamStatsTab({
           title="How each member works"
           caption="How useful each member's work was and how it held up: the newest analysis's marks, and its calls, tool errors, goals and reopened stages over the measured runs.">
           <MemberWorkTable stats={stats} memberOf={memberOf} />
+          {stats.assessmentVerdicts.agreed +
+            stats.assessmentVerdicts.disagreed ===
+          0 ? null : (
+            <p
+              data-slot="assessment-agreement"
+              className="text-sm text-muted-foreground">
+              You agreed with {formatCount(stats.assessmentVerdicts.agreed)} of
+              the{' '}
+              {formatCount(
+                stats.assessmentVerdicts.agreed +
+                  stats.assessmentVerdicts.disagreed,
+              )}{' '}
+              marks you gave a verdict on (
+              {formatCount(stats.assessmentVerdicts.assessments)} filed).
+            </p>
+          )}
         </MetricsSection>
       ) : null}
       {metrics === undefined ? null : stats &&
@@ -396,6 +412,7 @@ function MemberWorkTable({
               : `${assessmentCaption(latest)} — ${latest.summary}`;
           },
         },
+        readingColumn('Clean runs', 'clean'),
         readingColumn('Calls answered', 'calls'),
         readingColumn('Tool errors', 'tools'),
         readingColumn('Own goals', 'goals'),

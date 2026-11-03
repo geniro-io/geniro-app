@@ -214,6 +214,7 @@ import {
   readLocalImageDataUrl,
 } from './local-image-loader';
 import { mcpConfigActions } from './mcp-config-actions';
+import type { MemberVerdicts } from './member-verdicts-context';
 import { readMemoryByHandle } from './memory-tool-row';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
@@ -2282,6 +2283,24 @@ export function Chats({
       })();
     },
     [chatApi, teamNames],
+  );
+
+  /** The user's verdicts on a card's member assessments, for `MemberVerdictsContext`. */
+  const readMemberVerdicts = useLatestCallback<MemberVerdicts['read']>(
+    (chatRunId, cardSeq) =>
+      apis.stats.readCardAssessmentVerdicts({ chatRunId, cardSeq }),
+    [apis],
+  );
+  const setMemberVerdict = useLatestCallback<MemberVerdicts['set']>(
+    (request) =>
+      apis.stats.setMemberAssessmentVerdict({
+        memberAssessmentVerdictDto: request,
+      }),
+    [apis],
+  );
+  const memberVerdicts = useMemo<MemberVerdicts>(
+    () => ({ read: readMemberVerdicts, set: setMemberVerdict }),
+    [readMemberVerdicts, setMemberVerdict],
   );
 
   /** A recommendations card's Apply, for `RecommendationsApplyContext`. */
@@ -9403,6 +9422,7 @@ export function Chats({
         runSettledAt={activeRunSettledAt}
         callConversations={callConversations}
         applyRecommendations={applyRecommendations}
+        memberVerdicts={memberVerdicts}
         notSent={notSent}
         chatActions={chatActions}
         loadMemory={loadMemory}>

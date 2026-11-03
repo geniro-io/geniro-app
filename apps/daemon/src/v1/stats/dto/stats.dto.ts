@@ -3,6 +3,8 @@ import { z } from 'zod';
 
 import { SLUG_RE } from '../../teams/teams.types';
 import {
+  CardAssessmentVerdictsSchema,
+  MemberAssessmentVerdictRequestSchema,
   TeamStatsWireSchema,
   TeamVersionRestoredSchema,
   TeamVersionsWireSchema,
@@ -81,4 +83,23 @@ export class RestoreTeamVersionDto extends createZodDto(
 /** The restored version and the file's new hash — see {@link TeamVersionRestoredSchema}. */
 export class TeamVersionRestoredDto extends createZodDto(
   TeamVersionRestoredSchema,
+) {}
+
+/** Set or clear the user's verdict on one member's marks — see {@link MemberAssessmentVerdictRequestSchema}. */
+export class MemberAssessmentVerdictDto extends createZodDto(
+  MemberAssessmentVerdictRequestSchema,
+) {}
+
+/** One card's assessments a verdict route reads: the chat that filed it and the card's seq. */
+export const cardAssessmentParamsSchema = z.object({
+  chatRunId: z.string().min(1),
+  cardSeq: z.coerce.number().int().min(0),
+});
+export class CardAssessmentParamsDto extends createZodDto(
+  cardAssessmentParamsSchema,
+) {}
+
+/** The user's verdicts on one card's assessments — see {@link CardAssessmentVerdictsSchema}. */
+export class CardAssessmentVerdictsDto extends createZodDto(
+  CardAssessmentVerdictsSchema,
 ) {}

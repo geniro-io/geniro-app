@@ -78,7 +78,8 @@ function assessedCard(
 type ChatRun = Pick<
   Run,
   'id' | 'analysisTeamSlug' | 'editsTeamSlug' | 'analysisSourceRunId'
-> & { teamId?: string | null };
+> &
+  Partial<Pick<Run, 'teamId' | 'agentKind' | 'model'>>;
 
 interface StoredRow {
   seq: number;
@@ -139,7 +140,11 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
       },
     ];
     chats = new Map([
-      chat('analysis-1', { analysisTeamSlug: 'dev-team' }),
+      chat('analysis-1', {
+        analysisTeamSlug: 'dev-team',
+        agentKind: 'codex',
+        model: 'gpt-6.1-sol',
+      }),
       chat('builder-1', { editsTeamSlug: 'dev-team' }),
       chat('plain-chat'),
       chat('team-run', { teamId: 'dev-team' }),
@@ -312,6 +317,8 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
           summary: DEV.summary,
           evidence: DEV.evidence,
           items: [{ id: 'W-1', title: 'Title of W-1' }],
+          judge: { agent: 'codex', model: 'gpt-6.1-sol' },
+          userVerdict: null,
         },
         expect.objectContaining({ memberId: 'qa', verdict: 'keep', items: [] }),
       ]);

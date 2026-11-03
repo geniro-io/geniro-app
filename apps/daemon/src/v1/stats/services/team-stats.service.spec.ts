@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
+import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { GoalDao } from '../../agents/dao/goal.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
@@ -16,6 +17,8 @@ import { ID_BATCH } from '../../agents/utils/id-batches';
 import { Goal } from '../../runs/entity/goal.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
+import type { TeamChangeLogService } from '../../teams/services/team-change-log.service';
+import type { TeamChangeLogRecord } from '../../teams/teams.types';
 import {
   canonicalGraphJson,
   canonicalGraphOf,
@@ -48,6 +51,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
   let usageDao: UsageEventDao;
   let service: TeamStatsService;
   let liveChats: Set<string>;
+  let changeLog: TeamChangeLogRecord[];
   let versionTable: TeamVersionsWire | Error;
 
   beforeAll(async () => {
@@ -88,6 +92,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       usageDao,
       new AgentAdapterRegistry([
         new ClaudeAdapter(),
+        new CodexAdapter(),
         new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
       ]),
       new MetricLedgerDao(em),
@@ -106,7 +111,11 @@ describe('TeamStatsService (in-memory sqlite)', () => {
             : Promise.resolve(versionTable),
       } as unknown as TeamVersionsService,
       new TeamVersionDao(em),
+      {
+        entriesOf: () => Promise.resolve(changeLog),
+      } as unknown as TeamChangeLogService,
     );
+    changeLog = [];
     liveChats = new Set();
     versionTable = {
       currentVersion: 'v2',
@@ -243,7 +252,12 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         workedMs: RUNS * 1000,
         measuredWorkedMs: 0,
         runs: RUNS,
+        perRun: {
+          costUsd: { min: 3, median: 3, max: 3 },
+          workedMs: { min: 1000, median: 1000, max: 1000 },
+        },
         work: null,
+        changes: [],
         assessments: [],
       },
     ]);
@@ -293,6 +307,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       },
       days: [],
       byMember: [],
+      assessmentVerdicts: { assessments: 0, agreed: 0, disagreed: 0 },
       metrics: {
         goals: {
           recorded: 0,
@@ -491,7 +506,12 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         workedMs: 500,
         measuredWorkedMs: 0,
         runs: 1,
+        perRun: {
+          costUsd: { min: 6, median: 6, max: 6 },
+          workedMs: { min: 500, median: 500, max: 500 },
+        },
         work: null,
+        changes: [],
         assessments: [],
       },
       {
@@ -502,7 +522,12 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         workedMs: 100,
         measuredWorkedMs: 0,
         runs: 1,
+        perRun: {
+          costUsd: { min: 1, median: 1, max: 1 },
+          workedMs: { min: 100, median: 100, max: 100 },
+        },
         work: null,
+        changes: [],
         assessments: [],
       },
     ]);
@@ -540,7 +565,9 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         workedMs: null,
         measuredWorkedMs: 0,
         runs: 1,
+        perRun: { costUsd: null, workedMs: null },
         work: null,
+        changes: [],
         assessments: [],
       },
     ]);
@@ -741,6 +768,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
             dropped: 1,
             achievedShare: 0.5,
           },
+          cleanRuns: RUNS - 2,
           stagesCompleted: 3,
           completionsReopened: 2,
         },
@@ -782,6 +810,8 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       summary: 'Reviews are read, but it re-reads the diff every round',
       evidence: [{ runId: 'r1', seq: 4, quote: 'reading the diff again' }],
       items: [{ id: 'W-1', title: 'Review the diff once' }],
+      judge: { agent: 'claude', model: 'opus' },
+      userVerdict: null,
       ...overrides,
     });
 
@@ -941,6 +971,143 @@ describe('TeamStatsService (in-memory sqlite)', () => {
           ],
         }),
       ]);
+    });
+  });
+
+  describe('member changes, judges and verdicts', () => {
+    const graphOf = (team: ReturnType<typeof teamOf>) =>
+      canonicalGraphJson(canonicalGraphOf(team));
+    const V1 = teamOf([
+      member('lead'),
+      { ...member('reviewer'), model: 'opus' },
+    ]);
+    const V2 = teamOf([
+      member('lead'),
+      { ...member('reviewer'), agent: 'codex', model: 'gpt-6.1-sol' },
+    ]);
+
+    async function versionedRun(
+      runId: string,
+      version: string,
+      minute: number,
+      reviewerCost: number,
+    ): Promise<void> {
+      const at = new Date(2026, 9, 1, 10, minute);
+      await activityDao.stampThreadVersion(runId, at, {
+        slug: 'dev-team',
+        version,
+        inferred: false,
+      });
+      await turn(runId, {
+        memberId: 'reviewer',
+        occurredAt: at,
+        costUsd: reviewerCost,
+      });
+    }
+
+    it("measures a member's change across the versions its runs ran, names who judged it, and whether the judge shares the member's vendor", async () => {
+      const versions = new TeamVersionDao(orm.em.fork());
+      await versions.register(
+        'dev-team',
+        'v1',
+        graphOf(V1),
+        new Date(2026, 9, 1),
+      );
+      await versions.register(
+        'dev-team',
+        'v2',
+        graphOf(V2),
+        new Date(2026, 9, 2),
+      );
+      await versionedRun('a1', 'v1', 1, 4);
+      await versionedRun('a2', 'v1', 2, 4);
+      await versionedRun('b1', 'v2', 3, 1);
+      await versionedRun('b2', 'v2', 4, 1);
+      changeLog = [
+        {
+          slug: 'dev-team',
+          changedAt: new Date(2026, 9, 1, 10, 2, 30),
+          source: 'builder',
+          fromVersion: 'v1',
+          toVersion: 'v2',
+          summary: 'Review on codex',
+          reason: null,
+          userNote: null,
+          recommendationIds: ['W-2'],
+          chatRunId: 'builder-1',
+          cardSeq: 3,
+          backup: null,
+        },
+      ];
+      const assessments = new MemberAssessmentDao(orm.em.fork());
+      const row = (chatRunId: string, judge: MemberAssessmentRow['judge']) => ({
+        slug: 'dev-team',
+        chatRunId,
+        chatKind: 'analysis' as const,
+        cardSeq: 5,
+        filedAt: new Date('2026-10-20T10:00:00.000Z'),
+        libraryVersion: 'v2',
+        runs: 2,
+        runIds: ['b1', 'a1'],
+        memberId: 'reviewer',
+        usefulness: 4,
+        quality: 3,
+        verdict: 'keep' as const,
+        summary: 'Fine',
+        evidence: [],
+        items: [],
+        judge,
+        userVerdict: null,
+      });
+      await assessments.file([
+        row('by-claude', { agent: 'claude', model: 'opus' }),
+        row('by-codex', { agent: 'codex', model: null }),
+        row('by-cursor-auto', { agent: 'cursor-agent', model: 'auto' }),
+      ]);
+      await assessments.setUserVerdict(
+        { chatRunId: 'by-claude', cardSeq: 5, memberId: 'reviewer' },
+        { verdict: 'disagree', note: 'it missed the race' },
+        new Date('2026-10-21T10:00:00.000Z'),
+      );
+      await assessments.setUserVerdict(
+        { chatRunId: 'by-codex', cardSeq: 5, memberId: 'reviewer' },
+        { verdict: 'agree', note: null },
+        new Date('2026-10-21T10:00:00.000Z'),
+      );
+
+      const stats = await service.read('dev-team');
+      const reviewer = stats.byMember.find(
+        (entry) => entry.memberId === 'reviewer',
+      );
+
+      expect(reviewer?.changes).toEqual([
+        expect.objectContaining({
+          kinds: ['agent', 'model'],
+          source: 'builder',
+          summary: 'Review on codex',
+          recommendationIds: ['W-2'],
+          before: expect.objectContaining({ runs: 2, costPerRunUsd: 4 }),
+          after: expect.objectContaining({ runs: 2, costPerRunUsd: 1 }),
+          effect: 'better',
+        }),
+      ]);
+      expect(
+        Object.fromEntries(
+          reviewer!.assessments.map((entry) => [
+            entry.chatRunId,
+            [entry.judge.sameVendor, entry.userVerdict?.verdict ?? null],
+          ]),
+        ),
+      ).toEqual({
+        'by-claude': [false, 'disagree'],
+        'by-codex': [true, 'agree'],
+        'by-cursor-auto': [null, null],
+      });
+      expect(stats.assessmentVerdicts).toEqual({
+        assessments: 3,
+        agreed: 1,
+        disagreed: 1,
+      });
     });
   });
 });

@@ -591,8 +591,16 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
             summary: 'Repeats what the lead already did',
             evidence: [{ runId: 'r1', seq: 3, quote: 'same diff again' }],
             items: [{ id: 'W-1', title: 'Drop dev', status: 'skipped' }],
+            judge: { agent: 'codex', model: null, sameVendor: false },
+            userVerdict: {
+              verdict: 'disagree',
+              note: 'it is the only one who runs the tests',
+              at: '2026-10-21T10:00:00.000Z',
+            },
           },
         ],
+        perRun: { costUsd: null, workedMs: null },
+        changes: [],
       },
     ];
 

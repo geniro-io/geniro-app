@@ -192,6 +192,13 @@ describe('teamAnalysisGuide', () => {
       );
       expect(guide).toContain('`members[].assessments`');
       expect(guide).toContain(
+        'A mark the user disagreed with (`userVerdict.verdict` disagree) is a correction',
+      );
+      expect(guide).toContain(
+        'a change measured worse is a case for undoing it',
+      );
+      expect(guide).toContain('view=history `members[].changes`');
+      expect(guide).toContain(
         'one tuned twice with no gain is a case for replace or remove',
       );
       expect(guide).toContain(

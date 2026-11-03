@@ -40,15 +40,24 @@ export function recommendationSourceOf(
  * ran — given here as `analysedRun`, null for none or a plain chat.
  */
 export function assessmentSourceOf(
-  run: Pick<Run, 'id' | 'analysisTeamSlug' | 'editsTeamSlug'>,
+  run: Pick<
+    Run,
+    'id' | 'analysisTeamSlug' | 'editsTeamSlug' | 'agentKind' | 'model'
+  >,
   analysedRun: Pick<Run, 'teamId'> | null,
 ): MemberAssessmentSource | null {
+  const judge = { agent: run.agentKind ?? null, model: run.model ?? null };
   const own = recommendationSourceOf(run);
   if (own !== null) {
-    return own;
+    return { ...own, judge };
   }
   return analysedRun?.teamId
-    ? { chatRunId: run.id, slug: analysedRun.teamId, chatKind: 'thread' }
+    ? {
+        chatRunId: run.id,
+        slug: analysedRun.teamId,
+        chatKind: 'thread',
+        judge,
+      }
     : null;
 }
 
@@ -85,6 +94,8 @@ export function filedAssessmentsOf(
     summary: member.summary,
     evidence: member.evidence,
     items: member.items.map((id) => ({ id, title: titles.get(id) ?? '' })),
+    judge: source.judge,
+    userVerdict: null,
   }));
 }
 

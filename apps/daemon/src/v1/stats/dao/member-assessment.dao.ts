@@ -11,7 +11,11 @@ import {
   RecommendationEvidenceSchema,
 } from '../../agents/chat.types';
 import { MemberAssessmentRecord } from '../entity/member-assessment.entity';
-import type { MemberAssessmentRow } from '../stats.types';
+import {
+  MEMBER_ASSESSMENT_USER_VERDICTS,
+  type MemberAssessmentRow,
+  type MemberAssessmentUserVerdict,
+} from '../stats.types';
 
 /** `member_assessments` as SQLite stores it; dates are epoch milliseconds, since value conversion is off. */
 interface AssessmentDatabase {
@@ -35,6 +39,11 @@ interface AssessmentDatabase {
     summary: string;
     evidence: string;
     items: string;
+    judge_agent: string | null;
+    judge_model: string | null;
+    user_verdict: string | null;
+    user_note: string | null;
+    user_verdict_at: number | null;
   };
 }
 
@@ -113,6 +122,11 @@ export class MemberAssessmentDao extends BaseDao<MemberAssessmentRecord> {
           summary: row.summary,
           evidence: JSON.stringify(row.evidence),
           items: JSON.stringify(row.items),
+          judge_agent: row.judge.agent,
+          judge_model: row.judge.model,
+          user_verdict: null,
+          user_note: null,
+          user_verdict_at: null,
         })),
       )
       .onConflict((conflict) =>
@@ -161,9 +175,85 @@ export class MemberAssessmentDao extends BaseDao<MemberAssessmentRecord> {
               summary: row.summary,
               evidence: evidenceOf(row.evidence),
               items: itemsOf(row.items),
+              judge: { agent: row.judge_agent, model: row.judge_model },
+              userVerdict: userVerdictOf(row),
             },
           ]
         : [],
     );
   }
+
+  /**
+   * The user's verdict on one member's marks on one card — or none, which
+   * clears it. Answers whether that assessment is filed.
+   */
+  async setUserVerdict(
+    key: { chatRunId: string; cardSeq: number; memberId: string },
+    verdict: {
+      verdict: MemberAssessmentUserVerdict;
+      note: string | null;
+    } | null,
+    at: Date,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    const result = await (txEm ?? this.em.fork())
+      .getKysely<AssessmentDatabase>({ convertValues: false })
+      .updateTable('member_assessments')
+      .set({
+        user_verdict: verdict?.verdict ?? null,
+        user_note: verdict?.note ?? null,
+        user_verdict_at: verdict === null ? null : at.getTime(),
+        updated_at: Date.now(),
+      })
+      .where('chat_run_id', '=', key.chatRunId)
+      .where('card_seq', '=', key.cardSeq)
+      .where('member_id', '=', key.memberId)
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst();
+    return Number(result.numUpdatedRows) > 0;
+  }
+
+  /** The user's verdicts on one card's assessments, by member. */
+  async verdictsOfCard(
+    chatRunId: string,
+    cardSeq: number,
+    txEm?: EntityManager,
+  ): Promise<
+    {
+      memberId: string;
+      userVerdict: MemberAssessmentRow['userVerdict'];
+    }[]
+  > {
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<AssessmentDatabase>({ convertValues: false })
+      .selectFrom('member_assessments')
+      .select(['member_id', 'user_verdict', 'user_note', 'user_verdict_at'])
+      .where('chat_run_id', '=', chatRunId)
+      .where('card_seq', '=', cardSeq)
+      .where('deleted_at', 'is', null)
+      .orderBy('member_id', 'asc')
+      .execute();
+    return rows.map((row) => ({
+      memberId: row.member_id,
+      userVerdict: userVerdictOf(row),
+    }));
+  }
+}
+
+function userVerdictOf(row: {
+  user_verdict: string | null;
+  user_note: string | null;
+  user_verdict_at: number | null;
+}): MemberAssessmentRow['userVerdict'] {
+  return row.user_verdict !== null &&
+    (MEMBER_ASSESSMENT_USER_VERDICTS as readonly string[]).includes(
+      row.user_verdict,
+    ) &&
+    row.user_verdict_at !== null
+    ? {
+        verdict: row.user_verdict as MemberAssessmentUserVerdict,
+        note: row.user_note,
+        at: new Date(Number(row.user_verdict_at)),
+      }
+    : null;
 }

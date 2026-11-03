@@ -1563,6 +1563,37 @@ export interface AgentVocabularyDto {
 /**
  * 
  * @export
+ * @interface AnalysisJudgeCheckDto
+ */
+export interface AnalysisJudgeCheckDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalysisJudgeCheckDto
+     */
+    judgeVendor: string | null;
+    /**
+     * members of the team
+     * @type {number}
+     * @memberof AnalysisJudgeCheckDto
+     */
+    members: number;
+    /**
+     * the members whose own model is the judge’s vendor
+     * @type {Array<string>}
+     * @memberof AnalysisJudgeCheckDto
+     */
+    sameVendor: Array<string>;
+    /**
+     * agents whose every model is another vendor’s
+     * @type {Array<AgentKind>}
+     * @memberof AnalysisJudgeCheckDto
+     */
+    alternatives: Array<AgentKind>;
+}
+/**
+ * 
+ * @export
  * @interface AnalyzeTeamDto
  */
 export interface AnalyzeTeamDto {
@@ -2195,6 +2226,38 @@ export interface CapabilitiesDto {
      * @memberof CapabilitiesDto
      */
     maxActiveTurnsCeiling: number;
+}
+/**
+ * 
+ * @export
+ * @interface CardAssessmentVerdictsDto
+ */
+export interface CardAssessmentVerdictsDto {
+    /**
+     * 
+     * @type {Array<CardAssessmentVerdictsDtoVerdictsInner>}
+     * @memberof CardAssessmentVerdictsDto
+     */
+    verdicts: Array<CardAssessmentVerdictsDtoVerdictsInner>;
+}
+/**
+ * 
+ * @export
+ * @interface CardAssessmentVerdictsDtoVerdictsInner
+ */
+export interface CardAssessmentVerdictsDtoVerdictsInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof CardAssessmentVerdictsDtoVerdictsInner
+     */
+    memberId: string;
+    /**
+     * 
+     * @type {MemberAssessmentUserVerdict}
+     * @memberof CardAssessmentVerdictsDtoVerdictsInner
+     */
+    userVerdict: MemberAssessmentUserVerdict | null;
 }
 
 /**
@@ -4101,6 +4164,31 @@ export interface ExportedDto {
 /**
  * 
  * @export
+ * @interface FigureSpread
+ */
+export interface FigureSpread {
+    /**
+     * 
+     * @type {number}
+     * @memberof FigureSpread
+     */
+    min: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof FigureSpread
+     */
+    median: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof FigureSpread
+     */
+    max: number;
+}
+/**
+ * 
+ * @export
  * @interface FindFinishedTasksDto
  */
 export interface FindFinishedTasksDto {
@@ -5309,10 +5397,10 @@ export interface MemberAssessmentEntry {
     runs: number;
     /**
      * the team versions the analysed runs ran, oldest first — what the marks describe
-     * @type {Array<MemberAssessmentEntryVersionsInner>}
+     * @type {Array<MemberChangeFrom>}
      * @memberof MemberAssessmentEntry
      */
-    versions: Array<MemberAssessmentEntryVersionsInner>;
+    versions: Array<MemberChangeFrom>;
     /**
      * 
      * @type {number}
@@ -5349,6 +5437,18 @@ export interface MemberAssessmentEntry {
      * @memberof MemberAssessmentEntry
      */
     items: Array<MemberAssessmentEntryItemsInner>;
+    /**
+     * 
+     * @type {MemberAssessmentEntryJudge}
+     * @memberof MemberAssessmentEntry
+     */
+    judge: MemberAssessmentEntryJudge;
+    /**
+     * 
+     * @type {MemberAssessmentUserVerdict}
+     * @memberof MemberAssessmentEntry
+     */
+    userVerdict: MemberAssessmentUserVerdict | null;
 }
 
 
@@ -5441,24 +5541,114 @@ export const MemberAssessmentEntryItemsInnerStatusEnum = {
 export type MemberAssessmentEntryItemsInnerStatusEnum = typeof MemberAssessmentEntryItemsInnerStatusEnum[keyof typeof MemberAssessmentEntryItemsInnerStatusEnum];
 
 /**
- * 
+ * the CLI and model of the chat that marked it
  * @export
- * @interface MemberAssessmentEntryVersionsInner
+ * @interface MemberAssessmentEntryJudge
  */
-export interface MemberAssessmentEntryVersionsInner {
+export interface MemberAssessmentEntryJudge {
     /**
      * 
-     * @type {number}
-     * @memberof MemberAssessmentEntryVersionsInner
+     * @type {string}
+     * @memberof MemberAssessmentEntryJudge
      */
-    number: number | null;
+    agent: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentEntryJudge
+     */
+    model: string | null;
     /**
      * 
      * @type {boolean}
-     * @memberof MemberAssessmentEntryVersionsInner
+     * @memberof MemberAssessmentEntryJudge
      */
-    current: boolean;
+    sameVendor: boolean | null;
 }
+/**
+ * 
+ * @export
+ * @interface MemberAssessmentUserVerdict
+ */
+export interface MemberAssessmentUserVerdict {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentUserVerdict
+     */
+    verdict: MemberAssessmentUserVerdictVerdictEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentUserVerdict
+     */
+    note: string | null;
+    /**
+     * ISO-8601
+     * @type {string}
+     * @memberof MemberAssessmentUserVerdict
+     */
+    at: string;
+}
+
+
+/**
+ * @export
+ */
+export const MemberAssessmentUserVerdictVerdictEnum = {
+    Agree: 'agree',
+    Disagree: 'disagree'
+} as const;
+export type MemberAssessmentUserVerdictVerdictEnum = typeof MemberAssessmentUserVerdictVerdictEnum[keyof typeof MemberAssessmentUserVerdictVerdictEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemberAssessmentVerdictDto
+ */
+export interface MemberAssessmentVerdictDto {
+    /**
+     * the chat that filed the card
+     * @type {string}
+     * @memberof MemberAssessmentVerdictDto
+     */
+    chatRunId: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberAssessmentVerdictDto
+     */
+    cardSeq: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentVerdictDto
+     */
+    memberId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentVerdictDto
+     */
+    verdict: MemberAssessmentVerdictDtoVerdictEnum | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentVerdictDto
+     */
+    note?: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const MemberAssessmentVerdictDtoVerdictEnum = {
+    Agree: 'agree',
+    Disagree: 'disagree'
+} as const;
+export type MemberAssessmentVerdictDtoVerdictEnum = typeof MemberAssessmentVerdictDtoVerdictEnum[keyof typeof MemberAssessmentVerdictDtoVerdictEnum];
+
 /**
  * 
  * @export
@@ -5544,6 +5734,199 @@ export interface MemberCall {
      * @memberof MemberCall
      */
     avgMs: number | null;
+}
+/**
+ * 
+ * @export
+ * @interface MemberChange
+ */
+export interface MemberChange {
+    /**
+     * 
+     * @type {MemberChangeFrom}
+     * @memberof MemberChange
+     */
+    from: MemberChangeFrom;
+    /**
+     * 
+     * @type {MemberChangeFrom}
+     * @memberof MemberChange
+     */
+    to: MemberChangeFrom;
+    /**
+     * ISO-8601: the first run of the new version after the old
+     * @type {string}
+     * @memberof MemberChange
+     */
+    at: string;
+    /**
+     * what changed
+     * @type {Array<string>}
+     * @memberof MemberChange
+     */
+    kinds: Array<MemberChangeKindsEnum>;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberChange
+     */
+    source: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberChange
+     */
+    summary: string | null;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof MemberChange
+     */
+    recommendationIds: Array<string>;
+    /**
+     * 
+     * @type {MemberVersionFigures}
+     * @memberof MemberChange
+     */
+    before: MemberVersionFigures | null;
+    /**
+     * 
+     * @type {MemberVersionFigures}
+     * @memberof MemberChange
+     */
+    after: MemberVersionFigures | null;
+    /**
+     * 
+     * @type {MemberChangeTeam}
+     * @memberof MemberChange
+     */
+    team: MemberChangeTeam;
+    /**
+     * better or worse when every figure that moved by a tenth or more moved that way, mixed when they disagree; too-few-runs under two runs on either side
+     * @type {string}
+     * @memberof MemberChange
+     */
+    effect: MemberChangeEffectEnum;
+    /**
+     * the figures that moved by a tenth or more, and which way
+     * @type {Array<MemberChangeMovedInner>}
+     * @memberof MemberChange
+     */
+    moved: Array<MemberChangeMovedInner>;
+}
+
+
+/**
+ * @export
+ */
+export const MemberChangeKindsEnum = {
+    Added: 'added',
+    Removed: 'removed',
+    Role: 'role',
+    Instructions: 'instructions',
+    Character: 'character',
+    Agent: 'agent',
+    Model: 'model',
+    Effort: 'effort',
+    Approval: 'approval',
+    Pool: 'pool',
+    Tools: 'tools',
+    Stages: 'stages',
+    Blocks: 'blocks'
+} as const;
+export type MemberChangeKindsEnum = typeof MemberChangeKindsEnum[keyof typeof MemberChangeKindsEnum];
+
+/**
+ * @export
+ */
+export const MemberChangeEffectEnum = {
+    Better: 'better',
+    Worse: 'worse',
+    Mixed: 'mixed',
+    NoChange: 'no-change',
+    TooFewRuns: 'too-few-runs'
+} as const;
+export type MemberChangeEffectEnum = typeof MemberChangeEffectEnum[keyof typeof MemberChangeEffectEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemberChangeFrom
+ */
+export interface MemberChangeFrom {
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberChangeFrom
+     */
+    number: number | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof MemberChangeFrom
+     */
+    current: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface MemberChangeMovedInner
+ */
+export interface MemberChangeMovedInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberChangeMovedInner
+     */
+    figure: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberChangeMovedInner
+     */
+    from: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberChangeMovedInner
+     */
+    to: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberChangeMovedInner
+     */
+    direction: MemberChangeMovedInnerDirectionEnum;
+}
+
+
+/**
+ * @export
+ */
+export const MemberChangeMovedInnerDirectionEnum = {
+    Better: 'better',
+    Worse: 'worse'
+} as const;
+export type MemberChangeMovedInnerDirectionEnum = typeof MemberChangeMovedInnerDirectionEnum[keyof typeof MemberChangeMovedInnerDirectionEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemberChangeTeam
+ */
+export interface MemberChangeTeam {
+    /**
+     * 
+     * @type {TeamVersionRunFigures}
+     * @memberof MemberChangeTeam
+     */
+    before: TeamVersionRunFigures;
+    /**
+     * 
+     * @type {TeamVersionRunFigures}
+     * @memberof MemberChangeTeam
+     */
+    after: TeamVersionRunFigures;
 }
 /**
  * 
@@ -5691,6 +6074,49 @@ export interface MemberSeat {
 /**
  * 
  * @export
+ * @interface MemberVersionFigures
+ */
+export interface MemberVersionFigures {
+    /**
+     * runs of the version it took part in
+     * @type {number}
+     * @memberof MemberVersionFigures
+     */
+    runs: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberVersionFigures
+     */
+    costPerRunUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberVersionFigures
+     */
+    workedPerRunMs: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberVersionFigures
+     */
+    callFailureShare: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberVersionFigures
+     */
+    reworkShare: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberVersionFigures
+     */
+    cleanShare: number | null;
+}
+/**
+ * 
+ * @export
  * @interface MemberWork
  */
 export interface MemberWork {
@@ -5742,6 +6168,12 @@ export interface MemberWork {
      * @memberof MemberWork
      */
     goals: MemberWorkGoals;
+    /**
+     * of the measured runs, those where none of its work failed or was redone: no call to it failed, no stage it owns was reopened, no goal it recorded ended not achieved
+     * @type {number}
+     * @memberof MemberWork
+     */
+    cleanRuns: number;
     /**
      * completions of stages it was responsible for in its run’s team version, whoever moved them
      * @type {number}
@@ -12318,10 +12750,41 @@ export interface TeamStatsDto {
     byMember: Array<TeamStatsMember>;
     /**
      * 
+     * @type {TeamStatsDtoAssessmentVerdicts}
+     * @memberof TeamStatsDto
+     */
+    assessmentVerdicts: TeamStatsDtoAssessmentVerdicts;
+    /**
+     * 
      * @type {ThreadMetrics}
      * @memberof TeamStatsDto
      */
     metrics: ThreadMetrics;
+}
+/**
+ * how often the user agreed with the analyses’ marks
+ * @export
+ * @interface TeamStatsDtoAssessmentVerdicts
+ */
+export interface TeamStatsDtoAssessmentVerdicts {
+    /**
+     * every member assessment filed
+     * @type {number}
+     * @memberof TeamStatsDtoAssessmentVerdicts
+     */
+    assessments: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsDtoAssessmentVerdicts
+     */
+    agreed: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamStatsDtoAssessmentVerdicts
+     */
+    disagreed: number;
 }
 /**
  * 
@@ -12373,16 +12836,47 @@ export interface TeamStatsMember {
     runs: number;
     /**
      * 
+     * @type {TeamStatsMemberPerRun}
+     * @memberof TeamStatsMember
+     */
+    perRun: TeamStatsMemberPerRun;
+    /**
+     * 
      * @type {MemberWork}
      * @memberof TeamStatsMember
      */
     work: MemberWork | null;
+    /**
+     * every change between versions that touched it, newest first
+     * @type {Array<MemberChange>}
+     * @memberof TeamStatsMember
+     */
+    changes: Array<MemberChange>;
     /**
      * every analysis that judged it, newest first
      * @type {Array<MemberAssessmentEntry>}
      * @memberof TeamStatsMember
      */
     assessments: Array<MemberAssessmentEntry>;
+}
+/**
+ * how its cost and working time spread over the runs it took part in; null when none was priced or timed
+ * @export
+ * @interface TeamStatsMemberPerRun
+ */
+export interface TeamStatsMemberPerRun {
+    /**
+     * 
+     * @type {FigureSpread}
+     * @memberof TeamStatsMemberPerRun
+     */
+    costUsd: FigureSpread | null;
+    /**
+     * 
+     * @type {FigureSpread}
+     * @memberof TeamStatsMemberPerRun
+     */
+    workedMs: FigureSpread | null;
 }
 /**
  * 
@@ -12596,6 +13090,31 @@ export interface TeamVersionRow {
      * @memberof TeamVersionRow
      */
     figures: VersionFigures;
+}
+/**
+ * 
+ * @export
+ * @interface TeamVersionRunFigures
+ */
+export interface TeamVersionRunFigures {
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamVersionRunFigures
+     */
+    runs: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamVersionRunFigures
+     */
+    costPerRunUsd: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof TeamVersionRunFigures
+     */
+    workedPerRunMs: number | null;
 }
 /**
  * 

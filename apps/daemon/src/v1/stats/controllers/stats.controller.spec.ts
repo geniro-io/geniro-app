@@ -5,6 +5,7 @@ import {
   teamStatsParamsSchema,
   teamVersionsQuerySchema,
 } from '../dto/stats.dto';
+import type { MemberAssessmentsService } from '../services/member-assessments.service';
 import type { StatsService } from '../services/stats.service';
 import type { TeamStatsService } from '../services/team-stats.service';
 import type { TeamVersionsService } from '../services/team-versions.service';
@@ -29,6 +30,7 @@ describe('StatsController', () => {
         { usage } as unknown as StatsService,
         {} as TeamVersionsService,
         {} as TeamStatsService,
+        {} as MemberAssessmentsService,
       ),
       usage,
     };
@@ -65,6 +67,7 @@ describe('StatsController', () => {
         {} as StatsService,
         { read } as unknown as TeamVersionsService,
         {} as TeamStatsService,
+        {} as MemberAssessmentsService,
       );
 
       await expect(route.readTeamVersions({ slug: 'dev-team' })).resolves.toBe(
@@ -99,6 +102,7 @@ describe('StatsController', () => {
         {} as StatsService,
         {} as TeamVersionsService,
         { read } as unknown as TeamStatsService,
+        {} as MemberAssessmentsService,
       );
 
       await expect(route.readTeamStats({ slug: 'dev-team' })).resolves.toBe(
@@ -123,6 +127,7 @@ describe('StatsController', () => {
         {} as StatsService,
         { restore } as unknown as TeamVersionsService,
         {} as TeamStatsService,
+        {} as MemberAssessmentsService,
       );
 
       await expect(

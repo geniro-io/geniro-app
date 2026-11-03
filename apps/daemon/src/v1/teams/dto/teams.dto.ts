@@ -10,6 +10,8 @@ import {
 import { messageImagesSchema } from '../../agents/dto/chat.dto';
 import { TEAM_MEMORY_FATES } from '../../memory/memory.types';
 import {
+  AnalysisJudgeCheckSchema,
+  AnalysisJudgeQuerySchema,
   InstructionSizesWireSchema,
   MemberHealthSchema,
   NodeStateWireSchema,
@@ -213,3 +215,13 @@ export class DeleteTeamQueryDto extends createZodDto(deleteTeamQuerySchema) {}
 export class TeamHealthDto extends createZodDto(TeamHealthSchema) {}
 
 export class MemberHealthDto extends createZodDto(MemberHealthSchema) {}
+
+/** The judge an analysis would run as — see {@link AnalysisJudgeQuerySchema}. */
+export class AnalysisJudgeQueryDto extends createZodDto(
+  AnalysisJudgeQuerySchema,
+) {}
+
+/** Whether that judge shares the members' vendor — see {@link AnalysisJudgeCheckSchema}. */
+export class AnalysisJudgeCheckDto extends createZodDto(
+  AnalysisJudgeCheckSchema,
+) {}

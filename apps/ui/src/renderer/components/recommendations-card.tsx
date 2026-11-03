@@ -2,6 +2,10 @@ import { cva } from 'class-variance-authority';
 import { ArrowRight, Check, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 
+import {
+  AssessmentVerdict,
+  type AssessmentVerdictValue,
+} from './assessment-verdict';
 import { ErrorBanner } from './error-banner';
 import { MemberMarks, type MemberVerdict } from './member-marks';
 import {
@@ -556,6 +560,15 @@ function Hotspots({
   );
 }
 
+/** The user's verdicts on a card's member assessments, and how to set one. */
+export interface MemberVerdictControl {
+  verdicts: Readonly<Record<string, AssessmentVerdictValue | null>>;
+  onChange: (
+    member: string,
+    next: AssessmentVerdictValue | null,
+  ) => Promise<void>;
+}
+
 function MemberAssessments({
   members,
   stats,
@@ -564,6 +577,7 @@ function MemberAssessments({
   locked,
   look,
   folds,
+  verdicts,
   onToggle,
 }: {
   members: readonly MemberAssessmentView[];
@@ -573,6 +587,7 @@ function MemberAssessments({
   locked: boolean;
   look: RecommendationsLook;
   folds: RecommendationsFolds;
+  verdicts: MemberVerdictControl | null;
   onToggle: (id: string) => void;
 }): React.JSX.Element {
   const assessed = new Set(members.map((member) => member.member));
@@ -633,6 +648,12 @@ function MemberAssessments({
                   <EvidenceList evidence={member.evidence} />
                 </div>
               </Disclosure>
+              {verdicts === null ? null : (
+                <AssessmentVerdict
+                  value={verdicts.verdicts[member.member] ?? null}
+                  onChange={(next) => verdicts.onChange(member.member, next)}
+                />
+              )}
             </li>
           );
         })}
@@ -680,6 +701,7 @@ export function RecommendationsCard({
   teamStats = null,
   hotspots = [],
   members = [],
+  memberVerdicts = null,
   team,
   items,
   applied,
@@ -698,6 +720,8 @@ export function RecommendationsCard({
   hotspots?: readonly RecommendationHotspotView[];
   /** Each member as the analysis judged it; a plain chat has none. */
   members?: readonly MemberAssessmentView[];
+  /** The user's verdicts on those marks; absent draws no verdict control. */
+  memberVerdicts?: MemberVerdictControl | null;
   /** The analysed thread is a team; a plain chat gets no Team group. */
   team: boolean;
   items: readonly RecommendationView[];
@@ -836,6 +860,7 @@ export function RecommendationsCard({
           locked={locked}
           look={look}
           folds={foldsInUse}
+          verdicts={memberVerdicts}
           onToggle={toggle}
         />
       )}

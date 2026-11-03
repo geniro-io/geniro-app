@@ -1,3 +1,9 @@
+import type { ChatTotalsWire } from '../../agents/chat.types';
+import {
+  addPolledSpend,
+  addUsage,
+  emptyTotals,
+} from '../../agents/utils/usage-figures';
 import type {
   CallLedgerRow,
   GoalLedgerRow,
@@ -6,15 +12,18 @@ import type {
   MemberAssessmentRow,
   MemberWorkWire,
   StageLedgerRow,
+  TeamStatsMemberWire,
   ThreadLedgerRow,
   ToolCallLedgerRow,
 } from '../stats.types';
+import { isPolledSpend } from './polled-spend';
+import type { TeamStatsUsageRow } from './team-stats-fold';
 
-export interface MemberWorkInput {
+export interface MemberRunsInput {
   /** Every thread row of the team, each marked whether the ledgers watched it. */
   threads: readonly Pick<ThreadLedgerRow, 'runId' | 'metrics'>[];
-  /** Which members took a turn in which run, from the usage ledger. */
-  turns: readonly { runId: string; memberId: string | null }[];
+  /** Every usage row of those runs, a turn no CLI timed carrying geniro's clock. */
+  usage: readonly TeamStatsUsageRow[];
   toolCalls: readonly ToolCallLedgerRow[];
   calls: readonly CallLedgerRow[];
   stages: readonly StageLedgerRow[];
@@ -27,15 +36,11 @@ export interface MemberWorkInput {
   stageOwners: (runId: string, stageId: string) => readonly string[];
 }
 
-export interface MemberWork {
-  /** Every run of the team the member took part in. */
-  runs: number;
-  work: MemberWorkWire | null;
-}
-
-interface Cell {
-  runs: Set<string>;
-  measured: Set<string>;
+/** What one member did in one run. */
+export interface MemberRunCell {
+  /** The metric ledgers watched the run from its start. */
+  measured: boolean;
+  spend: ChatTotalsWire;
   callsAnswered: number;
   callsFailed: number;
   timedAnswers: number;
@@ -43,30 +48,55 @@ interface Cell {
   callsMade: number;
   toolCalls: number;
   toolErrors: number;
-  goals: MemberWorkWire['goals'];
+  goals: Omit<MemberWorkWire['goals'], 'achievedShare'>;
   stagesCompleted: number;
   completionsReopened: number;
 }
 
+/** Member id → run id → what it did there. */
+export type MemberRunCells = ReadonlyMap<
+  string,
+  ReadonlyMap<string, MemberRunCell>
+>;
+
+export interface MemberWork {
+  /** Every run of the team the member took part in. */
+  runs: number;
+  perRun: TeamStatsMemberWire['perRun'];
+  work: MemberWorkWire | null;
+}
+
+/** No call to it failed, no stage it owns was reopened, no goal it recorded ended not achieved. */
+export function isCleanRun(cell: MemberRunCell): boolean {
+  return (
+    cell.callsFailed === 0 &&
+    cell.completionsReopened === 0 &&
+    cell.goals.notAchieved === 0
+  );
+}
+
 /**
- * What each member did for the team, folded over every ledger row of its runs —
- * a deleted run's included. A member whose runs the metric ledgers never
- * watched has no work figures (null), never zeros.
+ * What each member did in each run of the team, from every ledger row of its
+ * runs — a deleted run's included.
  */
-export function foldMemberWork(
-  input: MemberWorkInput,
-): Map<string, MemberWork> {
+export function memberRunCells(input: MemberRunsInput): MemberRunCells {
   const runIds = new Set(input.threads.map((thread) => thread.runId));
   const measured = new Set(
     input.threads
       .filter((thread) => thread.metrics === true)
       .map((thread) => thread.runId),
   );
-  const cells = new Map<string, Cell>();
-  const cellOf = (memberId: string, runId: string): Cell => {
-    const cell = cells.get(memberId) ?? {
-      runs: new Set<string>(),
-      measured: new Set<string>(),
+  const cells = new Map<string, Map<string, MemberRunCell>>();
+  const cellOf = (memberId: string, runId: string): MemberRunCell => {
+    const runs = cells.get(memberId) ?? new Map<string, MemberRunCell>();
+    cells.set(memberId, runs);
+    const existing = runs.get(runId);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const fresh: MemberRunCell = {
+      measured: measured.has(runId),
+      spend: emptyTotals(),
       callsAnswered: 0,
       callsFailed: 0,
       timedAnswers: 0,
@@ -74,30 +104,27 @@ export function foldMemberWork(
       callsMade: 0,
       toolCalls: 0,
       toolErrors: 0,
-      goals: {
-        recorded: 0,
-        achieved: 0,
-        notAchieved: 0,
-        open: 0,
-        dropped: 0,
-        achievedShare: null,
-      },
+      goals: { recorded: 0, achieved: 0, notAchieved: 0, open: 0, dropped: 0 },
       stagesCompleted: 0,
       completionsReopened: 0,
     };
-    cell.runs.add(runId);
-    if (measured.has(runId)) {
-      cell.measured.add(runId);
-    }
-    cells.set(memberId, cell);
-    return cell;
+    runs.set(runId, fresh);
+    return fresh;
   };
   const ours = <T extends { runId: string }>(rows: readonly T[]): T[] =>
     rows.filter((row) => runIds.has(row.runId));
 
-  for (const turn of ours(input.turns)) {
-    if (turn.memberId !== null) {
-      cellOf(turn.memberId, turn.runId);
+  for (const row of ours(input.usage)) {
+    if (row.memberId === null) {
+      continue;
+    }
+    const cell = cellOf(row.memberId, row.runId);
+    if (isPolledSpend(row)) {
+      if ((row.costUsd ?? 0) > 0) {
+        addPolledSpend(cell.spend, row.costUsd ?? 0, 0);
+      }
+    } else {
+      addUsage(cell.spend, row);
     }
   }
   for (const row of ours(input.toolCalls)) {
@@ -162,33 +189,83 @@ export function foldMemberWork(
       }
     }
   }
+  return cells;
+}
 
+function spreadOf(
+  values: readonly number[],
+): { min: number; median: number; max: number } | null {
+  if (values.length === 0) {
+    return null;
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return {
+    min: sorted[0]!,
+    median:
+      sorted.length % 2 === 1
+        ? sorted[middle]!
+        : (sorted[middle - 1]! + sorted[middle]!) / 2,
+    max: sorted[sorted.length - 1]!,
+  };
+}
+
+/**
+ * What each member did for the team over every run it took part in. A
+ * member whose runs the metric ledgers never watched has no work figures
+ * (null), never zeros.
+ */
+export function foldMemberWork(cells: MemberRunCells): Map<string, MemberWork> {
   const folded = new Map<string, MemberWork>();
-  for (const [memberId, cell] of cells) {
-    const counted = cell.goals.recorded - cell.goals.dropped;
+  for (const [memberId, runs] of cells) {
+    const all = [...runs.values()];
+    const measured = all.filter((cell) => cell.measured);
+    const sum = (pick: (cell: MemberRunCell) => number): number =>
+      measured.reduce((total, cell) => total + pick(cell), 0);
+    const goals = {
+      recorded: sum((cell) => cell.goals.recorded),
+      achieved: sum((cell) => cell.goals.achieved),
+      notAchieved: sum((cell) => cell.goals.notAchieved),
+      open: sum((cell) => cell.goals.open),
+      dropped: sum((cell) => cell.goals.dropped),
+    };
+    const counted = goals.recorded - goals.dropped;
+    const timedAnswers = sum((cell) => cell.timedAnswers);
     folded.set(memberId, {
-      runs: cell.runs.size,
+      runs: runs.size,
+      perRun: {
+        costUsd: spreadOf(
+          all.flatMap((cell) =>
+            cell.spend.costUsd === null ? [] : [cell.spend.costUsd],
+          ),
+        ),
+        workedMs: spreadOf(
+          all.flatMap((cell) =>
+            cell.spend.workedMs === null ? [] : [cell.spend.workedMs],
+          ),
+        ),
+      },
       work:
-        cell.measured.size === 0
+        measured.length === 0
           ? null
           : {
-              measuredRuns: cell.measured.size,
-              callsAnswered: cell.callsAnswered,
-              callsFailed: cell.callsFailed,
+              measuredRuns: measured.length,
+              callsAnswered: sum((cell) => cell.callsAnswered),
+              callsFailed: sum((cell) => cell.callsFailed),
               avgAnswerMs:
-                cell.timedAnswers === 0
+                timedAnswers === 0
                   ? null
-                  : Math.round(cell.answerMs / cell.timedAnswers),
-              callsMade: cell.callsMade,
-              toolCalls: cell.toolCalls,
-              toolErrors: cell.toolErrors,
+                  : Math.round(sum((cell) => cell.answerMs) / timedAnswers),
+              callsMade: sum((cell) => cell.callsMade),
+              toolCalls: sum((cell) => cell.toolCalls),
+              toolErrors: sum((cell) => cell.toolErrors),
               goals: {
-                ...cell.goals,
-                achievedShare:
-                  counted === 0 ? null : cell.goals.achieved / counted,
+                ...goals,
+                achievedShare: counted === 0 ? null : goals.achieved / counted,
               },
-              stagesCompleted: cell.stagesCompleted,
-              completionsReopened: cell.completionsReopened,
+              cleanRuns: measured.filter(isCleanRun).length,
+              stagesCompleted: sum((cell) => cell.stagesCompleted),
+              completionsReopened: sum((cell) => cell.completionsReopened),
             },
     });
   }
@@ -210,6 +287,7 @@ export function assessmentsByMember(
   versionsOf: (
     runIds: readonly string[],
   ) => MemberAssessmentEntryWire['versions'],
+  sameVendorOf: (row: MemberAssessmentRow) => boolean | null,
 ): Map<string, MemberAssessmentEntryWire[]> {
   const byMember = new Map<string, MemberAssessmentEntryWire[]>();
   for (const row of [...rows].reverse()) {
@@ -237,6 +315,15 @@ export function assessmentsByMember(
             ? null
             : statusOf(row.chatRunId, row.cardSeq, item.id),
       })),
+      judge: { ...row.judge, sameVendor: sameVendorOf(row) },
+      userVerdict:
+        row.userVerdict === null
+          ? null
+          : {
+              verdict: row.userVerdict.verdict,
+              note: row.userVerdict.note,
+              at: row.userVerdict.at.toISOString(),
+            },
     });
     byMember.set(row.memberId, list);
   }

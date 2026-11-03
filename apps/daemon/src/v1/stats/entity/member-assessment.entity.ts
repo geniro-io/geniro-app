@@ -11,7 +11,10 @@ import {
 import { TimestampsEntity } from '@packages/mikroorm';
 
 import type { MemberVerdict } from '../../agents/chat.types';
-import type { MemberAssessmentChat } from '../stats.types';
+import type {
+  MemberAssessmentChat,
+  MemberAssessmentUserVerdict,
+} from '../stats.types';
 
 /**
  * One member of a library team as an analysis judged it — its usefulness and
@@ -80,4 +83,21 @@ export class MemberAssessmentRecord extends TimestampsEntity {
   /** The card items that carry the verdict out, `[{id, title}]` as JSON. */
   @Property({ type: 'text' })
   items!: string;
+
+  /** The CLI and model of the chat that judged, as that chat ran when the card was filed. */
+  @Property({ type: 'string', nullable: true })
+  judgeAgent: string | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  judgeModel: string | null = null;
+
+  /** The user's own verdict on the marks — `agree` or `disagree` — with its note; null until given. */
+  @Property({ type: 'string', nullable: true })
+  userVerdict: MemberAssessmentUserVerdict | null = null;
+
+  @Property({ type: 'text', nullable: true })
+  userNote: string | null = null;
+
+  @Property({ type: DateTimeType, nullable: true })
+  userVerdictAt: Date | null = null;
 }

@@ -15,16 +15,23 @@
 
 import * as runtime from '../runtime';
 import type {
+  CardAssessmentVerdictsDto,
   LineBaselineDto,
   LineBaselineRequestDto,
   LineSnapshotAckDto,
   LineSnapshotDto,
+  MemberAssessmentVerdictDto,
   RestoreTeamVersionDto,
   TeamStatsDto,
   TeamVersionRestoredDto,
   TeamVersionsDto,
   UsageStatsDto,
 } from '../models/index';
+
+export interface StatsApiReadCardAssessmentVerdictsRequest {
+    chatRunId: string;
+    cardSeq: number;
+}
 
 export interface StatsApiReadTeamStatsRequest {
     slug: string;
@@ -51,10 +58,67 @@ export interface StatsApiRestoreTeamVersionRequest {
     restoreTeamVersionDto: RestoreTeamVersionDto;
 }
 
+export interface StatsApiSetMemberAssessmentVerdictRequest {
+    memberAssessmentVerdictDto: MemberAssessmentVerdictDto;
+}
+
 /**
  * 
  */
 export class StatsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async readCardAssessmentVerdictsRaw(requestParameters: StatsApiReadCardAssessmentVerdictsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<CardAssessmentVerdictsDto>> {
+        if (requestParameters['chatRunId'] == null) {
+            throw new runtime.RequiredError(
+                'chatRunId',
+                'Required parameter "chatRunId" was null or undefined when calling readCardAssessmentVerdicts().'
+            );
+        }
+
+        if (requestParameters['cardSeq'] == null) {
+            throw new runtime.RequiredError(
+                'cardSeq',
+                'Required parameter "cardSeq" was null or undefined when calling readCardAssessmentVerdicts().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/stats/assessments/{chatRunId}/{cardSeq}`;
+        urlPath = urlPath.replace(`{${"chatRunId"}}`, encodeURIComponent(String(requestParameters['chatRunId'])));
+        urlPath = urlPath.replace(`{${"cardSeq"}}`, encodeURIComponent(String(requestParameters['cardSeq'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readCardAssessmentVerdicts(requestParameters: StatsApiReadCardAssessmentVerdictsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CardAssessmentVerdictsDto> {
+        const response = await this.readCardAssessmentVerdictsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -332,6 +396,53 @@ export class StatsApi extends runtime.BaseAPI {
      */
     async restoreTeamVersion(requestParameters: StatsApiRestoreTeamVersionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamVersionRestoredDto> {
         const response = await this.restoreTeamVersionRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async setMemberAssessmentVerdictRaw(requestParameters: StatsApiSetMemberAssessmentVerdictRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<CardAssessmentVerdictsDto>> {
+        if (requestParameters['memberAssessmentVerdictDto'] == null) {
+            throw new runtime.RequiredError(
+                'memberAssessmentVerdictDto',
+                'Required parameter "memberAssessmentVerdictDto" was null or undefined when calling setMemberAssessmentVerdict().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/stats/assessments/verdict`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['memberAssessmentVerdictDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async setMemberAssessmentVerdict(requestParameters: StatsApiSetMemberAssessmentVerdictRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CardAssessmentVerdictsDto> {
+        const response = await this.setMemberAssessmentVerdictRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

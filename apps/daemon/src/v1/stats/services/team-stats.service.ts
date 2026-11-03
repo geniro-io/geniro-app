@@ -6,6 +6,8 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
+import { TeamChangeLogService } from '../../teams/services/team-change-log.service';
+import type { Team } from '../../teams/teams.types';
 import { teamOfCanonical } from '../../teams/utils/team-version';
 import { MemberAssessmentDao } from '../dao/member-assessment.dao';
 import { MetricLedgerDao } from '../dao/metric-ledger.dao';
@@ -16,15 +18,27 @@ import { UsageEventDao } from '../dao/usage-event.dao';
 import type {
   HistoryRecommendationStatus,
   MemberAssessmentEntryWire,
+  MemberAssessmentRow,
   TeamStatsWire,
   TeamVersionsWire,
   ThreadLedgerRow,
 } from '../stats.types';
-import { assessmentsByMember, foldMemberWork } from '../utils/member-work-fold';
+import { foldMemberChanges } from '../utils/member-change-fold';
+import {
+  assessmentsByMember,
+  foldMemberWork,
+  memberRunCells,
+} from '../utils/member-work-fold';
 import { recommendationStatusOf } from '../utils/team-history-fold';
-import { foldTeamStats } from '../utils/team-stats-fold';
+import { foldTeamStats, withWallTimes } from '../utils/team-stats-fold';
+import { totalsByRun } from '../utils/team-versions-fold';
 import { foldThreadMetrics } from '../utils/thread-metrics-fold';
 import { TeamVersionsService } from './team-versions.service';
+
+/** A team's recorded versions as numbered by the versions table. */
+interface VersionNumbers {
+  ref: (version: string) => { number: number | null; current: boolean };
+}
 
 /**
  * One team's runs, spend, outcomes, members and thread metrics, read from the ledgers alone so
@@ -48,12 +62,16 @@ export class TeamStatsService {
     private readonly runDao: RunDao,
     private readonly versions: TeamVersionsService,
     private readonly versionDao: TeamVersionDao,
+    private readonly changeLog: TeamChangeLogService,
   ) {}
 
   async read(slug: string): Promise<TeamStatsWire> {
     const em = this.em.fork();
     const threads = await this.activityDao.threadRowsBySlug(slug, em);
     const adapters = this.adapters.all();
+    const polledKinds = [...adapters.keys()].filter((kind) =>
+      pollsSpendFor(adapters, kind),
+    );
     const scope = { teamSlug: slug };
     const [goals, threadOutcomes, toolCalls, stages, calls] = await Promise.all(
       [
@@ -66,28 +84,54 @@ export class TeamStatsService {
     );
     const runIds = threads.map((thread) => thread.runId);
     const usage = await this.usageDao.rowsByRuns(runIds, em);
+    const wallTurns = await this.wallTurns.turnsOfRuns(runIds, em);
+    const timed = withWallTimes(usage, wallTurns);
+    const teams = await this.teamsOf(slug, em);
+    const numbers = await this.versionNumbers(slug);
+    const cells = memberRunCells({
+      threads,
+      usage: timed,
+      toolCalls,
+      calls,
+      stages,
+      goals,
+      stageOwners: stageOwnersOf(teams, threads),
+    });
+    const rows = await this.assessments.rowsOf(slug, em);
     const figures = foldTeamStats({
       slug,
       threads,
       usage,
-      wallTurns: await this.wallTurns.turnsOfRuns(runIds, em),
-      polledKinds: [...adapters.keys()].filter((kind) =>
-        pollsSpendFor(adapters, kind),
-      ),
+      wallTurns,
+      polledKinds,
       outcomes: await this.activityDao.runOutcomes({ teamSlug: slug }, em),
-      memberWork: foldMemberWork({
+      memberWork: foldMemberWork(cells),
+      changes: foldMemberChanges({
         threads,
-        turns: usage,
-        toolCalls,
-        calls,
-        stages,
-        goals,
-        stageOwners: await this.stageOwnersOf(slug, threads, em),
+        cells,
+        teamSpend: totalsByRun(timed, polledKinds),
+        teams,
+        versionRef: numbers.ref,
+        changeLog: await this.changeLog.entriesOf(slug),
       }),
-      assessments: await this.assessmentsOf(slug, threads, em),
+      assessments: await this.assessmentsOf(
+        slug,
+        rows,
+        threads,
+        teams,
+        numbers,
+        em,
+      ),
     });
     return {
       ...figures,
+      assessmentVerdicts: {
+        assessments: rows.length,
+        agreed: rows.filter((row) => row.userVerdict?.verdict === 'agree')
+          .length,
+        disagreed: rows.filter((row) => row.userVerdict?.verdict === 'disagree')
+          .length,
+      },
       metrics: foldThreadMetrics({
         runs: threads,
         goals,
@@ -99,42 +143,45 @@ export class TeamStatsService {
     };
   }
 
-  /** Who is responsible for each stage in the team version each run ran. */
-  private async stageOwnersOf(
+  /** Every recorded version's team, by version. */
+  private async teamsOf(
     slug: string,
-    threads: readonly ThreadLedgerRow[],
     em: EntityManager,
-  ): Promise<(runId: string, stageId: string) => readonly string[]> {
-    const ownersByVersion = new Map<string, Map<string, string[]>>();
+  ): Promise<Map<string, Team>> {
+    const teams = new Map<string, Team>();
     for (const recorded of await this.versionDao.graphsOf(slug, em)) {
       const team = teamOfCanonical(recorded.graph);
-      ownersByVersion.set(
-        recorded.version,
-        new Map(
-          (team?.stages ?? []).map((stage) => [
-            stage.id,
-            [...new Set(stage.responsible ?? [])],
-          ]),
-        ),
-      );
+      if (team !== null) {
+        teams.set(recorded.version, team);
+      }
     }
-    const versionOfRun = new Map(
-      threads.map((thread) => [thread.runId, thread.version]),
-    );
-    return (runId, stageId) => {
-      const version = versionOfRun.get(runId);
-      return version == null
-        ? []
-        : (ownersByVersion.get(version)?.get(stageId) ?? []);
+    return teams;
+  }
+
+  private async versionNumbers(slug: string): Promise<VersionNumbers> {
+    const table = await this.versionTable(slug);
+    const numbers = new Map<string, number>();
+    for (const row of table?.versions ?? []) {
+      if (row.version !== null && row.ordinal !== null) {
+        numbers.set(row.version, row.ordinal);
+      }
+    }
+    return {
+      ref: (version) => ({
+        number: numbers.get(version) ?? null,
+        current: version === table?.currentVersion,
+      }),
     };
   }
 
   private async assessmentsOf(
     slug: string,
+    rows: readonly MemberAssessmentRow[],
     threads: readonly ThreadLedgerRow[],
+    teams: ReadonlyMap<string, Team>,
+    numbers: VersionNumbers,
     em: EntityManager,
   ): Promise<Map<string, MemberAssessmentEntryWire[]>> {
-    const rows = await this.assessments.rowsOf(slug, em);
     if (rows.length === 0) {
       return new Map();
     }
@@ -172,46 +219,88 @@ export class TeamStatsService {
             appliedCards.has(cardKey(chatRunId, cardSeq)),
           );
     };
-    const table = await this.versionTable(slug);
-    const numbers = new Map<string, number>();
-    for (const row of table?.versions ?? []) {
-      if (row.version !== null && row.ordinal !== null) {
-        numbers.set(row.version, row.ordinal);
-      }
-    }
-    const versionOfRun = new Map(
-      threads.map((thread) => [thread.runId, thread.version]),
-    );
-    return assessmentsByMember(rows, statusOf, (runIds) =>
+    const threadOf = new Map(threads.map((thread) => [thread.runId, thread]));
+    const versionsOf = (runIds: readonly string[]) =>
       [
         ...new Set(
           runIds.flatMap((runId) => {
-            const version = versionOfRun.get(runId);
+            const version = threadOf.get(runId)?.version;
             return version == null ? [] : [version];
           }),
         ),
       ]
-        .map((version) => ({
-          number: numbers.get(version) ?? null,
-          current: version === table?.currentVersion,
-        }))
+        .map(numbers.ref)
         .sort(
           (a, b) =>
             (a.number ?? Number.MAX_SAFE_INTEGER) -
             (b.number ?? Number.MAX_SAFE_INTEGER),
-        ),
-    );
+        );
+    const adapters = [...this.adapters.all()];
+    const vendorOf = (agent: string, model: string | null): string | null =>
+      adapters.find(([kind]) => kind === agent)?.[1].modelVendorOf(model) ??
+      null;
+    const sameVendorOf = (row: MemberAssessmentRow): boolean | null => {
+      const newest = row.runIds
+        .flatMap((runId) => {
+          const thread = threadOf.get(runId);
+          return thread === undefined || thread.version === null
+            ? []
+            : [thread];
+        })
+        .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())[0];
+      const member = (
+        newest?.version == null ? undefined : teams.get(newest.version)
+      )?.members.find((entry) => entry.id === row.memberId);
+      const judge =
+        row.judge.agent === null
+          ? null
+          : vendorOf(row.judge.agent, row.judge.model);
+      const own =
+        member === undefined
+          ? null
+          : vendorOf(member.agent, member.model ?? null);
+      return judge === null || own === null ? null : judge === own;
+    };
+    return assessmentsByMember(rows, statusOf, versionsOf, sameVendorOf);
   }
 
-  /** The versions table, or null when it cannot be read — assessments are then named without a number. */
+  /** The versions table, or null when it cannot be read — versions are then named without a number. */
   private async versionTable(slug: string): Promise<TeamVersionsWire | null> {
     try {
       return await this.versions.read(slug);
     } catch (err) {
       this.logger.warn(
-        `team ${slug}'s versions could not be read for its member assessments: ${err instanceof Error ? err.message : String(err)}`,
+        `team ${slug}'s versions could not be read for its members: ${err instanceof Error ? err.message : String(err)}`,
       );
       return null;
     }
   }
+}
+
+/** Who is responsible for each stage in the team version each run ran. */
+function stageOwnersOf(
+  teams: ReadonlyMap<string, Team>,
+  threads: readonly ThreadLedgerRow[],
+): (runId: string, stageId: string) => readonly string[] {
+  const ownersByVersion = new Map<string, Map<string, string[]>>();
+  for (const [version, team] of teams) {
+    ownersByVersion.set(
+      version,
+      new Map(
+        (team.stages ?? []).map((stage) => [
+          stage.id,
+          [...new Set(stage.responsible ?? [])],
+        ]),
+      ),
+    );
+  }
+  const versionOfRun = new Map(
+    threads.map((thread) => [thread.runId, thread.version]),
+  );
+  return (runId, stageId) => {
+    const version = versionOfRun.get(runId);
+    return version == null
+      ? []
+      : (ownersByVersion.get(version)?.get(stageId) ?? []);
+  };
 }

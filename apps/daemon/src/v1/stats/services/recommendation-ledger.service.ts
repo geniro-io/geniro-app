@@ -131,7 +131,12 @@ export class RecommendationLedgerService implements OnModuleInit {
   private async sourceOf(
     run: Pick<
       Run,
-      'id' | 'analysisTeamSlug' | 'editsTeamSlug' | 'analysisSourceRunId'
+      | 'id'
+      | 'analysisTeamSlug'
+      | 'editsTeamSlug'
+      | 'analysisSourceRunId'
+      | 'agentKind'
+      | 'model'
     >,
     em: EntityManager,
   ): Promise<MemberAssessmentSource | null> {

@@ -8,6 +8,7 @@ import {
 import type { UsageEvent } from '../entity/usage-event.entity';
 import type {
   MemberAssessmentEntryWire,
+  MemberChangeWire,
   RunOutcomeLedgerRow,
   TeamStatsDayWire,
   TeamStatsMemberWire,
@@ -42,6 +43,21 @@ export interface TeamStatsInput {
   memberWork?: ReadonlyMap<string, MemberWork>;
   /** Each member's assessments, newest first (`assessmentsByMember`). */
   assessments?: ReadonlyMap<string, readonly MemberAssessmentEntryWire[]>;
+  /** Each member's changes between versions, newest first (`foldMemberChanges`). */
+  changes?: ReadonlyMap<string, readonly MemberChangeWire[]>;
+}
+
+/** Usage rows with geniro's clock in place of a missing CLI time, keyed by `wallTurnKey(runId, seq)`. */
+export function withWallTimes<Row extends TeamStatsUsageRow>(
+  usage: readonly Row[],
+  wallTurns: ReadonlyMap<string, number> | undefined,
+): Row[] {
+  return usage.map((row) => {
+    const wall = wallTurns?.get(wallTurnKey(row.runId, row.seq));
+    return wall === undefined || row.durationMs !== null || isPolledSpend(row)
+      ? row
+      : { ...row, durationMs: wall };
+  });
 }
 
 interface DayCell {
@@ -60,7 +76,7 @@ interface MemberCell {
 /** One team's statistics, folded over every row its runs left in the ledgers. */
 export function foldTeamStats(
   input: TeamStatsInput,
-): Omit<TeamStatsWire, 'metrics'> {
+): Omit<TeamStatsWire, 'metrics' | 'assessmentVerdicts'> {
   let measuredWorkedMs = 0;
   const measuredOf = new Map<TeamStatsUsageRow, number>();
   const usage = input.usage.map((row) => {
@@ -148,6 +164,7 @@ export function foldTeamStats(
   for (const memberId of [
     ...(input.memberWork?.keys() ?? []),
     ...(input.assessments?.keys() ?? []),
+    ...(input.changes?.keys() ?? []),
   ]) {
     memberOf(memberId);
   }
@@ -194,7 +211,12 @@ export function foldTeamStats(
         workedMs: cell.spend.workedMs,
         measuredWorkedMs: cell.measuredMs,
         runs: input.memberWork?.get(memberId)?.runs ?? 0,
+        perRun: input.memberWork?.get(memberId)?.perRun ?? {
+          costUsd: null,
+          workedMs: null,
+        },
         work: input.memberWork?.get(memberId)?.work ?? null,
+        changes: [...(input.changes?.get(memberId) ?? [])],
         assessments: [...(input.assessments?.get(memberId) ?? [])],
       }))
       .sort(

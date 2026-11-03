@@ -83,9 +83,14 @@ describe('GoalsList', () => {
     );
     const rows = [...container.querySelectorAll('[data-goal-id]')];
     expect(rows).toHaveLength(2);
-    expect(rows[0]?.textContent).toContain('Achieved: saved report.csv');
-    expect(rows[0]?.textContent).toContain('closed by Developer');
-    expect(rows[1]?.textContent).toContain('Dropped: user said skip');
+    const part = (row: Element | undefined, slot: string): string | null =>
+      row?.querySelector(`[data-slot="${slot}"]`)?.textContent ?? null;
+    expect(part(rows[0], 'goal-meta')).toBe(
+      'Achieved·Inferred·closed by Developer',
+    );
+    expect(part(rows[0], 'goal-evidence')).toBe('saved report.csv');
+    expect(part(rows[1], 'goal-meta')).toBe('Dropped·Inferred');
+    expect(part(rows[1], 'goal-evidence')).toBe('user said skip');
     expect(container.querySelector('input[aria-label="New goal"]')).toBeNull();
   });
 

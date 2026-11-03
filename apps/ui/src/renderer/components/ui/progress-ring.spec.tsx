@@ -62,4 +62,15 @@ describe('ProgressRing', () => {
     const bare = render(<ProgressRing fraction={0.2} />);
     expect(bare.querySelector('svg')!.getAttribute('aria-hidden')).toBe('true');
   });
+
+  it('draws an empty ring with no cap, so nothing reads as progress at zero', () => {
+    const cap = (el: HTMLElement): string | null =>
+      el.querySelectorAll('circle')[1]!.getAttribute('stroke-linecap');
+    expect(cap(render(<ProgressRing fraction={0} label="none" />))).toBe(
+      'butt',
+    );
+    expect(cap(render(<ProgressRing fraction={0.3} label="some" />))).toBe(
+      'round',
+    );
+  });
 });

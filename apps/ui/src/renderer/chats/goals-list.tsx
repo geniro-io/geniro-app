@@ -1,5 +1,5 @@
 import { cva } from 'class-variance-authority';
-import { Check, Circle, CircleSlash, Pencil, RotateCcw, X } from 'lucide-react';
+import { Check, CircleSlash, Pencil, Plus, RotateCcw, X } from 'lucide-react';
 import { useState } from 'react';
 
 import type {
@@ -41,19 +41,55 @@ export const OUTCOME_LABEL: Record<ThreadOutcome['kind'], string> = {
   abandoned: 'Abandoned',
 };
 
-const statusMark = cva('mt-0.5 size-3.5 shrink-0', {
-  variants: {
-    status: {
-      open: 'text-muted-foreground',
-      achieved: 'text-success',
-      not_achieved: 'text-destructive',
-      dropped: 'text-muted-foreground',
+const SOURCE_LABEL: Record<RunGoal['source'], string> = {
+  user: 'Requested',
+  agent: 'Inferred',
+};
+
+const statusChip = cva(
+  'mt-px flex size-6 shrink-0 items-center justify-center rounded-full [&_svg]:size-3.5',
+  {
+    variants: {
+      status: {
+        open: 'border-[1.5px] border-dashed border-border-strong',
+        achieved: 'bg-success/10 text-success',
+        not_achieved: 'bg-destructive/10 text-destructive',
+        dropped: 'bg-muted/60 text-muted-foreground',
+      },
     },
   },
-});
+);
+
+const goalRow = cva(
+  'group flex items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors',
+  {
+    variants: {
+      status: {
+        open: 'border-border bg-card shadow-panel-sm',
+        achieved: 'border-border bg-card shadow-panel-sm',
+        not_achieved: 'border-border bg-card shadow-panel-sm',
+        dropped: 'border-dashed border-border bg-transparent',
+      },
+    },
+  },
+);
+
+const evidenceBlock = cva(
+  'mt-2 rounded-md border-l-2 bg-muted/40 px-2.5 py-1.5 text-xs leading-relaxed break-words text-muted-foreground',
+  {
+    variants: {
+      status: {
+        open: 'border-l-border',
+        achieved: 'border-l-success/60',
+        not_achieved: 'border-l-destructive/60',
+        dropped: 'border-l-border',
+      },
+    },
+  },
+);
 
 const STATUS_ICON = {
-  open: Circle,
+  open: null,
   achieved: Check,
   not_achieved: X,
   dropped: CircleSlash,
@@ -75,6 +111,26 @@ export function goalsFigure(goals: readonly RunGoal[]): string | null {
   }
   const achieved = counted.filter((goal) => goal.status === 'achieved').length;
   return `${achieved}/${counted.length}`;
+}
+
+const SUMMARY_ORDER: readonly RunGoal['status'][] = [
+  'open',
+  'achieved',
+  'not_achieved',
+  'dropped',
+];
+
+/** The goals as one line of counts by status, `1 open · 2 achieved`. */
+export function goalsSummary(goals: readonly RunGoal[]): string {
+  if (goals.length === 0) {
+    return 'No goals yet';
+  }
+  return SUMMARY_ORDER.flatMap((status) => {
+    const count = goals.filter((goal) => goal.status === status).length;
+    return count === 0
+      ? []
+      : [`${count} ${GOAL_STATUS_LABEL[status].toLowerCase()}`];
+  }).join(' · ');
 }
 
 /**
@@ -117,12 +173,7 @@ export function GoalsList({
 
   return (
     <div data-slot="goals-list" className="flex flex-col gap-2">
-      {goals.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          No goals yet. The agent records them at the start of a task, or add
-          one here.
-        </p>
-      ) : (
+      {goals.length === 0 ? null : (
         <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
           {goals.map((goal) => {
             const Icon = STATUS_ICON[goal.status];
@@ -130,15 +181,18 @@ export function GoalsList({
               <li
                 key={goal.id}
                 data-goal-id={goal.id}
-                className="group flex items-start gap-2 text-sm">
-                <Icon
+                data-status={goal.status}
+                className={goalRow({ status: goal.status })}>
+                <span
+                  role="img"
                   aria-label={GOAL_STATUS_LABEL[goal.status]}
-                  className={statusMark({ status: goal.status })}
-                />
-                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  className={statusChip({ status: goal.status })}>
+                  {Icon === null ? null : <Icon aria-hidden="true" />}
+                </span>
+                <div className="flex min-w-0 flex-1 flex-col">
                   {editing?.id === goal.id ? (
                     <form
-                      className="flex gap-1"
+                      className="flex gap-1.5"
                       onSubmit={(event) => {
                         event.preventDefault();
                         const text = editing.text.trim();
@@ -157,7 +211,7 @@ export function GoalsList({
                         aria-label={`Edit ${goal.id}`}
                         value={editing.text}
                         autoFocus
-                        className="h-7"
+                        className="h-8"
                         onChange={(event) =>
                           setEditing({ id: goal.id, text: event.target.value })
                         }
@@ -165,67 +219,94 @@ export function GoalsList({
                       <Button type="submit" size="sm" disabled={busy}>
                         Save
                       </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setEditing(null)}>
+                        Cancel
+                      </Button>
                     </form>
                   ) : (
                     <span
+                      data-slot="goal-text"
                       className={cn(
-                        'break-words',
+                        'text-sm leading-snug break-words text-foreground',
                         goal.status === 'dropped' &&
                           'text-muted-foreground line-through',
                       )}>
                       {goal.text}
                     </span>
                   )}
+                  <span
+                    data-slot="goal-meta"
+                    className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
+                    <span>{GOAL_STATUS_LABEL[goal.status]}</span>
+                    <span aria-hidden="true">·</span>
+                    <span
+                      title={
+                        goal.source === 'user'
+                          ? 'The user asked for it in so many words'
+                          : 'The agent read it from the task'
+                      }>
+                      {SOURCE_LABEL[goal.source]}
+                    </span>
+                    {goal.memberId !== null && nameOf !== undefined ? (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span>
+                          {goal.status === 'open' ? 'set' : 'closed'} by{' '}
+                          {nameOf(goal.memberId)}
+                        </span>
+                      </>
+                    ) : null}
+                  </span>
                   {goal.evidence === null ? null : (
-                    <span className="break-words text-xs text-muted-foreground">
-                      {GOAL_STATUS_LABEL[goal.status]}: {goal.evidence}
-                    </span>
+                    <p
+                      data-slot="goal-evidence"
+                      className={evidenceBlock({ status: goal.status })}>
+                      {goal.evidence}
+                    </p>
                   )}
-                  {goal.memberId !== null && nameOf !== undefined ? (
-                    <span className="text-[11px] text-muted-foreground">
-                      {goal.status === 'open' ? 'set' : 'closed'} by{' '}
-                      {nameOf(goal.memberId)}
-                    </span>
-                  ) : null}
                 </div>
                 {actions === undefined || editing?.id === goal.id ? null : (
-                  <span className="flex shrink-0 gap-0.5 opacity-60 group-hover:opacity-100 focus-within:opacity-100">
+                  <span className="-mt-0.5 -mr-1 flex shrink-0 gap-0.5 opacity-50 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
-                      className="size-6"
+                      className="size-7"
                       aria-label={`Edit ${goal.id}`}
                       title="Edit"
                       disabled={busy}
                       onClick={() =>
                         setEditing({ id: goal.id, text: goal.text })
                       }>
-                      <Pencil aria-hidden="true" className="size-3" />
+                      <Pencil aria-hidden="true" className="size-3.5" />
                     </Button>
                     {goal.status === 'open' ? (
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="size-6"
+                        className="size-7"
                         aria-label={`Close ${goal.id}…`}
                         title="Close with evidence…"
                         disabled={busy}
                         onClick={() => setClosing(goal)}>
-                        <Check aria-hidden="true" className="size-3" />
+                        <Check aria-hidden="true" className="size-3.5" />
                       </Button>
                     ) : (
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="size-6"
+                        className="size-7"
                         aria-label={`Reopen ${goal.id}`}
                         title="Reopen"
                         disabled={busy}
                         onClick={() => void run(() => actions.reopen(goal.id))}>
-                        <RotateCcw aria-hidden="true" className="size-3" />
+                        <RotateCcw aria-hidden="true" className="size-3.5" />
                       </Button>
                     )}
                   </span>
@@ -237,7 +318,8 @@ export function GoalsList({
       )}
       {actions === undefined ? null : (
         <form
-          className="flex gap-1"
+          data-slot="goal-add"
+          className="flex items-center gap-2 rounded-lg border border-dashed border-border-strong py-1 pr-1 pl-3 transition-[color,box-shadow,border-color] focus-within:border-solid focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50"
           onSubmit={(event) => {
             event.preventDefault();
             const text = draft.trim();
@@ -250,17 +332,21 @@ export function GoalsList({
               }
             });
           }}>
+          <Plus
+            aria-hidden="true"
+            className="size-4 shrink-0 text-muted-foreground"
+          />
           <Input
             aria-label="New goal"
-            placeholder="Add a goal…"
+            placeholder="Add a goal — one outcome you can check"
             value={draft}
-            className="h-7"
+            className="h-8 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
             onChange={(event) => setDraft(event.target.value)}
           />
           <Button
             type="submit"
             size="sm"
-            variant="outline"
+            variant={draft.trim().length === 0 ? 'ghost' : 'default'}
             disabled={busy || draft.trim().length === 0}>
             Add
           </Button>
@@ -321,7 +407,7 @@ function CloseGoalDialog({
             onSubmit(status, evidence.trim());
           }
         }}>
-        <p className="text-sm">{goal?.text}</p>
+        <p className="rounded-md bg-muted/40 px-3 py-2 text-sm">{goal?.text}</p>
         <SegmentedControl
           ariaLabel="How the goal ended"
           options={CLOSING_OPTIONS}

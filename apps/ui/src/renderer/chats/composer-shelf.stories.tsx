@@ -6,7 +6,6 @@ import type { AgentThread } from './agent-activity';
 import {
   ComposerShelf,
   FolderChangesChip,
-  GoalsChip,
   LeadChip,
   type OpenCallChipRow,
   RunningCallChips,
@@ -18,8 +17,9 @@ import {
   ThreadProjectChip,
   ThreadPullRequestChips,
 } from './composer-shelf';
+import type { RunGoals } from './goals-section';
+import { ProgressChip } from './progress-dialog';
 import type { ShellRun } from './shell-activity';
-import { StageProgressChip } from './stage-progress-chip';
 import type { AgentTaskRow } from './task-payload';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 
@@ -193,6 +193,38 @@ const stages: StageProgress = {
   stages: [{ id: 'review', title: 'Review', status: 'current', next: [] }],
 };
 
+const goals: RunGoals = {
+  goals: [
+    {
+      id: 'g1',
+      text: 'The export button saves a .csv',
+      source: 'user',
+      status: 'achieved',
+      evidence: 'Saved report.csv with 12 rows',
+      memberId: null,
+      createdAt: '2026-11-01T10:00:00.000Z',
+      closedAt: '2026-11-01T10:20:00.000Z',
+    },
+    {
+      id: 'g2',
+      text: 'The failing spec passes',
+      source: 'agent',
+      status: 'open',
+      evidence: null,
+      memberId: null,
+      createdAt: '2026-11-01T10:00:00.000Z',
+      closedAt: null,
+    },
+  ],
+  outcome: null,
+  actions: {
+    add: async () => ({}),
+    edit: async () => ({}),
+    close: async () => ({}),
+    reopen: async () => ({}),
+  },
+};
+
 const calls: OpenCallChipRow[] = [
   {
     blockId: 'b1',
@@ -246,33 +278,9 @@ export const OnAPhone: Story = {
           status={
             <>
               <RunningCallChips calls={calls} onReveal={() => {}} />
-              <GoalsChip
-                goals={[
-                  {
-                    id: 'g1',
-                    text: 'The export button saves a .csv',
-                    source: 'user',
-                    status: 'achieved',
-                    evidence: 'Saved report.csv with 12 rows',
-                    memberId: null,
-                    createdAt: '2026-11-01T10:00:00.000Z',
-                    closedAt: '2026-11-01T10:20:00.000Z',
-                  },
-                  {
-                    id: 'g2',
-                    text: 'The failing spec passes',
-                    source: 'agent',
-                    status: 'open',
-                    evidence: null,
-                    memberId: null,
-                    createdAt: '2026-11-01T10:00:00.000Z',
-                    closedAt: null,
-                  },
-                ]}
-              />
               <TeamNotesChip {...args} notes={manyNotes} />
               <TaskListChip done={5} total={5} tasks={tasks} live={false} />
-              <StageProgressChip progress={stages} />
+              <ProgressChip goals={goals} stages={stages} onOpen={() => {}} />
             </>
           }>
           <ThreadPullRequestChips results={[pullRequest]} />
@@ -299,7 +307,7 @@ export const OnTheShelf: Story = {
             <RunningSubagentChips running={1} threads={threads} />
             <TeamNotesChip {...args} />
             <TaskListChip done={1} total={3} tasks={tasks} live={true} />
-            <StageProgressChip progress={stages} />
+            <ProgressChip goals={goals} stages={stages} onOpen={() => {}} />
           </>
         }>
         <FolderChangesChip
@@ -319,7 +327,7 @@ export const RelayLeadOnTheShelf: Story = {
         status={
           <>
             <TeamNotesChip {...args} />
-            <StageProgressChip progress={stages} />
+            <ProgressChip goals={goals} stages={stages} onOpen={() => {}} />
           </>
         }>
         <LeadChip name="Backend Engineer" />

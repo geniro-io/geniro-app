@@ -16,7 +16,7 @@ import {
   type StageActionRequest,
   type StageMoveAction,
 } from './stage-action-dialog';
-import { StageEntry } from './stage-progress-chip';
+import { StageEntry } from './stage-entry';
 
 export interface RunStages {
   progress: StageProgress;

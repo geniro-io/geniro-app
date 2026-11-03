@@ -26,6 +26,7 @@ import {
   BlockToolFooter,
   REVEALABLE_CARD_CLASS,
 } from './block-shell';
+import { callClockTitle, useCallClockMs } from './call-clock';
 import { CalleeContextResolverContext, withLiveCost } from './call-context';
 import {
   CallConversationContext,
@@ -64,7 +65,7 @@ import {
 import type { TranscriptNodeMeta } from './transcript-item';
 import { payloadString } from './transcript-payload';
 import { JUMP_MARK_CLASS, TranscriptRow } from './transcript-row';
-import { formatDuration, openTurnWorkedMs } from './turn-duration';
+import { formatDuration } from './turn-duration';
 import { JumpMarkContext } from './use-transcript-jump';
 
 function blockStatusOf(
@@ -315,7 +316,8 @@ function CallFigures({
   contextEstimated,
   costUsd,
   estimatedCostUsd,
-  workedMs,
+  clockMs,
+  clockRunning,
 }: {
   slot: 'call-summary' | 'call-footer';
   tasks: readonly AgentTaskRow[];
@@ -332,22 +334,20 @@ function CallFigures({
   costUsd: number | null;
   /** Of {@link costUsd}, the part geniro priced itself; null when none. */
   estimatedCostUsd: number | null;
-  /** How long the callee has worked in this conversation, its open turn included. */
-  workedMs: number | null;
+  /** The conversation's clock (`call-clock.ts`), null when none of its calls has one. */
+  clockMs: number | null;
+  /** Whether the clock is still running — a call of it open, waits on its own work included. */
+  clockRunning: boolean;
 }): React.JSX.Element {
   return (
     <>
-      {workedMs === null ? null : (
+      {clockMs === null || clockMs <= 0 ? null : (
         <span
           data-slot={`${slot}-worked`}
-          title={
-            live
-              ? `${callee} has worked ${formatDuration(workedMs)} in this conversation so far`
-              : `${callee} worked ${formatDuration(workedMs)} in this conversation`
-          }
+          title={callClockTitle(clockMs, clockRunning)}
           className="flex shrink-0 items-center gap-1 tabular-nums">
           <Timer aria-hidden="true" className="size-3" />
-          {live ? formatElapsed(workedMs) : formatDuration(workedMs)}
+          {clockRunning ? formatElapsed(clockMs) : formatDuration(clockMs)}
         </span>
       )}
       {/* WHAT IT IS ON, without opening the card — asked for beside the
@@ -536,20 +536,8 @@ export const CallBlock = memo(function CallBlock({
       live?.contextWindowTokens ?? folded.contextWindowTokens,
   };
   const tasks = callBlockTasks(block);
-  /**
-   * The callee's working time in this conversation: the settled turns, plus
-   * the turn in flight while the card is working — never while it is settled,
-   * when an open turn is one a dead process left without an ending.
-   */
-  const workingTurns = status === 'running' ? (live?.openTurns ?? []) : [];
-  useSecondTick(workingTurns.length > 0);
-  const settledWorkedMs = live?.workedMs ?? null;
-  const liveWorkedMs =
-    workingTurns.length > 0 ? openTurnWorkedMs(workingTurns, Date.now()) : 0;
-  const workedMs =
-    settledWorkedMs === null && liveWorkedMs <= 0
-      ? null
-      : (settledWorkedMs ?? 0) + liveWorkedMs;
+  const clockRunning = status === 'running';
+  const clockMs = useCallClockMs(live?.clocks, clockRunning);
   const failed = block.status === 'failed';
   const identityText = caller ? `${caller} → ${callee}` : callee;
   const baseToggleLabel = caller ? `${identityText} call` : `Call to ${callee}`;
@@ -637,7 +625,7 @@ export const CallBlock = memo(function CallBlock({
    * pass `undefined` to say it has nothing to show.
    */
   const hasFigures =
-    workedMs !== null ||
+    (clockMs !== null && clockMs > 0) ||
     tasks.length > 0 ||
     usage.costUsd !== null ||
     context.contextTokens !== null;
@@ -654,7 +642,8 @@ export const CallBlock = memo(function CallBlock({
       contextEstimated={context.contextEstimated}
       costUsd={usage.costUsd}
       estimatedCostUsd={usage.estimatedCostUsd ?? null}
-      workedMs={workedMs}
+      clockMs={clockMs}
+      clockRunning={clockRunning}
     />
   );
   /**

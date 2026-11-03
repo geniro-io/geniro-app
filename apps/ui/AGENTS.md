@@ -68,7 +68,7 @@ The rules live in `.claude/rules/renderer-*.md`; start from `renderer-components
 - Run state (`useRunState`, `GET /v1/chats/:runId/state`).
 - Spend (`useChatTotals`, and the nodes route for teams).
 - The timeline, artifacts list, task-list words (`withDurableTaskLists`), shells (`withDurableShells`), delegates (`withDurableDelegates`), and node liveness (`withDurableNodeStatus`).
-- Worked time and tool count, which take the daemon's figure alone where it has one.
+- Worked time and tool count, which take the daemon's figure alone where it has one. A call card's clock is the daemon's `callFigures[].clock`, continued over the rows above its `throughSeq` (`chats/call-clock.ts`, twin of the daemon's `utils/call-clock.ts`): the call's open time, its waits on its own monitors and calls included and its waits on the user left out, so it runs while the card says `waiting` and is never replaced when a turn lands.
 - In each case the turn in flight is added on top (`withLiveCost`, `openTurns`).
 
 A team run's window is its OWN flow only:

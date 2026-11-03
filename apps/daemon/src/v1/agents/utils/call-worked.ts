@@ -12,9 +12,6 @@ export interface CallWork {
  * Count one usage row toward its call's worked time: the CLI's own duration,
  * plus the wall ledger's measure of the turn when its CLI timed nothing. A row
  * neither measured adds nothing and moves no `throughSeq`.
- *
- * TWIN PARSER: `scanCallTurns` in apps/ui/src/renderer/chats/turn-duration.ts
- * measures the turns past `throughSeq` from the same rows.
  */
 export function addCallWork(
   into: Map<string, CallWork>,

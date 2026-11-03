@@ -124,9 +124,12 @@ import { appendDraft } from './append-draft';
 import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { BranchSelect } from './branch-select';
+import { continueCallClocks } from './call-clock';
 import {
   type CalleeReading,
   type CallSpend,
+  conversationClocks,
+  durableCallClocks,
   liveConversationCost,
   liveCostOf,
   liveNodeCost,
@@ -136,7 +139,6 @@ import {
   resolveConversationContext,
   resolveConversationSpend,
   resolveConversationToolCalls,
-  resolveConversationWorked,
   spendOfTotals,
   spentOf,
   withLiveCost,
@@ -354,7 +356,6 @@ import {
   heldSinceOf,
   movesPausedSpans,
   parkWhileHeld,
-  scanCallTurns,
   scanTurns,
   threadWorkedMs,
   withDurableChatTurn,
@@ -5069,9 +5070,9 @@ export function Chats({
     () => ownToolCallSeqsByCall(transcriptRows),
     [transcriptRows],
   );
-  const callTurns = useMemo(
-    () => scanCallTurns(transcriptRows),
-    [transcriptRows],
+  const callClocks = useMemo(
+    () => continueCallClocks(durableCallClocks(nodeReadings), transcriptRows),
+    [nodeReadings, transcriptRows],
   );
   const resolveCallReading = useLatestCallback(
     (calleeMemberId: string, callIds: readonly string[]): CalleeReading => ({
@@ -5089,14 +5090,9 @@ export function Chats({
         callIds,
         ownToolSeqs,
       ),
-      ...resolveConversationWorked(
-        nodeReadings,
-        calleeMemberId,
-        callIds,
-        callTurns,
-      ),
+      clocks: conversationClocks(callClocks, callIds),
     }),
-    [liveText, nodeReadings, ownToolSeqs, callTurns],
+    [liveText, nodeReadings, ownToolSeqs, callClocks],
   );
   /**
    * The direct line to a running call's callee, past the agent that called it.
@@ -7440,12 +7436,7 @@ export function Chats({
             memberId,
             thread.callIds,
           ),
-          ...resolveConversationWorked(
-            nodeReadings,
-            memberId,
-            thread.callIds,
-            callTurns,
-          ),
+          clocks: conversationClocks(callClocks, thread.callIds),
         };
       });
       // Calls OLDER than the loaded window, known only from the daemon's
@@ -7552,12 +7543,7 @@ export function Chats({
             memberId,
             callIds,
           ),
-          ...resolveConversationWorked(
-            nodeReadings,
-            memberId,
-            callIds,
-            callTurns,
-          ),
+          clocks: conversationClocks(callClocks, callIds),
         };
       });
       // After the node's own conversation, before the calls the window holds —
@@ -7737,7 +7723,7 @@ export function Chats({
     awaitingAnswer,
     callBlockIndex,
     callChains,
-    callTurns,
+    callClocks,
     streaming,
     wfNodes,
     liveText,

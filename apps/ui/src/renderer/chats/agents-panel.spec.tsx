@@ -3108,29 +3108,29 @@ describe('AgentsPanel — the instances of a called agent', () => {
     expect(quiet.firstElementChild?.textContent).toBe('running');
   });
 
-  it('states how long each instance has worked, counting the running one as it goes', () => {
+  it('states how long each instance has been on its conversation, counting the running one as it goes', () => {
     const now = Date.parse('2026-10-31T12:00:00.000Z');
     vi.useFakeTimers();
     vi.setSystemTime(now);
     try {
-      const turn = {
-        agentKey: 'engineer',
-        startedAt: now - 30_000,
+      const clock = (closedMs: number, runningSince: number | null) => ({
+        closedMs,
+        runningSince,
         parkedMs: 0,
-        openSince: [],
-      };
+        parkedSince: null,
+        openCards: [],
+        throughSeq: 1,
+      });
       const el = panel({
         ...engineer,
         threads: [
           call('call-0', 'Explore the repo', 'completed', {
-            workedMs: 7_600,
-            openTurns: [turn],
+            clocks: [clock(7_600, now - 30_000)],
           }),
           call('call-1', 'Build the parser', 'running', {
-            workedMs: 60_000,
-            openTurns: [turn],
+            clocks: [clock(60_000, now - 30_000)],
           }),
-          call('call-2', 'Write the docs', 'running', { workedMs: null }),
+          call('call-2', 'Write the docs', 'running', { clocks: [] }),
         ],
       });
       const worked = (id: string): string | null =>

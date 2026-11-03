@@ -13479,30 +13479,6 @@ describe('TeamExecutorService — a member’s context reading', () => {
       { callId: 'call-1', toolCalls: 2, toolCallsThroughSeq: toolSeq('t2') },
       { callId: 'call-2', toolCalls: 1, toolCallsThroughSeq: toolSeq('t4') },
     ]);
-    const endSeq = (callId: string): number =>
-      itemDao.items.find(
-        (row) =>
-          row.kind === 'turn_complete' &&
-          (JSON.parse(row.payload) as { callId?: string }).callId === callId,
-      )!.seq;
-    expect(
-      calls?.map(({ callId, workedMs, workedThroughSeq }) => ({
-        callId,
-        workedMs,
-        workedThroughSeq,
-      })),
-    ).toEqual([
-      {
-        callId: 'call-1',
-        workedMs: 5_000,
-        workedThroughSeq: endSeq('call-1'),
-      },
-      {
-        callId: 'call-2',
-        workedMs: 7_000,
-        workedThroughSeq: endSeq('call-2'),
-      },
-    ]);
 
     completeTurn(claude.starts[0]!, 'done');
     await drain();
@@ -13544,8 +13520,10 @@ describe('TeamExecutorService — a member’s context reading', () => {
         callId: 'call-1',
         toolCalls: 2,
         toolCallsThroughSeq: lastSeq,
-        workedMs: null,
-        workedThroughSeq: null,
+        clock: expect.objectContaining({
+          closedMs: 0,
+          runningSince: expect.any(Number),
+        }),
       }),
     ]);
     // Listed from its start row, brief included, though it has no reading.
@@ -13563,8 +13541,8 @@ describe('TeamExecutorService — a member’s context reading', () => {
     await drain();
   });
 
-  it("states a call's worked time from the wall ledger for a turn its CLI did not time", async () => {
-    const { service, claude, callBroker, itemDao, wallTurns } = setup();
+  it("states a call's clock from its running row to its ending, less a card's wait", async () => {
+    const { service, claude, callBroker, itemDao } = setup();
     const run = await service.startRun({
       slug: 'work',
       team: CALL_TEAM,
@@ -13584,15 +13562,22 @@ describe('TeamExecutorService — a member’s context reading', () => {
     completeTurn(claude.starts[0]!, 'done');
     await drain();
 
-    const endOf = (memberId: string): number =>
-      itemDao.items.find(
-        (row) => row.kind === 'turn_complete' && row.memberId === memberId,
-      )!.seq;
-    wallTurns.rows.clear();
-    await wallTurns.record(run.id, [
-      { seq: endOf('callee'), memberId: 'callee', ms: 4_000 },
-      { seq: endOf('a'), memberId: 'a', ms: 9_000 },
-    ]);
+    const statusRow = (status: string): Item =>
+      itemDao.items.find((row) => {
+        const body = JSON.parse(row.payload) as {
+          status?: string;
+          callId?: string;
+        };
+        return (
+          row.kind === 'status' &&
+          body.callId === 'call-1' &&
+          body.status === status
+        );
+      })!;
+    const started = statusRow('running');
+    const ended = statusRow('completed');
+    started.createdAt = new Date(10_000);
+    ended.createdAt = new Date(70_000);
 
     const callee = (await service.getNodeStates(run.id)).find(
       (n) => n.memberId === 'callee',
@@ -13600,8 +13585,14 @@ describe('TeamExecutorService — a member’s context reading', () => {
     expect(callee?.callFigures).toEqual([
       expect.objectContaining({
         callId: 'call-1',
-        workedMs: 4_000,
-        workedThroughSeq: endOf('callee'),
+        clock: {
+          closedMs: 60_000,
+          runningSince: null,
+          parkedMs: 0,
+          parkedSince: null,
+          openCards: [],
+          throughSeq: ended.seq,
+        },
       }),
     ]);
   });
@@ -14042,8 +14033,7 @@ describe('TeamExecutorService — a member’s context reading', () => {
         totals: expect.objectContaining({ turns: 0, costUsd: null }),
         toolCalls: 0,
         toolCallsThroughSeq: null,
-        workedMs: null,
-        workedThroughSeq: null,
+        clock: expect.objectContaining({ closedMs: 0 }),
         // No turn has ended yet, so there is no cache to lapse.
         promptCacheExpiresAt: null,
       },
@@ -14212,8 +14202,7 @@ describe('TeamExecutorService — a member’s context reading', () => {
       totals: expect.objectContaining({ turns: 1, costUsd: 2.5 }),
       toolCalls: 1,
       toolCallsThroughSeq: toolRow.seq,
-      workedMs: null,
-      workedThroughSeq: null,
+      clock: null,
       // The fake stamps every row at the epoch, so the lapse is an hour past it.
       promptCacheExpiresAt: '1970-01-01T01:00:00.000Z',
     });

@@ -1941,6 +1941,49 @@ export type BlockedTaskKind = typeof BlockedTaskKind[keyof typeof BlockedTaskKin
 /**
  * 
  * @export
+ * @interface CallClock
+ */
+export interface CallClock {
+    /**
+     * 
+     * @type {number}
+     * @memberof CallClock
+     */
+    closedMs: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof CallClock
+     */
+    runningSince: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof CallClock
+     */
+    parkedMs: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof CallClock
+     */
+    parkedSince: number | null;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof CallClock
+     */
+    openCards: Array<string>;
+    /**
+     * 
+     * @type {number}
+     * @memberof CallClock
+     */
+    throughSeq: number;
+}
+/**
+ * 
+ * @export
  * @interface CallContextReading
  */
 export interface CallContextReading {
@@ -1995,16 +2038,10 @@ export interface CallFigures {
     totals: ChatTotals;
     /**
      * 
-     * @type {number}
+     * @type {CallClock}
      * @memberof CallFigures
      */
-    workedMs: number | null;
-    /**
-     * 
-     * @type {number}
-     * @memberof CallFigures
-     */
-    workedThroughSeq: number | null;
+    clock: CallClock | null;
     /**
      * The tools the node itself called inside this call, its CLI sub-agents' excluded, counted from the transcript as of toolCallsThroughSeq
      * @type {number}

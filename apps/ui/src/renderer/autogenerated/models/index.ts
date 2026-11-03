@@ -5308,23 +5308,23 @@ export interface MemberAssessmentEntry {
      */
     runs: number;
     /**
-     * 
-     * @type {MemberAssessmentEntryVersion}
+     * the team versions the analysed runs ran, oldest first — what the marks describe
+     * @type {Array<MemberAssessmentEntryVersionsInner>}
      * @memberof MemberAssessmentEntry
      */
-    version: MemberAssessmentEntryVersion | null;
+    versions: Array<MemberAssessmentEntryVersionsInner>;
     /**
      * 
      * @type {number}
      * @memberof MemberAssessmentEntry
      */
-    usefulness: number;
+    usefulness: number | null;
     /**
      * 
      * @type {number}
      * @memberof MemberAssessmentEntry
      */
-    quality: number;
+    quality: number | null;
     /**
      * 
      * @type {string}
@@ -5443,19 +5443,19 @@ export type MemberAssessmentEntryItemsInnerStatusEnum = typeof MemberAssessmentE
 /**
  * 
  * @export
- * @interface MemberAssessmentEntryVersion
+ * @interface MemberAssessmentEntryVersionsInner
  */
-export interface MemberAssessmentEntryVersion {
+export interface MemberAssessmentEntryVersionsInner {
     /**
      * 
      * @type {number}
-     * @memberof MemberAssessmentEntryVersion
+     * @memberof MemberAssessmentEntryVersionsInner
      */
     number: number | null;
     /**
      * 
      * @type {boolean}
-     * @memberof MemberAssessmentEntryVersion
+     * @memberof MemberAssessmentEntryVersionsInner
      */
     current: boolean;
 }
@@ -5743,7 +5743,7 @@ export interface MemberWork {
      */
     goals: MemberWorkGoals;
     /**
-     * stage completions it made
+     * completions of stages it was responsible for in its run’s team version, whoever moved them
      * @type {number}
      * @memberof MemberWork
      */

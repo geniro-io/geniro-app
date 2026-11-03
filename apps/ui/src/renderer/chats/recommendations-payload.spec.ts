@@ -334,7 +334,7 @@ describe('recommendations payload readers', () => {
     expect(card?.teamStats).toBeNull();
   });
 
-  it("reads each member's marks, verdict, evidence and items, drops one that does not read, and reads an older card as assessing none", () => {
+  it("reads each member's marks, verdict, evidence and items, an unjudged mark as null, drops one that does not read, and reads an older card as assessing none", () => {
     const reviewer = {
       member: 'reviewer',
       usefulness: 4,
@@ -352,6 +352,7 @@ describe('recommendations payload readers', () => {
           { ...reviewer, member: 'qa', quality: 6 },
           { ...reviewer, member: 'lead', verdict: 'fire' },
           { ...reviewer, member: 'dev', usefulness: 2.5 },
+          { ...reviewer, member: 'qa-2', usefulness: null },
         ],
       }),
     );
@@ -368,6 +369,7 @@ describe('recommendations payload readers', () => {
         ],
         items: ['W-1'],
       },
+      expect.objectContaining({ member: 'qa-2', usefulness: null, quality: 2 }),
     ]);
     expect(
       readRecommendations(item(6, 'recommendations', CARD))?.members,

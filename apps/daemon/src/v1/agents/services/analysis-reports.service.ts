@@ -246,7 +246,8 @@ function timingOf(timeline: ThreadTimeline): RecommendationsTiming {
  * Why a report's member assessments cannot go on a card, or null: a team
  * thread assesses its members and a plain chat none, each member once and only
  * one that took a turn in the analysed runs, and a verdict other than keep is
- * carried out by team items on the same card while keep carries none.
+ * carried out by team items on the same card and rests on at least one mark,
+ * while keep carries none.
  */
 export function checkMembers(
   report: RecommendationsReport,
@@ -289,6 +290,13 @@ export function checkMembers(
     }
     if (verdict !== 'keep' && assessment.items.length === 0) {
       return `member ${member}'s verdict ${verdict} names no item — file the team item that carries it out and name it, or keep the member`;
+    }
+    if (
+      verdict !== 'keep' &&
+      assessment.usefulness === null &&
+      assessment.quality === null
+    ) {
+      return `member ${member}'s verdict ${verdict} rests on no mark — judge its usefulness or quality, or keep it while the runs give too little to judge`;
     }
   }
   return null;

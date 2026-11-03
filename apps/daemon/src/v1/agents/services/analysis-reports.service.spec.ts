@@ -666,6 +666,52 @@ describe('checkMembers', () => {
     ).toContain("only team items (W-…) carry out a member's verdict");
   });
 
+  it('takes a member the runs gave too little to judge, but refuses a change resting on no mark', () => {
+    expect(
+      checkMembers(
+        {
+          hotspots: [],
+          items: [ITEM],
+          members: [
+            {
+              ...REVIEWER,
+              usefulness: null,
+              quality: null,
+              verdict: 'keep',
+              items: [],
+            },
+          ],
+        },
+        'team',
+        took,
+      ),
+    ).toBeNull();
+    expect(
+      checkMembers(
+        {
+          hotspots: [],
+          items: [ITEM],
+          members: [{ ...REVIEWER, usefulness: null, quality: null }],
+        },
+        'team',
+        took,
+      ),
+    ).toBe(
+      "member reviewer's verdict tune rests on no mark — judge its usefulness or quality, or keep it while the runs give too little to judge",
+    );
+    expect(
+      checkMembers(
+        {
+          hotspots: [],
+          items: [ITEM],
+          members: [{ ...REVIEWER, usefulness: null }],
+        },
+        'team',
+        took,
+      ),
+    ).toBeNull();
+  });
+
   it('refuses a change with no item to carry it out, and a keep that names one', () => {
     expect(
       checkMembers(

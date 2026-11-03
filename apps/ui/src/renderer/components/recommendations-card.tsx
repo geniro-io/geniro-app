@@ -77,8 +77,9 @@ export interface RecommendationsTimingView {
 /** One member as the analysis judged it — its marks, verdict and the items that carry the verdict out. */
 export interface MemberAssessmentView {
   member: string;
-  usefulness: number;
-  quality: number;
+  /** Null when the analysis found too little to judge. */
+  usefulness: number | null;
+  quality: number | null;
   verdict: MemberVerdict;
   summary: string;
   evidence: RecommendationView['evidence'];

@@ -27,9 +27,10 @@ interface AssessmentDatabase {
     filed_at: number;
     library_version: string | null;
     runs: number;
+    run_ids: string | null;
     member_id: string;
-    usefulness: number;
-    quality: number;
+    usefulness: number | null;
+    quality: number | null;
     verdict: string;
     summary: string;
     evidence: string;
@@ -104,6 +105,7 @@ export class MemberAssessmentDao extends BaseDao<MemberAssessmentRecord> {
           filed_at: row.filedAt.getTime(),
           library_version: row.libraryVersion,
           runs: row.runs,
+          run_ids: JSON.stringify(row.runIds),
           member_id: row.memberId,
           usefulness: row.usefulness,
           quality: row.quality,
@@ -146,6 +148,12 @@ export class MemberAssessmentDao extends BaseDao<MemberAssessmentRecord> {
               filedAt: new Date(Number(row.filed_at)),
               libraryVersion: row.library_version,
               runs: row.runs,
+              runIds:
+                row.run_ids === null
+                  ? []
+                  : jsonArray(row.run_ids).filter(
+                      (id): id is string => typeof id === 'string',
+                    ),
               memberId: row.member_id,
               usefulness: row.usefulness,
               quality: row.quality,

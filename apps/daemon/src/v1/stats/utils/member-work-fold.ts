@@ -19,6 +19,12 @@ export interface MemberWorkInput {
   calls: readonly CallLedgerRow[];
   stages: readonly StageLedgerRow[];
   goals: readonly GoalLedgerRow[];
+  /**
+   * The members responsible for a stage in the team version a run ran; empty
+   * when that version is not recorded. A stage's rework is theirs, whoever
+   * moved it — in `lead` mode the lead moves every stage.
+   */
+  stageOwners: (runId: string, stageId: string) => readonly string[];
 }
 
 export interface MemberWork {
@@ -140,21 +146,19 @@ export function foldMemberWork(
     stagesByRun.set(row.runId, list);
   }
   for (const [runId, rows] of stagesByRun) {
-    const completedBy = new Map<string, string>();
+    const completedBy = new Map<string, readonly string[]>();
     for (const row of [...rows].sort((a, b) => a.seq - b.seq)) {
       if (row.action === 'complete') {
-        if (row.memberId === null) {
-          completedBy.delete(row.stageId);
-          continue;
+        const owners = input.stageOwners(runId, row.stageId);
+        for (const owner of owners) {
+          cellOf(owner, runId).stagesCompleted += 1;
         }
-        cellOf(row.memberId, runId).stagesCompleted += 1;
-        completedBy.set(row.stageId, row.memberId);
+        completedBy.set(row.stageId, owners);
       } else if (row.action === 'reopen') {
-        const completer = completedBy.get(row.stageId);
-        if (completer !== undefined) {
-          cellOf(completer, runId).completionsReopened += 1;
-          completedBy.delete(row.stageId);
+        for (const owner of completedBy.get(row.stageId) ?? []) {
+          cellOf(owner, runId).completionsReopened += 1;
         }
+        completedBy.delete(row.stageId);
       }
     }
   }
@@ -203,7 +207,9 @@ export function assessmentsByMember(
     cardSeq: number,
     itemId: string,
   ) => HistoryRecommendationStatus | null,
-  versionOf: (version: string | null) => MemberAssessmentEntryWire['version'],
+  versionsOf: (
+    runIds: readonly string[],
+  ) => MemberAssessmentEntryWire['versions'],
 ): Map<string, MemberAssessmentEntryWire[]> {
   const byMember = new Map<string, MemberAssessmentEntryWire[]>();
   for (const row of [...rows].reverse()) {
@@ -214,7 +220,7 @@ export function assessmentsByMember(
       cardSeq: row.cardSeq,
       filedAt: row.filedAt.toISOString(),
       runs: row.runs,
-      version: versionOf(row.libraryVersion),
+      versions: versionsOf(row.runIds),
       usefulness: row.usefulness,
       quality: row.quality,
       verdict: row.verdict,

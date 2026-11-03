@@ -72,7 +72,7 @@ describe('MemberPerformance', () => {
     const text = container.textContent ?? '';
     expect(text).toContain('Calls answered14 (1 failed)');
     expect(text).toContain('Tool errors9 of 212');
-    expect(text).toContain('Goals achieved75% (3 of 4)');
+    expect(text).toContain('Own goals achieved75% (3 of 4)');
     expect(text).toContain('Reopened2 of 6');
     expect(text).toContain('over its 6 measured runs');
   });
@@ -103,23 +103,60 @@ describe('MemberPerformance', () => {
 describe('assessmentCaption', () => {
   const now = Date.parse('2026-11-03T12:00:00.000Z');
 
-  it('names the version and the runs a team analysis read, and one run for a thread analysis', () => {
+  it('names the runs an analysis read and the versions they ran, one run for a thread analysis', () => {
     expect(
       assessmentCaption(
         assessment({ filedAt: '2026-11-01T12:00:00.000Z' }),
         now,
       ),
-    ).toBe('2d ago · version 4 (current) · 6 runs');
+    ).toBe('2d ago · 6 runs of versions 3–4 (current)');
     expect(
       assessmentCaption(
         assessment({
           filedAt: '2026-11-03T11:00:00.000Z',
           chatKind: 'thread',
           runs: 1,
-          version: null,
+          versions: [{ number: 2, current: false }],
         }),
         now,
       ),
-    ).toBe('1h ago · one run');
+    ).toBe('1h ago · one run of version 2');
+    expect(
+      assessmentCaption(
+        assessment({
+          filedAt: '2026-11-03T11:00:00.000Z',
+          runs: 2,
+          versions: [],
+        }),
+        now,
+      ),
+    ).toBe('1h ago · 2 runs');
+  });
+});
+
+describe('MemberPerformance — an unjudged mark', () => {
+  it('draws a mark the analysis left unjudged as a dash, never a figure', () => {
+    render({
+      ...REVIEWER,
+      assessments: [
+        assessment({
+          usefulness: null,
+          quality: 4,
+          verdict: 'keep',
+          items: [],
+        }),
+      ],
+    });
+
+    const meters = [
+      ...container.querySelectorAll(
+        '[data-slot="member-assessment"] [data-slot="mark-meter"]',
+      ),
+    ];
+    expect(meters.map((meter) => meter.getAttribute('aria-label'))).toEqual([
+      'Usefulness not judged',
+      'Quality 4 of 5',
+    ]);
+    expect(meters[0]!.textContent).toBe('Usefulness—');
   });
 });

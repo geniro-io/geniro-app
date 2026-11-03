@@ -584,7 +584,7 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
             cardSeq: 5,
             filedAt: '2026-10-20T10:00:00.000Z',
             runs: 2,
-            version: { number: 1, current: false },
+            versions: [{ number: 1, current: false }],
             usefulness: 2,
             quality: 3,
             verdict: 'remove',

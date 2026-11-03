@@ -67,24 +67,31 @@ function toneOf(mark: number): 'good' | 'fair' | 'poor' {
   return mark >= 4 ? 'good' : mark === 3 ? 'fair' : 'poor';
 }
 
+const NOT_JUDGED = 'not judged: the runs gave too little to judge';
+
 export function MarkMeter({
   kind,
   mark,
   className,
 }: {
   kind: keyof typeof MARK_HINT;
-  mark: number;
+  /** Null when the analysis found too little to judge. */
+  mark: number | null;
   className?: string;
 }): React.JSX.Element {
   const label = kind === 'usefulness' ? 'Usefulness' : 'Quality';
-  const tone = toneOf(mark);
+  const tone = mark === null ? null : toneOf(mark);
   return (
     <span
       data-slot="mark-meter"
-      data-mark={mark}
+      data-mark={mark ?? 'none'}
       role="img"
-      aria-label={`${label} ${mark} of 5`}
-      title={MARK_HINT[kind]}
+      aria-label={
+        mark === null ? `${label} not judged` : `${label} ${mark} of 5`
+      }
+      title={
+        mark === null ? `${MARK_HINT[kind]} — ${NOT_JUDGED}` : MARK_HINT[kind]
+      }
       className={cn(
         'inline-flex items-center gap-1.5 text-[11px] text-muted-foreground',
         className,
@@ -94,14 +101,17 @@ export function MarkMeter({
         {[1, 2, 3, 4, 5].map((step) => (
           <span
             key={step}
-            className={segment({ tone: step <= mark ? tone : 'empty' })}
+            className={segment({
+              tone:
+                tone !== null && mark !== null && step <= mark ? tone : 'empty',
+            })}
           />
         ))}
       </span>
       <span
         aria-hidden="true"
         className="font-medium text-foreground tabular-nums">
-        {mark}
+        {mark ?? '—'}
       </span>
     </span>
   );
@@ -131,8 +141,8 @@ export function MemberMarks({
   verdict,
   className,
 }: {
-  usefulness: number;
-  quality: number;
+  usefulness: number | null;
+  quality: number | null;
   verdict: MemberVerdict;
   className?: string;
 }): React.JSX.Element {

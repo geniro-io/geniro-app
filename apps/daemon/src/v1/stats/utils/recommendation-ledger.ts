@@ -63,6 +63,10 @@ export function filedAssessmentsOf(
     return null;
   }
   const titles = new Map(card.data.items.map((item) => [item.id, item.title]));
+  const runIds =
+    source.chatKind === 'thread' || !card.data.teamStats
+      ? [card.data.sourceRunId]
+      : card.data.teamStats.runList.map((run) => run.runId);
   const runs =
     source.chatKind === 'thread' ? 1 : (card.data.teamStats?.runs ?? 1);
   return (card.data.members ?? []).map((member) => ({
@@ -73,6 +77,7 @@ export function filedAssessmentsOf(
     filedAt: row.createdAt,
     libraryVersion,
     runs,
+    runIds,
     memberId: member.member,
     usefulness: member.usefulness,
     quality: member.quality,

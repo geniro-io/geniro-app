@@ -6,9 +6,11 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
+import { teamOfCanonical } from '../../teams/utils/team-version';
 import { MemberAssessmentDao } from '../dao/member-assessment.dao';
 import { MetricLedgerDao } from '../dao/metric-ledger.dao';
 import { TeamRecommendationDao } from '../dao/team-recommendation.dao';
+import { TeamVersionDao } from '../dao/team-version.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import type {
@@ -16,6 +18,7 @@ import type {
   MemberAssessmentEntryWire,
   TeamStatsWire,
   TeamVersionsWire,
+  ThreadLedgerRow,
 } from '../stats.types';
 import { assessmentsByMember, foldMemberWork } from '../utils/member-work-fold';
 import { recommendationStatusOf } from '../utils/team-history-fold';
@@ -44,6 +47,7 @@ export class TeamStatsService {
     private readonly recommendations: TeamRecommendationDao,
     private readonly runDao: RunDao,
     private readonly versions: TeamVersionsService,
+    private readonly versionDao: TeamVersionDao,
   ) {}
 
   async read(slug: string): Promise<TeamStatsWire> {
@@ -78,8 +82,9 @@ export class TeamStatsService {
         calls,
         stages,
         goals,
+        stageOwners: await this.stageOwnersOf(slug, threads, em),
       }),
-      assessments: await this.assessmentsOf(slug, em),
+      assessments: await this.assessmentsOf(slug, threads, em),
     });
     return {
       ...figures,
@@ -94,8 +99,39 @@ export class TeamStatsService {
     };
   }
 
+  /** Who is responsible for each stage in the team version each run ran. */
+  private async stageOwnersOf(
+    slug: string,
+    threads: readonly ThreadLedgerRow[],
+    em: EntityManager,
+  ): Promise<(runId: string, stageId: string) => readonly string[]> {
+    const ownersByVersion = new Map<string, Map<string, string[]>>();
+    for (const recorded of await this.versionDao.graphsOf(slug, em)) {
+      const team = teamOfCanonical(recorded.graph);
+      ownersByVersion.set(
+        recorded.version,
+        new Map(
+          (team?.stages ?? []).map((stage) => [
+            stage.id,
+            [...new Set(stage.responsible ?? [])],
+          ]),
+        ),
+      );
+    }
+    const versionOfRun = new Map(
+      threads.map((thread) => [thread.runId, thread.version]),
+    );
+    return (runId, stageId) => {
+      const version = versionOfRun.get(runId);
+      return version == null
+        ? []
+        : (ownersByVersion.get(version)?.get(stageId) ?? []);
+    };
+  }
+
   private async assessmentsOf(
     slug: string,
+    threads: readonly ThreadLedgerRow[],
     em: EntityManager,
   ): Promise<Map<string, MemberAssessmentEntryWire[]>> {
     const rows = await this.assessments.rowsOf(slug, em);
@@ -143,13 +179,27 @@ export class TeamStatsService {
         numbers.set(row.version, row.ordinal);
       }
     }
-    return assessmentsByMember(rows, statusOf, (version) =>
-      version === null
-        ? null
-        : {
-            number: numbers.get(version) ?? null,
-            current: version === table?.currentVersion,
-          },
+    const versionOfRun = new Map(
+      threads.map((thread) => [thread.runId, thread.version]),
+    );
+    return assessmentsByMember(rows, statusOf, (runIds) =>
+      [
+        ...new Set(
+          runIds.flatMap((runId) => {
+            const version = versionOfRun.get(runId);
+            return version == null ? [] : [version];
+          }),
+        ),
+      ]
+        .map((version) => ({
+          number: numbers.get(version) ?? null,
+          current: version === table?.currentVersion,
+        }))
+        .sort(
+          (a, b) =>
+            (a.number ?? Number.MAX_SAFE_INTEGER) -
+            (b.number ?? Number.MAX_SAFE_INTEGER),
+        ),
     );
   }
 

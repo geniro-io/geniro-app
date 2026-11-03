@@ -310,13 +310,17 @@ function readEvidence(value: unknown): RecommendationView['evidence'] {
   });
 }
 
-function mark(value: unknown): number | null {
+/** A 1–5 mark, null for one the analysis left unjudged, undefined for one that does not read. */
+function mark(value: unknown): number | null | undefined {
+  if (value === null) {
+    return null;
+  }
   return typeof value === 'number' &&
     Number.isInteger(value) &&
     value >= 1 &&
     value <= 5
     ? value
-    : null;
+    : undefined;
 }
 
 function readMember(value: unknown): MemberAssessmentView | null {
@@ -329,8 +333,8 @@ function readMember(value: unknown): MemberAssessmentView | null {
   if (
     row === null ||
     member === null ||
-    usefulness === null ||
-    quality === null ||
+    usefulness === undefined ||
+    quality === undefined ||
     verdict === null ||
     summary === null
   ) {

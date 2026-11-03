@@ -36,20 +36,34 @@ const ITEM_STATUS: Record<
   unanswered: { label: 'Never decided', variant: 'muted' },
 };
 
+/** The runs an assessment read and the versions they ran: "4 runs of versions 1–2 (current)". */
+export function assessmentScope(entry: MemberAssessmentEntry): string {
+  const runs =
+    entry.chatKind === 'thread'
+      ? 'one run'
+      : `${formatCount(entry.runs)} run${entry.runs === 1 ? '' : 's'}`;
+  const numbers = entry.versions.flatMap((version) =>
+    version.number === null ? [] : [version.number],
+  );
+  if (numbers.length === 0) {
+    return runs;
+  }
+  const first = numbers[0]!;
+  const last = numbers[numbers.length - 1]!;
+  const current = entry.versions.some((version) => version.current)
+    ? ' (current)'
+    : '';
+  return first === last
+    ? `${runs} of version ${first}${current}`
+    : `${runs} of versions ${first}–${last}${current}`;
+}
+
 export function assessmentCaption(
   entry: MemberAssessmentEntry,
   now?: number,
 ): string {
-  return [
-    formatUpdated(entry.filedAt, now),
-    entry.version?.number == null
-      ? null
-      : `version ${entry.version.number}${entry.version.current ? ' (current)' : ''}`,
-    entry.chatKind === 'thread'
-      ? 'one run'
-      : `${formatCount(entry.runs)} run${entry.runs === 1 ? '' : 's'}`,
-  ]
-    .filter((part): part is string => part !== null && part !== '')
+  return [formatUpdated(entry.filedAt, now), assessmentScope(entry)]
+    .filter((part) => part !== '')
     .join(' · ');
 }
 
@@ -77,16 +91,18 @@ export function workReadings(
         work.toolCalls === 0
           ? NOT_MEASURED
           : `${formatCount(work.toolErrors)} of ${formatCount(work.toolCalls)}`,
-      title: 'Tool calls that ended in an error, of all it made',
+      title:
+        'Tool calls that ended in an error, of all it made — a command that exits non-zero counts',
     },
     {
       key: 'goals',
-      label: 'Goals achieved',
+      label: 'Own goals achieved',
       value:
         goals.achievedShare === null
           ? NOT_MEASURED
           : `${formatPercent(goals.achievedShare * 100)} (${formatCount(goals.achieved)} of ${formatCount(goals.recorded - goals.dropped)})`,
-      title: 'Of the goals it recorded and did not drop',
+      title:
+        'Of the goals it recorded itself and did not drop — in most teams only the lead records goals',
     },
     {
       key: 'reopened',
@@ -96,7 +112,7 @@ export function workReadings(
           ? NOT_MEASURED
           : `${formatCount(work.completionsReopened)} of ${formatCount(work.stagesCompleted)}`,
       title:
-        'Stage completions it made that a later move reopened in the same run',
+        'Completions of stages it is responsible for that a later move reopened in the same run, whoever moved them',
     },
   ];
 }

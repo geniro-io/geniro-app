@@ -175,6 +175,9 @@ describe('teamAnalysisGuide', () => {
       expect(guide).toContain('9. Member performance.');
       expect(guide).toContain('Usefulness (1–5)');
       expect(guide).toContain('Quality (1–5)');
+      expect(guide).toContain(
+        'When the runs give too little to judge a mark, leave it null and say why in the summary — never guess a number',
+      );
       for (const verdict of [
         'keep when',
         'tune when',

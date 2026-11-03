@@ -736,7 +736,7 @@ export type MemberVerdict = (typeof MEMBER_VERDICTS)[number];
 
 export const MAX_MEMBER_ASSESSMENTS = 50;
 
-const MemberMarkSchema = z.number().int().min(1).max(5);
+const MemberMarkSchema = z.number().int().min(1).max(5).nullable();
 
 /**
  * One member's work as an analysis judged it: how useful it was and how its
@@ -751,10 +751,10 @@ export const MemberAssessmentSchema = z.object({
     .max(200)
     .describe("The member's id, as the reads name it"),
   usefulness: MemberMarkSchema.describe(
-    'How much its work moved the runs toward what they set out to do: 5 used as delivered and carried the outcome; 4 used after small follow-ups; 3 partly used, partly redundant or ignored; 2 mostly redundant, ignored or redone by another member; 1 the runs did not need it, or it got in the way',
+    'How much its work moved the runs toward what they set out to do: 5 used as delivered and carried the outcome; 4 used after small follow-ups; 3 partly used, partly redundant or ignored; 2 mostly redundant, ignored or redone by another member; 1 the runs did not need it, or it got in the way. null when the runs give too little to judge — say why in the summary',
   ),
   quality: MemberMarkSchema.describe(
-    'How its work held up: 5 accepted first time, nothing reopened, sent back or redone; 4 small fixes only; 3 a round of findings, fixes or rework; 2 sent back or reopened again and again; 1 wrong or broken work that cost the runs',
+    'How its work held up: 5 accepted first time, nothing reopened, sent back or redone; 4 small fixes only; 3 a round of findings, fixes or rework; 2 sent back or reopened again and again; 1 wrong or broken work that cost the runs. null when the runs give too little to judge — say why in the summary',
   ),
   verdict: z
     .enum(MEMBER_VERDICTS)

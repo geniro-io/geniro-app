@@ -53,14 +53,19 @@ export class MemberAssessmentRecord extends TimestampsEntity {
   @Property({ type: 'integer' })
   runs!: number;
 
+  /** The runs the analysis read, as JSON — whose versions the marks describe. */
+  @Property({ type: 'text', nullable: true })
+  runIds: string | null = null;
+
   @Property({ type: 'string' })
   memberId!: string;
 
-  @Property({ type: 'integer' })
-  usefulness!: number;
+  /** Null when the runs gave too little to judge. */
+  @Property({ type: 'integer', nullable: true })
+  usefulness: number | null = null;
 
-  @Property({ type: 'integer' })
-  quality!: number;
+  @Property({ type: 'integer', nullable: true })
+  quality: number | null = null;
 
   @Property({ type: 'string' })
   verdict!: MemberVerdict;

@@ -15,13 +15,20 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { ID_BATCH } from '../../agents/utils/id-batches';
 import { Goal } from '../../runs/entity/goal.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
+import {
+  canonicalGraphJson,
+  canonicalGraphOf,
+} from '../../teams/utils/team-version';
 import { MemberAssessmentDao } from '../dao/member-assessment.dao';
 import { MetricLedgerDao } from '../dao/metric-ledger.dao';
 import { TeamRecommendationDao } from '../dao/team-recommendation.dao';
+import { TeamVersionDao } from '../dao/team-version.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { MemberAssessmentRecord } from '../entity/member-assessment.entity';
 import { TeamRecommendation } from '../entity/team-recommendation.entity';
+import { TeamVersion } from '../entity/team-version.entity';
 import { ToolCallEvent } from '../entity/tool-call-event.entity';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
@@ -55,6 +62,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
           WallTurn,
           MemberAssessmentRecord,
           TeamRecommendation,
+          TeamVersion,
         ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
@@ -97,6 +105,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
             ? Promise.reject(versionTable)
             : Promise.resolve(versionTable),
       } as unknown as TeamVersionsService,
+      new TeamVersionDao(em),
     );
     liveChats = new Set();
     versionTable = {
@@ -666,14 +675,32 @@ describe('TeamStatsService (in-memory sqlite)', () => {
           durationMs: 10,
         });
       }
-      for (const [seq, memberId, action] of [
-        [20, 'dev', 'complete'],
-        [21, 'reviewer', 'reopen'],
-        [22, 'dev', 'complete'],
-        [23, null, 'reopen'],
-        [24, null, 'reopen'],
-        [25, null, 'complete'],
-        [26, 'reviewer', 'reopen'],
+      const stage = (id: string, responsible: string[]) => ({
+        id,
+        title: id,
+        goal: `${id} done`,
+        responsible,
+      });
+      await new TeamVersionDao(orm.em.fork()).register(
+        'dev-team',
+        'v1',
+        canonicalGraphJson(
+          canonicalGraphOf(
+            teamOf([member('lead'), member('dev'), member('reviewer')], {
+              stages: [stage('build', ['dev']), stage('review', ['reviewer'])],
+            }),
+          ),
+        ),
+        started,
+      );
+      for (const [seq, memberId, stageId, action] of [
+        [20, 'lead', 'build', 'complete'],
+        [21, 'reviewer', 'build', 'reopen'],
+        [22, 'lead', 'build', 'complete'],
+        [23, null, 'review', 'complete'],
+        [24, 'lead', 'build', 'reopen'],
+        [25, 'lead', 'build', 'reopen'],
+        [26, null, 'build', 'complete'],
       ] as const) {
         await ledger.insertStage({
           runId: 'r-0',
@@ -682,7 +709,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
           teamSlug: 'dev-team',
           memberId,
           lead: null,
-          stageId: 'build',
+          stageId,
           action,
           enteredAt: null,
           durationMs: null,
@@ -693,9 +720,8 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       await memberGoal('r-0', 3, 'dev', 'dropped');
       await memberGoal('r-0', 4, null, 'not_achieved');
 
-      const dev = (await service.read('dev-team')).byMember.find(
-        (member) => member.memberId === 'dev',
-      );
+      const { byMember } = await service.read('dev-team');
+      const dev = byMember.find((entry) => entry.memberId === 'dev');
 
       expect(dev).toMatchObject({
         runs: RUNS,
@@ -715,10 +741,16 @@ describe('TeamStatsService (in-memory sqlite)', () => {
             dropped: 1,
             achievedShare: 0.5,
           },
-          stagesCompleted: 2,
+          stagesCompleted: 3,
           completionsReopened: 2,
         },
       });
+      expect(
+        byMember.find((entry) => entry.memberId === 'reviewer')?.work,
+      ).toMatchObject({ stagesCompleted: 1, completionsReopened: 0 });
+      expect(
+        byMember.find((entry) => entry.memberId === 'lead')?.work,
+      ).toMatchObject({ stagesCompleted: 0, completionsReopened: 0 });
     });
 
     it('keeps the work of a member the ledgers never watched null', async () => {
@@ -742,6 +774,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       filedAt: new Date('2026-10-20T10:00:00.000Z'),
       libraryVersion: 'v1',
       runs: 6,
+      runIds: ['r1'],
       memberId: 'reviewer',
       usefulness: 3,
       quality: 2,
@@ -794,9 +827,14 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       }
     }
 
-    it('lists every assessment of a member newest first, with its team version and what became of the items that carry it out', async () => {
+    it('lists every assessment of a member newest first, with the versions its runs ran and what became of the items that carry it out', async () => {
       await teamRun('r1');
       await turn('r1', { memberId: 'reviewer' });
+      await activityDao.stampThreadVersion('r2', started, {
+        slug: 'dev-team',
+        version: 'v2',
+        inferred: false,
+      });
       await filed('analysis-1', 'W-1', {
         selectedAt: new Date('2026-10-20T11:00:00.000Z'),
         outcome: 'applied',
@@ -809,6 +847,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
           chatRunId: 'analysis-2',
           filedAt: new Date('2026-10-25T10:00:00.000Z'),
           libraryVersion: 'v2',
+          runIds: ['r2', 'r1', 'gone-run'],
           usefulness: 4,
           quality: 4,
         }),
@@ -818,6 +857,9 @@ describe('TeamStatsService (in-memory sqlite)', () => {
           filedAt: new Date('2026-10-26T10:00:00.000Z'),
           libraryVersion: 'v-gone',
           runs: 1,
+          runIds: ['r2'],
+          usefulness: null,
+          quality: null,
           verdict: 'keep',
           items: [],
         }),
@@ -832,18 +874,29 @@ describe('TeamStatsService (in-memory sqlite)', () => {
           entry.chatRunId,
           entry.chatKind,
           entry.runs,
-          entry.version,
+          entry.versions,
           entry.usefulness,
           entry.quality,
           entry.items.map((item) => item.status),
         ]),
       ).toEqual([
-        ['thread-1', 'thread', 1, { number: null, current: false }, 3, 2, []],
+        [
+          'thread-1',
+          'thread',
+          1,
+          [{ number: 2, current: true }],
+          null,
+          null,
+          [],
+        ],
         [
           'analysis-2',
           'analysis',
           6,
-          { number: 2, current: true },
+          [
+            { number: 1, current: false },
+            { number: 2, current: true },
+          ],
           4,
           4,
           ['open'],
@@ -852,7 +905,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
           'analysis-1',
           'analysis',
           6,
-          { number: 1, current: false },
+          [{ number: 1, current: false }],
           3,
           2,
           ['applied'],
@@ -880,7 +933,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
           work: null,
           assessments: [
             expect.objectContaining({
-              version: { number: null, current: false },
+              versions: [],
               items: [
                 { id: 'W-1', title: 'Review the diff once', status: null },
               ],

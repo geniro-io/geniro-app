@@ -269,9 +269,11 @@ export interface MemberAssessmentRow {
   filedAt: Date;
   libraryVersion: string | null;
   runs: number;
+  /** The runs the analysis read, whose versions the marks describe. */
+  runIds: string[];
   memberId: string;
-  usefulness: number;
-  quality: number;
+  usefulness: number | null;
+  quality: number | null;
   verdict: MemberVerdict;
   summary: string;
   evidence: RecommendationEvidence[];
@@ -1033,7 +1035,11 @@ export const MemberWorkSchema = z
           ),
       })
       .describe('the goals it recorded'),
-    stagesCompleted: z.number().describe('stage completions it made'),
+    stagesCompleted: z
+      .number()
+      .describe(
+        'completions of stages it was responsible for in its run’s team version, whoever moved them',
+      ),
     completionsReopened: z
       .number()
       .describe(
@@ -1051,15 +1057,30 @@ export const MemberAssessmentEntrySchema = z
     cardSeq: z.number(),
     filedAt: z.string().describe('ISO-8601'),
     runs: z.number().describe('how many runs the analysis read'),
-    version: z
-      .object({
-        number: z.number().nullable(),
-        current: z.boolean(),
-      })
+    versions: z
+      .array(
+        z.object({
+          number: z.number().nullable(),
+          current: z.boolean(),
+        }),
+      )
+      .describe(
+        'the team versions the analysed runs ran, oldest first — what the marks describe',
+      ),
+    usefulness: z
+      .number()
+      .int()
+      .min(1)
+      .max(5)
       .nullable()
-      .describe('the team version the library held when it was filed'),
-    usefulness: z.number().int().min(1).max(5),
-    quality: z.number().int().min(1).max(5),
+      .describe('null when the runs gave too little to judge'),
+    quality: z
+      .number()
+      .int()
+      .min(1)
+      .max(5)
+      .nullable()
+      .describe('null when the runs gave too little to judge'),
     verdict: z.enum(MEMBER_VERDICTS),
     summary: z.string(),
     evidence: z.array(

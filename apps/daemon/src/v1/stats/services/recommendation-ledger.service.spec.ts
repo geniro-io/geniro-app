@@ -304,6 +304,7 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
           filedAt: new Date('2026-10-20T10:00:05.000Z'),
           libraryVersion: teamVersionOf(LIBRARY),
           runs: 1,
+          runIds: ['newest'],
           memberId: 'dev',
           usefulness: 4,
           quality: 2,

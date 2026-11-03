@@ -21,7 +21,11 @@ import {
   NOT_MEASURED,
 } from '../stats/stats-format';
 import { KpiStrip, KpiTile } from './kpi-tile';
-import { assessmentCaption, workReadings } from './member-performance';
+import {
+  assessmentCaption,
+  assessmentScope,
+  workReadings,
+} from './member-performance';
 import { CallMatrix, StageFiguresTable } from './team-metrics';
 
 /**
@@ -370,12 +374,19 @@ function MemberWorkTable({
             return latest === undefined ? (
               <span className="text-muted-foreground">Not assessed</span>
             ) : (
-              <MemberMarks
-                className="flex-nowrap whitespace-nowrap"
-                usefulness={latest.usefulness}
-                quality={latest.quality}
-                verdict={latest.verdict}
-              />
+              <span className="flex flex-col gap-0.5">
+                <MemberMarks
+                  className="flex-nowrap whitespace-nowrap"
+                  usefulness={latest.usefulness}
+                  quality={latest.quality}
+                  verdict={latest.verdict}
+                />
+                <span
+                  data-slot="member-marks-scope"
+                  className="text-[11px] whitespace-nowrap text-muted-foreground">
+                  {assessmentScope(latest)}
+                </span>
+              </span>
             );
           },
           title: (row) => {
@@ -387,7 +398,7 @@ function MemberWorkTable({
         },
         readingColumn('Calls answered', 'calls'),
         readingColumn('Tool errors', 'tools'),
-        readingColumn('Goals achieved', 'goals'),
+        readingColumn('Own goals', 'goals'),
         readingColumn('Reopened', 'reopened'),
       ]}
     />

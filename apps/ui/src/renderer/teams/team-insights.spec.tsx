@@ -302,6 +302,9 @@ describe('TeamStatsTab', () => {
         .querySelector('[data-slot="member-verdict"]')
         ?.getAttribute('data-verdict'),
     ).toBe('tune');
+    expect(
+      rows[0]!.querySelector('[data-slot="member-marks-scope"]')?.textContent,
+    ).toBe('6 runs of versions 3–4 (current)');
     expect(cells(rows[0]!).slice(2)).toEqual([
       '14 (1 failed)',
       '9 of 212',

@@ -489,6 +489,35 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
     });
   });
 
+  it('lists a project overlay’s logged changes beside the team’s, never as a version of the team', async () => {
+    await changeLog.recordOverlay({
+      slug: 'dev-team',
+      projectId: 'p1',
+      source: 'analysis',
+      fromHash: null,
+      toHash: 'overlay-hash',
+      summary: 'O-1 Effort for Manifest',
+      recommendationIds: ['O-1'],
+      chatRunId: 'analysis-new',
+      cardSeq: 3,
+      backup: null,
+    });
+
+    const history = await service.read('dev-team', {
+      analysedRunIds: [],
+      readerRunId: null,
+    });
+
+    expect(history.changeLog).toEqual([
+      expect.objectContaining({
+        projectId: 'p1',
+        source: 'analysis',
+        recommendationIds: ['O-1'],
+      }),
+    ]);
+    expect(history.versions.flatMap((version) => version.madeBy)).toEqual([]);
+  });
+
   it('counts a card replaced before anything on it was applied as unanswered, never as passed over', async () => {
     await recommendations.file([
       filed('analysis-replaced', 4, 'W-1', '2026-10-05T10:00:00.000Z'),

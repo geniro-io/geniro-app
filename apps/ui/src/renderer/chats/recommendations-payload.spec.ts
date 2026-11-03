@@ -151,6 +151,35 @@ describe('recommendations payload readers', () => {
     });
   });
 
+  it('reads an overlay item, its location a project id, and drops one whose target is not a known one', () => {
+    const [w1] = CARD.items as Record<string, unknown>[];
+    const card = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        items: [
+          {
+            ...w1,
+            id: 'O-1',
+            target: 'overlay',
+            kind: 'member',
+            location: 'p-billing',
+            change: 'members:\n  - id: reviewer\n    model: opus',
+          },
+          { ...w1, id: 'O-2', target: 'overlays' },
+        ],
+      }),
+    );
+
+    expect(card?.items.map((entry) => [entry.id, entry.target])).toEqual([
+      ['O-1', 'overlay'],
+    ]);
+    expect(card?.items[0]).toMatchObject({
+      kind: 'member',
+      location: 'p-billing',
+      change: 'members:\n  - id: reviewer\n    model: opus',
+    });
+  });
+
   it("reads the team's measured figures, the hotspots and each item's estimates, an older card's missing ones as absent", () => {
     const filedItem = item(6, 'recommendations', {
       ...CARD,

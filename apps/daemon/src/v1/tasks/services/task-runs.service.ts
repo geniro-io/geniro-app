@@ -19,7 +19,7 @@ import { Run } from '../../runs/entity/run.entity';
 import { isTerminalRunStatus } from '../../runs/runs.types';
 import { RunTeamService } from '../../teams/services/run-team.service';
 import { TeamExecutorService } from '../../teams/services/team-executor.service';
-import { TeamStoreService } from '../../teams/services/team-store.service';
+import { TeamOverlayService } from '../../teams/services/team-overlay.service';
 import { membersThatAsk } from '../../teams/utils/unattended';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
@@ -89,7 +89,7 @@ export class TaskRunsService {
     private readonly executor: TeamExecutorService,
     private readonly groups: RunGroupsService,
     private readonly labelInstructions: LabelInstructionsService,
-    private readonly teams: TeamStoreService,
+    private readonly overlays: TeamOverlayService,
     private readonly runTeams: RunTeamService,
   ) {}
 
@@ -165,6 +165,7 @@ export class TaskRunsService {
   private async unattendedTeam(
     levels: Parameters<typeof resolveRunTarget>[0],
     startedBy: StartTaskRun['startedBy'],
+    projectId: string,
   ): Promise<(slug: string) => boolean> {
     const asUser = resolveRunTarget(levels, 'user');
     if (
@@ -174,8 +175,8 @@ export class TaskRunsService {
     ) {
       return () => false;
     }
-    const safe = await this.teams
-      .get(asUser.teamSlug)
+    const safe = await this.overlays
+      .effectiveBySlug(asUser.teamSlug, projectId)
       .then(({ team }) => membersThatAsk(team).length === 0)
       .catch(() => false);
     return (slug) => safe && slug === asUser.teamSlug;
@@ -207,7 +208,7 @@ export class TaskRunsService {
     const target = resolveRunTarget(
       levels,
       input.startedBy,
-      await this.unattendedTeam(levels, input.startedBy),
+      await this.unattendedTeam(levels, input.startedBy, task.projectId),
     );
     if (isRunTargetProblem(target)) {
       throw new BadRequestException(

@@ -267,6 +267,39 @@ describe('RecommendationsCard', () => {
     },
   );
 
+  it('draws overlay items in a Project overlay group, after the project instructions', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        team
+        items={[
+          recommendation('O-1', {
+            target: 'overlay',
+            kind: 'member',
+            location: 'p-billing',
+          }),
+          recommendation('P-1'),
+          recommendation('W-1'),
+        ]}
+        applied={null}
+        outcomes={{}}
+        onApply={vi.fn()}
+      />,
+    );
+
+    const headings = [...el.querySelectorAll('h4')].map((h) => h.textContent);
+    expect(headings).toEqual([
+      'Team',
+      'Project instructions',
+      'Project overlay',
+    ]);
+    expect(
+      el.querySelector('section:last-of-type [data-id="O-1"]'),
+    ).not.toBeNull();
+  });
+
   it('tags each row with its territory, and says what the territory means', () => {
     const el = render(
       <RecommendationsCard

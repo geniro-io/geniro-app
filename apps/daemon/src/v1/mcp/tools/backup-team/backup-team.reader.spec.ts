@@ -18,6 +18,7 @@ function tool() {
   const builders = new TeamBuilderBroker();
   builders.register('builder', 'agent', {
     slug: 'team',
+    projectId: null,
     turnStartedAt: 0,
     savedHash: null,
     acceptsAnyVersion: false,

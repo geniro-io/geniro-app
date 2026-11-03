@@ -158,16 +158,34 @@ export class SaveTeamChangeTool extends BaseMcpTool {
         true,
       );
     }
+    const { query } = read;
+    if (query.overlay !== undefined) {
+      try {
+        const answer = await this.teams.saveOverlay({
+          analysisRunId: turn.analysisRunId,
+          ids: query.ids,
+          slug: team.slug,
+          projectId: query.overlayProjectId!,
+          overlay: query.overlay,
+          baseHash: query.overlayHash ?? null,
+          dryRun: query.dryRun ?? false,
+        });
+        const result = teamChangeResultText(answer);
+        return this.text(result.text, result.isError);
+      } catch (error) {
+        return this.failed(runId, error);
+      }
+    }
     return this.save(runId, {
       authority: {
         kind: 'apply',
         analysisRunId: turn.analysisRunId,
-        ids: read.query.ids,
-        baseHash: read.query.baseHash,
+        ids: query.ids,
+        baseHash: query.baseHash!,
       },
       slug: team.slug,
-      edits: read.query.edits,
-      dryRun: read.query.dryRun ?? false,
+      edits: query.edits!,
+      dryRun: query.dryRun ?? false,
     });
   }
 

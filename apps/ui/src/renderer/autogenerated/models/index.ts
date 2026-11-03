@@ -1942,7 +1942,7 @@ export interface BlockedTask {
      */
     reason: string;
     /**
-     * Where the answer lies: the run settings (run-target, missing-team), or a Run press on the card itself (stopped, worktree)
+     * Where the answer lies: the run settings (run-target, missing-team), a Run press on the card itself (stopped, worktree), or the project's overrides on the team's page (overlay)
      * @type {BlockedTaskKind}
      * @memberof BlockedTask
      */
@@ -1965,7 +1965,8 @@ export const BlockedTaskKind = {
     RunTarget: 'run-target',
     MissingTeam: 'missing-team',
     Stopped: 'stopped',
-    Worktree: 'worktree'
+    Worktree: 'worktree',
+    Overlay: 'overlay'
 } as const;
 export type BlockedTaskKind = typeof BlockedTaskKind[keyof typeof BlockedTaskKind];
 
@@ -5339,6 +5340,18 @@ export interface MeasureInstructionSizesDto {
      * @memberof MeasureInstructionSizesDto
      */
     replyLanguage?: string;
+    /**
+     * With `overlay`: measure the team as this project runs it
+     * @type {string}
+     * @memberof MeasureInstructionSizesDto
+     */
+    projectId?: string;
+    /**
+     * The project's overlay as the editor holds it, applied to `team` before measuring
+     * @type {TeamOverlay}
+     * @memberof MeasureInstructionSizesDto
+     */
+    overlay?: TeamOverlay;
 }
 /**
  * 
@@ -7826,6 +7839,110 @@ export interface ProjectQueueDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface ProjectTeamOverlay
+ */
+export interface ProjectTeamOverlay {
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectTeamOverlay
+     */
+    projectId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectTeamOverlay
+     */
+    projectName: string;
+    /**
+     * True while the project's default team is this team — only then does a run apply the overlay
+     * @type {boolean}
+     * @memberof ProjectTeamOverlay
+     */
+    active: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectTeamOverlay
+     */
+    defaultTeamSlug: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectTeamOverlay
+     */
+    defaultTeamName: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ProjectTeamOverlay
+     */
+    hasOverlay: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectTeamOverlay
+     */
+    hash: string | null;
+    /**
+     * Model-group fields and pools the overlay overrides
+     * @type {number}
+     * @memberof ProjectTeamOverlay
+     */
+    overrides: number;
+    /**
+     * Overlay instruction blocks
+     * @type {number}
+     * @memberof ProjectTeamOverlay
+     */
+    blocks: number;
+    /**
+     * Members with extra instructions and stages with an addendum
+     * @type {number}
+     * @memberof ProjectTeamOverlay
+     */
+    notes: number;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ProjectTeamOverlay
+     */
+    orphans: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectTeamOverlay
+     */
+    unreadable: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectTeamOverlay
+     */
+    slug: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectTeamOverlay
+     */
+    teamName: string;
+}
+/**
+ * 
+ * @export
+ * @interface ProjectTeamOverlaysDto
+ */
+export interface ProjectTeamOverlaysDto {
+    /**
+     * 
+     * @type {Array<ProjectTeamOverlay>}
+     * @memberof ProjectTeamOverlaysDto
+     */
+    overlays: Array<ProjectTeamOverlay>;
+}
 
 /**
  * 
@@ -10253,6 +10370,25 @@ export interface SaveTeamDto {
 /**
  * 
  * @export
+ * @interface SaveTeamOverlayDto
+ */
+export interface SaveTeamOverlayDto {
+    /**
+     * 
+     * @type {TeamOverlay}
+     * @memberof SaveTeamOverlayDto
+     */
+    overlay: TeamOverlay;
+    /**
+     * 
+     * @type {string}
+     * @memberof SaveTeamOverlayDto
+     */
+    baseHash?: string | null;
+}
+/**
+ * 
+ * @export
  * @interface SendMessageDto
  */
 export interface SendMessageDto {
@@ -11474,6 +11610,12 @@ export interface StartTeamChatDto {
      * @memberof StartTeamChatDto
      */
     agentOptions?: { [key: string]: { [key: string]: boolean; }; };
+    /**
+     * 
+     * @type {string}
+     * @memberof StartTeamChatDto
+     */
+    projectId?: string | null;
 }
 
 
@@ -12581,6 +12723,312 @@ export const TeamNoteKind = {
 } as const;
 export type TeamNoteKind = typeof TeamNoteKind[keyof typeof TeamNoteKind];
 
+/**
+ * 
+ * @export
+ * @interface TeamOverlay
+ */
+export interface TeamOverlay {
+    /**
+     * Defaults for every member (and pool member) of one CLI
+     * @type {{ [key: string]: TeamOverlayAgentDefaults; }}
+     * @memberof TeamOverlay
+     */
+    allMembers?: { [key: string]: TeamOverlayAgentDefaults; };
+    /**
+     * Per-member overrides, keyed by member id
+     * @type {{ [key: string]: TeamOverlayMember; }}
+     * @memberof TeamOverlay
+     */
+    members?: { [key: string]: TeamOverlayMember; };
+    /**
+     * Team-scoped blocks for this project, after the team’s own
+     * @type {Array<InstructionBlock>}
+     * @memberof TeamOverlay
+     */
+    instructionBlocks?: Array<InstructionBlock>;
+    /**
+     * Per-stage addenda, keyed by stage id
+     * @type {{ [key: string]: TeamOverlayStage; }}
+     * @memberof TeamOverlay
+     */
+    stages?: { [key: string]: TeamOverlayStage; };
+}
+/**
+ * 
+ * @export
+ * @interface TeamOverlayAgentDefaults
+ */
+export interface TeamOverlayAgentDefaults {
+    /**
+     * Model alias; omitted = CLI default
+     * @type {string}
+     * @memberof TeamOverlayAgentDefaults
+     */
+    model?: string;
+    /**
+     * Reasoning-effort level; omitted = CLI default
+     * @type {string}
+     * @memberof TeamOverlayAgentDefaults
+     */
+    effort?: string;
+    /**
+     * Context-window size; omitted = the model's own default
+     * @type {string}
+     * @memberof TeamOverlayAgentDefaults
+     */
+    contextWindow?: string;
+    /**
+     * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
+     * @type {{ [key: string]: string; }}
+     * @memberof TeamOverlayAgentDefaults
+     */
+    modelParameters?: { [key: string]: string; };
+    /**
+     * Auto-compact threshold (% of the context window); omitted = never
+     * @type {number}
+     * @memberof TeamOverlayAgentDefaults
+     */
+    autoCompactPercent?: number;
+    /**
+     * Tool-approval mode; omitted = the team’s
+     * @type {ApprovalMode}
+     * @memberof TeamOverlayAgentDefaults
+     */
+    approval?: ApprovalMode;
+    /**
+     * Absolute path to the agent config directory this member runs under
+     * @type {string}
+     * @memberof TeamOverlayAgentDefaults
+     */
+    configDir?: string;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface TeamOverlayDto
+ */
+export interface TeamOverlayDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamOverlayDto
+     */
+    slug: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamOverlayDto
+     */
+    projectId: string;
+    /**
+     * 
+     * @type {TeamOverlay}
+     * @memberof TeamOverlayDto
+     */
+    overlay: TeamOverlay;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamOverlayDto
+     */
+    hash: string | null;
+    /**
+     * Overlay entries naming a member or stage the team no longer has, e.g. `members.reviewer`
+     * @type {Array<string>}
+     * @memberof TeamOverlayDto
+     */
+    orphans: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface TeamOverlayMember
+ */
+export interface TeamOverlayMember {
+    /**
+     * 
+     * @type {TeamOverlayMemberSettings}
+     * @memberof TeamOverlayMember
+     */
+    settings?: TeamOverlayMemberSettings;
+    /**
+     * Appended to the member’s own instructions in this project
+     * @type {string}
+     * @memberof TeamOverlayMember
+     */
+    extraInstructions?: string;
+    /**
+     * Replaces the member’s whole pool (members 2, 3, …) in this project; [] = no pool; omitted = the team’s pool
+     * @type {Array<TeamAgentPoolMember>}
+     * @memberof TeamOverlayMember
+     */
+    pool?: Array<TeamAgentPoolMember>;
+}
+/**
+ * 
+ * @export
+ * @interface TeamOverlayMemberSettings
+ */
+export interface TeamOverlayMemberSettings {
+    /**
+     * Model alias; omitted = CLI default
+     * @type {string}
+     * @memberof TeamOverlayMemberSettings
+     */
+    model?: string;
+    /**
+     * Reasoning-effort level; omitted = CLI default
+     * @type {string}
+     * @memberof TeamOverlayMemberSettings
+     */
+    effort?: string;
+    /**
+     * Context-window size; omitted = the model's own default
+     * @type {string}
+     * @memberof TeamOverlayMemberSettings
+     */
+    contextWindow?: string;
+    /**
+     * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
+     * @type {{ [key: string]: string; }}
+     * @memberof TeamOverlayMemberSettings
+     */
+    modelParameters?: { [key: string]: string; };
+    /**
+     * Auto-compact threshold (% of the context window); omitted = never
+     * @type {number}
+     * @memberof TeamOverlayMemberSettings
+     */
+    autoCompactPercent?: number;
+    /**
+     * Tool-approval mode; omitted = the team’s
+     * @type {ApprovalMode}
+     * @memberof TeamOverlayMemberSettings
+     */
+    approval?: ApprovalMode;
+    /**
+     * Absolute path to the agent config directory this member runs under
+     * @type {string}
+     * @memberof TeamOverlayMemberSettings
+     */
+    configDir?: string;
+    /**
+     * CLI agent this member runs in the project; omitted = the team’s
+     * @type {AgentKind}
+     * @memberof TeamOverlayMemberSettings
+     */
+    agent?: AgentKind;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface TeamOverlayScope
+ */
+export interface TeamOverlayScope {
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamOverlayScope
+     */
+    projectId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamOverlayScope
+     */
+    projectName: string;
+    /**
+     * True while the project's default team is this team — only then does a run apply the overlay
+     * @type {boolean}
+     * @memberof TeamOverlayScope
+     */
+    active: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamOverlayScope
+     */
+    defaultTeamSlug: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamOverlayScope
+     */
+    defaultTeamName: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof TeamOverlayScope
+     */
+    hasOverlay: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamOverlayScope
+     */
+    hash: string | null;
+    /**
+     * Model-group fields and pools the overlay overrides
+     * @type {number}
+     * @memberof TeamOverlayScope
+     */
+    overrides: number;
+    /**
+     * Overlay instruction blocks
+     * @type {number}
+     * @memberof TeamOverlayScope
+     */
+    blocks: number;
+    /**
+     * Members with extra instructions and stages with an addendum
+     * @type {number}
+     * @memberof TeamOverlayScope
+     */
+    notes: number;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof TeamOverlayScope
+     */
+    orphans: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamOverlayScope
+     */
+    unreadable: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface TeamOverlayScopesDto
+ */
+export interface TeamOverlayScopesDto {
+    /**
+     * 
+     * @type {Array<TeamOverlayScope>}
+     * @memberof TeamOverlayScopesDto
+     */
+    scopes: Array<TeamOverlayScope>;
+}
+/**
+ * 
+ * @export
+ * @interface TeamOverlayStage
+ */
+export interface TeamOverlayStage {
+    /**
+     * Appended to the stage’s how-to-work text in this project
+     * @type {string}
+     * @memberof TeamOverlayStage
+     */
+    howToWorkAddendum?: string;
+}
 /**
  * 
  * @export

@@ -17,6 +17,7 @@ interface ChangeLogDatabase {
     updated_at: number;
     deleted_at: number | null;
     slug: TeamChangeLogEntry['slug'];
+    project_id: TeamChangeLogEntry['projectId'];
     changed_at: number;
     source: TeamChangeLogEntry['source'];
     from_version: TeamChangeLogEntry['fromVersion'];
@@ -70,24 +71,35 @@ export class TeamChangeLogDao extends BaseDao<TeamChangeLogEntry> {
   }
 
   /**
-   * Every entry of one team, oldest first; entries written in the same
+   * Every entry of one team's shared file — or, with `projectId`, of that
+   * project's overlay of it — oldest first; entries written in the same
    * millisecond in the order they were written.
    */
   async entriesOf(
     slug: string,
     txEm?: EntityManager,
+    projectId: string | null | 'every' = null,
   ): Promise<TeamChangeLogRecord[]> {
-    const rows = await (txEm ?? this.em.fork())
+    let query = (txEm ?? this.em.fork())
       .getKysely<ChangeLogDatabase>({ convertValues: false })
       .selectFrom('team_change_log')
       .selectAll()
-      .where('slug', '=', slug)
+      .where('slug', '=', slug);
+    if (projectId !== 'every') {
+      query = query.where(
+        'project_id',
+        projectId === null ? 'is' : '=',
+        projectId,
+      );
+    }
+    const rows = await query
       .where('deleted_at', 'is', null)
       .orderBy('changed_at', 'asc')
       .orderBy('rowid', 'asc')
       .execute();
     return rows.map((row) => ({
       slug: row.slug,
+      projectId: row.project_id,
       changedAt: new Date(Number(row.changed_at)),
       source: row.source,
       fromVersion: row.from_version,

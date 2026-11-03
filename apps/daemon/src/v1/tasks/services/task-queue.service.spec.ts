@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,6 +25,8 @@ import { Project } from '../../projects/entity/project.entity';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
 import { Run } from '../../runs/entity/run.entity';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
+import { TeamOverlayService } from '../../teams/services/team-overlay.service';
+import { TeamOverlayStoreService } from '../../teams/services/team-overlay-store.service';
 import { TeamStoreService } from '../../teams/services/team-store.service';
 import type { Team } from '../../teams/teams.types';
 import { TaskDao } from '../dao/task.dao';
@@ -99,7 +101,16 @@ describe('TaskQueueService (in-memory sqlite)', () => {
     // which this fixture has to keep true to stay meaningful.
     await teams.create(DEV_TEAM_TEAM, 'dev-team');
 
-    service = new TaskQueueService(projectQueue, teams);
+    service = new TaskQueueService(
+      projectQueue,
+      teams,
+      new TeamOverlayService(
+        new TeamOverlayStoreService({ teamsDir }),
+        teams,
+        projectDao,
+        em,
+      ),
+    );
 
     const project = await projectDao.create({
       name: 'board',
@@ -487,6 +498,48 @@ describe('TaskQueueService (in-memory sqlite)', () => {
         reason: RUN_TARGET_PROBLEM_REASON['team-unattended'],
         kind: 'run-target',
         retryInMs: null,
+      },
+    ]);
+  });
+
+  it('HANDS OUT a card when its project’s overlay of its default team puts the asking member on auto', async () => {
+    await teams.create(
+      teamOf([member('coder', { approval: 'ask' })], {
+        name: 'Careful Team',
+      }),
+      'careful-team',
+    );
+    await arm({ agentKind: null, teamSlug: 'careful-team' });
+    await new TeamOverlayStoreService({ teamsDir }).save(
+      'careful-team',
+      projectId,
+      { members: { coder: { settings: { approval: 'auto' } } } },
+    );
+    const card = await addTask('run me as a team', 'todo', 0);
+
+    const queue = await service.read(projectId);
+
+    expect(queue.eligible.map((task) => task.id)).toEqual([card.id]);
+    expect(queue.blocked).toEqual([]);
+  });
+
+  it('holds a card whose project overlay cannot be applied, without failing the rest of the board', async () => {
+    await arm({ agentKind: null, teamSlug: 'dev-team' });
+    const overlays = new TeamOverlayStoreService({ teamsDir });
+    await overlays.save('dev-team', projectId, {});
+    writeFileSync(overlays.pathOf('dev-team', projectId), 'members: [');
+    const card = await addTask('run me as a team', 'todo', 0);
+
+    const queue = await service.read(projectId);
+
+    expect(queue.eligible).toEqual([]);
+    expect(queue.blocked).toMatchObject([
+      {
+        id: card.id,
+        reason: expect.stringContaining(
+          'overrides of its team cannot be applied',
+        ),
+        kind: 'overlay',
       },
     ]);
   });

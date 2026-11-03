@@ -89,7 +89,14 @@ import {
   useRunNotifications,
   useShareSignInNotifications,
 } from '../notifications/use-run-notifications';
-import { type ProjectRef, useProjectRefs } from '../projects/use-projects';
+import {
+  type ProjectTargetSeed,
+  projectTargetSeed,
+} from '../projects/project-composer-target';
+import {
+  type ProjectTargetRef,
+  useProjectRefs,
+} from '../projects/use-projects';
 import { randomId } from '../random-id';
 import { isRemoteRuntime } from '../remote/remote-session';
 import { currentRunSettings } from '../run-settings';
@@ -477,7 +484,7 @@ interface ComposerProject {
   source: 'config' | 'manual' | 'folder';
 }
 const FOLDER_PROJECT: ComposerProject = { projectId: null, source: 'folder' };
-const NO_PROJECTS: ProjectRef[] = [];
+const NO_PROJECTS: ProjectTargetRef[] = [];
 const NO_NOTIFIED_RUNS: ChatRun[] = [];
 
 /**
@@ -5724,6 +5731,104 @@ export function Chats({
     ],
   );
 
+  const rememberModelParameters = useLatestCallback(
+    (kind: CliKind, parameters: Record<string, string>): void => {
+      setModelParameters((current) => {
+        const next = { ...current };
+        if (Object.keys(parameters).length === 0) {
+          delete next[kind];
+        } else {
+          next[kind] = parameters;
+        }
+        void window.geniro.updateSettings({ lastModelParameters: next });
+        return next;
+      });
+    },
+    [],
+  );
+
+  /**
+   * Select an applied configuration's target and every setting it holds. A
+   * team says NOTHING about any CLI's model, effort or profile — its nodes
+   * each name their own. These setters PERSIST and `null` through them DELETES
+   * the remembered entry, so writing the blanks a team reports would erase the
+   * user's own claude choices.
+   */
+  const seedComposerTarget = useLatestCallback(
+    (seed: ProjectTargetSeed): void => {
+      changeTarget(seed.target);
+      if (seed.isTeam) {
+        return;
+      }
+      chooseConfigDir(seed.agentKind, seed.configDir);
+      if (seed.approval !== null) {
+        changeApprovalMode(seed.approval);
+      }
+      changeModel(seed.agentKind, seed.model);
+      changeEffort(seed.agentKind, seed.effort);
+      changeContextWindow(seed.agentKind, seed.contextWindow);
+      // Written WHOLE rather than per parameter: the configuration is the
+      // answer for this CLI, so a setting it does not name is one the user
+      // deliberately left at the model's default — and merging would leave
+      // whatever the composer happened to be carrying from the last chat.
+      rememberModelParameters(seed.agentKind, seed.modelParameters);
+    },
+    [
+      changeTarget,
+      chooseConfigDir,
+      changeApprovalMode,
+      changeModel,
+      changeEffort,
+      changeContextWindow,
+      rememberModelParameters,
+    ],
+  );
+
+  /**
+   * Preselect a picked project's default target. Unlike a configuration, a
+   * project leaves most settings unnamed to mean "inherit", so only what it
+   * names is written and the user's remembered choices stay otherwise.
+   */
+  const seedProjectTarget = useLatestCallback(
+    (project: ProjectTargetRef): void => {
+      const seed = projectTargetSeed(project);
+      if (seed === null) {
+        return;
+      }
+      changeTarget(seed.target);
+      if (seed.isTeam) {
+        return;
+      }
+      if (seed.configDir !== null) {
+        chooseConfigDir(seed.agentKind, seed.configDir);
+      }
+      if (seed.approval !== null) {
+        changeApprovalMode(seed.approval);
+      }
+      if (seed.model !== null) {
+        changeModel(seed.agentKind, seed.model);
+      }
+      if (seed.effort !== null) {
+        changeEffort(seed.agentKind, seed.effort);
+      }
+      if (seed.contextWindow !== null) {
+        changeContextWindow(seed.agentKind, seed.contextWindow);
+      }
+      if (Object.keys(seed.modelParameters).length > 0) {
+        rememberModelParameters(seed.agentKind, seed.modelParameters);
+      }
+    },
+    [
+      changeTarget,
+      chooseConfigDir,
+      changeApprovalMode,
+      changeModel,
+      changeEffort,
+      changeContextWindow,
+      rememberModelParameters,
+    ],
+  );
+
   /**
    * Start the new-chat screen from a saved configuration: seed every chip it
    * names, then take the folder to its branch.
@@ -5758,40 +5863,13 @@ export function Chats({
       newChat();
       setMobileComposeOpen(true);
 
-      changeTarget(applied.target);
       chooseFolder(applied.cwd);
       setComposerProject(
         applied.projectId === null
           ? FOLDER_PROJECT
           : { projectId: applied.projectId, source: 'config' },
       );
-      // A team says NOTHING about any CLI's model, effort or profile — its
-      // nodes each name their own. These setters PERSIST and `null` through
-      // them DELETES the remembered entry, so writing the blanks a team
-      // reports would erase the user's own claude choices.
-      if (!applied.isTeam) {
-        chooseConfigDir(applied.agentKind, applied.configDir);
-        if (applied.approval !== null) {
-          changeApprovalMode(applied.approval);
-        }
-        changeModel(applied.agentKind, applied.model);
-        changeEffort(applied.agentKind, applied.effort);
-        changeContextWindow(applied.agentKind, applied.contextWindow);
-        // Written WHOLE rather than per parameter: the configuration is the
-        // answer for this CLI, so a setting it does not name is one the user
-        // deliberately left at the model's default — and merging would leave
-        // whatever the composer happened to be carrying from the last chat.
-        setModelParameters((current) => {
-          const next = { ...current };
-          if (Object.keys(applied.modelParameters).length === 0) {
-            delete next[applied.agentKind];
-          } else {
-            next[applied.agentKind] = applied.modelParameters;
-          }
-          void window.geniro.updateSettings({ lastModelParameters: next });
-          return next;
-        });
-      }
+      seedComposerTarget(applied);
       if (applied.branch === null) {
         return;
       }
@@ -5832,18 +5910,7 @@ export function Chats({
       // this callback cannot see.
       await git.refresh(applied.cwd);
     },
-    [
-      newChat,
-      changeTarget,
-      chooseFolder,
-      chooseConfigDir,
-      changeApprovalMode,
-      changeModel,
-      changeEffort,
-      changeContextWindow,
-      git,
-      setError,
-    ],
+    [newChat, seedComposerTarget, chooseFolder, git, setError],
   );
 
   // What each composer's error strip shows. The screen-level `error` wins, then
@@ -9976,12 +10043,18 @@ export function Chats({
                                   noneLabel="No project"
                                   aria-label="Project for the new run"
                                   title="Its instructions go to every agent of the new run"
-                                  onChange={(projectId) =>
+                                  onChange={(projectId) => {
                                     setComposerProject({
                                       projectId,
                                       source: 'manual',
-                                    })
-                                  }
+                                    });
+                                    const picked = projects.find(
+                                      (project) => project.id === projectId,
+                                    );
+                                    if (picked !== undefined) {
+                                      seedProjectTarget(picked);
+                                    }
+                                  }}
                                 />
                               ) : null}
                               {!teamSlug ? (

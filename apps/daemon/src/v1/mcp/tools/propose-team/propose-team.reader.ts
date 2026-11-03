@@ -53,11 +53,20 @@ const ProposeTeamArgsSchema = z
  */
 export const ProposeTeamChangeArgsSchema = z
   .object({
-    edits: editsField('the team file as it stands'),
+    edits: editsField('the team file as it stands').optional(),
+    overlay: z
+      .record(z.string(), z.unknown())
+      .optional()
+      .describe(
+        "The bound project's WHOLE overlay document — only in a chat bound to a project",
+      ),
     summary: summaryField,
     reason: reasonField,
   })
-  .strict();
+  .strict()
+  .refine((args) => args.edits !== undefined || args.overlay !== undefined, {
+    message: 'send `edits`, `overlay`, or both',
+  });
 
 /** The call's arguments, or what is wrong with them. Never throws. */
 export function readProposeTeamArgs(
@@ -69,8 +78,11 @@ export function readProposeTeamArgs(
 /** A builder chat's call arguments, or what is wrong with them. Never throws. */
 export function readProposeTeamChangeArgs(
   args: Record<string, unknown>,
-): ToolArgs<Omit<TeamChangeProposalRequest, 'slug'>> {
-  return readToolArgs(ProposeTeamChangeArgsSchema, args);
+): ToolArgs<Omit<TeamChangeProposalRequest, 'slug' | 'projectId'>> {
+  const read = readToolArgs(ProposeTeamChangeArgsSchema, args);
+  return read.ok
+    ? { ok: true, query: { ...read.query, edits: read.query.edits ?? [] } }
+    : read;
 }
 
 /** What the agent is told once the call is answered. */

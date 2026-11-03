@@ -31,6 +31,8 @@ import { currentRunSettings } from '../run-settings';
 export function TeamChatPanel({
   slug,
   teamName,
+  projectId = null,
+  projectName = null,
   apis,
   handle,
   client,
@@ -46,6 +48,9 @@ export function TeamChatPanel({
 }: {
   slug: string;
   teamName: string;
+  /** The project scope the dock is opened in: its chat edits that project's overlay beside the shared team. */
+  projectId?: string | null;
+  projectName?: string | null;
   apis: DaemonApis;
   handle: DaemonHandle;
   client: DaemonClient;
@@ -103,9 +108,10 @@ export function TeamChatPanel({
           agentKind: initialAgent ?? CLI_KINDS[0]!,
           approval: 'acceptEdits',
           ...(await currentRunSettings()),
+          projectId,
         },
       }),
-    [apis, slug, initialAgent],
+    [apis, slug, initialAgent, projectId],
   );
   const discard = useLatestCallback(async (): Promise<void> => {
     await apis.teams.discardTeamChat({ slug });
@@ -160,7 +166,11 @@ export function TeamChatPanel({
       hidden={hidden}
       className="relative flex shrink-0 flex-col border-t border-border bg-sidebar"
       style={{ height }}
-      aria-label={`Change ${teamName} with chat`}>
+      aria-label={
+        projectName === null
+          ? `Change ${teamName} with chat`
+          : `Change with chat · ${teamName} + ${projectName}`
+      }>
       <PanelResizeHandle
         edge="top"
         label="Resize the team chat panel"

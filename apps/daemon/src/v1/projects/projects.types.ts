@@ -308,10 +308,10 @@ export const BlockedTaskSchema = z
       .string()
       .describe('Why this card cannot start, in words a user can act on'),
     kind: z
-      .enum(['run-target', 'missing-team', 'stopped', 'worktree'])
+      .enum(['run-target', 'missing-team', 'stopped', 'worktree', 'overlay'])
       .meta({ id: 'BlockedTaskKind' })
       .describe(
-        'Where the answer lies: the run settings (run-target, missing-team), or a Run press on the card itself (stopped, worktree)',
+        "Where the answer lies: the run settings (run-target, missing-team), a Run press on the card itself (stopped, worktree), or the project's overrides on the team's page (overlay)",
       ),
     retryInMs: z
       .number()

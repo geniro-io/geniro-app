@@ -27,6 +27,10 @@ export class TeamChangeLogEntry extends TimestampsEntity {
   @Property({ type: 'string' })
   slug!: string;
 
+  /** The project whose overlay of the team was written; null for a write to the shared team. */
+  @Property({ type: 'string', nullable: true })
+  projectId: string | null = null;
+
   @Property({ type: DateTimeType })
   changedAt!: Date;
 

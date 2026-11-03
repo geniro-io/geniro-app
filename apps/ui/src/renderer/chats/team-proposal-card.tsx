@@ -18,6 +18,7 @@ import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { cn } from '../components/ui/utils';
 import { type PreviewMark, RUNS_UNASKED_LABEL } from '../teams/member-schema';
+import { UnifiedDiff } from './diff-view';
 import { TeamDiffList } from './team-diff-list';
 import {
   diffRows,
@@ -226,6 +227,25 @@ function Fold({
   );
 }
 
+function ProposalSection({
+  title,
+  slot,
+  children,
+}: {
+  title: string;
+  slot: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <section data-slot={slot} className="flex min-w-0 flex-col gap-3">
+      <h4 className="m-0 text-[11px] font-medium tracking-wide text-muted-foreground uppercase break-words">
+        {title}
+      </h4>
+      {children}
+    </section>
+  );
+}
+
 function MarkBadge({ mark }: { mark: PreviewMark }): React.JSX.Element {
   return (
     <Badge variant="outline" className="px-1.5 py-0 font-normal">
@@ -306,7 +326,7 @@ export function TeamProposalCard({
   /** Open the saved team in the editor; absent, nothing offers to. */
   onOpenTeam?: (slug: string) => void;
 }): React.JSX.Element {
-  const { team, autoAgents, diff } = proposal;
+  const { team, autoAgents, diff, overlay } = proposal;
   const stages = team.stages ?? [];
   const { sending, respond } = useOneShotVerdict(verdict, expired, onRespond);
   const remembered = (name: string) =>
@@ -335,6 +355,48 @@ export function TeamProposalCard({
   const gate = useHazardGate(scanText);
   const firstMessage = team.members.find(
     (member) => member.id === team.triggers[0]?.member,
+  );
+
+  const teamBody = (
+    <>
+      {changes !== null ? (
+        <TeamDiffList rows={changes} memoryKey={remembered('team-diff')} />
+      ) : null}
+      {stages.length > 0 ? (
+        <div
+          data-slot="team-proposal-stages"
+          className="flex flex-col gap-1.5 rounded-md border border-border p-2">
+          <span className="text-xs font-medium">Stages every run walks</span>
+          <StageGraph stages={stages} />
+          <Fold
+            slot="team-proposal-stage-fold"
+            noun={['stage', 'stages']}
+            total={stages.length}
+            replacing={proposal.mode === 'replace'}
+            open={stageTextShown}
+            onToggle={() => setStageTextShown((current) => !current)}
+            changed={{
+              count: changedStages.length,
+              content: <StageList stages={changedStages} marks={stageMarks} />,
+            }}
+            all={<StageList stages={stages} marks={stageMarks} />}
+          />
+        </div>
+      ) : null}
+      <Fold
+        slot="team-proposal-agents"
+        noun={['agent', 'agents']}
+        total={roster.length}
+        replacing={proposal.mode === 'replace'}
+        open={rosterShown}
+        onToggle={() => setRosterShown((current) => !current)}
+        changed={{
+          count: changedAgents.length,
+          content: <Roster rows={changedAgents} marks={marks} />,
+        }}
+        all={<Roster rows={roster} marks={marks} />}
+      />
+    </>
   );
 
   return (
@@ -397,43 +459,22 @@ export function TeamProposalCard({
         </div>
       ) : null}
       <HazardWarning hazards={gate.hazards} subject="this proposal" />
-      {changes !== null ? (
-        <TeamDiffList rows={changes} memoryKey={remembered('team-diff')} />
-      ) : null}
-      {stages.length > 0 ? (
-        <div
-          data-slot="team-proposal-stages"
-          className="flex flex-col gap-1.5 rounded-md border border-border p-2">
-          <span className="text-xs font-medium">Stages every run walks</span>
-          <StageGraph stages={stages} />
-          <Fold
-            slot="team-proposal-stage-fold"
-            noun={['stage', 'stages']}
-            total={stages.length}
-            replacing={proposal.mode === 'replace'}
-            open={stageTextShown}
-            onToggle={() => setStageTextShown((current) => !current)}
-            changed={{
-              count: changedStages.length,
-              content: <StageList stages={changedStages} marks={stageMarks} />,
-            }}
-            all={<StageList stages={stages} marks={stageMarks} />}
-          />
-        </div>
-      ) : null}
-      <Fold
-        slot="team-proposal-agents"
-        noun={['agent', 'agents']}
-        total={roster.length}
-        replacing={proposal.mode === 'replace'}
-        open={rosterShown}
-        onToggle={() => setRosterShown((current) => !current)}
-        changed={{
-          count: changedAgents.length,
-          content: <Roster rows={changedAgents} marks={marks} />,
-        }}
-        all={<Roster rows={roster} marks={marks} />}
-      />
+      {overlay === null ? (
+        teamBody
+      ) : (
+        <>
+          {diff?.identical === true ? null : (
+            <ProposalSection title="Shared team" slot="team-proposal-shared">
+              {teamBody}
+            </ProposalSection>
+          )}
+          <ProposalSection
+            title={`${overlay.projectName} overlay`}
+            slot="team-proposal-overlay">
+            <UnifiedDiff diff={overlay.diffText} />
+          </ProposalSection>
+        </>
+      )}
       {expired && verdict === null ? (
         <p className="m-0 text-xs text-muted-foreground">
           ⏱ expired — a newer proposal replaced it, or the chat was archived
@@ -444,8 +485,11 @@ export function TeamProposalCard({
         <div className="flex flex-col gap-2">
           {proposal.mode === 'replace' ? (
             <p className="m-0 text-xs text-muted-foreground">
-              Approving overwrites {proposal.replacesName}; the current file is
-              backed up first.
+              {overlay !== null && diff?.identical === true
+                ? `Approving changes ${overlay.projectName}’s overlay of ${proposal.replacesName}; the shared team stays as it is.`
+                : overlay === null
+                  ? `Approving overwrites ${proposal.replacesName}; the current file is backed up first.`
+                  : `Approving overwrites ${proposal.replacesName} and changes ${overlay.projectName}’s overlay of it; the current files are backed up first.`}
             </p>
           ) : null}
           <VerdictNoteField

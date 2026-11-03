@@ -610,6 +610,191 @@ export const TeamYamlSchema = TeamSchema.extend({
     .default([]),
 });
 
+/**
+ * What a project may set for every member of one agent kind: the Model group
+ * of {@link memberSettingsShape} without `agent`, `mcpDisabled` and `pool`.
+ */
+export const TeamOverlayAgentDefaultsSchema = z
+  .object({
+    model: memberSettingsShape.model,
+    effort: memberSettingsShape.effort,
+    contextWindow: memberSettingsShape.contextWindow,
+    modelParameters: memberSettingsShape.modelParameters,
+    autoCompactPercent: memberSettingsShape.autoCompactPercent,
+    approval: ApprovalModeSchema.optional().describe(
+      'Tool-approval mode; omitted = the team’s',
+    ),
+    configDir: memberSettingsShape.configDir,
+  })
+  .meta({ id: 'TeamOverlayAgentDefaults' });
+export type TeamOverlayAgentDefaults = z.infer<
+  typeof TeamOverlayAgentDefaultsSchema
+>;
+
+/**
+ * One member's Model-group override in a project. Setting `agent` replaces the
+ * whole group: a key it leaves unset takes that CLI's default, never the
+ * team's value for another CLI.
+ */
+export const TeamOverlayMemberSettingsSchema =
+  TeamOverlayAgentDefaultsSchema.extend({
+    agent: AgentKindSchema.optional().describe(
+      'CLI agent this member runs in the project; omitted = the team’s',
+    ),
+  }).meta({ id: 'TeamOverlayMemberSettings' });
+export type TeamOverlayMemberSettings = z.infer<
+  typeof TeamOverlayMemberSettingsSchema
+>;
+
+export const MAX_OVERLAY_EXTRA_INSTRUCTIONS_LENGTH = 20_000;
+
+export const TeamOverlayMemberSchema = z
+  .object({
+    settings: TeamOverlayMemberSettingsSchema.optional(),
+    extraInstructions: z
+      .string()
+      .max(MAX_OVERLAY_EXTRA_INSTRUCTIONS_LENGTH)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .optional()
+      .describe('Appended to the member’s own instructions in this project'),
+    pool: z
+      .array(TeamAgentPoolMemberSchema)
+      .max(MAX_AGENT_POOL_EXTRA_MEMBERS)
+      .optional()
+      .describe(
+        'Replaces the member’s whole pool (members 2, 3, …) in this project; [] = no pool; omitted = the team’s pool',
+      ),
+  })
+  .meta({ id: 'TeamOverlayMember' });
+export type TeamOverlayMember = z.infer<typeof TeamOverlayMemberSchema>;
+
+export const TeamOverlayStageSchema = z
+  .object({
+    howToWorkAddendum: z
+      .string()
+      .max(MAX_STAGE_INSTRUCTIONS_LENGTH)
+      .refine(argvSafe, NO_CONTROL_CHARACTERS)
+      .optional()
+      .describe('Appended to the stage’s how-to-work text in this project'),
+  })
+  .meta({ id: 'TeamOverlayStage' });
+
+/**
+ * What one project changes about a shared team it defaults to — the
+ * `<userData>/teams/overlays/<slug>/<projectId>.overlay.yaml` shape and its
+ * wire shape. Only listed keys override; members, stages' structure,
+ * triggers, mode, identity and MCP switches stay the team's.
+ */
+export const TeamOverlaySchema = z
+  .object({
+    allMembers: z
+      .partialRecord(AgentKindSchema, TeamOverlayAgentDefaultsSchema)
+      .optional()
+      .describe('Defaults for every member (and pool member) of one CLI'),
+    members: z
+      .record(z.string().min(1), TeamOverlayMemberSchema)
+      .optional()
+      .describe('Per-member overrides, keyed by member id'),
+    instructionBlocks: z
+      .array(InstructionBlockSchema)
+      .optional()
+      .describe('Team-scoped blocks for this project, after the team’s own'),
+    stages: z
+      .record(z.string().min(1), TeamOverlayStageSchema)
+      .optional()
+      .describe('Per-stage addenda, keyed by stage id'),
+  })
+  .meta({ id: 'TeamOverlay' });
+export type TeamOverlay = z.infer<typeof TeamOverlaySchema>;
+
+/** `Run.teamOverlaySnapshot`: the overlay a run started with, when its project's default team was its team. */
+export const TeamOverlaySnapshotSchema = z.object({
+  projectId: z.string(),
+  hash: z.string(),
+  overlay: TeamOverlaySchema,
+});
+export type TeamOverlaySnapshot = z.infer<typeof TeamOverlaySnapshotSchema>;
+
+/** One project's overlay of one team, as stored. */
+export const TeamOverlayWireSchema = z.object({
+  slug: z.string(),
+  projectId: z.string(),
+  overlay: TeamOverlaySchema,
+  hash: z
+    .string()
+    .nullable()
+    .describe(
+      "The file's version as stored, sent back as a save's `baseHash`; null when the project has no overlay file yet",
+    ),
+  orphans: z
+    .array(z.string())
+    .describe(
+      'Overlay entries naming a member or stage the team no longer has, e.g. `members.reviewer`',
+    ),
+});
+export type TeamOverlayWire = z.infer<typeof TeamOverlayWireSchema>;
+
+/** A project in a team's scope list: it defaults to the team, or still holds an overlay of it. */
+export const TeamOverlayScopeSchema = z
+  .object({
+    projectId: z.string(),
+    projectName: z.string(),
+    active: z
+      .boolean()
+      .describe(
+        "True while the project's default team is this team — only then does a run apply the overlay",
+      ),
+    defaultTeamSlug: z
+      .string()
+      .nullable()
+      .describe('The team the project defaults to now; null for an agent'),
+    defaultTeamName: z.string().nullable(),
+    hasOverlay: z.boolean(),
+    hash: z.string().nullable(),
+    overrides: z
+      .number()
+      .int()
+      .describe('Model-group fields and pools the overlay overrides'),
+    blocks: z.number().int().describe('Overlay instruction blocks'),
+    notes: z
+      .number()
+      .int()
+      .describe('Members with extra instructions and stages with an addendum'),
+    orphans: z.array(z.string()),
+    unreadable: z
+      .string()
+      .nullable()
+      .describe('Why the overlay file could not be read; null when it reads'),
+  })
+  .meta({ id: 'TeamOverlayScope' });
+export type TeamOverlayScope = z.infer<typeof TeamOverlayScopeSchema>;
+
+export const TeamOverlayScopesSchema = z.object({
+  scopes: z.array(TeamOverlayScopeSchema),
+});
+
+/** One team's overlay a project holds: the project's default team's (active), or another team's it kept (inactive). */
+export const ProjectTeamOverlaySchema = TeamOverlayScopeSchema.extend({
+  slug: z.string(),
+  teamName: z.string(),
+}).meta({ id: 'ProjectTeamOverlay' });
+export type ProjectTeamOverlay = z.infer<typeof ProjectTeamOverlaySchema>;
+
+export const ProjectTeamOverlaysSchema = z.object({
+  overlays: z.array(ProjectTeamOverlaySchema),
+});
+
+export const SaveTeamOverlaySchema = z.object({
+  overlay: TeamOverlaySchema,
+  baseHash: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      'The hash the overlay was read at (null = there was no file); a newer file refuses the save TEAM_OVERLAY_CHANGED',
+    ),
+});
+
 export type TeamMember = z.infer<typeof TeamMemberSchema>;
 export type TeamAgentPoolMember = z.infer<typeof TeamAgentPoolMemberSchema>;
 export type TeamTrigger = z.infer<typeof TeamTriggerSchema>;
@@ -765,6 +950,18 @@ export const TEAM_SUMMARY_MAX = 200;
 /** How long an agent's `reason` for a proposal card may be. */
 export const TEAM_REASON_MAX = 1000;
 
+/** The overlay half of a builder chat's card: the whole new document, pinned to the file's version. */
+export const TeamProposalOverlaySchema = z.object({
+  projectId: z.string(),
+  projectName: z.string(),
+  overlay: TeamOverlaySchema,
+  /** The overlay file's hash when the card was raised; null = there was no file. */
+  baseHash: z.string().nullable(),
+  /** Unified diff of the overlay YAML, before → after. */
+  diffText: z.string(),
+});
+export type TeamProposalOverlay = z.infer<typeof TeamProposalOverlaySchema>;
+
 const TeamProposalBaseSchema = z.object({
   team: TeamSchema,
   /** The library file the approval writes, fixed when the card was raised. */
@@ -803,6 +1000,8 @@ export const TeamProposalSchema = z.discriminatedUnion('mode', [
     diff: z.custom<TeamDiff>(
       (value) => typeof value === 'object' && value !== null,
     ),
+    /** The bound project's overlay the same approval writes, before the team. */
+    overlay: TeamProposalOverlaySchema.optional(),
   }),
 ]);
 export type TeamProposal = z.infer<typeof TeamProposalSchema>;
@@ -824,6 +1023,10 @@ export interface TeamProposalRequest {
 export interface TeamChangeProposalRequest {
   slug: string;
   edits: TeamEdit[];
+  /** The bound project's whole overlay document, as the agent sends it. */
+  overlay?: unknown;
+  /** The project the chat is bound to (`Run.editsProjectId`); never the model's. */
+  projectId?: string | null;
   summary?: string;
   reason?: string;
 }
@@ -857,6 +1060,7 @@ export type TeamChangeSource = (typeof TEAM_CHANGE_SOURCES)[number];
 /** One write to a team as the change log records it (`TeamChangeLogEntry`). */
 export interface TeamChangeLogRecord {
   slug: string;
+  projectId: string | null;
   changedAt: Date;
   source: TeamChangeSource;
   fromVersion: string | null;
@@ -902,6 +1106,16 @@ export const StartTeamChatSchema = createChatSchema
     customInstructions: true,
     replyLanguage: true,
     agentOptions: true,
+  })
+  .extend({
+    projectId: z
+      .string()
+      .min(1)
+      .nullable()
+      .optional()
+      .describe(
+        'The project whose overlay of this team the chat edits beside the shared team; null = the shared team only',
+      ),
   })
   .meta({ id: 'StartTeamChat' });
 export type StartTeamChatInput = z.infer<typeof StartTeamChatSchema>;

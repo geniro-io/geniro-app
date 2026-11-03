@@ -34,6 +34,7 @@ function tool(slug: string | null, answers: Record<string, unknown>[] = []) {
   const builders = new TeamBuilderBroker();
   builders.register('builder', 'agent', {
     slug: 'team',
+    projectId: null,
     turnStartedAt: 5,
     savedHash: null,
     acceptsAnyVersion: false,
@@ -180,6 +181,7 @@ describe('SaveTeamChangeTool', () => {
     const builders = new TeamBuilderBroker();
     builders.register('builder', 'agent', {
       slug: 'team',
+      projectId: null,
       turnStartedAt: 5,
       savedHash: null,
       acceptsAnyVersion: false,
@@ -193,6 +195,7 @@ describe('SaveTeamChangeTool', () => {
         save: () => {
           builders.register('builder', 'agent', {
             slug: 'team',
+            projectId: null,
             turnStartedAt: 9,
             savedHash: null,
             acceptsAnyVersion: false,
@@ -214,6 +217,7 @@ describe('SaveTeamChangeTool', () => {
 
     await expect(builders.teamOf('builder', 'agent')).resolves.toEqual({
       slug: 'team',
+      projectId: null,
       turnStartedAt: 9,
       savedHash: null,
       acceptsAnyVersion: false,

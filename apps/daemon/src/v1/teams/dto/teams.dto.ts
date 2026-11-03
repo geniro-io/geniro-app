@@ -15,8 +15,10 @@ import {
   InstructionSizesWireSchema,
   MemberHealthSchema,
   NodeStateWireSchema,
+  ProjectTeamOverlaysSchema,
   ResetWakesCancelledSchema,
   RunTeamSnapshotWireSchema,
+  SaveTeamOverlaySchema,
   StageMoveRequestSchema,
   StageMoveResultSchema,
   StartTeamChatSchema,
@@ -25,6 +27,9 @@ import {
   TeamAvatarUploadSchema,
   TeamChatsDiscardedSchema,
   TeamHealthSchema,
+  TeamOverlaySchema,
+  TeamOverlayScopesSchema,
+  TeamOverlayWireSchema,
   TeamSchema,
   TeamSummarySchema,
   TeamWireSchema,
@@ -70,6 +75,14 @@ export const measureInstructionSizesSchema = z.object({
   team: TeamSchema,
   customInstructions: CustomInstructionsSchema.optional(),
   replyLanguage: ReplyLanguageSchema.optional(),
+  projectId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('With `overlay`: measure the team as this project runs it'),
+  overlay: TeamOverlaySchema.optional().describe(
+    "The project's overlay as the editor holds it, applied to `team` before measuring",
+  ),
 });
 export class MeasureInstructionSizesDto extends createZodDto(
   measureInstructionSizesSchema,
@@ -193,6 +206,13 @@ export class MoveTeamRunStageDto extends createZodDto(StageMoveRequestSchema) {}
 export class StageMoveResultDto extends createZodDto(StageMoveResultSchema) {}
 
 export const teamHealthQuerySchema = z.object({
+  projectId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Read the team as a run in this project would run it (its overlay applies when the project defaults to the team)',
+    ),
   probe: z
     .enum(['true', 'false'])
     .optional()
@@ -224,4 +244,26 @@ export class AnalysisJudgeQueryDto extends createZodDto(
 /** Whether that judge shares the members' vendor — see {@link AnalysisJudgeCheckSchema}. */
 export class AnalysisJudgeCheckDto extends createZodDto(
   AnalysisJudgeCheckSchema,
+) {}
+
+export class TeamOverlayDto extends createZodDto(TeamOverlayWireSchema) {}
+export class TeamOverlayScopesDto extends createZodDto(
+  TeamOverlayScopesSchema,
+) {}
+export class ProjectTeamOverlaysDto extends createZodDto(
+  ProjectTeamOverlaysSchema,
+) {}
+export class SaveTeamOverlayDto extends createZodDto(SaveTeamOverlaySchema) {}
+export const deleteTeamOverlayQuerySchema = z.object({
+  baseHash: z
+    .string()
+    .min(1)
+    .max(64)
+    .optional()
+    .describe(
+      'The hash the overlay was read at; a newer file refuses TEAM_OVERLAY_CHANGED',
+    ),
+});
+export class DeleteTeamOverlayQueryDto extends createZodDto(
+  deleteTeamOverlayQuerySchema,
 ) {}

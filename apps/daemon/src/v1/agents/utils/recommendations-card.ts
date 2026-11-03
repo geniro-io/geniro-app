@@ -105,6 +105,12 @@ const WRITTEN_ITEMS = {
     many: 'are not team items',
     only: 'only W- items change the team',
   },
+  overlay: {
+    code: 'NOT_AN_OVERLAY_ITEM',
+    one: 'is not an overlay item',
+    many: 'are not overlay items',
+    only: "only O- items change a project's overlay",
+  },
   project: {
     code: 'NOT_A_PROJECT_ITEM',
     one: 'is not a project item',

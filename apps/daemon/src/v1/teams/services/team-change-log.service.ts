@@ -23,6 +23,22 @@ interface TeamChangeNote {
   backup?: string | null;
 }
 
+interface TeamOverlayChangeNote {
+  slug: string;
+  projectId: string;
+  source: TeamChangeSource;
+  fromHash: string | null;
+  /** Null when the write removed the overlay. */
+  toHash: string | null;
+  summary?: string | null;
+  reason?: string | null;
+  userNote?: string | null;
+  recommendationIds?: readonly string[];
+  chatRunId?: string | null;
+  cardSeq?: number | null;
+  backup?: string | null;
+}
+
 /**
  * Writes the change log (`team_change_log`) and reads it back. Every writer
  * calls it AFTER the library file was written, so a log write that fails is
@@ -38,6 +54,7 @@ export class TeamChangeLogService {
     try {
       await this.dao.append({
         slug: note.slug,
+        projectId: null,
         changedAt: new Date(),
         source: note.source,
         fromVersion: note.before === null ? null : teamVersionOf(note.before),
@@ -69,6 +86,7 @@ export class TeamChangeLogService {
     try {
       await this.dao.append({
         slug,
+        projectId: null,
         changedAt: new Date(),
         source: 'migration',
         fromVersion,
@@ -88,9 +106,42 @@ export class TeamChangeLogService {
     }
   }
 
+  /**
+   * One write to a project's overlay of a team. Its versions are the overlay
+   * file's hashes, never team versions: an overlay changes no shared version.
+   */
+  async recordOverlay(note: TeamOverlayChangeNote): Promise<void> {
+    try {
+      await this.dao.append({
+        slug: note.slug,
+        projectId: note.projectId,
+        changedAt: new Date(),
+        source: note.source,
+        fromVersion: note.fromHash,
+        toVersion: note.toHash ?? 'removed',
+        summary: blankToNull(note.summary),
+        reason: blankToNull(note.reason),
+        userNote: blankToNull(note.userNote),
+        recommendationIds: [...new Set(note.recommendationIds ?? [])],
+        chatRunId: note.chatRunId ?? null,
+        cardSeq: note.cardSeq ?? null,
+        backup: note.backup ?? null,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `the change to project ${note.projectId}'s overlay of team ${note.slug} (${note.source}) was saved but not logged: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   /** Every logged change of one team, oldest first. */
   entriesOf(slug: string): Promise<TeamChangeLogRecord[]> {
     return this.dao.entriesOf(slug);
+  }
+
+  /** Every logged change of one team and of every project's overlay of it, oldest first. */
+  entriesWithOverlaysOf(slug: string): Promise<TeamChangeLogRecord[]> {
+    return this.dao.entriesOf(slug, undefined, 'every');
   }
 }
 

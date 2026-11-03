@@ -1486,6 +1486,9 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       expect(await reader.analysedTeamOf(scope)).toEqual({
         slug: 'team',
         snapshot: 'name: Team',
+        baseSnapshot: 'name: Team',
+        overlaySnapshot: null,
+        projectId: null,
         instructions: {
           customInstructions: 'MINE',
           replyLanguage: 'Russian',
@@ -1496,7 +1499,13 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       });
       expect(
         await reader.analysedTeamOf({ ...scope, sourceRunId: 'wf-gone' }),
-      ).toEqual({ slug: 'team', snapshot: null, instructions: null });
+      ).toEqual({
+        slug: 'team',
+        snapshot: null,
+        baseSnapshot: null,
+        overlaySnapshot: null,
+        instructions: null,
+      });
       const older = await fork.findOneOrFail(Run, { id: 'wf-old' });
       older.teamSnapshot = 'name: Team v1';
       await fork.flush();
@@ -1510,6 +1519,9 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       ).toEqual({
         slug: 'team',
         snapshot: 'name: Team v1',
+        baseSnapshot: 'name: Team v1',
+        overlaySnapshot: null,
+        projectId: null,
         instructions: {
           customInstructions: null,
           replyLanguage: null,

@@ -139,6 +139,8 @@ describe('ReadAnalyzedThreadTool', () => {
         Promise.resolve({
           slug: 'dev-team',
           snapshot: null,
+          baseSnapshot: null,
+          overlaySnapshot: null,
           instructions: null,
         }),
     };
@@ -178,6 +180,8 @@ describe('ReadAnalyzedThreadTool', () => {
           Promise.resolve({
             slug: 'dev-team',
             snapshot: 'name: Team',
+            baseSnapshot: 'name: Base',
+            overlaySnapshot: null,
             instructions,
           }),
       },
@@ -188,6 +192,8 @@ describe('ReadAnalyzedThreadTool', () => {
       'dev-team',
       'name: Team',
       instructions,
+      'name: Base',
+      { snapshot: null, projectId: null },
     );
   });
 
@@ -201,7 +207,13 @@ describe('ReadAnalyzedThreadTool', () => {
 
   it('refuses a team view of a run the analysis does not read, reading nothing', async () => {
     const analysedTeamOf = vi.fn(() =>
-      Promise.resolve({ slug: 'dev-team', snapshot: null, instructions: null }),
+      Promise.resolve({
+        slug: 'dev-team',
+        snapshot: null,
+        baseSnapshot: null,
+        overlaySnapshot: null,
+        instructions: null,
+      }),
     );
 
     const result = await tool({ analysedTeamOf }).call(
@@ -230,6 +242,8 @@ describe('ReadAnalyzedThreadTool', () => {
           Promise.resolve({
             slug: 'dev-team',
             snapshot: null,
+            baseSnapshot: null,
+            overlaySnapshot: null,
             instructions: null,
           }),
       },
@@ -269,6 +283,8 @@ describe('ReadAnalyzedThreadTool', () => {
           Promise.resolve({
             slug: 'dev-team',
             snapshot: null,
+            baseSnapshot: null,
+            overlaySnapshot: null,
             instructions: null,
           }),
       },

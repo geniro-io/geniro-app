@@ -19,6 +19,13 @@ import type { MemberField } from './member-validate';
 
 type MemberPatch = Partial<Omit<TeamMember, 'id'>>;
 
+/** The member in one project's scope: its shared parts read-only, its notes for that project editable. */
+export interface MemberSheetProject {
+  name: string;
+  extraInstructions: string;
+  onExtraInstructions: (text: string) => void;
+}
+
 const sheetVariants = cva(
   'flex min-h-0 flex-col bg-surface-raised transition-[translate,opacity] duration-[175ms] ease-out motion-reduce:transition-none',
   {
@@ -87,12 +94,14 @@ export function MemberSheet({
   canRemove,
   place,
   uploadAvatar,
+  project = null,
   onPatch,
   onMove,
   onRemove,
   onClose,
 }: {
   member: TeamMember;
+  project?: MemberSheetProject | null;
   /** "claude · handles the first message" */
   subtitle: string;
   issuesFor: (field: MemberField) => string[];
@@ -110,7 +119,7 @@ export function MemberSheet({
   toolsGroup: React.ReactNode;
   poolGroup: React.ReactNode;
   sizeLine: React.ReactNode;
-  /** How it has worked for the team: its figures and the analyses' marks. */
+  /** How it has worked for the team: its figures and the analyses' marks; null draws no group. */
   performance: React.ReactNode;
   /** What removing breaks (stages it owns, the first message), or null. */
   removeWarning: string | null;
@@ -211,6 +220,13 @@ export function MemberSheet({
         <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
           {subtitle}
         </span>
+        {project === null ? null : (
+          <span
+            data-slot="member-sheet-project"
+            className="shrink-0 rounded-pill bg-primary/10 px-2 py-0.5 text-xs text-primary">
+            {project.name}
+          </span>
+        )}
         {fullScreen ? null : (
           <Button
             type="button"
@@ -232,115 +248,138 @@ export function MemberSheet({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="flex flex-col gap-8 px-6 pt-4 pb-8">
-          <div className="flex flex-col items-center gap-3 text-center">
-            <span className="relative">
-              <button
-                ref={avatarRef}
-                type="button"
-                data-menu-trigger
-                aria-haspopup="dialog"
-                aria-expanded={pickerOpen}
-                aria-label={`Change ${name || 'this member'}’s avatar`}
-                className="group/avatar relative rounded-pill outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-raised"
-                onClick={() => setPickerOpen((open) => !open)}>
-                <MemberAvatar
-                  name={name || member.id}
-                  avatar={member.avatar}
-                  colorKey={member.id}
-                  size={96}
+          <fieldset
+            disabled={project !== null}
+            className="m-0 flex min-w-0 flex-col gap-8 border-0 p-0">
+            <div className="flex flex-col items-center gap-3 text-center">
+              <span className="relative">
+                <button
+                  ref={avatarRef}
+                  type="button"
+                  data-menu-trigger
+                  aria-haspopup="dialog"
+                  aria-expanded={pickerOpen}
+                  aria-label={`Change ${name || 'this member'}’s avatar`}
+                  className="group/avatar relative rounded-pill outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-raised"
+                  onClick={() => setPickerOpen((open) => !open)}>
+                  <MemberAvatar
+                    name={name || member.id}
+                    avatar={member.avatar}
+                    colorKey={member.id}
+                    size={96}
+                  />
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-0 flex items-center justify-center rounded-pill bg-foreground/40 text-background opacity-0 transition-opacity group-hover/avatar:opacity-100 group-focus-visible/avatar:opacity-100">
+                    <Pencil className="size-5" />
+                  </span>
+                </button>
+                <Popover
+                  open={pickerOpen}
+                  onClose={() => setPickerOpen(false)}
+                  triggerRef={avatarRef}
+                  side="bottom"
+                  align="start"
+                  anchor="viewport"
+                  label="Avatar"
+                  className="p-4">
+                  <AvatarPicker
+                    name={name || member.id}
+                    colorKey={member.id}
+                    value={member.avatar ?? undefined}
+                    upload={uploadAvatar}
+                    onChange={(avatar: AvatarLook | undefined) =>
+                      onPatch({ avatar })
+                    }
+                  />
+                </Popover>
+              </span>
+              <Input
+                ref={nameRef}
+                id="member-name"
+                aria-label="Name"
+                value={name}
+                placeholder="Name"
+                aria-invalid={issuesFor('name').length > 0 || undefined}
+                className="h-10 w-full max-w-sm border-transparent bg-transparent text-center text-xl font-semibold shadow-none hover:border-field-border focus-visible:border-field-border"
+                onChange={(event) => onPatch({ name: event.target.value })}
+              />
+              {fieldErrors('name')}
+            </div>
+
+            {performance === null ? null : (
+              <SheetGroup title="Performance">{performance}</SheetGroup>
+            )}
+
+            <SheetGroup title="Identity" warning={hasIssues(['character'])}>
+              <Field
+                label="Character"
+                htmlFor="member-character"
+                hint="Optional — its manner and tone. Only its own turns carry it.">
+                <ExpandableTextarea
+                  id="member-character"
+                  title="Character"
+                  value={member.character ?? ''}
+                  rows={2}
+                  placeholder="Terse and precise."
+                  onChange={(next) => onPatch({ character: next || undefined })}
                 />
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-0 flex items-center justify-center rounded-pill bg-foreground/40 text-background opacity-0 transition-opacity group-hover/avatar:opacity-100 group-focus-visible/avatar:opacity-100">
-                  <Pencil className="size-5" />
-                </span>
-              </button>
-              <Popover
-                open={pickerOpen}
-                onClose={() => setPickerOpen(false)}
-                triggerRef={avatarRef}
-                side="bottom"
-                align="start"
-                anchor="viewport"
-                label="Avatar"
-                className="p-4">
-                <AvatarPicker
-                  name={name || member.id}
-                  colorKey={member.id}
-                  value={member.avatar ?? undefined}
-                  upload={uploadAvatar}
-                  onChange={(avatar: AvatarLook | undefined) =>
-                    onPatch({ avatar })
+                {fieldErrors('character')}
+              </Field>
+            </SheetGroup>
+
+            <SheetGroup
+              title="Role & instructions"
+              warning={hasIssues(['role', 'instructions'])}>
+              <Field
+                label="Role"
+                htmlFor="member-role"
+                hint="What it does — visible to the others, so they can hand it work.">
+                <ExpandableTextarea
+                  id="member-role"
+                  title="Role"
+                  value={member.role ?? ''}
+                  rows={3}
+                  placeholder="Reviews a diff or branch and reports findings by severity."
+                  onChange={(next) => onPatch({ role: next || undefined })}
+                />
+                {fieldErrors('role')}
+              </Field>
+              <Field
+                label="Instructions"
+                htmlFor="member-instructions"
+                hint="How it works — private: only its own turns carry it.">
+                <ExpandableTextarea
+                  id="member-instructions"
+                  title="Instructions"
+                  value={member.instructions ?? ''}
+                  rows={5}
+                  onChange={(next) =>
+                    onPatch({ instructions: next || undefined })
                   }
                 />
-              </Popover>
-            </span>
-            <Input
-              ref={nameRef}
-              id="member-name"
-              aria-label="Name"
-              value={name}
-              placeholder="Name"
-              aria-invalid={issuesFor('name').length > 0 || undefined}
-              className="h-10 w-full max-w-sm border-transparent bg-transparent text-center text-xl font-semibold shadow-none hover:border-field-border focus-visible:border-field-border"
-              onChange={(event) => onPatch({ name: event.target.value })}
-            />
-            {fieldErrors('name')}
-          </div>
-
-          <SheetGroup title="Performance">{performance}</SheetGroup>
-
-          <SheetGroup title="Identity" warning={hasIssues(['character'])}>
-            <Field
-              label="Character"
-              htmlFor="member-character"
-              hint="Optional — its manner and tone. Only its own turns carry it.">
-              <ExpandableTextarea
-                id="member-character"
-                title="Character"
-                value={member.character ?? ''}
-                rows={2}
-                placeholder="Terse and precise."
-                onChange={(next) => onPatch({ character: next || undefined })}
-              />
-              {fieldErrors('character')}
-            </Field>
-          </SheetGroup>
-
-          <SheetGroup
-            title="Role & instructions"
-            warning={hasIssues(['role', 'instructions'])}>
-            <Field
-              label="Role"
-              htmlFor="member-role"
-              hint="What it does — visible to the others, so they can hand it work.">
-              <ExpandableTextarea
-                id="member-role"
-                title="Role"
-                value={member.role ?? ''}
-                rows={3}
-                placeholder="Reviews a diff or branch and reports findings by severity."
-                onChange={(next) => onPatch({ role: next || undefined })}
-              />
-              {fieldErrors('role')}
-            </Field>
-            <Field
-              label="Instructions"
-              htmlFor="member-instructions"
-              hint="How it works — private: only its own turns carry it.">
-              <ExpandableTextarea
-                id="member-instructions"
-                title="Instructions"
-                value={member.instructions ?? ''}
-                rows={5}
-                onChange={(next) =>
-                  onPatch({ instructions: next || undefined })
-                }
-              />
-              {fieldErrors('instructions')}
-            </Field>
-            {sizeLine}
-          </SheetGroup>
+                {fieldErrors('instructions')}
+              </Field>
+              {project === null ? sizeLine : null}
+            </SheetGroup>
+          </fieldset>
+          {project === null ? null : (
+            <SheetGroup title={`For ${project.name}`}>
+              <Field
+                label={`Extra instructions for ${project.name}`}
+                htmlFor="member-project-instructions"
+                hint={`Added after its own instructions in ${project.name}’s runs only.`}>
+                <ExpandableTextarea
+                  id="member-project-instructions"
+                  title={`Extra instructions for ${project.name}`}
+                  value={project.extraInstructions}
+                  rows={4}
+                  onChange={project.onExtraInstructions}
+                />
+              </Field>
+            </SheetGroup>
+          )}
+          {project === null ? null : sizeLine}
 
           <SheetGroup title="Model" warning={hasIssues(['settings'])}>
             {modelGroup}
@@ -359,33 +398,35 @@ export function MemberSheet({
             {fieldErrors('pool')}
           </SheetGroup>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm text-muted-foreground tabular-nums">
-              {place.index + 1} of {place.of} in the team
-            </span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-8 gap-1.5 rounded-control"
-              disabled={place.index === 0}
-              onClick={() => onMove(-1)}>
-              <ArrowUp aria-hidden="true" />
-              Move earlier
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-8 gap-1.5 rounded-control"
-              disabled={place.index >= place.of - 1}
-              onClick={() => onMove(1)}>
-              <ArrowDown aria-hidden="true" />
-              Move later
-            </Button>
-          </div>
+          {project !== null ? null : (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm text-muted-foreground tabular-nums">
+                {place.index + 1} of {place.of} in the team
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 rounded-control"
+                disabled={place.index === 0}
+                onClick={() => onMove(-1)}>
+                <ArrowUp aria-hidden="true" />
+                Move earlier
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 rounded-control"
+                disabled={place.index >= place.of - 1}
+                onClick={() => onMove(1)}>
+                <ArrowDown aria-hidden="true" />
+                Move later
+              </Button>
+            </div>
+          )}
 
-          {canRemove ? (
+          {project !== null ? null : canRemove ? (
             <Button
               type="button"
               variant="ghost"

@@ -799,8 +799,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    */
   private readonly notifiers = new Map<string, () => void>();
 
-  private teamBrief: ((slug: string, cwd: string) => Promise<string>) | null =
-    null;
+  private teamBrief:
+    | ((slug: string, cwd: string, projectId: string | null) => Promise<string>)
+    | null = null;
 
   constructor(
     private readonly em: EntityManager,
@@ -2089,6 +2090,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      * knows where the library keeps its files.
      */
     editsTeamSlug?: string;
+    /** The project whose overlay of that team the chat edits beside it. */
+    editsProjectId?: string | null;
     teamInstructions?: string;
     /**
      * The user's per-CLI switches, snapshotted like the instructions above;
@@ -2223,6 +2226,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         ...memory,
         taskInstructions: input.taskInstructions?.trim() || null,
         editsTeamSlug: input.editsTeamSlug ?? null,
+        editsProjectId: input.editsProjectId ?? null,
         teamInstructions: input.teamInstructions?.trim() || null,
         agentOptions: writeAgentOptions(input.agentOptions),
         groupId,
@@ -3012,6 +3016,26 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * `updatedAt` — neither opening the panel nor a turn's re-brief is activity
    * in the thread.
    */
+  /** Bind a builder chat to the project whose overlay it edits, or to the shared team alone. */
+  async bindTeamChatProject(
+    runId: string,
+    projectId: string | null,
+  ): Promise<void> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
+    if (run.editsProjectId === projectId) {
+      return;
+    }
+    await this.runDao.updateWithoutActivity(
+      runId,
+      { editsProjectId: projectId },
+      em,
+    );
+  }
+
   async refreshTeamInstructions(
     runId: string,
     instructions: string,
@@ -3038,7 +3062,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * than injected because `TeamsModule`, which owns the library, depends on
    * this module.
    */
-  useTeamBrief(source: (slug: string, cwd: string) => Promise<string>): void {
+  useTeamBrief(
+    source: (
+      slug: string,
+      cwd: string,
+      projectId: string | null,
+    ) => Promise<string>,
+  ): void {
     this.teamBrief = source;
   }
 
@@ -3051,6 +3081,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     runId: string,
     slug: string,
     cwd: string,
+    projectId: string | null,
   ): Promise<void> {
     if (this.teamBrief === null) {
       return;
@@ -3058,7 +3089,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     try {
       await this.refreshTeamInstructions(
         runId,
-        await this.teamBrief(slug, cwd),
+        await this.teamBrief(slug, cwd, projectId),
       );
     } catch (err) {
       this.logger.warn(
@@ -5613,7 +5644,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
 
       // Before the settings re-read below, so the turn reads the brief it wrote.
       if (run.editsTeamSlug !== null) {
-        await this.rebriefTeamChat(runId, run.editsTeamSlug, cwd);
+        await this.rebriefTeamChat(
+          runId,
+          run.editsTeamSlug,
+          cwd,
+          run.editsProjectId,
+        );
       }
 
       // Re-read the committed settings from a FRESH fork now that the claim is
@@ -7084,6 +7120,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         mcpEndpoint && editsTeamSlug !== null
           ? this.teamBuilders.register(runId, SINGLE_AGENT_NODE, {
               slug: editsTeamSlug,
+              projectId: run.editsProjectId,
               turnStartedAt: Date.now(),
               savedHash: null,
               acceptsAnyVersion: false,

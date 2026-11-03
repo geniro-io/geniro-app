@@ -362,6 +362,7 @@ function readItem(value: unknown): RecommendationView | null {
     'user',
     'memory',
     'project',
+    'overlay',
   ] as const);
   const territory = oneOf(row?.territory, TERRITORIES);
   const title = text(row?.title);

@@ -41,6 +41,7 @@ import {
   AnalysisJudgeCheckDto,
   AnalysisJudgeQueryDto,
   CreateTeamDto,
+  DeleteTeamOverlayQueryDto,
   DeleteTeamQueryDto,
   ExportedDto,
   ExportTeamDto,
@@ -50,10 +51,12 @@ import {
   MemberHealthDto,
   MoveTeamRunStageDto,
   NodeStateDto,
+  ProjectTeamOverlaysDto,
   ResetWakesCancelledDto,
   RunTeamDto,
   RunTeamSnapshotDto,
   SaveTeamDto,
+  SaveTeamOverlayDto,
   StageMoveResultDto,
   StartTeamChatDto,
   TeamAvatarDataDto,
@@ -63,6 +66,8 @@ import {
   TeamFileDto,
   TeamHealthDto,
   TeamHealthQueryDto,
+  TeamOverlayDto,
+  TeamOverlayScopesDto,
   TeamSummaryDto,
   UploadTeamAvatarDto,
 } from '../dto/teams.dto';
@@ -76,16 +81,20 @@ import { TeamAnalysisService } from '../services/team-analysis.service';
 import { TeamChatService } from '../services/team-chat.service';
 import { TeamExecutorService } from '../services/team-executor.service';
 import { TeamHealthService } from '../services/team-health.service';
+import { TeamOverlayService } from '../services/team-overlay.service';
 import { TeamStoreService } from '../services/team-store.service';
 import type {
   AnalysisJudgeCheckWire,
   InstructionSizesWire,
   MemberHealth,
   NodeStateWire,
+  ProjectTeamOverlay,
   ResetWakesCancelled,
   RunTeamSnapshotWire,
   StageMoveResultWire,
   TeamHealth,
+  TeamOverlayScope,
+  TeamOverlayWire,
   TeamSummary,
   TeamWire,
 } from '../teams.types';
@@ -115,6 +124,7 @@ export class TeamsController {
     private readonly stageWakes: StageWakeService,
     private readonly avatars: AvatarStoreService,
     private readonly health: TeamHealthService,
+    private readonly overlays: TeamOverlayService,
   ) {}
 
   /**
@@ -319,7 +329,7 @@ export class TeamsController {
   measureInstructionSizes(
     @Body() dto: MeasureInstructionSizesDto,
   ): InstructionSizesWire {
-    return this.instructionSizes.measure(dto);
+    return this.instructionSizes.measureFor(dto);
   }
 
   @Post('avatars')
@@ -361,7 +371,11 @@ export class TeamsController {
     @Param('slug') slug: string,
     @Query() query: TeamHealthQueryDto,
   ): Promise<TeamHealth> {
-    return this.health.health(slug, query.probe === 'true');
+    return this.health.health(
+      slug,
+      query.probe === 'true',
+      query.projectId ?? null,
+    );
   }
 
   @Get(':slug/members/:memberId/health')
@@ -372,7 +386,71 @@ export class TeamsController {
     @Param('memberId') memberId: string,
     @Query() query: TeamHealthQueryDto,
   ): Promise<MemberHealth> {
-    return this.health.memberHealth(slug, memberId, query.probe === 'true');
+    return this.health.memberHealth(
+      slug,
+      memberId,
+      query.probe === 'true',
+      query.projectId ?? null,
+    );
+  }
+
+  /** Every team's overlay one project holds: its default team's, then the ones it kept of teams it no longer defaults to. */
+  @Get('project-overlays/:projectId')
+  @ApiOperation({ operationId: 'listProjectTeamOverlays' })
+  @ZodResponse({ status: 200, type: ProjectTeamOverlaysDto })
+  async listProjectOverlays(
+    @Param('projectId') projectId: string,
+  ): Promise<{ overlays: ProjectTeamOverlay[] }> {
+    return { overlays: await this.overlays.forProject(projectId) };
+  }
+
+  /**
+   * The projects this team serves: every project whose default team it is
+   * (its overlay applies to its runs), then every project still holding an
+   * overlay of it while defaulting to something else (inactive).
+   */
+  @Get(':slug/overlays')
+  @ApiOperation({ operationId: 'listTeamOverlays' })
+  @ZodResponse({ status: 200, type: TeamOverlayScopesDto })
+  async listOverlays(
+    @Param('slug') slug: string,
+  ): Promise<{ scopes: TeamOverlayScope[] }> {
+    return { scopes: await this.overlays.scopes(slug) };
+  }
+
+  /** One project's overlay of this team; an empty overlay with a null hash when it has none yet. */
+  @Get(':slug/overlays/:projectId')
+  @ApiOperation({ operationId: 'getTeamOverlay' })
+  @ZodResponse({ status: 200, type: TeamOverlayDto })
+  getOverlay(
+    @Param('slug') slug: string,
+    @Param('projectId') projectId: string,
+  ): Promise<TeamOverlayWire> {
+    return this.overlays.get(slug, projectId);
+  }
+
+  /** Write one project's overlay; 409 `TEAM_OVERLAY_CHANGED` over a newer file, 400 `TEAM_OVERLAY_INVALID` when the team would not run with it. */
+  @Put(':slug/overlays/:projectId')
+  @ApiOperation({ operationId: 'saveTeamOverlay' })
+  @ZodResponse({ status: 200, type: TeamOverlayDto })
+  saveOverlay(
+    @Param('slug') slug: string,
+    @Param('projectId') projectId: string,
+    @Body() dto: SaveTeamOverlayDto,
+  ): Promise<TeamOverlayWire> {
+    return this.overlays.save(slug, projectId, dto.overlay, dto.baseHash);
+  }
+
+  /** Remove one project's overlay of this team, after a backup. */
+  @Delete(':slug/overlays/:projectId')
+  @ApiOperation({ operationId: 'deleteTeamOverlay' })
+  @ZodResponse({ status: 200, type: TeamDeletedDto })
+  deleteOverlay(
+    @Param('slug') slug: string,
+    @Param('projectId') projectId: string,
+    @Query() query: DeleteTeamOverlayQueryDto,
+  ): Promise<{ deleted: boolean }> {
+    return this.overlays.remove(slug, projectId, query.baseHash);
   }
 
   @Put(':slug')

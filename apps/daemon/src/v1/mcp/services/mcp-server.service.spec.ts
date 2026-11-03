@@ -4204,6 +4204,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const builders = new TeamBuilderBroker();
     builders.register('run-1', 'agent', {
       slug: 'team',
+      projectId: null,
       turnStartedAt: 0,
       savedHash: null,
       acceptsAnyVersion: false,
@@ -4287,6 +4288,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const builders = new TeamBuilderBroker();
     builders.register('run-1', 'agent', {
       slug: 'team',
+      projectId: null,
       turnStartedAt: 0,
       savedHash: null,
       acceptsAnyVersion: false,
@@ -4347,6 +4349,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     const builders = new TeamBuilderBroker();
     builders.register('run-1', 'agent', {
       slug: 'team',
+      projectId: null,
       turnStartedAt: 0,
       savedHash: null,
       acceptsAnyVersion: false,
@@ -4424,6 +4427,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(result.content[0]!.text).toContain('End your turn now');
     expect(proposeChange).toHaveBeenCalledWith('run-1', {
       slug: 'team',
+      projectId: null,
       edits,
       summary: 'Renames it',
       reason: 'The user asked.',

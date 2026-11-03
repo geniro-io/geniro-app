@@ -7,14 +7,18 @@ import {
   STAGES_PROPOSAL as LEGACY_STAGES_PROPOSAL,
 } from '../__fixtures__/team-proposals';
 import {
+  BILLING_OVERLAY,
+  OVERLAY_ONLY_PROPOSAL,
   RECORDED_NEW_PROPOSAL,
   RECORDED_REPLACE_PROPOSAL,
   REPLACE_TO_AUTO_PROPOSAL,
+  REPLACE_WITH_OVERLAY_PROPOSAL,
   STAGES_PROPOSAL,
 } from './__fixtures__/member-team-proposals';
 import {
   diffRows,
   previewMarks,
+  proposalScanText,
   readProposalOutcome,
   readTeamProposal,
   rosterOf,
@@ -127,6 +131,74 @@ describe('readTeamProposal', () => {
     for (const input of unreadable) {
       expect(readTeamProposal(input)).toBeNull();
     }
+  });
+
+  it('reads a replacement’s overlay beside its diff, and none on a card without one', () => {
+    const proposal = parsed(REPLACE_WITH_OVERLAY_PROPOSAL);
+    expect(proposal.overlay).toEqual(BILLING_OVERLAY);
+    expect(proposal.diff?.identical).toBe(false);
+    expect(parsed(RECORDED_REPLACE_PROPOSAL).overlay).toBeNull();
+    expect(parsed(RECORDED_NEW_PROPOSAL).overlay).toBeNull();
+  });
+
+  it('reads an overlay-only replacement, whose team diff is identical', () => {
+    const proposal = parsed(OVERLAY_ONLY_PROPOSAL);
+    expect(proposal.diff?.identical).toBe(true);
+    expect(proposal.overlay?.projectName).toBe('Billing');
+  });
+
+  it('reads an overlay file that did not exist as a null base hash', () => {
+    const proposal = parsed({
+      ...(REPLACE_WITH_OVERLAY_PROPOSAL as object),
+      overlay: { ...(BILLING_OVERLAY as object), baseHash: null },
+    });
+    expect(proposal.overlay?.baseHash).toBeNull();
+  });
+
+  it.each([
+    ['a non-object', 'overlay'],
+    ['a missing project id', { ...(BILLING_OVERLAY as object), projectId: 1 }],
+    [
+      'a missing project name',
+      { ...(BILLING_OVERLAY as object), projectName: undefined },
+    ],
+    [
+      'a diff that is not text',
+      { ...(BILLING_OVERLAY as object), diffText: [] },
+    ],
+    [
+      'a base hash that is neither text nor null',
+      { ...(BILLING_OVERLAY as object), baseHash: 7 },
+    ],
+    [
+      'a document that is not an object',
+      { ...(BILLING_OVERLAY as object), overlay: 'members:' },
+    ],
+  ])(
+    'drops a malformed overlay (%s) and still reads the card',
+    (_case, overlay) => {
+      const proposal = parsed({
+        ...(REPLACE_WITH_OVERLAY_PROPOSAL as object),
+        overlay,
+      });
+      expect(proposal.overlay).toBeNull();
+      expect(proposal.diff).toEqual(parsed(RECORDED_REPLACE_PROPOSAL).diff);
+    },
+  );
+
+  it('scans the overlay’s diff text for hidden characters', () => {
+    const clean = proposalScanText(parsed(REPLACE_WITH_OVERLAY_PROPOSAL));
+    expect(clean).not.toContain('\u202E');
+    const tricked = proposalScanText(
+      parsed({
+        ...(REPLACE_WITH_OVERLAY_PROPOSAL as object),
+        overlay: {
+          ...(BILLING_OVERLAY as object),
+          diffText: '+    model: op\u202Eus',
+        },
+      }),
+    );
+    expect(tricked).toContain('\u202E');
   });
 
   it('drops a blank summary rather than drawing an empty line', () => {

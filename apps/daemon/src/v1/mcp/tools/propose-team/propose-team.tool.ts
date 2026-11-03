@@ -91,9 +91,16 @@ export class ProposeTeamTool extends BaseMcpTool {
     if ('status' in turn) {
       return this.text(`Not proposed: ${turn.reason}.`, true);
     }
+    if (read.query.overlay !== undefined && turn.projectId === null) {
+      return this.text(
+        'Not proposed: this chat edits the shared team only — an overlay is proposed from a chat opened in a project scope.',
+        true,
+      );
+    }
     const outcome = await this.proposals.proposeChange(runId, {
       ...read.query,
       slug: turn.slug,
+      projectId: turn.projectId,
     });
     return this.text(
       proposeTeamResultText(outcome),

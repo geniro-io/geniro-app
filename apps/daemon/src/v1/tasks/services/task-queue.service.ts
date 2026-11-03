@@ -7,6 +7,7 @@ import type {
   QueuedTask,
 } from '../../projects/projects.types';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
+import { TeamOverlayService } from '../../teams/services/team-overlay.service';
 import { TeamStoreService } from '../../teams/services/team-store.service';
 import { membersThatAsk } from '../../teams/utils/unattended';
 import {
@@ -75,6 +76,7 @@ export class TaskQueueService {
   constructor(
     private readonly projectQueue: ProjectQueueService,
     private readonly teams: TeamStoreService,
+    private readonly overlays: TeamOverlayService,
   ) {}
 
   async read(projectId: string): Promise<ProjectQueue> {
@@ -96,9 +98,19 @@ export class TaskQueueService {
     const unattended = new Map<string, boolean>();
     const runsUnattended = async (slug: string): Promise<void> => {
       if (!unattended.has(slug)) {
-        const { team } = await this.teams.get(slug);
+        const { team } = await this.overlays.effectiveBySlug(slug, projectId);
         unattended.set(slug, membersThatAsk(team).length === 0);
       }
+    };
+    const overlayRefusals = new Map<string, string | null>();
+    const overlayRefusalOf = async (slug: string): Promise<string | null> => {
+      if (!overlayRefusals.has(slug)) {
+        overlayRefusals.set(
+          slug,
+          await this.overlays.refusalOf(slug, projectId),
+        );
+      }
+      return overlayRefusals.get(slug) ?? null;
     };
 
     const startable: typeof raw.waitingTasks = [];
@@ -180,6 +192,21 @@ export class TaskQueueService {
           title: task.title,
           reason: missingTeamReason(asUser.teamSlug),
           kind: 'missing-team',
+          retryInMs: null,
+        });
+        continue;
+      }
+      // A project overlay a run start would refuse breaks both states too.
+      const overlayRefusal =
+        !isRunTargetProblem(asUser) && asUser.kind === 'team'
+          ? await overlayRefusalOf(asUser.teamSlug)
+          : null;
+      if (overlayRefusal !== null) {
+        blocked.push({
+          id: task.id,
+          title: task.title,
+          reason: `This project’s overrides of its team cannot be applied — fix them on the team page: ${overlayRefusal}`,
+          kind: 'overlay',
           retryInMs: null,
         });
         continue;

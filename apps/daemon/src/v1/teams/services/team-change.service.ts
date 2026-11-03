@@ -17,7 +17,11 @@ import {
 } from '../../agents/utils/recommendations-card';
 import { sizedUserInstructionFiles } from '../../agents/utils/user-instruction-files';
 import type { AgentKind } from '../../runs/runs.types';
-import type { Team } from '../teams.types';
+import {
+  type Team,
+  type TeamOverlaySnapshot,
+  TeamOverlaySnapshotSchema,
+} from '../teams.types';
 import { firstLineOf } from '../utils/config-dir-redaction';
 import { editTeam, TEAM_FILE_EDIT_COPY } from '../utils/edit-team';
 import { backUpTeam, readTeamSource, sameBackupOf } from '../utils/team-backup';
@@ -27,6 +31,7 @@ import { parseTeamSnapshot } from '../utils/team-snapshot';
 import { parseTeamYaml } from '../utils/team-yaml';
 import { InstructionSizesService } from './instruction-sizes.service';
 import { TeamChangeLogService } from './team-change-log.service';
+import { TeamOverlayService } from './team-overlay.service';
 import { TeamStoreService } from './team-store.service';
 
 /**
@@ -67,6 +72,18 @@ export type TeamChangeAuthority =
       acceptsAnyVersion: boolean;
     };
 
+/** An analysis's write of a project's overlay through `save_team_change` (O- items). */
+export interface TeamOverlayChange {
+  analysisRunId: string;
+  ids: string[];
+  slug: string;
+  projectId: string;
+  overlay: unknown;
+  /** The overlay hash view=team's `overlayNow` answered; null when the project had none. */
+  baseHash: string | null;
+  dryRun: boolean;
+}
+
 /** A save asked for through the `save_team_change` tool. */
 export interface TeamChange {
   authority: TeamChangeAuthority;
@@ -77,6 +94,18 @@ export interface TeamChange {
 }
 
 type Answer = Record<string, unknown>;
+
+function readOverlaySnapshot(raw: string | null): TeamOverlaySnapshot | null {
+  if (raw === null) {
+    return null;
+  }
+  try {
+    const parsed = TeamOverlaySnapshotSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Every (agent, profile) a member or one of its pool members runs under. */
 function runnersOf(
@@ -110,6 +139,7 @@ export class TeamChangeService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly instructionSizes: InstructionSizesService,
     private readonly changeLog: TeamChangeLogService,
+    private readonly overlays: TeamOverlayService,
   ) {}
 
   /**
@@ -123,6 +153,13 @@ export class TeamChangeService {
     snapshot: string | null,
     /** What the run's turns were composed with beside the team; null when unknown. */
     instructions: AnalysedTeamRef['instructions'] = null,
+    /** The shared team the run started from; drift is measured from it, never from the project's overlay. */
+    baseSnapshot: string | null = snapshot,
+    /** The overlay the run started with, and its project, whose overlay is read as it stands now. */
+    overlay: { snapshot: string | null; projectId: string | null } = {
+      snapshot: null,
+      projectId: null,
+    },
   ): Promise<Answer> {
     const current = await this.readCurrent(slug);
     if (current === null) {
@@ -132,6 +169,8 @@ export class TeamChangeService {
       };
     }
     const started = parseTeamSnapshot(snapshot);
+    const startedBase =
+      baseSnapshot === snapshot ? started : parseTeamSnapshot(baseSnapshot);
     return {
       slug,
       hash: current.hash,
@@ -145,10 +184,160 @@ export class TeamChangeService {
         runnersOf(started.state === 'readable' ? started.team : current.team),
       ),
       changedSinceThisRun:
-        started.state === 'readable'
-          ? diffTeams(started.team, current.team)
-          : `unknown — the run's own copy is ${started.state}`,
+        startedBase.state === 'readable'
+          ? diffTeams(startedBase.team, current.team)
+          : `unknown — the run's own copy is ${startedBase.state}`,
       team: current.team,
+      ...(await this.overlayView(slug, overlay)),
+    };
+  }
+
+  /** view=team's overlay part: what the run started with and the project's overlay now, for O- items. */
+  private async overlayView(
+    slug: string,
+    overlay: { snapshot: string | null; projectId: string | null },
+  ): Promise<Answer> {
+    const started = readOverlaySnapshot(overlay.snapshot);
+    const projectId = started?.projectId ?? overlay.projectId;
+    if (projectId === null) {
+      return started === null ? {} : { overlay: started };
+    }
+    let now: Answer;
+    try {
+      const stored = await this.overlays.storedOverlay(slug, projectId);
+      now = {
+        projectId,
+        active: await this.overlays.isDefaultTeam(slug, projectId),
+        hash: stored?.hash ?? null,
+        overlay: stored?.overlay ?? {},
+      };
+    } catch (error) {
+      now = {
+        projectId,
+        error: 'TEAM_OVERLAY_UNREADABLE',
+        message: firstLineOf(
+          error instanceof Error ? error.message : String(error),
+        ),
+      };
+    }
+    return {
+      ...(started === null ? {} : { overlay: started }),
+      overlayNow: now,
+    };
+  }
+
+  /**
+   * An analysis's write of a project's overlay of the analysed team, for O-
+   * items its newest Apply selected — each filed on the card about that
+   * project. Hash-guarded, backed up and logged like a team save.
+   */
+  async saveOverlay(change: TeamOverlayChange): Promise<Answer> {
+    const apply = await this.latestApply(change.analysisRunId);
+    if (apply === null) {
+      return refuse(
+        'NOT_APPLIED',
+        'nothing has been applied in this chat yet — overlay changes are saved only for items the user selected and applied',
+      );
+    }
+    const refusal = unappliedRefusal('overlay', change.ids, apply);
+    if (refusal !== null) {
+      return refuse(refusal.error, refusal.message);
+    }
+    const card = await readCard(
+      this.itemDao,
+      change.analysisRunId,
+      apply.cardSeq,
+      this.em.fork(),
+    ).catch(() => null);
+    const elsewhere = (card?.items ?? []).filter(
+      (item) =>
+        change.ids.includes(item.id) && item.location !== change.projectId,
+    );
+    if (card === null || elsewhere.length > 0) {
+      return refuse(
+        'WRONG_PROJECT',
+        card === null
+          ? 'the card these items were filed on can no longer be read'
+          : `${elsewhere.map((item) => item.id).join(', ')} ${elsewhere.length === 1 ? 'is' : 'are'} about another project's overlay`,
+      );
+    }
+    const current = await this.readCurrent(change.slug);
+    if (current === null) {
+      return refuse(
+        'TEAM_GONE',
+        `the team '${change.slug}' is no longer in the library`,
+      );
+    }
+    const prepared = await this.overlays.prepareChange(
+      change.slug,
+      current.team,
+      change.projectId,
+      change.overlay,
+    );
+    if (!prepared.ok) {
+      return refuse(
+        prepared.code,
+        prepared.code === 'OVERLAY_INACTIVE'
+          ? `${prepared.message} — recommend a change to the team or the project's instructions instead`
+          : prepared.message,
+      );
+    }
+    if ((prepared.current?.hash ?? null) !== change.baseHash) {
+      return {
+        ...refuse(
+          'HASH_DRIFT',
+          "the project's overlay changed since you read it — read view=team again and re-apply on overlayNow",
+        ),
+        currentHash: prepared.current?.hash ?? null,
+      };
+    }
+    const { diffText } = prepared;
+    if (change.dryRun) {
+      return { dryRun: true, saved: false, diffText };
+    }
+    if (diffText === '') {
+      return { saved: false, diffText, message: 'nothing to change' };
+    }
+    let written: { hash: string; backup: string | null };
+    try {
+      written = await this.overlays.writeOverlay(
+        change.slug,
+        change.projectId,
+        prepared.overlay,
+        change.baseHash,
+      );
+    } catch (error) {
+      if (
+        error instanceof ConflictException &&
+        error.errorCode === 'TEAM_OVERLAY_CHANGED'
+      ) {
+        return refuse(
+          'HASH_DRIFT',
+          "the project's overlay changed while saving — read view=team again and re-apply",
+        );
+      }
+      throw error;
+    }
+    await this.changeLog.recordOverlay({
+      slug: change.slug,
+      projectId: change.projectId,
+      source: 'analysis',
+      fromHash: change.baseHash,
+      toHash: written.hash,
+      summary: card.items
+        .filter((item) => change.ids.includes(item.id))
+        .map((item) => `${item.id} ${item.title}`)
+        .join('; '),
+      recommendationIds: change.ids,
+      chatRunId: change.analysisRunId,
+      cardSeq: apply.cardSeq,
+      backup: written.backup,
+    });
+    return {
+      saved: true,
+      hash: written.hash,
+      ...(written.backup === null ? {} : { backup: written.backup }),
+      diffText,
     };
   }
 

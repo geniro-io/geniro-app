@@ -155,8 +155,26 @@ describe('TeamChatPanel', () => {
         approval: 'acceptEdits',
         customInstructions: 'Prefer small diffs.',
         replyLanguage: 'Russian',
+        projectId: null,
       },
     });
+  });
+
+  it('binds a dock opened in a project’s scope to that project', async () => {
+    await paint({ projectId: 'p1', projectName: 'Geniro' });
+
+    await act(async () => {
+      await thread().open();
+    });
+
+    expect(openTeamChat.mock.calls[0]![0].startTeamChatDto.projectId).toBe(
+      'p1',
+    );
+    expect(
+      container.querySelector(
+        '[aria-label="Change with chat · Dev Team + Geniro"]',
+      ),
+    ).not.toBeNull();
   });
 
   it('starts a team chat on the first agent when none was picked', async () => {

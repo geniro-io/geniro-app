@@ -6,6 +6,8 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_REQUEST_BODY_BYTES,
+  RECOMMENDATION_ID_PREFIX,
+  RecommendationIdSchema,
 } from './chat.types';
 
 /** A settled listing with one row — the ordinary answered state. */
@@ -166,5 +168,13 @@ describe('custom-instruction validation — the daemon is the enforcing side', (
       CustomInstructionsSchema.optional().safeParse(undefined).success,
     ).toBe(true);
     expect(CustomInstructionsSchema.safeParse('').success).toBe(true);
+  });
+});
+
+describe('RecommendationIdSchema', () => {
+  it('reads an O- id as a project overlay item and keeps refusing unknown prefixes', () => {
+    expect(RecommendationIdSchema.safeParse('O-1').success).toBe(true);
+    expect(RECOMMENDATION_ID_PREFIX.overlay).toBe('O-');
+    expect(RecommendationIdSchema.safeParse('X-1').success).toBe(false);
   });
 });

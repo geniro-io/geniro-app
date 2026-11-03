@@ -9,10 +9,13 @@ import type { RunWire } from '../../agents/chat.types';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { ThreadAnalysisService } from '../../agents/services/thread-analysis.service';
 import type { MemoryService } from '../../memory/services/memory.service';
+import type { ProjectDao } from '../../projects/dao/project.dao';
 import { member, teamOf } from '../__tests__/team-builders';
 import type { StartTeamChatInput, Team } from '../teams.types';
 import { teamJsonSchema } from '../utils/team-json-schema';
 import { TeamChatService } from './team-chat.service';
+import { TeamOverlayService } from './team-overlay.service';
+import { TeamOverlayStoreService } from './team-overlay-store.service';
 import { TeamStoreService } from './team-store.service';
 
 const WF: Team = teamOf([member('lead')], { name: 'Dev Team' });
@@ -30,10 +33,12 @@ function runWire(id: string): RunWire {
 describe('TeamChatService', () => {
   let dir: string;
   let store: TeamStoreService;
+  let overlays: TeamOverlayStoreService;
   let chats: {
     findTeamChat: ReturnType<typeof vi.fn>;
     createChat: ReturnType<typeof vi.fn>;
     refreshTeamInstructions: ReturnType<typeof vi.fn>;
+    bindTeamChatProject: ReturnType<typeof vi.fn>;
     useTeamBrief: ReturnType<typeof vi.fn>;
     deleteTeamChats: ReturnType<typeof vi.fn>;
     offeredApproval: ReturnType<typeof vi.fn>;
@@ -53,6 +58,7 @@ describe('TeamChatService', () => {
       findTeamChat: vi.fn().mockResolvedValue(null),
       createChat: vi.fn().mockResolvedValue(runWire('new-run')),
       refreshTeamInstructions: vi.fn().mockResolvedValue(undefined),
+      bindTeamChatProject: vi.fn().mockResolvedValue(undefined),
       useTeamBrief: vi.fn(),
       deleteTeamChats: vi.fn().mockResolvedValue({ deleted: 2 }),
       offeredApproval: vi.fn(
@@ -65,11 +71,23 @@ describe('TeamChatService', () => {
       settleDeletedTeam: vi.fn(async () => 0),
       useTeamLookup: vi.fn(),
     };
+    overlays = new TeamOverlayStoreService({ teamsDir: dir });
+    const projects = {
+      getById: async (id: string) =>
+        id === 'p1' ? { id, name: 'Geniro', teamSlug: null } : null,
+      listAll: async () => [{ id: 'p1', name: 'Geniro', teamSlug: null }],
+    };
     service = new TeamChatService(
       store,
       chats as unknown as ChatService,
       analyses as unknown as ThreadAnalysisService,
       memory as unknown as MemoryService,
+      new TeamOverlayService(
+        overlays,
+        store,
+        projects as unknown as ProjectDao,
+        { fork: () => ({}) } as never,
+      ),
     );
   });
 
@@ -158,6 +176,37 @@ describe('TeamChatService', () => {
       runWire('existing-run'),
     );
     expect(chats.createChat).not.toHaveBeenCalled();
+  });
+
+  it('binds a chat opened in a project scope to that project and briefs it on the overlay file', async () => {
+    const { slug } = await store.create(WF);
+    await overlays.save(slug, 'p1', {});
+
+    await service.open(slug, { ...CHIPS, projectId: 'p1' });
+
+    const [input] = chats.createChat.mock.calls[0] as [
+      Parameters<ChatService['createChat']>[0],
+    ];
+    expect(input.editsProjectId).toBe('p1');
+    expect(input).not.toHaveProperty('projectId');
+    expect(input.teamInstructions).toContain('PROJECT OVERLAY — Geniro');
+    expect(input.teamInstructions).toContain(overlays.pathOf(slug, 'p1'));
+  });
+
+  it('rebinds an open chat to the scope it is opened in', async () => {
+    const { slug } = await store.create(WF);
+    chats.findTeamChat.mockResolvedValue(runWire('existing-run'));
+
+    await service.open(slug, { ...CHIPS, projectId: null });
+
+    expect(chats.bindTeamChatProject).toHaveBeenCalledWith(
+      'existing-run',
+      null,
+    );
+    expect(chats.refreshTeamInstructions).toHaveBeenCalledWith(
+      'existing-run',
+      expect.not.stringContaining('PROJECT OVERLAY —'),
+    );
   });
 
   // Otherwise a conversation opened before an update, or before the team
@@ -318,12 +367,14 @@ describe('TeamChatService', () => {
     expect(chats.deleteTeamChats).toHaveBeenCalledWith('already-deleted');
   });
 
-  it('deletes a team, the chat about it and its analyses, and settles its memories as the user chose', async () => {
+  it('deletes a team, its project overlays, the chat about it and its analyses, and settles its memories as the user chose', async () => {
     const { slug } = await store.create(WF);
+    await overlays.save(slug, 'p1', { members: {} });
 
     await service.deleteTeam(slug, 'forget');
 
     await expect(store.get(slug)).rejects.toThrow(NotFoundException);
+    expect(await overlays.listForTeam(slug)).toEqual([]);
     expect(chats.deleteTeamChats).toHaveBeenCalledWith(slug);
     expect(analyses.deleteTeamAnalyses).toHaveBeenCalledWith(slug);
     expect(memory.settleDeletedTeam).toHaveBeenCalledWith(slug, 'forget');

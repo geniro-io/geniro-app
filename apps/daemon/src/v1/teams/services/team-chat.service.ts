@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { Injectable, type OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
 import type { RunWire } from '../../agents/chat.types';
 import { ChatService } from '../../agents/services/chat.service';
@@ -10,6 +10,7 @@ import type { TeamMemoryFate } from '../../memory/memory.types';
 import { MemoryService } from '../../memory/services/memory.service';
 import type { StartTeamChatInput, Team } from '../teams.types';
 import { composeTeamChatInstructions } from '../utils/team-chat-instructions';
+import { TeamOverlayService } from './team-overlay.service';
 import { TeamStoreService } from './team-store.service';
 
 /** A run's cwd is stored canonicalized; the library path may not be. */
@@ -43,6 +44,8 @@ function canonical(path: string): string {
  */
 @Injectable()
 export class TeamChatService implements OnModuleInit {
+  private readonly logger = new Logger(TeamChatService.name);
+
   /**
    * Opens in flight, keyed by team — a second ask joins the first instead
    * of racing it.
@@ -69,10 +72,13 @@ export class TeamChatService implements OnModuleInit {
     private readonly chats: ChatService,
     private readonly analyses: ThreadAnalysisService,
     private readonly memory: MemoryService,
+    private readonly overlays: TeamOverlayService,
   ) {}
 
   onModuleInit(): void {
-    this.chats.useTeamBrief((slug, cwd) => this.briefFor(slug, cwd));
+    this.chats.useTeamBrief((slug, cwd, projectId) =>
+      this.briefFor(slug, cwd, projectId),
+    );
     this.memory.useTeamLookup((slug) => this.store.has(slug));
   }
 
@@ -85,9 +91,18 @@ export class TeamChatService implements OnModuleInit {
   private async briefFor(
     slug: string,
     cwd: string,
+    projectId: string | null,
     team?: Team,
   ): Promise<string> {
     const location = this.store.locate(slug);
+    const overlays = await this.overlays
+      .builderRefs(slug, projectId)
+      .catch((error: unknown) => {
+        this.logger.warn(
+          `team chat ${slug} briefed without its overlays: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return { otherOverlays: [] };
+      });
     return composeTeamChatInstructions({
       path: location.path,
       slug,
@@ -95,6 +110,7 @@ export class TeamChatService implements OnModuleInit {
       schemaPath: await this.schemaReference(),
       memory: this.memory.enabled,
       inLibrary: canonical(cwd) === canonical(location.directory),
+      ...overlays,
     });
   }
 
@@ -145,23 +161,33 @@ export class TeamChatService implements OnModuleInit {
   ): Promise<RunWire> {
     const { team } = await this.store.get(slug);
     const location = this.store.locate(slug);
+    const { projectId: bound, ...chips } = input;
+    const projectId = bound ?? null;
     const existing = await this.chats.findTeamChat(slug);
     if (existing !== null) {
       // An open conversation is re-briefed rather than left on the text it was
-      // created with — see `ChatService.refreshTeamInstructions`.
+      // created with — see `ChatService.refreshTeamInstructions` — and bound
+      // to the scope the panel opened it in.
+      await this.chats.bindTeamChatProject(existing.id, projectId);
       await this.chats.refreshTeamInstructions(
         existing.id,
-        await this.briefFor(slug, existing.cwd ?? location.directory, team),
+        await this.briefFor(
+          slug,
+          existing.cwd ?? location.directory,
+          projectId,
+          team,
+        ),
       );
       return existing;
     }
     const teamInstructions = await this.briefFor(
       slug,
       location.directory,
+      projectId,
       team,
     );
     return this.chats.createChat({
-      ...input,
+      ...chips,
       // The dock's own default may be a mode this CLI does not offer.
       approval: this.chats.offeredApproval(input.agentKind, input.approval),
       // The LIBRARY directory, not the file: a cwd is a directory, and putting
@@ -173,6 +199,7 @@ export class TeamChatService implements OnModuleInit {
       // service only ever replacing a title it derived itself.
       title: `Team: ${team.name}`,
       editsTeamSlug: slug,
+      editsProjectId: projectId,
       teamInstructions,
     });
   }
@@ -214,6 +241,7 @@ export class TeamChatService implements OnModuleInit {
    */
   async deleteTeam(slug: string, memories: TeamMemoryFate): Promise<void> {
     await this.store.delete(slug);
+    await this.overlays.deleteForTeam(slug);
     await this.discard(slug);
     await this.analyses.deleteTeamAnalyses(slug);
     await this.memory.settleDeletedTeam(slug, memories);

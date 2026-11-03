@@ -337,6 +337,8 @@ export interface HistoryVersionFigures {
 export interface HistoryChange {
   at: string;
   source: string;
+  /** The project whose overlay of the team was changed; null for the shared team. Its `from`/`to` are then overlay file hashes, never team versions. */
+  projectId: string | null;
   from: HistoryVersionRef | null;
   to: HistoryVersionRef;
   summary: string | null;

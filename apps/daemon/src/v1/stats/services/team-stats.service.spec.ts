@@ -1026,6 +1026,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       changeLog = [
         {
           slug: 'dev-team',
+          projectId: null,
           changedAt: new Date(2026, 9, 1, 10, 2, 30),
           source: 'builder',
           fromVersion: 'v1',

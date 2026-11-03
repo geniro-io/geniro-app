@@ -30,11 +30,13 @@ import type {
   MoveTeamRunStageDto,
   NodeStateDto,
   PressActionDto,
+  ProjectTeamOverlaysDto,
   ResetWakesCancelledDto,
   RunDto,
   RunTeamDto,
   RunTeamSnapshotDto,
   SaveTeamDto,
+  SaveTeamOverlayDto,
   SendMessageDto,
   StageMoveResultDto,
   StartTeamChatDto,
@@ -44,6 +46,8 @@ import type {
   TeamDeletedDto,
   TeamFileDto,
   TeamHealthDto,
+  TeamOverlayDto,
+  TeamOverlayScopesDto,
   TeamSummaryDto,
   ThreadAnalysisDto,
   UploadTeamAvatarDto,
@@ -77,6 +81,12 @@ export interface TeamsApiDeleteTeamRequest {
     memories?: DeleteTeamMemoriesEnum;
 }
 
+export interface TeamsApiDeleteTeamOverlayRequest {
+    slug: string;
+    projectId: string;
+    baseHash?: string;
+}
+
 export interface TeamsApiDeleteTeamRunRequest {
     runId: string;
 }
@@ -107,12 +117,25 @@ export interface TeamsApiGetTeamAvatarRequest {
     id: string;
 }
 
+export interface TeamsApiGetTeamOverlayRequest {
+    slug: string;
+    projectId: string;
+}
+
 export interface TeamsApiGetTeamRunSnapshotRequest {
     runId: string;
 }
 
 export interface TeamsApiImportTeamRequest {
     importTeamDto: ImportTeamDto;
+}
+
+export interface TeamsApiListProjectTeamOverlaysRequest {
+    projectId: string;
+}
+
+export interface TeamsApiListTeamOverlaysRequest {
+    slug: string;
 }
 
 export interface TeamsApiListTeamRunNodesRequest {
@@ -150,17 +173,25 @@ export interface TeamsApiPressTeamActionRequest {
 export interface TeamsApiReadMemberHealthRequest {
     slug: string;
     memberId: string;
+    projectId?: string;
     probe?: ReadMemberHealthProbeEnum;
 }
 
 export interface TeamsApiReadTeamHealthRequest {
     slug: string;
+    projectId?: string;
     probe?: ReadTeamHealthProbeEnum;
 }
 
 export interface TeamsApiSaveTeamRequest {
     slug: string;
     saveTeamDto: SaveTeamDto;
+}
+
+export interface TeamsApiSaveTeamOverlayRequest {
+    slug: string;
+    projectId: string;
+    saveTeamOverlayDto: SaveTeamOverlayDto;
 }
 
 export interface TeamsApiSendTeamCallMessageRequest {
@@ -487,6 +518,63 @@ export class TeamsApi extends runtime.BaseAPI {
      */
     async deleteTeam(requestParameters: TeamsApiDeleteTeamRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamDeletedDto> {
         const response = await this.deleteTeamRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async deleteTeamOverlayRaw(requestParameters: TeamsApiDeleteTeamOverlayRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TeamDeletedDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling deleteTeamOverlay().'
+            );
+        }
+
+        if (requestParameters['projectId'] == null) {
+            throw new runtime.RequiredError(
+                'projectId',
+                'Required parameter "projectId" was null or undefined when calling deleteTeamOverlay().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['baseHash'] != null) {
+            queryParameters['baseHash'] = requestParameters['baseHash'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/{slug}/overlays/{projectId}`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+        urlPath = urlPath.replace(`{${"projectId"}}`, encodeURIComponent(String(requestParameters['projectId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async deleteTeamOverlay(requestParameters: TeamsApiDeleteTeamOverlayRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamDeletedDto> {
+        const response = await this.deleteTeamOverlayRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -826,6 +914,59 @@ export class TeamsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async getTeamOverlayRaw(requestParameters: TeamsApiGetTeamOverlayRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TeamOverlayDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling getTeamOverlay().'
+            );
+        }
+
+        if (requestParameters['projectId'] == null) {
+            throw new runtime.RequiredError(
+                'projectId',
+                'Required parameter "projectId" was null or undefined when calling getTeamOverlay().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/{slug}/overlays/{projectId}`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+        urlPath = urlPath.replace(`{${"projectId"}}`, encodeURIComponent(String(requestParameters['projectId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async getTeamOverlay(requestParameters: TeamsApiGetTeamOverlayRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamOverlayDto> {
+        const response = await this.getTeamOverlayRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async getTeamRunSnapshotRaw(requestParameters: TeamsApiGetTeamRunSnapshotRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunTeamSnapshotDto>> {
         if (requestParameters['runId'] == null) {
             throw new runtime.RequiredError(
@@ -912,6 +1053,96 @@ export class TeamsApi extends runtime.BaseAPI {
      */
     async importTeam(requestParameters: TeamsApiImportTeamRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamFileDto> {
         const response = await this.importTeamRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listProjectTeamOverlaysRaw(requestParameters: TeamsApiListProjectTeamOverlaysRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ProjectTeamOverlaysDto>> {
+        if (requestParameters['projectId'] == null) {
+            throw new runtime.RequiredError(
+                'projectId',
+                'Required parameter "projectId" was null or undefined when calling listProjectTeamOverlays().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/project-overlays/{projectId}`;
+        urlPath = urlPath.replace(`{${"projectId"}}`, encodeURIComponent(String(requestParameters['projectId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listProjectTeamOverlays(requestParameters: TeamsApiListProjectTeamOverlaysRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ProjectTeamOverlaysDto> {
+        const response = await this.listProjectTeamOverlaysRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listTeamOverlaysRaw(requestParameters: TeamsApiListTeamOverlaysRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TeamOverlayScopesDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling listTeamOverlays().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/{slug}/overlays`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listTeamOverlays(requestParameters: TeamsApiListTeamOverlaysRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamOverlayScopesDto> {
+        const response = await this.listTeamOverlaysRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -1294,6 +1525,10 @@ export class TeamsApi extends runtime.BaseAPI {
 
         const queryParameters: any = {};
 
+        if (requestParameters['projectId'] != null) {
+            queryParameters['projectId'] = requestParameters['projectId'];
+        }
+
         if (requestParameters['probe'] != null) {
             queryParameters['probe'] = requestParameters['probe'];
         }
@@ -1343,6 +1578,10 @@ export class TeamsApi extends runtime.BaseAPI {
         }
 
         const queryParameters: any = {};
+
+        if (requestParameters['projectId'] != null) {
+            queryParameters['projectId'] = requestParameters['projectId'];
+        }
 
         if (requestParameters['probe'] != null) {
             queryParameters['probe'] = requestParameters['probe'];
@@ -1432,6 +1671,69 @@ export class TeamsApi extends runtime.BaseAPI {
      */
     async saveTeam(requestParameters: TeamsApiSaveTeamRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamFileDto> {
         const response = await this.saveTeamRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async saveTeamOverlayRaw(requestParameters: TeamsApiSaveTeamOverlayRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TeamOverlayDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling saveTeamOverlay().'
+            );
+        }
+
+        if (requestParameters['projectId'] == null) {
+            throw new runtime.RequiredError(
+                'projectId',
+                'Required parameter "projectId" was null or undefined when calling saveTeamOverlay().'
+            );
+        }
+
+        if (requestParameters['saveTeamOverlayDto'] == null) {
+            throw new runtime.RequiredError(
+                'saveTeamOverlayDto',
+                'Required parameter "saveTeamOverlayDto" was null or undefined when calling saveTeamOverlay().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/{slug}/overlays/{projectId}`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+        urlPath = urlPath.replace(`{${"projectId"}}`, encodeURIComponent(String(requestParameters['projectId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PUT',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['saveTeamOverlayDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async saveTeamOverlay(requestParameters: TeamsApiSaveTeamOverlayRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamOverlayDto> {
+        const response = await this.saveTeamOverlayRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

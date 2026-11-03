@@ -254,6 +254,7 @@ import { CallBroker } from './call-broker.service';
 import { RunTeamService } from './run-team.service';
 import { StageService } from './stage.service';
 import { TeamHealthService } from './team-health.service';
+import { TeamOverlayService } from './team-overlay.service';
 import { TeamStoreService } from './team-store.service';
 
 /** How one member's turn ended (the run-level rollup derives from these). */
@@ -775,6 +776,7 @@ export class TeamExecutorService
     private readonly kindRows: RunKindRowsCache,
     private readonly memory: MemoryService,
     private readonly projectScope: ProjectScopeService,
+    private readonly overlays: TeamOverlayService,
     /**
      * The page tool (`show_artifact`) for team agents. Optional only so the
      * executor's specs, which construct it positionally, need not supply it.
@@ -1311,7 +1313,21 @@ export class TeamExecutorService
    * bus → WS while the team works.
    */
   async startRun(input: StartTeamRunInput): Promise<RunWire> {
-    await this.assertMembersReady(input.team);
+    const cwd = resolveValidCwd(input.cwd);
+    const scopeFacts = {
+      taskId: input.taskId ?? null,
+      cwd,
+      projectId: input.projectId,
+    };
+    const placement = await this.projectScope.placeNewRun(scopeFacts);
+    // The project's overlay applies only to its DEFAULT team; every check
+    // below and the snapshot read the team as this project runs it.
+    const effective = await this.overlays.effective(
+      input.slug,
+      input.team,
+      placement.projectId,
+    );
+    await this.assertMembersReady(effective.team);
     // Member settings are resolved HERE rather than per turn, for the same two
     // reasons `cwd` is: a bad config directory is a configuration mistake, so
     // refusing the run names it once up front instead of failing one member
@@ -1319,16 +1335,9 @@ export class TeamExecutorService
     // spawn with, since that is what was actually checked. The CLI itself would
     // say nothing: it ignores an unusable --plugin-dir silently
     // (probe-verified), which reads as "this member has no MCP servers".
-    const { team, dropped } = await this.assertRunnable(input.team);
-    const cwd = resolveValidCwd(input.cwd);
+    const { team, dropped } = await this.assertRunnable(effective.team);
     const lead = startingLeadOf(team);
 
-    const scopeFacts = {
-      taskId: input.taskId ?? null,
-      cwd,
-      projectId: input.projectId,
-    };
-    const placement = await this.projectScope.placeNewRun(scopeFacts);
     // Which sidebar group claims this run — by the TEAM first, which is the
     // rule a team exists for: one team runs over a dozen repositories,
     // so no folder names its runs. Resolved here for the reason the chat
@@ -1357,8 +1366,12 @@ export class TeamExecutorService
         teamId: input.slug,
         // The team as it is NOW, kept with the run: a later edit of the
         // library team must not reach this run (`Run.teamSnapshot`).
-        teamSnapshot: teamSnapshotOf(input.team),
-        stageProgress: initialStageProgress(input.team),
+        teamSnapshot: teamSnapshotOf(effective.team),
+        teamBaseSnapshot: teamSnapshotOf(input.team),
+        teamOverlaySnapshot: effective.overlay
+          ? JSON.stringify(effective.overlay)
+          : null,
+        stageProgress: initialStageProgress(effective.team),
         currentLead: lead,
         groupId,
         status: 'running',

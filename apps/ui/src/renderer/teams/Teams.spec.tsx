@@ -78,8 +78,12 @@ const {
   uploadTeamAvatar,
   readTeamStats,
   readTeamHealth,
+  listTeamOverlays,
+  openProject,
   listMemories,
 } = vi.hoisted(() => ({
+  listTeamOverlays: vi.fn(),
+  openProject: vi.fn(),
   readTeamStats: vi.fn(),
   readTeamHealth: vi.fn(),
   listMemories: vi.fn(),
@@ -130,6 +134,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       })),
       uploadTeamAvatar,
       readTeamHealth,
+      listTeamOverlays,
     },
     memories: { listMemories },
     chats: withHistoryPages({
@@ -346,6 +351,8 @@ beforeEach(() => {
     byMember: [],
     assessmentVerdicts: { assessments: 0, agreed: 0, disagreed: 0 },
   }));
+  listTeamOverlays.mockReset().mockImplementation(async () => ({ scopes: [] }));
+  openProject.mockReset();
   readTeamHealth.mockReset().mockImplementation(async ({ slug }) => ({
     slug,
     checkedAt: '2026-11-02T10:00:00.000Z',
@@ -394,6 +401,7 @@ async function paint(
         onFirstLaunchHandled={onFirstLaunchHandled}
         openRequest={open?.request ?? null}
         onOpenRequestHandled={open?.onHandled}
+        onOpenProject={openProject}
       />,
     );
   });
@@ -628,6 +636,55 @@ describe('Teams — the library list', () => {
     expect(
       container.querySelector('[data-slot="team-card-warnings"]')?.textContent,
     ).toContain('1');
+  });
+});
+
+describe('Teams — the projects that run it', () => {
+  const scope = (
+    projectId: string,
+    projectName: string,
+    active: boolean,
+  ): Record<string, unknown> => ({
+    projectId,
+    projectName,
+    active,
+    defaultTeamSlug: active ? 'dev-team' : 'other',
+    defaultTeamName: active ? 'Dev Team' : 'Other',
+    hasOverlay: true,
+    hash: 'h',
+    overrides: 2,
+    blocks: 1,
+    notes: 0,
+    orphans: [],
+    unreadable: null,
+  });
+
+  it('names the projects that default to it and opens one on a press, with no project scope on the page', async () => {
+    listTeamOverlays.mockImplementation(async () => ({
+      scopes: [scope('p1', 'Manifest', true), scope('p2', 'Old site', false)],
+    }));
+    await openBuilder();
+    await act(async () => {});
+
+    const usedBy = container.querySelector('[data-slot="team-used-by"]');
+    expect(usedBy?.textContent).toContain('Used by');
+    expect(usedBy?.textContent).toContain('Manifest');
+    expect(usedBy?.textContent).not.toContain('Old site');
+    expect(container.querySelector('[data-slot="team-scope-bar"]')).toBeNull();
+
+    await press('Manifest');
+
+    expect(openProject).toHaveBeenCalledWith('p1');
+  });
+
+  it('says nothing about projects when none defaults to it', async () => {
+    listTeamOverlays.mockImplementation(async () => ({
+      scopes: [scope('p2', 'Old site', false)],
+    }));
+    await openBuilder();
+    await act(async () => {});
+
+    expect(container.querySelector('[data-slot="team-used-by"]')).toBeNull();
   });
 });
 

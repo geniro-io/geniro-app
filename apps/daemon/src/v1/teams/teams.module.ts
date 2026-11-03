@@ -30,6 +30,8 @@ import { TeamChatService } from './services/team-chat.service';
 import { TeamExecutorService } from './services/team-executor.service';
 import { TeamHealthService } from './services/team-health.service';
 import { TeamLiveWorkSources } from './services/team-live-work.service';
+import { TeamOverlayService } from './services/team-overlay.service';
+import { TeamOverlayStoreService } from './services/team-overlay-store.service';
 import { TeamProposalService } from './services/team-proposal.service';
 import { TeamStoreService } from './services/team-store.service';
 
@@ -63,6 +65,11 @@ import { TeamStoreService } from './services/team-store.service';
         new TeamStoreService({}, avatars),
       inject: [AvatarStoreService],
     },
+    {
+      provide: TeamOverlayStoreService,
+      useFactory: () => new TeamOverlayStoreService({}),
+    },
+    TeamOverlayService,
     CapabilitiesService,
     InstructionSizesService,
     ProjectInstructionSizesService,
@@ -111,6 +118,8 @@ import { TeamStoreService } from './services/team-store.service';
   // restore, which writes the library too, and for its team history read.
   exports: [
     TeamStoreService,
+    TeamOverlayStoreService,
+    TeamOverlayService,
     TeamExecutorService,
     CallBroker,
     TaskBoardBroker,

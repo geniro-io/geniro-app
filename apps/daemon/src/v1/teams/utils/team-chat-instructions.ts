@@ -51,6 +51,82 @@ const APPROVAL_MEANING: Record<ApprovalMode, string> = {
   acceptEdits: 'approves its own file edits and asks about everything else',
 };
 
+export interface BuilderOverlayRef {
+  projectId: string;
+  projectName: string;
+  /** Absolute path of `<projectId>.overlay.yaml`, which may not exist yet. */
+  path: string;
+  /** True while the project's default team is this team. */
+  active: boolean;
+}
+
+function overlaySection(
+  overlay: BuilderOverlayRef | undefined,
+  others: readonly BuilderOverlayRef[],
+): string {
+  const listed =
+    others.length === 0
+      ? ''
+      : `
+Other projects' overlays of this team — read them before a shared change, so
+the change does not break them, and never edit them here:
+${others.map((o) => `  - ${o.projectName}${o.active ? '' : ' (inactive)'}: ${o.path}`).join('\n')}
+`;
+  if (overlay === undefined) {
+    return listed === ''
+      ? ''
+      : `
+PROJECT OVERLAYS
+This chat edits the SHARED team, which every project uses. A project whose
+default team this is may add its own overlay on top.
+${listed}`;
+  }
+  return `
+PROJECT OVERLAY — ${overlay.projectName}
+This chat is bound to the project "${overlay.projectName}". The shared team
+serves every project; what only this project needs lives in its overlay:
+
+  ${overlay.path}
+${
+  overlay.active
+    ? ''
+    : `
+The project does not default to this team now, so its runs do not apply the
+overlay until it does again.
+`
+}
+The overlay is YAML with these optional sections, all keyed by the team's
+own ids:
+- \`allMembers\`: per CLI (\`claude\`, \`cursor-agent\`, \`codex\`), the Model group
+  every member and team pool entry of that CLI runs with here: \`model\`,
+  \`effort\`, \`contextWindow\`, \`modelParameters\`, \`autoCompactPercent\`,
+  \`approval\`, \`configDir\`.
+- \`members.<memberId>.settings\`: the same Model group plus \`agent\` for one
+  member; it beats \`allMembers\`. Setting \`agent\` starts that member's Model
+  group over from the new CLI's defaults.
+- \`members.<memberId>.pool\`: the member's whole pool in this project
+  (members 2, 3, …; \`[]\` = none), each entry shaped like a team pool entry.
+- \`members.<memberId>.extraInstructions\`: appended to that member's own
+  instructions in this project.
+- \`instructionBlocks\`: blocks only this project's runs carry, shaped like
+  the team's (\`id\`, \`title\`, \`text\`, \`audience\`).
+- \`stages.<stageId>.howToWorkAddendum\`: appended to that stage's \`howToWork\`.
+
+Members, stages, the trigger, the mode, names, roles, MCP switches and
+avatars are shared and cannot be changed per project.
+
+Put a change in the overlay when it is about this project only (its paths,
+its accounts, its conventions); put it in the shared team when every project
+should get it. To move shared text into the overlay, remove it from the
+team with edits and add it to the overlay on the same card.
+
+Propose an overlay change with ${HOST_PROPOSE_TEAM_TOOL} too: pass the WHOLE
+overlay document as \`overlay\` (read the file first; a missing file is an
+empty overlay), alone or beside team edits. One card shows both diffs and one
+approval writes both.
+${listed}`;
+}
+
 export function composeTeamChatInstructions(input: {
   /** Absolute path of the `*.team.yaml` file this chat edits. */
   path: string;
@@ -67,6 +143,10 @@ export function composeTeamChatInstructions(input: {
    * library moved keeps the folder it was created in.
    */
   inLibrary: boolean;
+  /** The project overlay this chat edits beside the shared team; absent in shared scope. */
+  overlay?: BuilderOverlayRef;
+  /** Every other overlay of this team, read-only for this chat. */
+  otherOverlays?: readonly BuilderOverlayRef[];
 }): string {
   return `<team-editing>
 You are editing one geniro team through the chat panel docked under the
@@ -141,7 +221,7 @@ ${TEAM_MODES.map((mode) => `  - ${mode}: ${MODE_MEANING[mode]}`).join('\n')}
 ${ApprovalModeSchema.options.map((mode) => `  - ${mode}: ${APPROVAL_MEANING[mode]}`).join('\n')}
 - \`instructionBlocks\`: text added to the instructions of its \`audience\` —
   \`everyone\`, or a list of member ids. A block runs nothing.
-
+${overlaySection(input.overlay, input.otherOverlays ?? [])}
 On each turn a member receives, most general first: the user's own standing
 instructions, the blocks addressed to it, its own \`instructions\`, its
 \`character\`, and every other member's name and \`role\`. A later part

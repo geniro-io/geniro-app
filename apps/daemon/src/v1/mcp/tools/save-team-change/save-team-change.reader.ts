@@ -8,19 +8,53 @@ import type { ToolArgs } from '../../mcp.types';
 import { editsField } from '../team-edit-args';
 import { readToolArgs } from '../tool-args';
 
-/** An analysis's save: what it changes, and which applied recommendations that carries out. */
+/**
+ * An analysis's save: what it changes, and which applied recommendations that
+ * carries out — team edits for W- items, or a project's whole overlay for O-
+ * items, one or the other per call.
+ */
 export const SaveTeamChangeArgsSchema = z.object({
-  edits: editsField('the team as view="team" returned it'),
+  edits: editsField('the team as view="team" returned it')
+    .optional()
+    .describe('W- items: the changes to the shared team'),
   baseHash: z
     .string()
     .min(1)
     .max(64)
-    .describe('The `hash` view="team" returned when you read it'),
+    .optional()
+    .describe('W- items: the `hash` view="team" returned when you read it'),
+  overlay: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      "O- items: the project's WHOLE overlay document as it should stand",
+    ),
+  overlayProjectId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "O- items: the project whose overlay this is (view=team's overlayNow.projectId)",
+    ),
+  overlayHash: z
+    .string()
+    .min(1)
+    .max(64)
+    .nullable()
+    .optional()
+    .describe(
+      "O- items: view=team's overlayNow.hash; null when the project has none yet",
+    ),
   ids: z
-    .array(RecommendationIdSchema.regex(/^W-/, 'only W- items change the team'))
+    .array(
+      RecommendationIdSchema.regex(
+        /^[WO]-/,
+        'only W- items change the team and O- items its overlay',
+      ),
+    )
     .min(1)
     .max(MAX_RECOMMENDATIONS_PER_TARGET)
-    .describe('The W-n ids this change carries out'),
+    .describe('The W-n or O-n ids this change carries out'),
   dryRun: z
     .boolean()
     .optional()
@@ -44,7 +78,31 @@ export type BuilderTeamChangeArgs = z.infer<typeof BuilderTeamChangeArgsSchema>;
 export function readSaveTeamChangeArgs(
   args: Record<string, unknown>,
 ): ToolArgs<SaveTeamChangeArgs> {
-  return readToolArgs(SaveTeamChangeArgsSchema.strict(), args);
+  return readToolArgs(
+    SaveTeamChangeArgsSchema.strict().superRefine((value, ctx) => {
+      const overlay = value.overlay !== undefined;
+      if (overlay === (value.edits !== undefined)) {
+        ctx.addIssue({
+          code: 'custom',
+          message:
+            'send `edits` (W- items) or `overlay` (O- items), one per call',
+        });
+      } else if (
+        overlay &&
+        (value.overlayProjectId === undefined ||
+          value.overlayHash === undefined)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          message:
+            '`overlay` needs `overlayProjectId` and `overlayHash` (null when the project has none)',
+        });
+      } else if (!overlay && value.baseHash === undefined) {
+        ctx.addIssue({ code: 'custom', message: '`edits` need `baseHash`' });
+      }
+    }),
+    args,
+  );
 }
 
 /** A builder chat's `save_team_change` arguments, or why they cannot be read. */

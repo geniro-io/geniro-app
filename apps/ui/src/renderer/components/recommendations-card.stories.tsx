@@ -144,6 +144,33 @@ export const WithProject: Story = {
   ),
 };
 
+export const WithOverlay: Story = {
+  render: () => (
+    <div className="w-[420px]">
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={TIMING}
+        team
+        items={[
+          recommendation('W-1'),
+          recommendation('P-1'),
+          recommendation('O-1', {
+            target: 'overlay',
+            kind: 'member',
+            location: 'p-billing',
+            title: 'Run the billing project’s reviewer on a stronger model',
+            change: 'members:\n  - id: reviewer\n    model: opus',
+          }),
+        ]}
+        applied={null}
+        outcomes={{}}
+        onApply={() => undefined}
+      />
+    </div>
+  ),
+};
+
 export const Empty: Story = {
   render: () => (
     <div className="w-[560px]">

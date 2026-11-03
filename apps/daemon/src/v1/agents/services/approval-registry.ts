@@ -268,9 +268,9 @@ export class ApprovalRegistry {
   }
 
   /**
-   * Pending approvals for a run. No production route serves this today — a
-   * reconnecting client replays approval cards from the persisted items, not
-   * from here — it exists as the specs' observation seam for the pending map.
+   * Pending approvals for a run. A reconnecting client replays approval cards
+   * from the persisted items, not from here; `AgentActivityService` reads it to
+   * tell a run waiting on the user from one still working.
    */
   listByRun(runId: string): PendingApproval[] {
     return [...this.pending.values()].filter((p) => p.runId === runId);

@@ -434,6 +434,19 @@ export interface AddTaskAttachmentDto {
 /**
  * 
  * @export
+ * @interface AgentActivityDto
+ */
+export interface AgentActivityDto {
+    /**
+     * Whether an agent is at work right now
+     * @type {boolean}
+     * @memberof AgentActivityDto
+     */
+    working: boolean;
+}
+/**
+ * 
+ * @export
  * @interface AgentApprovalCapability
  */
 export interface AgentApprovalCapability {

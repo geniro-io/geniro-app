@@ -16,6 +16,7 @@
 import * as runtime from '../runtime';
 import type {
   AddMcpServerDto,
+  AgentActivityDto,
   AgentCacheResetDto,
   AgentKind,
   AgentMcpConfigDto,
@@ -219,6 +220,43 @@ export class AgentsApi extends runtime.BaseAPI {
      */
     async copyAgentMcpPluginServer(requestParameters: AgentsApiCopyAgentMcpPluginServerRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentMcpListingDto> {
         const response = await this.copyAgentMcpPluginServerRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async getAgentActivityRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentActivityDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/activity`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async getAgentActivity(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentActivityDto> {
+        const response = await this.getAgentActivityRaw(initOverrides);
         return await response.value();
     }
 

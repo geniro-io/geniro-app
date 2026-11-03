@@ -402,6 +402,7 @@ export const settingsPatchSchema = z.strictObject({
     .min(MIN_KEPT_SESSION_IDLE_MINUTES)
     .max(MAX_KEPT_SESSION_IDLE_MINUTES)
     .optional(),
+  preventSleepWhileWorking: z.boolean().optional(),
   // Each CLI's own switches (`AdapterConfig.options` in the daemon), as
   // `{optionId: on}`. The ids are the CLI's, published on the capabilities
   // wire, so this side bounds them and enumerates none.

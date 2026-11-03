@@ -104,6 +104,11 @@ export class ProcessRegistry implements OnApplicationShutdown {
     return this.active.size;
   }
 
+  /** The key of every claimed or in-flight entry. */
+  activeKeys(): string[] {
+    return [...this.active.keys()];
+  }
+
   /**
    * The run's in-flight turn handle, or null.
    *

@@ -1192,6 +1192,15 @@ export class CallBroker implements OnModuleInit {
     return this.runs.get(runId)?.capability.calleesOf.get(callerMemberId) ?? [];
   }
 
+  /**
+   * How many of the run's conversations are blocked — inside a wait on their
+   * own calls, or on a card or a parked question — or null for a run this
+   * broker does not hold.
+   */
+  blockedConversations(runId: string): number | null {
+    return this.runs.get(runId)?.reportedBlocked.size ?? null;
+  }
+
   /** True while the run is registered (its MCP endpoint is live). */
   hasRun(runId: string): boolean {
     return this.runs.has(runId);

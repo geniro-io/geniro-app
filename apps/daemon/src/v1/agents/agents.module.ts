@@ -14,6 +14,7 @@ import type { AdapterDaemonDeps } from './adapters/adapter.types';
 import { ClaudeAdapter } from './adapters/claude/claude.adapter';
 import { CodexAdapter } from './adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from './adapters/cursor-acp/cursor-acp.adapter';
+import { AgentActivityController } from './controllers/agent-activity.controller';
 import { ArtifactsController } from './controllers/artifacts.controller';
 import { ChatController } from './controllers/chat.controller';
 import { ChatSearchController } from './controllers/chat-search.controller';
@@ -38,6 +39,7 @@ import { ActionOutcomeSweep } from './services/action-outcome-sweep.service';
 import { ActionPressService } from './services/action-press.service';
 import { ActionPublishService } from './services/action-publish.service';
 import { ActionStopService } from './services/action-stop.service';
+import { AgentActivityService } from './services/agent-activity.service';
 import {
   AGENT_ADAPTERS,
   AgentAdapterRegistry,
@@ -173,6 +175,7 @@ import { defaultSpawn } from './utils/spawn-cli';
 @Module({
   imports: [MemoryModule, ProjectsModule],
   controllers: [
+    AgentActivityController,
     ArtifactsController,
     ChatController,
     GoalsController,
@@ -430,6 +433,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     UnrecordedSpendStore,
     ProcessRegistry,
     AgentSessionRegistry,
+    AgentActivityService,
     {
       // Factory because the trailing options bag is a test seam, not a DI
       // token — and because the journal path is config, not a dependency.
@@ -618,6 +622,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     // For the share service, which wakes the agent that asked once a share
     // waiting on the user's sign-in lands, and the team delivery of it.
     HostWakeBus,
+    // For the team module, which reports its runs' blocked conversations.
+    AgentActivityService,
     // For the task board, which keeps a card's worktree while its run works
     // outside a turn, and the team module, which adds its own sources.
     RunLiveWork,

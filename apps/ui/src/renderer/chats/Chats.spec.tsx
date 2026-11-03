@@ -14992,6 +14992,23 @@ describe('Chats — what the status badge says the run is doing', () => {
     expect(headerStatus(container)).toContain('needs more info');
   });
 
+  it('lets the pinned question shrink to a column shorter than its cap', async () => {
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'hi'),
+      approval('r1', 1, 'req-1'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const pinned = container.querySelector<HTMLElement>(
+      '[data-slot="pinned-request"]',
+    )!;
+    expect(pinned.classList).toContain('shrink');
+    expect(pinned.classList).toContain('min-h-0');
+    expect(pinned.classList).not.toContain('shrink-0');
+  });
+
   it('reads the run row’s own awaiting, as every other sidebar row does', async () => {
     api.listChats.mockResolvedValue([{ ...run1, awaiting: 'question' }]);
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);

@@ -10580,7 +10580,7 @@ export function Chats({
                         // Bounded and scrolling itself, so option previews stacked
                         // above the options cannot push them, the answer field and
                         // the composer off screen.
-                        className="max-h-[60vh] shrink-0 overflow-y-auto border-t border-border bg-card/60 px-4 py-3">
+                        className="max-h-[60vh] min-h-0 shrink overflow-y-auto border-t border-border bg-card/60 px-4 py-3">
                         {openRequests.length > 1 ? (
                           <p className="m-0 mb-1.5 text-xs text-muted-foreground">
                             {openRequests.length} questions waiting — answering

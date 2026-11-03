@@ -40,11 +40,10 @@ function MonitorRow({
             {agentName}
           </span>
         )}
-        <span className="min-w-0 flex-1 truncate" title={monitor.description}>
+        <span
+          className="min-w-0 flex-1 truncate font-medium"
+          title={`${monitor.description} (${monitor.id})`}>
           {monitor.description}
-        </span>
-        <span className="shrink-0 text-[11px] text-muted-foreground">
-          {monitor.id}
         </span>
         {Number.isNaN(started) ? null : (
           <span className="min-w-[3.25rem] shrink-0 text-right tabular-nums text-muted-foreground">

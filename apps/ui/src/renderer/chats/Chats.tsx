@@ -6629,6 +6629,31 @@ export function Chats({
     }
     const nameOf = (memberId: string | null): string | null =>
       memberId === null ? null : (nodeMeta.get(memberId)?.name ?? memberId);
+    const faces = (
+      calleeId: string | null,
+      callerId: string | null,
+    ): Pick<
+      OpenCallChipRow,
+      | 'callee'
+      | 'calleeKey'
+      | 'calleeAvatar'
+      | 'caller'
+      | 'callerKey'
+      | 'callerAvatar'
+    > => {
+      const callee = nameOf(calleeId) ?? 'a called agent';
+      const caller = nameOf(callerId);
+      return {
+        callee,
+        calleeKey: calleeId ?? callee,
+        calleeAvatar:
+          calleeId === null ? undefined : nodeMeta.get(calleeId)?.avatar,
+        caller,
+        callerKey: callerId,
+        callerAvatar:
+          callerId === null ? undefined : nodeMeta.get(callerId)?.avatar,
+      };
+    };
     const startOf = new Map(
       runState.calls.map((call) => [call.callId, Date.parse(call.startedAt)]),
     );
@@ -6655,8 +6680,7 @@ export function Chats({
       return {
         blockId: block.id,
         callId: block.callId,
-        callee: nameOf(block.calleeMemberId) ?? 'a called agent',
-        caller: nameOf(block.callerMemberId),
+        ...faces(block.calleeMemberId, block.callerMemberId),
         title: block.title,
         startedAt:
           recorded !== undefined && Number.isFinite(recorded)
@@ -6677,8 +6701,7 @@ export function Chats({
         return {
           blockId: `${OFF_WINDOW_CALL_PREFIX}${call.callId}`,
           callId: call.callId,
-          callee: nameOf(call.calleeMemberId) ?? 'a called agent',
-          caller: nameOf(call.callerMemberId),
+          ...faces(call.calleeMemberId, call.callerMemberId),
           title: call.title,
           startedAt: Number.isFinite(startedAt) ? startedAt : null,
           stalled: false,

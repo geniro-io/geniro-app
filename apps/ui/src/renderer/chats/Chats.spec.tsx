@@ -5176,7 +5176,7 @@ describe('Chats team runs', () => {
     const row = document.querySelector<HTMLButtonElement>(
       '[data-slot="running-call-row"]',
     );
-    expect(row?.textContent).toContain('call-5');
+    expect(row?.title).toContain('call-5');
     expect(row?.textContent).toContain('5m');
 
     // Pressing the row takes the reader to that call's card and MARKS it —
@@ -5450,7 +5450,7 @@ describe('Chats team runs', () => {
     const row = document.querySelector<HTMLButtonElement>(
       '[data-slot="running-call-row"]',
     );
-    expect(row?.textContent).toContain('call-9');
+    expect(row?.title).toContain('call-9');
     expect(row?.textContent).toContain('10m');
 
     await act(async () => {

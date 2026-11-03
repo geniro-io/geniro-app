@@ -97,7 +97,37 @@ const shells = [
     agentId: null,
     callId: null,
   },
+  {
+    id: 'c2',
+    command: 'pnpm --filter @geniro/ui dev --port 5174 --strictPort',
+    description: 'Renderer dev server for the acceptance preview',
+    background: true,
+    handle: 'bash_2',
+    status: 'running',
+    exitCode: null,
+    startedAt: new Date(Date.now() - 754_000).toISOString(),
+    agentId: null,
+    callId: null,
+  },
+  {
+    id: 'c3',
+    command: 'pnpm --filter @geniro/daemon test:unit src/v1/teams',
+    description: null,
+    background: false,
+    handle: null,
+    status: 'running',
+    exitCode: null,
+    startedAt: new Date(Date.now() - 41_000).toISOString(),
+    agentId: null,
+    callId: null,
+  },
 ] as ShellRun[];
+
+const shellAgents = new Map([
+  ['c1', 'Engineer'],
+  ['c2', 'Engineer'],
+  ['c3', 'QA'],
+]);
 
 const monitors: OpenMonitor[] = [
   {
@@ -168,10 +198,37 @@ const calls: OpenCallChipRow[] = [
     blockId: 'b1',
     callId: 'call-32',
     callee: 'Engineer',
+    calleeKey: 'engineer',
     caller: 'Manager',
-    title: 'Answer the Bugbot thread',
+    callerKey: 'manager',
+    title:
+      'Answer the Bugbot thread on PR #346 and push the fix for the flaky drop-zone spec',
     startedAt: Date.now() - 90_000,
     stalled: false,
+    queued: false,
+  },
+  {
+    blockId: 'b2',
+    callId: 'call-33',
+    callee: 'QA',
+    calleeKey: 'qa',
+    caller: 'Manager',
+    callerKey: 'manager',
+    title: 'Review PR #346',
+    startedAt: Date.now() - 12_000,
+    stalled: false,
+    queued: true,
+  },
+  {
+    blockId: 'b3',
+    callId: 'call-29',
+    callee: 'Researcher',
+    calleeKey: 'researcher',
+    caller: null,
+    callerKey: null,
+    title: null,
+    startedAt: Date.now() - 1_260_000,
+    stalled: true,
     queued: false,
   },
 ];
@@ -231,7 +288,13 @@ export const OnTheShelf: Story = {
       <ComposerShelf
         status={
           <>
-            <RunningShellChips shells={shells} onOpen={() => {}} />
+            <RunningShellChips
+              shells={shells}
+              agentNameOf={shellAgents}
+              onOpen={() => {}}
+              onKill={() => {}}
+            />
+            <RunningCallChips calls={calls} onReveal={() => {}} />
             <RunningMonitorChips monitors={monitors} />
             <RunningSubagentChips running={1} threads={threads} />
             <TeamNotesChip {...args} />

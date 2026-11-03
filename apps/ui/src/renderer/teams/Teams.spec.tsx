@@ -1346,14 +1346,16 @@ describe('Teams — instruction blocks', () => {
     ]);
 
     await press('Reaches Everyone');
-    await press('Only the members picked below');
+    await press('Picked members');
     await press('QA');
     await wait(900);
 
     expect(lastSaved().instructionBlocks[0]!.audience).toEqual(['qa']);
     expect(
-      container.querySelector('[data-slot="block-card"]')!.textContent,
-    ).toContain('Reaches QA');
+      container
+        .querySelector('[data-slot="audience-pick"] > button')!
+        .getAttribute('aria-label'),
+    ).toBe('Reaches QA');
   });
 
   it('removes a block', async () => {

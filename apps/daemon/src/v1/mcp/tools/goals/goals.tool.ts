@@ -6,6 +6,7 @@ import {
   HOST_GOALS_TOOL,
 } from '../../../agents/chat.types';
 import type { GoalsService } from '../../../agents/services/goals.service';
+import { ALWAYS_LOADED_TOOL_META } from '../../../teams/teams.types';
 import type { McpCallContext, McpToolResult } from '../../mcp.types';
 import { BaseMcpTool } from '../base-mcp-tool';
 import { goalsInstructions } from './goals.instructions';
@@ -20,6 +21,8 @@ import { goalsSchema } from './goals.schema';
 /** `goals` — record a task's goals and close each with evidence. Offered in every run. */
 export class GoalsTool extends BaseMcpTool {
   readonly name = HOST_GOALS_TOOL;
+  protected readonly meta: Record<string, unknown> | null =
+    ALWAYS_LOADED_TOOL_META;
   private readonly logger = new Logger(GoalsTool.name);
 
   constructor(private readonly goals: GoalsService) {

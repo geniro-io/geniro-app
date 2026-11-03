@@ -1358,8 +1358,11 @@ export const DEFAULT_AWAIT_TIMEOUT_MS = MAX_AWAIT_TIMEOUT_MS;
  *
  * A vendor key inside `_meta`, which MCP reserves for exactly this and every
  * other client ignores — so it is written once on the tools that need it rather
- * than routed per CLI. Kept to the call tools: they are the ones a caller member
- * cannot work without, and every always-loaded schema is paid for on every turn.
+ * than routed per CLI. Kept to the call tools, which a caller member cannot work
+ * without, and `goals`, whose "set them at the start of a task" lives in its own
+ * description: deferred, it was loaded in 4 of 36 threads (2026-11-02..04), so
+ * the instruction reached almost no agent. Every always-loaded schema is paid
+ * for on every turn.
  */
 export const ALWAYS_LOADED_TOOL_META = {
   'anthropic/alwaysLoad': true,

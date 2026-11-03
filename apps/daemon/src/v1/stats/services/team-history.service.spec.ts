@@ -26,8 +26,13 @@ import { TeamRecommendation } from '../entity/team-recommendation.entity';
 import { TeamVersion } from '../entity/team-version.entity';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
-import type { FiledRecommendation, UsageEventInput } from '../stats.types';
+import type {
+  FiledRecommendation,
+  TeamStatsMemberWire,
+  UsageEventInput,
+} from '../stats.types';
 import { TeamHistoryService } from './team-history.service';
+import type { TeamStatsService } from './team-stats.service';
 import { TeamVersionsService } from './team-versions.service';
 
 const FIRST: Team = teamOf([member('dev')], { name: 'Dev Team' });
@@ -50,6 +55,7 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
   let recommendations: TeamRecommendationDao;
   let changeLog: TeamChangeLogService;
   let liveRuns: Set<string>;
+  let members: TeamStatsMemberWire[];
   let service: TeamHistoryService;
 
   beforeAll(async () => {
@@ -111,7 +117,11 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
           Promise.resolve(liveRuns.has(id) ? { id } : null),
       } as unknown as RunDao,
       adapters,
+      {
+        read: () => Promise.resolve({ byMember: members }),
+      } as unknown as TeamStatsService,
     );
+    members = [];
     for (const [team, version, at] of [
       [FIRST, V1, '2026-10-01T10:00:00.000Z'],
       [SECOND, V2, '2026-10-10T10:00:00.000Z'],
@@ -554,5 +564,51 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
       [V2, 2],
       [V1, 1],
     ]);
+  });
+
+  it("carries every member's figures, work and earlier assessments, as the team's statistics count them", async () => {
+    members = [
+      {
+        memberId: 'dev',
+        agentKind: 'claude',
+        costUsd: 3,
+        turns: 4,
+        workedMs: 1_000,
+        measuredWorkedMs: 0,
+        runs: 2,
+        work: null,
+        assessments: [
+          {
+            chatRunId: 'analysis-old',
+            chatKind: 'analysis',
+            cardSeq: 5,
+            filedAt: '2026-10-20T10:00:00.000Z',
+            runs: 2,
+            versions: [{ number: 1, current: false }],
+            usefulness: 2,
+            quality: 3,
+            verdict: 'remove',
+            summary: 'Repeats what the lead already did',
+            evidence: [{ runId: 'r1', seq: 3, quote: 'same diff again' }],
+            items: [{ id: 'W-1', title: 'Drop dev', status: 'skipped' }],
+            judge: { agent: 'codex', model: null, sameVendor: false },
+            userVerdict: {
+              verdict: 'disagree',
+              note: 'it is the only one who runs the tests',
+              at: '2026-10-21T10:00:00.000Z',
+            },
+          },
+        ],
+        perRun: { costUsd: null, workedMs: null },
+        changes: [],
+      },
+    ];
+
+    const history = await service.read('dev-team', {
+      analysedRunIds: [],
+      readerRunId: null,
+    });
+
+    expect(history.members).toEqual(members);
   });
 });

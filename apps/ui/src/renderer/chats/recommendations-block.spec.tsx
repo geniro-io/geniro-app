@@ -38,6 +38,7 @@ const ENTRY: RecommendationsEntry = {
     timing: null,
     teamStats: null,
     hotspots: [],
+    members: [],
     sourceKind: 'team',
     items: ITEMS,
   },

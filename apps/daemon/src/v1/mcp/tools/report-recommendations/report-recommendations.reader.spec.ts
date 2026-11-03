@@ -65,6 +65,7 @@ function setup(
   teamId: string | null,
   team: AnalysedTeam | null = null,
   memoryOn = true,
+  lanes: { memberId: string | null }[] = [],
 ) {
   const memory = { enabled: memoryOn } as MemoryService;
   const written: { kind: string; payload: unknown }[] = [];
@@ -89,7 +90,7 @@ function setup(
     {
       read: () =>
         Promise.resolve({
-          fold: {},
+          fold: { lanes },
           timeline: {
             wallMs: 600_000,
             activeMs: 400_000,
@@ -149,6 +150,37 @@ describe('ReportRecommendationsTool', () => {
         sinks: [{ label: 'reviewer', ms: 300_000 }],
       },
     });
+  });
+
+  it("files a team thread's member assessments and counts them in the receipt", async () => {
+    const { report, written } = setup('dev-team', null, true, [
+      { memberId: 'reviewer' },
+    ]);
+    const reviewer = {
+      member: 'reviewer',
+      usefulness: 4,
+      quality: 2,
+      verdict: 'tune',
+      summary: 'Useful reviews, but it re-reads the diff every round',
+      evidence: [{ seq: 3, quote: 'reading the diff again' }],
+      items: ['W-1'],
+    };
+
+    const missing = await report({ items: [item('W-1')] });
+    const unknownVerdict = await report({
+      items: [item('W-1')],
+      members: [{ ...reviewer, verdict: 'fire' }],
+    });
+    const filed = await report({ items: [item('W-1')], members: [reviewer] });
+
+    expect(missing.content[0]!.text).toContain('assess the members');
+    expect(unknownVerdict.content[0]!.text).toMatch(/^INVALID_ARGS/);
+    expect(filed.isError).toBe(false);
+    expect(filed.content[0]!.text).toContain(
+      'with 1 recommendation and 1 member assessment',
+    );
+    expect(written).toHaveLength(1);
+    expect(written[0]!.payload).toMatchObject({ members: [reviewer] });
   });
 
   it('refuses an evidence seq that does not exist, or lies past the snapshot', async () => {

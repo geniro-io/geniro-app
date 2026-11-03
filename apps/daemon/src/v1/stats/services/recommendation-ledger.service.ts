@@ -6,15 +6,18 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { parseJsonColumn } from '../../agents/utils/json-util';
+import type { Run } from '../../runs/entity/run.entity';
 import { TeamStoreService } from '../../teams/services/team-store.service';
 import { teamVersionOf } from '../../teams/utils/team-version';
+import { MemberAssessmentDao } from '../dao/member-assessment.dao';
 import { TeamRecommendationDao } from '../dao/team-recommendation.dao';
-import type { TeamRecommendationSource } from '../stats.types';
+import type { MemberAssessmentSource } from '../stats.types';
 import {
   applyIn,
+  assessmentSourceOf,
+  filedAssessmentsOf,
   filedRecommendationsOf,
   marksIn,
-  recommendationSourceOf,
 } from '../utils/recommendation-ledger';
 
 /** One row of a chat, as the ledger reads it. */
@@ -29,7 +32,9 @@ interface LedgerRow {
 /**
  * Copies every recommendations card a team's analysis or builder chat
  * files, every Apply that selects from one and every mark of what became of
- * an item into `team_recommendations`, which outlives the chat. It
+ * an item into `team_recommendations`, and the member assessments of those
+ * cards and of a thread analysis of one of the team's runs into
+ * `member_assessments`; both outlive the chat. It
  * OBSERVES the bus like `RunOutcomeLedgerService`: the agents module writes
  * the rows and cannot depend on this module.
  *
@@ -49,6 +54,7 @@ export class RecommendationLedgerService implements OnModuleInit {
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
     private readonly ledger: TeamRecommendationDao,
+    private readonly assessments: MemberAssessmentDao,
     private readonly store: TeamStoreService,
   ) {}
 
@@ -73,10 +79,10 @@ export class RecommendationLedgerService implements OnModuleInit {
    */
   async sweep(): Promise<number> {
     const em = this.em.fork();
-    const chats = await this.runDao.teamRecommendationChats(em);
+    const chats = await this.runDao.teamLedgerChats(em);
     let read = 0;
     for (const chat of chats) {
-      const source = recommendationSourceOf(chat);
+      const source = await this.sourceOf(chat, em);
       if (source === null) {
         continue;
       }
@@ -121,9 +127,30 @@ export class RecommendationLedgerService implements OnModuleInit {
     );
   }
 
+  /** The team a chat files about, its thread analysis's source run read when it needs one. */
+  private async sourceOf(
+    run: Pick<
+      Run,
+      | 'id'
+      | 'analysisTeamSlug'
+      | 'editsTeamSlug'
+      | 'analysisSourceRunId'
+      | 'agentKind'
+      | 'model'
+    >,
+    em: EntityManager,
+  ): Promise<MemberAssessmentSource | null> {
+    const analysed =
+      run.analysisSourceRunId === null
+        ? null
+        : await this.runDao.getById(run.analysisSourceRunId, em);
+    return assessmentSourceOf(run, analysed);
+  }
+
   private async recordLive(event: RunItemEvent): Promise<void> {
-    const run = await this.runDao.getById(event.runId, this.em.fork());
-    const source = run === null ? null : recommendationSourceOf(run);
+    const em = this.em.fork();
+    const run = await this.runDao.getById(event.runId, em);
+    const source = run === null ? null : await this.sourceOf(run, em);
     if (source === null) {
       return;
     }
@@ -143,19 +170,33 @@ export class RecommendationLedgerService implements OnModuleInit {
   }
 
   private async copy(
-    source: TeamRecommendationSource,
+    source: MemberAssessmentSource,
     row: LedgerRow,
     libraryVersion: string | null,
   ): Promise<void> {
     if (row.kind === 'recommendations') {
-      const filed = filedRecommendationsOf(source, row, libraryVersion);
-      if (filed === null) {
+      const assessed = filedAssessmentsOf(source, row, libraryVersion);
+      if (assessed === null) {
         this.logger.warn(
           `chat ${source.chatRunId} card ${row.seq} did not read as recommendations; not copied to the ledger`,
         );
         return;
       }
-      await this.ledger.file(filed);
+      if (source.chatKind !== 'thread') {
+        await this.ledger.file(
+          filedRecommendationsOf(
+            { ...source, chatKind: source.chatKind },
+            row,
+            libraryVersion,
+          ) ?? [],
+        );
+      }
+      await this.assessments.file(assessed);
+      return;
+    }
+    // A thread analysis's items stay with its source thread; only its
+    // assessments of the team's members are the team's.
+    if (source.chatKind === 'thread') {
       return;
     }
     if (row.kind === 'recommendation_outcome') {

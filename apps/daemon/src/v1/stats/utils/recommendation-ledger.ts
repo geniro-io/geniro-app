@@ -8,6 +8,8 @@ import { parseRecommendationsPayload } from '../../agents/utils/recommendations-
 import type { Run } from '../../runs/entity/run.entity';
 import type {
   FiledRecommendation,
+  MemberAssessmentRow,
+  MemberAssessmentSource,
   TeamRecommendationSource,
 } from '../stats.types';
 
@@ -30,6 +32,71 @@ export function recommendationSourceOf(
     };
   }
   return null;
+}
+
+/**
+ * The team a chat's member assessments are about: the team of a chat that
+ * files its recommendations, or for a thread analysis the team its source run
+ * ran — given here as `analysedRun`, null for none or a plain chat.
+ */
+export function assessmentSourceOf(
+  run: Pick<
+    Run,
+    'id' | 'analysisTeamSlug' | 'editsTeamSlug' | 'agentKind' | 'model'
+  >,
+  analysedRun: Pick<Run, 'teamId'> | null,
+): MemberAssessmentSource | null {
+  const judge = { agent: run.agentKind ?? null, model: run.model ?? null };
+  const own = recommendationSourceOf(run);
+  if (own !== null) {
+    return { ...own, judge };
+  }
+  return analysedRun?.teamId
+    ? {
+        chatRunId: run.id,
+        slug: analysedRun.teamId,
+        chatKind: 'thread',
+        judge,
+      }
+    : null;
+}
+
+/** A `recommendations` row's member assessments as the ledger files them, or null when the row does not read as a card. */
+export function filedAssessmentsOf(
+  source: MemberAssessmentSource,
+  row: { seq: number; createdAt: Date; payload: unknown },
+  libraryVersion: string | null,
+): MemberAssessmentRow[] | null {
+  const card = parseRecommendationsPayload(row.payload);
+  if (!card.success) {
+    return null;
+  }
+  const titles = new Map(card.data.items.map((item) => [item.id, item.title]));
+  const runIds =
+    source.chatKind === 'thread' || !card.data.teamStats
+      ? [card.data.sourceRunId]
+      : card.data.teamStats.runList.map((run) => run.runId);
+  const runs =
+    source.chatKind === 'thread' ? 1 : (card.data.teamStats?.runs ?? 1);
+  return (card.data.members ?? []).map((member) => ({
+    slug: source.slug,
+    chatRunId: source.chatRunId,
+    chatKind: source.chatKind,
+    cardSeq: row.seq,
+    filedAt: row.createdAt,
+    libraryVersion,
+    runs,
+    runIds,
+    memberId: member.member,
+    usefulness: member.usefulness,
+    quality: member.quality,
+    verdict: member.verdict,
+    summary: member.summary,
+    evidence: member.evidence,
+    items: member.items.map((id) => ({ id, title: titles.get(id) ?? '' })),
+    judge: source.judge,
+    userVerdict: null,
+  }));
 }
 
 /** A `recommendations` row's items as the ledger files them, or null when the row does not read as a card. */

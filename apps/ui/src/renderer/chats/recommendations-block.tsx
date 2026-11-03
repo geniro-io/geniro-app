@@ -1,5 +1,6 @@
-import { useContext, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 
+import type { AssessmentVerdictValue } from '../components/assessment-verdict';
 import {
   RecommendationsCard,
   type RecommendationsLook,
@@ -8,6 +9,7 @@ import { describeDaemonError } from '../daemon-api';
 import { categoryToken } from '../stats/charts/chart-theme';
 import { formatDuration, formatPercent } from '../stats/stats-format';
 import { formatUsd } from './agent-activity';
+import { MemberVerdictsContext } from './member-verdicts-context';
 import { RecommendationsApplyContext } from './recommendations-apply-context';
 import { useThreadFlags } from './thread-ui-memory';
 import type { RecommendationsEntry } from './transcript-groups';
@@ -32,6 +34,29 @@ export function RecommendationsBlock({
   entry: RecommendationsEntry;
 }): React.JSX.Element {
   const apply = useContext(RecommendationsApplyContext);
+  const verdictsApi = useContext(MemberVerdictsContext);
+  const assessed = entry.card.members.length > 0;
+  const [verdicts, setVerdicts] = useState<Record<
+    string,
+    AssessmentVerdictValue | null
+  > | null>(null);
+  useEffect(() => {
+    if (verdictsApi === null || !assessed) {
+      return;
+    }
+    let live = true;
+    verdictsApi
+      .read(entry.runId, entry.seq)
+      .then((answer) => {
+        if (live) {
+          setVerdicts(verdictMap(answer.verdicts));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [verdictsApi, assessed, entry.runId, entry.seq]);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +84,28 @@ export function RecommendationsBlock({
       timing={entry.card.timing}
       teamStats={entry.card.teamStats}
       hotspots={entry.card.hotspots}
+      members={entry.card.members}
+      memberVerdicts={
+        verdictsApi === null || verdicts === null
+          ? null
+          : {
+              verdicts,
+              onChange: async (member, next) => {
+                const answer = await verdictsApi
+                  .set({
+                    chatRunId: entry.runId,
+                    cardSeq: entry.seq,
+                    memberId: member,
+                    verdict: next?.verdict ?? null,
+                    note: next?.note ?? null,
+                  })
+                  .catch((err: unknown) => {
+                    throw new Error(describeDaemonError(err));
+                  });
+                setVerdicts(verdictMap(answer.verdicts));
+              },
+            }
+      }
       team={entry.card.sourceKind === 'team'}
       items={entry.card.items}
       applied={entry.applied ?? sent}
@@ -79,5 +126,21 @@ export function RecommendationsBlock({
             }
       }
     />
+  );
+}
+
+function verdictMap(
+  verdicts: readonly {
+    memberId: string;
+    userVerdict: { verdict: 'agree' | 'disagree'; note: string | null } | null;
+  }[],
+): Record<string, AssessmentVerdictValue | null> {
+  return Object.fromEntries(
+    verdicts.map((entry) => [
+      entry.memberId,
+      entry.userVerdict === null
+        ? null
+        : { verdict: entry.userVerdict.verdict, note: entry.userVerdict.note },
+    ]),
   );
 }

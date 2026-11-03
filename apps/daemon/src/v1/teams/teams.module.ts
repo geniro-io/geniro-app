@@ -9,6 +9,7 @@ import { CapabilitiesController } from './controllers/capabilities.controller';
 import { ProjectInstructionSizesController } from './controllers/project-instruction-sizes.controller';
 import { TeamsController } from './controllers/teams.controller';
 import { TeamChangeLogDao } from './dao/team-change-log.dao';
+import { AnalysisJudgeService } from './services/analysis-judge.service';
 import { AvatarStoreService } from './services/avatar-store.service';
 import { CallBroker } from './services/call-broker.service';
 import { CapabilitiesService } from './services/capabilities.service';
@@ -86,6 +87,7 @@ import { TeamStoreService } from './services/team-store.service';
     StageWakeService,
     TeamChatService,
     TeamAnalysisService,
+    AnalysisJudgeService,
     TeamChangeService,
     TeamChangeLogDao,
     TeamChangeLogService,

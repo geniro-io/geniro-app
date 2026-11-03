@@ -2,7 +2,12 @@ import { cva } from 'class-variance-authority';
 import { ArrowRight, Check, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 
+import {
+  AssessmentVerdict,
+  type AssessmentVerdictValue,
+} from './assessment-verdict';
 import { ErrorBanner } from './error-banner';
+import { MemberMarks, type MemberVerdict } from './member-marks';
 import {
   deltaTone,
   Disclosure,
@@ -71,6 +76,18 @@ export interface RecommendationsTimingView {
   waitingMs: number;
   criticalPathMs: number;
   sinks: { label: string; ms: number }[];
+}
+
+/** One member as the analysis judged it — its marks, verdict and the items that carry the verdict out. */
+export interface MemberAssessmentView {
+  member: string;
+  /** Null when the analysis found too little to judge. */
+  usefulness: number | null;
+  quality: number | null;
+  verdict: MemberVerdict;
+  summary: string;
+  evidence: RecommendationView['evidence'];
+  items: string[];
 }
 
 export interface RecommendationOutcomeView {
@@ -222,6 +239,83 @@ function TimingStrip({
   );
 }
 
+function EvidenceList({
+  evidence,
+}: {
+  evidence: RecommendationView['evidence'];
+}): React.JSX.Element {
+  return (
+    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+      {evidence.map((entry, index) => (
+        <li key={`${entry.seq}:${index}`} className="min-w-0">
+          <span className="font-mono text-[11px] text-muted-foreground">
+            {[
+              entry.runId == null ? null : `run ${entry.runId.slice(0, 8)}`,
+              `seq ${entry.seq}`,
+              entry.nodeId,
+              entry.ts,
+            ]
+              .filter((part): part is string => part !== null)
+              .join(' · ')}
+          </span>
+          <blockquote className="m-0 border-l-2 border-border pl-2 break-words text-muted-foreground">
+            {entry.quote}
+          </blockquote>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The card's items named by `ids`, each a toggle that ticks it on the card. */
+function ItemToggles({
+  label,
+  ids,
+  items,
+  selected,
+  locked,
+  slot,
+  onToggle,
+}: {
+  label: string;
+  ids: readonly string[];
+  items: readonly RecommendationView[];
+  selected: readonly string[];
+  locked: boolean;
+  slot: string;
+  onToggle: (id: string) => void;
+}): React.JSX.Element | null {
+  const named = ids.flatMap((id) => {
+    const item = items.find((each) => each.id === id);
+    return item === undefined ? [] : [item];
+  });
+  if (named.length === 0) {
+    return null;
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+      {named.map((item) => {
+        const on = selected.includes(item.id);
+        return (
+          <button
+            key={item.id}
+            type="button"
+            data-slot={slot}
+            aria-pressed={on}
+            disabled={locked}
+            title={item.title}
+            onClick={() => onToggle(item.id)}
+            className={fixToggle({ on })}>
+            {on ? <Check aria-hidden="true" className="size-3" /> : null}
+            {item.id}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ItemRow({
   item,
   selected,
@@ -339,27 +433,7 @@ function ItemRow({
           onToggle={() => folds.toggle(`${item.id}:why`)}>
           <div className="flex flex-col gap-1.5 text-xs leading-relaxed">
             <p className="m-0">{item.rootCause}</p>
-            <ul className="m-0 flex list-none flex-col gap-1 p-0">
-              {item.evidence.map((evidence, index) => (
-                <li key={`${evidence.seq}:${index}`} className="min-w-0">
-                  <span className="font-mono text-[11px] text-muted-foreground">
-                    {[
-                      evidence.runId == null
-                        ? null
-                        : `run ${evidence.runId.slice(0, 8)}`,
-                      `seq ${evidence.seq}`,
-                      evidence.nodeId,
-                      evidence.ts,
-                    ]
-                      .filter((part): part is string => part !== null)
-                      .join(' · ')}
-                  </span>
-                  <blockquote className="m-0 border-l-2 border-border pl-2 break-words text-muted-foreground">
-                    {evidence.quote}
-                  </blockquote>
-                </li>
-              ))}
-            </ul>
+            <EvidenceList evidence={item.evidence} />
             <p className="m-0 text-muted-foreground">
               Estimate: {sentence(item.basis)} If wrong: {item.riskNote}
             </p>
@@ -385,17 +459,22 @@ function HotspotFigures({
   agent,
   stats,
   look,
+  named = true,
 }: {
   agent: TeamAgentStatsView;
   stats: TeamStatsView;
   look: RecommendationsLook;
+  /** Lead with the agent's name; off where the row already names it. */
+  named?: boolean;
 }): React.JSX.Element {
   const share = workedShare(stats, agent);
   return (
     <p
       data-slot="analysis-hotspot-figures"
       className="m-0 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground tabular-nums">
-      <span className="font-medium text-foreground">{agent.node}</span>
+      {named ? (
+        <span className="font-medium text-foreground">{agent.node}</span>
+      ) : null}
       {agent.workedPerRunMs === null ? null : (
         <span>{look.formatMs(agent.workedPerRunMs)}/run</span>
       )}
@@ -443,10 +522,6 @@ function Hotspots({
               ? null
               : (stats?.agents.find((each) => each.node === hotspot.node) ??
                 null);
-          const fixes = hotspot.items.flatMap((id) => {
-            const item = items.find((each) => each.id === id);
-            return item === undefined ? [] : [item];
-          });
           return (
             <li
               key={`${index}:${hotspot.title}`}
@@ -467,37 +542,129 @@ function Hotspots({
                 <p className="m-0 text-xs leading-relaxed break-words text-muted-foreground">
                   {hotspot.why}
                 </p>
-                {fixes.length === 0 ? null : (
-                  <div className="flex flex-wrap items-center gap-1">
-                    <span className="text-[11px] text-muted-foreground">
-                      Fixed by
-                    </span>
-                    {fixes.map((item) => {
-                      const on = selected.includes(item.id);
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          data-slot="analysis-hotspot-fix"
-                          aria-pressed={on}
-                          disabled={locked}
-                          title={item.title}
-                          onClick={() => onToggle(item.id)}
-                          className={fixToggle({ on })}>
-                          {on ? (
-                            <Check aria-hidden="true" className="size-3" />
-                          ) : null}
-                          {item.id}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
+                <ItemToggles
+                  label="Fixed by"
+                  ids={hotspot.items}
+                  items={items}
+                  selected={selected}
+                  locked={locked}
+                  slot="analysis-hotspot-fix"
+                  onToggle={onToggle}
+                />
               </div>
             </li>
           );
         })}
       </ol>
+    </section>
+  );
+}
+
+/** The user's verdicts on a card's member assessments, and how to set one. */
+export interface MemberVerdictControl {
+  verdicts: Readonly<Record<string, AssessmentVerdictValue | null>>;
+  onChange: (
+    member: string,
+    next: AssessmentVerdictValue | null,
+  ) => Promise<void>;
+}
+
+function MemberAssessments({
+  members,
+  stats,
+  items,
+  selected,
+  locked,
+  look,
+  folds,
+  verdicts,
+  onToggle,
+}: {
+  members: readonly MemberAssessmentView[];
+  stats: TeamStatsView | null;
+  items: readonly RecommendationView[];
+  selected: readonly string[];
+  locked: boolean;
+  look: RecommendationsLook;
+  folds: RecommendationsFolds;
+  verdicts: MemberVerdictControl | null;
+  onToggle: (id: string) => void;
+}): React.JSX.Element {
+  const assessed = new Set(members.map((member) => member.member));
+  const unassessed = (stats?.agents ?? [])
+    .map((agent) => agent.node)
+    .filter((node) => !assessed.has(node));
+  return (
+    <section
+      data-slot="analysis-members"
+      className="flex min-w-0 flex-col gap-2">
+      <SectionTitle>How each member did</SectionTitle>
+      <ul className="m-0 flex list-none flex-col gap-3 p-0">
+        {members.map((member) => {
+          const agent =
+            stats?.agents.find((each) => each.node === member.member) ?? null;
+          const fold = `member:${member.member}`;
+          return (
+            <li
+              key={member.member}
+              data-slot="analysis-member"
+              data-member={member.member}
+              className="flex min-w-0 flex-col gap-1">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="text-sm font-medium break-words">
+                  {member.member}
+                </span>
+                <MemberMarks
+                  usefulness={member.usefulness}
+                  quality={member.quality}
+                  verdict={member.verdict}
+                />
+              </div>
+              {agent === null || stats === null ? null : (
+                <HotspotFigures
+                  agent={agent}
+                  stats={stats}
+                  look={look}
+                  named={false}
+                />
+              )}
+              <p className="m-0 text-xs leading-relaxed break-words text-muted-foreground">
+                {member.summary}
+              </p>
+              <ItemToggles
+                label="Carried out by"
+                ids={member.items}
+                items={items}
+                selected={selected}
+                locked={locked}
+                slot="analysis-member-fix"
+                onToggle={onToggle}
+              />
+              <Disclosure
+                label="Evidence"
+                open={folds.isOpen(fold)}
+                onToggle={() => folds.toggle(fold)}>
+                <div className="text-xs leading-relaxed">
+                  <EvidenceList evidence={member.evidence} />
+                </div>
+              </Disclosure>
+              {verdicts === null ? null : (
+                <AssessmentVerdict
+                  value={verdicts.verdicts[member.member] ?? null}
+                  onChange={(next) => verdicts.onChange(member.member, next)}
+                />
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {unassessed.length === 0 ? null : (
+        <p
+          data-slot="analysis-members-unassessed"
+          className="m-0 text-[11px] text-muted-foreground">
+          Not assessed: {unassessed.join(', ')}
+        </p>
+      )}
     </section>
   );
 }
@@ -533,6 +700,8 @@ export function RecommendationsCard({
   timing,
   teamStats = null,
   hotspots = [],
+  members = [],
+  memberVerdicts = null,
   team,
   items,
   applied,
@@ -549,6 +718,10 @@ export function RecommendationsCard({
   timing: RecommendationsTimingView | null;
   teamStats?: TeamStatsView | null;
   hotspots?: readonly RecommendationHotspotView[];
+  /** Each member as the analysis judged it; a plain chat has none. */
+  members?: readonly MemberAssessmentView[];
+  /** The user's verdicts on those marks; absent draws no verdict control. */
+  memberVerdicts?: MemberVerdictControl | null;
   /** The analysed thread is a team; a plain chat gets no Team group. */
   team: boolean;
   items: readonly RecommendationView[];
@@ -675,6 +848,19 @@ export function RecommendationsCard({
           selected={selected}
           locked={locked}
           look={look}
+          onToggle={toggle}
+        />
+      )}
+      {members.length === 0 ? null : (
+        <MemberAssessments
+          members={members}
+          stats={teamStats}
+          items={items}
+          selected={selected}
+          locked={locked}
+          look={look}
+          folds={foldsInUse}
+          verdicts={memberVerdicts}
           onToggle={toggle}
         />
       )}

@@ -156,21 +156,40 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Every chat that can file recommendations about a library team — its
-   * analyses and its builder chats — archived ones included.
+   * Every chat that can file recommendations or member assessments about a
+   * library team — its analyses and its builder chats, and every thread
+   * analysis, whose source may be one of its runs — archived ones included.
    */
-  async teamRecommendationChats(
+  async teamLedgerChats(
     txEm?: EntityManager,
-  ): Promise<Pick<Run, 'id' | 'analysisTeamSlug' | 'editsTeamSlug'>[]> {
+  ): Promise<
+    Pick<
+      Run,
+      | 'id'
+      | 'analysisTeamSlug'
+      | 'editsTeamSlug'
+      | 'analysisSourceRunId'
+      | 'agentKind'
+      | 'model'
+    >[]
+  > {
     return this.getRepo(txEm).find(
       {
         $or: [
           { analysisTeamSlug: { $ne: null } },
           { editsTeamSlug: { $ne: null } },
+          { analysisSourceRunId: { $ne: null } },
         ],
       },
       {
-        fields: ['id', 'analysisTeamSlug', 'editsTeamSlug'],
+        fields: [
+          'id',
+          'analysisTeamSlug',
+          'editsTeamSlug',
+          'analysisSourceRunId',
+          'agentKind',
+          'model',
+        ],
         disableIdentityMap: true,
       },
     );

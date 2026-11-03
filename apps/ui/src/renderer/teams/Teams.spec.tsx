@@ -122,6 +122,12 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       measureInstructionSizes,
       getTeamAnalysis,
       analyzeTeam,
+      checkTeamAnalysisJudge: vi.fn(async () => ({
+        judgeVendor: null,
+        members: 1,
+        sameVendor: [],
+        alternatives: [],
+      })),
       uploadTeamAvatar,
       readTeamHealth,
     },
@@ -338,6 +344,7 @@ beforeEach(() => {
     },
     days: [],
     byMember: [],
+    assessmentVerdicts: { assessments: 0, agreed: 0, disagreed: 0 },
   }));
   readTeamHealth.mockReset().mockImplementation(async ({ slug }) => ({
     slug,
@@ -2761,8 +2768,12 @@ describe('Teams — the team page', () => {
           costUsd: 12.5,
           turns: 900,
           workedMs: 3_600_000,
+          runs: 3,
+          work: null,
+          assessments: [],
         },
       ],
+      assessmentVerdicts: { assessments: 0, agreed: 0, disagreed: 0 },
     }));
     await openBuilder();
     await press('Statistics');

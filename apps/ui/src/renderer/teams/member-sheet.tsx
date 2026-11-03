@@ -82,6 +82,7 @@ export function MemberSheet({
   toolsGroup,
   poolGroup,
   sizeLine,
+  performance,
   removeWarning,
   canRemove,
   place,
@@ -109,6 +110,8 @@ export function MemberSheet({
   toolsGroup: React.ReactNode;
   poolGroup: React.ReactNode;
   sizeLine: React.ReactNode;
+  /** How it has worked for the team: its figures and the analyses' marks. */
+  performance: React.ReactNode;
   /** What removing breaks (stages it owns, the first message), or null. */
   removeWarning: string | null;
   canRemove: boolean;
@@ -284,6 +287,8 @@ export function MemberSheet({
             />
             {fieldErrors('name')}
           </div>
+
+          <SheetGroup title="Performance">{performance}</SheetGroup>
 
           <SheetGroup title="Identity" warning={hasIssues(['character'])}>
             <Field

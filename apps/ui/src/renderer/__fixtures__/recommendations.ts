@@ -1,5 +1,6 @@
 import { formatUsd } from '../chats/agent-activity';
 import type {
+  MemberAssessmentView,
   RecommendationHotspotView,
   RecommendationsLook,
   RecommendationsTimingView,
@@ -349,5 +350,62 @@ export const HOTSPOTS: RecommendationHotspotView[] = [
     node: 'qa',
     why: 'QA only runs the test command and reads its output, yet every turn runs on opus — a fifth of the price would buy the same 8 passes.',
     items: ['W-2'],
+  },
+];
+
+export const MEMBERS: MemberAssessmentView[] = [
+  {
+    member: 'reviewer',
+    usefulness: 4,
+    quality: 3,
+    verdict: 'tune',
+    summary:
+      'Its reviews catch real defects (2 of 3 blocking comments led to fixes), but it re-reads the whole diff each round: 34m and $1.80 per run, 53% of the agents’ time.',
+    evidence: [
+      {
+        runId: 'run-2',
+        seq: 1488,
+        ts: null,
+        nodeId: 'reviewer',
+        quote: 'Reading the full diff again before the second pass',
+      },
+    ],
+    items: ['W-1'],
+  },
+  {
+    member: 'qa',
+    usefulness: 3,
+    quality: 4,
+    verdict: 'reconfigure',
+    summary:
+      'Runs the test command and reports it faithfully, but on opus for a checklist: 8 passes at $0.06 each.',
+    evidence: [
+      {
+        runId: 'run-1',
+        seq: 902,
+        ts: null,
+        nodeId: 'qa',
+        quote: 'All 412 tests pass',
+      },
+    ],
+    items: ['W-2'],
+  },
+  {
+    member: 'builder',
+    usefulness: 5,
+    quality: 4,
+    verdict: 'keep',
+    summary:
+      'Carries every run: its patches merged after one review round in 5 of 6 runs.',
+    evidence: [
+      {
+        runId: 'run-2',
+        seq: 1200,
+        ts: null,
+        nodeId: 'builder',
+        quote: 'Patch applied, tests green',
+      },
+    ],
+    items: [],
   },
 ];

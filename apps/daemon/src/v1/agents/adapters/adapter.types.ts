@@ -5234,6 +5234,12 @@ export interface AdapterConfig {
 
   // ── What a turn cost ───────────────────────────────────────────────────────
   /**
+   * Whose models this CLI runs — what tells an analysis's judge apart from the
+   * members it marks, since a judge favours its own vendor's work. Absent: not
+   * known for any model.
+   */
+  readonly modelVendor?: AdapterModelVendor;
+  /**
    * Whether this CLI reports the tokens and money a turn spent, or the reason
    * its context meter will always be empty.
    *
@@ -5450,6 +5456,21 @@ export interface AdapterDaemonDeps {
    */
   readonly prices: ModelPriceLookup;
 }
+
+/**
+ * Whose models a CLI runs — see {@link AdapterConfig.modelVendor}: one vendor
+ * for every model, or one per model id prefix, matched case-insensitively; a
+ * model no prefix matches (an `auto` pick) has no known vendor.
+ */
+export type AdapterModelVendor =
+  | { readonly kind: 'fixed'; readonly vendor: string }
+  | {
+      readonly kind: 'by-model-id';
+      readonly prefixes: readonly {
+        readonly prefix: string;
+        readonly vendor: string;
+      }[];
+    };
 
 /**
  * Where a CLI's models get a LIST price from — see

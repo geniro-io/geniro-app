@@ -7,34 +7,67 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
+import { CodexAdapter } from '../../agents/adapters/codex/codex.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { GoalDao } from '../../agents/dao/goal.dao';
+import type { RunDao } from '../../agents/dao/run.dao';
 import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { ID_BATCH } from '../../agents/utils/id-batches';
 import { Goal } from '../../runs/entity/goal.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
+import { member, teamOf } from '../../teams/__tests__/team-builders';
+import type { TeamChangeLogService } from '../../teams/services/team-change-log.service';
+import type { TeamChangeLogRecord } from '../../teams/teams.types';
+import {
+  canonicalGraphJson,
+  canonicalGraphOf,
+} from '../../teams/utils/team-version';
+import { MemberAssessmentDao } from '../dao/member-assessment.dao';
 import { MetricLedgerDao } from '../dao/metric-ledger.dao';
+import { TeamRecommendationDao } from '../dao/team-recommendation.dao';
+import { TeamVersionDao } from '../dao/team-version.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
+import { MemberAssessmentRecord } from '../entity/member-assessment.entity';
+import { TeamRecommendation } from '../entity/team-recommendation.entity';
+import { TeamVersion } from '../entity/team-version.entity';
 import { ToolCallEvent } from '../entity/tool-call-event.entity';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
-import type { RunOutcomeLedgerRow, UsageEventInput } from '../stats.types';
+import type {
+  MemberAssessmentRow,
+  RunOutcomeLedgerRow,
+  TeamVersionsWire,
+  UsageEventInput,
+} from '../stats.types';
 import { POLLED_SPEND_SEQ } from '../stats.types';
 import { TeamStatsService } from './team-stats.service';
+import type { TeamVersionsService } from './team-versions.service';
 
 describe('TeamStatsService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let activityDao: UsageActivityDao;
   let usageDao: UsageEventDao;
   let service: TeamStatsService;
+  let liveChats: Set<string>;
+  let changeLog: TeamChangeLogRecord[];
+  let versionTable: TeamVersionsWire | Error;
 
   beforeAll(async () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [UsageActivity, UsageEvent, ToolCallEvent, Goal, WallTurn],
+        entities: [
+          UsageActivity,
+          UsageEvent,
+          ToolCallEvent,
+          Goal,
+          WallTurn,
+          MemberAssessmentRecord,
+          TeamRecommendation,
+          TeamVersion,
+        ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -59,12 +92,38 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       usageDao,
       new AgentAdapterRegistry([
         new ClaudeAdapter(),
+        new CodexAdapter(),
         new CursorAcpAdapter({ vocabularyStore: freshVocabularyStore() }),
       ]),
       new MetricLedgerDao(em),
       new GoalDao(em),
       new WallTurnDao(em),
+      new MemberAssessmentDao(em),
+      new TeamRecommendationDao(em),
+      {
+        getById: (id: string) =>
+          Promise.resolve(liveChats.has(id) ? { id } : null),
+      } as unknown as RunDao,
+      {
+        read: () =>
+          versionTable instanceof Error
+            ? Promise.reject(versionTable)
+            : Promise.resolve(versionTable),
+      } as unknown as TeamVersionsService,
+      new TeamVersionDao(em),
+      {
+        entriesOf: () => Promise.resolve(changeLog),
+      } as unknown as TeamChangeLogService,
     );
+    changeLog = [];
+    liveChats = new Set();
+    versionTable = {
+      currentVersion: 'v2',
+      versions: [
+        { version: 'v2', ordinal: 2 },
+        { version: 'v1', ordinal: 1 },
+      ],
+    } as unknown as TeamVersionsWire;
   });
 
   const started = new Date(2026, 9, 1, 10);
@@ -192,6 +251,14 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         turns: RUNS * 2,
         workedMs: RUNS * 1000,
         measuredWorkedMs: 0,
+        runs: RUNS,
+        perRun: {
+          costUsd: { min: 3, median: 3, max: 3 },
+          workedMs: { min: 1000, median: 1000, max: 1000 },
+        },
+        work: null,
+        changes: [],
+        assessments: [],
       },
     ]);
   });
@@ -240,6 +307,7 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       },
       days: [],
       byMember: [],
+      assessmentVerdicts: { assessments: 0, agreed: 0, disagreed: 0 },
       metrics: {
         goals: {
           recorded: 0,
@@ -437,6 +505,14 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         turns: 2,
         workedMs: 500,
         measuredWorkedMs: 0,
+        runs: 1,
+        perRun: {
+          costUsd: { min: 6, median: 6, max: 6 },
+          workedMs: { min: 500, median: 500, max: 500 },
+        },
+        work: null,
+        changes: [],
+        assessments: [],
       },
       {
         memberId: 'dev',
@@ -445,6 +521,14 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         turns: 1,
         workedMs: 100,
         measuredWorkedMs: 0,
+        runs: 1,
+        perRun: {
+          costUsd: { min: 1, median: 1, max: 1 },
+          workedMs: { min: 100, median: 100, max: 100 },
+        },
+        work: null,
+        changes: [],
+        assessments: [],
       },
     ]);
     expect(stats.costUsd).toBe(17);
@@ -480,6 +564,11 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         turns: 1,
         workedMs: null,
         measuredWorkedMs: 0,
+        runs: 1,
+        perRun: { costUsd: null, workedMs: null },
+        work: null,
+        changes: [],
+        assessments: [],
       },
     ]);
     expect(stats.days[0]).toMatchObject({ costUsd: 7, turns: 1 });
@@ -550,5 +639,475 @@ describe('TeamStatsService (in-memory sqlite)', () => {
 
     expect(stats.costUsd).toBe(5);
     expect(stats.estimatedCostUsd).toBe(1);
+  });
+  describe('member work', () => {
+    async function memberGoal(
+      runId: string,
+      number: number,
+      memberId: string | null,
+      status: Goal['status'],
+    ): Promise<void> {
+      const em = orm.em.fork();
+      em.persist(
+        Object.assign(new Goal(), {
+          runId,
+          number,
+          teamSlug: 'dev-team',
+          memberId,
+          text: `goal ${number}`,
+          source: 'agent',
+          status,
+        }),
+      );
+      await em.flush();
+    }
+
+    it("counts each member's calls, tool errors, goals and reopened completions over every measured run", async () => {
+      const RUNS = ID_BATCH + 5;
+      const ledger = new MetricLedgerDao(orm.em);
+      for (let i = 0; i < RUNS; i += 1) {
+        const runId = `r-${i}`;
+        await teamRun(runId);
+        await activityDao.markMetricsMeasured(runId);
+        await turn(runId, { memberId: 'dev' });
+        await ledger.insertCall({
+          runId,
+          seq: 1,
+          callId: `call-${i}`,
+          occurredAt: started,
+          teamSlug: 'dev-team',
+          caller: 'lead',
+          callee: 'dev',
+          durationMs: i === 0 ? null : 2_000,
+          costUsd: null,
+          turns: 1,
+          ok: i !== 1,
+        });
+      }
+      for (const [seq, ok] of [
+        [10, true],
+        [11, false],
+        [12, false],
+      ] as const) {
+        await ledger.insertToolCall({
+          runId: 'r-0',
+          seq,
+          occurredAt: started,
+          teamSlug: 'dev-team',
+          memberId: 'dev',
+          agentKind: 'claude',
+          tool: 'Bash',
+          mcpServer: null,
+          ok,
+          durationMs: 10,
+        });
+      }
+      const stage = (id: string, responsible: string[]) => ({
+        id,
+        title: id,
+        goal: `${id} done`,
+        responsible,
+      });
+      await new TeamVersionDao(orm.em.fork()).register(
+        'dev-team',
+        'v1',
+        canonicalGraphJson(
+          canonicalGraphOf(
+            teamOf([member('lead'), member('dev'), member('reviewer')], {
+              stages: [stage('build', ['dev']), stage('review', ['reviewer'])],
+            }),
+          ),
+        ),
+        started,
+      );
+      for (const [seq, memberId, stageId, action] of [
+        [20, 'lead', 'build', 'complete'],
+        [21, 'reviewer', 'build', 'reopen'],
+        [22, 'lead', 'build', 'complete'],
+        [23, null, 'review', 'complete'],
+        [24, 'lead', 'build', 'reopen'],
+        [25, 'lead', 'build', 'reopen'],
+        [26, null, 'build', 'complete'],
+      ] as const) {
+        await ledger.insertStage({
+          runId: 'r-0',
+          seq,
+          occurredAt: started,
+          teamSlug: 'dev-team',
+          memberId,
+          lead: null,
+          stageId,
+          action,
+          enteredAt: null,
+          durationMs: null,
+        });
+      }
+      await memberGoal('r-0', 1, 'dev', 'achieved');
+      await memberGoal('r-0', 2, 'dev', 'open');
+      await memberGoal('r-0', 3, 'dev', 'dropped');
+      await memberGoal('r-0', 4, null, 'not_achieved');
+
+      const { byMember } = await service.read('dev-team');
+      const dev = byMember.find((entry) => entry.memberId === 'dev');
+
+      expect(dev).toMatchObject({
+        runs: RUNS,
+        work: {
+          measuredRuns: RUNS,
+          callsAnswered: RUNS,
+          callsFailed: 1,
+          avgAnswerMs: 2_000,
+          callsMade: 0,
+          toolCalls: 3,
+          toolErrors: 2,
+          goals: {
+            recorded: 3,
+            achieved: 1,
+            notAchieved: 0,
+            open: 1,
+            dropped: 1,
+            achievedShare: 0.5,
+          },
+          cleanRuns: RUNS - 2,
+          stagesCompleted: 3,
+          completionsReopened: 2,
+        },
+      });
+      expect(
+        byMember.find((entry) => entry.memberId === 'reviewer')?.work,
+      ).toMatchObject({ stagesCompleted: 1, completionsReopened: 0 });
+      expect(
+        byMember.find((entry) => entry.memberId === 'lead')?.work,
+      ).toMatchObject({ stagesCompleted: 0, completionsReopened: 0 });
+    });
+
+    it('keeps the work of a member the ledgers never watched null', async () => {
+      await teamRun('old-run');
+      await turn('old-run', { memberId: 'dev' });
+
+      const [dev] = (await service.read('dev-team')).byMember;
+
+      expect(dev).toMatchObject({ memberId: 'dev', runs: 1, work: null });
+    });
+  });
+
+  describe('member assessments', () => {
+    const assessment = (
+      overrides: Partial<MemberAssessmentRow>,
+    ): MemberAssessmentRow => ({
+      slug: 'dev-team',
+      chatRunId: 'analysis-1',
+      chatKind: 'analysis',
+      cardSeq: 5,
+      filedAt: new Date('2026-10-20T10:00:00.000Z'),
+      libraryVersion: 'v1',
+      runs: 6,
+      runIds: ['r1'],
+      memberId: 'reviewer',
+      usefulness: 3,
+      quality: 2,
+      verdict: 'tune',
+      summary: 'Reviews are read, but it re-reads the diff every round',
+      evidence: [{ runId: 'r1', seq: 4, quote: 'reading the diff again' }],
+      items: [{ id: 'W-1', title: 'Review the diff once' }],
+      judge: { agent: 'claude', model: 'opus' },
+      userVerdict: null,
+      ...overrides,
+    });
+
+    async function filed(
+      chatRunId: string,
+      itemId: string,
+      fate: { selectedAt?: Date; outcome?: string },
+    ): Promise<void> {
+      const dao = new TeamRecommendationDao(orm.em.fork());
+      await dao.file([
+        {
+          slug: 'dev-team',
+          chatRunId,
+          chatKind: 'analysis',
+          cardSeq: 5,
+          filedAt: new Date('2026-10-20T10:00:00.000Z'),
+          libraryVersion: 'v1',
+          itemId,
+          target: 'team',
+          territory: 'process',
+          kind: 'instructions',
+          location: 'reviewer',
+          title: 'Review the diff once',
+          change: 'x',
+          rootCause: 'y',
+          minutesSaved: 5,
+          costSavedUsd: null,
+          expectedOutcome: null,
+          confidence: 3,
+          risk: 'low',
+        },
+      ]);
+      if (fate.selectedAt !== undefined) {
+        await dao.markSelected(chatRunId, 5, [itemId], fate.selectedAt);
+      }
+      if (fate.outcome !== undefined) {
+        await dao.markOutcome(
+          chatRunId,
+          5,
+          { itemId, outcome: fate.outcome, note: null },
+          { seq: 9, at: new Date('2026-10-21T10:00:00.000Z') },
+        );
+      }
+    }
+
+    it('lists every assessment of a member newest first, with the versions its runs ran and what became of the items that carry it out', async () => {
+      await teamRun('r1');
+      await turn('r1', { memberId: 'reviewer' });
+      await activityDao.stampThreadVersion('r2', started, {
+        slug: 'dev-team',
+        version: 'v2',
+        inferred: false,
+      });
+      await filed('analysis-1', 'W-1', {
+        selectedAt: new Date('2026-10-20T11:00:00.000Z'),
+        outcome: 'applied',
+      });
+      await filed('analysis-2', 'W-1', {});
+      liveChats.add('analysis-2');
+      await new MemberAssessmentDao(orm.em.fork()).file([
+        assessment({}),
+        assessment({
+          chatRunId: 'analysis-2',
+          filedAt: new Date('2026-10-25T10:00:00.000Z'),
+          libraryVersion: 'v2',
+          runIds: ['r2', 'r1', 'gone-run'],
+          usefulness: 4,
+          quality: 4,
+        }),
+        assessment({
+          chatRunId: 'thread-1',
+          chatKind: 'thread',
+          filedAt: new Date('2026-10-26T10:00:00.000Z'),
+          libraryVersion: 'v-gone',
+          runs: 1,
+          runIds: ['r2'],
+          usefulness: null,
+          quality: null,
+          verdict: 'keep',
+          items: [],
+        }),
+      ]);
+
+      const reviewer = (await service.read('dev-team')).byMember.find(
+        (member) => member.memberId === 'reviewer',
+      );
+
+      expect(
+        reviewer?.assessments.map((entry) => [
+          entry.chatRunId,
+          entry.chatKind,
+          entry.runs,
+          entry.versions,
+          entry.usefulness,
+          entry.quality,
+          entry.items.map((item) => item.status),
+        ]),
+      ).toEqual([
+        [
+          'thread-1',
+          'thread',
+          1,
+          [{ number: 2, current: true }],
+          null,
+          null,
+          [],
+        ],
+        [
+          'analysis-2',
+          'analysis',
+          6,
+          [
+            { number: 1, current: false },
+            { number: 2, current: true },
+          ],
+          4,
+          4,
+          ['open'],
+        ],
+        [
+          'analysis-1',
+          'analysis',
+          6,
+          [{ number: 1, current: false }],
+          3,
+          2,
+          ['applied'],
+        ],
+      ]);
+      expect(reviewer?.assessments[2]).toMatchObject({
+        verdict: 'tune',
+        summary: 'Reviews are read, but it re-reads the diff every round',
+        evidence: [{ runId: 'r1', seq: 4, quote: 'reading the diff again' }],
+        items: [{ id: 'W-1', title: 'Review the diff once' }],
+      });
+    });
+
+    it('lists a member assessed but gone from the usage ledger, and names versions by nothing when the table cannot be read', async () => {
+      versionTable = new Error('library unreadable');
+      await new MemberAssessmentDao(orm.em.fork()).file([assessment({})]);
+
+      const stats = await service.read('dev-team');
+
+      expect(stats.byMember).toEqual([
+        expect.objectContaining({
+          memberId: 'reviewer',
+          turns: 0,
+          runs: 0,
+          work: null,
+          assessments: [
+            expect.objectContaining({
+              versions: [],
+              items: [
+                { id: 'W-1', title: 'Review the diff once', status: null },
+              ],
+            }),
+          ],
+        }),
+      ]);
+    });
+  });
+
+  describe('member changes, judges and verdicts', () => {
+    const graphOf = (team: ReturnType<typeof teamOf>) =>
+      canonicalGraphJson(canonicalGraphOf(team));
+    const V1 = teamOf([
+      member('lead'),
+      { ...member('reviewer'), model: 'opus' },
+    ]);
+    const V2 = teamOf([
+      member('lead'),
+      { ...member('reviewer'), agent: 'codex', model: 'gpt-6.1-sol' },
+    ]);
+
+    async function versionedRun(
+      runId: string,
+      version: string,
+      minute: number,
+      reviewerCost: number,
+    ): Promise<void> {
+      const at = new Date(2026, 9, 1, 10, minute);
+      await activityDao.stampThreadVersion(runId, at, {
+        slug: 'dev-team',
+        version,
+        inferred: false,
+      });
+      await turn(runId, {
+        memberId: 'reviewer',
+        occurredAt: at,
+        costUsd: reviewerCost,
+      });
+    }
+
+    it("measures a member's change across the versions its runs ran, names who judged it, and whether the judge shares the member's vendor", async () => {
+      const versions = new TeamVersionDao(orm.em.fork());
+      await versions.register(
+        'dev-team',
+        'v1',
+        graphOf(V1),
+        new Date(2026, 9, 1),
+      );
+      await versions.register(
+        'dev-team',
+        'v2',
+        graphOf(V2),
+        new Date(2026, 9, 2),
+      );
+      await versionedRun('a1', 'v1', 1, 4);
+      await versionedRun('a2', 'v1', 2, 4);
+      await versionedRun('b1', 'v2', 3, 1);
+      await versionedRun('b2', 'v2', 4, 1);
+      changeLog = [
+        {
+          slug: 'dev-team',
+          changedAt: new Date(2026, 9, 1, 10, 2, 30),
+          source: 'builder',
+          fromVersion: 'v1',
+          toVersion: 'v2',
+          summary: 'Review on codex',
+          reason: null,
+          userNote: null,
+          recommendationIds: ['W-2'],
+          chatRunId: 'builder-1',
+          cardSeq: 3,
+          backup: null,
+        },
+      ];
+      const assessments = new MemberAssessmentDao(orm.em.fork());
+      const row = (chatRunId: string, judge: MemberAssessmentRow['judge']) => ({
+        slug: 'dev-team',
+        chatRunId,
+        chatKind: 'analysis' as const,
+        cardSeq: 5,
+        filedAt: new Date('2026-10-20T10:00:00.000Z'),
+        libraryVersion: 'v2',
+        runs: 2,
+        runIds: ['b1', 'a1'],
+        memberId: 'reviewer',
+        usefulness: 4,
+        quality: 3,
+        verdict: 'keep' as const,
+        summary: 'Fine',
+        evidence: [],
+        items: [],
+        judge,
+        userVerdict: null,
+      });
+      await assessments.file([
+        row('by-claude', { agent: 'claude', model: 'opus' }),
+        row('by-codex', { agent: 'codex', model: null }),
+        row('by-cursor-auto', { agent: 'cursor-agent', model: 'auto' }),
+      ]);
+      await assessments.setUserVerdict(
+        { chatRunId: 'by-claude', cardSeq: 5, memberId: 'reviewer' },
+        { verdict: 'disagree', note: 'it missed the race' },
+        new Date('2026-10-21T10:00:00.000Z'),
+      );
+      await assessments.setUserVerdict(
+        { chatRunId: 'by-codex', cardSeq: 5, memberId: 'reviewer' },
+        { verdict: 'agree', note: null },
+        new Date('2026-10-21T10:00:00.000Z'),
+      );
+
+      const stats = await service.read('dev-team');
+      const reviewer = stats.byMember.find(
+        (entry) => entry.memberId === 'reviewer',
+      );
+
+      expect(reviewer?.changes).toEqual([
+        expect.objectContaining({
+          kinds: ['agent', 'model'],
+          source: 'builder',
+          summary: 'Review on codex',
+          recommendationIds: ['W-2'],
+          before: expect.objectContaining({ runs: 2, costPerRunUsd: 4 }),
+          after: expect.objectContaining({ runs: 2, costPerRunUsd: 1 }),
+          effect: 'better',
+        }),
+      ]);
+      expect(
+        Object.fromEntries(
+          reviewer!.assessments.map((entry) => [
+            entry.chatRunId,
+            [entry.judge.sameVendor, entry.userVerdict?.verdict ?? null],
+          ]),
+        ),
+      ).toEqual({
+        'by-claude': [false, 'disagree'],
+        'by-codex': [true, 'agree'],
+        'by-cursor-auto': [null, null],
+      });
+      expect(stats.assessmentVerdicts).toEqual({
+        assessments: 3,
+        agreed: 1,
+        disagreed: 1,
+      });
+    });
   });
 });

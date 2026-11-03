@@ -263,6 +263,14 @@ describe('AnalyzeThreadDialog', () => {
     async function renderTeam(
       analyzeTeam: ReturnType<typeof vi.fn>,
       onStarted = vi.fn(),
+      checkTeamAnalysisJudge: ReturnType<typeof vi.fn> = vi
+        .fn()
+        .mockResolvedValue({
+          judgeVendor: null,
+          members: 2,
+          sameVendor: [],
+          alternatives: [],
+        }),
     ): Promise<void> {
       container = document.createElement('div');
       document.body.appendChild(container);
@@ -274,7 +282,10 @@ describe('AnalyzeThreadDialog', () => {
               kind: 'team',
               slug: 'dev-team',
               name: 'Dev Team',
-              api: { analyzeTeam } as unknown as TeamsApi,
+              api: {
+                analyzeTeam,
+                checkTeamAnalysisJudge,
+              } as unknown as TeamsApi,
             }}
             sourceLabel="Dev Team"
             chatApi={{} as ChatsApi}
@@ -285,6 +296,7 @@ describe('AnalyzeThreadDialog', () => {
             configProfilesFor={() => []}
             configDirReasonFor={() => null}
             approvalCapabilityFor={() => CLAUDE_APPROVALS}
+            agentLabelOf={(kind) => (kind === 'codex' ? 'Codex' : kind)}
             runSettings={() => Promise.resolve({})}
             onClose={() => undefined}
             onStarted={onStarted}
@@ -292,6 +304,38 @@ describe('AnalyzeThreadDialog', () => {
         );
       });
     }
+
+    it('warns when most members run the judge’s own vendor, and switches to another agent on a press', async () => {
+      const check = vi.fn().mockImplementation(async ({ agent }) => ({
+        judgeVendor: agent === 'claude' ? 'anthropic' : 'openai',
+        members: 2,
+        sameVendor: agent === 'claude' ? ['lead', 'reviewer'] : [],
+        alternatives: agent === 'claude' ? ['codex'] : ['claude'],
+      }));
+      await renderTeam(vi.fn(), vi.fn(), check);
+
+      const hint = document.querySelector('[data-slot="analysis-judge-hint"]');
+      expect(check).toHaveBeenCalledWith({
+        slug: 'dev-team',
+        agent: 'claude',
+        model: 'opus',
+      });
+      expect(hint?.textContent).toContain(
+        'Every member of this team runs models of the same vendor',
+      );
+
+      await act(async () => {
+        button('Use Codex').click();
+      });
+
+      expect(check).toHaveBeenLastCalledWith({
+        slug: 'dev-team',
+        agent: 'codex',
+      });
+      expect(
+        document.querySelector('[data-slot="analysis-judge-hint"]'),
+      ).toBeNull();
+    });
 
     it('starts a team analysis over the number of latest runs picked', async () => {
       const analyzeTeam = vi.fn().mockResolvedValue({ id: 'analysis' });

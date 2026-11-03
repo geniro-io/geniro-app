@@ -12,11 +12,13 @@ import { UsageEventDao } from '../dao/usage-event.dao';
 import type { TeamHistory } from '../stats.types';
 import { foldTeamHistory } from '../utils/team-history-fold';
 import { totalsByRun } from '../utils/team-versions-fold';
+import { TeamStatsService } from './team-stats.service';
 import { TeamVersionsService } from './team-versions.service';
 
 /**
  * A team's history for its analysis: its versions and what their runs
- * did, the writes logged against it, and the recommendations filed about it.
+ * did, the writes logged against it, the recommendations filed about it, and
+ * each member's work and the earlier analyses' marks of it.
  * Read from the ledgers, which outlive the runs and chats they record, so an
  * analysis sees past the runs it was started on and past the analyses it
  * replaced.
@@ -32,6 +34,7 @@ export class TeamHistoryService {
     private readonly changeLog: TeamChangeLogService,
     private readonly runDao: RunDao,
     private readonly adapters: AgentAdapterRegistry,
+    private readonly stats: TeamStatsService,
   ) {}
 
   /** Each recorded version's number, and the library's version now. */
@@ -63,6 +66,7 @@ export class TeamHistoryService {
         liveChats.add(chatRunId);
       }
     }
+    const { byMember } = await this.stats.read(slug);
     return foldTeamHistory({
       slug,
       versions: await this.versions.read(slug),
@@ -77,6 +81,7 @@ export class TeamHistoryService {
       liveChats,
       analysedRunIds: scope.analysedRunIds,
       readerRunId: scope.readerRunId,
+      members: byMember,
     });
   }
 }

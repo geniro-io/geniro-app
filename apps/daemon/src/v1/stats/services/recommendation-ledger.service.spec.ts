@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type {
   ItemWire,
+  MemberAssessment,
   RecommendationMarks,
   RecommendationsPayload,
 } from '../../agents/chat.types';
@@ -18,7 +19,9 @@ import { member, teamOf } from '../../teams/__tests__/team-builders';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { Team } from '../../teams/teams.types';
 import { teamVersionOf } from '../../teams/utils/team-version';
+import { MemberAssessmentDao } from '../dao/member-assessment.dao';
 import { TeamRecommendationDao } from '../dao/team-recommendation.dao';
+import { MemberAssessmentRecord } from '../entity/member-assessment.entity';
 import { TeamRecommendation } from '../entity/team-recommendation.entity';
 import { filedRecommendationsOf } from '../utils/recommendation-ledger';
 import { RecommendationLedgerService } from './recommendation-ledger.service';
@@ -55,7 +58,28 @@ function card(ids: string[]): RecommendationsPayload {
   };
 }
 
-type ChatRun = Pick<Run, 'id' | 'analysisTeamSlug' | 'editsTeamSlug'>;
+const DEV: MemberAssessment = {
+  member: 'dev',
+  usefulness: 4,
+  quality: 2,
+  verdict: 'reconfigure',
+  summary: 'Carries every run, but its patches come back from review twice',
+  evidence: [{ runId: 'newest', seq: 4, quote: 'slow' }],
+  items: ['W-1'],
+};
+
+function assessedCard(
+  ids: string[],
+  members: MemberAssessment[],
+): RecommendationsPayload {
+  return { ...card(ids), members };
+}
+
+type ChatRun = Pick<
+  Run,
+  'id' | 'analysisTeamSlug' | 'editsTeamSlug' | 'analysisSourceRunId'
+> &
+  Partial<Pick<Run, 'teamId' | 'agentKind' | 'model'>>;
 
 interface StoredRow {
   seq: number;
@@ -73,6 +97,7 @@ interface StoredRow {
 describe('RecommendationLedgerService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let dao: TeamRecommendationDao;
+  let assessments: MemberAssessmentDao;
   let bus: AgentEventBus;
   let chats: Map<string, ChatRun>;
   let stored: Map<string, StoredRow[]>;
@@ -82,7 +107,7 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [TeamRecommendation],
+        entities: [TeamRecommendation, MemberAssessmentRecord],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -99,32 +124,32 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
   beforeEach(async () => {
     await orm.schema.clear();
     dao = new TeamRecommendationDao(orm.em.fork());
+    assessments = new MemberAssessmentDao(orm.em.fork());
     bus = new AgentEventBus();
+    const chat = (
+      id: string,
+      fields: Partial<ChatRun> = {},
+    ): [string, ChatRun] => [
+      id,
+      {
+        id,
+        analysisTeamSlug: null,
+        editsTeamSlug: null,
+        analysisSourceRunId: null,
+        ...fields,
+      },
+    ];
     chats = new Map([
-      [
-        'analysis-1',
-        {
-          id: 'analysis-1',
-          analysisTeamSlug: 'dev-team',
-          editsTeamSlug: null,
-        },
-      ],
-      [
-        'builder-1',
-        {
-          id: 'builder-1',
-          analysisTeamSlug: null,
-          editsTeamSlug: 'dev-team',
-        },
-      ],
-      [
-        'plain-chat',
-        {
-          id: 'plain-chat',
-          analysisTeamSlug: null,
-          editsTeamSlug: null,
-        },
-      ],
+      chat('analysis-1', {
+        analysisTeamSlug: 'dev-team',
+        agentKind: 'codex',
+        model: 'gpt-6.1-sol',
+      }),
+      chat('builder-1', { editsTeamSlug: 'dev-team' }),
+      chat('plain-chat'),
+      chat('team-run', { teamId: 'dev-team' }),
+      chat('thread-analysis', { analysisSourceRunId: 'team-run' }),
+      chat('chat-analysis', { analysisSourceRunId: 'plain-chat' }),
     ]);
     stored = new Map();
     service = new RecommendationLedgerService(
@@ -132,11 +157,13 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
       bus,
       {
         getById: (id: string) => Promise.resolve(chats.get(id) ?? null),
-        teamRecommendationChats: () =>
+        teamLedgerChats: () =>
           Promise.resolve(
             [...chats.values()].filter(
               (chat) =>
-                chat.analysisTeamSlug !== null || chat.editsTeamSlug !== null,
+                chat.analysisTeamSlug !== null ||
+                chat.editsTeamSlug !== null ||
+                chat.analysisSourceRunId !== null,
             ),
           ),
       } as unknown as RunDao,
@@ -151,6 +178,7 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
           ),
       } as unknown as ItemDao,
       dao,
+      assessments,
       {
         get: () => Promise.resolve({ slug: 'dev-team', team: LIBRARY }),
       } as unknown as TeamStoreService,
@@ -260,6 +288,70 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
       expect(await dao.rowsOf('dev-team')).toEqual([]);
     });
 
+    it("files a team analysis's member assessments with the runs it read and the titles of the items that carry them out", async () => {
+      publish(
+        'analysis-1',
+        5,
+        'recommendations',
+        assessedCard(
+          ['W-1', 'R-1'],
+          [DEV, { ...DEV, member: 'qa', verdict: 'keep', items: [] }],
+        ),
+      );
+      await service.settled();
+
+      expect(await assessments.rowsOf('dev-team')).toEqual([
+        {
+          slug: 'dev-team',
+          chatRunId: 'analysis-1',
+          chatKind: 'analysis',
+          cardSeq: 5,
+          filedAt: new Date('2026-10-20T10:00:05.000Z'),
+          libraryVersion: teamVersionOf(LIBRARY),
+          runs: 1,
+          runIds: ['newest'],
+          memberId: 'dev',
+          usefulness: 4,
+          quality: 2,
+          verdict: 'reconfigure',
+          summary: DEV.summary,
+          evidence: DEV.evidence,
+          items: [{ id: 'W-1', title: 'Title of W-1' }],
+          judge: { agent: 'codex', model: 'gpt-6.1-sol' },
+          userVerdict: null,
+        },
+        expect.objectContaining({ memberId: 'qa', verdict: 'keep', items: [] }),
+      ]);
+    });
+
+    it("files a thread analysis's assessments under the team its source run ran, and none of its items", async () => {
+      publish(
+        'thread-analysis',
+        5,
+        'recommendations',
+        assessedCard(['W-1'], [DEV]),
+      );
+      publish(
+        'thread-analysis',
+        7,
+        'message',
+        { text: 'apply', apply: { cardSeq: 5, ids: ['W-1'] } },
+        'user',
+      );
+      publish('chat-analysis', 3, 'recommendations', assessedCard(['R-1'], []));
+      await service.settled();
+
+      expect(await assessments.rowsOf('dev-team')).toEqual([
+        expect.objectContaining({
+          chatRunId: 'thread-analysis',
+          chatKind: 'thread',
+          runs: 1,
+          memberId: 'dev',
+        }),
+      ]);
+      expect(await dao.rowsOf('dev-team')).toEqual([]);
+    });
+
     it('keeps the newest mark of an item whichever order two marks arrive in', async () => {
       publish('analysis-1', 5, 'recommendations', card(['W-1']));
       await service.settled();
@@ -333,9 +425,19 @@ describe('RecommendationLedgerService (in-memory sqlite)', () => {
         }),
       ]);
       stored.set('plain-chat', [row(2, 'recommendations', card(['R-1']))]);
+      stored.set('thread-analysis', [
+        row(3, 'recommendations', assessedCard(['W-1'], [DEV])),
+      ]);
 
-      await expect(service.sweep()).resolves.toBe(2);
+      await expect(service.sweep()).resolves.toBe(3);
       await service.sweep();
+
+      expect(
+        (await assessments.rowsOf('dev-team')).map((entry) => [
+          entry.chatRunId,
+          entry.memberId,
+        ]),
+      ).toEqual([['thread-analysis', 'dev']]);
 
       const rows = await dao.rowsOf('dev-team');
       expect(rows.map((entry) => [entry.itemId, entry.outcome])).toEqual([

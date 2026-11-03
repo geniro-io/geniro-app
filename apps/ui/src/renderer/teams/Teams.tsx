@@ -73,6 +73,7 @@ import { type HeldProblem, HeldProblems } from './held-problems';
 import { InstructionSizeCard } from './instruction-size-card';
 import { InstructionsCard } from './instructions-card';
 import { AddMemberCard, MemberCard } from './member-card';
+import { MemberPerformance } from './member-performance';
 import { memberLabels } from './member-pick';
 import { memberProblemsOf, memberStatusOf } from './member-problems';
 import { modelChangePatch } from './member-schema';
@@ -2009,6 +2010,36 @@ export function Teams({
               />
             </div>
           }
+          performance={
+            <MemberPerformance
+              row={
+                teamStats.data?.byMember.find(
+                  (row) => row.memberId === selected.id,
+                ) ?? null
+              }
+              loading={teamStats.loading}
+              onVerdict={
+                apis === null
+                  ? undefined
+                  : async (entry, next) => {
+                      await apis.stats
+                        .setMemberAssessmentVerdict({
+                          memberAssessmentVerdictDto: {
+                            chatRunId: entry.chatRunId,
+                            cardSeq: entry.cardSeq,
+                            memberId: selected.id,
+                            verdict: next?.verdict ?? null,
+                            note: next?.note ?? null,
+                          },
+                        })
+                        .catch((err: unknown) => {
+                          throw new Error(describeDaemonError(err));
+                        });
+                      teamStats.reload();
+                    }
+              }
+            />
+          }
           removeWarning={removeWarningOf(selected.id)}
           canRemove={members.length > 1}
           place={{
@@ -2220,6 +2251,9 @@ export function Teams({
                 : null
             }
             replaces={hasAnalysis}
+            agentLabelOf={(kind) =>
+              agentDisplayName(capabilities?.agents ?? [], kind)
+            }
             sourceLabel={team.name}
             chatApi={apis.chats}
             agentsApi={apis.agents}

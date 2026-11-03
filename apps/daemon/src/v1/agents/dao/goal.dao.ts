@@ -34,11 +34,13 @@ export class GoalDao extends BaseDao<Goal> {
   async statusesOf(
     scope: { teamSlug: string } | { runIds: readonly string[] },
     txEm?: EntityManager,
-  ): Promise<{ runId: string; status: Goal['status'] }[]> {
+  ): Promise<
+    { runId: string; status: Goal['status']; memberId: string | null }[]
+  > {
     const repo = this.getRepo(txEm ?? this.em.fork());
     const read = (where: FilterQuery<Goal>) =>
       repo.find(where, {
-        fields: ['runId', 'status'],
+        fields: ['runId', 'status', 'memberId'],
         disableIdentityMap: true,
       });
     const rows =
@@ -51,6 +53,10 @@ export class GoalDao extends BaseDao<Goal> {
               ),
             )
           ).flat();
-    return rows.map((row) => ({ runId: row.runId, status: row.status }));
+    return rows.map((row) => ({
+      runId: row.runId,
+      status: row.status,
+      memberId: row.memberId,
+    }));
   }
 }

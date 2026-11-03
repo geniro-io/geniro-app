@@ -10,6 +10,7 @@ import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { FigureTable } from '../components/figure-table';
 import { type AvatarLook, MemberAvatar } from '../components/member-avatar';
+import { MemberMarks } from '../components/member-marks';
 import { ToolUsageTables } from '../components/tool-usage-tables';
 import { Input } from '../components/ui/input';
 import { SERIES } from '../stats/charts/chart-theme';
@@ -20,6 +21,11 @@ import {
   NOT_MEASURED,
 } from '../stats/stats-format';
 import { KpiStrip, KpiTile } from './kpi-tile';
+import {
+  assessmentCaption,
+  assessmentScope,
+  workReadings,
+} from './member-performance';
 import { CallMatrix, StageFiguresTable } from './team-metrics';
 
 /**
@@ -156,6 +162,29 @@ export function TeamStatsTab({
           </EmptyState>
         )}
       </section>
+      {stats && stats.runs > 0 ? (
+        <MetricsSection
+          title="How each member works"
+          caption="How useful each member's work was and how it held up: the newest analysis's marks, and its calls, tool errors, goals and reopened stages over the measured runs.">
+          <MemberWorkTable stats={stats} memberOf={memberOf} />
+          {stats.assessmentVerdicts.agreed +
+            stats.assessmentVerdicts.disagreed ===
+          0 ? null : (
+            <p
+              data-slot="assessment-agreement"
+              className="text-sm text-muted-foreground">
+              You agreed with {formatCount(stats.assessmentVerdicts.agreed)} of
+              the{' '}
+              {formatCount(
+                stats.assessmentVerdicts.agreed +
+                  stats.assessmentVerdicts.disagreed,
+              )}{' '}
+              marks you gave a verdict on (
+              {formatCount(stats.assessmentVerdicts.assessments)} filed).
+            </p>
+          )}
+        </MetricsSection>
+      ) : null}
       {metrics === undefined ? null : stats &&
         stats.runs > 0 &&
         metrics.goals.measuredRuns === 0 ? (
@@ -242,7 +271,7 @@ function MemberTable({
           cell: (row) => (
             <span className="flex items-center gap-2 whitespace-nowrap">
               <MemberAvatar
-                name={nameOf(row)}
+                name={memberOf(row.memberId)?.name ?? row.memberId}
                 avatar={memberOf(row.memberId)?.avatar}
                 colorKey={row.memberId}
                 size={20}
@@ -302,6 +331,92 @@ function MemberTable({
                 ? `Includes ${formatDuration(row.measuredWorkedMs)} Geniro measured by the clock, for turns this member’s CLI did not time.`
                 : undefined,
         },
+      ]}
+    />
+  );
+}
+
+function MemberWorkTable({
+  stats,
+  memberOf,
+}: {
+  stats: TeamStatsDto;
+  memberOf: (
+    memberId: string,
+  ) => { name: string; avatar?: AvatarLook | null } | null;
+}): React.JSX.Element {
+  type Row = TeamStatsDto['byMember'][number];
+  const nameOf = (row: Row): string =>
+    memberOf(row.memberId)?.name ?? `${row.memberId} (removed)`;
+  const reading = (row: Row, key: string) =>
+    row.work === null
+      ? null
+      : (workReadings(row.work).find((entry) => entry.key === key) ?? null);
+  const readingColumn = (header: string, key: string) => ({
+    header,
+    align: 'end' as const,
+    cell: (row: Row) => reading(row, key)?.value ?? NOT_MEASURED,
+    title: (row: Row) =>
+      row.work === null
+        ? 'Not measured: none of its runs was measured.'
+        : reading(row, key)?.title,
+  });
+  return (
+    <FigureTable
+      ariaLabel="How each member works"
+      rows={stats.byMember}
+      rowKey={(row) => row.memberId}
+      emptyLabel="No member has taken a turn yet."
+      columns={[
+        {
+          header: 'Member',
+          cell: (row) => (
+            <span className="flex items-center gap-2 whitespace-nowrap">
+              <MemberAvatar
+                name={memberOf(row.memberId)?.name ?? row.memberId}
+                avatar={memberOf(row.memberId)?.avatar}
+                colorKey={row.memberId}
+                size={20}
+              />
+              <span className="max-w-48 truncate">{nameOf(row)}</span>
+            </span>
+          ),
+          title: nameOf,
+        },
+        {
+          header: 'Latest marks',
+          cell: (row) => {
+            const latest = row.assessments[0];
+            return latest === undefined ? (
+              <span className="text-muted-foreground">Not assessed</span>
+            ) : (
+              <span className="flex flex-col gap-0.5">
+                <MemberMarks
+                  className="flex-nowrap whitespace-nowrap"
+                  usefulness={latest.usefulness}
+                  quality={latest.quality}
+                  verdict={latest.verdict}
+                />
+                <span
+                  data-slot="member-marks-scope"
+                  className="text-[11px] whitespace-nowrap text-muted-foreground">
+                  {assessmentScope(latest)}
+                </span>
+              </span>
+            );
+          },
+          title: (row) => {
+            const latest = row.assessments[0];
+            return latest === undefined
+              ? 'No analysis has judged its work yet.'
+              : `${assessmentCaption(latest)} — ${latest.summary}`;
+          },
+        },
+        readingColumn('Clean runs', 'clean'),
+        readingColumn('Calls answered', 'calls'),
+        readingColumn('Tool errors', 'tools'),
+        readingColumn('Own goals', 'goals'),
+        readingColumn('Reopened', 'reopened'),
       ]}
     />
   );

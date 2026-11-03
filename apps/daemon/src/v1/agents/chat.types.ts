@@ -613,6 +613,9 @@ export const RecommendationEvidenceSchema = z.object({
     .max(600)
     .describe('A short verbatim excerpt of that item'),
 });
+export type RecommendationEvidence = z.infer<
+  typeof RecommendationEvidenceSchema
+>;
 
 const RecommendationImpactSchema = z.object({
   minutesSaved: z
@@ -721,6 +724,60 @@ export const RecommendationHotspotSchema = z.object({
 });
 export type RecommendationHotspot = z.infer<typeof RecommendationHotspotSchema>;
 
+/** What an analysis advises for one member of a team, from its marks. */
+export const MEMBER_VERDICTS = [
+  'keep',
+  'tune',
+  'reconfigure',
+  'replace',
+  'remove',
+] as const;
+export type MemberVerdict = (typeof MEMBER_VERDICTS)[number];
+
+export const MAX_MEMBER_ASSESSMENTS = 50;
+
+const MemberMarkSchema = z.number().int().min(1).max(5).nullable();
+
+/**
+ * One member's work as an analysis judged it: how useful it was and how its
+ * work held up, each 1–5 with the rows behind them, and what to do about it.
+ * A verdict other than `keep` names the team items on the same card that
+ * carry it out, so it is applied with them.
+ */
+export const MemberAssessmentSchema = z.object({
+  member: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe("The member's id, as the reads name it"),
+  usefulness: MemberMarkSchema.describe(
+    'How much its work moved the runs toward what they set out to do: 5 used as delivered and carried the outcome; 4 used after small follow-ups; 3 partly used, partly redundant or ignored; 2 mostly redundant, ignored or redone by another member; 1 the runs did not need it, or it got in the way. null when the runs give too little to judge — say why in the summary',
+  ),
+  quality: MemberMarkSchema.describe(
+    'How its work held up: 5 accepted first time, nothing reopened, sent back or redone; 4 small fixes only; 3 a round of findings, fixes or rework; 2 sent back or reopened again and again; 1 wrong or broken work that cost the runs. null when the runs give too little to judge — say why in the summary',
+  ),
+  verdict: z
+    .enum(MEMBER_VERDICTS)
+    .describe(
+      'keep: it works as it is; tune: change its role or instructions; reconfigure: change its model, effort or tools; replace: put another agent or model in its place, or rewrite its role; remove: the team does not need it — merge its work into another member or drop it',
+    ),
+  summary: z
+    .string()
+    .min(1)
+    .max(600)
+    .describe(
+      'What it contributed and how its work held up, with the figures behind both marks',
+    ),
+  evidence: z.array(RecommendationEvidenceSchema).min(1).max(4),
+  items: z
+    .array(RecommendationIdSchema)
+    .max(MAX_RECOMMENDATIONS_PER_TARGET)
+    .describe(
+      'The team items (W-…) on this card that carry the verdict out; [] for keep',
+    ),
+});
+export type MemberAssessment = z.infer<typeof MemberAssessmentSchema>;
+
 /** The `report_recommendations` arguments. */
 export const RecommendationsReportSchema = z.object({
   summary: z
@@ -735,6 +792,13 @@ export const RecommendationsReportSchema = z.object({
       'Where the time and money went, costliest first, and why — the card draws them over the figures the daemon measured',
     ),
   items: z.array(RecommendationItemSchema).max(MAX_RECOMMENDATIONS),
+  members: z
+    .array(MemberAssessmentSchema)
+    .max(MAX_MEMBER_ASSESSMENTS)
+    .optional()
+    .describe(
+      'A team thread or team analysis: one assessment for each member of the team that took a turn in the analysed runs. Leave it out for a plain chat',
+    ),
 });
 export type RecommendationsReport = z.infer<typeof RecommendationsReportSchema>;
 
@@ -865,6 +929,7 @@ export type RecommendationsTiming = z.infer<typeof RecommendationsTimingSchema>;
 export const RecommendationsPayloadSchema = RecommendationsReportSchema.extend({
   hotspots: RecommendationsReportSchema.shape.hotspots.optional(),
   items: z.array(CardRecommendationItemSchema).max(MAX_RECOMMENDATIONS),
+  members: RecommendationsReportSchema.shape.members.catch(undefined),
   sourceRunId: z.string(),
   sourceKind: z.enum(['team', 'chat']),
   timing: RecommendationsTimingSchema.nullable(),
@@ -1372,7 +1437,7 @@ export interface ModelFigures {
 
 /** What filing a report or a set of outcomes resolved to. */
 export type AnalysisFiled =
-  | { status: 'recorded'; seq: number; count: number }
+  | { status: 'recorded'; seq: number; count: number; members?: number }
   | { status: 'refused'; reason: string };
 
 /**

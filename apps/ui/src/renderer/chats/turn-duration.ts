@@ -5,7 +5,7 @@ import { CHAT_AGENT_KEY } from './agent-activity';
 import { formatElapsed } from './live-row';
 import { settlesOnContinuation, TERMINAL_KINDS } from './settled-status';
 import { subagentIdOf } from './subagent-payload';
-import { payloadBoolean, payloadString } from './transcript-payload';
+import { payloadBoolean } from './transcript-payload';
 
 /**
  * How long each turn actually WORKED, and the thread's total.

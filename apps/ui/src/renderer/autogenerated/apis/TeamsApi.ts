@@ -16,6 +16,7 @@
 import * as runtime from '../runtime';
 import type {
   ActionPressDto,
+  AnalysisJudgeCheckDto,
   AnalyzeTeamDto,
   CancelledDto,
   CreateTeamDto,
@@ -59,6 +60,12 @@ export interface TeamsApiCancelTeamRunRequest {
 
 export interface TeamsApiCancelTeamRunResetWakesRequest {
     runId: string;
+}
+
+export interface TeamsApiCheckTeamAnalysisJudgeRequest {
+    slug: string;
+    agent: string;
+    model?: string;
 }
 
 export interface TeamsApiCreateTeamRequest {
@@ -324,6 +331,66 @@ export class TeamsApi extends runtime.BaseAPI {
      */
     async cancelTeamRunResetWakes(requestParameters: TeamsApiCancelTeamRunResetWakesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ResetWakesCancelledDto> {
         const response = await this.cancelTeamRunResetWakesRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async checkTeamAnalysisJudgeRaw(requestParameters: TeamsApiCheckTeamAnalysisJudgeRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AnalysisJudgeCheckDto>> {
+        if (requestParameters['slug'] == null) {
+            throw new runtime.RequiredError(
+                'slug',
+                'Required parameter "slug" was null or undefined when calling checkTeamAnalysisJudge().'
+            );
+        }
+
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling checkTeamAnalysisJudge().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['model'] != null) {
+            queryParameters['model'] = requestParameters['model'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/teams/{slug}/analysis-judge`;
+        urlPath = urlPath.replace(`{${"slug"}}`, encodeURIComponent(String(requestParameters['slug'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async checkTeamAnalysisJudge(requestParameters: TeamsApiCheckTeamAnalysisJudgeRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AnalysisJudgeCheckDto> {
+        const response = await this.checkTeamAnalysisJudgeRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

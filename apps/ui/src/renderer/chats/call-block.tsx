@@ -7,7 +7,6 @@ import { HoverPopover } from '../components/hover-popover';
 import { type AvatarLook, MemberAvatar } from '../components/member-avatar';
 import { Badge } from '../components/ui/badge';
 import { cn } from '../components/ui/utils';
-import { useSecondTick } from '../components/use-second-tick';
 import {
   CONTEXT_ESTIMATE_NOTE,
   costEstimateTitle,

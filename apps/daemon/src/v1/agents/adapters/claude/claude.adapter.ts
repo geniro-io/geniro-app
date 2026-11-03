@@ -886,6 +886,7 @@ export class ClaudeAdapter extends AgentAdapter {
          */
         consumptionReported: true,
       },
+      modelVendor: { kind: 'fixed', vendor: 'anthropic' },
       usage: {
         /**
          * Reports it in full. Every `result` line carries `usage` (input/output

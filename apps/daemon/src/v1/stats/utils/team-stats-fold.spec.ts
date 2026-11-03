@@ -64,6 +64,11 @@ describe('foldTeamStats', () => {
         turns: 2,
         workedMs: null,
         measuredWorkedMs: 0,
+        runs: 0,
+        perRun: { costUsd: null, workedMs: null },
+        work: null,
+        changes: [],
+        assessments: [],
       },
     ]);
   });

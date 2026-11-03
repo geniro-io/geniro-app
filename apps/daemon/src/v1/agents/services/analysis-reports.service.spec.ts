@@ -8,6 +8,7 @@ import type { Run } from '../../runs/entity/run.entity';
 import type {
   FoldedRun,
   ItemWire,
+  MemberAssessment,
   RecommendationItem,
   RecommendationsPayload,
   RecommendationsReport,
@@ -15,7 +16,11 @@ import type {
 } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { RunDao } from '../dao/run.dao';
-import { AnalysisReportsService, checkItems } from './analysis-reports.service';
+import {
+  AnalysisReportsService,
+  checkItems,
+  checkMembers,
+} from './analysis-reports.service';
 import type { ThreadReaderService } from './thread-reader.service';
 import type { ThreadTimelineService } from './thread-timeline.service';
 
@@ -317,8 +322,19 @@ function folded(runId: string): FoldedRun {
   };
 }
 
-function teamReporter() {
+const REVIEWER: MemberAssessment = {
+  member: 'reviewer',
+  usefulness: 4,
+  quality: 2,
+  verdict: 'tune',
+  summary: 'Its reviews are used, but it re-reads the whole diff every round',
+  evidence: [{ runId: 'r1', seq: 7, quote: 'reading the diff again' }],
+  items: ['W-1'],
+};
+
+function teamReporter(existing?: (runId: string, seqs: number[]) => number[]) {
   const written: { kind: string; payload: object }[] = [];
+  const asked: { runId: string; seqs: number[] }[] = [];
   const runs = [
     { runId: 'r2', snapshotSeq: 30, working: false },
     { runId: 'r1', snapshotSeq: 20, working: false },
@@ -328,8 +344,10 @@ function teamReporter() {
     { fork: () => ({}) } as unknown as EntityManager,
     {} as RunDao,
     {
-      existingSeqs: (_runId: string, seqs: number[]) =>
-        Promise.resolve(new Set(seqs)),
+      existingSeqs: (runId: string, seqs: number[]) => {
+        asked.push({ runId, seqs });
+        return Promise.resolve(new Set(existing?.(runId, seqs) ?? seqs));
+      },
     } as unknown as ItemDao,
     {} as ThreadTimelineService,
     { enabled: true } as MemoryService,
@@ -364,7 +382,7 @@ function teamReporter() {
       return Promise.resolve({ seq: 40 } as ItemWire);
     },
   ).report;
-  return { written, report };
+  return { written, report, asked };
 }
 
 describe('AnalysisReportsService — a team card', () => {
@@ -383,16 +401,19 @@ describe('AnalysisReportsService — a team card', () => {
         },
       ],
       items: [ITEM],
+      members: [REVIEWER],
     };
 
     expect(await report(filed, index)).toEqual({
       status: 'recorded',
       seq: 40,
       count: 1,
+      members: 1,
     });
     const payload = written[0]?.payload as RecommendationsPayload;
     expect(payload).toMatchObject({
       hotspots: filed.hotspots,
+      members: [REVIEWER],
       timing: null,
       teamStats: {
         runs: 2,
@@ -425,7 +446,7 @@ describe('AnalysisReportsService — a team card', () => {
   it('files the runs by hash alone when the version index cannot be read', async () => {
     const { report, written } = teamReporter();
 
-    await report({ hotspots: [], items: [ITEM] }, () =>
+    await report({ hotspots: [], items: [ITEM], members: [REVIEWER] }, () =>
       Promise.reject(new Error('ledger locked')),
     );
 
@@ -444,6 +465,7 @@ describe('AnalysisReportsService — a team card', () => {
         {
           hotspots: [{ title: 'Loops', why: 'x', items: ['W-9'] }],
           items: [ITEM],
+          members: [REVIEWER],
         },
         index,
       ),
@@ -456,6 +478,7 @@ describe('AnalysisReportsService — a team card', () => {
         {
           hotspots: [{ title: 'Idle QA', node: 'qa', why: 'x', items: [] }],
           items: [ITEM],
+          members: [REVIEWER],
         },
         index,
       ),
@@ -464,5 +487,260 @@ describe('AnalysisReportsService — a team card', () => {
       reason: expect.stringContaining('member qa, which took no turn'),
     });
     expect(written).toEqual([]);
+  });
+});
+
+describe('AnalysisReportsService — member assessments', () => {
+  const index = () =>
+    Promise.resolve({ current: 'v-b', numbers: new Map([['v-b', 3]]) });
+
+  it('refuses a team card that assesses no member', async () => {
+    const { report, written } = teamReporter();
+
+    expect(await report({ hotspots: [], items: [ITEM] }, index)).toEqual({
+      status: 'refused',
+      reason:
+        'assess the members: one entry in members for each member of the team that took a turn in the analysed runs',
+    });
+    expect(written).toEqual([]);
+  });
+
+  it("checks a member's evidence against the run it names", async () => {
+    const { report, written, asked } = teamReporter((runId, seqs) =>
+      runId === 'r1' ? seqs.filter((seq) => seq !== 7) : seqs,
+    );
+
+    expect(
+      await report({ hotspots: [], items: [ITEM], members: [REVIEWER] }, index),
+    ).toMatchObject({
+      status: 'refused',
+      reason: expect.stringContaining('evidence seq 7 does not exist'),
+    });
+    expect(asked).toContainEqual({ runId: 'r1', seqs: [7] });
+    expect(written).toEqual([]);
+  });
+
+  it('refuses a member that took no turn in the analysed runs', async () => {
+    const { report, written } = teamReporter();
+
+    expect(
+      await report(
+        {
+          hotspots: [],
+          items: [ITEM],
+          members: [REVIEWER, { ...REVIEWER, member: 'qa' }],
+        },
+        index,
+      ),
+    ).toEqual({
+      status: 'refused',
+      reason:
+        'member qa took no turn in the analysed runs — assess only members the reads name (reviewer)',
+    });
+    expect(written).toEqual([]);
+  });
+
+  it("assesses a thread analysis of a team run by the run's own lanes", async () => {
+    const written: object[] = [];
+    const service = new AnalysisReportsService(
+      { fork: () => ({}) } as unknown as EntityManager,
+      {
+        getById: () => Promise.resolve({ id: 'source', teamId: 'dev-team' }),
+      } as unknown as RunDao,
+      {
+        existingSeqs: (_runId: string, seqs: number[]) =>
+          Promise.resolve(new Set(seqs)),
+      } as unknown as ItemDao,
+      {
+        read: () =>
+          Promise.resolve({
+            fold: { lanes: [{ memberId: 'reviewer' }, { memberId: 'coder' }] },
+            timeline: { ...folded('source').timeline, sinks: [] },
+          }),
+      } as unknown as ThreadTimelineService,
+      { enabled: true } as MemoryService,
+      {} as ThreadReaderService,
+      {} as ProjectScopeService,
+    );
+    const { report } = service.sinkFor(
+      {
+        analysisRunId: 'analysis',
+        sourceRunId: 'source',
+        snapshotSeq: 9,
+        sourceWorking: false,
+      },
+      (_kind, payload) => {
+        written.push(payload);
+        return Promise.resolve({ seq: 12 } as ItemWire);
+      },
+    );
+    const coder: MemberAssessment = {
+      ...REVIEWER,
+      member: 'coder',
+      verdict: 'keep',
+      items: [],
+      evidence: [{ seq: 3, quote: 'tests pass' }],
+    };
+
+    expect(
+      await report(
+        {
+          hotspots: [],
+          items: [ITEM],
+          members: [{ ...REVIEWER, evidence: [{ seq: 4, quote: 'x' }] }, coder],
+        },
+        null,
+      ),
+    ).toEqual({ status: 'recorded', seq: 12, count: 1, members: 2 });
+    expect(
+      await report(
+        {
+          hotspots: [],
+          items: [ITEM],
+          members: [{ ...coder, member: 'qa' }],
+        },
+        null,
+      ),
+    ).toMatchObject({
+      status: 'refused',
+      reason: expect.stringContaining('(reviewer, coder)'),
+    });
+    expect(written).toHaveLength(1);
+    expect((written[0] as RecommendationsPayload).members).toHaveLength(2);
+  });
+});
+
+describe('checkMembers', () => {
+  const took = new Set(['reviewer', 'coder']);
+  const repoItem: RecommendationItem = {
+    ...ITEM,
+    id: 'R-1',
+    target: 'repo',
+    kind: 'check',
+    location: 'package.json:1',
+  };
+
+  it('takes a chat with no members, and refuses one that assesses any', () => {
+    expect(checkMembers({ hotspots: [], items: [] }, 'chat', took)).toBeNull();
+    expect(
+      checkMembers(
+        { hotspots: [], items: [ITEM], members: [REVIEWER] },
+        'chat',
+        took,
+      ),
+    ).toContain('plain chat');
+  });
+
+  it('refuses a member assessed twice', () => {
+    expect(
+      checkMembers(
+        { hotspots: [], items: [ITEM], members: [REVIEWER, REVIEWER] },
+        'team',
+        took,
+      ),
+    ).toBe('member reviewer is assessed twice — one entry per member');
+  });
+
+  it('refuses a verdict carried out by an item the card lacks, or by a non-team item', () => {
+    expect(
+      checkMembers(
+        {
+          hotspots: [],
+          items: [ITEM],
+          members: [{ ...REVIEWER, items: ['W-2'] }],
+        },
+        'team',
+        took,
+      ),
+    ).toBe('member reviewer names W-2, which is not on the card');
+    expect(
+      checkMembers(
+        {
+          hotspots: [],
+          items: [ITEM, repoItem],
+          members: [{ ...REVIEWER, items: ['R-1'] }],
+        },
+        'team',
+        took,
+      ),
+    ).toContain("only team items (W-…) carry out a member's verdict");
+  });
+
+  it('takes a member the runs gave too little to judge, but refuses a change resting on no mark', () => {
+    expect(
+      checkMembers(
+        {
+          hotspots: [],
+          items: [ITEM],
+          members: [
+            {
+              ...REVIEWER,
+              usefulness: null,
+              quality: null,
+              verdict: 'keep',
+              items: [],
+            },
+          ],
+        },
+        'team',
+        took,
+      ),
+    ).toBeNull();
+    expect(
+      checkMembers(
+        {
+          hotspots: [],
+          items: [ITEM],
+          members: [{ ...REVIEWER, usefulness: null, quality: null }],
+        },
+        'team',
+        took,
+      ),
+    ).toBe(
+      "member reviewer's verdict tune rests on no mark — judge its usefulness or quality, or keep it while the runs give too little to judge",
+    );
+    expect(
+      checkMembers(
+        {
+          hotspots: [],
+          items: [ITEM],
+          members: [{ ...REVIEWER, usefulness: null }],
+        },
+        'team',
+        took,
+      ),
+    ).toBeNull();
+  });
+
+  it('refuses a change with no item to carry it out, and a keep that names one', () => {
+    expect(
+      checkMembers(
+        {
+          hotspots: [],
+          items: [ITEM],
+          members: [{ ...REVIEWER, verdict: 'remove', items: [] }],
+        },
+        'team',
+        took,
+      ),
+    ).toContain('verdict remove names no item');
+    expect(
+      checkMembers(
+        {
+          hotspots: [],
+          items: [ITEM],
+          members: [{ ...REVIEWER, verdict: 'keep' }],
+        },
+        'team',
+        took,
+      ),
+    ).toContain('is kept, so it names no items');
+    expect(
+      checkMembers(
+        { hotspots: [], items: [ITEM], members: [REVIEWER] },
+        'team',
+        took,
+      ),
+    ).toBeNull();
   });
 });

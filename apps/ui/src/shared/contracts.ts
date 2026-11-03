@@ -583,6 +583,11 @@ export interface Settings {
    */
   keptSessionIdleMinutes: number;
   /**
+   * Keep the Mac from idle sleep while any agent works, and only then
+   * (`main/keep-awake.ts`). The display still sleeps, and so does a closed lid.
+   */
+  preventSleepWhileWorking: boolean;
+  /**
    * Each CLI's own switches — cursor's Max Mode, claude's browser tools, and
    * whatever a CLI declares next — as `{agentKind: {optionId: on}}`. The
    * daemon publishes every CLI's options (label, description, default) on
@@ -795,6 +800,7 @@ export const DEFAULT_SETTINGS: Settings = {
   archiveRetentionDays: null,
   historyPageSize: DEFAULT_HISTORY_PAGE_SIZE,
   keptSessionIdleMinutes: DEFAULT_KEPT_SESSION_IDLE_MINUTES,
+  preventSleepWhileWorking: true,
   agentOptions: {},
   collapseToolSteps: false,
   daemonInspect: null,

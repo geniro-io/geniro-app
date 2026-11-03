@@ -1,7 +1,14 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  nativeImage,
+  powerSaveBlocker,
+  session,
+  shell,
+} from 'electron';
 
 import { type DaemonHandle, TRAFFIC_LIGHT_INSET } from '../shared/contracts';
 import { EXTERNAL_LINK_SCHEMES } from '../shared/link-schemes';
@@ -21,6 +28,7 @@ import { installFetchDispatcher } from './fetch-dispatcher';
 import { readFinishedTasks } from './finished-tasks';
 import { readGitStamp } from './git-info';
 import { registerIpc } from './ipc';
+import { KeepAwake } from './keep-awake';
 import { KeptSessionConfigPush } from './kept-session-config-push';
 import { flushWindowsThen } from './line-measurement-flush';
 import { MemoryConfigPush } from './memory-config-push';
@@ -188,6 +196,7 @@ onSettingsWritten((settings) => {
     idleMinutes: settings.keptSessionIdleMinutes,
   });
   void memoryConfigPush.pushIfChanged(supervisor.getHandle(), settings.memory);
+  keepAwake.setEnabled(settings.preventSleepWhileWorking);
 });
 
 /**
@@ -222,6 +231,16 @@ const keepAlive = new DaemonKeepAlive((message) => {
   void reportMainLog(supervisor.getHandle(), 'info', message, {
     source: 'autopilot-keepalive',
   });
+});
+
+const keepAwake = new KeepAwake({
+  blocker: powerSaveBlocker,
+  getHandle: () => supervisor.getHandle(),
+  report: (message) => {
+    void reportMainLog(supervisor.getHandle(), 'info', message, {
+      source: 'keep-awake',
+    });
+  },
 });
 
 const autopilot = new AutopilotConductor({
@@ -639,6 +658,7 @@ function daemonCameUp(handle: DaemonHandle): void {
   // about its own load has been waiting for an address to send it to.
   void flushMainLogs(handle);
   reapWorktrees(handle);
+  keepAwake.poke();
 }
 
 /**
@@ -704,6 +724,7 @@ function main(): void {
     // and, through `prefers-color-scheme`, what the renderer paints too, which
     // is what keeps the first frame from flashing the wrong theme.
     applyTheme(readSettings().theme);
+    keepAwake.setEnabled(readSettings().preventSleepWhileWorking);
     // The one theme change that arrives through no settings write: the user
     // flips the OS appearance while `system` is selected. The renderer follows
     // on its own (its media query moves); the window's own ground does not.
@@ -852,6 +873,7 @@ function main(): void {
         () => autopilot.stop(),
         () => mergeWatcher.stop(),
         () => keepAlive.dispose(),
+        () => keepAwake.dispose(),
         () => terminals.disposeAll(),
         // The daemon and the gateway together, not one after the other:
         // neither owns the other, and the app must not quit while either is

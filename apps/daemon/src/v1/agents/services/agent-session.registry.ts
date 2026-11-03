@@ -947,6 +947,50 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     return working;
   }
 
+  /** How many of the run's kept processes have a turn in flight. */
+  turnsInFlight(runId: string): number {
+    let turns = 0;
+    for (const [key, entry] of this.entries) {
+      if (
+        runIdOfSessionKey(key) === runId &&
+        entry.session.alive &&
+        !entry.session.idle
+      ) {
+        turns += 1;
+      }
+    }
+    return turns;
+  }
+
+  /**
+   * Whether a kept process works with no turn of ours in flight, counting a
+   * detached command only while its run took a turn within `detachedForMs`:
+   * a dev server nobody has used since is running, not working.
+   */
+  worksBetweenTurns(detachedForMs: number): boolean {
+    const now = Date.now();
+    const runLastUsed = new Map(this.runUsedAt);
+    for (const [key, entry] of this.entries) {
+      const run = runIdOfSessionKey(key);
+      runLastUsed.set(
+        run,
+        Math.max(runLastUsed.get(run) ?? 0, entry.lastUsedAt),
+      );
+    }
+    for (const [key, entry] of this.entries) {
+      if (
+        entry.session.alive &&
+        (this.worksOffTurn(entry) ||
+          (entry.session.shellsRunning > 0 &&
+            now - (runLastUsed.get(runIdOfSessionKey(key)) ?? 0) <
+              detachedForMs))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /**
    * Every live CLI process one run holds — its own key and every `<runId>::…`
    * key under it, as {@link closeRun} reaches them — with the pid each was

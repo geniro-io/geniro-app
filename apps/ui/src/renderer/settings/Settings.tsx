@@ -11,6 +11,7 @@ import {
   DAEMON_INSPECT_PORT,
   DEFAULT_HISTORY_PAGE_SIZE,
   DEFAULT_KEPT_SESSION_IDLE_MINUTES,
+  DEFAULT_SETTINGS,
   type FastAction,
   hasControlCharacters,
   HISTORY_PAGE_SIZES,
@@ -333,6 +334,9 @@ export function Settings({
   const [keptSessionIdleMinutes, setKeptSessionIdleMinutes] = useState(
     DEFAULT_KEPT_SESSION_IDLE_MINUTES,
   );
+  const [preventSleepWhileWorking, setPreventSleepWhileWorking] = useState(
+    DEFAULT_SETTINGS.preventSleepWhileWorking,
+  );
   const [theme, setTheme] = useState<ThemePreference>(DEFAULT_THEME_PREFERENCE);
   const [forgetting, setForgetting] = useState(false);
   /** What the last purge reached, in words — `null` until one has run. */
@@ -366,6 +370,7 @@ export function Settings({
   const archiveRetentionDirtyRef = useRef(false);
   const historyPageDirtyRef = useRef(false);
   const keptSessionIdleDirtyRef = useRef(false);
+  const preventSleepDirtyRef = useRef(false);
   const daemonInspectDirtyRef = useRef(false);
   const persistGenerationRef = useRef({
     cliPaths: 0,
@@ -454,6 +459,9 @@ export function Settings({
       }
       if (!keptSessionIdleDirtyRef.current) {
         setKeptSessionIdleMinutes(s.keptSessionIdleMinutes);
+      }
+      if (!preventSleepDirtyRef.current) {
+        setPreventSleepWhileWorking(s.preventSleepWhileWorking);
       }
       if (!daemonInspectDirtyRef.current) {
         setStoredInspect(s.daemonInspect);
@@ -973,6 +981,15 @@ export function Settings({
     [persist],
   );
 
+  const onTogglePreventSleep = useLatestCallback(
+    (next: boolean): void => {
+      preventSleepDirtyRef.current = true;
+      setPreventSleepWhileWorking(next);
+      void persist({ preventSleepWhileWorking: next });
+    },
+    [persist],
+  );
+
   const onThemeChange = useLatestCallback(
     (next: ThemePreference): void => {
       const previous = theme;
@@ -1377,6 +1394,16 @@ export function Settings({
                       aria-label="Minutes to keep an idle agent running"
                     />
                     <span className="text-sm text-muted-foreground">min</span>
+                  </SettingsPanelRow>
+                  <SettingsPanelRow
+                    label="Keep the Mac awake while agents work"
+                    htmlFor="settings-prevent-sleep"
+                    description="Holds off idle sleep while an agent works, not while it waits for you; a command it left running counts for an hour after its last turn. The display still turns off, and closing the lid still sleeps the Mac.">
+                    <Switch
+                      id="settings-prevent-sleep"
+                      checked={preventSleepWhileWorking}
+                      onCheckedChange={onTogglePreventSleep}
+                    />
                   </SettingsPanelRow>
                 </SettingsPanel>
               </section>

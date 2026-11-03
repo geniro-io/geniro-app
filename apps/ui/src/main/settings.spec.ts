@@ -164,6 +164,18 @@ describe('readSettings', () => {
     expect(readSettings().keptSessionIdleMinutes).toBe(5);
   });
 
+  it('keeps the Mac awake while agents work by default, and a stored off survives a read', () => {
+    expect(readSettings().preventSleepWhileWorking).toBe(true);
+
+    writeRaw({ preventSleepWhileWorking: false });
+    expect(readSettings().preventSleepWhileWorking).toBe(false);
+
+    writeRaw({ preventSleepWhileWorking: 'no', onboardingComplete: true });
+    const settings = readSettings();
+    expect(settings.preventSleepWhileWorking).toBe(true);
+    expect(settings.onboardingComplete).toBe(true);
+  });
+
   it('an idle window outside 5–180 whole minutes costs only that key', () => {
     for (const keptSessionIdleMinutes of [4, 181, 12.5, '30']) {
       writeRaw({ keptSessionIdleMinutes, onboardingComplete: true });

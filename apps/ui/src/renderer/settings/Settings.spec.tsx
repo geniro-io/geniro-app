@@ -1625,6 +1625,27 @@ describe('Settings appearance section', () => {
     ).toBe(true);
   });
 
+  it('opens the keep-awake switch on the stored value and saves a flip', async () => {
+    geniro.getSettings.mockResolvedValue({
+      ...settings,
+      preventSleepWhileWorking: false,
+    });
+    await mount();
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '#settings-prevent-sleep',
+    )!;
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      preventSleepWhileWorking: true,
+    });
+  });
+
   it('does NOT sweep on the spot when the window is set', async () => {
     // Setting a standing policy is not pressing a delete. Destroying
     // conversations inside the gesture that expressed a preference is the shape

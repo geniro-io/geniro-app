@@ -2926,6 +2926,20 @@ describe('CallBroker — a caller blocked on a card of its own', () => {
     }
   });
 
+  it("counts the run's blocked conversations, and none for a run it does not hold", () => {
+    const { broker } = harness();
+    expect(broker.blockedConversations('run-1')).toBe(0);
+
+    broker.noteCallerBlocked('run-1', 'orch', 'card-1');
+    broker.noteCallerBlocked('run-1', 'orch', 'card-2');
+    expect(broker.blockedConversations('run-1')).toBe(1);
+
+    broker.noteCallerUnblocked('run-1', 'orch', 'card-1');
+    broker.noteCallerUnblocked('run-1', 'orch', 'card-2');
+    expect(broker.blockedConversations('run-1')).toBe(0);
+    expect(broker.blockedConversations('run-other')).toBeNull();
+  });
+
   it('the SAME card offered twice is one blocker — its one answer resumes the questions', async () => {
     // REVIEWED: spawn-cli re-offers a request its turn settled without an
     // answer to the next turn of the same process, so one card can reach the

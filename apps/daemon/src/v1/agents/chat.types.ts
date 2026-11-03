@@ -3461,6 +3461,12 @@ export const KeptSessionConfigSchema = z
   .meta({ id: 'KeptSessionConfig' });
 export type KeptSessionConfig = z.infer<typeof KeptSessionConfigSchema>;
 
+/** TWIN PARSER: `parseAgentActivity` in `apps/ui/src/main/keep-awake.ts`. */
+export const AgentActivitySchema = z.object({
+  working: z.boolean().describe('Whether an agent is at work right now'),
+});
+export type AgentActivity = z.infer<typeof AgentActivitySchema>;
+
 /** A command line longer than this is cut — a full prompt can ride argv. */
 export const MAX_PROCESS_ARGS_CHARS = 2_000;
 

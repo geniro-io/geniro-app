@@ -1268,6 +1268,55 @@ describe('AgentSessionRegistry — work between turns', () => {
     at(sessions, 1).dieWithoutSettling();
     expect(registry.workingOffTurn).toBe(0);
   });
+
+  it('counts a detached command as work between turns only within the window after its last turn', async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-shell', adapter, INPUT, noop, undefined, noop);
+    await at(sessions, 0).endTurn();
+    expect(registry.worksBetweenTurns(60_000)).toBe(false);
+
+    at(sessions, 0).shellsRunning = 1;
+    expect(registry.worksBetweenTurns(60_000)).toBe(true);
+
+    vi.advanceTimersByTime(60_000);
+    expect(registry.worksBetweenTurns(60_000)).toBe(false);
+    expect(registry.workingOffTurn).toBe(1);
+
+    at(sessions, 0).emitBetweenTurn('Bash-1');
+    expect(registry.worksBetweenTurns(60_000)).toBe(true);
+  });
+
+  it("times a member's detached command from the run's last turn, not that member's own", async () => {
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn(nodeSessionKey('run-1', 'a'), adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).shellsRunning = 1;
+
+    vi.advanceTimersByTime(50_000);
+    registry.startTurn(nodeSessionKey('run-1', 'b'), adapter, INPUT, noop);
+    await at(sessions, 1).endTurn();
+    vi.advanceTimersByTime(20_000);
+
+    expect(registry.worksBetweenTurns(60_000)).toBe(true);
+  });
+
+  it("counts the run's processes with a turn in flight", async () => {
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn(nodeSessionKey('run-1', 'a'), adapter, INPUT, noop);
+    registry.startTurn(nodeSessionKey('run-1', 'b'), adapter, INPUT, noop);
+    registry.startTurn('run-2', adapter, INPUT, noop);
+
+    expect(registry.turnsInFlight('run-1')).toBe(2);
+
+    await at(sessions, 0).endTurn();
+    expect(registry.turnsInFlight('run-1')).toBe(1);
+    expect(registry.turnsInFlight('run-2')).toBe(1);
+  });
 });
 
 describe('AgentSessionRegistry — why a session closed', () => {

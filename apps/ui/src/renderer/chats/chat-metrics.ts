@@ -54,7 +54,7 @@ export const ChatMetricsLoaderContext = createContext<ChatMetricsLoader | null>(
 );
 
 /**
- * The loader both the chat screen and the team dock provide: a read of the
+ * The chat screen's loader: a read of the
  * run's metrics route, with a run-level reading written back to the run row.
  *
  * The readout is the CLI's own accounting asked over the live process, while

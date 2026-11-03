@@ -3,11 +3,9 @@ import type { RunStatusEvent } from '../daemon-client';
 
 /**
  * The run-row fields one `run_status` announce sets, the same way wherever the
- * row is held: the chat screen's sidebar patch (`patchRow` in use-chat-run.ts)
- * a hosted chat's copy of its run (`runRowPatch` in use-hosted-chat.ts — the
- * builder's dock and the analysis popup), and the Analyze button's reading of
- * an analysis (`useThreadAnalysis`). Each used to carry its own reading of
- * these rules, and nothing checked that they agreed.
+ * row is held: the chat screen's run list (`patchRow` in use-chat-run.ts — a
+ * hosted conversation's one row included) and the Analyze button's reading of
+ * an analysis (`useThreadAnalysis`).
  *
  * ABSENT asserts nothing, so an activity announce cannot lower a value it never
  * meant to touch: each field is set only when the event carries it. `status` is
@@ -16,8 +14,7 @@ import type { RunStatusEvent } from '../daemon-client';
  *
  * The shell and sub-agent counts and the context reading are NOT here. The chat
  * screen applies those through handlers of their own, which skip a value that
- * did not move so the sidebar does not re-render per event; the dock applies its
- * copies beside this set in `runRowPatch`.
+ * did not move so the sidebar does not re-render per event.
  */
 export function runStatusRowFields(event: RunStatusEvent): Partial<RunDto> {
   const fields: Partial<RunDto> = {};

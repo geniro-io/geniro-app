@@ -34,6 +34,7 @@ import {
   PLAN_WITHHELD,
 } from '../chats/approval-mode-select';
 import { AutoCompactSelect } from '../chats/auto-compact-select';
+import { Chats } from '../chats/Chats';
 import { ConfigDirSelect } from '../chats/config-dir-select';
 import { mcpConfigActions } from '../chats/mcp-config-actions';
 import { ModelSelect } from '../chats/model-select';
@@ -63,7 +64,6 @@ import {
 } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { starterTeam, type TeamLaunch } from '../onboarding/first-launch';
-import { randomId } from '../random-id';
 import { currentRunSettings } from '../run-settings';
 import { useSharedCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
@@ -638,6 +638,23 @@ export function Teams({
     }
   }, [api, activeSlug, refreshList]);
 
+  /**
+   * The re-read the dock's last turn ending started. A queued message goes out
+   * the moment the turn before it ends, so the send waits for that re-read
+   * before writing the editor: a flush first would be refused over the file
+   * the agent just changed.
+   */
+  const chatTurnReloadRef = useRef<Promise<void>>(Promise.resolve());
+  const reloadAfterChatTurn = useLatestCallback((): Promise<void> => {
+    const reload = reloadAfterAgentEdit();
+    chatTurnReloadRef.current = reload;
+    return reload;
+  }, [reloadAfterAgentEdit]);
+  const beforeChatSend = useLatestCallback(async (): Promise<unknown> => {
+    await chatTurnReloadRef.current;
+    return autosave.flush();
+  }, [autosave]);
+
   const reloadVersions = versions.reload;
 
   /**
@@ -827,19 +844,6 @@ export function Teams({
       setError(describeDaemonError(err));
     }
   }, [api, activeSlug]);
-
-  const applyRecommendations = useLatestCallback(
-    async (runId: string, cardSeq: number, ids: string[]): Promise<void> => {
-      if (!apis) {
-        throw new Error('daemon unavailable');
-      }
-      await apis.chats.applyRecommendations({
-        runId,
-        applyRecommendationsDto: { cardSeq, ids, clientMessageId: randomId() },
-      });
-    },
-    [apis],
-  );
 
   /** The builder header's overflow rows; Delete is a group of its own. */
   const builderActions = useMemo((): MenuGroup[] => {
@@ -2090,7 +2094,11 @@ export function Teams({
         }
         sheet={sheet}
         dock={
-          chatMounted && activeSlug !== null ? (
+          chatMounted &&
+          activeSlug !== null &&
+          apis !== null &&
+          handle !== null &&
+          client !== null ? (
             <TeamChatPanel
               key={activeSlug}
               slug={activeSlug}
@@ -2104,18 +2112,13 @@ export function Teams({
               apis={apis}
               handle={handle}
               client={client}
-              capabilities={capabilities}
-              capabilitiesLoading={capabilitiesLoading}
-              recentConfigDirs={recentConfigDirs}
-              configProfiles={configProfiles}
               hidden={!chatOpen}
               active={active}
               onClose={() => setChatOpen(false)}
-              onBeforeSend={autosave.flush}
+              onBeforeSend={beforeChatSend}
               onWorkingChange={setChatWorking}
               onAwaitingChange={setChatAwaiting}
-              onTurnSettled={reloadAfterAgentEdit}
-              applyRecommendations={applyRecommendations}
+              onTurnSettled={reloadAfterChatTurn}
             />
           ) : null
         }
@@ -2199,13 +2202,13 @@ export function Teams({
             }
             sourceLabel={team.name}
             apis={apis}
-            handle={handle}
-            client={client}
-            capabilities={capabilities}
-            capabilitiesLoading={capabilitiesLoading}
-            recentConfigDirs={recentConfigDirs}
-            configProfiles={configProfiles}
-            applyRecommendations={applyRecommendations}
+            renderThread={
+              handle === null || client === null
+                ? null
+                : (thread) => (
+                    <Chats client={client} handle={handle} hosted={thread} />
+                  )
+            }
             onNewAnalysis={() => setAnalyzeOpen(true)}
             onTurnSettled={reloadAfterAgentEdit}
             onClose={() => setAnalysisOpen(false)}

@@ -125,12 +125,10 @@ export interface RunStream {
 
 /**
  * The per-run stream a transcript renders from — rows, anchors, the live plane,
- * request expiry, and the socket's reconnect replay — shared by the chat screen
- * and the team dock.
+ * request expiry, and the socket's reconnect replay.
  *
- * It owns the state and the event handling. What differs between the two
- * surfaces (the sidebar, the queue, the notifications, a builder's canvas) is
- * passed in as options, so the rules for one run's rows are written once.
+ * It owns the state and the event handling. What belongs to the screen (the
+ * sidebar, the queue, the notifications) is passed in as options.
  *
  * The listeners are registered once per client and read the run and the options
  * through refs, so a consumer that changes identity per render does not tear

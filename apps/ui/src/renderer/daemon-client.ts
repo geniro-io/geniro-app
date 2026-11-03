@@ -1279,16 +1279,15 @@ export class DaemonClient {
   private readonly joinWaiters = new Map<string, Set<JoinWaiter>>();
   private readonly debugListeners = new Set<(entry: DebugLogEntry) => void>();
   /**
-   * Every run room this client is in, so a reconnect can re-join all of them.
+   * Every run room this client is in, with how many surfaces hold it, so a
+   * reconnect can re-join all of them.
    *
-   * A SET rather than one id because two surfaces can each be following a run
-   * at the same time — the chat screen stays mounted while the team
-   * builder's chat panel is open, and the gateway's own `join`/`leave` are
-   * additive, so the socket really is in both rooms. With a single id the
-   * second joiner overwrote the first and a reconnect silently re-joined only
-   * one of them, leaving the other surface live but permanently silent.
+   * Several surfaces can follow runs at once — the chat screen stays mounted
+   * under the team dock and the analysis popups — and the socket is one, so a
+   * room is shared: the gateway's `leave` takes the socket out of it for
+   * everyone. A count keeps the room until the last surface lets go.
    */
-  private readonly joinedRunIds = new Set<string>();
+  private readonly joinedRunIds = new Map<string, number>();
   private hasConnected = false;
   /** Whether the debug room should be re-joined after a reconnect. */
   private debugStreaming = false;
@@ -1317,9 +1316,11 @@ export class DaemonClient {
       let joined: Promise<unknown> | null = null;
       if (this.joinedRunIds.size > 0) {
         const waits = isReconnect
-          ? [...this.joinedRunIds].map((runId) => this.waitForJoin(runId))
+          ? [...this.joinedRunIds.keys()].map((runId) =>
+              this.waitForJoin(runId),
+            )
           : [];
-        for (const runId of this.joinedRunIds) {
+        for (const runId of this.joinedRunIds.keys()) {
           socket.emit('join', { runId });
         }
         joined = waits.length > 0 ? Promise.all(waits) : null;
@@ -1657,9 +1658,14 @@ export class DaemonClient {
     };
   }
 
-  /** Join a run's room to start receiving its `item` events. */
+  /**
+   * Join a run's room to start receiving its `item` events. Every join is
+   * matched by one {@link leaveRun}. A join of a room already held is still
+   * sent: the gateway answers each with the live plane as it stands, which the
+   * new surface has not seen.
+   */
   joinRun(runId: string): Promise<void> {
-    this.joinedRunIds.add(runId);
+    this.joinedRunIds.set(runId, (this.joinedRunIds.get(runId) ?? 0) + 1);
     const joined = this.waitForJoin(runId);
     if (this.socket?.connected) {
       this.socket.emit('join', { runId });
@@ -1667,8 +1673,13 @@ export class DaemonClient {
     return joined;
   }
 
-  /** Leave a run's room. */
+  /** Release one join; the room is left once nothing holds it. */
   leaveRun(runId: string): void {
+    const holders = this.joinedRunIds.get(runId) ?? 0;
+    if (holders > 1) {
+      this.joinedRunIds.set(runId, holders - 1);
+      return;
+    }
     this.joinedRunIds.delete(runId);
     this.rejectJoins(runId, 'run room was left before joining');
     this.socket?.emit('leave', { runId });

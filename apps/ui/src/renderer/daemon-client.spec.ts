@@ -313,6 +313,45 @@ describe('DaemonClient', () => {
     fireConnect();
     expect(mocks.emit).not.toHaveBeenCalledWith('join', { runId: 'r1' });
   });
+
+  // The team dock and an analysis popup follow their run over the same socket
+  // as the chat screen; one surface letting go must not take the room from
+  // the other.
+  it('keeps a room two surfaces joined until both have left it', async () => {
+    const client = new DaemonClient(handle, {});
+    client.connect();
+    fireConnect();
+    const first = client.joinRun('r1');
+    const second = client.joinRun('r1');
+    fireJoined('r1');
+    await Promise.all([first, second]);
+
+    mocks.emit.mockClear();
+    client.leaveRun('r1');
+    expect(mocks.emit).not.toHaveBeenCalledWith('leave', { runId: 'r1' });
+    fireConnect();
+    expect(mocks.emit).toHaveBeenCalledWith('join', { runId: 'r1' });
+
+    mocks.emit.mockClear();
+    client.leaveRun('r1');
+    expect(mocks.emit).toHaveBeenCalledWith('leave', { runId: 'r1' });
+    fireConnect();
+    expect(mocks.emit).not.toHaveBeenCalledWith('join', { runId: 'r1' });
+  });
+
+  it('keeps a second surface’s join pending when the first leaves before the answer', async () => {
+    const client = new DaemonClient(handle, {});
+    client.connect();
+    fireConnect();
+    const first = client.joinRun('r1');
+    const second = client.joinRun('r1');
+    client.leaveRun('r1');
+
+    fireJoined('r1');
+
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).resolves.toBeUndefined();
+  });
 });
 
 describe('parseRunStatus — the run_status twin', () => {

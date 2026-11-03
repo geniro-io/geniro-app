@@ -21,6 +21,7 @@ import { RUN_LIST_MAX, RUN_LIST_PAGE } from './run-list-pages';
 import {
   type ChatRunState,
   HISTORY_PAGE,
+  type PinnedRun,
   REMOTE_HISTORY_PAGE,
   useChatRun,
 } from './use-chat-run';
@@ -266,6 +267,7 @@ async function mount(
   client: DaemonClient,
   historyPageSize?: number,
   pageCap?: number,
+  pinned?: PinnedRun,
 ): Promise<Harness> {
   let latest: ChatRunState | null = null;
   const swapDraft = vi.fn();
@@ -287,6 +289,7 @@ async function mount(
       onLiveUnsentRef,
       historyPageSize,
       pageCap,
+      pinned,
     });
     return null;
   }
@@ -2630,6 +2633,24 @@ describe('useChatRun', () => {
     expect(harness.swapDraft).toHaveBeenLastCalledWith('r1', null);
   });
 
+  // Rooms are counted per join (`DaemonClient.joinRun`), so a join the screen
+  // never gave back keeps the socket in a room no surface reads.
+  it('holds one join of the open thread however often it is re-opened', async () => {
+    const { client, joinRun, leaveRun } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await open(harness, 'r1');
+    await open(harness, 'r1');
+
+    const held = (runId: string): number =>
+      joinRun.mock.calls.filter(([id]) => id === runId).length -
+      leaveRun.mock.calls.filter(([id]) => id === runId).length;
+    expect(held('r1')).toBe(1);
+
+    harness.unmount();
+    expect(held('r1')).toBe(0);
+  });
+
   it('leaves the room and drops every listener when the screen goes away', async () => {
     const { client, leaveRun, listenerCount } = makeClient();
     const harness = await mount(client);
@@ -4433,5 +4454,128 @@ describe('useChatRun — a team run’s calls', () => {
 
     expect(harness.state().anchors).toEqual([]);
     expect(harness.state().callConversations.stateOf('call-1')).toBeNull();
+  });
+});
+
+describe('useChatRun — a pinned run', () => {
+  const hosted: ChatRun = { ...run1, id: 'h1', title: 'Team chat' };
+
+  it('lists the one run open answers, opens it, and asks no listing', async () => {
+    const { client, joinRun } = makeClient();
+    const open = vi.fn(async () => hosted);
+
+    const harness = await mount(client, undefined, undefined, { open });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(harness.state().runs.map((run) => run.id)).toEqual(['h1']);
+    expect(harness.state().activeRunId).toBe('h1');
+    expect(joinRun).toHaveBeenCalledWith('h1');
+    expect(chatApi.listChats).not.toHaveBeenCalled();
+    expect(teamApi.listTeamRuns).not.toHaveBeenCalled();
+  });
+
+  it('never takes another run in on its announce', async () => {
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client, undefined, undefined, {
+      open: async () => hosted,
+    });
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r9', status: null, activity: 'Bash' });
+    });
+
+    expect(chatApi.listChats).not.toHaveBeenCalled();
+    expect(harness.state().runs.map((run) => run.id)).toEqual(['h1']);
+  });
+
+  it('asks open again on a reconnect and follows the run it answers', async () => {
+    const { client, fireReconnect } = makeClient();
+    const replacement: ChatRun = { ...hosted, id: 'h2' };
+    const open = vi
+      .fn<() => Promise<ChatRun>>()
+      .mockResolvedValueOnce(hosted)
+      .mockResolvedValueOnce(replacement);
+    const harness = await mount(client, undefined, undefined, { open });
+
+    await act(async () => {
+      fireReconnect();
+      await Promise.resolve();
+    });
+
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(harness.state().runs.map((run) => run.id)).toEqual(['h2']);
+    expect(harness.state().activeRunId).toBe('h2');
+  });
+
+  // The re-read answers with the row as it stood when it was asked; an
+  // announce that landed while it was in flight is newer.
+  it('keeps what an announce wrote while a reconnect’s open was in flight', async () => {
+    const { client, fireReconnect, emitRunStatus } = makeClient();
+    let answer: (row: ChatRun) => void = () => {};
+    const open = vi
+      .fn<() => Promise<ChatRun>>()
+      .mockResolvedValueOnce(hosted)
+      .mockImplementationOnce(
+        () =>
+          new Promise<ChatRun>((resolve) => {
+            answer = resolve;
+          }),
+      );
+    const harness = await mount(client, undefined, undefined, { open });
+
+    await act(async () => {
+      fireReconnect();
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'h1',
+        status: null,
+        holdingFor: 3,
+        at: '2026-09-14T12:00:00.000Z',
+      });
+    });
+    await act(async () => {
+      answer({
+        ...hosted,
+        holdingFor: 0,
+        updatedAt: '2026-09-14T11:00:00.000Z',
+      });
+    });
+
+    expect(harness.state().runs[0]?.holdingFor).toBe(3);
+  });
+
+  it('joins nothing for an open that answers after the screen went away', async () => {
+    const { client, joinRun } = makeClient();
+    let answer: (row: ChatRun) => void = () => {};
+    const harness = await mount(client, undefined, undefined, {
+      open: () =>
+        new Promise<ChatRun>((resolve) => {
+          answer = resolve;
+        }),
+    });
+
+    harness.unmount();
+    await act(async () => {
+      answer(hosted);
+    });
+
+    expect(joinRun).not.toHaveBeenCalled();
+  });
+
+  it('says why when the run cannot be opened', async () => {
+    const { client } = makeClient();
+    const harness = await mount(client, undefined, undefined, {
+      open: async () => {
+        throw new Error('This thread has no analysis yet.');
+      },
+    });
+
+    expect(harness.state().error).toBe('This thread has no analysis yet.');
+    expect(harness.state().runsLoaded).toBe(true);
+    expect(harness.state().activeRunId).toBeNull();
   });
 });

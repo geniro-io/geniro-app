@@ -80,7 +80,7 @@ A team run's window is its OWN flow only:
 Anchors and run state:
 
 - Anchors (`GET …/items` → `{items, anchors}`) are kept apart from `items`, laid in only where the transcript is folded, and never drawn as rows.
-- Live rows ask for anchors through `chats/use-live-anchor-asks.ts`, shared with the team dock.
+- Live rows ask for anchors through `chats/use-live-anchor-asks.ts`.
 - Whatever replaces anchors calls `forget`. A page landing after a live answer merges.
 - Rows refused by `addItem`'s away-from-tail guard bring no anchors.
 - Never rebuild a call heuristically from its later rows: it draws ghost cards.
@@ -94,10 +94,11 @@ Jumps (search, global search, timeline, the Agents chip) — `chats/use-transcri
 
 One home for each concern:
 
-- The per-run stream is `chats/use-run-stream.ts`, shared by the chat screen and the team dock.
+- The per-run stream is `chats/use-run-stream.ts`.
+- A conversation drawn outside the chat screen — the builder's chat dock, a thread's or a team's analysis popup — is the chat screen itself: `Chats` with `hosted` (`chats/hosted-thread.ts`). Its run list is the one run the surface's `open` answers (`useChatRun`'s `pinned`), and it draws the thread alone: no list, no new-chat composer, no notifications, archive sweep, global search or Analyze. The surface gives its header controls, empty text, composer label and queue scope, and is told back through `onBeforeSend` (before every turn it starts: a message, a button press, a recommendations Apply, a Retry — `startHostedTurn`), `onWorkingChange`, `onAwaitingChange` and `onTurnSettled` (as a turn's ending arrives, before a queued message leaves behind it: `useChatRun`'s `onTurnEndRef`). `AnalysisDialog` takes the chat screen as `renderThread`, so the two modules do not import each other. Never write a second chat surface; a hosted surface that needs something is given it through `HostedThread`.
 - Run-row fields from `run_status` are read by `chats/run-status-row.ts`.
-- The message queue rules are in `chats/use-message-queue.ts`. Only the chat screen persists queues (`queued-message-store.ts`, one key).
-- `joinRun`/`leaveRun` both live in `use-chat-run.ts` (`activateRun`/`deactivateRun`).
+- The message queue rules are in `chats/use-message-queue.ts`. Every queue persists (`queued-message-store.ts`): the chat screen's under one key, a hosted conversation's under its surface's own (`HostedThread.queueScope`), so closing the dock or a popup, or a reload, loses nothing — it goes out once the surface is back and its agent is free.
+- `joinRun`/`leaveRun` both live in `use-chat-run.ts` (`activateRun`/`deactivateRun`), which holds one join of the open run (`heldRoomRef`). `DaemonClient` counts joins per run, so several chat screens share the socket's room and it is left only when the last one lets go.
 - The chat screen's composer text is a store (`chats/composer-text.ts`), never state on `Chats`: the field subscribes to the text (`MessageComposer`'s `text`), the screen only to facts it draws (`useComposerTextFact`: is there text, the `/` query), and send paths read `get()` at the press. Typing must not re-render the screen (pinned in `Chats.spec.tsx`).
 - `Chats` stays mounted across nav switches. Read settings at the moment a run is created (`renderer/run-settings.ts` → `currentRunSettings()`, the one reader every renderer run start uses: chat, team run, analysis, a card's run, the builder's chat; main's autopilot normalises through the same `runSettingsOf` in `shared/contracts.ts`), never from cached state. Re-read lists such as fast actions when the screen becomes active again.
 
@@ -132,7 +133,7 @@ One home for each concern:
 - `settled-status.ts`: only a live terminal item mirrors its status onto the run row. A replay takes one reading from its last item (`reconcileFromTail`).
 - A `turn_complete` stamped `insideTurn` is not terminal. Never mirror it.
 - `RunStatusEvent.noTerminalItem` lets `use-chat-run.ts` end `streaming` and drain the queue.
-- A settle arriving after the open run's live terminal row ends `streaming` too, without a second drain (`liveTurnEndedRef`; `use-hosted-chat.ts` mirrors it): a stray `running` can land between the two. After-turn bookkeeping rows (`isAfterTurnBookkeeping`) do not count as the run resuming.
+- A settle arriving after the open run's live terminal row ends `streaming` too, without a second drain (`liveTurnEndedRef`): a stray `running` can land between the two. After-turn bookkeeping rows (`isAfterTurnBookkeeping`) do not count as the run resuming.
 - A run settling is a moment, not a flag. `settleMomentOf` reads the last terminal item first and the row's `updatedAt` only as a fallback. `subagentSpokeSince` and `taskCardIsLive` use that moment. A sub-agent's own status (`subagentBlockStatus`) reads no run state at all: its rows, else the daemon's whole-conversation reading (`daemonSubagentReadings` + `applyDaemonReadings` in `durable-transcript.ts`), which is the only place a missing ending is resolved.
 - A null activity means "working, nothing named". Both live rows fall back to the one `STANDING_ACTIVITY`. `WORKING_WORDS[0]` is its twin.
 - Live clocks count from durable-row timestamps, never from their own mount.
@@ -160,8 +161,8 @@ One home for each concern:
 
 - A thread's analysis is never a sidebar row and never a search hit. Its home is its popup over the source (`AnalysisDialog`), where it is read, answered, applied and replaced; the Analyze button opens the popup when one exists, else the setup dialog, and marks it (tint; a dot while working or waiting on you). The popup and the setup dialog close when their thread is deleted (the analysis went with it).
 - A direct link (`#chats/<id>`) or the processes panel can still open an analysis as the thread on screen; its header's "Analyzing: <source> ↗" chip (`analysisSourceOf`) is kept for exactly that way back.
-- The popup and the builder's chat dock are one surface: `chats/hosted-chat.tsx` (`HostedChat`, transcript + composer + chips) over `chats/use-hosted-chat.ts`. Change a hosted-chat behaviour there, never in one frame.
-- A team's analysis ("Analyze & improve…", the open team's overflow menu) uses the same two components, each given a `subject` of kind `team`: `AnalyzeThreadDialog` (plus how many latest runs to read, twin bound `MAX_ANALYSED_RUNS`) and `AnalysisDialog` (hosted-chat subject `team-analysis:<slug>`, never the builder chat's). The menu opens the popup when one exists, else the setup dialog; both close when the builder leaves that team, and a turn of the analysis settling re-reads the team (`reloadAfterAgentEdit`), since an applied item changes the file. Every "is this an analysis" check is `isAnalysisRun` (either column). The builder's chat dock posts the same recommendations card (its agent reads the team's latest runs) and takes the same `applyRecommendations` as the analysis popup.
+- The popup and the builder's chat dock draw their conversation with the chat screen (`Chats` with `hosted`, above): every chip, label, queue and shelf a thread has, they have.
+- A team's analysis ("Analyze & improve…", the open team's overflow menu) uses the same two components, each given a `subject` of kind `team`: `AnalyzeThreadDialog` (plus how many latest runs to read, twin bound `MAX_ANALYSED_RUNS`) and `AnalysisDialog` (its team analysis read by `GET /v1/teams/:slug/analysis`, never the builder chat's). The menu opens the popup when one exists, else the setup dialog; both close when the builder leaves that team, and a turn of the analysis settling re-reads the team (`reloadAfterAgentEdit`), since an applied item changes the file. Every "is this an analysis" check is `isAnalysisRun` (either column). The builder's chat dock posts the same recommendations card (its agent reads the team's latest runs), applied by the chat screen's own `applyRecommendations`.
 
 **Run waterfall** (`chats/run-waterfall*.ts(x)`, the "Where the run went" popup, opened from the agents panel's control row straight into its full view):
 
@@ -333,11 +334,10 @@ One home for each concern:
 
 **What the builder must never lose** (pinned in `Teams.spec.tsx`):
 
-- Closing the chat dock hides it and never unmounts it. Autosave is paused while the agent works.
+- Closing the chat dock hides it and never unmounts it. Autosave is paused while the agent works. The dock's turn ending starts the builder's re-read, and the next send waits for it before writing the editor (`reloadAfterChatTurn`, `beforeChatSend`): a queued message leaves as the turn before it ends. A send no turn ended ahead of re-reads nothing, so a file changed elsewhere still meets `TEAM_CHANGED`.
 - The post-turn re-read compares against the last load or save (`teamSnapshot`), never against the editor.
 - Leaving waits for `flush`. A late save or re-read answer for another team is dropped.
 - Every save quotes the `hash` the team was loaded or last saved at. A `TEAM_CHANGED` refusal (an analysis changed the file) holds autosave and offers Reload, which replaces the unsaved edits; nothing is written over the newer file.
-- After a socket reconnect, the dock reads back from the newest row held when the socket dropped. A turn ending is counted once, by row id. The dock holds anchors the way the chat screen does.
 - `RunDto.awaiting` follows the three-state rule: absent asserts nothing, and `null` clears.
 - Every save writes `normalizedTeam` (`team-doc.ts`): `maxActiveTurns` and the description ride it like every other field, and an empty stage list is written as ABSENT, never `[]`; a save that dropped a field would lose it or loop autosave.
 - `maxActiveTurns` is the "Edit team" dialog's agents-at-once row: a switch (off is no limit of its own, the machine ceiling) and a `Stepper` from 1 to the ceiling, so no value outside the range can be entered.

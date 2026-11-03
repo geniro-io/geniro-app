@@ -106,9 +106,7 @@ export function endsContextHistory(item: ChatItem): boolean {
  * Does this row say the readings above it no longer describe the conversation?
  * Geniro's own compaction says so outright (`conversationReplaced`); a CLI's own
  * compaction says so when it reports no figure after it (`postTokens: null`). The
- * live plane and the run row both drop their reading on it. The chat screen and
- * the team dock both read it from here, so they cannot disagree about which
- * row clears a reading.
+ * live plane and the run row both drop their reading on it.
  */
 export function discardsContextReading(item: ChatItem): boolean {
   return (

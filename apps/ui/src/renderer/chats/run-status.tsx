@@ -446,9 +446,7 @@ export function untrackedSummary(processEnded: boolean): string {
  *
  * An announce with no activity key leaves the phrase as it was, but a terminal
  * status clears it: a stopped run is doing nothing, whatever the announce carried.
- * An empty phrase names nothing, so it reads as null. The chat screen keeps one
- * phrase per run and the team dock keeps one for its run, and both apply this,
- * so they agree about when a phrase stands.
+ * An empty phrase names nothing, so it reads as null.
  */
 export function activityAfterAnnounce(event: {
   status: string | null;

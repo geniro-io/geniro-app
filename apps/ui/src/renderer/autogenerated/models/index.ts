@@ -5274,6 +5274,194 @@ export interface MeasureProjectInstructionSizesDto {
 /**
  * 
  * @export
+ * @interface MemberAssessmentEntry
+ */
+export interface MemberAssessmentEntry {
+    /**
+     * the chat that filed it — it may be gone
+     * @type {string}
+     * @memberof MemberAssessmentEntry
+     */
+    chatRunId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentEntry
+     */
+    chatKind: MemberAssessmentEntryChatKindEnum;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberAssessmentEntry
+     */
+    cardSeq: number;
+    /**
+     * ISO-8601
+     * @type {string}
+     * @memberof MemberAssessmentEntry
+     */
+    filedAt: string;
+    /**
+     * how many runs the analysis read
+     * @type {number}
+     * @memberof MemberAssessmentEntry
+     */
+    runs: number;
+    /**
+     * 
+     * @type {MemberAssessmentEntryVersion}
+     * @memberof MemberAssessmentEntry
+     */
+    version: MemberAssessmentEntryVersion | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberAssessmentEntry
+     */
+    usefulness: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberAssessmentEntry
+     */
+    quality: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentEntry
+     */
+    verdict: MemberAssessmentEntryVerdictEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentEntry
+     */
+    summary: string;
+    /**
+     * 
+     * @type {Array<MemberAssessmentEntryEvidenceInner>}
+     * @memberof MemberAssessmentEntry
+     */
+    evidence: Array<MemberAssessmentEntryEvidenceInner>;
+    /**
+     * the card items that carry the verdict out
+     * @type {Array<MemberAssessmentEntryItemsInner>}
+     * @memberof MemberAssessmentEntry
+     */
+    items: Array<MemberAssessmentEntryItemsInner>;
+}
+
+
+/**
+ * @export
+ */
+export const MemberAssessmentEntryChatKindEnum = {
+    Analysis: 'analysis',
+    Builder: 'builder',
+    Thread: 'thread'
+} as const;
+export type MemberAssessmentEntryChatKindEnum = typeof MemberAssessmentEntryChatKindEnum[keyof typeof MemberAssessmentEntryChatKindEnum];
+
+/**
+ * @export
+ */
+export const MemberAssessmentEntryVerdictEnum = {
+    Keep: 'keep',
+    Tune: 'tune',
+    Reconfigure: 'reconfigure',
+    Replace: 'replace',
+    Remove: 'remove'
+} as const;
+export type MemberAssessmentEntryVerdictEnum = typeof MemberAssessmentEntryVerdictEnum[keyof typeof MemberAssessmentEntryVerdictEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemberAssessmentEntryEvidenceInner
+ */
+export interface MemberAssessmentEntryEvidenceInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentEntryEvidenceInner
+     */
+    runId: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberAssessmentEntryEvidenceInner
+     */
+    seq: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentEntryEvidenceInner
+     */
+    quote: string;
+}
+/**
+ * 
+ * @export
+ * @interface MemberAssessmentEntryItemsInner
+ */
+export interface MemberAssessmentEntryItemsInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentEntryItemsInner
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentEntryItemsInner
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemberAssessmentEntryItemsInner
+     */
+    status: MemberAssessmentEntryItemsInnerStatusEnum | null;
+}
+
+
+/**
+ * @export
+ */
+export const MemberAssessmentEntryItemsInnerStatusEnum = {
+    Applied: 'applied',
+    Skipped: 'skipped',
+    Failed: 'failed',
+    Selected: 'selected',
+    Open: 'open',
+    NotSelected: 'not-selected',
+    Unanswered: 'unanswered'
+} as const;
+export type MemberAssessmentEntryItemsInnerStatusEnum = typeof MemberAssessmentEntryItemsInnerStatusEnum[keyof typeof MemberAssessmentEntryItemsInnerStatusEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemberAssessmentEntryVersion
+ */
+export interface MemberAssessmentEntryVersion {
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberAssessmentEntryVersion
+     */
+    number: number | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof MemberAssessmentEntryVersion
+     */
+    current: boolean;
+}
+/**
+ * 
+ * @export
  * @interface MemberAvatar
  */
 export interface MemberAvatar {
@@ -5500,6 +5688,116 @@ export interface MemberSeat {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface MemberWork
+ */
+export interface MemberWork {
+    /**
+     * runs the metric ledgers watched from their start that the member took part in — what every figure here is counted over
+     * @type {number}
+     * @memberof MemberWork
+     */
+    measuredRuns: number;
+    /**
+     * calls other members made to it
+     * @type {number}
+     * @memberof MemberWork
+     */
+    callsAnswered: number;
+    /**
+     * of those, the calls that ended in an error
+     * @type {number}
+     * @memberof MemberWork
+     */
+    callsFailed: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberWork
+     */
+    avgAnswerMs: number | null;
+    /**
+     * calls it made to other members
+     * @type {number}
+     * @memberof MemberWork
+     */
+    callsMade: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberWork
+     */
+    toolCalls: number;
+    /**
+     * tool calls that ended in an error
+     * @type {number}
+     * @memberof MemberWork
+     */
+    toolErrors: number;
+    /**
+     * 
+     * @type {MemberWorkGoals}
+     * @memberof MemberWork
+     */
+    goals: MemberWorkGoals;
+    /**
+     * stage completions it made
+     * @type {number}
+     * @memberof MemberWork
+     */
+    stagesCompleted: number;
+    /**
+     * of those, the completions a later move reopened in the same run — rework
+     * @type {number}
+     * @memberof MemberWork
+     */
+    completionsReopened: number;
+}
+/**
+ * the goals it recorded
+ * @export
+ * @interface MemberWorkGoals
+ */
+export interface MemberWorkGoals {
+    /**
+     * goals it recorded, dropped ones included
+     * @type {number}
+     * @memberof MemberWorkGoals
+     */
+    recorded: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberWorkGoals
+     */
+    achieved: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberWorkGoals
+     */
+    notAchieved: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberWorkGoals
+     */
+    open: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberWorkGoals
+     */
+    dropped: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemberWorkGoals
+     */
+    achievedShare: number | null;
+}
 /**
  * 
  * @export
@@ -12067,6 +12365,24 @@ export interface TeamStatsMember {
      * @memberof TeamStatsMember
      */
     measuredWorkedMs: number;
+    /**
+     * runs it took part in
+     * @type {number}
+     * @memberof TeamStatsMember
+     */
+    runs: number;
+    /**
+     * 
+     * @type {MemberWork}
+     * @memberof TeamStatsMember
+     */
+    work: MemberWork | null;
+    /**
+     * every analysis that judged it, newest first
+     * @type {Array<MemberAssessmentEntry>}
+     * @memberof TeamStatsMember
+     */
+    assessments: Array<MemberAssessmentEntry>;
 }
 /**
  * 

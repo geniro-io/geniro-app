@@ -5,6 +5,7 @@ import {
   HOTSPOTS,
   ITEMS,
   LOOK,
+  MEMBERS,
   recommendation,
   TEAM_STATS,
   TIMING,
@@ -22,6 +23,7 @@ function SelectingDemo(): React.JSX.Element {
         timing={null}
         teamStats={TEAM_STATS}
         hotspots={HOTSPOTS}
+        members={MEMBERS}
         team
         items={ITEMS}
         applied={applied}

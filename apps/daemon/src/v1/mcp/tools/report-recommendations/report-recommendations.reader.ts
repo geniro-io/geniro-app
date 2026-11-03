@@ -28,8 +28,12 @@ export function recommendationsResultText(
     return { text: `Not recorded: ${outcome.reason}.`, isError: true };
   }
   const noun = outcome.count === 1 ? 'recommendation' : 'recommendations';
+  const members =
+    outcome.members === undefined
+      ? ''
+      : ` and ${outcome.members} member ${outcome.members === 1 ? 'assessment' : 'assessments'}`;
   return {
-    text: `Card recorded at seq ${outcome.seq} with ${outcome.count} ${noun} and shown to the user. Change nothing until they apply.`,
+    text: `Card recorded at seq ${outcome.seq} with ${outcome.count} ${noun}${members} and shown to the user. Change nothing until they apply.`,
     isError: false,
   };
 }

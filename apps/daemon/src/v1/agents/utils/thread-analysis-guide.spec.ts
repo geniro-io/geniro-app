@@ -31,6 +31,19 @@ describe('threadAnalysisGuide', () => {
     expect(guide).toContain('view=team lists them under `userInstructions`');
   });
 
+  it("has a team thread assess each member as one run's thin sample, and a plain chat none", () => {
+    const team = threadAnalysisGuide('team', null, true);
+    const chat = threadAnalysisGuide('chat', null, true);
+
+    expect(team).toContain('14. Member performance.');
+    expect(team).toContain('15. Cluster by root cause');
+    expect(team).toContain('One run is a thin sample');
+    expect(team).toContain('and in `members` your assessment of each member');
+    expect(chat).not.toContain('Member performance');
+    expect(chat).not.toContain('`members`');
+    expect(chat).toContain('14. Cluster by root cause');
+  });
+
   it('keeps a plain chat to repo and user changes and never names the team save', () => {
     const guide = threadAnalysisGuide('chat', null, true);
 
@@ -154,13 +167,44 @@ describe('teamAnalysisGuide', () => {
     expect(guide).toContain('## Where a fix belongs');
   });
 
+  it("has the analyst mark every member's usefulness and quality, and name the items that carry out each verdict but keep", () => {
+    for (const guide of [
+      teamAnalysisGuide(null, true),
+      builderChatAnalysisGuide(true, 10),
+    ]) {
+      expect(guide).toContain('9. Member performance.');
+      expect(guide).toContain('Usefulness (1–5)');
+      expect(guide).toContain('Quality (1–5)');
+      for (const verdict of [
+        'keep when',
+        'tune when',
+        'reconfigure when',
+        'replace when',
+        'remove when',
+      ]) {
+        expect(guide).toContain(verdict);
+      }
+      expect(guide).toContain(
+        'Every verdict but keep names the team items (W-…) on this card that carry it out',
+      );
+      expect(guide).toContain('`members[].assessments`');
+      expect(guide).toContain(
+        'one tuned twice with no gain is a case for replace or remove',
+      );
+      expect(guide).toContain(
+        "Its `members` are every member's figures over every run",
+      );
+      expect(guide).not.toContain('One run is a thin sample');
+    }
+  });
+
   it("has the analyst measure every agent's instructions and grade them on five marks", () => {
     const guide = teamAnalysisGuide(null, true);
 
-    expect(guide).toContain('9. Instruction size. Read view=team');
+    expect(guide).toContain('10. Instruction size. Read view=team');
     expect(guide).toContain('`instructionSizes`');
     expect(guide).toContain('`inThisRun`');
-    expect(guide).toContain('10. Instruction quality.');
+    expect(guide).toContain('11. Instruction quality.');
     for (const mark of [
       'clear (',
       'specific (',
@@ -226,7 +270,7 @@ describe('teamAnalysisGuide', () => {
 describe('teamAnalysisBrief', () => {
   it('names the team, how many runs, and where to start', () => {
     expect(teamAnalysisBrief({ name: 'Dev Team', runs: 5 })).toBe(
-      "Analyse the team \"Dev Team\" across its 5 latest runs: explain where its runs' time and money went and why, how large and how good each agent's instructions are, how its agents' models fit their work, and how the earlier changes to it worked out, and find what in the team or its environment would make the next runs faster, cheaper or less error-prone. Start with read_analyzed_thread view=history, then view=runs.",
+      "Analyse the team \"Dev Team\" across its 5 latest runs: explain where its runs' time and money went and why, how useful each agent's work was and how well it held up, how large and how good each agent's instructions are, how its agents' models fit their work, and how the earlier changes to it worked out, and find what in the team or its environment would make the next runs faster, cheaper or less error-prone. Start with read_analyzed_thread view=history, then view=runs.",
     );
     expect(teamAnalysisBrief({ name: 'Dev Team', runs: 1 })).toContain(
       'across its latest run:',

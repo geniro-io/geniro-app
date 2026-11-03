@@ -7,12 +7,14 @@ import {
 } from '../../agents/utils/usage-figures';
 import type { UsageEvent } from '../entity/usage-event.entity';
 import type {
+  MemberAssessmentEntryWire,
   RunOutcomeLedgerRow,
   TeamStatsDayWire,
   TeamStatsMemberWire,
   TeamStatsWire,
   ThreadLedgerRow,
 } from '../stats.types';
+import type { MemberWork } from './member-work-fold';
 import { isPolledSpend } from './polled-spend';
 import { totalsByRun, type UsageLedgerRow } from './team-versions-fold';
 import { localDateKey } from './usage-fold';
@@ -36,6 +38,10 @@ export interface TeamStatsInput {
    * the seq of the turn's own ledger row.
    */
   wallTurns?: ReadonlyMap<string, number>;
+  /** Each member's work from the metric ledgers (`foldMemberWork`). */
+  memberWork?: ReadonlyMap<string, MemberWork>;
+  /** Each member's assessments, newest first (`assessmentsByMember`). */
+  assessments?: ReadonlyMap<string, readonly MemberAssessmentEntryWire[]>;
 }
 
 interface DayCell {
@@ -139,6 +145,13 @@ export function foldTeamStats(
     }
   }
 
+  for (const memberId of [
+    ...(input.memberWork?.keys() ?? []),
+    ...(input.assessments?.keys() ?? []),
+  ]) {
+    memberOf(memberId);
+  }
+
   const runIds = new Set(input.threads.map((thread) => thread.runId));
   const outcomes = input.outcomes.filter((outcome) =>
     runIds.has(outcome.runId),
@@ -180,6 +193,9 @@ export function foldTeamStats(
         turns: cell.spend.turns,
         workedMs: cell.spend.workedMs,
         measuredWorkedMs: cell.measuredMs,
+        runs: input.memberWork?.get(memberId)?.runs ?? 0,
+        work: input.memberWork?.get(memberId)?.work ?? null,
+        assessments: [...(input.assessments?.get(memberId) ?? [])],
       }))
       .sort(
         (a, b) =>

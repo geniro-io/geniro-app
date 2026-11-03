@@ -8,6 +8,7 @@ import type {
   RunOutcomeLedgerRow,
   TeamHistory,
   TeamRecommendationRow,
+  TeamStatsMemberWire,
   TeamVersionsWire,
   ThreadLedgerRow,
 } from '../stats.types';
@@ -35,6 +36,8 @@ export interface TeamHistoryInput {
   analysedRunIds: readonly string[];
   /** The chat reading the history, so its own entries are told apart. */
   readerRunId: string | null;
+  /** Every member's figures, work and assessments over every run (`TeamStatsService`). */
+  members: readonly TeamStatsMemberWire[];
 }
 
 const NO_STATUSES: Record<HistoryRecommendationStatus, number> = {
@@ -157,8 +160,9 @@ function figuresOf(
   };
 }
 
-function statusOf(
-  row: TeamRecommendationRow,
+/** What became of one filed item: its mark, else whether an Apply took it, passed it over, or none came. */
+export function recommendationStatusOf(
+  row: Pick<TeamRecommendationRow, 'outcome' | 'selectedAt'>,
   chatStillExists: boolean,
   cardApplied: boolean,
 ): HistoryRecommendationStatus {
@@ -280,7 +284,11 @@ export function foldTeamHistory(input: TeamHistoryInput): TeamHistory {
         row.libraryVersion === null ? null : ref(row.libraryVersion),
       items: [],
     };
-    const status = statusOf(row, chatStillExists, appliedCards.has(key));
+    const status = recommendationStatusOf(
+      row,
+      chatStillExists,
+      appliedCards.has(key),
+    );
     statuses[status] += 1;
     card.items.push({
       id: row.itemId,
@@ -339,5 +347,6 @@ export function foldTeamHistory(input: TeamHistoryInput): TeamHistory {
     versions,
     changeLog,
     recommendations: [...cards.values()].reverse(),
+    members: [...input.members],
   };
 }

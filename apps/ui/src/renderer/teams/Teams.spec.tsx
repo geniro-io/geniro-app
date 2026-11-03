@@ -2761,6 +2761,9 @@ describe('Teams — the team page', () => {
           costUsd: 12.5,
           turns: 900,
           workedMs: 3_600_000,
+          runs: 3,
+          work: null,
+          assessments: [],
         },
       ],
     }));

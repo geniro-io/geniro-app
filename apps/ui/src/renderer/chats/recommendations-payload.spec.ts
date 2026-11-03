@@ -334,6 +334,46 @@ describe('recommendations payload readers', () => {
     expect(card?.teamStats).toBeNull();
   });
 
+  it("reads each member's marks, verdict, evidence and items, drops one that does not read, and reads an older card as assessing none", () => {
+    const reviewer = {
+      member: 'reviewer',
+      usefulness: 4,
+      quality: 2,
+      verdict: 'tune',
+      summary: 'Useful, but re-reads the diff',
+      evidence: [{ runId: 'r1', seq: 4, quote: 'again' }, { seq: 'x' }],
+      items: ['W-1', 7],
+    };
+    const card = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        members: [
+          reviewer,
+          { ...reviewer, member: 'qa', quality: 6 },
+          { ...reviewer, member: 'lead', verdict: 'fire' },
+          { ...reviewer, member: 'dev', usefulness: 2.5 },
+        ],
+      }),
+    );
+
+    expect(card?.members).toEqual([
+      {
+        member: 'reviewer',
+        usefulness: 4,
+        quality: 2,
+        verdict: 'tune',
+        summary: 'Useful, but re-reads the diff',
+        evidence: [
+          { runId: 'r1', seq: 4, quote: 'again', ts: null, nodeId: null },
+        ],
+        items: ['W-1'],
+      },
+    ]);
+    expect(
+      readRecommendations(item(6, 'recommendations', CARD))?.members,
+    ).toEqual([]);
+  });
+
   it("reads each item's territory, and drops an item that names none or another", () => {
     const [w1, u1] = CARD.items as Record<string, unknown>[];
     const { territory: _omitted, ...untagged } = w1!;

@@ -7,6 +7,7 @@ import {
   HOTSPOTS,
   ITEMS,
   LOOK,
+  MEMBERS,
   recommendation,
   TEAM_STATS,
   TIMING,
@@ -611,5 +612,85 @@ describe('RecommendationsCard', () => {
 
     expect(el.textContent).toContain('No recommendations on this card.');
     expect(el.textContent).not.toContain('nothing was found worth changing');
+  });
+
+  it("draws each member's marks and verdict beside its measured figures, ticks the items that carry a verdict out, and names who went unassessed", () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        teamStats={TEAM_STATS}
+        hotspots={HOTSPOTS}
+        members={MEMBERS}
+        team
+        items={ITEMS}
+        applied={null}
+        outcomes={{}}
+        onApply={vi.fn()}
+      />,
+    );
+    const rows = [
+      ...el.querySelectorAll<HTMLElement>('[data-slot="analysis-member"]'),
+    ];
+    const reviewer = rows[0]!;
+    const fix = reviewer.querySelector<HTMLButtonElement>(
+      '[data-slot="analysis-member-fix"]',
+    )!;
+
+    expect(rows.map((row) => row.getAttribute('data-member'))).toEqual([
+      'reviewer',
+      'qa',
+      'builder',
+    ]);
+    expect(
+      [...reviewer.querySelectorAll('[data-slot="mark-meter"]')].map((meter) =>
+        meter.getAttribute('aria-label'),
+      ),
+    ).toEqual(['Usefulness 4 of 5', 'Quality 3 of 5']);
+    expect(
+      reviewer
+        .querySelector('[data-slot="member-verdict"]')
+        ?.getAttribute('data-verdict'),
+    ).toBe('tune');
+    expect(
+      reviewer.querySelector('[data-slot="analysis-hotspot-figures"]')
+        ?.textContent,
+    ).toBe('reviewer34m/run53% of the agents’ time$1.80/run3 failed turns');
+    expect(
+      rows[2]!.querySelector('[data-slot="analysis-member-fix"]'),
+    ).toBeNull();
+    expect(
+      el.querySelector('[data-slot="analysis-members-unassessed"]')
+        ?.textContent,
+    ).toBe('Not assessed: lead');
+    expect(reviewer.textContent).not.toContain('Reading the full diff again');
+
+    click(fix);
+    click(button(reviewer, 'Evidence'));
+
+    expect(
+      el
+        .querySelector('[data-id="W-1"] button[aria-pressed]')
+        ?.getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(footer(el)).toContain('1 of 4 selected');
+    expect(reviewer.textContent).toContain('Reading the full diff again');
+  });
+
+  it('draws no members section for a card that assessed none', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={TIMING}
+        team={false}
+        items={ITEMS.filter((item) => item.target !== 'team')}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+
+    expect(el.querySelector('[data-slot="analysis-members"]')).toBeNull();
   });
 });

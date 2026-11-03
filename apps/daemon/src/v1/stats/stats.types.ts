@@ -3,6 +3,9 @@ import { z } from 'zod';
 import {
   ChatTotalsWireSchema,
   type GoalStatus,
+  MEMBER_VERDICTS,
+  type MemberVerdict,
+  type RecommendationEvidence,
   type StageChangeAction,
   type ThreadOutcomeKind,
 } from '../agents/chat.types';
@@ -103,6 +106,8 @@ export interface CallLedgerRow {
 export interface GoalLedgerRow {
   runId: string;
   status: GoalStatus;
+  /** The member that recorded it; null for the user or a chat. */
+  memberId?: string | null;
 }
 
 /** A run's recorded thread outcome as the ledger keeps it. */
@@ -243,6 +248,36 @@ export interface TeamRecommendationSource {
   chatKind: TeamRecommendationChat;
 }
 
+/**
+ * Which kind of chat assessed a team's members: one that files the team's
+ * recommendations, or a thread analysis of one of its runs.
+ */
+export type MemberAssessmentChat = TeamRecommendationChat | 'thread';
+
+/** A chat whose cards' member assessments the ledger files. */
+export interface MemberAssessmentSource {
+  chatRunId: string;
+  slug: string;
+  chatKind: MemberAssessmentChat;
+}
+
+export interface MemberAssessmentRow {
+  slug: string;
+  chatRunId: string;
+  chatKind: MemberAssessmentChat;
+  cardSeq: number;
+  filedAt: Date;
+  libraryVersion: string | null;
+  runs: number;
+  memberId: string;
+  usefulness: number;
+  quality: number;
+  verdict: MemberVerdict;
+  summary: string;
+  evidence: RecommendationEvidence[];
+  items: { id: string; title: string }[];
+}
+
 /** A team version as the history names it: its hash, its number once recorded, and whether it is the library's now. */
 export interface HistoryVersionRef {
   version: string;
@@ -296,14 +331,17 @@ export interface HistoryChange {
 }
 
 /** What became of a recommendation, from the ledger. */
+export const HISTORY_RECOMMENDATION_STATUSES = [
+  'applied',
+  'skipped',
+  'failed',
+  'selected',
+  'open',
+  'not-selected',
+  'unanswered',
+] as const;
 export type HistoryRecommendationStatus =
-  | 'applied'
-  | 'skipped'
-  | 'failed'
-  | 'selected'
-  | 'open'
-  | 'not-selected'
-  | 'unanswered';
+  (typeof HISTORY_RECOMMENDATION_STATUSES)[number];
 
 /** One team's history, as an analysis reads it (`read_analyzed_thread` view=history). */
 export interface TeamHistory {
@@ -361,6 +399,8 @@ export interface TeamHistory {
       changedIn: { at: string; to: HistoryVersionRef }[];
     }[];
   }[];
+  /** Every member's figures over every run, its work from the metric ledgers and every earlier assessment of it, newest first. */
+  members: TeamStatsMemberWire[];
 }
 
 /** One `team_versions` row. */
@@ -955,6 +995,100 @@ export const TeamStatsDaySchema = z
 export type TeamStatsDayWire = z.infer<typeof TeamStatsDaySchema>;
 
 /** One team member's share of a team's turns. */
+/** What one member did for the team, from the write-time ledgers over every run they watched. */
+export const MemberWorkSchema = z
+  .object({
+    measuredRuns: z
+      .number()
+      .describe(
+        'runs the metric ledgers watched from their start that the member took part in — what every figure here is counted over',
+      ),
+    callsAnswered: z.number().describe('calls other members made to it'),
+    callsFailed: z
+      .number()
+      .describe('of those, the calls that ended in an error'),
+    avgAnswerMs: z
+      .number()
+      .nullable()
+      .describe(
+        'how long a call to it stayed open on average; null when none was timed',
+      ),
+    callsMade: z.number().describe('calls it made to other members'),
+    toolCalls: z.number(),
+    toolErrors: z.number().describe('tool calls that ended in an error'),
+    goals: z
+      .object({
+        recorded: z
+          .number()
+          .describe('goals it recorded, dropped ones included'),
+        achieved: z.number(),
+        notAchieved: z.number(),
+        open: z.number(),
+        dropped: z.number(),
+        achievedShare: z
+          .number()
+          .nullable()
+          .describe(
+            'achieved over every goal it recorded and did not drop, an open one counting as not achieved; null with none',
+          ),
+      })
+      .describe('the goals it recorded'),
+    stagesCompleted: z.number().describe('stage completions it made'),
+    completionsReopened: z
+      .number()
+      .describe(
+        'of those, the completions a later move reopened in the same run — rework',
+      ),
+  })
+  .meta({ id: 'MemberWork' });
+export type MemberWorkWire = z.infer<typeof MemberWorkSchema>;
+
+/** One analysis's judgement of one member, from the assessment ledger. */
+export const MemberAssessmentEntrySchema = z
+  .object({
+    chatRunId: z.string().describe('the chat that filed it — it may be gone'),
+    chatKind: z.enum(['analysis', 'builder', 'thread']),
+    cardSeq: z.number(),
+    filedAt: z.string().describe('ISO-8601'),
+    runs: z.number().describe('how many runs the analysis read'),
+    version: z
+      .object({
+        number: z.number().nullable(),
+        current: z.boolean(),
+      })
+      .nullable()
+      .describe('the team version the library held when it was filed'),
+    usefulness: z.number().int().min(1).max(5),
+    quality: z.number().int().min(1).max(5),
+    verdict: z.enum(MEMBER_VERDICTS),
+    summary: z.string(),
+    evidence: z.array(
+      z.object({
+        runId: z.string().nullable(),
+        seq: z.number(),
+        quote: z.string(),
+      }),
+    ),
+    items: z
+      .array(
+        z.object({
+          id: z.string(),
+          title: z.string(),
+          status: z
+            .enum(HISTORY_RECOMMENDATION_STATUSES)
+            .nullable()
+            .describe(
+              'what became of it; null for a thread analysis, whose items stay with its source thread',
+            ),
+        }),
+      )
+      .describe('the card items that carry the verdict out'),
+  })
+  .meta({ id: 'MemberAssessmentEntry' });
+export type MemberAssessmentEntryWire = z.infer<
+  typeof MemberAssessmentEntrySchema
+>;
+
 export const TeamStatsMemberSchema = z
   .object({
     memberId: z.string(),
@@ -976,6 +1110,13 @@ export const TeamStatsMemberSchema = z
     measuredWorkedMs: z
       .number()
       .describe('the part of workedMs geniro measured by the clock'),
+    runs: z.number().describe('runs it took part in'),
+    work: MemberWorkSchema.nullable().describe(
+      'null when no run it took part in was watched by the metric ledgers',
+    ),
+    assessments: z
+      .array(MemberAssessmentEntrySchema)
+      .describe('every analysis that judged it, newest first'),
   })
   .meta({ id: 'TeamStatsMember' });
 export type TeamStatsMemberWire = z.infer<typeof TeamStatsMemberSchema>;

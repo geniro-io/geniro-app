@@ -9,32 +9,53 @@ import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-voca
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
 import { GoalDao } from '../../agents/dao/goal.dao';
+import type { RunDao } from '../../agents/dao/run.dao';
 import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { ID_BATCH } from '../../agents/utils/id-batches';
 import { Goal } from '../../runs/entity/goal.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
+import { MemberAssessmentDao } from '../dao/member-assessment.dao';
 import { MetricLedgerDao } from '../dao/metric-ledger.dao';
+import { TeamRecommendationDao } from '../dao/team-recommendation.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
+import { MemberAssessmentRecord } from '../entity/member-assessment.entity';
+import { TeamRecommendation } from '../entity/team-recommendation.entity';
 import { ToolCallEvent } from '../entity/tool-call-event.entity';
 import { UsageActivity } from '../entity/usage-activity.entity';
 import { UsageEvent } from '../entity/usage-event.entity';
-import type { RunOutcomeLedgerRow, UsageEventInput } from '../stats.types';
+import type {
+  MemberAssessmentRow,
+  RunOutcomeLedgerRow,
+  TeamVersionsWire,
+  UsageEventInput,
+} from '../stats.types';
 import { POLLED_SPEND_SEQ } from '../stats.types';
 import { TeamStatsService } from './team-stats.service';
+import type { TeamVersionsService } from './team-versions.service';
 
 describe('TeamStatsService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let activityDao: UsageActivityDao;
   let usageDao: UsageEventDao;
   let service: TeamStatsService;
+  let liveChats: Set<string>;
+  let versionTable: TeamVersionsWire | Error;
 
   beforeAll(async () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [UsageActivity, UsageEvent, ToolCallEvent, Goal, WallTurn],
+        entities: [
+          UsageActivity,
+          UsageEvent,
+          ToolCallEvent,
+          Goal,
+          WallTurn,
+          MemberAssessmentRecord,
+          TeamRecommendation,
+        ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -64,7 +85,27 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       new MetricLedgerDao(em),
       new GoalDao(em),
       new WallTurnDao(em),
+      new MemberAssessmentDao(em),
+      new TeamRecommendationDao(em),
+      {
+        getById: (id: string) =>
+          Promise.resolve(liveChats.has(id) ? { id } : null),
+      } as unknown as RunDao,
+      {
+        read: () =>
+          versionTable instanceof Error
+            ? Promise.reject(versionTable)
+            : Promise.resolve(versionTable),
+      } as unknown as TeamVersionsService,
     );
+    liveChats = new Set();
+    versionTable = {
+      currentVersion: 'v2',
+      versions: [
+        { version: 'v2', ordinal: 2 },
+        { version: 'v1', ordinal: 1 },
+      ],
+    } as unknown as TeamVersionsWire;
   });
 
   const started = new Date(2026, 9, 1, 10);
@@ -192,6 +233,9 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         turns: RUNS * 2,
         workedMs: RUNS * 1000,
         measuredWorkedMs: 0,
+        runs: RUNS,
+        work: null,
+        assessments: [],
       },
     ]);
   });
@@ -437,6 +481,9 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         turns: 2,
         workedMs: 500,
         measuredWorkedMs: 0,
+        runs: 1,
+        work: null,
+        assessments: [],
       },
       {
         memberId: 'dev',
@@ -445,6 +492,9 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         turns: 1,
         workedMs: 100,
         measuredWorkedMs: 0,
+        runs: 1,
+        work: null,
+        assessments: [],
       },
     ]);
     expect(stats.costUsd).toBe(17);
@@ -480,6 +530,9 @@ describe('TeamStatsService (in-memory sqlite)', () => {
         turns: 1,
         workedMs: null,
         measuredWorkedMs: 0,
+        runs: 1,
+        work: null,
+        assessments: [],
       },
     ]);
     expect(stats.days[0]).toMatchObject({ costUsd: 7, turns: 1 });
@@ -550,5 +603,291 @@ describe('TeamStatsService (in-memory sqlite)', () => {
 
     expect(stats.costUsd).toBe(5);
     expect(stats.estimatedCostUsd).toBe(1);
+  });
+  describe('member work', () => {
+    async function memberGoal(
+      runId: string,
+      number: number,
+      memberId: string | null,
+      status: Goal['status'],
+    ): Promise<void> {
+      const em = orm.em.fork();
+      em.persist(
+        Object.assign(new Goal(), {
+          runId,
+          number,
+          teamSlug: 'dev-team',
+          memberId,
+          text: `goal ${number}`,
+          source: 'agent',
+          status,
+        }),
+      );
+      await em.flush();
+    }
+
+    it("counts each member's calls, tool errors, goals and reopened completions over every measured run", async () => {
+      const RUNS = ID_BATCH + 5;
+      const ledger = new MetricLedgerDao(orm.em);
+      for (let i = 0; i < RUNS; i += 1) {
+        const runId = `r-${i}`;
+        await teamRun(runId);
+        await activityDao.markMetricsMeasured(runId);
+        await turn(runId, { memberId: 'dev' });
+        await ledger.insertCall({
+          runId,
+          seq: 1,
+          callId: `call-${i}`,
+          occurredAt: started,
+          teamSlug: 'dev-team',
+          caller: 'lead',
+          callee: 'dev',
+          durationMs: i === 0 ? null : 2_000,
+          costUsd: null,
+          turns: 1,
+          ok: i !== 1,
+        });
+      }
+      for (const [seq, ok] of [
+        [10, true],
+        [11, false],
+        [12, false],
+      ] as const) {
+        await ledger.insertToolCall({
+          runId: 'r-0',
+          seq,
+          occurredAt: started,
+          teamSlug: 'dev-team',
+          memberId: 'dev',
+          agentKind: 'claude',
+          tool: 'Bash',
+          mcpServer: null,
+          ok,
+          durationMs: 10,
+        });
+      }
+      for (const [seq, memberId, action] of [
+        [20, 'dev', 'complete'],
+        [21, 'reviewer', 'reopen'],
+        [22, 'dev', 'complete'],
+        [23, null, 'reopen'],
+        [24, null, 'reopen'],
+        [25, null, 'complete'],
+        [26, 'reviewer', 'reopen'],
+      ] as const) {
+        await ledger.insertStage({
+          runId: 'r-0',
+          seq,
+          occurredAt: started,
+          teamSlug: 'dev-team',
+          memberId,
+          lead: null,
+          stageId: 'build',
+          action,
+          enteredAt: null,
+          durationMs: null,
+        });
+      }
+      await memberGoal('r-0', 1, 'dev', 'achieved');
+      await memberGoal('r-0', 2, 'dev', 'open');
+      await memberGoal('r-0', 3, 'dev', 'dropped');
+      await memberGoal('r-0', 4, null, 'not_achieved');
+
+      const dev = (await service.read('dev-team')).byMember.find(
+        (member) => member.memberId === 'dev',
+      );
+
+      expect(dev).toMatchObject({
+        runs: RUNS,
+        work: {
+          measuredRuns: RUNS,
+          callsAnswered: RUNS,
+          callsFailed: 1,
+          avgAnswerMs: 2_000,
+          callsMade: 0,
+          toolCalls: 3,
+          toolErrors: 2,
+          goals: {
+            recorded: 3,
+            achieved: 1,
+            notAchieved: 0,
+            open: 1,
+            dropped: 1,
+            achievedShare: 0.5,
+          },
+          stagesCompleted: 2,
+          completionsReopened: 2,
+        },
+      });
+    });
+
+    it('keeps the work of a member the ledgers never watched null', async () => {
+      await teamRun('old-run');
+      await turn('old-run', { memberId: 'dev' });
+
+      const [dev] = (await service.read('dev-team')).byMember;
+
+      expect(dev).toMatchObject({ memberId: 'dev', runs: 1, work: null });
+    });
+  });
+
+  describe('member assessments', () => {
+    const assessment = (
+      overrides: Partial<MemberAssessmentRow>,
+    ): MemberAssessmentRow => ({
+      slug: 'dev-team',
+      chatRunId: 'analysis-1',
+      chatKind: 'analysis',
+      cardSeq: 5,
+      filedAt: new Date('2026-10-20T10:00:00.000Z'),
+      libraryVersion: 'v1',
+      runs: 6,
+      memberId: 'reviewer',
+      usefulness: 3,
+      quality: 2,
+      verdict: 'tune',
+      summary: 'Reviews are read, but it re-reads the diff every round',
+      evidence: [{ runId: 'r1', seq: 4, quote: 'reading the diff again' }],
+      items: [{ id: 'W-1', title: 'Review the diff once' }],
+      ...overrides,
+    });
+
+    async function filed(
+      chatRunId: string,
+      itemId: string,
+      fate: { selectedAt?: Date; outcome?: string },
+    ): Promise<void> {
+      const dao = new TeamRecommendationDao(orm.em.fork());
+      await dao.file([
+        {
+          slug: 'dev-team',
+          chatRunId,
+          chatKind: 'analysis',
+          cardSeq: 5,
+          filedAt: new Date('2026-10-20T10:00:00.000Z'),
+          libraryVersion: 'v1',
+          itemId,
+          target: 'team',
+          territory: 'process',
+          kind: 'instructions',
+          location: 'reviewer',
+          title: 'Review the diff once',
+          change: 'x',
+          rootCause: 'y',
+          minutesSaved: 5,
+          costSavedUsd: null,
+          expectedOutcome: null,
+          confidence: 3,
+          risk: 'low',
+        },
+      ]);
+      if (fate.selectedAt !== undefined) {
+        await dao.markSelected(chatRunId, 5, [itemId], fate.selectedAt);
+      }
+      if (fate.outcome !== undefined) {
+        await dao.markOutcome(
+          chatRunId,
+          5,
+          { itemId, outcome: fate.outcome, note: null },
+          { seq: 9, at: new Date('2026-10-21T10:00:00.000Z') },
+        );
+      }
+    }
+
+    it('lists every assessment of a member newest first, with its team version and what became of the items that carry it out', async () => {
+      await teamRun('r1');
+      await turn('r1', { memberId: 'reviewer' });
+      await filed('analysis-1', 'W-1', {
+        selectedAt: new Date('2026-10-20T11:00:00.000Z'),
+        outcome: 'applied',
+      });
+      await filed('analysis-2', 'W-1', {});
+      liveChats.add('analysis-2');
+      await new MemberAssessmentDao(orm.em.fork()).file([
+        assessment({}),
+        assessment({
+          chatRunId: 'analysis-2',
+          filedAt: new Date('2026-10-25T10:00:00.000Z'),
+          libraryVersion: 'v2',
+          usefulness: 4,
+          quality: 4,
+        }),
+        assessment({
+          chatRunId: 'thread-1',
+          chatKind: 'thread',
+          filedAt: new Date('2026-10-26T10:00:00.000Z'),
+          libraryVersion: 'v-gone',
+          runs: 1,
+          verdict: 'keep',
+          items: [],
+        }),
+      ]);
+
+      const reviewer = (await service.read('dev-team')).byMember.find(
+        (member) => member.memberId === 'reviewer',
+      );
+
+      expect(
+        reviewer?.assessments.map((entry) => [
+          entry.chatRunId,
+          entry.chatKind,
+          entry.runs,
+          entry.version,
+          entry.usefulness,
+          entry.quality,
+          entry.items.map((item) => item.status),
+        ]),
+      ).toEqual([
+        ['thread-1', 'thread', 1, { number: null, current: false }, 3, 2, []],
+        [
+          'analysis-2',
+          'analysis',
+          6,
+          { number: 2, current: true },
+          4,
+          4,
+          ['open'],
+        ],
+        [
+          'analysis-1',
+          'analysis',
+          6,
+          { number: 1, current: false },
+          3,
+          2,
+          ['applied'],
+        ],
+      ]);
+      expect(reviewer?.assessments[2]).toMatchObject({
+        verdict: 'tune',
+        summary: 'Reviews are read, but it re-reads the diff every round',
+        evidence: [{ runId: 'r1', seq: 4, quote: 'reading the diff again' }],
+        items: [{ id: 'W-1', title: 'Review the diff once' }],
+      });
+    });
+
+    it('lists a member assessed but gone from the usage ledger, and names versions by nothing when the table cannot be read', async () => {
+      versionTable = new Error('library unreadable');
+      await new MemberAssessmentDao(orm.em.fork()).file([assessment({})]);
+
+      const stats = await service.read('dev-team');
+
+      expect(stats.byMember).toEqual([
+        expect.objectContaining({
+          memberId: 'reviewer',
+          turns: 0,
+          runs: 0,
+          work: null,
+          assessments: [
+            expect.objectContaining({
+              version: { number: null, current: false },
+              items: [
+                { id: 'W-1', title: 'Review the diff once', status: null },
+              ],
+            }),
+          ],
+        }),
+      ]);
+    });
   });
 });

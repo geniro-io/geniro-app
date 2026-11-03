@@ -73,6 +73,7 @@ import { type HeldProblem, HeldProblems } from './held-problems';
 import { InstructionSizeCard } from './instruction-size-card';
 import { InstructionsCard } from './instructions-card';
 import { AddMemberCard, MemberCard } from './member-card';
+import { MemberPerformance } from './member-performance';
 import { memberLabels } from './member-pick';
 import { memberProblemsOf, memberStatusOf } from './member-problems';
 import { modelChangePatch } from './member-schema';
@@ -2008,6 +2009,16 @@ export function Teams({
                 blockName={blockName}
               />
             </div>
+          }
+          performance={
+            <MemberPerformance
+              row={
+                teamStats.data?.byMember.find(
+                  (row) => row.memberId === selected.id,
+                ) ?? null
+              }
+              loading={teamStats.loading}
+            />
           }
           removeWarning={removeWarningOf(selected.id)}
           canRemove={members.length > 1}

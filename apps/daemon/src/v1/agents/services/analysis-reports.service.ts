@@ -19,10 +19,12 @@ import {
   type RecommendationsTeamStats,
   type RecommendationsTiming,
   type TeamVersionIndexReader,
+  type ThreadTimeline,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { analysedProjectIdsOf, analysedSourceOf } from '../utils/analysed-runs';
+import { laneOf } from '../utils/analysis-lane';
 import { readCard } from '../utils/recommendations-card';
 import { teamCardStats } from '../utils/team-runs-fold';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
@@ -100,7 +102,10 @@ export class AnalysisReportsService {
     // Each cited row is checked against the run it names, at that run's own
     // snapshot — a team analysis cites several.
     const cited = new Map<string, { snapshotSeq: number; seqs: Set<number> }>();
-    for (const evidence of report.items.flatMap((item) => item.evidence)) {
+    for (const evidence of [
+      ...report.items.flatMap((item) => item.evidence),
+      ...(report.members ?? []).flatMap((member) => member.evidence),
+    ]) {
       const source = analysedSourceOf(turn, evidence.runId);
       if ('error' in source) {
         return refused(
@@ -134,16 +139,42 @@ export class AnalysisReportsService {
     if (hotspotProblem !== null) {
       return refused(hotspotProblem);
     }
+    // One run's timing would pass for the team's.
+    const reading = turn.team
+      ? null
+      : await this.timelines.read(
+          turn.sourceRunId,
+          turn.snapshotSeq,
+          turn.sourceWorking,
+        );
+    const memberProblem = checkMembers(
+      report,
+      sourceKind,
+      teamStats !== null
+        ? new Set(teamStats.agents.map((agent) => agent.node))
+        : new Set(
+            (reading?.fold.lanes ?? []).map((lane) => laneOf(lane.memberId)),
+          ),
+    );
+    if (memberProblem !== null) {
+      return refused(memberProblem);
+    }
     const payload: RecommendationsPayload = {
       ...report,
       sourceRunId: turn.sourceRunId,
       sourceKind,
-      // One run's timing would pass for the team's.
-      timing: turn.team ? null : await this.timing(turn),
+      timing: reading === null ? null : timingOf(reading.timeline),
       teamStats,
     };
     const row = await write('recommendations', payload);
-    return { status: 'recorded', seq: row.seq, count: report.items.length };
+    return {
+      status: 'recorded',
+      seq: row.seq,
+      count: report.items.length,
+      ...(report.members === undefined
+        ? {}
+        : { members: report.members.length }),
+    };
   }
 
   private async mark(
@@ -196,30 +227,71 @@ export class AnalysisReportsService {
       index,
     );
   }
+}
 
-  private async timing(
-    turn: AnalysisTurn,
-  ): Promise<RecommendationsTiming | null> {
-    const reading = await this.timelines.read(
-      turn.sourceRunId,
-      turn.snapshotSeq,
-      turn.sourceWorking,
-    );
-    if (reading === null) {
-      return null;
-    }
-    const { timeline } = reading;
-    return {
-      wallMs: timeline.wallMs,
-      activeMs: timeline.activeMs,
-      waitingMs: timeline.waitingOnUserMs,
-      criticalPathMs: timeline.criticalPathMs,
-      sinks: timeline.sinks.map((sink) => ({
-        label: sink.memberId ?? 'agent',
-        ms: sink.ms,
-      })),
-    };
+function timingOf(timeline: ThreadTimeline): RecommendationsTiming {
+  return {
+    wallMs: timeline.wallMs,
+    activeMs: timeline.activeMs,
+    waitingMs: timeline.waitingOnUserMs,
+    criticalPathMs: timeline.criticalPathMs,
+    sinks: timeline.sinks.map((sink) => ({
+      label: sink.memberId ?? 'agent',
+      ms: sink.ms,
+    })),
+  };
+}
+
+/**
+ * Why a report's member assessments cannot go on a card, or null: a team
+ * thread assesses its members and a plain chat none, each member once and only
+ * one that took a turn in the analysed runs, and a verdict other than keep is
+ * carried out by team items on the same card while keep carries none.
+ */
+export function checkMembers(
+  report: RecommendationsReport,
+  sourceKind: AnalysedThreadKind,
+  /** The members that took a turn in the analysed runs, as the reads name them. */
+  members: ReadonlySet<string>,
+): string | null {
+  const assessed = report.members ?? [];
+  if (sourceKind === 'chat') {
+    return assessed.length === 0
+      ? null
+      : 'the analysed thread is a plain chat, so it has no members to assess — leave members out';
   }
+  if (assessed.length === 0 && members.size > 0) {
+    return 'assess the members: one entry in members for each member of the team that took a turn in the analysed runs';
+  }
+  const items = new Map(report.items.map((item) => [item.id, item]));
+  const seen = new Set<string>();
+  for (const assessment of assessed) {
+    const { member, verdict } = assessment;
+    if (seen.has(member)) {
+      return `member ${member} is assessed twice — one entry per member`;
+    }
+    seen.add(member);
+    if (!members.has(member)) {
+      return `member ${member} took no turn in the analysed runs — assess only members the reads name (${[...members].join(', ')})`;
+    }
+    const unknown = assessment.items.filter((id) => !items.has(id));
+    if (unknown.length > 0) {
+      return `member ${member} names ${unknown.join(', ')}, which ${unknown.length === 1 ? 'is' : 'are'} not on the card`;
+    }
+    const notTeam = assessment.items.filter(
+      (id) => items.get(id)?.target !== 'team',
+    );
+    if (notTeam.length > 0) {
+      return `member ${member} names ${notTeam.join(', ')} — only team items (W-…) carry out a member's verdict`;
+    }
+    if (verdict === 'keep' && assessment.items.length > 0) {
+      return `member ${member} is kept, so it names no items — a member with a change to make is tune, reconfigure, replace or remove`;
+    }
+    if (verdict !== 'keep' && assessment.items.length === 0) {
+      return `member ${member}'s verdict ${verdict} names no item — file the team item that carries it out and name it, or keep the member`;
+    }
+  }
+  return null;
 }
 
 export function checkHotspots(

@@ -5,6 +5,7 @@ import { ProjectsModule } from '../projects/projects.module';
 import { TeamsModule } from '../teams/teams.module';
 import { StatsController } from './controllers/stats.controller';
 import { LineBaselineDao } from './dao/line-baseline.dao';
+import { MemberAssessmentDao } from './dao/member-assessment.dao';
 import { MetricLedgerDao } from './dao/metric-ledger.dao';
 import { TeamRecommendationDao } from './dao/team-recommendation.dao';
 import { TeamVersionDao } from './dao/team-version.dao';
@@ -56,6 +57,7 @@ import { UsageRecorderService } from './services/usage-recorder.service';
     TeamLedgerService,
     TeamVersionsService,
     TeamRecommendationDao,
+    MemberAssessmentDao,
     RecommendationLedgerService,
     TeamHistoryService,
     TeamStatsService,

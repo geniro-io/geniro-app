@@ -271,7 +271,7 @@ function MemberTable({
           cell: (row) => (
             <span className="flex items-center gap-2 whitespace-nowrap">
               <MemberAvatar
-                name={nameOf(row)}
+                name={memberOf(row.memberId)?.name ?? row.memberId}
                 avatar={memberOf(row.memberId)?.avatar}
                 colorKey={row.memberId}
                 size={20}
@@ -373,7 +373,7 @@ function MemberWorkTable({
           cell: (row) => (
             <span className="flex items-center gap-2 whitespace-nowrap">
               <MemberAvatar
-                name={nameOf(row)}
+                name={memberOf(row.memberId)?.name ?? row.memberId}
                 avatar={memberOf(row.memberId)?.avatar}
                 colorKey={row.memberId}
                 size={20}

@@ -382,9 +382,9 @@ export function AnalyzeThreadDialog({
               className="flex flex-col gap-2 px-3 py-2.5">
               <p className="m-0 text-xs text-warning">
                 {judge.sameVendor.length === judge.members
-                  ? 'Every member of this team'
-                  : `${judge.sameVendor.length} of its ${judge.members} members`}{' '}
-                run models of the same vendor as this analysis. A judge tends to
+                  ? 'Every member of this team runs'
+                  : `${judge.sameVendor.length} of its ${judge.members} members run`}{' '}
+                models of the same vendor as this analysis. A judge tends to
                 mark its own vendor’s work high — for the members’ marks, pick
                 another agent.
               </p>

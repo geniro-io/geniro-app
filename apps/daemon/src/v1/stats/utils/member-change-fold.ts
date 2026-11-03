@@ -8,6 +8,7 @@ import { instructionBlocksByMember } from '../../teams/utils/member-instructions
 import type {
   MemberChangeEffect,
   MemberChangeKind,
+  MemberChangeUnit,
   MemberChangeWire,
   ThreadLedgerRow,
 } from '../stats.types';
@@ -171,21 +172,22 @@ function teamFigures(
 
 interface Movable {
   figure: string;
+  unit: MemberChangeUnit;
   from: number | null;
   to: number | null;
   better: 'lower' | 'higher';
-  isShare: boolean;
 }
 
 function movedOf(figures: readonly Movable[]): MemberChangeWire['moved'] {
-  return figures.flatMap(({ figure, from, to, better, isShare }) => {
+  return figures.flatMap(({ figure, unit, from, to, better }) => {
     if (from === null || to === null || from === to) {
       return [];
     }
     const delta = to - from;
-    const moved = isShare
-      ? Math.abs(delta) >= MOVE_THRESHOLD
-      : from !== 0 && Math.abs(delta) / Math.abs(from) >= MOVE_THRESHOLD;
+    const moved =
+      unit === 'share'
+        ? Math.abs(delta) >= MOVE_THRESHOLD
+        : from !== 0 && Math.abs(delta) / Math.abs(from) >= MOVE_THRESHOLD;
     if (!moved) {
       return [];
     }
@@ -193,6 +195,7 @@ function movedOf(figures: readonly Movable[]): MemberChangeWire['moved'] {
     return [
       {
         figure,
+        unit,
         from,
         to,
         direction: (better === 'lower') === down ? 'better' : 'worse',
@@ -299,54 +302,54 @@ export function foldMemberChanges(
           ? movedOf([
               {
                 figure: 'cost per run',
+                unit: 'usd',
                 from: own.before.costPerRunUsd,
                 to: own.after.costPerRunUsd,
                 better: 'lower',
-                isShare: false,
               },
               {
                 figure: 'working time per run',
+                unit: 'ms',
                 from: own.before.workedPerRunMs,
                 to: own.after.workedPerRunMs,
                 better: 'lower',
-                isShare: false,
               },
               {
                 figure: 'failed calls',
+                unit: 'share',
                 from: own.before.callFailureShare,
                 to: own.after.callFailureShare,
                 better: 'lower',
-                isShare: true,
               },
               {
                 figure: 'rework',
+                unit: 'share',
                 from: own.before.reworkShare,
                 to: own.after.reworkShare,
                 better: 'lower',
-                isShare: true,
               },
               {
                 figure: 'clean runs',
+                unit: 'share',
                 from: own.before.cleanShare,
                 to: own.after.cleanShare,
                 better: 'higher',
-                isShare: true,
               },
             ])
           : movedOf([
               {
                 figure: 'team cost per run',
+                unit: 'usd',
                 from: team.before.costPerRunUsd,
                 to: team.after.costPerRunUsd,
                 better: 'lower',
-                isShare: false,
               },
               {
                 figure: 'team working time per run',
+                unit: 'ms',
                 from: team.before.workedPerRunMs,
                 to: team.after.workedPerRunMs,
                 better: 'lower',
-                isShare: false,
               },
             ]);
       const list = byMember.get(memberId) ?? [];

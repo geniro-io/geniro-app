@@ -186,7 +186,34 @@ describe('MemberPerformance — reliability, changes, judges and verdicts', () =
     expect(change.textContent).toContain('v3 → v4 (current)');
     expect(change.textContent).toContain('instructions');
     expect(change.textContent).toContain('by an analysis · W-1');
+    expect(change.textContent).toContain('cost per run −46% ($0.41 → $0.22)');
     expect(change.textContent).toContain('rework 50% → 0%');
+  });
+
+  it('says how far a per-run amount moved when its rounded ends would read as doubling', () => {
+    const [change] = REVIEWER.changes;
+    render({
+      ...REVIEWER,
+      changes: [
+        {
+          ...change!,
+          effect: 'worse',
+          moved: [
+            {
+              figure: 'cost per run',
+              unit: 'usd',
+              from: 0.0141,
+              to: 0.0156,
+              direction: 'worse',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      container.querySelector('[data-slot="member-change"]')!.textContent,
+    ).toContain('cost per run +11% ($0.01 → $0.02)');
   });
 
   it('names the judge, warns when it shares the member’s vendor, and sends the verdict on its marks', async () => {

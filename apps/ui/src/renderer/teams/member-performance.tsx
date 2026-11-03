@@ -195,14 +195,26 @@ function versionLabel(ref: MemberChange['from']): string {
   return ref.number === null ? 'unnumbered' : `v${ref.number}`;
 }
 
-function movedValue(figure: string, value: number): string {
-  if (figure.includes('cost')) {
+type MovedFigure = MemberChange['moved'][number];
+
+function movedValue(unit: MovedFigure['unit'], value: number): string {
+  if (unit === 'usd') {
     return formatUsd(value);
   }
-  if (figure.includes('time')) {
+  if (unit === 'ms') {
     return formatDuration(value);
   }
   return formatPercent(value * 100);
+}
+
+/** A per-run amount leads with how far it moved, which its rounded ends can hide (`$0.01 → $0.02` for a tenth). */
+function movedText(moved: MovedFigure): string {
+  const span = `${movedValue(moved.unit, moved.from)} → ${movedValue(moved.unit, moved.to)}`;
+  if (moved.unit === 'share' || moved.from === 0) {
+    return `${moved.figure} ${span}`;
+  }
+  const change = ((moved.to - moved.from) / Math.abs(moved.from)) * 100;
+  return `${moved.figure} ${change > 0 ? '+' : '−'}${formatPercent(Math.abs(change))} (${span})`;
 }
 
 /** One change that touched the member, and what its runs measured on either side. */
@@ -252,8 +264,7 @@ function ChangeRow({ change }: { change: MemberChange }): React.JSX.Element {
                   ? 'text-success'
                   : 'text-destructive'
               }>
-              {moved.figure} {movedValue(moved.figure, moved.from)} →{' '}
-              {movedValue(moved.figure, moved.to)}
+              {movedText(moved)}
             </span>
           ))}
         </span>

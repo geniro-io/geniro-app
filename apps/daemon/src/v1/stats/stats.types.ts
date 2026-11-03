@@ -1248,6 +1248,9 @@ export const MEMBER_CHANGE_EFFECTS = [
 ] as const;
 export type MemberChangeEffect = (typeof MEMBER_CHANGE_EFFECTS)[number];
 
+export const MEMBER_CHANGE_UNITS = ['usd', 'ms', 'share'] as const;
+export type MemberChangeUnit = (typeof MEMBER_CHANGE_UNITS)[number];
+
 /**
  * One change between two team versions that touched a member, with what its
  * runs measured on either side — counted by the daemon, never judged by an
@@ -1288,6 +1291,11 @@ export const MemberChangeSchema = z
       .array(
         z.object({
           figure: z.string(),
+          unit: z
+            .enum(MEMBER_CHANGE_UNITS)
+            .describe(
+              'dollars or milliseconds per run, moved by a tenth of where they stood; a share (0–1), moved by 0.1',
+            ),
           from: z.number(),
           to: z.number(),
           direction: z.enum(['better', 'worse']),

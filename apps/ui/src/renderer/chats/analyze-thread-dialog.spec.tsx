@@ -321,7 +321,7 @@ describe('AnalyzeThreadDialog', () => {
         model: 'opus',
       });
       expect(hint?.textContent).toContain(
-        'Every member of this team run models of the same vendor',
+        'Every member of this team runs models of the same vendor',
       );
 
       await act(async () => {

@@ -344,6 +344,19 @@ describe('TeamStatsTab', () => {
     expect(rows[1]?.textContent).toContain('7');
   });
 
+  it('draws a removed member’s face from its id, never from the “removed” mark', () => {
+    const gone = STATS.byMember[1]!;
+    render({ ...STATS, byMember: [{ ...gone, memberId: 'echo' }] });
+
+    for (const table of ['By member', 'How each member works']) {
+      const row = container.querySelector(
+        `table[aria-label="${table}"] tbody tr`,
+      );
+      expect(row?.textContent).toContain('echo (removed)');
+      expect(row?.querySelector('[data-slot="avatar"]')?.textContent).toBe('E');
+    }
+  });
+
   it('says there are no runs when the team has none', () => {
     render({
       ...STATS,

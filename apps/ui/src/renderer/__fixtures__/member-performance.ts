@@ -58,10 +58,34 @@ export const TUNED: MemberChange = {
   },
   effect: 'better',
   moved: [
-    { figure: 'cost per run', from: 0.41, to: 0.22, direction: 'better' },
-    { figure: 'failed calls', from: 0.25, to: 0, direction: 'better' },
-    { figure: 'rework', from: 0.5, to: 0, direction: 'better' },
-    { figure: 'clean runs', from: 0.25, to: 1, direction: 'better' },
+    {
+      figure: 'cost per run',
+      unit: 'usd',
+      from: 0.41,
+      to: 0.22,
+      direction: 'better',
+    },
+    {
+      figure: 'failed calls',
+      unit: 'share',
+      from: 0.25,
+      to: 0,
+      direction: 'better',
+    },
+    {
+      figure: 'rework',
+      unit: 'share',
+      from: 0.5,
+      to: 0,
+      direction: 'better',
+    },
+    {
+      figure: 'clean runs',
+      unit: 'share',
+      from: 0.25,
+      to: 1,
+      direction: 'better',
+    },
   ],
 };
 

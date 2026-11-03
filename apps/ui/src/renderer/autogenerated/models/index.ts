@@ -5880,6 +5880,12 @@ export interface MemberChangeMovedInner {
      */
     figure: string;
     /**
+     * dollars or milliseconds per run, moved by a tenth of where they stood; a share (0–1), moved by 0.1
+     * @type {string}
+     * @memberof MemberChangeMovedInner
+     */
+    unit: MemberChangeMovedInnerUnitEnum;
+    /**
      * 
      * @type {number}
      * @memberof MemberChangeMovedInner
@@ -5899,6 +5905,16 @@ export interface MemberChangeMovedInner {
     direction: MemberChangeMovedInnerDirectionEnum;
 }
 
+
+/**
+ * @export
+ */
+export const MemberChangeMovedInnerUnitEnum = {
+    Usd: 'usd',
+    Ms: 'ms',
+    Share: 'share'
+} as const;
+export type MemberChangeMovedInnerUnitEnum = typeof MemberChangeMovedInnerUnitEnum[keyof typeof MemberChangeMovedInnerUnitEnum];
 
 /**
  * @export

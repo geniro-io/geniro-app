@@ -177,11 +177,11 @@ describe('foldMemberChanges', () => {
       effect: 'better',
     });
     expect(
-      tuned!.moved.map((moved) => [moved.figure, moved.direction]),
+      tuned!.moved.map((moved) => [moved.figure, moved.unit, moved.direction]),
     ).toEqual([
-      ['cost per run', 'better'],
-      ['rework', 'better'],
-      ['clean runs', 'better'],
+      ['cost per run', 'usd', 'better'],
+      ['rework', 'share', 'better'],
+      ['clean runs', 'share', 'better'],
     ]);
     expect(restore).toMatchObject({
       at: at(5).toISOString(),
@@ -213,6 +213,12 @@ describe('foldMemberChanges', () => {
   it('judges a member removed by the team’s own figures', () => {
     const echo = fold({}).get('echo');
 
+    expect(
+      echo?.at(-1)?.moved.map((moved) => [moved.figure, moved.unit]),
+    ).toEqual([
+      ['team cost per run', 'usd'],
+      ['team working time per run', 'ms'],
+    ]);
     expect(echo?.at(-1)).toMatchObject({
       kinds: ['removed'],
       before: { runs: 3 },

@@ -41,8 +41,8 @@ export function TeamSection({
 /**
  * A team's page: a quiet header (back, the chat toggle, the actions), the
  * hero, any banner, then the Team / Memory / Statistics tabs. The page
- * scrolls in its own panel — never the window — and the member sheet and the
- * chat dock sit beside it on the right.
+ * scrolls in its own panel — never the window — with the chat dock under it
+ * and the member sheet beside both on the right.
  */
 export function TeamPage({
   onBack,
@@ -121,10 +121,10 @@ export function TeamPage({
             </div>
           </div>
         </div>
+        {dock}
         {footer}
       </div>
       {sheet}
-      {dock}
     </section>
   );
 }

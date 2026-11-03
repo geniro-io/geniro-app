@@ -620,6 +620,22 @@ describe('Teams — the Change with chat dock', () => {
     expect(panel()!.hasAttribute('hidden')).toBe(false);
   });
 
+  // The dock sizes itself by height from a top edge: placed beside the page in
+  // its row, it took its content's width and pushed the page and its own Hide
+  // button off screen.
+  it('docks under the page, in the column the page scrolls in', async () => {
+    await openBuilder();
+
+    await press('Change with chat');
+
+    const scroll = container.querySelector('[data-slot="team-page-scroll"]');
+    expect(panel()!.parentElement).toBe(scroll!.parentElement);
+    expect(
+      scroll!.compareDocumentPosition(panel()!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   /**
    * Closing HIDES the dock rather than unmounting it: an unmounted dock took a
    * running turn's reports with it — autosave stayed suspended for good and the

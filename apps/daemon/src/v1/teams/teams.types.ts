@@ -929,6 +929,18 @@ export type RunTeamSnapshotWire = z.infer<typeof RunTeamSnapshotWireSchema>;
  */
 export const CALL_START_BRIEF_MAX = 2_000;
 
+/** One call's clock as the daemon folded it — `CallClock` in `utils/call-clock.ts`. */
+export const CallClockWireSchema = z
+  .object({
+    closedMs: z.number(),
+    runningSince: z.number().nullable(),
+    parkedMs: z.number(),
+    parkedSince: z.number().nullable(),
+    openCards: z.array(z.string()),
+    throughSeq: z.number().int(),
+  })
+  .meta({ id: 'CallClock' });
+
 /** Per-member execution state projected to the wire (from `node_state` rows). */
 export const NodeStateWireSchema = z.object({
   runId: z.string(),
@@ -1013,19 +1025,9 @@ export const NodeStateWireSchema = z.object({
         callId: z.string(),
         /** What this call's own turns spent, over the whole run. */
         totals: ChatTotalsWireSchema,
-        workedMs: z
-          .number()
-          .nullable()
-          .describe(
-            "How long the node worked inside this call: its CLI's own turn durations plus the wall_turns ledger's turns its CLI did not time. Null when no turn of it was measured",
-          ),
-        workedThroughSeq: z
-          .number()
-          .int()
-          .nullable()
-          .describe(
-            'The seq of the newest turn ending counted in workedMs; a later turn of this call is not in it. Null when none was counted',
-          ),
+        clock: CallClockWireSchema.nullable().describe(
+          'How long this call has been open less its waits on the user, as of throughSeq (utils/call-clock.ts). Null when the run holds no row of its clock',
+        ),
         toolCalls: z
           .number()
           .int()

@@ -79,6 +79,7 @@ import { ArtifactDialog } from './artifact-dialog';
 import type { RunArtifact } from './artifact-payload';
 import { ArtifactShareContext, hasLink } from './artifact-share';
 import { bareUrl, briefParts, plainMarkdownText } from './brief-text';
+import { callClockTitle, useCallClockMs } from './call-clock';
 import { callTitle } from './call-title';
 import { ContextMeter } from './context-meter';
 import { ConversationTimeline } from './conversation-timeline';
@@ -1231,14 +1232,8 @@ function InstanceSummary({
   // `117.6k in/out` stood here and is gone — see {@link AgentCost}, which
   // carried the same figure and drew the same report.
   const usd = measured(thread.spentUsd);
-  const workingTurns =
-    thread.status === 'running' ? (thread.openTurns ?? []) : [];
-  useSecondTick(workingTurns.length > 0);
-  const settledMs = measured(thread.workedMs);
-  const liveMs =
-    workingTurns.length > 0 ? openTurnWorkedMs(workingTurns, Date.now()) : 0;
-  const workedMs =
-    settledMs === null && liveMs <= 0 ? null : (settledMs ?? 0) + liveMs;
+  const running = thread.status === 'running';
+  const clockMs = useCallClockMs(thread.clocks, running);
   const rawLatest = thread.latest ?? null;
   // Every live delta and status announce re-renders the panel, and these
   // regexes run over a whole message per instance.
@@ -1254,15 +1249,13 @@ function InstanceSummary({
         {latest ?? RUN_STATUS_META[thread.status].label}
       </span>
       {open ? null : <InstanceCounts instance={instance} />}
-      {workedMs === null ? null : (
+      {clockMs === null || clockMs <= 0 ? null : (
         <span
           data-slot="agent-instance-worked"
-          title={`Worked ${formatDuration(workedMs)} in this conversation`}
+          title={callClockTitle(clockMs, running)}
           className="flex shrink-0 items-center gap-0.5 tabular-nums">
           <Timer aria-hidden="true" className="size-3" />
-          {workingTurns.length > 0
-            ? formatElapsed(workedMs)
-            : formatDuration(workedMs)}
+          {running ? formatElapsed(clockMs) : formatDuration(clockMs)}
         </span>
       )}
       {usd === null ? null : (

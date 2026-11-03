@@ -339,6 +339,12 @@ export interface CallBlockEntry {
    */
   waiting?: { monitors: readonly string[] };
   /**
+   * The callee was woken inside this open call — by its monitors or the calls
+   * it waited for — and has said nothing since, so its words from before the
+   * wake are not what it is doing now. Absent otherwise.
+   */
+  quietSinceWake?: true;
+  /**
    * The LATEST call is waiting for room under its run's active-turn cap
    * (`Workflow.maxActiveTurns`): asked for, not started. Set only while the
    * call is still `pending` — its first status row ends it.
@@ -1445,6 +1451,9 @@ export function subagentNamed(block: SubagentBlockEntry): boolean {
 export function callBlockSummary(block: CallBlockEntry): string | null {
   if (block.result !== null) {
     return block.result;
+  }
+  if (block.quietSinceWake === true) {
+    return null;
   }
   const spoken = lastSpokenIn(latestCallTurn(block));
   if (
@@ -3669,7 +3678,11 @@ function buildCallBlock(
   const handOff = latestPoolHandOff(shell);
   const handOffMessage = payloadString(handOff?.payload, 'message');
   const member = callMemberOf(shell, settle, handOff);
-  const waiting = status === 'running' ? calleeWaitingIn(shell.bucket) : null;
+  const turns =
+    status === 'running'
+      ? calleeTurnIn(shell.bucket)
+      : { waiting: null, quietSinceWake: false };
+  const waiting = turns.waiting;
   return {
     type: 'call-block',
     id: shell.started.id,
@@ -3689,6 +3702,7 @@ function buildCallBlock(
     stalled,
     ...(heldOn !== null && OPEN_CALL_STATUSES.has(status) ? { heldOn } : {}),
     ...(waiting !== null ? { waiting } : {}),
+    ...(turns.quietSinceWake ? { quietSinceWake: true as const } : {}),
     ...(queuedSeq !== null && status === 'pending'
       ? { queued: true as const, queuedSeq }
       : {}),
@@ -3939,14 +3953,24 @@ const WAIT_NEUTRAL_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether the callee's turn in one call's rows has ended, and the monitors of
- * that call still running — see {@link CallBlockEntry.waiting}. Null while the
- * callee is mid-turn or has not ended a turn yet.
+ * Where the callee's turns stand in one call's rows: whether its turn has
+ * ended with the call still open, and the monitors of that call still running
+ * — see {@link CallBlockEntry.waiting}, null while the callee is mid-turn or
+ * has not ended a turn yet — and whether it was woken inside the call and has
+ * said nothing since ({@link CallBlockEntry.quietSinceWake}).
  */
-function calleeWaitingIn(
-  rows: readonly ChatItem[],
-): { monitors: readonly string[] } | null {
+function calleeTurnIn(rows: readonly ChatItem[]): {
+  waiting: { monitors: readonly string[] } | null;
+  quietSinceWake: boolean;
+} {
   let turnEnded = false;
+  let quietSinceWake = false;
+  const resume = (): void => {
+    if (turnEnded) {
+      quietSinceWake = true;
+    }
+    turnEnded = false;
+  };
   const monitors = new Map<string, string>();
   for (const item of rows) {
     if (item.kind === 'system') {
@@ -3959,7 +3983,7 @@ function calleeWaitingIn(
         }
       }
       if (notice?.woke === true || endsHeldWait(item)) {
-        turnEnded = false;
+        resume();
       }
       continue;
     }
@@ -3968,15 +3992,25 @@ function calleeWaitingIn(
     }
     if (item.kind === 'status') {
       if (payloadString(item.payload, 'status') === 'running') {
-        turnEnded = false;
+        resume();
       }
       continue;
+    }
+    if (
+      item.kind === 'message' &&
+      item.role !== 'user' &&
+      (payloadString(item.payload, 'text')?.trim() ?? '') !== ''
+    ) {
+      quietSinceWake = false;
     }
     turnEnded =
       TERMINAL_KINDS.has(item.kind) &&
       payloadBoolean(item.payload, 'insideTurn') !== true;
   }
-  return turnEnded ? { monitors: [...monitors.values()] } : null;
+  return {
+    waiting: turnEnded ? { monitors: [...monitors.values()] } : null,
+    quietSinceWake: !turnEnded && quietSinceWake,
+  };
 }
 
 /** Whether `item` ends a call's wait — see the `heldCalls` fold. */

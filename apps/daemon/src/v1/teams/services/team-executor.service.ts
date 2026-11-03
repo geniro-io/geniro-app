@@ -84,6 +84,7 @@ import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import { WallWorkService } from '../../agents/services/wall-work.service';
+import { SPAN_ROW_KINDS } from '../../agents/utils/active-spans';
 import {
   type AgentOptionsSnapshot,
   readAgentOptions,
@@ -100,12 +101,12 @@ import {
   type AutoCompactReading,
 } from '../../agents/utils/auto-compact';
 import { BackgroundWorkCounts } from '../../agents/utils/background-work-counts';
+import { callClocksFrom } from '../../agents/utils/call-clock';
 import {
   CALL_RECORDS,
   callNumber,
   readCallSeed,
 } from '../../agents/utils/call-seed';
-import { addCallWork, type CallWork } from '../../agents/utils/call-worked';
 import { asksForSecret } from '../../agents/utils/card-questions';
 import { withCarriedContext } from '../../agents/utils/carried-context';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
@@ -2367,7 +2368,6 @@ export class TeamExecutorService
     // Each member's wall-measured turns — what its CLI did not time — served on
     // top of the CLI-reported `workedMs` the row holds.
     const wallByNode = await this.wallTurns.nodeSums(runId, em);
-    const wallBySeq = await this.wallTurns.nodeTurnsBySeq(runId, em);
     const adapters = this.adapters.all();
     const poolKinds = snapshotPoolKinds(run.teamSnapshot);
     const ownPoolMembers =
@@ -2388,9 +2388,6 @@ export class TeamExecutorService
       string,
       { memberId: string; totals: ChatTotalsWire }
     >();
-    // Each call's worked time — its CLI's own figures plus the wall ledger's
-    // turns — and the newest turn ending it counts.
-    const callWork = new Map<string, CallWork>();
     // Each conversation's newest turn ending and the lifetime last stated for
     // it, per call and per member's own conversation — what its prompt-cache
     // expiry is read from.
@@ -2455,15 +2452,6 @@ export class TeamExecutorService
         nodeTtl.set(ttlKey, stated);
       }
       const figures = usageFiguresFrom(payload);
-      if (callId !== null) {
-        addCallWork(
-          callWork,
-          callId,
-          turn.seq,
-          payload,
-          wallBySeq.get(turn.seq),
-        );
-      }
       if (figures === null) {
         continue;
       }
@@ -2563,6 +2551,9 @@ export class TeamExecutorService
         toolCallsThroughSeq: count?.lastSeq ?? null,
       };
     };
+    const callClocks = callClocksFrom(
+      await this.kindRows.rowsOf(runId, SPAN_ROW_KINDS, 'fresh'),
+    );
     // Every call's FIGURES, never capped: the maps above already cover every
     // call of the run, so only the heavy listing below is bounded.
     const callNodes = new Map<string, string>();
@@ -2587,8 +2578,7 @@ export class TeamExecutorService
       forNode.push({
         callId,
         totals: callTotals.get(callId)?.totals ?? emptyTotals(),
-        workedMs: callWork.get(callId)?.ms ?? null,
-        workedThroughSeq: callWork.get(callId)?.throughSeq ?? null,
+        clock: callClocks.get(callId) ?? null,
         ...toolsOf(memberId, callId),
         promptCacheExpiresAt: cacheExpiryOf(callCache.get(callId)),
       });

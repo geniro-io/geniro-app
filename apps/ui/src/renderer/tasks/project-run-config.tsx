@@ -155,7 +155,7 @@ export function ProjectRunConfig({
   const label = targetLabel(target, teams);
 
   return (
-    <div className="relative">
+    <div className="relative max-w-full min-w-0">
       <Chip
         asChild
         interactive
@@ -163,18 +163,22 @@ export function ProjectRunConfig({
         // state rather than an edge case: it is the one thing on screen that
         // explains a board where every Run press is refused.
         tone={target === null ? 'muted' : 'active'}
+        className="max-w-full"
         data-menu-trigger>
         <button
           type="button"
           ref={triggerRef}
           aria-label="Project run settings"
           aria-expanded={open}
+          title={label === null ? 'No agent' : `Agent · ${label}`}
           onClick={() => {
             onOpenChange(!open);
           }}>
           {teamSlug !== null ? <TeamIcon aria-hidden /> : <Bot aria-hidden />}
           {/* The STATE, not the word alone — the autopilot chip's own rule. */}
-          {label === null ? 'No agent' : `Agent · ${label}`}
+          <span className="min-w-0 truncate">
+            {label === null ? 'No agent' : `Agent · ${label}`}
+          </span>
           <ChipChevron />
         </button>
       </Chip>

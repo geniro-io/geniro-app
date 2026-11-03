@@ -66,6 +66,19 @@ const settingRow = cva('grid items-center gap-x-3 px-3 py-2', {
       default: 'grid-cols-[7rem_minmax(0,1fr)]',
       compact:
         'grid-cols-1 gap-y-1 @[17rem]:grid-cols-[6rem_minmax(0,1fr)] @[17rem]:gap-y-0',
+      /** Label at the start, control at the end — a short list read down a card. */
+      split: 'grid-cols-[auto_minmax(0,1fr)] px-0 py-1',
+    },
+  },
+  defaultVariants: { width: 'default' },
+});
+
+const settingCell = cva('flex min-w-0 flex-col gap-0.5 [&>*]:max-w-full', {
+  variants: {
+    width: {
+      default: 'items-start',
+      compact: 'items-start',
+      split: 'items-end text-right',
     },
   },
   defaultVariants: { width: 'default' },
@@ -93,7 +106,7 @@ export function SettingRow({
           profile` chip ran 38px past its column and over the card's edge.
           Capping the child is what hands the overflow to the chip's own
           `truncate` span, which is where the ellipsis lives. */}
-      <div className="flex min-w-0 flex-col items-start gap-0.5 [&>*]:max-w-full">
+      <div className={settingCell({ width })}>
         {children}
         {hint === undefined ? null : (
           <span className="text-xs text-muted-foreground">{hint}</span>

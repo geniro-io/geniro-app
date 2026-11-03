@@ -53,6 +53,7 @@ export function ProjectRunConfigs({
         configs={own}
         totalCount={sources.runConfigs.length}
         showProject={false}
+        homeFolder={project.folder}
         emptyNote="A configuration names the folder, branch, agent and its options a new chat of this project starts with."
         agentsApi={agentsApi}
         teams={sources.teams}

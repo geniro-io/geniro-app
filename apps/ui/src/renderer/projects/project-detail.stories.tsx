@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import { aProject } from '../__fixtures__/projects';
 import {
+  type AgentInstructionSize,
   type ProjectQueueDto,
   type ProjectsApi,
   TaskStatus,
@@ -20,6 +21,29 @@ const BILLING = aProject({
   instructionsRevision: 3,
 });
 
+function sizeOf(
+  agent: AgentInstructionSize['agent'],
+  preambleChars: number,
+): AgentInstructionSize {
+  const parts = [
+    {
+      source: 'preamble' as const,
+      chars: preambleChars,
+      approxTokens: Math.round(preambleChars / 4),
+    },
+    { source: 'customInstructions' as const, chars: 318, approxTokens: 80 },
+    { source: 'instructions' as const, chars: 5_600, approxTokens: 1_400 },
+  ];
+  const totalChars = parts.reduce((sum, part) => sum + part.chars, 0);
+  return {
+    agent,
+    totalChars,
+    approxTokens: Math.round(totalChars / 4),
+    separatorChars: 4,
+    parts,
+  };
+}
+
 const APIS = {
   projects: {
     updateProject: async ({ updateProjectDto }) => ({
@@ -28,6 +52,14 @@ const APIS = {
       instructionsRevision: BILLING.instructionsRevision + 1,
     }),
     readProject: async () => BILLING,
+    measureProjectInstructionSizes: async () => ({
+      agents: [
+        sizeOf('claude', 2_431),
+        sizeOf('cursor-agent', 2_210),
+        sizeOf('codex', 1_980),
+      ],
+      blocks: [],
+    }),
   } as Partial<ProjectsApi> as ProjectsApi,
 } as Partial<DaemonApis> as DaemonApis;
 

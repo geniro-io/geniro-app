@@ -13,7 +13,9 @@ import { ConfirmDialog } from '../components/confirm-dialog';
 import { CopyButton } from '../components/copy-button';
 import { InlineRenameInput } from '../components/inline-rename-input';
 import { SettingRow } from '../components/setting-row';
+import { StatusDot } from '../components/status-dot';
 import { Button } from '../components/ui/button';
+import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { type DaemonApis, describeDaemonError } from '../daemon-api';
 import { AutopilotControl } from '../tasks/autopilot-control';
@@ -40,16 +42,31 @@ const HERO_CHIP_CLASS =
 function QueueFigure({
   label,
   value,
+  live = false,
 }: {
   label: string;
   value: number | null;
+  live?: boolean;
 }): React.JSX.Element {
+  const active = live && value !== null && value > 0;
   return (
     <div
       data-slot="project-queue-figure"
-      className="flex min-w-0 flex-col gap-0.5 rounded-control bg-muted/60 px-3 py-2">
-      <span className="truncate text-xs text-muted-foreground">{label}</span>
-      <span className="text-xl leading-tight font-semibold tabular-nums">
+      className="flex min-w-0 flex-col gap-1 rounded-control bg-muted/60 px-3 py-2.5">
+      <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+        {live ? (
+          <StatusDot
+            tone={active ? 'ok' : 'unknown'}
+            className={cn('shrink-0', active && 'animate-pulse')}
+          />
+        ) : null}
+        <span className="truncate">{label}</span>
+      </span>
+      <span
+        className={cn(
+          'text-xl leading-none font-semibold tabular-nums',
+          value === null || value === 0 ? 'text-muted-foreground' : null,
+        )}>
         {value ?? '—'}
       </span>
     </div>
@@ -323,7 +340,11 @@ export function ProjectDetail({
             title="Task board"
             hint="How this project's cards are worked.">
             <div className="grid grid-cols-2 gap-2">
-              <QueueFigure label="Running" value={queue?.running ?? null} />
+              <QueueFigure
+                label="Running"
+                value={queue?.running ?? null}
+                live
+              />
               <QueueFigure
                 label={
                   queue === null
@@ -333,8 +354,8 @@ export function ProjectDetail({
                 value={queue?.waiting ?? null}
               />
             </div>
-            <div className="@container -mx-3 flex flex-col">
-              <SettingRow label="Runs as">
+            <div className="-mt-1 -mb-2 flex flex-col divide-y divide-border">
+              <SettingRow width="split" label="Runs as">
                 <ProjectRunConfig
                   project={project}
                   teams={sources.teams}
@@ -348,7 +369,7 @@ export function ProjectDetail({
                   onUpdate={(patch) => void patchProject(patch)}
                 />
               </SettingRow>
-              <SettingRow label="Autopilot">
+              <SettingRow width="split" label="Autopilot">
                 <AutopilotControl
                   project={project}
                   onUpdate={(patch) => void patchProject(patch)}

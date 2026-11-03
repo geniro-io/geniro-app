@@ -26,6 +26,8 @@ import { cn } from './utils';
 export const popoverSurface =
   'absolute z-50 rounded-xl border border-border/60 bg-popover shadow-panel-lg';
 
+export const POPOVER_PANEL_SELECTOR = '[data-slot="popover-panel"]';
+
 /**
  * The gap between a trigger and the panel it opens.
  *
@@ -264,6 +266,7 @@ export function Popover({
         panelRef.current = node;
         setPanelEl(node);
       }}
+      data-slot="popover-panel"
       role="dialog"
       aria-label={label}
       style={box ?? undefined}

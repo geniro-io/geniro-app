@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { POINTER_GRACE_MS } from '../use-pointer-grace';
 import { Menu, type MenuGroup } from './menu';
 
 (
@@ -681,6 +682,143 @@ describe('Menu — the second level', () => {
     expect(listboxes(el)).toHaveLength(1);
     expect(onClose).not.toHaveBeenCalled();
     expect(axisRow(el).getAttribute('aria-expanded')).toBe('false');
+  });
+});
+
+describe('Menu — reaching the second level with the pointer', () => {
+  const GROUPS: MenuGroup[] = [
+    {
+      items: [
+        {
+          value: 'axis:colour',
+          label: 'Change colour',
+          submenu: [
+            {
+              items: [
+                { value: 'colour:blue', label: 'Blue' },
+                { value: 'colour:pink', label: 'Pink' },
+              ],
+            },
+          ],
+        },
+        { value: 'analyze', label: 'Analyze thread…' },
+      ],
+    },
+  ];
+
+  const row = (el: HTMLElement, label: string): HTMLElement =>
+    rows(el).find((r) => r.textContent === label)!;
+
+  const parentHighlight = (el: HTMLElement): (string | null)[] =>
+    highlighted(el.querySelector<HTMLElement>('[role="listbox"]')!);
+
+  const submenuOpen = (el: HTMLElement): boolean =>
+    el.querySelectorAll('[role="listbox"]').length === 2;
+
+  const crossInto = (
+    from: HTMLElement,
+    to: HTMLElement,
+    x: number,
+    y: number,
+  ): void => {
+    act(() => {
+      from.dispatchEvent(
+        new MouseEvent('mouseout', {
+          bubbles: true,
+          relatedTarget: to,
+          clientX: x,
+          clientY: y,
+        }),
+      );
+    });
+  };
+
+  const moveWithin = (target: HTMLElement, x: number, y: number): void => {
+    act(() => {
+      target.dispatchEvent(
+        new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y }),
+      );
+    });
+  };
+
+  function withSubmenuAt(test: (el: HTMLElement) => void): void {
+    vi.useFakeTimers();
+    const spy = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element): DOMRect {
+        const box =
+          this.getAttribute('data-slot') === 'menu-panel' && this.id !== ''
+            ? { top: 0, bottom: 300, left: 300, right: 500 }
+            : { top: 0, bottom: 0, left: 0, right: 0 };
+        return {
+          ...box,
+          height: box.bottom - box.top,
+          width: box.right - box.left,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    try {
+      const el = open(GROUPS);
+      act(() => {
+        row(el, 'Change colour').dispatchEvent(
+          new MouseEvent('mouseover', { bubbles: true }),
+        );
+      });
+      expect(submenuOpen(el)).toBe(true);
+      test(el);
+    } finally {
+      spy.mockRestore();
+      vi.useRealTimers();
+    }
+  }
+
+  it('keeps the submenu while the pointer crosses another row toward it, then lets that row take over', () => {
+    withSubmenuAt((el) => {
+      crossInto(row(el, 'Change colour'), row(el, 'Analyze thread…'), 200, 20);
+
+      expect(submenuOpen(el)).toBe(true);
+      expect(parentHighlight(el)).toEqual(['Change colour']);
+
+      act(() => {
+        vi.advanceTimersByTime(POINTER_GRACE_MS - 1);
+      });
+      expect(submenuOpen(el)).toBe(true);
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(submenuOpen(el)).toBe(false);
+      expect(parentHighlight(el)).toEqual(['Analyze thread…']);
+    });
+  });
+
+  it('switches at once when the pointer moves away from the submenu', () => {
+    withSubmenuAt((el) => {
+      const analyze = row(el, 'Analyze thread…');
+      crossInto(row(el, 'Change colour'), analyze, 200, 20);
+
+      moveWithin(analyze, 150, 60);
+
+      expect(submenuOpen(el)).toBe(false);
+      expect(parentHighlight(el)).toEqual(['Analyze thread…']);
+    });
+  });
+
+  it('keeps the submenu once the pointer reaches it across another row', () => {
+    withSubmenuAt((el) => {
+      const analyze = row(el, 'Analyze thread…');
+      crossInto(row(el, 'Change colour'), analyze, 200, 20);
+      crossInto(analyze, row(el, 'Pink'), 310, 40);
+
+      act(() => {
+        vi.advanceTimersByTime(POINTER_GRACE_MS);
+      });
+
+      expect(submenuOpen(el)).toBe(true);
+      expect(row(el, 'Change colour').getAttribute('aria-expanded')).toBe(
+        'true',
+      );
+    });
   });
 });
 

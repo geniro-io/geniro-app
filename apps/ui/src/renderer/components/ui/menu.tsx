@@ -2,6 +2,7 @@ import { Check, ChevronRight } from 'lucide-react';
 import * as React from 'react';
 
 import type { ProfileColor } from '../../../shared/contracts';
+import { pointOf, usePointerGrace } from '../use-pointer-grace';
 import { MenuAnchorContext } from './menu-anchor';
 import { PALETTE_BORDER_CLASS } from './palette';
 import { popoverSurface } from './popover';
@@ -148,6 +149,8 @@ const TRIGGER_GAP = 6;
  */
 const MIN_MENU_HEIGHT = 120;
 
+export const MENU_PANEL_SELECTOR = '[data-slot="menu-panel"]';
+
 /**
  * The app's dropdown: a token-styled popover list, built from scratch because
  * the native `<select>` menu is drawn by the OS and can render none of what
@@ -275,6 +278,11 @@ export function Menu({
   const submenuTriggerRef = React.useRef<HTMLElement | null>(null);
   /** What the open row's `aria-controls` points at — one panel at a time. */
   const submenuPanelId = React.useId();
+  const grace = usePointerGrace();
+  const pendingRow = React.useRef<{ value: string; apply: () => void } | null>(
+    null,
+  );
+  React.useEffect(() => grace.stop, [submenuFor, grace.stop]);
   /**
    * The `fixed` box for `anchor="viewport"`, measured off the trigger — null in
    * ancestor mode, where the placement is a class rather than a measurement.
@@ -554,6 +562,16 @@ export function Menu({
     onClose();
   };
 
+  const hoverRow = (index: number, item: MenuItem, row: HTMLElement): void => {
+    setHighlight(index);
+    if (item.submenu) {
+      submenuTriggerRef.current = row;
+      setSubmenuFor(item.value);
+    } else {
+      setSubmenuFor(null);
+    }
+  };
+
   /** The row whose second level is open, looked up across every group. */
   const submenuItem =
     submenuFor === null
@@ -817,16 +835,30 @@ export function Menu({
                           'cursor-not-allowed text-muted-foreground opacity-60',
                       )}
                       onMouseEnter={(event) => {
-                        setHighlight(index);
-                        // Hovering ANY row decides the second level: onto a row
-                        // that has one it opens, onto one that has not it
-                        // closes. Without the second half the panel would stay
-                        // open over the rows the pointer moved on to.
-                        if (item.submenu) {
-                          submenuTriggerRef.current = event.currentTarget;
-                          setSubmenuFor(item.value);
-                        } else {
-                          setSubmenuFor(null);
+                        const row = event.currentTarget;
+                        if (
+                          item.value !== submenuFor &&
+                          grace.covers(pointOf(event))
+                        ) {
+                          pendingRow.current = {
+                            value: item.value,
+                            apply: () => hoverRow(index, item, row),
+                          };
+                          return;
+                        }
+                        grace.stop();
+                        hoverRow(index, item, row);
+                      }}
+                      onMouseLeave={(event) => {
+                        if (item.value === submenuFor) {
+                          pendingRow.current = null;
+                          grace.start(
+                            event.nativeEvent,
+                            document.getElementById(submenuPanelId),
+                            () => pendingRow.current?.apply(),
+                          );
+                        } else if (pendingRow.current?.value === item.value) {
+                          pendingRow.current = null;
                         }
                       }}
                       onClick={(event) => {

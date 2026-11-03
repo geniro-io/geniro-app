@@ -454,17 +454,22 @@ function HotspotFigures({
   agent,
   stats,
   look,
+  named = true,
 }: {
   agent: TeamAgentStatsView;
   stats: TeamStatsView;
   look: RecommendationsLook;
+  /** Lead with the agent's name; off where the row already names it. */
+  named?: boolean;
 }): React.JSX.Element {
   const share = workedShare(stats, agent);
   return (
     <p
       data-slot="analysis-hotspot-figures"
       className="m-0 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground tabular-nums">
-      <span className="font-medium text-foreground">{agent.node}</span>
+      {named ? (
+        <span className="font-medium text-foreground">{agent.node}</span>
+      ) : null}
       {agent.workedPerRunMs === null ? null : (
         <span>{look.formatMs(agent.workedPerRunMs)}/run</span>
       )}
@@ -600,7 +605,12 @@ function MemberAssessments({
                 />
               </div>
               {agent === null || stats === null ? null : (
-                <HotspotFigures agent={agent} stats={stats} look={look} />
+                <HotspotFigures
+                  agent={agent}
+                  stats={stats}
+                  look={look}
+                  named={false}
+                />
               )}
               <p className="m-0 text-xs leading-relaxed break-words text-muted-foreground">
                 {member.summary}

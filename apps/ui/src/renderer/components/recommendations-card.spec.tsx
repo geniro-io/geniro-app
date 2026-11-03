@@ -656,7 +656,7 @@ describe('RecommendationsCard', () => {
     expect(
       reviewer.querySelector('[data-slot="analysis-hotspot-figures"]')
         ?.textContent,
-    ).toBe('reviewer34m/run53% of the agents’ time$1.80/run3 failed turns');
+    ).toBe('34m/run53% of the agents’ time$1.80/run3 failed turns');
     expect(
       rows[2]!.querySelector('[data-slot="analysis-member-fix"]'),
     ).toBeNull();

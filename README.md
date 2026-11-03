@@ -329,6 +329,8 @@ The analysis lives in a popup over the thread it analyzed, so you can come back 
 
 On a team, **Analyze & improve** reads its latest runs together. The card opens with what Geniro measured over them: time and cost per run, failed turns, and each agent's share of the working time with its model and cost per run. Then it names what costs the most and why, next to the measured figures of the agent at fault, and says how each member did: its usefulness and quality marks, its verdict, and the fixes that carry the verdict out. An analysis of one team run marks its members too, as the thin sample one run is.
 
+![A team analysis's members section: the writer and the reviewer marked keep (usefulness 5 and 3, quality 5), and an Echo member that only repeats the writer's draft marked usefulness 1 with the verdict Remove, carried out by W-1, which reverts the team to the version without it](docs/screenshots/member-assessments.png)
+
 ![A team analysis over two runs: 45 seconds and $0.62 per run, the drafter agent taking 73% of the agents' time at $0.39 per run, and two numbered causes — a pointless search and rewrite pass, and a leak the checker catches but nobody fixes — each with the fixes that address it](docs/screenshots/workflow-analysis.png)
 
 Each fix shows the time and money it should save per run, or add, and what the next runs look like with it. Ticking fixes projects the time and cost per run with exactly those.

@@ -49,7 +49,7 @@ export function ProgressRing({
         fill="none"
         stroke="currentColor"
         strokeWidth={strokeWidth}
-        strokeLinecap="round"
+        strokeLinecap={clamped > 0 ? 'round' : 'butt'}
         strokeDasharray={`${circumference * clamped} ${circumference}`}
         transform={`rotate(-90 ${size / 2} ${size / 2})`}
       />

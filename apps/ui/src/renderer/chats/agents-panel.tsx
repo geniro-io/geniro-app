@@ -1842,6 +1842,7 @@ export function AgentsPanel({
   onRevealWorkflow,
   stages,
   goals,
+  onOpenProgress,
   tasksByAgent,
   shellsByAgent,
   workByAgent,
@@ -1930,6 +1931,8 @@ export function AgentsPanel({
   stages?: RunStages;
   /** The run's goals and outcome, with the user's hand on them. */
   goals?: RunGoals;
+  /** Open the thread's progress popup, where the goals are read and changed. */
+  onOpenProgress?: () => void;
   /**
    * The run whose expanded context readouts this panel may offer, or null.
    */
@@ -3151,8 +3154,8 @@ export function AgentsPanel({
         {workflows.length > 0 && onRevealWorkflow !== undefined ? (
           <WorkflowsSection workflows={workflows} onReveal={onRevealWorkflow} />
         ) : null}
-        {goals === undefined ? null : (
-          <GoalsSection goals={goals} nameOf={teamNoteAgentName} />
+        {goals === undefined || onOpenProgress === undefined ? null : (
+          <GoalsSection goals={goals} onOpen={onOpenProgress} />
         )}
         {stages === undefined ? null : (
           <StagesSection stages={stages} agentName={teamNoteAgentName} />

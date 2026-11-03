@@ -173,7 +173,6 @@ import {
   ActiveWorkflowChips,
   ComposerShelf,
   FolderChangesChip,
-  GoalsChip,
   LeadChip,
   type OpenCallChipRow,
   ResetWakeChip,
@@ -209,6 +208,7 @@ import { standsAcrossTurns } from './geniro-tool';
 import { GitNoticeOffers } from './git-notice-offers';
 import { GlobalChatSearchDialog } from './global-chat-search-dialog';
 import type { GoalsActions } from './goals-list';
+import type { RunGoals } from './goals-section';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { isCallRow, mergeAnchorRows, withAnchors } from './history-anchors';
 import type { HostedThread } from './hosted-thread';
@@ -240,6 +240,7 @@ import {
 } from './not-sent-messages';
 import { NotesDialog } from './notes-dialog';
 import { OlderMessagesControl } from './older-messages-control';
+import { ProgressChip, ProgressDialog } from './progress-dialog';
 import { ProjectSelect } from './project-select';
 import { PromptCacheNotice } from './prompt-cache-notice';
 import {
@@ -313,7 +314,6 @@ import {
   withAgentSlashSpelling,
 } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
-import { StageProgressChip } from './stage-progress-chip';
 import { SubagentDetail } from './subagent-block';
 import type { AgentSubagentGroup } from './subagent-list';
 import { subagentIdOf } from './subagent-payload';
@@ -6977,6 +6977,12 @@ export function Chats({
   const openTeamNote = useLatestCallback((seq: number) => {
     setNotesView({ selected: seq });
   }, []);
+  /** The progress popup — stages, goals and outcome — from the shelf chip or the panel's Goals row. */
+  const [progressOpen, setProgressOpen] = useState(false);
+  useEffect(() => {
+    setProgressOpen(false);
+  }, [activeRunId]);
+  const openProgress = useLatestCallback(() => setProgressOpen(true), []);
   /**
    * The newest outcome the open run's pull-request list carries — the outcome
    * history's one refresh trigger, moved by every announce of a written outcome.
@@ -7895,6 +7901,17 @@ export function Chats({
             reopen: reopenGoal,
           },
     [goalRunId, goalsArchived, addGoal, editGoal, closeGoal, reopenGoal],
+  );
+  const runGoals = useMemo(
+    (): RunGoals | undefined =>
+      activeRun === undefined || activeRun === null
+        ? undefined
+        : {
+            goals: activeRun.goals ?? [],
+            outcome: activeRun.outcome ?? null,
+            actions: goalActions,
+          },
+    [activeRun, goalActions],
   );
 
   const shelfAgentName = useLatestCallback(
@@ -9378,11 +9395,6 @@ export function Chats({
             onOpen={openSubagentById}
           />
           <RunningCallChips calls={openCallRows} onReveal={revealOpenCall} />
-          <GoalsChip
-            goals={activeRun?.goals ?? []}
-            actions={goalActions}
-            nameOf={shelfAgentName}
-          />
           <TeamNotesChip
             notes={teamNotes}
             agentName={shelfAgentName}
@@ -9407,7 +9419,13 @@ export function Chats({
             // about the same task for as long as that lasted.
             live={activeRunStatus === 'running'}
           />
-          <StageProgressChip progress={activeRun?.stages} />
+          {runGoals === undefined ? null : (
+            <ProgressChip
+              goals={runGoals}
+              stages={activeRun?.stages}
+              onOpen={openProgress}
+            />
+          )}
         </>
       }>
       {/* FIRST in the row, and the one chip here that is
@@ -9480,6 +9498,15 @@ export function Chats({
           initialSelected={notesView.selected}
           agentName={shelfAgentName}
           onJump={jumpToSeq}
+        />
+      ) : null}
+      {progressOpen && runGoals !== undefined ? (
+        <ProgressDialog
+          open
+          onClose={() => setProgressOpen(false)}
+          goals={runGoals}
+          stages={activeRun?.stages}
+          nameOf={activeRun?.teamId ? shelfAgentName : undefined}
         />
       ) : null}
       {/* An agent's buttons outlive the turn that made them,
@@ -11254,15 +11281,8 @@ export function Chats({
                       pullRequestOutcomes={pullRequestOutcomes}
                       workflows={runWorkflows}
                       onRevealWorkflow={revealWorkflow}
-                      goals={
-                        activeRun === undefined || activeRun === null
-                          ? undefined
-                          : {
-                              goals: activeRun.goals ?? [],
-                              outcome: activeRun.outcome ?? null,
-                              actions: goalActions,
-                            }
-                      }
+                      goals={runGoals}
+                      onOpenProgress={openProgress}
                       stages={
                         activeRun?.stages
                           ? {

@@ -2,6 +2,7 @@ import { Check, ChevronRight } from 'lucide-react';
 import * as React from 'react';
 
 import type { ProfileColor } from '../../../shared/contracts';
+import { pointOf, usePointerGrace } from '../use-pointer-grace';
 import { MenuAnchorContext } from './menu-anchor';
 import { PALETTE_BORDER_CLASS } from './palette';
 import { popoverSurface } from './popover';
@@ -148,61 +149,7 @@ const TRIGGER_GAP = 6;
  */
 const MIN_MENU_HEIGHT = 120;
 
-/** How long a pointer heading for an open submenu may cross other rows before they take over. */
-export const SUBMENU_GRACE_MS = 300;
-
-const SUBMENU_GRACE_BLEED = 5;
-
-interface Point {
-  x: number;
-  y: number;
-}
-
-interface SubmenuGrace {
-  area: Point[];
-  timer: ReturnType<typeof setTimeout>;
-  pending: { value: string; apply: () => void } | null;
-}
-
-const pointOf = (event: React.MouseEvent): Point => ({
-  x: event.clientX,
-  y: event.clientY,
-});
-
-function graceAreaOf(exit: Point, submenu: DOMRect): Point[] {
-  const towardRight = submenu.left >= exit.x;
-  const near = towardRight ? submenu.left : submenu.right;
-  const far = towardRight ? submenu.right : submenu.left;
-  const bleed = towardRight ? -SUBMENU_GRACE_BLEED : SUBMENU_GRACE_BLEED;
-  return [
-    { x: exit.x + bleed, y: exit.y },
-    { x: near, y: submenu.top },
-    { x: far, y: submenu.top },
-    { x: far, y: submenu.bottom },
-    { x: near, y: submenu.bottom },
-  ];
-}
-
-function isInside(point: Point, area: Point[]): boolean {
-  let inside = false;
-  for (const [index, a] of area.entries()) {
-    const b = area.at(index - 1) ?? a;
-    if (
-      a.y > point.y !== b.y > point.y &&
-      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x
-    ) {
-      inside = !inside;
-    }
-  }
-  return inside;
-}
-
-function endGrace(grace: React.RefObject<SubmenuGrace | null>): void {
-  if (grace.current !== null) {
-    clearTimeout(grace.current.timer);
-    grace.current = null;
-  }
-}
+export const MENU_PANEL_SELECTOR = '[data-slot="menu-panel"]';
 
 /**
  * The app's dropdown: a token-styled popover list, built from scratch because
@@ -331,8 +278,11 @@ export function Menu({
   const submenuTriggerRef = React.useRef<HTMLElement | null>(null);
   /** What the open row's `aria-controls` points at — one panel at a time. */
   const submenuPanelId = React.useId();
-  const graceRef = React.useRef<SubmenuGrace | null>(null);
-  React.useEffect(() => () => endGrace(graceRef), [submenuFor]);
+  const grace = usePointerGrace();
+  const pendingRow = React.useRef<{ value: string; apply: () => void } | null>(
+    null,
+  );
+  React.useEffect(() => grace.stop, [submenuFor, grace.stop]);
   /**
    * The `fixed` box for `anchor="viewport"`, measured off the trigger — null in
    * ancestor mode, where the placement is a class rather than a measurement.
@@ -622,23 +572,6 @@ export function Menu({
     }
   };
 
-  const startGrace = (exit: Point): void => {
-    const submenu = document.getElementById(submenuPanelId);
-    if (submenu === null) {
-      return;
-    }
-    endGrace(graceRef);
-    const grace: SubmenuGrace = {
-      area: graceAreaOf(exit, submenu.getBoundingClientRect()),
-      pending: null,
-      timer: setTimeout(() => {
-        graceRef.current = null;
-        grace.pending?.apply();
-      }, SUBMENU_GRACE_MS),
-    };
-    graceRef.current = grace;
-  };
-
   /** The row whose second level is open, looked up across every group. */
   const submenuItem =
     submenuFor === null
@@ -903,39 +836,29 @@ export function Menu({
                       )}
                       onMouseEnter={(event) => {
                         const row = event.currentTarget;
-                        const grace = graceRef.current;
                         if (
-                          grace !== null &&
                           item.value !== submenuFor &&
-                          isInside(pointOf(event), grace.area)
+                          grace.covers(pointOf(event))
                         ) {
-                          grace.pending = {
+                          pendingRow.current = {
                             value: item.value,
                             apply: () => hoverRow(index, item, row),
                           };
                           return;
                         }
-                        endGrace(graceRef);
+                        grace.stop();
                         hoverRow(index, item, row);
-                      }}
-                      onMouseMove={(event) => {
-                        const grace = graceRef.current;
-                        if (
-                          grace === null ||
-                          isInside(pointOf(event), grace.area)
-                        ) {
-                          return;
-                        }
-                        endGrace(graceRef);
-                        hoverRow(index, item, event.currentTarget);
                       }}
                       onMouseLeave={(event) => {
                         if (item.value === submenuFor) {
-                          startGrace(pointOf(event));
-                        } else if (
-                          graceRef.current?.pending?.value === item.value
-                        ) {
-                          graceRef.current.pending = null;
+                          pendingRow.current = null;
+                          grace.start(
+                            event.nativeEvent,
+                            document.getElementById(submenuPanelId),
+                            () => pendingRow.current?.apply(),
+                          );
+                        } else if (pendingRow.current?.value === item.value) {
+                          pendingRow.current = null;
                         }
                       }}
                       onClick={(event) => {

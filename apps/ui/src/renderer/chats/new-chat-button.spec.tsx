@@ -261,6 +261,46 @@ describe('NewChatButton', () => {
     expect(onApply).toHaveBeenCalledTimes(1);
   });
 
+  it('closes at once when the pointer leaves the + away from the menu', () => {
+    vi.useFakeTimers();
+    render();
+    hover(plus());
+    container.querySelector<HTMLElement>(
+      '[data-slot="menu-panel"]',
+    )!.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        right: 200,
+        top: 130,
+        bottom: 330,
+        width: 200,
+        height: 200,
+      }) as DOMRect;
+    const moveTo = (x: number, y: number): void => {
+      act(() => {
+        document.dispatchEvent(
+          new MouseEvent('mousemove', { clientX: x, clientY: y }),
+        );
+      });
+    };
+
+    act(() => {
+      plus().dispatchEvent(
+        new MouseEvent('mouseout', {
+          bubbles: true,
+          relatedTarget: document.body,
+          clientX: 100,
+          clientY: 100,
+        }),
+      );
+    });
+    moveTo(100, 115);
+    expect(rows().length).toBeGreaterThan(0);
+
+    moveTo(100, 60);
+    expect(rows()).toHaveLength(0);
+  });
+
   it('the keyboard can reach the configurations too', () => {
     // The button's own click is the new thread, so without this the menu would
     // be pointer-only.

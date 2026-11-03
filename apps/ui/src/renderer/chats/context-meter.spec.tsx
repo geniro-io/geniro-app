@@ -567,6 +567,48 @@ describe('the expanded readout the meter opens onto', () => {
     }
   });
 
+  it('closes at once when the pointer leaves the ring AWAY from the panel', () => {
+    vi.useFakeTimers();
+    try {
+      renderWithLoader(() => Promise.resolve(METRICS));
+      hoverIn(meterTrigger());
+      act(() => vi.advanceTimersByTime(300));
+      panel()!.getBoundingClientRect = () =>
+        ({
+          left: 0,
+          right: 200,
+          top: 130,
+          bottom: 330,
+          width: 200,
+          height: 200,
+        }) as DOMRect;
+      const moveTo = (x: number, y: number): void => {
+        act(() => {
+          document.dispatchEvent(
+            new MouseEvent('mousemove', { clientX: x, clientY: y }),
+          );
+        });
+      };
+
+      act(() => {
+        meterTrigger()!.dispatchEvent(
+          new MouseEvent('mouseout', {
+            bubbles: true,
+            clientX: 100,
+            clientY: 100,
+          }),
+        );
+      });
+      moveTo(100, 115);
+      expect(panel()).not.toBeNull();
+
+      moveTo(100, 60);
+      expect(panel()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not reopen a panel dismissed while a hover was still pending', () => {
     // The branch the press-path cancel exists for. A press that BEATS the rest
     // delay leaves the open timer armed, so without the cancel it fires after

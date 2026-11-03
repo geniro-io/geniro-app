@@ -3,7 +3,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { Menu, type MenuGroup, SUBMENU_GRACE_MS } from './menu';
+import { POINTER_GRACE_MS } from '../use-pointer-grace';
+import { Menu, type MenuGroup } from './menu';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -779,7 +780,7 @@ describe('Menu — reaching the second level with the pointer', () => {
       expect(parentHighlight(el)).toEqual(['Change colour']);
 
       act(() => {
-        vi.advanceTimersByTime(SUBMENU_GRACE_MS - 1);
+        vi.advanceTimersByTime(POINTER_GRACE_MS - 1);
       });
       expect(submenuOpen(el)).toBe(true);
 
@@ -810,7 +811,7 @@ describe('Menu — reaching the second level with the pointer', () => {
       crossInto(analyze, row(el, 'Pink'), 310, 40);
 
       act(() => {
-        vi.advanceTimersByTime(SUBMENU_GRACE_MS);
+        vi.advanceTimersByTime(POINTER_GRACE_MS);
       });
 
       expect(submenuOpen(el)).toBe(true);

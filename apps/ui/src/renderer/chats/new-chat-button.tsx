@@ -3,8 +3,8 @@ import * as React from 'react';
 
 import type { RunConfig } from '../../shared/contracts';
 import { Button } from '../components/ui/button';
-import { Menu } from '../components/ui/menu';
-import { useLatestCallback } from '../components/use-latest-callback';
+import { Menu, MENU_PANEL_SELECTOR } from '../components/ui/menu';
+import { usePointerGrace } from '../components/use-pointer-grace';
 import type { ProjectRef } from '../projects/use-projects';
 import { teamSlugOf } from './composer-values';
 import { shortenPath } from './directory-select';
@@ -16,9 +16,6 @@ import { groupRunConfigsByProject } from './run-config';
  */
 const NEW_CONFIG = 'action:new-configuration';
 const MANAGE_CONFIGS = 'action:manage-configurations';
-
-/** How long the menu survives the pointer leaving, so the 6px gap is crossable. */
-const CLOSE_DELAY_MS = 180;
 
 /**
  * The sidebar's `+`: one click starts a new thread, hovering offers the saved
@@ -56,7 +53,7 @@ export function NewChatButton({
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const triggerRef = React.useRef<HTMLButtonElement | null>(null);
-  const closeTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const grace = usePointerGrace();
   /**
    * The kind of pointer that last reached the button. A tap on a phone is
    * followed by compatibility mouse events, and iOS Safari drops the `click`
@@ -66,23 +63,6 @@ export function NewChatButton({
   const pointerType = React.useRef<string | null>(null);
   /** Whether the menu was open when the bookmark was pressed. */
   const openAtPress = React.useRef(false);
-
-  const cancelClose = useLatestCallback((): void => {
-    if (closeTimer.current !== null) {
-      clearTimeout(closeTimer.current);
-      closeTimer.current = null;
-    }
-  }, []);
-
-  // The panel hangs 6px below the button, and that gap belongs to neither — a
-  // pointer travelling from one to the other passes through it and would close
-  // the menu on the way in. The delay is what makes the trip survivable.
-  const scheduleClose = useLatestCallback((): void => {
-    cancelClose();
-    closeTimer.current = setTimeout(() => setOpen(false), CLOSE_DELAY_MS);
-  }, [cancelClose]);
-
-  React.useEffect(() => cancelClose, [cancelClose]);
 
   const groups = React.useMemo(() => {
     const commands = {
@@ -133,11 +113,15 @@ export function NewChatButton({
         pointerType.current = event.pointerType;
       }}
       // The panel is a descendant, so arriving on it — after crossing the gap
-      // that scheduled the close — is an enter here, and must call it off.
-      // Without this the menu closed under the pointer 180ms after leaving the
-      // +, and no configuration could ever be picked with a mouse.
-      onMouseEnter={cancelClose}
-      onMouseLeave={scheduleClose}>
+      // that started the grace — is an enter here, and must call it off.
+      onMouseEnter={grace.stop}
+      onMouseLeave={(event) =>
+        grace.start(
+          event.nativeEvent,
+          event.currentTarget.querySelector(MENU_PANEL_SELECTOR),
+          () => setOpen(false),
+        )
+      }>
       <Button
         type="button"
         variant="ghost"
@@ -167,7 +151,7 @@ export function NewChatButton({
           if (pointerType.current !== null && pointerType.current !== 'mouse') {
             return;
           }
-          cancelClose();
+          grace.stop();
           setOpen(true);
         }}
         aria-label="New chat"

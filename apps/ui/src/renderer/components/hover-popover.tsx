@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { Popover } from './ui/popover';
+import { Popover, POPOVER_PANEL_SELECTOR } from './ui/popover';
 import { cn } from './ui/utils';
 import { useLatestCallback } from './use-latest-callback';
+import { usePointerGrace } from './use-pointer-grace';
 
 /**
  * How long a pointer must REST on the trigger before the panel opens.
@@ -17,20 +18,6 @@ import { useLatestCallback } from './use-latest-callback';
  * and open at once.
  */
 const HOVER_OPEN_DELAY_MS = 250;
-
-/**
- * How long an open panel survives the pointer leaving it.
- *
- * The panel is anchored 6px clear of the trigger (`Popover`'s viewport box), so
- * the path from the trigger to the thing it opened crosses 6px that belong to
- * neither. Closing on that crossing is what made the context breakdown
- * unreachable: a scrolling panel that unmounts before the pointer arrives can
- * only ever be read by pinning it, and nothing on screen says a click pins.
- *
- * Short enough that a pointer merely passing THROUGH does not leave a panel
- * hanging behind it, long enough to cross the gap at any hand speed.
- */
-const HOVER_CLOSE_GRACE_MS = 120;
 
 /**
  * Whether the most recent input was a key rather than a pointer press — the
@@ -151,7 +138,7 @@ export function HoverPopover({
   const [hovered, setHovered] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const grace = usePointerGrace();
   const open = pinned || hovered;
   // Every path OUT of the open state cancels the pending hover, including the
   // two that close an already-open panel: a timer left running fires after the
@@ -162,28 +149,16 @@ export function HoverPopover({
       hoverTimer.current = null;
     }
   }, []);
-  const cancelHoverClose = useLatestCallback(() => {
-    if (closeTimer.current !== null) {
-      clearTimeout(closeTimer.current);
-      closeTimer.current = null;
-    }
-  }, []);
-  useEffect(
-    () => () => {
-      cancelHoverOpen();
-      cancelHoverClose();
-    },
-    [cancelHoverOpen, cancelHoverClose],
-  );
+  useEffect(() => cancelHoverOpen, [cancelHoverOpen]);
   useEffect(() => {
     onOpenChange?.(open);
   }, [open, onOpenChange]);
   const close = useLatestCallback(() => {
     cancelHoverOpen();
-    cancelHoverClose();
+    grace.stop();
     setPinned(false);
     setHovered(false);
-  }, [cancelHoverOpen, cancelHoverClose]);
+  }, [cancelHoverOpen, grace.stop]);
   return (
     <span
       data-slot={slot}
@@ -200,7 +175,7 @@ export function HoverPopover({
         if (!hoverOpens) {
           return;
         }
-        cancelHoverClose();
+        grace.stop();
         // Already open on the hover term — re-arming would queue a second
         // timer per crossing between the trigger and the panel.
         if (hovered) {
@@ -212,16 +187,16 @@ export function HoverPopover({
           setHovered(true);
         }, HOVER_OPEN_DELAY_MS);
       }}
-      onMouseLeave={() => {
+      onMouseLeave={(event) => {
         if (!hoverOpens) {
           return;
         }
         cancelHoverOpen();
-        cancelHoverClose();
-        closeTimer.current = setTimeout(() => {
-          closeTimer.current = null;
-          setHovered(false);
-        }, HOVER_CLOSE_GRACE_MS);
+        grace.start(
+          event.nativeEvent,
+          event.currentTarget.querySelector(POPOVER_PANEL_SELECTOR),
+          () => setHovered(false),
+        );
       }}>
       <button
         ref={triggerRef}
@@ -241,7 +216,7 @@ export function HoverPopover({
             return;
           }
           cancelHoverOpen();
-          cancelHoverClose();
+          grace.stop();
           setHovered(false);
         }}
         // A press on an UNPINNED panel pins it; a press on a pinned one closes
@@ -257,7 +232,7 @@ export function HoverPopover({
         // focuses, which is why the first spec written here missed both.
         onClick={() => {
           cancelHoverOpen();
-          cancelHoverClose();
+          grace.stop();
           if (onPress !== undefined) {
             // The press is the trigger's own act, so the panel steps aside
             // rather than standing over whatever that act opens.

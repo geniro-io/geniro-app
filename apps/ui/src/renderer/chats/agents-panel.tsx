@@ -49,10 +49,11 @@ import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { PanelSection } from '../components/panel-section';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
-import { Popover } from '../components/ui/popover';
+import { Popover, POPOVER_PANEL_SELECTOR } from '../components/ui/popover';
 import { SegmentedControl } from '../components/ui/segmented-control';
 import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
+import { usePointerGrace } from '../components/use-pointer-grace';
 import { useSecondTick } from '../components/use-second-tick';
 import {
   type AgentDisplay,
@@ -183,6 +184,7 @@ function OpenInCliButton({
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const [hint, setHint] = useState<HandoffTargetDto | null>(null);
   const [showHint, setShowHint] = useState(false);
+  const grace = usePointerGrace();
   const inert = unavailableReason !== null;
   const reveal = (): void => {
     setShowHint(true);
@@ -201,8 +203,17 @@ function OpenInCliButton({
   return (
     <span
       className="relative flex shrink-0 items-center"
-      onMouseEnter={reveal}
-      onMouseLeave={() => setShowHint(false)}>
+      onMouseEnter={() => {
+        grace.stop();
+        reveal();
+      }}
+      onMouseLeave={(event) =>
+        grace.start(
+          event.nativeEvent,
+          event.currentTarget.querySelector(POPOVER_PANEL_SELECTOR),
+          () => setShowHint(false),
+        )
+      }>
       <Button
         ref={triggerRef}
         type="button"

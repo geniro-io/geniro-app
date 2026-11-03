@@ -1049,6 +1049,37 @@ describe('McpServerService', () => {
     }
   });
 
+  it('keeps goals LOADED on every endpoint and nothing else beside the call tools', async () => {
+    const alwaysLoaded = async (
+      node: string,
+      calls?: CallBroker,
+    ): Promise<string[]> => {
+      const { json } = await post(
+        service(calls),
+        'run-1',
+        node,
+        rpc('tools/list', {}),
+      );
+      return (
+        json().result as {
+          tools: { name: string; _meta?: Record<string, unknown> }[];
+        }
+      ).tools
+        .filter(
+          (t) =>
+            JSON.stringify(t._meta) === JSON.stringify(ALWAYS_LOADED_TOOL_META),
+        )
+        .map((t) => t.name)
+        .sort();
+    };
+    expect(await alwaysLoaded('agent', new CallBroker())).toEqual([
+      HOST_GOALS_TOOL,
+    ]);
+    expect(await alwaysLoaded('orch')).toEqual(
+      [...GENIRO_MCP_CALL_TOOLS, HOST_GOALS_TOOL].sort(),
+    );
+  });
+
   it('hands call_agent’s pool member to the broker, reading "2" as 2', async () => {
     const callBroker = broker();
     const callSpy = vi

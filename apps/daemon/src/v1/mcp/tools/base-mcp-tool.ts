@@ -26,7 +26,7 @@ export abstract class BaseMcpTool implements McpTool {
 
   /**
    * `_meta` for the listing row, when the tool needs one. Only the call tools
-   * do (`ALWAYS_LOADED_TOOL_META`).
+   * and `goals` do (`ALWAYS_LOADED_TOOL_META`).
    */
   protected readonly meta: Record<string, unknown> | null = null;
 

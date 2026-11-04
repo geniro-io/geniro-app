@@ -1,4 +1,12 @@
-import { Fragment, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import type {
   RunWaterfallCall,
@@ -63,7 +71,13 @@ import { formatDuration as formatTurnDuration } from './turn-duration';
  *   below follow.
  *
  * It draws whatever WINDOW of the run's clock the view is zoomed to; the
- * overview strip above it is how a reader picks one.
+ * overview strip above it is how a reader picks one. `scale` widens that
+ * window past the card, which then scrolls sideways under the pinned lane
+ * names; ⌘/Ctrl + wheel changes it around the pointer.
+ *
+ * Every call is drawn as a link between the lanes — out from the caller's call
+ * bar to the first turn that answered it, dashed back from the last one — so
+ * who called whom, and what ran at once, reads off the picture itself.
  */
 
 /**
@@ -79,8 +93,117 @@ import { formatDuration as formatTurnDuration } from './turn-duration';
  */
 const LABEL_WIDTH = 236;
 
-/** How many marks the time axis carries. Six is readable at every width. */
+/** How many marks the time axis carries per card width. Six is readable at every width. */
 const AXIS_TICKS = 6;
+
+/** The widths the lanes can be drawn at, as multiples of the card's. */
+export const GANTT_SCALES = [1, 1.5, 2, 3, 4, 6, 8] as const;
+
+/** The next scale up or down from `scale`, held at the ends. */
+export function stepScale(scale: number, direction: 1 | -1): number {
+  if (direction === 1) {
+    return GANTT_SCALES.find((step) => step > scale) ?? scale;
+  }
+  return [...GANTT_SCALES].reverse().find((step) => step < scale) ?? 1;
+}
+
+/** The wheel travel, in pixels, that one scale step takes. */
+const WHEEL_STEP = 60;
+
+/**
+ * Keep the moment under the pointer (or the middle of the view, for the
+ * buttons) where it was when the scale changes, and turn ⌘/Ctrl + wheel over
+ * the lanes into scale steps. A plain wheel or a trackpad swipe scrolls as
+ * usual.
+ */
+function useScaleAnchor(
+  scrollRef: React.RefObject<HTMLDivElement | null>,
+  scale: number,
+  onScale: ((scale: number) => void) | undefined,
+): void {
+  const geometry = useRef<{ scrollLeft: number; scrollWidth: number } | null>(
+    null,
+  );
+  const anchor = useRef<{ fraction: number; offset: number } | null>(null);
+  const latest = useRef({ scale, onScale });
+  latest.current = { scale, onScale };
+
+  const fractionAt = (offset: number): number => {
+    const before = geometry.current;
+    if (before === null) {
+      return 0;
+    }
+    const track = Math.max(1, before.scrollWidth - LABEL_WIDTH);
+    return (before.scrollLeft + offset - LABEL_WIDTH) / track;
+  };
+
+  useEffect(() => {
+    const box = scrollRef.current;
+    if (box === null) {
+      return;
+    }
+    const remember = (): void => {
+      geometry.current = {
+        scrollLeft: box.scrollLeft,
+        scrollWidth: box.scrollWidth,
+      };
+    };
+    remember();
+    let travel = 0;
+    const onWheel = (event: WheelEvent): void => {
+      const { scale: now, onScale: ask } = latest.current;
+      if (!(event.ctrlKey || event.metaKey) || ask === undefined) {
+        return;
+      }
+      event.preventDefault();
+      travel += event.deltaY;
+      if (Math.abs(travel) < WHEEL_STEP) {
+        return;
+      }
+      const next = stepScale(now, travel < 0 ? 1 : -1);
+      travel = 0;
+      if (next === now) {
+        return;
+      }
+      const offset = Math.max(
+        LABEL_WIDTH,
+        event.clientX - box.getBoundingClientRect().left,
+      );
+      anchor.current = { fraction: fractionAt(offset), offset };
+      ask(next);
+    };
+    box.addEventListener('scroll', remember, { passive: true });
+    box.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      box.removeEventListener('scroll', remember);
+      box.removeEventListener('wheel', onWheel);
+    };
+  }, [scrollRef]);
+
+  useLayoutEffect(() => {
+    const box = scrollRef.current;
+    if (box === null) {
+      return;
+    }
+    if (geometry.current !== null) {
+      const offset = LABEL_WIDTH + (box.clientWidth - LABEL_WIDTH) / 2;
+      const { fraction, offset: at } = anchor.current ?? {
+        fraction: fractionAt(offset),
+        offset,
+      };
+      box.scrollLeft =
+        fraction * (box.scrollWidth - LABEL_WIDTH) + LABEL_WIDTH - at;
+    }
+    anchor.current = null;
+    geometry.current = {
+      scrollLeft: box.scrollLeft,
+      scrollWidth: box.scrollWidth,
+    };
+  }, [scale, scrollRef]);
+}
+
+/** The pinned lane-name column's look: it covers the lanes scrolled under it. */
+const PINNED = 'sticky left-0 z-40 bg-card shadow-[1px_0_0_var(--border)]';
 
 /** A bar narrower than this has no room for its own price, so it carries none. */
 const LABEL_MIN_PCT = 5;
@@ -112,7 +235,7 @@ const TRACK_PAD_BOTTOM = 4;
  * lane's floor carried none at all. REPORTED as "сейчас ничего не показывается,
  * непонятно, что за полоски такие".
  */
-interface MarkTip {
+export interface MarkTip {
   clientX: number;
   clientY: number;
   title: string;
@@ -133,7 +256,7 @@ const TIP_BOX = { width: 280, height: 160 };
  * against the mark it is describing. It flips to the other side of the cursor
  * near an edge rather than being clamped, so it never covers what is hovered.
  */
-function HoverTip({ tip }: { tip: MarkTip }): React.JSX.Element {
+export function HoverTip({ tip }: { tip: MarkTip }): React.JSX.Element {
   const flipX = tip.clientX + TIP_OFFSET + TIP_BOX.width > window.innerWidth;
   const flipY = tip.clientY + TIP_OFFSET + TIP_BOX.height > window.innerHeight;
   return (
@@ -222,6 +345,12 @@ export interface GanttProps {
   onFocus: (memberId: string | null | undefined) => void;
   /** Light the critical path and fade everything off it. */
   critical: boolean;
+  /** How many card widths the window is drawn across. */
+  scale?: number;
+  /** A ⌘/Ctrl + wheel over the lanes asks for another scale. */
+  onScale?: (scale: number) => void;
+  /** Draw every call as a link between its caller and callee. */
+  links?: boolean;
 }
 
 export function Gantt({
@@ -233,20 +362,24 @@ export function Gantt({
   focus,
   onFocus,
   critical,
+  scale = 1,
+  onScale,
+  links = true,
 }: GanttProps): React.JSX.Element {
   const span = Math.max(1, view.to - view.from);
+  const tickCount = Math.max(2, Math.round((AXIS_TICKS - 1) * scale) + 1);
   const ticks = useMemo(
     () =>
-      Array.from({ length: AXIS_TICKS }, (_, index) => ({
-        pct: (index / (AXIS_TICKS - 1)) * 100,
+      Array.from({ length: tickCount }, (_, index) => ({
+        pct: (index / (tickCount - 1)) * 100,
         // The precise clock, not the rounded one: zoomed into four minutes
         // the ticks sit 48 seconds apart, and whole minutes printed `4m`
         // twice in a row.
         label: formatTurnDuration(
-          view.from - runFrom + (span * index) / (AXIS_TICKS - 1),
+          view.from - runFrom + (span * index) / (tickCount - 1),
         ),
       })),
-    [view.from, runFrom, span],
+    [view.from, runFrom, span, tickCount],
   );
   const lanes = useMemo(
     () => ({
@@ -267,19 +400,24 @@ export function Gantt({
     setTip(null);
     setCursorPct(null);
   }, []);
-  const gridRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const atOf = (pct: number | null): string =>
     formatTurnDuration(view.from - runFrom + ((pct ?? 0) / 100) * span);
+  useScaleAnchor(scrollRef, scale, onScale);
 
   return (
     <div
-      className="relative overflow-hidden rounded-xl border border-border bg-card"
+      ref={scrollRef}
+      data-slot="waterfall-scroll"
+      className="relative overflow-x-auto overflow-y-hidden rounded-xl border border-border bg-card"
       onMouseLeave={clearHover}>
       {tip === null ? null : <HoverTip tip={tip} />}
       <div
-        ref={gridRef}
-        className="relative grid"
-        style={{ gridTemplateColumns: `${LABEL_WIDTH}px 1fr` }}>
+        className="relative grid min-w-full"
+        style={{
+          gridTemplateColumns: `${LABEL_WIDTH}px 1fr`,
+          width: `calc(${LABEL_WIDTH}px + (100% - ${LABEL_WIDTH}px) * ${scale})`,
+        }}>
         {/*
           The axis: elapsed time, so a reader never has to subtract two clocks.
 
@@ -288,8 +426,16 @@ export function Gantt({
           wraps it — which is what put a stray "41" over "18" in the corner of
           a real run. The first tick has the mirror problem at 0%.
         */}
-        <div className="border-b border-border" />
-        <div className="relative h-6 overflow-hidden border-b border-l border-border">
+        <CallLinks
+          data={data}
+          selected={selected}
+          view={view}
+          scale={scale}
+          links={links}
+          focus={focus}
+        />
+        <div className={cn('border-b border-border', PINNED)} />
+        <div className="relative h-6 overflow-hidden border-b border-border">
           {ticks.map((tick, index) => (
             <span
               key={tick.pct}
@@ -356,12 +502,6 @@ export function Gantt({
             onMove={setCursorPct}
           />
         )}
-        <CallArrows
-          data={data}
-          gridRef={gridRef}
-          selected={selected}
-          view={view}
-        />
       </div>
     </div>
   );
@@ -395,9 +535,10 @@ function LaneLabel({
       title={focused ? 'Show every agent' : 'Focus this agent'}
       onClick={onFocus}
       className={cn(
-        'flex min-w-0 cursor-pointer flex-col justify-center gap-1 border-t border-border px-3 py-2 text-left transition-opacity hover:bg-muted/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
-        focused && 'bg-muted/50',
-        faded && 'opacity-40',
+        'flex min-w-0 cursor-pointer flex-col justify-center gap-1 border-t border-border px-3 py-2 text-left hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
+        PINNED,
+        focused && 'bg-muted',
+        faded && '[&>*]:opacity-40',
       )}>
       <span className="flex min-w-0 items-baseline gap-1.5">
         <span
@@ -991,8 +1132,9 @@ function WaitLane({
       <div
         data-slot="waterfall-wait-lane"
         className={cn(
-          'flex min-w-0 flex-col justify-center gap-1 border-t border-border px-3 py-2 transition-opacity',
-          faded && 'opacity-40',
+          'flex min-w-0 flex-col justify-center gap-1 border-t border-border px-3 py-2',
+          PINNED,
+          faded && '[&>*]:opacity-40',
         )}>
         <span className="flex min-w-0 items-baseline gap-1.5">
           <span
@@ -1107,142 +1249,335 @@ function WaitLane({
   );
 }
 
+/** One call drawn between its lanes: out to the work that answered it, and back. */
+interface CallLink {
+  index: number;
+  /** Where the line leaves the caller, marked with a dot. */
+  start: { x: number; y: number };
+  out: string;
+  /** Null for a call its caller did not wait on: nothing came back to wait for. */
+  back: string | null;
+  colour: number;
+  /** The turns at either end, which light the link when hovered. */
+  turns: number[];
+}
+
+/** A mark's box, in the grid's own coordinates. */
+interface Box {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/** How far a link swings before it turns into a bar, in pixels. */
+const LINK_REACH = 10;
+
+/** The radius of a link's bend, in pixels. */
+const LINK_BEND = 10;
+
 /**
- * Two arrows for the selected call: from the call to the first turn that
- * answered it, and back from the last one to the moment the call returned.
+ * A call going OUT: down (or up) from the caller at the moment of the call,
+ * then bending smoothly into the start of the callee's turn from its left, so
+ * the arrow reads as "this is where the call landed". When the callee began
+ * at the very moment of the call there is no room on its left, and the line
+ * drops a few pixels early to make that room rather than land on the bar.
+ */
+function outPath(x: number, fromY: number, turn: Box): string {
+  const y = (turn.top + turn.bottom) / 2;
+  const drop = Math.min(x, turn.left - LINK_REACH);
+  const dir = y > fromY ? 1 : -1;
+  const bend = Math.min(LINK_BEND, Math.abs(y - fromY) / 2);
+  return [
+    `M${x},${fromY}`,
+    drop < x ? `Q${drop},${fromY} ${drop},${fromY + dir * bend}` : '',
+    `V${y - dir * bend}`,
+    `Q${drop},${y} ${drop + bend},${y}`,
+    `H${turn.left}`,
+  ].join(' ');
+}
+
+/**
+ * A call's answer coming BACK: out of the end of the callee's last turn to its
+ * right, bending smoothly up (or down) into the caller at the moment the call
+ * returned.
+ */
+function backPath(turn: Box, x: number, toY: number): string {
+  const y = (turn.top + turn.bottom) / 2;
+  const rise = Math.max(x, turn.right + LINK_REACH);
+  const dir = toY > y ? 1 : -1;
+  const bend = Math.min(LINK_BEND, Math.abs(toY - y) / 2);
+  return [
+    `M${turn.right},${y}`,
+    `H${rise - bend}`,
+    `Q${rise},${y} ${rise},${y + dir * bend}`,
+    `V${toY}`,
+  ].join(' ');
+}
+
+/**
+ * Every call as a line between its lanes, on the run's own clock: out of the
+ * caller's turn at the moment of the call into the turn that answered it, and,
+ * for a call its caller waited on, dashed back into the caller at the moment
+ * the answer returned. The lines run UNDER the bars and stay quiet until a
+ * reader points at a turn or a call: then that mark's own links light up and
+ * the rest step back; a selected call keeps its links lit. With links off only
+ * the selected call keeps its lines.
+ *
+ * The turns that answered a call are the daemon's (`RunWaterfallTurn.callId`);
+ * a run recorded before turns named their call falls back to the callee's
+ * turns that overlap the call.
  *
  * Measured off the DOM after layout rather than computed from percentages,
  * because the lanes' heights depend on how many call rows each one stacks —
  * which only the browser knows once it has laid them out.
  */
-function CallArrows({
+function CallLinks({
   data,
-  gridRef,
   selected,
   view,
+  scale,
+  links,
+  focus,
 }: {
   data: RunWaterfallDto;
-  gridRef: React.RefObject<HTMLDivElement | null>;
   selected: WaterfallMark | null;
   view: ClockWindow;
-}): React.JSX.Element | null {
-  // Bumped whenever the grid changes size: the arrows are pixels measured
-  // off bars placed in percentages, so a window resize moves the bars and
-  // leaves the arrows pointing at where they used to be.
+  scale: number;
+  links: boolean;
+  focus: string | null | undefined;
+}): React.JSX.Element {
+  const markerId = useId();
+  // The grid is found through this svg's own node: a child's layout effect
+  // runs before its parent's ref is attached, so a ref handed down from the
+  // grid is still null on the first measure.
+  const svgRef = useRef<SVGSVGElement>(null);
+  // Bumped whenever the grid changes size: the links are pixels measured off
+  // bars placed in percentages, so a resize or a new scale moves the bars and
+  // leaves the links pointing at where they used to be.
   const [measure, setMeasure] = useState(0);
+  const [hovered, setHovered] = useState<string | null>(null);
   useLayoutEffect(() => {
-    const grid = gridRef.current;
-    if (grid === null || typeof ResizeObserver === 'undefined') {
+    const grid = svgRef.current?.parentElement ?? null;
+    if (grid === null) {
       return;
     }
-    const observer = new ResizeObserver(() => setMeasure((n) => n + 1));
-    observer.observe(grid);
-    return () => observer.disconnect();
-  }, [gridRef]);
-  const [paths, setPaths] = useState<{
-    out: string;
-    back: string;
-    colour: string;
-  } | null>(null);
-  useLayoutEffect(() => {
-    const grid = gridRef.current;
-    const call =
-      selected !== null &&
-      (selected.kind === 'call' || selected.kind === 'blocked')
-        ? data.calls[selected.index]
-        : undefined;
-    if (grid === null || call === undefined) {
-      setPaths(null);
-      return;
-    }
-    const from = Date.parse(call.startedAt);
-    const to = from + call.durationMs;
-    const answering = data.turns
-      .map((turn, index) => ({ turn, index }))
-      .filter(
-        ({ turn }) =>
-          turn.memberId === call.calleeMemberId &&
-          Date.parse(turn.startedAt) < to &&
-          endOf(turn) > from,
-      );
-    const callMark = grid.querySelector(
-      `[data-mark="${selected?.kind}-${selected?.index}"]`,
-    );
-    const first = answering[0];
-    const last = answering[answering.length - 1];
-    const firstMark =
-      first === undefined
+    const observer =
+      typeof ResizeObserver === 'undefined'
         ? null
-        : grid.querySelector(`[data-mark="turn-${first.index}"]`);
-    const lastMark =
-      last === undefined
-        ? null
-        : grid.querySelector(`[data-mark="turn-${last.index}"]`);
-    if (callMark === null || firstMark === null || lastMark === null) {
-      setPaths(null);
-      return;
-    }
-    const box = grid.getBoundingClientRect();
-    const a = callMark.getBoundingClientRect();
-    const f = firstMark.getBoundingClientRect();
-    const z = lastMark.getBoundingClientRect();
-    const curve = (x1: number, y1: number, x2: number, y2: number): string => {
-      const mid = (y1 + y2) / 2;
-      return `M${x1},${y1} C${x1},${mid} ${x2},${mid} ${x2},${y2}`;
+        : new ResizeObserver(() => setMeasure((n) => n + 1));
+    observer?.observe(grid);
+    const over = (event: PointerEvent): void => {
+      const mark =
+        event.target instanceof Element
+          ? event.target.closest('[data-mark]')
+          : null;
+      setHovered(mark?.getAttribute('data-mark') ?? null);
     };
-    const down = f.top > a.bottom;
-    setPaths({
-      out: curve(
-        a.left - box.left + 4,
-        (down ? a.bottom : a.top) - box.top,
-        f.left - box.left + 4,
-        (down ? f.top : f.bottom) - box.top,
-      ),
-      back: curve(
-        z.right - box.left - 4,
-        (down ? z.top : z.bottom) - box.top,
-        a.right - box.left - 4,
-        (down ? a.bottom : a.top) - box.top,
-      ),
-      colour: categoryToken(laneIndexOf(data, call.calleeMemberId)),
+    const leave = (): void => setHovered(null);
+    grid.addEventListener('pointerover', over);
+    grid.addEventListener('pointerleave', leave);
+    return () => {
+      observer?.disconnect();
+      grid.removeEventListener('pointerover', over);
+      grid.removeEventListener('pointerleave', leave);
+    };
+  }, []);
+  const selectedCall =
+    selected !== null &&
+    (selected.kind === 'call' || selected.kind === 'blocked')
+      ? selected.index
+      : null;
+  const [drawn, setDrawn] = useState<CallLink[]>([]);
+  useLayoutEffect(() => {
+    const grid = svgRef.current?.parentElement ?? null;
+    if (grid === null) {
+      setDrawn([]);
+      return;
+    }
+    const origin = grid.getBoundingClientRect();
+    const boxOf = (selector: string): Box | null => {
+      const el = grid.querySelector(selector);
+      if (el === null) {
+        return null;
+      }
+      const r = el.getBoundingClientRect();
+      return {
+        left: r.left - origin.left,
+        right: r.right - origin.left,
+        top: r.top - origin.top,
+        bottom: r.bottom - origin.top,
+      };
+    };
+    const named = data.turns.some((turn) => turn.callId !== null);
+    // The caller's turn under way at an instant — where its line leaves from.
+    const turnAt = (memberId: string | null, at: number): number => {
+      let found = -1;
+      data.turns.forEach((turn, index) => {
+        const start = Date.parse(turn.startedAt);
+        if (
+          turn.memberId === memberId &&
+          start <= at + 1000 &&
+          endOf(turn) >= at - 1000
+        ) {
+          found = index;
+        }
+      });
+      return found;
+    };
+    const out: CallLink[] = [];
+    data.calls.forEach((call, index) => {
+      if (!links && index !== selectedCall) {
+        return;
+      }
+      const from = Date.parse(call.startedAt);
+      const to = from + call.durationMs;
+      const answering = data.turns
+        .map((turn, at) => ({ turn, at }))
+        .filter(({ turn }) =>
+          named
+            ? turn.callId === call.callId
+            : turn.memberId === call.calleeMemberId &&
+              Date.parse(turn.startedAt) < to &&
+              endOf(turn) > from,
+        );
+      const first = answering[0];
+      const last = answering[answering.length - 1];
+      if (first === undefined || last === undefined) {
+        return;
+      }
+      const kind = index === selectedCall ? selected?.kind : 'call';
+      const callBox = boxOf(`[data-mark="${kind}-${index}"]`);
+      const f = boxOf(`[data-mark="turn-${first.at}"]`);
+      const z = boxOf(`[data-mark="turn-${last.at}"]`);
+      if (callBox === null || f === null || z === null) {
+        return;
+      }
+      const opened = turnAt(call.callerMemberId, from);
+      const closed = turnAt(call.callerMemberId, to);
+      const openedBox =
+        opened < 0 ? null : boxOf(`[data-mark="turn-${opened}"]`);
+      const closedBox =
+        closed < 0 ? null : boxOf(`[data-mark="turn-${closed}"]`);
+      const edge = (source: Box, towards: Box): number =>
+        towards.top > source.bottom ? source.bottom : source.top;
+      const outFrom = openedBox ?? callBox;
+      const backTo = closedBox ?? callBox;
+      const startY = edge(outFrom, f);
+      out.push({
+        index,
+        start: { x: callBox.left + 1, y: startY },
+        out: outPath(callBox.left + 1, startY, f),
+        back: blocksCaller(call)
+          ? backPath(z, callBox.right - 1, edge(backTo, z))
+          : null,
+        colour: laneIndexOf(data, call.calleeMemberId),
+        turns: [
+          ...answering.map(({ at }) => at),
+          ...(opened < 0 ? [] : [opened]),
+          ...(closed < 0 ? [] : [closed]),
+        ],
+      });
     });
-  }, [data, gridRef, selected, view, measure]);
+    setDrawn(out);
+  }, [data, selected, selectedCall, view, scale, links, measure]);
 
-  if (paths === null) {
-    return null;
-  }
+  const lit = (link: CallLink): boolean => {
+    if (link.index === selectedCall) {
+      return true;
+    }
+    if (hovered === null) {
+      return false;
+    }
+    if (
+      hovered === `call-${link.index}` ||
+      hovered === `blocked-${link.index}`
+    ) {
+      return true;
+    }
+    return link.turns.some((turn) => hovered === `turn-${turn}`);
+  };
+  const anyLit = drawn.some(lit);
+  const colours = [...new Set(drawn.map((link) => link.colour))];
   return (
     <svg
+      ref={svgRef}
       aria-hidden="true"
       data-slot="waterfall-arrows"
-      className="pointer-events-none absolute inset-0 z-30 size-full overflow-visible">
+      className="pointer-events-none absolute inset-0 z-0 size-full overflow-visible">
       <defs>
-        <marker
-          id="waterfall-arrow-head"
-          viewBox="0 0 8 8"
-          refX="7"
-          refY="4"
-          markerWidth="7"
-          markerHeight="7"
-          orient="auto">
-          <path d="M0,0 L8,4 L0,8 z" fill={paths.colour} />
-        </marker>
+        {colours.map((colour) => (
+          <marker
+            key={colour}
+            id={`${markerId}-${colour}`}
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="7"
+            markerHeight="7"
+            markerUnits="userSpaceOnUse"
+            orient="auto">
+            <path
+              d="M1,1 L9,5 L1,9"
+              fill="none"
+              stroke={categoryToken(colour)}
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </marker>
+        ))}
       </defs>
-      <path
-        d={paths.out}
-        fill="none"
-        stroke={paths.colour}
-        strokeWidth={1.5}
-        markerEnd="url(#waterfall-arrow-head)"
-      />
-      <path
-        d={paths.back}
-        fill="none"
-        stroke={paths.colour}
-        strokeWidth={1.5}
-        strokeDasharray="4 3"
-        markerEnd="url(#waterfall-arrow-head)"
-      />
+      {[...drawn]
+        .sort((a, b) => Number(lit(a)) - Number(lit(b)))
+        .map((link) => {
+          const call = data.calls[link.index];
+          const strong = lit(link);
+          const strongSelected = link.index === selectedCall;
+          const touchesFocus =
+            focus === undefined ||
+            call?.callerMemberId === focus ||
+            call?.calleeMemberId === focus;
+          const opacity = strong ? 1 : anyLit || !touchesFocus ? 0.08 : 0.35;
+          const stroke = categoryToken(link.colour);
+          const width = strong ? 2 : 1.5;
+          return (
+            <g
+              key={link.index}
+              data-slot="waterfall-link"
+              data-call={link.index}
+              data-strong={strongSelected || undefined}
+              data-lit={strong || undefined}
+              opacity={opacity}
+              className="transition-opacity duration-150">
+              <circle
+                cx={link.start.x}
+                cy={link.start.y}
+                r={strong ? 3.5 : 2.5}
+                fill={stroke}
+              />
+              <path
+                d={link.out}
+                fill="none"
+                stroke={stroke}
+                strokeWidth={width}
+                strokeLinecap="round"
+                markerEnd={`url(#${markerId}-${link.colour})`}
+              />
+              {link.back === null ? null : (
+                <path
+                  d={link.back}
+                  fill="none"
+                  stroke={stroke}
+                  strokeWidth={width}
+                  strokeLinecap="round"
+                  strokeDasharray="1 4"
+                  markerEnd={`url(#${markerId}-${link.colour})`}
+                />
+              )}
+            </g>
+          );
+        })}
     </svg>
   );
 }

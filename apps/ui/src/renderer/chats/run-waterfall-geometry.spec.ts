@@ -27,6 +27,7 @@ const SPAN_MS = 60 * 60 * 1000;
 function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
   return {
     memberId: 'engineer',
+    callId: null,
     startedAt: new Date(FROM).toISOString(),
     seq: 1,
     timingSource: 'cli',
@@ -333,6 +334,8 @@ describe('placeIn', () => {
 describe('blocksCaller', () => {
   it("holds a caller for anything not explicitly async, as the daemon's path does", () => {
     const call = (mode: string | null) => ({
+      callId: 'c1',
+      parentCallId: null,
       callerMemberId: 'a',
       calleeMemberId: 'b',
       mode,

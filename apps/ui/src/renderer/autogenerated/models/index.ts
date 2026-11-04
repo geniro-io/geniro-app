@@ -9813,6 +9813,18 @@ export interface RunWaterfallCall {
      * @type {string}
      * @memberof RunWaterfallCall
      */
+    callId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallCall
+     */
+    parentCallId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallCall
+     */
     callerMemberId: string | null;
     /**
      * 
@@ -10129,6 +10141,12 @@ export interface RunWaterfallTurn {
      * @memberof RunWaterfallTurn
      */
     memberId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunWaterfallTurn
+     */
+    callId: string | null;
     /**
      * 
      * @type {string}

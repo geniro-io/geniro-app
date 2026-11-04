@@ -445,6 +445,8 @@ describe('ChatWaterfallService', () => {
       });
       expect(result.calls).toEqual([
         {
+          callId: 'call-4',
+          parentCallId: null,
           callerMemberId: 'manager',
           calleeMemberId: 'engineer',
           mode: 'async',
@@ -856,6 +858,8 @@ describe('ChatWaterfallService', () => {
 
       expect(result.calls).toEqual([
         {
+          callId: 'c1',
+          parentCallId: null,
           callerMemberId: 'mgr',
           calleeMemberId: 'qa',
           mode: 'async',
@@ -866,6 +870,87 @@ describe('ChatWaterfallService', () => {
           durationMs: 12_000,
         },
       ]);
+    });
+
+    it('names the call each nested call was made from, through a continued conversation, and the call each turn answered', async () => {
+      const result = await build([
+        row(
+          0,
+          'call_started',
+          {
+            callId: 'c1',
+            callerNodeId: 'mgr',
+            calleeNodeId: 'eng',
+            mode: 'sync',
+          },
+          0,
+          'mgr',
+        ),
+        row(
+          1,
+          'call_started',
+          {
+            callId: 'c2',
+            callerNodeId: 'eng',
+            callerConversationId: 'c1',
+            calleeNodeId: 'qa',
+            mode: 'sync',
+          },
+          5,
+          'eng',
+        ),
+        row(2, 'call_result', { callId: 'c2', status: 'ok' }, 10, 'eng'),
+        row(
+          3,
+          'turn_complete',
+          { callId: 'c1', usage: { durationMs: 12_000 } },
+          13,
+          'eng',
+        ),
+        row(4, 'call_result', { callId: 'c1', status: 'ok' }, 14, 'mgr'),
+        row(
+          5,
+          'call_started',
+          {
+            callId: 'c3',
+            callerNodeId: 'mgr',
+            calleeNodeId: 'eng',
+            mode: 'sync',
+            thread: 'c1',
+          },
+          20,
+          'mgr',
+        ),
+        row(
+          6,
+          'call_started',
+          {
+            callId: 'c4',
+            callerNodeId: 'eng',
+            callerConversationId: 'c1',
+            calleeNodeId: 'qa',
+            mode: 'sync',
+          },
+          22,
+          'eng',
+        ),
+        row(7, 'call_result', { callId: 'c4', status: 'ok' }, 25, 'eng'),
+        row(8, 'call_result', { callId: 'c3', status: 'ok' }, 26, 'mgr'),
+      ]).read('run-a');
+
+      expect(
+        result.calls.map((call) => [call.callId, call.parentCallId]),
+      ).toEqual([
+        ['c2', 'c1'],
+        ['c1', null],
+        ['c4', 'c3'],
+        ['c3', null],
+      ]);
+      expect(
+        result.turns
+          .filter((turn) => turn.memberId === 'eng')
+          .map((turn) => turn.callId),
+      ).toEqual(['c1']);
     });
 
     it('runs a delegate from its FIRST open announcement to its outcome', async () => {

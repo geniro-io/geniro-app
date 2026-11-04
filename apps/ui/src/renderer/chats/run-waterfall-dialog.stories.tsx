@@ -45,6 +45,7 @@ function turn(
 ): RunWaterfallTurn {
   return {
     memberId,
+    callId: null,
     startedAt: at(start),
     seq: nextSeq++,
     timingSource: 'cli',
@@ -77,6 +78,8 @@ function call(
   over: Partial<RunWaterfallCall> = {},
 ): RunWaterfallCall {
   return {
+    callId: `call-${calleeMemberId}-${start}`,
+    parentCallId: null,
     callerMemberId: 'manager',
     calleeMemberId,
     mode: 'async',
@@ -138,6 +141,7 @@ const fanOut: RunWaterfallDto = {
       toolCalls: 14,
     }),
     turn('engineer', 52, 200, {
+      callId: 'call-engineer',
       model: 'sonnet-5',
       costUsd: 1.1,
       inputTokens: 9_000,
@@ -147,16 +151,19 @@ const fanOut: RunWaterfallDto = {
       toolCalls: 31,
     }),
     turn('researcher', 58, 300, {
+      callId: 'call-researcher',
       model: 'gpt-5.6',
       costUsd: 1.5,
       toolCalls: 44,
     }),
     turn('reviewer', 60, 118, {
+      callId: 'call-reviewer',
       model: 'gpt-5.6-sol',
       timingSource: 'derived',
       toolCalls: 9,
     }),
     turn('engineer', 262, 342, {
+      callId: 'call-engineer',
       model: 'sonnet-5',
       costUsd: 1.0,
       inputTokens: 11_000,
@@ -165,7 +172,14 @@ const fanOut: RunWaterfallDto = {
       contextWindowTokens: 200_000,
       toolCalls: 18,
     }),
+    turn('researcher', 270, 296, {
+      callId: 'call-engineer-researcher',
+      model: 'gpt-5.6',
+      costUsd: 0.2,
+      toolCalls: 6,
+    }),
     turn('reviewer', 300, 405, {
+      callId: 'call-reviewer',
       model: 'gpt-5.6-sol',
       timingSource: 'derived',
       outcome: 'failed',
@@ -183,9 +197,15 @@ const fanOut: RunWaterfallDto = {
     }),
   ],
   calls: [
-    call('engineer', 50, 345, { mode: 'sync' }),
-    call('researcher', 52, 305),
-    call('reviewer', 55, 410, { status: 'failed' }),
+    call('engineer', 50, 345, { mode: 'sync', callId: 'call-engineer' }),
+    call('researcher', 52, 305, { callId: 'call-researcher' }),
+    call('reviewer', 55, 410, { status: 'failed', callId: 'call-reviewer' }),
+    call('researcher', 266, 300, {
+      mode: 'sync',
+      callId: 'call-engineer-researcher',
+      parentCallId: 'call-engineer',
+      callerMemberId: 'engineer',
+    }),
   ],
   waits: [
     {

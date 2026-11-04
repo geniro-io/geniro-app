@@ -43,6 +43,7 @@ export function wfTurn(
 ): RunWaterfallTurn {
   return {
     memberId,
+    callId: null,
     startedAt: atSecond(start),
     seq: 1,
     timingSource: 'cli',
@@ -76,6 +77,8 @@ export function wfCall(
   over: Partial<RunWaterfallCall> = {},
 ): RunWaterfallCall {
   return {
+    callId: `${callerMemberId}>${calleeMemberId}@${start}`,
+    parentCallId: null,
     callerMemberId,
     calleeMemberId,
     mode: 'async',

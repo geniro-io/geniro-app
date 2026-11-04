@@ -3112,6 +3112,13 @@ export type RunWaterfallModelCost = z.infer<typeof RunWaterfallModelCostSchema>;
 export const RunWaterfallTurnSchema = z
   .object({
     memberId: z.string().nullable(),
+    callId: z
+      .string()
+      .max(MAX_WATERFALL_LABEL_CHARS)
+      .nullable()
+      .describe(
+        "the call this turn answered — a `RunWaterfallCall.callId`; null for a turn of the member's own conversation",
+      ),
     startedAt: z.string(),
     seq: z
       .number()
@@ -3198,6 +3205,14 @@ export type RunWaterfallTurn = z.infer<typeof RunWaterfallTurnSchema>;
 /** One agent-to-agent call, from the caller's dispatch to the callee's answer. */
 export const RunWaterfallCallSchema = z
   .object({
+    callId: z.string().max(MAX_WATERFALL_LABEL_CHARS),
+    parentCallId: z
+      .string()
+      .max(MAX_WATERFALL_LABEL_CHARS)
+      .nullable()
+      .describe(
+        "the call whose conversation made this one — the newest call of the caller's conversation started before it; null for a call made from a member's own conversation",
+      ),
     callerMemberId: z.string().nullable(),
     calleeMemberId: z.string().nullable(),
     mode: z.string().max(MAX_WATERFALL_LABEL_CHARS).nullable(),

@@ -99,6 +99,26 @@ describe('PoolCooldowns', () => {
       expect(cooldowns.proven(OPUS, FOLDER)).toBe(true);
     });
 
+    it('keeps a member spent past the fallback window through a dated weekly reset, and proves it once that reset passes', () => {
+      const start = Date.parse('2026-11-03T18:38:34Z');
+      const reset = Date.parse('2026-11-05T05:00:00Z');
+      const { cooldowns, advance } = clocked(start);
+      cooldowns.record(
+        OPUS,
+        FOLDER,
+        failed({ resetsAt: 'Nov 5 at 10am (Asia/Almaty)' }),
+        true,
+      );
+      advance(POOL_COOLDOWN_FALLBACK_MS * 4);
+      expect(cooldowns.standing(OPUS, FOLDER)).toBe('limit');
+      advance(reset - start - POOL_COOLDOWN_FALLBACK_MS * 4 - 1000);
+      expect(cooldowns.standing(OPUS, FOLDER)).toBe('limit');
+      expect(cooldowns.proven(OPUS, FOLDER)).toBe(false);
+      advance(2000);
+      expect(cooldowns.standing(OPUS, FOLDER)).toBeNull();
+      expect(cooldowns.proven(OPUS, FOLDER)).toBe(true);
+    });
+
     it('does not prove a member whose guessed cooldown merely lapsed, until it answers', () => {
       const { cooldowns, advance } = clocked(0);
       cooldowns.record(OPUS, FOLDER, failed({ resetsAt: 'soon' }), true);

@@ -14,16 +14,17 @@
  * The shapes are claude's own formatter (`Pc` in the 2.1.280 bundle), read
  * rather than guessed: within a day it prints `toLocaleTimeString('en-US',
  * {hour:'numeric', minute:'2-digit' unless :00, hour12:true})` with the
- * meridiem lowercased — `6:10pm`, `6pm`; further out it prints the date too —
- * `Sep 25, 6pm`, and `Jan 2, 2027, 9:30am` across a year boundary — and it
- * always appends the IANA zone it formatted in, ` (Asia/Almaty)`. A sentence
- * with no zone is read in the machine's own zone, which is the one the CLI
- * formats in when it prints none.
+ * meridiem lowercased — `6:10pm`, `6pm`; further out it prints the date too,
+ * through `toLocaleString`, whose separator before the time is the ICU's: `Nov
+ * 5 at 10am` and `Jan 2, 2027 at 9:30am` (2.1.316), `Sep 25, 6pm` and `Jan 2,
+ * 2027, 9:30am` under an older ICU — and it always appends the IANA zone it
+ * formatted in, ` (Asia/Almaty)`. A sentence with no zone is read in the
+ * machine's own zone, which is the one the CLI formats in when it prints none.
  *
  * A time with no date is the NEXT such time: `6pm` read at 19:00 is tomorrow.
  */
 const RESET_PATTERN =
-  /^(?:(?<month>[A-Z][a-z]{2}) (?<day>\d{1,2}),(?: (?<year>\d{4}),)? )?(?<hour>\d{1,2})(?::(?<minute>\d{2}))?\s*(?<meridiem>am|pm)(?:\s*\((?<zone>[^)]+)\))?$/i;
+  /^(?:(?<month>[A-Z][a-z]{2}) (?<day>\d{1,2})(?:, (?<year>\d{4}))?(?:,| at) )?(?<hour>\d{1,2})(?::(?<minute>\d{2}))?\s*(?<meridiem>am|pm)(?:\s*\((?<zone>[^)]+)\))?$/i;
 
 const MONTHS = [
   'jan',

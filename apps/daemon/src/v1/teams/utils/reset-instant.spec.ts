@@ -47,6 +47,25 @@ describe('resetInstantFrom', () => {
     ).toBe('2027-01-02T09:30:00.000Z');
   });
 
+  it('reads a dated reset as claude 2.1.316 prints it, with `at` before the time', () => {
+    expect(
+      iso(
+        resetInstantFrom(
+          'Nov 5 at 10am (Asia/Almaty)',
+          at('2026-11-03T18:38:34Z'),
+        ),
+      ),
+    ).toBe('2026-11-05T05:00:00.000Z');
+    expect(
+      iso(
+        resetInstantFrom(
+          'Jan 2, 2027 at 9:30am (UTC)',
+          at('2026-12-30T10:00Z'),
+        ),
+      ),
+    ).toBe('2027-01-02T09:30:00.000Z');
+  });
+
   it('rolls a year-less date that has already passed into next year', () => {
     expect(
       iso(resetInstantFrom('Jan 2, 9am (UTC)', at('2026-12-30T10:00:00Z'))),
@@ -71,5 +90,7 @@ describe('resetInstantFrom', () => {
     expect(resetInstantFrom('in 3 hours', now)).toBeNull();
     expect(resetInstantFrom('13pm (UTC)', now)).toBeNull();
     expect(resetInstantFrom('6pm (Not/AZone)', now)).toBeNull();
+    expect(resetInstantFrom('Nov 5 (UTC)', now)).toBeNull();
+    expect(resetInstantFrom('Nov 5 at (UTC)', now)).toBeNull();
   });
 });

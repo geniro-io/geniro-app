@@ -11,7 +11,6 @@ import {
   teamFromMeta,
   teamSnapshot,
   withMember,
-  withMemberMoved,
   withoutMember,
 } from './team-doc';
 
@@ -142,19 +141,6 @@ describe('newMember', () => {
 
   it('starts unattended, as the schema’s default does', () => {
     expect(runsUnasked(newMember(team(), 'claude'))).toBe(true);
-  });
-});
-
-describe('withMemberMoved', () => {
-  it('moves a member one place and stops at either end', () => {
-    expect(withMemberMoved(team(), 'c', -1).members.map((m) => m.id)).toEqual([
-      'a',
-      'c',
-      'b',
-    ]);
-    const unchanged = team();
-    expect(withMemberMoved(unchanged, 'a', -1)).toBe(unchanged);
-    expect(withMemberMoved(unchanged, 'c', 1)).toBe(unchanged);
   });
 });
 

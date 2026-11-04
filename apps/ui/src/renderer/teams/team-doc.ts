@@ -163,23 +163,6 @@ export function withoutMember(team: Team, memberId: string): Team {
     : withTriggerMember(next, heir.id);
 }
 
-/** The team with member `memberId` moved `by` places, clamped to the list. */
-export function withMemberMoved(
-  team: Team,
-  memberId: string,
-  by: -1 | 1,
-): Team {
-  const from = team.members.findIndex((member) => member.id === memberId);
-  const to = from + by;
-  if (from < 0 || to < 0 || to >= team.members.length) {
-    return team;
-  }
-  const members = [...team.members];
-  const [moved] = members.splice(from, 1);
-  members.splice(to, 0, moved!);
-  return { ...team, members };
-}
-
 /**
  * Where the builder remembers the CLI a member was last put on — a per-viewer
  * convenience, so it is browser storage and read defensively.

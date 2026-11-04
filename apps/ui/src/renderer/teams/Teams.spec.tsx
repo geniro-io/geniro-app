@@ -1265,17 +1265,6 @@ describe('Teams — the members', () => {
     );
   });
 
-  it('reorders members from the member sheet', async () => {
-    await openBuilder();
-
-    await selectMember('qa');
-    await press('Move earlier');
-    await wait(900);
-
-    expect(memberIds()).toEqual(['qa', 'lead']);
-    expect(lastSaved().members.map((m) => m.id)).toEqual(['qa', 'lead']);
-  });
-
   it('edits a member’s name, public role and private instructions', async () => {
     await openBuilder();
     await selectMember('qa');

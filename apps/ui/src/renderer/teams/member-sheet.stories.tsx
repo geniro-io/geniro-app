@@ -62,8 +62,6 @@ function Stateful({
         performance={<MemberPerformance row={REVIEWER} loading={false} />}
         removeWarning="Ada handles the first message; the entry becomes empty."
         canRemove
-        place={{ index: 0, of: 4 }}
-        onMove={() => {}}
         uploadAvatar={async () => 'stored.png'}
         onPatch={(patch) => setMember((current) => ({ ...current, ...patch }))}
         onRemove={() => {}}
@@ -90,8 +88,6 @@ const meta = {
     performance: null,
     removeWarning: null,
     canRemove: true,
-    place: { index: 0, of: 1 },
-    onMove: () => {},
     uploadAvatar: async () => 'stored.png',
     onPatch: () => {},
     onRemove: () => {},

@@ -89,7 +89,8 @@ export function InstructionsCard({
   blockSizes?: ReadonlyMap<string, InstructionBlockSize> | null;
   emptyLabel?: string;
   addLabel?: string;
-  onAdd: () => void;
+  /** Absent draws no Add button. */
+  onAdd?: () => void;
   onChange: (
     blockId: string,
     patch: Partial<Omit<InstructionBlock, 'id'>>,
@@ -101,7 +102,7 @@ export function InstructionsCard({
       empty={blocks.length === 0}
       emptyLabel={emptyLabel}
       {...(addLabel === undefined ? {} : { addLabel })}
-      onAdd={onAdd}>
+      {...(onAdd === undefined ? {} : { onAdd })}>
       {blocks.map((block) => (
         <BlockCard
           key={block.id}

@@ -1087,7 +1087,44 @@ describe('Projects page', () => {
       expect(teamsApi.readTeamHealth).toHaveBeenCalledWith(
         expect.objectContaining({ slug: 'crew', projectId: 'p1' }) as unknown,
       );
-      expect(section.textContent).toContain('Be brief.');
+      expect(section.textContent).not.toContain('Be brief.');
+      expect(section.textContent).not.toContain('Add block for');
+      expect(
+        section.querySelector('[data-slot="project-scope-instructions"]'),
+      ).toBeNull();
+    });
+
+    it('still lists a block the overlay already carries, with no way to add another', async () => {
+      teamsApi.getTeamOverlay.mockResolvedValue(
+        overlayWire(
+          {
+            instructionBlocks: [
+              {
+                id: 'p1',
+                title: 'Project only',
+                text: 'Use staging.',
+                audience: 'everyone',
+              },
+            ],
+          },
+          'o-1',
+        ),
+      );
+      const el = await mountOpen();
+
+      const blocks = el.querySelector(
+        '[data-slot="project-team"] [data-slot="project-scope-instructions"]',
+      )!;
+      expect(blocks).not.toBeNull();
+      expect(
+        blocks.querySelector<HTMLInputElement>('input')?.value ??
+          blocks.textContent,
+      ).toContain('Project only');
+      expect(
+        [...blocks.querySelectorAll('button')].some((b) =>
+          b.textContent?.includes('Add'),
+        ),
+      ).toBe(false);
     });
 
     it('opens a member beside the page in the project’s mode and saves an extra instruction to the overlay, never the team', async () => {
@@ -1342,7 +1379,7 @@ describe('Projects page', () => {
             '[data-slot="project-team"] button',
           ),
         ]
-          .find((b) => b.textContent === 'Open team')!
+          .find((b) => b.textContent === 'Manage team')!
           .click();
       });
       await settle();
@@ -1396,7 +1433,7 @@ describe('Projects page', () => {
             '[data-slot="project-team"] button',
           ),
         ]
-          .find((b) => b.textContent === 'Open team')!
+          .find((b) => b.textContent === 'Manage team')!
           .click();
       });
 

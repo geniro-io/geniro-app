@@ -223,7 +223,7 @@ export function MemberCard({
           overlayBadges.overrides === 0 ? null : (
             <span
               data-slot="member-overrides"
-              className={cn(CHIP_CLASS, 'bg-primary/10 text-primary')}>
+              className={cn(CHIP_CLASS, 'bg-override/10 text-override')}>
               {overlayBadges.overrides} override
               {overlayBadges.overrides === 1 ? '' : 's'}
             </span>
@@ -231,7 +231,7 @@ export function MemberCard({
           {overlayBadges?.notes ? (
             <span
               data-slot="member-project-notes"
-              className={cn(CHIP_CLASS, 'bg-primary/10 text-primary')}>
+              className={cn(CHIP_CLASS, 'bg-override/10 text-override')}>
               project notes
             </span>
           ) : null}

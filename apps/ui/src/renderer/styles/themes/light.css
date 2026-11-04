@@ -92,6 +92,7 @@
   --success-foreground: #ffffff;
   --warning: #8a6116;
   --warning-foreground: #ffffff;
+  --override: #2f5f9e;
   /* Syntax palette for highlighted code (components/ui/code-block.tsx).
      Hue-matched to the warm cream palette and contrast-checked as TEXT on
      --muted (#ebe5dc), the code surface: every tone below clears WCAG AA

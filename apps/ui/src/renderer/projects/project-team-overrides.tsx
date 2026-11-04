@@ -1,4 +1,4 @@
-import { UsersRound } from 'lucide-react';
+import { ArrowUpRight, UsersRound } from 'lucide-react';
 import { useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -24,7 +24,7 @@ import { MemberSheet } from '../teams/member-sheet';
 import { type RowScope, ScopedGroup } from '../teams/overridable-row';
 import { ProjectScopeInstructions } from '../teams/project-scope-instructions';
 import { stageTitle } from '../teams/stage-validate';
-import { nextBlockId, teamSnapshot, triggerMemberOf } from '../teams/team-doc';
+import { teamSnapshot, triggerMemberOf } from '../teams/team-doc';
 import {
   effectiveMemberOf,
   isOverridden,
@@ -266,14 +266,6 @@ export function ProjectTeamOverrides({
       [],
     );
 
-  const addBlock = (): void =>
-    overlayState.edit((current) => {
-      const blocks = current.instructionBlocks ?? [];
-      return withOverlayBlocks(current, [
-        ...blocks,
-        { id: nextBlockId(blocks), title: '', text: '', audience: 'everyone' },
-      ]);
-    });
   const patchBlock = (
     blockId: string,
     patch: Partial<Omit<InstructionBlock, 'id'>>,
@@ -390,10 +382,6 @@ export function ProjectTeamOverrides({
           performance={null}
           removeWarning={null}
           canRemove={false}
-          place={{
-            index: members.findIndex((member) => member.id === selected.id),
-            of: members.length,
-          }}
           uploadAvatar={() => Promise.reject(new Error('read-only here'))}
           project={{
             name: projectName,
@@ -412,7 +400,6 @@ export function ProjectTeamOverrides({
                     ),
           }}
           onPatch={() => undefined}
-          onMove={() => undefined}
           onRemove={() => undefined}
           onClose={() => setSelectedId(null)}
         />
@@ -431,11 +418,13 @@ export function ProjectTeamOverrides({
             type="button"
             variant="ghost"
             size="sm"
-            className="rounded-control"
+            data-slot="project-manage-team"
+            className="gap-1.5 rounded-control"
             onClick={() => {
               void overlayState.flush().then(() => onOpenTeam(slug));
             }}>
-            Open team
+            Manage team
+            <ArrowUpRight aria-hidden="true" />
           </Button>
         </div>
       }>
@@ -527,24 +516,23 @@ export function ProjectTeamOverrides({
               </ul>
             </Part>
 
-            <Part
-              title="Team instructions"
-              hint={`The team’s own blocks, then the ones only ${projectName}’s runs of it carry.`}>
-              <ProjectScopeInstructions
-                projectName={projectName}
-                sharedBlocks={team.instructionBlocks}
-                overlayBlocks={overlay.instructionBlocks ?? []}
-                members={members}
-                overlaySizeOf={(blockId) =>
-                  instructionSizes.blocks?.get(
-                    `project:${projectId}:${blockId}`,
-                  )
-                }
-                onAdd={addBlock}
-                onChange={patchBlock}
-                onRemove={removeBlock}
-              />
-            </Part>
+            {(overlay.instructionBlocks ?? []).length === 0 ? null : (
+              <Part
+                title={`Team blocks only in ${projectName}`}
+                hint={`Blocks this project’s overlay of the team still carries. Move what they say into ${projectName}’s instructions and remove them here.`}>
+                <ProjectScopeInstructions
+                  overlayBlocks={overlay.instructionBlocks ?? []}
+                  members={members}
+                  overlaySizeOf={(blockId) =>
+                    instructionSizes.blocks?.get(
+                      `project:${projectId}:${blockId}`,
+                    )
+                  }
+                  onChange={patchBlock}
+                  onRemove={removeBlock}
+                />
+              </Part>
+            )}
           </div>
         </MenuAnchorContext.Provider>
       )}

@@ -528,6 +528,49 @@ describe('TurnBlock reasoning', () => {
     expect(row!.querySelector('strong')).toBeNull();
   });
 
+  it('folds back-to-back summaries into one Thought line that opens on every heading', () => {
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'Stand is up.' }, 'writer', 'assistant'),
+        item('reasoning', { text: '**Updating handoff pointer**' }, 'writer'),
+        item(
+          'reasoning',
+          { text: '**Reviewing test logs**\n\n**Recording keeper need**' },
+          'writer',
+        ),
+        item('message', { text: 'Done.' }, 'writer', 'assistant'),
+      ]),
+    );
+    act(() => {
+      root.render(
+        <>
+          {entries.map((entry, index) => (
+            <TranscriptEntryView key={index} entry={entry} nodes={NODES} />
+          ))}
+        </>,
+      );
+    });
+
+    const runs = container.querySelectorAll('[data-role="reasoning-run"]');
+    expect(runs).toHaveLength(1);
+    const toggle = runs[0]!.querySelector('button')!;
+    expect(toggle.textContent).toBe('Thought · 3 steps');
+    expect(container.textContent).not.toContain('Updating handoff pointer');
+
+    act(() => toggle.click());
+
+    expect(
+      [...runs[0]!.querySelectorAll('[data-slot="reasoning-headings"] li')].map(
+        (line) => line.textContent,
+      ),
+    ).toEqual([
+      'Updating handoff pointer',
+      'Reviewing test logs',
+      'Recording keeper need',
+    ]);
+    expect(toggle.textContent).toBe('Thought · 3 steps');
+  });
+
   it('keeps a summary with prose as markdown', () => {
     renderReasoning('**Clarifying tool usage**\n\nI need to check it.');
     const row = container.querySelector('[data-role="reasoning"]');

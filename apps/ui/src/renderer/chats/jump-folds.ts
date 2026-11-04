@@ -1,4 +1,5 @@
 import { agentActionOf } from '../components/agent-action-block';
+import { reasoningRunFoldKey, withReasoningRuns } from './reasoning-runs';
 import {
   isCardEntry,
   type ToolGroupEntry,
@@ -15,14 +16,21 @@ import {
  * TWIN of the memory keys the folds read: `tools:<id>` (`GroupedTools`, one
  * per run of plain calls between agent actions), `tool:<call item id>`
  * (`ToolRow`), `thinking:<item id>` (`ThinkingDisclosure`),
+ * `thinking-run:<first item id>` (`ReasoningRunFold`, `reasoning-runs.ts`),
  * `subagent:<block id>` (`SubagentBlock`), `call:<block id>` (`CallBlock`).
  */
 export function foldsHolding(
   entries: readonly TranscriptEntry[],
   seq: number,
 ): string[] {
-  for (const entry of entries) {
-    const found = foldsIn(entry, seq);
+  for (const piece of withReasoningRuns(entries)) {
+    if (piece.type === 'reasoning-run') {
+      if (piece.entries.some((entry) => entry.item.seq === seq)) {
+        return [reasoningRunFoldKey(piece)];
+      }
+      continue;
+    }
+    const found = foldsIn(piece, seq);
     if (found !== null) {
       return found;
     }

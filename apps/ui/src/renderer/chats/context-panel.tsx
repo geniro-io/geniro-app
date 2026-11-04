@@ -15,10 +15,11 @@ import { usePersistedFlag } from '../components/use-persisted-flag';
 import { formatPercent } from '../stats/stats-format';
 import {
   costEstimateNote,
+  formatExactUsd,
   formatTokens,
-  formatUsd,
   markEstimate,
 } from './agent-activity';
+import { type LiveCost, withLiveCost } from './call-context';
 import {
   contextCategoryColor,
   formatTimeUntil,
@@ -48,6 +49,7 @@ export function ContextPanel({
   error,
   live = false,
   refreshed = false,
+  runningCost = null,
   onRefresh,
 }: {
   /** Null until the first fetch lands. */
@@ -67,6 +69,13 @@ export function ContextPanel({
   live?: boolean;
   /** Whether {@link metrics} answers a REFRESH — see {@link Plan}'s note. */
   refreshed?: boolean;
+  /**
+   * What the turn in flight has spent that no finished turn records yet, from
+   * the live plane — added to the daemon's totals, as every other spend
+   * readout adds it, so the thread's cost here matches the figure beside the
+   * ring.
+   */
+  runningCost?: LiveCost | null;
   /**
    * Ask the agent again, past any reading the daemon holds. Absent draws no
    * refresh control, which is the honest shape for a caller with nothing to
@@ -153,7 +162,9 @@ export function ContextPanel({
           <span className="text-muted-foreground">{metrics.planReason}</span>
         </div>
       ) : null}
-      {metrics ? <Totals totals={metrics.totals} live={live} /> : null}
+      {metrics ? (
+        <Totals totals={metrics.totals} live={live} runningCost={runningCost} />
+      ) : null}
       {metrics?.context ? <ContextDetail context={metrics.context} /> : null}
       {/* `ErrorText`, not a hand-rolled `<p>`: it carries `role="alert"`, and
           this error is set ASYNCHRONOUSLY on a panel the user already has open.
@@ -615,61 +626,104 @@ function Plan({
 function Totals({
   totals,
   live,
+  runningCost,
 }: {
   totals: ChatMetricsDto['totals'];
   live: boolean;
+  runningCost: LiveCost | null;
 }): React.JSX.Element {
-  const parts = [
+  const recorded =
     totals.costUsd === null
       ? null
-      : markEstimate(formatUsd(totals.costUsd), totals.estimatedCostUsd),
-    // A turn in flight is STATED rather than counted, and it replaces the count
-    // outright while there is nothing to count — `0 turns` is the one reading
-    // that is both technically true and read by everyone as "this is broken",
-    // since it appears under a live window on a thread that is plainly working.
-    // Once a turn has finished the count leads and the running one trails it,
-    // so no figure is ever lost to the phrase.
+      : {
+          tokens: null,
+          costUsd: totals.costUsd,
+          estimatedCostUsd: totals.estimatedCostUsd,
+        };
+  const spend = withLiveCost(recorded, runningCost);
+  const costUsd = spend?.costUsd ?? null;
+  const estimatedUsd = spend?.estimatedCostUsd ?? null;
+  const running =
+    runningCost !== null && runningCost.costUsd > 0 ? runningCost : null;
+  // A turn in flight is STATED beside the count, never folded into it: the
+  // daemon counts finished turns, and `0` under a working agent reads as broken.
+  const turns =
     totals.turns === 0
       ? live
-        ? 'turn in progress'
-        : '0 turns'
-      : `${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'}${
-          live ? ' · 1 in progress' : ''
-        }`,
+        ? '1 running'
+        : '0'
+      : `${totals.turns}${live ? ' + 1 running' : ''}`;
+  const figures = [
+    { label: 'Turns', value: turns },
     totals.workedMs === null
       ? null
-      : `worked ${formatDuration(totals.workedMs)}`,
-  ].filter((part): part is string => part !== null);
-  const tokens = [
+      : { label: 'Worked', value: formatDuration(totals.workedMs) },
     totals.inputTokens === null
       ? null
-      : `in ${formatTokens(totals.inputTokens)}`,
+      : { label: 'Input', value: formatTokens(totals.inputTokens) },
     totals.outputTokens === null
       ? null
-      : `out ${formatTokens(totals.outputTokens)}`,
+      : { label: 'Output', value: formatTokens(totals.outputTokens) },
     totals.thinkingTokens === null
       ? null
-      : `thinking ${formatTokens(totals.thinkingTokens)}`,
+      : { label: 'Thinking', value: formatTokens(totals.thinkingTokens) },
     totals.cacheReadTokens === null
       ? null
-      : `cache read ${formatTokens(totals.cacheReadTokens)}`,
-    totals.cacheCreationTokens === null
+      : { label: 'Cache read', value: formatTokens(totals.cacheReadTokens) },
+    totals.cacheCreationTokens === null || totals.cacheCreationTokens === 0
       ? null
-      : `cached ${formatTokens(totals.cacheCreationTokens)}`,
-  ].filter((part): part is string => part !== null);
-  const estimate = costEstimateNote(totals.costUsd, totals.estimatedCostUsd);
+      : {
+          label: 'Cache write',
+          value: formatTokens(totals.cacheCreationTokens),
+        },
+  ].filter(
+    (figure): figure is { label: string; value: string } => figure !== null,
+  );
+  const estimate = costEstimateNote(costUsd, estimatedUsd);
   return (
-    <div className="flex flex-col gap-0.5 border-t border-border pt-2">
-      <span className="font-medium text-foreground">This thread</span>
-      <span className="text-muted-foreground">{parts.join(' · ')}</span>
-      {estimate === null ? null : (
-        <span data-slot="cost-estimate-note" className="text-muted-foreground">
-          {estimate}
-        </span>
+    <div
+      data-slot="thread-totals"
+      className="flex flex-col gap-1.5 border-t border-border pt-2">
+      <div className="flex items-baseline gap-1.5">
+        <span className="font-medium text-foreground">This thread</span>
+        {costUsd === null ? null : (
+          <span
+            data-slot="thread-cost"
+            className="ml-auto shrink-0 text-sm font-medium tabular-nums text-foreground">
+            {markEstimate(formatExactUsd(costUsd), estimatedUsd)}
+          </span>
+        )}
+      </div>
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+        {figures.map((figure) => (
+          <div
+            key={figure.label}
+            data-thread-figure={figure.label}
+            className="flex min-w-0 items-baseline gap-2">
+            <dt className="truncate text-muted-foreground">{figure.label}</dt>
+            <dd className="ml-auto shrink-0 tabular-nums text-foreground">
+              {figure.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {running === null && estimate === null ? null : (
+        <div className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
+          {running === null ? null : (
+            <span data-slot="running-cost-note">
+              Includes{' '}
+              {markEstimate(
+                formatExactUsd(running.costUsd),
+                running.estimatedCostUsd,
+              )}{' '}
+              the running turn has spent so far
+            </span>
+          )}
+          {estimate === null ? null : (
+            <span data-slot="cost-estimate-note">{estimate}</span>
+          )}
+        </div>
       )}
-      {tokens.length > 0 ? (
-        <span className="text-muted-foreground">{tokens.join(' · ')}</span>
-      ) : null}
     </div>
   );
 }

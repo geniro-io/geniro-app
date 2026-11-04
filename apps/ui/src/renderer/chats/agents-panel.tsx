@@ -2885,6 +2885,7 @@ export function AgentsPanel({
                           contextEstimated={agent.contextEstimated === true}
                           spentUsd={agent.spentUsd}
                           spentEstimatedUsd={agent.spentEstimatedUsd ?? null}
+                          runningCost={agent.runningCost ?? null}
                           // This card's OWN status, not the run's: the panel lists
                           // several agents and only the working one's readout has
                           // anything to keep current.

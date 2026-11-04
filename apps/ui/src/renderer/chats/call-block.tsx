@@ -27,7 +27,11 @@ import {
   REVEALABLE_CARD_CLASS,
 } from './block-shell';
 import { callClockTitle, useCallClockMs } from './call-clock';
-import { CalleeContextResolverContext, withLiveCost } from './call-context';
+import {
+  CalleeContextResolverContext,
+  type LiveCost,
+  withLiveCost,
+} from './call-context';
 import {
   CallConversationContext,
   CallConversationPager,
@@ -286,6 +290,7 @@ function CallFigures({
   contextEstimated,
   costUsd,
   estimatedCostUsd,
+  runningCost,
   clockMs,
   clockRunning,
 }: {
@@ -304,6 +309,8 @@ function CallFigures({
   costUsd: number | null;
   /** Of {@link costUsd}, the part geniro priced itself; null when none. */
   estimatedCostUsd: number | null;
+  /** Of {@link costUsd}, what the running turn has spent that no row records yet. */
+  runningCost: LiveCost | null;
   /** The conversation's clock (`call-clock.ts`), null when none of its calls has one. */
   clockMs: number | null;
   /** Whether the clock is still running — a call of it open, waits on its own work included. */
@@ -341,6 +348,7 @@ function CallFigures({
             contextWindowTokens={contextWindowTokens}
             contextEstimated={contextEstimated}
             live={live}
+            runningCost={runningCost}
           />
         </span>
       )}
@@ -632,6 +640,7 @@ export const CallBlock = memo(function CallBlock({
       contextEstimated={context.contextEstimated}
       costUsd={usage.costUsd}
       estimatedCostUsd={usage.estimatedCostUsd ?? null}
+      runningCost={live?.liveCost ?? null}
       clockMs={clockMs}
       clockRunning={clockRunning}
     />

@@ -60,7 +60,7 @@ export function MemoryRow({
       </div>
       <ClampedText
         text={entry.body}
-        lines={3}
+        lines={2}
         slot="memory-body"
         className="text-sm"
       />

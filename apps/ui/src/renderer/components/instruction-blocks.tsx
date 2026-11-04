@@ -3,6 +3,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { formatTokens } from '../chats/agent-activity';
 import { ErrorText } from './error-text';
 import { ExpandableTextarea } from './expandable-textarea';
+import { ReadOnlyText } from './read-only-text';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { cn } from './ui/utils';
@@ -119,7 +120,8 @@ export function InstructionBlockCard({
 
 /**
  * One block shown as it stands, editable elsewhere: its title, a tag saying
- * where it lives, its size and its text. `children` sits under the title.
+ * where it lives, its size and the first lines of its text, the whole of it
+ * in a read-only window. `children` sits under the title.
  */
 export function ReadOnlyInstructionBlockCard({
   id,
@@ -138,6 +140,7 @@ export function ReadOnlyInstructionBlockCard({
   sizeTitle?: string;
   children?: React.ReactNode;
 }): React.JSX.Element {
+  const name = title.trim() || 'Untitled block';
   return (
     <li
       data-slot="block-card"
@@ -146,7 +149,7 @@ export function ReadOnlyInstructionBlockCard({
       className="flex flex-col gap-2 rounded-card bg-muted/30 p-5 ring-1 ring-border">
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-base font-semibold">
-          {title.trim() || 'Untitled block'}
+          {name}
         </span>
         {size === undefined || size.chars === 0 ? null : (
           <span
@@ -159,9 +162,7 @@ export function ReadOnlyInstructionBlockCard({
         {tag}
       </div>
       {children}
-      <p className="text-sm whitespace-pre-wrap text-muted-foreground">
-        {text.trim() === '' ? 'No text yet.' : text}
-      </p>
+      <ReadOnlyText title={name} text={text} slot="block-text" />
     </li>
   );
 }

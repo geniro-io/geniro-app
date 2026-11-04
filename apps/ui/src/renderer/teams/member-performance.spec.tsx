@@ -30,6 +30,49 @@ afterEach(() => {
   container.remove();
 });
 
+function reading(key: string): { value: string; detail: string | null } {
+  const tile = container.querySelector(
+    `[data-slot="member-reading"][data-reading="${key}"]`,
+  );
+  if (tile === null) {
+    throw new Error(`no reading ${key}`);
+  }
+  return {
+    value:
+      tile.querySelector('[data-slot="member-reading-value"]')?.textContent ??
+      '',
+    detail:
+      tile.querySelector('[data-slot="member-reading-detail"]')?.textContent ??
+      null,
+  };
+}
+
+function openChanges(): Element {
+  act(() => {
+    (
+      container.querySelector(
+        '[data-slot="member-changes-open"]',
+      ) as HTMLButtonElement
+    ).click();
+  });
+  return container.querySelector('[data-slot="member-changes"]')!;
+}
+
+function figure(
+  change: Element,
+  name: string,
+): { span: string; delta: string } {
+  const row = change.querySelector(
+    `[data-slot="member-change-figure"][data-figure="${name}"]`,
+  )!;
+  return {
+    span:
+      row.querySelector('[data-slot="member-change-span"]')?.textContent ?? '',
+    delta:
+      row.querySelector('[data-slot="member-change-delta"]')?.textContent ?? '',
+  };
+}
+
 function render(
   row: TeamStatsMember | null,
   loading = false,
@@ -76,20 +119,19 @@ describe('MemberPerformance', () => {
   it("reads the member's work over its measured runs", () => {
     render(REVIEWER);
 
-    const text = container.textContent ?? '';
-    expect(text).toContain('Calls answered14 (1 failed)');
-    expect(text).toContain('Tool errors9 of 212');
-    expect(text).toContain('Own goals achieved75% (3 of 4)');
-    expect(text).toContain('Reopened2 of 6');
-    expect(text).toContain('over its 6 measured runs');
+    expect(reading('calls')).toEqual({ value: '14', detail: '1 failed' });
+    expect(reading('tools')).toEqual({ value: '9 of 212', detail: null });
+    expect(reading('goals')).toEqual({ value: '75%', detail: '3 of 4' });
+    expect(reading('reopened')).toEqual({ value: '2 of 6', detail: null });
+    expect(container.textContent).toContain('over its 6 measured runs');
   });
 
   it('says what was not measured and that no analysis has judged it, never zeros', () => {
     render(PLANNER);
 
     const text = container.textContent ?? '';
-    expect(text).toContain('Cost—');
-    expect(text).not.toContain('Calls answered');
+    expect(reading('cost').value).toBe('—');
+    expect(container.querySelector('[data-reading="calls"]')).toBeNull();
     expect(text).toContain(
       'counted only for runs started since Geniro began measuring',
     );
@@ -172,22 +214,66 @@ describe('MemberPerformance — reliability, changes, judges and verdicts', () =
   it('reads its clean runs and the spread of its cost and time per run', () => {
     render(REVIEWER);
 
-    const text = container.textContent ?? '';
-    expect(text).toContain('Clean runs4 of 6');
-    expect(text).toContain('Cost per run$0.30 ($0.18–$0.52)');
-    expect(text).toContain('Time per run14m (10m–25m)');
+    expect(reading('clean')).toEqual({ value: '4 of 6', detail: null });
+    expect(reading('cost-per-run')).toEqual({
+      value: '$0.30',
+      detail: '$0.18–$0.52',
+    });
+    expect(reading('time-per-run')).toEqual({
+      value: '14m',
+      detail: '10m–25m',
+    });
   });
 
-  it('lists each change that touched it with who made it, the measured effect and the figures that moved', () => {
+  it('keeps the changes behind a button and lists each one in its popup with who made it, the measured effect and the figures that moved', () => {
     render(REVIEWER);
 
-    const change = container.querySelector('[data-slot="member-change"]')!;
+    expect(container.querySelector('[data-slot="member-change"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="member-changes-open"]')!.textContent,
+    ).toBe('1 change');
+
+    const dialog = openChanges();
+    const change = dialog.querySelector('[data-slot="member-change"]')!;
     expect(change.getAttribute('data-effect')).toBe('better');
-    expect(change.textContent).toContain('v3 → v4 (current)');
-    expect(change.textContent).toContain('instructions');
+    expect(
+      change.querySelector('[data-slot="member-change-versions"]')!.textContent,
+    ).toBe('v3v4');
+    expect(change.textContent).toContain('current');
+    expect(
+      change.querySelector('[data-slot="member-change-kinds"]')!.textContent,
+    ).toBe('instructions');
     expect(change.textContent).toContain('by an analysis · W-1');
-    expect(change.textContent).toContain('cost per run −46% ($0.41 → $0.22)');
-    expect(change.textContent).toContain('rework 50% → 0%');
+    expect(figure(change, 'cost per run')).toEqual({
+      span: '$0.41 → $0.22',
+      delta: '−46%',
+    });
+    expect(figure(change, 'rework')).toEqual({
+      span: '50% → 0%',
+      delta: '−50 pts',
+    });
+    expect(
+      dialog.querySelector('[data-slot="member-changes-summary"]')!.textContent,
+    ).toBe('1 better');
+  });
+
+  it('shows no changes button for a member no change touched', () => {
+    render({ ...REVIEWER, changes: [] });
+
+    expect(
+      container.querySelector('[data-slot="member-changes-open"]'),
+    ).toBeNull();
+  });
+
+  it('greys the figures of a change with too few runs to judge', () => {
+    const [change] = REVIEWER.changes;
+    render({ ...REVIEWER, changes: [{ ...change!, effect: 'too-few-runs' }] });
+
+    const delta = openChanges().querySelector(
+      '[data-figure="cost per run"] [data-slot="member-change-delta"]',
+    )!;
+    expect(delta.className).toContain('text-muted-foreground');
+    expect(delta.className).not.toContain('text-success');
   });
 
   it('says how far a per-run amount moved when its rounded ends would read as doubling', () => {
@@ -211,9 +297,36 @@ describe('MemberPerformance — reliability, changes, judges and verdicts', () =
       ],
     });
 
-    expect(
-      container.querySelector('[data-slot="member-change"]')!.textContent,
-    ).toContain('cost per run +11% ($0.01 → $0.02)');
+    expect(figure(openChanges(), 'cost per run')).toEqual({
+      span: '$0.01 → $0.02',
+      delta: '+11%',
+    });
+  });
+
+  it('shows the three newest earlier analyses and the rest behind Show all', () => {
+    const [latest, earlier] = REVIEWER.assessments;
+    render({
+      ...REVIEWER,
+      assessments: [
+        latest!,
+        ...Array.from({ length: 5 }, (_, index) => ({
+          ...earlier!,
+          cardSeq: 100 + index,
+        })),
+      ],
+    });
+    const rows = (): number =>
+      container.querySelectorAll('[data-slot="member-assessment-history"] li')
+        .length;
+    expect(rows()).toBe(3);
+
+    const toggle = container.querySelector(
+      '[data-slot="member-assessment-history-toggle"]',
+    ) as HTMLButtonElement;
+    expect(toggle.textContent).toBe('Show all 5');
+    act(() => toggle.click());
+
+    expect(rows()).toBe(5);
   });
 
   it('names the judge, warns when it shares the member’s vendor, and sends the verdict on its marks', async () => {

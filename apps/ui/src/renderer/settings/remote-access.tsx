@@ -45,6 +45,7 @@ export const REMOTE_ACCESS_POLL_WINDOW_MS = 5 * 60_000;
  * code that stopped working moments later.
  */
 const EXPIRY_REREAD_MARGIN_MS = 1_000;
+const DEVICES_SHOWN = 5;
 
 /**
  * One copyable link — the `.local` primary or the IP fallback.
@@ -246,6 +247,7 @@ export function RemoteAccess({
   // was reported.
   const [regeneratedHere, setRegeneratedHere] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [allDevicesShown, setAllDevicesShown] = useState(false);
   // The switch flips at once, before the round trip answers — a toggle that
   // waited for `updateSettings` to resolve before moving would read as an
   // unresponsive control on a slow launch.
@@ -603,16 +605,34 @@ export function RemoteAccess({
                   None yet — a device pairs by typing the code above.
                 </p>
               ) : (
-                <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
-                  {state.devices.map((device) => (
-                    <DeviceRow
-                      key={device.id}
-                      device={device}
-                      onRevoke={onRevoke}
-                      revoking={revokingId === device.id}
-                    />
-                  ))}
-                </ul>
+                <div className="flex flex-col gap-2">
+                  <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+                    {(allDevicesShown
+                      ? state.devices
+                      : state.devices.slice(0, DEVICES_SHOWN)
+                    ).map((device) => (
+                      <DeviceRow
+                        key={device.id}
+                        device={device}
+                        onRevoke={onRevoke}
+                        revoking={revokingId === device.id}
+                      />
+                    ))}
+                  </ul>
+                  {state.devices.length <= DEVICES_SHOWN ? null : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      data-slot="devices-show-all"
+                      className="self-start text-muted-foreground"
+                      onClick={() => setAllDevicesShown((shown) => !shown)}>
+                      {allDevicesShown
+                        ? 'Show fewer'
+                        : `Show all ${state.devices.length} devices`}
+                    </Button>
+                  )}
+                </div>
               )}
             </SettingsPanelRow>
           </SettingsPanel>

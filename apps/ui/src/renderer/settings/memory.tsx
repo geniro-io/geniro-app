@@ -84,7 +84,7 @@ const ANY_TYPE = 'any';
 const REFRESH_DELAY_MS = 250;
 /** TWIN: `MEMORY_LIST_LIMIT_MAX` in `apps/daemon/src/v1/memory/memory.types.ts`. */
 const PENDING_LIMIT = 200;
-const MEMORY_PAGE = 50;
+const MEMORY_PAGE = 20;
 /** TWIN: `MEMORY_LIST_LIMIT_MAX` in `apps/daemon/src/v1/memory/memory.types.ts`. */
 const MEMORY_PAGE_MAX = 200;
 

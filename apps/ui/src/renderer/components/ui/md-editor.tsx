@@ -72,6 +72,7 @@ export function MdEditor({
   height?: number;
   /** 'live' = split (default), 'edit' = editor only, 'preview' = preview only */
   preview?: MDEditorProps['preview'];
+  /** The same panes and view switches, with the text locked and no formatting buttons. */
   readOnly?: boolean;
   placeholder?: string;
   className?: string;
@@ -84,10 +85,10 @@ export function MdEditor({
         value={value}
         onChange={(next) => onChange?.(next ?? '')}
         height={height}
-        preview={readOnly ? 'preview' : preview}
-        hideToolbar={readOnly}
+        preview={preview}
+        {...(readOnly ? { commands: [] } : {})}
         previewOptions={PREVIEW_OPTIONS}
-        textareaProps={{ placeholder }}
+        textareaProps={{ placeholder, readOnly }}
       />
     </div>
   );

@@ -32,11 +32,16 @@ type InheritedTagProps = VariantProps<typeof inheritedTagVariants>;
 export function InheritedTag({
   variant,
   className,
-}: InheritedTagProps & { className?: string }): React.JSX.Element {
+  title,
+}: InheritedTagProps & {
+  className?: string;
+  title?: string;
+}): React.JSX.Element {
   return (
     <span
       data-slot="inherited-tag"
       data-variant={variant ?? 'project'}
+      title={title}
       className={cn(inheritedTagVariants({ variant }), className)}>
       {LABEL[variant ?? 'project']}
     </span>

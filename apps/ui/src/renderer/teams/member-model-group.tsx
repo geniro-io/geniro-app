@@ -36,8 +36,8 @@ type MemberPatch = Partial<Omit<TeamMember, 'id'>>;
 /**
  * A member's Model group — CLI, profile, approval, model and its axes,
  * auto-compact — as the member sheet draws it. With `scopeOf`, each row is
- * one project's override of the team's value (TEAM / OVERRIDDEN, Override and
- * Reset); without, the plain rows of the shared team.
+ * one project's copy of the team's value: changing it overrides it, and its
+ * reset brings the team's back; without, the plain rows of the shared team.
  */
 export function MemberModelGroup({
   agentsApi,

@@ -155,6 +155,33 @@ describe('RemoteAccess', () => {
     expect(container.textContent).toContain('iPhone — Safari');
   });
 
+  it('lists the first five paired devices and the rest behind Show all', async () => {
+    const [device] = LISTENING.devices;
+    geniro.getRemoteAccess.mockResolvedValue({
+      ...LISTENING,
+      devices: Array.from({ length: 7 }, (_, index) => ({
+        ...device!,
+        id: `device-${index}`,
+        label: `Phone ${index}`,
+      })),
+    });
+    await mount();
+    const labels = (): string[] =>
+      [...container.querySelectorAll('li')]
+        .map((row) => row.textContent ?? '')
+        .filter((text) => text.includes('Phone '));
+    expect(labels()).toHaveLength(5);
+
+    const toggle = container.querySelector(
+      '[data-slot="devices-show-all"]',
+    ) as HTMLButtonElement;
+    expect(toggle.textContent).toBe('Show all 7 devices');
+    await act(async () => toggle.click());
+
+    expect(labels()).toHaveLength(7);
+    expect(toggle.textContent).toBe('Show fewer');
+  });
+
   it('flips the switch, persists it and re-reads the whole state', async () => {
     geniro.getRemoteAccess
       .mockResolvedValueOnce(OFF)

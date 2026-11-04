@@ -35,7 +35,6 @@ import {
   memberOverlayBadges,
   OVERLAY_MODEL_FIELDS,
   type OverlaySettingsField,
-  overrideFields,
   resetFields,
   withExtraInstructions,
   withMemberPool,
@@ -167,9 +166,6 @@ export function ProjectTeamOverrides({
   const health = useTeamHealth(apis, slug, { probe: false, projectId });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [openedOverrides, setOpenedOverrides] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
   const [addendaOpen, setAddendaOpen] = useState(false);
 
   const members = team?.members ?? NO_MEMBERS;
@@ -184,6 +180,8 @@ export function ProjectTeamOverrides({
     selected === null || overlay === null
       ? selected
       : effectiveMemberOf(selected, overlay);
+  const poolOverridden =
+    selected !== null && overlay?.members?.[selected.id]?.pool !== undefined;
 
   const instructionSizes = useInstructionSizes(
     apis.teams,
@@ -219,39 +217,14 @@ export function ProjectTeamOverrides({
     teamValue: string,
   ): RowScope => {
     const memberId = selected?.id ?? '';
-    const key = (field: OverlaySettingsField): string => `${memberId}:${field}`;
     return {
       projectName,
       overridden: fields.some(
-        (field) =>
-          (overlay !== null && isOverridden(overlay, memberId, field)) ||
-          openedOverrides.has(key(field)),
+        (field) => overlay !== null && isOverridden(overlay, memberId, field),
       ),
       teamValue,
-      onOverride: () => {
-        if (selected === null) {
-          return;
-        }
-        overlayState.edit((current) =>
-          overrideFields(current, selected, fields),
-        );
-        setOpenedOverrides(
-          (previous) => new Set([...previous, ...fields.map(key)]),
-        );
-      },
-      onReset: () => {
-        overlayState.edit((current) => resetFields(current, memberId, fields));
-        setOpenedOverrides(
-          (previous) =>
-            new Set(
-              [...previous].filter((entry) =>
-                fields.includes('agent')
-                  ? !entry.startsWith(`${memberId}:`)
-                  : !fields.some((field) => entry === key(field)),
-              ),
-            ),
-        );
-      },
+      onReset: () =>
+        overlayState.edit((current) => resetFields(current, memberId, fields)),
     };
   };
 
@@ -369,12 +342,8 @@ export function ProjectTeamOverrides({
               bare
               scope={{
                 projectName,
-                overridden: overlay.members?.[selected.id]?.pool !== undefined,
+                overridden: poolOverridden,
                 teamValue: `${selected.pool?.length ?? 0} member${selected.pool?.length === 1 ? '' : 's'}`,
-                onOverride: () =>
-                  overlayState.edit((current) =>
-                    withMemberPool(current, selected.id, shown.pool ?? []),
-                  ),
                 onReset: () =>
                   overlayState.edit((current) =>
                     withMemberPool(current, selected.id, undefined),
@@ -552,7 +521,7 @@ export function ProjectTeamOverrides({
           <div className="flex flex-col gap-8">
             <Part
               title="Members"
-              hint={`Open one to override its model, profile or fallback members, or to give it extra instructions for ${projectName}.`}>
+              hint={`Open one to change its model, profile or fallback agents, or give it extra instructions, for ${projectName} only. A changed setting is marked ${projectName}; its reset brings the team’s back.`}>
               <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {members.map((member) => {
                   const setup = problemsOf(member.id);

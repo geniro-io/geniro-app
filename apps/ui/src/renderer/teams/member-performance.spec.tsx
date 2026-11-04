@@ -116,25 +116,20 @@ describe('MemberPerformance', () => {
     expect(latest.textContent).toContain('LGTM — the change looks correct');
   });
 
-  it("reads the member's work over its measured runs", () => {
+  it('draws its totals only, none of the measured-run work tiles', () => {
     render(REVIEWER);
 
-    expect(reading('calls')).toEqual({ value: '14', detail: '1 failed' });
-    expect(reading('tools')).toEqual({ value: '9 of 212', detail: null });
-    expect(reading('goals')).toEqual({ value: '75%', detail: '3 of 4' });
-    expect(reading('reopened')).toEqual({ value: '2 of 6', detail: null });
-    expect(container.textContent).toContain('over its 6 measured runs');
+    expect(reading('runs').value).not.toBe('');
+    for (const key of ['clean', 'calls', 'tools', 'goals', 'reopened']) {
+      expect(container.querySelector(`[data-reading="${key}"]`)).toBeNull();
+    }
+    expect(container.textContent).not.toContain('measured run');
   });
 
   it('says what was not measured and that no analysis has judged it, never zeros', () => {
     render(PLANNER);
 
-    const text = container.textContent ?? '';
     expect(reading('cost').value).toBe('—');
-    expect(container.querySelector('[data-reading="calls"]')).toBeNull();
-    expect(text).toContain(
-      'counted only for runs started since Geniro began measuring',
-    );
     expect(
       container.querySelector('[data-slot="member-performance-unassessed"]'),
     ).not.toBeNull();
@@ -211,10 +206,9 @@ describe('MemberPerformance — an unjudged mark', () => {
 });
 
 describe('MemberPerformance — reliability, changes, judges and verdicts', () => {
-  it('reads its clean runs and the spread of its cost and time per run', () => {
+  it('reads the spread of its cost and time per run', () => {
     render(REVIEWER);
 
-    expect(reading('clean')).toEqual({ value: '4 of 6', detail: null });
     expect(reading('cost-per-run')).toEqual({
       value: '$0.30',
       detail: '$0.18–$0.52',

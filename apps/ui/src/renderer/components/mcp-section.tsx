@@ -1,4 +1,5 @@
 import {
+  Braces,
   ChevronRight,
   Loader2,
   Lock,
@@ -494,6 +495,7 @@ export function McpSection({
   onAddPluginServer,
   onRefresh,
   onAddServer,
+  onEditJson,
   className,
 }: {
   listing: AgentMcpListing | undefined;
@@ -558,6 +560,8 @@ export function McpSection({
    * the control — a surface with no write path to the profile offers none.
    */
   onAddServer?: () => void;
+  /** Open this listing's profile servers as JSON. Absent hides the control. */
+  onEditJson?: () => void;
   /**
    * Overrides the CARD chrome (`border-t`, the card's own horizontal padding),
    * which belongs to the Agents panel where every section is one band of a
@@ -638,12 +642,26 @@ export function McpSection({
             size="sm"
             data-slot="mcp-add-server"
             className="ml-auto h-5 shrink-0 gap-1 px-1.5 text-[11px]"
-            // Named for both halves of what it opens: a form that runs the
-            // CLI's own `mcp add`, and the profile's servers as JSON.
-            title="Add an MCP server, or edit this profile’s servers as JSON"
+            title="Add an MCP server to this profile"
             onClick={onAddServer}>
             <Plus aria-hidden="true" className="size-3 shrink-0" />
             Add
+          </Button>
+        ) : null}
+        {onEditJson ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-slot="mcp-edit-json"
+            className={cn(
+              'h-5 shrink-0 gap-1 px-1.5 text-[11px]',
+              onAddServer === undefined && 'ml-auto',
+            )}
+            title="Edit, rename or remove this profile’s servers as JSON"
+            onClick={onEditJson}>
+            <Braces aria-hidden="true" className="size-3 shrink-0" />
+            Edit JSON
           </Button>
         ) : null}
         {onRefresh ? (
@@ -653,7 +671,9 @@ export function McpSection({
             size="icon"
             className={cn(
               'size-5 shrink-0',
-              onAddServer === undefined && 'ml-auto',
+              onAddServer === undefined &&
+                onEditJson === undefined &&
+                'ml-auto',
             )}
             aria-label="Refresh MCP servers"
             // Named for what it DOES to a broken server, because that is what

@@ -39,9 +39,9 @@ export interface McpConfigActions {
   add: (server: McpServerDraft) => Promise<AgentMcpConfigDto>;
 }
 
-type Mode = 'add' | 'json';
+export type McpChangeMode = 'add' | 'json';
 
-const MODES: readonly { id: Mode; label: string }[] = [
+const MODES: readonly { id: McpChangeMode; label: string }[] = [
   { id: 'add', label: 'Add a server' },
   { id: 'json', label: 'Edit JSON' },
 ];
@@ -84,9 +84,9 @@ export function McpAddDialog({
   actions: McpConfigActions;
   /** Called after a write landed, so the listing beneath can be re-read. */
   onChanged: () => void;
-  initialMode?: Mode;
+  initialMode?: McpChangeMode;
 }): React.JSX.Element | null {
-  const [mode, setMode] = useState<Mode>(initialMode);
+  const [mode, setMode] = useState<McpChangeMode>(initialMode);
   // A fresh dialog every time it opens: a half-typed form from an earlier
   // open belongs to a press the user abandoned.
   useEffect(() => {

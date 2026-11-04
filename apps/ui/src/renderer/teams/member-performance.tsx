@@ -406,9 +406,8 @@ function AssessmentDetail({
 }
 
 /**
- * How one member has worked for the team: its figures over every run, its
- * calls, tool errors, goals and rework from the measured runs, and every
- * analysis's marks of it, newest first. Every figure is the daemon's.
+ * How one member has worked for the team: its figures over every run and
+ * every analysis's marks of it, newest first. Every figure is the daemon's.
  */
 export function MemberPerformance({
   row,
@@ -434,37 +433,19 @@ export function MemberPerformance({
   return (
     <div data-slot="member-performance" className="flex flex-col gap-4">
       <ReadingGrid label="Totals" readings={totalReadings(row)} />
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
-          <p className="m-0 min-w-0 flex-1 text-xs text-muted-foreground">
-            {row.work === null ? (
-              'Calls, tool errors, goals and reopened stages are counted only for runs started since Geniro began measuring them.'
-            ) : (
-              <>
-                Calls, tool errors, goals and reopened stages over its{' '}
-                {formatCount(row.work.measuredRuns)} measured run
-                {row.work.measuredRuns === 1 ? '' : 's'}.
-              </>
-            )}
-          </p>
-          {row.changes.length === 0 ? null : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              data-slot="member-changes-open"
-              className="h-7 gap-1.5 px-2.5 text-xs"
-              onClick={() => setChangesOpen(true)}>
-              <History aria-hidden="true" className="size-3.5" />
-              {formatCount(row.changes.length)} change
-              {row.changes.length === 1 ? '' : 's'}
-            </Button>
-          )}
-        </div>
-        {row.work === null ? null : (
-          <ReadingGrid label="Work" readings={workReadings(row.work)} />
-        )}
-      </div>
+      {row.changes.length === 0 ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          data-slot="member-changes-open"
+          className="h-7 gap-1.5 self-start px-2.5 text-xs"
+          onClick={() => setChangesOpen(true)}>
+          <History aria-hidden="true" className="size-3.5" />
+          {formatCount(row.changes.length)} change
+          {row.changes.length === 1 ? '' : 's'}
+        </Button>
+      )}
       <MemberChangesDialog
         open={changesOpen}
         onClose={() => setChangesOpen(false)}

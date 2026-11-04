@@ -90,7 +90,6 @@ import {
   teamSnapshot,
   triggerMemberOf,
   withMember,
-  withMemberMoved,
   withoutMember,
   withTriggerMember,
 } from './team-doc';
@@ -1881,13 +1880,6 @@ export function Teams({
           }
           removeWarning={removeWarningOf(selected.id)}
           canRemove={members.length > 1}
-          place={{
-            index: members.findIndex((member) => member.id === selected.id),
-            of: members.length,
-          }}
-          onMove={(by) =>
-            editTeam((current) => withMemberMoved(current, selected.id, by))
-          }
           uploadAvatar={uploadAvatar}
           onPatch={patchSelected}
           onRemove={() => removeMember(selected.id)}

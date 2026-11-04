@@ -80,6 +80,7 @@
   --success-foreground: #201c17;
   --warning: #dcb268;
   --warning-foreground: #201c17;
+  --override: #7ba4d8;
   /* Syntax palette, contrast-checked as TEXT on --muted (#2a2827), the code
      surface — the same bar and the same surface `light.css` uses. Punctuation
      again sits at AA-large only, by the same argument: it is structural noise

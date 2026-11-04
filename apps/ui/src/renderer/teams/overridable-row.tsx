@@ -15,7 +15,7 @@ export interface RowScope {
 }
 
 /** The accent bar down the left edge of a row this project overrides. */
-const OVERRIDDEN_EDGE = 'shadow-[inset_2px_0_0_var(--primary)]';
+const OVERRIDDEN_EDGE = 'shadow-[inset_2px_0_0_var(--override)]';
 
 /**
  * The trailing column every overridable setting shares: a quiet Team while it
@@ -46,7 +46,7 @@ function ScopeMark({
     <span className="ml-auto flex shrink-0 items-center gap-1">
       <span
         data-slot="scope-mark"
-        className="max-w-28 truncate rounded-pill bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+        className="max-w-28 truncate rounded-pill bg-override/10 px-1.5 py-0.5 text-[10px] font-medium text-override">
         {projectName}
       </span>
       <Button

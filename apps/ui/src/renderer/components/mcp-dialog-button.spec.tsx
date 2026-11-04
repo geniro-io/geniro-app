@@ -245,4 +245,92 @@ describe('McpDialogButton — adding a server', () => {
     expect(add).toHaveBeenCalledTimes(1);
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
+
+  it('opens the profile’s servers as JSON from the listing’s own Edit JSON, and saves a removal', async () => {
+    const onRefresh = vi.fn();
+    const read = vi.fn(() =>
+      Promise.resolve({
+        servers: {
+          keep: { command: 'npx' },
+          drop: { url: 'https://example.com/mcp' },
+        },
+        path: '/Users/me/.claude.json',
+        version: 'v1',
+        unavailableReason: null,
+      }),
+    );
+    const write = vi.fn(() =>
+      Promise.resolve({
+        servers: { keep: { command: 'npx' } },
+        path: '/Users/me/.claude.json',
+        version: 'v2',
+        unavailableReason: null,
+      }),
+    );
+    const el = render(
+      <McpDialogButton
+        title="MCP servers — claude"
+        open
+        onOpenChange={() => undefined}
+        listing={listing(['keep', 'drop'])}
+        loading={false}
+        onRefresh={onRefresh}
+        configActions={{
+          read,
+          write,
+          add: () => Promise.reject(new Error('unused')),
+        }}
+      />,
+    );
+    const doc = el.ownerDocument;
+    expect(doc.querySelector('[data-slot="mcp-edit-json"]')).not.toBeNull();
+
+    await act(async () => {
+      doc
+        .querySelector<HTMLButtonElement>('[data-slot="mcp-edit-json"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+    const editor = doc.querySelector<HTMLTextAreaElement>('textarea')!;
+    expect(editor.value).toContain('"drop"');
+
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      'value',
+    )!.set!;
+    act(() => {
+      setter.call(
+        editor,
+        JSON.stringify({ keep: { command: 'npx' } }, null, 2),
+      );
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const save = [...doc.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent?.trim() === 'Save',
+    )!;
+    await act(async () => {
+      save.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(write).toHaveBeenCalledWith({ keep: { command: 'npx' } }, 'v1');
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no Edit JSON where the caller bound no writes', () => {
+    const el = render(
+      <McpDialogButton
+        title="MCP servers — claude"
+        open
+        onOpenChange={() => undefined}
+        listing={listing(['a'])}
+        loading={false}
+      />,
+    );
+    expect(
+      el.ownerDocument.querySelector('[data-slot="mcp-edit-json"]'),
+    ).toBeNull();
+  });
 });

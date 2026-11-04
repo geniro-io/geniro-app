@@ -3,7 +3,13 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { DiffView, editDiffOf, UnifiedDiff } from './diff-view';
+import {
+  DIFF_ROW_LIMIT,
+  diffRows,
+  DiffView,
+  editDiffOf,
+  UnifiedDiff,
+} from './diff-view';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -24,17 +30,138 @@ afterEach(() => {
 });
 
 describe('DiffView', () => {
-  it('renders old lines as red "-" rows and new lines as green "+" rows', () => {
+  it('renders removed lines as red "-" rows, added lines as green "+" rows and unchanged lines as context', () => {
     act(() => root.render(<DiffView oldText={'a\nb'} newText={'a\nc\nd'} />));
 
-    const minus = [...container.querySelectorAll('.text-destructive')];
-    const plus = [...container.querySelectorAll('.text-success')];
-    expect(minus).toHaveLength(2);
-    expect(plus).toHaveLength(3);
-    expect(minus[0]?.textContent).toContain('-');
-    expect(minus[0]?.textContent).toContain('a');
-    expect(plus[1]?.textContent).toContain('+');
-    expect(plus[1]?.textContent).toContain('c');
+    const rows = [...container.querySelectorAll('[data-slot="diff"] > div')];
+    expect(rows.map((row) => row.textContent)).toEqual([
+      ' a',
+      '-b',
+      '+c',
+      '+d',
+    ]);
+    expect(rows[0]?.className).not.toMatch(/text-(destructive|success)/);
+    expect(rows[1]?.className).toContain('text-destructive');
+    expect(rows[2]?.className).toContain('text-success');
+  });
+
+  it('folds each unchanged stretch longer than the context into one gap row naming its length', () => {
+    const before = Array.from({ length: 100 }, (_, index) => `line ${index}`);
+    const after = before.map((line, index) =>
+      index === 20 || index === 80 ? `${line} changed` : line,
+    );
+
+    act(() =>
+      root.render(
+        <DiffView oldText={before.join('\n')} newText={after.join('\n')} />,
+      ),
+    );
+
+    expect(
+      [...container.querySelectorAll('[data-slot="diff-gap"]')].map(
+        (gap) => gap.textContent,
+      ),
+    ).toEqual([
+      '⋯ 17 unchanged lines',
+      '⋯ 53 unchanged lines',
+      '⋯ 16 unchanged lines',
+    ]);
+  });
+
+  it('draws at most the row limit until Show all draws the rest', () => {
+    const created = Array.from(
+      { length: DIFF_ROW_LIMIT + 100 },
+      (_, index) => `line ${index}`,
+    ).join('\n');
+
+    act(() => root.render(<DiffView newText={created} />));
+
+    expect(container.querySelectorAll('.text-success')).toHaveLength(
+      DIFF_ROW_LIMIT,
+    );
+    const showAll = [...container.querySelectorAll('button')].find(
+      (button) =>
+        button.textContent ===
+        `Show all ${(DIFF_ROW_LIMIT + 100).toLocaleString('en-US')} rows`,
+    );
+    expect(showAll).toBeDefined();
+
+    act(() => showAll?.click());
+
+    expect(container.querySelectorAll('.text-success')).toHaveLength(
+      DIFF_ROW_LIMIT + 100,
+    );
+    expect(container.querySelector('button')).toBeNull();
+  });
+
+  it('starts capped again when the texts change after Show all', () => {
+    const created = (length: number): string =>
+      Array.from({ length }, (_, index) => `line ${index}`).join('\n');
+
+    act(() =>
+      root.render(<DiffView newText={created(DIFF_ROW_LIMIT + 100)} />),
+    );
+    act(() => container.querySelector('button')?.click());
+    act(() => root.render(<DiffView newText={created(DIFF_ROW_LIMIT + 50)} />));
+
+    expect(container.querySelectorAll('.text-success')).toHaveLength(
+      DIFF_ROW_LIMIT,
+    );
+  });
+
+  it('keeps an unchanged last line as context when a line is appended after it', () => {
+    act(() => root.render(<DiffView oldText={'a\nb'} newText={'a\nb\nc'} />));
+
+    expect(
+      [...container.querySelectorAll('[data-slot="diff"] > div')].map(
+        (row) => row.textContent,
+      ),
+    ).toEqual([' a', ' b', '+c']);
+  });
+
+  it('names a one-line gap in the singular', () => {
+    act(() =>
+      root.render(
+        <DiffView
+          oldText={'l0\nl1\nl2\nl3\nl4'}
+          newText={'l0\nl1\nl2\nl3\nL4'}
+        />,
+      ),
+    );
+
+    expect(container.querySelector('[data-slot="diff-gap"]')?.textContent).toBe(
+      '⋯ 1 unchanged line',
+    );
+  });
+
+  it('a one-line change inside whole-file texts draws only the changed lines and their context', () => {
+    const before = Array.from({ length: 9000 }, (_, index) => `line ${index}`);
+    const after = before.map((line, index) =>
+      index === 4500 ? 'line 4500 changed' : line,
+    );
+
+    act(() =>
+      root.render(
+        <DiffView oldText={before.join('\n')} newText={after.join('\n')} />,
+      ),
+    );
+
+    expect(
+      [...container.querySelectorAll('[data-slot="diff"] > div')].map(
+        (row) => row.textContent,
+      ),
+    ).toEqual([
+      '⋯ 4,497 unchanged lines',
+      ' line 4497',
+      ' line 4498',
+      ' line 4499',
+      '-line 4500',
+      '+line 4500 changed',
+      ' line 4501',
+      ' line 4502',
+      ' line 4503',
+      '⋯ 4,496 unchanged lines',
+    ]);
   });
 
   it('a file creation (no oldText) renders only added lines', () => {
@@ -42,6 +169,43 @@ describe('DiffView', () => {
 
     expect(container.querySelectorAll('.text-destructive')).toHaveLength(0);
     expect(container.querySelectorAll('.text-success')).toHaveLength(2);
+  });
+});
+
+describe('diffRows', () => {
+  it('when the line search gives up, keeps only what lies between the shared ends', () => {
+    const shared = (prefix: string): string[] =>
+      Array.from({ length: 50 }, (_, index) => `${prefix} ${index}`);
+    const middle = (prefix: string): string[] =>
+      Array.from({ length: 1500 }, (_, index) =>
+        index % 100 === 50 ? 'common' : `${prefix} ${index}`,
+      );
+    const oldLines = [...shared('head'), ...middle('old'), ...shared('tail')];
+    const newLines = [...shared('head'), ...middle('new'), ...shared('tail')];
+
+    const rows = diffRows(oldLines.join('\n'), newLines.join('\n'));
+
+    expect(rows.slice(0, 4)).toEqual([
+      { kind: 'gap', skipped: 47 },
+      { kind: 'context', text: 'head 47' },
+      { kind: 'context', text: 'head 48' },
+      { kind: 'context', text: 'head 49' },
+    ]);
+    expect(rows.filter((row) => row.kind === 'removed')).toHaveLength(1500);
+    expect(rows.filter((row) => row.kind === 'added')).toHaveLength(1500);
+    const firstRemoved = rows.findIndex((row) => row.kind === 'removed');
+    const lastAdded = rows.findLastIndex((row) => row.kind === 'added');
+    expect(
+      rows
+        .slice(firstRemoved, lastAdded + 1)
+        .filter((row) => row.kind === 'context'),
+    ).toEqual([]);
+    expect(rows.slice(-4)).toEqual([
+      { kind: 'context', text: 'tail 0' },
+      { kind: 'context', text: 'tail 1' },
+      { kind: 'context', text: 'tail 2' },
+      { kind: 'gap', skipped: 47 },
+    ]);
   });
 });
 

@@ -70,6 +70,18 @@ describe('foldsHolding', () => {
     expect(foldsHolding(entries, 2)).toEqual([]);
   });
 
+  it('opens the Thought fold a heading row was folded into', () => {
+    const entries = groupTranscript([
+      row(1, 'message', { text: 'Stand is up.' }),
+      row(2, 'reasoning', { text: '**Updating handoff pointer**' }),
+      row(3, 'reasoning', { text: '**Listing changed files**' }),
+    ]);
+
+    expect(foldsHolding(entries, 3)).toEqual(['thinking-run:i2']);
+    expect(foldsHolding(entries, 2)).toEqual(['thinking-run:i2']);
+    expect(foldsHolding(entries, 1)).toEqual([]);
+  });
+
   it('opens the delegate a row IS in, never another whose seqs span it', () => {
     // Two delegates of one fan-out interleave: B starts nearer the hit and
     // its seqs span it, but the row is A's.

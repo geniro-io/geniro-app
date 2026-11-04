@@ -7,12 +7,18 @@ import { EntryCard } from './entry-card';
 import { jumpAnchorProps } from './jump-target';
 import { liveRowKind } from './live-row';
 import { MarkdownContent, MESSAGE_TEXT_CLASS } from './markdown-content';
+import {
+  reasoningRunFoldKey,
+  type ReasoningRunPiece,
+  withReasoningRuns,
+} from './reasoning-runs';
 import { formatClockTime } from './relative-time';
 import { SubagentBlock } from './subagent-block';
 import { NestedThreadContext } from './subagent-context';
 import {
   ReasoningHeadings,
   reasoningHeadings,
+  ReasoningRunFold,
   ThinkingDisclosure,
 } from './thinking-block';
 import { ToolGroup } from './tool-group';
@@ -88,7 +94,22 @@ export const TurnBlock = memo(function TurnBlock({
    * A `TranscriptRow`, whose `empty:hidden` keeps a row that draws nothing
    * out of the column's gaps.
    */
-  const renderRow = (entry: TranscriptEntry): React.ReactNode => {
+  const renderRow = (piece: ReasoningRunPiece): React.ReactNode => {
+    if (piece.type === 'reasoning-run') {
+      const seq = piece.entries[0]!.item.seq;
+      return (
+        <TranscriptRow
+          key={piece.id}
+          className={cn(mark?.key === `row:${seq}` && JUMP_MARK_CLASS)}
+          {...jumpAnchorProps('row', seq, `row:${seq}`)}>
+          <ReasoningRunFold
+            headings={piece.headings}
+            memoryKey={reasoningRunFoldKey(piece)}
+          />
+        </TranscriptRow>
+      );
+    }
+    const entry = piece;
     const drawn = renderInner(entry);
     if (drawn === null) {
       return null;
@@ -207,7 +228,7 @@ export const TurnBlock = memo(function TurnBlock({
             'border-l-2 border-border pl-3',
         )}>
         {subagentLabel}
-        {block.entries.map(renderRow)}
+        {withReasoningRuns(block.entries).map(renderRow)}
       </div>
     );
   }
@@ -251,7 +272,7 @@ export const TurnBlock = memo(function TurnBlock({
             </>
           ) : null}
         </div>
-        {block.entries.map(renderRow)}
+        {withReasoningRuns(block.entries).map(renderRow)}
       </div>
     </div>
   );

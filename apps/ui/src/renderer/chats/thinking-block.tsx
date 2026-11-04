@@ -78,6 +78,29 @@ export function ReasoningHeadings({
   );
 }
 
+export function reasoningRunLabel(steps: number): string {
+  return `Thought · ${steps} ${steps === 1 ? 'step' : 'steps'}`;
+}
+
+export function ReasoningRunFold({
+  headings,
+  memoryKey,
+}: {
+  headings: readonly string[];
+  memoryKey: string;
+}): React.JSX.Element {
+  return (
+    <div data-role="reasoning-run">
+      <ThinkingDisclosure
+        text={headings.join('\n')}
+        label={reasoningRunLabel(headings.length)}
+        memoryKey={memoryKey}>
+        <ReasoningHeadings headings={headings} />
+      </ThinkingDisclosure>
+    </div>
+  );
+}
+
 /**
  * The reasoning text of a stretch that is STILL BEING WRITTEN — bounded, and
  * following its own tail.
@@ -174,28 +197,33 @@ export function ThinkingScroller({
  */
 export function ThinkingDisclosure({
   text,
+  label,
   memoryKey,
   children,
 }: {
   /** The reasoning, for the preview and for the fold decision. */
   text: string;
+  /** A fixed line drawn folded and open alike; with it the body always folds. */
+  label?: string;
   /** Where the fold is remembered within the thread — the reasoning row's id. */
   memoryKey?: string;
   /** The full body, drawn by the caller in its own idiom. */
   children: React.ReactNode;
 }): React.JSX.Element {
   const [open, setOpen] = useThreadFlag(memoryKey, false);
-  if (text.length <= THINKING_FOLD_CHARS) {
+  if (label === undefined && text.length <= THINKING_FOLD_CHARS) {
     return <>{children}</>;
   }
   // The first line with anything ON it. A chain of thought routinely opens
   // with a blank line or a bare heading marker, and previewing that shows the
   // reader nothing they can decide on.
   const preview =
+    label ??
     text
       .split('\n')
       .find((line) => line.trim() !== '')
-      ?.trim() ?? '';
+      ?.trim() ??
+    '';
   return (
     <div data-slot="thinking-disclosure" className="flex min-w-0 flex-col">
       <button
@@ -221,7 +249,7 @@ export function ThinkingDisclosure({
         />
         {/* Collapsed the line hints at the content; expanded it would repeat
             the first line of the body directly beneath it, so it goes. */}
-        {open ? (
+        {open && label === undefined ? (
           <span className="min-w-0 flex-1" />
         ) : (
           <span className="min-w-0 flex-1 truncate">{preview}</span>

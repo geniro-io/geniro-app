@@ -42,10 +42,12 @@ import { jumpAnchorProps } from './jump-target';
 import { formatElapsed, liveRowKind } from './live-row';
 import { THINKING_WORDS, useLiveWord } from './live-words';
 import { MessageBubble } from './message-bubble';
+import { reasoningRunFoldKey, withReasoningRuns } from './reasoning-runs';
 import { NestedThreadContext } from './subagent-context';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import type { AgentTaskRow } from './task-payload';
 import { taskProgress } from './task-payload';
+import { ReasoningRunFold } from './thinking-block';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -781,13 +783,35 @@ export const CallBlock = memo(function CallBlock({
           дублируется — она должна быть просто один раз в хедере блока".
         */}
         <NestedThreadContext.Provider value={true}>
-          {block.entries.map((entry) => {
-            const startSeq = entryStartSeq(entry);
-            const endSeq = entryEndSeq(entry);
-            // Wholly above the pages read: a scattered card row, not one of them.
-            if (drawnFrom !== null && endSeq !== null && endSeq < drawnFrom) {
-              return null;
+          {withReasoningRuns(
+            block.entries.filter((entry) => {
+              const endSeq = entryEndSeq(entry);
+              // Wholly above the pages read: a scattered card row, not one of them.
+              return !(
+                drawnFrom !== null &&
+                endSeq !== null &&
+                endSeq < drawnFrom
+              );
+            }),
+          ).map((piece) => {
+            if (piece.type === 'reasoning-run') {
+              const runSeq = piece.entries[0]!.item.seq;
+              return (
+                <TranscriptRow
+                  key={piece.id}
+                  className={cn(
+                    mark?.key === `card-row:${runSeq}` && JUMP_MARK_CLASS,
+                  )}
+                  {...jumpAnchorProps('call', runSeq, `card-row:${runSeq}`)}>
+                  <ReasoningRunFold
+                    headings={piece.headings}
+                    memoryKey={reasoningRunFoldKey(piece)}
+                  />
+                </TranscriptRow>
+              );
             }
+            const entry = piece;
+            const startSeq = entryStartSeq(entry);
             // A CONTINUED call's ask, at the point it was sent — drawn exactly
             // as the first ask is, since the card is one conversation and each
             // ask is a brief to the same callee.

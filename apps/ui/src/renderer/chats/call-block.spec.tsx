@@ -731,6 +731,45 @@ describe('CallBlock', () => {
     return block;
   };
 
+  it("folds a callee's back-to-back thought summaries into one Thought line", () => {
+    const block = blockOf([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Ship it.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'reasoning',
+        { text: '**Updating handoff pointer**', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'reasoning',
+        {
+          text: '**Reviewing test logs**\n\n**Listing changed files**',
+          callId: 'call-1',
+        },
+        'poet',
+      ),
+      item('message', { text: 'Stand is up.', callId: 'call-1' }, 'poet'),
+    ]);
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+    expand();
+
+    const runs = container.querySelectorAll('[data-role="reasoning-run"]');
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.querySelector('button')!.textContent).toBe(
+      'Thought · 3 steps',
+    );
+    expect(container.textContent).not.toContain('Reviewing test logs');
+    expect(container.textContent).toContain('Stand is up.');
+  });
+
   it('says a call is WAITING for the calls its callee made, until the callee is continued', () => {
     // The daemon holds the call open while the callee's own calls run, and
     // writes one `heldCall` row saying so — the card must not read "thinking".

@@ -575,20 +575,40 @@ export const CallBlock = memo(function CallBlock({
     heldOn === null
       ? null
       : `${heldOn} call${heldOn === 1 ? '' : 's'} it started`;
-  const heldText = heldCalls === null ? null : `waiting for ${heldCalls}`;
+  const monitorNames = waiting?.monitors ?? [];
+  const heldMonitors =
+    heldCalls !== null || monitorNames.length === 0
+      ? null
+      : monitorNames.length === 1
+        ? 'its monitor'
+        : `its ${monitorNames.length} monitors`;
+  const heldText =
+    heldCalls !== null
+      ? `waiting for ${heldCalls}`
+      : heldMonitors !== null
+        ? `waiting for ${heldMonitors}`
+        : null;
+  const heldTitle =
+    heldCalls !== null
+      ? `${callee} ended its turn with ${heldCalls} still running. This call stays open until they finish, and ${callee} is continued in it to finish its answer.`
+      : waitingTitle;
   const pendingLine =
-    heldText !== null
-      ? `${callee} is ${heldText}`
-      : block.stalled
-        ? `${callee} has gone quiet — the call is still open`
-        : activity === null
-          ? // The rotating vocabulary, lower-cased to sit inside the sentence. It
-            // opens on the plain `thinking`, so a card glanced at in the first
-            // seconds reads exactly as it always has — the word only wanders once
-            // the callee has been quiet long enough for a still line to read as a
-            // frozen one, which on a called agent is routinely minutes.
-            `${callee} is ${calleeWord.toLowerCase()}...`
-          : `${callee} is running ${activity}`;
+    heldCalls !== null
+      ? `${callee} is waiting for ${heldCalls}`
+      : heldMonitors !== null
+        ? `${callee} is waiting for ${heldMonitors}: ${monitorNames.join('; ')}`
+        : waiting !== null
+          ? `${callee} ended its turn — the call stays open until it is continued`
+          : block.stalled
+            ? `${callee} has gone quiet — the call is still open`
+            : activity === null
+              ? // The rotating vocabulary, lower-cased to sit inside the sentence. It
+                // opens on the plain `thinking`, so a card glanced at in the first
+                // seconds reads exactly as it always has — the word only wanders once
+                // the callee has been quiet long enough for a still line to read as a
+                // frozen one, which on a called agent is routinely minutes.
+                `${callee} is ${calleeWord.toLowerCase()}...`
+              : `${callee} is running ${activity}`;
   /**
    * Whether there is anything to put in the band at all — `BlockShell` renders
    * it on `summary ?`, and an element is always truthy, so the caller has to
@@ -695,7 +715,7 @@ export const CallBlock = memo(function CallBlock({
               {heldText !== null ? (
                 <span
                   data-slot="call-summary-held"
-                  title={`${callee} ended its turn with ${heldCalls} still running. This call stays open until they finish, and ${callee} is continued in it to finish its answer.`}
+                  title={heldTitle}
                   className="shrink-0 text-xs text-muted-foreground">
                   {heldText}
                 </span>

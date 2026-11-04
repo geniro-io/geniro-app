@@ -78,6 +78,14 @@ function panel(): HTMLElement | null {
   return container.querySelector<HTMLElement>('[role="dialog"]');
 }
 
+/** One figure of the readout's thread block, by its label. */
+function threadFigure(label: string): string | null {
+  return (
+    container.querySelector(`[data-thread-figure="${label}"] dd`)
+      ?.textContent ?? null
+  );
+}
+
 /**
  * A pointer arriving at / leaving an element.
  *
@@ -931,10 +939,11 @@ describe('the expanded readout the meter opens onto', () => {
     openMeter();
     await act(async () => {});
 
-    const text = container.textContent ?? '';
-    expect(text).toContain('$0.42');
-    expect(text).toContain('3 turns');
-    expect(text).toContain('cache read 1.3M');
+    expect(
+      container.querySelector('[data-slot="thread-cost"]')?.textContent,
+    ).toBe('$0.42');
+    expect(threadFigure('Turns')).toBe('3');
+    expect(threadFigure('Cache read')).toBe('1.3M');
   });
 
   it('shows the daemon’s own sentence when there is no breakdown to take', async () => {
@@ -1210,8 +1219,34 @@ describe('the expanded readout the meter opens onto', () => {
     openMeter();
     await act(async () => {});
 
-    expect(container.textContent).toContain('turn in progress');
-    expect(container.textContent).not.toContain('0 turns');
+    expect(threadFigure('Turns')).toBe('1 running');
+  });
+
+  it('adds what the running turn has spent to the thread’s cost', async () => {
+    // The call card beside the ring adds the live plane's unrecorded spend to
+    // the daemon's totals, and the readout stated the totals alone: `≈$9.70`
+    // on the card over `≈$1.54` here, for the same conversation.
+    render(
+      <ChatMetricsLoaderContext.Provider
+        value={vi.fn().mockResolvedValue(METRICS)}>
+        <ContextMeter
+          contextTokens={62_444}
+          contextWindowTokens={1_000_000}
+          runId="run-1"
+          live
+          runningCost={{ costUsd: 8.16, estimatedCostUsd: 8.16 }}
+        />
+      </ChatMetricsLoaderContext.Provider>,
+    );
+    openMeter();
+    await act(async () => {});
+
+    expect(
+      container.querySelector('[data-slot="thread-cost"]')?.textContent,
+    ).toBe('≈$8.58');
+    expect(
+      container.querySelector('[data-slot="running-cost-note"]')?.textContent,
+    ).toBe('Includes ≈$8.16 the running turn has spent so far');
   });
 
   it('keeps the finished count and names the running turn beside it', async () => {
@@ -1222,7 +1257,7 @@ describe('the expanded readout the meter opens onto', () => {
 
     // Both, because both are true — and a count replaced by the phrase would
     // lose three turns' worth of spend from the line.
-    expect(container.textContent).toContain('3 turns · 1 in progress');
+    expect(threadFigure('Turns')).toBe('3 + 1 running');
   });
 
   it('leaves a settled thread reading exactly as it did', async () => {
@@ -1231,8 +1266,7 @@ describe('the expanded readout the meter opens onto', () => {
     openMeter();
     await act(async () => {});
 
-    expect(container.textContent).toContain('3 turns');
-    expect(container.textContent).not.toContain('in progress');
+    expect(threadFigure('Turns')).toBe('3');
   });
 
   it('shows every plan window with its percentage and time to reset', async () => {

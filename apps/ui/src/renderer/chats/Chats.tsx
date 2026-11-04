@@ -7363,6 +7363,7 @@ export function Chats({
               liveCostOf(liveText.get(CHAT_LIVE_KEY)),
             ),
           ),
+          runningCost: liveCostOf(liveText.get(CHAT_LIVE_KEY)),
           inputTokens:
             threadTotals.inputTokens ?? chatActivity?.inputTokens ?? null,
           outputTokens:
@@ -7409,6 +7410,7 @@ export function Chats({
       AgentDisplay,
       | 'spentUsd'
       | 'spentEstimatedUsd'
+      | 'runningCost'
       | 'inputTokens'
       | 'outputTokens'
       | 'cacheTokens'
@@ -7430,6 +7432,7 @@ export function Chats({
               live,
             ),
           ),
+          runningCost: live,
           inputTokens: nodeActivity?.inputTokens ?? null,
           outputTokens: nodeActivity?.outputTokens ?? null,
           cacheTokens: nodeActivity?.cacheTokens ?? null,
@@ -7446,6 +7449,7 @@ export function Chats({
             live,
           ),
         ),
+        runningCost: live,
         inputTokens: totals.inputTokens,
         outputTokens: totals.outputTokens,
         cacheTokens:
@@ -11191,6 +11195,7 @@ export function Chats({
                                 // running cannot disagree about whether
                                 // anything is happening.
                                 live={isWorkingRunStatus(activeRunStatus)}
+                                runningCost={liveRunCost(liveText)}
                                 // Opens UPWARD. This row sits at the bottom of the
                                 // composer, inside the app shell's
                                 // `overflow-hidden` main — roughly 20px below a
@@ -11239,6 +11244,11 @@ export function Chats({
                                   contextWindowTokens={chatContext.window}
                                   contextEstimated={chatContext.estimated}
                                   live={isWorkingRunStatus(activeRunStatus)}
+                                  runningCost={
+                                    runLead === null
+                                      ? null
+                                      : liveNodeCost(liveText, runLead)
+                                  }
                                   side="top"
                                 />
                               )}

@@ -13,6 +13,7 @@ import {
   markContextEstimate,
   markEstimate,
 } from './agent-activity';
+import type { LiveCost } from './call-context';
 import { ChatMetricsLoaderContext, planReadingIsStale } from './chat-metrics';
 import { ContextPanel } from './context-panel';
 
@@ -64,6 +65,7 @@ function MeterReadout({
   memberId = null,
   callId = null,
   live = false,
+  runningCost = null,
   children,
 }: {
   ring: React.ReactNode;
@@ -79,6 +81,8 @@ function MeterReadout({
   callId?: string | null;
   /** Whether this chat's agent is working right now — see {@link LIVE_REREAD_MS}. */
   live?: boolean;
+  /** See {@link ContextMeter}'s `runningCost`. */
+  runningCost?: LiveCost | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   // Mirrors `HoverPopover`'s own open state, which this needs and cannot see:
@@ -152,6 +156,7 @@ function MeterReadout({
           loading={metrics.loading}
           error={metrics.error}
           live={live}
+          runningCost={runningCost}
           refreshed={metrics.refreshed}
           onRefresh={metrics.refresh}
         />
@@ -383,6 +388,7 @@ export function ContextMeter({
   callId = null,
   side = 'bottom',
   live = false,
+  runningCost = null,
   awaitingReading = null,
   className,
 }: {
@@ -444,6 +450,13 @@ export function ContextMeter({
    */
   live?: boolean;
   /**
+   * What the readout's subject has spent in its running turn that no finished
+   * turn records yet — the same live part the caller adds to the cost it draws
+   * beside the ring. The readout adds it to the daemon's totals, so its
+   * thread cost and that figure agree.
+   */
+  runningCost?: LiveCost | null;
+  /**
    * Why there is no reading, when the reason is worth drawing rather than
    * hiding: a compaction has just discarded the conversation the last figure
    * described, and nothing measures the replacement until the next message.
@@ -491,6 +504,7 @@ export function ContextMeter({
         memberId={memberId}
         callId={callId}
         live={live}
+        runningCost={runningCost}
         label={awaitingReading}
         ring={
           <ProgressRing
@@ -569,6 +583,7 @@ export function ContextMeter({
         memberId={memberId}
         callId={callId}
         live={live}
+        runningCost={runningCost}
         label={unscaled ?? 'No context reading yet'}
         ring={
           <ProgressRing
@@ -611,6 +626,7 @@ export function ContextMeter({
       memberId={memberId}
       callId={callId}
       live={live}
+      runningCost={runningCost}
       // Deliberately still the bare reading, with no "which measurement"
       // qualifier: this is the control's accessible NAME, and a name that
       // explains itself stops being one — it is announced on every focus, and

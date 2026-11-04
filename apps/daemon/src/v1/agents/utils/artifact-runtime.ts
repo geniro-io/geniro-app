@@ -497,7 +497,7 @@ export const ARTIFACT_KIT_STYLE = `
 :where(.g-callout-danger) { border-left-color: ${themeVar('danger')}; }
 :where(.g-step) { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; align-items: baseline; }
 :where(.g-step + .g-step) { margin-top: 24px; }
-:where(.g-step-num) { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 999px; background: ${themeVar('primary')}; color: ${themeVar('primary-fg')}; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+:where(.g-step-num) { position: relative; top: -1.5px; display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 999px; background: ${themeVar('primary')}; color: ${themeVar('primary-fg')}; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 :where(.g-step-body) { min-width: 0; }
 :where(.g-disclosure) { background: ${themeVar('surface')}; border: 1px solid ${themeVar('border')}; border-radius: ${themeVar('radius')}; min-width: 0; }
 :where(.g-disclosure + .g-disclosure) { margin-top: 8px; }

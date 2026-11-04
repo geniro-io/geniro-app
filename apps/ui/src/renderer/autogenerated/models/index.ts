@@ -7398,6 +7398,19 @@ export interface ProcessFigures {
 /**
  * 
  * @export
+ * @interface ProjectChatsDiscardedDto
+ */
+export interface ProjectChatsDiscardedDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof ProjectChatsDiscardedDto
+     */
+    deleted: number;
+}
+/**
+ * 
+ * @export
  * @interface ProjectDeletedDto
  */
 export interface ProjectDeletedDto {
@@ -7913,7 +7926,7 @@ export interface ProjectTeamOverlay {
      */
     blocks: number;
     /**
-     * Members with extra instructions and stages with an addendum
+     * Members with extra instructions
      * @type {number}
      * @memberof ProjectTeamOverlay
      */
@@ -11445,6 +11458,81 @@ export type StageStatus = typeof StageStatus[keyof typeof StageStatus];
 /**
  * 
  * @export
+ * @interface StartProjectChatDto
+ */
+export interface StartProjectChatDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof StartProjectChatDto
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartProjectChatDto
+     */
+    model?: string;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof StartProjectChatDto
+     */
+    approval?: ChatApprovalMode;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartProjectChatDto
+     */
+    effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartProjectChatDto
+     */
+    contextWindow?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof StartProjectChatDto
+     */
+    autoCompactPercent?: number;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof StartProjectChatDto
+     */
+    modelParameters?: { [key: string]: string; };
+    /**
+     * 
+     * @type {string}
+     * @memberof StartProjectChatDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartProjectChatDto
+     */
+    customInstructions?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartProjectChatDto
+     */
+    replyLanguage?: string;
+    /**
+     * 
+     * @type {{ [key: string]: { [key: string]: boolean; }; }}
+     * @memberof StartProjectChatDto
+     */
+    agentOptions?: { [key: string]: { [key: string]: boolean; }; };
+}
+
+
+/**
+ * 
+ * @export
  * @interface StartShareSignInDto
  */
 export interface StartShareSignInDto {
@@ -11641,12 +11729,6 @@ export interface StartTeamChatDto {
      * @memberof StartTeamChatDto
      */
     agentOptions?: { [key: string]: { [key: string]: boolean; }; };
-    /**
-     * 
-     * @type {string}
-     * @memberof StartTeamChatDto
-     */
-    projectId?: string | null;
 }
 
 
@@ -12778,12 +12860,6 @@ export interface TeamOverlay {
      * @memberof TeamOverlay
      */
     instructionBlocks?: Array<InstructionBlock>;
-    /**
-     * Per-stage addenda, keyed by stage id
-     * @type {{ [key: string]: TeamOverlayStage; }}
-     * @memberof TeamOverlay
-     */
-    stages?: { [key: string]: TeamOverlayStage; };
 }
 /**
  * 
@@ -13016,7 +13092,7 @@ export interface TeamOverlayScope {
      */
     blocks: number;
     /**
-     * Members with extra instructions and stages with an addendum
+     * Members with extra instructions
      * @type {number}
      * @memberof TeamOverlayScope
      */
@@ -13046,19 +13122,6 @@ export interface TeamOverlayScopesDto {
      * @memberof TeamOverlayScopesDto
      */
     scopes: Array<TeamOverlayScope>;
-}
-/**
- * 
- * @export
- * @interface TeamOverlayStage
- */
-export interface TeamOverlayStage {
-    /**
-     * Appended to the stage’s how-to-work text in this project
-     * @type {string}
-     * @memberof TeamOverlayStage
-     */
-    howToWorkAddendum?: string;
 }
 /**
  * 

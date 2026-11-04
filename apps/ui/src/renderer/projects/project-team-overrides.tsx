@@ -1,8 +1,7 @@
-import { MessagesSquare, UsersRound } from 'lucide-react';
+import { UsersRound } from 'lucide-react';
 import { useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import type { DaemonHandle } from '../../shared/contracts';
 import type {
   InstructionBlock,
   ProjectTeamOverlay,
@@ -16,7 +15,6 @@ import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { useNarrowViewport } from '../components/use-narrow-viewport';
 import { type DaemonApis, describeDaemonError } from '../daemon-api';
-import type { DaemonClient } from '../daemon-client';
 import { AgentPoolEditor } from '../teams/agent-pool-editor';
 import { InstructionSizeCard } from '../teams/instruction-size-card';
 import { MemberCard } from '../teams/member-card';
@@ -25,9 +23,7 @@ import { memberProblemsOf, memberStatusOf } from '../teams/member-problems';
 import { MemberSheet } from '../teams/member-sheet';
 import { type RowScope, ScopedGroup } from '../teams/overridable-row';
 import { ProjectScopeInstructions } from '../teams/project-scope-instructions';
-import { StageAddendaDialog } from '../teams/stage-addenda-dialog';
 import { stageTitle } from '../teams/stage-validate';
-import { TeamChatPanel } from '../teams/team-chat-panel';
 import { nextBlockId, teamSnapshot, triggerMemberOf } from '../teams/team-doc';
 import {
   effectiveMemberOf,
@@ -41,7 +37,7 @@ import {
   withMemberSettings,
   withoutOrphan,
   withOverlayBlocks,
-  withStageAddendum,
+  withTeamSettings,
 } from '../teams/team-overlay-doc';
 import { configDirCapabilityFrom } from '../teams/use-config-dir-capability';
 import { useInstructionSizes } from '../teams/use-instruction-sizes';
@@ -60,9 +56,6 @@ const NO_MEMBERS: readonly TeamMember[] = [];
 function orphanWords(orphan: string): string {
   if (orphan.startsWith('members.')) {
     return `Overrides for member “${orphan.slice('members.'.length)}”, who is no longer on the team, are ignored.`;
-  }
-  if (orphan.startsWith('stages.')) {
-    return `An addendum for stage “${orphan.slice('stages.'.length)}”, which the team no longer has, is ignored.`;
   }
   return `${orphan} names a member the team no longer has.`;
 }
@@ -96,28 +89,34 @@ function Part({
 }
 
 /**
- * The project's own copy of its default team: the team's members, blocks and
- * stages as this project runs them, each Model setting and pool overridable
- * here, plus the blocks, extra instructions and stage addenda only this
- * project adds. Nothing here writes the team itself — every edit autosaves to
- * the project's overlay of it. The member sheet and the chat dock are drawn
- * beside and under the page.
+ * The project's own copy of its default team: the team's members and blocks
+ * as this project runs them, each Model setting and pool overridable here,
+ * plus the blocks and extra instructions only this project adds. Nothing here
+ * writes the team itself — every edit autosaves to the project's overlay of
+ * it. The member sheet is drawn beside the page. The page's own chat changes
+ * the overlay too, so autosave pauses while that chat works and the section
+ * reads everything back after each turn.
  */
 export function ProjectTeamOverrides({
   projectId,
   projectName,
   slug,
   apis,
-  handle,
-  client,
+  chatWorking,
+  reloadKey,
+  flushRef,
   onOpenTeam,
 }: {
   projectId: string;
   projectName: string;
   slug: string;
   apis: DaemonApis;
-  handle: DaemonHandle | null;
-  client: DaemonClient | null;
+  /** The page's chat is working: the overlay is not autosaved meanwhile. */
+  chatWorking: boolean;
+  /** Moves after each turn of the page's chat: the team and overlay are read again. */
+  reloadKey: number;
+  /** Set to the overlay's pending-write flush, which the page's chat runs before every send. */
+  flushRef: React.RefObject<(() => Promise<unknown>) | null>;
   onOpenTeam: (slug: string) => void;
 }): React.JSX.Element {
   const slots = useContext(ProjectPageSlotsContext);
@@ -143,9 +142,6 @@ export function ProjectTeamOverrides({
     void readTeam();
   }, [slug, readTeam]);
 
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatMounted, setChatMounted] = useState(false);
-  const [chatWorking, setChatWorking] = useState(false);
   const overlayState = useTeamOverlay(
     apis.teams,
     slug,
@@ -164,9 +160,26 @@ export function ProjectTeamOverrides({
     [],
   );
   const health = useTeamHealth(apis, slug, { probe: false, projectId });
+  useEffect(() => {
+    flushRef.current = () => flushOverlay.current();
+    return () => {
+      flushRef.current = null;
+    };
+  }, [flushRef]);
+  const readBack = useLatestCallback(async (): Promise<void> => {
+    await Promise.all([readTeam(), overlayState.refresh()]);
+    health.reload();
+  }, [readTeam, overlayState, health]);
+  const seenReloadKey = useRef(reloadKey);
+  useEffect(() => {
+    if (seenReloadKey.current === reloadKey) {
+      return;
+    }
+    seenReloadKey.current = reloadKey;
+    void readBack();
+  }, [reloadKey, readBack]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [addendaOpen, setAddendaOpen] = useState(false);
 
   const members = team?.members ?? NO_MEMBERS;
   const agentLabelOf = (agent: string): string =>
@@ -253,15 +266,6 @@ export function ProjectTeamOverrides({
       [],
     );
 
-  const beforeChatSend = useLatestCallback(
-    (): Promise<boolean> => overlayState.flush(),
-    [overlayState],
-  );
-  const afterChatTurn = useLatestCallback(async (): Promise<void> => {
-    await Promise.all([readTeam(), overlayState.refresh()]);
-    health.reload();
-  }, [readTeam, overlayState, health]);
-
   const addBlock = (): void =>
     overlayState.edit((current) => {
       const blocks = current.instructionBlocks ?? [];
@@ -293,9 +297,6 @@ export function ProjectTeamOverrides({
     );
 
   const stages = team?.stages ?? [];
-  const addenda = Object.values(overlay?.stages ?? {}).filter(
-    (stage) => (stage.howToWorkAddendum ?? '').trim() !== '',
-  ).length;
   const handlerId = team === null ? null : triggerMemberOf(team);
 
   const sheet =
@@ -330,12 +331,7 @@ export function ProjectTeamOverrides({
               onPatch={patchModel}
             />
           }
-          toolsGroup={
-            <p className="m-0 text-sm text-muted-foreground">
-              A member’s MCP switches are the same in every project — change
-              them on the team’s page.
-            </p>
-          }
+          toolsGroup={null}
           poolGroup={
             <ScopedGroup
               label="Fallback members"
@@ -407,6 +403,13 @@ export function ProjectTeamOverrides({
               overlayState.edit((current) =>
                 withExtraInstructions(current, selected.id, text),
               ),
+            onRestoreTeamSettings:
+              memberOverlayBadges(overlay, selected.id).overrides === 0
+                ? null
+                : () =>
+                    overlayState.edit((current) =>
+                      withTeamSettings(current, selected.id),
+                    ),
           }}
           onPatch={() => undefined}
           onMove={() => undefined}
@@ -416,25 +419,6 @@ export function ProjectTeamOverrides({
       </MenuAnchorContext.Provider>
     );
 
-  const dock =
-    chatMounted && handle !== null && client !== null && team !== null ? (
-      <TeamChatPanel
-        key={`${slug}:${projectId}`}
-        slug={slug}
-        teamName={team.name}
-        projectId={projectId}
-        projectName={projectName}
-        apis={apis}
-        handle={handle}
-        client={client}
-        hidden={!chatOpen}
-        onClose={() => setChatOpen(false)}
-        onBeforeSend={beforeChatSend}
-        onWorkingChange={setChatWorking}
-        onTurnSettled={afterChatTurn}
-      />
-    ) : null;
-
   return (
     <ProjectSection
       slot="project-team"
@@ -443,21 +427,6 @@ export function ProjectTeamOverrides({
       hint={`How this team works in ${projectName}. What you change here applies to ${projectName}’s runs only; the team itself stays as it is.`}
       action={
         <div className="flex shrink-0 flex-wrap items-center gap-1">
-          {handle === null || client === null ? null : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="rounded-control"
-              aria-pressed={chatOpen}
-              onClick={() => {
-                setChatMounted(true);
-                setChatOpen((open) => !open);
-              }}>
-              <MessagesSquare className="size-4" aria-hidden />
-              Change with chat
-            </Button>
-          )}
           <Button
             type="button"
             variant="ghost"
@@ -497,7 +466,7 @@ export function ProjectTeamOverrides({
           data-slot="overlay-orphan"
           className="flex flex-wrap items-center gap-2 text-warning">
           <span className="flex-1">{orphanWords(orphan)}</span>
-          {orphan.startsWith('members.') || orphan.startsWith('stages.') ? (
+          {orphan.startsWith('members.') ? (
             <Button
               type="button"
               variant="ghost"
@@ -576,59 +545,13 @@ export function ProjectTeamOverrides({
                 onRemove={removeBlock}
               />
             </Part>
-
-            {stages.length === 0 ? null : (
-              <Part
-                title="Stages"
-                hint={`Text added to a stage’s how-to-work in ${projectName}’s runs.`}
-                action={
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 rounded-control"
-                    onClick={() => setAddendaOpen(true)}>
-                    Edit stage addenda
-                  </Button>
-                }>
-                <p
-                  data-slot="project-stage-addenda"
-                  className="m-0 text-sm text-muted-foreground">
-                  {addenda === 0
-                    ? `No stage has an addendum for ${projectName}.`
-                    : `${addenda} of ${stages.length} stage${stages.length === 1 ? '' : 's'} carry an addendum for ${projectName}.`}
-                </p>
-              </Part>
-            )}
           </div>
         </MenuAnchorContext.Provider>
       )}
 
-      {overlay === null ? null : (
-        <StageAddendaDialog
-          open={addendaOpen}
-          projectName={projectName}
-          stages={stages}
-          overlay={overlay}
-          onClose={() => setAddendaOpen(false)}
-          onSave={(next) => {
-            overlayState.edit((current) =>
-              Object.entries(next).reduce(
-                (doc, [stageId, text]) =>
-                  withStageAddendum(doc, stageId, text.trim()),
-                current,
-              ),
-            );
-            setAddendaOpen(false);
-          }}
-        />
-      )}
       {sheet === null || slots.sheet === null
         ? null
         : createPortal(sheet, slots.sheet)}
-      {dock === null || slots.dock === null
-        ? null
-        : createPortal(dock, slots.dock)}
     </ProjectSection>
   );
 }

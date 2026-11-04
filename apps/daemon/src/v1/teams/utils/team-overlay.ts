@@ -4,14 +4,12 @@ import { createTwoFilesPatch } from 'diff';
 import {
   INSTRUCTION_BLOCK_EVERYONE,
   type InstructionBlock,
-  MAX_STAGE_INSTRUCTIONS_LENGTH,
   type Team,
   type TeamAgentPoolMember,
   type TeamMember,
   type TeamOverlay,
   type TeamOverlayAgentDefaults,
   TeamSchema,
-  type TeamStage,
 } from '../teams.types';
 import { serializeTeamOverlayYaml } from './team-overlay-yaml';
 import { validateTeam } from './team-validate';
@@ -34,7 +32,7 @@ const CLI_BOUND_FIELDS = OVERLAY_MODEL_FIELDS.filter(
 
 export interface AppliedTeamOverlay {
   team: Team;
-  /** Overlay entries naming a member or stage the team no longer has, e.g. `members.reviewer`. */
+  /** Overlay entries naming a member the team no longer has, e.g. `members.reviewer`. */
   orphans: string[];
 }
 
@@ -127,33 +125,13 @@ function effectiveMember(member: TeamMember, overlay: TeamOverlay): TeamMember {
   return out;
 }
 
-function effectiveStage(stage: TeamStage, overlay: TeamOverlay): TeamStage {
-  const addendum = overlay.stages?.[stage.id]?.howToWorkAddendum?.trim();
-  if (!addendum) {
-    return stage;
-  }
-  const howToWork = appended(stage.howToWork, addendum);
-  if (howToWork.length > MAX_STAGE_INSTRUCTIONS_LENGTH) {
-    return invalid(
-      `Stage '${stage.title}' (${stage.id}) would run ${howToWork.length} characters of how-to-work with this project's addendum, past the ${MAX_STAGE_INSTRUCTIONS_LENGTH} limit — shorten the addendum or the stage's own text`,
-    );
-  }
-  return { ...stage, howToWork };
-}
-
-/** Overlay entries naming a member, stage or audience member the team does not have. */
+/** Overlay entries naming a member or audience member the team does not have. */
 export function overlayOrphans(team: Team, overlay: TeamOverlay): string[] {
   const memberIds = new Set(team.members.map((member) => member.id));
-  const stageIds = new Set((team.stages ?? []).map((stage) => stage.id));
   const orphans: string[] = [];
   for (const id of Object.keys(overlay.members ?? {})) {
     if (!memberIds.has(id)) {
       orphans.push(`members.${id}`);
-    }
-  }
-  for (const id of Object.keys(overlay.stages ?? {})) {
-    if (!stageIds.has(id)) {
-      orphans.push(`stages.${id}`);
     }
   }
   for (const block of overlay.instructionBlocks ?? []) {
@@ -202,9 +180,6 @@ export function applyTeamOverlay(
     ...team,
     members: team.members.map((member) => effectiveMember(member, overlay)),
     instructionBlocks: [...team.instructionBlocks, ...blocks],
-    ...(team.stages
-      ? { stages: team.stages.map((stage) => effectiveStage(stage, overlay)) }
-      : {}),
   };
   const parsed = TeamSchema.safeParse(candidate);
   if (!parsed.success) {
@@ -240,11 +215,6 @@ export function overlayCounts(overlay: TeamOverlay): {
       overrides += 1;
     }
     if (member.extraInstructions?.trim()) {
-      notes += 1;
-    }
-  }
-  for (const stage of Object.values(overlay.stages ?? {})) {
-    if (stage.howToWorkAddendum?.trim()) {
       notes += 1;
     }
   }

@@ -9,7 +9,13 @@ import {
 } from '../../../teams/teams.types';
 import { CONFIG_DIR_TOKEN_PREFIX } from '../../../teams/utils/config-dir-redaction';
 import { toolInputSchema } from '../tool-args';
-import { ProposeTeamChangeArgsSchema } from './propose-team.reader';
+import {
+  ProposeProjectOverlayArgsSchema,
+  ProposeTeamChangeArgsSchema,
+} from './propose-team.reader';
+
+/** Which chat is listing the tool: an ordinary one, a team's builder, or a project's own. */
+export type ProposeTeamAudience = 'chat' | 'builder' | 'project';
 
 const REASON_DESCRIPTION = `Why, for the card, at most ${TEAM_REASON_MAX} characters: what the user asked for or what you found that this answers.`;
 
@@ -27,9 +33,32 @@ function overlayJsonSchema(): Record<string, unknown> {
 }
 
 export function proposeTeamSchema(
-  forBuilder: boolean,
+  audience: ProposeTeamAudience,
 ): Record<string, unknown> {
-  if (forBuilder) {
+  if (audience === 'project') {
+    const schema = toolInputSchema(ProposeProjectOverlayArgsSchema);
+    const properties = schema.properties as Record<string, unknown>;
+    return {
+      ...schema,
+      properties: {
+        ...properties,
+        overlay: {
+          ...overlayJsonSchema(),
+          description:
+            "This project's WHOLE overlay document as it should stand, the one your brief shows with your change made; an empty object removes every override.",
+        },
+        summary: {
+          ...(properties.summary as Record<string, unknown>),
+          description: `One line for the card, at most ${TEAM_SUMMARY_MAX} characters: what this change does to how the team works in this project.`,
+        },
+        reason: {
+          ...(properties.reason as Record<string, unknown>),
+          description: REASON_DESCRIPTION,
+        },
+      },
+    };
+  }
+  if (audience === 'builder') {
     const schema = toolInputSchema(ProposeTeamChangeArgsSchema);
     const properties = schema.properties as Record<string, unknown>;
     return {

@@ -68,6 +68,27 @@ export const ProposeTeamChangeArgsSchema = z
     message: 'send `edits`, `overlay`, or both',
   });
 
+/**
+ * A project chat's proposal: the project's whole overlay of its default team,
+ * never the team itself, which is changed on its own page.
+ */
+export const ProposeProjectOverlayArgsSchema = z
+  .object({
+    overlay: z
+      .record(z.string(), z.unknown())
+      .describe("The project's WHOLE overlay document as it should stand"),
+    summary: summaryField,
+    reason: reasonField,
+  })
+  .strict();
+
+/** A project chat's call arguments, or what is wrong with them. Never throws. */
+export function readProposeProjectOverlayArgs(
+  args: Record<string, unknown>,
+): ToolArgs<z.infer<typeof ProposeProjectOverlayArgsSchema>> {
+  return readToolArgs(ProposeProjectOverlayArgsSchema, args);
+}
+
 /** The call's arguments, or what is wrong with them. Never throws. */
 export function readProposeTeamArgs(
   args: Record<string, unknown>,

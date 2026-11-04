@@ -17,11 +17,14 @@ import * as runtime from '../runtime';
 import type {
   CreateProjectDto,
   MeasureProjectInstructionSizesDto,
+  ProjectChatsDiscardedDto,
   ProjectDeletedDto,
   ProjectDto,
   ProjectForFolderDto,
   ProjectInstructionSizesDto,
   ProjectQueueDto,
+  RunDto,
+  StartProjectChatDto,
   UpdateProjectDto,
 } from '../models/index';
 
@@ -33,9 +36,18 @@ export interface ProjectsApiDeleteProjectRequest {
     projectId: string;
 }
 
+export interface ProjectsApiDiscardProjectChatRequest {
+    projectId: string;
+}
+
 export interface ProjectsApiMeasureProjectInstructionSizesRequest {
     projectId: string;
     measureProjectInstructionSizesDto: MeasureProjectInstructionSizesDto;
+}
+
+export interface ProjectsApiOpenProjectChatRequest {
+    projectId: string;
+    startProjectChatDto: StartProjectChatDto;
 }
 
 export interface ProjectsApiReadProjectRequest {
@@ -159,6 +171,51 @@ export class ProjectsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async discardProjectChatRaw(requestParameters: ProjectsApiDiscardProjectChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ProjectChatsDiscardedDto>> {
+        if (requestParameters['projectId'] == null) {
+            throw new runtime.RequiredError(
+                'projectId',
+                'Required parameter "projectId" was null or undefined when calling discardProjectChat().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/projects/{projectId}/chat`;
+        urlPath = urlPath.replace(`{${"projectId"}}`, encodeURIComponent(String(requestParameters['projectId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async discardProjectChat(requestParameters: ProjectsApiDiscardProjectChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ProjectChatsDiscardedDto> {
+        const response = await this.discardProjectChatRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async listProjectsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<ProjectDto>>> {
         const queryParameters: any = {};
 
@@ -245,6 +302,61 @@ export class ProjectsApi extends runtime.BaseAPI {
      */
     async measureProjectInstructionSizes(requestParameters: ProjectsApiMeasureProjectInstructionSizesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ProjectInstructionSizesDto> {
         const response = await this.measureProjectInstructionSizesRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async openProjectChatRaw(requestParameters: ProjectsApiOpenProjectChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
+        if (requestParameters['projectId'] == null) {
+            throw new runtime.RequiredError(
+                'projectId',
+                'Required parameter "projectId" was null or undefined when calling openProjectChat().'
+            );
+        }
+
+        if (requestParameters['startProjectChatDto'] == null) {
+            throw new runtime.RequiredError(
+                'startProjectChatDto',
+                'Required parameter "startProjectChatDto" was null or undefined when calling openProjectChat().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/projects/{projectId}/chat`;
+        urlPath = urlPath.replace(`{${"projectId"}}`, encodeURIComponent(String(requestParameters['projectId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['startProjectChatDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async openProjectChat(requestParameters: ProjectsApiOpenProjectChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
+        const response = await this.openProjectChatRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

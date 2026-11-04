@@ -24,6 +24,8 @@ const projectsApi = vi.hoisted(() => ({
   readProjectQueue: vi.fn(),
   resolveProjectForFolder: vi.fn(),
   measureProjectInstructionSizes: vi.fn(),
+  openProjectChat: vi.fn(),
+  discardProjectChat: vi.fn(),
 }));
 const teamsApi = vi.hoisted(() => ({
   listTeams: vi.fn(async () => []),
@@ -36,6 +38,24 @@ const teamsApi = vi.hoisted(() => ({
   saveTeam: vi.fn(),
   readTeamHealth: vi.fn(),
   measureInstructionSizes: vi.fn(),
+}));
+
+// The chat screen has its own spec for what it does with a hosted thread; this
+// one is about what the project page hands it.
+const drawn = vi.hoisted(() => ({
+  hosted: null as import('../chats/hosted-thread').HostedThread | null,
+}));
+const hostedThread = (): import('../chats/hosted-thread').HostedThread =>
+  drawn.hosted!;
+vi.mock('../chats/Chats', () => ({
+  Chats: ({
+    hosted,
+  }: {
+    hosted: import('../chats/hosted-thread').HostedThread;
+  }): null => {
+    drawn.hosted = hosted;
+    return null;
+  },
 }));
 
 vi.mock('../daemon-api', async (importOriginal) => {
@@ -910,6 +930,67 @@ describe('Projects page', () => {
     expect(teamsApi.listTeamOverlays).not.toHaveBeenCalled();
   });
 
+  it('opens the project’s own chat from the page’s header, writing what was just typed before it sends', async () => {
+    vi.useFakeTimers();
+    projectsApi.listProjects.mockResolvedValue([
+      aProject({ instructions: 'Use pnpm.', instructionsRevision: 4 }),
+    ]);
+    projectsApi.updateProject.mockImplementation(
+      async ({ updateProjectDto }: ProjectsApiUpdateProjectRequest) =>
+        aProject({
+          instructionBlocks: updateProjectDto.instructionBlocks ?? [],
+          instructionsRevision: 5,
+        }),
+    );
+    projectsApi.openProjectChat.mockResolvedValue({ id: 'chat-1' });
+    await mountOpen({
+      client: {
+        onProjectsChanged: () => () => undefined,
+        onTaskChanged: () => () => undefined,
+        onReconnect: () => () => undefined,
+      } as unknown as DaemonClient,
+    });
+
+    const toggle = document.body.querySelector<HTMLButtonElement>(
+      '[data-slot="project-hero"] button[aria-label="Change with chat"]',
+    )!;
+    expect(toggle).not.toBeNull();
+    await act(async () => {
+      toggle.click();
+    });
+    await settle();
+
+    const dock = document.body.querySelector(
+      '[data-slot="project-page-dock"] aside',
+    );
+    expect(dock?.getAttribute('aria-label')).toBe('Change One with chat');
+    expect(hostedThread().queueScope).toBe('project-chat:p1');
+    await act(async () => {
+      await hostedThread().open();
+    });
+    expect(projectsApi.openProjectChat).toHaveBeenCalledWith({
+      projectId: 'p1',
+      startProjectChatDto: expect.objectContaining({
+        approval: 'acceptEdits',
+      }) as unknown,
+    });
+
+    type(field('block-b1-text'), 'Use pnpm. Keep diffs small.');
+    expect(updates()).toEqual([]);
+    await act(async () => {
+      await hostedThread().onBeforeSend?.();
+    });
+    expect(updates()).toEqual([
+      expect.objectContaining({
+        updateProjectDto: expect.objectContaining({
+          instructionBlocks: [
+            { id: 'b1', title: '', text: 'Use pnpm. Keep diffs small.' },
+          ],
+        }) as unknown,
+      }),
+    ]);
+  });
+
   describe('when the default is a team', () => {
     const CREW = {
       name: 'Crew',
@@ -1081,6 +1162,115 @@ describe('Projects page', () => {
           }) as unknown,
         }) as unknown,
       );
+    });
+
+    it('offers no stage addenda, no MCP group and no chat of its own: the page’s header chat changes the overlay', async () => {
+      teamsApi.getTeam.mockResolvedValue({
+        slug: 'crew',
+        hash: 'team-1',
+        team: {
+          ...CREW,
+          stages: [
+            {
+              id: 'build',
+              title: 'Build',
+              goal: 'built',
+              responsible: ['lead'],
+            },
+          ],
+        },
+      });
+      const el = await mountOpen();
+      const section = el.querySelector<HTMLElement>(
+        '[data-slot="project-team"]',
+      )!;
+
+      expect(section.querySelector('section[aria-label="Stages"]')).toBeNull();
+      expect(section.textContent).not.toContain('addend');
+      expect(
+        [...section.querySelectorAll('button')].map(
+          (button) => button.textContent,
+        ),
+      ).not.toContain('Change with chat');
+      const sheet = await openMember(el);
+      expect(
+        sheet.querySelector('section[aria-label="Tools & MCP"]'),
+      ).toBeNull();
+      expect(sheet.querySelector('section[aria-label="Model"]')).not.toBeNull();
+    });
+
+    it('restores every setting and the pool of a member to the team’s on confirm, keeping its extra instructions', async () => {
+      teamsApi.getTeamOverlay.mockResolvedValue(
+        overlayWire(
+          {
+            members: {
+              lead: {
+                settings: { model: 'haiku', effort: 'low' },
+                pool: [],
+                extraInstructions: 'Use the staging DB.',
+              },
+            },
+          },
+          'o-1',
+        ),
+      );
+      const el = await mountOpen();
+      const sheet = await openMember(el);
+
+      await act(async () => {
+        sheet
+          .querySelector<HTMLButtonElement>(
+            '[data-slot="member-restore-team-settings"]',
+          )!
+          .click();
+      });
+      expect(teamsApi.saveTeamOverlay).not.toHaveBeenCalled();
+      await act(async () => {
+        buttonReading('Restore').click();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      });
+
+      expect(teamsApi.saveTeamOverlay).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          saveTeamOverlayDto: expect.objectContaining({
+            overlay: {
+              members: { lead: { extraInstructions: 'Use the staging DB.' } },
+            },
+          }) as unknown,
+        }) as unknown,
+      );
+      expect(
+        sheet.querySelector('[data-slot="member-restore-team-settings"]'),
+      ).toBeNull();
+      expect(
+        sheet.querySelector('[data-slot="member-team-settings"]')?.textContent,
+      ).toContain('Every setting is the team’s');
+    });
+
+    it('reads the team and its overlay back once a turn of the page’s chat ends', async () => {
+      const el = await mountOpen({
+        client: {
+          onProjectsChanged: () => () => undefined,
+          onTaskChanged: () => () => undefined,
+          onReconnect: () => () => undefined,
+        } as unknown as DaemonClient,
+      });
+      await act(async () => {
+        el.querySelector<HTMLButtonElement>(
+          '[data-slot="project-hero"] button[aria-label="Change with chat"]',
+        )!.click();
+      });
+      await settle();
+      const reads = teamsApi.getTeamOverlay.mock.calls.length;
+
+      await act(async () => {
+        await hostedThread().onTurnSettled?.();
+      });
+      await settle();
+
+      expect(teamsApi.getTeamOverlay.mock.calls.length).toBeGreaterThan(reads);
     });
 
     it('gives the project its own pool the moment the team’s pool is changed, with no Override press', async () => {

@@ -599,7 +599,7 @@ export class TeamProposalService {
         code: prepared.code,
         message:
           prepared.code === 'OVERLAY_INACTIVE'
-            ? `the project this chat is bound to does not default to team '${request.slug}', so its runs would not use the overlay — change the shared team instead`
+            ? `the project no longer defaults to team '${request.slug}', so its runs would not use the overlay`
             : prepared.message,
       };
     }
@@ -707,6 +707,18 @@ export class TeamProposalService {
     };
   }
 
+  /** A builder chat's overlay write, or a project chat's. */
+  private async overlaySourceOf(
+    slug: string,
+    by: { runId: string } | null,
+  ): Promise<'builder' | 'chat'> {
+    const chat =
+      by === null
+        ? null
+        : await this.runDao.getById(by.runId, this.em.fork()).catch(() => null);
+    return (chat?.editsTeamSlug ?? null) === slug ? 'builder' : 'chat';
+  }
+
   private async logApprovedOverlay(
     proposal: TeamProposal,
     overlay: TeamProposalOverlay,
@@ -716,7 +728,7 @@ export class TeamProposalService {
     await this.changeLog.recordOverlay({
       slug: proposal.slug,
       projectId: overlay.projectId,
-      source: 'builder',
+      source: await this.overlaySourceOf(proposal.slug, by),
       fromHash: overlay.baseHash,
       toHash: written.hash,
       summary: proposal.summary,

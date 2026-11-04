@@ -6,6 +6,7 @@ import {
   isHostProjectInstructionsCall,
   projectInstructionsCardInput,
   projectInstructionsVerdict,
+  readHostProjectInstructions,
 } from './host-project-instructions';
 
 const SERVER = 'geniro-1a2b3c4d';
@@ -101,5 +102,34 @@ describe('projectInstructionsVerdict', () => {
       }),
     ).toEqual({ outcome: 'not-saved', answer: 'the project has been deleted' });
     expect(projectInstructionsVerdict({ status: 'declined' })).toEqual({});
+  });
+});
+
+describe('readHostProjectInstructions', () => {
+  const stored = {
+    projectId: 'p1',
+    project: 'Billing',
+    previous: 'Use pnpm.',
+    next: 'Use pnpm only.',
+    blocks: [{ id: 'b1', title: '', text: 'Use pnpm only.' }],
+    baseRevision: 2,
+  };
+
+  it('reads an analysis’s card with its items and a project chat’s with none', () => {
+    expect(
+      readHostProjectInstructions({ ...stored, ids: ['P-1'], cardSeq: 4 }),
+    ).toMatchObject({ ids: ['P-1'], cardSeq: 4 });
+    expect(
+      readHostProjectInstructions({ ...stored, ids: [], cardSeq: null }),
+    ).toMatchObject({ ids: [], cardSeq: null });
+  });
+
+  it('refuses items without a card, and a card without items', () => {
+    expect(
+      readHostProjectInstructions({ ...stored, ids: ['P-1'], cardSeq: null }),
+    ).toBeNull();
+    expect(
+      readHostProjectInstructions({ ...stored, ids: [], cardSeq: 4 }),
+    ).toBeNull();
   });
 });

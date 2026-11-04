@@ -13,6 +13,7 @@ import type { MonitorBroker } from '../../agents/services/monitor.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
 import type { PatchBroker } from '../../agents/services/patch.broker';
 import type { PlanBroker } from '../../agents/services/plan.broker';
+import type { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import type { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
 import type { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
@@ -107,6 +108,7 @@ export interface McpToolDeps {
   teamHistory: TeamHistoryService;
   teamGate: TeamProposalBroker;
   teamBuilders: TeamBuilderBroker;
+  projectChats: ProjectChatBroker;
   teamStore: TeamStoreService;
   teamProposals: TeamProposalService;
   shares: ShareService;
@@ -157,7 +159,12 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new MemorySaveTool(deps.memory),
     new MemoryForgetTool(deps.memory),
     new ReadTeamsTool(deps.teamGate, deps.teamBuilders, deps.teamStore),
-    new ProposeTeamTool(deps.teamGate, deps.teamBuilders, deps.teamProposals),
+    new ProposeTeamTool(
+      deps.teamGate,
+      deps.teamBuilders,
+      deps.projectChats,
+      deps.teamProposals,
+    ),
     new ReadAnalyzedThreadTool(
       deps.analysis,
       deps.threads,
@@ -174,6 +181,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     ),
     new SaveProjectInstructionsTool(
       deps.analysis,
+      deps.projectChats,
       deps.projectInstructions,
       deps.projectInstructionCards,
     ),

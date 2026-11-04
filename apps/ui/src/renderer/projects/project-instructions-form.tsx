@@ -69,6 +69,7 @@ export function ProjectInstructionsForm({
   project,
   api,
   blockSizes = null,
+  flushRef,
   onSaved,
   onError,
 }: {
@@ -77,6 +78,8 @@ export function ProjectInstructionsForm({
   api: DaemonApis['projects'] | null;
   /** Each saved block's measured size, by block id; null before a measurement lands. */
   blockSizes?: ReadonlyMap<string, InstructionBlockSize> | null;
+  /** Set to a write of whatever is typed and not yet saved, for the page's chat to run before it sends. */
+  flushRef?: React.RefObject<(() => Promise<unknown>) | null>;
   onSaved: () => void;
   onError: (message: string) => void;
 }): React.JSX.Element {
@@ -133,6 +136,18 @@ export function ProjectInstructionsForm({
     [api, project.id, onSaved, onError],
   );
   const persist = useDebouncedPersist(write, () => !driftRef.current);
+  useEffect(() => {
+    if (flushRef === undefined) {
+      return undefined;
+    }
+    flushRef.current = async () => {
+      await persist.flush().catch(() => undefined);
+      await writes.current;
+    };
+    return () => {
+      flushRef.current = null;
+    };
+  }, [flushRef, persist]);
 
   const edit = (patch: Partial<Texts>): void => {
     const next = { ...textsRef.current, ...patch };

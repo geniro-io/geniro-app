@@ -17717,12 +17717,11 @@ describe('TeamExecutorService — relay mode', () => {
       const { overlayStore, service: overlays } = await overlaysFor({
         p1: 'dev',
       });
-      const staged = teamOf([member('a')], {
-        name: 'staged',
-        stages: [{ id: 's', title: 'S', goal: 'done', howToWork: 'x' }],
-      });
       await overlayStore.save('dev', 'p1', {
-        stages: { s: { howToWorkAddendum: 'y'.repeat(4000) } },
+        instructionBlocks: [
+          { id: 'b', title: 'One', text: 'x', audience: 'everyone' },
+          { id: 'b', title: 'Two', text: 'y', audience: 'everyone' },
+        ],
       });
       const { service, runDao } = setup(4870, {
         overlays,
@@ -17730,7 +17729,7 @@ describe('TeamExecutorService — relay mode', () => {
       });
 
       await expect(
-        service.startRun({ slug: 'dev', team: staged, cwd: dir, prompt: 'go' }),
+        service.startRun({ slug: 'dev', team: SHARED, cwd: dir, prompt: 'go' }),
       ).rejects.toMatchObject({ errorCode: 'TEAM_OVERLAY_INVALID' });
       expect(runDao.runs.size).toBe(0);
     });

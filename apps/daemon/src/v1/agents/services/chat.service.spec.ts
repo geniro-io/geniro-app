@@ -133,6 +133,7 @@ import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
+import { ProjectChatBroker } from './project-chat.broker';
 import { ProjectInstructionsBroker } from './project-instructions.broker';
 import type { ProjectInstructionsChangeService } from './project-instructions-change.service';
 import type { PullRequestCaptureService } from './pull-request-capture.service';
@@ -1205,6 +1206,7 @@ function setup(
   const patches = new PatchBroker();
   const plans = new PlanBroker();
   const projectCards = new ProjectInstructionsBroker();
+  const projectChats = new ProjectChatBroker();
   // Its sink is all these cases observe: whether a chat turn offers it.
   const runOutcomes = new RunOutcomeBroker(
     ...([em, runDao, {}, {}, bus] as unknown as ConstructorParameters<
@@ -1419,6 +1421,7 @@ function setup(
     runOutcomes,
     projectCards,
     opts.projectWrites as ProjectInstructionsChangeService | undefined,
+    projectChats,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -1443,6 +1446,7 @@ function setup(
     actionSinks,
     teamProposals,
     teamBuilders,
+    projectChats,
     artifactStore,
     statuses,
     deletedRuns,
@@ -2915,6 +2919,50 @@ describe('ChatService', () => {
 
       await settle(claude);
       expect(teamBuilders.canEdit(builder.id, SINGLE_AGENT_NODE)).toBe(false);
+    });
+
+    it('lets a project chat turn change its own project, briefed afresh, and only while the turn runs', async () => {
+      const {
+        service,
+        claude,
+        runDao,
+        projectChats,
+        projectCards,
+        teamProposals,
+      } = setup();
+      const briefs: string[] = [];
+      service.useProjectChat({
+        brief: (projectId, cwd) => {
+          briefs.push(`${projectId}@${cwd}`);
+          return Promise.resolve(`brief of ${projectId}`);
+        },
+        teamOf: (projectId) =>
+          Promise.resolve(projectId === 'p1' ? 'dev' : null),
+      });
+      const chat = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        editsProjectId: 'p1',
+      });
+      expect(projectChats.canEdit(chat.id, SINGLE_AGENT_NODE)).toBe(false);
+
+      await service.sendMessage(chat.id, 'hello');
+
+      expect(projectChats.projectOf(chat.id, SINGLE_AGENT_NODE)).toEqual({
+        projectId: 'p1',
+        teamSlug: 'dev',
+      });
+      expect(projectChats.canProposeOverlay(chat.id, SINGLE_AGENT_NODE)).toBe(
+        true,
+      );
+      expect(projectCards.canPropose(chat.id, SINGLE_AGENT_NODE)).toBe(true);
+      expect(teamProposals.canPropose(chat.id, SINGLE_AGENT_NODE)).toBe(false);
+      expect(briefs).toEqual([`p1@${realpathSync(dir)}`]);
+      expect(runDao.runs.get(chat.id)!.teamInstructions).toBe('brief of p1');
+
+      await settle(claude);
+      expect(projectChats.canEdit(chat.id, SINGLE_AGENT_NODE)).toBe(false);
+      expect(projectCards.canPropose(chat.id, SINGLE_AGENT_NODE)).toBe(false);
     });
 
     it('stops accepting artifacts once the turn that could show them is over', async () => {

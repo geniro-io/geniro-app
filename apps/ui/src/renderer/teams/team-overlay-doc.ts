@@ -209,6 +209,19 @@ export function isOverridden(
   return settings[field] !== undefined || settings.agent !== undefined;
 }
 
+/** Every Model setting and the pool back to the team's; the member's extra instructions stay. */
+export function withTeamSettings(
+  overlay: TeamOverlay,
+  memberId: string,
+): TeamOverlay {
+  return withOwn(overlay, memberId, (own) => {
+    const next = { ...own };
+    delete next.settings;
+    delete next.pool;
+    return next;
+  });
+}
+
 /** `pool` undefined goes back to the team's pool. */
 export function withMemberPool(
   overlay: TeamOverlay,
@@ -237,20 +250,6 @@ export function withExtraInstructions(
   }));
 }
 
-export function withStageAddendum(
-  overlay: TeamOverlay,
-  stageId: string,
-  text: string,
-): TeamOverlay {
-  const stages = { ...overlay.stages };
-  if (text === '') {
-    delete stages[stageId];
-  } else {
-    stages[stageId] = { howToWorkAddendum: text };
-  }
-  return { ...overlay, stages };
-}
-
 export function withOverlayBlocks(
   overlay: TeamOverlay,
   instructionBlocks: InstructionBlock[],
@@ -272,7 +271,7 @@ export function memberOverlayBadges(
   };
 }
 
-/** The overlay with one orphan entry (`members.<id>` / `stages.<id>`) removed. */
+/** The overlay with one orphan entry (`members.<id>`) removed. */
 export function withoutOrphan(
   overlay: TeamOverlay,
   orphan: string,
@@ -283,11 +282,6 @@ export function withoutOrphan(
     const members = { ...overlay.members };
     delete members[id];
     return { ...overlay, members };
-  }
-  if (section === 'stages') {
-    const stages = { ...overlay.stages };
-    delete stages[id];
-    return { ...overlay, stages };
   }
   return overlay;
 }

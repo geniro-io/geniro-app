@@ -439,9 +439,10 @@ export class Run extends TimestampsEntity {
   editsTeamSlug: string | null = null;
 
   /**
-   * The project whose overlay of {@link editsTeamSlug} this builder chat
-   * edits beside the shared team; null for a chat bound to the shared team
-   * only.
+   * With {@link editsTeamSlug} null, the project this run is the own chat of
+   * (`ProjectChatService`), hidden from the sidebar like a builder chat. With
+   * a slug, the project a builder chat was bound to before project chats
+   * existed; a builder chat opened since is bound to none.
    */
   @Property({ type: 'string', nullable: true })
   editsProjectId: string | null = null;

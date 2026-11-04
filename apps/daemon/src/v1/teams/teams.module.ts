@@ -6,6 +6,7 @@ import { ConfigDirPinService } from '../agents/services/config-dir-pin.service';
 import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { CapabilitiesController } from './controllers/capabilities.controller';
+import { ProjectChatController } from './controllers/project-chat.controller';
 import { ProjectInstructionSizesController } from './controllers/project-instruction-sizes.controller';
 import { TeamsController } from './controllers/teams.controller';
 import { TeamChangeLogDao } from './dao/team-change-log.dao';
@@ -17,6 +18,7 @@ import { HostWakeGraphDelivery } from './services/host-wake-graph-delivery.servi
 import { InstructionSizesService } from './services/instruction-sizes.service';
 import { MonitorGraphDelivery } from './services/monitor-graph-delivery.service';
 import { PoolCooldowns } from './services/pool-cooldowns.store';
+import { ProjectChatService } from './services/project-chat.service';
 import { ProjectInstructionSizesService } from './services/project-instruction-sizes.service';
 import { RunTeamService } from './services/run-team.service';
 import { StageService } from './services/stage.service';
@@ -52,6 +54,7 @@ import { TeamStoreService } from './services/team-store.service';
     TeamsController,
     CapabilitiesController,
     ProjectInstructionSizesController,
+    ProjectChatController,
   ],
   providers: [
     {
@@ -93,6 +96,7 @@ import { TeamStoreService } from './services/team-store.service';
     StageService,
     StageWakeService,
     TeamChatService,
+    ProjectChatService,
     TeamAnalysisService,
     AnalysisJudgeService,
     TeamChangeService,

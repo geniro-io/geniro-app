@@ -326,6 +326,11 @@ export class TeamOverlayService
     };
   }
 
+  /** Where `projectId`'s overlay of `slug` is kept, whether or not it exists yet. */
+  overlayPathOf(slug: string, projectId: string): string {
+    return this.overlays.pathOf(slug, projectId);
+  }
+
   /** A deleted project's overlays go with it, each backed up first. */
   async dropIfProjectGone(projectId: string): Promise<string[]> {
     try {

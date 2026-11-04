@@ -2162,10 +2162,19 @@ export interface HostProjectInstructions {
   blocks: ProjectInstructionBlock[];
   /** The revision `previous` was read at; Apply writes only over it. */
   baseRevision: number;
-  /** The `P-` ids the change carries out. */
+  /** The `P-` ids the change carries out; none for a project chat's change. */
   ids: string[];
-  /** The recommendations card the Apply that selected them named. */
-  cardSeq: number;
+  /** The recommendations card the Apply that selected them named; null for a project chat's change, which carries out no item. */
+  cardSeq: number | null;
+}
+
+/**
+ * Where a project's own chat is briefed from, and which team's overlay its turn
+ * may change — installed by the teams module (`ProjectChatService`).
+ */
+export interface ProjectChatSource {
+  brief(projectId: string, cwd: string): Promise<string>;
+  teamOf(projectId: string): Promise<string | null>;
 }
 
 /** What a project-instructions card resolves to; the arms mean what {@link HostPatchOutcome}'s do. */

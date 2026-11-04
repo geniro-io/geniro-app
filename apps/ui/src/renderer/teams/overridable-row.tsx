@@ -92,7 +92,9 @@ export function OverridableRow({
           <ScopeMark label={label} {...scope} />
         </div>
         {scope.overridden ? (
-          <span id={teamId} className="text-xs text-muted-foreground">
+          <span
+            id={teamId}
+            className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
             Team: {scope.teamValue}
           </span>
         ) : null}
@@ -134,7 +136,11 @@ export function OverridableGroup({
         <ScopeMark label={label} {...scope} />
       </div>
       {scope.overridden ? (
-        <span className={cn('text-xs text-muted-foreground', !bare && 'px-3')}>
+        <span
+          className={cn(
+            'min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]',
+            !bare && 'px-3',
+          )}>
           Team: {scope.teamValue}
         </span>
       ) : null}

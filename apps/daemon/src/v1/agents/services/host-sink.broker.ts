@@ -104,6 +104,11 @@ export abstract class HostSinkBroker<TSink> {
     return this.sinks.has(this.key(runId, memberId));
   }
 
+  /** This member's sink as it stands, for a gate that reads what the sink carries. */
+  protected sinkOf(runId: string, memberId: string): TSink | undefined {
+    return this.sinks.get(this.key(runId, memberId))?.sink;
+  }
+
   /**
    * Whether this member's sink was installed for a CLI that will not hold the
    * call open (see {@link HostSinkOptions.answersAtOnce}). False with no sink.

@@ -40,12 +40,12 @@ describe('TeamOverlayStoreService', () => {
 
   it('refuses a stale hash with TEAM_OVERLAY_CHANGED and writes nothing', async () => {
     const first = await store.save('dev', 'p1', {
-      stages: { a: { howToWorkAddendum: 'one' } },
+      members: { lead: { extraInstructions: 'one' } },
     });
     await store.save(
       'dev',
       'p1',
-      { stages: { a: { howToWorkAddendum: 'two' } } },
+      { members: { lead: { extraInstructions: 'two' } } },
       first.hash,
     );
 
@@ -53,7 +53,7 @@ describe('TeamOverlayStoreService', () => {
       store.save(
         'dev',
         'p1',
-        { stages: { a: { howToWorkAddendum: 'three' } } },
+        { members: { lead: { extraInstructions: 'three' } } },
         first.hash,
       ),
     ).rejects.toMatchObject({ errorCode: 'TEAM_OVERLAY_CHANGED' });
@@ -61,7 +61,7 @@ describe('TeamOverlayStoreService', () => {
       errorCode: 'TEAM_OVERLAY_CHANGED',
     });
     expect(
-      (await store.get('dev', 'p1'))!.overlay.stages!.a!.howToWorkAddendum,
+      (await store.get('dev', 'p1'))!.overlay.members!.lead!.extraInstructions,
     ).toBe('two');
   });
 
@@ -72,13 +72,13 @@ describe('TeamOverlayStoreService', () => {
       store.save(
         'dev',
         'p1',
-        { stages: { a: { howToWorkAddendum: 'left' } } },
+        { members: { lead: { extraInstructions: 'left' } } },
         first.hash,
       ),
       store.save(
         'dev',
         'p1',
-        { stages: { a: { howToWorkAddendum: 'right' } } },
+        { members: { lead: { extraInstructions: 'right' } } },
         first.hash,
       ),
     ]);

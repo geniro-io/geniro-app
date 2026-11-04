@@ -4229,7 +4229,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       content: [
         {
           type: 'text',
-          text: "Not read: the team library is offered to ordinary chats and a team's builder chat only.",
+          text: "Not read: the team library is offered to ordinary chats, a team's builder chat and the chat of a project a team runs.",
         },
       ],
       isError: true,
@@ -4324,6 +4324,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
   const projectChatTools = (
     projectChats: ProjectChatBroker,
     teamProposals = {} as TeamProposalService,
+    teamStore = {} as TeamStoreService,
   ) => {
     const cards = new ProjectInstructionsBroker();
     cards.register('run-1', 'agent', () =>
@@ -4354,7 +4355,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamGate: new TeamProposalBroker(),
       teamBuilders: new TeamBuilderBroker(),
       projectChats,
-      teamStore: {} as TeamStoreService,
+      teamStore,
       teamProposals,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
@@ -4366,7 +4367,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     } as Parameters<typeof createMcpTools>[0]);
   };
 
-  it('lists a project chat its instructions save and, for a team-run project, the overlay proposal — no builder tools', () => {
+  it('lists a project chat its instructions save and, for a team-run project, the overlay proposal and a read of its team — no builder tools', () => {
     const listed = (teamSlug: string | null) => {
       const projectChats = new ProjectChatBroker();
       projectChats.register('run-1', 'agent', { projectId: 'p1', teamSlug });
@@ -4384,13 +4385,11 @@ describe('McpServerService — what the descriptions tell a model', () => {
 
     expect(names).toContain(HOST_PROJECT_INSTRUCTIONS_TOOL);
     expect(names).toContain(HOST_PROPOSE_TEAM_TOOL);
-    for (const builderOnly of [
-      HOST_READ_TEAMS_TOOL,
-      HOST_TEAM_CHANGE_TOOL,
-      HOST_BACKUP_TEAM_TOOL,
-    ]) {
+    expect(names).toContain(HOST_READ_TEAMS_TOOL);
+    for (const builderOnly of [HOST_TEAM_CHANGE_TOOL, HOST_BACKUP_TEAM_TOOL]) {
       expect(names).not.toContain(builderOnly);
     }
+    expect(schemaOf(HOST_READ_TEAMS_TOOL).properties).toEqual({});
     expect(Object.keys(schemaOf(HOST_PROPOSE_TEAM_TOOL).properties)).toEqual([
       'overlay',
       'summary',
@@ -4407,10 +4406,52 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(described(HOST_PROJECT_INSTRUCTIONS_TOOL)).toContain(
       HOST_PROPOSE_TEAM_TOOL,
     );
+    expect(described(HOST_READ_TEAMS_TOOL)).toContain(HOST_PROPOSE_TEAM_TOOL);
+    expect(described(HOST_READ_TEAMS_TOOL)).toMatch(/It reads only/);
 
     const agentRun = listed(null).map((tool) => tool.name);
     expect(agentRun).toContain(HOST_PROJECT_INSTRUCTIONS_TOOL);
     expect(agentRun).not.toContain(HOST_PROPOSE_TEAM_TOOL);
+    expect(agentRun).not.toContain(HOST_READ_TEAMS_TOOL);
+  });
+
+  it('answers a project chat’s read_teams with its own team only', async () => {
+    const projectChats = new ProjectChatBroker();
+    projectChats.register('run-1', 'agent', {
+      projectId: 'p1',
+      teamSlug: 'dev',
+    });
+    const get = vi.fn((slug: string) =>
+      Promise.resolve({
+        slug,
+        hash: 'h1',
+        team: teamOf([member('lead')], { name: 'Dev Team' }),
+      }),
+    );
+    const list = vi.fn();
+    const tool = projectChatTools(
+      projectChats,
+      {} as TeamProposalService,
+      { get, list } as unknown as TeamStoreService,
+    ).find((t) => t.handles(HOST_READ_TEAMS_TOOL))!;
+    const context = { runId: 'run-1', memberId: 'agent' } as Parameters<
+      typeof tool.call
+    >[2];
+
+    const own = await tool.call(HOST_READ_TEAMS_TOOL, {}, context);
+    const other = await tool.call(
+      HOST_READ_TEAMS_TOOL,
+      { slug: 'billing' },
+      context,
+    );
+
+    expect(own.isError).toBe(false);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith('dev');
+    expect(list).not.toHaveBeenCalled();
+    expect(JSON.stringify(own.content)).toContain('Dev Team');
+    expect(other.isError).toBe(true);
+    expect(JSON.stringify(other.content)).toContain('`dev`');
   });
 
   it('proposes a project chat’s overlay on its own team and project, never team edits', async () => {

@@ -44,6 +44,18 @@ export function isHostBuilderTeamCall(
 }
 
 /**
+ * Whether a project chat's call reads its project's team — asked only on a
+ * project chat's turn, where `read_teams` answers that one team and nothing
+ * else of the library: the team the user opened this chat beside.
+ */
+export function isHostProjectTeamReadCall(
+  serverName: string | null,
+  toolName: string,
+): boolean {
+  return isHostToolCall(serverName, toolName, HOST_READ_TEAMS_TOOL);
+}
+
+/**
  * The card id `Run.pendingTeamProposal` names, or null — read WITHOUT the
  * proposal, so the one id both readers of the column act on is the same: the
  * boot reconcile spares this card, and `TeamProposalService.rehydrate`

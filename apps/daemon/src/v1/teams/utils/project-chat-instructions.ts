@@ -3,6 +3,7 @@ import { Document } from 'yaml';
 import {
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
+  HOST_READ_TEAMS_TOOL,
 } from '../../agents/chat.types';
 import type { ProjectInstructionBlock } from '../../projects/projects.types';
 import type { AgentKind } from '../../runs/runs.types';
@@ -25,8 +26,6 @@ export type ProjectChatTarget =
       kind: 'team';
       slug: string;
       team: Team;
-      /** Absolute path of the team's library file, read-only for this chat. */
-      teamPath: string;
       /** Absolute path of this project's overlay of it, which may not exist yet. */
       overlayPath: string;
       /** The overlay file's YAML as it stands; null when there is none. */
@@ -112,9 +111,10 @@ section; you cannot change it.`;
   return `ITS TEAM
 The project's runs are run by the team "${target.team.name}" (slug
 \`${target.slug}\`). The team is shared by every project that uses it, and is
-changed on its own page, never here. Its file, read-only for you:
-
-  ${target.teamPath}
+changed on its own page, never here; you cannot change it. Read it whole —
+its members' roles and instructions, its stages, trigger, mode and blocks —
+with ${HOST_READ_TEAMS_TOOL}, whenever the user asks about it or a change needs
+to know it.
 
 What it holds for each member's Model group and pool:
 

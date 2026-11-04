@@ -11191,6 +11191,33 @@ describe('ChatService — approval modes (parity M1)', () => {
     }
   });
 
+  it("approves a project chat's read of its team in an `ask` chat, and no builder tool", async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    runDao.runs.get(run.id)!.editsProjectId = 'p1';
+    await service.sendMessage(run.id, 'hi');
+    const handle = claude.handles[0]!;
+    for (const tool of [HOST_READ_TEAMS_TOOL, HOST_TEAM_CHANGE_TOOL]) {
+      claude.emit({
+        type: 'approval_request',
+        id: `p-${tool}`,
+        toolName: `mcp__${hostMcpServerName(run.id)}__${tool}`,
+        input: {},
+      });
+    }
+    await drain();
+
+    expect(
+      handle.respondApproval.mock.calls
+        .filter(([, allowed]) => allowed === true)
+        .map(([id]) => id as string),
+    ).toEqual([`p-${HOST_READ_TEAMS_TOOL}`]);
+  });
+
   it('auto-approves the show_comparison CALL, like every drawing tool', async () => {
     const { service, claude, approvals, itemDao } = setup();
     const run = await service.createChat({

@@ -170,6 +170,7 @@ import {
 } from '../utils/host-question';
 import {
   isHostBuilderTeamCall,
+  isHostProjectTeamReadCall,
   isHostTeamProposalCall,
   standingProposalCardId,
 } from '../utils/host-teams';
@@ -5869,6 +5870,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // `isHostBuilderTeamCall`.
         (run.editsTeamSlug !== null &&
           isHostBuilderTeamCall(hostServerName, toolName)) ||
+        (isProjectChat(run) &&
+          isHostProjectTeamReadCall(hostServerName, toolName)) ||
         // The board tools: a card filed or changed is on the board in front of
         // the user and one click to undo. The writes that would hand an
         // agent's text to unattended work — a card landing in, or edited

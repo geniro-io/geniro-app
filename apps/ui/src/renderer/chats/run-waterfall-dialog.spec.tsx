@@ -37,6 +37,7 @@ function lane(over: Partial<RunWaterfallLane> = {}): RunWaterfallLane {
 function turn(over: Partial<RunWaterfallTurn> = {}): RunWaterfallTurn {
   return {
     memberId: 'engineer',
+    callId: null,
     startedAt: FROM,
     seq: 1,
     timingSource: 'cli',
@@ -96,8 +97,19 @@ let host: HTMLDivElement | null = null;
 
 function show(
   data: RunWaterfallDto,
-  props: { onClose?: () => void; onJump?: (seq: number) => void } = {},
+  props: {
+    onClose?: () => void;
+    onJump?: (seq: number) => void;
+    links?: boolean;
+    view?: 'calls' | 'lanes';
+  } = {},
 ): HTMLElement {
+  if ((props.view ?? 'lanes') === 'lanes') {
+    localStorage.setItem('geniro.waterfall.lanes', '1');
+  }
+  if (props.links === false) {
+    localStorage.setItem('geniro.waterfall.callLinks', '0');
+  }
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -370,6 +382,10 @@ describe('RunWaterfallDialog', () => {
         ],
         calls: [
           {
+            callId: 'call-1',
+
+            parentCallId: null,
+
             callerMemberId: 'manager',
             calleeMemberId: 'researcher',
             mode: 'async',
@@ -395,6 +411,10 @@ describe('RunWaterfallDialog', () => {
       dto({
         calls: [
           {
+            callId: 'call-2',
+
+            parentCallId: null,
+
             callerMemberId: 'manager',
             calleeMemberId: 'engineer',
             mode: 'async',
@@ -418,6 +438,10 @@ describe('RunWaterfallDialog', () => {
     // REPORTED as a usage page with "→ engineer" and "researcher" printed on
     // top of each other: a manager's concurrent calls all sat on one line.
     const call = (calleeMemberId: string, minutes: number) => ({
+      callId: 'call-3',
+
+      parentCallId: null,
+
       callerMemberId: 'manager',
       calleeMemberId,
       mode: 'async' as const,
@@ -738,6 +762,10 @@ describe('RunWaterfallDialog', () => {
 
   it('draws the part of a turn a sync call held still, and never an async one', () => {
     const call = (mode: string, calleeMemberId: string) => ({
+      callId: 'call-4',
+
+      parentCallId: null,
+
       callerMemberId: 'manager',
       calleeMemberId,
       mode,
@@ -959,13 +987,92 @@ describe('the rest of the view answering the pointer', () => {
     ).toBe('false');
   });
 
-  it('draws arrows for a selected call to the work that answered it, and none for a turn', () => {
+  it('links every call to the work that answered it, and draws the selected call strong', () => {
     const view = show(
       dto({
         lanes: [lane({ memberId: 'manager' }), lane({ memberId: 'engineer' })],
         turns: [turn({ memberId: 'engineer', durationMs: 5 * 60_000 })],
         calls: [
           {
+            callId: 'call-5',
+
+            parentCallId: null,
+
+            callerMemberId: 'manager',
+            calleeMemberId: 'engineer',
+            mode: 'sync',
+            status: 'ok',
+            running: false,
+            startedAt: FROM,
+            seq: 9,
+            durationMs: 10 * 60_000,
+          },
+        ],
+      }),
+      { links: true },
+    );
+    const links = (): Element[] => [
+      ...view.querySelectorAll('[data-slot="waterfall-link"]'),
+    ];
+    expect(links()).toHaveLength(1);
+    expect(links()[0]!.querySelectorAll(':scope > path')).toHaveLength(2);
+    expect(links()[0]!.hasAttribute('data-strong')).toBe(false);
+
+    press(view.querySelector('[data-slot="waterfall-turn"]'));
+    expect(links()[0]!.hasAttribute('data-strong')).toBe(false);
+
+    press(view.querySelector('[data-slot="waterfall-call"]'));
+    expect(links()[0]!.hasAttribute('data-strong')).toBe(true);
+
+    press(
+      [...view.querySelectorAll('button')].find(
+        (button) => button.textContent === 'Links',
+      ) ?? null,
+    );
+    expect(links()).toHaveLength(1);
+    press(view.querySelector('[data-slot="waterfall-turn"]'));
+    expect(links()).toHaveLength(0);
+  });
+
+  it('links a call only to the turns that named it, and draws an answer coming back only for a call its caller waited on', () => {
+    const call = (callId: string, mode: string) => ({
+      callId,
+      parentCallId: null,
+      callerMemberId: 'manager',
+      calleeMemberId: 'engineer',
+      mode,
+      status: 'ok',
+      running: false,
+      startedAt: FROM,
+      seq: 9,
+      durationMs: 10 * 60_000,
+    });
+    const view = show(
+      dto({
+        lanes: [lane({ memberId: 'manager' }), lane({ memberId: 'engineer' })],
+        turns: [
+          turn({ memberId: 'engineer', callId: 'c2', durationMs: 5 * 60_000 }),
+        ],
+        calls: [call('c1', 'sync'), call('c2', 'async')],
+      }),
+    );
+
+    const links = [...view.querySelectorAll('[data-slot="waterfall-link"]')];
+    expect(links.map((link) => link.getAttribute('data-call'))).toEqual(['1']);
+    expect(links[0]!.querySelectorAll(':scope > path')).toHaveLength(1);
+  });
+
+  it('lights the links of the turn under the pointer and lets the rest step back', () => {
+    const view = show(
+      dto({
+        lanes: [lane({ memberId: 'manager' }), lane({ memberId: 'engineer' })],
+        turns: [
+          turn({ memberId: 'engineer', callId: 'c1', durationMs: 5 * 60_000 }),
+        ],
+        calls: [
+          {
+            callId: 'c1',
+            parentCallId: null,
             callerMemberId: 'manager',
             calleeMemberId: 'engineer',
             mode: 'sync',
@@ -978,16 +1085,151 @@ describe('the rest of the view answering the pointer', () => {
         ],
       }),
     );
-    expect(view.querySelector('[data-slot="waterfall-arrows"]')).toBeNull();
+    const link = (): Element =>
+      view.querySelector('[data-slot="waterfall-link"]')!;
+    expect(link().hasAttribute('data-lit')).toBe(false);
 
-    press(view.querySelector('[data-slot="waterfall-turn"]'));
-    expect(view.querySelector('[data-slot="waterfall-arrows"]')).toBeNull();
+    act(() => {
+      view
+        .querySelector('[data-slot="waterfall-turn"]')!
+        .dispatchEvent(new Event('pointerover', { bubbles: true }));
+    });
+    expect(link().hasAttribute('data-lit')).toBe(true);
+  });
 
-    press(view.querySelector('[data-slot="waterfall-call"]'));
+  it('opens as a sequence diagram: an arrow per call from its caller to its callee, a dashed answer for a call its caller waited on', () => {
+    const call = (callId: string, mode: string, minutes: number) => ({
+      callId,
+      parentCallId: null,
+      callerMemberId: 'manager',
+      calleeMemberId: 'engineer',
+      mode,
+      status: 'ok',
+      running: false,
+      startedAt: new Date(Date.parse(FROM) + minutes * 60_000).toISOString(),
+      seq: 9,
+      durationMs: 10 * 60_000,
+    });
+    const view = show(
+      dto({
+        lanes: [lane({ memberId: 'manager' }), lane({ memberId: 'engineer' })],
+        turns: [
+          turn({ memberId: 'manager', callId: null, durationMs: 40 * 60_000 }),
+          turn({ memberId: 'engineer', callId: 'c1', durationMs: 5 * 60_000 }),
+        ],
+        calls: [call('c1', 'sync', 0), call('c2', 'async', 0)],
+      }),
+      { view: 'calls' },
+    );
+
     expect(
-      // The two curves — out, and back — not the arrowhead's own path.
-      view.querySelectorAll('[data-slot="waterfall-arrows"] > path'),
-    ).toHaveLength(2);
+      view.querySelector('[data-slot="waterfall-sequence"]'),
+    ).not.toBeNull();
+    const arrows = [...view.querySelectorAll('[data-slot="waterfall-call"]')];
+    expect(
+      arrows.map(
+        (arrow) =>
+          arrow.querySelector('[data-slot="waterfall-call-words"]')!
+            .textContent,
+      ),
+    ).toEqual(['engineer · 10m · waits', 'engineer · 10m']);
+    expect(
+      arrows.map((arrow) =>
+        [...arrow.querySelectorAll('[data-slot="waterfall-call-number"]')].map(
+          (badge) => badge.textContent,
+        ),
+      ),
+    ).toEqual([['1', '1'], ['2']]);
+    const lines = [
+      ...view.querySelectorAll('[data-slot="waterfall-call-line"]'),
+    ];
+    expect(
+      lines.map(
+        (line) => line.querySelectorAll('line[stroke-dasharray]').length,
+      ),
+    ).toEqual([1, 0]);
+    expect(
+      new Set(
+        lines.flatMap((line) =>
+          [...line.querySelectorAll('line')].map((drawn) =>
+            drawn.getAttribute('stroke'),
+          ),
+        ),
+      ),
+    ).toEqual(new Set(['var(--color-muted-foreground)']));
+    const y = (arrow: Element): number => Number(arrow.getAttribute('data-y'));
+    expect(y(arrows[1]!) - y(arrows[0]!)).toBeGreaterThanOrEqual(26);
+  });
+
+  it('frames calls one agent made at once and stacks the turns that answered them', () => {
+    const at = (minutes: number): string =>
+      new Date(Date.parse(FROM) + minutes * 60_000).toISOString();
+    const call = (callId: string, seconds: number) => ({
+      callId,
+      parentCallId: null,
+      callerMemberId: 'engineer',
+      calleeMemberId: 'middle',
+      mode: 'async',
+      status: 'ok',
+      running: false,
+      startedAt: new Date(Date.parse(FROM) + seconds * 1000).toISOString(),
+      seq: 9,
+      durationMs: 10 * 60_000,
+    });
+    const view = show(
+      dto({
+        lanes: [lane({ memberId: 'engineer' }), lane({ memberId: 'middle' })],
+        turns: [
+          turn({ memberId: 'engineer', callId: null, durationMs: 40 * 60_000 }),
+          ...['a', 'b', 'c'].map((callId, index) =>
+            turn({
+              memberId: 'middle',
+              callId,
+              startedAt: at(index * 0.25),
+              durationMs: 10 * 60_000,
+            }),
+          ),
+        ],
+        calls: [call('a', 0), call('b', 15), call('c', 30)],
+      }),
+      { view: 'calls' },
+    );
+
+    const groups = [
+      ...view.querySelectorAll('[data-slot="waterfall-sequence-group"]'),
+    ];
+    expect(groups.map((group) => group.textContent)).toEqual(['3 at once']);
+    const xs = [
+      ...view.querySelectorAll<SVGRectElement>(
+        '[data-slot="waterfall-turn"] rect',
+      ),
+    ]
+      .slice(1)
+      .map((bar) => Number(bar.getAttribute('x')));
+    expect(xs[1]! - xs[0]!).toBe(4);
+    expect(xs[2]! - xs[1]!).toBe(4);
+  });
+
+  it('widens the lanes past the card and steps the scale with its buttons', () => {
+    const view = show(dto({}));
+    const grid = (): HTMLElement =>
+      view.querySelector<HTMLElement>(
+        '[data-slot="waterfall-scroll"] > .grid',
+      )!;
+    expect(grid().style.width).toMatch(/\+ 2 \*/);
+
+    press(view.querySelector('[aria-label="Zoom in"]'));
+    expect(grid().style.width).toMatch(/\+ 3 \*/);
+    press(
+      [...view.querySelectorAll('[data-slot="waterfall-scale"] button')].find(
+        (button) => button.textContent === '3×',
+      ) ?? null,
+    );
+    expect(grid().style.width).toMatch(/\+ 1 \*/);
+    expect(
+      view.querySelector<HTMLButtonElement>('[aria-label="Zoom out"]')!
+        .disabled,
+    ).toBe(true);
   });
 
   it('turns the critical path on and off from an insight about the run as a whole', () => {

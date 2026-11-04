@@ -515,6 +515,7 @@ function foldTurns(
     ends.set(key, [...(ends.get(key) ?? []), endedMs]);
     out.push({
       memberId: row.memberId,
+      callId: boundedLabel(asString(body?.callId)),
       startedAt: new Date(endedMs - durationMs).toISOString(),
       seq: firstSeqWithin(
         laneRows.get(row.memberId),
@@ -635,6 +636,7 @@ function bracketedTurn(
   /** The row that opened the stretch — where a reader is taken for it. */
   seq: number,
   member: TurnMember | null,
+  callId: string | null,
 ): RunWaterfallTurn | null {
   const durationMs = Math.max(0, endMs - startMs);
   if (durationMs > MAX_SPAN_MS) {
@@ -642,6 +644,7 @@ function bracketedTurn(
   }
   return {
     memberId,
+    callId: boundedLabel(callId),
     startedAt: new Date(startMs).toISOString(),
     seq,
     timingSource: 'derived',
@@ -686,7 +689,12 @@ function foldUnfinishedNodeTurns(
 ): RunWaterfallTurn[] {
   const open = new Map<
     string,
-    { memberId: string | null; startMs: number; seq: number }
+    {
+      memberId: string | null;
+      startMs: number;
+      seq: number;
+      callId: string | null;
+    }
   >();
   // The pool member running each conversation's open attempt: the one its
   // own usage rows (its `error`, its `turn_cancelled`) name, else the one the
@@ -697,7 +705,12 @@ function foldUnfinishedNodeTurns(
   const out: RunWaterfallTurn[] = [];
   const settle = (
     key: string,
-    started: { memberId: string | null; startMs: number; seq: number },
+    started: {
+      memberId: string | null;
+      startMs: number;
+      seq: number;
+      callId: string | null;
+    },
     endMs: number,
     outcome: RunWaterfallTurn['outcome'],
   ): void => {
@@ -714,6 +727,7 @@ function foldUnfinishedNodeTurns(
       outcome,
       started.seq,
       members.get(key) ?? null,
+      started.callId,
     );
     if (turn !== null) {
       out.push(turn);
@@ -740,6 +754,7 @@ function foldUnfinishedNodeTurns(
           memberId: started.memberId,
           startMs: atMs,
           seq: row.seq,
+          callId: started.callId,
         });
         members.set(key, to);
       }
@@ -764,7 +779,12 @@ function foldUnfinishedNodeTurns(
       // The EARLIEST open is the start: a pass re-announcing `running` for a
       // turn already under way must not shrink it to its tail.
       if (!open.has(key)) {
-        open.set(key, { memberId, startMs: atMs, seq: row.seq });
+        open.set(key, {
+          memberId,
+          startMs: atMs,
+          seq: row.seq,
+          callId: asString(body?.callId),
+        });
         members.set(
           key,
           handedTo.get(key) ??
@@ -816,7 +836,15 @@ function foldUnfinishedChatTurns(
     if (open === null) {
       return;
     }
-    const turn = bracketedTurn(null, open.atMs, endMs, outcome, open.seq, null);
+    const turn = bracketedTurn(
+      null,
+      open.atMs,
+      endMs,
+      outcome,
+      open.seq,
+      null,
+      null,
+    );
     if (turn !== null) {
       out.push(turn);
     }
@@ -1017,9 +1045,41 @@ function foldCalls(
 ): RunWaterfallCall[] {
   const open = new Map<
     string,
-    { row: PayloadRow; body: Record<string, unknown> }
+    {
+      row: PayloadRow;
+      body: Record<string, unknown>;
+      parentCallId: string | null;
+    }
   >();
+  // A fresh call opens a conversation named after itself; a continuation
+  // goes on in the conversation of the call it continues. A callee's call
+  // names the conversation it was made from, and its parent is the newest call
+  // of that conversation started before it.
+  const conversationOf = new Map<string, string>();
+  const newestIn = new Map<string, string>();
   const out: RunWaterfallCall[] = [];
+  const span = (
+    callId: string,
+    started: {
+      row: PayloadRow;
+      body: Record<string, unknown>;
+      parentCallId: string | null;
+    },
+    status: string | null,
+    running: boolean,
+    endMs: number,
+  ): RunWaterfallCall => ({
+    callId: callId.slice(0, MAX_WATERFALL_LABEL_CHARS),
+    parentCallId: boundedLabel(started.parentCallId),
+    callerMemberId: asString(started.body.callerNodeId),
+    calleeMemberId: asString(started.body.calleeNodeId),
+    mode: asString(started.body.mode),
+    status,
+    running,
+    startedAt: started.row.createdAt.toISOString(),
+    seq: started.row.seq,
+    durationMs: Math.max(0, endMs - started.row.createdAt.getTime()),
+  });
   for (const row of rows) {
     const body = parsed(row.payload);
     const callId = asString(body?.callId);
@@ -1027,7 +1087,17 @@ function foldCalls(
       continue;
     }
     if (row.kind === 'call_started') {
-      open.set(callId, { row, body });
+      const thread = asString(body.thread);
+      const conversation =
+        thread === null ? callId : (conversationOf.get(thread) ?? thread);
+      conversationOf.set(callId, conversation);
+      const madeIn = asString(body.callerConversationId);
+      open.set(callId, {
+        row,
+        body,
+        parentCallId: madeIn === null ? null : (newestIn.get(madeIn) ?? null),
+      });
+      newestIn.set(conversation, callId);
       continue;
     }
     if (row.kind !== 'call_result') {
@@ -1038,35 +1108,27 @@ function foldCalls(
       continue;
     }
     open.delete(callId);
-    out.push({
-      callerMemberId: asString(started.body.callerNodeId),
-      calleeMemberId: asString(started.body.calleeNodeId),
-      mode: asString(started.body.mode),
-      status: asString(body.status),
-      running: false,
-      startedAt: started.row.createdAt.toISOString(),
-      seq: started.row.seq,
-      durationMs: Math.max(
-        0,
-        row.createdAt.getTime() - started.row.createdAt.getTime(),
+    out.push(
+      span(
+        callId,
+        started,
+        asString(body.status),
+        false,
+        row.createdAt.getTime(),
       ),
-    });
+    );
   }
   if (working) {
-    for (const started of open.values()) {
-      out.push({
-        callerMemberId: asString(started.body.callerNodeId),
-        calleeMemberId: asString(started.body.calleeNodeId),
-        mode: asString(started.body.mode),
-        status: null,
-        running: true,
-        startedAt: started.row.createdAt.toISOString(),
-        seq: started.row.seq,
-        durationMs: Math.max(0, to - started.row.createdAt.getTime()),
-      });
+    for (const [callId, started] of open) {
+      out.push(span(callId, started, null, true, to));
     }
   }
   return out;
+}
+
+/** A label cut to what the wire carries, or null. */
+function boundedLabel(value: string | null): string | null {
+  return value === null ? null : value.slice(0, MAX_WATERFALL_LABEL_CHARS);
 }
 
 /**

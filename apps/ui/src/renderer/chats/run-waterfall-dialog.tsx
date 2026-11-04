@@ -1,4 +1,4 @@
-import { HelpCircle, Route } from 'lucide-react';
+import { GitFork, HelpCircle, Route, ZoomIn, ZoomOut } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Area,
@@ -47,7 +47,12 @@ import {
   toolRows,
 } from './run-waterfall-breakdown';
 import { WaterfallDetail } from './run-waterfall-detail';
-import { Gantt, WaterfallOverview } from './run-waterfall-gantt';
+import {
+  Gantt,
+  GANTT_SCALES,
+  stepScale,
+  WaterfallOverview,
+} from './run-waterfall-gantt';
 import type {
   ClockWindow,
   SpendPoint,
@@ -67,6 +72,7 @@ import {
   turnCacheShare,
 } from './run-waterfall-geometry';
 import { type Insight, waterfallInsights } from './run-waterfall-insights';
+import { SequenceDiagram } from './run-waterfall-sequence';
 import { formatDuration as formatTurnDuration } from './turn-duration';
 
 /**
@@ -101,6 +107,15 @@ const CURVE_HEIGHT = 200;
 
 /** Where the critical-path switch remembers itself. */
 const CRITICAL_PATH_KEY = 'geniro.waterfall.criticalPath';
+
+/** Where the call-links switch remembers itself. */
+const CALL_LINKS_KEY = 'geniro.waterfall.callLinks';
+
+/** Where the choice of the lanes over the sequence diagram remembers itself. */
+const LANES_KEY = 'geniro.waterfall.lanes';
+
+/** The lanes open a little wider than the card, so the calls read apart. */
+const START_SCALE = 2;
 
 /**
  * What Recharts hands the curve's tooltip.
@@ -225,6 +240,9 @@ export function RunWaterfallDialog({
   const [selected, setSelected] = useState<WaterfallMark | null>(null);
   const [focus, setFocus] = useState<string | null | undefined>(undefined);
   const [critical, setCritical] = usePersistedFlag(CRITICAL_PATH_KEY, false);
+  const [links, setLinks] = usePersistedFlag(CALL_LINKS_KEY, true);
+  const [asLanes, setAsLanes] = usePersistedFlag(LANES_KEY, false);
+  const [scale, setScale] = useState(START_SCALE);
   // Where focus lands as the view opens. Its first control is the `?` beside
   // `spent`, and focusing that opened its explanation over the insights before
   // anyone had read them; the gantt's toolbar is where a reader starts.
@@ -346,6 +364,27 @@ export function RunWaterfallDialog({
                   onClick={() => setZoom(null)}>
                   Show the whole run
                 </Button>
+                <SegmentedControl
+                  ariaLabel="Draw the run as"
+                  size="sm"
+                  options={[
+                    { id: 'calls', label: 'Calls' },
+                    { id: 'lanes', label: 'Lanes' },
+                  ]}
+                  value={asLanes ? 'lanes' : 'calls'}
+                  onSelect={(id) => setAsLanes(id === 'lanes')}
+                />
+                {asLanes ? (
+                  <Button
+                    size="sm"
+                    variant={links ? 'secondary' : 'ghost'}
+                    aria-pressed={links}
+                    title="Draw every call as a line from the agent that made it to the one that answered"
+                    onClick={() => setLinks(!links)}>
+                    <GitFork aria-hidden="true" className="size-3.5" />
+                    Links
+                  </Button>
+                ) : null}
                 {focus === undefined ? null : (
                   <Button
                     size="sm"
@@ -354,7 +393,38 @@ export function RunWaterfallDialog({
                     Every agent
                   </Button>
                 )}
-                <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+                <div
+                  data-slot="waterfall-scale"
+                  className="ml-auto flex items-center gap-0.5 rounded-control border border-border p-0.5">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7"
+                    aria-label="Zoom out"
+                    title="Zoom out (⌘ or Ctrl + scroll)"
+                    disabled={scale <= GANTT_SCALES[0]}
+                    onClick={() => setScale(stepScale(scale, -1))}>
+                    <ZoomOut aria-hidden="true" className="size-3.5" />
+                  </Button>
+                  <button
+                    type="button"
+                    className="min-w-10 rounded-control px-1 text-xs tabular-nums text-muted-foreground hover:text-foreground"
+                    title="Fit the lanes to the card"
+                    onClick={() => setScale(1)}>
+                    {scale}×
+                  </button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7"
+                    aria-label="Zoom in"
+                    title="Zoom in (⌘ or Ctrl + scroll)"
+                    disabled={scale >= Math.max(...GANTT_SCALES)}
+                    onClick={() => setScale(stepScale(scale, 1))}>
+                    <ZoomIn aria-hidden="true" className="size-3.5" />
+                  </Button>
+                </div>
+                <span className="text-xs tabular-nums text-muted-foreground">
                   {zoomed
                     ? `${formatDuration(view.from - full.from)} – ${formatDuration(view.to - full.from)} of ${formatDuration(span)}`
                     : 'the whole run'}
@@ -366,17 +436,34 @@ export function RunWaterfallDialog({
                 window={view}
                 onWindow={zoomTo}
               />
-              <Gantt
-                data={data}
-                runFrom={full.from}
-                window={view}
-                selected={selected}
-                onSelect={setSelected}
-                focus={focus}
-                onFocus={setFocus}
-                critical={critical}
-              />
-              <Legend critical={critical} />
+              {asLanes ? (
+                <Gantt
+                  data={data}
+                  runFrom={full.from}
+                  window={view}
+                  selected={selected}
+                  onSelect={setSelected}
+                  focus={focus}
+                  onFocus={setFocus}
+                  critical={critical}
+                  scale={scale}
+                  onScale={setScale}
+                  links={links}
+                />
+              ) : (
+                <SequenceDiagram
+                  data={data}
+                  runFrom={full.from}
+                  window={view}
+                  selected={selected}
+                  onSelect={setSelected}
+                  focus={focus}
+                  onFocus={setFocus}
+                  critical={critical}
+                  scale={scale}
+                />
+              )}
+              <Legend critical={critical} links={links} sequence={!asLanes} />
             </Section>
 
             <Section title="Where the time and money went">
@@ -682,9 +769,104 @@ function Insights({
   );
 }
 
-function Legend({ critical }: { critical: boolean }): React.JSX.Element {
+function Legend({
+  critical,
+  links,
+  sequence,
+}: {
+  critical: boolean;
+  links: boolean;
+  sequence: boolean;
+}): React.JSX.Element {
+  if (sequence) {
+    return (
+      <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
+        <LegendRow
+          mark={
+            <span className="h-3.5 w-1.5 rounded-[2px] bg-foreground/70" />
+          }>
+          a turn of the agent in that column
+        </LegendRow>
+        <LegendRow
+          mark={
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 18 10"
+              className="h-2.5 w-[18px]">
+              <circle cx="2" cy="5" r="2" fill="currentColor" />
+              <path
+                d="M2,5 H15 M12,2 L15,5 L12,8"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+          }>
+          a call, at the moment it was made, named and timed
+        </LegendRow>
+        <LegendRow
+          mark={
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 18 10"
+              className="h-2.5 w-[18px]">
+              <path
+                d="M16,5 H3 M6,2 L3,5 L6,8"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeDasharray="3 3"
+                strokeLinecap="round"
+              />
+            </svg>
+          }>
+          the answer to a call its caller waited on
+        </LegendRow>
+        <LegendRow
+          mark={<span className="h-3.5 w-1 rounded-[2px] bg-warning" />}>
+          waiting on you
+        </LegendRow>
+        <LegendRow
+          mark={<span className="text-[10px] tabular-nums">⋯ 8h</span>}>
+          a long stretch with nothing in it, drawn short
+        </LegendRow>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
+      {links ? (
+        <>
+          <LegendRow
+            mark={
+              <svg aria-hidden="true" viewBox="0 0 16 10" className="h-2.5 w-4">
+                <path
+                  d="M1,1 C1,6 15,4 15,9"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+              </svg>
+            }>
+            a call, from the agent that made it to the one that answered
+          </LegendRow>
+          <LegendRow
+            mark={
+              <svg aria-hidden="true" viewBox="0 0 16 10" className="h-2.5 w-4">
+                <path
+                  d="M1,9 C1,4 15,6 15,1"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeDasharray="3 2"
+                />
+              </svg>
+            }>
+            its answer coming back
+          </LegendRow>
+        </>
+      ) : null}
       <LegendRow
         mark={
           <span className="relative h-2.5 w-4 overflow-hidden rounded-[3px] bg-foreground/70">

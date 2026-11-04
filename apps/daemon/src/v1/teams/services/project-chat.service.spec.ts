@@ -159,7 +159,8 @@ describe('ProjectChatService', () => {
     await service.open('p1', CHIPS);
 
     expect(brief()).toContain('ITS TEAM');
-    expect(brief()).toContain(store.locate(slug).path);
+    expect(brief()).toContain('with read_teams');
+    expect(brief()).not.toContain(store.locate(slug).path);
     expect(brief()).toContain(overlays.pathOf(slug, 'p1'));
     expect(brief()).toContain('effort: max');
     expect(brief()).toMatch(/model: gpt-5/);

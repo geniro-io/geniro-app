@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { BaseException } from '@packages/common';
 
 import { HOST_READ_TEAMS_TOOL } from '../../../agents/chat.types';
+import type { ProjectChatBroker } from '../../../agents/services/project-chat.broker';
 import type { TeamBuilderBroker } from '../../../agents/services/team-builder.broker';
 import type { TeamProposalBroker } from '../../../agents/services/team-proposal.broker';
 import type { TeamStoreService } from '../../../teams/services/team-store.service';
@@ -12,14 +13,18 @@ import type {
   McpToolResult,
 } from '../../mcp.types';
 import { BaseMcpTool } from '../base-mcp-tool';
-import { readTeamsInstructions } from './read-teams.instructions';
+import {
+  type ReadTeamsAudience,
+  readTeamsInstructions,
+} from './read-teams.instructions';
 import { readReadTeamsArgs, teamListText, teamText } from './read-teams.reader';
 import { readTeamsSchema } from './read-teams.schema';
 
 /**
  * `read_teams` — the team library, read by an ordinary chat (ahead of
  * `propose_team`) or by a team's builder chat (ahead of
- * `save_team_change`).
+ * `save_team_change`); in a project's own chat, the one team its project
+ * runs with, which that chat may not change.
  */
 export class ReadTeamsTool extends BaseMcpTool {
   readonly name = HOST_READ_TEAMS_TOOL;
@@ -28,31 +33,47 @@ export class ReadTeamsTool extends BaseMcpTool {
   constructor(
     private readonly gate: TeamProposalBroker,
     private readonly builders: TeamBuilderBroker,
+    private readonly projectChats: ProjectChatBroker,
     private readonly store: TeamStoreService,
   ) {
     super();
   }
 
+  private projectTeamOf(runId: string, memberId: string): string | null {
+    return this.projectChats.projectOf(runId, memberId)?.teamSlug ?? null;
+  }
+
+  private audienceOf(runId: string, memberId: string): ReadTeamsAudience {
+    if (this.builders.canEdit(runId, memberId)) {
+      return 'builder';
+    }
+    return this.projectTeamOf(runId, memberId) === null ? 'chat' : 'project';
+  }
+
   protected isOffered({ runId, memberId }: McpListContext): boolean {
     return (
       this.gate.canPropose(runId, memberId) ||
-      this.builders.canEdit(runId, memberId)
+      this.builders.canEdit(runId, memberId) ||
+      this.projectTeamOf(runId, memberId) !== null
     );
   }
 
   protected instructions({ runId, memberId }: McpListContext): string {
-    return readTeamsInstructions(this.builders.canEdit(runId, memberId));
+    return readTeamsInstructions(this.audienceOf(runId, memberId));
   }
 
-  protected inputSchema(): Record<string, unknown> {
-    return readTeamsSchema();
+  protected inputSchema({
+    runId,
+    memberId,
+  }: McpListContext): Record<string, unknown> {
+    return readTeamsSchema(this.audienceOf(runId, memberId));
   }
 
   protected async run(
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId } = context;
+    const { runId, memberId } = context;
     const read = readReadTeamsArgs(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
@@ -60,11 +81,25 @@ export class ReadTeamsTool extends BaseMcpTool {
     // A call is not checked against the listing, so the gate is asked again.
     if (!this.isOffered(context)) {
       return this.text(
-        "Not read: the team library is offered to ordinary chats and a team's builder chat only.",
+        "Not read: the team library is offered to ordinary chats, a team's builder chat and the chat of a project a team runs.",
         true,
       );
     }
-    const { slug } = read.query;
+    const projectTeam =
+      this.audienceOf(runId, memberId) === 'project'
+        ? this.projectTeamOf(runId, memberId)
+        : null;
+    if (
+      projectTeam !== null &&
+      read.query.slug !== undefined &&
+      read.query.slug !== projectTeam
+    ) {
+      return this.text(
+        `Not read: this chat reads only its project's team, \`${projectTeam}\`. Call it with no arguments.`,
+        true,
+      );
+    }
+    const slug = projectTeam ?? read.query.slug;
     try {
       return this.text(
         slug === undefined

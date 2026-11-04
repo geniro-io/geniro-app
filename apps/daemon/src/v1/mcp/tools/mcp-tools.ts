@@ -158,7 +158,12 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new MemoryReadTool(deps.memory),
     new MemorySaveTool(deps.memory),
     new MemoryForgetTool(deps.memory),
-    new ReadTeamsTool(deps.teamGate, deps.teamBuilders, deps.teamStore),
+    new ReadTeamsTool(
+      deps.teamGate,
+      deps.teamBuilders,
+      deps.projectChats,
+      deps.teamStore,
+    ),
     new ProposeTeamTool(
       deps.teamGate,
       deps.teamBuilders,

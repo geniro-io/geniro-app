@@ -164,7 +164,6 @@ export class ProjectChatService
       kind: 'team',
       slug,
       team,
-      teamPath: this.store.locate(slug).path,
       overlayPath: this.overlays.overlayPathOf(slug, project.id),
       overlayYaml:
         stored === null ? null : serializeTeamOverlayYaml(stored.overlay),

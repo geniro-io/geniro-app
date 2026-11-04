@@ -1097,6 +1097,13 @@ describe('CallBlock', () => {
     expect(badge?.getAttribute('title')).toBe(
       'Poet ended its turn and is waiting for its monitor: pnpm test. Nothing runs until one reports.',
     );
+    expect(
+      container.querySelector('[data-slot="call-summary-held"]')?.textContent,
+    ).toBe('waiting for its monitor');
+    expand();
+    expect(
+      container.querySelector('[data-slot="block-pending"]')?.textContent,
+    ).toBe('Poet is waiting for its monitor: pnpm test');
 
     const woken = [
       ...ended,

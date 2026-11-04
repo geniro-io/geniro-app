@@ -4,8 +4,9 @@ Guidance for AI coding agents (Claude Code, Codex, Cursor) working in this repos
 
 - Guidance lives only in `AGENTS.md` files — this one, `apps/daemon/AGENTS.md`, `apps/ui/AGENTS.md` and `apps/ui/src/main/AGENTS.md` — and the rules under `.claude/rules/`. `.geniro/instructions/` holds the Geniro plugin's own run rules (Claude Code only).
 - Each of those directories also has a `CLAUDE.md` that is exactly one line, `@AGENTS.md`. Never write guidance in a `CLAUDE.md`; a guide added in a new directory gets both files.
-- Why both: Codex reads only `AGENTS.md` (root down to its start directory, first 32 KiB of the chain); Cursor reads `AGENTS.md` at every level; Claude Code receives a nested guide whole only through the `CLAUDE.md` import.
-- Codex truncates at 32 KiB, so keep the rules an agent must not miss near the top of this file.
+- Why both: Codex reads only `AGENTS.md` (root down to its start directory); Cursor reads `AGENTS.md` at every level; Claude Code receives a nested guide whole only through the `CLAUDE.md` import.
+- Codex cuts the chain at `project_doc_max_bytes`. `.codex/config.toml` raises it to 128 KiB, but Codex reads that file only in a project the user trusted (untrusted: 32 KiB), so keep the rules an agent must not miss near the top of this file.
+- Codex reaches the rules and the nested guides as skills: `.agents/skills/rule-<name>/` and `.agents/skills/guide-<dir>/`, generated (see below).
 
 **Contents**: [Repository rules](#repository-rules) · [Issues and pull requests](#issues-and-pull-requests) · [Project Overview](#project-overview) · [CodeGraph](#codegraph--prefer-it-over-grepfind) · [Commands](#commands) · [Coding conventions](#coding-conventions) · [Testing conventions](#testing-conventions) · [Constraints (local-first & security)](#constraints-local-first--security) · [Architecture](#architecture) · [A note on vendored packages](#a-note-on-vendored-packages)
 
@@ -13,7 +14,7 @@ Guidance for AI coding agents (Claude Code, Codex, Cursor) working in this repos
 
 ## Repository rules
 
-The rules under `.claude/rules/` are part of this file's contract. Claude Code loads each one by itself when a file under its `paths:` is touched. Cursor reads each one through `.cursor/rules/<name>.mdc`, a committed file generated from the rule: its `paths:` become Cursor's `globs:`, so Cursor attaches the rule by itself when a matching file is in context, and a rule without `paths:` becomes `alwaysApply: true`. Codex never reads `.claude/rules/`. So on Codex, and on Cursor when the rule is not already in context, open the matching rule and follow it before editing a file under its paths.
+The rules under `.claude/rules/` are part of this file's contract. Claude Code loads each one by itself when a file under its `paths:` is touched. Cursor reads each one through `.cursor/rules/<name>.mdc`, a committed file generated from the rule: its `paths:` become Cursor's `globs:`, so Cursor attaches the rule by itself when a matching file is in context, and a rule without `paths:` becomes `alwaysApply: true`. Codex reads each one as the skill `.agents/skills/rule-<name>/SKILL.md`, generated from the rule with its paths in the description, and every nested `AGENTS.md` as a `guide-<dir>` skill that points at it. So on Codex, and on Cursor when the rule is not already in context, open the matching rule and follow it before editing a file under its paths.
 
 <!-- prettier-ignore -->
 | Rule | Applies to | What it holds |
@@ -33,7 +34,7 @@ The rules under `.claude/rules/` are part of this file's contract. Claude Code l
 | [`testing.md`](.claude/rules/testing.md) | `**/*.spec.ts`, `**/*.spec.tsx` | No false pins: a claimed behaviour has an assertion that fails when it breaks |
 | [`run-statistics.md`](.claude/rules/run-statistics.md) | `apps/daemon/src/**`, `apps/ui/src/renderer/**` | Run, thread, conversation, agent and sub-agent statistics are counted by the daemon over every row, never folded from the loaded window or bounded by a listing cap |
 
-Add a new rule file to this table in the same change, with the paths its frontmatter declares, then run `pnpm sync:cursor-rules` and commit the `.cursor/rules/<name>.mdc` it writes; never edit a generated file by hand. A rule's frontmatter holds only a one-line `description:` and an optional `paths:` block list with no brace group (Cursor splits `globs:` on commas), and the script refuses anything else. `pnpm sync:cursor-rules --check` (in CI and `full-check`) fails on a missing, stale or extra file. The table is the only way a rule reaches Codex.
+Add a new rule file to this table in the same change, with the paths its frontmatter declares, then run `pnpm sync:agent-rules` and commit the `.cursor/rules/<name>.mdc` and `.agents/skills/rule-<name>/SKILL.md` it writes (a new nested `AGENTS.md` gets its `guide-<dir>` skill the same way); never edit a generated file by hand. A rule's frontmatter holds only a one-line `description:` and an optional `paths:` block list with no brace group (Cursor splits `globs:` on commas), and the script refuses anything else. `pnpm sync:agent-rules --check` (in CI and `full-check`) fails on a missing, stale or extra file.
 
 ---
 
@@ -156,7 +157,7 @@ Seed rules: `apps/daemon/AGENTS.md`.
 pnpm full-check         # must pass
 ```
 
-- It chains `sync:cursor-rules --check` → build → check-types → build:tests → lint:fix → test:unit → test:integration. `build:tests`, `test:integration` and `test:e2e*` are placeholders no workspace implements yet.
+- It chains `sync:agent-rules --check` → build → check-types → build:tests → lint:fix → test:unit → test:integration. `build:tests`, `test:integration` and `test:e2e*` are placeholders no workspace implements yet.
 - CI (`.github/workflows/ci.yaml`) runs `lint`, not `lint:fix`, so commit any fixes `full-check` made. CI also runs `pnpm build-storybook`, the only gate that compiles story files, and runs `rebuild:native` before `test:unit`.
 - `turbo.json` sets `agentGuidance: false`. If turbo ever injects a managed block into `AGENTS.md`, delete it by hand.
 
@@ -293,14 +294,14 @@ pnpm commit             # conventional commit via commitizen
 
 ### The daemon (`apps/daemon`)
 
-Full guide: `apps/daemon/AGENTS.md`. Codex never loads it (this root file alone fills its 32 KiB AGENTS.md budget); read it yourself before working there. Cross-cutting facts:
+Full guide: `apps/daemon/AGENTS.md`. Codex started at the root does not load it (its skill `guide-daemon` points at it); read it yourself before working there. Cross-cutting facts:
 
 - Writes the pidfile (`daemon.json`: pid, host, port, per-launch token, version, entry, startedAt) only after the schema sync and a healthy listen, then prints `GENIRO_DAEMON_READY {port}`. The UI reads host/port from the pidfile and never assumes them.
 - Every route needs the per-launch bearer token except the public prefixes `/health` and `/v1/artifacts` (`auth/token.guard.ts`); never put the launch token in a URL. Bind, port, shutdown, env, artifact keys, call tokens and the WebSocket handshake: `apps/daemon/AGENTS.md` → _Daemon endpoints_.
 
 ### The UI (`apps/ui`)
 
-Full guides: `apps/ui/AGENTS.md` (renderer, chats, teams, settings, notifications) and `apps/ui/src/main/AGENTS.md` (Electron main process: IPC, git and worktrees, daemon supervision, terminal, LAN gateway, app updates, security); macOS packaging: `.claude/rules/packaging-config.md`. Codex never loads them; read them yourself before working there.
+Full guides: `apps/ui/AGENTS.md` (renderer, chats, teams, settings, notifications) and `apps/ui/src/main/AGENTS.md` (Electron main process: IPC, git and worktrees, daemon supervision, terminal, LAN gateway, app updates, security); macOS packaging: `.claude/rules/packaging-config.md`. Codex started at the root does not load them (skills `guide-ui`, `guide-ui-src-main`); read them yourself before working there.
 
 ### Agent instructions — the host preamble and the user's own
 

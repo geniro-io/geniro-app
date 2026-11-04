@@ -255,6 +255,35 @@ describe('RunDao (in-memory sqlite)', () => {
       ).toHaveLength(2);
     });
 
+    it('leaves a project’s own chat out of EVERY scope, and finds it by its project apart from a builder chat bound to one', async () => {
+      const mine = await dao.create({ createdAt: new Date(1_000) });
+      const own = await dao.create({
+        createdAt: new Date(2_000),
+        editsProjectId: 'p1',
+      });
+      const shelved = await dao.create({
+        createdAt: new Date(3_000),
+        editsProjectId: 'p1',
+        archivedAt: new Date(9_000),
+      });
+      await dao.create({
+        createdAt: new Date(4_000),
+        editsTeamSlug: 'review-team',
+        editsProjectId: 'p1',
+      });
+
+      for (const scope of ['active', 'archived', 'all'] as const) {
+        expect(
+          (await dao.listChats(scope)).map((run) => run.id),
+          scope,
+        ).toEqual(scope === 'archived' ? [] : [mine.id]);
+      }
+      expect((await dao.listEditingProject('p1')).map((run) => run.id)).toEqual(
+        [shelved.id, own.id],
+      );
+      expect(await dao.projectChatProjectIds()).toEqual(['p1']);
+    });
+
     it('leaves a thread’s analysis out of EVERY scope, and finds it by its source', async () => {
       // Opened from its source thread's popup, never from the sidebar: only
       // `analysisSourceRunId` tells it from an ordinary chat.

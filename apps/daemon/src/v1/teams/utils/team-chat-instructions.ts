@@ -51,6 +51,26 @@ const APPROVAL_MEANING: Record<ApprovalMode, string> = {
   acceptEdits: 'approves its own file edits and asks about everything else',
 };
 
+/** What a project overlay may hold, as every chat that writes one is told. */
+export const OVERLAY_FORMAT = `The overlay is YAML with these optional sections, all keyed by the team's
+own ids:
+- \`allMembers\`: per CLI (\`claude\`, \`cursor-agent\`, \`codex\`), the Model group
+  every member and team pool entry of that CLI runs with here: \`model\`,
+  \`effort\`, \`contextWindow\`, \`modelParameters\`, \`autoCompactPercent\`,
+  \`approval\`, \`configDir\`.
+- \`members.<memberId>.settings\`: the same Model group plus \`agent\` for one
+  member; it beats \`allMembers\`. Setting \`agent\` starts that member's Model
+  group over from the new CLI's defaults.
+- \`members.<memberId>.pool\`: the member's whole pool in this project
+  (members 2, 3, …; \`[]\` = none), each entry shaped like a team pool entry.
+- \`members.<memberId>.extraInstructions\`: appended to that member's own
+  instructions in this project.
+- \`instructionBlocks\`: blocks only this project's runs carry, shaped like
+  the team's (\`id\`, \`title\`, \`text\`, \`audience\`).
+
+Members, stages, the trigger, the mode, names, roles, MCP switches and
+avatars are shared and cannot be changed per project.`;
+
 export interface BuilderOverlayRef {
   projectId: string;
   projectName: string;
@@ -95,25 +115,7 @@ The project does not default to this team now, so its runs do not apply the
 overlay until it does again.
 `
 }
-The overlay is YAML with these optional sections, all keyed by the team's
-own ids:
-- \`allMembers\`: per CLI (\`claude\`, \`cursor-agent\`, \`codex\`), the Model group
-  every member and team pool entry of that CLI runs with here: \`model\`,
-  \`effort\`, \`contextWindow\`, \`modelParameters\`, \`autoCompactPercent\`,
-  \`approval\`, \`configDir\`.
-- \`members.<memberId>.settings\`: the same Model group plus \`agent\` for one
-  member; it beats \`allMembers\`. Setting \`agent\` starts that member's Model
-  group over from the new CLI's defaults.
-- \`members.<memberId>.pool\`: the member's whole pool in this project
-  (members 2, 3, …; \`[]\` = none), each entry shaped like a team pool entry.
-- \`members.<memberId>.extraInstructions\`: appended to that member's own
-  instructions in this project.
-- \`instructionBlocks\`: blocks only this project's runs carry, shaped like
-  the team's (\`id\`, \`title\`, \`text\`, \`audience\`).
-- \`stages.<stageId>.howToWorkAddendum\`: appended to that stage's \`howToWork\`.
-
-Members, stages, the trigger, the mode, names, roles, MCP switches and
-avatars are shared and cannot be changed per project.
+${OVERLAY_FORMAT}
 
 Put a change in the overlay when it is about this project only (its paths,
 its accounts, its conventions); put it in the shared team when every project

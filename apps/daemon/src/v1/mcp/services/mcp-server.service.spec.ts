@@ -70,6 +70,7 @@ import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { ProjectChatBroker } from '../../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import type { ProjectInstructionsChangeService } from '../../agents/services/project-instructions-change.service';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
@@ -130,6 +131,7 @@ import {
   ANSWERING_WITH_CALLS_OUT,
 } from '../../teams/utils/callee-text';
 import { callerKey } from '../../teams/utils/caller-key';
+import type { McpCallContext } from '../mcp.types';
 import { GoalsTool } from '../tools/goals/goals.tool';
 import { createMcpTools } from '../tools/mcp-tools';
 import { MoveStageTool } from '../tools/move-stage/move-stage.tool';
@@ -222,6 +224,8 @@ function service(
   goals = {} as GoalsService,
   // Off unless a case registers a sink: the tool is not listed.
   projectInstructionCards = new ProjectInstructionsBroker(),
+  // Off unless a case registers a sink: no project chat's form is listed.
+  projectChats = new ProjectChatBroker(),
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -254,6 +258,7 @@ function service(
       teamHistory: {} as TeamHistoryService,
       teamGate,
       teamBuilders,
+      projectChats,
       teamStore,
       // Never asked by the cases that list tools.
       teamProposals: {} as TeamProposalService,
@@ -4264,6 +4269,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamHistory: {} as TeamHistoryService,
       teamGate: new TeamProposalBroker(),
       teamBuilders: builders,
+      projectChats: new ProjectChatBroker(),
       teamStore: {} as TeamStoreService,
       teamProposals: {} as TeamProposalService,
       shares: fakeShares(false).service,
@@ -4315,6 +4321,153 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(described(HOST_TEAM_CHANGE_TOOL)).toMatch(/Do NOT use it/);
   });
 
+  const projectChatTools = (
+    projectChats: ProjectChatBroker,
+    teamProposals = {} as TeamProposalService,
+  ) => {
+    const cards = new ProjectInstructionsBroker();
+    cards.register('run-1', 'agent', () =>
+      Promise.resolve({ status: 'declined' }),
+    );
+    return createMcpTools({
+      calls: new CallBroker(),
+      questions: new UserQuestionBroker(),
+      findings: new FindingsReportBroker(),
+      charts: new ChartBroker(),
+      metrics: new MetricsBroker(),
+      comparisons: new ComparisonBroker(),
+      galleries: new GalleryBroker(),
+      galleryImages: {} as GalleryImageService,
+      artifacts: new ArtifactBroker(),
+      actions: new ActionBroker(),
+      patches: new PatchBroker(),
+      plans: new PlanBroker(),
+      notices: new NotifyBroker(),
+      board: new TaskBoardBroker(),
+      history: new GlobalChatSearchService({} as ChatSearchIndexDao),
+      analysis: new AnalysisBroker(),
+      threads: {} as ThreadReaderService,
+      teamChanges: {} as TeamChangeService,
+      projectInstructions: {} as ProjectInstructionsChangeService,
+      projectInstructionCards: cards,
+      teamHistory: {} as TeamHistoryService,
+      teamGate: new TeamProposalBroker(),
+      teamBuilders: new TeamBuilderBroker(),
+      projectChats,
+      teamStore: {} as TeamStoreService,
+      teamProposals,
+      shares: fakeShares(false).service,
+      memory: fakeMemory(false).service,
+      monitors: monitorBroker().broker,
+      teamNotes: teamNoteBroker(),
+      runOutcomes: runOutcomeBroker(),
+      goals: {} as GoalsService,
+      stages: stageService(),
+    } as Parameters<typeof createMcpTools>[0]);
+  };
+
+  it('lists a project chat its instructions save and, for a team-run project, the overlay proposal — no builder tools', () => {
+    const listed = (teamSlug: string | null) => {
+      const projectChats = new ProjectChatBroker();
+      projectChats.register('run-1', 'agent', { projectId: 'p1', teamSlug });
+      return projectChatTools(projectChats).flatMap((tool) =>
+        tool.list({ runId: 'run-1', memberId: 'agent', conversationId: null }),
+      );
+    };
+    const teamRun = listed('dev');
+    const names = teamRun.map((tool) => tool.name);
+    const schemaOf = (name: string) =>
+      teamRun.find((tool) => tool.name === name)!.inputSchema as {
+        properties: Record<string, unknown>;
+        required?: string[];
+      };
+
+    expect(names).toContain(HOST_PROJECT_INSTRUCTIONS_TOOL);
+    expect(names).toContain(HOST_PROPOSE_TEAM_TOOL);
+    for (const builderOnly of [
+      HOST_READ_TEAMS_TOOL,
+      HOST_TEAM_CHANGE_TOOL,
+      HOST_BACKUP_TEAM_TOOL,
+    ]) {
+      expect(names).not.toContain(builderOnly);
+    }
+    expect(Object.keys(schemaOf(HOST_PROPOSE_TEAM_TOOL).properties)).toEqual([
+      'overlay',
+      'summary',
+      'reason',
+    ]);
+    expect(
+      Object.keys(schemaOf(HOST_PROJECT_INSTRUCTIONS_TOOL).properties),
+    ).toEqual(['blocks', 'baseRevision']);
+    const described = (name: string): string =>
+      teamRun.find((tool) => tool.name === name)!.description;
+    expect(described(HOST_PROPOSE_TEAM_TOOL)).toContain(
+      HOST_PROJECT_INSTRUCTIONS_TOOL,
+    );
+    expect(described(HOST_PROJECT_INSTRUCTIONS_TOOL)).toContain(
+      HOST_PROPOSE_TEAM_TOOL,
+    );
+
+    const agentRun = listed(null).map((tool) => tool.name);
+    expect(agentRun).toContain(HOST_PROJECT_INSTRUCTIONS_TOOL);
+    expect(agentRun).not.toContain(HOST_PROPOSE_TEAM_TOOL);
+  });
+
+  it('proposes a project chat’s overlay on its own team and project, never team edits', async () => {
+    const projectChats = new ProjectChatBroker();
+    projectChats.register('run-1', 'agent', {
+      projectId: 'p1',
+      teamSlug: 'dev',
+    });
+    const proposeChange = vi.fn().mockResolvedValue({
+      status: 'refused',
+      code: 'NOTHING_TO_CHANGE',
+      message: 'no change',
+    });
+    const tool = projectChatTools(projectChats, {
+      proposeChange,
+    } as unknown as TeamProposalService).find((entry) =>
+      entry.handles(HOST_PROPOSE_TEAM_TOOL),
+    )!;
+    const context = {
+      runId: 'run-1',
+      memberId: 'agent',
+      conversationId: null,
+      caller: 'agent',
+      requestId: 1,
+      remote: false,
+      whileCancellable: (call) => call(new AbortController().signal),
+    } as McpCallContext;
+    const overlay = { members: { lead: { settings: { effort: 'max' } } } };
+
+    await tool.call(
+      HOST_PROPOSE_TEAM_TOOL,
+      { overlay, summary: 'Lead thinks harder here', reason: 'asked' },
+      context,
+    );
+    const withEdits = await tool.call(
+      HOST_PROPOSE_TEAM_TOOL,
+      {
+        overlay,
+        edits: [{ path: 'name', value: 'x' }],
+        summary: 's',
+        reason: 'r',
+      },
+      context,
+    );
+
+    expect(proposeChange).toHaveBeenCalledTimes(1);
+    expect(proposeChange).toHaveBeenCalledWith('run-1', {
+      overlay,
+      summary: 'Lead thinks harder here',
+      reason: 'asked',
+      edits: [],
+      slug: 'dev',
+      projectId: 'p1',
+    });
+    expect(withEdits.isError).toBe(true);
+  });
+
   it('answers a builder chat turn its read_teams call', async () => {
     const builders = new TeamBuilderBroker();
     builders.register('run-1', 'agent', {
@@ -4356,6 +4509,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamHistory: {} as TeamHistoryService,
       teamGate: new TeamProposalBroker(),
       teamBuilders: builders,
+      projectChats: new ProjectChatBroker(),
       teamStore: store,
       teamProposals: {} as TeamProposalService,
       shares: fakeShares(false).service,
@@ -4424,6 +4578,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamHistory: {} as TeamHistoryService,
       teamGate: new TeamProposalBroker(),
       teamBuilders: builders,
+      projectChats: new ProjectChatBroker(),
       teamStore: {} as TeamStoreService,
       teamProposals: {
         propose,
@@ -4502,6 +4657,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamHistory: {} as TeamHistoryService,
       teamGate: gate,
       teamBuilders: new TeamBuilderBroker(),
+      projectChats: new ProjectChatBroker(),
       teamStore: {} as TeamStoreService,
       teamProposals: { propose } as unknown as TeamProposalService,
       shares: fakeShares(false).service,

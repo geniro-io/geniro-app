@@ -128,9 +128,9 @@ export function readHostProjectInstructions(
     !text(record.previous) ||
     !text(record.next) ||
     !count(record.baseRevision) ||
-    !count(record.cardSeq) ||
+    !(record.cardSeq === null || count(record.cardSeq)) ||
     !Array.isArray(record.ids) ||
-    record.ids.length === 0 ||
+    (record.ids.length === 0) !== (record.cardSeq === null) ||
     !record.ids.every(
       (id): id is string =>
         RecommendationIdSchema.safeParse(id).success &&
@@ -151,10 +151,21 @@ export function readHostProjectInstructions(
   };
 }
 
-/** What the agent is told once the card is answered. */
+/** What the agent is told once the card is answered; `fromChat` for the project chat's own change. */
 export function hostProjectInstructionsResultText(
   outcome: HostProjectInstructionsOutcome,
+  fromChat = false,
 ): string {
+  if (fromChat) {
+    switch (outcome.status) {
+      case 'stale':
+        return `The user accepted the change but it could not be saved (${outcome.reason}). Nothing was written; tell the user, and propose it again on their word.`;
+      case 'posted':
+        return 'The change is now on the user’s screen, waiting for them. STOP HERE and end your turn, and do not call this tool again for the same change. Their Apply or Reject arrives as your next user message.';
+      default:
+        break;
+    }
+  }
   switch (outcome.status) {
     case 'saved':
       return `The user applied the change; the project's instructions are saved as revision ${outcome.instructionsRevision}. Do not write them again.`;

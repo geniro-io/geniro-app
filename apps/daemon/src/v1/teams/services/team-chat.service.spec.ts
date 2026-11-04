@@ -178,26 +178,20 @@ describe('TeamChatService', () => {
     expect(chats.createChat).not.toHaveBeenCalled();
   });
 
-  it('binds a chat opened in a project scope to that project and briefs it on the overlay file', async () => {
+  it('opens a builder chat bound to no project, and unbinds one bound before', async () => {
     const { slug } = await store.create(WF);
     await overlays.save(slug, 'p1', {});
 
-    await service.open(slug, { ...CHIPS, projectId: 'p1' });
+    await service.open(slug, CHIPS);
 
     const [input] = chats.createChat.mock.calls[0] as [
       Parameters<ChatService['createChat']>[0],
     ];
-    expect(input.editsProjectId).toBe('p1');
-    expect(input).not.toHaveProperty('projectId');
-    expect(input.teamInstructions).toContain('PROJECT OVERLAY — Geniro');
-    expect(input.teamInstructions).toContain(overlays.pathOf(slug, 'p1'));
-  });
+    expect(input.editsProjectId).toBeUndefined();
+    expect(input.teamInstructions).not.toContain('PROJECT OVERLAY —');
 
-  it('rebinds an open chat to the scope it is opened in', async () => {
-    const { slug } = await store.create(WF);
     chats.findTeamChat.mockResolvedValue(runWire('existing-run'));
-
-    await service.open(slug, { ...CHIPS, projectId: null });
+    await service.open(slug, CHIPS);
 
     expect(chats.bindTeamChatProject).toHaveBeenCalledWith(
       'existing-run',

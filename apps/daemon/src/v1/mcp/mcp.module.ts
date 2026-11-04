@@ -16,6 +16,7 @@ import { MonitorBroker } from '../agents/services/monitor.broker';
 import { NotifyBroker } from '../agents/services/notify.broker';
 import { PatchBroker } from '../agents/services/patch.broker';
 import { PlanBroker } from '../agents/services/plan.broker';
+import { ProjectChatBroker } from '../agents/services/project-chat.broker';
 import { ProjectInstructionsBroker } from '../agents/services/project-instructions.broker';
 import { ProjectInstructionsChangeService } from '../agents/services/project-instructions-change.service';
 import { RunOutcomeBroker } from '../agents/services/run-outcome.broker';
@@ -91,6 +92,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         teamHistory: TeamHistoryService,
         teamGate: TeamProposalBroker,
         teamBuilders: TeamBuilderBroker,
+        projectChats: ProjectChatBroker,
         teamStore: TeamStoreService,
         teamProposals: TeamProposalService,
         shares: ShareService,
@@ -125,6 +127,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           teamHistory,
           teamGate,
           teamBuilders,
+          projectChats,
           teamStore,
           teamProposals,
           shares,
@@ -159,6 +162,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         TeamHistoryService,
         TeamProposalBroker,
         TeamBuilderBroker,
+        ProjectChatBroker,
         TeamStoreService,
         TeamProposalService,
         ShareService,

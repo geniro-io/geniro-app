@@ -252,14 +252,14 @@ describe('TeamOverlayService', () => {
 
   it('writes the overlay and then the team, putting the overlay back when the team write fails', async () => {
     const before = await overlays.save('dev', 'p1', {
-      stages: { s: { howToWorkAddendum: 'old' } },
+      members: { lead: { extraInstructions: 'old' } },
     });
 
     await expect(
       service.writeWithTeam(
         'dev',
         'p1',
-        { stages: { s: { howToWorkAddendum: 'new' } } },
+        { members: { lead: { extraInstructions: 'new' } } },
         before.hash,
         () => Promise.reject(new Error('team write failed')),
       ),
@@ -273,7 +273,7 @@ describe('TeamOverlayService', () => {
       service.writeWithTeam(
         'dev',
         'p1',
-        { stages: { s: { howToWorkAddendum: 'newer' } } },
+        { members: { lead: { extraInstructions: 'newer' } } },
         before.hash,
         () => Promise.reject(new Error('team write failed')),
       ),
@@ -285,14 +285,14 @@ describe('TeamOverlayService', () => {
       service.writeWithTeam(
         'dev',
         'p1',
-        { stages: { s: { howToWorkAddendum: 'mine' } } },
+        { members: { lead: { extraInstructions: 'mine' } } },
         meanwhile!.hash,
         async () => {
           const written = await overlays.get('dev', 'p1');
           await overlays.save(
             'dev',
             'p1',
-            { stages: { s: { howToWorkAddendum: 'typed meanwhile' } } },
+            { members: { lead: { extraInstructions: 'typed meanwhile' } } },
             written!.hash,
           );
           throw new Error('team write failed');
@@ -300,13 +300,14 @@ describe('TeamOverlayService', () => {
       ),
     ).rejects.toThrow('team write failed');
     expect(
-      (await overlays.get('dev', 'p1'))!.overlay.stages!.s!.howToWorkAddendum,
+      (await overlays.get('dev', 'p1'))!.overlay.members!.lead!
+        .extraInstructions,
     ).toBe('typed meanwhile');
 
     const written = await service.writeWithTeam(
       'dev',
       'p1',
-      { stages: { s: { howToWorkAddendum: 'new' } } },
+      { members: { lead: { extraInstructions: 'new' } } },
       (await overlays.get('dev', 'p1'))!.hash,
       () => Promise.resolve('team-saved'),
     );

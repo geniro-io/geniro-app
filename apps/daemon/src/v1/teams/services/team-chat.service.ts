@@ -161,20 +161,18 @@ export class TeamChatService implements OnModuleInit {
   ): Promise<RunWire> {
     const { team } = await this.store.get(slug);
     const location = this.store.locate(slug);
-    const { projectId: bound, ...chips } = input;
-    const projectId = bound ?? null;
     const existing = await this.chats.findTeamChat(slug);
     if (existing !== null) {
       // An open conversation is re-briefed rather than left on the text it was
-      // created with — see `ChatService.refreshTeamInstructions` — and bound
-      // to the scope the panel opened it in.
-      await this.chats.bindTeamChatProject(existing.id, projectId);
+      // created with — see `ChatService.refreshTeamInstructions` — and edits
+      // the shared team alone: a project's own chat changes its overlay.
+      await this.chats.bindTeamChatProject(existing.id, null);
       await this.chats.refreshTeamInstructions(
         existing.id,
         await this.briefFor(
           slug,
           existing.cwd ?? location.directory,
-          projectId,
+          null,
           team,
         ),
       );
@@ -183,11 +181,11 @@ export class TeamChatService implements OnModuleInit {
     const teamInstructions = await this.briefFor(
       slug,
       location.directory,
-      projectId,
+      null,
       team,
     );
     return this.chats.createChat({
-      ...chips,
+      ...input,
       // The dock's own default may be a mode this CLI does not offer.
       approval: this.chats.offeredApproval(input.agentKind, input.approval),
       // The LIBRARY directory, not the file: a cwd is a directory, and putting
@@ -199,7 +197,6 @@ export class TeamChatService implements OnModuleInit {
       // service only ever replacing a title it derived itself.
       title: `Team: ${team.name}`,
       editsTeamSlug: slug,
-      editsProjectId: projectId,
       teamInstructions,
     });
   }

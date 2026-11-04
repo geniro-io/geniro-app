@@ -668,17 +668,6 @@ export const TeamOverlayMemberSchema = z
   .meta({ id: 'TeamOverlayMember' });
 export type TeamOverlayMember = z.infer<typeof TeamOverlayMemberSchema>;
 
-export const TeamOverlayStageSchema = z
-  .object({
-    howToWorkAddendum: z
-      .string()
-      .max(MAX_STAGE_INSTRUCTIONS_LENGTH)
-      .refine(argvSafe, NO_CONTROL_CHARACTERS)
-      .optional()
-      .describe('Appended to the stage’s how-to-work text in this project'),
-  })
-  .meta({ id: 'TeamOverlayStage' });
-
 /**
  * What one project changes about a shared team it defaults to — the
  * `<userData>/teams/overlays/<slug>/<projectId>.overlay.yaml` shape and its
@@ -699,10 +688,6 @@ export const TeamOverlaySchema = z
       .array(InstructionBlockSchema)
       .optional()
       .describe('Team-scoped blocks for this project, after the team’s own'),
-    stages: z
-      .record(z.string().min(1), TeamOverlayStageSchema)
-      .optional()
-      .describe('Per-stage addenda, keyed by stage id'),
   })
   .meta({ id: 'TeamOverlay' });
 export type TeamOverlay = z.infer<typeof TeamOverlaySchema>;
@@ -756,10 +741,7 @@ export const TeamOverlayScopeSchema = z
       .int()
       .describe('Model-group fields and pools the overlay overrides'),
     blocks: z.number().int().describe('Overlay instruction blocks'),
-    notes: z
-      .number()
-      .int()
-      .describe('Members with extra instructions and stages with an addendum'),
+    notes: z.number().int().describe('Members with extra instructions'),
     orphans: z.array(z.string()),
     unreadable: z
       .string()
@@ -1093,32 +1075,35 @@ export interface TeamLocation {
  * them — the daemon owns it, because the whole point is that the agent is put
  * where the team library lives.
  */
-export const StartTeamChatSchema = createChatSchema
-  .pick({
-    agentKind: true,
-    model: true,
-    approval: true,
-    effort: true,
-    contextWindow: true,
-    autoCompactPercent: true,
-    modelParameters: true,
-    configDir: true,
-    customInstructions: true,
-    replyLanguage: true,
-    agentOptions: true,
-  })
-  .extend({
-    projectId: z
-      .string()
-      .min(1)
-      .nullable()
-      .optional()
-      .describe(
-        'The project whose overlay of this team the chat edits beside the shared team; null = the shared team only',
-      ),
-  })
-  .meta({ id: 'StartTeamChat' });
+const chatChipsSchema = createChatSchema.pick({
+  agentKind: true,
+  model: true,
+  approval: true,
+  effort: true,
+  contextWindow: true,
+  autoCompactPercent: true,
+  modelParameters: true,
+  configDir: true,
+  customInstructions: true,
+  replyLanguage: true,
+  agentOptions: true,
+});
+
+export const StartTeamChatSchema = chatChipsSchema.meta({
+  id: 'StartTeamChat',
+});
 export type StartTeamChatInput = z.infer<typeof StartTeamChatSchema>;
+
+/** The composer settings a project page's chat panel opens its conversation with. */
+export const StartProjectChatSchema = chatChipsSchema.meta({
+  id: 'StartProjectChat',
+});
+export type StartProjectChatInput = z.infer<typeof StartProjectChatSchema>;
+
+/** How many of a project's own chats a discard destroyed. */
+export const ProjectChatsDiscardedSchema = z.object({
+  deleted: z.number().int(),
+});
 
 /** How many team-editing chats a discard actually destroyed. */
 export const TeamChatsDiscardedSchema = z.object({

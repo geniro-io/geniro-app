@@ -14,6 +14,8 @@ export interface DebouncedPersist<T> {
   schedule: (value: T) => void;
   /** True once `schedule` has been called — guards a late initial read. */
   dirtyRef: React.RefObject<boolean>;
+  /** Write an armed value now instead of at the end of its wait; resolves at once when none is armed. */
+  flush: () => Promise<void>;
 }
 
 /**
@@ -123,5 +125,23 @@ export function useDebouncedPersist<T>(
     [savable],
   );
 
-  return { schedule, dirtyRef };
+  const flush = useLatestCallback(async (): Promise<void> => {
+    if (timer.current === null || latest.current === null) {
+      return;
+    }
+    clearTimeout(timer.current);
+    timer.current = null;
+    const value = latest.current;
+    try {
+      await writeRef.current(value);
+      if (failed.current?.value === value) {
+        failed.current = null;
+      }
+    } catch (err) {
+      failed.current = { value };
+      throw err;
+    }
+  }, []);
+
+  return { schedule, dirtyRef, flush };
 }

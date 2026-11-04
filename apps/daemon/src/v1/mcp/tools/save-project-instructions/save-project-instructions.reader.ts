@@ -57,14 +57,8 @@ function visibleText(max: number) {
     );
 }
 
-/** An analysis's write of a project's instructions, and the applied items it carries out. */
-export const SaveProjectInstructionsArgsSchema = z.object({
-  projectId: z
-    .string()
-    .min(1)
-    .max(200)
-    .describe('The projectId view="project" named'),
-  blocks: z
+function blocksField(source: string) {
+  return z
     .array(
       z.object({
         id: z
@@ -72,7 +66,7 @@ export const SaveProjectInstructionsArgsSchema = z.object({
           .min(1)
           .max(PROJECT_BLOCK_ID_MAX)
           .describe(
-            'The block’s id from view="project"; a new block takes a new id of your own',
+            `The block’s id from ${source}; a new block takes a new id of your own`,
           ),
         title: visibleText(PROJECT_BLOCK_TITLE_MAX).describe(
           'The block’s title, as the editor shows it',
@@ -84,8 +78,18 @@ export const SaveProjectInstructionsArgsSchema = z.object({
     )
     .max(MAX_PROJECT_INSTRUCTION_BLOCKS)
     .describe(
-      'Every instruction block as it should read after the change, in order — each block view="project" returned, with your edits made; keep an id to change that block, leave a block out to remove it, add one with a new id; an empty list clears them',
-    ),
+      `Every instruction block as it should read after the change, in order — each block ${source} lists, with your edits made; keep an id to change that block, leave a block out to remove it, add one with a new id; an empty list clears them`,
+    );
+}
+
+/** An analysis's write of a project's instructions, and the applied items it carries out. */
+export const SaveProjectInstructionsArgsSchema = z.object({
+  projectId: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe('The projectId view="project" named'),
+  blocks: blocksField('view="project"'),
   baseRevision: z
     .number()
     .int()
@@ -105,6 +109,26 @@ export const SaveProjectInstructionsArgsSchema = z.object({
 export type SaveProjectInstructionsArgs = z.infer<
   typeof SaveProjectInstructionsArgsSchema
 >;
+
+/** A project chat's write of its own project's instructions: the project is the chat's. */
+export const ProjectChatInstructionsArgsSchema = z.object({
+  blocks: blocksField('your brief'),
+  baseRevision: z
+    .number()
+    .int()
+    .min(0)
+    .describe('The instructions revision your brief names'),
+});
+export type ProjectChatInstructionsArgs = z.infer<
+  typeof ProjectChatInstructionsArgsSchema
+>;
+
+/** A project chat's `save_project_instructions` arguments, or why they cannot be read. */
+export function readProjectChatInstructionsArgs(
+  args: Record<string, unknown>,
+): ToolArgs<ProjectChatInstructionsArgs> {
+  return readToolArgs(ProjectChatInstructionsArgsSchema.strict(), args);
+}
 
 /** `save_project_instructions` arguments, or why they cannot be read. */
 export function readSaveProjectInstructionsArgs(

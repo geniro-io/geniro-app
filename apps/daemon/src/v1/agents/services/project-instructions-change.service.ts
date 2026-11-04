@@ -42,6 +42,16 @@ export interface ProjectInstructionsChange {
   ids: readonly string[];
 }
 
+/** What a project's own chat asks `save_project_instructions` to write. */
+export interface ProjectChatInstructionsChange {
+  chatRunId: string;
+  projectId: string;
+  /** Every block as it should read after the change, in order; none clears them. */
+  blocks: ProjectInstructionBlock[];
+  /** The revision the chat's brief was written at. */
+  baseRevision: number;
+}
+
 type Answer = Record<string, unknown>;
 
 function refuse(error: string, message: string): Answer {
@@ -56,7 +66,8 @@ export type ProjectInstructionsCard = (
 /**
  * An analysis's one write to a project: its instructions — never its
  * description — for `P-` items the user selected in the newest Apply, each
- * filed about that project, quoting the revision it read. A change that passes
+ * filed about that project, quoting the revision it read; and a project
+ * chat's write to its own project's instructions ({@link saveForChat}). A change that passes
  * those checks is put on a card with the old and new text, and only the
  * card's Apply writes it (`write`), through `ProjectsService.update`, which
  * logs it as the analysis's and announces `projects_changed`.
@@ -159,9 +170,89 @@ export class ProjectInstructionsChangeService {
     }
   }
 
+  /**
+   * A project chat's change to its own project's blocks: checked against the
+   * revision its brief was written at, then put on the same card. A drift is
+   * answered with the blocks as they stand, since the brief is not written
+   * again until the next turn.
+   */
+  async saveForChat(
+    change: ProjectChatInstructionsChange,
+    card: ProjectInstructionsCard,
+  ): Promise<Answer> {
+    let project: ProjectWire;
+    try {
+      project = await this.projects.get(change.projectId);
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        return refuse('PROJECT_GONE', 'the project has been deleted');
+      }
+      throw error;
+    }
+    if (project.instructionsRevision !== change.baseRevision) {
+      return {
+        ...refuse(
+          'REVISION_DRIFT',
+          `the project's instructions changed since revision ${change.baseRevision} — make your edits again on the blocks below and pass instructionsRevision as baseRevision`,
+        ),
+        instructionsRevision: project.instructionsRevision,
+        blocks: project.instructionBlocks,
+      };
+    }
+    const receipt = { projectId: project.id, project: project.name };
+    if (sameBlocks(change.blocks, project.instructionBlocks)) {
+      return {
+        saved: true,
+        ...receipt,
+        changed: false,
+        instructionsRevision: project.instructionsRevision,
+      };
+    }
+    const outcome = await card({
+      projectId: project.id,
+      project: project.name,
+      previous: blocksDocument(project.instructionBlocks),
+      next: blocksDocument(change.blocks),
+      blocks: change.blocks,
+      baseRevision: change.baseRevision,
+      ids: [],
+      cardSeq: null,
+    });
+    switch (outcome.status) {
+      case 'saved':
+        return {
+          saved: true,
+          ...receipt,
+          changed: true,
+          instructionsRevision: outcome.instructionsRevision,
+        };
+      case 'declined':
+        return {
+          saved: false,
+          declined: true,
+          message: hostProjectInstructionsResultText(outcome, true),
+        };
+      case 'posted':
+        return {
+          posted: true,
+          message: hostProjectInstructionsResultText(outcome, true),
+        };
+      case 'stale':
+        return refuse(
+          'STALE',
+          hostProjectInstructionsResultText(outcome, true),
+        );
+      case 'unavailable':
+        return refuse(
+          'UNAVAILABLE',
+          hostProjectInstructionsResultText(outcome, true),
+        );
+    }
+  }
+
   /** The card's Apply: the change written over the revision it was read at, or why it could not be. */
   async write(
-    analysisRunId: string,
+    chatRunId: string,
     change: HostProjectInstructions,
   ): Promise<HostProjectInstructionsOutcome> {
     try {
@@ -172,9 +263,9 @@ export class ProjectInstructionsChangeService {
           expectedInstructionsRevision: change.baseRevision,
         },
         {
-          source: 'analysis',
+          source: change.cardSeq === null ? 'chat' : 'analysis',
           recommendationIds: change.ids,
-          chatRunId: analysisRunId,
+          chatRunId,
           cardSeq: change.cardSeq,
         },
       );
@@ -196,7 +287,7 @@ export class ProjectInstructionsChangeService {
         return { status: 'stale', reason: error.message };
       }
       this.logger.error(
-        `analysis ${analysisRunId} could not save project ${change.projectId}: ${error instanceof Error ? error.message : String(error)}`,
+        `chat ${chatRunId} could not save project ${change.projectId}: ${error instanceof Error ? error.message : String(error)}`,
       );
       return { status: 'stale', reason: 'the instructions could not be saved' };
     }

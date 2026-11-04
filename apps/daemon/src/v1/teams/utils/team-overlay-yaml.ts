@@ -66,16 +66,6 @@ export function compactTeamOverlay(overlay: TeamOverlay): TeamOverlay {
   if (plain.instructionBlocks && plain.instructionBlocks.length > 0) {
     out.instructionBlocks = plain.instructionBlocks;
   }
-  const stages = Object.fromEntries(
-    Object.entries(plain.stages ?? {}).filter(
-      ([, stage]) =>
-        stage.howToWorkAddendum !== undefined &&
-        stage.howToWorkAddendum.trim() !== '',
-    ),
-  );
-  if (Object.keys(stages).length > 0) {
-    out.stages = stages;
-  }
   return out;
 }
 

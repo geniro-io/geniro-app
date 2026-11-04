@@ -111,6 +111,7 @@ import { PayloadRefsSweepService } from './services/payload-refs-sweep.service';
 import { PlanBroker } from './services/plan.broker';
 import { PolledSpendService } from './services/polled-spend.service';
 import { ProcessRegistry } from './services/process-registry';
+import { ProjectChatBroker } from './services/project-chat.broker';
 import { ProjectInstructionsBroker } from './services/project-instructions.broker';
 import { ProjectInstructionsChangeService } from './services/project-instructions-change.service';
 import { PullRequestCaptureService } from './services/pull-request-capture.service';
@@ -247,6 +248,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     AnalysisReportsService,
     ProjectInstructionsChangeService,
     ProjectInstructionsBroker,
+    ProjectChatBroker,
     ChartBroker,
     PatchBroker,
     ComparisonBroker,
@@ -634,6 +636,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ActionPressService,
     TeamProposalBroker,
     TeamBuilderBroker,
+    ProjectChatBroker,
     // And the store behind it: a TEAM member publishes a page too, and the
     // executor is the turn that persists that row.
     ArtifactStoreService,

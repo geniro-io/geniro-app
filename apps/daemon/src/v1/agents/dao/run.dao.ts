@@ -58,7 +58,8 @@ export class RunDao extends BaseDao<Run> {
    * this thread in shared list - same as for thread with changing team"):
    * it belongs to the thread it reads, opens in that thread's popup, and is
    * found through {@link listAnalysesOf}. A team's analysis is hidden on
-   * the same terms and found through {@link listTeamAnalyses}. Nothing
+   * the same terms and found through {@link listTeamAnalyses}, and so is a
+   * project's own chat, found through {@link listEditingProject}. Nothing
    * else is hidden by kind.
    */
   async listChats(
@@ -70,6 +71,7 @@ export class RunDao extends BaseDao<Run> {
       {
         teamId: null,
         editsTeamSlug: null,
+        editsProjectId: null,
         analysisSourceRunId: null,
         analysisTeamSlug: null,
         ...scopeFilter(scope),
@@ -127,6 +129,32 @@ export class RunDao extends BaseDao<Run> {
       { editsTeamSlug: slug },
       { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
     );
+  }
+
+  /** Every project's own chat for one project, newest first — archived ones included, for the reason {@link listEditingTeam} gives. */
+  async listEditingProject(
+    projectId: string,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { editsProjectId: projectId, editsTeamSlug: null },
+      { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+    );
+  }
+
+  /** The projects that have an own chat, archived ones included. */
+  async projectChatProjectIds(txEm?: EntityManager): Promise<string[]> {
+    const runs = await this.getRepo(txEm).find(
+      { editsProjectId: { $ne: null }, editsTeamSlug: null },
+      { fields: ['id', 'editsProjectId'], disableIdentityMap: true },
+    );
+    return [
+      ...new Set(
+        runs.flatMap((run) =>
+          run.editsProjectId === null ? [] : [run.editsProjectId],
+        ),
+      ),
+    ];
   }
 
   /**

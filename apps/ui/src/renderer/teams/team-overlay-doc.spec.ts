@@ -9,6 +9,7 @@ import {
   resetFields,
   withMemberPool,
   withMemberSettings,
+  withTeamSettings,
 } from './team-overlay-doc';
 
 const LEAD: TeamMember = {
@@ -97,5 +98,28 @@ describe('editing an overlay', () => {
       notes: false,
     });
     expect(withMemberPool(pooled, 'lead', undefined)).toEqual({ members: {} });
+  });
+
+  it('restores every setting and the pool, keeping the extra instructions and other members', () => {
+    const before: TeamOverlay = {
+      members: {
+        lead: {
+          settings: { agent: 'codex', effort: 'low' },
+          pool: [],
+          extraInstructions: 'Use the staging DB.',
+        },
+        reviewer: { settings: { effort: 'max' } },
+      },
+    };
+
+    expect(withTeamSettings(before, 'lead')).toEqual({
+      members: {
+        lead: { extraInstructions: 'Use the staging DB.' },
+        reviewer: { settings: { effort: 'max' } },
+      },
+    });
+    expect(
+      withTeamSettings({ members: { lead: { pool: [] } } }, 'lead'),
+    ).toEqual({ members: {} });
   });
 });

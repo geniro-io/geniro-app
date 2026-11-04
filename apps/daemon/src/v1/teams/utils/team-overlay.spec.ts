@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  MAX_STAGE_INSTRUCTIONS_LENGTH,
-  type Team,
-  type TeamOverlay,
-} from '../teams.types';
+import type { Team, TeamOverlay } from '../teams.types';
 import { applyTeamOverlay, overlayCounts } from './team-overlay';
 import {
   parseTeamOverlayYaml,
@@ -161,24 +157,20 @@ describe('applyTeamOverlay', () => {
     expect(team.members[0]!.pool).toEqual([]);
   });
 
-  it('appends extra instructions and stage addenda', () => {
+  it('appends extra instructions and leaves the stages as the team has them', () => {
     const { team } = apply({
       members: { lead: { extraInstructions: 'Use the staging DB.' } },
-      stages: { build: { howToWorkAddendum: 'Run pnpm full-check.' } },
     });
 
     expect(team.members[0]!.instructions).toBe(
       'Plan the work.\n\nUse the staging DB.',
     );
-    expect(team.stages![0]!.howToWork).toBe(
-      'Write the code.\n\nRun pnpm full-check.',
-    );
+    expect(team.stages).toEqual(TEAM.stages);
   });
 
   it('drops entries for a removed member and reports them as orphans', () => {
     const { team, orphans } = apply({
       members: { gone: { settings: { effort: 'low' } } },
-      stages: { ship: { howToWorkAddendum: 'x' } },
       instructionBlocks: [
         { id: 'o1', title: 'P', text: 'Hi', audience: ['lead', 'gone'] },
       ],
@@ -186,7 +178,6 @@ describe('applyTeamOverlay', () => {
 
     expect(orphans).toEqual([
       'members.gone',
-      'stages.ship',
       'instructionBlocks.o1.audience.gone',
     ]);
     expect(team.members.map((m) => m.id)).toEqual(['lead', 'reviewer']);
@@ -211,18 +202,6 @@ describe('applyTeamOverlay', () => {
     ]);
   });
 
-  it('rejects a stage addendum past the howToWork cap', () => {
-    expect(() =>
-      apply({
-        stages: {
-          build: {
-            howToWorkAddendum: 'x'.repeat(MAX_STAGE_INSTRUCTIONS_LENGTH),
-          },
-        },
-      }),
-    ).toThrow(/Stage 'Build' \(build\).*past the 4000 limit/);
-  });
-
   it('leaves the shared team untouched', () => {
     apply({ members: { lead: { settings: { effort: 'max' } } } });
 
@@ -245,9 +224,8 @@ describe('overlayCounts', () => {
         instructionBlocks: [
           { id: 'o', title: '', text: '', audience: 'everyone' },
         ],
-        stages: { build: { howToWorkAddendum: 'y' } },
       }),
-    ).toEqual({ overrides: 4, blocks: 1, notes: 2 });
+    ).toEqual({ overrides: 4, blocks: 1, notes: 1 });
   });
 });
 
@@ -259,12 +237,19 @@ describe('team overlay YAML', () => {
         lead: { settings: { effort: 'max' }, extraInstructions: '  ' },
         reviewer: {},
       },
-      stages: { build: { howToWorkAddendum: '' } },
     });
 
     expect(parseTeamOverlayYaml(text)).toEqual({
       members: { lead: { settings: { effort: 'max' } } },
     });
+  });
+
+  it('reads a file written with stage addenda, dropping them', () => {
+    expect(
+      parseTeamOverlayYaml(
+        'members:\n  lead:\n    extraInstructions: Hi\nstages:\n  build:\n    howToWorkAddendum: Run the suite.\n',
+      ),
+    ).toEqual({ members: { lead: { extraInstructions: 'Hi' } } });
   });
 
   it('reads an empty file as an empty overlay and refuses a malformed one', () => {

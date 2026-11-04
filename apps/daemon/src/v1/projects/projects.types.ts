@@ -233,15 +233,15 @@ export const PROJECT_INSTRUCTION_FIELDS = [
 export type ProjectInstructionField =
   (typeof PROJECT_INSTRUCTION_FIELDS)[number];
 
-/** Who changed a project's texts: the user, or an analysis applying `P-` items. */
-export type ProjectInstructionChangeSource = 'user' | 'analysis';
+/** Who changed a project's texts: the user, an analysis applying `P-` items, or the project's own chat. */
+export type ProjectInstructionChangeSource = 'user' | 'analysis' | 'chat';
 
 /** Consecutive user edits of one field this close together are logged as one change. */
 export const PROJECT_CHANGE_COALESCE_MS = 10 * 60 * 1000;
 
-/** What an analysis's write carries into the change log. */
+/** What an analysis's or the project chat's write carries into the change log. */
 export interface ProjectChangeOrigin {
-  source: 'analysis';
+  source: 'analysis' | 'chat';
   recommendationIds: readonly string[];
   chatRunId: string;
   cardSeq: number | null;

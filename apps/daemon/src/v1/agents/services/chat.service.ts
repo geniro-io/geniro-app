@@ -82,6 +82,7 @@ import {
   type HostQuestionOutcome,
   type HostRowWire,
   type ItemWire,
+  type ProjectChatSource,
   type RecommendationApply,
   type RunAwaiting,
   type RunGroupColor,
@@ -199,6 +200,7 @@ import {
   serializePendingQuestion,
 } from '../utils/pending-question';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
+import { isProjectChat } from '../utils/project-chat';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
@@ -243,6 +245,7 @@ import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
+import { ProjectChatBroker } from './project-chat.broker';
 import { ProjectInstructionsBroker } from './project-instructions.broker';
 import { ProjectInstructionsChangeService } from './project-instructions-change.service';
 import { PullRequestCaptureService } from './pull-request-capture.service';
@@ -803,6 +806,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     | ((slug: string, cwd: string, projectId: string | null) => Promise<string>)
     | null = null;
 
+  private projectChatSource: ProjectChatSource | null = null;
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
@@ -876,6 +881,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly projectInstructionCards?: ProjectInstructionsBroker,
     @Optional()
     private readonly projectInstructionWrites?: ProjectInstructionsChangeService,
+    /** A project chat's standing to change its project, installed per turn. Optional for the positional specs. */
+    @Optional() private readonly projectChats?: ProjectChatBroker,
   ) {}
 
   /**
@@ -1232,14 +1239,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           ? await this.writeProjectInstructions(runId, snapshot.change)
           : { status: 'declined' };
         return {
-          message: hostProjectInstructionsResultText(outcome),
+          message: hostProjectInstructionsResultText(
+            outcome,
+            snapshot.change.cardSeq === null,
+          ),
           ...projectInstructionsVerdict(outcome),
         };
       }
     }
   }
 
-  /** A project-instructions card's Apply, written as the analysis that raised it. */
+  /** A project-instructions card's Apply, written as the analysis or project chat that raised it. */
   private writeProjectInstructions(
     runId: string,
     change: HostProjectInstructions,
@@ -2090,7 +2100,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      * knows where the library keeps its files.
      */
     editsTeamSlug?: string;
-    /** The project whose overlay of that team the chat edits beside it. */
+    /** The project whose overlay of that team the chat edits beside it; with no team, the project this chat is the own chat of. */
     editsProjectId?: string | null;
     teamInstructions?: string;
     /**
@@ -3070,6 +3080,96 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     ) => Promise<string>,
   ): void {
     this.teamBrief = source;
+  }
+
+  /**
+   * Install what a project's own chat is briefed from and which team it may
+   * change — installed rather than injected because `TeamsModule`, which
+   * knows overlays, depends on this module.
+   */
+  useProjectChat(source: ProjectChatSource): void {
+    this.projectChatSource = source;
+  }
+
+  /** A project's own chat, or null if it has none — newest wins, as in {@link findTeamChat}. */
+  async findProjectChat(projectId: string): Promise<RunWire | null> {
+    const em = this.em.fork();
+    const [run] = await this.runDao.listEditingProject(projectId, em);
+    if (!run) {
+      return null;
+    }
+    const previews = await this.wireReads([run], em);
+    return this.toRunWire(run, previews.of(run.id));
+  }
+
+  /** The projects that have an own chat — what the orphan sweep checks. */
+  projectChatProjectIds(): Promise<string[]> {
+    return this.runDao.projectChatProjectIds(this.em.fork());
+  }
+
+  /**
+   * **Destructive and irreversible**: delete a project's own chats, answering
+   * with the count — {@link deleteTeamChats}' terms.
+   */
+  async deleteProjectChats(projectId: string): Promise<{ deleted: number }> {
+    const runs = await this.runDao.listEditingProject(
+      projectId,
+      this.em.fork(),
+    );
+    let deleted = 0;
+    for (const run of runs) {
+      try {
+        if ((await this.delete(run.id)).deleted) {
+          deleted += 1;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `could not delete project chat ${run.id} for '${projectId}': ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    return { deleted };
+  }
+
+  /** Re-brief a project's chat from the project as it stands before each turn. */
+  private async rebriefProjectChat(
+    runId: string,
+    projectId: string,
+    cwd: string,
+  ): Promise<void> {
+    if (this.projectChatSource === null) {
+      return;
+    }
+    try {
+      await this.refreshTeamInstructions(
+        runId,
+        await this.projectChatSource.brief(projectId, cwd),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `project chat ${runId} keeps its brief: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** The team whose overlay a project chat's turn may change; null for an agent default or a failed read. */
+  private async projectChatTeamOf(
+    runId: string,
+    projectId: string,
+  ): Promise<string | null> {
+    if (this.projectChatSource === null) {
+      return null;
+    }
+    try {
+      return await this.projectChatSource.teamOf(projectId);
+    } catch (err) {
+      this.logger.warn(
+        `project chat ${runId} goes without its team's overlay: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
   }
 
   /**
@@ -5650,6 +5750,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           cwd,
           run.editsProjectId,
         );
+      } else if (isProjectChat(run)) {
+        await this.rebriefProjectChat(runId, run.editsProjectId, cwd);
       }
 
       // Re-read the committed settings from a FRESH fork now that the claim is
@@ -6993,6 +7095,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         this.runtime.port !== null && run.editsTeamSlug !== null
           ? await this.builderAnalysisTurn(runId, run.editsTeamSlug)
           : null;
+      const projectChatTeam =
+        this.runtime.port !== null && isProjectChat(run)
+          ? await this.projectChatTeamOf(runId, run.editsProjectId)
+          : null;
       const questionServer = hostQuestionServer();
       // Only where there is a port to reach: a token nobody can present is a
       // credential registered as a redaction secret and held to run teardown
@@ -7110,7 +7216,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // below, and an analysis saves the analysed one through
       // `save_team_change` — see `TeamProposalBroker`.
       const disposeTeamProposals =
-        mcpEndpoint && run.editsTeamSlug === null && !isAnalysisRun(run)
+        mcpEndpoint &&
+        run.editsTeamSlug === null &&
+        !isProjectChat(run) &&
+        !isAnalysisRun(run)
           ? this.teamProposals.register(runId, SINGLE_AGENT_NODE, {
               runId,
             })
@@ -7148,9 +7257,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               ),
             )
           : null;
+      const disposeProjectChat =
+        mcpEndpoint && isProjectChat(run) && this.projectChats !== undefined
+          ? this.projectChats.register(runId, SINGLE_AGENT_NODE, {
+              projectId: run.editsProjectId,
+              teamSlug: projectChatTeam,
+            })
+          : null;
       const disposeProjectCards =
         mcpEndpoint &&
-        analysisTurn !== null &&
+        (analysisTurn !== null || isProjectChat(run)) &&
         this.projectInstructionCards !== undefined
           ? this.projectInstructionCards.register(
               runId,
@@ -7184,6 +7300,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         disposeTeamBuilder?.();
         disposeAnalysis?.();
         disposeProjectCards?.();
+        disposeProjectChat?.();
       };
       // ZERO the last turn's running bill before this one's first request can
       // report. It belongs HERE rather than at the settle for the reason the

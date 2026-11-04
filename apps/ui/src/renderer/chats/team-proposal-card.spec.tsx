@@ -210,7 +210,7 @@ describe('TeamProposalCard', () => {
     expect(
       el.querySelector('[data-slot="team-proposal-reason"]')?.textContent,
     ).toBe(
-      'Why: The user asked for tests before review.\nThe coder waited on every edit, so it now runs unattended.',
+      'The user asked for tests before review.\nThe coder waited on every edit, so it now runs unattended.',
     );
   });
 

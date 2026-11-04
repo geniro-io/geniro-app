@@ -1,7 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { useState } from 'react';
 
-import { MarkdownEditorDialog } from './markdown-editor-dialog';
+import {
+  MarkdownEditorDialog,
+  MarkdownViewerDialog,
+} from './markdown-editor-dialog';
 
 const SAMPLE_ROLE = `You are the release-notes agent.
 
@@ -53,4 +56,18 @@ export const Playground: Story = {};
 
 export const Empty: Story = {
   args: { value: '' },
+};
+
+export const Viewer: Story = {
+  render: (args) => {
+    const [open, setOpen] = useState(true);
+    return (
+      <MarkdownViewerDialog
+        open={open}
+        title="Team Settings"
+        value={args.value}
+        onClose={() => setOpen(false)}
+      />
+    );
+  },
 };

@@ -164,14 +164,14 @@ describe('MemoryRow', () => {
       [...el.querySelectorAll('button')].find((button) =>
         button.textContent?.startsWith('Show'),
       )!;
-    expect(body.className).toContain('line-clamp-3');
+    expect(body.className).toContain('line-clamp-2');
     expect(body.className).toContain('whitespace-pre-wrap');
     expect(toggle().textContent).toBe('Show more');
     act(() => toggle().click());
-    expect(body.className).not.toContain('line-clamp-3');
+    expect(body.className).not.toContain('line-clamp-2');
     expect(toggle().textContent).toBe('Show less');
     act(() => toggle().click());
-    expect(body.className).toContain('line-clamp-3');
+    expect(body.className).toContain('line-clamp-2');
   });
 
   it('scrolls itself to the middle when it becomes focused', () => {

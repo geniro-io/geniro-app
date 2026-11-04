@@ -89,3 +89,33 @@ export function MarkdownEditorDialog({
     </Dialog>
   );
 }
+
+/** The same popup, locked, for a text edited somewhere else: Close alone. */
+export function MarkdownViewerDialog({
+  open,
+  title,
+  value,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  value: string;
+  onClose: () => void;
+}): React.JSX.Element {
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={title}
+      className="max-w-[1100px]">
+      <div data-slot="markdown-viewer" className="flex flex-col gap-4">
+        <MdEditor value={value} height={EDITOR_HEIGHT} readOnly />
+        <div className="flex items-center justify-end">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}

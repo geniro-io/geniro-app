@@ -355,7 +355,15 @@ function MemberWorkTable({
   const readingColumn = (header: string, key: string) => ({
     header,
     align: 'end' as const,
-    cell: (row: Row) => reading(row, key)?.value ?? NOT_MEASURED,
+    cell: (row: Row) => {
+      const found = reading(row, key);
+      if (found === null) {
+        return NOT_MEASURED;
+      }
+      return found.detail === undefined
+        ? found.value
+        : `${found.value} (${found.detail})`;
+    },
     title: (row: Row) =>
       row.work === null
         ? 'Not measured: none of its runs was measured.'

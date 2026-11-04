@@ -61,6 +61,13 @@ vi.mock('../daemon-api', async (importOriginal) => {
           parameters: [],
           unavailableReason: null,
         }),
+        listAgentMcpServers: async () => ({
+          servers: [],
+          plugins: [],
+          unavailableReason: null,
+          interactiveOnlyNote: null,
+          pending: false,
+        }),
       }),
     }),
   };
@@ -1035,28 +1042,27 @@ describe('Projects page', () => {
       expect(teamsApi.saveTeam).not.toHaveBeenCalled();
     });
 
-    it('overrides a Model row from the team’s value and resets it', async () => {
+    it('marks a Model row the project overrides with its name, and resets it to the team’s', async () => {
+      teamsApi.getTeamOverlay.mockResolvedValue(
+        overlayWire(
+          { members: { lead: { settings: { model: 'haiku' } } } },
+          'o-1',
+        ),
+      );
       const el = await mountOpen();
       const sheet = await openMember(el);
 
-      await act(async () => {
-        sheet
-          .querySelector<HTMLButtonElement>(
-            '[aria-label="Override Model for One"]',
-          )!
-          .click();
-      });
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 900));
-      });
-      expect(teamsApi.saveTeamOverlay).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          saveTeamOverlayDto: expect.objectContaining({
-            overlay: { members: { lead: { settings: { model: 'opus' } } } },
-          }) as unknown,
-        }) as unknown,
+      const rows = [
+        ...sheet.querySelectorAll<HTMLElement>('[data-slot="overridable-row"]'),
+      ];
+      const model = rows.find((row) => row.hasAttribute('data-overridden'))!;
+      expect(rows.filter((row) => row.hasAttribute('data-overridden'))).toEqual(
+        [model],
       );
-      expect(sheet.textContent).toContain('Team: opus');
+      expect(model.querySelector('[data-slot="scope-mark"]')?.textContent).toBe(
+        'One',
+      );
+      expect(model.textContent).toContain('Team: opus');
 
       await act(async () => {
         sheet
@@ -1072,6 +1078,34 @@ describe('Projects page', () => {
         expect.objectContaining({
           saveTeamOverlayDto: expect.objectContaining({
             overlay: { members: {} },
+          }) as unknown,
+        }) as unknown,
+      );
+    });
+
+    it('gives the project its own pool the moment the team’s pool is changed, with no Override press', async () => {
+      const el = await mountOpen();
+      const sheet = await openMember(el);
+      expect(sheet.querySelector('[aria-label^="Override"]')).toBeNull();
+
+      await act(async () => {
+        [...sheet.querySelectorAll<HTMLButtonElement>('button')]
+          .find((button) => button.textContent?.includes('Add pool member'))!
+          .click();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      });
+      expect(teamsApi.saveTeamOverlay).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          saveTeamOverlayDto: expect.objectContaining({
+            overlay: {
+              members: {
+                lead: {
+                  pool: [expect.objectContaining({ agent: 'claude' })],
+                },
+              },
+            },
           }) as unknown,
         }) as unknown,
       );

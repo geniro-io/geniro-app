@@ -230,7 +230,7 @@ describe('Memory', () => {
 
     expect(container.textContent).toContain('Waiting for review (1)');
     expect(rowOf('m1').textContent).toContain('Use pnpm');
-    expect(api.listMemories).toHaveBeenCalledWith({ limit: 50 });
+    expect(api.listMemories).toHaveBeenCalledWith({ limit: 20 });
     expect(api.listMemories).toHaveBeenCalledWith({
       status: 'pending',
       limit: 200,
@@ -250,7 +250,7 @@ describe('Memory', () => {
       scope: 'project',
       projectId: 'project-billing',
       type: 'feedback',
-      limit: 50,
+      limit: 20,
     });
   });
 
@@ -742,7 +742,7 @@ describe('Memory', () => {
 
     expect(api.listMemories).toHaveBeenCalledWith({
       status: 'pending',
-      limit: 50,
+      limit: 20,
     });
     expect(container.textContent).not.toContain('Waiting for review (');
   });
@@ -839,7 +839,7 @@ describe('Memory', () => {
     const onFocusDone = vi.fn();
     const api = await render({ focus: 'm3', onFocusDone });
 
-    expect(api.listMemories).toHaveBeenCalledWith({ handle: 'm3', limit: 50 });
+    expect(api.listMemories).toHaveBeenCalledWith({ handle: 'm3', limit: 20 });
     expect(api.listMemories).not.toHaveBeenCalledWith(
       expect.objectContaining({ status: 'pending' }),
     );

@@ -8,8 +8,10 @@ import { ConfirmDialog } from '../components/confirm-dialog';
 import { ErrorText } from '../components/error-text';
 import { ExpandableTextarea } from '../components/expandable-textarea';
 import { Field } from '../components/field';
+import { InheritedTag } from '../components/inherited-tag';
 import { type AvatarLook, MemberAvatar } from '../components/member-avatar';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
+import { ReadOnlyText } from '../components/read-only-text';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Popover } from '../components/ui/popover';
@@ -67,6 +69,34 @@ function SheetGroup({
       </h3>
       {children}
     </section>
+  );
+}
+
+/** A text the shared team holds, read-only in a project's scope, with where to change it. */
+function TeamText({
+  title,
+  text,
+}: {
+  title: string;
+  text: string | undefined;
+}): React.JSX.Element {
+  return (
+    <div
+      data-slot="member-team-text"
+      className="flex min-w-0 flex-col gap-1.5 rounded-control bg-muted/30 px-3 py-2.5 ring-1 ring-border/60">
+      <div className="flex items-center gap-2">
+        <InheritedTag variant="team" />
+        <span className="text-xs text-muted-foreground">
+          Edit it on the team’s page.
+        </span>
+      </div>
+      <ReadOnlyText
+        title={title}
+        text={text ?? ''}
+        lines={3}
+        emptyLabel="Not set on the team."
+      />
+    </div>
   );
 }
 
@@ -306,16 +336,18 @@ export function MemberSheet({
               />
               {fieldErrors('name')}
             </div>
+          </fieldset>
 
-            {performance === null ? null : (
-              <SheetGroup title="Performance">{performance}</SheetGroup>
-            )}
+          {performance === null ? null : (
+            <SheetGroup title="Performance">{performance}</SheetGroup>
+          )}
 
-            <SheetGroup title="Identity" warning={hasIssues(['character'])}>
-              <Field
-                label="Character"
-                htmlFor="member-character"
-                hint="Optional — its manner and tone. Only its own turns carry it.">
+          <SheetGroup title="Identity" warning={hasIssues(['character'])}>
+            <Field
+              label="Character"
+              htmlFor={project === null ? 'member-character' : undefined}
+              hint="Optional — its manner and tone. Only its own turns carry it.">
+              {project === null ? (
                 <ExpandableTextarea
                   id="member-character"
                   title="Character"
@@ -324,17 +356,21 @@ export function MemberSheet({
                   placeholder="Terse and precise."
                   onChange={(next) => onPatch({ character: next || undefined })}
                 />
-                {fieldErrors('character')}
-              </Field>
-            </SheetGroup>
+              ) : (
+                <TeamText title="Character" text={member.character} />
+              )}
+              {fieldErrors('character')}
+            </Field>
+          </SheetGroup>
 
-            <SheetGroup
-              title="Role & instructions"
-              warning={hasIssues(['role', 'instructions'])}>
-              <Field
-                label="Role"
-                htmlFor="member-role"
-                hint="What it does — visible to the others, so they can hand it work.">
+          <SheetGroup
+            title="Role & instructions"
+            warning={hasIssues(['role', 'instructions'])}>
+            <Field
+              label="Role"
+              htmlFor={project === null ? 'member-role' : undefined}
+              hint="What it does — visible to the others, so they can hand it work.">
+              {project === null ? (
                 <ExpandableTextarea
                   id="member-role"
                   title="Role"
@@ -343,12 +379,16 @@ export function MemberSheet({
                   placeholder="Reviews a diff or branch and reports findings by severity."
                   onChange={(next) => onPatch({ role: next || undefined })}
                 />
-                {fieldErrors('role')}
-              </Field>
-              <Field
-                label="Instructions"
-                htmlFor="member-instructions"
-                hint="How it works — private: only its own turns carry it.">
+              ) : (
+                <TeamText title="Role" text={member.role} />
+              )}
+              {fieldErrors('role')}
+            </Field>
+            <Field
+              label="Instructions"
+              htmlFor={project === null ? 'member-instructions' : undefined}
+              hint="How it works — private: only its own turns carry it.">
+              {project === null ? (
                 <ExpandableTextarea
                   id="member-instructions"
                   title="Instructions"
@@ -358,11 +398,13 @@ export function MemberSheet({
                     onPatch({ instructions: next || undefined })
                   }
                 />
-                {fieldErrors('instructions')}
-              </Field>
-              {project === null ? sizeLine : null}
-            </SheetGroup>
-          </fieldset>
+              ) : (
+                <TeamText title="Instructions" text={member.instructions} />
+              )}
+              {fieldErrors('instructions')}
+            </Field>
+            {project === null ? sizeLine : null}
+          </SheetGroup>
           {project === null ? null : (
             <SheetGroup title={`For ${project.name}`}>
               <Field

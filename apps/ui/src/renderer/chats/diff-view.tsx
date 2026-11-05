@@ -1,3 +1,9 @@
+import { structuredPatch } from 'diff';
+import { memo, useMemo, useState } from 'react';
+
+import { Button } from '../components/ui/button';
+import { cn } from '../components/ui/utils';
+import { formatCount } from '../stats/stats-format';
 import { isProposedChange, SAVE_PROJECT_INSTRUCTIONS } from './geniro-tool';
 
 /**
@@ -82,52 +88,243 @@ export function editDiffOf(
   return null;
 }
 
+const REMOVED_CLASS = 'bg-destructive/10 text-destructive';
+const ADDED_CLASS = 'bg-success/10 text-success';
+
+/** Unchanged lines kept around each change, as `git diff` keeps them. */
+const DIFF_CONTEXT_LINES = 3;
+
+/** Rows drawn before Show all: an agent's edit can carry the whole file on both sides. */
+export const DIFF_ROW_LIMIT = 400;
+
 /**
- * GitHub-style line diff for file-editing tool calls: the removed text as
- * red `-` lines, the added text as green `+` lines. Purely presentational —
- * an Edit shows old→new, a Write (file creation) shows only added lines.
- * Colours come from the destructive/success tokens.
+ * How far the line diff may search before it gives up and the diff falls back
+ * to trimming what the two sides share at either end — two unrelated files
+ * would otherwise cost the main thread a quadratic search.
  */
-export function DiffView({
+const DIFF_MAX_EDIT_LENGTH = 1000;
+
+type DiffRow =
+  | { kind: 'removed' | 'added' | 'context'; text: string }
+  | { kind: 'gap'; skipped: number };
+
+function linesOf(text: string): string[] {
+  return text.split('\n');
+}
+
+/**
+ * The rows of a line diff: each change with up to {@link DIFF_CONTEXT_LINES}
+ * unchanged lines around it, and every longer unchanged stretch as one gap. A
+ * file creation (no old text) is its new text as additions.
+ */
+export function diffRows(
+  oldText: string | null | undefined,
+  newText: string,
+): DiffRow[] {
+  if (!oldText) {
+    return linesOf(newText).map((text) => ({ kind: 'added', text }));
+  }
+  const oldLines = linesOf(oldText);
+  // The trailing newline keeps jsdiff from reporting a missing end-of-file
+  // newline as a change of the last line.
+  const patch = structuredPatch(
+    '',
+    '',
+    `${oldText}\n`,
+    `${newText}\n`,
+    undefined,
+    undefined,
+    { context: DIFF_CONTEXT_LINES, maxEditLength: DIFF_MAX_EDIT_LENGTH },
+  );
+  if (patch === undefined) {
+    return trimmedRows(oldLines, linesOf(newText));
+  }
+  const rows: DiffRow[] = [];
+  let consumed = 0;
+  for (const hunk of patch.hunks) {
+    const skipped = hunk.oldStart - 1 - consumed;
+    if (skipped > 0) {
+      rows.push({ kind: 'gap', skipped });
+    }
+    consumed = Math.max(consumed, hunk.oldStart - 1);
+    for (const line of hunk.lines) {
+      const sign = line[0];
+      const text = line.slice(1);
+      if (sign === '-') {
+        rows.push({ kind: 'removed', text });
+        consumed += 1;
+      } else if (sign === '+') {
+        rows.push({ kind: 'added', text });
+      } else if (sign === ' ') {
+        rows.push({ kind: 'context', text });
+        consumed += 1;
+      }
+    }
+  }
+  if (oldLines.length > consumed) {
+    rows.push({ kind: 'gap', skipped: oldLines.length - consumed });
+  }
+  return rows;
+}
+
+/** The diff when the line search gave up: only what lies between the shared ends. */
+function trimmedRows(oldLines: string[], newLines: string[]): DiffRow[] {
+  let head = 0;
+  while (
+    head < oldLines.length &&
+    head < newLines.length &&
+    oldLines[head] === newLines[head]
+  ) {
+    head += 1;
+  }
+  let tail = 0;
+  while (
+    tail < oldLines.length - head &&
+    tail < newLines.length - head &&
+    oldLines[oldLines.length - 1 - tail] ===
+      newLines[newLines.length - 1 - tail]
+  ) {
+    tail += 1;
+  }
+  const before = Math.max(0, head - DIFF_CONTEXT_LINES);
+  const after = Math.min(tail, DIFF_CONTEXT_LINES);
+  const context = (lines: string[]): DiffRow[] =>
+    lines.map((text) => ({ kind: 'context', text }));
+  return [
+    ...(before > 0 ? [{ kind: 'gap', skipped: before } as const] : []),
+    ...context(oldLines.slice(before, head)),
+    ...oldLines
+      .slice(head, oldLines.length - tail)
+      .map((text): DiffRow => ({ kind: 'removed', text })),
+    ...newLines
+      .slice(head, newLines.length - tail)
+      .map((text): DiffRow => ({ kind: 'added', text })),
+    ...context(
+      oldLines.slice(oldLines.length - tail, oldLines.length - tail + after),
+    ),
+    ...(tail > after ? [{ kind: 'gap', skipped: tail - after } as const] : []),
+  ];
+}
+
+/**
+ * The first `limit` rows, a change cut by the limit keeping both sides: its
+ * removed and its added lines share the room left, and a side shorter than
+ * its half leaves the rest to the other.
+ */
+function cappedRows(rows: DiffRow[], limit: number): DiffRow[] {
+  if (rows.length <= limit) {
+    return rows;
+  }
+  const shown: DiffRow[] = [];
+  let index = 0;
+  while (index < rows.length && shown.length < limit) {
+    if (rows[index]?.kind !== 'removed') {
+      shown.push(rows[index]!);
+      index += 1;
+      continue;
+    }
+    let removedEnd = index;
+    while (rows[removedEnd]?.kind === 'removed') {
+      removedEnd += 1;
+    }
+    let addedEnd = removedEnd;
+    while (rows[addedEnd]?.kind === 'added') {
+      addedEnd += 1;
+    }
+    const room = limit - shown.length;
+    const added = addedEnd - removedEnd;
+    const removedShown = Math.min(
+      removedEnd - index,
+      Math.max(Math.floor(room / 2), room - added),
+    );
+    shown.push(
+      ...rows.slice(index, index + removedShown),
+      ...rows.slice(
+        removedEnd,
+        removedEnd + Math.min(added, room - removedShown),
+      ),
+    );
+    index = addedEnd;
+  }
+  return shown;
+}
+
+const ROW_CLASS: Record<Exclude<DiffRow['kind'], 'gap'>, string> = {
+  removed: REMOVED_CLASS,
+  added: ADDED_CLASS,
+  context: 'text-foreground',
+};
+
+const ROW_SIGN: Record<Exclude<DiffRow['kind'], 'gap'>, string> = {
+  removed: '-',
+  added: '+',
+  context: ' ',
+};
+
+/**
+ * GitHub-style line diff for file-editing tool calls: what changed as red `-`
+ * and green `+` lines between unchanged context, long unchanged stretches
+ * folded into one gap row, and at most {@link DIFF_ROW_LIMIT} rows until the
+ * reader asks for all — a rewrite the limit cuts shows both its sides. A Write
+ * (file creation) shows only added lines.
+ */
+export const DiffView = memo(function DiffView({
   oldText,
   newText,
 }: {
   oldText?: string | null;
   newText: string;
 }): React.JSX.Element {
-  const lines = (text: string): string[] => text.split('\n');
+  const rows = useMemo(() => diffRows(oldText, newText), [oldText, newText]);
+  // Keyed to the texts it was pressed for, so new texts start capped again.
+  const [expanded, setExpanded] = useState<{
+    oldText: string | null | undefined;
+    newText: string;
+  } | null>(null);
+  const showAll =
+    expanded !== null &&
+    expanded.oldText === oldText &&
+    expanded.newText === newText;
+  const shown = showAll ? rows : cappedRows(rows, DIFF_ROW_LIMIT);
   return (
     <div
       data-slot="diff"
       className="overflow-x-auto rounded-md border border-border font-mono text-xs">
-      {oldText
-        ? lines(oldText).map((line, index) => (
-            <div
-              key={`old-${index}`}
-              className="flex bg-destructive/10 text-destructive">
-              <span
-                aria-hidden="true"
-                className="w-5 shrink-0 select-none pl-1.5">
-                -
-              </span>
-              <span className="whitespace-pre-wrap break-all pr-2">{line}</span>
-            </div>
-          ))
-        : null}
-      {lines(newText).map((line, index) => (
-        <div key={`new-${index}`} className="flex bg-success/10 text-success">
-          <span aria-hidden="true" className="w-5 shrink-0 select-none pl-1.5">
-            +
-          </span>
-          <span className="whitespace-pre-wrap break-all pr-2">{line}</span>
-        </div>
-      ))}
+      {shown.map((row, index) =>
+        row.kind === 'gap' ? (
+          <div
+            key={index}
+            data-slot="diff-gap"
+            className="select-none px-2 text-muted-foreground">
+            ⋯ {formatCount(row.skipped)} unchanged{' '}
+            {row.skipped === 1 ? 'line' : 'lines'}
+          </div>
+        ) : (
+          <div key={index} className={cn('flex', ROW_CLASS[row.kind])}>
+            <span
+              aria-hidden="true"
+              className="w-5 shrink-0 select-none pl-1.5">
+              {ROW_SIGN[row.kind]}
+            </span>
+            <span className="whitespace-pre-wrap break-all pr-2">
+              {row.text}
+            </span>
+          </div>
+        ),
+      )}
+      {shown.length < rows.length ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="w-full rounded-none font-sans"
+          onClick={() => setExpanded({ oldText, newText })}>
+          Show all {formatCount(rows.length)} rows
+        </Button>
+      ) : null}
     </div>
   );
-}
-
-const REMOVED_CLASS = 'bg-destructive/10 text-destructive';
-const ADDED_CLASS = 'bg-success/10 text-success';
+});
 
 const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/;
 
@@ -180,10 +377,10 @@ function unifiedLineClass(line: string): string {
     return 'text-muted-foreground';
   }
   if (line.startsWith('+')) {
-    return 'bg-success/10 text-success';
+    return ADDED_CLASS;
   }
   if (line.startsWith('-')) {
-    return 'bg-destructive/10 text-destructive';
+    return REMOVED_CLASS;
   }
   if (line.startsWith('diff --git') || line.startsWith('index ')) {
     return 'text-muted-foreground';

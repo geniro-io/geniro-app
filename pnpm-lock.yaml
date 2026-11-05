@@ -282,6 +282,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      diff:
+        specifier: ^9.0.0
+        version: 9.0.0
       electron:
         specifier: ^44.5.1
         version: 44.5.1(supports-color@10.2.2)

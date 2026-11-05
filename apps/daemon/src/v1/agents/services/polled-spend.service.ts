@@ -6,29 +6,40 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
-import type { AccountSpendEvent } from '../adapters/adapter.types';
+import {
+  ACCOUNT_SIGNED_OUT,
+  type AccountSpendEvent,
+  type AccountSpendReply,
+} from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { readNodeSessions } from '../utils/node-sessions';
+import { effectiveAccountDir } from '../utils/plan-limits-ledger';
 import { pollsSpendFor } from '../utils/polled-spend';
 import {
   type ConversationSpend,
+  DEFAULT_ACCOUNT,
+  heldAnyEvent,
   ledgerTotals,
   type PolledSpendLedger,
   readPolledSpendLedger,
+  recordedAccounts,
   unpricedConversation,
   withAccountEvents,
+  withAccounts,
   writePolledSpendLedger,
 } from '../utils/polled-spend-ledger';
 import {
+  snapshotNodeConfigDirs,
   snapshotNodePoolProfiles,
   snapshotPoolKinds,
   type SnapshotPoolProfile,
 } from '../utils/snapshot-config-dirs';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
+import { ConfigDirPinService } from './config-dir-pin.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 
 /**
@@ -94,12 +105,14 @@ const NODE_START_SLACK_MS = 60 * 60_000;
  * The columns a poll reads of a run. It writes runs only through
  * `nativeUpdate`, so the rows are read-only projections and stay out of the
  * identity map. The team copy is left out: it runs to hundreds of KB a run and
- * is read once per run ({@link PolledSpendService.poolsOf}).
+ * is read once per run ({@link PolledSpendService.profilesOf}).
  */
 const RUN_READ = {
   fields: [
     'id',
     'agentKind',
+    'configDir',
+    'cwd',
     'polledCostCents',
     'polledCostEvents',
     'polledSpendBuckets',
@@ -113,6 +126,21 @@ const RUN_READ = {
  */
 type PolledRun = Pick<Run, (typeof RUN_READ)['fields'][number]>;
 
+/** What a run's team copy says about the profiles its members ran under. */
+interface RunProfiles {
+  pools: ReadonlyMap<string, readonly (SnapshotPoolProfile | null)[]>;
+  dirs: ReadonlyMap<string, string>;
+}
+
+const NO_PROFILES: RunProfiles = { pools: new Map(), dirs: new Map() };
+
+/**
+ * A set of accounts, each the canonical config directory it logs in from
+ * ({@link DEFAULT_ACCOUNT} for the CLI's default login) — the form
+ * `ConversationSpend.accounts` stores.
+ */
+type Accounts = ReadonlySet<string>;
+
 /** One member whose conversations a poll prices, and everything they are. */
 interface NodeTarget {
   run: PolledRun;
@@ -121,6 +149,16 @@ interface NodeTarget {
   stored: PolledSpendLedger;
   /** Each conversation it is answerable for, with its ledger entry so far. */
   conversations: Map<string, ConversationSpend>;
+  /**
+   * The accounts the member runs under NOW. A pooled member's sessions name
+   * no pool member, so a pool's are all of them.
+   */
+  accounts: Accounts;
+}
+
+interface AccountAsk {
+  startMs: number;
+  conversations: Set<string>;
 }
 
 /**
@@ -136,9 +174,12 @@ interface NodeTarget {
  *   for an ambient caller and {@link LIVE_POLL_INTERVAL_MS} while a polled
  *   conversation is producing items — and never runs two polls at once, so
  *   there is no per-thread or per-message request anywhere.
- * - It **fails closed and silent**: an adapter that cannot read its account
- *   answers null, which ends as "no cost reported". A missing price is never an
- *   error strip.
+ * - It asks **each account apart**: a profile (`configDir`) is its own account,
+ *   and an account lists only its own conversations, so every conversation is
+ *   asked of the account of the profile it ran under — one request per account.
+ * - It **fails closed and silent**: an adapter that cannot read an account
+ *   answers null, which ends as "no cost reported" for that account's
+ *   conversations alone. A missing price is never an error strip.
  * - It **re-reads rather than accumulates**: each member keeps a per-event ledger
  *   (`NodeState.polledSpend`) and every poll REPLACES the events it reads, so a
  *   charge the vendor raised after first listing it is followed rather than
@@ -167,13 +208,10 @@ export class PolledSpendService implements OnModuleInit {
    */
   private readonly polledRows = new Map<string, boolean>();
   /**
-   * Each run's pooled members, parsed from its team copy once: the copy is
+   * Each run's members' profiles, parsed from its team copy once: the copy is
    * frozen once written, so only a run that has none yet is read again.
    */
-  private readonly poolsByRun = new Map<
-    string,
-    Map<string, (SnapshotPoolProfile | null)[]>
-  >();
+  private readonly profilesByRun = new Map<string, RunProfiles>();
   /**
    * Per CLI, the runs whose team copy pools a member of it, and the instant
    * that list was read from. A run's copy is frozen as it is created, so after
@@ -205,6 +243,7 @@ export class PolledSpendService implements OnModuleInit {
     private readonly adapters: AgentAdapterRegistry,
     private readonly itemDao: ItemDao,
     private readonly seqs: ItemSeqAllocator,
+    private readonly configDirPins: ConfigDirPinService,
   ) {}
 
   /**
@@ -219,7 +258,7 @@ export class PolledSpendService implements OnModuleInit {
     });
     this.bus.allDeleted().subscribe((runId) => {
       this.deletionEpoch += 1;
-      this.poolsByRun.delete(runId);
+      this.profilesByRun.delete(runId);
       this.callSessions.delete(runId);
       for (const pooled of this.pooledRuns.values()) {
         pooled.ids.delete(runId);
@@ -375,35 +414,62 @@ export class PolledSpendService implements OnModuleInit {
       // CLI: a user who never ran it must never see its credential prompt, and
       // an account with no runs here has nothing to attribute.
       const targets = await this.targetsFor(kind, adapter, em);
-      const owners = new Map<string, NodeTarget>();
-      let startMs = now;
+      const asks = new Map<string, AccountAsk>();
       for (const target of targets.values()) {
         for (const [conversationId, spend] of target.conversations) {
-          owners.set(conversationId, target);
-          startMs = Math.min(startMs, spend.settledThroughMs);
+          for (const account of recordedAccounts(spend)) {
+            const ask = asks.get(account) ?? {
+              startMs: now,
+              conversations: new Set<string>(),
+            };
+            ask.startMs = Math.min(ask.startMs, spend.settledThroughMs);
+            ask.conversations.add(conversationId);
+            asks.set(account, ask);
+          }
         }
       }
-      if (owners.size === 0) {
-        return;
-      }
-      const reply = await adapter.fetchAccountSpend({
-        startMs: Math.max(startMs, now - ACCOUNT_LOOKBACK_MS),
-        endMs: now,
-        conversations: new Set(owners.keys()),
-      });
-      if (reply === null) {
+      if (asks.size === 0) {
         return;
       }
       const byConversation = new Map<string, AccountSpendEvent[]>();
-      for (const event of reply.events) {
-        const list = byConversation.get(event.conversationId) ?? [];
-        list.push(event);
-        byConversation.set(event.conversationId, list);
+      const readWhole = new Set<string>();
+      const signedOut = new Set<string>();
+      for (const [account, ask] of asks) {
+        const reply = await this.askAccount(kind, adapter, account, ask, now);
+        if (reply === ACCOUNT_SIGNED_OUT) {
+          signedOut.add(account);
+          continue;
+        }
+        if (reply === null) {
+          continue;
+        }
+        if (reply.complete) {
+          readWhole.add(account);
+        }
+        for (const event of reply.events) {
+          const list = byConversation.get(event.conversationId) ?? [];
+          list.push(event);
+          byConversation.set(event.conversationId, list);
+        }
       }
+      if (readWhole.size === 0 && byConversation.size === 0) {
+        return;
+      }
+      // A conversation settles only once every account it was asked of was
+      // read whole — an account that failed may still hold charges inside the
+      // window, and settling past them would lose them — or has no login to
+      // read it with, which no later poll can read either, as long as one of
+      // its accounts WAS read: alone, a signed-out account settles nothing.
       await this.writeSpend(
         targets,
         byConversation,
-        reply.complete ? now - SETTLE_AFTER_MS : null,
+        (accounts) =>
+          accounts.some((account) => readWhole.has(account)) &&
+          accounts.every(
+            (account) => readWhole.has(account) || signedOut.has(account),
+          )
+            ? now - SETTLE_AFTER_MS
+            : null,
         em,
         now,
       );
@@ -415,6 +481,31 @@ export class PolledSpendService implements OnModuleInit {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+    }
+  }
+
+  /** One account's read, a throw answered as "no cost reported" for it alone. */
+  private async askAccount(
+    kind: AgentKind,
+    adapter: AgentAdapter,
+    account: string,
+    ask: AccountAsk,
+    now: number,
+  ): Promise<AccountSpendReply | typeof ACCOUNT_SIGNED_OUT | null> {
+    try {
+      return await adapter.fetchAccountSpend({
+        startMs: Math.max(ask.startMs, now - ACCOUNT_LOOKBACK_MS),
+        endMs: now,
+        conversations: ask.conversations,
+        configDir: account === DEFAULT_ACCOUNT ? null : account,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `could not refresh ${kind} account usage: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
     }
   }
 
@@ -517,35 +608,76 @@ export class PolledSpendService implements OnModuleInit {
     return known.ids;
   }
 
-  /** {@link poolsByRun} for these runs, reading the team copies not parsed yet. */
-  private async poolsOf(
+  /** {@link profilesByRun} for these runs, reading the team copies not parsed yet. */
+  private async profilesOf(
     runIds: readonly string[],
     em: EntityManager,
-  ): Promise<Map<string, Map<string, (SnapshotPoolProfile | null)[]>>> {
-    const missing = runIds.filter((id) => !this.poolsByRun.has(id));
-    const parsed = new Map<
-      string,
-      Map<string, (SnapshotPoolProfile | null)[]>
-    >();
+  ): Promise<Map<string, RunProfiles>> {
+    const missing = runIds.filter((id) => !this.profilesByRun.has(id));
+    const parsed = new Map<string, RunProfiles>();
     if (missing.length > 0) {
       for (const row of await this.runDao.getAll(
         { id: { $in: missing } },
         { fields: ['id', 'teamSnapshot'], disableIdentityMap: true },
         em,
       )) {
-        const pools = snapshotNodePoolProfiles(row.teamSnapshot);
-        parsed.set(row.id, pools);
+        const profiles: RunProfiles = {
+          pools: snapshotNodePoolProfiles(row.teamSnapshot),
+          dirs: snapshotNodeConfigDirs(row.teamSnapshot),
+        };
+        parsed.set(row.id, profiles);
         if (row.teamSnapshot !== null) {
-          this.poolsByRun.set(row.id, pools);
+          this.profilesByRun.set(row.id, profiles);
         }
       }
     }
     return new Map(
       runIds.map((id) => [
         id,
-        this.poolsByRun.get(id) ?? parsed.get(id) ?? new Map(),
+        this.profilesByRun.get(id) ?? parsed.get(id) ?? NO_PROFILES,
       ]),
     );
+  }
+
+  /**
+   * The accounts one member's conversations may be billed to — a chat's own
+   * profile, a team member's from the run's team copy, every pool member of
+   * this CLI's for a pooled member — each as `effectiveAccountDir` reads it,
+   * the folder's pin first.
+   */
+  private accountsOf(
+    kind: AgentKind,
+    row: PolledRun,
+    state: NodeState,
+    profiles: RunProfiles,
+  ): Accounts {
+    const pinned = this.configDirPins.forRun(kind, row.cwd)?.effective ?? null;
+    return new Set(
+      this.profileDirsOf(kind, row, state, profiles).map(
+        (raw) =>
+          effectiveAccountDir(raw?.trim() || null, pinned, row.cwd) ??
+          DEFAULT_ACCOUNT,
+      ),
+    );
+  }
+
+  private profileDirsOf(
+    kind: AgentKind,
+    row: PolledRun,
+    state: NodeState,
+    profiles: RunProfiles,
+  ): (string | null)[] {
+    if (row.agentKind === kind) {
+      return [row.configDir];
+    }
+    const pool = profiles.pools.get(state.memberId);
+    if (pool === undefined) {
+      return [profiles.dirs.get(state.memberId) ?? null];
+    }
+    const dirs = pool.flatMap((profile) =>
+      profile?.agentKind === kind ? [profile.configDir] : [],
+    );
+    return dirs.length === 0 ? [null] : dirs;
   }
 
   /**
@@ -581,15 +713,14 @@ export class PolledSpendService implements OnModuleInit {
         : await this.runDao.getAll({ id: { $in: [...runIds] } }, RUN_READ, em);
     const calls: { target: NodeTarget; sessionId: string }[] = [];
     const rows = [...runs, ...withNodes];
-    const pools = await this.poolsOf(
+    const profiles = await this.profilesOf(
       rows.map((row) => row.id),
       em,
     );
     for (const row of rows) {
       await yieldToEventLoop();
       const byNode = new Map<string, NodeTarget>();
-      const nodePools =
-        pools.get(row.id) ?? new Map<string, (SnapshotPoolProfile | null)[]>();
+      const runProfiles = profiles.get(row.id) ?? NO_PROFILES;
       for (const state of await this.nodeStates.listByRun(row.id, em)) {
         // A team's member on another CLI holds a session id from THAT CLI's
         // store, which this account has never heard of — never offer it. A
@@ -597,7 +728,7 @@ export class PolledSpendService implements OnModuleInit {
         if (
           row.agentKind !== kind &&
           state.agentKind !== kind &&
-          !(nodePools.get(state.memberId) ?? []).some(
+          !(runProfiles.pools.get(state.memberId) ?? []).some(
             (profile) => profile?.agentKind === kind,
           )
         ) {
@@ -608,6 +739,7 @@ export class PolledSpendService implements OnModuleInit {
           state,
           stored: readPolledSpendLedger(state.polledSpend),
           conversations: new Map(),
+          accounts: this.accountsOf(kind, row, state, runProfiles),
         };
         targets.set(`${row.id}\u0000${state.memberId}`, target);
         byNode.set(state.memberId, target);
@@ -654,8 +786,16 @@ export class PolledSpendService implements OnModuleInit {
       // A delegate cannot be billed before the conversation that launched it
       // was last open, so it starts there rather than at the member's birth —
       // which, on a chat weeks old, would make every new delegate a walk
-      // through weeks of the account.
-      const from = target.conversations.get(parent)?.settledThroughMs;
+      // through weeks of the account — and is billed to the accounts that
+      // conversation was asked of.
+      const spend = target.conversations.get(parent);
+      const from =
+        spend === undefined
+          ? undefined
+          : {
+              ms: spend.settledThroughMs,
+              accounts: new Set(recordedAccounts(spend)),
+            };
       for (const child of children) {
         this.claim(target, child, claimed, from);
       }
@@ -665,29 +805,57 @@ export class PolledSpendService implements OnModuleInit {
 
   /**
    * File one conversation under a member, unless another member already has it,
-   * with its ledger entry so far — or, for one never priced, an empty entry
-   * starting at `fromMs`, else where the member did.
+   * with its ledger entry so far and the accounts it is asked of — or, for one
+   * never priced, an empty entry starting at `from.ms`, else where the member
+   * did, asked of `from.accounts`, else of the member's accounts now.
+   *
+   * An entry that holds an event stays on the accounts it recorded: its
+   * conversation is billed to one of them, wherever the member runs now. One
+   * that holds no event and was never asked of an account the member runs
+   * under now is asked of both, from the start: its boundary moved past
+   * charges nobody read, and the chat may have switched profile since.
    */
   private claim(
     target: NodeTarget,
     conversationId: string,
     claimed: Set<string>,
-    fromMs?: number,
+    from?: { ms: number; accounts: Accounts },
   ): void {
     if (claimed.has(conversationId)) {
       return;
     }
     claimed.add(conversationId);
+    const startMs =
+      from?.ms ?? target.state.createdAt.getTime() - NODE_START_SLACK_MS;
+    const current = from?.accounts ?? target.accounts;
     const stored = target.stored.get(conversationId);
-    if (stored !== undefined) {
-      target.conversations.set(conversationId, stored);
+    if (stored === undefined) {
+      this.file(target, conversationId, unpricedConversation(startMs), current);
       return;
     }
-    const createdAtMs = target.state.createdAt.getTime();
-    target.conversations.set(
+    const recorded = new Set(recordedAccounts(stored));
+    if (
+      heldAnyEvent(stored) ||
+      [...current].every((account) => recorded.has(account))
+    ) {
+      this.file(target, conversationId, stored, recorded);
+      return;
+    }
+    this.file(
+      target,
       conversationId,
-      unpricedConversation(fromMs ?? createdAtMs - NODE_START_SLACK_MS),
+      unpricedConversation(startMs),
+      new Set([...recorded, ...current]),
     );
+  }
+
+  private file(
+    target: NodeTarget,
+    conversationId: string,
+    spend: ConversationSpend,
+    accounts: Accounts,
+  ): void {
+    target.conversations.set(conversationId, withAccounts(spend, accounts));
   }
 
   /**
@@ -703,7 +871,7 @@ export class PolledSpendService implements OnModuleInit {
   private async writeSpend(
     targets: ReadonlyMap<string, NodeTarget>,
     byConversation: ReadonlyMap<string, readonly AccountSpendEvent[]>,
-    settleBeforeMs: number | null,
+    settleBeforeMsOf: (accounts: readonly string[]) => number | null,
     em: EntityManager,
     at: number,
   ): Promise<void> {
@@ -721,7 +889,7 @@ export class PolledSpendService implements OnModuleInit {
           withAccountEvents(
             spend,
             byConversation.get(conversationId) ?? [],
-            settleBeforeMs,
+            settleBeforeMsOf(recordedAccounts(spend)),
           ),
         );
       }

@@ -17,11 +17,13 @@ import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
 import {
   type ConversationSpend,
+  DEFAULT_ACCOUNT,
   readPolledSpendLedger,
   spendBucket,
 } from '../utils/polled-spend-ledger';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentEventBus } from './agent-events.bus';
+import type { ConfigDirPinService } from './config-dir-pin.service';
 import { PolledSpendService } from './polled-spend.service';
 
 const em = { fork: () => em } as unknown as EntityManager;
@@ -30,6 +32,8 @@ const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
 /** The clock every case runs at, unless it moves it. */
 const NOW = 1_790_000_000_000;
+/** A named configuration whose CLI identity cannot be read. */
+const SIGNED_OUT_PROFILE = '/profiles/signed-out';
 
 /**
  * The REAL cursor adapter with its MACHINE stood in for — the Keychain read and
@@ -44,15 +48,18 @@ class MachineCursorAdapter extends CursorAcpAdapter {
     super({ vocabularyStore: freshVocabularyStore() });
   }
 
-  protected override async readAccountIdentity(): Promise<{
+  protected override async readAccountIdentity(configDir: string): Promise<{
     teamId: number;
     userId: number;
   } | null> {
-    return { teamId: 1, userId: 2 };
+    return configDir === SIGNED_OUT_PROFILE ? null : { teamId: 1, userId: 2 };
   }
 
-  protected override async readAccessToken(): Promise<string | null> {
-    return 'token';
+  /** The default login is `token`; a profile's is `token:<its directory>`. */
+  protected override readProfileAccessToken(
+    configDir: string,
+  ): Promise<string | null> {
+    return Promise.resolve(configDir === '' ? 'token' : `token:${configDir}`);
   }
 
   override async spawnedConversations(
@@ -288,6 +295,7 @@ function harness(options: {
     new AgentAdapterRegistry([new ClaudeAdapter(), adapter]),
     itemDao,
     { writtenThrough: (_runId: string, maxSeq: number) => maxSeq } as never,
+    { forRun: () => null } as unknown as ConfigDirPinService,
   );
   service.onModuleInit();
   return {
@@ -350,6 +358,41 @@ function answerWith(...events: unknown[]): {
     }),
   );
   return { windows };
+}
+
+/**
+ * Answer each request by the login it carries: that account's events, a
+ * refusal, or a throw. Records every request's login and window start.
+ */
+function answerPerAccount(
+  replies: Record<string, unknown[] | 'refuse' | 'throw'>,
+): { asked: { token: string; start: number }[] } {
+  const asked: { token: string; start: number }[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const token = (
+        new Headers(init?.headers).get('authorization') ?? ''
+      ).replace(/^Bearer /, '');
+      const body = JSON.parse(String(init?.body)) as { startDate: string };
+      asked.push({ token, start: Number(body.startDate) });
+      const reply = replies[token] ?? 'throw';
+      if (reply === 'throw') {
+        throw new Error('fetch failed');
+      }
+      if (reply === 'refuse') {
+        return { ok: false, status: 401, json: async () => ({}) };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          usageEventsDisplay: reply,
+          totalUsageEventsCount: reply.length,
+        }),
+      };
+    }),
+  );
+  return { asked };
 }
 
 /** Let the bus subscriber's own async work settle. */
@@ -898,6 +941,8 @@ describe('PolledSpendService', () => {
         fields: [
           'id',
           'agentKind',
+          'configDir',
+          'cwd',
           'polledCostCents',
           'polledCostEvents',
           'polledSpendBuckets',
@@ -1217,6 +1262,444 @@ describe('PolledSpendService', () => {
   });
 });
 
+describe('PolledSpendService — whose account it asks', () => {
+  const WORK = '/profiles/work';
+
+  /** The latest ledger written for a member. */
+  function ledgerWritten(
+    h: Harness,
+    runId: string,
+    memberId: string,
+  ): Map<string, ConversationSpend> {
+    const write = h.nodeWrites
+      .filter((w) => w.runId === runId && w.memberId === memberId)
+      .at(-1);
+    return readPolledSpendLedger(write?.ledger ?? null);
+  }
+
+  it('asks each conversation of the account of the profile it ran under, one request per account', async () => {
+    at(NOW);
+    const team = cursorRun({
+      id: 'wf',
+      agentKind: null,
+      teamId: 'dev',
+      teamSnapshot: JSON.stringify({
+        members: [{ id: 'qa', agent: 'cursor-agent', configDir: WORK }],
+      }),
+    });
+    const h = harness({
+      runs: [cursorRun(), cursorRun({ id: 'run-2', configDir: WORK }), team],
+      cursorNodeRunIds: ['wf'],
+      nodes: {
+        'run-1': [holding('conv-1')],
+        'run-2': [holding('conv-2', { runId: 'run-2' })],
+        wf: [node({ runId: 'wf', memberId: 'qa', agentSessionId: 'conv-wf' })],
+      },
+    });
+    const { asked } = answerPerAccount({
+      token: [event('conv-1', 10), event('conv-2', 999)],
+      [`token:${WORK}`]: [event('conv-2', 20), event('conv-wf', 30)],
+    });
+
+    await h.service.refresh(true);
+
+    expect(asked.map((ask) => ask.token).sort()).toEqual([
+      'token',
+      `token:${WORK}`,
+    ]);
+    expect(
+      Object.fromEntries(
+        h.runWrites.map((write) => [write.id, write.data.polledCostCents]),
+      ),
+    ).toEqual({ 'run-1': 10, 'run-2': 20, wf: 30 });
+  });
+
+  it('prices the accounts that answered when others refuse or throw, settling nothing of the failed ones', async () => {
+    at(NOW);
+    const createdAt = new Date(NOW - 3 * DAY);
+    const unpriced = createdAt.getTime() - HOUR;
+    const h = harness({
+      runs: [
+        cursorRun({ polledSpendBuckets: null }),
+        cursorRun({ id: 'run-2', configDir: WORK, polledSpendBuckets: null }),
+        cursorRun({
+          id: 'run-3',
+          configDir: SIGNED_OUT_PROFILE,
+          polledSpendBuckets: null,
+        }),
+        cursorRun({
+          id: 'run-4',
+          configDir: '/profiles/refusing',
+          polledSpendBuckets: null,
+        }),
+      ],
+      nodes: {
+        'run-1': [holding('conv-1', { createdAt })],
+        'run-2': [holding('conv-2', { runId: 'run-2', createdAt })],
+        'run-3': [holding('conv-3', { runId: 'run-3', createdAt })],
+        'run-4': [holding('conv-4', { runId: 'run-4', createdAt })],
+      },
+    });
+    const { asked } = answerPerAccount({
+      token: [event('conv-1', 10, NOW - 2 * DAY)],
+      [`token:${WORK}`]: 'throw',
+      'token:/profiles/refusing': 'refuse',
+    });
+
+    await h.service.refresh(true);
+
+    // The signed-out profile is never asked: no identity, no request.
+    expect(asked.map((ask) => ask.token).sort()).toEqual([
+      'token',
+      'token:/profiles/refusing',
+      `token:${WORK}`,
+    ]);
+    expect(h.runWrites.map((write) => write.id)).toEqual(['run-1']);
+    expect(ledgerWritten(h, 'run-1', 'node-0').get('conv-1')).toMatchObject({
+      settledThroughMs: NOW - DAY,
+    });
+    for (const [runId, conversationId] of [
+      ['run-2', 'conv-2'],
+      ['run-3', 'conv-3'],
+      ['run-4', 'conv-4'],
+    ] as const) {
+      expect(
+        ledgerWritten(h, runId, 'node-0').get(conversationId)?.settledThroughMs,
+      ).toBe(unpriced);
+    }
+  });
+
+  it('asks a pooled member of every cursor account in its pool, and settles it only once all of them read whole', async () => {
+    const pooled = (): Run =>
+      cursorRun({
+        id: 'wf',
+        agentKind: null,
+        teamId: 'dev',
+        teamSnapshot: JSON.stringify({
+          members: [
+            {
+              id: 'eng',
+              agent: 'cursor-agent',
+              configDir: '/profiles/a',
+              pool: [
+                { agent: 'cursor-agent', configDir: '/profiles/b' },
+                { agent: 'claude', configDir: '/profiles/c' },
+              ],
+            },
+          ],
+        }),
+      });
+    const nodes = {
+      wf: [
+        node({
+          runId: 'wf',
+          memberId: 'eng',
+          agentSessionId: 'conv-p',
+          createdAt: new Date(NOW - 3 * DAY),
+        }),
+      ],
+    };
+    const old = NOW - 2 * DAY;
+
+    at(NOW);
+    const both = harness({ runs: [pooled()], cursorNodeRunIds: ['wf'], nodes });
+    const bothAsked = answerPerAccount({
+      'token:/profiles/a': [event('conv-p', 5, old)],
+      'token:/profiles/b': [event('conv-p', 7, NOW - HOUR)],
+    });
+    await both.service.refresh(true);
+
+    // The pool's claude member is never asked of cursor's account.
+    expect(bothAsked.asked.map((ask) => ask.token).sort()).toEqual([
+      'token:/profiles/a',
+      'token:/profiles/b',
+    ]);
+    expect(both.runWrites).toMatchObject([
+      { id: 'wf', data: { polledCostCents: 12 } },
+    ]);
+    expect(ledgerWritten(both, 'wf', 'eng').get('conv-p')).toMatchObject({
+      settledThroughMs: NOW - DAY,
+      settled: { [spendBucket(old, 'grok-4.7')]: [5, 1] },
+    });
+
+    const one = harness({ runs: [pooled()], cursorNodeRunIds: ['wf'], nodes });
+    answerPerAccount({
+      'token:/profiles/a': [event('conv-p', 5, old)],
+      'token:/profiles/b': 'refuse',
+    });
+    await one.service.refresh(true);
+
+    expect(one.runWrites).toMatchObject([
+      { id: 'wf', data: { polledCostCents: 5 } },
+    ]);
+    const open = ledgerWritten(one, 'wf', 'eng').get('conv-p');
+    expect(open?.settled).toEqual({});
+    expect(open?.open).toEqual({ [keyOf(old)]: [old, 5, 'grok-4.7'] });
+  });
+
+  it('prices again, from its member’s start, an empty entry the default account settled for a profile’s conversation', async () => {
+    at(NOW);
+    const createdAt = new Date(NOW - 3 * DAY);
+    const charged = NOW - 2 * DAY;
+    const h = harness({
+      runs: [cursorRun({ id: 'run-2', configDir: WORK })],
+      nodes: {
+        'run-2': [
+          holding('conv-2', {
+            runId: 'run-2',
+            createdAt,
+            polledSpend: ledger({
+              'conv-2': {
+                settled: {},
+                settledThroughMs: NOW - DAY,
+                open: {},
+              },
+            }),
+          }),
+        ],
+      },
+    });
+    const { asked } = answerPerAccount({
+      token: [],
+      [`token:${WORK}`]: [event('conv-2', 40, charged)],
+    });
+
+    await h.service.refresh(true);
+
+    expect(asked.map((ask) => [ask.token, ask.start]).sort()).toEqual([
+      ['token', createdAt.getTime() - HOUR],
+      [`token:${WORK}`, createdAt.getTime() - HOUR],
+    ]);
+    expect(h.runWrites).toMatchObject([
+      { id: 'run-2', data: { polledCostCents: 40 } },
+    ]);
+    expect(ledgerWritten(h, 'run-2', 'node-0').get('conv-2')).toMatchObject({
+      settledThroughMs: NOW - DAY,
+      settled: { [spendBucket(charged, 'grok-4.7')]: [40, 1] },
+      accounts: [DEFAULT_ACCOUNT, WORK],
+    });
+  });
+
+  it('settles a conversation past an account it was asked of that has no login, once another of its accounts read it whole', async () => {
+    at(NOW);
+    const createdAt = new Date(NOW - 3 * DAY);
+    const charged = NOW - 2 * DAY;
+    const h = harness({
+      runs: [
+        cursorRun({ configDir: WORK, polledSpendBuckets: null }),
+        cursorRun({
+          id: 'run-2',
+          configDir: SIGNED_OUT_PROFILE,
+          polledSpendBuckets: null,
+        }),
+      ],
+      nodes: {
+        'run-1': [
+          holding('conv-1', {
+            createdAt,
+            polledSpend: ledger({
+              'conv-1': {
+                settled: {},
+                settledThroughMs: NOW - DAY,
+                open: {},
+                accounts: [SIGNED_OUT_PROFILE],
+              },
+            }),
+          }),
+        ],
+        'run-2': [holding('conv-2', { runId: 'run-2', createdAt })],
+      },
+    });
+    answerPerAccount({ [`token:${WORK}`]: [event('conv-1', 7, charged)] });
+
+    await h.service.refresh(true);
+
+    // Moved off a signed-out profile: the profile it runs under now settles it.
+    expect(ledgerWritten(h, 'run-1', 'node-0').get('conv-1')).toMatchObject({
+      settledThroughMs: NOW - DAY,
+      settled: { [spendBucket(charged, 'grok-4.7')]: [7, 1] },
+    });
+    // Asked of a signed-out profile alone: nothing read it, nothing settles.
+    expect(
+      ledgerWritten(h, 'run-2', 'node-0').get('conv-2')?.settledThroughMs,
+    ).toBe(createdAt.getTime() - HOUR);
+  });
+
+  it('prices again, of the account it was asked of AND the one its chat runs under now, an empty entry from before a profile switch', async () => {
+    at(NOW);
+    const stored = ledger({
+      'conv-1': {
+        settled: {},
+        settledThroughMs: NOW - HOUR,
+        open: {},
+        accounts: ['/profiles/old'],
+      },
+    });
+    const h = harness({
+      runs: [cursorRun({ configDir: WORK })],
+      nodes: { 'run-1': [holding('conv-1', { polledSpend: stored })] },
+    });
+    const { asked } = answerPerAccount({
+      'token:/profiles/old': [event('conv-1', 12, NOW - 2 * HOUR)],
+      [`token:${WORK}`]: [],
+    });
+
+    await h.service.refresh(true);
+
+    expect(asked.map((ask) => [ask.token, ask.start]).sort()).toEqual([
+      ['token:/profiles/old', NOW - 3 * HOUR],
+      [`token:${WORK}`, NOW - 3 * HOUR],
+    ]);
+    expect(h.runWrites).toMatchObject([
+      { id: 'run-1', data: { polledCostCents: 12 } },
+    ]);
+    expect(ledgerWritten(h, 'run-1', 'node-0').get('conv-1')?.accounts).toEqual(
+      ['/profiles/old', WORK],
+    );
+  });
+
+  it('asks a delegate of the accounts its parent conversation was asked of', async () => {
+    at(NOW);
+    const h = harness({
+      runs: [cursorRun({ configDir: WORK })],
+      nodes: {
+        'run-1': [
+          holding('conv-new', {
+            sessionIds: JSON.stringify(['conv-old']),
+            polledSpend: ledger({
+              'conv-old': {
+                settled: {},
+                settledThroughMs: NOW - 2 * HOUR,
+                open: { [keyOf()]: [NOW - HOUR, 5, 'grok-4.7'] },
+              },
+            }),
+          }),
+        ],
+      },
+      delegates: { 'conv-old': ['child'] },
+    });
+    const { asked } = answerPerAccount({
+      token: [event('child', 3)],
+      [`token:${WORK}`]: [event('child', 999)],
+    });
+
+    await h.service.refresh(true);
+
+    const written = ledgerWritten(h, 'run-1', 'node-0');
+    expect(written.get('child')?.open).toEqual({
+      [keyOf()]: [NOW - HOUR, 3, 'grok-4.7'],
+    });
+    expect(written.get('child')).not.toHaveProperty('accounts');
+    expect(asked.map((ask) => ask.token).sort()).toEqual([
+      'token',
+      `token:${WORK}`,
+    ]);
+  });
+
+  it('keeps an entry where it stands once it was asked of the member’s accounts, and one that found a charge wherever it was found', async () => {
+    at(NOW);
+    const h = harness({
+      runs: [
+        cursorRun(),
+        cursorRun({ id: 'run-2', configDir: WORK }),
+        cursorRun({ id: 'run-3', configDir: WORK, polledCostCents: 9 }),
+      ],
+      nodes: {
+        'run-1': [
+          holding('conv-1', {
+            polledSpend: ledger({
+              'conv-1': { settled: {}, settledThroughMs: NOW - HOUR, open: {} },
+            }),
+          }),
+        ],
+        'run-2': [
+          holding('conv-2', {
+            runId: 'run-2',
+            polledSpend: ledger({
+              'conv-2': {
+                settled: {},
+                settledThroughMs: NOW - 2 * HOUR,
+                open: {},
+                accounts: [WORK],
+              },
+            }),
+          }),
+        ],
+        'run-3': [
+          holding('conv-3', {
+            runId: 'run-3',
+            polledCostCents: 9,
+            polledCostEvents: 1,
+            polledSpend: ledger({
+              'conv-3': {
+                settled: { [spendBucket(NOW - 5 * HOUR, 'grok-4.7')]: [9, 1] },
+                settledThroughMs: NOW - 4 * HOUR,
+                open: {},
+              },
+            }),
+          }),
+        ],
+      },
+    });
+    const { asked } = answerPerAccount({ token: [], [`token:${WORK}`]: [] });
+
+    await h.service.refresh(true);
+
+    // Each account from its OWN oldest open point: the default account for
+    // conv-1 and for conv-3's charges, the work profile for conv-2 alone.
+    expect(asked.map((ask) => [ask.token, ask.start]).sort()).toEqual([
+      ['token', NOW - 4 * HOUR],
+      [`token:${WORK}`, NOW - 2 * HOUR],
+    ]);
+  });
+
+  it('keeps asking a chat’s earlier conversation of the account it ran on after the chat switched profile', async () => {
+    at(NOW);
+    const h = harness({
+      runs: [cursorRun({ configDir: WORK })],
+      nodes: {
+        'run-1': [
+          holding('conv-new', {
+            sessionIds: JSON.stringify(['conv-old']),
+            polledCostCents: 5,
+            polledCostEvents: 1,
+            polledSpend: ledger({
+              'conv-old': {
+                settled: {},
+                settledThroughMs: NOW - 2 * HOUR,
+                open: {
+                  [keyOf(NOW - 90 * 60_000)]: [
+                    NOW - 90 * 60_000,
+                    5,
+                    'grok-4.7',
+                  ],
+                },
+              },
+            }),
+          }),
+        ],
+      },
+    });
+    const { asked } = answerPerAccount({
+      token: [event('conv-old', 8, NOW - 90 * 60_000)],
+      [`token:${WORK}`]: [event('conv-new', 30)],
+    });
+
+    await h.service.refresh(true);
+
+    expect(asked.map((ask) => [ask.token, ask.start]).sort()).toEqual([
+      ['token', NOW - 2 * HOUR],
+      [`token:${WORK}`, NOW - 3 * HOUR],
+    ]);
+    expect(h.runWrites).toMatchObject([
+      { id: 'run-1', data: { polledCostCents: 38 } },
+    ]);
+    const written = ledgerWritten(h, 'run-1', 'node-0');
+    expect(written.get('conv-old')).not.toHaveProperty('accounts');
+    expect(written.get('conv-new')?.accounts).toEqual([WORK]);
+  });
+});
+
 /** A CLI that declares polled spend and answers with whatever it is handed. */
 class FakePolledAdapter extends ClaudeAdapter {
   readonly queries: AccountSpendQuery[] = [];
@@ -1242,9 +1725,12 @@ class FakePolledAdapter extends ClaudeAdapter {
 }
 
 describe('PolledSpendService — which CLIs it asks', () => {
-  function withAdapter(adapter: FakePolledAdapter) {
+  function withAdapter(
+    adapter: FakePolledAdapter,
+    pinned: string | null = null,
+  ) {
     const writes: Partial<Run>[] = [];
-    const run = cursorRun({ agentKind: AgentKind.Claude });
+    const run = cursorRun({ agentKind: AgentKind.Claude, cwd: '/repo' });
     const service = new PolledSpendService(
       {
         getAll: async (where?: { agentKind?: string }) =>
@@ -1273,9 +1759,25 @@ describe('PolledSpendService — which CLIs it asks', () => {
         callResultSessions: async () => [],
       } as unknown as ItemDao,
       { writtenThrough: (_runId: string, maxSeq: number) => maxSeq } as never,
+      {
+        forRun: (_kind: AgentKind, cwd: string | null) =>
+          pinned === null || cwd !== run.cwd ? null : { effective: pinned },
+      } as unknown as ConfigDirPinService,
     );
     return { service, writes };
   }
+
+  it('asks the account the run’s FOLDER pins, when its CLI pins one', async () => {
+    at(NOW);
+    const adapter = new FakePolledAdapter(true, { complete: true, events: [] });
+    const { service } = withAdapter(adapter, '/profiles/pinned');
+
+    await service.refresh(true);
+
+    expect(adapter.queries.map((query) => query.configDir)).toEqual([
+      '/profiles/pinned',
+    ]);
+  });
 
   it('asks a polled CLI’s OWN adapter, about every conversation it holds', async () => {
     at(NOW);

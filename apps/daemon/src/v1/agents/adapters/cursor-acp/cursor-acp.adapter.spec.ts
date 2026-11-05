@@ -44,6 +44,7 @@ import {
   REFUSED_TOOL_RESULT,
 } from '../acp/acp-driver';
 import {
+  ACCOUNT_SIGNED_OUT,
   type AccountSpendQuery,
   type AdapterConfig,
   type AgentEvent,
@@ -5627,6 +5628,7 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
       startMs: 1_000,
       endMs: 2_000,
       conversations: new Set(conversations),
+      configDir: null,
     };
   }
 
@@ -5678,8 +5680,8 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
     expect(pagesAsked(fetchMock)).toEqual(
       Array.from({ length: CURSOR_USAGE_MAX_PAGES }, (_, index) => index + 1),
     );
-    expect(spend?.complete).toBe(false);
-    expect(spend?.events).toHaveLength(CURSOR_USAGE_MAX_PAGES);
+    expect(spend).toMatchObject({ complete: false });
+    expect(spend).toHaveProperty('events.length', CURSOR_USAGE_MAX_PAGES);
   });
 
   it('answers null, and asks for nothing further, when the first page is refused', async () => {
@@ -5740,6 +5742,119 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
 
     expect(pagesAsked(fetchMock)).toEqual([1]);
     expect(spend).toEqual({ complete: true, events: [read('a', 5, 1_001)] });
+  });
+});
+
+describe('CursorAcpAdapter fetchAccountSpend — whose account it asks', () => {
+  const dirs: string[] = [];
+
+  /** The default login's Keychain stood in for; every file read is real. */
+  class KeychainCursor extends CursorAcpAdapter {
+    constructor(homeDir: string) {
+      super({ vocabularyStore: freshVocabularyStore(), homeDir });
+    }
+
+    protected override readAccessToken(): Promise<string | null> {
+      return Promise.resolve('default-token');
+    }
+  }
+
+  /** A `.cursor` home holding this identity and, when given, this login. */
+  function cursorHome(userId: number, accessToken?: string): string {
+    const home = mkdtempSync(join(tmpdir(), 'cursor-spend-home-'));
+    dirs.push(home);
+    mkdirSync(join(home, '.cursor'));
+    writeFileSync(
+      join(home, '.cursor', 'cli-config.json'),
+      JSON.stringify({ authInfo: { userId, teamId: userId + 1 } }),
+    );
+    if (accessToken !== undefined) {
+      writeFileSync(
+        join(home, '.cursor', 'auth.json'),
+        JSON.stringify({ accessToken }),
+      );
+    }
+    return home;
+  }
+
+  /** Each request's login and the account its body names. */
+  function serve(): {
+    asked: { auth: string; userId: number; teamId: number }[];
+  } {
+    const asked: { auth: string; userId: number; teamId: number }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>((_input, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          userId: number;
+          teamId: number;
+        };
+        asked.push({
+          auth: new Headers(init?.headers).get('authorization') ?? '',
+          userId: body.userId,
+          teamId: body.teamId,
+        });
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              usageEventsDisplay: [],
+              totalUsageEventsCount: 0,
+            }),
+          ),
+        );
+      }),
+    );
+    return { asked };
+  }
+
+  const ask = (adapter: CursorAcpAdapter, configDir: string | null) =>
+    adapter.fetchAccountSpend({
+      startMs: 1_000,
+      endMs: 2_000,
+      conversations: new Set(['a']),
+      configDir,
+    });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('asks a named configuration’s OWN account, with its own login and identity', async () => {
+    const adapter = new KeychainCursor(cursorHome(10));
+    const profile = cursorHome(20, 'profile-token');
+    const { asked } = serve();
+
+    expect(await ask(adapter, profile)).toEqual({ complete: true, events: [] });
+    expect(asked).toEqual([
+      { auth: 'Bearer profile-token', userId: 20, teamId: 21 },
+    ]);
+  });
+
+  it('asks the default account under the Keychain login when no profile is named', async () => {
+    const adapter = new KeychainCursor(cursorHome(10));
+    const { asked } = serve();
+
+    await ask(adapter, null);
+    await ask(adapter, '   ');
+
+    expect(asked).toEqual([
+      { auth: 'Bearer default-token', userId: 10, teamId: 11 },
+      { auth: 'Bearer default-token', userId: 10, teamId: 11 },
+    ]);
+  });
+
+  it('answers signed out, asking nothing, for a profile with no login — never the default account in its place', async () => {
+    const adapter = new KeychainCursor(cursorHome(10));
+    const signedOut = cursorHome(20);
+    const unknown = join(tmpdir(), 'cursor-spend-no-such-profile');
+    const { asked } = serve();
+
+    expect(await ask(adapter, signedOut)).toBe(ACCOUNT_SIGNED_OUT);
+    expect(await ask(adapter, unknown)).toBe(ACCOUNT_SIGNED_OUT);
+    expect(asked).toEqual([]);
   });
 });
 

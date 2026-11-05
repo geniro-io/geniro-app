@@ -151,11 +151,23 @@ export function effectiveAccountKey(
   pinnedDir: string | null,
   cwd: string | null,
 ): string | null {
-  const dir = pinnedDir ?? configDir;
   return accountKeyOf(
     agentKind,
-    dir === null ? null : canonicalAccountDir(dir, cwd),
+    effectiveAccountDir(configDir, pinnedDir, cwd),
   );
+}
+
+/**
+ * The config directory whose account a run in `cwd` under `configDir` uses —
+ * {@link effectiveAccountKey}'s directory — or null for the CLI's default login.
+ */
+export function effectiveAccountDir(
+  configDir: string | null,
+  pinnedDir: string | null,
+  cwd: string | null,
+): string | null {
+  const dir = pinnedDir ?? configDir;
+  return dir === null ? null : canonicalAccountDir(dir, cwd);
 }
 
 /**

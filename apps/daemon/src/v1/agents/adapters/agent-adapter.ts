@@ -38,6 +38,7 @@ import {
   type SpawnFn,
 } from '../utils/spawn-cli';
 import type {
+  ACCOUNT_SIGNED_OUT,
   AccountSpendQuery,
   AccountSpendReply,
   AdapterConfig,
@@ -2344,14 +2345,14 @@ export abstract class AgentAdapter {
    * a vendor revises an event's charge after listing it, so deciding what is
    * new is the caller's job, keyed by {@link AccountSpendEvent.key}.
    *
-   * Null means nothing could be read — no credential, a signed-out account,
-   * no network — which the caller reads as "no cost reported", never as an
-   * error. That is also the default: a CLI whose turns price themselves has
-   * nothing to poll.
+   * Null means the ask failed — a refused or unreadable reply, no network —
+   * and {@link ACCOUNT_SIGNED_OUT} that the account has no login to ask with;
+   * the caller reads both as "no cost reported", never as an error. Null is
+   * also the default: a CLI whose turns price themselves has nothing to poll.
    */
   fetchAccountSpend(
     _query: AccountSpendQuery,
-  ): Promise<AccountSpendReply | null> {
+  ): Promise<AccountSpendReply | typeof ACCOUNT_SIGNED_OUT | null> {
     return Promise.resolve(null);
   }
 

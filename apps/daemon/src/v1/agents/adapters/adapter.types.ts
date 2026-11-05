@@ -4192,12 +4192,25 @@ export interface AccountSpendReply {
   readonly complete: boolean;
 }
 
-/** The window one account poll asks about. */
+/**
+ * What `AgentAdapter.fetchAccountSpend` answers for an account that has no
+ * login to ask with — no identity, no token — as against null, an ask that
+ * failed. Nothing can read that account, so the poll lets a conversation
+ * another of its accounts read whole settle without it.
+ */
+export const ACCOUNT_SIGNED_OUT = 'signed-out';
+
+/** The window one account poll asks about, and the account it asks. */
 export interface AccountSpendQuery {
   readonly startMs: number;
   readonly endMs: number;
   /** The conversations whose events are wanted; every other one is skipped. */
   readonly conversations: ReadonlySet<string>;
+  /**
+   * The config directory whose account is asked — the profile those
+   * conversations ran under — or null for the CLI's default login.
+   */
+  readonly configDir: string | null;
 }
 
 /**

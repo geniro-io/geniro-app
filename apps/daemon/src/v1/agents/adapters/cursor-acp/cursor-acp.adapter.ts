@@ -76,6 +76,7 @@ import type {
   ToolCallMetric,
   TurnDriver,
 } from '../adapter.types';
+import { ACCOUNT_SIGNED_OUT } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
 import { readFileSafe } from '../utils/fs-safe.utils';
 import {
@@ -132,7 +133,6 @@ import {
   CURSOR_PLUGIN_ROOT_VARIABLES,
   CURSOR_PLUGIN_SCAN_TTL_MS,
   CURSOR_PROFILE_DIR_NAME,
-  CURSOR_SEEDED_CONFIG_FILE,
   CURSOR_SESSION_LIST_TIMEOUT_MS,
   CURSOR_SESSION_LOAD_TIMEOUT_MS,
   CURSOR_SESSION_META_NAME,
@@ -2360,25 +2360,29 @@ export class CursorAcpAdapter extends AgentAdapter {
 
   /**
    * Every charge of the asked-about cursor conversations over the window, read
-   * from the user's own account — the only place the figure exists
-   * (`utils/cursor-usage.utils.ts` carries the evidence).
+   * from the account of the profile they ran under (`query.configDir`) — the
+   * only place the figure exists (`utils/cursor-usage.utils.ts` carries the
+   * evidence). A named configuration is its own account, and the default
+   * account never lists its conversations.
    *
    * Fails closed and silent, exactly as `main/github-prs.ts` does for the same
-   * shape of call: no identity, no Keychain item, a denied prompt, a signed-out
-   * account, a reply this build cannot read — every one answers null, which the
-   * poller reads as "no cost reported". The token is read per call, used for
-   * that call's requests and dropped; nothing here keeps it.
+   * shape of call: a profile with no identity or no login answers
+   * {@link ACCOUNT_SIGNED_OUT}, and a denied prompt, a refused request or a
+   * reply this build cannot read answer null; the poller reads both as "no cost
+   * reported". The token is read per call, used for that call's requests and
+   * dropped; nothing here keeps it.
    */
   override async fetchAccountSpend(
     query: AccountSpendQuery,
-  ): Promise<AccountSpendReply | null> {
-    const identity = await this.readAccountIdentity();
+  ): Promise<AccountSpendReply | typeof ACCOUNT_SIGNED_OUT | null> {
+    const configDir = query.configDir?.trim() ?? '';
+    const identity = await this.readAccountIdentity(configDir);
     if (identity === null) {
-      return null;
+      return ACCOUNT_SIGNED_OUT;
     }
-    const token = await this.readAccessToken();
+    const token = await this.readProfileAccessToken(configDir);
     if (token === null) {
-      return null;
+      return ACCOUNT_SIGNED_OUT;
     }
     const events: AccountSpendEvent[] = [];
     let seen = 0;
@@ -2494,33 +2498,27 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
-   * The team and user ids the events are scoped by, from the CLI's OWN identity
-   * block. Read rather than invented, and absent identity is a clean decline.
+   * The team and user ids the events are scoped by, from the identity block
+   * the CLI keeps for the profile — `~/.cursor` for the default login (`''`),
+   * the named configuration's own `.cursor` otherwise. Read rather than
+   * invented, and absent identity is a clean decline.
    *
    * `protected`, like {@link readAccessToken}, so a spec can stand in for this
    * MACHINE — a test reaching the real ones would read the author's own
    * Keychain on macOS and decline on CI.
    */
-  protected async readAccountIdentity(): Promise<{
+  protected readAccountIdentity(configDir: string): Promise<{
     teamId: number;
     userId: number;
   } | null> {
-    try {
-      const raw = await readFile(
-        join(
-          this.cursorOptions.homeDir ?? homedir(),
-          CURSOR_HOME_DIR_NAME,
-          CURSOR_SEEDED_CONFIG_FILE,
-        ),
-        'utf8',
-      );
-      const auth = asRecord(asRecord(JSON.parse(raw))?.['authInfo']);
-      const teamId = asNumber(auth?.['teamId']);
-      const userId = asNumber(auth?.['userId']);
-      return userId === null ? null : { teamId: teamId ?? 0, userId };
-    } catch {
-      return null;
-    }
+    const auth = readCursorProfileAuthInfo(
+      configDir === '' ? (this.cursorOptions.homeDir ?? homedir()) : configDir,
+    );
+    const teamId = asNumber(auth?.['teamId']);
+    const userId = asNumber(auth?.['userId']);
+    return Promise.resolve(
+      userId === null ? null : { teamId: teamId ?? 0, userId },
+    );
   }
 
   /**

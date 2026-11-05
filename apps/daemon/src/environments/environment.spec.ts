@@ -95,6 +95,28 @@ describe('environment() idle window', () => {
   });
 });
 
+describe('environment() spend poll floor', () => {
+  it('keeps the poll’s own floor unless a stand names one', () => {
+    withEnv({ GENIRO_SPEND_POLL_FLOOR_MS: undefined }, () => {
+      expect(environment().spendPollFloorMs).toBeNull();
+    });
+  });
+
+  it('reads the floor a stand sets', () => {
+    withEnv({ GENIRO_SPEND_POLL_FLOOR_MS: '15000' }, () => {
+      expect(environment().spendPollFloorMs).toBe(15_000);
+    });
+  });
+
+  it('keeps the poll’s own floor when the value is malformed', () => {
+    for (const raw of ['0', '-1', 'soon', '15s', '']) {
+      withEnv({ GENIRO_SPEND_POLL_FLOOR_MS: raw }, () => {
+        expect(environment().spendPollFloorMs).toBeNull();
+      });
+    }
+  });
+});
+
 describe('environment() userData dir', () => {
   it('honours the path the UI passes', () => {
     withEnv({ GENIRO_USER_DATA: '/tmp/geniro-somewhere' }, () => {

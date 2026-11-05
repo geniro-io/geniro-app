@@ -19,7 +19,7 @@ import {
  * keep in step with the object, and a field added below is typed everywhere it
  * is read without a second edit.
  *
- * Three fields deliberately do NOT go through `getEnv`, and each says why at
+ * Four fields deliberately do NOT go through `getEnv`, and each says why at
  * its own line: that helper boolean-coerces `'0'`/`'1'`/`'on'`/`'off'`, which
  * is wrong for a path, a port and a duration alike. Their strict parsers live
  * in `utils/handshake.ts` beside the rest of the UI→daemon contract, so this
@@ -64,6 +64,9 @@ export const environment = () => {
     // sole client — `pnpm daemon:dev` and the throwaway `pnpm generate:api`
     // daemon have no client by design and must stay up regardless.
     idleExitMs: parseDurationMs(process.env.GENIRO_IDLE_EXIT_MS),
+    // NOT `getEnv`: a duration, set by hand on a dev or acceptance stand only;
+    // absent keeps the account-spend poll's own floor (`PolledSpendService`).
+    spendPollFloorMs: parseDurationMs(process.env.GENIRO_SPEND_POLL_FLOOR_MS),
 
     // pricing
     //

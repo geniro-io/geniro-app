@@ -1,8 +1,14 @@
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 
+import { environment } from '../../../environments';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
@@ -54,6 +60,20 @@ import { ItemSeqAllocator } from './item-seq.allocator';
  * still feeling live to somebody watching a thread's price settle.
  */
 const MIN_POLL_INTERVAL_MS = 10 * 60_000;
+
+/**
+ * The lowest ambient floor a stand may set (`GENIRO_SPEND_POLL_FLOOR_MS`), so a
+ * typo cannot turn every thread read into a request to the vendor.
+ */
+const MIN_STAND_POLL_FLOOR_MS = 5_000;
+
+interface PolledSpendServiceOptions {
+  /**
+   * The ambient floor in place of {@link MIN_POLL_INTERVAL_MS}; null keeps it.
+   * Defaults to `environment.spendPollFloorMs`, which the UI never sets.
+   */
+  pollFloorMs?: number | null;
+}
 
 /**
  * The floor while a polled conversation is actually PRODUCING.
@@ -198,6 +218,8 @@ export class PolledSpendService implements OnModuleInit {
 
   /** When the last poll ATTEMPT started — the floor is on attempts, not wins. */
   private lastAttemptAtMs = 0;
+  /** An ambient caller's floor: {@link MIN_POLL_INTERVAL_MS}, or a stand's own. */
+  private readonly ambientFloorMs: number;
   /** The poll in flight, so concurrent callers join it rather than duplicate it. */
   private inFlight: Promise<void> | null = null;
   /**
@@ -244,7 +266,17 @@ export class PolledSpendService implements OnModuleInit {
     private readonly itemDao: ItemDao,
     private readonly seqs: ItemSeqAllocator,
     private readonly configDirPins: ConfigDirPinService,
-  ) {}
+    @Optional() options?: PolledSpendServiceOptions,
+  ) {
+    const floorMs =
+      options?.pollFloorMs === undefined
+        ? environment.spendPollFloorMs
+        : options.pollFloorMs;
+    this.ambientFloorMs =
+      floorMs === null
+        ? MIN_POLL_INTERVAL_MS
+        : Math.max(MIN_STAND_POLL_FLOOR_MS, floorMs);
+  }
 
   /**
    * Follow the work, which is the only thing that moves these figures — every
@@ -311,7 +343,7 @@ export class PolledSpendService implements OnModuleInit {
    * Stats refresh), and even that cannot start a second concurrent poll.
    */
   async refresh(force = false): Promise<void> {
-    return this.refreshWithin(force ? 0 : MIN_POLL_INTERVAL_MS);
+    return this.refreshWithin(force ? 0 : this.ambientFloorMs);
   }
 
   private async noteItem(

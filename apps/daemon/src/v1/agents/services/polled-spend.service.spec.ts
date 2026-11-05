@@ -156,6 +156,8 @@ function harness(options: {
   /** Each run's `call_result` records, as `rowsOfKinds` answers them. */
   calls?: Record<string, { calleeMemberId: string; sessionId: string }[]>;
   delegates?: Record<string, string[]>;
+  /** A stand's ambient floor (`GENIRO_SPEND_POLL_FLOOR_MS`); null keeps the poll's own. */
+  pollFloorMs?: number | null;
 }): Harness {
   const runWrites: Harness['runWrites'] = [];
   const nodeWrites: Harness['nodeWrites'] = [];
@@ -294,6 +296,7 @@ function harness(options: {
     itemDao,
     { writtenThrough: (_runId: string, maxSeq: number) => maxSeq } as never,
     { forRun: () => null } as unknown as ConfigDirPinService,
+    { pollFloorMs: options.pollFloorMs ?? null },
   );
   service.onModuleInit();
   return {
@@ -1166,6 +1169,64 @@ describe('PolledSpendService', () => {
     clock(NOW + 90_000);
     h.onItem(itemOn('run-1'));
     await flush();
+    expect(h.counts.listed).toBe(2);
+  });
+
+  it('asks the account again on a thread read only once the ten-minute floor has passed', async () => {
+    const clock = at(NOW);
+    const h = harness({
+      runs: [cursorRun()],
+      nodes: { 'run-1': [holding('conv-1')] },
+    });
+    answerWith(event('conv-1', 10));
+    await h.service.refresh();
+    expect(h.counts.listed).toBe(1);
+
+    clock(NOW + 20_000);
+    await h.service.refresh();
+    expect(h.counts.listed).toBe(1);
+
+    clock(NOW + 10 * 60_000);
+    await h.service.refresh();
+    expect(h.counts.listed).toBe(2);
+  });
+
+  it('asks the account again on a thread read past a stand’s own floor', async () => {
+    const clock = at(NOW);
+    const h = harness({
+      runs: [cursorRun()],
+      nodes: { 'run-1': [holding('conv-1')] },
+      pollFloorMs: 15_000,
+    });
+    answerWith(event('conv-1', 10));
+    await h.service.refresh();
+    expect(h.counts.listed).toBe(1);
+
+    clock(NOW + 10_000);
+    await h.service.refresh();
+    expect(h.counts.listed).toBe(1);
+
+    clock(NOW + 20_000);
+    await h.service.refresh();
+    expect(h.counts.listed).toBe(2);
+  });
+
+  it('never lets a stand’s floor go under five seconds', async () => {
+    const clock = at(NOW);
+    const h = harness({
+      runs: [cursorRun()],
+      nodes: { 'run-1': [holding('conv-1')] },
+      pollFloorMs: 1,
+    });
+    answerWith(event('conv-1', 10));
+    await h.service.refresh();
+
+    clock(NOW + 4_000);
+    await h.service.refresh();
+    expect(h.counts.listed).toBe(1);
+
+    clock(NOW + 5_000);
+    await h.service.refresh();
     expect(h.counts.listed).toBe(2);
   });
 

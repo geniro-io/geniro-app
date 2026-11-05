@@ -1564,3 +1564,11 @@ export const CURSOR_KEYCHAIN_ACCOUNT = 'cursor-user';
 
 /** How long the `security` read of that item may take. */
 export const CURSOR_KEYCHAIN_TIMEOUT_MS = 5_000;
+
+/**
+ * The exit code of `security find-generic-password` when the Keychain holds no
+ * such item (`errSecItemNotFound`) — measured 2026-11-05 on macOS 27.2; any
+ * other failure (a denied prompt, a locked or unreadable keychain) exits
+ * otherwise, and a timeout kills it.
+ */
+export const CURSOR_KEYCHAIN_ITEM_NOT_FOUND_EXIT = 44;

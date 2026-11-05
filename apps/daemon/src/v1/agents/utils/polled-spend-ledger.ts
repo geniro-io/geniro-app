@@ -28,6 +28,33 @@ export interface ConversationSpend {
   settledThroughMs: number;
   /** Each still-revisable event, by its key, as `[atMs, cents, model]`. */
   open: Record<string, [number, number, string]>;
+  /**
+   * The accounts this conversation was asked of, as the canonical config
+   * directories they log in from, sorted — `''` the CLI's default login.
+   * Absent for the default account alone, the only account any entry was
+   * asked of before this was recorded.
+   */
+  accounts?: string[];
+}
+
+/** The config directory {@link ConversationSpend.accounts} writes for the default login. */
+export const DEFAULT_ACCOUNT = '';
+
+/** The accounts an entry records, the default login alone when it records none. */
+export function recordedAccounts(spend: ConversationSpend): string[] {
+  return spend.accounts ?? [DEFAULT_ACCOUNT];
+}
+
+/** An entry recording these accounts, the field left out for the default login alone. */
+export function withAccounts(
+  spend: ConversationSpend,
+  accounts: Iterable<string>,
+): ConversationSpend {
+  const { accounts: _recorded, ...entry } = spend;
+  const sorted = [...new Set(accounts)].sort();
+  return sorted.length === 1 && sorted[0] === DEFAULT_ACCOUNT
+    ? entry
+    : { ...entry, accounts: sorted };
 }
 
 /**
@@ -78,8 +105,19 @@ function readConversationSpend(entry: unknown): ConversationSpend | null {
   if (typeof entry !== 'object' || entry === null) {
     return null;
   }
-  const { settled, settledThroughMs, open } = entry as Record<string, unknown>;
+  const { settled, settledThroughMs, open, accounts } = entry as Record<
+    string,
+    unknown
+  >;
   if (!finite(settledThroughMs) || !isRecord(settled) || !isRecord(open)) {
+    return null;
+  }
+  if (
+    accounts !== undefined &&
+    (!Array.isArray(accounts) ||
+      accounts.length === 0 ||
+      !accounts.every((dir) => typeof dir === 'string'))
+  ) {
     return null;
   }
   const sums: Record<string, [number, number]> = {};
@@ -107,7 +145,18 @@ function readConversationSpend(entry: unknown): ConversationSpend | null {
     }
     events[key] = [triple[0], triple[1], triple[2]];
   }
-  return { settled: sums, settledThroughMs, open: events };
+  return {
+    settled: sums,
+    settledThroughMs,
+    open: events,
+    ...(accounts === undefined
+      ? {}
+      : {
+          accounts: accounts.filter(
+            (dir): dir is string => typeof dir === 'string',
+          ),
+        }),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -128,6 +177,13 @@ export function writePolledSpendLedger(
 /** A conversation never priced before, whose events begin no earlier than `fromMs`. */
 export function unpricedConversation(fromMs: number): ConversationSpend {
   return { settled: {}, settledThroughMs: fromMs, open: {} };
+}
+
+/** Whether any account ever answered with an event of this conversation. */
+export function heldAnyEvent(spend: ConversationSpend): boolean {
+  return (
+    Object.keys(spend.settled).length > 0 || Object.keys(spend.open).length > 0
+  );
 }
 
 /**
@@ -164,7 +220,7 @@ export function withAccountEvents(
       delete open[key];
     }
   }
-  return { settled, settledThroughMs: settleBeforeMs, open };
+  return { ...spend, settled, settledThroughMs: settleBeforeMs, open };
 }
 
 /**

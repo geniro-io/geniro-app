@@ -3,12 +3,16 @@ import { describe, expect, it } from 'vitest';
 import type { AccountSpendEvent } from '../adapters/adapter.types';
 import {
   type ConversationSpend,
+  DEFAULT_ACCOUNT,
+  heldAnyEvent,
   ledgerTotals,
   readPolledSpendLedger,
   readSpendBucket,
+  recordedAccounts,
   spendBucket,
   unpricedConversation,
   withAccountEvents,
+  withAccounts,
   writePolledSpendLedger,
 } from './polled-spend-ledger';
 
@@ -71,6 +75,59 @@ describe('withAccountEvents', () => {
     const before: ConversationSpend = { ...unpricedConversation(1_000) };
 
     expect(withAccountEvents(before, [], 500).settledThroughMs).toBe(1_000);
+  });
+
+  it('keeps the accounts the entry was asked of through a settle', () => {
+    const after = withAccountEvents(
+      withAccounts(unpricedConversation(0), ['/profiles/a']),
+      [charge('a', 100, 5)],
+      300,
+    );
+
+    expect(after.accounts).toEqual(['/profiles/a']);
+    expect(after.settledThroughMs).toBe(300);
+  });
+});
+
+describe('heldAnyEvent', () => {
+  it('is true once any account answered with an event, a free one included', () => {
+    const free = withAccountEvents(
+      unpricedConversation(0),
+      [charge('free', 100, 0)],
+      300,
+    );
+
+    expect(heldAnyEvent(unpricedConversation(0))).toBe(false);
+    expect(
+      heldAnyEvent(
+        withAccountEvents(unpricedConversation(0), [charge('a', 400, 5)], null),
+      ),
+    ).toBe(true);
+    expect(heldAnyEvent(free)).toBe(true);
+  });
+});
+
+describe('withAccounts', () => {
+  it('records the same set the same way, whatever order or repeats it was listed in', () => {
+    const entry = unpricedConversation(0);
+
+    expect(withAccounts(entry, ['/b', '/a', '/b']).accounts).toEqual([
+      '/a',
+      '/b',
+    ]);
+    expect(withAccounts(entry, [DEFAULT_ACCOUNT, '/a']).accounts).toEqual([
+      DEFAULT_ACCOUNT,
+      '/a',
+    ]);
+  });
+
+  it('records nothing for the default login alone, and reads nothing recorded as it', () => {
+    const entry = withAccounts(unpricedConversation(0), ['/a']);
+    const back = withAccounts(entry, [DEFAULT_ACCOUNT]);
+
+    expect(back).not.toHaveProperty('accounts');
+    expect(recordedAccounts(back)).toEqual([DEFAULT_ACCOUNT]);
+    expect(recordedAccounts(entry)).toEqual(['/a']);
   });
 });
 
@@ -140,6 +197,33 @@ describe('readPolledSpendLedger', () => {
     expect(readPolledSpendLedger(writePolledSpendLedger(ledger))).toEqual(
       ledger,
     );
+  });
+
+  it('keeps the accounts an entry was asked of, and reads an entry from before them with none', () => {
+    const asked = readPolledSpendLedger(
+      writePolledSpendLedger(
+        new Map([
+          ['a', withAccounts(unpricedConversation(5), ['/y', DEFAULT_ACCOUNT])],
+        ]),
+      ),
+    ).get('a');
+    const older = readPolledSpendLedger(
+      '{"a":{"settled":{},"settledThroughMs":5,"open":{}}}',
+    ).get('a');
+
+    expect(asked?.accounts).toEqual([DEFAULT_ACCOUNT, '/y']);
+    expect(older).toEqual({ settled: {}, settledThroughMs: 5, open: {} });
+    expect(older).not.toHaveProperty('accounts');
+  });
+
+  it('reads an entry whose accounts are not a list of directories as never priced', () => {
+    for (const accounts of ['"/a"', '[]', '[1]']) {
+      expect(
+        readPolledSpendLedger(
+          `{"conv":{"settled":{},"settledThroughMs":1,"open":{},"accounts":${accounts}}}`,
+        ).size,
+      ).toBe(0);
+    }
   });
 
   it('writes null for an empty ledger', () => {

@@ -324,7 +324,11 @@ import {
   taskListsByThread,
   taskProgress,
 } from './task-payload';
-import { restoreTaskWorktree, sendRestoringWorktree } from './task-worktree';
+import {
+  restoreRunWorktree,
+  sendRestoringWorktree,
+  type WorktreeRun,
+} from './task-worktree';
 import { agentNameOf } from './team-note-author';
 import { firstMessageMemberOf, rootAgentOf, runLeadOf } from './team-root';
 import { hasThreadNotes } from './thread-notes';
@@ -2310,19 +2314,31 @@ export function Chats({
     [readMemberVerdicts, setMemberVerdict],
   );
 
+  /**
+   * Put back the worktree a chat outlived — see `task-worktree.ts`. Every send
+   * path goes through `startTurn`, Retry and Apply through their own calls, so
+   * those are the three places that use it.
+   */
+  const restoreWorktree = useLatestCallback(
+    (run: WorktreeRun) => restoreRunWorktree(apis, run),
+    [apis],
+  );
+
   /** A recommendations card's Apply, for `RecommendationsApplyContext`. */
   const applyRecommendations = useLatestCallback<RecommendationsApplier>(
     async (runId, cardSeq, ids) => {
       const raised = await startHostedTurn(runId);
+      const clientMessageId = randomId();
       try {
-        await chatApi.applyRecommendations({
-          runId,
-          applyRecommendationsDto: {
-            cardSeq,
-            ids,
-            clientMessageId: randomId(),
-          },
-        });
+        await sendRestoringWorktree(
+          () =>
+            chatApi.applyRecommendations({
+              runId,
+              applyRecommendationsDto: { cardSeq, ids, clientMessageId },
+            }),
+          runsRef.current.find((run) => run.id === runId) ?? null,
+          restoreWorktree,
+        );
       } catch (err) {
         if (raised) {
           refuseHostedTurn();
@@ -2330,7 +2346,7 @@ export function Chats({
         throw err;
       }
     },
-    [chatApi, startHostedTurn, refuseHostedTurn],
+    [chatApi, startHostedTurn, refuseHostedTurn, restoreWorktree],
   );
 
   /** An analysis chat's header chip: the thread it reads, one press away. */
@@ -4184,16 +4200,6 @@ export function Chats({
   );
 
   /**
-   * Put a task's worktree back when its chat outlived it — see
-   * `task-worktree.ts`. Every send path goes through `startTurn`, and Retry
-   * through its own call, so those are the two places that use it.
-   */
-  const restoreWorktree = useLatestCallback(
-    (taskId: string) => restoreTaskWorktree(apis, taskId),
-    [apis],
-  );
-
-  /**
    * Start one turn: mark the run working, send, render the user message
    * (addItem de-dupes when the WS copy arrives).
    *
@@ -4263,9 +4269,9 @@ export function Chats({
           ...(images?.length ? { images } : {}),
         };
         const run = runsRef.current.find((row) => row.id === runId);
-        // A TASK's chat outlives its worktree — the board collects that once
-        // the card is Done — so a refusal naming the missing folder puts the
-        // worktree back and sends once more (`sendRestoringWorktree`).
+        // A chat in a TASK's worktree outlives it — the board collects that
+        // once the card is Done — so a refusal naming the missing folder puts
+        // the worktree back and sends once more (`sendRestoringWorktree`).
         const userItem = await sendRestoringWorktree(
           () =>
             // A team run's message goes to the agents its trigger feeds,
@@ -4273,7 +4279,7 @@ export function Chats({
             run?.teamId != null
               ? teamApi.sendTeamRunMessage({ runId, sendMessageDto })
               : chatApi.sendChatMessage({ runId, sendMessageDto }),
-          run?.taskId ?? null,
+          run ?? null,
           restoreWorktree,
         );
         addItem(userItem, true);
@@ -8870,7 +8876,10 @@ export function Chats({
     if (runId === undefined || !chatApi || activeRun?.teamId) {
       return null;
     }
-    const taskId = activeRun?.taskId ?? null;
+    const worktreeRun: WorktreeRun = {
+      taskId: activeRun?.taskId ?? null,
+      cwd: activeRun?.cwd ?? null,
+    };
     return () => {
       // Retry after a task's worktree was collected is the reported case
       // itself — the transcript's failure row offers exactly this press.
@@ -8879,7 +8888,7 @@ export function Chats({
         try {
           await sendRestoringWorktree(
             () => chatApi.retryChat({ runId }),
-            taskId,
+            worktreeRun,
             restoreWorktree,
           );
         } catch (err) {
@@ -8893,6 +8902,7 @@ export function Chats({
   }, [
     activeRun?.id,
     activeRun?.taskId,
+    activeRun?.cwd,
     chatApi,
     restoreWorktree,
     startHostedTurn,

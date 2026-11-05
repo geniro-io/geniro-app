@@ -122,7 +122,7 @@ One home for each concern:
 - Queue drag: call `preventDefault` on `dragover` first, then decide what to move. Never return early over the dragged row.
 - The paperclip is an `<input type="file">`, which also works on a phone. A non-image file becomes its path. On a phone it is uploaded first (`POST /v1/chats/uploads`).
 - A pasted non-image file becomes its path (`chats/paste-file-paths.ts`). Insert it with `execCommand('insertText')`. Give back a paste you cannot replace.
-- A task's chat re-creates its worktree once on `INVALID_CWD` and resends (`chats/task-worktree.ts`).
+- A chat in a task's worktree re-creates it once on `INVALID_CWD` and resends — a message, a Retry or an Apply (`chats/task-worktree.ts`). That is the card's own chat, and any chat whose folder the card records as its `worktreePath` (an analysis of the card's thread runs there); the folder's last segment names the only card asked.
 
 **Run status:**
 

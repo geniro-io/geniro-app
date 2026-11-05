@@ -5,8 +5,9 @@ import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type { DaemonApis } from '../daemon-api';
 import {
   isMissingCwdError,
-  restoreTaskWorktree,
+  restoreRunWorktree,
   sendRestoringWorktree,
+  type WorktreeRun,
 } from './task-worktree';
 
 afterEach(() => {
@@ -25,7 +26,16 @@ const refusal = (status: number, code: string, message: string): Error =>
 const missingCwd = (): Error =>
   refusal(400, 'INVALID_CWD', 'cwd does not exist: /userData/worktrees/t1');
 
-function fakeApis(cardFolder: string | null): {
+const taskChat: WorktreeRun = { taskId: 't1', cwd: '/userData/worktrees/t1' };
+const analysisChat: WorktreeRun = {
+  taskId: null,
+  cwd: '/userData/worktrees/t1',
+};
+
+function fakeApis(
+  cardFolder: string | null,
+  worktreePath: string | null = '/userData/worktrees/t1',
+): {
   apis: Pick<DaemonApis, 'tasks' | 'projects'>;
   readTask: ReturnType<typeof vi.fn>;
   readProject: ReturnType<typeof vi.fn>;
@@ -34,6 +44,7 @@ function fakeApis(cardFolder: string | null): {
     id: 't1',
     projectId: 'p1',
     folder: cardFolder,
+    worktreePath,
   }));
   const readProject = vi.fn(async () => ({ id: 'p1', folder: '/repo' }));
   return {
@@ -78,10 +89,10 @@ describe('sendRestoringWorktree', () => {
       .mockResolvedValueOnce('sent');
     const restore = vi.fn(async () => true);
 
-    await expect(sendRestoringWorktree(send, 't1', restore)).resolves.toBe(
+    await expect(sendRestoringWorktree(send, taskChat, restore)).resolves.toBe(
       'sent',
     );
-    expect(restore).toHaveBeenCalledWith('t1');
+    expect(restore).toHaveBeenCalledWith(taskChat);
     expect(send).toHaveBeenCalledTimes(2);
   });
 
@@ -90,12 +101,12 @@ describe('sendRestoringWorktree', () => {
     const send = vi.fn<() => Promise<string>>().mockRejectedValue(original);
 
     await expect(
-      sendRestoringWorktree(send, 't1', async () => false),
+      sendRestoringWorktree(send, taskChat, async () => false),
     ).rejects.toBe(original);
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it('never restores anything for a chat that is not a task’s', async () => {
+  it('never restores anything when the send names no run', async () => {
     const original = missingCwd();
     const send = vi.fn<() => Promise<string>>().mockRejectedValue(original);
     const restore = vi.fn(async () => true);
@@ -111,7 +122,9 @@ describe('sendRestoringWorktree', () => {
     const send = vi.fn<() => Promise<string>>().mockRejectedValue(busy);
     const restore = vi.fn(async () => true);
 
-    await expect(sendRestoringWorktree(send, 't1', restore)).rejects.toBe(busy);
+    await expect(sendRestoringWorktree(send, taskChat, restore)).rejects.toBe(
+      busy,
+    );
     expect(restore).not.toHaveBeenCalled();
   });
 
@@ -123,18 +136,18 @@ describe('sendRestoringWorktree', () => {
       .mockRejectedValueOnce(second);
 
     await expect(
-      sendRestoringWorktree(send, 't1', async () => true),
+      sendRestoringWorktree(send, taskChat, async () => true),
     ).rejects.toBe(second);
     expect(send).toHaveBeenCalledTimes(2);
   });
 });
 
-describe('restoreTaskWorktree', () => {
+describe('restoreRunWorktree', () => {
   it('cuts it from the card’s own folder when the card names one', async () => {
     const prepare = stubPrepare(true);
     const { apis, readProject } = fakeApis('/elsewhere');
 
-    await expect(restoreTaskWorktree(apis, 't1')).resolves.toBe(true);
+    await expect(restoreRunWorktree(apis, taskChat)).resolves.toBe(true);
     expect(prepare).toHaveBeenCalledWith({
       taskId: 't1',
       folder: '/elsewhere',
@@ -146,7 +159,7 @@ describe('restoreTaskWorktree', () => {
     const prepare = stubPrepare(true);
     const { apis } = fakeApis(null);
 
-    await expect(restoreTaskWorktree(apis, 't1')).resolves.toBe(true);
+    await expect(restoreRunWorktree(apis, taskChat)).resolves.toBe(true);
     expect(prepare).toHaveBeenCalledWith({ taskId: 't1', folder: '/repo' });
   });
 
@@ -154,7 +167,37 @@ describe('restoreTaskWorktree', () => {
     stubPrepare(false);
     const { apis } = fakeApis(null);
 
-    await expect(restoreTaskWorktree(apis, 't1')).resolves.toBe(false);
+    await expect(restoreRunWorktree(apis, taskChat)).resolves.toBe(false);
+  });
+
+  it('puts back the card’s worktree for a chat that works in it without being the card’s own', async () => {
+    const prepare = stubPrepare(true);
+    const { apis, readTask } = fakeApis(null);
+
+    await expect(restoreRunWorktree(apis, analysisChat)).resolves.toBe(true);
+    expect(readTask).toHaveBeenCalledWith({ taskId: 't1' });
+    expect(prepare).toHaveBeenCalledWith({ taskId: 't1', folder: '/repo' });
+  });
+
+  it('restores nothing for a chat whose folder the card does not record as its worktree', async () => {
+    const prepare = stubPrepare(true);
+    const { apis } = fakeApis(null, '/userData/worktrees/t1');
+
+    await expect(
+      restoreRunWorktree(apis, { taskId: null, cwd: '/projects/t1' }),
+    ).resolves.toBe(false);
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it('restores nothing for a chat with no folder and no card', async () => {
+    const prepare = stubPrepare(true);
+    const { apis, readTask } = fakeApis(null);
+
+    await expect(
+      restoreRunWorktree(apis, { taskId: null, cwd: null }),
+    ).resolves.toBe(false);
+    expect(readTask).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
   });
 
   it('answers false when the card cannot be read, rather than throwing', async () => {
@@ -164,7 +207,7 @@ describe('restoreTaskWorktree', () => {
       new Error('daemon GET /v1/tasks/t1 failed (404)'),
     );
 
-    await expect(restoreTaskWorktree(apis, 't1')).resolves.toBe(false);
+    await expect(restoreRunWorktree(apis, taskChat)).resolves.toBe(false);
     expect(prepare).not.toHaveBeenCalled();
   });
 });

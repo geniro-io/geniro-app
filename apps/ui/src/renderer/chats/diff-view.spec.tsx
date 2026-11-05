@@ -94,6 +94,44 @@ describe('DiffView', () => {
     expect(container.querySelector('button')).toBeNull();
   });
 
+  const signsOf = (): string =>
+    [...container.querySelectorAll('[data-slot="diff"] > div')]
+      .map((row) => row.textContent?.[0])
+      .join('');
+
+  it('a rewrite past the row limit shows half its removed and half its added lines before Show all', () => {
+    const file = (prefix: string): string =>
+      Array.from({ length: 600 }, (_, index) => `${prefix} ${index}`).join(
+        '\n',
+      );
+
+    act(() =>
+      root.render(<DiffView oldText={file('old')} newText={file('new')} />),
+    );
+
+    expect(signsOf()).toBe(
+      `${'-'.repeat(DIFF_ROW_LIMIT / 2)}${'+'.repeat(DIFF_ROW_LIMIT / 2)}`,
+    );
+    expect(container.querySelector('button')?.textContent).toBe(
+      'Show all 1,200 rows',
+    );
+  });
+
+  it('a rewrite whose added side is shorter than its half gives the rest of the limit to the removed side', () => {
+    const lines = (prefix: string, length: number): string =>
+      Array.from({ length }, (_, index) => `${prefix} ${index}`).join('\n');
+
+    act(() =>
+      root.render(
+        <DiffView oldText={lines('old', 600)} newText={lines('new', 50)} />,
+      ),
+    );
+
+    expect(signsOf()).toBe(
+      `${'-'.repeat(DIFF_ROW_LIMIT - 50)}${'+'.repeat(50)}`,
+    );
+  });
+
   it('starts capped again when the texts change after Show all', () => {
     const created = (length: number): string =>
       Array.from({ length }, (_, index) => `line ${index}`).join('\n');

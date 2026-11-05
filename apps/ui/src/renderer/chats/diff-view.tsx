@@ -206,6 +206,49 @@ function trimmedRows(oldLines: string[], newLines: string[]): DiffRow[] {
   ];
 }
 
+/**
+ * The first `limit` rows, a change cut by the limit keeping both sides: its
+ * removed and its added lines share the room left, and a side shorter than
+ * its half leaves the rest to the other.
+ */
+function cappedRows(rows: DiffRow[], limit: number): DiffRow[] {
+  if (rows.length <= limit) {
+    return rows;
+  }
+  const shown: DiffRow[] = [];
+  let index = 0;
+  while (index < rows.length && shown.length < limit) {
+    if (rows[index]?.kind !== 'removed') {
+      shown.push(rows[index]!);
+      index += 1;
+      continue;
+    }
+    let removedEnd = index;
+    while (rows[removedEnd]?.kind === 'removed') {
+      removedEnd += 1;
+    }
+    let addedEnd = removedEnd;
+    while (rows[addedEnd]?.kind === 'added') {
+      addedEnd += 1;
+    }
+    const room = limit - shown.length;
+    const added = addedEnd - removedEnd;
+    const removedShown = Math.min(
+      removedEnd - index,
+      Math.max(Math.floor(room / 2), room - added),
+    );
+    shown.push(
+      ...rows.slice(index, index + removedShown),
+      ...rows.slice(
+        removedEnd,
+        removedEnd + Math.min(added, room - removedShown),
+      ),
+    );
+    index = addedEnd;
+  }
+  return shown;
+}
+
 const ROW_CLASS: Record<Exclude<DiffRow['kind'], 'gap'>, string> = {
   removed: REMOVED_CLASS,
   added: ADDED_CLASS,
@@ -222,7 +265,8 @@ const ROW_SIGN: Record<Exclude<DiffRow['kind'], 'gap'>, string> = {
  * GitHub-style line diff for file-editing tool calls: what changed as red `-`
  * and green `+` lines between unchanged context, long unchanged stretches
  * folded into one gap row, and at most {@link DIFF_ROW_LIMIT} rows until the
- * reader asks for all. A Write (file creation) shows only added lines.
+ * reader asks for all — a rewrite the limit cuts shows both its sides. A Write
+ * (file creation) shows only added lines.
  */
 export const DiffView = memo(function DiffView({
   oldText,
@@ -241,10 +285,7 @@ export const DiffView = memo(function DiffView({
     expanded !== null &&
     expanded.oldText === oldText &&
     expanded.newText === newText;
-  const shown =
-    showAll || rows.length <= DIFF_ROW_LIMIT
-      ? rows
-      : rows.slice(0, DIFF_ROW_LIMIT);
+  const shown = showAll ? rows : cappedRows(rows, DIFF_ROW_LIMIT);
   return (
     <div
       data-slot="diff"

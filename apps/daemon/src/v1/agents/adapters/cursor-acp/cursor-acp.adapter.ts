@@ -104,6 +104,7 @@ import {
   CURSOR_DATA_DIR_ENV,
   CURSOR_HOME_DIR_NAME,
   CURSOR_KEYCHAIN_ACCOUNT,
+  CURSOR_KEYCHAIN_ITEM_NOT_FOUND_EXIT,
   CURSOR_KEYCHAIN_SERVICE,
   CURSOR_KEYCHAIN_TIMEOUT_MS,
   CURSOR_MAX_MODE,
@@ -2380,9 +2381,9 @@ export class CursorAcpAdapter extends AgentAdapter {
     if (identity === null) {
       return ACCOUNT_SIGNED_OUT;
     }
-    const token = await this.readProfileAccessToken(configDir);
-    if (token === null) {
-      return ACCOUNT_SIGNED_OUT;
+    const token = await this.readSpendLogin(configDir);
+    if (token === null || token === ACCOUNT_SIGNED_OUT) {
+      return token;
     }
     const events: AccountSpendEvent[] = [];
     let seen = 0;
@@ -2528,9 +2529,23 @@ export class CursorAcpAdapter extends AgentAdapter {
    * `gh` calls do, one step closer in. A denial, a missing item or a machine
    * that is not macOS all answer null.
    */
-  protected readAccessToken(): Promise<string | null> {
+  protected async readAccessToken(): Promise<string | null> {
+    const login = await this.readKeychainLogin();
+    return login === ACCOUNT_SIGNED_OUT ? null : login;
+  }
+
+  /**
+   * {@link readAccessToken} told apart: {@link ACCOUNT_SIGNED_OUT} only when
+   * the Keychain holds no such item (`security` exits
+   * {@link CURSOR_KEYCHAIN_ITEM_NOT_FOUND_EXIT}) or the machine is not macOS,
+   * and null for a read that failed — a denied prompt, a locked keychain, a
+   * timeout — which a later poll may yet read.
+   */
+  protected readKeychainLogin(): Promise<
+    string | typeof ACCOUNT_SIGNED_OUT | null
+  > {
     if (process.platform !== 'darwin') {
-      return Promise.resolve(null);
+      return Promise.resolve(ACCOUNT_SIGNED_OUT);
     }
     const run = this.options.execFileFn ?? execFile;
     return new Promise((resolve) => {
@@ -2547,14 +2562,36 @@ export class CursorAcpAdapter extends AgentAdapter {
           ],
           { timeout: CURSOR_KEYCHAIN_TIMEOUT_MS, encoding: 'utf8' },
           (err, stdout) => {
-            const token = err ? '' : String(stdout).trim();
-            resolve(token === '' ? null : token);
+            if (err) {
+              resolve(
+                err.code === CURSOR_KEYCHAIN_ITEM_NOT_FOUND_EXIT
+                  ? ACCOUNT_SIGNED_OUT
+                  : null,
+              );
+              return;
+            }
+            const token = String(stdout).trim();
+            resolve(token === '' ? ACCOUNT_SIGNED_OUT : token);
           },
         );
       } catch {
         resolve(null);
       }
     });
+  }
+
+  /**
+   * The login the spend poll asks a profile's account with: the Keychain item
+   * for the default one ({@link readKeychainLogin}), the named configuration's
+   * own file store otherwise, where no token is no login.
+   */
+  protected async readSpendLogin(
+    configDir: string,
+  ): Promise<string | typeof ACCOUNT_SIGNED_OUT | null> {
+    if (configDir === '') {
+      return this.readKeychainLogin();
+    }
+    return (await this.readProfileAccessToken(configDir)) ?? ACCOUNT_SIGNED_OUT;
   }
 
   /**

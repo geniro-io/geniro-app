@@ -5566,7 +5566,7 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
       return Promise.resolve({ teamId: 1, userId: 2 });
     }
 
-    protected override readAccessToken(): Promise<string | null> {
+    protected override readSpendLogin(): Promise<string> {
       return Promise.resolve('spec-token');
     }
   }
@@ -5748,16 +5748,48 @@ describe('CursorAcpAdapter fetchAccountSpend — the page walk', () => {
 describe('CursorAcpAdapter fetchAccountSpend — whose account it asks', () => {
   const dirs: string[] = [];
 
-  /** The default login's Keychain stood in for; every file read is real. */
-  class KeychainCursor extends CursorAcpAdapter {
-    constructor(homeDir: string) {
-      super({ vocabularyStore: freshVocabularyStore(), homeDir });
-    }
+  /** How the stood-in `security` read of the default login ends. */
+  type KeychainAnswer =
+    { token: string } | { exitCode: number } | { killed: true };
 
-    protected override readAccessToken(): Promise<string | null> {
-      return Promise.resolve('default-token');
-    }
+  /**
+   * The real adapter with `security` stood in for: every file read is real,
+   * and the Keychain answers as `keychain` says — a token, a failing exit, or
+   * a read killed by its timeout.
+   */
+  function keychainCursor(
+    homeDir: string,
+    keychain: KeychainAnswer = { token: 'default-token' },
+  ): CursorAcpAdapter {
+    const execFileFn = ((
+      _file: string,
+      _args: readonly string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout: string) => void,
+    ) => {
+      if ('token' in keychain) {
+        callback(null, `${keychain.token}\n`);
+      } else {
+        callback(
+          Object.assign(new Error('security failed'), {
+            code: 'exitCode' in keychain ? keychain.exitCode : null,
+            killed: 'killed' in keychain,
+          }),
+          '',
+        );
+      }
+    }) as unknown as typeof execFile;
+    return new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      homeDir,
+      execFileFn,
+    });
   }
+
+  const realPlatform = process.platform;
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+  });
 
   /** A `.cursor` home holding this identity and, when given, this login. */
   function cursorHome(userId: number, accessToken?: string): string {
@@ -5816,6 +5848,7 @@ describe('CursorAcpAdapter fetchAccountSpend — whose account it asks', () => {
     });
 
   afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: realPlatform });
     vi.unstubAllGlobals();
     for (const dir of dirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
@@ -5823,7 +5856,7 @@ describe('CursorAcpAdapter fetchAccountSpend — whose account it asks', () => {
   });
 
   it('asks a named configuration’s OWN account, with its own login and identity', async () => {
-    const adapter = new KeychainCursor(cursorHome(10));
+    const adapter = keychainCursor(cursorHome(10));
     const profile = cursorHome(20, 'profile-token');
     const { asked } = serve();
 
@@ -5834,7 +5867,7 @@ describe('CursorAcpAdapter fetchAccountSpend — whose account it asks', () => {
   });
 
   it('asks the default account under the Keychain login when no profile is named', async () => {
-    const adapter = new KeychainCursor(cursorHome(10));
+    const adapter = keychainCursor(cursorHome(10));
     const { asked } = serve();
 
     await ask(adapter, null);
@@ -5847,13 +5880,37 @@ describe('CursorAcpAdapter fetchAccountSpend — whose account it asks', () => {
   });
 
   it('answers signed out, asking nothing, for a profile with no login — never the default account in its place', async () => {
-    const adapter = new KeychainCursor(cursorHome(10));
+    const adapter = keychainCursor(cursorHome(10));
     const signedOut = cursorHome(20);
     const unknown = join(tmpdir(), 'cursor-spend-no-such-profile');
     const { asked } = serve();
 
     expect(await ask(adapter, signedOut)).toBe(ACCOUNT_SIGNED_OUT);
     expect(await ask(adapter, unknown)).toBe(ACCOUNT_SIGNED_OUT);
+    expect(asked).toEqual([]);
+  });
+
+  it('answers signed out for the default account only when the Keychain holds no login item', async () => {
+    const { asked } = serve();
+
+    expect(
+      await ask(keychainCursor(cursorHome(10), { exitCode: 44 }), null),
+    ).toBe(ACCOUNT_SIGNED_OUT);
+    expect(asked).toEqual([]);
+  });
+
+  it('answers null — a failed ask, never signed out — when the Keychain read is denied, fails or times out', async () => {
+    const { asked } = serve();
+
+    for (const keychain of [
+      { exitCode: 51 },
+      { exitCode: 2 },
+      { killed: true },
+    ] as const) {
+      expect(await ask(keychainCursor(cursorHome(10), keychain), null)).toBe(
+        null,
+      );
+    }
     expect(asked).toEqual([]);
   });
 });

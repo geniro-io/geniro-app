@@ -56,9 +56,7 @@ class MachineCursorAdapter extends CursorAcpAdapter {
   }
 
   /** The default login is `token`; a profile's is `token:<its directory>`. */
-  protected override readProfileAccessToken(
-    configDir: string,
-  ): Promise<string | null> {
+  protected override readSpendLogin(configDir: string): Promise<string> {
     return Promise.resolve(configDir === '' ? 'token' : `token:${configDir}`);
   }
 

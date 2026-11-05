@@ -67,9 +67,23 @@ describe('composeTeamChatInstructions', () => {
     );
   });
 
-  it('tells the agent to read the WHOLE file before changing it', () => {
+  it('tells the agent to read the team through read_teams before changing it, never the file', () => {
     expect(BRIEF).toMatch(
-      /Read the whole team file with your own file tools before your first\s+change of each turn/,
+      /Read the team with read_teams \(slug `[^`]+`\) before\s+your first change of each turn/,
+    );
+    expect(BRIEF).toMatch(/read_teams, never with your own file tools/);
+    expect(BRIEF).toMatch(/`search` for the words the request names/);
+    expect(BRIEF).not.toMatch(/Read the whole team file/);
+  });
+
+  it('puts an asked-for change on a propose_team card, never a recommendations card, and moves project rules on one card', () => {
+    expect(BRIEF).toMatch(
+      /A change the user asks for goes straight onto a propose_team\s+card, however large\. Never file it through report_recommendations/,
+    );
+    expect(BRIEF).toMatch(/\(`projects: true`\)/);
+    expect(BRIEF).toMatch(/on ONE card — one approval writes\s+both/);
+    expect(BRIEF).toMatch(
+      /ask the user what to drop before you shorten anything/,
     );
   });
 

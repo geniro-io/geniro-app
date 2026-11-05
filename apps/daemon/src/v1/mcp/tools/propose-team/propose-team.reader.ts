@@ -9,6 +9,7 @@ import {
   type TeamProposalRequest,
 } from '../../../teams/teams.types';
 import type { ToolArgs } from '../../mcp.types';
+import { blocksField } from '../project-block-args';
 import { editsField } from '../team-edit-args';
 import { readToolArgs } from '../tool-args';
 
@@ -60,13 +61,38 @@ export const ProposeTeamChangeArgsSchema = z
       .describe(
         "The bound project's WHOLE overlay document — only in a chat bound to a project",
       ),
+    project: z
+      .object({
+        projectId: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe(
+            'A project that runs this team by default — read_teams with `projects` names each',
+          ),
+        blocks: blocksField('read_teams with `projects`'),
+        baseRevision: z
+          .number()
+          .int()
+          .min(0)
+          .describe('The `instructionsRevision` read_teams named for it'),
+      })
+      .strict()
+      .optional()
+      .describe(
+        "A change to that project's own instruction blocks, written by the same approval as the edits — how text moves between the team and the project in one change",
+      ),
     summary: summaryField,
     reason: reasonField,
   })
   .strict()
-  .refine((args) => args.edits !== undefined || args.overlay !== undefined, {
-    message: 'send `edits`, `overlay`, or both',
-  });
+  .refine(
+    (args) =>
+      args.edits !== undefined ||
+      args.overlay !== undefined ||
+      args.project !== undefined,
+    { message: 'send `edits`, `overlay`, `project`, or several' },
+  );
 
 /**
  * A project chat's proposal: the project's whole overlay of its default team,

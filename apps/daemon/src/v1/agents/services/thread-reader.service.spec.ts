@@ -234,6 +234,8 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           key: 'BIL',
           instructionsRevision: 3,
           description: null,
+          instructionsChars: 'Use pnpm. Deploy key tok-SECRET-1234.'.length,
+          instructionsMaxChars: 20_000,
           instructionBlocks: [
             {
               id: 'instructions',

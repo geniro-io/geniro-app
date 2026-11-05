@@ -115,6 +115,7 @@ import { CallBroker } from '../../teams/services/call-broker.service';
 import type { StageService } from '../../teams/services/stage.service';
 import { TaskBoardBroker } from '../../teams/services/task-board.broker';
 import type { TeamChangeService } from '../../teams/services/team-change.service';
+import type { TeamOverlayService } from '../../teams/services/team-overlay.service';
 import type { TeamProposalService } from '../../teams/services/team-proposal.service';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
 import {
@@ -260,6 +261,7 @@ function service(
       teamBuilders,
       projectChats,
       teamStore,
+      teamOverlays: {} as TeamOverlayService,
       // Never asked by the cases that list tools.
       teamProposals: {} as TeamProposalService,
       shares,
@@ -4271,6 +4273,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamBuilders: builders,
       projectChats: new ProjectChatBroker(),
       teamStore: {} as TeamStoreService,
+      teamOverlays: {} as TeamOverlayService,
       teamProposals: {} as TeamProposalService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
@@ -4356,6 +4359,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamBuilders: new TeamBuilderBroker(),
       projectChats,
       teamStore,
+      teamOverlays: {} as TeamOverlayService,
       teamProposals,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
@@ -4389,7 +4393,14 @@ describe('McpServerService — what the descriptions tell a model', () => {
     for (const builderOnly of [HOST_TEAM_CHANGE_TOOL, HOST_BACKUP_TEAM_TOOL]) {
       expect(names).not.toContain(builderOnly);
     }
-    expect(schemaOf(HOST_READ_TEAMS_TOOL).properties).toEqual({});
+    expect(Object.keys(schemaOf(HOST_READ_TEAMS_TOOL).properties)).toEqual([
+      'members',
+      'blocks',
+      'stages',
+      'search',
+      'full',
+      'offset',
+    ]);
     expect(Object.keys(schemaOf(HOST_PROPOSE_TEAM_TOOL).properties)).toEqual([
       'overlay',
       'summary',
@@ -4552,7 +4563,30 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamBuilders: builders,
       projectChats: new ProjectChatBroker(),
       teamStore: store,
-      teamProposals: {} as TeamProposalService,
+      teamOverlays: {
+        overlaySources: () =>
+          Promise.resolve([
+            {
+              projectId: 'p1',
+              projectName: 'Billing',
+              active: true,
+              source: 'members:\n  agent:\n    effort: high\n',
+            },
+          ]),
+      } as unknown as TeamOverlayService,
+      teamProposals: {
+        projectsRunning: () =>
+          Promise.resolve([
+            {
+              id: 'p1',
+              name: 'Billing',
+              instructionsRevision: 3,
+              instructionBlocks: [
+                { id: 'repo', title: 'Repo', text: 'Use pnpm.' },
+              ],
+            },
+          ]),
+      } as unknown as TeamProposalService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       monitors: monitorBroker().broker,
@@ -4569,6 +4603,38 @@ describe('McpServerService — what the descriptions tell a model', () => {
 
     expect(result.isError).toBe(false);
     expect(result.content[0]!.text).toContain('"hash": "h1"');
+
+    const context = {
+      runId: 'run-1',
+      memberId: 'agent',
+    } as Parameters<typeof tool.call>[2];
+    const overlays = await tool.call(
+      HOST_READ_TEAMS_TOOL,
+      { slug: 'team', overlays: true },
+      context,
+    );
+    expect(overlays.isError).toBe(false);
+    expect(overlays.content[0]!.text).toContain(
+      '=== overlay Billing (p1) · its runs apply it ===\nmembers:\n  agent:\n    effort: high',
+    );
+    const elsewhere = await tool.call(
+      HOST_READ_TEAMS_TOOL,
+      { slug: 'other', overlays: true },
+      context,
+    );
+    expect(elsewhere).toMatchObject({ isError: true });
+    expect(elsewhere.content[0]!.text).toContain(
+      'reads the overlays of the team it edits, `team`',
+    );
+    const projects = await tool.call(
+      HOST_READ_TEAMS_TOOL,
+      { slug: 'team', projects: true },
+      context,
+    );
+    expect(projects.isError).toBe(false);
+    expect(projects.content[0]!.text).toContain(
+      '=== project Billing (p1) · instructionsRevision 3 · 9 of 20000 characters ===',
+    );
   });
 
   it("hands a builder chat's propose_team edits to the proposal service under the chat's own slug", async () => {
@@ -4621,6 +4687,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamBuilders: builders,
       projectChats: new ProjectChatBroker(),
       teamStore: {} as TeamStoreService,
+      teamOverlays: {} as TeamOverlayService,
       teamProposals: {
         propose,
         proposeChange,
@@ -4700,6 +4767,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamBuilders: new TeamBuilderBroker(),
       projectChats: new ProjectChatBroker(),
       teamStore: {} as TeamStoreService,
+      teamOverlays: {} as TeamOverlayService,
       teamProposals: { propose } as unknown as TeamProposalService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,

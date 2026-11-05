@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
-import { BaseException, ConflictException } from '@packages/common';
+import {
+  BaseException,
+  ConflictException,
+  NotFoundException,
+} from '@packages/common';
 
 import {
   type DeferredCardResponder,
@@ -13,10 +17,17 @@ import {
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
+import { instructionsDiff } from '../../agents/utils/host-project-instructions';
 import {
   standingProposalCardId,
   teamVerdictMessage,
 } from '../../agents/utils/host-teams';
+import type { ProjectWire } from '../../projects/projects.types';
+import { ProjectsService } from '../../projects/services/projects.service';
+import {
+  blocksDocument,
+  checkedProjectChange,
+} from '../../projects/utils/project-instruction-blocks';
 import {
   type PendingTeamProposal,
   PendingTeamProposalSchema,
@@ -25,6 +36,7 @@ import {
   type TeamChangeProposalRequest,
   type TeamProposal,
   type TeamProposalOverlay,
+  type TeamProposalProject,
   type TeamProposalRequest,
 } from '../teams.types';
 import {
@@ -52,13 +64,24 @@ export type PreparedProposal =
   | { ok: false; code: string; message: string };
 
 export type AppliedProposal =
-  | { outcome: 'saved'; slug: string; backup: string | null }
+  | {
+      outcome: 'saved';
+      slug: string;
+      backup: string | null;
+      /** The project instructions the same approval wrote. */
+      project?: { name: string; revision: number };
+    }
   /**
    * A replacement whose file changed since the card was raised; `overlay`
    * when it was the project's overlay that moved, or the project that stopped
-   * defaulting to this team (`inactive`).
+   * defaulting to this team (`inactive`); `project` the same for the
+   * project's instructions.
    */
-  | { outcome: 'changed'; overlay?: 'changed' | 'inactive' }
+  | {
+      outcome: 'changed';
+      overlay?: 'changed' | 'inactive';
+      project?: 'changed' | 'inactive' | 'gone';
+    }
   /** A new team whose slug was taken since the card was raised. */
   | { outcome: 'exists' }
   /** A replacement whose file was deleted since the card was raised. */
@@ -101,6 +124,7 @@ export class TeamProposalService {
     private readonly chats: ChatService,
     private readonly changeLog: TeamChangeLogService,
     private readonly overlays: TeamOverlayService,
+    private readonly projects: ProjectsService,
   ) {}
 
   /**
@@ -405,7 +429,10 @@ export class TeamProposalService {
         verdict = {
           kind: 'not-saved',
           cause: 'write-failed',
-          reason: 'the file could not be written',
+          reason:
+            error instanceof ProjectLeftChangedError
+              ? `the team file could not be written, and the instructions of ${error.projectName} could not be put back: they stay changed at revision ${error.revision} — tell the user`
+              : 'the file could not be written',
           note,
         };
       }
@@ -543,11 +570,15 @@ export class TeamProposalService {
     if ('code' in overlay) {
       return { ok: false, code: overlay.code, message: overlay.message };
     }
-    if (diff.identical && overlay.half === null) {
+    const project = await this.projectHalf(request);
+    if (project !== null && 'code' in project) {
+      return { ok: false, code: project.code, message: project.message };
+    }
+    if (diff.identical && overlay.half === null && project === null) {
       return {
         ok: false,
         code: 'NOTHING_TO_CHANGE',
-        message: `the ${request.overlay === undefined ? 'edits leave' : 'edits and overlay leave'} '${request.slug}' as it stands`,
+        message: `the ${request.overlay === undefined && request.project === undefined ? 'edits leave' : 'edits, overlay and project instructions leave'} '${request.slug}' as it stands`,
       };
     }
     return {
@@ -561,8 +592,81 @@ export class TeamProposalService {
         baseHash: file.hash,
         team,
         ...(overlay.half === null ? {} : { overlay: overlay.half }),
+        ...(project === null ? {} : { project }),
       },
     };
+  }
+
+  /** The projects that run `slug` by default — whose instructions a builder card may change beside the team. */
+  async projectsRunning(slug: string): Promise<ProjectWire[]> {
+    return (await this.projects.list()).filter(
+      (project) => project.teamSlug === slug,
+    );
+  }
+
+  /**
+   * The project half of a builder card: a project that runs this team by
+   * default, its blocks filled in and checked as its own write would check
+   * them, pinned to the revision the agent read. Null when the agent sent
+   * none or it changes nothing.
+   */
+  private async projectHalf(
+    request: TeamChangeProposalRequest,
+  ): Promise<TeamProposalProject | { code: string; message: string } | null> {
+    const asked = request.project;
+    if (asked === undefined) {
+      return null;
+    }
+    let project: ProjectWire;
+    try {
+      project = await this.projects.get(asked.projectId);
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        return {
+          code: 'PROJECT_GONE',
+          message: `no project ${asked.projectId} — read_teams with \`projects\` names the ones that run this team`,
+        };
+      }
+      throw error;
+    }
+    if (project.teamSlug !== request.slug) {
+      return {
+        code: 'PROJECT_NOT_THIS_TEAMS',
+        message: `the project ${project.name} does not run '${request.slug}' by default, so this chat does not change its instructions`,
+      };
+    }
+    if (project.instructionsRevision !== asked.baseRevision) {
+      return {
+        code: 'REVISION_DRIFT',
+        message: `the instructions of ${project.name} changed since revision ${asked.baseRevision} (now ${project.instructionsRevision}) — read them again with read_teams and propose on what they hold now`,
+      };
+    }
+    const checked = checkedProjectChange(
+      asked.blocks,
+      project.instructionBlocks,
+    );
+    if (!checked.ok) {
+      return {
+        code: checked.error,
+        message:
+          checked.figures === undefined
+            ? checked.message
+            : `${checked.message} (${project.name} holds ${checked.figures.charsNow} now)`,
+      };
+    }
+    const diffText = instructionsDiff(
+      blocksDocument(project.instructionBlocks),
+      blocksDocument(checked.blocks),
+    );
+    return diffText === ''
+      ? null
+      : {
+          projectId: project.id,
+          projectName: project.name,
+          blocks: checked.blocks,
+          baseRevision: project.instructionsRevision,
+          diffText,
+        };
   }
 
   /**
@@ -656,6 +760,15 @@ export class TeamProposalService {
     ) {
       return { outcome: 'changed', overlay: 'inactive' };
     }
+    const projectHalf = proposal.project;
+    let projectBefore: ProjectWire | null = null;
+    if (projectHalf !== undefined) {
+      const standing = await this.standingProject(proposal.slug, projectHalf);
+      if (typeof standing === 'string') {
+        return { outcome: 'changed', project: standing };
+      }
+      projectBefore = standing;
+    }
     const writeTeam = async (): Promise<string | null> => {
       if (proposal.diff.identical) {
         return null;
@@ -664,23 +777,42 @@ export class TeamProposalService {
       await this.store.save(proposal.slug, proposal.team, proposal.baseHash);
       return copy;
     };
-    let backup: string | null;
-    let overlayWrite: WrittenOverlay | null = null;
-    try {
+    const writeTeamAndOverlay = async (): Promise<{
+      backup: string | null;
+      overlayWrite: WrittenOverlay | null;
+    }> => {
       if (overlay === undefined) {
-        backup = await writeTeam();
+        return { backup: await writeTeam(), overlayWrite: null };
+      }
+      const written = await this.overlays.writeWithTeam(
+        proposal.slug,
+        overlay.projectId,
+        overlay.overlay,
+        overlay.baseHash,
+        writeTeam,
+      );
+      return { backup: written.team, overlayWrite: written.overlay };
+    };
+    let backup: string | null;
+    let overlayWrite: WrittenOverlay | null;
+    let projectRevision: number | null = null;
+    try {
+      if (projectHalf === undefined || projectBefore === null) {
+        ({ backup, overlayWrite } = await writeTeamAndOverlay());
       } else {
-        const written = await this.overlays.writeWithTeam(
-          proposal.slug,
-          overlay.projectId,
-          overlay.overlay,
-          overlay.baseHash,
-          writeTeam,
+        const written = await this.writeProjectWithTeam(
+          projectHalf,
+          projectBefore,
+          by,
+          writeTeamAndOverlay,
         );
-        overlayWrite = written.overlay;
-        backup = written.team;
+        ({ backup, overlayWrite } = written.team);
+        projectRevision = written.revision;
       }
     } catch (error) {
+      if (isConflict(error, 'PROJECT_INSTRUCTIONS_DRIFT')) {
+        return { outcome: 'changed', project: 'changed' };
+      }
       if (isConflict(error, 'TEAM_OVERLAY_CHANGED')) {
         return { outcome: 'changed', overlay: 'changed' };
       }
@@ -704,7 +836,95 @@ export class TeamProposalService {
       outcome: 'saved',
       slug: proposal.slug,
       backup: backup ?? overlayWrite?.backup ?? null,
+      ...(projectHalf === undefined || projectRevision === null
+        ? {}
+        : {
+            project: {
+              name: projectHalf.projectName,
+              revision: projectRevision,
+            },
+          }),
     };
+  }
+
+  /**
+   * The project a card's half changes, as it stands, or why the card no
+   * longer holds for it: deleted, no longer running this team by default, or
+   * its instructions moved past the revision the card was raised at.
+   */
+  private async standingProject(
+    slug: string,
+    half: TeamProposalProject,
+  ): Promise<ProjectWire | 'changed' | 'inactive' | 'gone'> {
+    let project: ProjectWire;
+    try {
+      project = await this.projects.get(half.projectId);
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        return 'gone';
+      }
+      throw error;
+    }
+    if (project.teamSlug !== slug) {
+      return 'inactive';
+    }
+    return project.instructionsRevision === half.baseRevision
+      ? project
+      : 'changed';
+  }
+
+  /**
+   * The project's instructions first, then the team through `writeTeam`; a
+   * team write that fails puts the instructions back as they were, so the
+   * pair is never half written. Logged as the chat's own change.
+   */
+  private async writeProjectWithTeam<T>(
+    half: TeamProposalProject,
+    before: ProjectWire,
+    by: { runId: string; note: string | null } | null,
+    writeTeam: () => Promise<T>,
+  ): Promise<{ team: T; revision: number }> {
+    const origin = {
+      source: 'chat' as const,
+      recommendationIds: [],
+      chatRunId: by?.runId ?? half.projectId,
+      cardSeq: null,
+    };
+    const written = await this.projects.update(
+      half.projectId,
+      {
+        instructionBlocks: half.blocks,
+        expectedInstructionsRevision: half.baseRevision,
+      },
+      origin,
+    );
+    try {
+      return {
+        team: await writeTeam(),
+        revision: written.instructionsRevision,
+      };
+    } catch (error) {
+      try {
+        await this.projects.update(
+          half.projectId,
+          {
+            instructionBlocks: before.instructionBlocks,
+            expectedInstructionsRevision: written.instructionsRevision,
+          },
+          origin,
+        );
+      } catch (restoreError) {
+        this.logger.warn(
+          `the instructions of project ${half.projectId} could not be put back after the team write failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
+        );
+        throw new ProjectLeftChangedError(
+          half.projectName,
+          written.instructionsRevision,
+          error,
+        );
+      }
+      throw error;
+    }
   }
 
   /** A builder chat's overlay write, or a project chat's. */
@@ -819,17 +1039,20 @@ function verdictOf(
         slug: applied.slug,
         backup: applied.backup,
         note,
+        ...(applied.project === undefined ? {} : { project: applied.project }),
       };
     case 'changed':
       return {
         kind: 'not-saved',
         cause: 'changed',
         reason:
-          applied.overlay === 'changed'
-            ? `this project's overlay of '${proposal.slug}' changed after you proposed this — read the overlay file again and propose on what it holds now`
-            : applied.overlay === 'inactive'
-              ? `the project stopped defaulting to team '${proposal.slug}' after you proposed this, so its runs would not use the overlay`
-              : `the team '${proposal.slug}' changed after you proposed replacing it`,
+          applied.project !== undefined
+            ? projectChangedReason(proposal, applied.project)
+            : applied.overlay === 'changed'
+              ? `this project's overlay of '${proposal.slug}' changed after you proposed this — read the overlay file again and propose on what it holds now`
+              : applied.overlay === 'inactive'
+                ? `the project stopped defaulting to team '${proposal.slug}' after you proposed this, so its runs would not use the overlay`
+                : `the team '${proposal.slug}' changed after you proposed replacing it`,
         note,
       };
     case 'exists':
@@ -846,6 +1069,39 @@ function verdictOf(
         reason: `the team '${proposal.slug}' was deleted after you proposed replacing it`,
         note,
       };
+  }
+}
+
+/** A team write that failed after its project's instructions were written and could not be put back. */
+class ProjectLeftChangedError extends Error {
+  constructor(
+    readonly projectName: string,
+    readonly revision: number,
+    cause: unknown,
+  ) {
+    super(
+      `the team write failed and the instructions of ${projectName} stay at revision ${revision}`,
+      { cause },
+    );
+  }
+}
+
+/** Why a card's project half no longer held when the user approved it. */
+function projectChangedReason(
+  proposal: TeamProposal,
+  cause: 'changed' | 'inactive' | 'gone',
+): string {
+  const name =
+    proposal.mode === 'replace' && proposal.project !== undefined
+      ? proposal.project.projectName
+      : 'the project';
+  switch (cause) {
+    case 'changed':
+      return `the instructions of ${name} changed after you proposed this — read them again with read_teams and propose on what they hold now; nothing was written`;
+    case 'inactive':
+      return `${name} stopped running team '${proposal.slug}' by default after you proposed this; nothing was written`;
+    case 'gone':
+      return `${name} was deleted after you proposed this; nothing was written`;
   }
 }
 

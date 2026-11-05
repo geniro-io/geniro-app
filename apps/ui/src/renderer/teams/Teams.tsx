@@ -17,7 +17,6 @@ import type {
 import { agentDisplayName } from '../agent-identity';
 import type {
   AgentKind,
-  ApprovalMode as TeamApproval,
   InstructionBlock,
   RunAwaiting,
   Team,

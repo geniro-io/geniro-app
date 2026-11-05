@@ -434,7 +434,14 @@ export type DeferredCardResponder = (allow: boolean, answer?: string) => void;
  * is what the user typed on either button.
  */
 export type TeamProposalVerdict =
-  | { kind: 'saved'; slug: string; backup: string | null; note: string | null }
+  | {
+      kind: 'saved';
+      slug: string;
+      backup: string | null;
+      note: string | null;
+      /** A project whose instructions the same approval wrote, and the revision it saved them as. */
+      project?: { name: string; revision: number };
+    }
   | { kind: 'declined'; note: string | null }
   | {
       kind: 'not-saved';

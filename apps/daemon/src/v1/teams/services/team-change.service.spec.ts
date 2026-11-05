@@ -405,12 +405,13 @@ describe('TeamChangeService', () => {
     });
   });
 
-  it('answers the diff on a dry run and writes nothing', async () => {
+  it('answers where each edit landed and the diff on a dry run, and writes nothing', async () => {
     const result = await change({ dryRun: true });
 
     expect(result).toMatchObject({
       dryRun: true,
       saved: false,
+      landed: ['members/reviewer/model'],
       diff: { changedMembers: [{ id: 'reviewer' }] },
     });
     expect((await store.get('dev-team')).team).toEqual(WF);
@@ -442,7 +443,7 @@ describe('TeamChangeService', () => {
       const result = await change({ authority: builder({ turnStartedAt: 0 }) });
 
       expect(result).toMatchObject({ saved: false, error: 'HASH_DRIFT' });
-      expect(result.message).toMatch(/read the file again/);
+      expect(result.message).toMatch(/read the team again with read_teams/);
       expect(result.currentHash).toBe(await hash());
       expect((await store.get('dev-team')).team).toEqual(WF);
     });
@@ -512,14 +513,14 @@ describe('TeamChangeService', () => {
       ).toMatchObject({ saved: false, error: 'HASH_DRIFT' });
     });
 
-    it('points a find that matches nothing at the file, not at an analysis view', async () => {
+    it('points a find that matches nothing at read_teams, not at an analysis view', async () => {
       const result = await change({
         authority: builder(),
         edits: [{ find: 'not in the team', replace: 'x' }],
       });
 
       expect(result).toMatchObject({ saved: false, error: 'INVALID_EDIT' });
-      expect(result.message).toMatch(/copy it exactly from the team file/);
+      expect(result.message).toMatch(/copy it exactly from read_teams/);
     });
 
     it('refuses a file that no longer parses, naming the fault but quoting no line of it', async () => {

@@ -480,6 +480,62 @@ describe('save_project_instructions (in-memory sqlite)', () => {
     expect(published).toEqual([projectId]);
   });
 
+  it('refuses blocks that together run past the limit before any card, with the figures', async () => {
+    const tooLong = await call({
+      projectId,
+      blocks: [
+        { id: 'b1', title: '', text: 'a'.repeat(12_000) },
+        { id: 'b2', title: '', text: 'b'.repeat(9_000) },
+      ],
+      baseRevision: 0,
+      ids: ['P-1'],
+    });
+
+    expect(tooLong).toMatchObject({
+      isError: true,
+      answer: {
+        error: 'INSTRUCTIONS_TOO_LONG',
+        chars: 21_002,
+        maxChars: 20_000,
+        charsNow: 'Use pnpm.'.length,
+      },
+    });
+    expect(String(tooLong.answer.message)).toContain('1002 over');
+    expect(cards).toEqual([]);
+    expect((await projects.get(projectId)).instructions).toBe('Use pnpm.');
+  });
+
+  it('keeps a block sent as its id alone and refuses an id it does not know without text', async () => {
+    await call({
+      projectId,
+      blocks: [
+        { id: 'b1' },
+        { id: 'b2', title: 'Tests', text: 'Run pnpm test:unit.' },
+      ],
+      baseRevision: 0,
+      ids: ['P-1'],
+    });
+    expect(cards[0]?.blocks).toEqual([
+      { id: 'b1', title: '', text: 'Use pnpm.' },
+      { id: 'b2', title: 'Tests', text: 'Run pnpm test:unit.' },
+    ]);
+    expect((await projects.get(projectId)).instructions).toBe(
+      'Use pnpm.\n\nRun pnpm test:unit.',
+    );
+
+    const unknown = await call({
+      projectId,
+      blocks: [{ id: 'b1' }, { id: 'b9', title: 'Lint' }],
+      baseRevision: 1,
+      ids: ['P-1'],
+    });
+    expect(unknown).toMatchObject({
+      isError: true,
+      answer: { error: 'UNKNOWN_BLOCK' },
+    });
+    expect(cards).toHaveLength(1);
+  });
+
   it('diffs the blocks under their titles and writes the blocks it was given', async () => {
     await call({
       projectId,
@@ -582,6 +638,29 @@ describe('save_project_instructions (in-memory sqlite)', () => {
         cardSeq: null,
         next: 'Use pnpm. Run pnpm lint.',
       });
+    });
+
+    it('fills a block sent as its id alone and refuses a change past the limit before any card', async () => {
+      const tooLong = await chatCall({
+        blocks: [
+          { id: 'b1' },
+          { id: 'b2', title: '', text: 'x'.repeat(20_000) },
+        ],
+        baseRevision: 0,
+      });
+      expect(tooLong).toMatchObject({
+        isError: true,
+        answer: { error: 'INSTRUCTIONS_TOO_LONG', maxChars: 20_000 },
+      });
+      expect(cards).toEqual([]);
+
+      await chatCall({
+        blocks: [{ id: 'b1', title: 'Build' }],
+        baseRevision: 0,
+      });
+      expect(cards[0]?.blocks).toEqual([
+        { id: 'b1', title: 'Build', text: 'Use pnpm.' },
+      ]);
     });
 
     it('refuses a moved revision with the blocks as they stand, raising no card', async () => {

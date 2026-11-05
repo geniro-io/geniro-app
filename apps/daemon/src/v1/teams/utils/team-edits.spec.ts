@@ -49,8 +49,55 @@ describe('applyTeamEdits', () => {
       /^edit 1: `find` matches no text/,
     );
     expect(refusal([{ find: ' it.', replace: 'x' }])).toBe(
-      'edit 1: `find` matches 2 places (nodes/0/role, nodes/1/role) — include more of the surrounding text so it matches exactly one',
+      'edit 1: `find` matches 2 places in the team (nodes/builder/role, nodes/reviewer/role) — include more of the surrounding text, or narrow `path` to one field, so it matches exactly one',
     );
+  });
+
+  it('looks for a `find` only under its `path`, a field or a part of the team', () => {
+    expect(
+      applied([{ find: ' it.', replace: ' it twice.', path: 'nodes/reviewer' }])
+        .nodes,
+    ).toMatchObject([{ role: 'Build it.' }, { role: 'Review it twice.' }]);
+    expect(
+      applied([
+        { find: ' it.', replace: ' it all.', path: 'nodes/builder/role' },
+      ]).nodes[0]!.role,
+    ).toBe('Build it all.');
+    expect(
+      refusal([{ find: 'Build', replace: 'x', path: 'nodes/reviewer' }]),
+    ).toBe(
+      'edit 1: `find` matches no text under nodes/reviewer — copy it exactly from view="team"',
+    );
+    expect(refusal([{ find: 'it', replace: 'x', path: 'nodes/ghost' }])).toBe(
+      'edit 1: no element "ghost" at nodes/ghost',
+    );
+    expect(
+      refusal([{ find: 'it', replace: 'x', path: 'nodes/__proto__' }]),
+    ).toMatch(/^edit 1: "__proto__" cannot be part of a path/);
+  });
+
+  it('names where each edit landed, a list element by its id', () => {
+    const result = applyTeamEdits(
+      WF,
+      [
+        { find: 'Review it.', replace: 'Review it twice.' },
+        { path: 'nodes/builder/model', value: 'sonnet' },
+        { path: 'nodes/1/model', value: 'opus' },
+        { path: 'nodes/-', value: { id: 'tester', kind: 'agent' } },
+        { path: 'edges/0', remove: true },
+      ],
+      'view="team"',
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      landed: [
+        'nodes/reviewer/role',
+        'nodes/builder/model',
+        'nodes/reviewer/model',
+        'nodes/tester',
+        'edges/0',
+      ],
+    });
   });
 
   it('sets a field on a node named by id, and appends to a list with -', () => {

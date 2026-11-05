@@ -4,8 +4,12 @@ import { Injectable, Optional } from '@nestjs/common';
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import { ProjectInstructionChangeDao } from '../../projects/dao/project-instruction-change.dao';
 import type { Project } from '../../projects/entity/project.entity';
+import { PROJECT_INSTRUCTIONS_MAX } from '../../projects/projects.types';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
-import { projectBlocksOf } from '../../projects/utils/project-instruction-blocks';
+import {
+  instructionsLength,
+  projectBlocksOf,
+} from '../../projects/utils/project-instruction-blocks';
 import {
   projectInstructionsBody,
   projectInstructionsText,
@@ -315,13 +319,16 @@ export class ThreadReaderService {
         PROJECT_VIEW_CHANGES,
         em,
       );
+      const blocks = projectBlocksOf(project);
       projects.push({
         projectId: project.id,
         name: project.name,
         key: project.taskKey,
         instructionsRevision: project.instructionsRevision,
         description: project.description,
-        instructionBlocks: projectBlocksOf(project),
+        instructionsChars: instructionsLength(blocks),
+        instructionsMaxChars: PROJECT_INSTRUCTIONS_MAX,
+        instructionBlocks: blocks,
         runs,
         changes: changes.map((change) => ({
           at: change.changedAt.toISOString(),
@@ -344,7 +351,7 @@ export class ThreadReaderService {
       next:
         projects.length === 0
           ? 'The analysed runs belong to no project, so there are no project instructions to improve.'
-          : 'A project-instructions recommendation (P-) names its projectId and changes only its instruction blocks (each run receives their texts joined in order); once applied it is written with the project’s instructionsRevision as read here.',
+          : 'A project-instructions recommendation (P-) names its projectId and changes only its instruction blocks (each run receives their texts joined in order, `instructionsChars` of the `instructionsMaxChars` all of them together may hold); once applied it is written with the project’s instructionsRevision as read here.',
     });
   }
 

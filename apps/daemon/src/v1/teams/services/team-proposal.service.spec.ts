@@ -11,7 +11,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { EntityManager } from '@mikro-orm/sqlite';
-import { BadRequestException } from '@packages/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@packages/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -24,6 +28,8 @@ import type { RunDao } from '../../agents/dao/run.dao';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { ProjectDao } from '../../projects/dao/project.dao';
+import type { ProjectInstructionBlock } from '../../projects/projects.types';
+import type { ProjectsService } from '../../projects/services/projects.service';
 import { member, teamOf } from '../__tests__/team-builders';
 import type { TeamChangeLogDao } from '../dao/team-change-log.dao';
 import type { Team, TeamChangeLogRecord, TeamProposal } from '../teams.types';
@@ -116,6 +122,46 @@ class FakeRuns {
  * through the registry's own resolve — what decides that a second press finds
  * nothing. The rows it would write are recorded as calls.
  */
+interface FakeProject {
+  id: string;
+  name: string;
+  teamSlug: string | null;
+  instructionsRevision: number;
+  instructionBlocks: ProjectInstructionBlock[];
+}
+
+/** The projects service's reads and its revision-guarded write, over `rows`. */
+function fakeProjects(rows: Map<string, FakeProject>): ProjectsService {
+  const read = (id: string): FakeProject => {
+    const row = rows.get(id);
+    if (row === undefined) {
+      throw new NotFoundException('PROJECT_NOT_FOUND', `no project ${id}`);
+    }
+    return row;
+  };
+  return {
+    list: () => Promise.resolve([...rows.values()].map((row) => ({ ...row }))),
+    get: (id: string) => Promise.resolve({ ...read(id) }),
+    update: (
+      id: string,
+      patch: {
+        instructionBlocks: ProjectInstructionBlock[];
+        expectedInstructionsRevision: number;
+      },
+    ) => {
+      const row = read(id);
+      if (row.instructionsRevision !== patch.expectedInstructionsRevision) {
+        return Promise.reject(
+          new ConflictException('PROJECT_INSTRUCTIONS_DRIFT', 'moved'),
+        );
+      }
+      row.instructionBlocks = patch.instructionBlocks;
+      row.instructionsRevision += 1;
+      return Promise.resolve({ ...row });
+    },
+  } as unknown as ProjectsService;
+}
+
 function fakeChats(approvals: ApprovalRegistry) {
   const track = (
     runId: string,
@@ -179,6 +225,8 @@ describe('TeamProposalService', () => {
   let logged: TeamChangeLogRecord[];
   let overlayStore: TeamOverlayStoreService;
   let service: TeamProposalService;
+  let projectRows: Map<string, FakeProject>;
+  let projectsFake: ProjectsService;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'geniro-proposal-'));
@@ -205,6 +253,32 @@ describe('TeamProposalService', () => {
       } as unknown as ProjectDao,
       { fork: () => ({}) } as never,
     );
+    projectRows = new Map([
+      [
+        'p1',
+        {
+          id: 'p1',
+          name: 'Geniro',
+          teamSlug: 'team',
+          instructionsRevision: 2,
+          instructionBlocks: [
+            { id: 'repo', title: 'Repo', text: 'Use pnpm.' },
+            { id: 'local', title: 'Local', text: 'Run pnpm dev.' },
+          ],
+        },
+      ],
+      [
+        'p2',
+        {
+          id: 'p2',
+          name: 'Manifest',
+          teamSlug: 'other-team',
+          instructionsRevision: 0,
+          instructionBlocks: [],
+        },
+      ],
+    ]);
+    projectsFake = fakeProjects(projectRows);
     service = new TeamProposalService(
       store,
       { assertRunnable } as unknown as TeamExecutorService,
@@ -226,6 +300,7 @@ describe('TeamProposalService', () => {
         },
       } as unknown as TeamChangeLogDao),
       overlays,
+      projectsFake,
     );
   });
 
@@ -628,6 +703,196 @@ describe('TeamProposalService', () => {
             projectId: 'p1',
           }),
         ).resolves.toMatchObject({ ok: false, code: 'TEAM_OVERLAY_INVALID' });
+      });
+    });
+
+    describe("moving text into a project's instructions", () => {
+      const MOVE: TeamEdit[] = [
+        { path: 'members/reviewer/model', value: 'sonnet' },
+      ];
+      const PROJECT = {
+        projectId: 'p1',
+        blocks: [
+          { id: 'repo' },
+          { id: 'local' },
+          { id: 'visuals', title: 'Visuals', text: 'Attach screenshots.' },
+        ],
+        baseRevision: 2,
+      };
+
+      async function prepareMove(
+        project: typeof PROJECT = PROJECT,
+      ): Promise<TeamProposal> {
+        await store.create(TEAM, 'team');
+        const prepared = await service.prepareChange({
+          slug: 'team',
+          edits: MOVE,
+          project,
+          summary: 'Visuals move to Geniro',
+          reason: 'asked',
+        });
+        if (!prepared.ok) {
+          throw new Error(prepared.message);
+        }
+        return prepared.proposal;
+      }
+
+      it('cards the team edits and the project blocks on one card, a kept block filled in', async () => {
+        const proposal = await prepareMove();
+
+        expect(proposal).toMatchObject({
+          mode: 'replace',
+          team: FASTER,
+          project: {
+            projectId: 'p1',
+            projectName: 'Geniro',
+            baseRevision: 2,
+            blocks: [
+              { id: 'repo', title: 'Repo', text: 'Use pnpm.' },
+              { id: 'local', title: 'Local', text: 'Run pnpm dev.' },
+              { id: 'visuals', title: 'Visuals', text: 'Attach screenshots.' },
+            ],
+            diffText: expect.stringContaining('+## Visuals'),
+          },
+        });
+        expect(projectRows.get('p1')?.instructionsRevision).toBe(2);
+      });
+
+      it('writes the project, then the team, on one approval', async () => {
+        const proposal = await prepareMove();
+
+        expect(
+          await service.apply(proposal, { runId: 'run-1', note: null }),
+        ).toMatchObject({
+          outcome: 'saved',
+          project: { name: 'Geniro', revision: 3 },
+        });
+
+        expect((await store.get('team')).team).toEqual(FASTER);
+        expect(projectRows.get('p1')).toMatchObject({
+          instructionsRevision: 3,
+          instructionBlocks: [
+            { id: 'repo' },
+            { id: 'local' },
+            { id: 'visuals', text: 'Attach screenshots.' },
+          ],
+        });
+      });
+
+      it("puts the project's instructions back when the team write fails", async () => {
+        const proposal = await prepareMove();
+        vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk full'));
+
+        await expect(
+          service.apply(proposal, { runId: 'run-1', note: null }),
+        ).rejects.toThrow('disk full');
+
+        expect((await store.get('team')).team).toEqual(TEAM);
+        expect(
+          projectRows.get('p1')?.instructionBlocks.map((block) => block.id),
+        ).toEqual(['repo', 'local']);
+      });
+
+      it('tells the agent the instructions stay changed when the team write fails and they cannot be put back', async () => {
+        await store.create(TEAM, 'team');
+        await service.proposeChange('run-1', {
+          slug: 'team',
+          edits: MOVE,
+          project: PROJECT,
+          summary: 'Visuals move to Geniro',
+          reason: 'asked',
+        });
+        vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk full'));
+        const update = projectsFake.update.bind(projectsFake);
+        vi.spyOn(projectsFake, 'update')
+          .mockImplementationOnce(update)
+          .mockRejectedValueOnce(new Error('database locked'));
+
+        approvals.resolve('run-1', standingCard('run-1'), true);
+
+        const { message } = await verdictAfterPress();
+        expect(message).toContain(
+          'the instructions of Geniro could not be put back: they stay changed at revision 3',
+        );
+      });
+
+      it('writes nothing when the instructions moved, the project left the team or was deleted before Approve', async () => {
+        const proposal = await prepareMove();
+        projectRows.get('p1')!.instructionsRevision = 3;
+        expect(
+          await service.apply(proposal, { runId: 'run-1', note: null }),
+        ).toEqual({
+          outcome: 'changed',
+          project: 'changed',
+        });
+        projectRows.get('p1')!.instructionsRevision = 2;
+        projectRows.get('p1')!.teamSlug = 'other-team';
+        expect(
+          await service.apply(proposal, { runId: 'run-1', note: null }),
+        ).toEqual({
+          outcome: 'changed',
+          project: 'inactive',
+        });
+        projectRows.delete('p1');
+        expect(
+          await service.apply(proposal, { runId: 'run-1', note: null }),
+        ).toEqual({
+          outcome: 'changed',
+          project: 'gone',
+        });
+        expect((await store.get('team')).team).toEqual(TEAM);
+      });
+
+      it('tells the agent on Approve that the instructions moved, and writes nothing', async () => {
+        await store.create(TEAM, 'team');
+        await service.proposeChange('run-1', {
+          slug: 'team',
+          edits: MOVE,
+          project: PROJECT,
+          summary: 'Visuals move to Geniro',
+          reason: 'asked',
+        });
+        projectRows.get('p1')!.instructionsRevision = 3;
+
+        approvals.resolve('run-1', standingCard('run-1'), true);
+
+        const { message, outcome } = await verdictAfterPress();
+        expect(message).toContain(
+          'the instructions of Geniro changed after you proposed this',
+        );
+        expect(outcome).toEqual({ kind: 'not-saved', cause: 'changed' });
+        expect((await store.get('team')).team).toEqual(TEAM);
+      });
+
+      it('raises no card for a project of another team, a moved revision, an unknown block or texts past the limit', async () => {
+        await store.create(TEAM, 'team');
+        const refusal = (project: typeof PROJECT) =>
+          service.prepareChange({ slug: 'team', edits: [], project });
+
+        await expect(
+          refusal({ ...PROJECT, projectId: 'p2', baseRevision: 0 }),
+        ).resolves.toMatchObject({ ok: false, code: 'PROJECT_NOT_THIS_TEAMS' });
+        await expect(
+          refusal({ ...PROJECT, baseRevision: 1 }),
+        ).resolves.toMatchObject({ ok: false, code: 'REVISION_DRIFT' });
+        await expect(
+          refusal({ ...PROJECT, blocks: [{ id: 'ghost' }] }),
+        ).resolves.toMatchObject({ ok: false, code: 'UNKNOWN_BLOCK' });
+        const tooLong = await refusal({
+          ...PROJECT,
+          blocks: [
+            { id: 'repo' },
+            { id: 'big', title: '', text: 'x'.repeat(20_000) },
+          ],
+        });
+        expect(tooLong).toMatchObject({
+          ok: false,
+          code: 'INSTRUCTIONS_TOO_LONG',
+          message: expect.stringContaining('Geniro holds'),
+        });
+        await expect(
+          refusal({ ...PROJECT, projectId: 'nope' }),
+        ).resolves.toMatchObject({ ok: false, code: 'PROJECT_GONE' });
       });
     });
 

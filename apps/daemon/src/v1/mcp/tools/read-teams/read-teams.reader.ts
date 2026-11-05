@@ -1,19 +1,177 @@
 import { z } from 'zod';
 
+import { PAGE_BYTES } from '../../../agents/services/thread-reader.service';
+import {
+  PROJECT_INSTRUCTIONS_MAX,
+  type ProjectWire,
+} from '../../../projects/projects.types';
+import { instructionsLength } from '../../../projects/utils/project-instruction-blocks';
 import type { TeamSummary, TeamWire } from '../../../teams/teams.types';
-import { redactConfigDirs } from '../../../teams/utils/config-dir-redaction';
+import {
+  redactConfigDirs,
+  redactOverlaySource,
+} from '../../../teams/utils/config-dir-redaction';
+import {
+  teamOutline,
+  teamPartsText,
+  teamSearchText,
+  type TeamSelection,
+} from '../../../teams/utils/team-reading';
 import type { ToolArgs } from '../../mcp.types';
 import { readToolArgs } from '../tool-args';
 
+/** Ids one read may name, words one search may look for, and how long one word may be. */
+const MAX_READ_IDS = 50;
+const MAX_SEARCH_TERMS = 20;
+const MAX_SEARCH_TERM_LENGTH = 200;
+
+/** The least a page carries of its body, however long its lead. */
+const MIN_PAGE_BODY_BYTES = 1_000;
+
+const SLUG_FIELD = z
+  .string()
+  .min(1)
+  .optional()
+  .describe(
+    'One team to read, by the slug the listing names. Leave it out to list the library.',
+  );
+
+const PART_FIELDS = {
+  members: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(MAX_READ_IDS)
+    .optional()
+    .describe(
+      'Members to read whole, by id: each one’s short fields as JSON, then each of its texts between `=== <path> ===` markers — the path an edit takes, and the exact text a `find` is copied from',
+    ),
+  blocks: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(MAX_READ_IDS)
+    .optional()
+    .describe(
+      'Instruction blocks to read whole, by id, written as members are',
+    ),
+  stages: z
+    .boolean()
+    .optional()
+    .describe('true reads every stage whole, written as members are'),
+  search: z
+    .array(z.string().min(1).max(MAX_SEARCH_TERM_LENGTH))
+    .min(1)
+    .max(MAX_SEARCH_TERMS)
+    .optional()
+    .describe(
+      'Words or phrases to find, ignoring case: answers every paragraph of the team’s texts that holds one, under the path of its field — every place a subject lives, in one read',
+    ),
+  full: z
+    .boolean()
+    .optional()
+    .describe('true reads the whole team written out part by part, in pages'),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe(
+      'Where a long answer goes on: the offset its page names, with the same other arguments',
+    ),
+};
+
+const OVERLAYS_FIELD = z
+  .boolean()
+  .optional()
+  .describe(
+    "true reads every project's overlay of this team as its file stands — read-only in this chat",
+  );
+
+const PROJECTS_FIELD = z
+  .boolean()
+  .optional()
+  .describe(
+    'true reads every project that runs this team by default: its id, instructions revision, size and instruction blocks — what a `project` change on propose_team starts from',
+  );
+
+const BUILDER_FIELDS = { overlays: OVERLAYS_FIELD, projects: PROJECTS_FIELD };
+
 const ReadTeamsArgsSchema = z
-  .object({ slug: z.string().min(1).optional() })
+  .object({ slug: SLUG_FIELD, ...PART_FIELDS, ...BUILDER_FIELDS })
   .strict();
+
+export type ReadTeamsQuery = z.infer<typeof ReadTeamsArgsSchema>;
+
+/** The schema one audience is shown: a project's chat names no slug, only a builder chat reads overlays. */
+export function readTeamsArgsSchema(
+  audience: 'chat' | 'builder' | 'project',
+): z.ZodObject {
+  if (audience === 'project') {
+    return z.object(PART_FIELDS);
+  }
+  return audience === 'builder'
+    ? z.object({ slug: SLUG_FIELD, ...PART_FIELDS, ...BUILDER_FIELDS })
+    : z.object({ slug: SLUG_FIELD, ...PART_FIELDS });
+}
 
 /** The call's arguments, or what is wrong with them. Never throws. */
 export function readReadTeamsArgs(
   args: Record<string, unknown>,
-): ToolArgs<{ slug?: string }> {
+): ToolArgs<ReadTeamsQuery> {
   return readToolArgs(ReadTeamsArgsSchema, args);
+}
+
+/** What one read of a team asks for. */
+export type TeamRead =
+  | { kind: 'team' }
+  | { kind: 'parts'; selection: TeamSelection; offset: number }
+  | { kind: 'search'; terms: string[]; offset: number }
+  | { kind: 'full'; offset: number }
+  | { kind: 'overlays'; offset: number }
+  | { kind: 'projects'; offset: number };
+
+/** Which read the arguments ask for, or why they ask for none or for two. */
+export function teamReadOf(query: ReadTeamsQuery): TeamRead | string {
+  const offset = query.offset ?? 0;
+  const parts =
+    query.members !== undefined ||
+    query.blocks !== undefined ||
+    query.stages === true;
+  const asked = [
+    parts ? 'members/blocks/stages' : null,
+    query.search === undefined ? null : 'search',
+    query.full === true ? 'full' : null,
+    query.overlays === true ? 'overlays' : null,
+    query.projects === true ? 'projects' : null,
+  ].filter((name): name is string => name !== null);
+  if (asked.length > 1) {
+    return `Not read: ask for one read at a time — ${asked.join(', ')} were given together.`;
+  }
+  if (parts) {
+    return {
+      kind: 'parts',
+      selection: {
+        ...(query.members === undefined ? {} : { members: query.members }),
+        ...(query.blocks === undefined ? {} : { blocks: query.blocks }),
+        ...(query.stages === true ? { stages: true } : {}),
+      },
+      offset,
+    };
+  }
+  if (query.search !== undefined) {
+    return { kind: 'search', terms: query.search, offset };
+  }
+  if (query.full === true) {
+    return { kind: 'full', offset };
+  }
+  if (query.overlays === true) {
+    return { kind: 'overlays', offset };
+  }
+  if (query.projects === true) {
+    return { kind: 'projects', offset };
+  }
+  return query.offset === undefined
+    ? { kind: 'team' }
+    : 'Not read: `offset` goes on a long answer of members, blocks, stages, search, full, overlays or projects — give the same arguments as the page that named it.';
 }
 
 /**
@@ -62,4 +220,171 @@ export function teamText(wire: TeamWire): string {
     null,
     2,
   )}`;
+}
+
+/**
+ * A team read with no part named: the whole team while it fits one answer,
+ * else its outline — every member, block and stage with the size of each
+ * text — and how to read the rest.
+ */
+export function teamOrOutlineText(wire: TeamWire): string {
+  const whole = teamText(wire);
+  if (Buffer.byteLength(whole) <= PAGE_BYTES) {
+    return whole;
+  }
+  return `${TEAM_RESULT_PREFACE}\n${JSON.stringify(
+    {
+      slug: wire.slug,
+      hash: wire.hash,
+      note: `The team runs to ${whole.length} characters, past one answer, so this is its outline. Read what a change needs with members, blocks or stages, find every place a subject lives with search, or read it all with full=true, page by page.`,
+      outline: teamOutline(redactConfigDirs(wire.team)),
+    },
+    null,
+    2,
+  )}`;
+}
+
+/** The answer to a parts, search or full read, page by page. */
+export function teamReadText(
+  wire: TeamWire,
+  read: Exclude<
+    TeamRead,
+    { kind: 'team' } | { kind: 'overlays' } | { kind: 'projects' }
+  >,
+): string {
+  const team = redactConfigDirs(wire.team);
+  if (read.kind === 'search') {
+    const found = teamSearchText(team, read.terms);
+    const what = `search for ${read.terms.map((term) => JSON.stringify(term)).join(', ')}`;
+    return found.paragraphs === 0
+      ? `${TEAM_RESULT_PREFACE}\nTeam \`${wire.slug}\` at hash ${wire.hash}: no paragraph of its texts holds ${read.terms.map((term) => JSON.stringify(term)).join(' or ')}.`
+      : pagedText(
+          wire,
+          `${what}: ${found.paragraphs} paragraphs in ${found.fields} fields`,
+          found.text,
+          read.offset,
+        );
+  }
+  const parts = teamPartsText(
+    team,
+    read.kind === 'full' ? 'all' : read.selection,
+  );
+  if (!parts.ok) {
+    return `Not read: the team \`${wire.slug}\` has no ${parts.unknown.join(', ')} — its outline (read_teams with the slug alone) lists the ids.`;
+  }
+  return pagedText(
+    wire,
+    read.kind === 'full' ? 'the whole team' : 'the parts asked for',
+    parts.text,
+    read.offset,
+  );
+}
+
+/** One team's project overlays, each as its file stands with every profile path as a token. */
+export function teamOverlaysText(
+  wire: Pick<TeamWire, 'slug' | 'hash'>,
+  overlays: readonly {
+    projectId: string;
+    projectName: string;
+    active: boolean;
+    source: string | null;
+  }[],
+  offset: number,
+): string {
+  if (overlays.length === 0) {
+    return `${TEAM_RESULT_PREFACE}\nNo project has an overlay of the team \`${wire.slug}\`.`;
+  }
+  const body = overlays
+    .map((overlay) => {
+      const name = `overlay ${overlay.projectName} (${overlay.projectId})`;
+      const source =
+        overlay.source === null ? null : redactOverlaySource(overlay.source);
+      return `=== ${name} · ${overlay.active ? 'its runs apply it' : 'inactive: the project defaults to another team'} ===\n${
+        source?.trimEnd() ?? '(the file cannot be read)'
+      }\n=== end ${name} ===`;
+    })
+    .join('\n\n');
+  return pagedText(
+    wire,
+    `${overlays.length} project overlays, read-only here`,
+    body,
+    offset,
+  );
+}
+
+/** The projects that run a team by default, each with its instruction blocks written out. */
+export function teamProjectsText(
+  wire: Pick<TeamWire, 'slug' | 'hash'>,
+  projects: readonly Pick<
+    ProjectWire,
+    'id' | 'name' | 'instructionsRevision' | 'instructionBlocks'
+  >[],
+  offset: number,
+): string {
+  if (projects.length === 0) {
+    return `${TEAM_RESULT_PREFACE}\nNo project runs the team \`${wire.slug}\` by default.`;
+  }
+  const body = projects
+    .map((project) => {
+      const name = `project ${project.name} (${project.id})`;
+      const blocks =
+        project.instructionBlocks.length === 0
+          ? '(no instruction blocks yet)'
+          : project.instructionBlocks
+              .map(
+                (block) =>
+                  `--- block ${block.id} · title ${JSON.stringify(block.title)} · ${block.text.length} characters ---\n${block.text}`,
+              )
+              .join('\n\n');
+      return `=== ${name} · instructionsRevision ${project.instructionsRevision} · ${instructionsLength(project.instructionBlocks)} of ${PROJECT_INSTRUCTIONS_MAX} characters ===\n${blocks}\n=== end ${name} ===`;
+    })
+    .join('\n\n');
+  return pagedText(
+    wire,
+    `${projects.length} projects that run it by default`,
+    body,
+    offset,
+  );
+}
+
+/**
+ * One page of a long answer from `offset`: cut on a line break where one
+ * falls in the page's second half, so a page rarely splits a line a `find`
+ * would copy. Every page names the team's hash; a different one means the
+ * team changed between pages.
+ */
+function pagedText(
+  wire: Pick<TeamWire, 'slug' | 'hash'>,
+  what: string,
+  body: string,
+  offset: number,
+): string {
+  const lead = `${TEAM_RESULT_PREFACE}\nTeam \`${wire.slug}\` at hash ${wire.hash}, ${what}.`;
+  if (offset >= body.length && offset > 0) {
+    return `${lead} Nothing at offset ${offset}: the answer is ${body.length} characters.`;
+  }
+  const budget = Math.max(
+    MIN_PAGE_BODY_BYTES,
+    PAGE_BYTES - Buffer.byteLength(lead) - 200,
+  );
+  let chunk = body.slice(offset, offset + budget);
+  while (chunk.length > 1 && Buffer.byteLength(chunk) > budget) {
+    chunk = chunk.slice(0, Math.floor(chunk.length * 0.9));
+  }
+  if (offset + chunk.length < body.length) {
+    const lineEnd = chunk.lastIndexOf('\n');
+    if (lineEnd > chunk.length / 2) {
+      chunk = chunk.slice(0, lineEnd + 1);
+    }
+  }
+  const end = offset + chunk.length;
+  const position =
+    offset === 0 && end >= body.length
+      ? ''
+      : ` Characters ${offset}–${end} of ${body.length}${
+          end < body.length
+            ? `; the rest: the same call with offset ${end}. A page naming another hash means the team changed — read again from offset 0.`
+            : ', the last page.'
+        }`;
+  return `${lead}${position}\n\n${chunk}`;
 }

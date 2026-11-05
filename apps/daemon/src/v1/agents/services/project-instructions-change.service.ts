@@ -12,7 +12,11 @@ import type {
 } from '../../projects/projects.types';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { ProjectsService } from '../../projects/services/projects.service';
-import { blocksDocument } from '../../projects/utils/project-instruction-blocks';
+import {
+  blocksDocument,
+  checkedProjectChange,
+  type ProjectBlockInput,
+} from '../../projects/utils/project-instruction-blocks';
 import {
   type AnalysisTurn,
   type HostProjectInstructions,
@@ -34,8 +38,8 @@ import {
 export interface ProjectInstructionsChange {
   turn: AnalysisTurn;
   projectId: string;
-  /** Every block as it should read after the change, in order; none clears them. */
-  blocks: ProjectInstructionBlock[];
+  /** Every block as it should read after the change, in order (an id alone keeps that block); none clears them. */
+  blocks: ProjectBlockInput[];
   /** The `instructionsRevision` view=project returned. */
   baseRevision: number;
   /** The `P-` ids the change carries out. */
@@ -46,8 +50,8 @@ export interface ProjectInstructionsChange {
 export interface ProjectChatInstructionsChange {
   chatRunId: string;
   projectId: string;
-  /** Every block as it should read after the change, in order; none clears them. */
-  blocks: ProjectInstructionBlock[];
+  /** Every block as it should read after the change, in order (an id alone keeps that block); none clears them. */
+  blocks: ProjectBlockInput[];
   /** The revision the chat's brief was written at. */
   baseRevision: number;
 }
@@ -116,14 +120,19 @@ export class ProjectInstructionsChangeService {
     if (project.instructionsRevision !== change.baseRevision) {
       return refuse('REVISION_DRIFT', driftMessage(change.baseRevision));
     }
+    const checked = checkedChange(change.blocks, project);
+    if (!checked.ok) {
+      return checked.refusal;
+    }
+    const blocks = checked.blocks;
     const previous = blocksDocument(project.instructionBlocks);
-    const next = blocksDocument(change.blocks);
+    const next = blocksDocument(blocks);
     const receipt = {
       projectId: project.id,
       project: project.name,
       carriedOut: change.ids,
     };
-    if (sameBlocks(change.blocks, project.instructionBlocks)) {
+    if (sameBlocks(blocks, project.instructionBlocks)) {
       return {
         saved: true,
         ...receipt,
@@ -136,7 +145,7 @@ export class ProjectInstructionsChangeService {
       project: project.name,
       previous,
       next,
-      blocks: change.blocks,
+      blocks,
       baseRevision: change.baseRevision,
       ids: [...change.ids],
       cardSeq: apply.cardSeq,
@@ -199,8 +208,13 @@ export class ProjectInstructionsChangeService {
         blocks: project.instructionBlocks,
       };
     }
+    const checked = checkedChange(change.blocks, project);
+    if (!checked.ok) {
+      return checked.refusal;
+    }
+    const blocks = checked.blocks;
     const receipt = { projectId: project.id, project: project.name };
-    if (sameBlocks(change.blocks, project.instructionBlocks)) {
+    if (sameBlocks(blocks, project.instructionBlocks)) {
       return {
         saved: true,
         ...receipt,
@@ -212,8 +226,8 @@ export class ProjectInstructionsChangeService {
       projectId: project.id,
       project: project.name,
       previous: blocksDocument(project.instructionBlocks),
-      next: blocksDocument(change.blocks),
-      blocks: change.blocks,
+      next: blocksDocument(blocks),
+      blocks,
       baseRevision: change.baseRevision,
       ids: [],
       cardSeq: null,
@@ -338,6 +352,25 @@ export class ProjectInstructionsChangeService {
         )
       : null;
   }
+}
+
+/** The change's blocks filled in and checked, or the refusal the agent is answered with. */
+function checkedChange(
+  inputs: readonly ProjectBlockInput[],
+  project: Pick<ProjectWire, 'instructionBlocks'>,
+):
+  | { ok: true; blocks: ProjectInstructionBlock[] }
+  | { ok: false; refusal: Answer } {
+  const checked = checkedProjectChange(inputs, project.instructionBlocks);
+  return checked.ok
+    ? checked
+    : {
+        ok: false,
+        refusal: {
+          ...refuse(checked.error, checked.message),
+          ...checked.figures,
+        },
+      };
 }
 
 function driftMessage(baseRevision: number): string {

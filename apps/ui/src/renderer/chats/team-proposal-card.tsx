@@ -292,6 +292,38 @@ function StageList({
   );
 }
 
+/** What one Approve writes, said under a replacement: every file it changes and what is kept. */
+function approvalNote(proposal: ParsedTeamProposal): string {
+  const { overlay, project, replacesName } = proposal;
+  const teamChanges = proposal.diff?.identical !== true;
+  const changes = [
+    teamChanges ? `overwrites ${replacesName}` : null,
+    overlay === null
+      ? null
+      : `changes ${overlay.projectName}’s overlay of ${teamChanges ? 'it' : replacesName}`,
+    project === null
+      ? null
+      : `changes the instructions of ${project.projectName}`,
+  ].filter((change): change is string => change !== null);
+  const kept = teamChanges
+    ? [
+        overlay === null
+          ? 'the current file is backed up first'
+          : 'the current files are backed up first',
+        project === null
+          ? null
+          : `${project.projectName}’s instructions are put back if the team cannot be written`,
+      ].filter((part): part is string => part !== null)
+    : ['the shared team stays as it is'];
+  return `Approving ${joinedChanges(changes)}; ${kept.join(', and ')}.`;
+}
+
+function joinedChanges(changes: readonly string[]): string {
+  return changes.length <= 2
+    ? changes.join(' and ')
+    : `${changes.slice(0, -1).join(', ')} and ${changes.at(-1)}`;
+}
+
 /**
  * A whole team an agent proposes for the library — `propose_team`'s
  * card. Approve writes it (the daemon does, never the agent); Decline writes
@@ -327,7 +359,7 @@ export function TeamProposalCard({
   /** Open the saved team in the editor; absent, nothing offers to. */
   onOpenTeam?: (slug: string) => void;
 }): React.JSX.Element {
-  const { team, autoAgents, diff, overlay } = proposal;
+  const { team, autoAgents, diff, overlay, project } = proposal;
   const stages = team.stages ?? [];
   const { sending, respond } = useOneShotVerdict(verdict, expired, onRespond);
   const remembered = (name: string) =>
@@ -464,7 +496,7 @@ export function TeamProposalCard({
         </div>
       ) : null}
       <HazardWarning hazards={gate.hazards} subject="this proposal" />
-      {overlay === null ? (
+      {overlay === null && project === null ? (
         teamBody
       ) : (
         <>
@@ -473,11 +505,20 @@ export function TeamProposalCard({
               {teamBody}
             </ProposalSection>
           )}
-          <ProposalSection
-            title={`${overlay.projectName} overlay`}
-            slot="team-proposal-overlay">
-            <UnifiedDiff diff={overlay.diffText} />
-          </ProposalSection>
+          {overlay === null ? null : (
+            <ProposalSection
+              title={`${overlay.projectName} overlay`}
+              slot="team-proposal-overlay">
+              <UnifiedDiff diff={overlay.diffText} />
+            </ProposalSection>
+          )}
+          {project === null ? null : (
+            <ProposalSection
+              title={`${project.projectName} instructions`}
+              slot="team-proposal-project">
+              <UnifiedDiff diff={project.diffText} />
+            </ProposalSection>
+          )}
         </>
       )}
       {expired && verdict === null ? (
@@ -490,11 +531,7 @@ export function TeamProposalCard({
         <div className="flex flex-col gap-2">
           {proposal.mode === 'replace' ? (
             <p className="m-0 text-xs text-muted-foreground">
-              {overlay !== null && diff?.identical === true
-                ? `Approving changes ${overlay.projectName}’s overlay of ${proposal.replacesName}; the shared team stays as it is.`
-                : overlay === null
-                  ? `Approving overwrites ${proposal.replacesName}; the current file is backed up first.`
-                  : `Approving overwrites ${proposal.replacesName} and changes ${overlay.projectName}’s overlay of it; the current files are backed up first.`}
+              {approvalNote(proposal)}
             </p>
           ) : null}
           <VerdictNoteField

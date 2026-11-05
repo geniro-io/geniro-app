@@ -288,3 +288,34 @@ export const OVERLAY_ONLY_PROPOSAL: unknown = {
   },
   'overlay': BILLING_OVERLAY,
 };
+
+const BILLING_INSTRUCTIONS_DIFF = [
+  '@@ -1,3 +1,7 @@',
+  ' ## Repo',
+  ' ',
+  ' Use pnpm.',
+  '+',
+  '+## Visuals',
+  '+',
+  '+Attach before/after screenshots to every pull request.',
+].join('\n');
+
+/** A replacement that moves a rule out of the team into one project's instructions, on the same card. */
+export const MOVE_TO_PROJECT_PROPOSAL: unknown = {
+  ...(RECORDED_REPLACE_PROPOSAL as object),
+  'summary': 'Visuals move to Billing',
+  'project': {
+    'projectId': 'p-billing',
+    'projectName': 'Billing',
+    'blocks': [
+      { 'id': 'repo', 'title': 'Repo', 'text': 'Use pnpm.' },
+      {
+        'id': 'visuals',
+        'title': 'Visuals',
+        'text': 'Attach before/after screenshots to every pull request.',
+      },
+    ],
+    'baseRevision': 2,
+    'diffText': BILLING_INSTRUCTIONS_DIFF,
+  },
+};

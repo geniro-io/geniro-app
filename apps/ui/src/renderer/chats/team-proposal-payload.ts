@@ -21,8 +21,9 @@ import {
  * TWIN PARSER: `TeamProposalSchema` (`apps/daemon/src/v1/teams/teams.types.ts`),
  * `TeamDiff` (`apps/daemon/src/v1/teams/utils/team-diff.ts`) and
  * `TeamProposalOutcome` (`apps/daemon/src/v1/agents/chat.types.ts`); the
- * replace arm's optional `overlay` is read tolerantly, dropped whole when any
- * part of it does not read, and never makes the card unreadable. The
+ * replace arm's optional `overlay` and `project` are read tolerantly, each
+ * dropped whole when any part of it does not read, and never make the card
+ * unreadable. The
  * daemon checked the team strictly before raising the card, so anything
  * here that does not read is version skew — the card then falls back to the
  * permission body rather than drawing half a proposal. A card raised while
@@ -68,6 +69,16 @@ export interface ProposalOverlay {
   diffText: string;
 }
 
+/** A replacement's change to the instructions of a project that runs the team. */
+export interface ProposalProject {
+  projectId: string;
+  projectName: string;
+  /** The instructions revision the change was read at. */
+  baseRevision: number;
+  /** Unified diff of the blocks under their titles, before then after. */
+  diffText: string;
+}
+
 export interface ParsedTeamProposal {
   mode: 'create' | 'replace';
   team: Team;
@@ -85,6 +96,8 @@ export interface ParsedTeamProposal {
   diff: ProposalDiff | null;
   /** Replace only; null when the card leaves every overlay alone. */
   overlay: ProposalOverlay | null;
+  /** Replace only; null when the card leaves every project's instructions alone. */
+  project: ProposalProject | null;
 }
 
 const NOT_SAVED_CAUSES = [
@@ -465,6 +478,26 @@ function readOverlay(value: unknown): ProposalOverlay | null {
   };
 }
 
+function readProject(value: unknown): ProposalProject | null {
+  const raw = record(value);
+  if (
+    raw === null ||
+    !isString(raw.projectId) ||
+    !isString(raw.projectName) ||
+    !isString(raw.diffText) ||
+    typeof raw.baseRevision !== 'number' ||
+    !Number.isInteger(raw.baseRevision)
+  ) {
+    return null;
+  }
+  return {
+    projectId: raw.projectId,
+    projectName: raw.projectName,
+    baseRevision: raw.baseRevision,
+    diffText: raw.diffText,
+  };
+}
+
 function trimmedText(value: unknown): string | null {
   return isString(value) && value.trim() !== '' ? value.trim() : null;
 }
@@ -497,6 +530,7 @@ export function readTeamProposal(input: unknown): ParsedTeamProposal | null {
       replacesName: null,
       diff: null,
       overlay: null,
+      project: null,
     };
   }
   if (proposal.mode !== 'replace' || !isString(proposal.replacesName)) {
@@ -516,6 +550,7 @@ export function readTeamProposal(input: unknown): ParsedTeamProposal | null {
     replacesName: proposal.replacesName,
     diff,
     overlay: readOverlay(proposal.overlay),
+    project: readProject(proposal.project),
   };
 }
 
@@ -574,6 +609,7 @@ export function proposalScanText(proposal: ParsedTeamProposal): string {
       proposal.replacesName,
       proposal.autoAgents,
       proposal.overlay,
+      proposal.project,
     ],
     strings,
   );

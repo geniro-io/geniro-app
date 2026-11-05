@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { fn } from 'storybook/test';
 
 import {
+  MOVE_TO_PROJECT_PROPOSAL,
   OVERLAY_ONLY_PROPOSAL,
   RECORDED_NEW_PROPOSAL,
   RECORDED_REPLACE_PROPOSAL,
@@ -54,6 +55,11 @@ export const PendingReplaceWithOverlay: Story = {
 /** Only the project's overlay changes; the shared team section is left out. */
 export const PendingOverlayOnly: Story = {
   args: { input: OVERLAY_ONLY_PROPOSAL },
+};
+
+/** Text moves from the team into a project's instructions, written by the same Approve. */
+export const PendingMoveToProject: Story = {
+  args: { input: MOVE_TO_PROJECT_PROPOSAL },
 };
 
 export const SettledSaved: Story = {

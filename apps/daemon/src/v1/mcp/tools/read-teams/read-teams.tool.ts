@@ -5,6 +5,8 @@ import { HOST_READ_TEAMS_TOOL } from '../../../agents/chat.types';
 import type { ProjectChatBroker } from '../../../agents/services/project-chat.broker';
 import type { TeamBuilderBroker } from '../../../agents/services/team-builder.broker';
 import type { TeamProposalBroker } from '../../../agents/services/team-proposal.broker';
+import type { TeamOverlayService } from '../../../teams/services/team-overlay.service';
+import type { TeamProposalService } from '../../../teams/services/team-proposal.service';
 import type { TeamStoreService } from '../../../teams/services/team-store.service';
 import { firstLineOf } from '../../../teams/utils/config-dir-redaction';
 import type {
@@ -17,7 +19,15 @@ import {
   type ReadTeamsAudience,
   readTeamsInstructions,
 } from './read-teams.instructions';
-import { readReadTeamsArgs, teamListText, teamText } from './read-teams.reader';
+import {
+  readReadTeamsArgs,
+  teamListText,
+  teamOrOutlineText,
+  teamOverlaysText,
+  teamProjectsText,
+  teamReadOf,
+  teamReadText,
+} from './read-teams.reader';
 import { readTeamsSchema } from './read-teams.schema';
 
 /**
@@ -35,6 +45,8 @@ export class ReadTeamsTool extends BaseMcpTool {
     private readonly builders: TeamBuilderBroker,
     private readonly projectChats: ProjectChatBroker,
     private readonly store: TeamStoreService,
+    private readonly overlays: TeamOverlayService,
+    private readonly proposals: TeamProposalService,
   ) {
     super();
   }
@@ -100,12 +112,58 @@ export class ReadTeamsTool extends BaseMcpTool {
       );
     }
     const slug = projectTeam ?? read.query.slug;
-    try {
+    const teamRead = teamReadOf(read.query);
+    if (typeof teamRead === 'string') {
+      return this.text(teamRead, true);
+    }
+    if (slug === undefined && teamRead.kind !== 'team') {
       return this.text(
-        slug === undefined
-          ? teamListText(await this.store.list())
-          : teamText(await this.store.get(slug)),
+        'Not read: name the team with `slug` — the listing (no arguments) names every one.',
+        true,
       );
+    }
+    if (teamRead.kind === 'overlays' || teamRead.kind === 'projects') {
+      const own = await this.builders.teamOf(runId, memberId);
+      if ('status' in own) {
+        return this.text(
+          `Not read: a team's ${teamRead.kind} are read in that team's builder chat.`,
+          true,
+        );
+      }
+      if (own.slug !== slug) {
+        return this.text(
+          `Not read: this chat reads the ${teamRead.kind} of the team it edits, \`${own.slug}\`.`,
+          true,
+        );
+      }
+    }
+    try {
+      if (slug === undefined) {
+        return this.text(teamListText(await this.store.list()));
+      }
+      const wire = await this.store.get(slug);
+      switch (teamRead.kind) {
+        case 'team':
+          return this.text(teamOrOutlineText(wire));
+        case 'overlays':
+          return this.text(
+            teamOverlaysText(
+              wire,
+              await this.overlays.overlaySources(slug),
+              teamRead.offset,
+            ),
+          );
+        case 'projects':
+          return this.text(
+            teamProjectsText(
+              wire,
+              await this.proposals.projectsRunning(slug),
+              teamRead.offset,
+            ),
+          );
+        default:
+          return this.text(teamReadText(wire, teamRead));
+      }
     } catch (error) {
       if (error instanceof BaseException) {
         // A YAML parse error quotes the file's lines around the fault, a

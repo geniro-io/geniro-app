@@ -11,6 +11,7 @@ import { settleStageGraphs } from '../__tests__/settle-stage-graphs';
 import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import {
   BILLING_OVERLAY,
+  MOVE_TO_PROJECT_PROPOSAL,
   OVERLAY_ONLY_PROPOSAL,
   RECORDED_NEW_PROPOSAL,
   RECORDED_REPLACE_PROPOSAL,
@@ -269,6 +270,38 @@ describe('TeamProposalCard', () => {
     expect(el.textContent).toContain(
       'Approving changes Billing’s overlay of Review Pair; the shared team stays as it is.',
     );
+  });
+
+  it('draws the team change and the project’s instructions diff under one Approve, saying the instructions are put back on a failed team write', () => {
+    const el = render(card({ input: MOVE_TO_PROJECT_PROPOSAL }));
+    const project = el.querySelector('[data-slot="team-proposal-project"]');
+    expect(
+      el.querySelector('[data-slot="team-proposal-shared"]'),
+    ).not.toBeNull();
+    expect(project?.querySelector('h4')?.textContent).toBe(
+      'Billing instructions',
+    );
+    expect(
+      project?.querySelector('[data-slot="unified-diff"]')?.textContent,
+    ).toContain('+## Visuals');
+    expect(el.textContent).toContain(
+      'Approving overwrites Review Pair and changes the instructions of Billing; the current file is backed up first, and Billing’s instructions are put back if the team cannot be written.',
+    );
+  });
+
+  it('holds Approve over a hidden character in the project’s instructions diff', () => {
+    const el = render(
+      card({
+        input: {
+          ...(MOVE_TO_PROJECT_PROPOSAL as object),
+          project: {
+            ...(MOVE_TO_PROJECT_PROPOSAL as { project: object }).project,
+            diffText: '+Attach \u202Escreenshots',
+          },
+        },
+      }),
+    );
+    expect(buttonNamed(el, 'Approve')!.disabled).toBe(true);
   });
 
   it('draws no overlay section and no section titles for a card without an overlay', () => {

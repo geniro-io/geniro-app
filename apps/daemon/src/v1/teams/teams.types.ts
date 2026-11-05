@@ -23,6 +23,8 @@ import {
 } from '../agents/chat.types';
 import { createChatSchema } from '../agents/dto/chat.dto';
 import { TURN_INSTRUCTION_SOURCES } from '../agents/utils/agent-instructions';
+import { ProjectInstructionBlockSchema } from '../projects/projects.types';
+import type { ProjectBlockInput } from '../projects/utils/project-instruction-blocks';
 import {
   AgentKindSchema,
   type ItemKind,
@@ -944,6 +946,22 @@ export const TeamProposalOverlaySchema = z.object({
 });
 export type TeamProposalOverlay = z.infer<typeof TeamProposalOverlaySchema>;
 
+/**
+ * The project half of a builder chat's card: a project that runs the team by
+ * default, its instruction blocks as the same approval writes them, pinned to
+ * the revision they were read at — so text moves between the team and the
+ * project in one change, never in two the user approves apart.
+ */
+export const TeamProposalProjectSchema = z.object({
+  projectId: z.string(),
+  projectName: z.string(),
+  blocks: z.array(ProjectInstructionBlockSchema),
+  baseRevision: z.number().int().min(0),
+  /** Unified diff of the blocks under their titles, before → after. */
+  diffText: z.string(),
+});
+export type TeamProposalProject = z.infer<typeof TeamProposalProjectSchema>;
+
 const TeamProposalBaseSchema = z.object({
   team: TeamSchema,
   /** The library file the approval writes, fixed when the card was raised. */
@@ -984,6 +1002,8 @@ export const TeamProposalSchema = z.discriminatedUnion('mode', [
     ),
     /** The bound project's overlay the same approval writes, before the team. */
     overlay: TeamProposalOverlaySchema.optional(),
+    /** A project's instructions the same approval writes, before the team. */
+    project: TeamProposalProjectSchema.optional(),
   }),
 ]);
 export type TeamProposal = z.infer<typeof TeamProposalSchema>;
@@ -1009,6 +1029,12 @@ export interface TeamChangeProposalRequest {
   overlay?: unknown;
   /** The project the chat is bound to (`Run.editsProjectId`); never the model's. */
   projectId?: string | null;
+  /** A change to the instructions of a project that runs this team by default. */
+  project?: {
+    projectId: string;
+    blocks: ProjectBlockInput[];
+    baseRevision: number;
+  };
   summary?: string;
   reason?: string;
 }

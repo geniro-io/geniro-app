@@ -392,7 +392,7 @@ export class TeamChangeService {
     const reread =
       authority.kind === 'apply'
         ? 'read view=team again'
-        : 'read the file again';
+        : 'read the team again with read_teams';
     const file = await this.readFile(change.slug);
     if (file === null) {
       return refuse(
@@ -446,7 +446,13 @@ export class TeamChangeService {
     const next = edited.team;
     const diff = diffTeams(current.team, next);
     if (change.dryRun) {
-      return { dryRun: true, saved: false, diff, ...version };
+      return {
+        dryRun: true,
+        saved: false,
+        landed: edited.landed,
+        diff,
+        ...version,
+      };
     }
     if (diff.identical) {
       return { saved: false, diff, message: 'nothing to change', ...version };

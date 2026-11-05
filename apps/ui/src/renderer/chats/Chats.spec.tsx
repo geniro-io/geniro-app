@@ -20450,44 +20450,44 @@ describe('Chats — one hosted conversation', () => {
     expect(onWorkingChange).toHaveBeenLastCalledWith(true);
   });
 
+  const RECOMMENDATIONS_CARD = {
+    id: 'h-card',
+    runId: 'h1',
+    memberId: null,
+    seq: 7,
+    kind: 'recommendations',
+    role: null,
+    payload: {
+      sourceRunId: 'source',
+      sourceKind: 'chat',
+      summary: 'the reply named no pull request',
+      timing: null,
+      items: [
+        {
+          id: 'R-1',
+          target: 'repo',
+          territory: 'process',
+          kind: 'ADD',
+          location: 'AGENTS.md',
+          title: 'Report every opened PR by URL',
+          change: 'WHEN a PR is opened → name its URL',
+          evidence: [{ seq: 2, quote: 'Done.' }],
+          rootCause: 'termination',
+          impact: {
+            minutesSaved: 1,
+            basis: 'one follow-up turn',
+            confidence: 2,
+          },
+          risk: { level: 'low', note: 'longer replies' },
+        },
+      ],
+    },
+    createdAt: '2026-10-15T00:00:07.000Z',
+  } as unknown as ChatItem;
+
   // An Apply starts a turn, so the surface's step runs before it as before a send.
   it('applies the card’s selection for its run, after the surface’s step', async () => {
-    api.listRunItems.mockResolvedValue([
-      {
-        id: 'h-card',
-        runId: 'h1',
-        memberId: null,
-        seq: 7,
-        kind: 'recommendations',
-        role: null,
-        payload: {
-          sourceRunId: 'source',
-          sourceKind: 'chat',
-          summary: 'the reply named no pull request',
-          timing: null,
-          items: [
-            {
-              id: 'R-1',
-              target: 'repo',
-              territory: 'process',
-              kind: 'ADD',
-              location: 'AGENTS.md',
-              title: 'Report every opened PR by URL',
-              change: 'WHEN a PR is opened → name its URL',
-              evidence: [{ seq: 2, quote: 'Done.' }],
-              rootCause: 'termination',
-              impact: {
-                minutesSaved: 1,
-                basis: 'one follow-up turn',
-                confidence: 2,
-              },
-              risk: { level: 'low', note: 'longer replies' },
-            },
-          ],
-        },
-        createdAt: '2026-10-15T00:00:07.000Z',
-      } as unknown as ChatItem,
-    ]);
+    api.listRunItems.mockResolvedValue([RECOMMENDATIONS_CARD]);
     api.applyRecommendations.mockReset().mockResolvedValue(undefined);
     const onBeforeSend = vi.fn(async () => true);
     const onWorkingChange = vi.fn();
@@ -20521,6 +20521,106 @@ describe('Chats — one hosted conversation', () => {
       api.applyRecommendations.mock.invocationCallOrder[0]!,
     );
     expect(onWorkingChange).toHaveBeenLastCalledWith(true);
+  });
+
+  describe('an analysis whose card’s worktree was collected', () => {
+    const missingFolder = (route: string): Error =>
+      new Error(
+        `daemon POST /v1/chats/a1/${route} failed (400): {"code":"INVALID_CWD","message":"cwd does not exist: /userData/worktrees/t1"}`,
+      );
+    const analysis: ChatRun = {
+      ...HOSTED,
+      id: 'a1',
+      title: 'Analysis: GEN-1',
+      taskId: null,
+      cwd: '/userData/worktrees/t1',
+      analysisSourceRunId: 'source',
+    };
+
+    const analysisRow = (item: ChatItem): ChatItem => ({
+      ...item,
+      id: `a-${item.id}`,
+      runId: 'a1',
+    });
+
+    function stubCardWorktree(): ReturnType<typeof vi.fn> {
+      tasksApi.readTask.mockReset().mockResolvedValue({
+        id: 't1',
+        projectId: 'p1',
+        folder: '/repo',
+        worktreePath: '/userData/worktrees/t1',
+      });
+      const prepareTaskWorktree = vi.fn().mockResolvedValue({
+        ok: true,
+        path: '/userData/worktrees/t1',
+        branch: 'geniro/task-t1',
+        reused: false,
+        error: null,
+      });
+      window.geniro.prepareTaskWorktree = prepareTaskWorktree;
+      return prepareTaskWorktree;
+    }
+
+    it('puts the worktree back and applies the selection after all', async () => {
+      api.listRunItems.mockResolvedValue([
+        { ...RECOMMENDATIONS_CARD, id: 'a-card', runId: 'a1' },
+      ]);
+      api.applyRecommendations
+        .mockReset()
+        .mockRejectedValueOnce(missingFolder('recommendations/apply'))
+        .mockResolvedValueOnce(undefined);
+      const prepareTaskWorktree = stubCardWorktree();
+      const { client } = makeClient();
+      const container = await mount(client, undefined, {
+        hosted: hostedThread({ open: vi.fn(async () => analysis) }),
+      });
+      const buttons = (): HTMLButtonElement[] => [
+        ...container.querySelectorAll<HTMLButtonElement>('button'),
+      ];
+
+      await act(async () => {
+        buttons()
+          .find((b) => b.textContent?.includes('R-1'))!
+          .click();
+      });
+      await act(async () => {
+        buttons()
+          .find((b) => b.textContent?.includes('Apply selected'))!
+          .click();
+      });
+
+      expect(tasksApi.readTask).toHaveBeenCalledWith({ taskId: 't1' });
+      expect(prepareTaskWorktree).toHaveBeenCalledWith({
+        taskId: 't1',
+        folder: '/repo',
+      });
+      expect(api.applyRecommendations).toHaveBeenCalledTimes(2);
+      const [first, second] = api.applyRecommendations.mock.calls;
+      expect(second![0]).toEqual(first![0]);
+      expect(container.textContent).not.toContain('cwd does not exist');
+    });
+
+    it('puts the worktree back and sends a typed message after all', async () => {
+      api.listRunItems.mockResolvedValue([analysisRow(msg(0, 'user', 'go'))]);
+      api.sendChatMessage
+        .mockReset()
+        .mockRejectedValueOnce(missingFolder('messages'))
+        .mockResolvedValueOnce(analysisRow(msg(10, 'user', 'and this?')));
+      const prepareTaskWorktree = stubCardWorktree();
+      const { client } = makeClient();
+      const container = await mount(client, undefined, {
+        hosted: hostedThread({ open: vi.fn(async () => analysis) }),
+      });
+
+      await typeAndSend(container, 'and this?');
+
+      expect(prepareTaskWorktree).toHaveBeenCalledWith({
+        taskId: 't1',
+        folder: '/repo',
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+      expect(container.textContent).not.toContain('cwd does not exist');
+    });
   });
 
   it('runs the surface’s step before a Retry reopens the conversation', async () => {

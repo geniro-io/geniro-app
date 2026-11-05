@@ -89,6 +89,10 @@ export function teamVerdictMessage(verdict: TeamProposalVerdict): string {
         verdict.backup === null
           ? ''
           : ` The previous version is backed up as ${verdict.backup}.`
+      }${
+        verdict.project === undefined
+          ? ''
+          : ` The instructions of ${verdict.project.name} are saved as revision ${verdict.project.revision}.`
       }${noted})`;
     case 'declined':
       return note.length === 0

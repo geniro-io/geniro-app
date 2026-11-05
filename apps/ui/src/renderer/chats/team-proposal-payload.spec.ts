@@ -8,6 +8,7 @@ import {
 } from '../__fixtures__/team-proposals';
 import {
   BILLING_OVERLAY,
+  MOVE_TO_PROJECT_PROPOSAL,
   OVERLAY_ONLY_PROPOSAL,
   RECORDED_NEW_PROPOSAL,
   RECORDED_REPLACE_PROPOSAL,
@@ -185,6 +186,30 @@ describe('readTeamProposal', () => {
       expect(proposal.diff).toEqual(parsed(RECORDED_REPLACE_PROPOSAL).diff);
     },
   );
+
+  it('reads a replacement’s change to a project’s instructions, dropping a malformed one whole, and none on a card without one', () => {
+    expect(parsed(MOVE_TO_PROJECT_PROPOSAL).project).toEqual({
+      projectId: 'p-billing',
+      projectName: 'Billing',
+      baseRevision: 2,
+      diffText: expect.stringContaining('+## Visuals'),
+    });
+    expect(parsed(RECORDED_REPLACE_PROPOSAL).project).toBeNull();
+    expect(parsed(RECORDED_NEW_PROPOSAL).project).toBeNull();
+    const project = (MOVE_TO_PROJECT_PROPOSAL as { project: object }).project;
+    for (const broken of [
+      { ...project, baseRevision: '2' },
+      { ...project, diffText: null },
+      { ...project, projectName: 3 },
+    ]) {
+      const proposal = parsed({
+        ...(MOVE_TO_PROJECT_PROPOSAL as object),
+        project: broken,
+      });
+      expect(proposal.project).toBeNull();
+      expect(proposal.diff).toEqual(parsed(RECORDED_REPLACE_PROPOSAL).diff);
+    }
+  });
 
   it('scans the overlay’s diff text for hidden characters', () => {
     const clean = proposalScanText(parsed(REPLACE_WITH_OVERLAY_PROPOSAL));

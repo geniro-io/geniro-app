@@ -75,6 +75,20 @@ describe('teamVerdictMessage', () => {
     );
   });
 
+  it('names the revision a project’s instructions were saved as beside the team', () => {
+    expect(
+      teamVerdictMessage({
+        kind: 'saved',
+        slug: 'team',
+        backup: null,
+        note: null,
+        project: { name: 'Geniro', revision: 3 },
+      }),
+    ).toBe(
+      "(Approved — saved as 'team' in the team library. The instructions of Geniro are saved as revision 3.)",
+    );
+  });
+
   it('quotes the note typed on Approve, and on a write that did not happen', () => {
     expect(
       teamVerdictMessage({

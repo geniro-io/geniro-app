@@ -326,6 +326,35 @@ export class TeamOverlayService
     };
   }
 
+  /**
+   * Every project overlay of `slug` as its file stands — the project, whether
+   * its runs apply it, and the YAML, null for a file that cannot be read —
+   * for a builder chat that reads them before a shared change.
+   */
+  async overlaySources(slug: string): Promise<
+    {
+      projectId: string;
+      projectName: string;
+      active: boolean;
+      source: string | null;
+    }[]
+  > {
+    const scopes = (await this.scopes(slug)).filter(
+      (scope) => scope.hasOverlay,
+    );
+    return Promise.all(
+      scopes.map(async (scope) => ({
+        projectId: scope.projectId,
+        projectName: scope.projectName,
+        active: scope.active,
+        source: await this.overlays
+          .get(slug, scope.projectId)
+          .then((stored) => stored?.source ?? null)
+          .catch(() => null),
+      })),
+    );
+  }
+
   /** Where `projectId`'s overlay of `slug` is kept, whether or not it exists yet. */
   overlayPathOf(slug: string, projectId: string): string {
     return this.overlays.pathOf(slug, projectId);

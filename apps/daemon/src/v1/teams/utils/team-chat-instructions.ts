@@ -5,6 +5,7 @@ import {
   HOST_BACKUP_TEAM_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
+  HOST_RECOMMENDATIONS_TOOL,
   HOST_TEAM_CHANGE_TOOL,
 } from '../../agents/chat.types';
 import { builderChatAnalysisGuide } from '../../agents/utils/thread-analysis-guide';
@@ -88,9 +89,10 @@ function overlaySection(
     others.length === 0
       ? ''
       : `
-Other projects' overlays of this team — read them before a shared change, so
-the change does not break them, and never edit them here:
-${others.map((o) => `  - ${o.projectName}${o.active ? '' : ' (inactive)'}: ${o.path}`).join('\n')}
+Other projects' overlays of this team — read them with ${HOST_READ_TEAMS_TOOL}
+(\`overlays: true\`) before a shared change, so the change does not break
+them, and never edit them here:
+${others.map((o) => `  - ${o.projectName}${o.active ? '' : ' (inactive)'}`).join('\n')}
 `;
   if (overlay === undefined) {
     return listed === ''
@@ -158,7 +160,8 @@ Your subject is this file:
 
   ${input.path}
 
-It is the team "${input.name}", slug \`${input.slug}\`. ${
+It is the team "${input.name}", slug \`${input.slug}\`. Read it with
+${HOST_READ_TEAMS_TOOL}, never with your own file tools. ${
     input.inLibrary
       ? 'Its directory is\nyour working directory and holds'
       : 'Its directory,\n' + dirname(input.path) + ', holds'
@@ -176,11 +179,17 @@ Read it before you write a field this file does not already use, and before
 you build a team from scratch. Where it and your memory disagree, it wins.
 
 HOW TO WORK
-- Read the whole team file with your own file tools before your first
-  change of each turn: every member, its role and instructions, every
-  instruction block and stage, not only the part the request names. A change
-  is right only against the rest of the team, and the user edits the team
-  between your turns. A large file is read in parts.
+- Read the team with ${HOST_READ_TEAMS_TOOL} (slug \`${input.slug}\`) before
+  your first change of each turn — the user edits it between your turns. The
+  slug alone answers the whole team while it fits one answer, else its
+  outline: every member, block and stage with the size of each text. Then
+  read every part the change touches (\`members\`, \`blocks\`, \`stages\`)
+  and \`search\` for the words the request names, so you find every place
+  the subject lives, not only the one the request points at. A change is
+  right only against the rest of the team.
+- Copy a \`find\` from the text between a field's \`===\` markers, and
+  pass that field's path (\`members/<id>/instructions\`) as the edit's
+  \`path\`: a short anchor unique in that field is then enough.
 - Make every change by proposing it with ${HOST_PROPOSE_TEAM_TOOL}, never
   by writing the file yourself. Pass the edits, a one-line \`summary\` of what
   they change and a \`reason\` saying why — the user's request it answers, or
@@ -190,17 +199,27 @@ HOW TO WORK
   request needs on one card, then END YOUR TURN: their verdict — approved,
   declined with their note, or not saved and why — arrives as your next
   message. An edit you only describe never happens.
+- A change the user asks for goes straight onto a ${HOST_PROPOSE_TEAM_TOOL}
+  card, however large. Never file it through ${HOST_RECOMMENDATIONS_TOOL}:
+  that card carries an analysis of the team's runs, and only a request to
+  analyse or improve the team from its runs asks for one.
+- When the user wants rules that only one project needs moved out of the
+  team, read the projects that run it with ${HOST_READ_TEAMS_TOOL}
+  (\`projects: true\`), then put the team edits that remove the text and
+  \`project\` with the blocks that add it on ONE card — one approval writes
+  both. Move the text whole; when it does not fit the project's limit, say
+  so and ask the user what to drop before you shorten anything.
 - ${HOST_TEAM_CHANGE_TOOL} checks a set of edits against the file and
   answers the diff without saving or showing a card; use it to try edits out
   before you propose them.
 - Back the file up with ${HOST_BACKUP_TEAM_TOOL} whenever the user asks.
-- The one time you write the file yourself: when a proposal or a check
+- The one time you open the file yourself: when a proposal or a check
   answers TEAM_UNREADABLE, the file cannot be loaded. Fix only what that
   refusal names, with your own file tools, then propose the change.
 - A proposal refused for breaking the schema or the team rules below shows
   no card: fix the edits and propose again.
 - After a decline, change course as the user's note says and propose again;
-  after a "not saved" verdict, read the file again before you do.
+  after a "not saved" verdict, read the team again before you do.
 - When you rename or remove a member, update the trigger, every block
   audience, every stage's \`responsible\` and every piece of text that names
   it.

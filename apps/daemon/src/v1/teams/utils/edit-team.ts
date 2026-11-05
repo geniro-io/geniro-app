@@ -3,12 +3,12 @@ import { restoreConfigDirs } from './config-dir-redaction';
 import { checkTeam } from './team-check';
 import { applyTeamEdits, type TeamEdit } from './team-edits';
 
-/** Where a builder chat copies a `find` from: the file it read with its own tools. */
+/** Where a builder chat copies a `find` from: what `read_teams` answered. */
 export const TEAM_FILE_EDIT_COPY =
-  'the team file, as the string value itself rather than its YAML quoting or line folding';
+  'read_teams — the text between a field’s `===` markers, or the decoded JSON string — never the YAML file’s quoting or line folding';
 
 export type EditedTeam =
-  | { ok: true; team: Team }
+  | { ok: true; team: Team; landed: string[] }
   | {
       ok: false;
       error: 'INVALID_EDIT' | 'INVALID_TEAM' | 'CONFIG_DIR_UNKNOWN';
@@ -36,10 +36,10 @@ export function editTeam(
     return { ok: false, error: 'INVALID_TEAM', message: checked.message };
   }
   if (!restoreTokens) {
-    return checked;
+    return { ...checked, landed: edited.landed };
   }
   const restored = restoreConfigDirs(checked.team, current);
   return restored.ok
-    ? restored
+    ? { ...restored, landed: edited.landed }
     : { ok: false, error: 'CONFIG_DIR_UNKNOWN', message: restored.message };
 }

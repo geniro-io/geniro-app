@@ -10,7 +10,9 @@
  * - `find`/`replace`: exact text inside one of the team's string values (a
  *   member's role or instructions, a block's text). `find` must occur exactly once across all of
  *   them, the rule an editor's string replace follows, so an edit can never
- *   land somewhere the agent did not read.
+ *   land somewhere the agent did not read. An optional `path` narrows "all of
+ *   them" to the field or the part of the team it names, so a short anchor
+ *   unique in one member's instructions does.
  * - `path`/`value`: set one field, adding it if absent.
  * - `path`/`remove`: delete one field, or one array element.
  *
@@ -19,13 +21,18 @@
  * — a member is named, never counted), or `-` to append when setting.
  */
 export type TeamEdit =
-  | { find: string; replace: string }
+  | { find: string; replace: string; path?: string }
   | { path: string; value?: unknown }
   | { path: string; remove: true };
 
-/** The edited team, or why an edit could not be applied — nothing is half-applied. */
+/**
+ * The edited team with where each edit landed (the field a `find` changed,
+ * the path a set or remove named), or why an edit could not be applied —
+ * nothing is half-applied.
+ */
 export type TeamEditResult =
-  { ok: true; team: unknown } | { ok: false; message: string };
+  | { ok: true; team: unknown; landed: string[] }
+  | { ok: false; message: string };
 
 /** How many matching fields an ambiguous `find` names back, at most. */
 const MAX_NAMED_MATCHES = 5;
@@ -44,6 +51,7 @@ export function applyTeamEdits(
   copyFrom: string,
 ): TeamEditResult {
   let doc: unknown = structuredClone(team);
+  const landed: string[] = [];
   for (const [index, edit] of edits.entries()) {
     const applied =
       'find' in edit
@@ -53,8 +61,9 @@ export function applyTeamEdits(
       return { ok: false, message: `edit ${index + 1}: ${applied}` };
     }
     doc = applied.doc;
+    landed.push(applied.at);
   }
-  return { ok: true, team: doc };
+  return { ok: true, team: doc, landed };
 }
 
 type Container = Record<string, unknown> | unknown[];
@@ -67,22 +76,97 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return isContainer(value) && !Array.isArray(value);
 }
 
+interface StringField {
+  path: string[];
+  holder: Container;
+  key: string | number;
+  text: string;
+}
+
+/** How a path names one entry: an element by its `id` when it has one, else its index or key. */
+function segmentOf(holder: Container, key: string | number): string {
+  const value: unknown = Array.isArray(holder)
+    ? holder[key as number]
+    : holder[key];
+  return Array.isArray(holder) &&
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    value.id !== ''
+    ? value.id
+    : String(key);
+}
+
 /** Every string value in `doc`, with the path that reaches it. */
-function stringFields(
-  doc: unknown,
-  path: string[] = [],
-): { path: string[]; holder: Container; key: string | number; text: string }[] {
+function stringFields(doc: unknown, path: string[] = []): StringField[] {
   if (!isContainer(doc)) {
     return [];
   }
   const entries: [string | number, unknown][] = Array.isArray(doc)
     ? doc.map((value, index) => [index, value])
     : Object.entries(doc);
-  return entries.flatMap(([key, value]) =>
-    typeof value === 'string'
-      ? [{ path: [...path, String(key)], holder: doc, key, text: value }]
-      : stringFields(value, [...path, String(key)]),
-  );
+  return entries.flatMap(([key, value]) => {
+    const at = [...path, segmentOf(doc, key)];
+    return typeof value === 'string'
+      ? [{ path: at, holder: doc, key, text: value }]
+      : stringFields(value, at);
+  });
+}
+
+/** Every string value in a team with the path an edit names it by — what a search of the team reads. */
+export function teamStrings(doc: unknown): { path: string; text: string }[] {
+  return stringFields(doc).map((field) => ({
+    path: field.path.join('/'),
+    text: field.text,
+  }));
+}
+
+/**
+ * The string fields a `find` looks in: every one in the team, or those under
+ * the field or part `path` names, addressed as a set or remove addresses one.
+ */
+function fieldsUnder(
+  doc: unknown,
+  path: string | undefined,
+): { fields: StringField[]; where: string } | string {
+  const segments = segmentsOf(path ?? '');
+  const reserved = segments.find((segment) => RESERVED_SEGMENTS.has(segment));
+  if (reserved !== undefined) {
+    return `"${reserved}" cannot be part of a path`;
+  }
+  let holder: unknown = doc;
+  const named: string[] = [];
+  for (const [depth, segment] of segments.entries()) {
+    const at = segments.slice(0, depth + 1).join('/');
+    if (!isContainer(holder)) {
+      return `${named.join('/')} is not an object or a list`;
+    }
+    let key: string | number;
+    if (Array.isArray(holder)) {
+      key = indexIn(holder, segment);
+      if (key < 0 || key >= holder.length) {
+        return `no element "${segment}" at ${at}`;
+      }
+    } else if (Object.hasOwn(holder, segment)) {
+      key = segment;
+    } else {
+      return `nothing at ${at}`;
+    }
+    const value: unknown = Array.isArray(holder)
+      ? holder[key as number]
+      : holder[key];
+    named.push(segmentOf(holder, key));
+    if (typeof value === 'string' && depth === segments.length - 1) {
+      return {
+        fields: [{ path: named, holder, key, text: value }],
+        where: ` under ${named.join('/')}`,
+      };
+    }
+    holder = value;
+  }
+  return {
+    fields: stringFields(holder, named),
+    where: named.length === 0 ? ' in the team' : ` under ${named.join('/')}`,
+  };
 }
 
 function occurrences(text: string, find: string): number {
@@ -99,25 +183,29 @@ function occurrences(text: string, find: string): number {
 
 function replaceText(
   doc: unknown,
-  edit: { find: string; replace: string },
+  edit: { find: string; replace: string; path?: string },
   copyFrom: string,
-): { doc: unknown } | string {
+): { doc: unknown; at: string } | string {
   if (edit.find === '') {
     return '`find` is empty';
   }
-  const matches = stringFields(doc)
+  const scope = fieldsUnder(doc, edit.path);
+  if (typeof scope === 'string') {
+    return scope;
+  }
+  const matches = scope.fields
     .map((field) => ({ field, count: occurrences(field.text, edit.find) }))
     .filter((match) => match.count > 0);
   const total = matches.reduce((sum, match) => sum + match.count, 0);
   if (total === 0) {
-    return `\`find\` matches no text in the team — copy it exactly from ${copyFrom}`;
+    return `\`find\` matches no text${scope.where} — copy it exactly from ${copyFrom}`;
   }
   if (total > 1) {
     const where = matches
       .slice(0, MAX_NAMED_MATCHES)
       .map((match) => match.field.path.join('/'))
       .join(', ');
-    return `\`find\` matches ${total} places (${where}) — include more of the surrounding text so it matches exactly one`;
+    return `\`find\` matches ${total} places${scope.where} (${where}) — include more of the surrounding text, or narrow \`path\` to one field, so it matches exactly one`;
   }
   const { field } = matches[0]!;
   const replaced = field.text.replace(edit.find, () => edit.replace);
@@ -126,7 +214,7 @@ function replaceText(
   } else {
     field.holder[field.key] = replaced;
   }
-  return { doc };
+  return { doc, at: field.path.join('/') };
 }
 
 function segmentsOf(path: string): string[] {
@@ -153,7 +241,7 @@ function indexIn(array: unknown[], segment: string): number {
 function applyAtPath(
   doc: unknown,
   edit: { path: string; value?: unknown } | { path: string; remove: true },
-): { doc: unknown } | string {
+): { doc: unknown; at: string } | string {
   const segments = segmentsOf(edit.path);
   const reserved = segments.find((segment) => RESERVED_SEGMENTS.has(segment));
   if (reserved !== undefined) {
@@ -168,6 +256,8 @@ function applyAtPath(
     return '`path` without `value` — give the value to set, or `remove: true`';
   }
   let holder: unknown = doc;
+  const named: string[] = [];
+  const landed = (name: string) => ({ doc, at: [...named, name].join('/') });
   for (const [depth, segment] of segments.entries()) {
     const at = segments.slice(0, depth + 1).join('/');
     if (Array.isArray(holder)) {
@@ -175,8 +265,10 @@ function applyAtPath(
       if (index < 0 || index >= holder.length) {
         return `no element "${segment}" at ${at}`;
       }
+      named.push(segmentOf(holder, index));
       holder = holder[index];
     } else if (isRecord(holder) && Object.hasOwn(holder, segment)) {
+      named.push(segment);
       holder = holder[segment];
     } else {
       return `nothing at ${at}`;
@@ -191,7 +283,7 @@ function applyAtPath(
         return '`-` appends, so it cannot be removed';
       }
       holder.push(edit.value);
-      return { doc };
+      return landed(segmentOf(holder, holder.length - 1));
     }
     const index = indexIn(holder, last);
     if (
@@ -202,11 +294,12 @@ function applyAtPath(
       return `no element "${last}" at ${edit.path}`;
     }
     if (removing) {
+      const name = segmentOf(holder, index);
       holder.splice(index, 1);
-    } else {
-      holder[index] = edit.value;
+      return landed(name);
     }
-    return { doc };
+    holder[index] = edit.value;
+    return landed(segmentOf(holder, index));
   }
   if (!isRecord(holder)) {
     return `${segments.join('/') || '(root)'} is not an object or a list`;
@@ -219,5 +312,5 @@ function applyAtPath(
   } else {
     holder[last] = edit.value;
   }
-  return { doc };
+  return landed(last);
 }

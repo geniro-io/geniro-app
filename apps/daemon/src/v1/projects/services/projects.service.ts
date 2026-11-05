@@ -24,10 +24,8 @@ import { ProjectInstructionChangeDao } from '../dao/project-instruction-change.d
 import { Project } from '../entity/project.entity';
 import { ProjectInstructionChange } from '../entity/project-instruction-change.entity';
 import {
-  MAX_PROJECT_INSTRUCTION_BLOCKS,
   MAX_PROJECTS,
   PROJECT_CHANGE_COALESCE_MS,
-  PROJECT_INSTRUCTIONS_MAX,
   type ProjectChangeOrigin,
   type ProjectForFolder,
   type ProjectInstructionBlock,
@@ -39,6 +37,7 @@ import {
   blocksDocument,
   joinedBlockTexts,
   projectBlocksOf,
+  projectBlocksRefusal,
 } from '../utils/project-instruction-blocks';
 import { projectKey } from '../utils/project-key';
 import { ProjectEventBus } from './project-events.bus';
@@ -592,36 +591,11 @@ function textsOnly(patch: ProjectPatch): boolean {
 function checkedBlocks(
   blocks: readonly ProjectInstructionBlock[],
 ): ProjectInstructionBlock[] {
-  if (blocks.length > MAX_PROJECT_INSTRUCTION_BLOCKS) {
-    throw new BadRequestException(
-      'INVALID_PROJECT_BLOCKS',
-      `a project holds at most ${MAX_PROJECT_INSTRUCTION_BLOCKS} instruction blocks`,
-    );
+  const refusal = projectBlocksRefusal(blocks);
+  if (refusal !== null) {
+    throw new BadRequestException('INVALID_PROJECT_BLOCKS', refusal.message);
   }
-  const ids = new Set(blocks.map((block) => block.id));
-  if (ids.size !== blocks.length) {
-    throw new BadRequestException(
-      'INVALID_PROJECT_BLOCKS',
-      'two instruction blocks share an id',
-    );
-  }
-  const parsed = blocks.map((block) => {
-    const result = ProjectInstructionBlockSchema.safeParse(block);
-    if (!result.success) {
-      throw new BadRequestException(
-        'INVALID_PROJECT_BLOCKS',
-        `instruction block ${block.id}: ${result.error.issues[0]?.message ?? 'invalid'}`,
-      );
-    }
-    return result.data;
-  });
-  if ((joinedBlockTexts(parsed)?.length ?? 0) > PROJECT_INSTRUCTIONS_MAX) {
-    throw new BadRequestException(
-      'INVALID_PROJECT_BLOCKS',
-      `the instructions may hold at most ${PROJECT_INSTRUCTIONS_MAX} characters in all`,
-    );
-  }
-  return parsed;
+  return blocks.map((block) => ProjectInstructionBlockSchema.parse(block));
 }
 
 /** The two columns a block list is stored in. */

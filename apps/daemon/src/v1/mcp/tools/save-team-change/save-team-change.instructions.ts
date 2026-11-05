@@ -8,7 +8,7 @@ import {
 import { CONFIG_DIR_TOKEN_PREFIX } from '../../../teams/utils/config-dir-redaction';
 
 const EDIT_SHAPES =
-  'An edit is {find, replace} for text inside a string value (find must occur exactly once in the whole team; widen it until it does), {path, value} to set a field, or {path, remove: true} to delete one. A path names list elements by id: "members/reviewer/model", "instructionBlocks/-" appends. ';
+  'An edit is {find, replace} for text inside a string value (find must occur exactly once in the whole team, or only under its optional `path` — "members/reviewer/instructions" or "members/reviewer" — so a short anchor unique in that field is enough), {path, value} to set a field, or {path, remove: true} to delete one. A path names list elements by id: "members/reviewer/model", "instructionBlocks/-" appends. ';
 
 const SAVE_OUTCOME =
   'Set dryRun to see the diff without saving. On success the old file is backed up first and the answer names the backup. ';
@@ -20,9 +20,9 @@ const SAVE_OUTCOME =
 export function saveTeamChangeInstructions(forBuilder: boolean): string {
   if (forBuilder) {
     return (
-      'Check a change to the team this chat edits WITHOUT saving it: answers the diff the edits make to the file as it stands, or why they would be refused. ' +
+      'Check a change to the team this chat edits WITHOUT saving it: answers where each edit landed (`landed`, one field path per edit, in order) and the diff the edits make to the file as it stands, or which edit would be refused and why. ' +
       `Use it when you want to try out a set of edits before you put them on a card; to make the change, send the same edits to ${HOST_PROPOSE_TEAM_TOOL}, which shows the user what changes and why and saves it on their Approve. ` +
-      'Read the file with your own tools, then pass only the EDITS — never the whole team. ' +
+      `Read the team with ${HOST_READ_TEAMS_TOOL}, then pass only the EDITS — never the whole team. ` +
       EDIT_SHAPES +
       `A configDir token "${CONFIG_DIR_TOKEN_PREFIX}…>" from ${HOST_READ_TEAMS_TOOL} keeps that profile when written back unchanged. ` +
       'It refuses an edit that does not apply, a token that names no profile of this team, an invalid team, and a file something else changed during this turn (read it again and re-apply). ' +

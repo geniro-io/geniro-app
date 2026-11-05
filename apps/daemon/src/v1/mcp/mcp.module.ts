@@ -35,6 +35,7 @@ import { CallBroker } from '../teams/services/call-broker.service';
 import { StageService } from '../teams/services/stage.service';
 import { TaskBoardBroker } from '../teams/services/task-board.broker';
 import { TeamChangeService } from '../teams/services/team-change.service';
+import { TeamOverlayService } from '../teams/services/team-overlay.service';
 import { TeamProposalService } from '../teams/services/team-proposal.service';
 import { TeamStoreService } from '../teams/services/team-store.service';
 import { TeamsModule } from '../teams/teams.module';
@@ -94,6 +95,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         teamBuilders: TeamBuilderBroker,
         projectChats: ProjectChatBroker,
         teamStore: TeamStoreService,
+        teamOverlays: TeamOverlayService,
         teamProposals: TeamProposalService,
         shares: ShareService,
       ) =>
@@ -129,6 +131,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           teamBuilders,
           projectChats,
           teamStore,
+          teamOverlays,
           teamProposals,
           shares,
         }),
@@ -164,6 +167,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         TeamBuilderBroker,
         ProjectChatBroker,
         TeamStoreService,
+        TeamOverlayService,
         TeamProposalService,
         ShareService,
       ],

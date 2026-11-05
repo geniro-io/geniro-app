@@ -5,7 +5,11 @@ import {
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
 } from '../../agents/chat.types';
-import type { ProjectInstructionBlock } from '../../projects/projects.types';
+import {
+  PROJECT_INSTRUCTIONS_MAX,
+  type ProjectInstructionBlock,
+} from '../../projects/projects.types';
+import { instructionsLength } from '../../projects/utils/project-instruction-blocks';
 import type { AgentKind } from '../../runs/runs.types';
 import type { Team, TeamAgentPoolMember, TeamMember } from '../teams.types';
 import { OVERLAY_FORMAT } from './team-chat-instructions';
@@ -79,12 +83,14 @@ ${JSON.stringify(project.blocks, null, 2)}
 </project-instructions>`;
   return `INSTRUCTIONS
 Every agent of every new run in this project is told its instruction blocks,
-in order. They stand at revision ${project.revision}:
+in order. They stand at revision ${project.revision} and hold
+${instructionsLength(project.blocks)} of the ${PROJECT_INSTRUCTIONS_MAX} characters all of them together may hold:
 
 ${blocks}
 
 Change them only with ${HOST_PROJECT_INSTRUCTIONS_TOOL}: every block as it
-should read, with ${project.revision} as baseRevision. Keep each block about
+should read — one you keep unchanged as its id alone — with
+${project.revision} as baseRevision. Keep each block about
 one subject, and keep a sentence only if an agent working in this project
 would act differently without it. The description below is the user's to
 edit on the page; you cannot change it.${
@@ -111,10 +117,12 @@ section; you cannot change it.`;
   return `ITS TEAM
 The project's runs are run by the team "${target.team.name}" (slug
 \`${target.slug}\`). The team is shared by every project that uses it, and is
-changed on its own page, never here; you cannot change it. Read it whole —
-its members' roles and instructions, its stages, trigger, mode and blocks —
-with ${HOST_READ_TEAMS_TOOL}, whenever the user asks about it or a change needs
-to know it.
+changed on its own page, never here; you cannot change it. Read it — its
+members' roles and instructions, its stages, trigger, mode and blocks —
+with ${HOST_READ_TEAMS_TOOL} whenever the user asks about it or a change needs
+to know it: with no arguments it answers the whole team while it fits one
+answer, else its outline; then read the members, blocks or stages a change
+touches, or \`search\` for the words it names.
 
 What it holds for each member's Model group and pool:
 

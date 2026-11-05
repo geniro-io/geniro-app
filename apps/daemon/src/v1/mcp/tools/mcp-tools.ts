@@ -29,6 +29,7 @@ import type { CallBroker } from '../../teams/services/call-broker.service';
 import type { StageService } from '../../teams/services/stage.service';
 import type { TaskBoardBroker } from '../../teams/services/task-board.broker';
 import type { TeamChangeService } from '../../teams/services/team-change.service';
+import type { TeamOverlayService } from '../../teams/services/team-overlay.service';
 import type { TeamProposalService } from '../../teams/services/team-proposal.service';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
 import type { McpTool } from '../mcp.types';
@@ -110,6 +111,7 @@ export interface McpToolDeps {
   teamBuilders: TeamBuilderBroker;
   projectChats: ProjectChatBroker;
   teamStore: TeamStoreService;
+  teamOverlays: TeamOverlayService;
   teamProposals: TeamProposalService;
   shares: ShareService;
 }
@@ -163,6 +165,8 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
       deps.teamBuilders,
       deps.projectChats,
       deps.teamStore,
+      deps.teamOverlays,
+      deps.teamProposals,
     ),
     new ProposeTeamTool(
       deps.teamGate,

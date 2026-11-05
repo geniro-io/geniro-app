@@ -347,7 +347,7 @@ describe('readSaveTeamChangeArgs edits', () => {
     expect(edits([{ path: 'members/x/model', remove: true }])).toBe(true);
   });
 
-  it('refuses the whole team, no edits, an empty find, and a mixed edit', () => {
+  it('refuses the whole team, no edits, an empty find, and a mixed edit; takes a find narrowed by path', () => {
     expect(
       readSaveTeamChangeArgs({
         team: { name: 'Dev Team' },
@@ -357,7 +357,13 @@ describe('readSaveTeamChangeArgs edits', () => {
     ).toBe(false);
     expect(edits([])).toBe(false);
     expect(edits([{ find: '', replace: 'b' }])).toBe(false);
-    expect(edits([{ find: 'a', replace: 'b', path: 'name' }])).toBe(false);
+    expect(edits([{ find: 'a', replace: 'b', value: 'c' }])).toBe(false);
+    expect(
+      edits([{ find: 'a', replace: 'b', path: 'name', remove: true }]),
+    ).toBe(false);
+    expect(edits([{ find: 'a', replace: 'b', path: 'members/lead' }])).toBe(
+      true,
+    );
   });
 });
 

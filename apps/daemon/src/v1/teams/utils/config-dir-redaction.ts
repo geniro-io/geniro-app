@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { isScalar, parseDocument, visit } from 'yaml';
+
 import type { AgentKind } from '../../runs/runs.types';
 import type { Team, TeamMember, TeamOverlay } from '../teams.types';
 
@@ -30,6 +32,37 @@ export function redactConfigDirs(team: Team): Team {
         : { pool: member.pool.map(withToken) }),
     })),
   };
+}
+
+/**
+ * An overlay file's YAML with every `configDir` value shown as its token and
+ * every comment dropped — one can name a profile path too — the layout kept;
+ * null for YAML that does not parse.
+ */
+export function redactOverlaySource(source: string): string | null {
+  const document = parseDocument(source);
+  if (document.errors.length > 0) {
+    return null;
+  }
+  document.commentBefore = null;
+  document.comment = null;
+  visit(document, {
+    Node(_, node) {
+      node.commentBefore = null;
+      node.comment = null;
+    },
+    Pair(_, pair) {
+      if (
+        isScalar(pair.key) &&
+        pair.key.value === 'configDir' &&
+        isScalar(pair.value) &&
+        typeof pair.value.value === 'string'
+      ) {
+        pair.value.value = configDirToken(pair.value.value);
+      }
+    },
+  });
+  return document.toString();
 }
 
 /**

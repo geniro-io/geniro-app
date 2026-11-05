@@ -11,9 +11,16 @@ const TeamEditSchema = z.union([
         .string()
         .min(1)
         .describe(
-          'Exact text inside one string value of the team (a role, the instructions), occurring exactly once in the whole team',
+          'Exact text inside one string value of the team (a role, the instructions), occurring exactly once in the whole team — or under `path` when given',
         ),
       replace: z.string().describe('What replaces it'),
+      path: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Where `find` is looked for: one field ("members/reviewer/instructions") or a part of the team ("members/reviewer"); `find` must occur exactly once there. Leave it out to look in the whole team',
+        ),
     })
     .strict(),
   z

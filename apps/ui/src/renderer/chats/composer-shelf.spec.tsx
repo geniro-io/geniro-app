@@ -1468,7 +1468,7 @@ describe('WaitingMessagesChip', () => {
     expect(row?.textContent).toContain('first line of w1');
     expect(row?.textContent).not.toContain('second line');
     expect(row?.textContent).toContain(
-      'waits, because the user stopped that thread',
+      'Goes out with the next turn: this thread was stopped',
     );
   });
 

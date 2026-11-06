@@ -280,11 +280,13 @@ export class ThreadInboxService {
     why: 'archived' | 'deleted' | 'removed',
   ): Promise<void> {
     const sentence = threadMessageNotDeliveredSentence(toTitle, why);
-    for (const row of rows) {
-      await this.notices.warn(row.fromRunId, sentence, 'Not delivered');
-      if (!this.sessions.oweKeyNote(row.fromSessionKey, sentence)) {
+    for (const runId of new Set(rows.map((row) => row.fromRunId))) {
+      await this.notices.warn(runId, sentence, 'Not delivered');
+    }
+    for (const key of new Set(rows.map((row) => row.fromSessionKey))) {
+      if (!this.sessions.oweKeyNote(key, sentence)) {
         this.logger.warn(
-          `sender ${row.fromRunId} not told of undelivered message ${row.id}: the daemon is shutting down`,
+          `conversation ${key} not told of an undelivered message: the daemon is shutting down`,
         );
       }
     }

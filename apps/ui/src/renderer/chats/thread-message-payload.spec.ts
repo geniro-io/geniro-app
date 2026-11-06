@@ -5,6 +5,7 @@ import {
   firstLineOf,
   readThreadMessageRow,
   threadMessageReasonWords,
+  waitingMessageReasonWords,
 } from './thread-message-payload';
 
 const RECEIVED = {
@@ -154,6 +155,17 @@ describe('readThreadMessageRow', () => {
       kind: 'received',
       messages: [RECEIVED.threadMessages[0]],
     });
+  });
+});
+
+describe('waitingMessageReasonWords', () => {
+  it('speaks from the thread holding the message, never to the sender', () => {
+    expect(waitingMessageReasonWords('sender_opted_out')).toBe(
+      'Goes out with the next turn: the sender did not wake this thread',
+    );
+    expect(waitingMessageReasonWords('running_turn')).toBe(
+      'Goes out when this turn ends',
+    );
   });
 });
 

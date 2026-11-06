@@ -67,7 +67,7 @@ import { teamNoteAuthor } from './team-note-author';
 import { TeamNoteKindBadge } from './team-note-kind';
 import {
   firstLineOf,
-  threadMessageReasonWords,
+  waitingMessageReasonWords,
 } from './thread-message-payload';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import type { WorkflowEntry } from './transcript-groups';
@@ -1163,7 +1163,7 @@ function WaitingMessageRow({
       </span>
       {message.reason === null ? null : (
         <span className="min-w-0 break-words text-muted-foreground">
-          {threadMessageReasonWords(message.reason)}
+          {waitingMessageReasonWords(message.reason)}
         </span>
       )}
       <div className="flex items-center pt-0.5">

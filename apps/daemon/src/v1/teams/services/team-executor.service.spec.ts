@@ -1988,10 +1988,11 @@ describe('TeamExecutorService', () => {
       const written = itemDao.items.filter(
         (item) => item.runId === run.id && item.kind === 'system',
       );
-      expect(
-        written.filter((item) => item.payload.includes('threadMessages'))[0]
-          ?.memberId ?? null,
-      ).toBeNull();
+      const messageRows = written.filter((item) =>
+        item.payload.includes('threadMessages'),
+      );
+      expect(messageRows).toHaveLength(1);
+      expect(messageRows[0]!.memberId).toBeNull();
       expect(userTexts(itemDao, run.id)).toEqual(['go']);
     });
 
@@ -2115,6 +2116,7 @@ describe('TeamExecutorService', () => {
       completeTurn(claude.starts[0]!, 'done');
       await drain();
       vi.mocked(threadInbox.markDelivered).mockClear();
+      const rowsBefore = threadRows(itemDao, run.id).length;
 
       await expect(
         service.wakeLeadForThreadMessage(
@@ -2134,7 +2136,7 @@ describe('TeamExecutorService', () => {
       completeTurn(claude.starts.at(-1)!, 'read it');
       await drain();
       expect(threadInbox.markDelivered).toHaveBeenCalledWith(run.id, ['m1']);
-      expect(threadRows(itemDao, run.id)).not.toEqual([]);
+      expect(threadRows(itemDao, run.id)).toHaveLength(rowsBefore + 1);
     });
 
     it('starts nothing on a stopped run', async () => {
@@ -2222,6 +2224,189 @@ describe('TeamExecutorService', () => {
       expect((await service.leadCacheFacts(run.id))?.endedAt).toEqual(
         expect.any(Number),
       );
+    });
+
+    const callerTeam = (approval: 'auto' | 'ask'): Team =>
+      teamOf(
+        [
+          member('orch', { approval, instructions: 'You orchestrate.' }),
+          member('helper', {
+            name: 'Helper',
+            role: 'Researches a topic and reports what it found.',
+          }),
+        ],
+        { name: 'calls' },
+      );
+    const messageCall = (runId: string): string =>
+      `mcp__${hostMcpServerName(runId)}__message_thread`;
+
+    it('answers busy for a join while the lead compacts its conversation', async () => {
+      const { service, claude } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a', { autoCompactPercent: 50 })], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      claude.starts[0]!.emit({
+        type: 'context_progress',
+        contextTokens: 170_000,
+        contextWindowTokens: 200_000,
+      });
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+      expect(claude.starts.at(-1)!.input.prompt).toBe('/compact');
+
+      await expect(service.joinThreadMessage(run.id, join())).resolves.toBe(
+        'busy',
+      );
+    });
+
+    it('approves a message to another thread from an auto lead, without a card', async () => {
+      const { service, claude, approvals, itemDao } = setup();
+      const run = await service.startRun({
+        slug: 'calls',
+        team: callerTeam('auto'),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const input = { thread: 'run-target', message: 'the schema moved' };
+
+      claude.starts[0]!.emit({
+        type: 'approval_request',
+        id: 'p-msg',
+        toolName: messageCall(run.id),
+        input,
+      });
+      await drain();
+
+      expect(claude.starts[0]!.respondApproval).toHaveBeenCalledWith(
+        'p-msg',
+        true,
+        input,
+      );
+      expect(approvals.listByRun(run.id)).toEqual([]);
+      expect(
+        itemDao.items.some((item) => item.kind === 'approval_request'),
+      ).toBe(false);
+    });
+
+    it('draws a card titled with the thread it reaches for an ask lead', async () => {
+      const { service, claude, approvals, itemDao, runDao } = setup();
+      const target = await runDao.create({ title: 'Pelican' });
+      const run = await service.startRun({
+        slug: 'calls',
+        team: callerTeam('ask'),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      claude.starts[0]!.emit({
+        type: 'approval_request',
+        id: 'p-msg',
+        toolName: messageCall(run.id),
+        input: { thread: target.id, message: 'the schema moved' },
+      });
+      await drain();
+
+      expect(claude.starts[0]!.respondApproval).not.toHaveBeenCalled();
+      expect(approvals.listByRun(run.id)).toHaveLength(1);
+      const card = itemDao.items.find(
+        (item) => item.kind === 'approval_request',
+      );
+      expect(JSON.parse(card!.payload as string)).toMatchObject({
+        threadTitle: 'Pelican',
+      });
+    });
+
+    it('reads the end of the lead’s conversation from its own turn, and no other member’s', async () => {
+      const { service, claude, itemDao, callBroker } = setup();
+      const run = await service.startRun({
+        slug: 'calls',
+        team: callerTeam('auto'),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await callBroker.callAgent(run.id, 'orch', {
+        agent: 'helper',
+        message: 'look',
+        title: 'Look',
+        mode: 'async',
+      });
+      await drain();
+      claude.starts[1]!.emit({
+        type: 'turn_complete',
+        usage: { ...NO_USAGE, promptCacheTtlMs: 3_600_000 },
+        stopReason: 'end_turn',
+        finalText: 'looked',
+      });
+      claude.starts[1]!.finish();
+      await drain();
+      claude.starts[0]!.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: 'done',
+      });
+      claude.starts[0]!.finish();
+      await drain();
+      const endings = itemDao.items.filter(
+        (item) => item.runId === run.id && item.kind === 'turn_complete',
+      );
+      endings.find((item) => item.memberId === 'orch')!.createdAt = new Date(
+        4_000,
+      );
+      endings.find((item) => item.memberId === 'helper')!.createdAt = new Date(
+        9_000,
+      );
+
+      await expect(service.leadCacheFacts(run.id)).resolves.toMatchObject({
+        endedAt: 4_000,
+        promptCacheTtlMs: null,
+      });
+    });
+
+    it('wakes a settled lead while another member still works, and its turn drains the waiting message', async () => {
+      const threadInbox = inboxOf([entry]);
+      const { service, claude, callBroker } = setup(4870, { threadInbox });
+      const run = await service.startRun({
+        slug: 'calls',
+        team: callerTeam('auto'),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await callBroker.callAgent(run.id, 'orch', {
+        agent: 'helper',
+        message: 'look',
+        title: 'Look',
+        mode: 'async',
+      });
+      await drain();
+      completeTurn(claude.starts[0]!, 'delegated');
+      await drain();
+      vi.mocked(threadInbox.markDelivered).mockClear();
+
+      await expect(
+        service.wakeLeadForThreadMessage(
+          run.id,
+          'a turn for you',
+          { severity: 'info', message: 'Woken', woke: true },
+          () => undefined,
+        ),
+      ).resolves.toBe('woken');
+      await drain();
+
+      const woken = claude.starts.at(-1)!;
+      expect(woken.input.prompt).toContain('a turn for you');
+      expect(woken.input.prompt).toContain('the schema moved');
+      completeTurn(woken, 'read it');
+      await drain();
+      expect(threadInbox.markDelivered).toHaveBeenCalledWith(run.id, ['m1']);
     });
   });
 

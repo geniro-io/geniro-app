@@ -315,6 +315,90 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('listThreads', () => {
+    it('leaves out archived threads, builder chats, project chats and both kinds of analysis, and keeps team runs', async () => {
+      const chat = await dao.create({
+        title: 'Pelican',
+        updatedAt: new Date(2_000),
+      });
+      const teamRun = await dao.create({
+        title: 'Pelican team',
+        teamId: 'wf-1',
+        updatedAt: new Date(3_000),
+      });
+      await dao.create({
+        title: 'Pelican archived',
+        archivedAt: new Date(9_000),
+      });
+      await dao.create({ title: 'Pelican builder', editsTeamSlug: 'dev-team' });
+      await dao.create({
+        title: 'Pelican project',
+        editsProjectId: 'project-1',
+      });
+      await dao.create({
+        title: 'Pelican analysis',
+        analysisSourceRunId: 'source-1',
+      });
+      await dao.create({
+        title: 'Pelican team analysis',
+        analysisTeamSlug: 'dev-team',
+      });
+
+      const threads = await dao.listThreads(null, 50);
+
+      expect(threads.map((run) => run.id)).toEqual([teamRun.id, chat.id]);
+    });
+
+    it('lists the threads last worked in first', async () => {
+      const older = await dao.create({
+        title: 'older',
+        updatedAt: new Date(1_000),
+      });
+      const newest = await dao.create({
+        title: 'newest',
+        updatedAt: new Date(3_000),
+      });
+      const middle = await dao.create({
+        title: 'middle',
+        updatedAt: new Date(2_000),
+      });
+
+      const threads = await dao.listThreads(null, 50);
+
+      expect(threads.map((run) => run.id)).toEqual([
+        newest.id,
+        middle.id,
+        older.id,
+      ]);
+    });
+
+    it('narrows the listing to the titles that hold the query', async () => {
+      const build = await dao.create({
+        title: 'Pelican build',
+        updatedAt: new Date(3_000),
+      });
+      await dao.create({ title: 'Otter build', updatedAt: new Date(2_000) });
+      const review = await dao.create({
+        title: 'Review: Pelican',
+        updatedAt: new Date(1_000),
+      });
+
+      const threads = await dao.listThreads('pelican', 50);
+
+      expect(threads.map((run) => run.id)).toEqual([build.id, review.id]);
+    });
+
+    it('holds the limit to the newest threads', async () => {
+      await dao.create({ title: 'a', updatedAt: new Date(1_000) });
+      const b = await dao.create({ title: 'b', updatedAt: new Date(2_000) });
+      const c = await dao.create({ title: 'c', updatedAt: new Date(3_000) });
+
+      const threads = await dao.listThreads(null, 2);
+
+      expect(threads.map((run) => run.id)).toEqual([c.id, b.id]);
+    });
+  });
+
   describe('team analyses', () => {
     it('leaves a team’s analysis out of EVERY scope, and finds it by its slug', async () => {
       const older = await dao.create({

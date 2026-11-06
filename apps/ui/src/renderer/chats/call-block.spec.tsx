@@ -669,6 +669,101 @@ describe('CallBlock', () => {
     expect(container.textContent).toContain('Read File');
   });
 
+  describe('while its own sub-agents work', () => {
+    const DELEGATES = Array.from({ length: 10 }, (_, n) => `d${n}`);
+
+    function opening(): ChatItem[] {
+      return [
+        item(
+          'call_started',
+          { callId: 'call-1', calleeNodeId: 'poet', message: 'Review it.' },
+          'orch',
+        ),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        ...DELEGATES.map((id) =>
+          item(
+            'tool_call',
+            {
+              id,
+              name: 'Agent',
+              input: { description: `Review ${id}` },
+              callId: 'call-1',
+            },
+            'poet',
+          ),
+        ),
+      ];
+    }
+
+    function delegateFrames(): ChatItem[] {
+      return DELEGATES.flatMap((id, n) => {
+        const toolId = `${id}-tool`;
+        const shared = { callId: 'call-1', parentToolUseId: id };
+        return [
+          item(
+            'tool_call',
+            {
+              id: toolId,
+              name: n % 2 === 0 ? 'Read' : 'Grep',
+              input: {},
+              ...shared,
+            },
+            'poet',
+          ),
+          item(
+            'tool_result',
+            { id: toolId, name: null, result: 'ok', ...shared },
+            'poet',
+          ),
+        ];
+      });
+    }
+
+    function pendingLines(rows: ChatItem[], from: number): string[] {
+      const lines: string[] = [];
+      for (let count = from; count <= rows.length; count += 1) {
+        const block = groupTranscript(rows.slice(0, count))[0];
+        if (block?.type !== 'call-block') {
+          throw new Error('expected a call block');
+        }
+        act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+        if (count === from) {
+          expand();
+        }
+        lines.push(
+          container.querySelector('[data-slot="block-pending"]')?.textContent ??
+            '',
+        );
+      }
+      return lines;
+    }
+
+    it('keeps one line while ten sub-agents start and finish tools', () => {
+      const rows = [...opening(), ...delegateFrames()];
+
+      const lines = pendingLines(rows, opening().length);
+
+      expect(new Set(lines)).toEqual(new Set(['Poet is thinking...']));
+    });
+
+    it('still names a tool the callee itself is running', () => {
+      const own = item(
+        'tool_call',
+        { id: 'own', name: 'Bash', input: {}, callId: 'call-1' },
+        'poet',
+      );
+      const rows = [...opening(), own, ...delegateFrames()];
+
+      const lines = pendingLines(rows, opening().length + 1);
+
+      expect(new Set(lines)).toEqual(new Set(['Poet is running Bash']));
+    });
+  });
+
   it('marks a call that has gone quiet, on the band and in the line', () => {
     const entries = groupTranscript([
       item(

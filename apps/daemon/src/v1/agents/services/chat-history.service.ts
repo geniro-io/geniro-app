@@ -305,6 +305,12 @@ export class ChatHistoryService {
             fromSeq: status.seq,
             limit: OPEN_TURN_TOOLS_PER_CALL,
           })),
+          ...(await newest({
+            kinds: ['tool_call'],
+            fromSeq: status.seq,
+            ownThread: true,
+            limit: OPEN_TURN_TOOLS_PER_CALL,
+          })),
         );
       }
       rows.push(
@@ -320,6 +326,7 @@ export class ChatHistoryService {
         ...(await newest({
           kinds: ['tool_call'],
           said: 'name',
+          ownThread: true,
           limit: NAMED_TOOLS_PER_CALL,
         })),
       );

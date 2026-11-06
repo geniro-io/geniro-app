@@ -435,6 +435,33 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       expect(tools).not.toContain(10);
     });
 
+    it("anchors the callee's own running tool past more sub-agent calls than a turn's cap", async () => {
+      await teamRun();
+      await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      await row(10, 'tool_call', 'qa', {
+        id: 'own',
+        name: 'Bash',
+        callId: 'call-2',
+      });
+      for (let seq = 11; seq < 21; seq += 1) {
+        await row(seq, 'tool_call', 'qa', {
+          id: `launch${seq}`,
+          name: 'Agent',
+          callId: 'call-2',
+        });
+      }
+      for (let seq = 21; seq < 331; seq += 1) {
+        await row(seq, 'tool_call', 'qa', {
+          id: `d${seq}`,
+          name: 'Read',
+          callId: 'call-2',
+          parentToolUseId: 'delegate',
+        });
+      }
+
+      expect(await anchoredOf('call-2', ['tool_call'])).toContain(10);
+    });
+
     it('anchors the calls that run across a page of the run’s own flow but began above it', async () => {
       await teamRun();
       // call-2 settles before the page, call-4 below it; call-1 (continued by

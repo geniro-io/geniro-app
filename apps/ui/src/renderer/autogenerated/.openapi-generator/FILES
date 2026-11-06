@@ -6,6 +6,7 @@ apis/CliAuthApi.ts
 apis/DiagnosticsApi.ts
 apis/GroupsApi.ts
 apis/HandoffApi.ts
+apis/KnowledgeApi.ts
 apis/LabelInstructionsApi.ts
 apis/MemoriesApi.ts
 apis/ProjectsApi.ts

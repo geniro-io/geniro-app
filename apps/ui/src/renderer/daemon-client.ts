@@ -1146,6 +1146,38 @@ export interface MemoryChangedEvent {
   teamSlug: string | null;
 }
 
+/** One write to the knowledge store — never a document's text. */
+export interface KnowledgeChangedEvent {
+  /** Null for a change to many documents at once. */
+  documentId: string | null;
+  /** What the write did (`created`, `approved`, `bulk`…); opaque here. */
+  change: string;
+  place: string | null;
+}
+
+/**
+ * Read a `knowledge_changed` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `KnowledgeChangedEvent`
+ * (`apps/daemon/src/v1/knowledge/knowledge.types.ts`). Change one and change the other.
+ */
+export function parseKnowledgeChanged(
+  data: unknown,
+): KnowledgeChangedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { documentId, change, place } = data as Record<string, unknown>;
+  if (
+    !(documentId === null || typeof documentId === 'string') ||
+    typeof change !== 'string' ||
+    !(place === null || typeof place === 'string')
+  ) {
+    return null;
+  }
+  return { documentId, change, place };
+}
+
 /**
  * Read a `memory_changed` payload, or null when it is not one.
  *
@@ -1272,6 +1304,9 @@ export class DaemonClient {
   >();
   private readonly memoryChangedListeners = new Set<
     (event: MemoryChangedEvent) => void
+  >();
+  private readonly knowledgeChangedListeners = new Set<
+    (event: KnowledgeChangedEvent) => void
   >();
   private readonly projectsChangedListeners = new Set<
     (event: ProjectsChangedEvent) => void
@@ -1449,6 +1484,14 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'knowledge_changed') {
+        const knowledge = parseKnowledgeChanged(data);
+        if (knowledge) {
+          for (const listener of this.knowledgeChangedListeners) {
+            listener(knowledge);
+          }
+        }
+      }
       if (event === 'memory_changed') {
         const memory = parseMemoryChanged(data);
         if (memory) {
@@ -1621,6 +1664,16 @@ export class DaemonClient {
     this.projectsChangedListeners.add(listener);
     return () => {
       this.projectsChangedListeners.delete(listener);
+    };
+  }
+
+  /** Subscribe to every write to the knowledge store, client-wide. */
+  onKnowledgeChanged(
+    listener: (event: KnowledgeChangedEvent) => void,
+  ): () => void {
+    this.knowledgeChangedListeners.add(listener);
+    return () => {
+      this.knowledgeChangedListeners.delete(listener);
     };
   }
 

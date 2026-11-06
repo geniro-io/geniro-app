@@ -173,6 +173,58 @@ it('leaves a memory call it cannot read in the ordinary group', () => {
   expect(container.querySelector('[data-role="tool-group"]')).not.toBeNull();
 });
 
+it('draws a knowledge call as its own row beside the group of ordinary tools', () => {
+  const group = makeGroup([
+    toolItem('tool_call', { id: 'b', name: 'Bash', input: { command: 'ls' } }),
+    toolItem('tool_result', { id: 'b', result: 'files' }),
+    toolItem('tool_call', {
+      id: 'k',
+      name: 'mcp__geniro-run-1__knowledge_read',
+      input: { handle: 'release-checklist' },
+    }),
+    toolItem('tool_result', {
+      id: 'k',
+      result:
+        'Knowledge document written or approved by the user for this project:\n- release-checklist (rev 7, project, 2.0 KB) — Release checklist. When: Cutting a release.\n\n\nTag after CI.',
+    }),
+    toolItem('tool_call', {
+      id: 'r',
+      name: 'Read',
+      input: { file_path: '/proj/a.ts' },
+    }),
+    toolItem('tool_result', { id: 'r', result: 'contents' }),
+  ]);
+  render(group);
+
+  const knowledge = container.querySelectorAll('[data-role="knowledge-tool"]');
+  expect(knowledge).toHaveLength(1);
+  expect(knowledge[0]?.textContent).toContain('Read release-checklist');
+  expect(knowledge[0]?.textContent).toContain('Release checklist');
+  expect(container.querySelectorAll('[data-role="tool-group"]')).toHaveLength(
+    2,
+  );
+  expect(
+    [...container.querySelectorAll('[data-role="tool-group"]')].some((el) =>
+      el.contains(knowledge[0] ?? null),
+    ),
+  ).toBe(false);
+});
+
+it('leaves a knowledge call it cannot read in the ordinary group', () => {
+  const group = makeGroup([
+    toolItem('tool_call', {
+      id: 'k',
+      name: 'mcp__geniro-run-1__knowledge_read',
+      input: {},
+    }),
+    toolItem('tool_result', { id: 'k', result: 'whatever' }),
+  ]);
+  render(group);
+
+  expect(container.querySelector('[data-role="knowledge-tool"]')).toBeNull();
+  expect(container.querySelector('[data-role="tool-group"]')).not.toBeNull();
+});
+
 /** Each expanded tool row's status, in row order, off its own status glyph. */
 function rowStatuses(): (string | null)[] {
   return [

@@ -49,6 +49,7 @@ describe('BottomTabBar', () => {
       'Teams',
       'Tasks',
       'Projects',
+      'Knowledge',
       'Stats',
       'Settings',
     ]);

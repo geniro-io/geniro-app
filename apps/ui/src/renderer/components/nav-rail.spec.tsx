@@ -66,6 +66,7 @@ describe('NavRail', () => {
       teams: 'Teams',
       tasks: 'Tasks',
       projects: 'Projects',
+      knowledge: 'Knowledge',
       stats: 'Stats',
       settings: 'Settings',
     };
@@ -78,6 +79,35 @@ describe('NavRail', () => {
     expect(missing).toEqual([]);
   });
 
+  it('counts what waits on the user beside a destination, and draws nothing at zero', () => {
+    const waiting = render(
+      <NavRail
+        view="chats"
+        onNavigate={() => undefined}
+        collapsed={false}
+        hydrated
+        onToggleCollapsed={() => undefined}
+        counts={{ knowledge: 3 }}
+      />,
+    );
+    expect(buttonNamed(waiting, 'Knowledge3')).toBeDefined();
+
+    const collapsed = render(
+      <NavRail
+        view="chats"
+        onNavigate={() => undefined}
+        collapsed
+        hydrated
+        onToggleCollapsed={() => undefined}
+        counts={{ knowledge: 3 }}
+      />,
+    );
+    expect(
+      collapsed.querySelector('[aria-label="Knowledge, 3 waiting"]'),
+    ).not.toBeNull();
+    expect(rail('chats').querySelector('[data-slot="nav-count"]')).toBeNull();
+  });
+
   it('navigates to each destination it offers', () => {
     // Pairs with the test above: presence alone would pass for a button wired
     // to nothing, which is the same unreachable view seen one step later.
@@ -86,6 +116,7 @@ describe('NavRail', () => {
       teams: 'Teams',
       tasks: 'Tasks',
       projects: 'Projects',
+      knowledge: 'Knowledge',
       stats: 'Stats',
       settings: 'Settings',
     } satisfies Record<AppView, string>)) {

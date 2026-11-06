@@ -25,6 +25,8 @@ import { TeamNoteBroker } from '../agents/services/team-note.broker';
 import { TeamProposalBroker } from '../agents/services/team-proposal.broker';
 import { ThreadReaderService } from '../agents/services/thread-reader.service';
 import { UserQuestionBroker } from '../agents/services/user-question.broker';
+import { KnowledgeModule } from '../knowledge/knowledge.module';
+import { KnowledgeService } from '../knowledge/services/knowledge.service';
 import { MemoryModule } from '../memory/memory.module';
 import { MemoryService } from '../memory/services/memory.service';
 import { ShareService } from '../shares/services/share.service';
@@ -58,7 +60,14 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
  * ({@link createMcpTools}).
  */
 @Module({
-  imports: [AgentsModule, TeamsModule, SharesModule, MemoryModule, StatsModule],
+  imports: [
+    AgentsModule,
+    TeamsModule,
+    SharesModule,
+    MemoryModule,
+    KnowledgeModule,
+    StatsModule,
+  ],
   controllers: [McpController],
   providers: [
     {
@@ -85,6 +94,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         board: TaskBoardBroker,
         history: GlobalChatSearchService,
         memory: MemoryService,
+        knowledge: KnowledgeService,
         analysis: AnalysisBroker,
         threads: ThreadReaderService,
         teamChanges: TeamChangeService,
@@ -121,6 +131,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           board,
           history,
           memory,
+          knowledge,
           analysis,
           threads,
           teamChanges,
@@ -157,6 +168,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         TaskBoardBroker,
         GlobalChatSearchService,
         MemoryService,
+        KnowledgeService,
         AnalysisBroker,
         ThreadReaderService,
         TeamChangeService,

@@ -6,6 +6,7 @@ import { defineConfig, UnderscoreNamingStrategy } from '@mikro-orm/sqlite';
 import { environment } from '../environments';
 import { APP_MIGRATIONS_TABLES } from '../v1/migrations/migrations.types';
 import { CHAT_TEXT_TABLES } from './chat-text-index.ddl';
+import { KNOWLEDGE_TEXT_TABLES } from './knowledge-text-index.ddl';
 import { MEMORY_TEXT_TABLES } from './memory-text-index.ddl';
 import { NulSafeSqliteDriver } from './nul-safe-sqlite.driver';
 
@@ -33,7 +34,12 @@ export default defineConfig({
   // The full-text indexes and the migration journal are not entities and must
   // stay invisible to the schema sync — see CHAT_TEXT_TABLES.
   schemaGenerator: {
-    skipTables: [CHAT_TEXT_TABLES, MEMORY_TEXT_TABLES, APP_MIGRATIONS_TABLES],
+    skipTables: [
+      CHAT_TEXT_TABLES,
+      MEMORY_TEXT_TABLES,
+      KNOWLEDGE_TEXT_TABLES,
+      APP_MIGRATIONS_TABLES,
+    ],
   },
   // NO `extensions` and no `seeder` block, unlike the sibling's config, and
   // the omission is load-bearing twice over.

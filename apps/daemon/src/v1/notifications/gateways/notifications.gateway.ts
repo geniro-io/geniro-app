@@ -28,6 +28,7 @@ import {
   extractStringField,
 } from '../../agents/utils/ws-payload';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
+import { KnowledgeEventBus } from '../../knowledge/services/knowledge-events.bus';
 import { MemoryEventBus } from '../../memory/services/memory-events.bus';
 import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { ShareEventBus } from '../../shares/services/share-events.bus';
@@ -146,6 +147,7 @@ export class NotificationsGateway
   private taskSubscription?: Subscription;
   private shareSubscription?: Subscription;
   private memorySubscription?: Subscription;
+  private knowledgeSubscription?: Subscription;
   private projectSubscription?: Subscription;
   /**
    * Debug fan-out failures, counted rather than logged.
@@ -170,6 +172,7 @@ export class NotificationsGateway
     private readonly shares: ShareEventBus,
     private readonly memories: MemoryEventBus,
     private readonly projects: ProjectEventBus,
+    private readonly knowledge: KnowledgeEventBus,
   ) {}
 
   afterInit(server: Server): void {
@@ -271,6 +274,21 @@ export class NotificationsGateway
       },
       error: (err: unknown) =>
         this.logger.error(`memory event bus errored: ${String(err)}`),
+    });
+    // A knowledge write goes to EVERY client, as a memory write does; the
+    // event names the document and its place, never its text.
+    this.knowledgeSubscription = this.knowledge.allChanges().subscribe({
+      next: (change) => {
+        try {
+          server.emit('knowledge_changed', change);
+        } catch (err) {
+          this.logger.error(
+            `failed to broadcast knowledge_changed (${change.change} ${change.documentId ?? 'many'}): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`knowledge event bus errored: ${String(err)}`),
     });
     // A project write goes to EVERY client, paired devices included, like a
     // task write: the Projects page, the board and the composer all read it.
@@ -410,6 +428,7 @@ export class NotificationsGateway
     this.taskSubscription?.unsubscribe();
     this.shareSubscription?.unsubscribe();
     this.memorySubscription?.unsubscribe();
+    this.knowledgeSubscription?.unsubscribe();
     this.projectSubscription?.unsubscribe();
     this.deletedSubscription?.unsubscribe();
     this.changedSubscription?.unsubscribe();

@@ -2243,6 +2243,7 @@ export abstract class AgentAdapter {
       customInstructions: input.customInstructions,
       projectInstructions: input.projectInstructions,
       memoryIndex: granted ? input.memoryIndex : null,
+      knowledgeIndex: granted ? input.knowledgeIndex : null,
       taskInstructions: input.taskInstructions,
       teamInstructions: input.teamInstructions,
       instructionBlocks: input.instructionBlocks,
@@ -2570,6 +2571,8 @@ export abstract class AgentAdapter {
       // The same block again; snapshotted on the run, so a note saved while
       // the run works restarts nothing.
       input.memoryIndex ?? null,
+      // Likewise: a document saved while the run works restarts nothing.
+      input.knowledgeIndex ?? null,
       // Env on claude and thread config on codex, both fixed at spawn.
       input.nativeMemoryOff === true,
       // The same block again: a card whose label instructions changed since

@@ -15,6 +15,7 @@ import {
   HOST_FINDINGS_TOOL,
   HOST_GALLERY_TOOL,
   HOST_GOALS_TOOL,
+  HOST_KNOWLEDGE_TOOLS,
   HOST_MEMORY_TOOLS,
   HOST_METRICS_TOOL,
   HOST_MONITOR_TOOL,
@@ -173,6 +174,7 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
       HOST_GOALS_TOOL,
       HOST_RECORD_OUTCOME_TOOL,
       ...HOST_MEMORY_TOOLS,
+      ...HOST_KNOWLEDGE_TOOLS,
       HOST_SEARCH_CHATS_TOOL,
       HOST_READ_CHAT_CONTEXT_TOOL,
       ...BOARD_TOOLS_NAMED,
@@ -366,6 +368,26 @@ describe('the composed block', () => {
       'memoryIndex',
       'taskInstructions',
     ]);
+  });
+
+  it('puts the knowledge index right after the memory index, masked on every turn', () => {
+    const secret = 'sk-knowledge-index-secret';
+    registerSecret(secret, 'late');
+    const parts = turnInstructionParts({
+      memoryIndex: 'MEMORY',
+      knowledgeIndex: `- key — Key ${secret}. When: now. (global, 0.1 KB)`,
+      taskInstructions: 'CARD',
+    });
+
+    expect(parts.map((part) => part.source)).toEqual([
+      'preamble',
+      'memoryIndex',
+      'knowledgeIndex',
+      'taskInstructions',
+    ]);
+    expect(
+      parts.find((part) => part.source === 'knowledgeIndex')?.text,
+    ).not.toContain(secret);
   });
 });
 

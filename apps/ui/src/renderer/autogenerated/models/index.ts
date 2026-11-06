@@ -1880,6 +1880,19 @@ export type ApprovalMode = typeof ApprovalMode[keyof typeof ApprovalMode];
 /**
  * 
  * @export
+ * @interface ApproveKnowledgeDto
+ */
+export interface ApproveKnowledgeDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof ApproveKnowledgeDto
+     */
+    rev: number;
+}
+/**
+ * 
+ * @export
  * @interface AttachTaskFileDto
  */
 export interface AttachTaskFileDto {
@@ -2555,6 +2568,12 @@ export interface ChatExportRun {
      * @memberof ChatExportRun
      */
     memoryIndex: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    knowledgeIndex: string | null;
     /**
      * 
      * @type {boolean}
@@ -3381,6 +3400,43 @@ export interface CreateChatDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface CreateKnowledgeDto
+ */
+export interface CreateKnowledgeDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateKnowledgeDto
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateKnowledgeDto
+     */
+    whenToRead: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateKnowledgeDto
+     */
+    body: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateKnowledgeDto
+     */
+    handle?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateKnowledgeDto
+     */
+    place: string;
+}
 /**
  * 
  * @export
@@ -4764,6 +4820,7 @@ export const InstructionSizeSource = {
     CustomInstructions: 'customInstructions',
     ProjectInstructions: 'projectInstructions',
     MemoryIndex: 'memoryIndex',
+    KnowledgeIndex: 'knowledgeIndex',
     TaskInstructions: 'taskInstructions',
     TeamInstructions: 'teamInstructions',
     InstructionBlocks: 'instructionBlocks',
@@ -4927,6 +4984,734 @@ export interface KeptSessionConfigDto {
      * @memberof KeptSessionConfigDto
      */
     idleMinutes: number;
+}
+/**
+ * 
+ * @export
+ * @interface KnowledgeConfigAckDto
+ */
+export interface KnowledgeConfigAckDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof KnowledgeConfigAckDto
+     */
+    enabled: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeConfigAckDto
+     */
+    agentWrites: KnowledgeConfigAckDtoAgentWritesEnum;
+}
+
+
+/**
+ * @export
+ */
+export const KnowledgeConfigAckDtoAgentWritesEnum = {
+    Review: 'review',
+    Direct: 'direct',
+    Off: 'off'
+} as const;
+export type KnowledgeConfigAckDtoAgentWritesEnum = typeof KnowledgeConfigAckDtoAgentWritesEnum[keyof typeof KnowledgeConfigAckDtoAgentWritesEnum];
+
+/**
+ * 
+ * @export
+ * @interface KnowledgeConfigDto
+ */
+export interface KnowledgeConfigDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof KnowledgeConfigDto
+     */
+    enabled: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeConfigDto
+     */
+    agentWrites: KnowledgeConfigDtoAgentWritesEnum;
+}
+
+
+/**
+ * @export
+ */
+export const KnowledgeConfigDtoAgentWritesEnum = {
+    Review: 'review',
+    Direct: 'direct',
+    Off: 'off'
+} as const;
+export type KnowledgeConfigDtoAgentWritesEnum = typeof KnowledgeConfigDtoAgentWritesEnum[keyof typeof KnowledgeConfigDtoAgentWritesEnum];
+
+/**
+ * 
+ * @export
+ * @interface KnowledgeCountsDto
+ */
+export interface KnowledgeCountsDto {
+    /**
+     * 
+     * @type {Array<KnowledgeCountsDtoPlacesInner>}
+     * @memberof KnowledgeCountsDto
+     */
+    places: Array<KnowledgeCountsDtoPlacesInner>;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeCountsDto
+     */
+    active: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeCountsDto
+     */
+    waiting: number;
+}
+/**
+ * 
+ * @export
+ * @interface KnowledgeCountsDtoPlacesInner
+ */
+export interface KnowledgeCountsDtoPlacesInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeCountsDtoPlacesInner
+     */
+    place: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeCountsDtoPlacesInner
+     */
+    active: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeCountsDtoPlacesInner
+     */
+    waiting: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeCountsDtoPlacesInner
+     */
+    documents: number;
+}
+/**
+ * 
+ * @export
+ * @interface KnowledgeDocumentDetailDto
+ */
+export interface KnowledgeDocumentDetailDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    handle: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    place: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    projectId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    teamSlug: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    whenToRead: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    bodyBytes: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    status: KnowledgeDocumentDetailDtoStatusEnum;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    rev: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    pending: number;
+    /**
+     * 
+     * @type {KnowledgeHeadSource}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    source: KnowledgeHeadSource;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    updatedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    lastReadAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    approvedAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeDocumentDetailDto
+     */
+    body: string;
+}
+
+
+/**
+ * @export
+ */
+export const KnowledgeDocumentDetailDtoStatusEnum = {
+    Proposed: 'proposed',
+    Active: 'active',
+    Archived: 'archived'
+} as const;
+export type KnowledgeDocumentDetailDtoStatusEnum = typeof KnowledgeDocumentDetailDtoStatusEnum[keyof typeof KnowledgeDocumentDetailDtoStatusEnum];
+
+/**
+ * 
+ * @export
+ * @interface KnowledgeExportDto
+ */
+export interface KnowledgeExportDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeExportDto
+     */
+    markdown: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeExportDto
+     */
+    count: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeExportDto
+     */
+    name: string;
+}
+/**
+ * 
+ * @export
+ * @interface KnowledgeHead
+ */
+export interface KnowledgeHead {
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHead
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHead
+     */
+    handle: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHead
+     */
+    place: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHead
+     */
+    projectId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHead
+     */
+    teamSlug: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHead
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHead
+     */
+    whenToRead: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeHead
+     */
+    bodyBytes: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHead
+     */
+    status: KnowledgeHeadStatusEnum;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeHead
+     */
+    rev: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeHead
+     */
+    pending: number;
+    /**
+     * 
+     * @type {KnowledgeHeadSource}
+     * @memberof KnowledgeHead
+     */
+    source: KnowledgeHeadSource;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHead
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHead
+     */
+    updatedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHead
+     */
+    lastReadAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHead
+     */
+    approvedAt: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const KnowledgeHeadStatusEnum = {
+    Proposed: 'proposed',
+    Active: 'active',
+    Archived: 'archived'
+} as const;
+export type KnowledgeHeadStatusEnum = typeof KnowledgeHeadStatusEnum[keyof typeof KnowledgeHeadStatusEnum];
+
+/**
+ * 
+ * @export
+ * @interface KnowledgeHeadSource
+ */
+export interface KnowledgeHeadSource {
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHeadSource
+     */
+    actor: KnowledgeHeadSourceActorEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHeadSource
+     */
+    runId: string | null;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof KnowledgeHeadSource
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeHeadSource
+     */
+    model: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const KnowledgeHeadSourceActorEnum = {
+    User: 'user',
+    Agent: 'agent',
+    Analysis: 'analysis'
+} as const;
+export type KnowledgeHeadSourceActorEnum = typeof KnowledgeHeadSourceActorEnum[keyof typeof KnowledgeHeadSourceActorEnum];
+
+/**
+ * 
+ * @export
+ * @interface KnowledgeListDto
+ */
+export interface KnowledgeListDto {
+    /**
+     * 
+     * @type {Array<KnowledgeHead>}
+     * @memberof KnowledgeListDto
+     */
+    documents: Array<KnowledgeHead>;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeListDto
+     */
+    next: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface KnowledgeRemovedDto
+ */
+export interface KnowledgeRemovedDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof KnowledgeRemovedDto
+     */
+    deleted: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface KnowledgeRevisionDetailDto
+ */
+export interface KnowledgeRevisionDetailDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    documentId: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    rev: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    status: KnowledgeRevisionDetailDtoStatusEnum;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    baseRev: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    whenToRead: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    bodyBytes: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    reason: string | null;
+    /**
+     * 
+     * @type {KnowledgeRevisionDetailDtoSource}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    source: KnowledgeRevisionDetailDtoSource;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    decidedAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    body: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    diff: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    stale: boolean;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    baseKept: boolean;
+    /**
+     * 
+     * @type {KnowledgeHead}
+     * @memberof KnowledgeRevisionDetailDto
+     */
+    document: KnowledgeHead;
+}
+
+
+/**
+ * @export
+ */
+export const KnowledgeRevisionDetailDtoStatusEnum = {
+    Applied: 'applied',
+    Pending: 'pending',
+    Rejected: 'rejected'
+} as const;
+export type KnowledgeRevisionDetailDtoStatusEnum = typeof KnowledgeRevisionDetailDtoStatusEnum[keyof typeof KnowledgeRevisionDetailDtoStatusEnum];
+
+/**
+ * 
+ * @export
+ * @interface KnowledgeRevisionDetailDtoSource
+ */
+export interface KnowledgeRevisionDetailDtoSource {
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDtoSource
+     */
+    actor: KnowledgeRevisionDetailDtoSourceActorEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDtoSource
+     */
+    runId: string | null;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof KnowledgeRevisionDetailDtoSource
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDtoSource
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionDetailDtoSource
+     */
+    memberId: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const KnowledgeRevisionDetailDtoSourceActorEnum = {
+    User: 'user',
+    Agent: 'agent',
+    Analysis: 'analysis'
+} as const;
+export type KnowledgeRevisionDetailDtoSourceActorEnum = typeof KnowledgeRevisionDetailDtoSourceActorEnum[keyof typeof KnowledgeRevisionDetailDtoSourceActorEnum];
+
+/**
+ * 
+ * @export
+ * @interface KnowledgeRevisionHead
+ */
+export interface KnowledgeRevisionHead {
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionHead
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionHead
+     */
+    documentId: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeRevisionHead
+     */
+    rev: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionHead
+     */
+    status: KnowledgeRevisionHeadStatusEnum;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeRevisionHead
+     */
+    baseRev: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionHead
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionHead
+     */
+    whenToRead: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof KnowledgeRevisionHead
+     */
+    bodyBytes: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionHead
+     */
+    reason: string | null;
+    /**
+     * 
+     * @type {KnowledgeRevisionDetailDtoSource}
+     * @memberof KnowledgeRevisionHead
+     */
+    source: KnowledgeRevisionDetailDtoSource;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionHead
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof KnowledgeRevisionHead
+     */
+    decidedAt: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const KnowledgeRevisionHeadStatusEnum = {
+    Applied: 'applied',
+    Pending: 'pending',
+    Rejected: 'rejected'
+} as const;
+export type KnowledgeRevisionHeadStatusEnum = typeof KnowledgeRevisionHeadStatusEnum[keyof typeof KnowledgeRevisionHeadStatusEnum];
+
+/**
+ * 
+ * @export
+ * @interface KnowledgeRevisionListDto
+ */
+export interface KnowledgeRevisionListDto {
+    /**
+     * 
+     * @type {Array<KnowledgeRevisionHead>}
+     * @memberof KnowledgeRevisionListDto
+     */
+    revisions: Array<KnowledgeRevisionHead>;
 }
 /**
  * 
@@ -7426,6 +8211,24 @@ export interface ProjectDeletedDto {
      * @memberof ProjectDeletedDto
      */
     tasksRemoved: number;
+    /**
+     * How many of its knowledge documents moved to Global
+     * @type {number}
+     * @memberof ProjectDeletedDto
+     */
+    knowledgeMoved: number;
+    /**
+     * How many of its knowledge documents were deleted
+     * @type {number}
+     * @memberof ProjectDeletedDto
+     */
+    knowledgeDeleted: number;
+    /**
+     * Handles a move to Global changed, because Global held them
+     * @type {Array<TeamRemovedDtoKnowledgeRenamedInner>}
+     * @memberof ProjectDeletedDto
+     */
+    knowledgeRenamed: Array<TeamRemovedDtoKnowledgeRenamedInner>;
 }
 /**
  * 
@@ -8213,6 +9016,19 @@ export interface ResetWakesCancelledDto {
      * @memberof ResetWakesCancelledDto
      */
     cancelledCallIds: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface RestoreKnowledgeRevisionDto
+ */
+export interface RestoreKnowledgeRevisionDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof RestoreKnowledgeRevisionDto
+     */
+    rev: number;
 }
 /**
  * 
@@ -13176,6 +13992,44 @@ export interface TeamPortraitMember {
 /**
  * 
  * @export
+ * @interface TeamRemovedDto
+ */
+export interface TeamRemovedDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof TeamRemovedDto
+     */
+    deleted: boolean;
+    /**
+     * Handles a move to Global changed, because Global held them
+     * @type {Array<TeamRemovedDtoKnowledgeRenamedInner>}
+     * @memberof TeamRemovedDto
+     */
+    knowledgeRenamed: Array<TeamRemovedDtoKnowledgeRenamedInner>;
+}
+/**
+ * 
+ * @export
+ * @interface TeamRemovedDtoKnowledgeRenamedInner
+ */
+export interface TeamRemovedDtoKnowledgeRenamedInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamRemovedDtoKnowledgeRenamedInner
+     */
+    from: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TeamRemovedDtoKnowledgeRenamedInner
+     */
+    to: string;
+}
+/**
+ * 
+ * @export
  * @interface TeamStage
  */
 export interface TeamStage {
@@ -14542,6 +15396,43 @@ export interface UpdateChatSettingsDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface UpdateKnowledgeDto
+ */
+export interface UpdateKnowledgeDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateKnowledgeDto
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateKnowledgeDto
+     */
+    whenToRead: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateKnowledgeDto
+     */
+    body: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateKnowledgeDto
+     */
+    handle?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof UpdateKnowledgeDto
+     */
+    rev: number;
+}
 /**
  * 
  * @export

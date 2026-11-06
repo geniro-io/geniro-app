@@ -1297,8 +1297,19 @@ describe('Settings — sections', () => {
       'Remote access',
       'Sharing',
       'Memory',
+      'Knowledge',
       'Storage',
     ]);
+  });
+
+  it('opens the Knowledge section on its switch and its agent-writes choice', async () => {
+    await mount('knowledge');
+    expect(
+      container.querySelector('#settings-knowledge-enabled'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('#settings-knowledge-agent-writes'),
+    ).not.toBeNull();
   });
 
   it('keeps run configurations off Settings — they belong to their projects', async () => {

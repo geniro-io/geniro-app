@@ -358,6 +358,7 @@ export class TeamChangeService {
       taskInstructions: instructions?.taskInstructions ?? undefined,
       projectInstructions: instructions?.projectInstructions ?? undefined,
       memoryIndex: instructions?.memoryIndex ?? undefined,
+      knowledgeIndex: instructions?.knowledgeIndex ?? undefined,
     };
     const inThisRun = new Map(
       (started === null

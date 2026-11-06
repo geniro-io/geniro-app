@@ -176,6 +176,7 @@ const meta = {
     onError: () => {},
     onOpenBoard: () => {},
     onOpenTeam: () => {},
+    onOpenKnowledge: () => {},
     onDeleted: () => {},
   },
   decorators: [

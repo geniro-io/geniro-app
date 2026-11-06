@@ -1,3 +1,4 @@
+import type { EntityManager } from '@mikro-orm/sqlite';
 import { z } from 'zod';
 
 import type { InterruptCause } from '../../utils/stop-cause';
@@ -76,6 +77,57 @@ export interface RunProjectFacts {
    * card and the folder.
    */
   projectId?: string | null;
+}
+
+/** {@link RunProjectFacts} plus the team a team run belongs to; absent for a chat. */
+export type RunPlaceFacts = RunProjectFacts & {
+  teamSlug?: string | null;
+};
+
+/** Where a document or memory entry is filed and what a run reads from: at most one of the two is set on a filed row. */
+export interface RunPlace {
+  projectId: string | null;
+  teamSlug: string | null;
+}
+
+/** What a deleted project's or team's knowledge documents become. */
+export const KNOWLEDGE_FATES = ['global', 'delete'] as const;
+export type KnowledgeFate = (typeof KNOWLEDGE_FATES)[number];
+
+/** A handle a move to Global changed, because Global held it. */
+export const KnowledgeRenamedSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+});
+export type KnowledgeRenamed = z.infer<typeof KnowledgeRenamedSchema>;
+
+/** What a project's removal did to the documents filed under it. */
+export interface ProjectKnowledgeRemoval {
+  moved: number;
+  deleted: number;
+  renamed: KnowledgeRenamed[];
+  /** Announce the change; called once the removal has committed. */
+  announce: () => void;
+}
+
+/**
+ * Settles a removed project's knowledge inside the removal's own transaction.
+ * Every statement is built on `tx`: a forked one would wait on the connection
+ * the transaction holds, for ever.
+ */
+export type ProjectRemovalParticipant = (
+  projectId: string,
+  fate: KnowledgeFate,
+  tx: EntityManager,
+) => Promise<ProjectKnowledgeRemoval>;
+
+/** What deleting a project answers. */
+export interface ProjectDeleted {
+  deleted: boolean;
+  tasksRemoved: number;
+  knowledgeMoved: number;
+  knowledgeDeleted: number;
+  knowledgeRenamed: KnowledgeRenamed[];
 }
 
 /** Which project a new run belongs to and how that was settled. */

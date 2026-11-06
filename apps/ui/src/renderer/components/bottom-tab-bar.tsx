@@ -18,10 +18,13 @@ export function BottomTabBar({
   view,
   onNavigate,
   className,
+  counts = {},
 }: {
   view: AppView;
   onNavigate: (view: AppView) => void;
   className?: string;
+  /** What waits on the user, by destination. */
+  counts?: Partial<Record<AppView, number>>;
 }): React.JSX.Element {
   return (
     <nav
@@ -34,16 +37,19 @@ export function BottomTabBar({
       {NAV_ITEMS.map((item) => {
         const Icon = item.icon;
         const active = view === item.view;
+        const count = counts[item.view] ?? 0;
         return (
           <button
             key={item.view}
             type="button"
-            aria-label={item.label}
+            aria-label={
+              count > 0 ? `${item.label}, ${count} waiting` : item.label
+            }
             title={item.label}
             aria-current={active ? 'page' : undefined}
             onClick={() => onNavigate(item.view)}
             className={cn(
-              'flex flex-1 items-center justify-center outline-none transition-colors focus-visible:bg-sidebar-accent',
+              'relative flex flex-1 items-center justify-center outline-none transition-colors focus-visible:bg-sidebar-accent',
               active
                 ? 'text-sidebar-primary-strong'
                 : 'text-sidebar-foreground/60 hover:text-sidebar-foreground',
@@ -53,6 +59,13 @@ export function BottomTabBar({
               className="size-6 max-[340px]:size-5"
               strokeWidth={active ? 2.25 : 1.75}
             />
+            {count > 0 ? (
+              <span
+                data-slot="nav-count"
+                className="absolute top-1.5 right-1/4 rounded-full bg-primary px-1 text-[10px] leading-3.5 font-semibold text-primary-foreground tabular-nums">
+                {count}
+              </span>
+            ) : null}
           </button>
         );
       })}

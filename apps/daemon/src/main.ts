@@ -53,6 +53,7 @@ import {
 import { createPinoSinkStream } from './v1/diagnostics/utils/pino-sink-stream';
 import { registerSecret } from './v1/diagnostics/utils/redact';
 import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
+import { KnowledgeTextIndexService } from './v1/knowledge/services/knowledge-text-index.service';
 import { MemoryTextIndexService } from './v1/memory/services/memory-text-index.service';
 import { MIGRATION_FAILED_EXIT_CODE } from './v1/migrations/migrations.types';
 import { MigrationRunnerService } from './v1/migrations/services/migration-runner.service';
@@ -265,12 +266,14 @@ bootstrapper.addExtension(
       await app.get(StorageService).compactIfScheduled();
 
       // The full-text indexes (`db/chat-text-index.ddl.ts`,
-      // `db/memory-text-index.ddl.ts`): AFTER the schema sync, because a sync
-      // that rebuilds `items` or `memories` drops the triggers these re-create,
+      // `db/memory-text-index.ddl.ts`, `db/knowledge-text-index.ddl.ts`): AFTER
+      // the schema sync, because a sync that rebuilds `items`, `memories` or
+      // `knowledge_documents` drops the triggers these re-create,
       // and BEFORE listen, so no row can be written between the backfill and
       // the triggers that keep it current.
       await app.get(ChatTextIndexService).ensure();
       await app.get(MemoryTextIndexService).ensure();
+      await app.get(KnowledgeTextIndexService).ensure();
 
       // Reconcile chat runs left `running` by a prior crash / SIGKILL. Runs HERE
       // (after the schema sync, before listen), in this explicit order. Nest's

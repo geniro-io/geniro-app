@@ -298,6 +298,10 @@ export function installRemoteBridge(): void {
       invoke(IPC.saveMemoryExport, [markdown]) as ReturnType<
         GeniroApi['saveMemoryExport']
       >,
+    saveKnowledgeExport: (input) =>
+      invoke(IPC.saveKnowledgeExport, [input]) as ReturnType<
+        GeniroApi['saveKnowledgeExport']
+      >,
     prepareTaskWorktree: (input) =>
       invoke(IPC.prepareTaskWorktree, [input]) as ReturnType<
         GeniroApi['prepareTaskWorktree']

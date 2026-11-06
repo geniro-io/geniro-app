@@ -11,9 +11,11 @@ import { isDeepStrictEqual } from 'node:util';
 import { app } from 'electron';
 
 import {
+  DEFAULT_KNOWLEDGE,
   DEFAULT_MEMORY,
   DEFAULT_SETTINGS,
   DEFAULT_SHARING,
+  type KnowledgeSettings,
   MAX_CONFIG_PROFILES,
   MAX_FAST_ACTIONS,
   MAX_RUN_CONFIGS,
@@ -24,6 +26,7 @@ import {
 } from '../shared/contracts';
 import {
   autoRevokeAfterDaysSchema,
+  knowledgeSchema,
   MAX_SHARE_DESTINATIONS,
   memorySchema,
   settingsPatchSchema,
@@ -127,6 +130,10 @@ export function readSettings(): Settings {
       }
       if (key === 'memory') {
         salvaged[key] = salvageMemory(record[key]);
+        continue;
+      }
+      if (key === 'knowledge') {
+        salvaged[key] = salvageKnowledge(record[key]);
         continue;
       }
       if (key === 'configProfiles') {
@@ -283,6 +290,22 @@ function salvageMemory(value: unknown): MemorySettings {
     nativeMemoryOff: memorySchema.shape.nativeMemoryOff
       .catch(DEFAULT_MEMORY.nativeMemoryOff)
       .parse(record.nativeMemoryOff),
+  };
+}
+
+/** The knowledge settings field by field: one bad value keeps the other. */
+function salvageKnowledge(value: unknown): KnowledgeSettings {
+  if (typeof value !== 'object' || value === null) {
+    return DEFAULT_KNOWLEDGE;
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    enabled: knowledgeSchema.shape.enabled
+      .catch(DEFAULT_KNOWLEDGE.enabled)
+      .parse(record.enabled),
+    agentWrites: knowledgeSchema.shape.agentWrites
+      .catch(DEFAULT_KNOWLEDGE.agentWrites)
+      .parse(record.agentWrites),
   };
 }
 

@@ -18,15 +18,13 @@ import {
   type TeamSelection,
 } from '../../../teams/utils/team-reading';
 import type { ToolArgs } from '../../mcp.types';
+import { pagedText } from '../paged-text';
 import { readToolArgs } from '../tool-args';
 
 /** Ids one read may name, words one search may look for, and how long one word may be. */
 const MAX_READ_IDS = 50;
 const MAX_SEARCH_TERMS = 20;
 const MAX_SEARCH_TERM_LENGTH = 200;
-
-/** The least a page carries of its body, however long its lead. */
-const MIN_PAGE_BODY_BYTES = 1_000;
 
 const SLUG_FIELD = z
   .string()
@@ -258,7 +256,7 @@ export function teamReadText(
     const what = `search for ${read.terms.map((term) => JSON.stringify(term)).join(', ')}`;
     return found.paragraphs === 0
       ? `${TEAM_RESULT_PREFACE}\nTeam \`${wire.slug}\` at hash ${wire.hash}: no paragraph of its texts holds ${read.terms.map((term) => JSON.stringify(term)).join(' or ')}.`
-      : pagedText(
+      : teamPage(
           wire,
           `${what}: ${found.paragraphs} paragraphs in ${found.fields} fields`,
           found.text,
@@ -272,7 +270,7 @@ export function teamReadText(
   if (!parts.ok) {
     return `Not read: the team \`${wire.slug}\` has no ${parts.unknown.join(', ')} — its outline (read_teams with the slug alone) lists the ids.`;
   }
-  return pagedText(
+  return teamPage(
     wire,
     read.kind === 'full' ? 'the whole team' : 'the parts asked for',
     parts.text,
@@ -304,7 +302,7 @@ export function teamOverlaysText(
       }\n=== end ${name} ===`;
     })
     .join('\n\n');
-  return pagedText(
+  return teamPage(
     wire,
     `${overlays.length} project overlays, read-only here`,
     body,
@@ -339,7 +337,7 @@ export function teamProjectsText(
       return `=== ${name} · instructionsRevision ${project.instructionsRevision} · ${instructionsLength(project.instructionBlocks)} of ${PROJECT_INSTRUCTIONS_MAX} characters ===\n${blocks}\n=== end ${name} ===`;
     })
     .join('\n\n');
-  return pagedText(
+  return teamPage(
     wire,
     `${projects.length} projects that run it by default`,
     body,
@@ -347,44 +345,17 @@ export function teamProjectsText(
   );
 }
 
-/**
- * One page of a long answer from `offset`: cut on a line break where one
- * falls in the page's second half, so a page rarely splits a line a `find`
- * would copy. Every page names the team's hash; a different one means the
- * team changed between pages.
- */
-function pagedText(
+/** One page of a team's text; every page names the team's hash. */
+function teamPage(
   wire: Pick<TeamWire, 'slug' | 'hash'>,
   what: string,
   body: string,
   offset: number,
 ): string {
-  const lead = `${TEAM_RESULT_PREFACE}\nTeam \`${wire.slug}\` at hash ${wire.hash}, ${what}.`;
-  if (offset >= body.length && offset > 0) {
-    return `${lead} Nothing at offset ${offset}: the answer is ${body.length} characters.`;
-  }
-  const budget = Math.max(
-    MIN_PAGE_BODY_BYTES,
-    PAGE_BYTES - Buffer.byteLength(lead) - 200,
+  return pagedText(
+    `${TEAM_RESULT_PREFACE}\nTeam \`${wire.slug}\` at hash ${wire.hash}, ${what}.`,
+    body,
+    offset,
+    'A page naming another hash means the team changed — read again from offset 0.',
   );
-  let chunk = body.slice(offset, offset + budget);
-  while (chunk.length > 1 && Buffer.byteLength(chunk) > budget) {
-    chunk = chunk.slice(0, Math.floor(chunk.length * 0.9));
-  }
-  if (offset + chunk.length < body.length) {
-    const lineEnd = chunk.lastIndexOf('\n');
-    if (lineEnd > chunk.length / 2) {
-      chunk = chunk.slice(0, lineEnd + 1);
-    }
-  }
-  const end = offset + chunk.length;
-  const position =
-    offset === 0 && end >= body.length
-      ? ''
-      : ` Characters ${offset}–${end} of ${body.length}${
-          end < body.length
-            ? `; the rest: the same call with offset ${end}. A page naming another hash means the team changed — read again from offset 0.`
-            : ', the last page.'
-        }`;
-  return `${lead}${position}\n\n${chunk}`;
 }

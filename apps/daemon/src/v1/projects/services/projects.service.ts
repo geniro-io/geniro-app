@@ -24,13 +24,16 @@ import { ProjectInstructionChangeDao } from '../dao/project-instruction-change.d
 import { Project } from '../entity/project.entity';
 import { ProjectInstructionChange } from '../entity/project-instruction-change.entity';
 import {
+  type KnowledgeFate,
   MAX_PROJECTS,
   PROJECT_CHANGE_COALESCE_MS,
   type ProjectChangeOrigin,
+  type ProjectDeleted,
   type ProjectForFolder,
   type ProjectInstructionBlock,
   ProjectInstructionBlockSchema,
   type ProjectInstructionField,
+  type ProjectRemovalParticipant,
   type ProjectWire,
 } from '../projects.types';
 import {
@@ -100,6 +103,16 @@ export class ProjectsService {
     private readonly events: ProjectEventBus,
     private readonly scope: ProjectScopeService,
   ) {}
+
+  private removalParticipant: ProjectRemovalParticipant | null = null;
+
+  /**
+   * What else a project's removal settles in its transaction; registered by
+   * the knowledge module, which imports this one.
+   */
+  useRemovalParticipant(participant: ProjectRemovalParticipant): void {
+    this.removalParticipant = participant;
+  }
 
   /** Writes to one project, in arrival order: a revision check and its write must not interleave with another's. */
   private writes: Promise<unknown> = Promise.resolve();
@@ -430,7 +443,8 @@ export class ProjectsService {
    */
   async remove(
     projectId: string,
-  ): Promise<{ deleted: boolean; tasksRemoved: number }> {
+    knowledge: KnowledgeFate = 'global',
+  ): Promise<ProjectDeleted> {
     const em = this.em.fork();
     await this.require(projectId, em);
     const doomed = await this.taskDao.listForProject(projectId, em);
@@ -444,7 +458,7 @@ export class ProjectsService {
     // The chats that worked those cards go on as ordinary chats rather than
     // naming cards that are gone — the same release a single card's delete
     // makes (`releaseTaskRuns`).
-    await em.transactional(async (tx) => {
+    const settled = await em.transactional(async (tx) => {
       await this.taskDao.deleteForProject(projectId, tx);
       await releaseTaskRuns(
         this.runDao,
@@ -453,7 +467,9 @@ export class ProjectsService {
       );
       await this.labelInstructionDao.deleteForProject(projectId, tx);
       await this.projectDao.deleteById(projectId, tx);
+      return this.removalParticipant?.(projectId, knowledge, tx) ?? null;
     });
+    settled?.announce();
     // Each card's pasted images, on `TasksService.remove`'s own reasoning:
     // after the rows, outside the transaction, and one failure stepped over
     // rather than thrown — the board is already gone, so a permission error on
@@ -468,7 +484,13 @@ export class ProjectsService {
       }
     }
     this.events.publish({ projectId });
-    return { deleted: true, tasksRemoved };
+    return {
+      deleted: true,
+      tasksRemoved,
+      knowledgeMoved: settled?.moved ?? 0,
+      knowledgeDeleted: settled?.deleted ?? 0,
+      knowledgeRenamed: settled?.renamed ?? [],
+    };
   }
 
   /**

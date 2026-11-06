@@ -578,6 +578,11 @@ export const CallBlock = memo(function CallBlock({
     subagentsRunning === 0
       ? null
       : `${subagentsRunning} sub-agent${subagentsRunning === 1 ? '' : 's'}`;
+  const waitingForSubagents =
+    subagentsOut !== null &&
+    (waiting !== null || (!block.stalled && activity === null))
+      ? `waiting for ${subagentsOut}`
+      : null;
   const waitingTitle =
     waiting === null
       ? undefined
@@ -604,9 +609,9 @@ export const CallBlock = memo(function CallBlock({
       ? `waiting for ${heldCalls}`
       : heldMonitors !== null
         ? `waiting for ${heldMonitors}`
-        : waiting !== null && subagentsOut !== null
-          ? `waiting for ${subagentsOut}`
-          : null;
+        : pending
+          ? null
+          : waitingForSubagents;
   const heldTitle =
     heldCalls !== null
       ? `${callee} ended its turn with ${heldCalls} still running. This call stays open until they finish, and ${callee} is continued in it to finish its answer.`
@@ -616,16 +621,14 @@ export const CallBlock = memo(function CallBlock({
       ? `${callee} is waiting for ${heldCalls}`
       : heldMonitors !== null
         ? `${callee} is waiting for ${heldMonitors}: ${monitorNames.join('; ')}`
-        : waiting !== null
-          ? subagentsOut !== null
-            ? `${callee} is waiting for ${subagentsOut}`
-            : `${callee} ended its turn — the call stays open until it is continued`
-          : block.stalled
-            ? `${callee} has gone quiet — the call is still open`
-            : activity !== null
-              ? `${callee} is running ${activity}`
-              : subagentsOut !== null
-                ? `${callee} is waiting for ${subagentsOut}`
+        : waitingForSubagents !== null
+          ? `${callee} is ${waitingForSubagents}`
+          : waiting !== null
+            ? `${callee} ended its turn — the call stays open until it is continued`
+            : block.stalled
+              ? `${callee} has gone quiet — the call is still open`
+              : activity !== null
+                ? `${callee} is running ${activity}`
                 : // The rotating vocabulary, lower-cased to sit inside the sentence. It
                   // opens on the plain `thinking`, so a card glanced at in the first
                   // seconds reads exactly as it always has — the word only wanders once

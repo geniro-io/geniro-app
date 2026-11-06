@@ -804,8 +804,20 @@ describe('CallBlock', () => {
       act(() => root.render(<CallBlock block={block} nodes={NODES} />));
     }
 
+    function saying(rows: ChatItem[]): ChatItem[] {
+      const words = item(
+        'message',
+        { text: 'Started them.', callId: 'call-1' },
+        'poet',
+      );
+      const ending = rows.findIndex((row) => row.kind === 'turn_complete');
+      return ending === -1
+        ? [...rows, words]
+        : [...rows.slice(0, ending), words, ...rows.slice(ending)];
+    }
+
     it('says what it waits for once its own turn has ended with them out, and agrees with its mark', () => {
-      shutCard(backgrounded());
+      shutCard(saying(backgrounded()));
 
       const badge = container.querySelector('[data-slot="block-status-badge"]');
       expect(badge?.textContent).toBe('waiting');
@@ -819,6 +831,44 @@ describe('CallBlock', () => {
       expect(
         container.querySelector('[data-slot="block-pending"]')?.textContent,
       ).toBe('Poet is waiting for 10 sub-agents');
+    });
+
+    it('puts the wait beside its words on the shut band while its turn stays open', () => {
+      shutCard(saying(opening()));
+
+      expect(
+        container.querySelector('[data-slot="block-status-badge"]'),
+      ).toBeNull();
+      expect(container.textContent).toContain('Started them.');
+      expect(
+        container.querySelector('[data-slot="call-summary-held"]')?.textContent,
+      ).toBe('waiting for 10 sub-agents');
+    });
+
+    it('takes the wait off the shut band while a tool of its own runs', () => {
+      shutCard([
+        ...saying(opening()),
+        item(
+          'tool_call',
+          { id: 'own', name: 'Bash', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+
+      expect(
+        container.querySelector('[data-slot="call-summary-held"]'),
+      ).toBeNull();
+    });
+
+    it('states the wait once on a shut band with no words', () => {
+      shutCard(opening());
+
+      expect(
+        container.querySelector('[data-slot="block-pending"]')?.textContent,
+      ).toBe('Poet is waiting for 10 sub-agents');
+      expect(
+        container.querySelector('[data-slot="call-summary-held"]'),
+      ).toBeNull();
     });
 
     it('reads the turn as ended, with none out, once its last sub-agent has closed', () => {

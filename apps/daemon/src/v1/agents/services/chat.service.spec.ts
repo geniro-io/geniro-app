@@ -65,6 +65,7 @@ import type {
   RunStatusEvent,
   RunWire,
   SettleFigures,
+  HostRowWire,
 } from '../chat.types';
 import {
   HOST_BOARD_TOOLS,
@@ -1120,6 +1121,8 @@ function setup(
     /** The monitor registry a Stop reaches, when a test drives one. */
     monitors?: MonitorRegistry;
     runWrites?: RunWriteQueue;
+    /** The mailbox between threads, when a test drives one. */
+    threadInbox?: ThreadInboxService;
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot'>;
     /** What the run's project tells it; no project when absent. */
@@ -1424,6 +1427,7 @@ function setup(
     projectCards,
     opts.projectWrites as ProjectInstructionsChangeService | undefined,
     projectChats,
+    opts.threadInbox,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -6767,6 +6771,227 @@ describe('ChatService', () => {
     );
     expect(JSON.parse(marker!.payload)).toMatchObject({
       unsentMessages: [sent.deliveryId],
+    });
+  });
+
+  describe('messages from other threads', () => {
+    const entry = {
+      id: 'm1',
+      fromRunId: 'sender',
+      fromTitle: 'Sender',
+      fromMember: null,
+      text: 'the schema moved',
+    };
+    const inboxOf = (
+      overrides: Partial<ThreadInboxService> = {},
+    ): ThreadInboxService =>
+      ({
+        takeForTurn: vi.fn(async () => []),
+        markDelivered: vi.fn(async () => undefined),
+        returnDropped: vi.fn(async () => ({ deliveryIds: [], titles: [] })),
+        cancelFor: vi.fn(async () => undefined),
+        ...overrides,
+      }) as unknown as ThreadInboxService;
+    const hostRow: HostRowWire = {
+      severity: 'info',
+      message: 'Message from Sender',
+      threadMessages: [entry],
+      woke: false,
+    };
+
+    it('joins a running turn under the given id with a system row, leaving no user row', async () => {
+      const { service, claude, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'first');
+
+      await service.sendMessage(run.id, 'fenced', [], {
+        joinOnly: true,
+        hostRow,
+        deliveryId: 'join-1',
+      });
+
+      expect(
+        vi.mocked(claude.handles[0]!.sendUserMessage).mock.calls[0]![0],
+      ).toMatchObject({ text: 'fenced', deliveryId: 'join-1' });
+      const rows = await itemDao.getByRun(run.id);
+      expect(
+        rows.filter((row) => row.kind === 'message' && row.role === 'user'),
+      ).toHaveLength(1);
+      const row = rows.find((candidate) => candidate.kind === 'system');
+      expect(JSON.parse(row!.payload)).toMatchObject({
+        threadMessages: [entry],
+      });
+
+      claude.finish();
+      await drain();
+    });
+
+    it('refuses a join with no running turn and leaves the run free for the next turn', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await expect(
+        service.sendMessage(run.id, 'fenced', [], {
+          joinOnly: true,
+          hostRow,
+          deliveryId: 'join-1',
+        }),
+      ).rejects.toMatchObject({ errorCode: 'RUN_NOT_RUNNING' });
+      expect(claude.start).not.toHaveBeenCalled();
+
+      await service.sendMessage(run.id, 'first');
+      expect(claude.start).toHaveBeenCalledTimes(1);
+      claude.finish();
+      await drain();
+    });
+
+    it('refuses a join that carries a client message id', async () => {
+      const { service } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await expect(
+        service.sendMessage(run.id, 'fenced', [], {
+          joinOnly: true,
+          hostRow,
+          clientMessageId: 'c1',
+        }),
+      ).rejects.toMatchObject({ errorCode: 'JOIN_WITH_CLIENT_ID' });
+    });
+
+    it('carries what waits in the turn’s prompt, then flips it and writes one row', async () => {
+      const threadInbox = inboxOf({
+        takeForTurn: vi.fn(async () => [entry]),
+      });
+      const { service, claude, itemDao } = setup({ threadInbox });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await service.sendMessage(run.id, 'hello');
+      await drain();
+
+      const { prompt } = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+      expect(prompt.startsWith('hello\n\n')).toBe(true);
+      expect(prompt).toContain('the schema moved');
+      expect(prompt).toContain('not a request from the user');
+      expect(threadInbox.markDelivered).toHaveBeenCalledWith(run.id, ['m1']);
+      const rows = (await itemDao.getByRun(run.id)).filter(
+        (row) => row.kind === 'system',
+      );
+      expect(JSON.parse(rows[0]!.payload)).toMatchObject({
+        threadMessages: [entry],
+      });
+      expect(rows).toHaveLength(1);
+
+      claude.finish();
+      await drain();
+    });
+
+    it('carries it in a turn a wake opened, under the wake’s own row', async () => {
+      const threadInbox = inboxOf({
+        takeForTurn: vi.fn(async () => [entry]),
+      });
+      const { service, claude, itemDao } = setup({ threadInbox });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await service.sendMessage(run.id, 'a turn for you', [], {
+        ownTurn: true,
+        hostRow: { severity: 'info', message: 'Woken', woke: true },
+      });
+      await drain();
+
+      const { prompt } = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+      expect(prompt).toContain('a turn for you');
+      expect(prompt).toContain('the schema moved');
+      expect(
+        (await itemDao.getByRun(run.id)).filter(
+          (row) => row.kind === 'message' && row.role === 'user',
+        ),
+      ).toEqual([]);
+
+      claude.finish();
+      await drain();
+    });
+
+    it('takes nothing for a slash command', async () => {
+      const threadInbox = inboxOf({
+        takeForTurn: vi.fn(async () => [entry]),
+      });
+      const { service, claude } = setup({ threadInbox });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await service.sendMessage(run.id, '/review');
+      await drain();
+
+      expect(threadInbox.takeForTurn).not.toHaveBeenCalled();
+      expect((claude.start.mock.calls[0]?.[0] as AgentTurnInput).prompt).toBe(
+        '/review',
+      );
+
+      claude.finish();
+      await drain();
+    });
+
+    it('cancels what waits when the chat is archived', async () => {
+      const threadInbox = inboxOf();
+      const { service } = setup({ threadInbox });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await service.archive(run.id);
+
+      expect(threadInbox.cancelFor).toHaveBeenCalledWith(run.id, 'archived');
+    });
+
+    describe('a dropped join', () => {
+      it('goes back to waiting under one info row, with no "not sent" warning', async () => {
+        const threadInbox = inboxOf({
+          returnDropped: vi.fn(async () => ({
+            deliveryIds: ['join-1'],
+            titles: ['Sender'],
+          })),
+        });
+        const { service, claude, itemDao } = setup({ threadInbox });
+        const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+        await service.sendMessage(run.id, 'first');
+
+        claude.emit({ type: 'follow_up_dropped', deliveryIds: ['join-1'] });
+        claude.emit({ type: 'turn_cancelled' });
+        await drain();
+
+        const payloads = (await itemDao.getByRun(run.id))
+          .filter((row) => row.kind === 'system')
+          .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+        expect(payloads.filter((row) => 'unsentMessages' in row)).toEqual([]);
+        expect(
+          payloads.filter((row) =>
+            String(row.message).includes('did not reach the running turn'),
+          ),
+        ).toHaveLength(1);
+      });
+
+      it('still reports the user’s own message dropped beside it', async () => {
+        const threadInbox = inboxOf({
+          returnDropped: vi.fn(async () => ({
+            deliveryIds: ['join-1'],
+            titles: ['Sender'],
+          })),
+        });
+        const { service, claude, itemDao } = setup({ threadInbox });
+        const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+        await service.sendMessage(run.id, 'first');
+
+        claude.emit({
+          type: 'follow_up_dropped',
+          deliveryIds: ['join-1', 'user-1'],
+        });
+        claude.emit({ type: 'turn_cancelled' });
+        await drain();
+
+        const payloads = (await itemDao.getByRun(run.id))
+          .filter((row) => row.kind === 'system')
+          .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+        expect(payloads.find((row) => 'unsentMessages' in row)).toMatchObject({
+          unsentMessages: ['user-1'],
+        });
+      });
     });
   });
 

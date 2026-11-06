@@ -2389,8 +2389,11 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
 
     expect(captured.args).toEqual([
       ...CLAUDE_BASE_ARGS,
+      CLAUDE_SETTINGS_FLAG,
+      '{"crossSessionInbound":"refuse"}',
       '--disallowedTools',
       'Monitor',
+      'ListAgents',
       CLAUDE_MCP_CONFIG_FLAG,
       CLAUDE_EMPTY_MCP_CONFIG,
       CLAUDE_STRICT_MCP_CONFIG_FLAG,
@@ -2872,7 +2875,7 @@ describe('ClaudeAdapter — fast mode', () => {
     );
   });
 
-  it('passes --settings only when the turn asked for fast mode', () => {
+  it('sets fast mode only when the turn asked for it, and refuses other sessions on every turn', () => {
     const on = fakeSpawn();
     new ClaudeAdapter({ spawn: on.spawn, waitForMcpServers: false }).start(
       {
@@ -2883,9 +2886,12 @@ describe('ClaudeAdapter — fast mode', () => {
       },
       () => {},
     );
-    expect(on.captured.args).toEqual(
-      expect.arrayContaining([CLAUDE_SETTINGS_FLAG, '{"fastMode":true}']),
-    );
+    const settingsOf = (args: string[]): unknown =>
+      JSON.parse(args[args.indexOf(CLAUDE_SETTINGS_FLAG) + 1]!);
+    expect(settingsOf(on.captured.args!)).toEqual({
+      crossSessionInbound: 'refuse',
+      fastMode: true,
+    });
 
     const off = fakeSpawn();
     new ClaudeAdapter({ spawn: off.spawn, waitForMcpServers: false }).start(
@@ -2897,14 +2903,18 @@ describe('ClaudeAdapter — fast mode', () => {
       },
       () => {},
     );
-    expect(off.captured.args).not.toContain(CLAUDE_SETTINGS_FLAG);
+    expect(settingsOf(off.captured.args!)).toEqual({
+      crossSessionInbound: 'refuse',
+    });
 
     const unset = fakeSpawn();
     new ClaudeAdapter({ spawn: unset.spawn, waitForMcpServers: false }).start(
       { prompt: 'go', cwd: '/proj', model: 'claude-opus-5-5' },
       () => {},
     );
-    expect(unset.captured.args).not.toContain(CLAUDE_SETTINGS_FLAG);
+    expect(settingsOf(unset.captured.args!)).toEqual({
+      crossSessionInbound: 'refuse',
+    });
   });
 
   it('hands the CLI the run’s reply language in the same one --settings as fast mode', () => {
@@ -2922,6 +2932,7 @@ describe('ClaudeAdapter — fast mode', () => {
     const args = both.captured.args!;
     expect(args.filter((arg) => arg === CLAUDE_SETTINGS_FLAG)).toHaveLength(1);
     expect(JSON.parse(args[args.indexOf(CLAUDE_SETTINGS_FLAG) + 1]!)).toEqual({
+      crossSessionInbound: 'refuse',
       fastMode: true,
       language: 'Russian',
     });
@@ -2982,8 +2993,9 @@ describe('ClaudeAdapter — fast mode', () => {
     const args = captured.args!;
     const at = args.indexOf('--disallowedTools');
     expect(at).toBeGreaterThan(-1);
-    expect(args.slice(at + 1, at + 4)).toEqual([
+    expect(args.slice(at + 1, at + 5)).toEqual([
       'Monitor',
+      'ListAgents',
       'mcp__codegraph',
       'mcp__claude_ai_Gmail',
     ]);
@@ -4541,6 +4553,7 @@ describe('ClaudeAdapter.askOnce', () => {
     expect(args[args.indexOf('--model') + 1]).toBe('opus');
     expect(args[args.indexOf('--effort') + 1]).toBe('high');
     expect(JSON.parse(args[args.indexOf('--settings') + 1]!)).toEqual({
+      crossSessionInbound: 'refuse',
       [CLAUDE_FAST_MODE_PARAMETER_ID]: true,
     });
     expect(args.at(-1)).toBe('Sort these');

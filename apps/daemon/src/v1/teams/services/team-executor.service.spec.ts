@@ -141,6 +141,7 @@ import { TeamOverlayService } from './team-overlay.service';
 import { TeamOverlayStoreService } from './team-overlay-store.service';
 import type { TeamStoreService } from './team-store.service';
 import type { ThreadInboxService } from '../../agents/services/thread-inbox.service';
+import type { HostRowWire } from '../../agents/chat.types';
 
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
 class FakeRunDao {
@@ -1143,6 +1144,8 @@ function setup(
     claudeSpawn?: SpawnFn;
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot'>;
+    /** The mailbox between threads, when a test drives one. */
+    threadInbox?: ThreadInboxService;
     /** What the run's project tells it; no project when absent. */
     projectScope?: Partial<
       Pick<ProjectScopeService, 'placeNewRun' | 'liveNamesOf'>
@@ -1613,6 +1616,7 @@ function setup(
     runOutcomes,
     stages,
     opts.health as TeamHealthService | undefined,
+    opts.threadInbox,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -1893,6 +1897,305 @@ describe('TeamExecutorService', () => {
     expect(cursor.getConfig().followUp.interrupts).toBe(true);
     expect(cursorCaller.tellLiveNode('a', 'a question')).toBe(false);
     expect(cursor.starts[0]!.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  describe('messages from other threads', () => {
+    const entry = {
+      id: 'm1',
+      fromRunId: 'sender',
+      fromTitle: 'Sender',
+      fromMember: null,
+      text: 'the schema moved',
+    };
+    const inboxOf = (taken: (typeof entry)[] = []) =>
+      ({
+        takeForTurn: vi.fn(async () => taken),
+        markDelivered: vi.fn(async () => undefined),
+      }) as unknown as ThreadInboxService;
+    const row: HostRowWire = {
+      severity: 'info',
+      message: 'Message from Sender',
+      threadMessages: [entry],
+      woke: false,
+    };
+    const callTeam = teamOf(
+      [
+        member('orch', { instructions: 'You orchestrate.' }),
+        member('helper', {
+          name: 'Helper',
+          role: 'Researches a topic and reports what it found.',
+        }),
+      ],
+      { name: 'calls' },
+    );
+    const join = (onDropped: () => void = () => undefined) => ({
+      prompt: 'fenced text',
+      row,
+      deliveryId: 'join-1',
+      onDropped,
+    });
+    const threadRows = (itemDao: FakeItemDao, runId: string) =>
+      itemDao.items
+        .filter((item) => item.runId === runId && item.kind === 'system')
+        .map((item) => JSON.parse(item.payload) as Record<string, unknown>)
+        .filter((payload) => 'threadMessages' in payload);
+
+    it('joins the lead’s running turn with a run-level row and no user row', async () => {
+      const { service, claude, itemDao } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      await expect(service.joinThreadMessage(run.id, join())).resolves.toBe(
+        'joined',
+      );
+      await drain();
+
+      expect(claude.starts[0]!.sendUserMessage).toHaveBeenCalledWith({
+        text: 'fenced text',
+        images: [],
+        deliveryId: 'join-1',
+      });
+      const written = itemDao.items.filter(
+        (item) => item.runId === run.id && item.kind === 'system',
+      );
+      expect(
+        written.filter((item) => item.payload.includes('threadMessages'))[0]
+          ?.memberId ?? null,
+      ).toBeNull();
+      expect(userTexts(itemDao, run.id)).toEqual(['go']);
+    });
+
+    it('answers busy for a CLI whose follow-up interrupts: its running step is left alone', async () => {
+      const { service, cursor } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a', { agent: 'cursor-agent' })], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      await expect(service.joinThreadMessage(run.id, join())).resolves.toBe(
+        'busy',
+      );
+      expect(cursor.starts[0]!.sendUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('answers busy when the turn refuses the write', async () => {
+      const { service, claude } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      claude.starts[0]!.sendUserMessage.mockReturnValue(false);
+
+      await expect(service.joinThreadMessage(run.id, join())).resolves.toBe(
+        'busy',
+      );
+    });
+
+    it('releases a lead parked on its calls, so it reads the message now', async () => {
+      const { service, claude, callBroker } = setup();
+      const run = await service.startRun({
+        slug: 'c',
+        team: callTeam,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await callBroker.callAgent(run.id, 'orch', {
+        agent: 'helper',
+        message: 'look',
+        mode: 'async',
+      });
+      await drain();
+      const envelope = callBroker.awaitAgent(run.id, 'orch', {
+        call_id: 'call-1',
+      });
+      await drain();
+
+      await service.joinThreadMessage(run.id, join());
+
+      await expect(envelope).resolves.toMatchObject({
+        status: 'pending',
+        interrupted: 'user_message',
+      });
+      completeTurn(claude.starts[1]!, 'helped');
+      await drain();
+    });
+
+    it('takes a dropped join back once the turn has ended, and writes no "not sent" row', async () => {
+      const { service, claude, itemDao } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const onDropped = vi.fn();
+      await service.joinThreadMessage(run.id, join(onDropped));
+      const turn = claude.starts[0]!;
+
+      turn.emit({ type: 'follow_up_dropped', deliveryIds: ['join-1'] });
+      await drain();
+      expect(onDropped).not.toHaveBeenCalled();
+      completeTurn(turn, 'done');
+      await drain();
+
+      expect(onDropped).toHaveBeenCalledTimes(1);
+      const unsent = itemDao.items
+        .filter((item) => item.runId === run.id && item.kind === 'system')
+        .map((item) => JSON.parse(item.payload) as Record<string, unknown>)
+        .filter((payload) => 'unsentMessages' in payload);
+      expect(unsent).toEqual([]);
+    });
+
+    it('answers idle once the run has settled', async () => {
+      const { service, claude } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+
+      await expect(service.joinThreadMessage(run.id, join())).resolves.toBe(
+        'idle',
+      );
+    });
+
+    it('walks a completed run again for a wake, and the lead’s turn carries the waiting message', async () => {
+      const threadInbox = inboxOf([entry]);
+      const { service, claude, itemDao } = setup(4870, { threadInbox });
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+      vi.mocked(threadInbox.markDelivered).mockClear();
+
+      await expect(
+        service.wakeLeadForThreadMessage(
+          run.id,
+          'a turn for you',
+          { severity: 'info', message: 'Woken', woke: true },
+          () => undefined,
+        ),
+      ).resolves.toBe('woken');
+      await drain();
+
+      const prompt = claude.starts.at(-1)!.input.prompt;
+      expect(prompt).toContain('a turn for you');
+      expect(prompt).toContain('the schema moved');
+      expect(threadInbox.markDelivered).not.toHaveBeenCalled();
+
+      completeTurn(claude.starts.at(-1)!, 'read it');
+      await drain();
+      expect(threadInbox.markDelivered).toHaveBeenCalledWith(run.id, ['m1']);
+      expect(threadRows(itemDao, run.id)).not.toEqual([]);
+    });
+
+    it('starts nothing on a stopped run', async () => {
+      const { service, claude, runDao } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      await service.cancel(run.id);
+      await drain();
+      runDao.runs.get(run.id)!.status = 'cancelled';
+      const turns = claude.starts.length;
+
+      await expect(
+        service.wakeLeadForThreadMessage(
+          run.id,
+          'a turn for you',
+          { severity: 'info', message: 'Woken', woke: true },
+          () => undefined,
+        ),
+      ).resolves.toBe('refused');
+      await drain();
+
+      expect(claude.starts).toHaveLength(turns);
+    });
+
+    it('drains only into the lead’s own conversation, never a callee’s', async () => {
+      const threadInbox = inboxOf([entry]);
+      const { service, claude, callBroker } = setup(4870, { threadInbox });
+      const run = await service.startRun({
+        slug: 'c',
+        team: callTeam,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      expect(claude.starts[0]!.input.prompt).toContain('the schema moved');
+
+      await callBroker.callAgent(run.id, 'orch', {
+        agent: 'helper',
+        message: 'look',
+        mode: 'async',
+      });
+      await drain();
+
+      expect(claude.starts[1]!.input.prompt).not.toContain('the schema moved');
+      expect(threadInbox.takeForTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it('flips nothing for a turn that never took its prompt', async () => {
+      const threadInbox = inboxOf([entry]);
+      const { service, claude } = setup(4870, { threadInbox });
+      await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      claude.starts[0]!.emit({ type: 'session', sessionId: 's-1' });
+      await drain();
+
+      expect(threadInbox.markDelivered).not.toHaveBeenCalled();
+    });
+
+    it('reads when the lead’s own conversation last ended', async () => {
+      const { service, claude } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      expect((await service.leadCacheFacts(run.id))?.endedAt).toBeNull();
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+
+      expect((await service.leadCacheFacts(run.id))?.endedAt).toEqual(
+        expect.any(Number),
+      );
+    });
   });
 
   it('delivers a tell again once the turn that dropped it has ended, and writes no unsent row', async () => {

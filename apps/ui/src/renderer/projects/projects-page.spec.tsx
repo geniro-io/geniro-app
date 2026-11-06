@@ -1088,19 +1088,58 @@ describe('Projects page', () => {
         expect.objectContaining({ slug: 'crew', projectId: 'p1' }) as unknown,
       );
       expect(section.textContent).not.toContain('Be brief.');
-      expect(section.textContent).not.toContain('Add block for');
-      expect(
-        section.querySelector('[data-slot="project-scope-instructions"]'),
-      ).toBeNull();
     });
 
-    it('still lists a block the overlay already carries, with no way to add another', async () => {
+    it('adds a block with an empty overlay, narrows it to a member, and saves it to the overlay, never the team', async () => {
+      const el = await mountOpen();
+
+      const section = el.querySelector('[data-slot="project-team"]')!;
+      expect(section.textContent).toContain('No blocks only One carries yet.');
+      await act(async () => {
+        buttonReading('Add block for One').click();
+      });
+      type(field('block-block-1-title'), 'Checklist');
+      type(field('block-block-1-text'), 'Run tests.');
+      for (const control of [
+        () => buttonNamed('Reaches Everyone'),
+        () => buttonReading('Picked members'),
+        () => buttonNamed('Lead'),
+      ]) {
+        await act(async () => {
+          control().click();
+        });
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      });
+
+      expect(teamsApi.saveTeamOverlay).toHaveBeenLastCalledWith({
+        slug: 'crew',
+        projectId: 'p1',
+        saveTeamOverlayDto: {
+          overlay: {
+            instructionBlocks: [
+              {
+                id: 'block-1',
+                title: 'Checklist',
+                text: 'Run tests.',
+                audience: ['lead'],
+              },
+            ],
+          },
+          baseHash: expect.any(String) as unknown as string,
+        },
+      });
+      expect(teamsApi.saveTeam).not.toHaveBeenCalled();
+    });
+
+    it('lists a block the overlay already carries and gives a new one an id of its own', async () => {
       teamsApi.getTeamOverlay.mockResolvedValue(
         overlayWire(
           {
             instructionBlocks: [
               {
-                id: 'p1',
+                id: 'block-1',
                 title: 'Project only',
                 text: 'Use staging.',
                 audience: 'everyone',
@@ -1120,11 +1159,13 @@ describe('Projects page', () => {
         blocks.querySelector<HTMLInputElement>('input')?.value ??
           blocks.textContent,
       ).toContain('Project only');
-      expect(
-        [...blocks.querySelectorAll('button')].some((b) =>
-          b.textContent?.includes('Add'),
-        ),
-      ).toBe(false);
+
+      await act(async () => {
+        buttonReading('Add block for One').click();
+      });
+
+      expect(field('block-block-2-title')).not.toBeNull();
+      expect(field('block-block-1-title').value).toBe('Project only');
     });
 
     it('opens a member beside the page in the project’s mode and saves an extra instruction to the overlay, never the team', async () => {

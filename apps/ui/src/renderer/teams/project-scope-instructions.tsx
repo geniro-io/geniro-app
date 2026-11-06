@@ -4,20 +4,23 @@ import { InstructionsCard } from './instructions-card';
 type MemberRef = Parameters<typeof InstructionsCard>[0]['members'][number];
 
 /**
- * The blocks a project's overlay of its team still carries. A project's own
- * text lives in its instructions, so nothing adds one here; what an overlay
- * already holds stays visible, editable and removable, since its runs carry it.
+ * The blocks a project's overlay adds to its team. Each reaches the members it
+ * names, which the project's own instructions cannot: those reach every member.
  */
 export function ProjectScopeInstructions({
+  projectName,
   overlayBlocks,
   members,
   overlaySizeOf,
+  onAdd,
   onChange,
   onRemove,
 }: {
+  projectName: string;
   overlayBlocks: readonly InstructionBlock[];
   members: readonly MemberRef[];
   overlaySizeOf: (blockId: string) => InstructionBlockSize | undefined;
+  onAdd: () => void;
   onChange: (
     blockId: string,
     patch: Partial<Omit<InstructionBlock, 'id'>>,
@@ -39,6 +42,9 @@ export function ProjectScopeInstructions({
         issues={new Map()}
         warnings={new Map()}
         blockSizes={sizes}
+        addLabel={`Add block for ${projectName}`}
+        emptyLabel={`No blocks only ${projectName} carries yet.`}
+        onAdd={onAdd}
         onChange={onChange}
         onRemove={onRemove}
       />

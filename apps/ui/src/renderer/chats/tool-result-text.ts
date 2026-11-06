@@ -20,6 +20,19 @@ export function resultTextOf(result: unknown): string | null {
   return record === null ? null : resultTextOf(record.content);
 }
 
+/**
+ * A tool call's arguments. A CLI may wrap an MCP call's as
+ * `{toolName, args}`, keeping the tool's own one level down.
+ */
+export function toolCallArgsOf(
+  payload: unknown,
+): Record<string, unknown> | null {
+  const input = recordOf(recordOf(payload)?.input);
+  return (
+    (typeof input?.toolName === 'string' ? recordOf(input.args) : null) ?? input
+  );
+}
+
 /** The reason after a refusal's `CODE: ` prefix, or the line itself. */
 export function refusalReason(text: string): string {
   const line = text.split('\n', 1)[0]?.trim() ?? '';

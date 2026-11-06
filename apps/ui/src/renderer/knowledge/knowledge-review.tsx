@@ -30,7 +30,9 @@ export function KnowledgeReview({
   const unseenBase = !isNew && revision.document.approvedAt === null;
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <BackLink label="Waiting for review" onClick={onBack} />
+      <div>
+        <BackLink label="Waiting for review" onClick={onBack} />
+      </div>
       <header className="flex min-w-0 flex-col gap-1">
         <h2 className="text-title font-semibold break-words">
           {revision.title}

@@ -51,7 +51,9 @@ export function KnowledgeDocumentView({
   const archived = document.status === 'archived';
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <BackLink label="Knowledge" onClick={onBack} />
+      <div>
+        <BackLink label="Knowledge" onClick={onBack} />
+      </div>
       {archived ? (
         <KnowledgeNote
           action={

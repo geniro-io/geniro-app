@@ -81,13 +81,15 @@ export function KnowledgeHistory({
   const current = detail?.rev === document.rev;
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <BackLink label={document.title} onClick={onBack} />
+      <div>
+        <BackLink label={document.title} onClick={onBack} />
+      </div>
       <h2 className="text-title font-semibold">History</h2>
       {error === null ? null : (
         <ErrorBanner message={error} onDismiss={() => setError(null)} />
       )}
       <div className="grid min-w-0 gap-4 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
-        <ul className="flex min-w-0 flex-col gap-1">
+        <ul className="flex min-w-0 flex-col divide-y divide-border/60 self-start overflow-hidden rounded-card bg-card ring-1 ring-border">
           {(revisions ?? []).map((revision) => (
             <li key={revision.id}>
               <button
@@ -95,10 +97,10 @@ export function KnowledgeHistory({
                 aria-pressed={revision.id === selected}
                 onClick={() => setSelected(revision.id)}
                 className={cn(
-                  'flex w-full min-w-0 flex-col gap-0.5 rounded-control p-2 text-left text-sm hover:bg-accent',
+                  'flex w-full min-w-0 flex-col gap-0.5 p-2 text-left text-sm hover:bg-accent',
                   revision.id === selected && 'bg-accent',
                 )}>
-                <span className="flex items-center gap-2 font-medium">
+                <span className="flex items-center gap-2 font-semibold">
                   rev {revision.rev}
                   {revision.rev === document.rev ? (
                     <Badge variant="muted">Current</Badge>

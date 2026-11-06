@@ -11,7 +11,12 @@ import { useLatestCallback } from '../components/use-latest-callback';
 import { currentOf } from '../knowledge/knowledge-text';
 import type { BlockStatus } from './block-shell';
 import { type GeniroKnowledgeTool, geniroKnowledgeToolOf } from './geniro-tool';
-import { recordOf, refusalReason, resultTextOf } from './tool-result-text';
+import {
+  recordOf,
+  refusalReason,
+  resultTextOf,
+  toolCallArgsOf,
+} from './tool-result-text';
 import { Dot, plural } from './tool-row-parts';
 import type { ToolPair } from './transcript-groups';
 import { payloadString } from './transcript-payload';
@@ -85,6 +90,8 @@ export type KnowledgeToolEntry =
   | {
       tool: 'knowledge_read';
       handle: string;
+      /** Null where the result does not say. */
+      rev: number | null;
       documents: KnowledgeDocLine[];
       changed: boolean;
       failure: string | null;
@@ -110,6 +117,7 @@ const SEARCH_TOTAL =
 const SEARCH_NONE =
   /^(?:No knowledge document this run sees matches|This run sees no knowledge documents)/;
 const READ_CHANGED = /^The document `[^`]+` changed:/;
+const READ_REV = /^- \S+ \(rev (\d+),/m;
 const SAVED = /^Saved `([^`]+)` at rev \d+\./;
 const PROPOSED = /^Proposed (a new document|a change to) `([^`]+)`:/;
 const SAVE_STALE = /^Not saved: `([^`]+)` is at rev \d+ now\./;
@@ -152,6 +160,11 @@ export function knowledgeToolDocsOf(text: string | null): KnowledgeDocLine[] {
       },
     ];
   });
+}
+
+function revOf(text: string | null): number | null {
+  const rev = READ_REV.exec(text ?? '')?.[1];
+  return rev === undefined ? null : Number(rev);
 }
 
 function searchCount(text: string, shown: number): number | null {
@@ -203,6 +216,7 @@ function readEntry(
     return {
       tool: 'knowledge_read',
       handle,
+      rev: null,
       documents: [],
       changed: false,
       failure: text === null ? null : refusalReason(text),
@@ -224,6 +238,7 @@ function readEntry(
   return {
     tool: 'knowledge_read',
     handle,
+    rev: changed ? null : revOf(text),
     documents: changed ? [] : named,
     changed,
     failure: null,
@@ -335,7 +350,7 @@ export function knowledgeToolEntryOf(
   if (tool === null) {
     return null;
   }
-  const args = recordOf(recordOf(pair.call.payload)?.input);
+  const args = toolCallArgsOf(pair.call.payload);
   if (args === null) {
     return null;
   }
@@ -419,18 +434,18 @@ function Detail({
     case 'knowledge_search':
       return (
         <>
+          {entry.query === null ? null : (
+            <>
+              <Dot />
+              <span className="min-w-0 truncate text-muted-foreground/70">
+                “{entry.query}”
+              </span>
+            </>
+          )}
           {entry.count === null ? null : (
             <>
               <Dot />
               <span>{plural(entry.count, 'document')}</span>
-            </>
-          )}
-          {entry.query === null ? null : (
-            <>
-              {' '}
-              <span className="min-w-0 truncate text-muted-foreground/70">
-                “{entry.query}”
-              </span>
             </>
           )}
           {entry.failure === null ? null : (
@@ -458,11 +473,10 @@ function Detail({
           </>
         );
       }
-      const title = entry.documents[0]?.title ?? null;
-      return title === null ? null : (
+      return entry.rev === null ? null : (
         <>
           <Dot />
-          <span className="min-w-0 truncate text-foreground">{title}</span>
+          <span>rev {entry.rev}</span>
         </>
       );
     }

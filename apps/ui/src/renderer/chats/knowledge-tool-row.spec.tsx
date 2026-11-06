@@ -123,7 +123,7 @@ describe('knowledge_search', () => {
         },
       ),
     );
-    expect(line()).toBe('Searched knowledge · 2 documents “release”');
+    expect(line()).toBe('Searched knowledge · “release” · 2 documents');
   });
 
   it('counts every document a search matched, not only the ones it showed', () => {
@@ -139,7 +139,7 @@ describe('knowledge_search', () => {
         },
       ),
     );
-    expect(line()).toBe('Searched knowledge · 9 documents “release”');
+    expect(line()).toBe('Searched knowledge · “release” · 9 documents');
   });
 
   it('says 0 documents for a search that matched nothing, and 1 document in the singular', () => {
@@ -150,7 +150,7 @@ describe('knowledge_search', () => {
         { text: 'No knowledge document this run sees matches "zebra".' },
       ),
     );
-    expect(line()).toBe('Searched knowledge · 0 documents “zebra”');
+    expect(line()).toBe('Searched knowledge · “zebra” · 0 documents');
     draw(
       pair(
         'knowledge_search',
@@ -163,7 +163,7 @@ describe('knowledge_search', () => {
         },
       ),
     );
-    expect(line()).toBe('Searched knowledge · 1 document “commit”');
+    expect(line()).toBe('Searched knowledge · “commit” · 1 document');
   });
 
   it('lists what the run sees when the search named no words', () => {
@@ -195,7 +195,7 @@ describe('knowledge_search', () => {
         },
       ),
     );
-    expect(line()).toBe('Searched knowledge · 1 document “commit”');
+    expect(line()).toBe('Searched knowledge · “commit” · 1 document');
   });
 
   it('names no count for a refused search, reads the refusal as the row’s reason, and says it is running while it is', () => {
@@ -211,7 +211,7 @@ describe('knowledge_search', () => {
       { status: 'error' },
     );
     expect(line()).toBe(
-      'Searched knowledge “release” · the user has turned knowledge off; work without it.',
+      'Searched knowledge · “release” · the user has turned knowledge off; work without it.',
     );
     expect(
       container.querySelector('[data-role="knowledge-tool"] .font-medium')
@@ -223,7 +223,7 @@ describe('knowledge_search', () => {
 });
 
 describe('knowledge_read', () => {
-  it('shows the title of the document read and never its body', () => {
+  it('shows the revision read and never its body', () => {
     draw(
       pair(
         'knowledge_read',
@@ -233,7 +233,7 @@ describe('knowledge_read', () => {
         },
       ),
     );
-    expect(line()).toBe('Read release-checklist · Release checklist');
+    expect(line()).toBe('Read release-checklist · rev 7');
     expect(container.textContent).not.toContain('Tag after CI.');
   });
 
@@ -697,6 +697,22 @@ describe('the documents a panel reads as they stand now', () => {
     expect(container.textContent).toContain(
       'Nothing in Knowledge matches this search now.',
     );
+  });
+
+  it('reads the arguments a CLI keeps one level down', async () => {
+    const entry = knowledgeToolEntryOf({
+      ...pair('knowledge_search', {}, { text: { success: true } }),
+      call: item('tool_call', {
+        id: 'c1',
+        name: `${SERVER}: knowledge_search`,
+        input: {
+          providerIdentifier: SERVER,
+          toolName: 'knowledge_search',
+          args: { query: 'release' },
+        },
+      }),
+    });
+    expect(entry).toMatchObject({ tool: 'knowledge_search', query: 'release' });
   });
 
   it('offers a read’s document from its arguments when the result has no text', async () => {

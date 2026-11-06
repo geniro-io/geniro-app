@@ -310,13 +310,16 @@ describe('ThreadInboxService.wakesInLastHour', () => {
     await h.seedMessage({ wokeAt: new Date(T0.getTime() - 61 * MINUTE) });
     await h.seedMessage({ wokeAt: new Date(T0.getTime() - 120 * MINUTE) });
     await h.seedMessage({ wokeAt: null });
-    await h.seedMessage({ toRunId: 'elsewhere', wokeAt: T0 });
+    await h.seedMessage({ toRunId: 'elsewhere', wokeAt: T0, wakes: 1 });
 
     expect(await h.service.wakesInLastHour(TARGET)).toBe(1);
 
     const waiting = await h.seedMessage({});
-    await h.service.markWoken(TARGET, waiting.id);
+    await h.service.markWoken(TARGET, waiting);
     expect(await h.service.wakesInLastHour(TARGET)).toBe(2);
+
+    await h.service.markWoken(TARGET, { id: waiting.id, wakes: 1 });
+    expect(await h.service.wakesInLastHour(TARGET)).toBe(3);
   });
 });
 
@@ -474,6 +477,21 @@ describe('ThreadInboxService.cancelFor', () => {
 });
 
 describe('ThreadInboxService.remove', () => {
+  it('refuses a message a starting turn already read, and frees it once delivered', async () => {
+    const h = await threadInboxDb();
+    const message = await h.seedMessage({});
+    await h.service.takeForTurn(TARGET);
+
+    await expect(h.service.remove(TARGET, message.id)).rejects.toMatchObject({
+      errorCode: 'THREAD_MESSAGE_TAKEN',
+    });
+
+    await h.service.markDelivered(TARGET, [message.id]);
+    await expect(h.service.remove(TARGET, message.id)).rejects.toMatchObject({
+      errorCode: 'THREAD_MESSAGE_NOT_FOUND',
+    });
+  });
+
   it('tells the sender its message was removed, and a removed message is never taken', async () => {
     const h = await threadInboxDb();
     await h.seedRun(TARGET, { title: 'Release' });

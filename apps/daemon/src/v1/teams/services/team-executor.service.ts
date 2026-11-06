@@ -1683,15 +1683,20 @@ export class TeamExecutorService
     }
     const lead = callerNodeOf(caller);
     let clock: TurnCacheClock | undefined;
+    let statedTtl: number | null = null;
     for (const turn of await this.kindRows.rowsOf(
       runId,
       USAGE_ITEM_KINDS,
       'fresh',
     )) {
-      const payload = asRecord(parseJsonColumn(turn.payload));
-      if (turn.memberId === lead && typeof payload?.callId !== 'string') {
-        clock = advanceCacheClock(clock, turn.createdAt, payload);
+      if (turn.memberId !== lead) {
+        continue;
       }
+      const payload = asRecord(parseJsonColumn(turn.payload));
+      if (typeof payload?.callId !== 'string') {
+        clock = advanceCacheClock(clock, turn.createdAt, payload, statedTtl);
+      }
+      statedTtl = statedTtlOf(payload) ?? statedTtl;
     }
     const row = await this.nodeStateDao.getByRunNode(
       runId,

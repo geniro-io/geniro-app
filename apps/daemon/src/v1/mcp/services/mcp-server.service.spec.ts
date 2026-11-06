@@ -3700,11 +3700,11 @@ describe('McpServerService — what the descriptions tell a model', () => {
     );
     expect(find(tools, HOST_SEARCH_CHATS_TOOL)).toMatch(/archived/);
     expect(threads).not.toContain('call_agent');
-    expect(threads).not.toContain('list_agent_threads');
+    expect(threads).toContain('list_agent_threads');
     expect(message).toContain(HOST_LIST_THREADS_TOOL);
-    expect(message).not.toContain('message_agent');
-    expect(find(tools, 'list_agent_threads')).toContain('call_agent');
-    expect(find(tools, 'message_agent')).toMatch(/callee/);
+    expect(message).toContain('message_agent');
+    expect(find(tools, 'list_agent_threads')).toContain(HOST_LIST_THREADS_TOOL);
+    expect(find(tools, 'message_agent')).toContain(HOST_MESSAGE_THREAD_TOOL);
   });
 
   it('says await_agent can return for a message from another thread, not only from the user', async () => {

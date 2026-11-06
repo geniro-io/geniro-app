@@ -47,12 +47,11 @@ function tool(
     projectChats?: ProjectChatBroker;
   } = {},
 ) {
-  return new ListThreadsTool(
-    threads as ThreadDeliveryService,
-    brokers.analysis ?? new AnalysisBroker(),
-    brokers.teamBuilders ?? new TeamBuilderBroker(),
-    brokers.projectChats ?? new ProjectChatBroker(),
-  );
+  return new ListThreadsTool(threads as ThreadDeliveryService, {
+    analysis: brokers.analysis ?? new AnalysisBroker(),
+    teamBuilders: brokers.teamBuilders ?? new TeamBuilderBroker(),
+    projectChats: brokers.projectChats ?? new ProjectChatBroker(),
+  });
 }
 
 function textOf(result: { content: { text: string }[] }): string {

@@ -20,6 +20,7 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ChatService } from '../../agents/services/chat.service';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
 import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
@@ -36,8 +37,10 @@ import {
   threadMessagesPrompt,
   threadMessagesRow,
   threadWakeRow,
+  UNTITLED_THREAD,
 } from '../../agents/utils/thread-message-text';
 import { isMessageableThread } from '../../agents/utils/thread-runs';
+import { redactSecrets } from '../../diagnostics/utils/redact';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { Run } from '../../runs/entity/run.entity';
 import { isColdAndLarge } from '../utils/prompt-cache-standing';
@@ -45,6 +48,12 @@ import { TeamExecutorService } from './team-executor.service';
 
 /** How many runs a listing reads before it hides the caller and ranks its project. */
 const THREAD_LIST_WINDOW = 200;
+
+interface RouteTerms {
+  mayJoin: boolean;
+  /** A boot sending again what a wake was already spent on. */
+  resending: boolean;
+}
 
 interface Routed {
   outcome: ThreadMessageOutcome;
@@ -55,7 +64,12 @@ interface Routed {
 type Routable = ThreadMessageRowEntry & {
   wake: boolean;
   wokeAt: Date | null;
+  wakes: number;
 };
+
+function titleOf(run: Run): string {
+  return redactSecrets(run.title ?? UNTITLED_THREAD);
+}
 
 /**
  * Routes a message from another thread to where it can be read: JOINED into
@@ -70,6 +84,8 @@ type Routable = ThreadMessageRowEntry & {
 export class ThreadDeliveryService implements OnModuleInit {
   private readonly logger = new Logger(ThreadDeliveryService.name);
   private readonly routing = new KeyedChain();
+  /** Team runs whose lead was woken and has not ended that turn yet. */
+  private readonly wakingLeads = new Set<string>();
 
   constructor(
     private readonly em: EntityManager,
@@ -77,6 +93,7 @@ export class ThreadDeliveryService implements OnModuleInit {
     private readonly projectDao: ProjectDao,
     private readonly inbox: ThreadInboxService,
     private readonly chats: ChatService,
+    private readonly approvals: ApprovalRegistry,
     private readonly executor: TeamExecutorService,
     private readonly processes: ProcessRegistry,
     private readonly adapters: AgentAdapterRegistry,
@@ -148,7 +165,7 @@ export class ThreadDeliveryService implements OnModuleInit {
       .slice(0, query.limit)
       .map((run) => ({
         thread: run.id,
-        title: run.title ?? 'Untitled thread',
+        title: titleOf(run),
         kind: run.teamId === null ? ('chat' as const) : ('team' as const),
         status: this.statusOf(run),
         agent: run.agentKind ?? null,
@@ -159,8 +176,15 @@ export class ThreadDeliveryService implements OnModuleInit {
       }));
   }
 
+  /** A question waits for the user: a chat's card, or any member's in a team. */
+  private awaitsAnswer(run: Run): boolean {
+    return run.teamId === null
+      ? this.chats.hasQuestionWaiting(run.id)
+      : this.approvals.awaitingFor(run.id) === 'question';
+  }
+
   private statusOf(run: Run): ThreadListRow['status'] {
-    if (this.chats.hasQuestionWaiting(run.id)) {
+    if (this.awaitsAnswer(run)) {
       return 'needs_user';
     }
     if (run.status === 'cancelled') {
@@ -188,10 +212,13 @@ export class ThreadDeliveryService implements OnModuleInit {
         : null;
     const accepted = await this.inbox.accept({ ...draft, fromMember });
     const routed = await this.routing.run(draft.toRunId, () =>
-      this.route(draft.toRunId, [accepted], true),
+      this.route(draft.toRunId, [accepted], {
+        mayJoin: true,
+        resending: false,
+      }),
     );
     const target = await this.runDao.getById(draft.toRunId, this.em.fork());
-    const title = target?.title ?? 'Untitled thread';
+    const title = target === null ? UNTITLED_THREAD : titleOf(target);
     const answer: ThreadMessageAnswer = {
       outcome: routed.outcome,
       ...(routed.reason === null ? {} : { reason: routed.reason }),
@@ -207,7 +234,6 @@ export class ThreadDeliveryService implements OnModuleInit {
           outcome: routed.outcome,
           reason: routed.reason,
         },
-        null,
         draft.from.conversationId,
       ),
     );
@@ -217,16 +243,20 @@ export class ThreadDeliveryService implements OnModuleInit {
   /** Wake whoever a daemon restart left owed. */
   async republishOwed(): Promise<void> {
     for (const runId of await this.inbox.owedRunIds()) {
-      await this.release(runId);
+      await this.release(runId, true);
     }
   }
 
   private async releaseLead(runId: string, caller: string): Promise<void> {
     try {
       if (
-        (await this.inbox.listOwed(runId)).length > 0 &&
-        (await this.executor.threadLeadCaller(runId)) === caller
+        !this.wakingLeads.has(runId) &&
+        (await this.inbox.listOwed(runId)).length === 0
       ) {
+        return;
+      }
+      if ((await this.executor.threadLeadCaller(runId)) === caller) {
+        this.wakingLeads.delete(runId);
         await this.release(runId);
       }
     } catch (err) {
@@ -237,12 +267,12 @@ export class ThreadDeliveryService implements OnModuleInit {
   }
 
   /** What a thread is owed goes out now, or says why it still waits. */
-  private async release(runId: string): Promise<void> {
+  private async release(runId: string, resending = false): Promise<void> {
     try {
       await this.routing.run(runId, async () => {
         const owed = await this.inbox.listOwed(runId);
         if (owed.length > 0) {
-          await this.route(runId, owed, false);
+          await this.route(runId, owed, { mayJoin: false, resending });
         }
       });
     } catch (err) {
@@ -255,7 +285,7 @@ export class ThreadDeliveryService implements OnModuleInit {
   private async route(
     runId: string,
     messages: readonly Routable[],
-    mayJoin: boolean,
+    { mayJoin, resending }: RouteTerms,
   ): Promise<Routed> {
     const run = await this.runDao.getById(runId, this.em.fork());
     const [first] = messages;
@@ -274,21 +304,24 @@ export class ThreadDeliveryService implements OnModuleInit {
         return this.leave(runId, messages, 'running_turn');
       }
     }
-    const reason = await this.whyNotWake(run, messages);
+    const reason = await this.whyNotWake(run, messages, resending);
     if (reason !== null) {
       return this.leave(runId, messages, reason);
     }
     const woke =
       run.teamId === null
-        ? await this.wakeChat(run, first, messages)
-        : await this.wakeTeam(run, first, messages);
+        ? await this.wakeChat(run, first, messages, resending)
+        : await this.wakeTeam(run, first, messages, resending);
     if (woke === 'woken') {
       return { outcome: 'woken', reason: null };
     }
+    // A refusal on a live run is a Stop on its way: its status stamps the rows.
     return this.leave(
       runId,
       messages,
-      woke === 'busy' ? 'running_turn' : 'not_started',
+      woke === 'busy' || run.status === 'running'
+        ? 'running_turn'
+        : 'not_started',
     );
   }
 
@@ -394,6 +427,7 @@ export class ThreadDeliveryService implements OnModuleInit {
   private async whyNotWake(
     run: Run,
     messages: readonly Routable[],
+    resending: boolean,
   ): Promise<ThreadMessageReason | null> {
     if (run.status === 'cancelled') {
       return 'stopped';
@@ -404,14 +438,15 @@ export class ThreadDeliveryService implements OnModuleInit {
     if (run.status === 'pending') {
       return 'not_started';
     }
-    if (this.chats.hasQuestionWaiting(run.id)) {
+    if (this.awaitsAnswer(run)) {
       return 'question';
     }
     if (messages.every((message) => !message.wake)) {
       return 'sender_opted_out';
     }
-    // A wake already spent on them: this is the same wake going out again.
-    if (messages.some((message) => message.wokeAt !== null)) {
+    // After a restart the wake already spent on them goes out again, uncounted.
+    // Anywhere else a turn came and left them, so another turn is another wake.
+    if (resending && messages.some((message) => message.wokeAt !== null)) {
       return null;
     }
     if (await this.isCold(run)) {
@@ -444,9 +479,10 @@ export class ThreadDeliveryService implements OnModuleInit {
     runId: string,
     first: Routable,
     messages: readonly Routable[],
+    resending: boolean,
   ): Promise<void> {
-    if (!messages.some((message) => message.wokeAt !== null)) {
-      await this.inbox.markWoken(runId, first.id);
+    if (!resending || !messages.some((message) => message.wokeAt !== null)) {
+      await this.inbox.markWoken(runId, first);
     }
     await this.inbox.setReason(
       runId,
@@ -459,8 +495,9 @@ export class ThreadDeliveryService implements OnModuleInit {
     run: Run,
     first: Routable,
     messages: readonly Routable[],
+    resending: boolean,
   ): Promise<'woken'> {
-    await this.spendWake(run.id, first, messages);
+    await this.spendWake(run.id, first, messages, resending);
     const wake: HostWake = {
       key: `thread-message:${run.id}`,
       owner: {
@@ -498,17 +535,25 @@ export class ThreadDeliveryService implements OnModuleInit {
     run: Run,
     first: Routable,
     messages: readonly Routable[],
+    resending: boolean,
   ): Promise<'woken' | 'busy' | 'refused'> {
+    // The woken turn's drain has not run yet, and it takes these too.
+    if (this.wakingLeads.has(run.id)) {
+      return 'woken';
+    }
     // A dropped wake leaves the rows waiting: the next pass's drain takes
     // them, and a stop comes back here as a status.
     const woke = await this.executor.wakeLeadForThreadMessage(
       run.id,
       THREAD_WAKE_PROMPT,
       threadWakeRow(first.fromRunId, first.fromTitle),
-      () => undefined,
+      () => {
+        this.wakingLeads.delete(run.id);
+      },
     );
     if (woke === 'woken') {
-      await this.spendWake(run.id, first, messages);
+      this.wakingLeads.add(run.id);
+      await this.spendWake(run.id, first, messages, resending);
     }
     return woke;
   }

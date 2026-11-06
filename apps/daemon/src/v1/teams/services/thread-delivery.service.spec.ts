@@ -12,6 +12,7 @@ import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { AgentEventBus } from '../../agents/services/agent-events.bus';
+import type { ApprovalRegistry } from '../../agents/services/approval-registry';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { HostWakeBus } from '../../agents/services/host-wake.bus';
 import type { ItemCallIndexService } from '../../agents/services/item-call-index.service';
@@ -64,6 +65,7 @@ interface Row {
   text: string;
   wake: boolean;
   wokeAt: Date | null;
+  wakes: number;
   reason: string | null;
   status: 'waiting' | 'delivered' | 'cancelled';
   deliveryId: string | null;
@@ -112,6 +114,7 @@ function harness(
         text: draft.text,
         wake: draft.wake,
         wokeAt: null,
+        wakes: 0,
         reason: null,
         status: 'waiting',
         deliveryId: null,
@@ -163,10 +166,11 @@ function harness(
         }
       },
     ),
-    markWoken: vi.fn(async (_run: string, id: string) => {
+    markWoken: vi.fn(async (_run: string, { id }: { id: string }) => {
       const row = messages.find((message) => message.id === id);
       if (row) {
         row.wokeAt = new Date();
+        row.wakes += 1;
       }
     }),
     wakesInLastHour: vi.fn(async () => opts.wakes ?? 0),
@@ -174,6 +178,9 @@ function harness(
   const chats = {
     sendMessage: vi.fn(async () => ({})),
     hasQuestionWaiting: vi.fn(() => false),
+  };
+  const approvals = {
+    awaitingFor: vi.fn((): 'question' | 'approval' | null => null),
   };
   let turnEnded: (runId: string, caller: string) => void = () => undefined;
   const executor = {
@@ -207,6 +214,7 @@ function harness(
     } as unknown as ProjectDao,
     inbox as unknown as ThreadInboxService,
     chats as unknown as ChatService,
+    approvals as unknown as ApprovalRegistry,
     executor as unknown as TeamExecutorService,
     { has: () => opts.running === true } as unknown as ProcessRegistry,
     {
@@ -242,6 +250,7 @@ function harness(
     messages,
     inbox,
     chats,
+    approvals,
     executor,
     published,
     settle: async (status: RunStatusEvent['status'], runId = TARGET) => {
@@ -475,7 +484,7 @@ describe('ThreadDeliveryService: a settling status', () => {
     expect(h.messages[0]!.reason).toBe('stopped');
   });
 
-  it('counts no new wake for a message already woken, as after a restart', async () => {
+  it('counts no new wake for a message already woken, after a restart', async () => {
     const h = harness();
     await h.send();
     h.published.length = 0;
@@ -486,6 +495,45 @@ describe('ThreadDeliveryService: a settling status', () => {
     expect(h.published).toHaveLength(1);
     expect(h.inbox.markWoken).not.toHaveBeenCalled();
     expect(h.inbox.wakesInLastHour).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts another wake for a message a finished turn left waiting, and stops at the limit', async () => {
+    const h = harness();
+    await h.send();
+    h.published.length = 0;
+    h.inbox.markWoken.mockClear();
+
+    await h.settle('completed');
+
+    expect(h.published).toHaveLength(1);
+    expect(h.inbox.markWoken).toHaveBeenCalledTimes(1);
+
+    h.published.length = 0;
+    h.inbox.wakesInLastHour.mockResolvedValue(6);
+    await h.settle('completed');
+
+    expect(h.published).toEqual([]);
+    expect(h.messages[0]!.reason).toBe('wake_limit');
+  });
+
+  it('holds a cold large thread back from a re-wake too', async () => {
+    const h = harness();
+    await h.send();
+    h.published.length = 0;
+    h.runs.set(
+      TARGET,
+      runOf({
+        promptCacheExpiresAt: new Date(Date.now() - 60_000),
+        promptCacheTtlMs: 300_000,
+        contextTokens: 900_000,
+        contextWindowTokens: 1_000_000,
+      }),
+    );
+
+    await h.settle('completed');
+
+    expect(h.published).toEqual([]);
+    expect(h.messages[0]!.reason).toBe('cold_and_large');
   });
 
   it('ignores a run going live', async () => {
@@ -525,6 +573,58 @@ describe('ThreadDeliveryService: a team', () => {
       status: 'waiting',
       deliveryId: null,
     });
+  });
+
+  it('starts nothing while any member’s question waits for the user', async () => {
+    const h = harness({ teamId: 'team-1', status: 'completed' });
+    h.approvals.awaitingFor.mockReturnValue('question');
+
+    await expect(h.send()).resolves.toMatchObject({ reason: 'question' });
+    expect(h.executor.wakeLeadForThreadMessage).not.toHaveBeenCalled();
+  });
+
+  it('is not held back by a permission card', async () => {
+    const h = harness({ teamId: 'team-1', status: 'completed' });
+    h.approvals.awaitingFor.mockReturnValue('approval');
+
+    await expect(h.send()).resolves.toMatchObject({ outcome: 'woken' });
+  });
+
+  it('asks the woken lead once: a second send before its turn ended joins that wake', async () => {
+    const h = harness({ teamId: 'team-1', status: 'completed' });
+    await h.send();
+
+    await expect(h.send(true, 'again')).resolves.toMatchObject({
+      outcome: 'woken',
+    });
+    await h.settle('completed');
+    expect(h.executor.wakeLeadForThreadMessage).toHaveBeenCalledTimes(1);
+
+    await h.endTurn('lead');
+    expect(h.executor.wakeLeadForThreadMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('wakes again once a dropped wake came back', async () => {
+    const h = harness({ teamId: 'team-1', status: 'completed' });
+    await h.send();
+    const dropped = h.executor.wakeLeadForThreadMessage.mock
+      .calls[0] as unknown as [string, string, HostRowWire, () => void];
+
+    dropped[3]();
+    await h.settle('completed');
+
+    expect(h.executor.wakeLeadForThreadMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves a wake refused during a Stop for the status to stamp', async () => {
+    const h = harness({ teamId: 'team-1', status: 'running' });
+    h.executor.wakeLeadForThreadMessage.mockResolvedValue('refused');
+
+    await h.send();
+    h.runs.set(TARGET, runOf({ teamId: 'team-1', status: 'cancelled' }));
+    await h.settle('cancelled');
+
+    expect(h.messages[0]!.reason).toBe('stopped');
   });
 
   it('wakes an idle lead on the fixed sentence', async () => {
@@ -646,6 +746,25 @@ describe('ThreadDeliveryService: who may reach whom', () => {
       'failed',
     ]);
     expect(listed[0]?.project).toBe('One');
+  });
+
+  it('lists a thread waiting on the user, chat or team, and a stopped one', async () => {
+    const h = harness({ status: 'cancelled' });
+    h.runs.set(
+      'team',
+      runOf({ id: 'team', teamId: 'team-1', status: 'running' }),
+    );
+    h.runs.set('chat', runOf({ id: 'chat', status: 'running' }));
+    h.approvals.awaitingFor.mockReturnValue('question');
+    h.chats.hasQuestionWaiting.mockImplementation(
+      ((runId: string) => runId === 'chat') as unknown as () => boolean,
+    );
+
+    const listed = await h.service.listThreads(SENDER, { limit: 20 });
+
+    expect(
+      Object.fromEntries(listed.map((row) => [row.thread, row.status])),
+    ).toEqual({ [TARGET]: 'stopped', team: 'needs_user', chat: 'needs_user' });
   });
 
   it('caps the listing at the limit asked for', async () => {

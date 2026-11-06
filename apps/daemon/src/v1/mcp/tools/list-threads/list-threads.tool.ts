@@ -1,7 +1,4 @@
 import { HOST_LIST_THREADS_TOOL } from '../../../agents/chat.types';
-import type { AnalysisBroker } from '../../../agents/services/analysis.broker';
-import type { ProjectChatBroker } from '../../../agents/services/project-chat.broker';
-import type { TeamBuilderBroker } from '../../../agents/services/team-builder.broker';
 import type { ThreadDeliveryService } from '../../../teams/services/thread-delivery.service';
 import type {
   McpCallContext,
@@ -10,6 +7,7 @@ import type {
 } from '../../mcp.types';
 import { BaseMcpTool } from '../base-mcp-tool';
 import { historyResultText } from '../history-mcp-tool';
+import { offersThreadTools, type ThreadToolGates } from '../thread-tools-offer';
 import { listThreadsInstructions } from './list-threads.instructions';
 import { readListThreadsArgs } from './list-threads.reader';
 import { listThreadsSchema } from './list-threads.schema';
@@ -25,19 +23,13 @@ export class ListThreadsTool extends BaseMcpTool {
 
   constructor(
     private readonly threads: ThreadDeliveryService,
-    private readonly analysis: AnalysisBroker,
-    private readonly teamBuilders: TeamBuilderBroker,
-    private readonly projectChats: ProjectChatBroker,
+    private readonly gates: ThreadToolGates,
   ) {
     super();
   }
 
-  protected isOffered({ runId, memberId }: McpListContext): boolean {
-    return (
-      !this.analysis.canAnalyse(runId, memberId) &&
-      !this.teamBuilders.canEdit(runId, memberId) &&
-      !this.projectChats.canEdit(runId, memberId)
-    );
+  protected isOffered(context: McpListContext): boolean {
+    return offersThreadTools(this.gates, context);
   }
 
   protected instructions(): string {

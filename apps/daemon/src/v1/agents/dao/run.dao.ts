@@ -82,15 +82,16 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * The threads an agent may message: chats and team runs alike, never an
-   * archived, builder, project or analysis one. `query` narrows by title.
+   * The threads an agent may message, last worked in first: chats and team
+   * runs alike, never an archived, builder, project or analysis one. `query`
+   * narrows by title.
    */
   async listThreads(
     query: string | null,
     limit: number,
     txEm?: EntityManager,
   ): Promise<Run[]> {
-    return this.listPage(
+    return this.getRepo(txEm).find(
       {
         archivedAt: null,
         editsTeamSlug: null,
@@ -99,8 +100,11 @@ export class RunDao extends BaseDao<Run> {
         analysisTeamSlug: null,
         ...(query === null ? {} : { title: { $like: `%${query}%` } }),
       },
-      { limit },
-      txEm,
+      {
+        orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+        limit,
+        disableIdentityMap: true,
+      },
     );
   }
 

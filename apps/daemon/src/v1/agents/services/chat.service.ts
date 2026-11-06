@@ -6080,26 +6080,27 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       }
       approvalMode = resolved.mode;
 
-      /**
-       * What the CLI is actually asked this turn.
-       *
-       * Two rewrites, in this order. A geniro command REPLACES the text with
-       * what its adapter says this CLI needs — the transcript still records the
-       * `/compact` the user typed, because the rewrite is what the agent is
-       * asked, not what the conversation says was asked. And a run owed a
-       * carried summary gets it prepended, once: a geniro compaction drops the
-       * agent's session, so without this the next turn opens on an agent that
-       * has forgotten the conversation it just summarised.
-       *
-       * The take is read-and-clear, so the column cannot ride a second prompt —
-       * including this one's own retry.
-       */
       const threadMessages =
         options.resumeOnly === true ||
         geniroCommand !== null ||
         isSlashCommand(text)
           ? []
           : ((await this.threadInbox?.takeForTurn(runId, em)) ?? []);
+      /**
+       * What the CLI is actually asked this turn.
+       *
+       * Three rewrites, in this order. A geniro command REPLACES the text with
+       * what its adapter says this CLI needs — the transcript still records the
+       * `/compact` the user typed, because the rewrite is what the agent is
+       * asked, not what the conversation says was asked. And a run owed a
+       * carried summary gets it prepended, once: a geniro compaction drops the
+       * agent's session, so without this the next turn opens on an agent that
+       * has forgotten the conversation it just summarised. What other threads
+       * left waiting follows the text.
+       *
+       * The take is read-and-clear, so the column cannot ride a second prompt —
+       * including this one's own retry.
+       */
       const turnPrompt =
         options.resumeOnly === true
           ? // Nothing is composed for a turn that sends no prompt — and the

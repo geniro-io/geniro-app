@@ -1,6 +1,10 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
-import { BadRequestException, NotFoundException } from '@packages/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@packages/common';
 
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import type { ThreadMessage } from '../../runs/entity/thread-message.entity';
@@ -20,6 +24,7 @@ import {
   THREAD_MESSAGES_PER_MINUTE,
   THREAD_MESSAGES_TURN_MAX_CHARS,
   threadMessageNotDeliveredSentence,
+  UNTITLED_THREAD,
 } from '../utils/thread-message-text';
 import { isMessageableThread } from '../utils/thread-runs';
 import { AgentEventBus } from './agent-events.bus';
@@ -29,6 +34,7 @@ import { RunNoticeWriter } from './run-notice.writer';
 
 const HOUR_MS = 60 * 60_000;
 const MINUTE_MS = 60_000;
+const TAKEN_HOLD_MS = 2 * MINUTE_MS;
 
 export interface ThreadMessageDraft {
   from: HostWakeOwner;
@@ -51,6 +57,12 @@ export interface ThreadMessageDraft {
 export class ThreadInboxService {
   private readonly logger = new Logger(ThreadInboxService.name);
   private readonly accepting = new KeyedChain();
+  /**
+   * When a turn's prompt took a message that is still waiting: it flips only
+   * once the turn is known to have started, and until then Remove could no
+   * longer keep it from the agent. Timed, so a turn that never started frees it.
+   */
+  private readonly takenAt = new Map<string, number>();
 
   constructor(
     private readonly em: EntityManager,
@@ -133,7 +145,7 @@ export class ThreadInboxService {
     const row = await this.messages.create(
       {
         fromRunId,
-        fromTitle: redactSecrets(sender?.title ?? 'Untitled thread'),
+        fromTitle: redactSecrets(sender?.title ?? UNTITLED_THREAD),
         fromMember: draft.fromMember,
         fromSessionKey: hostWakeSessionKey(draft.from),
         toRunId: draft.toRunId,
@@ -152,6 +164,7 @@ export class ThreadInboxService {
     txEm?: EntityManager,
   ): Promise<ThreadMessageRowEntry[]> {
     const waiting = await this.messages.listWaiting(runId, txEm);
+    const now = Date.now();
     const taken: ThreadMessageRowEntry[] = [];
     let chars = 0;
     for (const message of waiting) {
@@ -159,6 +172,7 @@ export class ThreadInboxService {
       if (chars > THREAD_MESSAGES_TURN_MAX_CHARS) {
         break;
       }
+      this.takenAt.set(message.id, now);
       taken.push(rowEntryOf(message));
     }
     return taken;
@@ -173,6 +187,9 @@ export class ThreadInboxService {
       return;
     }
     await this.messages.markDelivered(ids, deliveryId, new Date());
+    for (const id of ids) {
+      this.takenAt.delete(id);
+    }
     this.bus.publishThreadMessagesChanged(runId);
   }
 
@@ -212,11 +229,14 @@ export class ThreadInboxService {
   }
 
   wakesInLastHour(runId: string): Promise<number> {
-    return this.messages.countWakesSince(runId, new Date(Date.now() - HOUR_MS));
+    return this.messages.sumWakesSince(runId, new Date(Date.now() - HOUR_MS));
   }
 
-  async markWoken(runId: string, id: string): Promise<void> {
-    await this.messages.markWoken(id, new Date());
+  async markWoken(
+    runId: string,
+    message: Pick<ThreadMessage, 'id' | 'wakes'>,
+  ): Promise<void> {
+    await this.messages.markWoken(message.id, message.wakes + 1, new Date());
     this.bus.publishThreadMessagesChanged(runId);
   }
 
@@ -248,10 +268,22 @@ export class ThreadInboxService {
         `no message ${messageId} waits in ${runId}`,
       );
     }
+    const takenAt = this.takenAt.get(row.id);
+    if (takenAt !== undefined && Date.now() - takenAt < TAKEN_HOLD_MS) {
+      throw new ConflictException(
+        'THREAD_MESSAGE_TAKEN',
+        'a turn starting now has already read this message',
+      );
+    }
+    this.takenAt.delete(row.id);
     await this.messages.cancel([row.id], em);
     this.bus.publishThreadMessagesChanged(runId);
     const target = await this.runDao.getById(runId, em);
-    await this.tellSenders([row], target?.title ?? 'that thread', 'removed');
+    await this.tellSenders(
+      [row],
+      redactSecrets(target?.title ?? UNTITLED_THREAD),
+      'removed',
+    );
   }
 
   /** The thread is shelved or going: nothing it holds will be read. */
@@ -264,7 +296,11 @@ export class ThreadInboxService {
         em,
       );
       const target = await this.runDao.getById(runId, em);
-      await this.tellSenders(waiting, target?.title ?? 'that thread', why);
+      await this.tellSenders(
+        waiting,
+        redactSecrets(target?.title ?? UNTITLED_THREAD),
+        why,
+      );
     }
     if (why === 'deleted') {
       await this.messages.hardDeleteAddressedTo(runId, em);

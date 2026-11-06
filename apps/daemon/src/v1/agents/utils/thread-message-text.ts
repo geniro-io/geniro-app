@@ -14,6 +14,7 @@ export const THREAD_MESSAGES_PER_MINUTE = 5;
 export const THREAD_MESSAGE_REPEAT_WINDOW_MS = 10 * 60_000;
 export const THREAD_INBOX_MAX_WAITING = 50;
 export const THREAD_WAKES_PER_HOUR = 6;
+export const UNTITLED_THREAD = 'Untitled thread';
 
 /**
  * The prompt of a turn geniro opens for a waiting message. The message itself
@@ -93,6 +94,11 @@ export function threadWakeRow(
   };
 }
 
+/**
+ * TWIN PARSER: `REASON_WORDS` in
+ * `apps/ui/src/renderer/chats/thread-message-payload.ts` says the same to the
+ * sender's transcript.
+ */
 const REASON_WORDS: Record<ThreadMessageReason, string> = {
   running_turn: 'waits for the turn running there to end',
   stopped: 'waits, because the user stopped that thread',
@@ -125,7 +131,6 @@ function sentSentence(sent: ThreadMessageSentRow): string {
 /** The row the sender's transcript keeps of a send. */
 export function threadMessageSentRow(
   sent: ThreadMessageSentRow,
-  callId: string | null,
   conversationId: string | null,
 ): HostRowWire {
   return {
@@ -133,7 +138,6 @@ export function threadMessageSentRow(
     message: sentSentence(sent),
     threadMessageSent: sent,
     woke: false,
-    ...(callId === null ? {} : { callId }),
     ...(conversationId === null ? {} : { conversationId }),
   };
 }

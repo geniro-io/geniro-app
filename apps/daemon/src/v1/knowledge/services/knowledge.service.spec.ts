@@ -984,6 +984,74 @@ describe('KnowledgeService', () => {
       expect(restoredSeen.source.actor).toBe('user');
     });
 
+    describe('a run’s own search, as the transcript asks it', () => {
+      beforeEach(async () => {
+        const em = orm.em.fork();
+        em.persist(
+          make(Run, {
+            id: 'run-p1',
+            projectId: 'p1',
+            projectSource: 'explicit',
+          }),
+        );
+        await em.flush();
+      });
+
+      const handlesFound = async (query?: string): Promise<string[]> =>
+        (await service.runSearch('run-p1', query)).documents.map(
+          (row) => row.handle,
+        );
+
+      it('falls back to any word, as the agent’s search does', async () => {
+        applied(
+          await service.create(
+            doc({ handle: 'tag', place: 'project:p1', title: 'Tag a release' }),
+          ),
+        );
+
+        expect(await handlesFound('release zebraqq')).toEqual(['tag']);
+        expect(
+          (await service.search(IN_P1, 'release zebraqq')).hits.map(
+            (hit) => hit.handle,
+          ),
+        ).toEqual(['tag']);
+      });
+
+      it('never finds a document the run’s nearer one shadows', async () => {
+        applied(
+          await service.create(
+            doc({
+              handle: 'shared',
+              place: 'project:p1',
+              title: 'Near',
+              body: 'plain words',
+            }),
+          ),
+        );
+        applied(
+          await service.create(
+            doc({
+              handle: 'shared',
+              place: 'global',
+              title: 'Far',
+              body: 'hidden marker',
+            }),
+          ),
+        );
+
+        expect(await handlesFound('marker')).toEqual([]);
+      });
+
+      it('lists what the run sees when there is no query', async () => {
+        applied(
+          await service.create(doc({ handle: 'near', place: 'project:p1' })),
+        );
+        applied(await service.create(doc({ handle: 'far', place: 'global' })));
+
+        expect(await handlesFound()).toEqual(['near', 'far']);
+      });
+    });
+
     it('lists a handle only in a run’s own places, nearest first', async () => {
       const em = orm.em.fork();
       em.persist([

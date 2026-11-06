@@ -1,9 +1,12 @@
 import { ConflictException, NotFoundException } from '@packages/common';
 import { describe, expect, it, vi } from 'vitest';
 
-import type {
-  KnowledgeDocumentDto,
-  KnowledgeRefusal,
+import { KnowledgeSearchArgsSchema } from '../../mcp/tools/knowledge-search/knowledge-search.reader';
+import {
+  KNOWLEDGE_QUERY_MAX_CHARS,
+  type KnowledgeDocumentDto,
+  type KnowledgeRefusal,
+  KnowledgeRunSearchQuerySchema,
 } from '../knowledge.types';
 import type { KnowledgeService } from '../services/knowledge.service';
 import { KnowledgeController } from './knowledge.controller';
@@ -78,5 +81,22 @@ describe('KnowledgeController', () => {
     await expect(
       subject.create({ place: 'global', ...PATCH }),
     ).resolves.toEqual(DOC);
+  });
+
+  it('searches for a run with the query the run’s own tool accepts', () => {
+    const longest = 'x'.repeat(KNOWLEDGE_QUERY_MAX_CHARS);
+    const runSearch = vi.fn(async () => ({ documents: [] }));
+    void controller({ runSearch }).runSearch('run-1', { q: longest });
+
+    expect(runSearch).toHaveBeenCalledExactlyOnceWith('run-1', longest);
+    expect(
+      KnowledgeRunSearchQuerySchema.safeParse({ q: longest }).success,
+    ).toBe(true);
+    expect(
+      KnowledgeSearchArgsSchema.safeParse({ query: `${longest}x` }).success,
+    ).toBe(false);
+    expect(
+      KnowledgeRunSearchQuerySchema.safeParse({ q: `${longest}x` }).success,
+    ).toBe(false);
   });
 });

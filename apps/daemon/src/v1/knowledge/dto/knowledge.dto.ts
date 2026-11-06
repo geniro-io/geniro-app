@@ -15,6 +15,8 @@ import {
   KnowledgeRevisionDetailSchema,
   KnowledgeRevisionListSchema,
   KnowledgeRevisionRestoreSchema,
+  KnowledgeRunSearchQuerySchema,
+  KnowledgeRunSearchSchema,
 } from '../knowledge.types';
 
 export class KnowledgeListQueryDto extends createZodDto(
@@ -23,6 +25,14 @@ export class KnowledgeListQueryDto extends createZodDto(
 
 export class KnowledgeListDto extends createZodDto(
   z.object(KnowledgeListSchema.shape),
+) {}
+
+export class KnowledgeRunSearchQueryDto extends createZodDto(
+  KnowledgeRunSearchQuerySchema,
+) {}
+
+export class KnowledgeRunSearchDto extends createZodDto(
+  z.object(KnowledgeRunSearchSchema.shape),
 ) {}
 
 export class KnowledgeCountsDto extends createZodDto(KnowledgeCountsSchema) {}

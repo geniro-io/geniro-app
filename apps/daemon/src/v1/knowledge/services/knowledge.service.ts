@@ -56,6 +56,7 @@ import {
   type KnowledgeRevisionDetail,
   type KnowledgeRevisionHeadDto,
   type KnowledgeRevisionList,
+  type KnowledgeRunSearch,
   type KnowledgeSaveInput,
   type KnowledgeSaveOutcome,
   type KnowledgeSearchResult,
@@ -211,17 +212,41 @@ export class KnowledgeService {
   ): Promise<KnowledgeSearchResult> {
     const em = this.em.fork();
     const cap = Math.min(Math.max(limit, 1), KNOWLEDGE_SEARCH_MAX);
+    const hits = await this.visibleMatches(place, query, em);
+    return { hits: hits.slice(0, cap).map(toHit), total: hits.length };
+  }
+
+  /** {@link search} for the run itself, as the transcript reads it back. */
+  async runSearch(
+    runId: string,
+    query: string | undefined,
+  ): Promise<KnowledgeRunSearch> {
+    const em = this.em.fork();
+    const hits = await this.visibleMatches(
+      await this.memory.scopeOf(runId),
+      query,
+      em,
+    );
+    return {
+      documents: await this.toHeads(hits.slice(0, KNOWLEDGE_SEARCH_MAX), em),
+    };
+  }
+
+  private async visibleMatches(
+    place: RunPlace,
+    query: string | undefined,
+    em: EntityManager,
+  ): Promise<KnowledgeHead[]> {
     const heads = await this.visibleHeads(place, em);
     const text = query?.trim() ?? '';
     if (text.length === 0) {
-      return { hits: heads.slice(0, cap).map(toHit), total: heads.length };
+      return heads;
     }
     const ids = await this.matchingIds(text, heads, em);
     const byId = new Map(heads.map((head) => [head.id, head]));
-    const hits = ids
+    return ids
       .map((id) => byId.get(id))
       .filter((head): head is KnowledgeHead => head !== undefined);
-    return { hits: hits.slice(0, cap).map(toHit), total: hits.length };
   }
 
   /**

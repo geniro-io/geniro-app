@@ -26,6 +26,8 @@ import {
   KnowledgeRemovedDto,
   KnowledgeRevisionDetailDto,
   KnowledgeRevisionListDto,
+  KnowledgeRunSearchDto,
+  KnowledgeRunSearchQueryDto,
   RestoreKnowledgeRevisionDto,
   UpdateKnowledgeDto,
 } from '../dto/knowledge.dto';
@@ -37,6 +39,7 @@ import type {
   KnowledgeList,
   KnowledgeRevisionDetail,
   KnowledgeRevisionList,
+  KnowledgeRunSearch,
 } from '../knowledge.types';
 import { KnowledgeService } from '../services/knowledge.service';
 import {
@@ -61,6 +64,16 @@ export class KnowledgeController {
   @ZodResponse({ status: 200, type: KnowledgeListDto })
   list(@Query() query: KnowledgeListQueryDto): Promise<KnowledgeList> {
     return this.knowledge.list(query);
+  }
+
+  @Get('runs/:runId/search')
+  @ApiOperation({ operationId: 'searchKnowledgeForRun' })
+  @ZodResponse({ status: 200, type: KnowledgeRunSearchDto })
+  runSearch(
+    @Param('runId') runId: string,
+    @Query() query: KnowledgeRunSearchQueryDto,
+  ): Promise<KnowledgeRunSearch> {
+    return this.knowledge.runSearch(runId, query.q);
   }
 
   @Post()

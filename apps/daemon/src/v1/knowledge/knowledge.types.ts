@@ -54,6 +54,7 @@ export const KNOWLEDGE_PENDING_MAX = 20;
 export const KNOWLEDGE_REVISIONS_KEPT = 50;
 export const KNOWLEDGE_SEARCH_DEFAULT = 10;
 export const KNOWLEDGE_SEARCH_MAX = 30;
+export const KNOWLEDGE_QUERY_MAX_CHARS = 300;
 export const KNOWLEDGE_EDITS_MAX = 50;
 export const KNOWLEDGE_LIST_LIMIT_DEFAULT = 50;
 export const KNOWLEDGE_LIST_LIMIT_MAX = 200;
@@ -174,7 +175,7 @@ export type KnowledgeDocumentDto = z.infer<typeof KnowledgeDocumentSchema>;
 export const KnowledgeListQuerySchema = z.object({
   place: KnowledgePlaceKeySchema.optional(),
   status: z.enum(KNOWLEDGE_LIST_STATUSES).optional(),
-  q: z.string().trim().min(1).max(200).optional(),
+  q: z.string().trim().min(1).max(KNOWLEDGE_QUERY_MAX_CHARS).optional(),
   /** Exactly this handle, in whichever places hold it. */
   handle: z
     .string()
@@ -194,6 +195,19 @@ export const KnowledgeListQuerySchema = z.object({
   cursor: z.string().min(1).max(300).optional(),
 });
 export type KnowledgeListQuery = z.infer<typeof KnowledgeListQuerySchema>;
+
+/**
+ * What a run's own `knowledge_search` finds now, for a transcript row whose CLI
+ * kept no result text. No query lists what the run sees, nearest first.
+ */
+export const KnowledgeRunSearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(KNOWLEDGE_QUERY_MAX_CHARS).optional(),
+});
+
+export const KnowledgeRunSearchSchema = z.object({
+  documents: z.array(KnowledgeHeadSchema),
+});
+export type KnowledgeRunSearch = z.infer<typeof KnowledgeRunSearchSchema>;
 
 export const KnowledgeListSchema = z.object({
   documents: z.array(KnowledgeHeadSchema),

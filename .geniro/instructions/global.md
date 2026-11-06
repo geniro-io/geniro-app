@@ -19,16 +19,19 @@ file at the start of each run and at every phase-boundary refresh via
   - **A deferred MCP tool looks exactly like a missing one.** If
     `mcp__codegraph__codegraph_explore` is not in your tool surface, load its schema
     by name before concluding codegraph is unavailable — or use the shell form,
-    which never needs loading.
+    which never needs loading. `geniro:*` agents have no MCP tools and no tool
+    search, so they go straight to the shell form.
   - **In a worktree, pass `projectPath: <absolute worktree root>`.** The MCP server
     keeps answering from the checkout the session was launched in, uncommitted work
     included, and never says which tree it read. A user-level hook may fill
     `projectPath` in; where it is absent, pass it yourself. The index must be the
     worktree's own — the bootstrap is `## Additional Steps → After worktree-setup`.
-  - **Spawning subagents: pass this rule into each spawn prompt next to the task,
-    not as a closing note.** A subagent inherits none of your context and its own
-    workflow defaults to plain-text search, so a policy that arrives as a trailing
-    aside loses to it.
+  - **Spawning subagents: run `codegraph sync` once yourself first, then pass this
+    rule into each spawn prompt next to the task, not as a closing note.** A subagent
+    inherits none of your context and its own workflow defaults to plain-text search,
+    so a policy that arrives as a trailing aside loses to it. The rule you pass names
+    the shell form, and a subagent never runs `sync` or `status`: parallel syncs fight
+    over the index lock.
 - Renderer design system: `.claude/rules/renderer-design-system.md` and `.claude/rules/renderer-components.md`.
 - **Browser automation is `agent-browser` — the CLI, not a built-in tool.** Every
   browser-driven step of testing and development goes through it: driving the
@@ -97,9 +100,9 @@ file at the start of each run and at every phase-boundary refresh via
     ```
 
   MCP calls with `projectPath` catch the index up themselves; the shell form
-  `codegraph explore` does no catch-up, so run `codegraph sync` before it after
-  a batch of edits. Never use `init`/`index` to refresh: both are full rebuilds
-  costing ~580 MB per checkout.
+  `codegraph explore` does no catch-up, so the orchestrator runs `codegraph sync`
+  after a batch of edits and before spawning subagents. Never use `init`/`index` to
+  refresh: both are full rebuilds costing ~580 MB per checkout.
 
 ## Constraints
 

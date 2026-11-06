@@ -260,9 +260,8 @@ export class NotificationsGateway
       error: (err: unknown) =>
         this.logger.error(`share event bus errored: ${String(err)}`),
     });
-    // A memory write goes to EVERY client, paired devices included: the user
-    // reads and edits memory from the phone too. The event names the entry,
-    // never its text.
+    // Goes to EVERY client, paired devices included: a phone reads the same
+    // waiting list. The event names the thread, never a message.
     this.threadMessagesSubscription = this.bus
       .allThreadMessageChanges()
       .subscribe({
@@ -278,6 +277,9 @@ export class NotificationsGateway
         error: (err: unknown) =>
           this.logger.error(`thread message bus errored: ${String(err)}`),
       });
+    // A memory write goes to EVERY client, paired devices included: the user
+    // reads and edits memory from the phone too. The event names the entry,
+    // never its text.
     this.memorySubscription = this.memories.allChanges().subscribe({
       next: (change) => {
         try {

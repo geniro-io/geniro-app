@@ -72,6 +72,8 @@ const api = vi.hoisted(() => ({
   readRunArtifacts: vi.fn(),
   readRunTeamNotes: vi.fn(),
   readRunOutcomes: vi.fn(),
+  listWaitingMessages: vi.fn(),
+  removeWaitingMessage: vi.fn(),
   readRunWaterfall: vi.fn(),
   readRunProcesses: vi.fn(),
   getThreadAnalysis: vi.fn(),
@@ -431,6 +433,7 @@ function makeClient(): {
       };
     },
     onSharesChanged: () => () => undefined,
+    onThreadMessagesChanged: () => () => undefined,
     onProjectsChanged: (
       l: (event: { projectId: string; textsOnly: boolean }) => void,
     ) => {
@@ -879,6 +882,7 @@ beforeEach(() => {
   api.readRunArtifacts.mockReset().mockResolvedValue({ artifacts: [] });
   api.readRunTeamNotes.mockReset().mockResolvedValue({ notes: [] });
   api.readRunOutcomes.mockReset().mockResolvedValue({ pullRequests: [] });
+  api.listWaitingMessages.mockReset().mockResolvedValue([]);
   api.readChatMetrics.mockReset().mockResolvedValue({
     context: null,
     breakdownReason: 'no live agent',

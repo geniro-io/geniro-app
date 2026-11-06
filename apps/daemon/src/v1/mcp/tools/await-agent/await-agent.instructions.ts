@@ -12,8 +12,8 @@ export function awaitAgentInstructions(): string {
     'Every call stays collectable after you answer via answer_agent. ' +
     'Pass timeout_ms to check in WITHOUT committing to the whole wait: a callee still working answers ' +
     '{"status":"pending"}, which is not a failure — the call is untouched, so go do something else and await it again. ' +
-    'A wait (this one, or a sync call_agent) also ends early with {"status":"pending","interrupted":"user_message"} when the user writes to you: ' +
-    'answer the user first — the message follows the result — then collect your calls again. ' +
+    'A wait (this one, or a sync call_agent) also ends early with {"status":"pending","interrupted":"user_message"} when a message reaches you, from the user or from another thread: ' +
+    'answer it first — the message follows the result and says who wrote it — then collect your calls again. ' +
     'OMIT call_id after fanning out several calls: it waits on ALL of them and returns the FIRST thing any produces — a question or a finished result — ' +
     'with its call_id, leaving the rest collectable; call it again to get the next one. Prefer this over waiting on one call while others run. ' +
     `${CALL_RESULT_PAGES} ` +

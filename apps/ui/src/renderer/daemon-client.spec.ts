@@ -10,6 +10,7 @@ import {
   parseProjectsChanged,
   parseRunStatus,
   parseTaskChanged,
+  parseThreadMessagesChanged,
   parseUsageRecorded,
 } from './daemon-client';
 
@@ -1058,6 +1059,26 @@ describe('parseProjectsChanged — the projects_changed twin', () => {
     mocks.ref.any?.('memory_changed', { memoryId: 'e1', change: 'created' });
 
     expect(seen).toEqual(['p1']);
+  });
+
+  it('hands a thread_messages_changed event to every thread-messages listener, and drops a malformed one', () => {
+    const client = new DaemonClient(handle, {});
+    const seen: string[] = [];
+    client.onThreadMessagesChanged((event) => seen.push(event.runId));
+    client.connect();
+
+    mocks.ref.any?.('thread_messages_changed', { runId: 'r-otter' });
+    mocks.ref.any?.('thread_messages_changed', { runId: 4 });
+
+    expect(seen).toEqual(['r-otter']);
+  });
+});
+
+describe('parseThreadMessagesChanged — the thread_messages_changed twin', () => {
+  it('reads nothing from a payload with no run id', () => {
+    expect(parseThreadMessagesChanged(null)).toBeNull();
+    expect(parseThreadMessagesChanged({})).toBeNull();
+    expect(parseThreadMessagesChanged({ runId: 4 })).toBeNull();
   });
 });
 

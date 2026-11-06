@@ -1,0 +1,161 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  HISTORY_RESULT_PREFACE,
+  type ThreadListRow,
+} from '../../../agents/chat.types';
+import { AnalysisBroker } from '../../../agents/services/analysis.broker';
+import { ProjectChatBroker } from '../../../agents/services/project-chat.broker';
+import { TeamBuilderBroker } from '../../../agents/services/team-builder.broker';
+import type { ThreadDeliveryService } from '../../../teams/services/thread-delivery.service';
+import type { McpCallContext, McpListContext } from '../../mcp.types';
+import { readListThreadsArgs } from './list-threads.reader';
+import { ListThreadsTool } from './list-threads.tool';
+
+const CONTEXT = {
+  runId: 'run-1',
+  memberId: 'agent',
+  conversationId: null,
+  caller: 'agent',
+  requestId: 1,
+} as McpCallContext;
+
+const LISTING: McpListContext = {
+  runId: 'run-1',
+  memberId: 'agent',
+  conversationId: null,
+};
+
+const ROWS: ThreadListRow[] = [
+  {
+    thread: '00000000-0000-4000-8000-000000000001',
+    title: 'Deploy',
+    kind: 'chat',
+    status: 'idle',
+    agent: 'claude',
+    project: 'geniro',
+    folder: '/work/geniro',
+    updatedAt: '2026-11-06T10:00:00.000Z',
+  },
+];
+
+function tool(
+  threads: Partial<ThreadDeliveryService>,
+  brokers: {
+    analysis?: AnalysisBroker;
+    teamBuilders?: TeamBuilderBroker;
+    projectChats?: ProjectChatBroker;
+  } = {},
+) {
+  return new ListThreadsTool(threads as ThreadDeliveryService, {
+    analysis: brokers.analysis ?? new AnalysisBroker(),
+    teamBuilders: brokers.teamBuilders ?? new TeamBuilderBroker(),
+    projectChats: brokers.projectChats ?? new ProjectChatBroker(),
+  });
+}
+
+function textOf(result: { content: { text: string }[] }): string {
+  return result.content[0]!.text;
+}
+
+describe('readListThreadsArgs', () => {
+  it('reads no argument as the newest twenty threads', () => {
+    expect(readListThreadsArgs({})).toEqual({
+      ok: true,
+      query: { limit: 20 },
+    });
+  });
+
+  it('refuses a misspelt field rather than reading past it', () => {
+    expect(readListThreadsArgs({ quey: 'deploy' }).ok).toBe(false);
+  });
+
+  it('refuses a limit below one or above fifty, and reads fifty', () => {
+    expect(readListThreadsArgs({ limit: 0 }).ok).toBe(false);
+    expect(readListThreadsArgs({ limit: 51 }).ok).toBe(false);
+    expect(readListThreadsArgs({ limit: 50 })).toEqual({
+      ok: true,
+      query: { limit: 50 },
+    });
+  });
+
+  it('refuses a query over 200 characters', () => {
+    expect(readListThreadsArgs({ query: 'x'.repeat(201) }).ok).toBe(false);
+  });
+
+  it('reads a null argument as absent', () => {
+    expect(readListThreadsArgs({ query: null, limit: null })).toEqual({
+      ok: true,
+      query: { limit: 20 },
+    });
+  });
+});
+
+describe('ListThreadsTool', () => {
+  it('answers the threads the delivery service lists for this run, with the query it was given', async () => {
+    const listThreads = vi.fn<ThreadDeliveryService['listThreads']>(() =>
+      Promise.resolve(ROWS),
+    );
+    const result = await tool({
+      senderTarget: () => Promise.resolve('chat'),
+      listThreads,
+    }).call('list_threads', { query: 'deploy' }, CONTEXT);
+
+    expect(listThreads).toHaveBeenCalledWith('run-1', {
+      query: 'deploy',
+      limit: 20,
+    });
+    expect(result.isError).toBe(false);
+    expect(textOf(result)).toBe(
+      `${HISTORY_RESULT_PREFACE}\n${JSON.stringify({ threads: ROWS })}`,
+    );
+  });
+
+  it('says a chat that reaches no other thread lists nothing', async () => {
+    const listThreads = vi.fn<ThreadDeliveryService['listThreads']>();
+    const result = await tool({
+      senderTarget: () => Promise.resolve(null),
+      listThreads,
+    }).call('list_threads', {}, CONTEXT);
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe('This chat does not reach other threads.');
+    expect(listThreads).not.toHaveBeenCalled();
+  });
+
+  it('is not offered to an analysis, a team builder or a project chat, and is offered to a chat', () => {
+    const analysis = new AnalysisBroker();
+    analysis.register('run-1', 'agent', {
+      turn: {
+        analysisRunId: 'run-1',
+        sourceRunId: 'source',
+        snapshotSeq: 0,
+        sourceWorking: false,
+      },
+      report: () => Promise.reject(new Error('unused')),
+      mark: () => Promise.reject(new Error('unused')),
+    });
+    const teamBuilders = new TeamBuilderBroker();
+    teamBuilders.register('run-1', 'agent', {
+      slug: 'team',
+      projectId: null,
+      turnStartedAt: 0,
+      savedHash: null,
+      acceptsAnyVersion: false,
+    });
+    const projectChats = new ProjectChatBroker();
+    projectChats.register('run-1', 'agent', {
+      projectId: 'p1',
+      teamSlug: null,
+    });
+
+    expect(tool({}, { analysis }).list(LISTING)).toEqual([]);
+    expect(tool({}, { teamBuilders }).list(LISTING)).toEqual([]);
+    expect(tool({}, { projectChats }).list(LISTING)).toEqual([]);
+    expect(
+      tool({})
+        .list(LISTING)
+        .map((listed) => listed.name),
+    ).toEqual(['list_threads']);
+  });
+});

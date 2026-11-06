@@ -114,7 +114,10 @@ export class HostWakeGraphDelivery implements OnModuleInit {
     for (const wake of unwithdrawn(wakes)) {
       // Settled only when the note was kept: one dropped at shutdown leaves
       // the share owed, for the next boot to send.
-      if (this.sessions.oweKeyNote(hostWakeSessionKey(wake.owner), wake.note)) {
+      if (
+        wake.note !== null &&
+        this.sessions.oweKeyNote(hostWakeSessionKey(wake.owner), wake.note)
+      ) {
         wake.onDelivered();
       }
     }

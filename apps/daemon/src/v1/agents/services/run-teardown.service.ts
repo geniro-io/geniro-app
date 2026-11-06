@@ -19,6 +19,7 @@ import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
 import { RunProcessReaper } from './run-process-reaper.service';
 import { SessionTranscriptsService } from './session-transcripts.service';
+import { ThreadInboxService } from './thread-inbox.service';
 
 /**
  * How long a purge waits for a cancelled turn to finish writing before it
@@ -80,6 +81,7 @@ export class RunTeardownService {
     private readonly reaper: RunProcessReaper,
     private readonly wallTurns: WallTurnDao,
     private readonly commands: ActionCommandRegistry,
+    private readonly threadInbox: ThreadInboxService,
     /** Optional for the positional specs. */
     @Optional() private readonly monitors?: MonitorRegistry,
   ) {}
@@ -180,6 +182,9 @@ export class RunTeardownService {
     // deliberately does not hydrate. The raw payload is scanned rather than
     // parsed: the path survives JSON encoding intact.
     const uploadTexts = await this.itemDao.userMessagePayloads(runId, em);
+
+    // Before the rows go: it names the thread to each sender of what waited.
+    await this.threadInbox.cancelFor(runId, 'deleted');
 
     const items = await this.itemDao.hardDeleteIncludingSoftDeleted(
       { runId },

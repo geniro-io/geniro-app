@@ -24,6 +24,7 @@ import { McpController } from './controllers/mcp.controller';
 import { MemoryImportController } from './controllers/memory-import.controller';
 import { RunGroupsController } from './controllers/run-groups.controller';
 import { SkillsController } from './controllers/skills.controller';
+import { ThreadMessagesController } from './controllers/thread-messages.controller';
 import { CallContextDao } from './dao/call-context.dao';
 import { ChatSearchIndexDao } from './dao/chat-search-index.dao';
 import { GoalDao } from './dao/goal.dao';
@@ -31,6 +32,7 @@ import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
 import { RunGroupDao } from './dao/run-group.dao';
+import { ThreadMessageDao } from './dao/thread-message.dao';
 import { WallTurnDao } from './dao/wall-turn.dao';
 import { ActionBroker } from './services/action.broker';
 import { ActionCommandRegistry } from './services/action-command.registry';
@@ -151,6 +153,7 @@ import { TeamBuilderBroker } from './services/team-builder.broker';
 import { TeamNoteBroker } from './services/team-note.broker';
 import { TeamProposalBroker } from './services/team-proposal.broker';
 import { ThreadAnalysisService } from './services/thread-analysis.service';
+import { ThreadInboxService } from './services/thread-inbox.service';
 import { ThreadOverviewService } from './services/thread-overview.service';
 import { ThreadReaderService } from './services/thread-reader.service';
 import { ThreadTimelineService } from './services/thread-timeline.service';
@@ -180,6 +183,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ArtifactsController,
     ChatController,
     GoalsController,
+    ThreadMessagesController,
     ChatSearchController,
     KeptSessionsController,
     McpController,
@@ -527,6 +531,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     NodeStateDao,
     WallTurnDao,
     CallContextDao,
+    ThreadMessageDao,
+    ThreadInboxService,
     RunDao,
     RunGroupDao,
     ProjectDao,
@@ -703,6 +709,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     NodeStateDao,
     WallTurnDao,
     CallContextDao,
+    ThreadInboxService,
     RunDao,
     AgentAdapterRegistry,
     // Exported for the diagnostics report, which names each CLI and the

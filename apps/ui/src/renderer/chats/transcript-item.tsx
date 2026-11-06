@@ -60,8 +60,12 @@ import {
   reasoningHeadings,
   ThinkingDisclosure,
 } from './thinking-block';
+import { ThreadMessageCard } from './thread-message-card';
+import { readThreadMessageRow } from './thread-message-payload';
+import { ThreadMessageSentRow } from './thread-message-sent-row';
 import { readThreadOutcomePayload } from './thread-outcome-payload';
 import { ThreadOutcomeRow } from './thread-outcome-row';
+import { ThreadWakeDivider } from './thread-wake-divider';
 import { ToolBodyView } from './tool-body-view';
 import { toolRowAccent } from './tool-icon';
 import {
@@ -516,6 +520,24 @@ export const TranscriptItem = memo(function TranscriptItem({
       const message = payloadString(item.payload, 'message');
       if (message === null) {
         return null;
+      }
+      // Messages from other threads, the turn one of them woke, and a send this
+      // thread made: each its own row, not the sentence the daemon wrote for it.
+      const threadRow = readThreadMessageRow(item.payload);
+      if (threadRow?.kind === 'received') {
+        return <ThreadMessageCard messages={threadRow.messages} />;
+      }
+      if (threadRow?.kind === 'woken') {
+        return (
+          <ThreadWakeDivider
+            caller={nodeName(item.memberId)}
+            fromRunId={threadRow.fromRunId}
+            fromTitle={threadRow.fromTitle}
+          />
+        );
+      }
+      if (threadRow?.kind === 'sent') {
+        return <ThreadMessageSentRow sent={threadRow.sent} />;
       }
       // A caller started again by a call of its own — drawn as a divider whose
       // calls open their cards, rather than as a sentence about the engine.

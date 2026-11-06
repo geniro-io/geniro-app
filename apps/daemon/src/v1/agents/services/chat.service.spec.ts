@@ -56,6 +56,7 @@ import type {
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type {
   ChatListScope,
+  HostRowWire,
   PromptCacheTtlReason,
   RunCreatedEvent,
   RunDeltaEvent,
@@ -148,6 +149,7 @@ import { SessionTranscriptsService } from './session-transcripts.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
 import { TeamBuilderBroker } from './team-builder.broker';
 import { TeamProposalBroker } from './team-proposal.broker';
+import { ThreadInboxService } from './thread-inbox.service';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
 
@@ -1119,6 +1121,8 @@ function setup(
     /** The monitor registry a Stop reaches, when a test drives one. */
     monitors?: MonitorRegistry;
     runWrites?: RunWriteQueue;
+    /** The mailbox between threads, when a test drives one. */
+    threadInbox?: ThreadInboxService;
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot'>;
     /** What the run's project tells it; no project when absent. */
@@ -1291,6 +1295,7 @@ function setup(
     } as unknown as RunProcessReaper,
     wallTurns as unknown as WallTurnDao,
     new ActionCommandRegistry(),
+    { cancelFor: async () => undefined } as unknown as ThreadInboxService,
   );
   // A double rather than the real service: what THIS spec pins is that the
   // group the rule names lands on the created run, not how the rule reads a
@@ -1422,6 +1427,7 @@ function setup(
     projectCards,
     opts.projectWrites as ProjectInstructionsChangeService | undefined,
     projectChats,
+    opts.threadInbox,
   );
   // Nest calls this for us in production; a hand-built service gets it here so
   // every spec runs against the same wiring rather than a subset of it.
@@ -6765,6 +6771,472 @@ describe('ChatService', () => {
     );
     expect(JSON.parse(marker!.payload)).toMatchObject({
       unsentMessages: [sent.deliveryId],
+    });
+  });
+
+  describe('messages from other threads', () => {
+    const entry = {
+      id: 'm1',
+      fromRunId: 'sender',
+      fromTitle: 'Sender',
+      fromMember: null,
+      text: 'the schema moved',
+    };
+    const inboxOf = (
+      overrides: Partial<ThreadInboxService> = {},
+    ): ThreadInboxService =>
+      ({
+        takeForTurn: vi.fn(async () => []),
+        markDelivered: vi.fn(async () => undefined),
+        returnDropped: vi.fn(async () => ({ deliveryIds: [], titles: [] })),
+        cancelFor: vi.fn(async () => undefined),
+        ...overrides,
+      }) as unknown as ThreadInboxService;
+    const hostRow: HostRowWire = {
+      severity: 'info',
+      message: 'Message from Sender',
+      threadMessages: [entry],
+      woke: false,
+    };
+
+    it('joins a running turn under the given id with a system row, leaving no user row', async () => {
+      const { service, claude, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'first');
+
+      await service.sendMessage(run.id, 'fenced', [], {
+        joinOnly: true,
+        hostRow,
+        deliveryId: 'join-1',
+      });
+
+      expect(
+        vi.mocked(claude.handles[0]!.sendUserMessage).mock.calls[0]![0],
+      ).toMatchObject({ text: 'fenced', deliveryId: 'join-1' });
+      const rows = await itemDao.getByRun(run.id);
+      expect(
+        rows.filter((row) => row.kind === 'message' && row.role === 'user'),
+      ).toHaveLength(1);
+      const row = rows.find((candidate) => candidate.kind === 'system');
+      expect(JSON.parse(row!.payload)).toMatchObject({
+        threadMessages: [entry],
+      });
+
+      claude.finish();
+      await drain();
+    });
+
+    it('refuses a join with no running turn and leaves the run free for the next turn', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await expect(
+        service.sendMessage(run.id, 'fenced', [], {
+          joinOnly: true,
+          hostRow,
+          deliveryId: 'join-1',
+        }),
+      ).rejects.toMatchObject({ errorCode: 'RUN_NOT_RUNNING' });
+      expect(claude.start).not.toHaveBeenCalled();
+
+      await service.sendMessage(run.id, 'first');
+      expect(claude.start).toHaveBeenCalledTimes(1);
+      claude.finish();
+      await drain();
+    });
+
+    it('refuses a join that carries a client message id', async () => {
+      const { service } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await expect(
+        service.sendMessage(run.id, 'fenced', [], {
+          joinOnly: true,
+          hostRow,
+          clientMessageId: 'c1',
+        }),
+      ).rejects.toMatchObject({ errorCode: 'JOIN_WITH_CLIENT_ID' });
+    });
+
+    it('carries what waits in the turn’s prompt, then flips it and writes one row', async () => {
+      const threadInbox = inboxOf({
+        takeForTurn: vi.fn(async () => [entry]),
+      });
+      const { service, claude, itemDao } = setup({ threadInbox });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await service.sendMessage(run.id, 'hello');
+      await drain();
+
+      const { prompt } = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+      expect(prompt.startsWith('hello\n\n')).toBe(true);
+      expect(prompt).toContain('the schema moved');
+      expect(prompt).toContain('not a request from the user');
+      expect(threadInbox.markDelivered).toHaveBeenCalledWith(run.id, ['m1']);
+      const rows = (await itemDao.getByRun(run.id)).filter(
+        (row) => row.kind === 'system',
+      );
+      expect(JSON.parse(rows[0]!.payload)).toMatchObject({
+        threadMessages: [entry],
+      });
+      expect(rows).toHaveLength(1);
+
+      claude.finish();
+      await drain();
+    });
+
+    it('carries it in a turn a wake opened, under the wake’s own row', async () => {
+      const threadInbox = inboxOf({
+        takeForTurn: vi.fn(async () => [entry]),
+      });
+      const { service, claude, itemDao } = setup({ threadInbox });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await service.sendMessage(run.id, 'a turn for you', [], {
+        ownTurn: true,
+        hostRow: { severity: 'info', message: 'Woken', woke: true },
+      });
+      await drain();
+
+      const { prompt } = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+      expect(prompt).toContain('a turn for you');
+      expect(prompt).toContain('the schema moved');
+      expect(
+        (await itemDao.getByRun(run.id)).filter(
+          (row) => row.kind === 'message' && row.role === 'user',
+        ),
+      ).toEqual([]);
+
+      claude.finish();
+      await drain();
+    });
+
+    it('takes nothing for a slash command', async () => {
+      const threadInbox = inboxOf({
+        takeForTurn: vi.fn(async () => [entry]),
+      });
+      const { service, claude } = setup({ threadInbox });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await service.sendMessage(run.id, '/review');
+      await drain();
+
+      expect(threadInbox.takeForTurn).not.toHaveBeenCalled();
+      expect((claude.start.mock.calls[0]?.[0] as AgentTurnInput).prompt).toBe(
+        '/review',
+      );
+
+      claude.finish();
+      await drain();
+    });
+
+    it('cancels what waits when the chat is archived', async () => {
+      const threadInbox = inboxOf();
+      const { service } = setup({ threadInbox });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await service.archive(run.id);
+
+      expect(threadInbox.cancelFor).toHaveBeenCalledWith(run.id, 'archived');
+    });
+
+    describe('a dropped join', () => {
+      it('goes back to waiting under one info row, with no "not sent" warning', async () => {
+        const threadInbox = inboxOf({
+          returnDropped: vi.fn(async () => ({
+            deliveryIds: ['join-1'],
+            titles: ['Sender'],
+          })),
+        });
+        const { service, claude, itemDao } = setup({ threadInbox });
+        const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+        await service.sendMessage(run.id, 'first');
+
+        claude.emit({ type: 'follow_up_dropped', deliveryIds: ['join-1'] });
+        claude.emit({ type: 'turn_cancelled' });
+        await drain();
+
+        const payloads = (await itemDao.getByRun(run.id))
+          .filter((row) => row.kind === 'system')
+          .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+        expect(payloads.filter((row) => 'unsentMessages' in row)).toEqual([]);
+        expect(
+          payloads.filter((row) =>
+            String(row.message).includes('did not reach the running turn'),
+          ),
+        ).toHaveLength(1);
+      });
+
+      it('still reports the user’s own message dropped beside it', async () => {
+        const threadInbox = inboxOf({
+          returnDropped: vi.fn(async () => ({
+            deliveryIds: ['join-1'],
+            titles: ['Sender'],
+          })),
+        });
+        const { service, claude, itemDao } = setup({ threadInbox });
+        const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+        await service.sendMessage(run.id, 'first');
+
+        claude.emit({
+          type: 'follow_up_dropped',
+          deliveryIds: ['join-1', 'user-1'],
+        });
+        claude.emit({ type: 'turn_cancelled' });
+        await drain();
+
+        const payloads = (await itemDao.getByRun(run.id))
+          .filter((row) => row.kind === 'system')
+          .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+        expect(payloads.find((row) => 'unsentMessages' in row)).toMatchObject({
+          unsentMessages: ['user-1'],
+        });
+      });
+    });
+
+    it('takes nothing from the mailbox for a resume-only turn or a geniro command', async () => {
+      const threadInbox = inboxOf({
+        takeForTurn: vi.fn(async () => [entry]),
+      });
+      const { service, claude } = setup({ threadInbox });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await service.sendMessage(run.id, '', [], { resumeOnly: true });
+      claude.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: null,
+      });
+      claude.finish();
+      await drain();
+      await drain();
+      await service.sendMessage(run.id, '/compact');
+      claude.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: null,
+      });
+      claude.finish();
+      await drain();
+      await drain();
+
+      expect(threadInbox.takeForTurn).not.toHaveBeenCalled();
+      expect(threadInbox.markDelivered).not.toHaveBeenCalled();
+    });
+
+    it('leaves a message waiting when the spawn fails, since no session came up to read it', async () => {
+      const threadInbox = inboxOf({
+        takeForTurn: vi.fn(async () => [entry]),
+      });
+      const { service, claude } = setup({ threadInbox });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      claude.start.mockImplementationOnce(() => {
+        throw new Error('spawn failed');
+      });
+
+      await expect(service.sendMessage(run.id, 'go')).rejects.toThrow(
+        'spawn failed',
+      );
+
+      expect(threadInbox.takeForTurn).toHaveBeenCalledTimes(1);
+      expect(threadInbox.markDelivered).not.toHaveBeenCalled();
+    });
+
+    it('leaves a message waiting when a turn starts with no session to read it', async () => {
+      const threadInbox = inboxOf({
+        takeForTurn: vi.fn(async () => [entry]),
+      });
+      const { service, sessions } = setup({ threadInbox });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      vi.spyOn(sessions, 'peek').mockReturnValue(null);
+
+      await service.sendMessage(run.id, 'go');
+      await drain();
+
+      expect(threadInbox.takeForTurn).toHaveBeenCalledTimes(1);
+      expect(threadInbox.markDelivered).not.toHaveBeenCalled();
+    });
+
+    it('passes a user’s own drop through as a "not sent" row when the mailbox takes nothing back', async () => {
+      const { service, claude, itemDao } = setup({ threadInbox: inboxOf() });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'first');
+
+      claude.emit({ type: 'follow_up_dropped', deliveryIds: ['user-1'] });
+      claude.emit({ type: 'turn_cancelled' });
+      await drain();
+
+      const payloads = (await itemDao.getByRun(run.id))
+        .filter((row) => row.kind === 'system')
+        .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+      expect(payloads.find((row) => 'unsentMessages' in row)).toMatchObject({
+        unsentMessages: ['user-1'],
+      });
+    });
+
+    it('takes a dropped message of another thread back to the mailbox between turns, under one info row', async () => {
+      const threadInbox = inboxOf({
+        returnDropped: vi.fn(async () => ({
+          deliveryIds: ['d-1'],
+          titles: ['Sender'],
+        })),
+      });
+      const { service, claude, itemDao } = setup({ threadInbox });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'go');
+      claude.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: null,
+      });
+      claude.finish();
+      await drain();
+
+      claude.sessions[0]?.onBetweenTurnEvent?.({
+        type: 'follow_up_dropped',
+        deliveryIds: ['d-1'],
+      });
+      await drain();
+
+      expect(threadInbox.returnDropped).toHaveBeenCalledWith(['d-1']);
+      const payloads = (await itemDao.getByRun(run.id))
+        .filter((row) => row.kind === 'system')
+        .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+      expect(
+        payloads.filter((row) =>
+          String(row.message).includes('did not reach the running turn'),
+        ),
+      ).toHaveLength(1);
+      expect(payloads.filter((row) => 'unsentMessages' in row)).toEqual([]);
+    });
+
+    it('draws a card titled with the thread it reaches in an ask chat, whatever mode that thread runs in', async () => {
+      const { service, claude, itemDao, approvals } = setup({
+        threadInbox: inboxOf(),
+      });
+      const target = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        approval: 'auto',
+        title: 'Pelican',
+      });
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        approval: 'ask',
+      });
+      await service.sendMessage(run.id, 'hi');
+
+      claude.emit({
+        type: 'approval_request',
+        id: 'p-msg',
+        toolName: `mcp__${hostMcpServerName(run.id)}__message_thread`,
+        input: { thread: target.id, message: 'the schema moved' },
+      });
+      await drain();
+
+      expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalled();
+      expect(approvals.listByRun(run.id)).toHaveLength(1);
+      const card = itemDao.items.find(
+        (item) => item.kind === 'approval_request',
+      );
+      expect(JSON.parse(card!.payload)).toMatchObject({
+        threadTitle: 'Pelican',
+      });
+    });
+
+    it('sends a refused message card back to the agent as a refusal', async () => {
+      const { service, claude, approvals } = setup({
+        threadInbox: inboxOf(),
+      });
+      const target = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        title: 'Pelican',
+      });
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        approval: 'ask',
+      });
+      await service.sendMessage(run.id, 'hi');
+      claude.emit({
+        type: 'approval_request',
+        id: 'p-msg',
+        toolName: `mcp__${hostMcpServerName(run.id)}__message_thread`,
+        input: { thread: target.id, message: 'the schema moved' },
+      });
+      await drain();
+
+      const requestId = approvals.listByRun(run.id)[0]!.requestId;
+      expect(approvals.resolve(run.id, requestId, false)).toBe(true);
+      await drain();
+
+      const [id, allow] = claude.handles[0]!.respondApproval.mock.calls[0]!;
+      expect([id, allow]).toEqual(['p-msg', false]);
+    });
+
+    it('approves a message to another thread without a card in an auto chat', async () => {
+      const { service, claude, itemDao, approvals } = setup({
+        threadInbox: inboxOf(),
+      });
+      const target = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        approval: 'ask',
+        title: 'Pelican',
+      });
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        approval: 'auto',
+      });
+      await service.sendMessage(run.id, 'hi');
+      const input = { thread: target.id, message: 'the schema moved' };
+
+      claude.emit({
+        type: 'approval_request',
+        id: 'p-msg',
+        toolName: `mcp__${hostMcpServerName(run.id)}__message_thread`,
+        input,
+      });
+      await drain();
+
+      expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+        'p-msg',
+        true,
+        input,
+      );
+      expect(approvals.listByRun(run.id)).toEqual([]);
+      expect(
+        itemDao.items.some((item) => item.kind === 'approval_request'),
+      ).toBe(false);
+    });
+
+    it('draws a card for a list of threads in an ask chat, and approves nothing', async () => {
+      const { service, claude, approvals } = setup({
+        threadInbox: inboxOf(),
+      });
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        approval: 'ask',
+      });
+      await service.sendMessage(run.id, 'hi');
+
+      claude.emit({
+        type: 'approval_request',
+        id: 'p-list',
+        toolName: `mcp__${hostMcpServerName(run.id)}__list_threads`,
+        input: {},
+      });
+      await drain();
+
+      expect(claude.handles[0]!.respondApproval).not.toHaveBeenCalled();
+      expect(approvals.listByRun(run.id)).toHaveLength(1);
     });
   });
 

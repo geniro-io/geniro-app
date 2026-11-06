@@ -32,6 +32,7 @@ import type { TeamChangeService } from '../../teams/services/team-change.service
 import type { TeamOverlayService } from '../../teams/services/team-overlay.service';
 import type { TeamProposalService } from '../../teams/services/team-proposal.service';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
+import type { ThreadDeliveryService } from '../../teams/services/thread-delivery.service';
 import type { McpTool } from '../mcp.types';
 import { AnswerAgentTool } from './answer-agent/answer-agent.tool';
 import { AskUserQuestionTool } from './ask-user-question/ask-user-question.tool';
@@ -43,12 +44,14 @@ import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
 import { GoalsTool } from './goals/goals.tool';
 import { ListAgentThreadsTool } from './list-agent-threads/list-agent-threads.tool';
 import { ListMonitorsTool } from './list-monitors/list-monitors.tool';
+import { ListThreadsTool } from './list-threads/list-threads.tool';
 import { MarkRecommendationsTool } from './mark-recommendations/mark-recommendations.tool';
 import { MemoryForgetTool } from './memory-forget/memory-forget.tool';
 import { MemoryReadTool } from './memory-read/memory-read.tool';
 import { MemorySaveTool } from './memory-save/memory-save.tool';
 import { MemorySearchTool } from './memory-search/memory-search.tool';
 import { MessageAgentTool } from './message-agent/message-agent.tool';
+import { MessageThreadTool } from './message-thread/message-thread.tool';
 import { MonitorTool } from './monitor/monitor.tool';
 import { MoveStageTool } from './move-stage/move-stage.tool';
 import { NotifyUserTool } from './notify-user/notify-user.tool';
@@ -114,6 +117,7 @@ export interface McpToolDeps {
   teamOverlays: TeamOverlayService;
   teamProposals: TeamProposalService;
   shares: ShareService;
+  threadDelivery: ThreadDeliveryService;
 }
 
 /**
@@ -156,6 +160,8 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new BoardTools(deps.board),
     new SearchChatsTool(deps.history),
     new ReadChatContextTool(deps.history),
+    new ListThreadsTool(deps.threadDelivery, deps),
+    new MessageThreadTool(deps.threadDelivery, deps),
     new MemorySearchTool(deps.memory),
     new MemoryReadTool(deps.memory),
     new MemorySaveTool(deps.memory),

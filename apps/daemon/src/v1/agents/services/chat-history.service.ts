@@ -55,8 +55,10 @@ const CARD_READS: readonly { kinds: readonly ItemKind[]; limit: number }[] = [
 ];
 
 /**
- * The task lists a call's card folds: every one since the newest that states
- * the whole list, which is where the fold restarts.
+ * The task lists a call's card folds: every one of the callee's own since its
+ * newest that states the whole list, which is where the fold restarts. A
+ * sub-agent's list is its own, so its rows neither restart the fold nor spend
+ * this cap.
  */
 const TASK_LISTS_PER_CALL = 300;
 
@@ -285,12 +287,14 @@ export class ChatHistoryService {
       const [whole] = await newest({
         kinds: ['task_list'],
         snapshot: true,
+        ownThread: true,
         limit: 1,
       });
       rows.push(
         ...(await newest({
           kinds: ['task_list'],
           fromSeq: whole?.seq,
+          ownThread: true,
           limit: TASK_LISTS_PER_CALL,
         })),
       );

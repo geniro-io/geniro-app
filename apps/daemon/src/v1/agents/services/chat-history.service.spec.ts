@@ -410,6 +410,35 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       expect(await anchoredOf('call-2', ['task_list'])).toEqual([10, 11, 12]);
     });
 
+    it("keeps the callee's own lists past a sub-agent's whole one", async () => {
+      await teamRun();
+      await row(9, 'task_list', 'qa', { callId: 'call-2', mode: 'snapshot' });
+      await row(10, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+      await row(11, 'task_list', 'qa', {
+        callId: 'call-2',
+        mode: 'snapshot',
+        parentToolUseId: 'delegate',
+      });
+
+      expect(await anchoredOf('call-2', ['task_list'])).toEqual(
+        expect.arrayContaining([9, 10]),
+      );
+    });
+
+    it("keeps the callee's own lists past more of a sub-agent's than a call's cap", async () => {
+      await teamRun();
+      await row(9, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+      for (let seq = 10; seq < 311; seq += 1) {
+        await row(seq, 'task_list', 'qa', {
+          callId: 'call-2',
+          mode: 'patch',
+          parentToolUseId: 'delegate',
+        });
+      }
+
+      expect(await anchoredOf('call-2', ['task_list'])).toContain(9);
+    });
+
     it('anchors every task list of a call that never stated a whole one', async () => {
       await teamRun();
       await row(9, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });

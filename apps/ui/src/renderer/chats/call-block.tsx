@@ -58,6 +58,7 @@ import {
   callBlockActivity,
   callBlockContext,
   type CallBlockEntry,
+  callBlockSubagentsRunning,
   callBlockSummary,
   callBlockTasks,
   callBlockUsage,
@@ -571,6 +572,12 @@ export const CallBlock = memo(function CallBlock({
    */
   const heldOn = status === 'running' ? (block.heldOn ?? null) : null;
   const waiting = status === 'running' ? (block.waiting ?? null) : null;
+  const subagentsRunning =
+    status === 'running' ? callBlockSubagentsRunning(block) : 0;
+  const subagentsOut =
+    subagentsRunning === 0
+      ? null
+      : `${subagentsRunning} sub-agent${subagentsRunning === 1 ? '' : 's'}`;
   const waitingTitle =
     waiting === null
       ? undefined
@@ -578,7 +585,9 @@ export const CallBlock = memo(function CallBlock({
         ? `${callee} ended its turn and is waiting for ${waiting.monitors.length === 1 ? 'its monitor' : 'its monitors'}: ${waiting.monitors.join('; ')}. Nothing runs until one reports.`
         : heldOn !== null
           ? `${callee} ended its turn and is waiting for ${heldOn} call${heldOn === 1 ? '' : 's'} it started. Nothing of it runs until they report.`
-          : `${callee} ended its turn. The call stays open until ${callee} is continued.`;
+          : subagentsOut !== null
+            ? `${callee} ended its turn and is waiting for ${subagentsOut}. The call stays open until ${callee} is continued.`
+            : `${callee} ended its turn. The call stays open until ${callee} is continued.`;
   const heldCalls =
     heldOn === null
       ? null
@@ -595,7 +604,9 @@ export const CallBlock = memo(function CallBlock({
       ? `waiting for ${heldCalls}`
       : heldMonitors !== null
         ? `waiting for ${heldMonitors}`
-        : null;
+        : waiting !== null && subagentsOut !== null
+          ? `waiting for ${subagentsOut}`
+          : null;
   const heldTitle =
     heldCalls !== null
       ? `${callee} ended its turn with ${heldCalls} still running. This call stays open until they finish, and ${callee} is continued in it to finish its answer.`
@@ -606,17 +617,21 @@ export const CallBlock = memo(function CallBlock({
       : heldMonitors !== null
         ? `${callee} is waiting for ${heldMonitors}: ${monitorNames.join('; ')}`
         : waiting !== null
-          ? `${callee} ended its turn — the call stays open until it is continued`
+          ? subagentsOut !== null
+            ? `${callee} is waiting for ${subagentsOut}`
+            : `${callee} ended its turn — the call stays open until it is continued`
           : block.stalled
             ? `${callee} has gone quiet — the call is still open`
-            : activity === null
-              ? // The rotating vocabulary, lower-cased to sit inside the sentence. It
-                // opens on the plain `thinking`, so a card glanced at in the first
-                // seconds reads exactly as it always has — the word only wanders once
-                // the callee has been quiet long enough for a still line to read as a
-                // frozen one, which on a called agent is routinely minutes.
-                `${callee} is ${calleeWord.toLowerCase()}...`
-              : `${callee} is running ${activity}`;
+            : activity !== null
+              ? `${callee} is running ${activity}`
+              : subagentsOut !== null
+                ? `${callee} is waiting for ${subagentsOut}`
+                : // The rotating vocabulary, lower-cased to sit inside the sentence. It
+                  // opens on the plain `thinking`, so a card glanced at in the first
+                  // seconds reads exactly as it always has — the word only wanders once
+                  // the callee has been quiet long enough for a still line to read as a
+                  // frozen one, which on a called agent is routinely minutes.
+                  `${callee} is ${calleeWord.toLowerCase()}...`;
   /**
    * Whether there is anything to put in the band at all — `BlockShell` renders
    * it on `summary ?`, and an element is always truthy, so the caller has to

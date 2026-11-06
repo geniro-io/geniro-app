@@ -15,6 +15,7 @@ import {
   callBlockLatest,
   callBlockOfConversation,
   callBlockPath,
+  callBlockSubagentsRunning,
   callBlockSummary,
   callBlockTasks,
   callBlockUsage,
@@ -2551,6 +2552,81 @@ describe('groupTranscript — call blocks', () => {
       expect(
         callBlockTasks(restated).map((t) => [t.id, t.title, t.status]),
       ).toEqual([['1', 'task 1', 'completed']]);
+    });
+
+    describe('its own work beside its sub-agents', () => {
+      const launch = (id: string, memberId: string, callId: string): ChatItem =>
+        tagged(
+          'tool_call',
+          { id, name: 'Agent', input: { description: id } },
+          memberId,
+          callId,
+        );
+      const ownList = (): ChatItem =>
+        tagged(
+          'task_list',
+          {
+            mode: 'snapshot',
+            tasks: [{ id: '1', title: 'own task', status: 'in_progress' }],
+          },
+          'engineer',
+          'call-1',
+        );
+      const delegateList = (): ChatItem =>
+        tagged(
+          'task_list',
+          {
+            mode: 'snapshot',
+            parentToolUseId: 'd1',
+            tasks: [{ id: '1', title: 'delegate task', status: 'pending' }],
+          },
+          'engineer',
+          'call-1',
+        );
+      const running = (): ChatItem =>
+        tagged('status', { status: 'running' }, 'engineer', 'call-1');
+
+      it('keeps the chip on its own list when a sub-agent announces one after it', () => {
+        const block = groupTranscript([
+          startCall('call-1', 'engineer'),
+          running(),
+          ownList(),
+          launch('d1', 'engineer', 'call-1'),
+          delegateList(),
+        ]).find(isBlock)!;
+
+        expect(callBlockTasks(block).map((task) => task.title)).toEqual([
+          'own task',
+        ]);
+      });
+
+      it('withholds the chip when only a sub-agent keeps a list', () => {
+        const block = groupTranscript([
+          startCall('call-1', 'engineer'),
+          running(),
+          launch('d1', 'engineer', 'call-1'),
+          delegateList(),
+        ]).find(isBlock)!;
+
+        expect(callBlockTasks(block)).toEqual([]);
+      });
+
+      it('counts the sub-agents still running, not those that returned', () => {
+        const block = groupTranscript([
+          startCall('call-1', 'engineer'),
+          running(),
+          launch('d1', 'engineer', 'call-1'),
+          launch('d2', 'engineer', 'call-1'),
+          tagged(
+            'tool_result',
+            { id: 'd2', name: 'Agent', result: 'done' },
+            'engineer',
+            'call-1',
+          ),
+        ]).find(isBlock)!;
+
+        expect(callBlockSubagentsRunning(block)).toBe(1);
+      });
     });
 
     it('a continuation whose root is OUTSIDE the loaded items stays its own card', () => {

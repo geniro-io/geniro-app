@@ -314,6 +314,12 @@ export interface CallBlockEntry {
    */
   stalled: boolean;
   /**
+   * How many of the conversation's sub-agents the daemon says are running with
+   * no block in {@link entries}: launched above the loaded window. Added on top
+   * of the blocks' own readings, see {@link callBlockSubagentsRunning}.
+   */
+  offWindowSubagents?: number;
+  /**
    * How many calls of its own the callee is WAITING for: it ended its turn
    * with them still running, so the call stays open until they finish and the
    * callee is continued inside it. Absent while it is not waiting.
@@ -1563,6 +1569,17 @@ export function callBlockActivity(block: CallBlockEntry): string | null {
 }
 
 /**
+ * How many of the callee's own sub-agents are still running: the blocks on
+ * screen, as each reads, plus those the daemon holds and the window does not.
+ */
+export function callBlockSubagentsRunning(block: CallBlockEntry): number {
+  const onScreen = collectSubagentBlocks(block.entries).filter(
+    (entry) => subagentBlockStatus(entry) === 'running',
+  );
+  return onScreen.length + (block.offWindowSubagents ?? 0);
+}
+
+/**
  * Where one call has got to, as ONE line — what the agents panel's instance row
  * says under the call's ask.
  *
@@ -1800,6 +1817,8 @@ function addFigure(total: number | null, next: unknown): number | null {
  * applies — so the shut card and the instance state one list, not the latest
  * call's partial one beside the whole. Empty when the callee keeps none, which
  * is what withholds the chip.
+ *
+ * The callee's OWN list alone: a sub-agent keeps one of its own in its block.
  */
 export function callBlockTasks(block: CallBlockEntry): readonly AgentTaskRow[] {
   let tasks: readonly AgentTaskRow[] = [];
@@ -1820,7 +1839,7 @@ function lastTaskListIn(
     if (entry.type === 'task-list') {
       return entry;
     }
-    if (entry.type === 'item' || entry.type === 'tools' || isCardEntry(entry)) {
+    if (entry.type !== 'turn-block') {
       continue;
     }
     const nested = lastTaskListIn(entry.entries);

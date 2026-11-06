@@ -742,12 +742,126 @@ describe('CallBlock', () => {
       return lines;
     }
 
-    it('keeps one line while ten sub-agents start and finish tools', () => {
+    function delegateReturned(id: string): ChatItem {
+      return item(
+        'tool_result',
+        { id, name: 'Agent', result: 'done', callId: 'call-1' },
+        'poet',
+      );
+    }
+
+    it('keeps one still line while ten sub-agents start and finish tools', () => {
       const rows = [...opening(), ...delegateFrames()];
 
       const lines = pendingLines(rows, opening().length);
 
-      expect(new Set(lines)).toEqual(new Set(['Poet is thinking...']));
+      expect(new Set(lines)).toEqual(
+        new Set(['Poet is waiting for 10 sub-agents']),
+      );
+    });
+
+    it('counts down as they finish, in the singular at one, and goes back to its word after the last', () => {
+      const finishing = DELEGATES.slice(0, 9).map(delegateReturned);
+      const last = delegateReturned('d9');
+      const rows = [...opening(), ...finishing, last];
+
+      const lines = pendingLines(rows, opening().length);
+
+      expect(lines).toEqual([
+        'Poet is waiting for 10 sub-agents',
+        ...[9, 8, 7, 6, 5, 4, 3, 2].map(
+          (n) => `Poet is waiting for ${n} sub-agents`,
+        ),
+        'Poet is waiting for 1 sub-agent',
+        'Poet is thinking...',
+      ]);
+    });
+
+    function backgrounded(): ChatItem[] {
+      return [
+        ...opening(),
+        ...DELEGATES.flatMap((id) => [
+          item(
+            'subagent_info',
+            { id, backgroundOpen: true, callId: 'call-1' },
+            'poet',
+          ),
+          delegateReturned(id),
+        ]),
+        item(
+          'turn_complete',
+          { callId: 'call-1', usage: { inputTokens: 1, outputTokens: 1 } },
+          'poet',
+        ),
+      ];
+    }
+
+    function shutCard(rows: ChatItem[]): void {
+      const block = groupTranscript(rows)[0];
+      if (block?.type !== 'call-block') {
+        throw new Error('expected a call block');
+      }
+      act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+    }
+
+    it('says what it waits for once its own turn has ended with them out, and agrees with its mark', () => {
+      shutCard(backgrounded());
+
+      const badge = container.querySelector('[data-slot="block-status-badge"]');
+      expect(badge?.textContent).toBe('waiting');
+      expect(badge?.getAttribute('title')).toBe(
+        'Poet ended its turn and is waiting for 10 sub-agents. The call stays open until Poet is continued.',
+      );
+      expect(
+        container.querySelector('[data-slot="call-summary-held"]')?.textContent,
+      ).toBe('waiting for 10 sub-agents');
+      expand();
+      expect(
+        container.querySelector('[data-slot="block-pending"]')?.textContent,
+      ).toBe('Poet is waiting for 10 sub-agents');
+    });
+
+    it('reads the turn as ended, with none out, once its last sub-agent has closed', () => {
+      shutCard([
+        ...backgrounded(),
+        ...DELEGATES.map((id) =>
+          item(
+            'subagent_info',
+            { id, backgroundOpen: false, callId: 'call-1' },
+            'poet',
+          ),
+        ),
+      ]);
+
+      expect(
+        container.querySelector('[data-slot="call-summary-held"]'),
+      ).toBeNull();
+      expand();
+      expect(
+        container.querySelector('[data-slot="block-pending"]')?.textContent,
+      ).toBe('Poet ended its turn — the call stays open until it is continued');
+    });
+
+    it('counts the sub-agents the daemon holds and the window does not', () => {
+      const rows = opening().slice(0, 2);
+      const block = groupTranscript(rows)[0];
+      if (block?.type !== 'call-block') {
+        throw new Error('expected a call block');
+      }
+
+      act(() =>
+        root.render(
+          <CallBlock
+            block={{ ...block, offWindowSubagents: 3 }}
+            nodes={NODES}
+          />,
+        ),
+      );
+      expand();
+
+      expect(
+        container.querySelector('[data-slot="block-pending"]')?.textContent,
+      ).toBe('Poet is waiting for 3 sub-agents');
     });
 
     it('still names a tool the callee itself is running', () => {
@@ -761,6 +875,42 @@ describe('CallBlock', () => {
       const lines = pendingLines(rows, opening().length + 1);
 
       expect(new Set(lines)).toEqual(new Set(['Poet is running Bash']));
+    });
+
+    it('goes back to waiting once its own tool returns with them still out', () => {
+      const own = item(
+        'tool_call',
+        { id: 'own', name: 'Bash', input: {}, callId: 'call-1' },
+        'poet',
+      );
+      const returned = item(
+        'tool_result',
+        { id: 'own', name: 'Bash', result: 'ok', callId: 'call-1' },
+        'poet',
+      );
+      const rows = [...opening(), own, returned];
+
+      const lines = pendingLines(rows, opening().length + 1);
+
+      expect(lines).toEqual([
+        'Poet is running Bash',
+        'Poet is waiting for 10 sub-agents',
+      ]);
+    });
+
+    it('still says a call has gone quiet over its sub-agents', () => {
+      const rows = [
+        ...opening(),
+        item(
+          'system',
+          { stalledCall: true, callId: 'call-1', message: 'quiet' },
+          'orch',
+        ),
+      ];
+
+      const [line] = pendingLines(rows, rows.length);
+
+      expect(line).toBe('Poet has gone quiet — the call is still open');
     });
   });
 

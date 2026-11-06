@@ -160,6 +160,7 @@ describe('Ollama through the existing agent harnesses', () => {
     );
     const settingsAt = captured.args!.lastIndexOf('--settings');
     expect(JSON.parse(captured.args![settingsAt + 1]!)).toEqual({
+      crossSessionInbound: 'refuse',
       language: 'Russian',
       env: expect.objectContaining({
         ANTHROPIC_BASE_URL: 'http://127.0.0.1:12000',
@@ -247,7 +248,9 @@ describe('Ollama through the existing agent harnesses', () => {
       { ...INPUT, model: 'opus' },
       () => undefined,
     );
-    expect(captured.args).not.toContain('--settings');
+    expect(captured.args).toEqual(
+      expect.arrayContaining(['--settings', '{"crossSessionInbound":"refuse"}']),
+    );
     expect(captured.args).toContain('opus');
     child.emit('close', 0);
     await handle.done;

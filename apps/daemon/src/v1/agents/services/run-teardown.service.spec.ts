@@ -64,6 +64,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let removedArtifactRuns: string[];
   /** The run's CLIs closing and its detached processes being reaped, in order. */
   let processEnds: string[];
+  let inboxCancels: { runId: string; why: string; runStillThere: boolean }[];
   let commands: ActionCommandRegistry;
   let monitors: MonitorRegistry;
   /** Every CLI transcript the teardown asked an adapter to delete. */
@@ -114,6 +115,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     await orm.schema.clear();
     removedArtifactRuns = [];
     processEnds = [];
+    inboxCancels = [];
     commands = new ActionCommandRegistry();
     monitors = new MonitorRegistry(new ProcessRegistry());
     referencedTexts = [];
@@ -126,7 +128,11 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     wallTurnDao = new WallTurnDao(em);
     const threadInbox = {
       cancelFor: async (runId: string, why: string) => {
-        processEnds.push(`inbox ${runId} ${why}`);
+        inboxCancels.push({
+          runId,
+          why,
+          runStillThere: (await runDao.getById(runId, orm.em.fork())) !== null,
+        });
       },
     } as unknown as ThreadInboxService;
     teardown = new RunTeardownService(
@@ -206,6 +212,16 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     await teardown.purge(orm.em.fork(), 'run-a', undefined);
 
     expect(processEnds).toEqual(['closeRun run-a', 'reap run-a']);
+  });
+
+  it('cancels what waits for the thread before its rows go', async () => {
+    await seedRun('run-a');
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(inboxCancels).toEqual([
+      { runId: 'run-a', why: 'deleted', runStillThere: true },
+    ]);
   });
 
   it('ends the command actions the run has running — that run’s only', () => {

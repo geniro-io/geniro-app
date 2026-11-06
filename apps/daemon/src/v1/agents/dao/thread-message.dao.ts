@@ -1,9 +1,16 @@
-import { EntityManager } from '@mikro-orm/sqlite';
+import { EntityManager, type FilterQuery } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { ThreadMessage } from '../../runs/entity/thread-message.entity';
 import type { ThreadMessageReason } from '../chat.types';
+
+/** What a turn still owes and a wake may open one for. */
+const OWED = {
+  status: 'waiting',
+  wake: true,
+  $or: [{ reason: null }, { reason: 'running_turn' }],
+} satisfies FilterQuery<ThreadMessage>;
 
 /** `thread_messages` — the mailbox between threads. */
 @Injectable()
@@ -32,12 +39,7 @@ export class ThreadMessageDao extends BaseDao<ThreadMessage> {
     txEm?: EntityManager,
   ): Promise<ThreadMessage[]> {
     return this.getRepo(txEm ?? this.em.fork()).find(
-      {
-        toRunId,
-        status: 'waiting',
-        wake: true,
-        $or: [{ reason: null }, { reason: 'running_turn' }],
-      },
+      { toRunId, ...OWED },
       {
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         disableIdentityMap: true,
@@ -47,14 +49,10 @@ export class ThreadMessageDao extends BaseDao<ThreadMessage> {
 
   /** The threads holding a message {@link listOwed} would answer. */
   async owedRunIds(txEm?: EntityManager): Promise<string[]> {
-    const rows = await this.getRepo(txEm ?? this.em.fork()).find(
-      {
-        status: 'waiting',
-        wake: true,
-        $or: [{ reason: null }, { reason: 'running_turn' }],
-      },
-      { fields: ['toRunId'], disableIdentityMap: true },
-    );
+    const rows = await this.getRepo(txEm ?? this.em.fork()).find(OWED, {
+      fields: ['toRunId'],
+      disableIdentityMap: true,
+    });
     return [...new Set(rows.map((row) => row.toRunId))];
   }
 
@@ -75,15 +73,17 @@ export class ThreadMessageDao extends BaseDao<ThreadMessage> {
     );
   }
 
-  async countWakesSince(
+  /** Wakes spent on a thread's messages last woken since `since`. */
+  async sumWakesSince(
     toRunId: string,
     since: Date,
     txEm?: EntityManager,
   ): Promise<number> {
-    return this.count(
+    const rows = await this.getRepo(txEm ?? this.em.fork()).find(
       { toRunId, wokeAt: { $gte: since } },
-      txEm ?? this.em.fork(),
+      { fields: ['wakes'], disableIdentityMap: true },
     );
+    return rows.reduce((sum, row) => sum + row.wakes, 0);
   }
 
   async setReason(
@@ -98,11 +98,16 @@ export class ThreadMessageDao extends BaseDao<ThreadMessage> {
     );
   }
 
-  async markWoken(id: string, at: Date, txEm?: EntityManager): Promise<void> {
+  async markWoken(
+    id: string,
+    wakes: number,
+    at: Date,
+    txEm?: EntityManager,
+  ): Promise<void> {
     await (txEm ?? this.em.fork()).nativeUpdate(
       ThreadMessage,
       { id },
-      { wokeAt: at, reason: null },
+      { wokeAt: at, wakes, reason: null },
     );
   }
 

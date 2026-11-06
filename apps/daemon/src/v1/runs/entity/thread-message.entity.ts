@@ -64,9 +64,13 @@ export class ThreadMessage extends TimestampsEntity {
   @Property({ type: 'string', nullable: true })
   deliveryId: string | null = null;
 
-  /** When a wake was spent on it — what the per-thread wake limit counts. */
+  /** When a wake was last spent on it. */
   @Property({ type: DateTimeType, nullable: true })
   wokeAt: Date | null = null;
+
+  /** How many wakes were spent on it — what the per-thread wake limit sums. */
+  @Property({ type: 'integer' })
+  wakes: number = 0;
 
   @Property({ type: DateTimeType, nullable: true })
   deliveredAt: Date | null = null;

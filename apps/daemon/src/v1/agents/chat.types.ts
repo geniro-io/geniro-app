@@ -4627,7 +4627,12 @@ export interface ThreadListRow {
   updatedAt: string;
 }
 
-/** The `thread_messages_changed` broadcast: re-read this thread's waiting list. */
+/**
+ * The `thread_messages_changed` broadcast: re-read this thread's waiting list.
+ *
+ * TWIN PARSER: read by `parseThreadMessagesChanged` in
+ * `apps/ui/src/renderer/daemon-client.ts`.
+ */
 export interface ThreadMessagesChange {
   runId: string;
 }

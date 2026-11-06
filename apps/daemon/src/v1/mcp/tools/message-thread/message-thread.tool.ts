@@ -1,9 +1,6 @@
 import { BaseException } from '@packages/common';
 
 import { HOST_MESSAGE_THREAD_TOOL } from '../../../agents/chat.types';
-import type { AnalysisBroker } from '../../../agents/services/analysis.broker';
-import type { ProjectChatBroker } from '../../../agents/services/project-chat.broker';
-import type { TeamBuilderBroker } from '../../../agents/services/team-builder.broker';
 import type { ThreadDeliveryService } from '../../../teams/services/thread-delivery.service';
 import type {
   McpCallContext,
@@ -11,6 +8,7 @@ import type {
   McpToolResult,
 } from '../../mcp.types';
 import { BaseMcpTool } from '../base-mcp-tool';
+import { offersThreadTools, type ThreadToolGates } from '../thread-tools-offer';
 import { messageThreadInstructions } from './message-thread.instructions';
 import {
   messageThreadResultText,
@@ -29,19 +27,13 @@ export class MessageThreadTool extends BaseMcpTool {
 
   constructor(
     private readonly threads: ThreadDeliveryService,
-    private readonly analysis: AnalysisBroker,
-    private readonly teamBuilders: TeamBuilderBroker,
-    private readonly projectChats: ProjectChatBroker,
+    private readonly gates: ThreadToolGates,
   ) {
     super();
   }
 
-  protected isOffered({ runId, memberId }: McpListContext): boolean {
-    return (
-      !this.analysis.canAnalyse(runId, memberId) &&
-      !this.teamBuilders.canEdit(runId, memberId) &&
-      !this.projectChats.canEdit(runId, memberId)
-    );
+  protected isOffered(context: McpListContext): boolean {
+    return offersThreadTools(this.gates, context);
   }
 
   protected instructions(): string {

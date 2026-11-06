@@ -781,6 +781,7 @@ function fakeAdapter(
     respondApproval: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
     sendUserMessage: ReturnType<typeof vi.fn>;
+    subagentsAFollowUpCancels: ReturnType<typeof vi.fn>;
     attributableDelegate: ReturnType<typeof vi.fn>;
     setApprovalMode: ReturnType<typeof vi.fn>;
   }[];
@@ -829,6 +830,7 @@ function fakeAdapter(
   const handles: {
     respondApproval: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
+    subagentsAFollowUpCancels: ReturnType<typeof vi.fn>;
     sendUserMessage: ReturnType<typeof vi.fn>;
     attributableDelegate: ReturnType<typeof vi.fn>;
     setApprovalMode: ReturnType<typeof vi.fn>;
@@ -853,6 +855,7 @@ function fakeAdapter(
         // stream-json stdin (probe-verified). A spec about the CLI that cannot
         // overrides it to false.
         sendUserMessage: vi.fn(() => true),
+        subagentsAFollowUpCancels: vi.fn(() => 0),
         // Nothing delegated unless a spec says so: the main thread doing its
         // own work is the ordinary turn, and attribution is the exception.
         attributableDelegate: vi.fn((): string | null => null),
@@ -3807,6 +3810,44 @@ describe('ChatService', () => {
         );
         expect(approvals.awaitingFor(run.id)).toBeNull();
         expect(runDao.runs.get(run.id)?.pendingQuestion).toBeNull();
+      });
+
+      it('holds the queue’s own send back from a card the user has not answered', async () => {
+        const { service, cursor, userQuestions, approvals, itemDao } = setup();
+        const run = await asking(service);
+        await userQuestions.ask(run.id, SINGLE_AGENT_NODE, QUESTIONS, null);
+        await drain();
+        await settle(cursor);
+        const turns = cursor.handles.length;
+
+        await expect(
+          service.sendMessage(run.id, 'queued earlier', [], {
+            waitForAnswer: true,
+          }),
+        ).rejects.toMatchObject({
+          errorCode: 'RUN_AWAITS_ANSWER',
+          statusCode: 409,
+        });
+        await drain();
+
+        expect(cursor.handles).toHaveLength(turns);
+        expect(itemDao.items.some((item) => item.kind === 'unanswerable')).toBe(
+          false,
+        );
+        expect(approvals.listByRun(run.id)).toHaveLength(1);
+      });
+
+      it('lets the queue’s send through once no card waits', async () => {
+        const { service, cursor } = setup();
+        const run = await asking(service);
+        await settle(cursor);
+
+        await service.sendMessage(run.id, 'queued earlier', [], {
+          waitForAnswer: true,
+        });
+        await drain();
+
+        expect(cursor.handles).toHaveLength(2);
       });
 
       it('puts a standing card back in the registry at boot', async () => {
@@ -7100,6 +7141,65 @@ describe('ChatService', () => {
 
     claude.finish();
     await drain();
+  });
+
+  describe('a press whose message would cancel running sub-agents', () => {
+    async function withSubagentsOut(): Promise<
+      ReturnType<typeof setup> & { runId: string }
+    > {
+      const context = setup();
+      const run = await context.service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+      });
+      await context.service.sendMessage(run.id, 'first');
+      context.claude.handles[0]!.subagentsAFollowUpCancels.mockReturnValue(3);
+      return { ...context, runId: run.id };
+    }
+
+    it('asks first, naming how many, and tells the CLI nothing', async () => {
+      const { service, claude, runId } = await withSubagentsOut();
+
+      await expect(
+        service.sendMessage(runId, 'now', [], { backgroundWork: 'ask' }),
+      ).rejects.toMatchObject({
+        errorCode: 'FOLLOW_UP_CANCELS_SUBAGENTS',
+        statusCode: 409,
+        message: expect.stringContaining('3 sub-agents'),
+      });
+      expect(claude.handles[0]!.sendUserMessage).not.toHaveBeenCalled();
+
+      claude.finish();
+      await drain();
+    });
+
+    it('delivers it past them once the user said to', async () => {
+      const { service, claude, runId } = await withSubagentsOut();
+
+      await service.sendMessage(runId, 'now', [], { backgroundWork: 'cancel' });
+
+      expect(claude.handles[0]!.sendUserMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'now', cancelBackgroundWork: true }),
+      );
+
+      claude.finish();
+      await drain();
+    });
+
+    it('stays the plain RUN_BUSY for a send nobody pressed', async () => {
+      const { service, claude, runId } = await withSubagentsOut();
+      claude.handles[0]!.sendUserMessage.mockReturnValue(false);
+
+      await expect(service.sendMessage(runId, 'queued')).rejects.toMatchObject({
+        errorCode: 'RUN_BUSY',
+      });
+      expect(claude.handles[0]!.sendUserMessage).toHaveBeenCalledWith(
+        expect.not.objectContaining({ cancelBackgroundWork: true }),
+      );
+
+      claude.finish();
+      await drain();
+    });
   });
 
   it('writes nothing to the transcript when the delivery is refused', async () => {

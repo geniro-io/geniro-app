@@ -10454,7 +10454,32 @@ export interface SendMessageDto {
      * @memberof SendMessageDto
      */
     clientMessageId?: string;
+    /**
+     * What a press does about background sub-agents the message would cancel: ask refuses with FOLLOW_UP_CANCELS_SUBAGENTS, cancel sends anyway. Absent, the message is refused RUN_BUSY and stays queued
+     * @type {SendMessageDtoFollowUpBackgroundWork}
+     * @memberof SendMessageDto
+     */
+    backgroundWork?: SendMessageDtoFollowUpBackgroundWork;
+    /**
+     * Sent by the queue, not by a press: refused RUN_AWAITS_ANSWER while a card waits for the user, whom a new turn would cut off from it
+     * @type {boolean}
+     * @memberof SendMessageDto
+     */
+    waitForAnswer?: boolean;
 }
+
+
+
+/**
+ * 
+ * @export
+ */
+export const SendMessageDtoFollowUpBackgroundWork = {
+    Ask: 'ask',
+    Cancel: 'cancel'
+} as const;
+export type SendMessageDtoFollowUpBackgroundWork = typeof SendMessageDtoFollowUpBackgroundWork[keyof typeof SendMessageDtoFollowUpBackgroundWork];
+
 /**
  * 
  * @export

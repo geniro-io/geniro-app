@@ -32,6 +32,7 @@ import {
   type AttachmentWire,
   type ChatListScope,
   type ChatTotalsWire,
+  type FollowUpBackgroundWork,
   type HostArtifact,
   type HostArtifactOutcome,
   type HostArtifactRow,
@@ -118,6 +119,7 @@ import {
   terminalStatus,
 } from '../../agents/utils/event-to-item';
 import { firstTurnWindow } from '../../agents/utils/first-turn-window';
+import { subagentsWouldBeCancelled } from '../../agents/utils/follow-up-background-work';
 import { isHostMemoryCall } from '../../agents/utils/host-memory';
 import { hostMcpServerName } from '../../agents/utils/host-question';
 import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
@@ -529,7 +531,11 @@ interface LiveRunControl {
    * Hand the message to the agents the trigger feeds. Null once the run has
    * finished, which leaves the caller to walk it again from the trigger.
    */
-  deliver(text: string, images: SendMessageImage[]): Promise<ItemWire | null>;
+  deliver(
+    text: string,
+    images: SendMessageImage[],
+    backgroundWork?: FollowUpBackgroundWork,
+  ): Promise<ItemWire | null>;
   /** Hand the message to the callee of ONE running call — see `deliverToCall`. */
   deliverToCall(
     memberId: string,
@@ -1656,13 +1662,14 @@ export class TeamExecutorService
     text: string,
     images: SendMessageImage[] = [],
     clientMessageId?: string,
+    backgroundWork?: FollowUpBackgroundWork,
   ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = await this.assertRunTakesMessage(em, runId, text, images);
     return this.messageSends.send(runId, text, clientMessageId, async () => {
       const live = this.liveRuns.get(runId);
       if (live) {
-        const item = await live.deliver(text, images);
+        const item = await live.deliver(text, images, backgroundWork);
         if (item !== null) {
           return item;
         }
@@ -6036,6 +6043,8 @@ export class TeamExecutorService
           },
           respondApproval: (...args) => current.handle.respondApproval(...args),
           sendUserMessage: (message) => current.handle.sendUserMessage(message),
+          subagentsAFollowUpCancels: () =>
+            current.handle.subagentsAFollowUpCancels?.() ?? 0,
           attributableDelegate: () => current.handle.attributableDelegate(),
           setApprovalMode: (mode) => current.handle.setApprovalMode(mode),
         },
@@ -7220,6 +7229,7 @@ export class TeamExecutorService
     const deliverFollowUp = async (
       text: string,
       images: SendMessageImage[],
+      backgroundWork?: FollowUpBackgroundWork,
     ): Promise<ItemWire | null> => {
       // A pass that is over hands the message back to be walked from the
       // trigger — unless the run is AWAKE for work its own agents started
@@ -7271,6 +7281,19 @@ export class TeamExecutorService
           `${compactingRoot.name ?? compactingRoot.id} is compacting its conversation`,
         );
       }
+      if (backgroundWork === 'ask') {
+        const cancels = roots.reduce(
+          (sum, root) =>
+            sum +
+            ((
+              runningHandles.get(root.id) ?? continuationHandles.get(root.id)
+            )?.subagentsAFollowUpCancels?.() ?? 0),
+          0,
+        );
+        if (cancels > 0) {
+          throw subagentsWouldBeCancelled(cancels);
+        }
+      }
       const { stored, turnImages } = this.storeImages(runId, images);
       // TWIN PARSER: the renderer reads the row's `deliveryId` back
       // (`chats/not-sent-messages.ts`). Each root is told under its own id.
@@ -7301,6 +7324,9 @@ export class TeamExecutorService
             text,
             images: turnImages,
             deliveryId: rootDeliveryId,
+            ...(backgroundWork === 'cancel'
+              ? { cancelBackgroundWork: true }
+              : {}),
           })
         ) {
           for (const id of told) {

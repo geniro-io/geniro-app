@@ -164,6 +164,8 @@ export interface CliTurnOptions {
    * whether the turn it is driving is already over.
    */
   sendFollowUp?: (message: FollowUpMessage) => boolean;
+  /** {@link TurnDriver.subagentsAFollowUpCancels}. */
+  subagentsAFollowUpCancels?: () => number;
   /**
    * The CLI acknowledges each message it takes off stdin with a
    * `user_message_consumed` event (`AdapterConfig`'s
@@ -4302,6 +4304,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         }
         return delivered;
       },
+      subagentsAFollowUpCancels: () =>
+        turn.settled || turn.terminalEmitted || turn.cancelRequested
+          ? 0
+          : (turnOptions.subagentsAFollowUpCancels?.() ?? 0),
       setApprovalMode: (mode) =>
         // Same settle guard as the two writers above. It matters more here: a
         // true reported for a write the turn never read would tell the user

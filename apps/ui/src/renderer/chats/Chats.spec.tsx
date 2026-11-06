@@ -8553,6 +8553,7 @@ describe('Chats queued messages', () => {
       runId: 'r1',
       sendMessageDto: {
         clientMessageId: expect.any(String),
+        waitForAnswer: true,
         text: 'look at this',
         images: [{ mediaType: 'image/png', data: PNG_BASE64 }],
       },
@@ -9402,6 +9403,7 @@ describe('Chats queued messages', () => {
       runId: 'r1',
       sendMessageDto: {
         clientMessageId: expect.any(String),
+        waitForAnswer: true,
         text: 'queued question',
       },
     });
@@ -9634,7 +9636,11 @@ describe('Chats queued messages', () => {
     });
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { clientMessageId: expect.any(String), text: '/compact' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        waitForAnswer: true,
+        text: '/compact',
+      },
     });
   });
 
@@ -9772,7 +9778,11 @@ describe('Chats queued messages', () => {
     // idle run kicks the drain, since there is no turn whose ending would.
     expect(api.sendChatMessage).toHaveBeenNthCalledWith(1, {
       runId: 'r1',
-      sendMessageDto: { clientMessageId: expect.any(String), text: 'first' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        waitForAnswer: true,
+        text: 'first',
+      },
     });
     expect(
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
@@ -9785,7 +9795,11 @@ describe('Chats queued messages', () => {
     });
     expect(api.sendChatMessage).toHaveBeenNthCalledWith(2, {
       runId: 'r1',
-      sendMessageDto: { clientMessageId: expect.any(String), text: 'second' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        waitForAnswer: true,
+        text: 'second',
+      },
     });
   });
 
@@ -10049,6 +10063,7 @@ describe('Chats queued messages', () => {
       runId: 'r1',
       sendMessageDto: {
         clientMessageId: expect.any(String),
+        waitForAnswer: true,
         text: 'held back',
       },
     });
@@ -10081,7 +10096,11 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
-      sendMessageDto: { clientMessageId: expect.any(String), text: 'first' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        backgroundWork: 'ask',
+        text: 'first',
+      },
     });
 
     // The turn that press started now ends — and 'second' STAYS, which is what
@@ -10115,7 +10134,11 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
-      sendMessageDto: { clientMessageId: expect.any(String), text: 'first' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        waitForAnswer: true,
+        text: 'first',
+      },
     });
     // 'second' still waits its turn.
     expect(
@@ -10128,7 +10151,11 @@ describe('Chats queued messages', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
-      sendMessageDto: { clientMessageId: expect.any(String), text: 'second' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        waitForAnswer: true,
+        text: 'second',
+      },
     });
   });
 
@@ -10227,6 +10254,7 @@ describe('Chats queued messages', () => {
       runId: 'r2',
       sendMessageDto: {
         clientMessageId: expect.any(String),
+        waitForAnswer: true,
         text: 'second run',
       },
     });
@@ -10478,6 +10506,7 @@ describe('Chats queued messages', () => {
       runId: 'r1',
       sendMessageDto: {
         clientMessageId: expect.any(String),
+        waitForAnswer: true,
         text: 'the second\nthought',
       },
     });
@@ -10501,7 +10530,11 @@ describe('Chats queued messages', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { clientMessageId: expect.any(String), text: 'urgent' },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        text: 'urgent',
+        backgroundWork: 'ask',
+      },
     });
     // It left the queue, so the drain cannot send it a second time.
     expect(
@@ -10629,6 +10662,7 @@ describe('Chats queued messages', () => {
         runId: 'r1',
         sendMessageDto: {
           clientMessageId: expect.any(String),
+          waitForAnswer: true,
           text: 'second draft',
         },
       });
@@ -10736,6 +10770,125 @@ describe('Chats queued messages', () => {
       container.querySelector('[aria-label="Queued messages"]')?.textContent,
     ).toContain('urgent');
     expect(container.textContent).not.toContain('RUN_BUSY');
+  });
+
+  describe('a “send now” that would cancel running sub-agents', () => {
+    const wouldCancel = (): Error =>
+      new Error(
+        'daemon POST /v1/chats/r1/messages failed (409): ' +
+          '{"statusCode":409,"code":"FOLLOW_UP_CANCELS_SUBAGENTS",' +
+          '"message":"Sending this now cancels the 3 sub-agents still running, and whatever they have not finished is lost.",' +
+          '"fields":[]}',
+      );
+    const dialog = (): Element | null =>
+      document.querySelector('[role="dialog"]');
+    const dialogButton = (name: string): HTMLButtonElement =>
+      [...(dialog()?.querySelectorAll('button') ?? [])].find(
+        (button) => button.textContent === name,
+      )!;
+
+    async function pressSendPastSubagents(): Promise<HTMLElement> {
+      api.sendChatMessage.mockRejectedValueOnce(wouldCancel());
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      await type(container, 'urgent');
+      await clickButton(container, 'Queue');
+      await clickButton(container, 'Send queued message 1 now');
+      return container;
+    }
+
+    it('asks first, in the daemon’s words, and sends nothing past them', async () => {
+      await pressSendPastSubagents();
+
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+      expect(
+        api.sendChatMessage.mock.calls[0]![0].sendMessageDto.backgroundWork,
+      ).toBe('ask');
+      expect(dialog()?.textContent).toContain('the 3 sub-agents');
+    });
+
+    it('sends past them once confirmed, and the row leaves the queue', async () => {
+      const container = await pressSendPastSubagents();
+      api.sendChatMessage.mockResolvedValueOnce(msg(11, 'user', 'urgent'));
+
+      await act(async () => {
+        dialogButton('Stop them and send').click();
+      });
+
+      expect(dialog()).toBeNull();
+      expect(
+        api.sendChatMessage.mock.calls[1]![0].sendMessageDto.backgroundWork,
+      ).toBe('cancel');
+      expect(
+        container.querySelector('[aria-label="Queued messages"]'),
+      ).toBeNull();
+    });
+
+    it('keeps the message queued when declined', async () => {
+      const container = await pressSendPastSubagents();
+
+      await act(async () => {
+        dialogButton('Cancel').click();
+      });
+
+      expect(dialog()).toBeNull();
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+      expect(
+        container.querySelector('[aria-label="Queued messages"]')?.textContent,
+      ).toContain('still queued');
+    });
+
+    it('drops the question once the turn’s ending has sent the message', async () => {
+      api.sendChatMessage.mockRejectedValueOnce(wouldCancel());
+      const { client, emitItem } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      await type(container, 'urgent');
+      await clickButton(container, 'Queue');
+      await clickButton(container, 'Send queued message 1 now');
+      expect(dialog()).not.toBeNull();
+      api.sendChatMessage.mockResolvedValueOnce(msg(11, 'user', 'urgent'));
+
+      await act(async () => {
+        emitItem(terminal(5));
+      });
+
+      expect(dialog()).toBeNull();
+    });
+  });
+
+  it('holds a queued message back from a card the user has not answered, with no banner', async () => {
+    api.sendChatMessage.mockRejectedValueOnce(
+      new Error(
+        'daemon POST /v1/chats/r1/messages failed (409): ' +
+          '{"statusCode":409,"code":"RUN_AWAITS_ANSWER",' +
+          '"message":"a card is waiting for your answer — your message goes out after it",' +
+          '"fields":[]}',
+      ),
+    );
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await type(container, 'later');
+    await clickButton(container, 'Queue');
+
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(
+      api.sendChatMessage.mock.calls[0]![0].sendMessageDto.waitForAnswer,
+    ).toBe(true);
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('later');
+    expect(container.textContent).not.toContain('waiting for your answer');
+    // Nothing started, so the composer is the idle one again.
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('waiting for you');
   });
 
   it('an older “send now” refusal does not unlock a row whose own send is still in flight', async () => {
@@ -10954,6 +11107,7 @@ describe('Chats queued messages', () => {
       runId: 'r1',
       sendMessageDto: {
         clientMessageId: expect.any(String),
+        waitForAnswer: true,
         text: 'later message',
       },
     });
@@ -11556,6 +11710,7 @@ describe('Chats queued messages — a team run', () => {
       runId: 'w1',
       sendMessageDto: {
         clientMessageId: expect.any(String),
+        backgroundWork: 'ask',
         text: 'collect my feedback first',
       },
     });
@@ -17743,7 +17898,11 @@ describe('Chats — a queue in a thread you are not watching', () => {
 
     expect(api.sendChatMessage).toHaveBeenCalledWith({
       runId: 'r1',
-      sendMessageDto: { clientMessageId: expect.any(String), text: QUEUED },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        waitForAnswer: true,
+        text: QUEUED,
+      },
     });
   });
 
@@ -17836,7 +17995,11 @@ describe('Chats — a queue in a thread you are not watching', () => {
     expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
     expect(api.sendChatMessage).toHaveBeenLastCalledWith({
       runId: 'r1',
-      sendMessageDto: { clientMessageId: expect.any(String), text: QUEUED },
+      sendMessageDto: {
+        clientMessageId: expect.any(String),
+        waitForAnswer: true,
+        text: QUEUED,
+      },
     });
   });
 });

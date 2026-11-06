@@ -2001,6 +2001,12 @@ export interface FollowUpMessage {
    * `MessageDeliveryFailure.deliveryId`, which names a broker failure record.
    */
   deliveryId?: string;
+  /**
+   * The user confirmed giving up the sub-agents this message would cancel
+   * ({@link TurnDriver.subagentsAFollowUpCancels}). Absent, a driver refuses
+   * such a message and it stays queued.
+   */
+  cancelBackgroundWork?: boolean;
 }
 
 /**
@@ -3870,6 +3876,11 @@ export interface TurnDriver {
    */
   sendFollowUp?(message: FollowUpMessage): boolean;
   /**
+   * How many running background sub-agents a message delivered now would
+   * cancel. Undefined = a message on this CLI cancels none.
+   */
+  subagentsAFollowUpCancels?(): number;
+  /**
    * Encode an in-protocol "stop what you are doing", for a CLI whose stop is a
    * frame only the driver can build — the same reason {@link sendFollowUp}
    * exists beside `AgentAdapter.buildFollowUpPayload`, and here it is the
@@ -3931,6 +3942,8 @@ export interface AgentTurnHandle {
    * adapter therefore answers false and the caller keeps the message queued.
    */
   sendUserMessage(message: FollowUpMessage): boolean;
+  /** {@link TurnDriver.subagentsAFollowUpCancels}, for this turn. */
+  subagentsAFollowUpCancels?(): number;
   /**
    * The delegate a render card drawn RIGHT NOW can be credited to, or null.
    *

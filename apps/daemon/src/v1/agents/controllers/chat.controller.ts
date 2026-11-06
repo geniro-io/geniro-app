@@ -627,6 +627,8 @@ export class ChatController {
   ): Promise<ItemWire> {
     return this.chatService.sendMessage(runId, dto.text, dto.images, {
       clientMessageId: dto.clientMessageId,
+      backgroundWork: dto.backgroundWork,
+      waitForAnswer: dto.waitForAnswer,
     });
   }
 

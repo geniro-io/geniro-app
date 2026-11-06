@@ -2204,19 +2204,14 @@ export class AcpTurnDriver {
       }
       return sent;
     }
-    // The prompt is out and background sub-agents are running: an agent with
-    // sub-agent SESSIONS holds its prompt open for them, and anything that
-    // ends that prompt — the `session/cancel` below, or a second prompt —
-    // cancels every one of them. Measured on cursor-agent 2026.10.01-e373342:
-    // a prompt sent while a background sub-agent held the turn answered the
-    // first `cancelled` and the sub-agent `subagent_state_update: cancelled`
-    // within 3ms. So the message is NOT delivered: false is the caller's
-    // RUN_BUSY, which queues it, and it goes out once the turn ends — the
-    // user's own choice of the two this left (queue, or cancel as Cursor
-    // does). Said once per turn, so the queue is not a mystery.
+    // The prompt is out and background sub-agents are running: see
+    // {@link subagentsAFollowUpCancels}. Unless the user chose to give them up
+    // the message is NOT delivered: false is the caller's RUN_BUSY, which
+    // queues it, and it goes out once the turn ends. Said once per turn, so
+    // the queue is not a mystery.
     if (
-      this.session.capabilities.subagentSessions &&
-      this.session.runningBackgroundDelegates() > 0
+      this.subagentsAFollowUpCancels() > 0 &&
+      message.cancelBackgroundWork !== true
     ) {
       if (!this.warnedQueuedForSubagents) {
         this.warnedQueuedForSubagents = true;
@@ -2259,6 +2254,23 @@ export class AcpTurnDriver {
       this.session.emit(event);
     }
     return true;
+  }
+
+  /**
+   * An agent with sub-agent SESSIONS holds its prompt open for its background
+   * sub-agents, and anything that ends that prompt — `session/cancel`, or a
+   * second prompt — cancels every one of them. Measured on cursor-agent
+   * 2026.10.01-e373342: a prompt sent while a background sub-agent held the
+   * turn answered the first `cancelled` and the sub-agent
+   * `subagent_state_update: cancelled` within 3ms; 2026.10.22-27dcf5f's
+   * `handlePrompt` still aborts the turn's sub-agents first.
+   */
+  subagentsAFollowUpCancels(): number {
+    return this.session.capabilities.subagentSessions &&
+      this.promptOutstanding &&
+      this.interruptedPromptId === null
+      ? this.session.runningBackgroundDelegates()
+      : 0;
   }
 
   /**

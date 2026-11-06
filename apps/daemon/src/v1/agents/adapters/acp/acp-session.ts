@@ -480,6 +480,10 @@ export class AcpSession implements TurnDriver {
     return this.turn.sendFollowUp(message);
   }
 
+  subagentsAFollowUpCancels(): number {
+    return this.turn.subagentsAFollowUpCancels();
+  }
+
   buildInterruptPayload(): string | undefined {
     return this.turn.buildInterruptPayload();
   }

@@ -353,8 +353,24 @@ export const CLAUDE_DISALLOWED_TOOLS_FLAG = '--disallowedTools';
  * `claude -p --output-format stream-json --verbose`, read to `system/init`:
  * 147 tools with `Monitor` without the flag; `--disallowedTools Monitor` →
  * 146 and no `Monitor`, also with an `mcp__<server>` rule after it.
+ *
+ * `ListAgents` — geniro's `list_threads`, which reaches every CLI and every
+ * state of a thread. MEASURED on 2.1.316 (2026-11-06), read to `system/init`:
+ * `--disallowedTools ListAgents`, and its alias `ListPeers`, take the tool
+ * away and leave `SendMessage`, and a background sub-agent still resumes
+ * through `SendMessage`, so that tool stays.
  */
-export const CLAUDE_WITHHELD_TOOLS: readonly string[] = ['Monitor'];
+export const CLAUDE_WITHHELD_TOOLS: readonly string[] = ['Monitor', 'ListAgents'];
+
+/**
+ * The settings key and value that stop another claude session writing into a
+ * geniro turn: such a message opens a turn the daemon never sees the text of.
+ * MEASURED on 2.1.316 (2026-11-06): with `accept` a peer's `SendMessage` opened
+ * a second `system/init` and `result`; with `refuse` in `--settings` none
+ * opened, and the sender's `SendMessage` still answered success.
+ */
+export const CLAUDE_CROSS_SESSION_INBOUND_KEY = 'crossSessionInbound';
+export const CLAUDE_CROSS_SESSION_INBOUND_REFUSE = 'refuse';
 
 /** The prefix the CLI names every MCP tool under: `mcp__<server>__<tool>`. */
 export const CLAUDE_MCP_TOOL_PREFIX = 'mcp__';

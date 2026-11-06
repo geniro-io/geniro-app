@@ -1,4 +1,6 @@
 import {
+  CLAUDE_CROSS_SESSION_INBOUND_KEY,
+  CLAUDE_CROSS_SESSION_INBOUND_REFUSE,
   CLAUDE_FAST_MODE_PARAMETER_ID,
   CLAUDE_LANGUAGE_SETTING_KEY,
   CLAUDE_SETTINGS_FLAG,
@@ -18,7 +20,8 @@ export interface ClaudeTurnSettings {
 }
 
 /**
- * The turn's own `--settings` flag, or none when it has nothing to set.
+ * The turn's own `--settings` flag, on every turn: other claude sessions are
+ * refused whatever else the turn sets.
  *
  * It lands after the base's env-only `--settings` for an Ollama model
  * (`AgentAdapter.startSession` puts `modelConfiguration(...).args` ahead of
@@ -27,16 +30,15 @@ export interface ClaudeTurnSettings {
  * model's routing would be dropped.
  */
 export function claudeSettingsArgs(settings: ClaudeTurnSettings): string[] {
-  const value: Record<string, unknown> = {};
+  const value: Record<string, unknown> = {
+    [CLAUDE_CROSS_SESSION_INBOUND_KEY]: CLAUDE_CROSS_SESSION_INBOUND_REFUSE,
+  };
   if (wantsFastMode(settings.modelParameters)) {
     value[CLAUDE_FAST_MODE_PARAMETER_ID] = true;
   }
   const language = settings.replyLanguage?.trim();
   if (language) {
     value[CLAUDE_LANGUAGE_SETTING_KEY] = language;
-  }
-  if (Object.keys(value).length === 0) {
-    return [];
   }
   if (settings.env && Object.keys(settings.env).length > 0) {
     value.env = settings.env;

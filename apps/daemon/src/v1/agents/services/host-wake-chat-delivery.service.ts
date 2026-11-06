@@ -8,6 +8,7 @@ import {
   HostWakeBus,
   hostWakeSessionKey,
   joinHostWakes,
+  stillDue,
   unwithdrawn,
 } from './host-wake.bus';
 import { RunNoticeWriter } from './run-notice.writer';
@@ -101,7 +102,10 @@ export class HostWakeChatDelivery implements OnModuleInit {
       return;
     }
     this.held.delete(runId);
-    const wakes = unwithdrawn(held.values());
+    const allowed = unwithdrawn(held.values());
+    const wakes = allowed.some((wake) => wake.stale !== undefined)
+      ? await stillDue(allowed)
+      : allowed;
     if (wakes.length === 0) {
       return;
     }
@@ -195,7 +199,10 @@ export class HostWakeChatDelivery implements OnModuleInit {
     for (const wake of unwithdrawn(held?.values() ?? [])) {
       // Settled only when the note was kept: one dropped at shutdown leaves
       // the share owed, for the next boot to send.
-      if (this.sessions.oweKeyNote(hostWakeSessionKey(wake.owner), wake.note)) {
+      if (
+        wake.note !== null &&
+        this.sessions.oweKeyNote(hostWakeSessionKey(wake.owner), wake.note)
+      ) {
         wake.onDelivered();
       }
     }

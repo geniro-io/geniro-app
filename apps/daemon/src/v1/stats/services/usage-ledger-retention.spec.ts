@@ -52,6 +52,7 @@ import { UsageEvent } from '../entity/usage-event.entity';
 import { StatsService } from './stats.service';
 import { UsageEventBus } from './usage-events.bus';
 import { UsageRecorderService } from './usage-recorder.service';
+import type { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 
 /**
  * The one behaviour the whole usage ledger exists for: deleting a chat must NOT
@@ -142,6 +143,7 @@ describe('usage ledger retention across a run delete', () => {
       { reapInBackground: () => undefined } as unknown as RunProcessReaper,
       new WallTurnDao(em),
       new ActionCommandRegistry(),
+      { cancelFor: async () => undefined } as unknown as ThreadInboxService,
     );
   });
 

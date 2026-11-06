@@ -84,6 +84,7 @@ import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { TeamNoteBroker } from '../../agents/services/team-note.broker';
+import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { SPAN_ROW_KINDS } from '../../agents/utils/active-spans';
 import {
@@ -123,6 +124,7 @@ import { subagentsWouldBeCancelled } from '../../agents/utils/follow-up-backgrou
 import { isHostKnowledgeCall } from '../../agents/utils/host-knowledge';
 import { isHostMemoryCall } from '../../agents/utils/host-memory';
 import { hostMcpServerName } from '../../agents/utils/host-question';
+import { threadCardFields } from '../../agents/utils/host-thread-message';
 import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
 import { offersMonitorTools } from '../../agents/utils/monitor-offer';
@@ -169,6 +171,10 @@ import {
 import { isSlashCommand } from '../../agents/utils/session-replacement-notes';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import { snapshotPoolKinds } from '../../agents/utils/snapshot-config-dirs';
+import {
+  threadMessagesPrompt,
+  threadMessagesRow,
+} from '../../agents/utils/thread-message-text';
 import {
   ANSWERABILITY_KINDS,
   unanswerablePayload,
@@ -243,6 +249,7 @@ import { MAX_PARALLEL_AGENTS } from '../utils/parallelism';
 import {
   advanceCacheClock,
   cacheExpiryOf,
+  type ConversationCacheFacts,
   statedTtlOf,
   type TurnCacheClock,
 } from '../utils/prompt-cache-standing';
@@ -547,7 +554,23 @@ interface LiveRunControl {
     text: string,
     images: SendMessageImage[],
   ): Promise<ItemWire>;
+  /** Hand a message from another thread to the lead's running turn. */
+  joinThreadMessage(join: ThreadMessageJoin): Promise<ThreadMessageJoinAnswer>;
 }
+
+/**
+ * A message from another thread going into the lead's running turn. `row` is
+ * what the run shows for it; `onDropped` runs when the turn gave it back.
+ */
+export interface ThreadMessageJoin {
+  prompt: string;
+  row: HostRowWire;
+  deliveryId: string;
+  onDropped: () => void;
+}
+
+/** `idle`: no turn of the lead to join. `busy`: one that cannot take it now. */
+export type ThreadMessageJoinAnswer = 'joined' | 'busy' | 'idle';
 
 /** The refusal for a message addressed to a call that is not running. */
 function callNotRunning(): ConflictException {
@@ -812,6 +835,8 @@ export class TeamExecutorService
     @Optional() private readonly runOutcomes?: RunOutcomeBroker,
     @Optional() private readonly stages?: StageService,
     @Optional() private readonly health?: TeamHealthService,
+    /** Messages from other threads, drained at a lead's turn. Optional on `artifacts`' terms. */
+    @Optional() private readonly threadInbox?: ThreadInboxService,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -1596,6 +1621,110 @@ export class TeamExecutorService
       );
       return false;
     }
+  }
+
+  /** Into the lead's running turn, when a message from another thread can go there. */
+  async joinThreadMessage(
+    runId: string,
+    join: ThreadMessageJoin,
+  ): Promise<ThreadMessageJoinAnswer> {
+    return (await this.liveRuns.get(runId)?.joinThreadMessage(join)) ?? 'idle';
+  }
+
+  /**
+   * Open the lead a turn of its own for a waiting message: `prompt` opens it
+   * and the turn's drain carries the message. A settled run is walked again,
+   * only when it completed, since a stopped one starts nothing on its own.
+   */
+  async wakeLeadForThreadMessage(
+    runId: string,
+    prompt: string,
+    row: HostRowWire,
+    onDropped: (requeue: boolean) => void,
+  ): Promise<MonitorWake> {
+    const em = this.em.fork();
+    const found = await this.runDao.getById(runId, em);
+    if (found === null || found.archivedAt !== null) {
+      return 'refused';
+    }
+    const run = assertTeamRun(found, runId);
+    const lead = await this.leadNow(
+      runId,
+      await this.runTeams.teamOf(run, em),
+    );
+    if (lead === null) {
+      return 'refused';
+    }
+    const woke = this.wakeConversation(
+      runId,
+      callerKey(lead, null),
+      prompt,
+      row,
+      onDropped,
+      'host',
+    );
+    if (woke !== 'refused' || run.status !== 'completed') {
+      return woke;
+    }
+    return (await this.continueAsHost(runId, lead, prompt, { ...row }))
+      ? 'woken'
+      : 'refused';
+  }
+
+  /** The conversation a message to this team run reaches, or null. */
+  async threadLeadCaller(runId: string): Promise<string | null> {
+    const em = this.em.fork();
+    const found = await this.runDao.getById(runId, em);
+    if (found === null || found.teamId === null) {
+      return null;
+    }
+    const lead = await this.leadNow(
+      runId,
+      await this.runTeams.teamOf(assertTeamRun(found, runId), em),
+    );
+    return lead === null ? null : callerKey(lead, null);
+  }
+
+  /** A member's name as a thread shows it. */
+  async memberNameOf(runId: string, memberId: string): Promise<string> {
+    const em = this.em.fork();
+    const found = await this.runDao.getById(runId, em);
+    if (found === null || found.teamId === null) {
+      return memberId;
+    }
+    const team = await this.runTeams.teamOf(assertTeamRun(found, runId), em);
+    return team.members.find((member) => member.id === memberId)?.name ?? memberId;
+  }
+
+  /** What the lead's own conversation last measured, for the cold-wake rule. */
+  async leadCacheFacts(runId: string): Promise<ConversationCacheFacts | null> {
+    const caller = await this.threadLeadCaller(runId);
+    if (caller === null) {
+      return null;
+    }
+    const lead = callerNodeOf(caller);
+    let clock: TurnCacheClock | undefined;
+    for (const turn of await this.kindRows.rowsOf(
+      runId,
+      USAGE_ITEM_KINDS,
+      'fresh',
+    )) {
+      const payload = asRecord(parseJsonColumn(turn.payload));
+      if (turn.memberId === lead && typeof payload?.callId !== 'string') {
+        clock = advanceCacheClock(clock, turn.createdAt, payload);
+      }
+    }
+    const row = await this.nodeStateDao.getByRunNode(
+      runId,
+      lead,
+      this.em.fork(),
+    );
+    return {
+      endedAt: clock?.endedAt ?? null,
+      promptCacheTtlMs: clock?.promptCacheTtlMs ?? null,
+      contextTokens: row?.contextTokens ?? null,
+      contextWindowTokens: row?.contextWindowTokens ?? null,
+    };
   }
 
   onRunSettledCompleted(listener: (runId: string) => void): () => void {
@@ -4236,6 +4365,11 @@ export class TeamExecutorService
       const stageLine =
         plainTurn && stageMap !== null ? await this.stageNoticeOf(runId) : null;
       let deliveryNoticeAcknowledged = false;
+      const threadMessages =
+        plainTurn && callContext === undefined && leadIds.has(node.id)
+          ? ((await this.threadInbox?.takeForTurn(runId, this.em.fork())) ?? [])
+          : [];
+      let threadMessagesTaken = false;
       // An automatic carried compaction replaced this conversation: its summary
       // rides this turn, once, and the session it replaced is not resumed.
       const carried = this.carriedSummaries.get(sessionKey) ?? null;
@@ -4375,7 +4509,14 @@ export class TeamExecutorService
         ...(streamPartials ? { streamPartials: true } : {}),
         prompt: withCarriedContext(
           carried,
-          [deliveryNotice?.prompt ?? null, prompt, stageLine]
+          [
+            deliveryNotice?.prompt ?? null,
+            prompt,
+            threadMessages.length === 0
+              ? null
+              : threadMessagesPrompt(threadMessages),
+            stageLine,
+          ]
             .filter((part): part is string => part !== null)
             .join('\n\n'),
         ),
@@ -4661,6 +4802,19 @@ export class TeamExecutorService
               runId,
               caller,
               deliveryNotice,
+            );
+          }
+          if (threadMessages.length > 0 && !threadMessagesTaken && promptTaken) {
+            threadMessagesTaken = true;
+            await this.threadInbox?.markDelivered(
+              runId,
+              threadMessages.map((message) => message.id),
+            );
+            await persistItem(
+              null,
+              'system',
+              null,
+              threadMessagesRow(threadMessages),
             );
           }
           if (event.type === 'slash_commands') {
@@ -5052,6 +5206,15 @@ export class TeamExecutorService
                 // A card row carries the CARD id, which is what the renderer
                 // sends back as the verdict's `requestId`.
                 ...(cardId !== null ? { id: cardId } : {}),
+                ...(event.type === 'approval_request'
+                  ? await threadCardFields(
+                      this.runDao,
+                      this.em.fork(),
+                      hostMcpServerName(runId),
+                      event.toolName,
+                      event.input,
+                    )
+                  : {}),
                 nodeId: node.id,
                 ...(callContext ? { callId: callContext.callId } : {}),
                 ...usageOwner(mapped.kind),
@@ -7242,6 +7405,88 @@ export class TeamExecutorService
       return null;
     };
 
+    /** Why nothing can be handed to the run's roots right now, or null. */
+    const whyRootsNotReady = (roots: readonly TeamMember[]): string | null => {
+      // A root the pass's cap has held back has no conversation to carry on yet,
+      // and its own turn is about to start from the seed. A lead the run was
+      // handed to mid-pass is no pass member: it has a turn or takes one now.
+      if (
+        roots.some(
+          (root) =>
+            (passMemberIds.has(root.id) &&
+              !settled.has(root.id) &&
+              !runningHandles.has(root.id)) ||
+            startingContinuations.has(root.id),
+        )
+      ) {
+        return 'the team is still starting';
+      }
+      const takingOver = roots.find(
+        (root) =>
+          handingOver.has(root.id) &&
+          !runningHandles.has(root.id) &&
+          !continuationHandles.has(root.id),
+      );
+      if (takingOver) {
+        return `${takingOver.name ?? takingOver.id} is taking over the run`;
+      }
+      // Never delivered into a compaction: on a CLI whose compaction replaces
+      // the session, a message landing in it would be summarised away.
+      const compactingRoot = roots.find((root) => compactingNodes.has(root.id));
+      if (compactingRoot) {
+        return `${compactingRoot.name ?? compactingRoot.id} is compacting its conversation`;
+      }
+      return null;
+    };
+
+    /**
+     * A message from another thread, into the lead's running turn: the user's
+     * follow-up without the user. It stays out of the shared delivery, because
+     * no user row stands behind it, and leaves `wokenOnlyByMonitors` alone,
+     * because the user is not driving this stretch.
+     */
+    const joinThreadMessage = async (
+      join: ThreadMessageJoin,
+    ): Promise<ThreadMessageJoinAnswer> => {
+      if (runFinished && !reopened) {
+        return 'idle';
+      }
+      const roots = nodes.filter((node) => leadIds.has(node.id));
+      if (cancelRequested || whyRootsNotReady(roots) !== null) {
+        return 'busy';
+      }
+      const lead = roots.find(
+        (root) =>
+          runningHandles.has(root.id) || continuationHandles.has(root.id),
+      );
+      if (lead === undefined) {
+        return 'idle';
+      }
+      const running = conversationNodes.get(lead.id) ?? lead;
+      if (this.adapterFor(running.agent).getConfig().followUp.interrupts) {
+        return 'busy';
+      }
+      const told = (
+        runningHandles.get(lead.id) ?? continuationHandles.get(lead.id)
+      )?.sendUserMessage({
+        text: join.prompt,
+        images: [],
+        deliveryId: join.deliveryId,
+      });
+      if (told !== true) {
+        return 'busy';
+      }
+      promptDeliveries.set(join.deliveryId, {
+        caller: callerKey(lead.id, null),
+        redeliver: join.onDropped,
+      });
+      enqueue(async () => {
+        await persistItem(null, 'system', null, join.row);
+      });
+      releaseWaitsFor(running);
+      return 'joined';
+    };
+
     const deliverFollowUp = async (
       text: string,
       images: SendMessageImage[],
@@ -7264,38 +7509,9 @@ export class TeamExecutorService
         throw busy('this run is stopping');
       }
       const roots = nodes.filter((node) => leadIds.has(node.id));
-      // A root the pass's cap has held back has no conversation to carry on yet,
-      // and its own turn is about to start from the seed. A lead the run was
-      // handed to mid-pass is no pass member: it has a turn or takes one now.
-      if (
-        roots.some(
-          (root) =>
-            (passMemberIds.has(root.id) &&
-              !settled.has(root.id) &&
-              !runningHandles.has(root.id)) ||
-            startingContinuations.has(root.id),
-        )
-      ) {
-        throw busy('the team is still starting');
-      }
-      const takingOver = roots.find(
-        (root) =>
-          handingOver.has(root.id) &&
-          !runningHandles.has(root.id) &&
-          !continuationHandles.has(root.id),
-      );
-      if (takingOver) {
-        throw busy(
-          `${takingOver.name ?? takingOver.id} is taking over the run`,
-        );
-      }
-      // Never delivered into a compaction: on a CLI whose compaction replaces
-      // the session, a message landing in it would be summarised away.
-      const compactingRoot = roots.find((root) => compactingNodes.has(root.id));
-      if (compactingRoot) {
-        throw busy(
-          `${compactingRoot.name ?? compactingRoot.id} is compacting its conversation`,
-        );
+      const notReady = whyRootsNotReady(roots);
+      if (notReady !== null) {
+        throw busy(notReady);
       }
       if (backgroundWork === 'ask') {
         const cancels = roots.reduce(
@@ -7934,7 +8150,11 @@ export class TeamExecutorService
         );
       });
     }
-    liveControl = { deliver: deliverFollowUp, deliverToCall };
+    liveControl = {
+      deliver: deliverFollowUp,
+      deliverToCall,
+      joinThreadMessage,
+    };
     this.liveRuns.set(runId, liveControl);
     schedule();
   }

@@ -53,11 +53,23 @@ export function unwithdrawn(wakes: Iterable<HostWake>): HostWake[] {
   return [...wakes].filter((wake) => wake.withdrawn?.() !== true);
 }
 
+/** The wakes a turn is still due for, of those {@link unwithdrawn} kept. */
+export async function stillDue(
+  wakes: readonly HostWake[],
+): Promise<HostWake[]> {
+  const verdicts = await Promise.all(
+    wakes.map(async (wake) => (await wake.stale?.()) !== true),
+  );
+  return wakes.filter((_, index) => verdicts[index]);
+}
+
 /** Several wakes for one conversation, as the one turn they open. */
 export function joinHostWakes(wakes: readonly HostWake[]): {
   prompt: string;
   row: HostRowWire;
 } {
+  const threadWake = wakes.find((wake) => wake.row.threadWake !== undefined)
+    ?.row.threadWake;
   return {
     prompt: wakes.map((wake) => wake.prompt).join('\n\n'),
     row: {
@@ -65,6 +77,7 @@ export function joinHostWakes(wakes: readonly HostWake[]): {
       message: [...new Set(wakes.map((wake) => wake.row.message))].join(' '),
       shares: wakes.flatMap((wake) => wake.row.shares ?? []),
       woke: true,
+      ...(threadWake === undefined ? {} : { threadWake }),
     },
   };
 }

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { CLAUDE_SETTINGS_FLAG } from '../claude.const';
 import { claudeSettingsArgs } from './claude-settings.utils';
 
+const REFUSE = { crossSessionInbound: 'refuse' };
+
 function settingsOf(args: string[]): Record<string, unknown> {
   expect(args[0]).toBe(CLAUDE_SETTINGS_FLAG);
   expect(args).toHaveLength(2);
@@ -10,26 +12,28 @@ function settingsOf(args: string[]): Record<string, unknown> {
 }
 
 describe('claudeSettingsArgs', () => {
-  it('sends nothing when the turn has nothing to set', () => {
-    expect(claudeSettingsArgs({})).toEqual([]);
+  it('refuses other claude sessions on a turn with nothing else to set', () => {
+    expect(settingsOf(claudeSettingsArgs({}))).toEqual(REFUSE);
     expect(
-      claudeSettingsArgs({
-        modelParameters: { fastMode: 'false' },
-        replyLanguage: '  ',
-      }),
-    ).toEqual([]);
+      settingsOf(
+        claudeSettingsArgs({
+          modelParameters: { fastMode: 'false' },
+          replyLanguage: '  ',
+        }),
+      ),
+    ).toEqual(REFUSE);
   });
 
   it('carries fast mode only when it is explicitly ON', () => {
     expect(
       settingsOf(claudeSettingsArgs({ modelParameters: { fastMode: 'true' } })),
-    ).toEqual({ fastMode: true });
+    ).toEqual({ ...REFUSE, fastMode: true });
   });
 
   it('carries the reply language under the CLI’s own key, trimmed', () => {
     expect(
       settingsOf(claudeSettingsArgs({ replyLanguage: ' Russian ' })),
-    ).toEqual({ language: 'Russian' });
+    ).toEqual({ ...REFUSE, language: 'Russian' });
   });
 
   it('puts fast mode and the language in ONE flag, since a second would replace the first', () => {
@@ -40,15 +44,14 @@ describe('claudeSettingsArgs', () => {
           replyLanguage: 'Russian',
         }),
       ),
-    ).toEqual({ fastMode: true, language: 'Russian' });
+    ).toEqual({ ...REFUSE, fastMode: true, language: 'Russian' });
   });
 
-  it('folds an Ollama env in only when something else is being set', () => {
+  it('repeats an Ollama env, since this flag replaces the base one wholesale', () => {
     const env = { ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434' };
     expect(
       settingsOf(claudeSettingsArgs({ replyLanguage: 'Russian', env })),
-    ).toEqual({ language: 'Russian', env });
-    // With nothing else to say, the base's own `--settings {"env"}` stands.
-    expect(claudeSettingsArgs({ env })).toEqual([]);
+    ).toEqual({ ...REFUSE, language: 'Russian', env });
+    expect(settingsOf(claudeSettingsArgs({ env }))).toEqual({ ...REFUSE, env });
   });
 });

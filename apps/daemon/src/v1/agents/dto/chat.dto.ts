@@ -34,6 +34,7 @@ import {
   RunGoalCreateSchema,
   RunGoalEditSchema,
   RunGoalsWireSchema,
+  WaitingMessageSchema,
   RunOutcomesWireSchema,
   RunProcessesWireSchema,
   RunSeenWireSchema,
@@ -860,6 +861,7 @@ export class NamedPathsResultDto extends createZodDto(
 ) {}
 
 export class RunGoalsDto extends createZodDto(RunGoalsWireSchema) {}
+export class WaitingMessageDto extends createZodDto(WaitingMessageSchema) {}
 
 export class CreateRunGoalDto extends createZodDto(RunGoalCreateSchema) {}
 

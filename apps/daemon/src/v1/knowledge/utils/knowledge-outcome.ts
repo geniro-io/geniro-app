@@ -24,14 +24,6 @@ export function refusalError(refusal: KnowledgeRefusal): Error {
   }
 }
 
-/** The HTTP error a write on an old `rev` is. */
-export function staleError(): Error {
-  return new ConflictException(
-    'KNOWLEDGE_STALE',
-    'the document changed since it was read — reload it and try again',
-  );
-}
-
 /** The document a user's write produced, or the HTTP error its refusal is. */
 export function savedDocumentOrThrow(
   outcome: KnowledgeSaveOutcome | KnowledgeRefusal,
@@ -40,7 +32,10 @@ export function savedDocumentOrThrow(
     return outcome.document;
   }
   if (outcome.kind === 'stale') {
-    throw staleError();
+    throw new ConflictException(
+      'KNOWLEDGE_STALE',
+      'the document changed since it was read — reload it and try again',
+    );
   }
   if (outcome.kind === 'proposed') {
     throw new ConflictException(

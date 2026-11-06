@@ -6,7 +6,10 @@ import {
   chatTextMatchQuery,
   chatTextQueryTerms,
 } from '../../agents/utils/chat-text-query';
-import { hasHiddenText } from '../../agents/utils/hidden-text';
+import {
+  hasHiddenText,
+  withoutHiddenText,
+} from '../../agents/utils/hidden-text';
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
@@ -378,9 +381,10 @@ export class KnowledgeService {
   }
 
   /** The user's own new document, filed where the user chose. */
-  create(input: KnowledgeCreateInput): Promise<KnowledgeSaveOutcome> {
+  create(raw: KnowledgeCreateInput): Promise<KnowledgeSaveOutcome> {
     return this.serialize(async () => {
       const em = this.em.fork();
+      const input = withoutHiddenCharacters(raw);
       const invalid = refuseInvalid(input);
       if (invalid) {
         return invalid;
@@ -416,9 +420,10 @@ export class KnowledgeService {
    * The user's edit at the `rev` it was read at. A proposed document is
    * approved or rejected first, and an archived one restored first.
    */
-  edit(id: string, patch: KnowledgePatch): Promise<KnowledgeSaveOutcome> {
+  edit(id: string, raw: KnowledgePatch): Promise<KnowledgeSaveOutcome> {
     return this.serialize(async () => {
       const em = this.em.fork();
+      const patch = withoutHiddenCharacters(raw);
       const row = await this.documents.getById(id, em);
       if (!row) {
         return refused('NOT_FOUND', `no document ${id}`);
@@ -450,44 +455,6 @@ export class KnowledgeService {
         row.handle = handle;
       }
       return this.applyToRow(row, USER, patch, null, em);
-    });
-  }
-
-  /**
-   * The user's review of a document an agent saved at once, of the rev they
-   * read: an agent's save meanwhile answers stale, never an unseen approval.
-   */
-  approveDocument(
-    id: string,
-    rev: number,
-  ): Promise<
-    | { kind: 'changed'; head: KnowledgeHeadDto }
-    | { kind: 'stale'; current: KnowledgeDocumentDto }
-    | KnowledgeRefusal
-  > {
-    return this.serialize(async () => {
-      const em = this.em.fork();
-      const row = await this.documents.getById(id, em);
-      if (!row) {
-        return refused('NOT_FOUND', `no document ${id}`);
-      }
-      if (row.status !== 'active') {
-        return refused('NOT_EDITABLE', 'only an active document is approved');
-      }
-      if (rev !== row.rev) {
-        return { kind: 'stale', current: await this.toDocument(row, em) };
-      }
-      if (row.approvedAt === null) {
-        const now = new Date();
-        row.approvedAt = now;
-        const applied = await this.revisionRows.appliedAt(row.id, row.rev, em);
-        if (applied) {
-          applied.approvedAt = now;
-        }
-        await em.flush();
-        this.publish(row, 'approved');
-      }
-      return { kind: 'changed', head: await this.toHeadDto(row, em) };
     });
   }
 
@@ -1146,6 +1113,16 @@ export class KnowledgeService {
 
 function refused(code: KnowledgeRefusalCode, reason: string): KnowledgeRefusal {
   return { kind: 'refused', code, reason };
+}
+
+/** A person's text keeps its words; an agent's is refused, so the agent hears why. */
+function withoutHiddenCharacters<T extends KnowledgeText>(text: T): T {
+  return {
+    ...text,
+    title: withoutHiddenText(text.title, false),
+    whenToRead: withoutHiddenText(text.whenToRead, false),
+    body: withoutHiddenText(text.body, true),
+  };
 }
 
 function refuseInvalid(text: KnowledgeText): KnowledgeRefusal | null {

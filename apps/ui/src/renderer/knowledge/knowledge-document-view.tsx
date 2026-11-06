@@ -30,7 +30,6 @@ export function KnowledgeDocumentView({
   onRestore,
   onDelete,
   onReview,
-  onApprove,
 }: {
   document: KnowledgeDocumentDetailDto;
   placeName: string;
@@ -44,8 +43,6 @@ export function KnowledgeDocumentView({
   onRestore: () => void;
   onDelete: () => Promise<void>;
   onReview: (head: KnowledgeHead) => void;
-  /** Approve a document an agent saved at once. */
-  onApprove: () => Promise<void>;
 }): React.JSX.Element {
   const [moreOpen, setMoreOpen] = useState(false);
   const archived = document.status === 'archived';
@@ -96,19 +93,7 @@ export function KnowledgeDocumentView({
         </KnowledgeNote>
       ) : null}
       {document.status === 'active' && document.approvedAt === null ? (
-        <KnowledgeNote
-          action={
-            <ConfirmActionButton
-              key={document.rev}
-              question={`Approve ${document.title}?`}
-              description="It joins the index of every run that sees it, as your own text."
-              confirmLabel="Approve"
-              busyLabel="Approving…"
-              confirmVariant="default"
-              onConfirm={onApprove}>
-              Approve
-            </ConfirmActionButton>
-          }>
+        <KnowledgeNote>
           An agent saved this and you have not reviewed it. Agents read it
           marked unreviewed, and it stays out of the index.
         </KnowledgeNote>

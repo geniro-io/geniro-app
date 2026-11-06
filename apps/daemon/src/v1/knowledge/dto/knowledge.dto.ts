@@ -65,10 +65,6 @@ export class KnowledgeRevisionDetailDto extends createZodDto(
   KnowledgeRevisionDetailSchema,
 ) {}
 
-export class ApproveKnowledgeDto extends createZodDto(
-  KnowledgeRevisionRestoreSchema,
-) {}
-
 export class RestoreKnowledgeRevisionDto extends createZodDto(
   KnowledgeRevisionRestoreSchema,
 ) {}

@@ -358,7 +358,7 @@ export type KnowledgeRevisionDetail = z.infer<
   typeof KnowledgeRevisionDetailSchema
 >;
 
-/** A write that must act on the `rev` the user read: a restore, an approval. */
+/** Restoring an old version writes it as a new one, at the `rev` read. */
 export const KnowledgeRevisionRestoreSchema = z.object({
   rev: z.number().int().min(1),
 });

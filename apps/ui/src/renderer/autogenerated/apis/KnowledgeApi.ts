@@ -15,7 +15,6 @@
 
 import * as runtime from '../runtime';
 import type {
-  ApproveKnowledgeDto,
   CreateKnowledgeDto,
   KnowledgeConfigAckDto,
   KnowledgeConfigDto,
@@ -31,11 +30,6 @@ import type {
   RestoreKnowledgeRevisionDto,
   UpdateKnowledgeDto,
 } from '../models/index';
-
-export interface KnowledgeApiApproveKnowledgeRequest {
-    id: string;
-    approveKnowledgeDto: ApproveKnowledgeDto;
-}
 
 export interface KnowledgeApiApproveKnowledgeRevisionRequest {
     revisionId: string;
@@ -111,61 +105,6 @@ export interface KnowledgeApiUpdateKnowledgeRequest {
  * 
  */
 export class KnowledgeApi extends runtime.BaseAPI {
-
-    /**
-     * 
-     */
-    async approveKnowledgeRaw(requestParameters: KnowledgeApiApproveKnowledgeRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<KnowledgeHead>> {
-        if (requestParameters['id'] == null) {
-            throw new runtime.RequiredError(
-                'id',
-                'Required parameter "id" was null or undefined when calling approveKnowledge().'
-            );
-        }
-
-        if (requestParameters['approveKnowledgeDto'] == null) {
-            throw new runtime.RequiredError(
-                'approveKnowledgeDto',
-                'Required parameter "approveKnowledgeDto" was null or undefined when calling approveKnowledge().'
-            );
-        }
-
-        const queryParameters: any = {};
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-        headerParameters['Content-Type'] = 'application/json';
-
-        if (this.configuration && this.configuration.accessToken) {
-            const token = this.configuration.accessToken;
-            const tokenString = await token("bearer", []);
-
-            if (tokenString) {
-                headerParameters["Authorization"] = `Bearer ${tokenString}`;
-            }
-        }
-
-        let urlPath = `/v1/knowledge/{id}/approve`;
-        urlPath = urlPath.replace(`{${"id"}}`, encodeURIComponent(String(requestParameters['id'])));
-
-        const response = await this.request({
-            path: urlPath,
-            method: 'POST',
-            headers: headerParameters,
-            query: queryParameters,
-            body: requestParameters['approveKnowledgeDto'],
-        }, initOverrides);
-
-        return new runtime.JSONApiResponse(response);
-    }
-
-    /**
-     * 
-     */
-    async approveKnowledge(requestParameters: KnowledgeApiApproveKnowledgeRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<KnowledgeHead> {
-        const response = await this.approveKnowledgeRaw(requestParameters, initOverrides);
-        return await response.value();
-    }
 
     /**
      * 

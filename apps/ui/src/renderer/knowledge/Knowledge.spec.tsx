@@ -21,7 +21,6 @@ const knowledgeApi = vi.hoisted(() => ({
   updateKnowledge: vi.fn(),
   listKnowledgeRevisions: vi.fn(),
   readKnowledgeRevision: vi.fn(),
-  approveKnowledge: vi.fn(),
   approveKnowledgeRevision: vi.fn(),
   rejectKnowledgeRevision: vi.fn(),
   restoreKnowledgeRevision: vi.fn(),
@@ -507,57 +506,16 @@ async function confirmDialog(name: string): Promise<void> {
 }
 
 describe('Knowledge — the page’s own actions', () => {
-  it('approves an agent’s unreviewed document from its own confirm', async () => {
+  it('says an agent’s document is unreviewed, and offers no Approve on the page', async () => {
     knowledgeApi.readKnowledge.mockResolvedValue(
       aKnowledgeDocument({ approvedAt: null }),
     );
-    knowledgeApi.approveKnowledge.mockResolvedValue(undefined);
     const el = await openCutting();
 
     expect(el.textContent).toContain('you have not reviewed it');
-    await press(el, 'Approve');
-    await confirmDialog('Approve');
-
-    expect(knowledgeApi.approveKnowledge).toHaveBeenCalledWith({
-      id: 'd1',
-      approveKnowledgeDto: { rev: 7 },
-    });
-  });
-
-  it('reloads and asks for another read when an agent saved over the rev read', async () => {
-    knowledgeApi.readKnowledge.mockResolvedValue(
-      aKnowledgeDocument({ approvedAt: null }),
-    );
-    knowledgeApi.approveKnowledge.mockRejectedValue(STALE);
-    const el = await openCutting();
-    const reads = knowledgeApi.readKnowledge.mock.calls.length;
-    await press(el, 'Approve');
-    await confirmDialog('Approve');
-
-    expect(knowledgeApi.readKnowledge.mock.calls.length).toBe(reads + 1);
-    expect(el.textContent).toContain('This document changed.');
-  });
-
-  it('closes the Approve question when an agent saves under it', async () => {
-    knowledgeApi.readKnowledge.mockResolvedValue(
-      aKnowledgeDocument({ approvedAt: null }),
-    );
-    const el = await openCutting();
-    await press(el, 'Approve');
-    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
-
-    knowledgeApi.readKnowledge.mockResolvedValue(
-      aKnowledgeDocument({ approvedAt: null, rev: 8 }),
-    );
-    await act(async () => {
-      for (const listener of changed) {
-        listener({ documentId: 'd1' });
-      }
-    });
-    await settle();
-
-    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
-    expect(knowledgeApi.approveKnowledge).not.toHaveBeenCalled();
+    expect(
+      [...el.querySelectorAll('button')].map((node) => node.textContent),
+    ).not.toContain('Approve');
   });
 
   it('draws an unreviewed document as its source, so nothing in it hides', async () => {
@@ -572,11 +530,10 @@ describe('Knowledge — the page’s own actions', () => {
     ).toContain(hidden);
   });
 
-  it('leaves an approved document without the Approve note', async () => {
+  it('leaves an approved document without the unreviewed note', async () => {
     const el = await openCutting();
 
     expect(el.textContent).not.toContain('you have not reviewed it');
-    expect(knowledgeApi.approveKnowledge).not.toHaveBeenCalled();
   });
 
   it('archives the open document from its More menu', async () => {

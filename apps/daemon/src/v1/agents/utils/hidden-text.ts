@@ -27,6 +27,28 @@ export function hasHiddenText(value: string, lineBreaks: boolean): boolean {
 }
 
 const HIDDEN_TEXT_EVERYWHERE = new RegExp(HIDDEN_TEXT.source, 'gu');
+const EMOJI_MARKS = new RegExp(
+  `${EMOJI_JOINER.source}|${EMOJI_PRESENTATION.source}`,
+  'gu',
+);
+
+/**
+ * `value` with what {@link hasHiddenText} objects to taken out: emoji keep their
+ * marks, and with `lineBreaks` the tabs and newlines stay.
+ */
+export function withoutHiddenText(value: string, lineBreaks: boolean): string {
+  const clean = (part: string): string =>
+    part.replace(HIDDEN_TEXT_EVERYWHERE, (hidden) =>
+      lineBreaks && /[\t\n\r]/.test(hidden) ? hidden : '',
+    );
+  let kept = '';
+  let from = 0;
+  for (const mark of value.matchAll(EMOJI_MARKS)) {
+    kept += clean(value.slice(from, mark.index)) + mark[0];
+    from = mark.index + mark[0].length;
+  }
+  return kept + clean(value.slice(from));
+}
 
 /** `value` with every hidden character (see {@link hasHiddenText}) turned into a space. */
 export function hiddenTextAsSpaces(value: string): string {

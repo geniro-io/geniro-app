@@ -361,6 +361,17 @@ describe('resolveConversationSpend', () => {
     expect(resolveConversationSpend(rows, 'nobody', ['call-1'])).toBeNull();
   });
 
+  it('states an account’s bill on a call whose first turn has not finished', () => {
+    expect(spendOfTotals(totals({ turns: 0, costUsd: 2.23 }))).toEqual({
+      tokens: null,
+      costUsd: 2.23,
+    });
+  });
+
+  it('keeps a call nothing reported on unmeasured', () => {
+    expect(spendOfTotals(totals({ turns: 0, costUsd: null }))).toBeNull();
+  });
+
   it('keeps an unpriced turn’s cost NOT MEASURED rather than zero', () => {
     // cursor reports tokens and no cost: a `$0.00` would be a claim nobody made.
     expect(

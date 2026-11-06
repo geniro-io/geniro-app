@@ -827,9 +827,25 @@ export class PolledSpendService implements OnModuleInit {
           : {
               ms: spend.settledThroughMs,
               accounts: new Set(recordedAccounts(spend)),
+              parent,
             };
       for (const child of children) {
         this.claim(target, child, claimed, from);
+      }
+    }
+    // A delegate is found through its parent's store, which ages out of the
+    // scan or can be cleaned away; what it was billed stays on its member.
+    for (const target of targets.values()) {
+      for (const [conversationId, spend] of target.stored) {
+        if (!claimed.has(conversationId)) {
+          claimed.add(conversationId);
+          this.file(
+            target,
+            conversationId,
+            spend,
+            new Set(recordedAccounts(spend)),
+          );
+        }
       }
     }
     return targets;
@@ -851,7 +867,7 @@ export class PolledSpendService implements OnModuleInit {
     target: NodeTarget,
     conversationId: string,
     claimed: Set<string>,
-    from?: { ms: number; accounts: Accounts },
+    from?: { ms: number; accounts: Accounts; parent: string },
   ): void {
     if (claimed.has(conversationId)) {
       return;
@@ -862,7 +878,13 @@ export class PolledSpendService implements OnModuleInit {
     const current = from?.accounts ?? target.accounts;
     const stored = target.stored.get(conversationId);
     if (stored === undefined) {
-      this.file(target, conversationId, unpricedConversation(startMs), current);
+      this.file(
+        target,
+        conversationId,
+        unpricedConversation(startMs),
+        current,
+        from?.parent,
+      );
       return;
     }
     const recorded = new Set(recordedAccounts(stored));
@@ -870,7 +892,7 @@ export class PolledSpendService implements OnModuleInit {
       heldAnyEvent(stored) ||
       [...current].every((account) => recorded.has(account))
     ) {
-      this.file(target, conversationId, stored, recorded);
+      this.file(target, conversationId, stored, recorded, from?.parent);
       return;
     }
     this.file(
@@ -878,6 +900,7 @@ export class PolledSpendService implements OnModuleInit {
       conversationId,
       unpricedConversation(startMs),
       new Set([...recorded, ...current]),
+      from?.parent,
     );
   }
 
@@ -886,8 +909,15 @@ export class PolledSpendService implements OnModuleInit {
     conversationId: string,
     spend: ConversationSpend,
     accounts: Accounts,
+    spawnedBy?: string,
   ): void {
-    target.conversations.set(conversationId, withAccounts(spend, accounts));
+    target.conversations.set(
+      conversationId,
+      withAccounts(
+        spawnedBy === undefined ? spend : { ...spend, spawnedBy },
+        accounts,
+      ),
+    );
   }
 
   /**

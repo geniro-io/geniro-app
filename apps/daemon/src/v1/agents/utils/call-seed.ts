@@ -243,15 +243,20 @@ export function callConversation(
   const members = records.filter(
     (record) => conversationOf.get(record.callId) === conversationId,
   );
+  const sessionIds = new Set<string>();
   let sessionId: string | null = null;
   for (const member of members) {
     sessionId = member.sessionId ?? sessionId;
+    if (member.sessionId !== null) {
+      sessionIds.add(member.sessionId);
+    }
   }
   return {
     conversationId,
     calleeMemberId: own.calleeMemberId,
     callIds: members.map((member) => member.callId),
     sessionId,
+    sessionIds: [...sessionIds],
   };
 }
 

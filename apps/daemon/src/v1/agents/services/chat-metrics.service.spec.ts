@@ -14,6 +14,7 @@ import {
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { PlanLimitsWire, RunItemEvent } from '../chat.types';
 import { ChatMetricsWireSchema } from '../chat.types';
+import type { CallContextDao } from '../dao/call-context.dao';
 import type { ItemDao } from '../dao/item.dao';
 import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
@@ -50,6 +51,10 @@ const BREAKDOWN: AgentContextUsage = {
     { name: 'amplitude', tokens: 109_284, toolCount: 33, loadedToolCount: 0 },
   ],
 };
+
+const NO_CALL_SESSIONS = {
+  sessionsByCall: () => Promise.resolve(new Map<string, string[]>()),
+} as unknown as CallContextDao;
 
 /** The run's usage rows and call records, as `RunKindRowsCache` hands them out. */
 function usageRowsOf(
@@ -213,6 +218,7 @@ function build(opts: {
       [],
       turnSpanRows,
     ),
+    NO_CALL_SESSIONS,
   );
   service.onModuleInit();
   return {
@@ -319,6 +325,7 @@ describe('ChatMetricsService — one team member', () => {
       { forRun: () => null } as unknown as ConfigDirPinService,
       wallTurns as unknown as WallTurnDao,
       usageRowsOf(usageRows),
+      NO_CALL_SESSIONS,
     );
     service.onModuleInit();
     return {
@@ -574,6 +581,9 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
       inFlight?: boolean;
       /** The CLI the process holding the conversation runs. */
       liveAgent?: string;
+      /** The callee's stored bill, per conversation. */
+      polledSpend?: string;
+      callDao?: CallContextDao;
     } = {},
   ) {
     const peek = vi.fn().mockReturnValue(opts.live ?? null);
@@ -583,7 +593,11 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
       .mockImplementation((_run: string, memberId: string) =>
         Promise.resolve(
           memberId === 'engineer'
-            ? { agentKind: AgentKind.Claude, agentSessionId: 'sess-own' }
+            ? {
+                agentKind: AgentKind.Claude,
+                agentSessionId: 'sess-own',
+                polledSpend: opts.polledSpend ?? null,
+              }
             : null,
         ),
       );
@@ -678,6 +692,7 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
               ]),
         ],
       ),
+      opts.callDao ?? NO_CALL_SESSIONS,
     );
     service.onModuleInit();
     return {
@@ -693,6 +708,56 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
   }
 
   const PLAN: PlanLimitsWire = { plan: 'max', windows: [], estimated: false };
+
+  const billed = (cents: number, spawnedBy?: string) => ({
+    settled: { '2026-11-05|model': [cents, 1] },
+    settledThroughMs: 0,
+    open: {},
+    ...(spawnedBy === undefined ? {} : { spawnedBy }),
+  });
+
+  it('states what the conversation’s sessions and their delegates cost, not the member’s whole bill', async () => {
+    const built = buildCall({
+      polledSpend: JSON.stringify({
+        'sess-a': billed(100),
+        'sess-b': billed(20),
+        'delegate-of-a': billed(5, 'sess-a'),
+        'sess-other-call': billed(9_999),
+      }),
+    });
+
+    const { totals } = await built.service.read('run-1', null, 'call-3');
+
+    expect(totals.costUsd).toBeCloseTo(1.25, 10);
+  });
+
+  it('prices a running call by the session it named before any result recorded it', async () => {
+    const built = buildCall({
+      inFlight: true,
+      polledSpend: JSON.stringify({
+        'sess-a': billed(100),
+        'sess-running': billed(222),
+      }),
+      callDao: {
+        sessionsByCall: () =>
+          Promise.resolve(new Map([['call-3', ['sess-running']]])),
+      } as unknown as CallContextDao,
+    });
+
+    const { totals } = await built.service.read('run-1', null, 'call-3');
+
+    expect(totals.costUsd).toBeCloseTo(3.22, 10);
+  });
+
+  it('leaves a conversation no account billed unpriced rather than free', async () => {
+    const built = buildCall({
+      polledSpend: JSON.stringify({ 'sess-other-call': billed(9_999) }),
+    });
+
+    const { totals } = await built.service.read('run-1', null, 'call-3');
+
+    expect(totals.costUsd).toBeNull();
+  });
 
   it('asks a POOLED callee’s conversation of the pool member that held it, not the member’s last stamp', async () => {
     const built = buildCall({ live: {}, pooled: true });

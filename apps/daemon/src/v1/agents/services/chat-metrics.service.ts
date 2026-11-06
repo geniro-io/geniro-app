@@ -16,6 +16,7 @@ import type {
 } from '../chat.types';
 import type { ChatTotalsResponse, StoredMetricsReading } from '../chat.types';
 import { SINGLE_AGENT_NODE, StoredMetricsReadingSchema } from '../chat.types';
+import { CallContextDao } from '../dao/call-context.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -41,11 +42,14 @@ import {
 import {
   addPolledSpendToTotals,
   applyPolledSpend,
-  NO_POLLED_SPEND,
   nodePolledSpend,
   type PolledSpend,
   withNodePolledSpend,
 } from '../utils/polled-spend';
+import {
+  conversationsBill,
+  readPolledSpendLedger,
+} from '../utils/polled-spend-ledger';
 import {
   callSessionKey,
   nodeSessionKey,
@@ -164,6 +168,7 @@ export class ChatMetricsService implements OnModuleInit {
     private readonly configDirPins: ConfigDirPinService,
     private readonly wallTurns: WallTurnDao,
     private readonly kindRows: RunKindRowsCache,
+    private readonly callContextDao: CallContextDao,
   ) {}
 
   /**
@@ -562,6 +567,7 @@ export class ChatMetricsService implements OnModuleInit {
     const agentKind = live.success
       ? live.data
       : (profile?.agentKind ?? state.agentKind);
+    const sessionsByCall = await this.callContextDao.sessionsByCall(runId, em);
     return {
       runId,
       memberId: conversation.calleeMemberId,
@@ -583,8 +589,13 @@ export class ChatMetricsService implements OnModuleInit {
             : null,
       storedReading: null,
       atSeq: -1,
-      // A polled bill is recorded per NODE; a call's share of it is not.
-      polled: NO_POLLED_SPEND,
+      polled: conversationsBill(
+        readPolledSpendLedger(state.polledSpend),
+        new Set([
+          ...conversation.sessionIds,
+          ...conversation.callIds.flatMap((id) => sessionsByCall.get(id) ?? []),
+        ]),
+      ),
     };
   }
 

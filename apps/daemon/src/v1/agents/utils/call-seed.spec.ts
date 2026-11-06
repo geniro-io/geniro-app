@@ -268,12 +268,14 @@ describe('callConversation', () => {
       callIds: ['call-1', 'call-3', 'call-4'],
       // The newest session any call of it recorded — call-4 settled without one.
       sessionId: 'sess-b',
+      sessionIds: ['sess-a', 'sess-b'],
     });
     expect(callConversation(records, 'call-2')).toEqual({
       conversationId: 'call-2',
       calleeMemberId: 'researcher',
       callIds: ['call-2'],
       sessionId: 'sess-r',
+      sessionIds: ['sess-r'],
     });
   });
 

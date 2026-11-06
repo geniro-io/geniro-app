@@ -640,6 +640,58 @@ describe('the page runtime', () => {
     expect(highlightAll).toHaveBeenCalledTimes(1);
   });
 
+  describe('a local path beside a copied picture', () => {
+    const URI = 'data:image/png;base64,AAAA';
+    const OTHER = 'data:image/png;base64,BBBB';
+    const shown = async (html: string): Promise<HTMLElement> => {
+      document.body.innerHTML = html;
+      run();
+      await flush();
+      return document.getElementById('held')!;
+    };
+
+    it('repoints the link around the picture, which a lightbox reads on click', async () => {
+      const link = await shown(
+        `<a id="held" href="/tmp/shots/a.png"><img src="${URI}"></a>`,
+      );
+      expect(link.getAttribute('href')).toBe(URI);
+    });
+
+    it('repoints a data attribute, on a wrapper further out or on the picture itself', async () => {
+      const wrapper = await shown(
+        `<div id="held" data-src="file:///tmp/a.JPEG"><span><img data-full=" /tmp/a.webp " src="${URI}"></span></div>`,
+      );
+      expect(wrapper.dataset['src']).toBe(URI);
+      expect(wrapper.querySelector('img')!.dataset['full']).toBe(URI);
+    });
+
+    it('leaves alone an element holding two pictures, whose path could mean either', async () => {
+      const wrapper = await shown(
+        `<a id="held" href="/tmp/a.png"><img src="${URI}"><img src="${OTHER}"></a>`,
+      );
+      expect(wrapper.getAttribute('href')).toBe('/tmp/a.png');
+    });
+
+    it('leaves alone what names no local picture', async () => {
+      const wrapper = await shown(
+        `<a id="held" href="/tmp/report.pdf" data-web="https://example.com/a.png" data-cdn="//example.com/a.png"><img src="${URI}"></a>`,
+      );
+      expect(wrapper.getAttribute('href')).toBe('/tmp/report.pdf');
+      expect(wrapper.dataset['web']).toBe('https://example.com/a.png');
+      expect(wrapper.dataset['cdn']).toBe('//example.com/a.png');
+    });
+
+    it('leaves alone other attributes, and a picture that was not copied in', async () => {
+      const wrapper = await shown(
+        `<a id="held" title="/tmp/a.png"><img src="${URI}"></a><a id="plain" href="/tmp/b.png"><img src="https://example.com/b.png"></a>`,
+      );
+      expect(wrapper.getAttribute('title')).toBe('/tmp/a.png');
+      expect(document.getElementById('plain')!.getAttribute('href')).toBe(
+        '/tmp/b.png',
+      );
+    });
+  });
+
   it('tells a page listener about the new theme, and survives one that throws', () => {
     run();
     const seen: string[] = [];

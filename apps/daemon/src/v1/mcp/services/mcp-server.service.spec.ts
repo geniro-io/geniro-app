@@ -5051,6 +5051,12 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(example!.startsWith('/tmp/')).toBe(true);
   });
 
+  it('says a click-to-enlarge viewer reads the picture’s own src, the only place a path is copied from', async () => {
+    const description = find(await everyHostTool(), HOST_ARTIFACT_TOOL);
+    expect(description).toContain('Only <img src> is copied');
+    expect(description).toMatch(/click-to-enlarge viewer sets its own src/);
+  });
+
   it('says in the html field that a picture goes in by path, and what the html limit is', async () => {
     // The html size limit is the one a model cannot discover by trying: a page
     // over it is refused whole. A picture named by its path adds only the path.

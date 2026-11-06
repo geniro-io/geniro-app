@@ -306,8 +306,14 @@ describe('ThreadInboxService.markDelivered and returnDropped', () => {
 describe('ThreadInboxService.wakesInLastHour', () => {
   it('counts the wakes spent on a thread in the last hour only', async () => {
     const h = await threadInboxDb();
-    await h.seedMessage({ wokeAt: new Date(T0.getTime() - 30 * MINUTE) });
-    await h.seedMessage({ wokeAt: new Date(T0.getTime() - 61 * MINUTE) });
+    await h.seedMessage({
+      wokeAt: new Date(T0.getTime() - 30 * MINUTE),
+      wakes: 1,
+    });
+    await h.seedMessage({
+      wokeAt: new Date(T0.getTime() - 61 * MINUTE),
+      wakes: 1,
+    });
     await h.seedMessage({ wokeAt: new Date(T0.getTime() - 120 * MINUTE) });
     await h.seedMessage({ wokeAt: null });
     await h.seedMessage({ toRunId: 'elsewhere', wokeAt: T0, wakes: 1 });

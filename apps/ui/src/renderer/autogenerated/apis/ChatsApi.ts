@@ -67,6 +67,7 @@ import type {
   ThreadOverviewDto,
   UpdateChatSettingsDto,
   UploadChatFileDto,
+  WaitingMessageDto,
 } from '../models/index';
 
 export interface ChatsApiAddRunGoalRequest {
@@ -153,6 +154,10 @@ export interface ChatsApiListRunItemsRequest {
     call?: string;
 }
 
+export interface ChatsApiListWaitingMessagesRequest {
+    runId: string;
+}
+
 export interface ChatsApiMarkRunSeenRequest {
     runId: string;
 }
@@ -225,6 +230,11 @@ export interface ChatsApiReadShellOutputRequest {
 export interface ChatsApiReadThreadOverviewRequest {
     runId: string;
     parts: string;
+}
+
+export interface ChatsApiRemoveWaitingMessageRequest {
+    runId: string;
+    messageId: string;
 }
 
 export interface ChatsApiRenameRunRequest {
@@ -1198,6 +1208,51 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async listWaitingMessagesRaw(requestParameters: ChatsApiListWaitingMessagesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<WaitingMessageDto>>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling listWaitingMessages().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/threads/{runId}/waiting-messages`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listWaitingMessages(requestParameters: ChatsApiListWaitingMessagesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<WaitingMessageDto>> {
+        const response = await this.listWaitingMessagesRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async markRunSeenRaw(requestParameters: ChatsApiMarkRunSeenRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunSeenDto>> {
         if (requestParameters['runId'] == null) {
             throw new runtime.RequiredError(
@@ -2031,6 +2086,58 @@ export class ChatsApi extends runtime.BaseAPI {
     async readThreadOverview(requestParameters: ChatsApiReadThreadOverviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ThreadOverviewDto> {
         const response = await this.readThreadOverviewRaw(requestParameters, initOverrides);
         return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async removeWaitingMessageRaw(requestParameters: ChatsApiRemoveWaitingMessageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<void>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling removeWaitingMessage().'
+            );
+        }
+
+        if (requestParameters['messageId'] == null) {
+            throw new runtime.RequiredError(
+                'messageId',
+                'Required parameter "messageId" was null or undefined when calling removeWaitingMessage().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/threads/{runId}/waiting-messages/{messageId}`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"messageId"}}`, encodeURIComponent(String(requestParameters['messageId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.VoidApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async removeWaitingMessage(requestParameters: ChatsApiRemoveWaitingMessageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<void> {
+        await this.removeWaitingMessageRaw(requestParameters, initOverrides);
     }
 
     /**

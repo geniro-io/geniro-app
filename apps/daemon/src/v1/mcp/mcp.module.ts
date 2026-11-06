@@ -38,6 +38,7 @@ import { TeamChangeService } from '../teams/services/team-change.service';
 import { TeamOverlayService } from '../teams/services/team-overlay.service';
 import { TeamProposalService } from '../teams/services/team-proposal.service';
 import { TeamStoreService } from '../teams/services/team-store.service';
+import { ThreadDeliveryService } from '../teams/services/thread-delivery.service';
 import { TeamsModule } from '../teams/teams.module';
 import { McpController } from './controllers/mcp.controller';
 import { McpServerService } from './services/mcp-server.service';
@@ -98,6 +99,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         teamOverlays: TeamOverlayService,
         teamProposals: TeamProposalService,
         shares: ShareService,
+        threadDelivery: ThreadDeliveryService,
       ) =>
         createMcpTools({
           calls,
@@ -134,6 +136,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           teamOverlays,
           teamProposals,
           shares,
+          threadDelivery,
         }),
       inject: [
         CallBroker,
@@ -170,6 +173,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         TeamOverlayService,
         TeamProposalService,
         ShareService,
+        ThreadDeliveryService,
       ],
     },
     McpServerService,

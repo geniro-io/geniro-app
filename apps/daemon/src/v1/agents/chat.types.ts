@@ -4481,7 +4481,132 @@ export interface HostRowWire {
   callId?: string;
   /** The callee conversation the monitor belongs to — what a restart's note is owed to. */
   conversationId?: string;
+  /**
+   * Messages from other threads a turn took.
+   *
+   * TWIN PARSER: read by `readThreadMessageRow` in
+   * `apps/ui/src/renderer/chats/thread-message-payload.ts`.
+   */
+  threadMessages?: ThreadMessageRowEntry[];
+  /**
+   * The turn this row opens was woken by a message from another thread.
+   *
+   * TWIN PARSER: read by `readThreadMessageRow` in
+   * `apps/ui/src/renderer/chats/thread-message-payload.ts`.
+   */
+  threadWake?: { fromRunId: string; fromTitle: string };
+  /**
+   * What became of a message this thread sent.
+   *
+   * TWIN PARSER: read by `readThreadMessageRow` in
+   * `apps/ui/src/renderer/chats/thread-message-payload.ts`.
+   */
+  threadMessageSent?: ThreadMessageSentRow;
 }
+
+export type ThreadMessageStatus = 'waiting' | 'delivered' | 'cancelled';
+
+/** Why a message still waits instead of having reached the thread. */
+export type ThreadMessageReason =
+  | 'running_turn'
+  | 'stopped'
+  | 'failed'
+  | 'not_started'
+  | 'question'
+  | 'sender_opted_out'
+  | 'cold_and_large'
+  | 'wake_limit';
+
+export const THREAD_MESSAGE_REASONS = [
+  'running_turn',
+  'stopped',
+  'failed',
+  'not_started',
+  'question',
+  'sender_opted_out',
+  'cold_and_large',
+  'wake_limit',
+] as const satisfies readonly ThreadMessageReason[];
+
+/** `joined` a running turn, `woken` a turn of its own, or left `waiting`. */
+export type ThreadMessageOutcome = 'joined' | 'woken' | 'waiting';
+
+export interface ThreadMessageRowEntry {
+  id: string;
+  fromRunId: string;
+  fromTitle: string;
+  fromMember: string | null;
+  text: string;
+}
+
+export interface ThreadMessageSentRow {
+  toRunId: string;
+  title: string;
+  outcome: ThreadMessageOutcome;
+  reason: ThreadMessageReason | null;
+}
+
+/** What `message_thread` answers. */
+export interface ThreadMessageAnswer {
+  outcome: ThreadMessageOutcome;
+  reason?: ThreadMessageReason;
+  title: string;
+}
+
+/** `list_threads`'s arguments. */
+export const ThreadListQuerySchema = z.object({
+  query: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('Words in the thread title; omit for the newest threads.'),
+  limit: z.number().int().min(1).max(50).default(20),
+});
+export type ThreadListQuery = z.infer<typeof ThreadListQuerySchema>;
+
+/** `message_thread`'s arguments. The text's limit is the inbox's, so it says so. */
+export const ThreadMessageSendSchema = z.object({
+  thread: z
+    .uuid()
+    .describe('The thread to write to: `thread` from list_threads, or the reply address of a message you received.'),
+  message: z
+    .string()
+    .describe('The text the other agent reads, up to 16,000 characters.'),
+  wake: z
+    .boolean()
+    .default(true)
+    .describe('Open a turn for it when that thread is idle. False leaves it for the thread\'s next turn.'),
+});
+export type ThreadMessageSend = z.infer<typeof ThreadMessageSendSchema>;
+
+/** One thread as `list_threads` lists it. */
+export interface ThreadListRow {
+  thread: string;
+  title: string;
+  kind: 'chat' | 'team';
+  status: 'working' | 'idle' | 'needs_user' | 'stopped' | 'failed';
+  agent: string | null;
+  project: string | null;
+  folder: string | null;
+  updatedAt: string;
+}
+
+/** The `thread_messages_changed` broadcast: re-read this thread's waiting list. */
+export interface ThreadMessagesChange {
+  runId: string;
+}
+
+/** One message waiting for a thread, as its chip lists it. */
+export const WaitingMessageSchema = z.object({
+  id: z.string(),
+  fromRunId: z.string(),
+  fromTitle: z.string(),
+  fromMember: z.string().nullable(),
+  text: z.string(),
+  reason: z.enum(THREAD_MESSAGE_REASONS).nullable(),
+  createdAt: z.string(),
+});
+export type WaitingMessageWire = z.infer<typeof WaitingMessageSchema>;
 
 /**
  * What woke a conversation for a turn of geniro's own: a monitor's output, or
@@ -4516,9 +4641,11 @@ export interface HostWake {
   row: HostRowWire;
   /**
    * What the conversation's next turn is owed instead when no turn can be
-   * started for it (an archived chat, a callee whose call has settled).
+   * started for it (an archived chat, a callee whose call has settled). Null
+   * when the debt lives elsewhere: the wake then leaves memory unsettled and
+   * whatever holds the debt wakes again.
    */
-  note: string;
+  note: string | null;
   /**
    * Told once the wake is settled: a turn opened on it, or its note was owed
    * to the conversation's next turn instead (held in memory, so lost if the
@@ -4531,6 +4658,12 @@ export interface HostWake {
    * turn nor a note — and never settled. Asked at every attempt.
    */
   withdrawn?: () => boolean;
+  /**
+   * True once nothing is left for the turn to carry, or the conversation may
+   * no longer be started on its own. Asked right before a turn is started,
+   * since what it reads is the database; the wake is then dropped unsettled.
+   */
+  stale?: () => Promise<boolean>;
 }
 
 /** One running monitor, as `list_monitors` and the process panel see it. */
@@ -7600,6 +7733,10 @@ export type ChatContextRun = Pick<
 >;
 
 export const HOST_SEARCH_CHATS_TOOL = 'search_chats';
+
+/** Wire names of the tools that reach another thread. */
+export const HOST_LIST_THREADS_TOOL = 'list_threads';
+export const HOST_MESSAGE_THREAD_TOOL = 'message_thread';
 
 /** The first line of every history tool result, ahead of its JSON. */
 export const HISTORY_RESULT_PREFACE =

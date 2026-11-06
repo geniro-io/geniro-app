@@ -140,6 +140,7 @@ import type { TeamHealthService } from './team-health.service';
 import { TeamOverlayService } from './team-overlay.service';
 import { TeamOverlayStoreService } from './team-overlay-store.service';
 import type { TeamStoreService } from './team-store.service';
+import type { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
 class FakeRunDao {
@@ -1478,6 +1479,7 @@ function setup(
     { reapInBackground: () => undefined } as unknown as RunProcessReaper,
     wallTurns as unknown as WallTurnDao,
     new ActionCommandRegistry(),
+    { cancelFor: async () => undefined } as unknown as ThreadInboxService,
   );
   const runTeams = new RunTeamService(
     { fork: () => ({}) } as never,

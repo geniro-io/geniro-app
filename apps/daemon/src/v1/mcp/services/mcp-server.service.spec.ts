@@ -139,6 +139,7 @@ import { MoveStageTool } from '../tools/move-stage/move-stage.tool';
 import { proposePatchInstructions } from '../tools/propose-patch/propose-patch.instructions';
 import { proposePlanInstructions } from '../tools/propose-plan/propose-plan.instructions';
 import { McpServerService } from './mcp-server.service';
+import type { ThreadDeliveryService } from '../../teams/services/thread-delivery.service';
 
 /** One row of `tools/list`, as the description audit reads it. */
 type ToolListing = {
@@ -230,6 +231,7 @@ function service(
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
+      threadDelivery: {} as ThreadDeliveryService,
       calls: callBroker,
       questions,
       findings,
@@ -4248,6 +4250,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       acceptsAnyVersion: false,
     });
     const tools = createMcpTools({
+      threadDelivery: {} as ThreadDeliveryService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
       findings: new FindingsReportBroker(),
@@ -4334,6 +4337,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       Promise.resolve({ status: 'declined' }),
     );
     return createMcpTools({
+      threadDelivery: {} as ThreadDeliveryService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
       findings: new FindingsReportBroker(),
@@ -4538,6 +4542,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         }),
     } as unknown as TeamStoreService;
     const tool = createMcpTools({
+      threadDelivery: {} as ThreadDeliveryService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
       findings: new FindingsReportBroker(),
@@ -4662,6 +4667,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       }),
     );
     const tool = createMcpTools({
+      threadDelivery: {} as ThreadDeliveryService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
       findings: new FindingsReportBroker(),
@@ -4742,6 +4748,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     );
     const team = teamOf([member('lead')], { name: 'x' });
     const tools = createMcpTools({
+      threadDelivery: {} as ThreadDeliveryService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
       findings: new FindingsReportBroker(),

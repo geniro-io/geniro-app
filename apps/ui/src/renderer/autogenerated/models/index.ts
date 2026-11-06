@@ -15089,6 +15089,72 @@ export interface VersionFigures {
 /**
  * 
  * @export
+ * @interface WaitingMessageDto
+ */
+export interface WaitingMessageDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof WaitingMessageDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof WaitingMessageDto
+     */
+    fromRunId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof WaitingMessageDto
+     */
+    fromTitle: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof WaitingMessageDto
+     */
+    fromMember: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof WaitingMessageDto
+     */
+    text: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof WaitingMessageDto
+     */
+    reason: WaitingMessageDtoReasonEnum | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof WaitingMessageDto
+     */
+    createdAt: string;
+}
+
+
+/**
+ * @export
+ */
+export const WaitingMessageDtoReasonEnum = {
+    RunningTurn: 'running_turn',
+    Stopped: 'stopped',
+    Failed: 'failed',
+    NotStarted: 'not_started',
+    Question: 'question',
+    SenderOptedOut: 'sender_opted_out',
+    ColdAndLarge: 'cold_and_large',
+    WakeLimit: 'wake_limit'
+} as const;
+export type WaitingMessageDtoReasonEnum = typeof WaitingMessageDtoReasonEnum[keyof typeof WaitingMessageDtoReasonEnum];
+
+/**
+ * 
+ * @export
  * @interface WriteMcpConfigDto
  */
 export interface WriteMcpConfigDto {

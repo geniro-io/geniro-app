@@ -40,14 +40,16 @@ describe('claudeMcpServerRule', () => {
 });
 
 describe('claudeDisallowedToolArgs', () => {
-  it('withholds claude’s own Monitor even when nothing is switched off', () => {
+  it('withholds claude’s own Monitor and ListAgents even when nothing is switched off', () => {
     expect(claudeDisallowedToolArgs(undefined, null)).toEqual([
       '--disallowedTools',
       'Monitor',
+      'ListAgents',
     ]);
     expect(claudeDisallowedToolArgs([], 'geniro-run')).toEqual([
       '--disallowedTools',
       'Monitor',
+      'ListAgents',
     ]);
   });
 
@@ -60,6 +62,7 @@ describe('claudeDisallowedToolArgs', () => {
     ).toEqual([
       '--disallowedTools',
       'Monitor',
+      'ListAgents',
       'mcp__codegraph',
       'mcp__claude_ai_Gmail',
     ]);
@@ -68,10 +71,16 @@ describe('claudeDisallowedToolArgs', () => {
   it('never withholds geniro’s own server', () => {
     expect(
       claudeDisallowedToolArgs(['geniro-abc', 'codegraph'], 'geniro-abc'),
-    ).toEqual(['--disallowedTools', 'Monitor', 'mcp__codegraph']);
+    ).toEqual([
+      '--disallowedTools',
+      'Monitor',
+      'ListAgents',
+      'mcp__codegraph',
+    ]);
     expect(claudeDisallowedToolArgs(['geniro-abc'], 'geniro-abc')).toEqual([
       '--disallowedTools',
       'Monitor',
+      'ListAgents',
     ]);
   });
 });

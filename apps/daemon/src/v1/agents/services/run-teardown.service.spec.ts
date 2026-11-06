@@ -41,6 +41,7 @@ import { ProcessRegistry } from './process-registry';
 import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunTeardownService } from './run-teardown.service';
 import { SessionTranscriptsService } from './session-transcripts.service';
+import { ThreadInboxService } from './thread-inbox.service';
 
 /**
  * The teardown's own spec, over REAL DAOs on a real in-memory schema.
@@ -123,6 +124,11 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     nodeStateDao = new NodeStateDao(em);
     callContextDao = new CallContextDao(em);
     wallTurnDao = new WallTurnDao(em);
+    const threadInbox = {
+      cancelFor: async (runId: string, why: string) => {
+        processEnds.push(`inbox ${runId} ${why}`);
+      },
+    } as unknown as ThreadInboxService;
     teardown = new RunTeardownService(
       itemDao,
       nodeStateDao,
@@ -174,6 +180,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       } as unknown as RunProcessReaper,
       wallTurnDao,
       commands,
+      threadInbox,
       monitors,
     );
   });

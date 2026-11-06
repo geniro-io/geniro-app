@@ -82,6 +82,29 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * The threads an agent may message: chats and team runs alike, never an
+   * archived, builder, project or analysis one. `query` narrows by title.
+   */
+  async listThreads(
+    query: string | null,
+    limit: number,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.listPage(
+      {
+        archivedAt: null,
+        editsTeamSlug: null,
+        editsProjectId: null,
+        analysisSourceRunId: null,
+        analysisTeamSlug: null,
+        ...(query === null ? {} : { title: { $like: `%${query}%` } }),
+      },
+      { limit },
+      txEm,
+    );
+  }
+
+  /**
    * One page of a listing, newest first. `id` breaks a `createdAt` tie so the
    * cursor names one place in the order and no row is skipped or repeated
    * across pages.

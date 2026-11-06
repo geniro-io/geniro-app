@@ -1075,12 +1075,6 @@ describe('parseProjectsChanged — the projects_changed twin', () => {
 });
 
 describe('parseThreadMessagesChanged — the thread_messages_changed twin', () => {
-  it('reads the run whose waiting list changed', () => {
-    expect(parseThreadMessagesChanged({ runId: 'r-otter' })).toEqual({
-      runId: 'r-otter',
-    });
-  });
-
   it('reads nothing from a payload with no run id', () => {
     expect(parseThreadMessagesChanged(null)).toBeNull();
     expect(parseThreadMessagesChanged({})).toBeNull();

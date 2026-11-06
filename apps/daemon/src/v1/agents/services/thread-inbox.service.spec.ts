@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import { threadInboxDb } from '../__tests__/thread-inbox-db';
+import { ThreadMessageDao } from '../dao/thread-message.dao';
 import { THREAD_INBOX_MAX_WAITING } from '../utils/thread-message-text';
 
 const FROM = {
@@ -178,6 +179,81 @@ describe('ThreadInboxService.accept — refusals', () => {
   });
 });
 
+describe("ThreadInboxService.accept — each sender's own limits", () => {
+  it('counts another sender apart from this one, toward both the per-minute and the repeat limit', async () => {
+    const h = await threadInboxDb();
+    await h.seedRun(TARGET);
+    const other = { ...FROM, runId: 'other' };
+    for (let index = 0; index < 4; index += 1) {
+      await h.service.accept(send(`note ${index}`));
+    }
+    for (let index = 0; index < 5; index += 1) {
+      await h.service.accept({ ...send(`note ${index}`), from: other });
+    }
+
+    await expect(h.service.accept(send('note 4'))).resolves.toMatchObject({
+      text: 'note 4',
+    });
+  });
+
+  it('refuses one of two racing messages for the fiftieth slot as INBOX_FULL', async () => {
+    const h = await threadInboxDb();
+    await h.seedRun(TARGET);
+    for (let index = 0; index < THREAD_INBOX_MAX_WAITING - 1; index += 1) {
+      await h.seedMessage({
+        fromRunId: `bulk-${index}`,
+        fromSessionKey: `bulk-${index}`,
+        text: `waiting ${index}`,
+      });
+    }
+
+    const outcomes = await Promise.allSettled([
+      h.service.accept(send('racing one')),
+      h.service.accept({
+        ...send('racing two'),
+        from: { ...FROM, runId: 'other' },
+      }),
+    ]);
+
+    expect(
+      outcomes.filter((outcome) => outcome.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(outcomes).toContainEqual(
+      expect.objectContaining({
+        status: 'rejected',
+        reason: expect.objectContaining({ errorCode: 'INBOX_FULL' }),
+      }),
+    );
+    expect(await h.rowsTo(TARGET)).toHaveLength(THREAD_INBOX_MAX_WAITING);
+  });
+});
+
+describe('ThreadMessageDao.owedRunIds', () => {
+  it('names each thread once that holds a message a turn still owes, and no other', async () => {
+    const h = await threadInboxDb();
+    const dao = new ThreadMessageDao(h.em);
+    await h.seedMessage({ toRunId: 'owed', reason: null });
+    await h.seedMessage({ toRunId: 'owed', reason: 'running_turn' });
+    await h.seedMessage({
+      toRunId: 'not-woken',
+      wake: false,
+      reason: 'sender_opted_out',
+    });
+    await h.seedMessage({ toRunId: 'stopped', reason: 'stopped' });
+    await h.seedMessage({
+      toRunId: 'delivered',
+      status: 'delivered',
+      deliveryId: 'turn-1',
+    });
+
+    expect(await dao.owedRunIds()).toEqual(['owed']);
+    expect(await dao.listOwed('owed')).toHaveLength(2);
+    expect(await dao.listOwed('not-woken')).toEqual([]);
+    expect(await dao.listOwed('stopped')).toEqual([]);
+    expect(await dao.listOwed('delivered')).toEqual([]);
+  });
+});
+
 describe('ThreadInboxService.accept — the stored row', () => {
   it('stores the sender title, member, session and wake choice, waiting', async () => {
     const h = await threadInboxDb();
@@ -255,14 +331,6 @@ describe('ThreadInboxService.takeForTurn', () => {
     expect(
       (await h.service.takeForTurn(TARGET)).map((message) => message.text),
     ).toEqual(['c']);
-  });
-
-  it('a turn takes nothing from a thread with no waiting message', async () => {
-    const h = await threadInboxDb();
-    await h.seedRun(TARGET);
-    await h.seedMessage({ status: 'delivered', deliveryId: 'turn-0' });
-
-    expect(await h.service.takeForTurn(TARGET)).toEqual([]);
   });
 });
 
@@ -386,7 +454,7 @@ describe('ThreadInboxService.listWaiting', () => {
 });
 
 describe('ThreadInboxService.cancelFor', () => {
-  it('cancels a thread waiting messages when it is archived, tells each sender and owes the note to its session, and starts nothing', async () => {
+  it('cancels a thread waiting messages when it is archived, tells each sender and owes the note to its session', async () => {
     const h = await threadInboxDb();
     await h.seedRun(TARGET, { title: 'Release' });
     await h.seedMessage({

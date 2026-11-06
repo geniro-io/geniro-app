@@ -1,35 +1,15 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { mountIntoDocument } from '../__tests__/mount-into-document';
 import { ApprovalCard } from './approval-card';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-let root: Root | null = null;
-let container: HTMLDivElement | null = null;
-
-function render(element: React.ReactElement): HTMLDivElement {
-  container = document.createElement('div');
-  document.body.appendChild(container);
-  root = createRoot(container);
-  act(() => {
-    root!.render(element);
-  });
-  return container;
-}
-
-afterEach(() => {
-  act(() => {
-    root?.unmount();
-  });
-  container?.remove();
-  root = null;
-  container = null;
-});
+const render = mountIntoDocument();
 
 const SEND = {
   thread: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
@@ -87,6 +67,27 @@ describe('a message to another thread, as an approval card', () => {
     );
     expect(el.querySelectorAll('button')).toHaveLength(0);
     expect(el.textContent).toContain('✓ approved');
+  });
+
+  it('holds Approve until a direction override in the title is acknowledged', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="message_thread"
+        input={SEND}
+        threadTitle={'Peli‮can'}
+        verdict={null}
+        requestId="req-1"
+        onRespond={() => {}}
+      />,
+    );
+    const approve = (): HTMLButtonElement =>
+      [...el.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Approve',
+      )!;
+    expect(el.querySelector('[data-slot="hazard-warning"]')).not.toBeNull();
+    expect(approve().disabled).toBe(true);
+    act(() => el.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
+    expect(approve().disabled).toBe(false);
   });
 
   it('draws the ordinary permission card when no thread title is given', () => {

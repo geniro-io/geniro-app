@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react';
 
+import { ClampedText } from '../components/clamped-text';
 import { Card } from '../components/ui/card';
 import type { ReceivedThreadMessage } from './thread-message-payload';
 
@@ -60,9 +61,12 @@ export function ThreadMessageCard({
               <span>· {message.fromMember}</span>
             )}
           </div>
-          <p className="m-0 min-w-0 text-sm break-words whitespace-pre-wrap text-foreground">
-            {message.text}
-          </p>
+          <ClampedText
+            text={message.text}
+            lines={4}
+            slot="thread-message-text"
+            className="text-sm text-foreground"
+          />
         </Card>
       ))}
     </div>

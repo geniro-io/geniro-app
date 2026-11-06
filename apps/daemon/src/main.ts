@@ -59,12 +59,12 @@ import { MIGRATION_FAILED_EXIT_CODE } from './v1/migrations/migrations.types';
 import { MigrationRunnerService } from './v1/migrations/services/migration-runner.service';
 import { MigrationFailedError } from './v1/migrations/utils/migration-failed-error';
 import { ShareService } from './v1/shares/services/share.service';
-import { ThreadDeliveryService } from './v1/teams/services/thread-delivery.service';
 import { TeamLedgerService } from './v1/stats/services/team-ledger.service';
 import { StorageService } from './v1/storage/services/storage.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
 import { TeamExecutorService } from './v1/teams/services/team-executor.service';
 import { TeamProposalService } from './v1/teams/services/team-proposal.service';
+import { ThreadDeliveryService } from './v1/teams/services/thread-delivery.service';
 
 /**
  * The one method of better-sqlite3's `Database` this file calls. No type

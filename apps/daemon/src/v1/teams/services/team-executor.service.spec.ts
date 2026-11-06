@@ -48,6 +48,7 @@ import type {
   ClaudeModesVerdict,
 } from '../../agents/adapters/claude/claude.types';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
+import type { HostRowWire } from '../../agents/chat.types';
 import {
   ChatApprovalModeSchema,
   type HistoryWindow,
@@ -95,6 +96,7 @@ import { RunWriteQueue } from '../../agents/services/run-write.queue';
 import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { TeamNoteBroker } from '../../agents/services/team-note.broker';
+import type { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { readAgentOptions } from '../../agents/utils/agent-options';
 import {
@@ -141,8 +143,6 @@ import type { TeamHealthService } from './team-health.service';
 import { TeamOverlayService } from './team-overlay.service';
 import { TeamOverlayStoreService } from './team-overlay-store.service';
 import type { TeamStoreService } from './team-store.service';
-import type { ThreadInboxService } from '../../agents/services/thread-inbox.service';
-import type { HostRowWire } from '../../agents/chat.types';
 
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
 class FakeRunDao {

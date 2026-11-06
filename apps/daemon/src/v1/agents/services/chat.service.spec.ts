@@ -57,6 +57,7 @@ import type {
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type {
   ChatListScope,
+  HostRowWire,
   PromptCacheTtlReason,
   RunCreatedEvent,
   RunDeltaEvent,
@@ -66,7 +67,6 @@ import type {
   RunStatusEvent,
   RunWire,
   SettleFigures,
-  HostRowWire,
 } from '../chat.types';
 import {
   HOST_BOARD_TOOLS,
@@ -151,9 +151,9 @@ import { SessionTranscriptsService } from './session-transcripts.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
 import { TeamBuilderBroker } from './team-builder.broker';
 import { TeamProposalBroker } from './team-proposal.broker';
+import { ThreadInboxService } from './thread-inbox.service';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
-import { ThreadInboxService } from './thread-inbox.service';
 
 const MEMORY_OFF: Pick<MemoryService, 'runSnapshot'> = {
   runSnapshot: async () => ({ nativeMemoryOff: false, memoryIndex: null }),

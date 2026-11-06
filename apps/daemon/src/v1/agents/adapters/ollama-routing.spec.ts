@@ -249,7 +249,10 @@ describe('Ollama through the existing agent harnesses', () => {
       () => undefined,
     );
     expect(captured.args).toEqual(
-      expect.arrayContaining(['--settings', '{"crossSessionInbound":"refuse"}']),
+      expect.arrayContaining([
+        '--settings',
+        '{"crossSessionInbound":"refuse"}',
+      ]),
     );
     expect(captured.args).toContain('opus');
     child.emit('close', 0);

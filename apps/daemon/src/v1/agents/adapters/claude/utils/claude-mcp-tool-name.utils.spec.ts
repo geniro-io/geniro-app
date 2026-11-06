@@ -71,12 +71,7 @@ describe('claudeDisallowedToolArgs', () => {
   it('never withholds geniro’s own server', () => {
     expect(
       claudeDisallowedToolArgs(['geniro-abc', 'codegraph'], 'geniro-abc'),
-    ).toEqual([
-      '--disallowedTools',
-      'Monitor',
-      'ListAgents',
-      'mcp__codegraph',
-    ]);
+    ).toEqual(['--disallowedTools', 'Monitor', 'ListAgents', 'mcp__codegraph']);
     expect(claudeDisallowedToolArgs(['geniro-abc'], 'geniro-abc')).toEqual([
       '--disallowedTools',
       'Monitor',

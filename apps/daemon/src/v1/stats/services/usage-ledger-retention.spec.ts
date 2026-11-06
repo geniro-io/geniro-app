@@ -35,6 +35,7 @@ import type { ProcessRegistry } from '../../agents/services/process-registry';
 import type { RunProcessReaper } from '../../agents/services/run-process-reaper.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
+import type { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { ProjectRootsService } from '../../projects/services/project-roots.service';
 import { CallContext } from '../../runs/entity/call-context.entity';
 import { Goal } from '../../runs/entity/goal.entity';
@@ -52,7 +53,6 @@ import { UsageEvent } from '../entity/usage-event.entity';
 import { StatsService } from './stats.service';
 import { UsageEventBus } from './usage-events.bus';
 import { UsageRecorderService } from './usage-recorder.service';
-import type { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 
 /**
  * The one behaviour the whole usage ledger exists for: deleting a chat must NOT

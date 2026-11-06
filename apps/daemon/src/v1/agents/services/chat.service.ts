@@ -212,8 +212,8 @@ import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
 import { teamRunSnapshots } from '../utils/run-snapshots';
 import { type RunStatusAnnounce, writeRunStatus } from '../utils/run-status';
-import { createSessionIdSaver } from '../utils/session-saver';
 import { isSlashCommand } from '../utils/session-replacement-notes';
+import { createSessionIdSaver } from '../utils/session-saver';
 import { StandingQuestions } from '../utils/standing-questions';
 import {
   threadMessageReturnedRow,

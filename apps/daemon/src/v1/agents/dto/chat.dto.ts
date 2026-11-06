@@ -34,7 +34,6 @@ import {
   RunGoalCreateSchema,
   RunGoalEditSchema,
   RunGoalsWireSchema,
-  WaitingMessageSchema,
   RunOutcomesWireSchema,
   RunProcessesWireSchema,
   RunSeenWireSchema,
@@ -49,6 +48,7 @@ import {
   THREAD_OVERVIEW_PARTS,
   ThreadAnalysisWireSchema,
   ThreadOverviewWireSchema,
+  WaitingMessageSchema,
 } from '../chat.types';
 
 /**

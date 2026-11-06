@@ -249,16 +249,27 @@ export class ThreadDeliveryService implements OnModuleInit {
 
   private async releaseLead(runId: string, caller: string): Promise<void> {
     try {
-      if (
-        !this.wakingLeads.has(runId) &&
-        (await this.inbox.listOwed(runId)).length === 0
-      ) {
+      const owed = await this.inbox.listOwed(runId);
+      if (!this.wakingLeads.has(runId) && owed.length === 0) {
         return;
       }
-      if ((await this.executor.threadLeadCaller(runId)) === caller) {
-        this.wakingLeads.delete(runId);
-        await this.release(runId);
+      if ((await this.executor.threadLeadCaller(runId)) !== caller) {
+        return;
       }
+      // The woken turn ended with its message unread, and a team's status does
+      // not say a stretch failed: nothing starts it again on its own.
+      const failed =
+        this.wakingLeads.delete(runId) &&
+        owed.some((message) => message.wokeAt !== null);
+      if (failed) {
+        await this.inbox.setReason(
+          runId,
+          owed.map((message) => message.id),
+          'failed',
+        );
+        return;
+      }
+      await this.release(runId);
     } catch (err) {
       this.logger.error(
         `run ${runId} could not release a thread message: ${err instanceof Error ? err.message : String(err)}`,

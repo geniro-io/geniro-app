@@ -599,8 +599,26 @@ describe('ThreadDeliveryService: a team', () => {
     });
     await h.settle('completed');
     expect(h.executor.wakeLeadForThreadMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts nothing more when the woken lead’s turn ended with the message unread', async () => {
+    const h = harness({ teamId: 'team-1', status: 'completed' });
+    await h.send();
 
     await h.endTurn('lead');
+
+    expect(h.executor.wakeLeadForThreadMessage).toHaveBeenCalledTimes(1);
+    expect(h.messages[0]!.reason).toBe('failed');
+  });
+
+  it('goes on to the rest when the woken turn read the message it was woken for', async () => {
+    const h = harness({ teamId: 'team-1', status: 'completed' });
+    await h.send();
+    h.messages[0]!.status = 'delivered';
+    await h.send(true, 'past the turn’s budget');
+
+    await h.endTurn('lead');
+
     expect(h.executor.wakeLeadForThreadMessage).toHaveBeenCalledTimes(2);
   });
 

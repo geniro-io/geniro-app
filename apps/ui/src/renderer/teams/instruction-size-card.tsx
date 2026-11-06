@@ -24,6 +24,7 @@ const SOURCE_LABEL: Record<InstructionSizeSource, string> = {
   customInstructions: 'Your custom instructions',
   projectInstructions: 'Project instructions',
   memoryIndex: 'Memory index',
+  knowledgeIndex: 'Knowledge index',
   taskInstructions: 'Task card instructions',
   teamInstructions: 'Team builder brief',
   instructionBlocks: 'Instruction block',

@@ -101,7 +101,7 @@ const {
   saveTeam: vi.fn(),
   openTeamChat: vi.fn(),
   listRunItems: vi.fn(),
-  deleteTeam: vi.fn(),
+  deleteTeam: vi.fn(async () => ({ deleted: true, knowledgeRenamed: [] })),
 }));
 
 vi.mock('../daemon-api', async (importOriginal) => ({
@@ -137,6 +137,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       listTeamOverlays,
     },
     memories: { listMemories },
+    knowledge: { knowledgeCounts },
     chats: withHistoryPages({
       readRunState: vi.fn(async () => emptyRunState()),
       listRunItems,
@@ -181,6 +182,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
  * that the real screen makes those reports.
  */
 const hostedThreads = vi.hoisted(() => new Map<string, HostedThread>());
+const knowledgeCounts = vi.hoisted(() => vi.fn());
 vi.mock('../chats/Chats', async () => {
   const { createElement, Fragment, useEffect } = await import('react');
   return {
@@ -307,6 +309,11 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async () => ({ slug: 'first-team', team: EMPTY }));
   listTeams.mockReset().mockImplementation(async () => []);
+  knowledgeCounts.mockReset().mockImplementation(async () => ({
+    places: [],
+    active: 0,
+    waiting: 0,
+  }));
   getTeam
     .mockReset()
     .mockImplementation(async ({ slug }: { slug: string }) => ({
@@ -326,7 +333,9 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async () => ({ id: 'run-1', status: 'pending' }));
   listRunItems.mockReset().mockImplementation(async () => []);
-  deleteTeam.mockReset().mockImplementation(async () => ({ deleted: true }));
+  deleteTeam
+    .mockReset()
+    .mockImplementation(async () => ({ deleted: true, knowledgeRenamed: [] }));
   getTeamAnalysis
     .mockReset()
     .mockImplementation(async () => ({ analysis: null }));
@@ -2144,6 +2153,7 @@ describe('Teams — the builder header', () => {
     expect(deleteTeam).toHaveBeenCalledWith({
       slug: 'dev-team',
       memories: 'forget',
+      knowledge: 'global',
     });
   });
 });
@@ -2166,6 +2176,161 @@ describe('Teams — deleting a team that keeps memories', () => {
     expect(deleteTeam).toHaveBeenCalledWith({
       slug: 'dev-team',
       memories: 'keep',
+      knowledge: 'global',
+    });
+  });
+});
+
+describe('Teams — the knowledge question of a delete', () => {
+  const countOfDev = {
+    places: [{ place: 'team:dev-team', active: 2, waiting: 0, documents: 2 }],
+    active: 2,
+    waiting: 0,
+  };
+
+  async function openDeleteFromBuilder(): Promise<void> {
+    await openBuilder();
+    await press('Team actions');
+    await press('Delete team');
+  }
+
+  function deleteConfirm(): HTMLButtonElement {
+    const control = [
+      ...document.body.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent?.trim() === 'Delete');
+    if (control === undefined) {
+      throw new Error('no Delete button');
+    }
+    return control;
+  }
+
+  it('holds the builder’s Delete until the count answered', async () => {
+    let answer: (counts: typeof countOfDev) => void = () => undefined;
+    knowledgeCounts.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await openDeleteFromBuilder();
+
+    expect(deleteConfirm().disabled).toBe(true);
+    await act(async () => {
+      answer(countOfDev);
+    });
+
+    expect(deleteConfirm().disabled).toBe(false);
+    expect(document.body.textContent).toContain('Its 2 knowledge documents:');
+  });
+
+  it('holds the library’s Delete until the count answered', async () => {
+    let answer: (counts: typeof countOfDev) => void = () => undefined;
+    knowledgeCounts.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    listTeams.mockImplementation(async () => [summary('dev-team', 'Dev Team')]);
+    await paint(true);
+    await press('Delete Dev Team');
+
+    expect(deleteConfirm().disabled).toBe(true);
+    await act(async () => {
+      answer(countOfDev);
+    });
+
+    expect(deleteConfirm().disabled).toBe(false);
+  });
+
+  it('says the count of the team’s documents failed, and deletes on Global', async () => {
+    knowledgeCounts.mockRejectedValue(
+      new Error('daemon GET /v1/knowledge/counts failed (500): boom'),
+    );
+    await openDeleteFromBuilder();
+
+    expect(document.body.textContent).toContain(
+      'Its knowledge documents could not be counted.',
+    );
+    await press('Delete');
+
+    expect(deleteTeam).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      memories: 'forget',
+      knowledge: 'global',
+    });
+  });
+
+  it('deletes with the knowledge fate picked', async () => {
+    knowledgeCounts.mockResolvedValue(countOfDev);
+    await openDeleteFromBuilder();
+
+    expect(document.body.textContent).toContain('Its 2 knowledge documents:');
+    await press('Delete them too');
+    await press('Delete');
+
+    expect(deleteTeam).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      memories: 'forget',
+      knowledge: 'delete',
+    });
+  });
+
+  it('takes the choice back to Move them to Global when the dialog opens again', async () => {
+    knowledgeCounts.mockResolvedValue(countOfDev);
+    await openDeleteFromBuilder();
+    await press('Delete them too');
+    await press('Cancel');
+    await press('Team actions');
+    await press('Delete team');
+    await press('Delete');
+
+    expect(deleteTeam).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      memories: 'forget',
+      knowledge: 'global',
+    });
+  });
+});
+
+describe('Teams — the knowledge question of a delete from the library', () => {
+  const countOfDev = {
+    places: [{ place: 'team:dev-team', active: 2, waiting: 0, documents: 2 }],
+    active: 2,
+    waiting: 0,
+  };
+
+  beforeEach(() => {
+    listTeams.mockImplementation(async () => [summary('dev-team', 'Dev Team')]);
+  });
+
+  it('deletes from the library with the knowledge fate picked', async () => {
+    knowledgeCounts.mockResolvedValue(countOfDev);
+    await paint(true);
+    await press('Delete Dev Team');
+
+    expect(document.body.textContent).toContain('Its 2 knowledge documents:');
+    await press('Delete them too');
+    await press('Delete');
+
+    expect(deleteTeam).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      memories: 'forget',
+      knowledge: 'delete',
+    });
+  });
+
+  it('takes the library choice back to Move them to Global when reopened', async () => {
+    knowledgeCounts.mockResolvedValue(countOfDev);
+    await paint(true);
+    await press('Delete Dev Team');
+    await press('Delete them too');
+    await press('Cancel');
+    await press('Delete Dev Team');
+    await press('Delete');
+
+    expect(deleteTeam).toHaveBeenCalledWith({
+      slug: 'dev-team',
+      memories: 'forget',
+      knowledge: 'global',
     });
   });
 });
@@ -2321,7 +2486,7 @@ describe('Teams — a team another screen asked to open', () => {
     deleteTeam.mockReset().mockImplementation(
       () =>
         new Promise((resolve) => {
-          answerDelete = () => resolve({ deleted: true });
+          answerDelete = () => resolve({ deleted: true, knowledgeRenamed: [] });
         }),
     );
     await openBuilder();
@@ -2330,6 +2495,7 @@ describe('Teams — a team another screen asked to open', () => {
     expect(deleteTeam).toHaveBeenCalledWith({
       slug: 'dev-team',
       memories: 'forget',
+      knowledge: 'global',
     });
     listTeams.mockImplementation(async () => [SAVED]);
     await paint(true, undefined, undefined, {

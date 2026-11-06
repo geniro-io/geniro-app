@@ -215,6 +215,7 @@ import type { HostedThread } from './hosted-thread';
 import { foldsHolding } from './jump-folds';
 import { jumpAnchorProps } from './jump-target';
 import { JumpToLatest } from './jump-to-latest';
+import type { KnowledgeOpenTarget } from './knowledge-tool-row';
 import { CHAT_LIVE_KEY, liveTextKey, partialOwnerKey } from './live-text';
 import {
   LocalImageLoaderContext,
@@ -771,6 +772,7 @@ export function Chats({
   onTitleChange,
   onOpenSettings,
   onOpenMemory,
+  onOpenKnowledge,
   onOpenTeam,
   onOpenProject,
   onOpenTerminal,
@@ -809,6 +811,11 @@ export function Chats({
    * tool row's handle. Absent, the handle is plain text.
    */
   onOpenMemory?: (handle: string) => void;
+  /**
+   * Take the app to the Knowledge page with this document open — a knowledge
+   * tool row's handle. Absent, the row offers no link to it.
+   */
+  onOpenKnowledge?: (target: KnowledgeOpenTarget) => void;
   /**
    * Take the app to the Teams screen with this library team open — a
    * saved proposal card's "Open team". Absent, the card offers none.
@@ -3753,6 +3760,27 @@ export function Chats({
   const loadMemory = useLatestCallback(
     (handle: string) => readMemoryByHandle(apis.memories, handle),
     [apis],
+  );
+
+  const loadKnowledge = useLatestCallback(
+    async (handle: string) =>
+      (
+        await apis.knowledge.listKnowledge({
+          handle,
+          runId: activeRunId ?? undefined,
+        })
+      ).documents,
+    [apis, activeRunId],
+  );
+
+  const openKnowledge = useLatestCallback(
+    (target: KnowledgeOpenTarget) =>
+      onOpenKnowledge?.(
+        'handle' in target
+          ? { ...target, runId: activeRunId ?? undefined }
+          : target,
+      ),
+    [onOpenKnowledge, activeRunId],
   );
 
   /**
@@ -9569,7 +9597,8 @@ export function Chats({
         memberVerdicts={memberVerdicts}
         notSent={notSent}
         chatActions={chatActions}
-        loadMemory={loadMemory}>
+        loadMemory={loadMemory}
+        loadKnowledge={loadKnowledge}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
@@ -10517,6 +10546,7 @@ export function Chats({
                         activeRun?.teamId != null ? openTeamNote : null
                       }
                       openMemory={onOpenMemory ?? null}
+                      openKnowledge={onOpenKnowledge ? openKnowledge : null}
                       collapseToolSteps={collapseToolSteps}
                       runActivity={activeActivity}
                       turnDurations={turnDurations}

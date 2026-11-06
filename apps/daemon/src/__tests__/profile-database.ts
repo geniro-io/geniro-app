@@ -10,6 +10,7 @@ import {
 } from '@mikro-orm/sqlite';
 
 import { CHAT_TEXT_TABLES } from '../db/chat-text-index.ddl';
+import { KNOWLEDGE_TEXT_TABLES } from '../db/knowledge-text-index.ddl';
 import { MEMORY_TEXT_TABLES } from '../db/memory-text-index.ddl';
 import type { Migration } from '../v1/migrations/migrations.types';
 import { APP_MIGRATIONS_TABLES } from '../v1/migrations/migrations.types';
@@ -65,6 +66,7 @@ export async function openDatabase(
         skipTables: [
           CHAT_TEXT_TABLES,
           MEMORY_TEXT_TABLES,
+          KNOWLEDGE_TEXT_TABLES,
           APP_MIGRATIONS_TABLES,
         ],
       },

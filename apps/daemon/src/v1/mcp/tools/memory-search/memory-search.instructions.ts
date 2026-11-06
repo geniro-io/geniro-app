@@ -1,4 +1,7 @@
-import { HOST_SEARCH_CHATS_TOOL } from '../../../agents/chat.types';
+import {
+  HOST_KNOWLEDGE_SEARCH_TOOL,
+  HOST_SEARCH_CHATS_TOOL,
+} from '../../../agents/chat.types';
 
 /** What a model reads about `memory_search`. */
 export function memorySearchInstructions(): string {
@@ -9,6 +12,6 @@ export function memorySearchInstructions(): string {
     'or guess at a convention — another agent may already have recorded the answer. It returns each ' +
     "entry's handle (`m12`), revision, scope (global, this project or this team) and an excerpt; read the whole " +
     'entry with memory_read. Entries saved by other agents during your conversation appear here too. ' +
-    `Do NOT use it to search past conversations — ${HOST_SEARCH_CHATS_TOOL} does that.`
+    `Do NOT use it to search past conversations — ${HOST_SEARCH_CHATS_TOOL} does that — nor for the long guides the user keeps — ${HOST_KNOWLEDGE_SEARCH_TOOL} does that.`
   );
 }

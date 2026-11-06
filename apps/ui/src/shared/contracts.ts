@@ -377,6 +377,20 @@ export const DEFAULT_MEMORY: MemorySettings = {
   nativeMemoryOff: false,
 };
 
+/** What an agent's document save does: used at once, held for the user's review, or refused. */
+export type KnowledgeAgentWrites = 'review' | 'direct' | 'off';
+
+export interface KnowledgeSettings {
+  /** Off gives agents no knowledge tools and no index. */
+  enabled: boolean;
+  agentWrites: KnowledgeAgentWrites;
+}
+
+export const DEFAULT_KNOWLEDGE: KnowledgeSettings = {
+  enabled: true,
+  agentWrites: 'review',
+};
+
 export interface Settings {
   /**
    * The settings migration this file was last brought up to
@@ -544,6 +558,12 @@ export interface Settings {
    * app starts; the daemon keeps it in memory only.
    */
   memory: MemorySettings;
+  /**
+   * Whether agents get knowledge tools and an index, and what happens to a
+   * document an agent saves. Owned here (settings.json) and pushed to every
+   * daemon this app starts; the daemon keeps it in memory only.
+   */
+  knowledge: KnowledgeSettings;
   /**
    * Delete a chat this many days after it was ARCHIVED, or `null` to keep the
    * archive for ever.
@@ -797,6 +817,7 @@ export const DEFAULT_SETTINGS: Settings = {
   remoteAccessEnabled: true,
   sharing: DEFAULT_SHARING,
   memory: DEFAULT_MEMORY,
+  knowledge: DEFAULT_KNOWLEDGE,
   archiveRetentionDays: null,
   historyPageSize: DEFAULT_HISTORY_PAGE_SIZE,
   keptSessionIdleMinutes: DEFAULT_KEPT_SESSION_IDLE_MINUTES,
@@ -1890,6 +1911,15 @@ export interface GeniroApi {
    */
   saveMemoryExport(markdown: string): Promise<FileSaveResult>;
   /**
+   * Ask where to keep a knowledge export, and write the given Markdown there.
+   * Refused from a paired device: the dialog would open on the Mac.
+   */
+  saveKnowledgeExport(input: {
+    /** The daemon's file name; never a path, main refuses separators. */
+    suggestedName: string;
+    markdown: string;
+  }): Promise<FileSaveResult>;
+  /**
    * Make the worktree and branch a task's agent will work in.
    *
    * Here rather than in the daemon because every git call this app makes
@@ -2204,6 +2234,7 @@ export const IPC = {
   saveChatExport: 'geniro:saveChatExport',
   saveArtifact: 'geniro:saveArtifact',
   saveMemoryExport: 'geniro:saveMemoryExport',
+  saveKnowledgeExport: 'geniro:saveKnowledgeExport',
   switchBranch: 'geniro:switchBranch',
   pullBranch: 'geniro:pullBranch',
   carryChangesToBranch: 'geniro:carryChangesToBranch',

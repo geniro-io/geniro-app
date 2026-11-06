@@ -10,6 +10,10 @@ import {
 import { messageImagesSchema } from '../../agents/dto/chat.dto';
 import { TEAM_MEMORY_FATES } from '../../memory/memory.types';
 import {
+  KNOWLEDGE_FATES,
+  KnowledgeRenamedSchema,
+} from '../../projects/projects.types';
+import {
   AnalysisJudgeCheckSchema,
   AnalysisJudgeQuerySchema,
   InstructionSizesWireSchema,
@@ -197,6 +201,16 @@ export class TeamDeletedDto extends createZodDto(
   z.object({ deleted: z.boolean() }),
 ) {}
 
+/** Acknowledgement of a library team's delete. */
+export class TeamRemovedDto extends createZodDto(
+  z.object({
+    deleted: z.boolean(),
+    knowledgeRenamed: z
+      .array(KnowledgeRenamedSchema)
+      .describe('Handles a move to Global changed, because Global held them'),
+  }),
+) {}
+
 /** Acknowledgement of an export to a user-chosen path. */
 export class ExportedDto extends createZodDto(
   z.object({ exported: z.boolean() }),
@@ -228,6 +242,12 @@ export const deleteTeamQuerySchema = z.object({
     .optional()
     .describe(
       'What happens to the entries filed under the team: forget them (restorable), keep them under the slug, or file them as global; default keep',
+    ),
+  knowledge: z
+    .enum(KNOWLEDGE_FATES)
+    .optional()
+    .describe(
+      'What happens to the documents filed under the team: move them to Global, or delete them; default global',
     ),
 });
 export class DeleteTeamQueryDto extends createZodDto(deleteTeamQuerySchema) {}

@@ -3312,6 +3312,12 @@ export interface AgentTurnInput {
    */
   memoryIndex?: string | null;
   /**
+   * The knowledge store's index, as snapshotted onto `Run.knowledgeIndex`;
+   * composed right after {@link memoryIndex} and on the same terms, since it
+   * sends the agent to `knowledge_read`.
+   */
+  knowledgeIndex?: string | null;
+  /**
    * Whether this run switches its CLI's own memory off (`Run.nativeMemoryOff`),
    * so an agent keeps one memory rather than two that disagree; each adapter
    * owns how.
@@ -3573,6 +3579,7 @@ export type TurnInstructionInput = Pick<
   | 'customInstructions'
   | 'projectInstructions'
   | 'memoryIndex'
+  | 'knowledgeIndex'
   | 'taskInstructions'
   | 'teamInstructions'
   | 'instructionBlocks'

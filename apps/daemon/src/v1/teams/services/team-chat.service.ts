@@ -6,8 +6,13 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import type { RunWire } from '../../agents/chat.types';
 import { ChatService } from '../../agents/services/chat.service';
 import { ThreadAnalysisService } from '../../agents/services/thread-analysis.service';
+import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import type { TeamMemoryFate } from '../../memory/memory.types';
 import { MemoryService } from '../../memory/services/memory.service';
+import type {
+  KnowledgeFate,
+  KnowledgeRenamed,
+} from '../../projects/projects.types';
 import type { StartTeamChatInput, Team } from '../teams.types';
 import { composeTeamChatInstructions } from '../utils/team-chat-instructions';
 import { TeamOverlayService } from './team-overlay.service';
@@ -72,6 +77,7 @@ export class TeamChatService implements OnModuleInit {
     private readonly chats: ChatService,
     private readonly analyses: ThreadAnalysisService,
     private readonly memory: MemoryService,
+    private readonly knowledge: KnowledgeService,
     private readonly overlays: TeamOverlayService,
   ) {}
 
@@ -80,6 +86,7 @@ export class TeamChatService implements OnModuleInit {
       this.briefFor(slug, cwd, projectId),
     );
     this.memory.useTeamLookup((slug) => this.store.has(slug));
+    this.knowledge.useTeamLookup((slug) => this.store.has(slug));
   }
 
   /**
@@ -236,11 +243,16 @@ export class TeamChatService implements OnModuleInit {
    * Delete a team with what the user chose for the entries filed under it;
    * the library file goes first, so a refused delete leaves them as they were.
    */
-  async deleteTeam(slug: string, memories: TeamMemoryFate): Promise<void> {
+  async deleteTeam(
+    slug: string,
+    memories: TeamMemoryFate,
+    knowledge: KnowledgeFate = 'global',
+  ): Promise<KnowledgeRenamed[]> {
     await this.store.delete(slug);
     await this.overlays.deleteForTeam(slug);
     await this.discard(slug);
     await this.analyses.deleteTeamAnalyses(slug);
     await this.memory.settleDeletedTeam(slug, memories);
+    return (await this.knowledge.settleDeletedTeam(slug, knowledge)).renamed;
   }
 }

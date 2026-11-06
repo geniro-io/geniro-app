@@ -6,6 +6,7 @@ import {
   DaemonClient,
   parseChangedRuns,
   parseDeletedRunId,
+  parseKnowledgeChanged,
   parseMemoryChanged,
   parseProjectsChanged,
   parseRunStatus,
@@ -1058,6 +1059,29 @@ describe('parseProjectsChanged — the projects_changed twin', () => {
     mocks.ref.any?.('memory_changed', { memoryId: 'e1', change: 'created' });
 
     expect(seen).toEqual(['p1']);
+  });
+});
+
+describe('parseKnowledgeChanged — the knowledge_changed twin', () => {
+  it('reads one document’s change and a bulk one', () => {
+    expect(
+      parseKnowledgeChanged({
+        documentId: 'd1',
+        change: 'approved',
+        place: 'project:p1',
+      }),
+    ).toEqual({ documentId: 'd1', change: 'approved', place: 'project:p1' });
+    expect(
+      parseKnowledgeChanged({ documentId: null, change: 'bulk', place: null }),
+    ).toEqual({ documentId: null, change: 'bulk', place: null });
+  });
+
+  it('refuses anything else', () => {
+    expect(parseKnowledgeChanged(null)).toBeNull();
+    expect(parseKnowledgeChanged({ documentId: 1, change: 'x' })).toBeNull();
+    expect(
+      parseKnowledgeChanged({ documentId: 'd', change: 2, place: null }),
+    ).toBeNull();
   });
 });
 

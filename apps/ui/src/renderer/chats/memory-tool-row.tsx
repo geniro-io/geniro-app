@@ -11,6 +11,8 @@ import { useLatestCallback } from '../components/use-latest-callback';
 import { daemonErrorDetail } from '../daemon-api';
 import type { BlockStatus } from './block-shell';
 import { type GeniroMemoryTool, geniroMemoryToolOf } from './geniro-tool';
+import { recordOf, refusalReason, resultTextOf } from './tool-result-text';
+import { Dot, plural } from './tool-row-parts';
 import type { ToolPair } from './transcript-groups';
 import { payloadString } from './transcript-payload';
 
@@ -74,39 +76,6 @@ function normalizedHandle(value: unknown): string | null {
   }
   const match = HANDLE_PATTERN.exec(value.trim());
   return match === null ? null : `m${Number(match[1])}`;
-}
-
-function recordOf(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-/** The text of a result that arrives bare, as MCP content blocks, or wrapped. */
-function resultTextOf(result: unknown): string | null {
-  if (typeof result === 'string') {
-    return result;
-  }
-  if (Array.isArray(result)) {
-    const texts = result.flatMap((block) => {
-      const text = recordOf(block)?.text;
-      return typeof text === 'string' ? [text] : [];
-    });
-    return texts.length > 0 ? texts.join('\n') : null;
-  }
-  const record = recordOf(result);
-  return record === null ? null : resultTextOf(record.content);
-}
-
-function firstLine(text: string): string {
-  return text.split('\n', 1)[0]?.trim() ?? '';
-}
-
-/** The reason after a refusal's `CODE: ` prefix, or the line itself. */
-function refusalReason(text: string): string {
-  const line = firstLine(text);
-  const match = /^[A-Z][A-Z_]+: (.+)$/.exec(line);
-  return match?.[1] ?? line;
 }
 
 /** The handles a result lists as hits, one `- m12 (rev …` line each. */
@@ -356,21 +325,6 @@ function MemoryPeekPanel({
       })}
     </div>
   );
-}
-
-function Dot(): React.JSX.Element {
-  return (
-    <>
-      {' '}
-      <span aria-hidden="true" className="text-muted-foreground/60">
-        ·
-      </span>{' '}
-    </>
-  );
-}
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 function SaveOutcomeTag({

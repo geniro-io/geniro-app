@@ -111,6 +111,7 @@ import {
   type WallClockRow,
 } from '../../agents/utils/wall-worked';
 import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
+import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { Item } from '../../runs/entity/item.entity';
@@ -1147,6 +1148,7 @@ function setup(
     claudeSpawn?: SpawnFn;
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot'>;
+    knowledge?: Pick<KnowledgeService, 'runSnapshot'>;
     /** What the run's project tells it; no project when absent. */
     projectScope?: Partial<
       Pick<ProjectScopeService, 'placeNewRun' | 'liveNamesOf'>
@@ -1591,6 +1593,9 @@ function setup(
     (opts.memory ?? {
       runSnapshot: async () => ({ nativeMemoryOff: false, memoryIndex: null }),
     }) as unknown as MemoryService,
+    (opts.knowledge ?? {
+      runSnapshot: async () => ({ knowledgeIndex: null }),
+    }) as unknown as KnowledgeService,
     {
       placeNewRun: async () => ({
         projectId: null,
@@ -6658,6 +6663,52 @@ describe('TeamExecutorService — agent calls', () => {
         memoryIndex: 'INDEX AT START',
         nativeMemoryOff: true,
       });
+    }
+  });
+
+  it('startRunBySlug snapshots the knowledge index of the run’s place onto the run row and every member', async () => {
+    const asked: unknown[] = [];
+    let index = 'INDEX AT START';
+    const { service, claude, runDao, storeGet } = setup(4870, {
+      knowledge: {
+        runSnapshot: async (facts) => {
+          asked.push(facts);
+          return { knowledgeIndex: index };
+        },
+      },
+      projectScope: {
+        placeNewRun: async () => ({
+          projectId: 'p-billing',
+          chosenProjectGroupId: null,
+          source: 'card',
+          instructions: null,
+        }),
+      },
+    });
+    storeGet.mockResolvedValue({ slug: 'lin', team: LINEAR });
+
+    const run = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      taskId: 'task-9',
+    });
+    index = 'INDEX AFTER A SAVE';
+    await drain();
+
+    expect(asked).toEqual([
+      {
+        taskId: 'task-9',
+        cwd: run.cwd,
+        projectId: 'p-billing',
+        teamSlug: 'lin',
+      },
+    ]);
+    expect(runDao.runs.get(run.id)).toMatchObject({
+      knowledgeIndex: 'INDEX AT START',
+    });
+    expect(claude.starts.length).toBeGreaterThan(0);
+    for (const start of claude.starts) {
+      expect(start.input).toMatchObject({ knowledgeIndex: 'INDEX AT START' });
     }
   });
 

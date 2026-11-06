@@ -8,6 +8,7 @@ import {
   DiagnosticsApi,
   GroupsApi,
   HandoffApi,
+  KnowledgeApi,
   LabelInstructionsApi,
   MemoriesApi,
   type Middleware,
@@ -257,6 +258,8 @@ export interface DaemonApis {
   shares: SharesApi;
   /** The shared memory every agent reads (`/v1/memories`); its import is desktop only. */
   memories: MemoriesApi;
+  /** The documents agents read on demand (`/v1/knowledge`). */
+  knowledge: KnowledgeApi;
   /** What the data folder holds and its clean-ups (`/v1/storage`) — desktop only. */
   storage: StorageApi;
 }
@@ -316,6 +319,7 @@ export function createDaemonApis(handle: DaemonHandle): DaemonApis {
     labelInstructions: new LabelInstructionsApi(config),
     shares: new SharesApi(config),
     memories: new MemoriesApi(config),
+    knowledge: new KnowledgeApi(config),
     storage: new StorageApi(config),
   };
 }

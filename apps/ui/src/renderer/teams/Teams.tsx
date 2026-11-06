@@ -50,6 +50,12 @@ import {
   describeDaemonError,
 } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import {
+  type KnowledgeFate,
+  KnowledgeFatePick,
+  useKnowledgeHeld,
+} from '../knowledge/knowledge-fate';
+import { renamedNotice, teamPlace } from '../knowledge/knowledge-text';
 import { starterTeam, type TeamLaunch } from '../onboarding/first-launch';
 import { currentRunSettings } from '../run-settings';
 import { useSharedCapabilities } from '../use-capabilities';
@@ -247,10 +253,19 @@ export function Teams({
   const [deleting, setDeleting] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<TeamSummary | null>(null);
   const [memoryFate, setMemoryFate] = useState<TeamMemoryFate>('forget');
+  const [knowledgeFate, setKnowledgeFate] = useState<KnowledgeFate>('global');
   // A menu row cannot arm itself, so the builder's delete confirms in a dialog.
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLButtonElement | null>(null);
   const [removeOpen, setRemoveOpen] = useState(false);
+  const libraryKnowledgeHeld = useKnowledgeHeld(
+    apis,
+    pendingDelete ? teamPlace(pendingDelete.slug) : null,
+  );
+  const builderKnowledgeHeld = useKnowledgeHeld(
+    apis,
+    removeOpen && activeSlug ? teamPlace(activeSlug) : null,
+  );
   // The builder's chat dock: on screen, and whether its agent is mid-turn —
   // which suspends autosave, since the agent writes the same file.
   const [chatOpen, setChatOpen] = useState(false);
@@ -755,15 +770,20 @@ export function Teams({
       }
       setError(null);
       try {
-        await api.deleteTeam({ slug, memories: memoryFate });
+        const { knowledgeRenamed } = await api.deleteTeam({
+          slug,
+          memories: memoryFate,
+          knowledge: knowledgeFate,
+        });
         await refreshList();
+        setError(renamedNotice(knowledgeRenamed));
         return true;
       } catch (err) {
         setError(String(err));
         return false;
       }
     },
-    [api, refreshList, memoryFate],
+    [api, refreshList, memoryFate, knowledgeFate],
   );
 
   const confirmDelete = useLatestCallback(async (): Promise<void> => {
@@ -1243,6 +1263,7 @@ export function Teams({
           onOpen={(slug) => void openTeam(slug)}
           onDelete={(summary) => {
             setMemoryFate('forget');
+            setKnowledgeFate('global');
             setPendingDelete(summary);
           }}
           onNew={newTeam}
@@ -1266,6 +1287,7 @@ export function Teams({
           open={pendingDelete !== null}
           busy={deleting}
           error={pendingDelete ? error : null}
+          confirmDisabled={!libraryKnowledgeHeld.settled}
           title="Delete team"
           confirmLabel="Delete"
           busyLabel="Deleting…"
@@ -1285,6 +1307,11 @@ export function Teams({
             slug={pendingDelete?.slug ?? null}
             value={memoryFate}
             onChange={setMemoryFate}
+          />
+          <KnowledgeFatePick
+            held={libraryKnowledgeHeld}
+            value={knowledgeFate}
+            onChange={setKnowledgeFate}
           />
         </ConfirmDialog>
       </>
@@ -1462,6 +1489,7 @@ export function Teams({
                 void openAnalysis();
               } else if (value === 'delete') {
                 setMemoryFate('forget');
+                setKnowledgeFate('global');
                 setRemoveOpen(true);
               }
             }}
@@ -2124,6 +2152,7 @@ export function Teams({
         open={removeOpen}
         busy={deleting}
         error={removeOpen ? error : null}
+        confirmDisabled={!builderKnowledgeHeld.settled}
         title="Delete team"
         confirmLabel="Delete"
         busyLabel="Deleting…"
@@ -2147,6 +2176,11 @@ export function Teams({
           slug={removeOpen ? activeSlug : null}
           value={memoryFate}
           onChange={setMemoryFate}
+        />
+        <KnowledgeFatePick
+          held={builderKnowledgeHeld}
+          value={knowledgeFate}
+          onChange={setKnowledgeFate}
         />
       </ConfirmDialog>
 

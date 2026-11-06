@@ -22,6 +22,7 @@ import {
   type InterruptCause,
   interruptCauseClause,
 } from '../../../utils/stop-cause';
+import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { placedFacts } from '../../projects/utils/placed-facts';
@@ -148,6 +149,7 @@ import { isHostChartCall } from '../utils/host-chart';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
 import { hostGalleryDownloads, isHostGalleryCall } from '../utils/host-gallery';
+import { isHostKnowledgeCall } from '../utils/host-knowledge';
 import { isHostMemoryCall } from '../utils/host-memory';
 import { isHostMetricsCall } from '../utils/host-metrics';
 import { isHostNotifyCall } from '../utils/host-notify';
@@ -885,6 +887,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly teamBuilders: TeamBuilderBroker,
     private readonly runWrites: RunWriteQueue,
     private readonly memory: MemoryService,
+    private readonly knowledge: KnowledgeService,
     private readonly projectScope: ProjectScopeService,
     private readonly holds: RunHoldRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
@@ -2223,9 +2226,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         configDir,
       );
     }
-    const memory = await this.memory.runSnapshot(
-      placedFacts(scopeFacts, placement),
-    );
+    const placed = placedFacts(scopeFacts, placement);
+    const memory = await this.memory.runSnapshot(placed);
+    const knowledge = await this.knowledge.runSnapshot(placed);
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -2254,6 +2257,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         projectSource: placement.source,
         projectInstructions: placement.instructions,
         ...memory,
+        ...knowledge,
         taskInstructions: input.taskInstructions?.trim() || null,
         editsTeamSlug: input.editsTeamSlug ?? null,
         editsProjectId: input.editsProjectId ?? null,
@@ -5933,6 +5937,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // The shared memory: its limits live in `MemoryService` — see
         // `isHostMemoryCall`.
         isHostMemoryCall(hostServerName, toolName) ||
+        // The knowledge store, on the same terms: `isHostKnowledgeCall`.
+        isHostKnowledgeCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;
@@ -5969,6 +5975,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const replyLanguage = settings.replyLanguage ?? undefined;
       const projectInstructions = settings.projectInstructions ?? undefined;
       const memoryIndex = settings.memoryIndex ?? undefined;
+      const knowledgeIndex = settings.knowledgeIndex ?? undefined;
       const nativeMemoryOff = settings.nativeMemoryOff === true;
       // Off the row too; `TaskRunsService` rewrites it before continuing a
       // card's thread, which is the one time it is meant to change.
@@ -7065,6 +7072,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           replyLanguage,
           projectInstructions,
           memoryIndex,
+          knowledgeIndex,
           nativeMemoryOff,
           taskInstructions,
           teamInstructions,

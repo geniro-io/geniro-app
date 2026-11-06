@@ -120,6 +120,7 @@ import {
 } from '../../agents/utils/event-to-item';
 import { firstTurnWindow } from '../../agents/utils/first-turn-window';
 import { subagentsWouldBeCancelled } from '../../agents/utils/follow-up-background-work';
+import { isHostKnowledgeCall } from '../../agents/utils/host-knowledge';
 import { isHostMemoryCall } from '../../agents/utils/host-memory';
 import { hostMcpServerName } from '../../agents/utils/host-question';
 import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
@@ -186,6 +187,7 @@ import {
   cliTurnDurationMs,
   servedWorkedMs,
 } from '../../agents/utils/wall-worked';
+import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { placedFacts } from '../../projects/utils/placed-facts';
@@ -488,6 +490,8 @@ interface RunContext {
   projectInstructions: string | null;
   /** The run's snapshotted memory index; every member composes it. */
   memoryIndex: string | null;
+  /** The run's snapshotted knowledge index; every member composes it. */
+  knowledgeIndex: string | null;
   /** Whether the run switches each CLI's own memory off (`Run.nativeMemoryOff`). */
   nativeMemoryOff: boolean;
   /** The card's instructions for a task run; every member composes them too. */
@@ -785,6 +789,7 @@ export class TeamExecutorService
     private readonly wallTurns: WallTurnDao,
     private readonly kindRows: RunKindRowsCache,
     private readonly memory: MemoryService,
+    private readonly knowledge: KnowledgeService,
     private readonly projectScope: ProjectScopeService,
     private readonly overlays: TeamOverlayService,
     /**
@@ -1367,9 +1372,12 @@ export class TeamExecutorService
             teamId: input.slug,
             chosenProjectGroupId: placement.chosenProjectGroupId,
           });
-    const memory = await this.memory.runSnapshot(
-      placedFacts({ ...scopeFacts, teamSlug: input.slug }, placement),
+    const placed = placedFacts(
+      { ...scopeFacts, teamSlug: input.slug },
+      placement,
     );
+    const memory = await this.memory.runSnapshot(placed);
+    const knowledge = await this.knowledge.runSnapshot(placed);
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -1397,6 +1405,7 @@ export class TeamExecutorService
         projectSource: placement.source,
         projectInstructions: placement.instructions,
         ...memory,
+        ...knowledge,
         taskInstructions: input.taskInstructions?.trim() || null,
         agentOptions: writeAgentOptions(input.agentOptions),
         startSha: input.startSha ?? null,
@@ -1472,6 +1481,7 @@ export class TeamExecutorService
         replyLanguage: run.replyLanguage,
         projectInstructions: run.projectInstructions,
         memoryIndex: run.memoryIndex,
+        knowledgeIndex: run.knowledgeIndex,
         nativeMemoryOff: run.nativeMemoryOff === true,
         taskInstructions: run.taskInstructions,
         agentOptions: readAgentOptions(run.agentOptions),
@@ -1873,6 +1883,7 @@ export class TeamExecutorService
         replyLanguage: run.replyLanguage,
         projectInstructions: run.projectInstructions,
         memoryIndex: run.memoryIndex,
+        knowledgeIndex: run.knowledgeIndex,
         nativeMemoryOff: run.nativeMemoryOff === true,
         taskInstructions: run.taskInstructions,
         agentOptions: readAgentOptions(run.agentOptions),
@@ -2934,6 +2945,7 @@ export class TeamExecutorService
       replyLanguage,
       projectInstructions,
       memoryIndex,
+      knowledgeIndex,
       nativeMemoryOff,
       taskInstructions,
       agentOptions,
@@ -4421,6 +4433,7 @@ export class TeamExecutorService
         replyLanguage,
         projectInstructions,
         memoryIndex,
+        knowledgeIndex,
         nativeMemoryOff,
         // A peer on the same terms; ranked right after the user's own text.
         taskInstructions,
@@ -5003,10 +5016,12 @@ export class TeamExecutorService
             }
             if (
               !isQuestion &&
-              isHostMemoryCall(hostMcpServerName(runId), event.toolName)
+              (isHostMemoryCall(hostMcpServerName(runId), event.toolName) ||
+                isHostKnowledgeCall(hostMcpServerName(runId), event.toolName))
             ) {
-              // The shared memory, at every approval level, as in a chat: its
-              // limits live in `MemoryService` — see `isHostMemoryCall`.
+              // The shared memory and the knowledge store, at every approval
+              // level, as in a chat: their limits live in their services — see
+              // `isHostMemoryCall` and `isHostKnowledgeCall`.
               handle.respondApproval(event.id, true, event.input);
               return;
             }
@@ -5350,7 +5365,8 @@ export class TeamExecutorService
             adapter.getConfig().questionToolName,
             request.toolName,
           )) ||
-        isHostMemoryCall(hostMcpServerName(runId), request.toolName)
+        isHostMemoryCall(hostMcpServerName(runId), request.toolName) ||
+        isHostKnowledgeCall(hostMcpServerName(runId), request.toolName)
           ? true
           : null;
       // One registry key per CONVERSATION, never per member: a member

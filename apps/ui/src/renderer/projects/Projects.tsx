@@ -39,6 +39,7 @@ export function Projects({
   onProjectShown,
   onOpenBoard,
   onOpenTeam,
+  onOpenKnowledge,
 }: {
   handle: DaemonHandle | null;
   client: DaemonClient | null;
@@ -50,6 +51,8 @@ export function Projects({
   onOpenBoard: (projectId: string) => void;
   /** Open a library team on its own page — the shared team. */
   onOpenTeam: (slug: string) => void;
+  /** Open Knowledge with this project picked. */
+  onOpenKnowledge: (projectId: string) => void;
 }): React.JSX.Element {
   const apis = useMemo(
     () => (handle ? createDaemonApis(handle) : null),
@@ -282,6 +285,7 @@ export function Projects({
                       onError={setActionError}
                       onOpenBoard={onOpenBoard}
                       onOpenTeam={onOpenTeam}
+                      onOpenKnowledge={onOpenKnowledge}
                       onDeleted={deleted}
                     />
                   )}

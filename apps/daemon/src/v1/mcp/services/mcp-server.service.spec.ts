@@ -24,6 +24,10 @@ import {
   HOST_FINDINGS_TOOL,
   HOST_GALLERY_TOOL,
   HOST_GOALS_TOOL,
+  HOST_KNOWLEDGE_READ_TOOL,
+  HOST_KNOWLEDGE_SAVE_TOOL,
+  HOST_KNOWLEDGE_SEARCH_TOOL,
+  HOST_KNOWLEDGE_TOOLS,
   HOST_LIST_MONITORS_TOOL,
   HOST_MEMORY_SAVE_TOOL,
   HOST_MEMORY_SEARCH_TOOL,
@@ -97,6 +101,7 @@ import {
 } from '../../agents/utils/artifact-runtime';
 import { MAX_HOST_QUESTION_TITLE_LENGTH } from '../../agents/utils/host-question';
 import { RemoteImageError } from '../../agents/utils/remote-image';
+import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { memoryDb } from '../../memory/__tests__/memory-db';
 import type {
   MemoryActor,
@@ -227,6 +232,8 @@ function service(
   projectInstructionCards = new ProjectInstructionsBroker(),
   // Off unless a case registers a sink: no project chat's form is listed.
   projectChats = new ProjectChatBroker(),
+  // Off unless a case turns it on: no knowledge tool is listed.
+  knowledge = fakeKnowledge(false).service,
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
@@ -266,6 +273,7 @@ function service(
       teamProposals: {} as TeamProposalService,
       shares,
       memory,
+      knowledge,
     }),
     {
       token: 'launch',
@@ -372,6 +380,8 @@ async function everyHostTool(): Promise<ToolListing[]> {
       fakeMemory(true).service,
       undefined,
       projectCards,
+      undefined,
+      fakeKnowledge(true).service,
     ),
     'run-1',
     'agent',
@@ -515,6 +525,32 @@ function galleryService(
  * A MemoryService double: the user's switch, the run's project, and every save
  * it was handed with the scope the tool resolved for it.
  */
+function fakeKnowledge(enabled: boolean, agentsMayWrite = enabled) {
+  const state = { enabled, agentsMayWrite };
+  const service = {
+    get enabled() {
+      return state.enabled;
+    },
+    get agentsMayWrite() {
+      return state.agentsMayWrite;
+    },
+    callScope: () =>
+      Promise.resolve({
+        place: { projectId: 'p1', teamSlug: null },
+        actor: { kind: 'user' },
+      }),
+    search: () => Promise.resolve({ hits: [], total: 0 }),
+    read: () => Promise.resolve({ kind: 'missing', similar: [] }),
+    save: () =>
+      Promise.resolve({
+        kind: 'refused',
+        code: 'KNOWLEDGE_READ_ONLY',
+        reason: 'no',
+      }),
+  } as unknown as KnowledgeService;
+  return { service, state };
+}
+
 function fakeMemory(enabled: boolean) {
   const saved: {
     actor: MemoryActor;
@@ -3670,6 +3706,91 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(find(tools, HOST_METRICS_TOOL)).toContain('show_chart');
   });
 
+  it('makes BOTH sides of the memory/knowledge boundary name the other', async () => {
+    const tools = await everyHostTool();
+    expect(find(tools, HOST_MEMORY_SEARCH_TOOL)).toContain(
+      HOST_KNOWLEDGE_SEARCH_TOOL,
+    );
+    expect(find(tools, HOST_KNOWLEDGE_SEARCH_TOOL)).toContain(
+      HOST_MEMORY_SEARCH_TOOL,
+    );
+    expect(find(tools, HOST_MEMORY_SAVE_TOOL)).toContain(
+      HOST_KNOWLEDGE_SAVE_TOOL,
+    );
+    expect(find(tools, HOST_KNOWLEDGE_SAVE_TOOL)).toContain(
+      HOST_MEMORY_SAVE_TOOL,
+    );
+  });
+
+  describe('the knowledge tools', () => {
+    function knowledgeService(knowledge: KnowledgeService): McpServerService {
+      return service(
+        ...([...Array.from({ length: 30 }), knowledge] as unknown as Parameters<
+          typeof service
+        >),
+      );
+    }
+    const names = async (knowledge: KnowledgeService): Promise<string[]> => {
+      const { json } = await post(
+        knowledgeService(knowledge),
+        'run-1',
+        'agent',
+        rpc('tools/list', {}),
+      );
+      return (json().result as { tools: ToolListing[] }).tools.map(
+        (tool) => tool.name,
+      );
+    };
+    const call = async (
+      knowledge: KnowledgeService,
+      name: string,
+      args: Record<string, unknown>,
+    ) => {
+      const { json } = await post(
+        knowledgeService(knowledge),
+        'run-1',
+        'agent',
+        rpc('tools/call', { name, arguments: args }),
+      );
+      return (
+        json() as {
+          result: { isError?: boolean; content: { text: string }[] };
+        }
+      ).result;
+    };
+
+    it('lists the three tools after memory while knowledge is on, and none while it is off', async () => {
+      const on = await names(fakeKnowledge(true).service);
+      const first = on.indexOf(HOST_KNOWLEDGE_SEARCH_TOOL);
+      expect(on.slice(first, first + HOST_KNOWLEDGE_TOOLS.length)).toEqual([
+        ...HOST_KNOWLEDGE_TOOLS,
+      ]);
+      expect(await names(fakeKnowledge(false).service)).not.toEqual(
+        expect.arrayContaining([HOST_KNOWLEDGE_SEARCH_TOOL]),
+      );
+    });
+
+    it('leaves knowledge_save off the list while agents may only read', async () => {
+      const listed = await names(fakeKnowledge(true, false).service);
+      expect(listed).toContain(HOST_KNOWLEDGE_READ_TOOL);
+      expect(listed).not.toContain(HOST_KNOWLEDGE_SAVE_TOOL);
+    });
+
+    it('refuses every tool once knowledge is off, on a list a kept CLI still holds', async () => {
+      const { service: knowledge, state } = fakeKnowledge(true);
+      state.enabled = false;
+      for (const [name, args] of [
+        [HOST_KNOWLEDGE_SEARCH_TOOL, {}],
+        [HOST_KNOWLEDGE_READ_TOOL, { handle: 'a' }],
+        [HOST_KNOWLEDGE_SAVE_TOOL, { title: 'T', reason: 'r' }],
+      ] as const) {
+        const result = await call(knowledge, name, args);
+        expect(result.isError).toBe(true);
+        expect(result.content[0]?.text).toContain('KNOWLEDGE_DISABLED');
+      }
+    });
+  });
+
   it('offers record_outcome only to a member a team pass registered, never to a chat', async () => {
     const runOutcomes = runOutcomeBroker();
     runOutcomes.register('run-1', 'manager', (async () => {
@@ -3715,6 +3836,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       board: new TaskBoardBroker(),
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
+      knowledge: fakeKnowledge(false).service,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
     }).find((t) => t.handles(HOST_RECORD_OUTCOME_TOOL))!;
@@ -4275,6 +4397,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamProposals: {} as TeamProposalService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
+      knowledge: fakeKnowledge(false).service,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -4361,6 +4484,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamProposals,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
+      knowledge: fakeKnowledge(false).service,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -4587,6 +4711,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       } as unknown as TeamProposalService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
+      knowledge: fakeKnowledge(false).service,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -4692,6 +4817,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       } as unknown as TeamProposalService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
+      knowledge: fakeKnowledge(false).service,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -4769,6 +4895,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamProposals: { propose } as unknown as TeamProposalService,
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
+      knowledge: fakeKnowledge(false).service,
     } as Parameters<typeof createMcpTools>[0]);
     const tool = tools.find((t) => t.handles(HOST_PROPOSE_TEAM_TOOL))!;
 

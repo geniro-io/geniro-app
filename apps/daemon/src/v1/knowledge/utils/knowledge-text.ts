@@ -153,7 +153,7 @@ export function firstHiddenLine(
 }
 
 export function kilobytes(bytes: number): string {
-  return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${Math.max(bytes / 1024, 0.1).toFixed(1)} KB`;
 }
 
 function indexLine(head: KnowledgeHead): string {

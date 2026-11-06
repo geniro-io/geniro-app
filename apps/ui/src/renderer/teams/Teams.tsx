@@ -1264,6 +1264,7 @@ export function Teams({
           onDelete={(summary) => {
             setMemoryFate('forget');
             setKnowledgeFate('global');
+            setError(null);
             setPendingDelete(summary);
           }}
           onNew={newTeam}
@@ -1490,6 +1491,7 @@ export function Teams({
               } else if (value === 'delete') {
                 setMemoryFate('forget');
                 setKnowledgeFate('global');
+                setError(null);
                 setRemoveOpen(true);
               }
             }}

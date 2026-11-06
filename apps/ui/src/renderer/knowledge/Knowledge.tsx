@@ -457,7 +457,10 @@ export function Knowledge({
   };
 
   const nameOf = (key: string): string => placeLabel(key, places);
-  const waiting = counts?.waiting ?? 0;
+  const waiting =
+    (place === null
+      ? counts?.waiting
+      : counts?.places.find((row) => row.place === place)?.waiting) ?? 0;
   const pickerGroups: SelectGroup[] = [
     { items: [{ value: ALL_PLACES, label: 'All places' }] },
     ...placeGroups(places),
@@ -588,6 +591,7 @@ export function Knowledge({
             <Select
               aria-label="Place"
               variant="ghost"
+              side="bottom"
               groups={pickerGroups}
               value={place ?? ALL_PLACES}
               onValueChange={(next) =>

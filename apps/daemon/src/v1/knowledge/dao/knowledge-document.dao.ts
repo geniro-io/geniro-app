@@ -31,8 +31,6 @@ export interface KnowledgePageFilter {
   statuses: readonly KnowledgeStatus[];
   /** Active documents with a change waiting; proposed ones always count. */
   waitingIds?: readonly string[];
-  /** A ready-made FTS5 query. */
-  match?: string;
   before?: { updatedAt: number; id: string };
   limit: number;
 }
@@ -148,7 +146,7 @@ export class KnowledgeDocumentDao extends BaseDao<KnowledgeDocument> {
     filter: KnowledgePageFilter,
     em: EntityManager = this.em,
   ): Promise<KnowledgeHead[]> {
-    const { placeKey, placeKeys, handle, match, before, waitingIds, statuses } =
+    const { placeKey, placeKeys, handle, before, waitingIds, statuses } =
       filter;
     let query = this.database(em)
       .selectFrom('knowledge_documents')
@@ -177,18 +175,6 @@ export class KnowledgeDocumentDao extends BaseDao<KnowledgeDocument> {
     }
     if (handle !== undefined) {
       query = query.where('handle', '=', handle);
-    }
-    if (match !== undefined) {
-      query = query.where((eb) =>
-        eb(
-          'id',
-          'in',
-          eb
-            .selectFrom('knowledge_fts')
-            .select('knowledge_fts.document_id')
-            .where('knowledge_fts', 'match', match),
-        ),
-      );
     }
     if (before !== undefined) {
       query = query.where((eb) =>

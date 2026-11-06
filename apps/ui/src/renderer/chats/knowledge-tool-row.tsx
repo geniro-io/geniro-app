@@ -586,7 +586,7 @@ function KnowledgePeekPanel({
             </p>
             {read === 'gone' ? (
               <p className="m-0 px-2 text-xs text-muted-foreground">
-                No longer in Knowledge.
+                This run does not see this document now.
               </p>
             ) : openKnowledge === null ? null : (
               <Button

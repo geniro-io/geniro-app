@@ -988,6 +988,49 @@ describe('KnowledgeService', () => {
       expect(restoredSeen.source.actor).toBe('user');
     });
 
+    it('ranks the page’s search like the agent’s, with the any-word retry', async () => {
+      const inBody = applied(
+        await service.create(
+          doc({ handle: 'in-body', title: 'Plain', body: 'word quokka here' }),
+        ),
+      );
+      const inTitle = applied(
+        await service.create(
+          doc({ handle: 'in-title', title: 'Quokka guide', body: 'Other.' }),
+        ),
+      );
+      await service.edit(inBody.id, {
+        rev: inBody.rev,
+        title: inBody.title,
+        whenToRead: inBody.whenToRead,
+        body: 'word quokka again',
+      });
+
+      const handles = async (q: string): Promise<string[]> =>
+        (await service.list({ q })).documents.map((row) => row.handle);
+
+      expect(await handles('quokka')).toEqual([inTitle.handle, inBody.handle]);
+      expect(await handles('quokka zzznosuchword')).toEqual([
+        inTitle.handle,
+        inBody.handle,
+      ]);
+    });
+
+    it('keeps the page’s search inside its place and status filters', async () => {
+      applied(
+        await service.create(doc({ handle: 'here', place: 'project:p1' })),
+      );
+      applied(await service.create(doc({ handle: 'there', place: 'global' })));
+
+      const { documents, next } = await service.list({
+        q: 'release',
+        place: 'project:p1',
+      });
+
+      expect(documents.map((row) => row.handle)).toEqual(['here']);
+      expect(next).toBeNull();
+    });
+
     describe('a run’s own search, as the transcript asks it', () => {
       beforeEach(async () => {
         const em = orm.em.fork();
@@ -1342,7 +1385,7 @@ describe('KnowledgeService', () => {
         '\n',
       );
       expect(lines?.[1]).toMatch(
-        /^- project-one — Project one\. When: Cutting a release\. \(project, 0\.0 KB\)$/,
+        /^- project-one — Project one\. When: Cutting a release\. \(project, 0\.1 KB\)$/,
       );
       expect(lines?.[2]).toContain('(global,');
     });

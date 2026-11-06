@@ -215,7 +215,10 @@ import type { HostedThread } from './hosted-thread';
 import { foldsHolding } from './jump-folds';
 import { jumpAnchorProps } from './jump-target';
 import { JumpToLatest } from './jump-to-latest';
-import type { KnowledgeOpenTarget } from './knowledge-tool-row';
+import type {
+  KnowledgeLookup,
+  KnowledgeOpenTarget,
+} from './knowledge-tool-row';
 import { CHAT_LIVE_KEY, liveTextKey, partialOwnerKey } from './live-text';
 import {
   LocalImageLoaderContext,
@@ -3763,24 +3766,24 @@ export function Chats({
   );
 
   const loadKnowledge = useLatestCallback(
-    async (handle: string) =>
-      (
-        await apis.knowledge.listKnowledge({
-          handle,
-          runId: activeRunId ?? undefined,
-        })
-      ).documents,
-    [apis, activeRunId],
-  );
-
-  const searchKnowledge = useLatestCallback(
-    async (q: string) =>
-      (
-        await apis.knowledge.listKnowledge({
-          q,
-          runId: activeRunId ?? undefined,
-        })
-      ).documents,
+    async (lookup: KnowledgeLookup) => {
+      const runId = activeRunId ?? undefined;
+      if ('handle' in lookup) {
+        const { documents } = await apis.knowledge.listKnowledge({
+          handle: lookup.handle,
+          runId,
+        });
+        return documents;
+      }
+      if (runId === undefined) {
+        throw new Error('no run to search for');
+      }
+      const { documents } = await apis.knowledge.searchKnowledgeForRun({
+        runId,
+        q: lookup.search ?? undefined,
+      });
+      return documents;
+    },
     [apis, activeRunId],
   );
 
@@ -9609,8 +9612,7 @@ export function Chats({
         notSent={notSent}
         chatActions={chatActions}
         loadMemory={loadMemory}
-        loadKnowledge={loadKnowledge}
-        searchKnowledge={searchKnowledge}>
+        loadKnowledge={loadKnowledge}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

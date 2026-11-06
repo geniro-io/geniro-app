@@ -27,6 +27,7 @@ import type {
   KnowledgeRemovedDto,
   KnowledgeRevisionDetailDto,
   KnowledgeRevisionListDto,
+  KnowledgeRunSearchDto,
   RestoreKnowledgeRevisionDto,
   UpdateKnowledgeDto,
 } from '../models/index';
@@ -90,6 +91,11 @@ export interface KnowledgeApiRestoreKnowledgeRequest {
 export interface KnowledgeApiRestoreKnowledgeRevisionRequest {
     revisionId: string;
     restoreKnowledgeRevisionDto: RestoreKnowledgeRevisionDto;
+}
+
+export interface KnowledgeApiSearchKnowledgeForRunRequest {
+    runId: string;
+    q?: string;
 }
 
 export interface KnowledgeApiSetKnowledgeConfigRequest {
@@ -767,6 +773,55 @@ export class KnowledgeApi extends runtime.BaseAPI {
      */
     async restoreKnowledgeRevision(requestParameters: KnowledgeApiRestoreKnowledgeRevisionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<KnowledgeDocumentDetailDto> {
         const response = await this.restoreKnowledgeRevisionRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async searchKnowledgeForRunRaw(requestParameters: KnowledgeApiSearchKnowledgeForRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<KnowledgeRunSearchDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling searchKnowledgeForRun().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['q'] != null) {
+            queryParameters['q'] = requestParameters['q'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/knowledge/runs/{runId}/search`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async searchKnowledgeForRun(requestParameters: KnowledgeApiSearchKnowledgeForRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<KnowledgeRunSearchDto> {
+        const response = await this.searchKnowledgeForRunRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

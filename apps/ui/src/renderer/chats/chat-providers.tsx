@@ -20,8 +20,6 @@ import {
   KnowledgeLoaderContext,
   KnowledgeOpenContext,
   type KnowledgeOpenTarget,
-  type KnowledgeSearcher,
-  KnowledgeSearcherContext,
 } from './knowledge-tool-row';
 import { RunActivityContext, RunSettledContext } from './live-row';
 import {
@@ -120,7 +118,6 @@ export function ChatProviders({
   chatActions = null,
   loadMemory = null,
   loadKnowledge = null,
-  searchKnowledge = null,
   children,
 }: {
   /**
@@ -199,8 +196,6 @@ export function ChatProviders({
   loadMemory?: MemoryLoader | null;
   /** How a knowledge row reads its documents — see `KnowledgeLoaderContext`. */
   loadKnowledge?: KnowledgeLoader | null;
-  /** How a knowledge row searches for itself — see `KnowledgeSearcherContext`. */
-  searchKnowledge?: KnowledgeSearcher | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -226,10 +221,7 @@ export function ChatProviders({
                                     value={loadMemory}>
                                     <KnowledgeLoaderContext.Provider
                                       value={loadKnowledge}>
-                                      <KnowledgeSearcherContext.Provider
-                                        value={searchKnowledge}>
-                                        {children}
-                                      </KnowledgeSearcherContext.Provider>
+                                      {children}
                                       {chatActions === null ? null : (
                                         <CommandConfirmDialog
                                           action={chatActions.confirming}

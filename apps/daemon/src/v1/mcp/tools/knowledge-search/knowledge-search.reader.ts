@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  KNOWLEDGE_QUERY_MAX_CHARS,
   KNOWLEDGE_SEARCH_DEFAULT,
   KNOWLEDGE_SEARCH_MAX,
   type KnowledgeSearchResult,
@@ -14,7 +15,7 @@ export const KnowledgeSearchArgsSchema = z
     query: z
       .string()
       .trim()
-      .max(300)
+      .max(KNOWLEDGE_QUERY_MAX_CHARS)
       .optional()
       .describe(
         'Words to find in titles, when-to-read lines and text; every word must match, and when none does, any word may. Leave it out to list what this run sees.',

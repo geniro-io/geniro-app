@@ -5716,6 +5716,19 @@ export interface KnowledgeRevisionListDto {
 /**
  * 
  * @export
+ * @interface KnowledgeRunSearchDto
+ */
+export interface KnowledgeRunSearchDto {
+    /**
+     * 
+     * @type {Array<KnowledgeHead>}
+     * @memberof KnowledgeRunSearchDto
+     */
+    documents: Array<KnowledgeHead>;
+}
+/**
+ * 
+ * @export
  * @interface LabelInstructionDeletedDto
  */
 export interface LabelInstructionDeletedDto {

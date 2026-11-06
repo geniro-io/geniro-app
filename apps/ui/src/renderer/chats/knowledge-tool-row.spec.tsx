@@ -218,7 +218,7 @@ describe('knowledge_search', () => {
         ?.className,
     ).toContain('text-destructive');
     draw(pair('knowledge_search', { query: 'release' }), { status: 'running' });
-    expect(line()).toBe('Searching knowledge “release”');
+    expect(line()).toBe('Searching knowledge · “release”');
   });
 });
 

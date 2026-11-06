@@ -199,7 +199,7 @@ it('draws a knowledge call as its own row beside the group of ordinary tools', (
   const knowledge = container.querySelectorAll('[data-role="knowledge-tool"]');
   expect(knowledge).toHaveLength(1);
   expect(knowledge[0]?.textContent).toContain('Read release-checklist');
-  expect(knowledge[0]?.textContent).toContain('Release checklist');
+  expect(knowledge[0]?.textContent).toContain('rev 7');
   expect(container.querySelectorAll('[data-role="tool-group"]')).toHaveLength(
     2,
   );

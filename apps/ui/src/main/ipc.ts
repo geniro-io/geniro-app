@@ -46,6 +46,7 @@ import {
 import {
   artifactSaveSchema,
   branchNameSchema,
+  changesPullRequestsSchema,
   chatExportSaveSchema,
   cliKindSchema,
   commitShaSchema,
@@ -491,11 +492,18 @@ export function registerIpc(
   handle(
     IPC.getChangesSince,
     ALLOW_REMOTELY,
-    (_event, dir: unknown, sha: unknown, workFolder: unknown) =>
+    (
+      _event,
+      dir: unknown,
+      sha: unknown,
+      workFolder: unknown,
+      pullRequests: unknown,
+    ) =>
       readChangesSince(
         gitDirSchema.parse(dir),
         commitShaSchema.parse(sha),
         workFolderFlagSchema.parse(workFolder) === true,
+        changesPullRequestsSchema.parse(pullRequests),
       ),
   );
   // The candidates `getChangesSince` above is then asked about, so it reaches as far.

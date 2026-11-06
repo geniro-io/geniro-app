@@ -320,6 +320,20 @@ export const OnTheShelf: Story = {
   ),
 };
 
+export const ChangesCutShort: Story = {
+  render: () => (
+    <div className="w-[720px]">
+      <ComposerShelf>
+        <FolderChangesChip
+          summary={{ files: 500, added: 41_547, removed: 12_146 }}
+          truncated
+          onOpen={() => {}}
+        />
+      </ComposerShelf>
+    </div>
+  ),
+};
+
 export const RelayLeadOnTheShelf: Story = {
   render: (args) => (
     <div className="w-[720px]">

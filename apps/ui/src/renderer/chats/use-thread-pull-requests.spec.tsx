@@ -15,6 +15,7 @@ import {
 } from './panel-flags';
 import { readThreadFlag, ThreadUiMemoryContext } from './thread-ui-memory';
 import {
+  changesPullRequestsOf,
   currentThreadPullRequest,
   refOf,
   rowPullRequestOf,
@@ -27,6 +28,57 @@ const row = (repo: string, number: number, seq: number): RunPullRequest => ({
   number,
   url: `https://github.com/acme/${repo}/pull/${number}`,
   seq,
+});
+
+describe('changesPullRequestsOf', () => {
+  const info: PullRequestInfo = {
+    number: 7,
+    title: 'Stacked',
+    state: 'open',
+    isDraft: false,
+    headRefName: 'feature/top',
+    headRefOid: 'a'.repeat(40),
+    baseRefName: 'feature/stack',
+    isCrossRepository: false,
+    headRepositoryOwner: 'acme',
+    author: 'someone',
+    url: 'https://github.com/acme/platform/pull/7',
+    updatedAt: '2026-11-06T00:00:00Z',
+    added: null,
+    removed: null,
+    changedFiles: null,
+  };
+  const result = (
+    pullRequest: PullRequestInfo | null,
+  ): PullRequestRefResult => ({
+    ref: refOf(row('platform', 7, 1)),
+    pullRequest,
+  });
+
+  it('keeps what a read needs of an open pull request', () => {
+    expect(changesPullRequestsOf([result(info)])).toEqual([
+      {
+        repository: 'acme/platform',
+        headRefName: 'feature/top',
+        headRefOid: 'a'.repeat(40),
+        baseRefName: 'feature/stack',
+      },
+    ]);
+  });
+
+  it('leaves out what cannot set a folder’s base', () => {
+    const { baseRefName: _unread, ...noBase } = info;
+
+    expect(
+      changesPullRequestsOf([
+        result(null),
+        result(noBase),
+        result({ ...info, state: 'merged' }),
+        result({ ...info, state: 'closed' }),
+        result({ ...info, isCrossRepository: true }),
+      ]),
+    ).toEqual([]);
+  });
 });
 
 describe('threadPullRequestsOf', () => {

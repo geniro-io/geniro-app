@@ -424,6 +424,7 @@ import { useRunWaterfall } from './use-run-waterfall';
 import { useRunWorkFolders } from './use-run-work-folders';
 import { isAnalysisRun, useThreadAnalysis } from './use-thread-analysis';
 import {
+  changesPullRequestsOf,
   rowPullRequestOf,
   threadPullRequestsOf,
   useThreadPullRequests,
@@ -5316,6 +5317,22 @@ export function Chats({
    */
   const activeRunArchived = activeRun?.archivedAt != null;
 
+  /**
+   * What each thread OPENED, as GitHub currently has it — the only pull
+   * requests any chat surface draws.
+   *
+   * Addressed by URL off the run row the daemon captured them onto, so they
+   * survive a branch switch and span repositories. What is merely open on the
+   * branch a folder sits on is NOT listed: it is not this conversation's work,
+   * and listing it beside these put the thread's own pull request on the panel
+   * twice.
+   */
+  const { byKey: resolvedThreadPullRequests } = useThreadPullRequests(runs);
+  const openedByActiveThread = useMemo(
+    () => threadPullRequestsOf(activeRun ?? null, resolvedThreadPullRequests),
+    [activeRun, resolvedThreadPullRequests],
+  );
+
   // ONE read of the run's folder and the worktrees its agents worked in,
   // feeding the header's changes chip AND the dialog behind it. Kept here
   // rather than inside the dialog because the chip states the figures without
@@ -5331,6 +5348,7 @@ export function Chats({
     activeRun?.cwd ?? null,
     activeRun?.startSha ?? null,
     workFolders,
+    changesPullRequestsOf(openedByActiveThread),
   );
   const refreshChatChanges = chatChanges.refresh;
   // What the DIALOG asks for when it opens: past the freshness floor, because
@@ -5351,21 +5369,6 @@ export function Chats({
     }
   }, [streaming, refreshChatChanges]);
 
-  /**
-   * What each thread OPENED, as GitHub currently has it — the only pull
-   * requests any chat surface draws.
-   *
-   * Addressed by URL off the run row the daemon captured them onto, so they
-   * survive a branch switch and span repositories. What is merely open on the
-   * branch a folder sits on is NOT listed: it is not this conversation's work,
-   * and listing it beside these put the thread's own pull request on the panel
-   * twice.
-   */
-  const { byKey: resolvedThreadPullRequests } = useThreadPullRequests(runs);
-  const openedByActiveThread = useMemo(
-    () => threadPullRequestsOf(activeRun ?? null, resolvedThreadPullRequests),
-    [activeRun, resolvedThreadPullRequests],
-  );
   /** Each of the open thread's pull requests' newest recorded outcome. */
   // Keyed on the list and GitHub's answers alone, never `activeRun`: a
   // run-status announce that carries no list keeps its reference, and a fresh
@@ -9488,6 +9491,7 @@ export function Chats({
       {activeRun?.cwd !== null && activeRun?.startSha !== null ? (
         <FolderChangesChip
           summary={chatChanges.summary}
+          truncated={chatChanges.truncated}
           onOpen={openChatChanges}
         />
       ) : null}

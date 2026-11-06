@@ -266,15 +266,21 @@ export function ResetWakeChip({
  */
 export function FolderChangesChip({
   summary,
+  truncated = false,
   onOpen,
 }: {
   summary: ChangesSummary | null;
+  /** More files changed than were read, so every figure here is a floor. */
+  truncated?: boolean;
   onOpen: () => void;
 }): React.JSX.Element | null {
   if (summary === null || summary.files === 0) {
     return null;
   }
-  const label = `${summary.files} ${summary.files === 1 ? 'file' : 'files'} changed since this chat started — open the list`;
+  const noun = summary.files === 1 ? 'file' : 'files';
+  const label = truncated
+    ? `More than ${summary.files} files changed since this chat started, and the line counts cover only those — open the list`
+    : `${summary.files} ${noun} changed since this chat started — open the list`;
   return (
     <button
       type="button"
@@ -285,7 +291,8 @@ export function FolderChangesChip({
       className={cn(SHELF_CHIP_CLASS, 'shrink-0')}>
       <GitCompare aria-hidden="true" className="size-3.5 shrink-0" />
       <span className="tabular-nums">
-        {summary.files} {summary.files === 1 ? 'file' : 'files'}
+        {summary.files}
+        {truncated ? '+' : ''} {noun}
       </span>
       <DiffFigures
         added={summary.added}

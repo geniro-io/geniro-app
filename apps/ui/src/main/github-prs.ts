@@ -18,14 +18,15 @@ const GH_TIMEOUT_MS = 15_000;
 
 /**
  * The GraphQL selection {@link readPullRequestRow} reads. A row missing any of
- * the REQUIRED fields is dropped; the three diff figures and `mergedAt` are
- * optional and their absence costs those figures alone.
+ * the REQUIRED fields is dropped; the three diff figures, `mergedAt`,
+ * `baseRefName` and `headRefOid` are optional and their absence costs those
+ * fields alone.
  *
  * The names are gh's own `--json` names, which are GitHub's GraphQL field
  * names, so the row reader is the same for both.
  */
 const PULL_REQUEST_SELECTION =
-  'number title state isDraft headRefName isCrossRepository headRepositoryOwner { login } author { login } url updatedAt mergedAt additions deletions changedFiles';
+  'number title state isDraft headRefName headRefOid baseRefName isCrossRepository headRepositoryOwner { login } author { login } url updatedAt mergedAt additions deletions changedFiles';
 
 /**
  * How many pull requests one GraphQL query asks about, by alias. GitHub counts
@@ -134,12 +135,17 @@ function readPullRequestRow(entry: unknown): PullRequestInfo | null {
     ...(mergedAt === undefined ? {} : { mergedAt }),
     // OPTIONAL, unlike everything above: a row that does not carry them is a
     // pull request without its size, never a row to drop. gh omits them on an
-    // older version, and the fields are the newest thing this query asks for —
-    // so requiring them would make one gh upgrade the difference between a
-    // populated panel and an empty one.
+    // older version, so requiring them would make one gh upgrade the difference
+    // between a populated panel and an empty one.
     added: numberOrNull(row.additions),
     removed: numberOrNull(row.deletions),
     changedFiles: numberOrNull(row.changedFiles),
+    ...(typeof row.baseRefName === 'string'
+      ? { baseRefName: row.baseRefName }
+      : {}),
+    ...(typeof row.headRefOid === 'string'
+      ? { headRefOid: row.headRefOid }
+      : {}),
   };
 }
 

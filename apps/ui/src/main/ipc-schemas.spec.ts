@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   branchNameSchema,
+  changesPullRequestsSchema,
   commitShaSchema,
   gitDirSchema,
   memoryExportSaveSchema,
@@ -14,6 +15,43 @@ import {
   terminalRowsSchema,
   terminalWriteDataSchema,
 } from './ipc-schemas';
+
+describe('changesPullRequestsSchema', () => {
+  const row = {
+    repository: 'acme/platform',
+    headRefName: 'feature/top',
+    headRefOid: 'a'.repeat(40),
+    baseRefName: 'feature/stack',
+  };
+
+  it('reads an absent argument as no pull requests', () => {
+    expect(changesPullRequestsSchema.parse(undefined)).toEqual([]);
+  });
+
+  it('drops the row git must not receive and keeps the read going', () => {
+    const parsed = changesPullRequestsSchema.parse([
+      { ...row, baseRefName: '--upload-pack=x' },
+      { ...row, headRefName: 'feature/../top' },
+      { ...row, headRefOid: 'HEAD~3' },
+      { ...row, repository: 'no-owner' },
+      row,
+    ]);
+
+    expect(parsed).toEqual([row]);
+  });
+
+  it('keeps a row gh reported no head commit for', () => {
+    const { headRefOid: _unread, ...noHead } = row;
+
+    expect(changesPullRequestsSchema.parse([noHead])).toEqual([noHead]);
+  });
+
+  it('caps how many pull requests one read weighs', () => {
+    const parsed = changesPullRequestsSchema.parse(Array(100).fill(row));
+
+    expect(parsed).toHaveLength(32);
+  });
+});
 
 describe('commitShaSchema', () => {
   const accepted = (value: string): boolean =>

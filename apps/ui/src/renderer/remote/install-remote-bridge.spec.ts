@@ -123,6 +123,30 @@ describe('installRemoteBridge', () => {
     });
   });
 
+  it('forwards a changes read’s pull requests, the fourth argument, to the phone’s read', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, { value: null }));
+    vi.stubGlobal('fetch', fetchMock);
+    const sha = 'a'.repeat(40);
+    const pullRequests = [
+      {
+        repository: 'acme/platform',
+        headRefName: 'feature/top',
+        baseRefName: 'feature/stack',
+      },
+    ];
+
+    installRemoteBridge();
+    await window.geniro.getChangesSince('/repo', sha, true, pullRequests);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      channel: IPC.getChangesSince,
+      args: ['/repo', sha, true, pullRequests],
+    });
+  });
+
   it('forwards call arguments verbatim, under the SAME channel name the real preload dispatches on', async () => {
     const fetchMock = vi
       .fn()

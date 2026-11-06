@@ -3,7 +3,11 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { GitChange, GitChanges } from '../../shared/contracts';
+import type {
+  ChangesPullRequest,
+  GitChange,
+  GitChanges,
+} from '../../shared/contracts';
 import { type ChatChanges, useChatChanges } from './use-chat-changes';
 
 const RUN_FOLDER = '/repo';
@@ -92,7 +96,109 @@ describe('useChatChanges', () => {
       AGENT_WORKTREE,
       START_SHA,
       true,
+      [],
     );
+  });
+
+  it('hands every read the thread’s pull requests, and reads again when they land', async () => {
+    // GitHub answers after the first read, and the chip is what the answer
+    // corrects, so an answer that only reached the next turn's read would leave
+    // a stacked branch's whole stack on screen meanwhile.
+    const pullRequest = {
+      repository: 'acme/platform',
+      headRefName: 'feature/top',
+      headRefOid: 'a'.repeat(40),
+      baseRefName: 'feature/stack',
+    };
+    const getChangesSince = vi.fn(
+      async (
+        _dir: string,
+        _sha: string,
+        _workFolder?: boolean,
+        pullRequests: readonly unknown[] = [],
+      ): Promise<GitChanges> =>
+        reading(
+          pullRequests.length > 0
+            ? [change('mine.ts', 1, 0)]
+            : [change('mine.ts', 1, 0), change('stack.ts', 9, 9)],
+        ),
+    );
+    vi.stubGlobal('geniro', { getChangesSince });
+    let latest: ChatChanges | null = null;
+    function Probe({ prs }: { prs: (typeof pullRequest)[] }): null {
+      latest = useChatChanges(RUN_FOLDER, START_SHA, [AGENT_WORKTREE], prs);
+      return null;
+    }
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(<Probe prs={[]} />);
+    });
+    expect(latest!.summary).toEqual({ files: 2, added: 10, removed: 9 });
+
+    await act(async () => {
+      root?.render(<Probe prs={[pullRequest]} />);
+    });
+
+    expect(getChangesSince).toHaveBeenCalledWith(RUN_FOLDER, START_SHA, false, [
+      pullRequest,
+    ]);
+    expect(getChangesSince).toHaveBeenCalledWith(
+      AGENT_WORKTREE,
+      START_SHA,
+      true,
+      [pullRequest],
+    );
+    expect(latest!.summary).toEqual({ files: 1, added: 1, removed: 0 });
+  });
+
+  it('does not read again for a fresh array holding the same pull requests', async () => {
+    // Callers rebuild the list on every render; a re-read per render would run
+    // `git diff` each time.
+    const getChangesSince = vi.fn(async (): Promise<GitChanges> =>
+      reading([change('mine.ts', 1, 0)]),
+    );
+    vi.stubGlobal('geniro', { getChangesSince });
+    const list = (): ChangesPullRequest[] => [
+      {
+        repository: 'acme/platform',
+        headRefName: 'feature/top',
+        baseRefName: 'feature/stack',
+      },
+    ];
+    function Probe({ prs }: { prs: ReturnType<typeof list> }): null {
+      useChatChanges(RUN_FOLDER, START_SHA, [], prs);
+      return null;
+    }
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(<Probe prs={list()} />);
+    });
+    const reads = getChangesSince.mock.calls.length;
+
+    await act(async () => {
+      root?.render(<Probe prs={list()} />);
+    });
+
+    expect(getChangesSince.mock.calls.length).toBe(reads);
+  });
+
+  it('keeps each work folder’s own base beside its changes', async () => {
+    const base = { sha: 'b'.repeat(40), ref: 'origin/feature/stack' };
+    vi.stubGlobal('geniro', {
+      getChangesSince: async (dir: string): Promise<GitChanges> =>
+        dir === AGENT_WORKTREE
+          ? { ...reading([change('mine.ts', 1, 0)]), upstreamBase: base }
+          : reading([]),
+    });
+
+    const current = await readHook(RUN_FOLDER, START_SHA, [AGENT_WORKTREE]);
+
+    expect(current().elsewhere[0]?.upstreamBase).toEqual(base);
+    expect(current().upstreamBase).toBeNull();
   });
 
   it('adds the folder’s own changes to the worktree’s rather than replacing them', async () => {
@@ -116,6 +222,7 @@ describe('useChatChanges', () => {
       {
         folder: AGENT_WORKTREE,
         changes: [change('apps/web/card-padding.ts', 2, 2)],
+        upstreamBase: null,
       },
     ]);
   });

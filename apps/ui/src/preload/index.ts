@@ -132,10 +132,14 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.getGitHead, dir) as ReturnType<
       GeniroApi['getGitHead']
     >,
-  getChangesSince: (dir, sha, workFolder) =>
-    ipcRenderer.invoke(IPC.getChangesSince, dir, sha, workFolder) as ReturnType<
-      GeniroApi['getChangesSince']
-    >,
+  getChangesSince: (dir, sha, workFolder, pullRequests) =>
+    ipcRenderer.invoke(
+      IPC.getChangesSince,
+      dir,
+      sha,
+      workFolder,
+      pullRequests,
+    ) as ReturnType<GeniroApi['getChangesSince']>,
   listWorktrees: (dir, startedAtMs) =>
     ipcRenderer.invoke(IPC.listWorktrees, dir, startedAtMs) as ReturnType<
       GeniroApi['listWorktrees']

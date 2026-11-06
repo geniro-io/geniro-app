@@ -101,12 +101,36 @@ describe('ChatChangesDialog — the thread’s other work folders', () => {
     // both rows must be drawn — one tree would merge them into one.
     const text = await dialogText({
       changes: [file('apps/web/card.tsx')],
-      elsewhere: [{ folder: WORKTREE, changes: [file('apps/web/card.tsx')] }],
+      elsewhere: [
+        {
+          folder: WORKTREE,
+          changes: [file('apps/web/card.tsx')],
+          upstreamBase: null,
+        },
+      ],
     });
 
     expect(text).toContain('cw-1256-padding');
     expect(text).toContain('a worktree this chat’s agents worked in');
+    expect(text).not.toContain(', against');
     expect(text.match(/card\.tsx/g)).toHaveLength(2);
+  });
+
+  it('names the ref a worktree is measured against, which the header does not', async () => {
+    const text = await dialogText({
+      upstreamBase: { sha: 'b'.repeat(40), ref: 'origin/main' },
+      elsewhere: [
+        {
+          folder: WORKTREE,
+          changes: [file('apps/web/card.tsx')],
+          upstreamBase: { sha: 'c'.repeat(40), ref: 'origin/feature/stack' },
+        },
+      ],
+    });
+
+    expect(text).toContain('worked in, against origin/feature/stack');
+    expect(text).toContain('shares with origin/main');
+    expect(text).not.toContain('shares with origin/feature/stack');
   });
 
   it('still lists a worktree when the thread’s own folder could not be read, and says why', async () => {
@@ -115,7 +139,13 @@ describe('ChatChangesDialog — the thread’s other work folders', () => {
     const text = await dialogText({
       changes: [],
       unavailableReason: 'The commit this chat started at is no longer here.',
-      elsewhere: [{ folder: WORKTREE, changes: [file('apps/web/card.tsx')] }],
+      elsewhere: [
+        {
+          folder: WORKTREE,
+          changes: [file('apps/web/card.tsx')],
+          upstreamBase: null,
+        },
+      ],
     });
 
     expect(text).toContain(
@@ -127,7 +157,13 @@ describe('ChatChangesDialog — the thread’s other work folders', () => {
   it('is not empty when only a worktree changed', async () => {
     const text = await dialogText({
       changes: [],
-      elsewhere: [{ folder: WORKTREE, changes: [file('apps/web/card.tsx')] }],
+      elsewhere: [
+        {
+          folder: WORKTREE,
+          changes: [file('apps/web/card.tsx')],
+          upstreamBase: null,
+        },
+      ],
     });
 
     expect(text).not.toContain('Nothing has changed in this folder');

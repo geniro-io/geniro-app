@@ -62,6 +62,114 @@ describe('PlanLimitsLedger', () => {
     ).toBe(45);
   });
 
+  describe('a window that has not reset', () => {
+    const RESET_HEADERS = '2026-11-08T11:00:00.000Z';
+    const RESET_SERVICE = '2026-11-08T11:00:00.441900+00:00';
+    const weekly = (
+      percent: number,
+      estimated: boolean,
+      resetsAt: string,
+    ): PlanLimitsWire => ({
+      plan: 'max',
+      windows: [
+        { key: 'weekly_all', label: 'Current week', percent, resetsAt },
+      ],
+      estimated,
+    });
+
+    it('keeps one figure as refresh presses alternate the service and a lagging estimate', () => {
+      const ledger = new PlanLimitsLedger();
+      const shown = [
+        weekly(85, false, RESET_SERVICE),
+        weekly(84, true, RESET_HEADERS),
+        weekly(85, false, RESET_SERVICE),
+        weekly(84, true, RESET_HEADERS),
+      ].map(
+        (reading, press) =>
+          ledger.settle(
+            KEY,
+            { plan: reading, takenAt: 1_000 * (press + 1) },
+            1_000 * (press + 1),
+            true,
+          )?.plan.windows[0]?.percent,
+      );
+
+      expect(shown).toEqual([85, 85, 85, 85]);
+    });
+
+    it('holds an estimate at the highest figure another estimate reached', () => {
+      const ledger = new PlanLimitsLedger();
+      ledger.settle(
+        KEY,
+        { plan: weekly(85, true, RESET_HEADERS), takenAt: 1_000 },
+        1_000,
+      );
+
+      const lagging = ledger.settle(
+        KEY,
+        { plan: weekly(84, true, RESET_HEADERS), takenAt: 2_000 },
+        2_000,
+      );
+
+      expect(lagging?.plan.windows[0]?.percent).toBe(85);
+      expect(lagging?.plan.estimated).toBe(true);
+      expect(lagging?.takenAt).toBe(2_000);
+    });
+
+    it('lets an estimate rise past what was held', () => {
+      const ledger = new PlanLimitsLedger();
+      ledger.settle(
+        KEY,
+        { plan: weekly(85, false, RESET_SERVICE), takenAt: 1_000 },
+        1_000,
+      );
+
+      const risen = ledger.settle(
+        KEY,
+        { plan: weekly(90, true, RESET_HEADERS), takenAt: 2_000 },
+        2_000,
+        true,
+      );
+
+      expect(risen?.plan.windows[0]?.percent).toBe(90);
+    });
+
+    it('lets the service lower a figure, since it is the account’s own word', () => {
+      const ledger = new PlanLimitsLedger();
+      ledger.settle(
+        KEY,
+        { plan: weekly(85, true, RESET_HEADERS), takenAt: 1_000 },
+        1_000,
+      );
+
+      const real = ledger.settle(
+        KEY,
+        { plan: weekly(84, false, RESET_SERVICE), takenAt: 2_000 },
+        2_000,
+      );
+
+      expect(real?.plan.windows[0]?.percent).toBe(84);
+    });
+
+    it('drops the old figure once the window has reset', () => {
+      const ledger = new PlanLimitsLedger();
+      ledger.settle(
+        KEY,
+        { plan: weekly(85, false, RESET_SERVICE), takenAt: 1_000 },
+        1_000,
+      );
+
+      const next = ledger.settle(
+        KEY,
+        { plan: weekly(1, true, '2026-11-15T11:00:00.000Z'), takenAt: 2_000 },
+        2_000,
+        true,
+      );
+
+      expect(next?.plan.windows[0]?.percent).toBe(1);
+    });
+  });
+
   it('lets an estimate win once the real reading is old enough to be the worse answer', () => {
     const real = { plan: plan(96, false), takenAt: 0 };
     const estimate = {

@@ -1628,10 +1628,7 @@ export class TeamExecutorService
       return 'refused';
     }
     const run = assertTeamRun(found, runId);
-    const lead = await this.leadNow(
-      runId,
-      await this.runTeams.teamOf(run, em),
-    );
+    const lead = await this.leadNow(runId, await this.runTeams.teamOf(run, em));
     if (lead === null) {
       return 'refused';
     }
@@ -1673,7 +1670,9 @@ export class TeamExecutorService
       return memberId;
     }
     const team = await this.runTeams.teamOf(assertTeamRun(found, runId), em);
-    return team.members.find((member) => member.id === memberId)?.name ?? memberId;
+    return (
+      team.members.find((member) => member.id === memberId)?.name ?? memberId
+    );
   }
 
   /** What the lead's own conversation last measured, for the cold-wake rule. */
@@ -4736,7 +4735,11 @@ export class TeamExecutorService
               deliveryNotice,
             );
           }
-          if (threadMessages.length > 0 && !threadMessagesTaken && promptTaken) {
+          if (
+            threadMessages.length > 0 &&
+            !threadMessagesTaken &&
+            promptTaken
+          ) {
             threadMessagesTaken = true;
             await this.threadInbox?.markDelivered(
               runId,

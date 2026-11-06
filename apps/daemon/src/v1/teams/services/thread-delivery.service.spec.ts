@@ -8,8 +8,8 @@ import type {
   HostWakeOwner,
   RunStatusEvent,
 } from '../../agents/chat.types';
-import type { RunDao } from '../../agents/dao/run.dao';
 import type { ItemDao } from '../../agents/dao/item.dao';
+import type { RunDao } from '../../agents/dao/run.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ChatService } from '../../agents/services/chat.service';
@@ -202,7 +202,9 @@ function harness(
       getById: async (id: string) => runs.get(id) ?? null,
       listThreads: async () => [...runs.values()],
     } as unknown as RunDao,
-    { listAll: async () => [{ id: 'p1', name: 'One' }] } as unknown as ProjectDao,
+    {
+      listAll: async () => [{ id: 'p1', name: 'One' }],
+    } as unknown as ProjectDao,
     inbox as unknown as ThreadInboxService,
     chats as unknown as ChatService,
     executor as unknown as TeamExecutorService,
@@ -415,7 +417,10 @@ describe('ThreadDeliveryService: a running chat', () => {
 
     const answer = await h.send();
 
-    expect(answer).toMatchObject({ outcome: 'waiting', reason: 'running_turn' });
+    expect(answer).toMatchObject({
+      outcome: 'waiting',
+      reason: 'running_turn',
+    });
     expect(h.chats.sendMessage).not.toHaveBeenCalled();
     expect(h.published).toEqual([]);
 
@@ -434,7 +439,10 @@ describe('ThreadDeliveryService: a running chat', () => {
 
     const answer = await h.send();
 
-    expect(answer).toMatchObject({ outcome: 'waiting', reason: 'running_turn' });
+    expect(answer).toMatchObject({
+      outcome: 'waiting',
+      reason: 'running_turn',
+    });
     expect(h.messages[0]).toMatchObject({
       status: 'waiting',
       deliveryId: null,
@@ -513,7 +521,10 @@ describe('ThreadDeliveryService: a team', () => {
       outcome: 'waiting',
       reason: 'running_turn',
     });
-    expect(h.messages[0]).toMatchObject({ status: 'waiting', deliveryId: null });
+    expect(h.messages[0]).toMatchObject({
+      status: 'waiting',
+      deliveryId: null,
+    });
   });
 
   it('wakes an idle lead on the fixed sentence', async () => {
@@ -583,9 +594,9 @@ describe('ThreadDeliveryService: a team', () => {
     expect(h.inbox.accept).toHaveBeenCalledWith(
       expect.objectContaining({ fromMember: 'Lead' }),
     );
-    expect(
-      rows.written.find((row) => row.runId === SENDER)?.memberId,
-    ).toBe('lead');
+    expect(rows.written.find((row) => row.runId === SENDER)?.memberId).toBe(
+      'lead',
+    );
   });
 });
 

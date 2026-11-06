@@ -360,7 +360,10 @@ export const CLAUDE_DISALLOWED_TOOLS_FLAG = '--disallowedTools';
  * away and leave `SendMessage`, and a background sub-agent still resumes
  * through `SendMessage`, so that tool stays.
  */
-export const CLAUDE_WITHHELD_TOOLS: readonly string[] = ['Monitor', 'ListAgents'];
+export const CLAUDE_WITHHELD_TOOLS: readonly string[] = [
+  'Monitor',
+  'ListAgents',
+];
 
 /**
  * The settings key and value that stop another claude session writing into a

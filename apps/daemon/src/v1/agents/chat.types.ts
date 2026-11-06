@@ -4568,14 +4568,18 @@ export type ThreadListQuery = z.infer<typeof ThreadListQuerySchema>;
 export const ThreadMessageSendSchema = z.object({
   thread: z
     .uuid()
-    .describe('The thread to write to: `thread` from list_threads, or the reply address of a message you received.'),
+    .describe(
+      'The thread to write to: `thread` from list_threads, or the reply address of a message you received.',
+    ),
   message: z
     .string()
     .describe('The text the other agent reads, up to 16,000 characters.'),
   wake: z
     .boolean()
     .default(true)
-    .describe('Open a turn for it when that thread is idle. False leaves it for the thread\'s next turn.'),
+    .describe(
+      "Open a turn for it when that thread is idle. False leaves it for the thread's next turn.",
+    ),
 });
 export type ThreadMessageSend = z.infer<typeof ThreadMessageSendSchema>;
 

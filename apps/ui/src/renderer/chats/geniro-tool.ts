@@ -73,6 +73,9 @@ export type GeniroCardKind =
 /** `propose_team` — its card stands across turns ({@link standsAcrossTurns}). */
 export const PROPOSE_TEAM = 'propose_team';
 
+/** `message_thread` — a send to another thread, whose card is its approval row. */
+export const MESSAGE_THREAD = 'message_thread';
+
 /**
  * `save_project_instructions` — an analysis's change to a project's
  * instructions, put on a card. TWIN: `HOST_PROJECT_INSTRUCTIONS_TOOL` in the
@@ -109,6 +112,9 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   // The outcome is its own `run_outcome` row.
   record_outcome: null,
   move_stage: null,
+  // The send is the sender's own `threadMessageSent` row; a refused one keeps
+  // its call row (`transcript-groups.ts`).
+  [MESSAGE_THREAD]: null,
   // The card is the `approval_request` row the daemon writes, which outlives
   // the call; `read_teams` draws nothing and stays visible.
   [PROPOSE_TEAM]: 'team',

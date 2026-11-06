@@ -1224,6 +1224,27 @@ export function parseSharesChanged(data: unknown): SharesChangedEvent | null {
   };
 }
 
+/** A thread's waiting messages changed: its chip re-reads them. */
+export interface ThreadMessagesChangedEvent {
+  runId: string;
+}
+
+/**
+ * Read a `thread_messages_changed` payload, or null when it is not one.
+ *
+ * TWIN PARSER: mirrors the daemon's `ThreadMessagesChange`
+ * (`apps/daemon/src/v1/agents/chat.types.ts`). Change one and change the other.
+ */
+export function parseThreadMessagesChanged(
+  data: unknown,
+): ThreadMessagesChangedEvent | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { runId } = data as Record<string, unknown>;
+  return typeof runId === 'string' ? { runId } : null;
+}
+
 const JOIN_TIMEOUT_MS = 5_000;
 
 interface JoinWaiter {
@@ -1272,6 +1293,9 @@ export class DaemonClient {
   >();
   private readonly memoryChangedListeners = new Set<
     (event: MemoryChangedEvent) => void
+  >();
+  private readonly threadMessagesChangedListeners = new Set<
+    (event: ThreadMessagesChangedEvent) => void
   >();
   private readonly projectsChangedListeners = new Set<
     (event: ProjectsChangedEvent) => void
@@ -1465,6 +1489,14 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'thread_messages_changed') {
+        const change = parseThreadMessagesChanged(data);
+        if (change) {
+          for (const listener of this.threadMessagesChangedListeners) {
+            listener(change);
+          }
+        }
+      }
       if (event === 'debug') {
         const entry = parseDebugEntry(data);
         if (entry) {
@@ -1629,6 +1661,19 @@ export class DaemonClient {
     this.memoryChangedListeners.add(listener);
     return () => {
       this.memoryChangedListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to every thread's waiting messages changing, client-wide, as
+   * {@link onSharesChanged} does: the open thread keeps the events of its own run.
+   */
+  onThreadMessagesChanged(
+    listener: (event: ThreadMessagesChangedEvent) => void,
+  ): () => void {
+    this.threadMessagesChangedListeners.add(listener);
+    return () => {
+      this.threadMessagesChangedListeners.delete(listener);
     };
   }
 

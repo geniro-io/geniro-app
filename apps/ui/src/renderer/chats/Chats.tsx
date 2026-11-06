@@ -184,6 +184,7 @@ import {
   TeamNotesChip,
   ThreadProjectChip,
   ThreadPullRequestChips,
+  WaitingMessagesChip,
 } from './composer-shelf';
 import { createComposerText, useComposerTextFact } from './composer-text';
 import {
@@ -434,6 +435,7 @@ import {
   useTranscriptJump,
 } from './use-transcript-jump';
 import { useUnseenRuns, useWindowWatched } from './use-unseen-runs';
+import { useWaitingMessages } from './use-waiting-messages';
 import { useWorktreeOrigin } from './use-worktree-origin';
 import { type WaitReading, waitReadings, waitsOnUser } from './waiting';
 
@@ -4938,6 +4940,7 @@ export function Chats({
           }
           options={(item.payload as { options?: unknown } | null)?.options}
           requestId={requestId}
+          threadTitle={payloadString(item.payload, 'threadTitle')}
           verdict={settled?.allow ?? null}
           verdictOption={settled?.optionLabel ?? null}
           // The user's own words, read back from the SAME item that settled the
@@ -7034,6 +7037,11 @@ export function Chats({
     latestShowArtifactResult,
     client,
   );
+  /**
+   * The messages other threads sent this one that still wait for its next turn
+   * — the shelf's chip lists them and takes one away on Remove.
+   */
+  const waitingMessages = useWaitingMessages(chatApi, client, activeRunId);
   /**
    * Stop one of this thread's running commands — ASKED FOR as "i wanna have an
    * ability to kill terminals".
@@ -9409,6 +9417,10 @@ export function Chats({
             onOpen={openSubagentById}
           />
           <RunningCallChips calls={openCallRows} onReveal={revealOpenCall} />
+          <WaitingMessagesChip
+            messages={waitingMessages.messages}
+            onRemove={waitingMessages.remove}
+          />
           <TeamNotesChip
             notes={teamNotes}
             agentName={shelfAgentName}
@@ -10503,6 +10515,7 @@ export function Chats({
                       openTeamNote={
                         activeRun?.teamId != null ? openTeamNote : null
                       }
+                      openThread={isHosted ? null : handleActivateRun}
                       openMemory={onOpenMemory ?? null}
                       collapseToolSteps={collapseToolSteps}
                       runActivity={activeActivity}

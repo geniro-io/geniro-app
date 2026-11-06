@@ -48,4 +48,11 @@ export class CallContext extends TimestampsEntity {
 
   @Property({ type: 'integer', nullable: true })
   contextWindowTokens: number | null = null;
+
+  /**
+   * Every CLI session this call ran in, as a JSON array, written the moment the
+   * CLI names one: a running call has no `call_result` to read it off yet.
+   */
+  @Property({ type: 'text', nullable: true })
+  sessionIds: string | null = null;
 }

@@ -1411,6 +1411,21 @@ function setup(
     async listByRun(runId: string) {
       return [...this.rows.values()].filter((row) => row.runId === runId);
     },
+    sessions: new Map<string, string[]>(),
+    async rememberSession(
+      _runId: string,
+      callId: string,
+      _memberId: string,
+      sessionId: string,
+    ) {
+      this.sessions.set(callId, [
+        ...(this.sessions.get(callId) ?? []),
+        sessionId,
+      ]);
+    },
+    async sessionsByCall() {
+      return new Map(this.sessions);
+    },
     async hardDeleteIncludingSoftDeleted(where: { runId: string }) {
       this.hardDeleted.push(where);
       return 0;
@@ -13495,6 +13510,93 @@ describe('TeamExecutorService — a member’s context reading', () => {
     await drain();
   });
 
+  it('states a running call’s share of the polled bill by the session its CLI named', async () => {
+    const { service, claude, callBroker, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'work',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    await drain();
+    claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-running' });
+    await drain();
+    const spend = (cents: number, spawnedBy?: string) => ({
+      settled: { '2026-11-05|model': [cents, 1] },
+      settledThroughMs: 0,
+      open: {},
+      ...(spawnedBy === undefined ? {} : { spawnedBy }),
+    });
+    Object.assign(nodeDao.row(run.id, 'callee')!, {
+      polledSpend: JSON.stringify({
+        'sess-running': spend(200),
+        delegate: spend(23, 'sess-running'),
+        'sess-elsewhere': spend(9_999),
+      }),
+    });
+
+    const figures = (await service.getNodeStates(run.id)).find(
+      (n) => n.memberId === 'callee',
+    )?.callFigures;
+
+    expect(figures).toEqual([
+      expect.objectContaining({
+        callId: 'call-1',
+        totals: expect.objectContaining({ turns: 0, costUsd: 2.23 }),
+      }),
+    ]);
+  });
+
+  it('bills a session two calls of a conversation share to the first alone', async () => {
+    const { service, claude, callBroker, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'work',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    for (const message of ['one', 'two']) {
+      await callBroker.callAgent(run.id, 'a', {
+        title: 'why',
+        agent: 'callee',
+        message,
+        mode: 'async',
+      });
+      await drain();
+    }
+    claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-shared' });
+    claude.starts[2]!.emit({ type: 'session', sessionId: 'sess-shared' });
+    await drain();
+    Object.assign(nodeDao.row(run.id, 'callee')!, {
+      polledSpend: JSON.stringify({
+        'sess-shared': {
+          settled: { '2026-11-05|model': [300, 1] },
+          settledThroughMs: 0,
+          open: {},
+        },
+      }),
+    });
+
+    const figures = (await service.getNodeStates(run.id)).find(
+      (n) => n.memberId === 'callee',
+    )?.callFigures;
+
+    expect(
+      figures?.map(({ callId, totals }) => [callId, totals.costUsd]),
+    ).toEqual([
+      ['call-1', 3],
+      ['call-2', null],
+    ]);
+  });
+
   it('counts a running call’s tools before it has reported any context reading', async () => {
     // A call with no `call_context` row yet still states what it has called
     // so far.
@@ -14155,6 +14257,58 @@ describe('TeamExecutorService — a member’s context reading', () => {
     expect(nodes.find((n) => n.memberId === 'callee')?.callFigures).toEqual([
       expect.objectContaining({ callId: 'call-1', promptCacheExpiresAt: null }),
     ]);
+  });
+
+  it('states a settled call’s polled bill past the listing cap, by the session its result recorded', async () => {
+    const { service, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      team: CALL_TEAM,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    let seq = 10_000;
+    const row = (kind: Item['kind'], payload: object): Promise<Item> =>
+      itemDao.create({
+        runId: run.id,
+        seq: (seq += 1),
+        kind,
+        memberId: 'callee',
+        payload: JSON.stringify(payload),
+      });
+    for (let n = 1; n <= CALL_CONTEXT_SNAPSHOT_LIMIT + 1; n += 1) {
+      await row('call_started', {
+        callId: `call-${n}`,
+        calleeNodeId: 'callee',
+        callerNodeId: 'a',
+      });
+    }
+    await row('call_result', {
+      callId: 'call-1',
+      calleeNodeId: 'callee',
+      callerNodeId: 'a',
+      sessionId: 'sess-oldest',
+    });
+    Object.assign(nodeDao.row(run.id, 'callee')!, {
+      polledSpend: JSON.stringify({
+        'sess-oldest': {
+          settled: { '2026-11-05|model': [125, 1] },
+          settledThroughMs: 0,
+          open: {},
+        },
+      }),
+    });
+
+    const callee = (await service.getNodeStates(run.id)).find(
+      (n) => n.memberId === 'callee',
+    );
+
+    expect(callee?.calls.map((call) => call.callId)).not.toContain('call-1');
+    expect(
+      callee?.callFigures.find((figures) => figures.callId === 'call-1')?.totals
+        .costUsd,
+    ).toBe(1.25);
   });
 
   it('states the figures of EVERY call, past the cap that bounds the heavy listing', async () => {

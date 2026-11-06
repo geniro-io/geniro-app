@@ -194,6 +194,37 @@ describe('CallContextDao (in-memory sqlite)', () => {
     });
   });
 
+  it('keeps every session a call ran in, and creates the row ahead of any reading', async () => {
+    await seedNode('run-1', 'callee');
+
+    await dao.rememberSession('run-1', 'call-1', 'callee', 'sess-a');
+    await dao.rememberSession('run-1', 'call-1', 'callee', 'sess-b');
+    await dao.rememberSession('run-1', 'call-1', 'callee', 'sess-a');
+    await dao.rememberContext('run-1', 'call-1', 'callee', {
+      contextTokens: 10,
+    });
+
+    expect(await dao.sessionsByCall('run-1')).toEqual(
+      new Map([['call-1', ['sess-a', 'sess-b']]]),
+    );
+    expect(await dao.listByRun('run-1')).toMatchObject([{ contextTokens: 10 }]);
+  });
+
+  it('leaves a call that named no session out of the sessions', async () => {
+    await seedNode('run-1', 'callee');
+    await dao.rememberContext('run-1', 'call-1', 'callee', {
+      contextTokens: 10,
+    });
+
+    expect(await dao.sessionsByCall('run-1')).toEqual(new Map());
+  });
+
+  it('creates no session row for a member whose state row is already gone', async () => {
+    await dao.rememberSession('run-1', 'call-1', 'ghost', 'sess-a');
+
+    expect(await dao.sessionsByCall('run-1')).toEqual(new Map());
+  });
+
   it('scopes the listing to one run', async () => {
     await dao.rememberContext('run-1', 'call-1', 'node-a', {
       contextTokens: 4200,

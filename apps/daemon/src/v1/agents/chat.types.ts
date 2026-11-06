@@ -7330,6 +7330,8 @@ export interface CallConversation {
   callIds: string[];
   /** The newest callee session any of those calls recorded, or null. */
   sessionId: string | null;
+  /** Every callee session those calls recorded, oldest first. */
+  sessionIds: string[];
 }
 
 /** What an earlier pass of a run left in the transcript — see {@link CallSeedRecord}. */

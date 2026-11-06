@@ -143,6 +143,10 @@ import {
   pollsSpendFor,
   withNodePolledSpend,
 } from '../../agents/utils/polled-spend';
+import {
+  conversationsBill,
+  readPolledSpendLedger,
+} from '../../agents/utils/polled-spend-ledger';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { assertTeamRun, type TeamRun } from '../../agents/utils/run-kind';
@@ -2393,6 +2397,7 @@ export class TeamExecutorService
     // The part of each member's spend run on a CLI that prices its own turns —
     // what a polled bill is added to (`withNodePolledSpend`).
     const selfPriced = new Map<string, ChatTotalsWire>();
+    const callSelfPriced = new Map<string, ChatTotalsWire>();
     const stampKinds = new Map(
       rows.map((row) => [row.memberId, row.agentKind]),
     );
@@ -2476,6 +2481,9 @@ export class TeamExecutorService
         )
       ) {
         addTo(selfPriced, turn.memberId, figures);
+        if (callId !== null) {
+          addTo(callSelfPriced, callId, figures);
+        }
       }
       if (callId === null) {
         addTo(mainTotals, turn.memberId, figures);
@@ -2497,11 +2505,12 @@ export class TeamExecutorService
         start: NonNullable<NodeStateWire['calls'][number]['start']>;
       }
     >();
-    for (const row of await this.kindRows.rowsOfView(
+    const callRows = await this.kindRows.rowsOfView(
       runId,
       CALL_RECORDS,
       'fresh',
-    )) {
+    );
+    for (const row of callRows) {
       if (row.kind !== 'call_started') {
         continue;
       }
@@ -2583,14 +2592,40 @@ export class TeamExecutorService
         callNodes.set(count.callId, count.memberId);
       }
     }
+    const callSessions = await this.callContextDao.sessionsByCall(runId, em);
+    for (const record of readCallSeed(callRows).records) {
+      if (record.sessionId !== null) {
+        const sessions = callSessions.get(record.callId) ?? [];
+        callSessions.set(record.callId, [...sessions, record.sessionId]);
+      }
+    }
+    const ledgers = new Map(
+      rows.map((row) => [row.memberId, readPolledSpendLedger(row.polledSpend)]),
+    );
+    // Summed per conversation by the client, so a session the conversation's
+    // calls share is billed to the first of them alone.
+    const billed = new Set<string>();
     const figuresByNode = new Map<string, NodeStateWire['callFigures']>();
     for (const [callId, memberId] of [...callNodes].sort(
       ([a], [b]) => (callNumber(a) ?? 0) - (callNumber(b) ?? 0),
     )) {
       const forNode = figuresByNode.get(memberId) ?? [];
+      const sessions = (callSessions.get(callId) ?? []).filter(
+        (sessionId) => !billed.has(sessionId),
+      );
+      for (const sessionId of sessions) {
+        billed.add(sessionId);
+      }
       forNode.push({
         callId,
-        totals: callTotals.get(callId)?.totals ?? emptyTotals(),
+        totals: withNodePolledSpend(
+          callTotals.get(callId)?.totals ?? emptyTotals(),
+          callSelfPriced.get(callId) ?? emptyTotals(),
+          conversationsBill(
+            ledgers.get(memberId) ?? new Map(),
+            new Set(sessions),
+          ),
+        ),
         clock: callClocks.get(callId) ?? null,
         ...toolsOf(memberId, callId),
         promptCacheExpiresAt: cacheExpiryOf(callCache.get(callId)),
@@ -4580,6 +4615,19 @@ export class TeamExecutorService
               nodeSessionIds.set(node.id, event.sessionId);
             }
             await saveSessionId(event.sessionId);
+            if (callContext) {
+              enqueue(() =>
+                this.callContextDao
+                  .rememberSession(
+                    runId,
+                    callContext.callId,
+                    node.id,
+                    event.sessionId,
+                    em,
+                  )
+                  .catch(() => {}),
+              );
+            }
             return;
           }
           // Session creation alone does not mean the CLI took its prompt.

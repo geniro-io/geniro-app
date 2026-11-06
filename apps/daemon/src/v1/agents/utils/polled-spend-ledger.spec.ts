@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AccountSpendEvent } from '../adapters/adapter.types';
 import {
+  conversationsBill,
   type ConversationSpend,
   DEFAULT_ACCOUNT,
   heldAnyEvent,
@@ -239,6 +240,75 @@ describe('readPolledSpendLedger', () => {
     expect(
       readPolledSpendLedger(
         '{"conv":{"settled":{},"settledThroughMs":1,"open":{"k":[1,2]}}}',
+      ).size,
+    ).toBe(0);
+  });
+});
+
+describe('conversationsBill', () => {
+  const held = (cents: number, spawnedBy?: string): ConversationSpend => ({
+    settled: { '2026-11-05|model': [cents, 1] },
+    settledThroughMs: 0,
+    open: {},
+    ...(spawnedBy === undefined ? {} : { spawnedBy }),
+  });
+
+  it('states a conversation with the delegates it launched, and no other', () => {
+    const ledger = new Map([
+      ['session-a', held(100)],
+      ['delegate-of-a', held(40, 'session-a')],
+      ['session-b', held(7)],
+      ['delegate-of-b', held(3, 'session-b')],
+    ]);
+
+    expect(conversationsBill(ledger, new Set(['session-a']))).toEqual({
+      polledCostCents: 140,
+      polledCostEvents: 2,
+    });
+  });
+
+  it('states no event for a conversation the ledger does not hold', () => {
+    expect(
+      conversationsBill(
+        new Map([['session-a', held(100)]]),
+        new Set(['session-z']),
+      ),
+    ).toEqual({ polledCostCents: 0, polledCostEvents: 0 });
+  });
+});
+
+describe('a delegate entry in the stored column', () => {
+  it('keeps the conversation that launched it across a round trip', () => {
+    const stored = writePolledSpendLedger(
+      new Map([
+        [
+          'delegate',
+          {
+            settled: {},
+            settledThroughMs: 5,
+            open: {},
+            spawnedBy: 'session-a',
+          },
+        ],
+      ]),
+    );
+
+    expect(readPolledSpendLedger(stored).get('delegate')?.spawnedBy).toBe(
+      'session-a',
+    );
+  });
+
+  it('reads an unreadable parent as never priced', () => {
+    expect(
+      readPolledSpendLedger(
+        JSON.stringify({
+          delegate: {
+            settled: {},
+            settledThroughMs: 5,
+            open: {},
+            spawnedBy: 7,
+          },
+        }),
       ).size,
     ).toBe(0);
   });

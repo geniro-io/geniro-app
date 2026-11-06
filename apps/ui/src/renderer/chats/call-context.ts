@@ -196,13 +196,14 @@ export function conversationClocks(
 }
 
 /**
- * The daemon's totals as a spend, or null when no turn reported any — so a
+ * The daemon's totals as a spend, or null when nothing reported any — so a
  * caller falls back to its own fold rather than drawing a zero nobody measured.
+ * An account's bill can name money before the first turn finishes.
  */
 export function spendOfTotals(
   totals: ChatTotals | undefined,
 ): CallSpend | null {
-  if (totals === undefined || totals.turns === 0) {
+  if (totals === undefined || (totals.turns === 0 && totals.costUsd === null)) {
     return null;
   }
   const tokens =

@@ -20,6 +20,7 @@ import {
   DEFAULT_ACCOUNT,
   readPolledSpendLedger,
   spendBucket,
+  unpricedConversation,
 } from '../utils/polled-spend-ledger';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentEventBus } from './agent-events.bus';
@@ -808,6 +809,57 @@ describe('PolledSpendService', () => {
     expect(h.nodeWrites).toMatchObject([
       { memberId: 'node-0', cents: 142, events: 3 },
     ]);
+  });
+
+  it('keeps a delegate’s bill once its parent’s store stops naming it', async () => {
+    at(NOW);
+    const held = {
+      settled: {},
+      settledThroughMs: NOW - HOUR,
+      open: {
+        'charged|model': [NOW - HOUR, 40, 'model'] as [number, number, string],
+      },
+    };
+    const h = harness({
+      runs: [cursorRun()],
+      nodes: {
+        'run-1': [
+          holding('parent', {
+            polledSpend: ledger({
+              parent: unpricedConversation(NOW - HOUR),
+              child: { ...held, spawnedBy: 'parent' },
+            }),
+          }),
+        ],
+      },
+    });
+    answerWith(event('parent', 100));
+
+    await h.service.refresh(true);
+
+    expect(h.nodeWrites).toMatchObject([
+      { memberId: 'node-0', cents: 140, events: 2 },
+    ]);
+    expect(
+      readPolledSpendLedger(h.nodeWrites[0]?.ledger ?? null).get('child')
+        ?.spawnedBy,
+    ).toBe('parent');
+  });
+
+  it('records which conversation launched a delegate, so a call can claim its bill', async () => {
+    at(NOW);
+    const h = harness({
+      runs: [cursorRun()],
+      nodes: { 'run-1': [holding('parent')] },
+      delegates: { parent: ['child'] },
+    });
+    answerWith(event('parent', 100), event('child', 40));
+
+    await h.service.refresh(true);
+
+    const written = readPolledSpendLedger(h.nodeWrites[0]?.ledger ?? null);
+    expect(written.get('child')?.spawnedBy).toBe('parent');
+    expect(written.get('parent')?.spawnedBy).toBeUndefined();
   });
 
   it('starts a newly found delegate where its parent is still open, not where the member began', async () => {

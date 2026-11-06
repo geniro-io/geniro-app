@@ -5,6 +5,7 @@ import { BaseDao } from '@packages/mikroorm';
 import { CallContext } from '../../runs/entity/call-context.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import type { ContextLevel } from '../chat.types';
+import { readNodeSessions, withNodeSession } from '../utils/node-sessions';
 import { positive } from '../utils/positive-figure';
 
 /**
@@ -115,6 +116,57 @@ export class CallContextDao extends BaseDao<CallContext> {
       return;
     }
     repo.create({ runId, callId, memberId, ...data }, { partial: true });
+    await em.flush();
+  }
+
+  /**
+   * Every call's CLI sessions as {@link rememberSession} recorded them,
+   * uncapped: a spend figure must cover every call, unlike the rings
+   * {@link listByRun} bounds.
+   */
+  async sessionsByCall(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Map<string, string[]>> {
+    const rows = await this.getRepo(txEm).find(
+      { runId, sessionIds: { $ne: null } },
+      { disableIdentityMap: true },
+    );
+    return new Map(
+      rows.map((row) => [row.callId, readNodeSessions(row.sessionIds)]),
+    );
+  }
+
+  /**
+   * Record a CLI session a call runs in. It creates the row on the terms of
+   * {@link rememberContext}, whose comment says why that is safe, since a CLI
+   * can name its session before the call's first reading.
+   */
+  async rememberSession(
+    runId: string,
+    callId: string,
+    memberId: string,
+    sessionId: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    const em = txEm ?? this.em;
+    const repo = this.getRepo(txEm);
+    const held = await repo.findOne(
+      { runId, callId },
+      { disableIdentityMap: true },
+    );
+    const sessionIds = withNodeSession(held?.sessionIds ?? null, sessionId);
+    if (sessionIds === null) {
+      return;
+    }
+    if (held !== null) {
+      await repo.nativeUpdate({ runId, callId }, { sessionIds });
+      return;
+    }
+    if ((await em.count(NodeState, { runId, memberId })) === 0) {
+      return;
+    }
+    repo.create({ runId, callId, memberId, sessionIds }, { partial: true });
     await em.flush();
   }
 

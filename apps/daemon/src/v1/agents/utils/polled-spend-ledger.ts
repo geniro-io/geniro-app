@@ -1,5 +1,6 @@
 import type { AccountSpendEvent } from '../adapters/adapter.types';
 import { parseJsonColumn } from './json-util';
+import type { PolledSpend } from './polled-spend';
 
 /**
  * What one polled CONVERSATION has cost, as `NodeState.polledSpend` keeps it.
@@ -35,6 +36,12 @@ export interface ConversationSpend {
    * asked of before this was recorded.
    */
   accounts?: string[];
+  /**
+   * The conversation that launched this one, for a delegate billed under an id
+   * of its own. Absent for a conversation a member held itself, and for a
+   * delegate no poll has seen launched since this was recorded.
+   */
+  spawnedBy?: string;
 }
 
 /** The config directory {@link ConversationSpend.accounts} writes for the default login. */
@@ -105,10 +112,8 @@ function readConversationSpend(entry: unknown): ConversationSpend | null {
   if (typeof entry !== 'object' || entry === null) {
     return null;
   }
-  const { settled, settledThroughMs, open, accounts } = entry as Record<
-    string,
-    unknown
-  >;
+  const { settled, settledThroughMs, open, accounts, spawnedBy } =
+    entry as Record<string, unknown>;
   if (!finite(settledThroughMs) || !isRecord(settled) || !isRecord(open)) {
     return null;
   }
@@ -118,6 +123,9 @@ function readConversationSpend(entry: unknown): ConversationSpend | null {
       accounts.length === 0 ||
       !accounts.every((dir) => typeof dir === 'string'))
   ) {
+    return null;
+  }
+  if (spawnedBy !== undefined && typeof spawnedBy !== 'string') {
     return null;
   }
   const sums: Record<string, [number, number]> = {};
@@ -156,6 +164,7 @@ function readConversationSpend(entry: unknown): ConversationSpend | null {
             (dir): dir is string => typeof dir === 'string',
           ),
         }),
+    ...(spawnedBy === undefined ? {} : { spawnedBy }),
   };
 }
 
@@ -254,4 +263,25 @@ export function ledgerTotals(ledger: PolledSpendLedger): {
     }
   }
   return { cents, events, buckets };
+}
+
+/**
+ * What these conversations cost with the delegates they launched, in the shape
+ * a member's own row states its whole bill.
+ */
+export function conversationsBill(
+  ledger: PolledSpendLedger,
+  conversationIds: ReadonlySet<string>,
+): PolledSpend {
+  const held: PolledSpendLedger = new Map();
+  for (const [conversationId, spend] of ledger) {
+    if (
+      conversationIds.has(conversationId) ||
+      (spend.spawnedBy !== undefined && conversationIds.has(spend.spawnedBy))
+    ) {
+      held.set(conversationId, spend);
+    }
+  }
+  const { cents, events } = ledgerTotals(held);
+  return { polledCostCents: cents, polledCostEvents: events };
 }

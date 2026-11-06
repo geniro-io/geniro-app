@@ -104,7 +104,7 @@ export function readKnowledgeSaveArgs(
 export function knowledgeSaveResultText(outcome: KnowledgeSaveOutcome): string {
   switch (outcome.kind) {
     case 'applied':
-      return `Saved \`${outcome.document.handle}\` at rev ${outcome.document.rev}. Agents read it now, marked unreviewed until the user approves it.`;
+      return `Saved \`${outcome.document.handle}\` at rev ${outcome.document.rev}. Agents read it now, marked unreviewed.`;
     case 'proposed':
       return `Proposed ${outcome.created ? `a new document \`${outcome.document.handle}\`` : `a change to \`${outcome.document.handle}\``}: it waits for the user's review on the Knowledge page. No agent sees it until they approve, and nothing has changed yet.`;
     case 'stale':

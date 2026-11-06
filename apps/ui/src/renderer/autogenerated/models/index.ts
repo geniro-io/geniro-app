@@ -1880,19 +1880,6 @@ export type ApprovalMode = typeof ApprovalMode[keyof typeof ApprovalMode];
 /**
  * 
  * @export
- * @interface ApproveKnowledgeDto
- */
-export interface ApproveKnowledgeDto {
-    /**
-     * 
-     * @type {number}
-     * @memberof ApproveKnowledgeDto
-     */
-    rev: number;
-}
-/**
- * 
- * @export
  * @interface AttachTaskFileDto
  */
 export interface AttachTaskFileDto {

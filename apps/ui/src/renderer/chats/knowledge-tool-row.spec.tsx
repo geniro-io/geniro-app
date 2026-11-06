@@ -290,7 +290,7 @@ describe('knowledge_save', () => {
           reason: 'r',
         },
         {
-          text: 'Saved `commit-format` at rev 1. Agents read it now, marked unreviewed until the user approves it.',
+          text: 'Saved `commit-format` at rev 1. Agents read it now, marked unreviewed.',
         },
       ),
     );

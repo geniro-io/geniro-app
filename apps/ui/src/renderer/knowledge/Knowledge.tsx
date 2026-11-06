@@ -417,26 +417,6 @@ export function Knowledge({
     }
   };
 
-  const approveDocument = async (): Promise<void> => {
-    if (apis === null || document === null) {
-      return;
-    }
-    try {
-      await apis.knowledge.approveKnowledge({
-        id: document.id,
-        approveKnowledgeDto: { rev: document.rev },
-      });
-    } catch (err: unknown) {
-      if (daemonErrorCode(err) !== 'KNOWLEDGE_STALE') {
-        throw err;
-      }
-      await openDocument(document.id);
-      setNotice('This document changed. Read it again before approving.');
-      return;
-    }
-    await openDocument(document.id);
-  };
-
   const deleteForGood = async (): Promise<void> => {
     if (apis === null || document === null) {
       return;
@@ -584,7 +564,6 @@ export function Knowledge({
         onRestore={() => void setStatusOf('restore')}
         onDelete={deleteForGood}
         onReview={(head) => void openReview(head.id)}
-        onApprove={approveDocument}
       />
     );
   } else {

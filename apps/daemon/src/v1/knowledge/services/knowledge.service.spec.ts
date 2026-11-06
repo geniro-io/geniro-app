@@ -748,8 +748,60 @@ describe('KnowledgeService', () => {
       );
     });
 
-    it('refuses a secret and a hidden character, naming the line', async () => {
-      const hidden = await service.create(doc({ body: 'one\ntwo​three' }));
+    it('takes hidden characters out of a person’s text and keeps emoji and line breaks', async () => {
+      const made = applied(
+        await service.create(
+          doc({
+            title: 'Rel\u200bease',
+            whenToRead: 'Bef\u202eore a tag',
+            body: 'one\n\ttwo\u200b three\u{E0041} 👩\u200D💻',
+          }),
+        ),
+      );
+      expect(made.title).toBe('Release');
+      expect(made.whenToRead).toBe('Before a tag');
+      expect(made.body).toBe('one\n\ttwo three 👩\u200D💻');
+      expect((await service.get(made.id))?.body).toBe(made.body);
+
+      const edited = applied(
+        await service.edit(made.id, {
+          rev: made.rev,
+          title: made.title,
+          whenToRead: made.whenToRead,
+          body: 'clean\u2060 text',
+        }),
+      );
+      expect(edited.body).toBe('clean text');
+    });
+
+    it('refuses a person’s text that is nothing but hidden characters', async () => {
+      const refused = await service.create(doc({ title: '\u200b' }));
+      expect(refusalOf(refused)).toBe('INVALID_DOCUMENT');
+    });
+
+    it('refuses a secret split by a hidden character', async () => {
+      registerSecret(SECRET, 'test key');
+      try {
+        const split = `${SECRET.slice(0, 4)}\u200b${SECRET.slice(4)}`;
+        expect(refusalOf(await service.create(doc({ body: split })))).toBe(
+          'CONTAINS_SECRET',
+        );
+      } finally {
+        clearSecrets();
+      }
+    });
+
+    it('refuses a secret, and an agent’s hidden character naming the line', async () => {
+      const hidden = await service.save(
+        AGENT,
+        {
+          title: 'T',
+          whenToRead: 'W.',
+          body: 'one\ntwo\u200bthree',
+          reason: 'r',
+        },
+        NOWHERE,
+      );
       expect(hidden.kind === 'refused' && hidden.reason).toContain('line 2');
     });
 
@@ -858,7 +910,7 @@ describe('KnowledgeService', () => {
       expect((await service.get(live.id))?.lastReadAt).not.toBeNull();
     });
 
-    it('approves an unreviewed document into the run index and refuses what is not active', async () => {
+    it('keeps an agent’s saved document out of the run index until the user takes its text', async () => {
       service.setConfig({ enabled: true, agentWrites: 'direct' });
       const facts = { taskId: null, cwd: null, projectId: null };
       const saved = applied(
@@ -870,61 +922,19 @@ describe('KnowledgeService', () => {
       );
       expect(saved.approvedAt).toBeNull();
       expect((await service.runSnapshot(facts)).knowledgeIndex).toBeNull();
-      const approved = await service.approveDocument(saved.id, saved.rev);
-      expect(
-        approved.kind === 'changed' && approved.head.approvedAt,
-      ).not.toBeNull();
+
+      const edited = applied(
+        await service.edit(saved.id, {
+          rev: saved.rev,
+          title: saved.title,
+          whenToRead: saved.whenToRead,
+          body: 'B, read',
+        }),
+      );
+
+      expect(edited.approvedAt).not.toBeNull();
       expect((await service.runSnapshot(facts)).knowledgeIndex).toContain(
-        '- unreviewed — Unreviewed. When: W. (global, 0.0 KB)',
-      );
-      expect(refusalOf(await service.approveDocument('no-such-id', 1))).toBe(
-        'NOT_FOUND',
-      );
-      service.setConfig({ enabled: true, agentWrites: 'review' });
-      const waiting = proposed(
-        await service.save(
-          AGENT,
-          { title: 'Waiting', whenToRead: 'W.', body: 'B', reason: 'r' },
-          NOWHERE,
-        ),
-      );
-      expect(refusalOf(await service.approveDocument(waiting.id, 0))).toBe(
-        'NOT_EDITABLE',
-      );
-      await service.setStatus(saved.id, 'archived');
-      expect(
-        refusalOf(await service.approveDocument(saved.id, saved.rev)),
-      ).toBe('NOT_EDITABLE');
-    });
-
-    it('answers stale when an agent saved since the rev the user read', async () => {
-      service.setConfig({ enabled: true, agentWrites: 'direct' });
-      const saved = applied(
-        await service.save(
-          AGENT,
-          { title: 'Plan', whenToRead: 'W.', body: 'seen', reason: 'r' },
-          NOWHERE,
-        ),
-      );
-      const moved = applied(
-        await service.save(
-          AGENT,
-          {
-            handle: saved.handle,
-            rev: saved.rev,
-            edits: [{ find: 'seen', replace: 'unseen' }],
-            reason: 'r',
-          },
-          NOWHERE,
-        ),
-      );
-
-      const outcome = await service.approveDocument(saved.id, saved.rev);
-
-      expect(outcome.kind).toBe('stale');
-      expect((await service.get(saved.id))?.approvedAt).toBeNull();
-      expect((await service.approveDocument(saved.id, moved.rev)).kind).toBe(
-        'changed',
+        '- unreviewed — Unreviewed.',
       );
     });
 
@@ -938,19 +948,13 @@ describe('KnowledgeService', () => {
         ),
       );
       const second = applied(
-        await service.save(
-          AGENT,
-          {
-            handle: first.handle,
-            rev: first.rev,
-            edits: [{ find: 'agent', replace: 'other' }],
-            reason: 'r',
-          },
-          NOWHERE,
-        ),
+        await service.edit(first.id, {
+          rev: first.rev,
+          title: first.title,
+          whenToRead: first.whenToRead,
+          body: 'other text',
+        }),
       );
-      const approved = await service.approveDocument(second.id, second.rev);
-      expect(approved.kind).toBe('changed');
       const third = applied(
         await service.save(
           AGENT,

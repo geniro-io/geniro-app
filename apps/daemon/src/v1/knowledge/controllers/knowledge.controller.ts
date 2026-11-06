@@ -14,7 +14,6 @@ import { NotFoundException } from '@packages/common';
 import { ZodResponse } from 'nestjs-zod';
 
 import {
-  ApproveKnowledgeDto,
   CreateKnowledgeDto,
   KnowledgeCountsDto,
   KnowledgeDocumentDetailDto,
@@ -42,11 +41,7 @@ import type {
   KnowledgeRunSearch,
 } from '../knowledge.types';
 import { KnowledgeService } from '../services/knowledge.service';
-import {
-  refusalError,
-  savedDocumentOrThrow,
-  staleError,
-} from '../utils/knowledge-outcome';
+import { refusalError, savedDocumentOrThrow } from '../utils/knowledge-outcome';
 
 /**
  * The user's own view of the knowledge store: list, read, write, review,
@@ -191,24 +186,6 @@ export class KnowledgeController {
       throw refusalError(refusal);
     }
     return { deleted: true };
-  }
-
-  @Post(':id/approve')
-  @HttpCode(200)
-  @ApiOperation({ operationId: 'approveKnowledge' })
-  @ZodResponse({ status: 200, type: KnowledgeHeadDetailDto })
-  async approveDocument(
-    @Param('id') id: string,
-    @Body() body: ApproveKnowledgeDto,
-  ): Promise<KnowledgeHeadDto> {
-    const outcome = await this.knowledge.approveDocument(id, body.rev);
-    if (outcome.kind === 'stale') {
-      throw staleError();
-    }
-    if (outcome.kind === 'refused') {
-      throw refusalError(outcome);
-    }
-    return outcome.head;
   }
 
   @Post(':id/archive')

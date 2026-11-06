@@ -12,6 +12,7 @@ import {
   buildSubagentBlocks,
   buildTurnBlocks,
   buildWorkflowCards,
+  type CallBlockEntry,
   collectSubagentBlocks,
   groupTranscript,
   pullFileChangesOutOfGroups,
@@ -258,6 +259,10 @@ interface DaemonReading {
   } | null;
   /** Its tool calls over the whole run, plus its rows written since the read. */
   toolCalls: number;
+  /** The call it was launched in; null for its member's own conversation. */
+  callId: string | null;
+  /** The read's own word, covered or not. */
+  running: boolean;
 }
 
 type DaemonReadings = ReadonlyMap<string, DaemonReading>;
@@ -311,6 +316,8 @@ export function daemonSubagentReadings(
           }
         : null,
       toolCalls: delegate.toolCalls + (toolsSinceRead.get(delegate.id) ?? 0),
+      callId: delegate.callId,
+      running: delegate.status === 'running',
     });
   }
   return readings;
@@ -342,6 +349,19 @@ export function applyDaemonReadings(
   if (readings.size === 0) {
     return entries;
   }
+  const running = [...readings].filter(([, reading]) => reading.running);
+  const offWindowCount = (
+    block: CallBlockEntry,
+    inner: readonly TranscriptEntry[],
+  ): number => {
+    const held = new Set(collectSubagentBlocks(inner).map((entry) => entry.id));
+    return running.filter(
+      ([id, { callId }]) =>
+        callId !== null &&
+        block.conversationCallIds.includes(callId) &&
+        !held.has(id),
+    ).length;
+  };
   const applyAll = (list: TranscriptEntry[]): TranscriptEntry[] => {
     let changed = false;
     const next = list.map((entry) => {
@@ -384,6 +404,16 @@ export function applyDaemonReadings(
         durableToolCalls: reading.toolCalls,
         entries: inner,
       };
+    }
+    if (entry.type === 'call-block') {
+      const offWindowSubagents = offWindowCount(entry, inner);
+      if (
+        inner !== entry.entries ||
+        (entry.offWindowSubagents ?? 0) !== offWindowSubagents
+      ) {
+        return { ...entry, entries: inner, offWindowSubagents };
+      }
+      return entry;
     }
     return inner === entry.entries ? entry : { ...entry, entries: inner };
   };

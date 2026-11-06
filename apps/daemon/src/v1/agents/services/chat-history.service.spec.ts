@@ -410,6 +410,35 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       expect(await anchoredOf('call-2', ['task_list'])).toEqual([10, 11, 12]);
     });
 
+    it("keeps the callee's own lists past a sub-agent's whole one", async () => {
+      await teamRun();
+      await row(9, 'task_list', 'qa', { callId: 'call-2', mode: 'snapshot' });
+      await row(10, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+      await row(11, 'task_list', 'qa', {
+        callId: 'call-2',
+        mode: 'snapshot',
+        parentToolUseId: 'delegate',
+      });
+
+      expect(await anchoredOf('call-2', ['task_list'])).toEqual(
+        expect.arrayContaining([9, 10]),
+      );
+    });
+
+    it("keeps the callee's own lists past more of a sub-agent's than a call's cap", async () => {
+      await teamRun();
+      await row(9, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
+      for (let seq = 10; seq < 311; seq += 1) {
+        await row(seq, 'task_list', 'qa', {
+          callId: 'call-2',
+          mode: 'patch',
+          parentToolUseId: 'delegate',
+        });
+      }
+
+      expect(await anchoredOf('call-2', ['task_list'])).toContain(9);
+    });
+
     it('anchors every task list of a call that never stated a whole one', async () => {
       await teamRun();
       await row(9, 'task_list', 'qa', { callId: 'call-2', mode: 'patch' });
@@ -433,6 +462,33 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       const tools = await anchoredOf('call-2', ['tool_call']);
       expect(tools).toHaveLength(20);
       expect(tools).not.toContain(10);
+    });
+
+    it("anchors the callee's own running tool past more sub-agent calls than a turn's cap", async () => {
+      await teamRun();
+      await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      await row(10, 'tool_call', 'qa', {
+        id: 'own',
+        name: 'Bash',
+        callId: 'call-2',
+      });
+      for (let seq = 11; seq < 21; seq += 1) {
+        await row(seq, 'tool_call', 'qa', {
+          id: `launch${seq}`,
+          name: 'Agent',
+          callId: 'call-2',
+        });
+      }
+      for (let seq = 21; seq < 331; seq += 1) {
+        await row(seq, 'tool_call', 'qa', {
+          id: `d${seq}`,
+          name: 'Read',
+          callId: 'call-2',
+          parentToolUseId: 'delegate',
+        });
+      }
+
+      expect(await anchoredOf('call-2', ['tool_call'])).toContain(10);
     });
 
     it('anchors the calls that run across a page of the run’s own flow but began above it', async () => {

@@ -314,6 +314,12 @@ export interface CallBlockEntry {
    */
   stalled: boolean;
   /**
+   * How many of the conversation's sub-agents the daemon says are running with
+   * no block in {@link entries}: launched above the loaded window. Added on top
+   * of the blocks' own readings, see {@link callBlockSubagentsRunning}.
+   */
+  offWindowSubagents?: number;
+  /**
    * How many calls of its own the callee is WAITING for: it ended its turn
    * with them still running, so the call stays open until they finish and the
    * callee is continued inside it. Absent while it is not waiting.
@@ -331,9 +337,9 @@ export interface CallBlockEntry {
    * or monitors it started, listed here by description while their start is on
    * the page and their end is not. Absent while the callee is mid-turn.
    *
-   * Read from the call's own rows: its newest row is anchored on every page, so
-   * a turn still running always shows a row after its last ending. TWIN PARSER:
-   * the daemon's hold is `CallBroker.holdCall` (calls) and `monitorsOwed`
+   * Read from the call's own rows, its sub-agents' left out: its statuses are
+   * anchored on every page, so a turn still running always shows its `running`
+   * row after its last ending. TWIN PARSER: the daemon's hold is `CallBroker.holdCall` (calls) and `monitorsOwed`
    * (monitors), which writes no row of its own for a monitor; the monitor rows
    * are `readMonitorNotice`'s.
    */
@@ -1436,8 +1442,10 @@ export function subagentNamed(block: SubagentBlockEntry): boolean {
  * The RESULT wins when there is one, because it lands after every row in
  * {@link CallBlockEntry.entries} and is the callee's final answer — the block
  * pulls it out of those entries for exactly that reason. Otherwise the newest
- * assistant message, found by walking backwards and descending into nested
- * entries, since a callee's rows are routinely folded into a turn block.
+ * assistant message, found by walking backwards through the callee's own turn
+ * blocks, which its rows are routinely folded into. A sub-agent's thread is
+ * never entered: it has a card and a spinner of its own, and its words are not
+ * the callee's.
  *
  * Null when the callee has not spoken yet, and never the caller's own ask: that
  * is what the block was ASKED, not where it has got to, and the header already
@@ -1522,7 +1530,7 @@ function lastSpokenIn(
       }
       continue;
     }
-    if (entry.type === 'tools' || isCardEntry(entry)) {
+    if (entry.type !== 'turn-block') {
       continue;
     }
     const nested = lastSpokenIn(entry.entries);
@@ -1552,9 +1560,23 @@ function lastSpokenIn(
  *
  * The LATEST call's tools alone, on {@link callBlockSummary}'s rule: a tool an
  * earlier call finished is not what the callee is doing now.
+ *
+ * The callee's OWN tools alone, on the same rule: its sub-agents run theirs at
+ * once, so reading them would change this line on each of their tool calls.
  */
 export function callBlockActivity(block: CallBlockEntry): string | null {
   return newestToolNameIn(latestCallTurn(block));
+}
+
+/**
+ * How many of the callee's own sub-agents are still running: the blocks on
+ * screen, as each reads, plus those the daemon holds and the window does not.
+ */
+export function callBlockSubagentsRunning(block: CallBlockEntry): number {
+  const onScreen = collectSubagentBlocks(block.entries).filter(
+    (entry) => subagentBlockStatus(entry) === 'running',
+  );
+  return onScreen.length + (block.offWindowSubagents ?? 0);
 }
 
 /**
@@ -1605,7 +1627,7 @@ function newestToolNameIn(entries: readonly TranscriptEntry[]): string | null {
       }
       continue;
     }
-    if (entry.type === 'item' || isCardEntry(entry)) {
+    if (entry.type !== 'turn-block') {
       continue;
     }
     const nested = newestToolNameIn(entry.entries);
@@ -1795,6 +1817,8 @@ function addFigure(total: number | null, next: unknown): number | null {
  * applies — so the shut card and the instance state one list, not the latest
  * call's partial one beside the whole. Empty when the callee keeps none, which
  * is what withholds the chip.
+ *
+ * The callee's OWN list alone: a sub-agent keeps one of its own in its block.
  */
 export function callBlockTasks(block: CallBlockEntry): readonly AgentTaskRow[] {
   let tasks: readonly AgentTaskRow[] = [];
@@ -1815,7 +1839,7 @@ function lastTaskListIn(
     if (entry.type === 'task-list') {
       return entry;
     }
-    if (entry.type === 'item' || entry.type === 'tools' || isCardEntry(entry)) {
+    if (entry.type !== 'turn-block') {
       continue;
     }
     const nested = lastTaskListIn(entry.entries);
@@ -3652,8 +3676,13 @@ function buildCallBlock(
       i >= 0 && result === null;
       i--
     ) {
-      // A message the user sent straight to the callee is never its result.
-      if (inner[i]!.kind === 'message' && inner[i]!.role !== 'user') {
+      // A message the user sent straight to the callee is never its result,
+      // and neither are a sub-agent's words: its thread keeps them.
+      if (
+        inner[i]!.kind === 'message' &&
+        inner[i]!.role !== 'user' &&
+        subagentIdOf(inner[i]!) === null
+      ) {
         result = payloadString(inner[i]!.payload, 'text');
         if (result !== null) {
           inner.splice(i, 1);
@@ -3987,7 +4016,7 @@ function calleeTurnIn(rows: readonly ChatItem[]): {
       }
       continue;
     }
-    if (WAIT_NEUTRAL_KINDS.has(item.kind)) {
+    if (WAIT_NEUTRAL_KINDS.has(item.kind) || subagentIdOf(item) !== null) {
       continue;
     }
     if (item.kind === 'status') {

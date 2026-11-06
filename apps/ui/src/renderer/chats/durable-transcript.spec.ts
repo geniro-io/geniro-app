@@ -13,6 +13,8 @@ import {
   withDaemonStartedCalls,
 } from './durable-transcript';
 import {
+  callBlockSubagentsRunning,
+  collectCallBlocks,
   collectSubagentBlocks,
   subagentBlockStatus,
   type TranscriptEntry,
@@ -429,5 +431,130 @@ describe('applyDaemonReadings', () => {
     expect(untouched(entries)).toBeDefined();
     expect(untouched(applied)).toBe(untouched(entries));
     expect(applyDaemonReadings(applied, readings)).toBe(applied);
+  });
+
+  describe("a call card's sub-agents past the loaded window", () => {
+    const inCall = (
+      id: string,
+      kind: string,
+      payload: Record<string, unknown>,
+      seq: number,
+    ): ChatItem => ({
+      ...row(id, kind, { ...payload, callId: 'call-1' }, seq),
+      memberId: 'poet',
+    });
+    const card = [
+      {
+        ...row(
+          'start',
+          'call_started',
+          { callId: 'call-1', calleeNodeId: 'poet', message: 'Review it.' },
+          10,
+        ),
+        memberId: 'orch',
+      },
+      inCall('status', 'status', { status: 'running' }, 11),
+      inCall(
+        'held',
+        'tool_call',
+        { id: 'held', name: 'Agent', input: { description: 'On screen' } },
+        12,
+      ),
+    ];
+    const delegate = (
+      id: string,
+      status: RunDelegateState['status'],
+      callId: string | null = 'call-1',
+    ): RunDelegateState => ({
+      ...delegateState(status),
+      id,
+      memberId: 'poet',
+      callId,
+    });
+    const countOf = (delegates: RunDelegateState[]): number => {
+      const [block] = collectCallBlocks(
+        applyDaemonReadings(
+          foldOf(card, true),
+          daemonSubagentReadings({ throughSeq: 12, delegates }, card),
+        ),
+      );
+      return callBlockSubagentsRunning(block!);
+    };
+
+    it('adds what the daemon says runs with no block on the page', () => {
+      expect(
+        countOf([
+          delegate('above-1', 'running'),
+          delegate('above-2', 'running'),
+        ]),
+      ).toBe(3);
+    });
+
+    it('counts a sub-agent the window holds once', () => {
+      expect(countOf([delegate('held', 'running')])).toBe(1);
+    });
+
+    it('takes the daemon’s word that a block on the page has ended', () => {
+      expect(countOf([delegate('held', 'completed')])).toBe(0);
+    });
+
+    it('leaves out what ended, and what another call or the member’s own conversation launched', () => {
+      expect(
+        countOf([
+          delegate('ended', 'completed'),
+          delegate('elsewhere', 'running', 'call-9'),
+          delegate('own', 'running', null),
+        ]),
+      ).toBe(1);
+    });
+
+    it('keeps the delegate of an earlier call of the conversation', () => {
+      const [block] = collectCallBlocks(foldOf(card, true));
+      const later = { ...block!, conversationCallIds: ['call-0', 'call-1'] };
+
+      const [read] = collectCallBlocks(
+        applyDaemonReadings(
+          [later],
+          daemonSubagentReadings(
+            {
+              throughSeq: 12,
+              delegates: [delegate('old', 'running', 'call-0')],
+            },
+            card,
+          ),
+        ),
+      );
+
+      expect(callBlockSubagentsRunning(read!)).toBe(2);
+    });
+
+    it('hands the same card back once it already says so', () => {
+      const readings = daemonSubagentReadings(
+        { throughSeq: 12, delegates: [delegate('above-1', 'running')] },
+        card,
+      );
+      const applied = applyDaemonReadings(foldOf(card, true), readings);
+
+      expect(applyDaemonReadings(applied, readings)).toBe(applied);
+    });
+
+    it('drops the count once the daemon stops saying it runs', () => {
+      const running = applyDaemonReadings(
+        foldOf(card, true),
+        daemonSubagentReadings(
+          { throughSeq: 12, delegates: [delegate('above-1', 'running')] },
+          card,
+        ),
+      );
+      const ended = applyDaemonReadings(
+        running,
+        daemonSubagentReadings(
+          { throughSeq: 12, delegates: [delegate('above-1', 'completed')] },
+          card,
+        ),
+      );
+
+      expect(callBlockSubagentsRunning(collectCallBlocks(ended)[0]!)).toBe(1);
+    });
   });
 });

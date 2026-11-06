@@ -12,8 +12,10 @@ import {
   callBlockActivity,
   callBlockContext,
   type CallBlockEntry,
+  callBlockLatest,
   callBlockOfConversation,
   callBlockPath,
+  callBlockSubagentsRunning,
   callBlockSummary,
   callBlockTasks,
   callBlockUsage,
@@ -969,6 +971,143 @@ describe('groupTranscript', () => {
       expect(callBlockSummary(block)).toBe('second thought');
     });
 
+    it('takes no words from a sub-agent of the callee', () => {
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count them.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item('message', { text: 'starting', callId: 'call-1' }, 'poet'),
+        item(
+          'tool_call',
+          { id: 'd1', name: 'Task', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'message',
+          {
+            text: 'the sub-agent’s own words',
+            callId: 'call-1',
+            parentToolUseId: 'd1',
+          },
+          'poet',
+        ),
+      ]);
+
+      expect(callBlockSummary(block)).toBe('starting');
+      expect(callBlockLatest(block)).toBe('starting');
+    });
+
+    it('keeps a sub-agent’s words out of a result', () => {
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count them.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item('message', { text: 'my answer', callId: 'call-1' }, 'poet'),
+        item(
+          'tool_call',
+          { id: 'd1', name: 'Task', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'message',
+          {
+            text: 'the sub-agent’s own words',
+            callId: 'call-1',
+            parentToolUseId: 'd1',
+          },
+          'poet',
+        ),
+        item(
+          'status',
+          { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+
+      expect(block.result).toBe('my answer');
+    });
+
+    it('keeps a woken callee quiet when only its sub-agent speaks', () => {
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count them.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item('message', { text: 'all done', callId: 'call-1' }, 'poet'),
+        item('turn_complete', { callId: 'call-1' }, 'poet'),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 'd1', name: 'Task', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'message',
+          {
+            text: 'the sub-agent’s own words',
+            callId: 'call-1',
+            parentToolUseId: 'd1',
+          },
+          'poet',
+        ),
+      ]);
+
+      expect(callBlockSummary(block)).toBeNull();
+    });
+
+    it('keeps a callee’s ended turn ended when its sub-agent writes a row', () => {
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count them.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item('turn_complete', { callId: 'call-1' }, 'poet'),
+        item(
+          'tool_call',
+          {
+            id: 'd2',
+            name: 'Grep',
+            input: {},
+            callId: 'call-1',
+            parentToolUseId: 'd1',
+          },
+          'poet',
+        ),
+      ]);
+
+      expect(block.waiting).toEqual({ monitors: [] });
+    });
+
     it('is the RESULT once there is one — it lands after every row', () => {
       const block = callBlockOf([
         item('call_started', {
@@ -1318,10 +1457,7 @@ describe('groupTranscript', () => {
       expect(callBlockActivity(block)).toBe('Read File');
     });
 
-    it('finds a tool nested inside the callee’s own delegate block', () => {
-      // `buildCallBlock` folds a callee's delegates into blocks of their own,
-      // so the newest tool routinely sits one level down. A flat scan would
-      // report `is thinking...` over a callee three tools deep.
+    it('names no tool a sub-agent of the callee is running', () => {
       const block = callBlockOf([
         item('call_started', {
           callId: 'call-1',
@@ -1331,11 +1467,6 @@ describe('groupTranscript', () => {
         item(
           'status',
           { status: 'running', nodeId: 'poet', callId: 'call-1' },
-          'poet',
-        ),
-        item(
-          'subagent_info',
-          { subagentId: 's1', label: 'Reader', callId: 'call-1' },
           'poet',
         ),
         item(
@@ -1361,7 +1492,47 @@ describe('groupTranscript', () => {
         ),
       ]);
 
-      expect(callBlockActivity(block)).not.toBeNull();
+      expect(callBlockActivity(block)).toBeNull();
+      expect(callBlockLatest(block)).toBeNull();
+    });
+
+    it('keeps the callee’s own running tool over a newer one of its sub-agent', () => {
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count them.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 'd1', name: 'Task', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 'own', name: 'Bash', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          {
+            id: 'd2',
+            name: 'Grep',
+            input: {},
+            callId: 'call-1',
+            parentToolUseId: 'd1',
+          },
+          'poet',
+        ),
+      ]);
+
+      expect(callBlockActivity(block)).toBe('Bash');
+      expect(callBlockLatest(block)).toBe('running Bash');
     });
 
     it('skips a tool whose name is blank and keeps scanning older ones', () => {
@@ -2381,6 +2552,81 @@ describe('groupTranscript — call blocks', () => {
       expect(
         callBlockTasks(restated).map((t) => [t.id, t.title, t.status]),
       ).toEqual([['1', 'task 1', 'completed']]);
+    });
+
+    describe('its own work beside its sub-agents', () => {
+      const launch = (id: string, memberId: string, callId: string): ChatItem =>
+        tagged(
+          'tool_call',
+          { id, name: 'Agent', input: { description: id } },
+          memberId,
+          callId,
+        );
+      const ownList = (): ChatItem =>
+        tagged(
+          'task_list',
+          {
+            mode: 'snapshot',
+            tasks: [{ id: '1', title: 'own task', status: 'in_progress' }],
+          },
+          'engineer',
+          'call-1',
+        );
+      const delegateList = (): ChatItem =>
+        tagged(
+          'task_list',
+          {
+            mode: 'snapshot',
+            parentToolUseId: 'd1',
+            tasks: [{ id: '1', title: 'delegate task', status: 'pending' }],
+          },
+          'engineer',
+          'call-1',
+        );
+      const running = (): ChatItem =>
+        tagged('status', { status: 'running' }, 'engineer', 'call-1');
+
+      it('keeps the chip on its own list when a sub-agent announces one after it', () => {
+        const block = groupTranscript([
+          startCall('call-1', 'engineer'),
+          running(),
+          ownList(),
+          launch('d1', 'engineer', 'call-1'),
+          delegateList(),
+        ]).find(isBlock)!;
+
+        expect(callBlockTasks(block).map((task) => task.title)).toEqual([
+          'own task',
+        ]);
+      });
+
+      it('withholds the chip when only a sub-agent keeps a list', () => {
+        const block = groupTranscript([
+          startCall('call-1', 'engineer'),
+          running(),
+          launch('d1', 'engineer', 'call-1'),
+          delegateList(),
+        ]).find(isBlock)!;
+
+        expect(callBlockTasks(block)).toEqual([]);
+      });
+
+      it('counts the sub-agents still running, not those that returned', () => {
+        const block = groupTranscript([
+          startCall('call-1', 'engineer'),
+          running(),
+          launch('d1', 'engineer', 'call-1'),
+          launch('d2', 'engineer', 'call-1'),
+          tagged(
+            'tool_result',
+            { id: 'd2', name: 'Agent', result: 'done' },
+            'engineer',
+            'call-1',
+          ),
+        ]).find(isBlock)!;
+
+        expect(callBlockSubagentsRunning(block)).toBe(1);
+      });
     });
 
     it('a continuation whose root is OUTSIDE the loaded items stays its own card', () => {

@@ -156,6 +156,8 @@ One home for each concern:
 - Never time a wait from the agent's last row.
 - The call-message queue is keyed by call block id, because call ids restart per pass. It retries only `CALL_MESSAGE_REFUSED`. A message row (`role === 'user'`) is never the block's summary or result.
 - The prompt-cache badge threshold is a twin of the daemon's `CACHE_EXPIRED` rule, pinned by a spec.
+- A call card's line, its shut band, its tasks chip and the agents panel's instance row read the callee's own thread (`callBlockActivity`, `callBlockSummary`, `callBlockTasks`), never a sub-agent's: several run at once, each with its own card.
+- With no tool of its own running, or once its turn ended, a callee with sub-agents out reads the still `<member> is waiting for N sub-agents` (`callBlockSubagentsRunning`): its blocks in the window as each reads, plus the delegates the daemon says run in this conversation with no block there (`offWindowSubagents`, laid on by `applyDaemonReadings`). A shut band showing the callee's words carries it as a chip beside them. A held turn writes no row, so that card stays `running`; `waiting` needs the turn's terminal row.
 - A delegate's generic title is its id tail. `resultIsOwn` is decided structurally, never by matching a CLI's prose. A `SendMessage` is not a delegation (`isAgentToolName`).
 - Shells listed in the panel are the main thread's only, dropped at the item (`subagentIdOf`).
 

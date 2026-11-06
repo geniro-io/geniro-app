@@ -52,6 +52,7 @@ import { type RunOutcomes, RunOutcomesContext } from './run-outcome';
 import { RunStagesContext } from './stage-change-row';
 import { SubagentDetailContext } from './subagent-context';
 import { TeamNoteOpenContext } from './team-note-row';
+import { ThreadOpenContext } from './thread-message-card';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import { CollapseToolStepsContext } from './tool-group';
 import type { RunSettleAt, SubagentBlockEntry } from './transcript-groups';
@@ -79,6 +80,8 @@ export interface TranscriptValues {
   runStages: StageProgress | null;
   /** Open the notes popup on one note — see `TeamNoteOpenContext`. */
   openTeamNote: ((seq: number) => void) | null;
+  /** Open another thread by its run id, or null where none opens — see `ThreadOpenContext`. */
+  openThread: ((runId: string) => void) | null;
   /** Open Settings → Memory on one entry — see `MemoryOpenContext`. */
   openMemory?: ((handle: string) => void) | null;
   /** Open the Knowledge page on one document — see `KnowledgeOpenContext`. */
@@ -268,6 +271,7 @@ export function TranscriptContexts({
   runOutcomes,
   runStages,
   openTeamNote,
+  openThread,
   openMemory = null,
   openKnowledge = null,
   children,
@@ -285,7 +289,9 @@ export function TranscriptContexts({
                       <SubagentDetailContext.Provider
                         value={openSubagentDetail}>
                         <KnowledgeOpenContext.Provider value={openKnowledge}>
-                          {children}
+                          <ThreadOpenContext.Provider value={openThread}>
+                            {children}
+                          </ThreadOpenContext.Provider>
                         </KnowledgeOpenContext.Provider>
                       </SubagentDetailContext.Provider>
                     </RevealCallContext.Provider>

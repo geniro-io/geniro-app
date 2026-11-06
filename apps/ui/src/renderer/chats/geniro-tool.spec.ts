@@ -14,6 +14,11 @@ const RUN = 'abc12345-0000-0000-0000-000000000000';
 const SERVER = 'geniro-abc12345';
 
 describe('geniro’s own tool calls', () => {
+  it('hides message_thread’s call row, and draws no card of its own', () => {
+    expect(isGeniroToolName(`mcp__${SERVER}__message_thread`, RUN)).toBe(true);
+    expect(geniroCardKindOf(`mcp__${SERVER}__message_thread`, RUN)).toBeNull();
+  });
+
   it('recognises the per-run server name', () => {
     expect(isGeniroToolName(`mcp__${SERVER}__show_artifact`, RUN)).toBe(true);
   });

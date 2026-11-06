@@ -584,6 +584,33 @@ describe('groupTranscript', () => {
     expect(pairs.every((pair) => pair.result !== null)).toBe(true);
   });
 
+  it('hides a message_thread call its sent row stands for, and SHOWS one that was refused', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__message_thread', 'm1', {
+        thread: 'r-pelican',
+        message: 'hi',
+      }),
+      result('m1', 'Message delivered.'),
+      call('mcp__geniro-run-1__message_thread', 'm2', {
+        thread: 'r-pelican',
+        message: '',
+      }),
+      item('tool_result', {
+        id: 'm2',
+        name: null,
+        result: 'message is empty',
+        isError: true,
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    const pairs = (entries[0] as ToolGroupEntry).pairs;
+    expect(pairs.map((pair) => payloadString(pair.call.payload, 'id'))).toEqual(
+      ['m2'],
+    );
+    expect(pairs[0]?.result).not.toBeNull();
+  });
+
   it('hides a team_note call its note row stands for, and SHOWS one that was refused', () => {
     // A written note is its own row; a refused write writes none, so the call
     // and the refusal are the only trace that the agent tried.

@@ -20,6 +20,7 @@ import {
   geniroCardKindOf,
   geniroToolOf,
   isGeniroToolName,
+  MESSAGE_THREAD,
   SAVE_PROJECT_INSTRUCTIONS,
 } from './geniro-tool';
 import {
@@ -2923,7 +2924,8 @@ export function groupTranscript(
         (tool === 'team_note' ||
           tool === 'record_outcome' ||
           tool === 'move_stage' ||
-          tool === SAVE_PROJECT_INSTRUCTIONS);
+          tool === SAVE_PROJECT_INSTRUCTIONS ||
+          tool === MESSAGE_THREAD);
       if (
         (isGeniroToolName(name, item.runId) && !refusedNote) ||
         (callId !== null && taskToolCallIds.has(callId))

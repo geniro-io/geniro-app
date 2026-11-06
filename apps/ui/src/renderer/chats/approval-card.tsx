@@ -1298,6 +1298,94 @@ function PermissionCard({
   );
 }
 
+/** The text a `message_thread` call would send, or null when its input holds none. */
+function messageOf(input: unknown): string | null {
+  if (input === null || typeof input !== 'object') {
+    return null;
+  }
+  const { message } = input as { message?: unknown };
+  return typeof message === 'string' ? message : null;
+}
+
+/**
+ * A message another thread would receive, under review: the receiving thread's
+ * title and every word of the text, approved or denied in one press. A message
+ * asks nothing to be remembered, so no option sits beside Approve and Deny.
+ */
+function ThreadMessageApproval({
+  title,
+  text,
+  verdict,
+  expired,
+  onRespond,
+}: {
+  title: string;
+  text: string;
+  verdict: boolean | null;
+  expired: boolean;
+  onRespond: (allow: boolean) => void;
+}): React.JSX.Element {
+  const { sending, respond } = useOneShotVerdict(verdict, expired, onRespond);
+  // Line breaks are control characters the scan would flag, so they are read as spaces.
+  const gate = useHazardGate(text.replace(/[\n\t\r]/g, ' '));
+  return (
+    <Card className="flex min-w-0 flex-col gap-2.5 border-primary/40 p-3">
+      <div className="flex min-w-0 items-center gap-2">
+        <ShieldQuestion
+          aria-hidden="true"
+          className="size-4 shrink-0 text-primary"
+        />
+        <span className="min-w-0 flex-1 text-sm font-medium break-words">
+          Agent asks to send a message to {title}
+        </span>
+      </div>
+      <HazardWarning hazards={gate.hazards} subject="this message" />
+      <p className="m-0 min-w-0 text-sm break-words whitespace-pre-wrap">
+        {text}
+      </p>
+      {expired && verdict === null ? (
+        <p className="text-xs text-muted-foreground">
+          ⏱ expired — the turn ended before an answer
+        </p>
+      ) : sending ? (
+        <p className="text-xs text-muted-foreground">Sending…</p>
+      ) : verdict === null ? (
+        <div className="flex flex-col gap-2">
+          {gate.hazards.gates ? (
+            <HazardAck
+              id={gate.ackId}
+              checked={gate.acknowledged}
+              onCheckedChange={gate.setAcknowledged}
+            />
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              disabled={gate.blocksApprove}
+              onClick={() => respond(true)}>
+              Approve
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => respond(false)}>
+              Deny
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p
+          className={cn(
+            'text-xs',
+            verdict ? 'text-success' : 'text-destructive',
+          )}>
+          {verdict ? '✓ approved' : '✗ denied'}
+        </p>
+      )}
+    </Card>
+  );
+}
+
 /**
  * Elicitation card for an `ask`-node's paused tool call — a two-line router.
  *
@@ -1322,12 +1410,18 @@ export function ApprovalCard({
   outcome = null,
   expired = false,
   requestId,
+  threadTitle = null,
   onRespond,
   onOpenTeam,
   onOpenProject,
 }: {
   toolName: string;
   input: unknown;
+  /**
+   * The title of the thread a `message_thread` call would write to. Present, the
+   * card is the whole message under that title; absent, the ordinary permission card.
+   */
+  threadTitle?: string | null;
   /** The row's `questions` — the question card, when this is a question. */
   questions?: unknown;
   /**
@@ -1417,6 +1511,20 @@ export function ApprovalCard({
         plan={plan}
         verdict={verdict}
         note={answer}
+        expired={expired}
+        onRespond={onRespond}
+      />
+    );
+  }
+  // A message to another thread is approved whole: its title and every word of
+  // its text. Without a readable text the permission card shows the raw input.
+  const sentText = threadTitle === null ? null : messageOf(input);
+  if (threadTitle !== null && sentText !== null) {
+    return (
+      <ThreadMessageApproval
+        title={threadTitle}
+        text={sentText}
+        verdict={verdict}
         expired={expired}
         onRespond={onRespond}
       />

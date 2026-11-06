@@ -734,6 +734,7 @@ interface FakeTurn {
   respondApproval: ReturnType<typeof vi.fn>;
   /** The mid-turn channel a follow-up message rides into a running turn. */
   sendUserMessage: ReturnType<typeof vi.fn>;
+  subagentsAFollowUpCancels: ReturnType<typeof vi.fn>;
   cancelled: boolean;
   /** Finished or cancelled — the session it ran on may take another turn. */
   settled: boolean;
@@ -977,6 +978,7 @@ class FakeAdapter {
     cancel: () => void;
     respondApproval: unknown;
     sendUserMessage: unknown;
+    subagentsAFollowUpCancels: unknown;
   } {
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
@@ -984,6 +986,7 @@ class FakeAdapter {
     });
     const respondApproval = vi.fn(() => true);
     const sendUserMessage = vi.fn(() => true);
+    const subagentsAFollowUpCancels = vi.fn(() => 0);
     const turn: FakeTurn = {
       input,
       emit: onEvent,
@@ -993,6 +996,7 @@ class FakeAdapter {
       },
       respondApproval,
       sendUserMessage,
+      subagentsAFollowUpCancels,
       cancelled: false,
       settled: false,
       // Replaced by `startSession` the moment it hands this turn back; the
@@ -1018,6 +1022,7 @@ class FakeAdapter {
       },
       respondApproval,
       sendUserMessage,
+      subagentsAFollowUpCancels,
     };
   }
 }
@@ -4206,6 +4211,35 @@ describe('TeamExecutorService — follow-up messages', () => {
 
     expect(userTexts(itemDao, run.id)).toEqual(['go']);
     expect(turnsOf(claude, 'role-a')).toHaveLength(1);
+  });
+
+  it('asks before a Send-now cancels the lead’s sub-agents, then delivers past them', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      team: LEAD_AND_PEER,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const lead = turnsOf(claude, 'role-a')[0]!;
+    lead.subagentsAFollowUpCancels.mockReturnValue(2);
+
+    await expect(
+      service.sendMessage(run.id, 'now', [], undefined, 'ask'),
+    ).rejects.toMatchObject({
+      errorCode: 'FOLLOW_UP_CANCELS_SUBAGENTS',
+      message: expect.stringContaining('2 sub-agents'),
+    });
+    expect(lead.sendUserMessage).not.toHaveBeenCalled();
+    expect(userTexts(itemDao, run.id)).toEqual(['go']);
+
+    await service.sendMessage(run.id, 'now', [], undefined, 'cancel');
+
+    expect(lead.sendUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'now', cancelBackgroundWork: true }),
+    );
+    expect(userTexts(itemDao, run.id)).toEqual(['go', 'now']);
   });
 
   it('marks a follow-up unsent once the lead it went to dropped it', async () => {

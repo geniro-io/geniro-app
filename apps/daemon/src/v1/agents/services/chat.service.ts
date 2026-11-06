@@ -52,6 +52,7 @@ import {
   type ChatListScope,
   type DeferredCard,
   type DeferredCardResponder,
+  type FollowUpBackgroundWork,
   type HistoryWindow,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
@@ -135,6 +136,7 @@ import {
   terminalStatus,
 } from '../utils/event-to-item';
 import { firstTurnWindow } from '../utils/first-turn-window';
+import { subagentsWouldBeCancelled } from '../utils/follow-up-background-work';
 import { isHostActionCall } from '../utils/host-action';
 import {
   isHostAnalysisReadCall,
@@ -1669,12 +1671,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
 
   /** Whether a verdict has to wait: a turn runs, or a question card stands. */
   private mustHoldVerdict(runId: string): boolean {
-    return (
-      this.registry.has(runId) ||
-      this.approvals
-        .listByRun(runId)
-        .some((entry) => entry.deferred === true && !isStandingCard(entry))
-    );
+    return this.registry.has(runId) || this.awaitsCardAnswer(runId);
+  }
+
+  /** Whether a card stands that a new turn would retire unanswered. */
+  private awaitsCardAnswer(runId: string): boolean {
+    return this.approvals
+      .listByRun(runId)
+      .some((entry) => entry.deferred === true && !isStandingCard(entry));
   }
 
   /** Whether a chat is archived, or being archived now. */
@@ -5556,6 +5560,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        */
       ownTurn?: boolean;
       /**
+       * A Send-now press: `ask` refuses a message that would cancel running
+       * sub-agents with a question for the user, `cancel` is their answer.
+       */
+      backgroundWork?: FollowUpBackgroundWork;
+      /**
+       * The queue's own send, which nobody pressed: refused while a card waits
+       * for the user, so it never retires a question they have not seen.
+       */
+      waitForAnswer?: boolean;
+      /**
        * The turn is geniro's, not the user's: `text` is still the prompt, but
        * the opening row is this `system` payload rather than a user message —
        * a monitor's output starting a turn must not read as something the user
@@ -5617,11 +5631,19 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       resumeOnly?: boolean;
       apply?: RecommendationApply;
       ownTurn?: boolean;
+      backgroundWork?: FollowUpBackgroundWork;
+      waitForAnswer?: boolean;
       hostRow?: HostRowWire;
       onHostRowWritten?: () => void;
     },
   ): Promise<ItemWire> {
     const runId = run.id;
+    if (options.waitForAnswer === true && this.awaitsCardAnswer(runId)) {
+      throw new ConflictException(
+        'RUN_AWAITS_ANSWER',
+        'a card is waiting for your answer — your message goes out after it',
+      );
+    }
     if (!run.cwd || !run.agentKind) {
       throw new BadRequestException(
         'RUN_NOT_CONFIGURED',
@@ -5702,7 +5724,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       if (options.ownTurn === true) {
         throw new ConflictException('RUN_BUSY', 'a turn is running');
       }
-      return await this.deliverIntoRunningTurn(runId, text, images);
+      return await this.deliverIntoRunningTurn(
+        runId,
+        text,
+        images,
+        options.backgroundWork,
+      );
     }
     // The claim is ours, so a turn is about to start — and a turn supersedes a
     // standing question card. AFTER the claim rather than before it: the check
@@ -8666,6 +8693,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     runId: string,
     text: string,
     images: SendMessageImage[],
+    backgroundWork?: FollowUpBackgroundWork,
   ): Promise<ItemWire> {
     const busy = new ConflictException(
       'RUN_BUSY',
@@ -8676,6 +8704,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     const handle = this.registry.runningHandle(runId);
     if (!handle) {
       throw busy;
+    }
+    const cancels = handle.subagentsAFollowUpCancels?.() ?? 0;
+    if (backgroundWork === 'ask' && cancels > 0) {
+      throw subagentsWouldBeCancelled(cancels);
     }
     // Written before the send because the payload the adapter builds reads
     // these files. A delivery that then fails leaves them unreferenced under
@@ -8697,6 +8729,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         mediaType: attachment.mediaType,
       })),
       deliveryId,
+      ...(backgroundWork === 'cancel' ? { cancelBackgroundWork: true } : {}),
     });
     if (!delivered) {
       throw busy;

@@ -19,6 +19,7 @@ import {
   ChatUploadWireSchema,
   commitShaSchema,
   CustomInstructionsSchema,
+  FollowUpBackgroundWorkSchema,
   hasControlCharacters,
   ItemWireSchema,
   LocalImageWireSchema,
@@ -337,6 +338,15 @@ export const sendMessageSchema = z
       .max(128)
       .optional()
       .describe('ID generated once per send and reused for retries'),
+    backgroundWork: FollowUpBackgroundWorkSchema.optional().describe(
+      'What a press does about background sub-agents the message would cancel: ask refuses with FOLLOW_UP_CANCELS_SUBAGENTS, cancel sends anyway. Absent, the message is refused RUN_BUSY and stays queued',
+    ),
+    waitForAnswer: z
+      .boolean()
+      .optional()
+      .describe(
+        'Sent by the queue, not by a press: refused RUN_AWAITS_ANSWER while a card waits for the user, whom a new turn would cut off from it',
+      ),
   })
   .refine(
     (dto) => dto.text.trim().length > 0 || (dto.images?.length ?? 0) > 0,

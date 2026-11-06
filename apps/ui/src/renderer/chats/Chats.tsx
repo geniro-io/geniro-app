@@ -413,7 +413,7 @@ import {
   useFileAttach,
 } from './use-file-attach';
 import { type GitNotice, useGitInfo } from './use-git-info';
-import { useMessageQueue } from './use-message-queue';
+import { type QueueSendTerms, useMessageQueue } from './use-message-queue';
 import { useNodeDurableReadings } from './use-node-context';
 import { useRunArtifacts } from './use-run-artifacts';
 import { useRunOutcomes } from './use-run-outcomes';
@@ -1217,6 +1217,8 @@ export function Chats({
     pausedQueues,
     postingIds,
     steerStatus,
+    subagentCancelAsk,
+    answerCancelAsk,
     enqueue: enqueueMessage,
     hasQueued: hasQueuedMessages,
     resetSteerStatus,
@@ -4228,6 +4230,7 @@ export function Chats({
        */
       statusBefore?: ChatRun['status'],
       clientMessageId = randomId(),
+      queueTerms?: QueueSendTerms,
     ): Promise<void> => {
       await hostedRef.current?.onBeforeSend?.();
       // The live plane belongs to the chat that is ON SCREEN. A background
@@ -4267,6 +4270,7 @@ export function Chats({
           text,
           clientMessageId,
           ...(images?.length ? { images } : {}),
+          ...queueTerms,
         };
         const run = runsRef.current.find((row) => row.id === runId);
         // A chat in a TASK's worktree outlives it — the board collects that
@@ -4452,9 +4456,14 @@ export function Chats({
   useEffect(() => {
     messageQueue.handlersRef.current = {
       activeRunId: () => activeRunIdRef.current,
-      send: (runId, text, images, clientMessageId) =>
-        startTurn(runId, text, images, undefined, clientMessageId),
+      send: (runId, text, images, clientMessageId, terms) =>
+        startTurn(runId, text, images, undefined, clientMessageId, terms),
       isWorking: () => streamingRef.current,
+      onHeldForAnswer: (runId) => {
+        if (runId === activeRunIdRef.current) {
+          setStreaming(false);
+        }
+      },
       onFailed: (runId, err, { steer, wasWorking }) => {
         if (steer) {
           if (!wasWorking) {
@@ -11516,6 +11525,18 @@ export function Chats({
                   onClose={() => setOpenShell(null)}
                   load={loadShellOutput}
                 />
+
+                <ConfirmDialog
+                  open={subagentCancelAsk !== null}
+                  title="Send now and stop the sub-agents?"
+                  confirmLabel="Stop them and send"
+                  busyLabel="Sending…"
+                  onCancel={() => answerCancelAsk(false)}
+                  onConfirm={() => answerCancelAsk(true)}>
+                  {subagentCancelAsk?.detail ??
+                    'Sending this now cancels the sub-agents still running, and whatever they have not finished is lost.'}{' '}
+                  Keep it queued and it goes out when this turn ends.
+                </ConfirmDialog>
 
                 {/* One dialog for both archives; the COPY is what separates
                     them. A settled chat is only being filed away, so it is

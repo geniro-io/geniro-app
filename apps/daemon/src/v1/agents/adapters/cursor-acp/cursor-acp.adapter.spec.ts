@@ -3502,6 +3502,31 @@ describe('CursorAcpAdapter — sub-agent sessions', () => {
     );
   });
 
+  it('counts the sub-agents a message would cancel, and cancels them only when told to', () => {
+    const { child, events, handle } = start();
+    expect(handle?.subagentsAFollowUpCancels?.()).toBe(0);
+    launch(child, true);
+    childWorks(child, 'BGDONE-77');
+    expect(handle?.subagentsAFollowUpCancels?.()).toBe(1);
+
+    expect(
+      handle?.sendUserMessage({ text: 'now', cancelBackgroundWork: true }),
+    ).toBe(true);
+
+    expect(framesOn(child).map((frame) => frame.method)).toContain(
+      'session/cancel',
+    );
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'notice' &&
+          event.message === QUEUED_FOR_SUBAGENTS_NOTICE,
+      ),
+    ).toBe(false);
+    // A cancel already out: nothing further is at stake.
+    expect(handle?.subagentsAFollowUpCancels?.()).toBe(0);
+  });
+
   it('accepts a late foreground ending when disconnection preceded a parent failure', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const { child, events } = start();

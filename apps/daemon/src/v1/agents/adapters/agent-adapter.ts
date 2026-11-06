@@ -3108,6 +3108,8 @@ export abstract class AgentAdapter {
           sendFollowUp: driver.sendFollowUp
             ? (message) => driver.sendFollowUp!(message)
             : undefined,
+          subagentsAFollowUpCancels: () =>
+            driver.subagentsAFollowUpCancels?.() ?? 0,
           buildApprovalModePayload: (mode) => {
             const line = this.buildApprovalModePayload(turnInput, mode);
             if (line !== undefined) {

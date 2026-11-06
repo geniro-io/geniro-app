@@ -199,6 +199,7 @@ export class TeamsController {
       dto.text,
       dto.images,
       dto.clientMessageId,
+      dto.backgroundWork,
     );
   }
 

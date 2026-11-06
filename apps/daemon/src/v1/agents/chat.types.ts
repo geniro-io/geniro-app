@@ -2870,6 +2870,13 @@ export interface SendMessageImage {
   data: string;
 }
 
+export const FollowUpBackgroundWorkSchema = z
+  .enum(['ask', 'cancel'])
+  .meta({ id: 'FollowUpBackgroundWork' });
+export type FollowUpBackgroundWork = z.infer<
+  typeof FollowUpBackgroundWorkSchema
+>;
+
 /** A stored attachment read back for display (base64 — see AttachmentDataDto). */
 export interface AttachmentDataWire extends SendMessageImage {
   id: string;

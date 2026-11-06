@@ -3,7 +3,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { type GeniroApi, HISTORY_PAGE_SIZES } from '../../shared/contracts';
+import {
+  type GeniroApi,
+  HISTORY_PAGE_SIZES,
+  type PullRequestRef,
+  type PullRequestRefResult,
+} from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { aProject } from '../__fixtures__/projects';
 import { RECORDED_NEW_PROPOSAL } from '../__fixtures__/team-proposals';
@@ -3461,6 +3466,86 @@ describe('Chats — the system notifications a thread earns', () => {
       ...container.querySelectorAll<HTMLElement>('li[draggable="true"]'),
     ].find((row) => row.querySelector('[aria-current="true"]'));
     expect(active?.textContent).toContain('Second chat');
+  });
+});
+
+describe('Chats — the changes chip', () => {
+  it('reads with the thread’s open pull request, and says when the read was cut short', async () => {
+    const startSha = 'e'.repeat(40);
+    const url = 'https://github.com/acme/platform/pull/87';
+    api.listChats.mockResolvedValue([
+      {
+        ...run1,
+        status: 'completed',
+        startSha,
+        pullRequests: [
+          {
+            owner: 'acme',
+            repo: 'platform',
+            number: 87,
+            url,
+            seq: 3,
+            opened: true,
+          },
+        ],
+      },
+    ]);
+    const getChangesSince = vi.fn(async () => ({
+      changes: [
+        {
+          path: 'mine.ts',
+          status: 'modified' as const,
+          diff: null,
+          added: 1,
+          removed: 0,
+        },
+      ],
+      truncated: true,
+      unavailableReason: null,
+      movedOffStart: false,
+      upstreamBase: null,
+    }));
+    window.geniro.getChangesSince = getChangesSince;
+    window.geniro.getPullRequestsByRef = vi.fn(
+      async (refs: PullRequestRef[]): Promise<PullRequestRefResult[]> =>
+        refs.map((ref) => ({
+          ref,
+          pullRequest: {
+            number: 87,
+            title: 'Stacked',
+            state: 'open',
+            isDraft: false,
+            headRefName: 'feature/top',
+            baseRefName: 'feature/stack',
+            isCrossRepository: false,
+            headRepositoryOwner: 'acme',
+            author: 'someone',
+            url,
+            updatedAt: '2026-11-06T00:00:00Z',
+            added: null,
+            removed: null,
+            changedFiles: null,
+          },
+        })),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(getChangesSince).toHaveBeenLastCalledWith('/proj', startSha, false, [
+      {
+        repository: 'acme/platform',
+        headRefName: 'feature/top',
+        headRefOid: undefined,
+        baseRefName: 'feature/stack',
+      },
+    ]);
+    expect(
+      container.querySelector('[data-slot="folder-changes-chip"]')?.textContent,
+    ).toContain('1+ file');
   });
 });
 

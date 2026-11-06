@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { GitChange, GitChanges } from '../../shared/contracts';
+import type {
+  ChangesPullRequest,
+  GitChange,
+  GitChanges,
+} from '../../shared/contracts';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { type ChangesSummary, summarizeAcrossFolders } from './changes-tree';
 
@@ -20,6 +24,8 @@ const CHANGES_FRESHNESS_MS = 15_000;
 export interface WorkFolderChanges {
   folder: string;
   changes: GitChange[];
+  /** What this folder is measured against, which the run folder's may not be. */
+  upstreamBase: GitChanges['upstreamBase'];
 }
 
 export interface ChatChanges {
@@ -80,14 +86,18 @@ export interface ChatChanges {
  * `workFolders` are the other folders the thread's agents worked in
  * (`useRunWorkFolders`), read in the same pass against the same start, since
  * an agent that commits in a worktree of its own leaves `cwd` untouched.
+ * `pullRequests` are the thread's open ones; their answer lands after the first
+ * read, so a change of them reads again.
  */
 export function useChatChanges(
   cwd: string | null,
   startSha: string | null,
   workFolders: readonly string[] = [],
+  pullRequests: readonly ChangesPullRequest[] = [],
 ): ChatChanges {
   // Callers rebuild the array every render; the key is what stays stable.
   const foldersKey = workFolders.join('\0');
+  const pullRequestsKey = JSON.stringify(pullRequests);
   const [changes, setChanges] = useState<GitChange[]>([]);
   const [elsewhere, setElsewhere] = useState<WorkFolderChanges[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -121,23 +131,29 @@ export function useChatChanges(
       setError(null);
       const folders = foldersKey === '' ? [] : foldersKey.split('\0');
       void Promise.all([
-        window.geniro.getChangesSince(cwd, startSha),
+        window.geniro.getChangesSince(cwd, startSha, false, pullRequests),
         Promise.all(
           folders.map((folder) =>
-            window.geniro.getChangesSince(folder, startSha, true).then(
-              (result) =>
-                // A worktree removed since it was listed, or one git cannot
-                // read (an empty list with a reason), simply has nothing to
-                // add — the run folder's own reading is the one whose failure
-                // the dialog explains.
-                result.changes.length > 0
-                  ? {
-                      entry: { folder, changes: result.changes },
-                      truncated: result.truncated,
-                    }
-                  : null,
-              () => null,
-            ),
+            window.geniro
+              .getChangesSince(folder, startSha, true, pullRequests)
+              .then(
+                (result) =>
+                  // A worktree removed since it was listed, or one git cannot
+                  // read (an empty list with a reason), simply has nothing to
+                  // add — the run folder's own reading is the one whose failure
+                  // the dialog explains.
+                  result.changes.length > 0
+                    ? {
+                        entry: {
+                          folder,
+                          changes: result.changes,
+                          upstreamBase: result.upstreamBase,
+                        },
+                        truncated: result.truncated,
+                      }
+                    : null,
+                () => null,
+              ),
           ),
         ),
       ])
@@ -167,7 +183,7 @@ export function useChatChanges(
           }
         });
     },
-    [cwd, startSha, foldersKey],
+    [cwd, startSha, foldersKey, pullRequestsKey],
   );
 
   useEffect(() => {
@@ -186,8 +202,9 @@ export function useChatChanges(
     lastReadAt.current = 0;
   }, [cwd, startSha]);
 
-  // Apart from the reset above, and after it: a work folder found later re-reads
-  // WITHOUT clearing, so the chip keeps its figures until the wider ones land.
+  // Apart from the reset above, and after it: a work folder or a pull request
+  // found later re-reads WITHOUT clearing, so the chip keeps its figures until
+  // the new ones land.
   useEffect(() => {
     if (cwd !== null && startSha !== null) {
       refresh(true);

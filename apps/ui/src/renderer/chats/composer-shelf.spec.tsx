@@ -198,6 +198,35 @@ const monitor = (over: Partial<OpenMonitor> = {}): OpenMonitor => ({
   ...over,
 });
 
+describe('FolderChangesChip', () => {
+  const summary = { files: 500, added: 41_547, removed: 12_146 };
+  const chipOf = (el: HTMLElement): HTMLElement =>
+    el.querySelector<HTMLElement>('[data-slot="folder-changes-chip"]')!;
+
+  it('states a whole read as its plain count', () => {
+    const chip = chipOf(
+      mount(<FolderChangesChip summary={summary} onOpen={() => {}} />),
+    );
+
+    expect(chip.textContent).toContain('500 files');
+    expect(chip.getAttribute('aria-label')).toBe(
+      '500 files changed since this chat started — open the list',
+    );
+  });
+
+  it('says a cut read is a floor, in the figure and in its name', () => {
+    const chip = chipOf(
+      mount(
+        <FolderChangesChip summary={summary} truncated onOpen={() => {}} />,
+      ),
+    );
+
+    expect(chip.textContent).toContain('500+ files');
+    expect(chip.getAttribute('aria-label')).toContain('More than 500 files');
+    expect(chip.getAttribute('title')).toContain('line counts cover only');
+  });
+});
+
 describe('RunningMonitorChips', () => {
   it('draws nothing while no monitor runs', () => {
     const el = mount(<RunningMonitorChips monitors={[]} />);

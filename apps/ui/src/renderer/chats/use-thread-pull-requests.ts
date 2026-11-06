@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
+  ChangesPullRequest,
   PullRequestInfo,
   PullRequestRef,
   PullRequestRefResult,
@@ -203,6 +204,29 @@ export function threadPullRequestsOf(
     .map(
       (row) => store.get(keyOf(row)) ?? { ref: refOf(row), pullRequest: null },
     );
+}
+
+/**
+ * What a read of the thread's changes needs of its pull requests: the open ones
+ * not from a fork, whose head branch is no ref of this clone.
+ */
+export function changesPullRequestsOf(
+  results: readonly PullRequestRefResult[],
+): ChangesPullRequest[] {
+  return results.flatMap(({ ref, pullRequest }) =>
+    pullRequest?.state === 'open' &&
+    !pullRequest.isCrossRepository &&
+    pullRequest.baseRefName !== undefined
+      ? [
+          {
+            repository: `${ref.owner}/${ref.repo}`,
+            headRefName: pullRequest.headRefName,
+            headRefOid: pullRequest.headRefOid,
+            baseRefName: pullRequest.baseRefName,
+          },
+        ]
+      : [],
+  );
 }
 
 /**

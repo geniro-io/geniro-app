@@ -198,9 +198,11 @@ const NO_WORK_FOLDERS: readonly WorkFolderChanges[] = [];
 function WorkFolderSection({
   folder,
   tree,
+  upstreamBase,
 }: {
   folder: string;
   tree: readonly ChangeTreeNode[];
+  upstreamBase: GitChanges['upstreamBase'];
 }): React.JSX.Element {
   const name = folderName(folder);
   return (
@@ -208,6 +210,14 @@ function WorkFolderSection({
       <p className="px-3 pb-1 text-xs text-muted-foreground" title={folder}>
         In <span className="font-mono text-foreground">{name}</span> — a
         worktree this chat’s agents worked in
+        {upstreamBase === null ? null : (
+          <>
+            , against{' '}
+            <span className="font-mono text-foreground">
+              {upstreamBase.ref}
+            </span>
+          </>
+        )}
       </p>
       <TreeRows nodes={tree} depth={0} />
     </section>
@@ -295,9 +305,10 @@ export function ChatChangesDialog({
   const tree = useMemo(() => buildChangesTree(changes), [changes]);
   const elsewhereTrees = useMemo(
     () =>
-      elsewhere.map(({ folder, changes: held }) => ({
+      elsewhere.map(({ folder, changes: held, upstreamBase: heldBase }) => ({
         folder,
         tree: buildChangesTree(held),
+        upstreamBase: heldBase,
       })),
     [elsewhere],
   );
@@ -345,9 +356,16 @@ export function ChatChangesDialog({
           ) : (
             <TreeRows nodes={tree} depth={0} />
           )}
-          {elsewhereTrees.map(({ folder, tree: held }) => (
-            <WorkFolderSection key={folder} folder={folder} tree={held} />
-          ))}
+          {elsewhereTrees.map(
+            ({ folder, tree: held, upstreamBase: heldBase }) => (
+              <WorkFolderSection
+                key={folder}
+                folder={folder}
+                tree={held}
+                upstreamBase={heldBase}
+              />
+            ),
+          )}
         </SearchResultList>
       </div>
     </Dialog>

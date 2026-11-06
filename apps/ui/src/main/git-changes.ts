@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 
 import type {
   ChangesBaseUnreachable,
+  ChangesPullRequest,
   ChangesTotals,
   GitChange,
   GitChanges,
@@ -434,6 +435,19 @@ export function countDiffLines(diff: string | null): {
   return { added, removed };
 }
 
+async function refExists(
+  dir: string,
+  ref: string,
+  config: readonly string[],
+): Promise<boolean> {
+  const found = await git(
+    dir,
+    ['rev-parse', '--verify', '--quiet', ref],
+    config,
+  );
+  return found !== null && found.trim() !== '';
+}
+
 /**
  * The default branch of the `origin` remote, as a ref this checkout holds — or
  * null for a repository with no such remote.
@@ -451,16 +465,105 @@ async function defaultRemoteBranch(
     'refs/remotes/origin/main',
     'refs/remotes/origin/master',
   ]) {
-    const found = await git(
-      dir,
-      ['rev-parse', '--verify', '--quiet', ref],
-      config,
-    );
-    if (found !== null && found.trim() !== '') {
+    if (await refExists(dir, ref, config)) {
       return ref;
     }
   }
   return null;
+}
+
+/** `owner/repo` of the `origin` remote, in lower case, from any URL form. */
+async function originRepository(
+  dir: string,
+  config: readonly string[],
+): Promise<string | null> {
+  const url = await git(dir, ['remote', 'get-url', 'origin'], config);
+  const match = /[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/u.exec(url?.trim() ?? '');
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
+/**
+ * Whether a detached HEAD belongs to a pull request: behind or past its head,
+ * through the remote branch or the head commit, and not yet on its base. Only a
+ * definite "no" from the base counts, because a commit already there belongs to
+ * a pull request beneath this one.
+ */
+async function detachedHeadIsOnPullRequest(
+  dir: string,
+  { headRefName, headRefOid, baseRefName }: ChangesPullRequest,
+  config: readonly string[],
+): Promise<boolean> {
+  const ancestry = (older: string, newer: string): Promise<number | null> =>
+    gitExitCode(dir, ['merge-base', '--is-ancestor', older, newer], config);
+  const tips = [
+    `refs/remotes/origin/${headRefName}`,
+    ...(headRefOid === undefined ? [] : [headRefOid]),
+  ];
+  for (const tip of tips) {
+    if (
+      (await ancestry('HEAD', tip)) === 0 ||
+      (await ancestry(tip, 'HEAD')) === 0
+    ) {
+      const base = `refs/remotes/origin/${baseRefName}`;
+      return (await ancestry('HEAD', base)) === EXIT_NO;
+    }
+  }
+  return false;
+}
+
+/**
+ * The pull request a folder is on, among those of its own repository: the one
+ * whose head branch it has checked out, else one whose head commit it sits at.
+ *
+ * A DETACHED folder also counts at a commit behind or past that head, since a
+ * review worktree stays behind when the branch moves on and takes commits of its
+ * own. A named branch never does: any branch cut from the same history sits
+ * behind every head above it.
+ */
+async function folderPullRequest(
+  dir: string,
+  pullRequests: readonly ChangesPullRequest[],
+  config: readonly string[],
+): Promise<ChangesPullRequest | null> {
+  if (pullRequests.length === 0) {
+    return null;
+  }
+  const origin = await originRepository(dir, config);
+  const own = pullRequests.filter(
+    ({ repository }) => repository.toLowerCase() === origin,
+  );
+  const reading = await git(
+    dir,
+    ['rev-parse', 'HEAD', '--symbolic-full-name', 'HEAD'],
+    config,
+  );
+  const [head = null, symbolic = null] = reading?.trim().split('\n') ?? [];
+  const match =
+    own.find(({ headRefName }) => `refs/heads/${headRefName}` === symbolic) ??
+    own.find(({ headRefOid }) => headRefOid === head);
+  if (match !== undefined || symbolic !== 'HEAD') {
+    return match ?? null;
+  }
+  for (const pullRequest of own) {
+    if (await detachedHeadIsOnPullRequest(dir, pullRequest, config)) {
+      return pullRequest;
+    }
+  }
+  return null;
+}
+
+/** The remote ref of the base branch of a folder's pull request, when fetched. */
+async function pullRequestBaseRef(
+  dir: string,
+  pullRequests: readonly ChangesPullRequest[],
+  config: readonly string[],
+): Promise<string | null> {
+  const pullRequest = await folderPullRequest(dir, pullRequests, config);
+  if (pullRequest === null) {
+    return null;
+  }
+  const ref = `refs/remotes/origin/${pullRequest.baseRefName}`;
+  return (await refExists(dir, ref, config)) ? ref : null;
 }
 
 /**
@@ -485,16 +588,38 @@ async function defaultRemoteBranch(
  * measuring against that would put upstream's own changes back in. A
  * repository with no remote, or one whose shared commit IS the start, keeps
  * the start.
+ *
+ * A folder on an open pull request is measured from that pull request's base
+ * branch first: a branch stacked on another would otherwise list the whole
+ * stack beneath it, which GitHub does not count. A base that lies before the
+ * start leaves the default branch to answer.
  */
 async function upstreamBaseSince(
   dir: string,
   sha: string,
   config: readonly string[],
+  pullRequests: readonly ChangesPullRequest[],
 ): Promise<GitUpstreamBase | null> {
-  const remote = await defaultRemoteBranch(dir, config);
-  if (remote === null) {
-    return null;
+  for (const remote of [
+    await pullRequestBaseRef(dir, pullRequests, config),
+    await defaultRemoteBranch(dir, config),
+  ]) {
+    const base =
+      remote === null ? null : await baseSharedWith(dir, remote, sha, config);
+    if (base !== null) {
+      return base;
+    }
   }
+  return null;
+}
+
+/** The newest commit HEAD shares with `remote`, when it lies past `sha`. */
+async function baseSharedWith(
+  dir: string,
+  remote: string,
+  sha: string,
+  config: readonly string[],
+): Promise<GitUpstreamBase | null> {
   const shared = (
     await git(dir, ['merge-base', 'HEAD', remote], config)
   )?.trim();
@@ -539,12 +664,13 @@ async function upstreamBaseSince(
  * thread's own folder: its own commits are the work, so when it does not descend
  * from `sha` (cut from `origin/main` while the chat sat on unpushed commits) it
  * is measured from where the two histories meet, not reduced to what is
- * uncommitted.
+ * uncommitted. `pullRequests` are the thread's open ones; see `upstreamBaseSince`.
  */
 export async function readChangesSince(
   dir: string,
   sha: string,
   workFolder = false,
+  pullRequests: readonly ChangesPullRequest[] = [],
 ): Promise<GitChanges> {
   const unreadable = (unavailableReason: string): GitChanges => ({
     changes: [],
@@ -590,9 +716,9 @@ export async function readChangesSince(
   // folder cut from a freshly fetched remote branch is past its fork point the
   // same way, so what upstream gained since is left out of it too.
   const upstreamBase = descends
-    ? await upstreamBaseSince(dir, sha, config)
+    ? await upstreamBaseSince(dir, sha, config, pullRequests)
     : forkPoint !== null
-      ? await upstreamBaseSince(dir, forkPoint, config)
+      ? await upstreamBaseSince(dir, forkPoint, config, pullRequests)
       : null;
   const base = upstreamBase?.sha ?? (descends ? sha : (forkPoint ?? 'HEAD'));
 

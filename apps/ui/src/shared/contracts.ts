@@ -1306,9 +1306,9 @@ export interface GitChanges {
    * What `changes` is measured against INSTEAD of the start, when the checkout
    * shares newer history with the remote than the start — upstream work pulled
    * in, or the chat's own commits merged: the newest commit HEAD shares with
-   * the default remote branch, so everything already there is left out. Null
-   * when the start itself is the base — nothing newer shared, no remote to ask,
-   * or `movedOffStart`.
+   * the folder's pull request's base branch, else the default remote branch, so
+   * everything already there is left out. Null when the start itself is the
+   * base — nothing newer shared, no remote to ask, or `movedOffStart`.
    */
   upstreamBase: GitUpstreamBase | null;
 }
@@ -1316,8 +1316,21 @@ export interface GitChanges {
 /** The commit a changes list is measured against, and the ref it came from. */
 export interface GitUpstreamBase {
   sha: string;
-  /** Short and as git names it — `origin/main`, `origin/master`. */
+  /** Short and as git names it — `origin/main`, `origin/feature/stack`. */
   ref: string;
+}
+
+/**
+ * An open pull request of the thread, as a read of a folder's changes needs it:
+ * a branch stacked on another counts from that branch, the way GitHub counts it.
+ */
+export interface ChangesPullRequest {
+  /** `owner/repo`, since a thread's pull requests can span repositories. */
+  repository: string;
+  headRefName: string;
+  /** Absent when gh did not report it; the branch name then decides alone. */
+  headRefOid?: string;
+  baseRefName: string;
 }
 
 /**
@@ -1464,14 +1477,13 @@ export interface PullRequestInfo {
   headRefName: string;
   /**
    * It comes from a FORK, so {@link headRefName} names a branch in someone
-   * else's repository — see `chats/pull-request.ts`, which is where that
-   * matters.
+   * else's repository, and no ref of this clone.
    */
   isCrossRepository: boolean;
   /**
    * GitHub login owning the repo {@link headRefName} lives in, or null when
    * that repo is gone — a deleted fork, which GitHub's own schema allows and
-   * which must still be listed rather than dropped. See `chats/pull-request.ts`.
+   * which must still be listed rather than dropped.
    */
   headRepositoryOwner: string | null;
   /** GitHub login of whoever opened it. */
@@ -1488,6 +1500,10 @@ export interface PullRequestInfo {
    * the many renderer fixtures that build a pull request need not name it.
    */
   mergedAt?: string;
+  /** The branch it merges INTO, absent when gh gave no readable name. */
+  baseRefName?: string;
+  /** The commit {@link headRefName} is at, absent when gh gave none. */
+  headRefOid?: string;
   /**
    * How big it is: lines added, lines removed, files touched — as GitHub itself
    * counts them, over the whole pull request rather than the working tree.
@@ -1505,7 +1521,8 @@ export interface PullRequestInfo {
  * The pull requests on a folder's checked-out branch, newest first.
  *
  * Head-filtered at the query — every surface in the app is scoped to the thread
- * (`chats/pull-request.ts`), so the repo's other branches are never fetched.
+ * (`chats/use-thread-pull-requests.ts`), so the repo's other branches are never
+ * fetched.
  *
  * There is no "did it work" flag, deliberately. Every failure — no `gh` on the
  * machine, a `gh` that is not signed in, a folder that is not a GitHub checkout,
@@ -1751,11 +1768,13 @@ export interface GeniroApi {
    *
    * `workFolder` marks a worktree one of the thread's agents made, measured
    * from where its history meets `sha` when it does not descend from it.
+   * `pullRequests` are the thread's open ones; the one `dir` is on sets the base.
    */
   getChangesSince(
     dir: string,
     sha: string,
     workFolder?: boolean,
+    pullRequests?: readonly ChangesPullRequest[],
   ): Promise<GitChanges>;
   /**
    * The repository's LINKED worktrees other than `dir`'s own — never the main

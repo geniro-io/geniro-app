@@ -159,6 +159,33 @@ describe('parsePullRequests', () => {
     });
   });
 
+  it('reads the branch a pull request merges into and the commit its head is at', () => {
+    const parsed = parsePullRequests(
+      answer([
+        {
+          ...row(1, 'OPEN'),
+          baseRefName: 'feature/stack',
+          headRefOid: 'a'.repeat(40),
+        },
+      ]),
+    );
+
+    expect(parsed?.[0]).toMatchObject({
+      baseRefName: 'feature/stack',
+      headRefOid: 'a'.repeat(40),
+    });
+  });
+
+  it('keeps a row with no base or head commit, leaving both keys out', () => {
+    const parsed = parsePullRequests(
+      answer([{ ...row(1, 'OPEN'), baseRefName: 7, headRefOid: null }]),
+    );
+
+    expect(parsed).toHaveLength(1);
+    expect(parsed?.[0]).not.toHaveProperty('baseRefName');
+    expect(parsed?.[0]).not.toHaveProperty('headRefOid');
+  });
+
   it('reads an unusable figure as NOT MEASURED rather than as zero', () => {
     // gh answering a string, or nothing at all, must not become a confident
     // `+0 −0` — that asserts a pull request changed nothing.
@@ -306,6 +333,8 @@ describe('readPullRequestsByRef', () => {
     expect(calls[0]).toContain('owner=acme');
     expect(calls[0]).toContain('name=platform');
     expect(calls[0]).toContain('pullRequest(number: 1)');
+    expect(calls[0]).toContain('baseRefName');
+    expect(calls[0]).toContain('headRefOid');
     expect(calls[0]).toContain('pullRequest(number: 2)');
     expect(calls[0]).not.toContain('pullRequest(number: 3)');
     expect(calls[1]).toContain('name=mobile-app');

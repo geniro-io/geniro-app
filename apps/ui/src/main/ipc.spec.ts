@@ -84,6 +84,7 @@ const mocks = vi.hoisted(() => {
       ...patch,
     })),
     readLinkedWorktrees: vi.fn(async (): Promise<string[]> => []),
+    readChangesSince: vi.fn(async () => undefined),
     worktreesRoot: vi.fn(() => '/no/such/userData/worktrees'),
   };
 });
@@ -105,6 +106,7 @@ vi.mock('./settings', () => ({
 vi.mock('./git-changes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./git-changes')>()),
   readLinkedWorktrees: mocks.readLinkedWorktrees,
+  readChangesSince: mocks.readChangesSince,
 }));
 vi.mock('./worktree-service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./worktree-service')>()),
@@ -645,6 +647,32 @@ describe('registerIpc remote-access channels', () => {
     expect(
       entry.policy.refuseRemoteArgs?.([{ sidebarCollapsed: true }]),
     ).toBeFalsy();
+  });
+});
+
+describe('registerIpc getChangesSince', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    registerIpc({} as DaemonSupervisor, {} as UpdateService, noTerminals);
+  });
+
+  it('hands the read only the pull requests git may be told about', async () => {
+    const sha = 'a'.repeat(40);
+    const pullRequest = {
+      repository: 'acme/platform',
+      headRefName: 'feature/top',
+      baseRefName: 'feature/stack',
+    };
+
+    await handler(IPC.getChangesSince)({}, '/repo', sha, true, [
+      { ...pullRequest, baseRefName: '--upload-pack=x' },
+      pullRequest,
+    ]);
+
+    expect(mocks.readChangesSince).toHaveBeenCalledWith('/repo', sha, true, [
+      pullRequest,
+    ]);
   });
 });
 

@@ -580,6 +580,39 @@ export const pullRequestRefsSchema = z
   )
   .max(MAX_PULL_REQUEST_REFS);
 
+const changesPullRequestSchema = z.object({
+  repository: z.string().refine((value) => {
+    const segments = value.split('/');
+    return (
+      segments.length === 2 &&
+      segments.every((part) => pullRequestSegment.safeParse(part).success)
+    );
+  }, 'must be owner/repo'),
+  headRefName: branchNameSchema,
+  headRefOid: commitShaSchema.optional(),
+  baseRefName: branchNameSchema,
+});
+
+/** Each pull request can cost a few git processes on every read of a folder. */
+const MAX_CHANGES_PULL_REQUESTS = 32;
+
+/**
+ * `getChangesSince`'s optional fourth argument. Row by row, because a list that
+ * refused as a whole would cost the read itself, and the rows are only a better
+ * base than the default branch.
+ */
+export const changesPullRequestsSchema = z
+  .array(z.unknown())
+  .optional()
+  .transform((rows = []) =>
+    rows
+      .flatMap((row) => {
+        const parsed = changesPullRequestSchema.safeParse(row);
+        return parsed.success ? [parsed.data] : [];
+      })
+      .slice(0, MAX_CHANGES_PULL_REQUESTS),
+  );
+
 /**
  * A file the renderer asks to be revealed in Finder.
  *

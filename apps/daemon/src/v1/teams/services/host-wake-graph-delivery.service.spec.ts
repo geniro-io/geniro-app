@@ -153,6 +153,17 @@ describe('HostWakeGraphDelivery', () => {
     expect(delivered).not.toHaveBeenCalled();
   });
 
+  it('leaves a wake with no note unsettled when no turn can take it', () => {
+    const h = harness();
+    h.answer('refused');
+    const delivered = vi.fn();
+
+    h.bus.publish({ ...wake(delivered), note: null });
+
+    expect(h.oweKeyNote).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+  });
+
   it('ignores a chat’s wake', () => {
     const h = harness();
     const w = wake();

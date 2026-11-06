@@ -5332,6 +5332,21 @@ describe('CallBroker — the user writes to a caller that is waiting', () => {
     });
   });
 
+  it('tells a released caller a message may come from another thread, not only from the user', async () => {
+    const { broker } = harness({ launch: 'defer' });
+    await started(broker);
+    const waiting = broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' });
+    await new Promise((resolve) => setImmediate(resolve));
+    broker.interruptWaits('run-1', 'orch');
+
+    const envelope = await waiting;
+    expect(envelope).toMatchObject({
+      interrupted: 'user_message',
+      note: expect.stringContaining('from the user or from another thread'),
+    });
+    expect(JSON.stringify(envelope)).not.toContain('The user sent you');
+  });
+
   it('releases a wait over ALL calls, naming what it was waiting on', async () => {
     const { broker } = harness({ launch: 'defer' });
     await started(broker);

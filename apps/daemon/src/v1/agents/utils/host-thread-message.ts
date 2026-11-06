@@ -6,8 +6,8 @@ import { isHostToolCall } from './host-tool';
 
 /**
  * Whether a permission request names `message_thread`. Used only to draw its
- * card: the tool is never auto-approved, because the card is the user's one
- * look at text leaving this thread for another.
+ * card: outside `auto` that card is the user's one look at text leaving this
+ * thread for another, so the tool joins no auto-approval list.
  */
 export function isHostThreadMessageCall(
   serverName: string | null,

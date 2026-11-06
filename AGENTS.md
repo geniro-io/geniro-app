@@ -356,7 +356,7 @@ Daemon side of the contract (zod wire schemas, `@ZodResponse`, operationIds, `se
 - **Uploaded files (phone) → `<userData>/chat-uploads/<uuid>/<name>`** (`POST /v1/chats/uploads`), collected by the teardown of the run whose user messages name them.
 - **Published artifacts → `<userData>/artifacts/<runId>/<artifactId>/v<N>.html`** plus `meta.json` (version, serving key). The `show_artifact` row carries only the descriptor.
   - Every version is kept, because each transcript row opens the version it announced.
-  - Local pictures are copied into `images/<sha256>.<ext>` and inlined as `data:` URIs; no route serves a picture to the page. Only png/jpeg/webp/gif/avif judged by bytes, only from `/tmp`, the system temp dir or the run's folder; a refused picture refuses the page.
+  - Local pictures are copied into `images/<sha256>.<ext>` and inlined as `data:` URIs; no route serves a picture to the page. Only png/jpeg/webp/gif/avif judged by bytes, only from `/tmp`, the system temp dir or the run's folder; a refused picture refuses the page. Only `<img src>` is copied; the page runtime repoints a local path in the `href` or `data-*` of an element holding that one picture to its `data:` URI when the page loads, so a click-to-enlarge written that way still opens.
   - Limits refuse rather than truncate (512KB of HTML). Dropped with the run by `RunTeardownService`.
 - **Task worktrees → `<userData>/worktrees/<taskId>/`**, registry `<userData>/worktrees.json` (`apps/ui/src/main/worktree-service.ts`).
   - Every git call belongs to the Electron main process; the daemon runs no git and is only told the path. Lifetime, removal and branch rules: `apps/ui/src/main/AGENTS.md` → _Task worktrees_.

@@ -1,8 +1,16 @@
+import { ARTIFACT_IMAGE_EXTENSIONS } from './artifact-html-images';
+
 /**
  * The window event geniro's frame wrapper fires once it has written the host's
  * theme tokens onto the page — the one signal the runtime below re-themes on.
  */
 export const ARTIFACT_THEME_EVENT = 'geniro:theme';
+
+/**
+ * A value naming a picture on the machine that published the page: an absolute
+ * path or a `file:` address, the two spellings the store accepts in an `<img src>`.
+ */
+const LOCAL_PICTURE_PATTERN = `^(?:file:|/(?!/)).*\\.(?:jpeg|${ARTIFACT_IMAGE_EXTENSIONS.join('|')})$`;
 
 /**
  * What every `--geniro-*` token falls back to when no host has supplied it —
@@ -65,6 +73,12 @@ export function themeVar(name: string): string {
  * diagrams, Lucide icons and highlight.js blocks are themed and drawn on
  * DOMContentLoaded. Every adapter is a no-op when its library is absent, so a
  * page that uses none of them pays for a few kilobytes of dead code.
+ *
+ * It also repoints what a page's click-to-enlarge reads. The store copies a
+ * picture in through its `<img src>` alone, so the same path left in the `href`
+ * or `data-*` of the element holding that picture names a file the page's policy
+ * refuses. Done here rather than in the store so a page already published is
+ * mended too, and the served page does not carry each picture twice.
  *
  * It must not spell the frame's postMessage tags or the frame wrapper's own
  * markers: it also ships in the RAW document a saved file is built from, which
@@ -420,6 +434,28 @@ export const ARTIFACT_RUNTIME_SCRIPT = `
   }
   window.addEventListener(THEME_EVENT, retheme);
 
+  // An element holding a second picture says nothing about which one its path meant.
+  function repointPicturePaths() {
+    var localPicture = new RegExp(${JSON.stringify(LOCAL_PICTURE_PATTERN)}, 'i');
+    var images = document.querySelectorAll('img[src^="data:"]');
+    for (var i = 0; i < images.length; i++) {
+      var uri = images[i].getAttribute('src');
+      var node = images[i];
+      while (node && node.querySelectorAll('img').length <= 1) {
+        for (var j = 0; j < node.attributes.length; j++) {
+          var attribute = node.attributes[j];
+          if (
+            (attribute.name === 'href' || attribute.name.indexOf('data-') === 0) &&
+            localPicture.test(attribute.value.trim())
+          ) {
+            attribute.value = uri;
+          }
+        }
+        node = node.parentElement;
+      }
+    }
+  }
+
   ready(function () {
     applied = JSON.stringify(theme());
     attempt('mermaid', function () {
@@ -427,6 +463,7 @@ export const ARTIFACT_RUNTIME_SCRIPT = `
     });
     attempt('icons', icons);
     attempt('code', highlight);
+    attempt('picture paths', repointPicturePaths);
   });
 
   window.geniro = {

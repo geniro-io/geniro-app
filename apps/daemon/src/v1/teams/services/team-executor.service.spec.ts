@@ -2039,6 +2039,7 @@ describe('TeamExecutorService', () => {
       await callBroker.callAgent(run.id, 'orch', {
         agent: 'helper',
         message: 'look',
+        title: 'Look',
         mode: 'async',
       });
       await drain();
@@ -2178,6 +2179,7 @@ describe('TeamExecutorService', () => {
       await callBroker.callAgent(run.id, 'orch', {
         agent: 'helper',
         message: 'look',
+        title: 'Look',
         mode: 'async',
       });
       await drain();

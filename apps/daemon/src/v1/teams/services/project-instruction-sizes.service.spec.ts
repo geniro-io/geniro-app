@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ProjectsService } from '../../projects/services/projects.service';
 import { projectInstructionsText } from '../../projects/utils/project-instructions';
@@ -20,7 +21,7 @@ const PROJECT = {
 };
 const INDEX = 'Memory index (data):\n- m1 [project] Use pnpm (project)';
 
-function subjectWith(memoryIndex: string | null) {
+function subjectWith(memoryIndex: string | null, knowledgeIndex?: string) {
   const projects = { get: vi.fn(async () => PROJECT) };
   const memory = {
     runSnapshot: vi.fn(async () => ({ nativeMemoryOff: false, memoryIndex })),
@@ -28,6 +29,11 @@ function subjectWith(memoryIndex: string | null) {
   const subject = new ProjectInstructionSizesService(
     projects as unknown as ProjectsService,
     memory as unknown as MemoryService,
+    {
+      runSnapshot: vi.fn(async () => ({
+        knowledgeIndex: knowledgeIndex ?? null,
+      })),
+    } as unknown as KnowledgeService,
     new InstructionSizesService(
       new AgentAdapterRegistry([new ClaudeAdapter()]),
     ),
@@ -64,6 +70,17 @@ describe('ProjectInstructionSizesService', () => {
         reaches: 1,
       },
     ]);
+  });
+
+  it('measures the knowledge index a run there would snapshot', async () => {
+    const { subject } = subjectWith(null, 'Knowledge index');
+
+    const answer = await subject.measure('p-shop', {});
+
+    expect(
+      answer.agents[0]!.parts.find((part) => part.source === 'knowledgeIndex')
+        ?.chars,
+    ).toBe('Knowledge index'.length);
   });
 
   it('leaves the memory index out when a run there would have none', async () => {

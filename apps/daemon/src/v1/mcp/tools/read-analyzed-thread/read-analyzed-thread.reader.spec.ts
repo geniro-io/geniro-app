@@ -169,6 +169,7 @@ describe('ReadAnalyzedThreadTool', () => {
       replyLanguage: 'Russian',
       taskInstructions: 'CARD',
       memoryIndex: 'INDEX',
+      knowledgeIndex: 'DOCS',
     };
     const describeTeam = vi.fn<TeamChangeService['describe']>(() =>
       Promise.resolve({ slug: 'dev-team' }),

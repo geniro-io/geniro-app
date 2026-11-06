@@ -129,6 +129,7 @@ Beside your CLI's tools, this app offers tools of its own, named below (in your 
 - \`report_findings\`: the defects a code review found, all in one call.
 - \`propose_plan\`: a plan the user approves before you start, when you have not been told to go ahead and the request could be read more than one way or touches something hard to undo. \`propose_patch\`: a change to one file you would rather hand the user to apply than make yourself.
 - \`memory_search\`, then \`memory_read\`: a preference, convention, decision or command another agent may already have recorded — at the start of a task, and before you ask the user or guess. \`memory_save\`: one durable fact the next agent, on any CLI and in any later chat, would otherwise have to rediscover — a correction the user gave, a convention and its reason, a command that works; never a secret or your progress. \`memory_forget\`: an entry that turned out wrong.
+- \`knowledge_search\`, then \`knowledge_read\`: a guide, recipe or checklist the user keeps — when the knowledge index in your instructions, or your instructions themselves, name one that fits, or before you work out by hand how something is done here. \`knowledge_save\`: a new document or a change to one that later runs would otherwise lack; while the user reviews agent writes it waits for them.
 - \`search_chats\`, then \`read_chat_context\`: an earlier decision, fix or context from another conversation.
 - \`list_tasks\`, \`get_task\`, \`create_task\`, \`update_task\`: the user's task board, when they ask to find, file or change work on it.
 - \`read_teams\`, then \`propose_team\`: a saved team of agents the user asks you to build or change.`;
@@ -176,6 +177,11 @@ export interface TurnInstructionParts {
    * data.
    */
   memoryIndex?: string | null;
+  /**
+   * The knowledge store's index, as snapshotted onto `Run.knowledgeIndex`:
+   * documents the user wrote or approved, with when to read each.
+   */
+  knowledgeIndex?: string | null;
   /**
    * What the board card this run works asks of it — its label instructions,
    * then geniro's report ask, as stored on `Run.taskInstructions`. Absent for
@@ -240,6 +246,7 @@ export const TURN_INSTRUCTION_SOURCES = [
   'customInstructions',
   'projectInstructions',
   'memoryIndex',
+  'knowledgeIndex',
   'taskInstructions',
   'teamInstructions',
   'instructionBlocks',
@@ -275,7 +282,8 @@ export const TURN_INSTRUCTION_SEPARATOR = '\n\n';
  * qualify it. The user's global
  * instructions come next, then the run's project's own, then the shared
  * memory's index — notes the user
- * wrote or approved, which their standing instructions outrank — then what a board
+ * wrote or approved, which their standing instructions outrank — and the
+ * knowledge index, then what a board
  * card asks of the run working it —
  * its label instructions, written for a class of card, and the report ask that
  * run needs.
@@ -313,6 +321,10 @@ export function turnInstructionParts(
     [
       'memoryIndex',
       parts.memoryIndex ? redactSecrets(parts.memoryIndex) : null,
+    ],
+    [
+      'knowledgeIndex',
+      parts.knowledgeIndex ? redactSecrets(parts.knowledgeIndex) : null,
     ],
     ['taskInstructions', parts.taskInstructions],
     ['teamInstructions', parts.teamInstructions],

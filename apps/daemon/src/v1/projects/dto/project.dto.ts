@@ -8,6 +8,8 @@ import {
 import { AgentKindSchema } from '../../runs/runs.types';
 import { TaskSourceSchema, TaskStatusSchema } from '../../tasks/tasks.types';
 import {
+  KNOWLEDGE_FATES,
+  KnowledgeRenamedSchema,
   MAX_PROJECT_INSTRUCTION_BLOCKS,
   PROJECT_DESCRIPTION_MAX,
   PROJECT_MAX_CONCURRENT_CEILING,
@@ -173,5 +175,28 @@ export class ProjectDeletedDto extends createZodDto(
       .number()
       .int()
       .describe('How many of its tasks were removed with it'),
+    knowledgeMoved: z
+      .number()
+      .int()
+      .describe('How many of its knowledge documents moved to Global'),
+    knowledgeDeleted: z
+      .number()
+      .int()
+      .describe('How many of its knowledge documents were deleted'),
+    knowledgeRenamed: z
+      .array(KnowledgeRenamedSchema)
+      .describe('Handles a move to Global changed, because Global held them'),
+  }),
+) {}
+
+/** What a project's delete does with the documents filed under it. */
+export class DeleteProjectQueryDto extends createZodDto(
+  z.object({
+    knowledge: z
+      .enum(KNOWLEDGE_FATES)
+      .optional()
+      .describe(
+        'What happens to the documents filed under the project: move them to Global, or delete them; default global',
+      ),
   }),
 ) {}

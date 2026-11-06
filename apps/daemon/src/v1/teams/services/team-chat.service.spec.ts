@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunWire } from '../../agents/chat.types';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { ThreadAnalysisService } from '../../agents/services/thread-analysis.service';
+import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ProjectDao } from '../../projects/dao/project.dao';
 import { member, teamOf } from '../__tests__/team-builders';
@@ -44,6 +45,10 @@ describe('TeamChatService', () => {
     offeredApproval: ReturnType<typeof vi.fn>;
   };
   let analyses: { deleteTeamAnalyses: ReturnType<typeof vi.fn> };
+  let knowledge: {
+    settleDeletedTeam: ReturnType<typeof vi.fn>;
+    useTeamLookup: ReturnType<typeof vi.fn>;
+  };
   let memory: {
     enabled: boolean;
     settleDeletedTeam: ReturnType<typeof vi.fn>;
@@ -71,6 +76,14 @@ describe('TeamChatService', () => {
       settleDeletedTeam: vi.fn(async () => 0),
       useTeamLookup: vi.fn(),
     };
+    knowledge = {
+      settleDeletedTeam: vi.fn(async () => ({
+        moved: 0,
+        deleted: 0,
+        renamed: [],
+      })),
+      useTeamLookup: vi.fn(),
+    };
     overlays = new TeamOverlayStoreService({ teamsDir: dir });
     const projects = {
       getById: async (id: string) =>
@@ -82,6 +95,7 @@ describe('TeamChatService', () => {
       chats as unknown as ChatService,
       analyses as unknown as ThreadAnalysisService,
       memory as unknown as MemoryService,
+      knowledge as unknown as KnowledgeService,
       new TeamOverlayService(
         overlays,
         store,

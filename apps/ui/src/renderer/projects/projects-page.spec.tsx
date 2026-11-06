@@ -27,6 +27,9 @@ const projectsApi = vi.hoisted(() => ({
   openProjectChat: vi.fn(),
   discardProjectChat: vi.fn(),
 }));
+const knowledgeApi = vi.hoisted(() => ({
+  knowledgeCounts: vi.fn(),
+}));
 const teamsApi = vi.hoisted(() => ({
   listTeams: vi.fn(async () => []),
   listTeamOverlays: vi.fn(),
@@ -64,6 +67,7 @@ vi.mock('../daemon-api', async (importOriginal) => {
     ...(await importOriginal<typeof import('../daemon-api')>()),
     createDaemonApis: () => ({
       projects: projectsApi,
+      knowledge: knowledgeApi,
       teams: teamsApi,
       capabilities: { getCapabilities: async () => ({}) },
       agents: withVocabulary({
@@ -152,6 +156,11 @@ let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
 beforeEach(() => {
+  knowledgeApi.knowledgeCounts.mockResolvedValue({
+    places: [],
+    active: 0,
+    waiting: 0,
+  });
   projectsApi.listProjects.mockResolvedValue([aProject()]);
   projectsApi.resolveProjectForFolder.mockResolvedValue({ project: null });
   projectsApi.measureProjectInstructionSizes.mockResolvedValue({
@@ -233,6 +242,7 @@ async function mount(
         onProjectShown={() => undefined}
         onOpenBoard={() => undefined}
         onOpenTeam={() => undefined}
+        onOpenKnowledge={() => undefined}
         {...props}
       />,
     );
@@ -413,6 +423,7 @@ describe('Projects page', () => {
       onProjectShown: shown,
       onOpenBoard: () => undefined,
       onOpenTeam: () => undefined,
+      onOpenKnowledge: () => undefined,
     };
     const el = await mount({ ...props, request: { projectId: 'p1' } });
     expect(el.querySelector('h1')?.textContent).toBe('One');
@@ -604,6 +615,7 @@ describe('Projects page', () => {
       },
       onTaskChanged: () => () => undefined,
       onReconnect: () => () => undefined,
+      onKnowledgeChanged: () => () => undefined,
     } as unknown as DaemonClient;
     projectsApi.listProjects.mockResolvedValue([
       aProject({
@@ -687,6 +699,7 @@ describe('Projects page', () => {
     projectsApi.deleteProject.mockResolvedValue({
       deleted: true,
       tasksRemoved: 0,
+      knowledgeRenamed: [],
     });
     const el = await mount();
 
@@ -723,6 +736,214 @@ describe('Projects page', () => {
     expect(pageOfEntry()).toBeUndefined();
   });
 
+  it('asks what happens to the project’s documents, moves them to Global by default and sends the choice', async () => {
+    knowledgeApi.knowledgeCounts.mockResolvedValue({
+      places: [{ place: 'project:p1', active: 2, waiting: 1, documents: 3 }],
+      active: 2,
+      waiting: 1,
+    });
+    projectsApi.listProjects.mockResolvedValue([
+      aProject({ id: 'p1', name: 'One' }),
+    ]);
+    projectsApi.deleteProject.mockResolvedValue({
+      deleted: true,
+      tasksRemoved: 0,
+      knowledgeRenamed: [],
+    });
+    const el = await mountOpen();
+    expect(
+      el.querySelector('[data-slot="project-knowledge"]')?.textContent,
+    ).toContain('2 documents');
+
+    await act(async () => {
+      buttonNamed('Delete One').click();
+    });
+    await settle();
+    const dialog = document.body.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('Its 3 knowledge documents');
+    expect(dialog.textContent).toContain('Move them to Global');
+
+    await act(async () => {
+      [...dialog.querySelectorAll('button')]
+        .find((node) => node.textContent?.includes('Delete them too'))
+        ?.click();
+    });
+    await act(async () => {
+      buttonReading('Delete project').click();
+    });
+    await settle();
+
+    expect(projectsApi.deleteProject).toHaveBeenCalledWith({
+      projectId: 'p1',
+      knowledge: 'delete',
+    });
+  });
+
+  it('holds the delete until the count of the project’s documents answers', async () => {
+    const answers: ((counts: unknown) => void)[] = [];
+    knowledgeApi.knowledgeCounts.mockImplementation(
+      () => new Promise((resolve) => answers.push(resolve)),
+    );
+    projectsApi.listProjects.mockResolvedValue([
+      aProject({ id: 'p1', name: 'One' }),
+    ]);
+    projectsApi.deleteProject.mockResolvedValue({
+      deleted: true,
+      tasksRemoved: 0,
+      knowledgeRenamed: [],
+    });
+    await mountOpen();
+    await act(async () => {
+      buttonNamed('Delete One').click();
+    });
+
+    expect(buttonReading('Delete project').disabled).toBe(true);
+
+    await act(async () => {
+      answers.forEach((answer) =>
+        answer({
+          places: [
+            { place: 'project:p1', active: 2, waiting: 0, documents: 2 },
+          ],
+          active: 2,
+          waiting: 0,
+        }),
+      );
+    });
+    await settle();
+
+    expect(buttonReading('Delete project').disabled).toBe(false);
+    expect(projectsApi.deleteProject).not.toHaveBeenCalled();
+  });
+
+  it('says the count of its documents failed, and lets the delete go ahead on Global', async () => {
+    knowledgeApi.knowledgeCounts.mockRejectedValue(
+      new Error('daemon GET /v1/knowledge/counts failed (500): boom'),
+    );
+    projectsApi.listProjects.mockResolvedValue([
+      aProject({ id: 'p1', name: 'One' }),
+    ]);
+    projectsApi.deleteProject.mockResolvedValue({
+      deleted: true,
+      tasksRemoved: 0,
+      knowledgeRenamed: [],
+    });
+    await mountOpen();
+    await act(async () => {
+      buttonNamed('Delete One').click();
+    });
+    await settle();
+
+    expect(
+      document.body.querySelector('[role="dialog"]')?.textContent,
+    ).toContain(
+      'Its knowledge documents could not be counted. Any it holds move to Global.',
+    );
+    expect(buttonReading('Delete project').disabled).toBe(false);
+
+    await act(async () => {
+      buttonReading('Delete project').click();
+    });
+    await settle();
+
+    expect(projectsApi.deleteProject).toHaveBeenCalledWith({
+      projectId: 'p1',
+      knowledge: 'global',
+    });
+  });
+
+  it('takes the choice back to Move them to Global when the dialog opens again', async () => {
+    knowledgeApi.knowledgeCounts.mockResolvedValue({
+      places: [{ place: 'project:p1', active: 2, waiting: 0, documents: 2 }],
+      active: 2,
+      waiting: 0,
+    });
+    projectsApi.listProjects.mockResolvedValue([
+      aProject({ id: 'p1', name: 'One' }),
+    ]);
+    projectsApi.deleteProject.mockResolvedValue({
+      deleted: true,
+      tasksRemoved: 0,
+      knowledgeRenamed: [],
+    });
+    await mountOpen();
+    await act(async () => {
+      buttonNamed('Delete One').click();
+    });
+    await settle();
+    await act(async () => {
+      [
+        ...document.body.querySelectorAll<HTMLButtonElement>(
+          '[role="dialog"] button',
+        ),
+      ]
+        .find((node) => node.textContent?.includes('Delete them too'))
+        ?.click();
+    });
+    await act(async () => {
+      [
+        ...document.body.querySelectorAll<HTMLButtonElement>(
+          '[role="dialog"] button',
+        ),
+      ]
+        .find((node) => node.textContent === 'Cancel')
+        ?.click();
+    });
+    await settle();
+    await act(async () => {
+      buttonNamed('Delete One').click();
+    });
+    await settle();
+    await act(async () => {
+      buttonReading('Delete project').click();
+    });
+    await settle();
+
+    expect(projectsApi.deleteProject).toHaveBeenCalledWith({
+      projectId: 'p1',
+      knowledge: 'global',
+    });
+  });
+
+  it('says which handles a move to Global changed', async () => {
+    projectsApi.listProjects.mockResolvedValue([
+      aProject({ id: 'p1', name: 'One' }),
+      aProject({ id: 'p2', name: 'Two' }),
+    ]);
+    projectsApi.deleteProject.mockResolvedValue({
+      deleted: true,
+      tasksRemoved: 0,
+      knowledgeRenamed: [{ from: 'guide', to: 'guide-2' }],
+    });
+    const el = await mountOpen();
+
+    await act(async () => {
+      buttonNamed('Delete One').click();
+    });
+    await act(async () => {
+      buttonReading('Delete project').click();
+    });
+    await settle();
+
+    expect(el.textContent).toContain('guide → guide-2');
+  });
+
+  it('asks nothing about documents when the project holds none', async () => {
+    projectsApi.listProjects.mockResolvedValue([
+      aProject({ id: 'p1', name: 'One' }),
+    ]);
+    const el = await mountOpen();
+    await act(async () => {
+      buttonNamed('Delete One').click();
+    });
+    await settle();
+
+    expect(el.isConnected).toBe(true);
+    expect(
+      document.body.querySelector('[data-slot="knowledge-fate"]'),
+    ).toBeNull();
+  });
+
   it('deletes only on confirm, keeping the project’s run configurations unbound', async () => {
     projectsApi.listProjects.mockResolvedValue([
       aProject({ id: 'p1', name: 'One' }),
@@ -731,6 +952,7 @@ describe('Projects page', () => {
     projectsApi.deleteProject.mockResolvedValue({
       deleted: true,
       tasksRemoved: 3,
+      knowledgeRenamed: [],
     });
     await seedRunConfigs([
       aRunConfig({ id: 'a', projectId: 'p1' }),
@@ -756,7 +978,10 @@ describe('Projects page', () => {
     });
     await settle();
 
-    expect(projectsApi.deleteProject).toHaveBeenCalledWith({ projectId: 'p1' });
+    expect(projectsApi.deleteProject).toHaveBeenCalledWith({
+      projectId: 'p1',
+      knowledge: 'global',
+    });
     expect(
       (await storedRunConfigs()).map((config) => [
         config.id,
@@ -948,6 +1173,7 @@ describe('Projects page', () => {
         onProjectsChanged: () => () => undefined,
         onTaskChanged: () => () => undefined,
         onReconnect: () => () => undefined,
+        onKnowledgeChanged: () => () => undefined,
       } as unknown as DaemonClient,
     });
 
@@ -1333,6 +1559,7 @@ describe('Projects page', () => {
           onProjectsChanged: () => () => undefined,
           onTaskChanged: () => () => undefined,
           onReconnect: () => () => undefined,
+          onKnowledgeChanged: () => () => undefined,
         } as unknown as DaemonClient,
       });
       await act(async () => {

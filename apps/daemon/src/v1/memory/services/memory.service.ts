@@ -7,6 +7,7 @@ import { chatTextMatchQuery } from '../../agents/utils/chat-text-query';
 import { hasHiddenText } from '../../agents/utils/hidden-text';
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import { ProjectDao } from '../../projects/dao/project.dao';
+import type { RunPlace, RunPlaceFacts } from '../../projects/projects.types';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { MemoryDao } from '../dao/memory.dao';
 import { Memory } from '../entity/memory.entity';
@@ -35,12 +36,10 @@ import {
   type MemoryList,
   type MemoryListQuery,
   type MemoryPatch,
-  type MemoryPlace,
   type MemoryRefusalCode,
   type MemoryRunSnapshot,
   type MemorySaveInput,
   type MemorySaveOutcome,
-  type MemoryScopeFacts,
   type MemoryStatusOutcome,
   type MemoryUserStatus,
   parseMemoryHandle,
@@ -143,30 +142,15 @@ export class MemoryService {
     return this.config;
   }
 
-  /**
-   * Where a run's memory is filed. The project: the live project settled when
-   * the run was created (`ProjectScopeService.projectOfRun`; an older run's
-   * task card's project, else the project bound to its folder), else none.
-   * The team: a team run's, else none — a chat, an analysis and a builder chat
-   * have global and project memory only.
-   */
-  async scopeOf(runId: string): Promise<MemoryPlace> {
+  /** Where a run's memory is filed (`ProjectScopeService.placeOf`). */
+  async scopeOf(runId: string): Promise<RunPlace> {
     const run = await this.runs.getById(runId, this.em.fork());
-    if (!run) {
-      return { projectId: null, teamSlug: null };
-    }
-    return {
-      projectId: (await this.scope.projectOfRun(run))?.id ?? null,
-      teamSlug: run.teamId,
-    };
+    return run ? this.scope.placeOf(run) : { projectId: null, teamSlug: null };
   }
 
   /** {@link scopeOf} for a run whose row does not exist yet. */
-  async scopeFor(facts: MemoryScopeFacts): Promise<MemoryPlace> {
-    return {
-      projectId: (await this.scope.projectOf(facts)).project?.id ?? null,
-      teamSlug: facts.teamSlug ?? null,
-    };
+  scopeFor(facts: RunPlaceFacts): Promise<RunPlace> {
+    return this.scope.placeFor(facts);
   }
 
   /**
@@ -182,7 +166,7 @@ export class MemoryService {
    * successful import does), so an agent keeps one memory without the CLIs'
    * notes being hidden before they are brought over.
    */
-  async runSnapshot(facts: MemoryScopeFacts): Promise<MemoryRunSnapshot> {
+  async runSnapshot(facts: RunPlaceFacts): Promise<MemoryRunSnapshot> {
     const none: MemoryRunSnapshot = {
       nativeMemoryOff: false,
       memoryIndex: null,
@@ -227,7 +211,7 @@ export class MemoryService {
   /** The best active entries a run in `place` may see, best first. */
   async search(
     query: string,
-    place: MemoryPlace,
+    place: RunPlace,
     limit: number,
   ): Promise<MemoryHit[]> {
     const match = chatTextMatchQuery(query);
@@ -256,7 +240,7 @@ export class MemoryService {
    */
   async read(
     handles: readonly string[],
-    place: MemoryPlace,
+    place: RunPlace,
   ): Promise<{ entries: MemoryEntry[]; missing: string[] }> {
     const wanted = handles.slice(0, MEMORY_READ_MAX);
     const numbers = wanted
@@ -299,7 +283,7 @@ export class MemoryService {
   save(
     actor: MemoryActor,
     input: MemorySaveInput,
-    place: MemoryPlace,
+    place: RunPlace,
   ): Promise<MemorySaveOutcome> {
     return this.serialize(() => this.saveNow(actor, input, place));
   }
@@ -312,7 +296,7 @@ export class MemoryService {
     actor: MemoryActor,
     handle: string,
     reason: string,
-    place: MemoryPlace,
+    place: RunPlace,
   ): Promise<MemoryForgetOutcome> {
     return this.serialize(() => this.forgetNow(actor, handle, reason, place));
   }
@@ -351,7 +335,7 @@ export class MemoryService {
    * project's, then global, each group most recently used first — what a run's
    * memory index is cut from.
    */
-  async listVisible(place: MemoryPlace): Promise<MemoryEntry[]> {
+  async listVisible(place: RunPlace): Promise<MemoryEntry[]> {
     const rows = await this.memories.getInScope(
       { statuses: ['active'], places: { visibleTo: place } },
       undefined,
@@ -554,7 +538,7 @@ export class MemoryService {
   }
 
   /** Active and pending entries filed in `place` whose title says the same. */
-  async similarTo(title: string, place: MemoryPlace): Promise<Memory[]> {
+  async similarTo(title: string, place: RunPlace): Promise<Memory[]> {
     return this.nearDuplicates(
       { title, body: '' },
       place,
@@ -674,7 +658,7 @@ export class MemoryService {
   private async saveNow(
     actor: MemoryActor,
     input: MemorySaveInput,
-    place: MemoryPlace,
+    place: RunPlace,
   ): Promise<MemorySaveOutcome> {
     const invalid = this.refuseInvalid(actor, input);
     if (invalid) {
@@ -718,7 +702,7 @@ export class MemoryService {
   private async writeRow(
     actor: MemoryActor,
     input: MemoryText,
-    target: MemoryPlace,
+    target: RunPlace,
     existing: Memory | null,
     em: EntityManager,
   ): Promise<MemorySaveOutcome> {
@@ -760,7 +744,7 @@ export class MemoryService {
     actor: MemoryActor,
     handle: string,
     reason: string,
-    place: MemoryPlace,
+    place: RunPlace,
   ): Promise<MemoryForgetOutcome> {
     if (isAgent(actor) && !this.config.enabled) {
       return refused('MEMORY_DISABLED', 'the user has turned memory off');
@@ -863,7 +847,7 @@ export class MemoryService {
 
   private async findVisible(
     handle: string,
-    place: MemoryPlace,
+    place: RunPlace,
     em: EntityManager,
   ): Promise<Memory | null> {
     const number = parseMemoryHandle(handle);
@@ -884,7 +868,7 @@ export class MemoryService {
    */
   private async nearDuplicates(
     input: MemoryText,
-    target: MemoryPlace,
+    target: RunPlace,
     existing: Memory | null,
     em: EntityManager,
   ): Promise<Memory[]> {
@@ -969,7 +953,7 @@ function isAgent(actor: MemoryActor): boolean {
   return actor.kind === 'agent' || actor.kind === 'analysis';
 }
 
-function placeRank(row: Memory, place: MemoryPlace): number {
+function placeRank(row: Memory, place: RunPlace): number {
   if (place.teamSlug !== null && row.teamSlug === place.teamSlug) {
     return 0;
   }
@@ -979,7 +963,7 @@ function placeRank(row: Memory, place: MemoryPlace): number {
 function placeOfInput(input: {
   projectId: string | null;
   teamSlug?: string | null;
-}): MemoryPlace {
+}): RunPlace {
   return { projectId: input.projectId, teamSlug: input.teamSlug ?? null };
 }
 
@@ -1000,8 +984,8 @@ function refused(code: MemoryRefusalCode, reason: string): Refusal {
 function targetPlace(
   input: MemorySaveInput,
   existing: Memory | null,
-  place: MemoryPlace,
-): MemoryPlace | undefined {
+  place: RunPlace,
+): RunPlace | undefined {
   if (input.scope === 'global') {
     return { projectId: null, teamSlug: null };
   }

@@ -10,6 +10,7 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import type { SubagentRecoveryService } from '../../agents/services/subagent-recovery.service';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
+import { KnowledgeEventBus } from '../../knowledge/services/knowledge-events.bus';
 import { MemoryEventBus } from '../../memory/services/memory-events.bus';
 import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { ShareEventBus } from '../../shares/services/share-events.bus';
@@ -83,6 +84,36 @@ function wireItem(runId: string, seq: number): ItemWire {
 }
 
 describe('NotificationsGateway', () => {
+  it('broadcasts a knowledge write to every client, naming no text', () => {
+    const knowledge = new KnowledgeEventBus();
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+      subagents(),
+      new ShareEventBus(),
+      new MemoryEventBus(),
+      new ProjectEventBus(),
+      knowledge,
+    );
+    const emit = vi.fn();
+    gw.afterInit({ emit, to: vi.fn() } as unknown as Server);
+
+    const change = {
+      documentId: 'd1',
+      change: 'approved' as const,
+      place: 'project:p1',
+    };
+    knowledge.publish(change);
+
+    expect(emit).toHaveBeenCalledWith('knowledge_changed', change);
+  });
+
   it('disconnects a socket presenting a bad token and never says hello', () => {
     const gw = new NotificationsGateway(
       runtime,
@@ -97,6 +128,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const socket = fakeSocket('wrong-token');
 
@@ -120,6 +152,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -146,6 +179,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -199,6 +233,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -238,6 +273,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -261,6 +297,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const socket = fakeSocket('good-token');
     let resolveJoin!: () => void;
@@ -300,6 +337,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -325,6 +363,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     let calls = 0;
     const emit = vi.fn(() => {
@@ -365,6 +404,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a usage event must never take it — the Stats page
@@ -404,6 +444,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a task write must never take it — a board is not
@@ -439,6 +480,7 @@ describe('NotificationsGateway', () => {
       shares,
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const emit = vi.fn();
     const roomEmit = vi.fn();
@@ -481,6 +523,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       memories,
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -528,6 +571,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       projects,
+      new KnowledgeEventBus(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -556,6 +600,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const desktop = fakeSocket('good-token');
     const phone = {
@@ -588,6 +633,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a deletion must never take it — every OTHER
@@ -632,6 +678,7 @@ describe('runs_changed broadcast', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -684,6 +731,7 @@ describe('verdict round-trip', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
 
     const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
@@ -720,6 +768,7 @@ describe('verdict round-trip', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
 
     track('req-o');
@@ -760,6 +809,7 @@ describe('verdict round-trip', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     expect(
       gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
@@ -797,6 +847,7 @@ describe('verdict round-trip', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
 
     track('req-a');

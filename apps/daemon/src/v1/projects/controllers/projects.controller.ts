@@ -13,13 +13,18 @@ import { ZodResponse } from 'nestjs-zod';
 
 import {
   CreateProjectDto,
+  DeleteProjectQueryDto,
   ProjectDeletedDto,
   ProjectDto,
   ProjectForFolderDto,
   ProjectForFolderQueryDto,
   UpdateProjectDto,
 } from '../dto/project.dto';
-import type { ProjectForFolder, ProjectWire } from '../projects.types';
+import type {
+  ProjectDeleted,
+  ProjectForFolder,
+  ProjectWire,
+} from '../projects.types';
 import { ProjectsService } from '../services/projects.service';
 
 /**
@@ -103,7 +108,8 @@ export class ProjectsController {
   @ZodResponse({ status: 200, type: ProjectDeletedDto })
   remove(
     @Param('projectId') projectId: string,
-  ): Promise<{ deleted: boolean; tasksRemoved: number }> {
-    return this.projects.remove(projectId);
+    @Query() query: DeleteProjectQueryDto,
+  ): Promise<ProjectDeleted> {
+    return this.projects.remove(projectId, query.knowledge ?? 'global');
   }
 }

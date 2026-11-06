@@ -834,6 +834,7 @@ describe('TeamChangeService', () => {
       taskInstructions: 'CARD',
       projectInstructions: 'PROJECT',
       memoryIndex: 'INDEX',
+      knowledgeIndex: 'DOCS',
     });
     const sizes = described.instructionSizes as {
       memberId: string;
@@ -851,6 +852,7 @@ describe('TeamChangeService', () => {
         expect.objectContaining({ source: 'taskInstructions', chars: 4 }),
         expect.objectContaining({ source: 'projectInstructions', chars: 7 }),
         expect.objectContaining({ source: 'memoryIndex', chars: 5 }),
+        expect.objectContaining({ source: 'knowledgeIndex', chars: 4 }),
         expect.objectContaining({ source: 'instructions', chars: 9 }),
       ]),
     );

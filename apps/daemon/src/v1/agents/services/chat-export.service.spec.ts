@@ -111,6 +111,8 @@ function build(
                 teamInstructions: null,
                 projectInstructions: 'Project: Billing\n\nUse pnpm.',
                 memoryIndex: 'Memory index …\n- m1 [user] Terse (global)',
+                knowledgeIndex:
+                  'Knowledge index …\n- guide — Guide. When: now.',
                 nativeMemoryOff: false,
                 agentOptions: null,
                 lastMetricsReading:
@@ -205,6 +207,9 @@ describe('ChatExportService', () => {
     expect(doc.run.projectInstructions).toBe('Project: Billing\n\nUse pnpm.');
     expect(doc.run.memoryIndex).toBe(
       'Memory index …\n- m1 [user] Terse (global)',
+    );
+    expect(doc.run.knowledgeIndex).toBe(
+      'Knowledge index …\n- guide — Guide. When: now.',
     );
     expect(doc.run.nativeMemoryOff).toBe(false);
     expect(doc.run.agentOptions).toBeNull();

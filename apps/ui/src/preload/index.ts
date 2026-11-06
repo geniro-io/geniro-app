@@ -206,6 +206,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.saveMemoryExport, markdown) as ReturnType<
       GeniroApi['saveMemoryExport']
     >,
+  saveKnowledgeExport: (input) =>
+    ipcRenderer.invoke(IPC.saveKnowledgeExport, input) as ReturnType<
+      GeniroApi['saveKnowledgeExport']
+    >,
   prepareTaskWorktree: (input) =>
     ipcRenderer.invoke(IPC.prepareTaskWorktree, input) as ReturnType<
       GeniroApi['prepareTaskWorktree']

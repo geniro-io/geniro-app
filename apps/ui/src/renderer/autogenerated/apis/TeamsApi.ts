@@ -48,6 +48,7 @@ import type {
   TeamHealthDto,
   TeamOverlayDto,
   TeamOverlayScopesDto,
+  TeamRemovedDto,
   TeamSummaryDto,
   ThreadAnalysisDto,
   UploadTeamAvatarDto,
@@ -79,6 +80,7 @@ export interface TeamsApiCreateTeamRequest {
 export interface TeamsApiDeleteTeamRequest {
     slug: string;
     memories?: DeleteTeamMemoriesEnum;
+    knowledge?: DeleteTeamKnowledgeEnum;
 }
 
 export interface TeamsApiDeleteTeamOverlayRequest {
@@ -475,7 +477,7 @@ export class TeamsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async deleteTeamRaw(requestParameters: TeamsApiDeleteTeamRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TeamDeletedDto>> {
+    async deleteTeamRaw(requestParameters: TeamsApiDeleteTeamRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TeamRemovedDto>> {
         if (requestParameters['slug'] == null) {
             throw new runtime.RequiredError(
                 'slug',
@@ -487,6 +489,10 @@ export class TeamsApi extends runtime.BaseAPI {
 
         if (requestParameters['memories'] != null) {
             queryParameters['memories'] = requestParameters['memories'];
+        }
+
+        if (requestParameters['knowledge'] != null) {
+            queryParameters['knowledge'] = requestParameters['knowledge'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};
@@ -516,7 +522,7 @@ export class TeamsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async deleteTeam(requestParameters: TeamsApiDeleteTeamRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamDeletedDto> {
+    async deleteTeam(requestParameters: TeamsApiDeleteTeamRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TeamRemovedDto> {
         const response = await this.deleteTeamRaw(requestParameters, initOverrides);
         return await response.value();
     }
@@ -1976,6 +1982,14 @@ export const DeleteTeamMemoriesEnum = {
     Global: 'global'
 } as const;
 export type DeleteTeamMemoriesEnum = typeof DeleteTeamMemoriesEnum[keyof typeof DeleteTeamMemoriesEnum];
+/**
+ * @export
+ */
+export const DeleteTeamKnowledgeEnum = {
+    Global: 'global',
+    Delete: 'delete'
+} as const;
+export type DeleteTeamKnowledgeEnum = typeof DeleteTeamKnowledgeEnum[keyof typeof DeleteTeamKnowledgeEnum];
 /**
  * @export
  */

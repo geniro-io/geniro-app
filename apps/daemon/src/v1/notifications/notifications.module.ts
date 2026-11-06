@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
 import { DiagnosticsModule } from '../diagnostics/diagnostics.module';
+import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { SharesModule } from '../shares/shares.module';
@@ -24,8 +25,9 @@ import { WsPresenceService } from './services/ws-presence.service';
   // `StatsModule` for the usage bus, and `TasksModule` for the task bus, on the
   // same terms: each module observes its own writes, this channel observes
   // each bus, and nothing under any of them depends on the gateway — so there
-  // is still no cycle. `SharesModule` for the share bus and `MemoryModule` for
-  // the memory bus, likewise, and `ProjectsModule` for the project bus.
+  // is still no cycle. `SharesModule` for the share bus, `MemoryModule` for the
+  // memory bus and `KnowledgeModule` for the knowledge bus, likewise, and
+  // `ProjectsModule` for the project bus.
   imports: [
     AgentsModule,
     DiagnosticsModule,
@@ -33,6 +35,7 @@ import { WsPresenceService } from './services/ws-presence.service';
     TasksModule,
     SharesModule,
     MemoryModule,
+    KnowledgeModule,
     ProjectsModule,
   ],
   providers: [NotificationsGateway, WsPresenceService],

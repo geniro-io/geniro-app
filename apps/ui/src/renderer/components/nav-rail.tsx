@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   ChartColumn,
   FolderGit2,
   KanbanSquare,
@@ -19,7 +20,7 @@ import { cn } from './ui/utils';
 
 /** The top-level views the nav rail switches between. */
 export type AppView =
-  'chats' | 'teams' | 'tasks' | 'projects' | 'stats' | 'settings';
+  'chats' | 'teams' | 'tasks' | 'projects' | 'knowledge' | 'stats' | 'settings';
 
 export interface NavItem {
   view: AppView;
@@ -33,6 +34,7 @@ const PRIMARY_ITEMS: readonly NavItem[] = [
   { view: 'teams', label: 'Teams', icon: TeamIcon },
   { view: 'tasks', label: 'Tasks', icon: KanbanSquare },
   { view: 'projects', label: 'Projects', icon: FolderGit2 },
+  { view: 'knowledge', label: 'Knowledge', icon: BookOpen },
   { view: 'stats', label: 'Stats', icon: ChartColumn },
 ];
 
@@ -54,11 +56,14 @@ function NavButton({
   item,
   active,
   collapsed,
+  count,
   onSelect,
 }: {
   item: NavItem;
   active: boolean;
   collapsed: boolean;
+  /** What waits on the user there; zero draws nothing. */
+  count: number;
   onSelect: (view: AppView) => void;
 }): React.JSX.Element {
   const Icon = item.icon;
@@ -68,11 +73,15 @@ function NavButton({
       aria-current={active ? 'page' : undefined}
       // When collapsed the label is hidden — keep it reachable to assistive tech
       // and surface it as a hover tooltip.
-      aria-label={collapsed ? item.label : undefined}
+      aria-label={
+        collapsed
+          ? `${item.label}${count > 0 ? `, ${count} waiting` : ''}`
+          : undefined
+      }
       title={collapsed ? item.label : undefined}
       onClick={() => onSelect(item.view)}
       className={cn(
-        'flex w-full items-center rounded-md text-left text-sm font-medium outline-none transition-colors',
+        'relative flex w-full items-center rounded-md text-left text-sm font-medium outline-none transition-colors',
         'hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/50',
         collapsed ? 'justify-center px-0 py-2' : 'gap-3 px-3 py-2',
         active
@@ -81,6 +90,16 @@ function NavButton({
       )}>
       <Icon aria-hidden="true" className="size-4 shrink-0" />
       {collapsed ? null : item.label}
+      {count > 0 ? (
+        <span
+          data-slot="nav-count"
+          className={cn(
+            'rounded-full bg-primary px-1.5 text-[10px] leading-4 font-semibold text-primary-foreground tabular-nums',
+            collapsed ? 'absolute top-0.5 right-0.5' : 'ml-auto',
+          )}>
+          {count}
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -103,9 +122,12 @@ export function NavRail({
   collapsed,
   hydrated,
   onToggleCollapsed,
+  counts = {},
 }: {
   view: AppView;
   onNavigate: (view: AppView) => void;
+  /** What waits on the user, by destination. */
+  counts?: Partial<Record<AppView, number>>;
   /**
    * Collapsed state, OWNED by the shell (`useSidebarCollapsed`).
    *
@@ -176,6 +198,7 @@ export function NavRail({
           item={item}
           active={view === item.view}
           collapsed={collapsed}
+          count={counts[item.view] ?? 0}
           onSelect={onNavigate}
         />
       ))}
@@ -187,6 +210,7 @@ export function NavRail({
             item={item}
             active={view === item.view}
             collapsed={collapsed}
+            count={counts[item.view] ?? 0}
             onSelect={onNavigate}
           />
         ))}

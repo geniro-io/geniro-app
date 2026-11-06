@@ -34,6 +34,7 @@ export interface ProjectsApiCreateProjectRequest {
 
 export interface ProjectsApiDeleteProjectRequest {
     projectId: string;
+    knowledge?: DeleteProjectKnowledgeEnum;
 }
 
 export interface ProjectsApiDiscardProjectChatRequest {
@@ -135,6 +136,10 @@ export class ProjectsApi extends runtime.BaseAPI {
         }
 
         const queryParameters: any = {};
+
+        if (requestParameters['knowledge'] != null) {
+            queryParameters['knowledge'] = requestParameters['knowledge'];
+        }
 
         const headerParameters: runtime.HTTPHeaders = {};
 
@@ -599,3 +604,12 @@ export class ProjectsApi extends runtime.BaseAPI {
     }
 
 }
+
+/**
+ * @export
+ */
+export const DeleteProjectKnowledgeEnum = {
+    Global: 'global',
+    Delete: 'delete'
+} as const;
+export type DeleteProjectKnowledgeEnum = typeof DeleteProjectKnowledgeEnum[keyof typeof DeleteProjectKnowledgeEnum];

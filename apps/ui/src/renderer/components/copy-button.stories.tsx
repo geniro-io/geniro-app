@@ -15,6 +15,10 @@ type Story = StoryObj<typeof meta>;
 
 export const Playground: Story = {};
 
+export const WithVisibleLabel: Story = {
+  args: { label: 'Copy reference', showLabel: true },
+};
+
 export const CustomLabel: Story = {
   args: { label: 'Copy sign-in link' },
 };

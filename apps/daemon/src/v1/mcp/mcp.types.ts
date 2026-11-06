@@ -1,6 +1,7 @@
 import type { RequestId } from '@modelcontextprotocol/sdk/types.js';
 
-import type { MemoryActor, MemoryPlace } from '../memory/memory.types';
+import type { MemoryActor } from '../memory/memory.types';
+import type { RunPlace } from '../projects/projects.types';
 
 /**
  * One row of a `tools/list` answer — what a model reads about a tool.
@@ -107,6 +108,6 @@ export type ToolArgs<TQuery> =
 
 /** Where a shared-memory call stands: the run's project and team and who is calling. */
 export interface MemoryCallScope {
-  place: MemoryPlace;
+  place: RunPlace;
   actor: MemoryActor;
 }

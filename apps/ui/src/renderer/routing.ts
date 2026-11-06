@@ -13,6 +13,7 @@ export type Route =
   | { view: 'teams'; slug: string | null }
   | { view: 'tasks'; projectId: string | null }
   | { view: 'projects'; projectId: string | null }
+  | { view: 'knowledge'; documentId: string | null }
   | { view: 'settings' }
   | { view: 'stats' };
 
@@ -23,6 +24,7 @@ const ID_VIEWS: ReadonlySet<AppView> = new Set([
   'teams',
   'tasks',
   'projects',
+  'knowledge',
 ]);
 
 /** The teams view's hash before the rename, still found in saved links. */
@@ -68,6 +70,8 @@ export function parseRoute(hash: string): Route | null {
         return { view: 'tasks', projectId: id };
       case 'projects':
         return { view: 'projects', projectId: id };
+      case 'knowledge':
+        return { view: 'knowledge', documentId: id };
       default:
         // `settings`/`stats` take no id at all — a stray segment names no
         // route rather than one this build merely ignores.
@@ -84,6 +88,8 @@ export function parseRoute(hash: string): Route | null {
       return { view: 'tasks', projectId: null };
     case 'projects':
       return { view: 'projects', projectId: null };
+    case 'knowledge':
+      return { view: 'knowledge', documentId: null };
     case 'settings':
       return { view: 'settings' };
     case 'stats':
@@ -108,7 +114,9 @@ export function formatRoute(route: Route): string {
         ? route.slug
         : route.view === 'tasks' || route.view === 'projects'
           ? route.projectId
-          : null;
+          : route.view === 'knowledge'
+            ? route.documentId
+            : null;
   return id === null
     ? `#/${route.view}`
     : `#/${route.view}/${encodeURIComponent(id)}`;

@@ -7,6 +7,7 @@ export * from './CliAuthApi';
 export * from './DiagnosticsApi';
 export * from './GroupsApi';
 export * from './HandoffApi';
+export * from './KnowledgeApi';
 export * from './LabelInstructionsApi';
 export * from './MemoriesApi';
 export * from './ProjectsApi';

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
+import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectsService } from '../../projects/services/projects.service';
 import { projectInstructionsText } from '../../projects/utils/project-instructions';
@@ -17,6 +18,7 @@ export class ProjectInstructionSizesService {
   constructor(
     private readonly projects: ProjectsService,
     private readonly memory: MemoryService,
+    private readonly knowledge: KnowledgeService,
     private readonly instructionSizes: InstructionSizesService,
   ) {}
 
@@ -25,16 +27,15 @@ export class ProjectInstructionSizesService {
     settings: { customInstructions?: string; replyLanguage?: string },
   ): Promise<ProjectInstructionSizesWire> {
     const project = await this.projects.get(projectId);
-    const { memoryIndex } = await this.memory.runSnapshot({
-      taskId: null,
-      cwd: project.folder,
-      projectId: project.id,
-    });
+    const facts = { taskId: null, cwd: project.folder, projectId: project.id };
+    const { memoryIndex } = await this.memory.runSnapshot(facts);
+    const { knowledgeIndex } = await this.knowledge.runSnapshot(facts);
     const measured = this.instructionSizes.measureProject({
       customInstructions: settings.customInstructions,
       replyLanguage: settings.replyLanguage,
       projectInstructions: projectInstructionsText(project) ?? undefined,
       memoryIndex: memoryIndex ?? undefined,
+      knowledgeIndex: knowledgeIndex ?? undefined,
     });
     return {
       ...measured,

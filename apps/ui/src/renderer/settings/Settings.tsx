@@ -60,6 +60,7 @@ import { signInAfterInstall, useCliInstall } from '../use-cli-install';
 import { isLoginOver, useCliLogin } from '../use-cli-login';
 import { ConfigProfileList } from './config-profiles';
 import { type FastActionDraft, FastActionsPane } from './fast-actions';
+import { Knowledge } from './knowledge';
 import { Memory } from './memory';
 import { RemoteAccess } from './remote-access';
 import { Sharing } from './sharing';
@@ -192,6 +193,7 @@ export type SettingsSection =
   | 'remote-access'
   | 'sharing'
   | 'memory'
+  | 'knowledge'
   | 'storage';
 
 const SECTION_LABEL: Record<SettingsSection, string> = {
@@ -200,6 +202,7 @@ const SECTION_LABEL: Record<SettingsSection, string> = {
   'remote-access': 'Remote access',
   sharing: 'Sharing',
   memory: 'Memory',
+  knowledge: 'Knowledge',
   storage: 'Storage',
 };
 
@@ -217,6 +220,8 @@ const SECTION_NOTE: Record<SettingsSection, string> = {
     'Serve this app to your Wi-Fi so a phone can open the same live chats — a device pairs with a code shown here.',
   memory:
     'The notes every agent shares, whatever its CLI — saved by agents as they work, or by you. New chats list the ones you wrote, imported or approved.',
+  knowledge:
+    'The documents agents read and save, whatever their CLI. How they may save is set below.',
   sharing:
     'Share a page as an encrypted link anyone holding it can open — uploaded through your own gcloud, aws or command, never a Geniro server.',
   storage:
@@ -230,6 +235,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'remote-access',
   'sharing',
   'memory',
+  'knowledge',
   'storage',
 ];
 
@@ -1219,6 +1225,8 @@ export function Settings({
               capabilities={capabilities}
               capabilitiesLoading={capabilitiesLoading}
             />
+          ) : section === 'knowledge' ? (
+            <Knowledge />
           ) : (
             <>
               {/* The sign-in's own error lives in its progress panel — but a sign-in that

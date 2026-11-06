@@ -48,6 +48,7 @@ const FEATURE_NAMESPACES = {
   chats: 'Chats/',
   teams: 'Teams/',
   projects: 'Projects/',
+  knowledge: 'Knowledge/',
 };
 
 /**

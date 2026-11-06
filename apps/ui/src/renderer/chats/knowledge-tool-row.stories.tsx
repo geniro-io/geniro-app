@@ -77,6 +77,7 @@ export const Read: Story = {
     entry: {
       tool: 'knowledge_read',
       handle: 'release-checklist',
+      rev: 7,
       documents: [RELEASE_CHECKLIST],
       changed: false,
       failure: null,
@@ -89,6 +90,7 @@ export const ReadChanged: Story = {
     entry: {
       tool: 'knowledge_read',
       handle: 'release-checklist',
+      rev: null,
       documents: [],
       changed: true,
       failure: null,
@@ -102,6 +104,7 @@ export const ReadNotFound: Story = {
     entry: {
       tool: 'knowledge_read',
       handle: 'ghost',
+      rev: null,
       documents: [],
       changed: false,
       failure:
@@ -215,6 +218,7 @@ export const WithoutAKnowledgePage: Story = {
     entry: {
       tool: 'knowledge_read',
       handle: 'release-checklist',
+      rev: 7,
       documents: [RELEASE_CHECKLIST],
       changed: false,
       failure: null,

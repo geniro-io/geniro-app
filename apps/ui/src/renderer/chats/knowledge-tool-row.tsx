@@ -28,6 +28,17 @@ export const KnowledgeOpenContext = createContext<
   ((target: KnowledgeOpenTarget) => void) | null
 >(null);
 
+/** What the run's places hold for a search, as the row reads it for itself. */
+export type KnowledgeSearcher = (query: string) => Promise<KnowledgeHead[]>;
+
+/**
+ * Searches again when a row opens on a call whose result carries no text, which
+ * is every call on a CLI that reports an MCP result as a bare success.
+ */
+export const KnowledgeSearcherContext = createContext<KnowledgeSearcher | null>(
+  null,
+);
+
 /** The documents the run's places file under a handle now, nearest first. */
 export type KnowledgeLoader = (handle: string) => Promise<KnowledgeHead[]>;
 
@@ -198,11 +209,22 @@ function readEntry(
     };
   }
   const changed = text !== null && READ_CHANGED.test(text);
+  const named =
+    text === null
+      ? [
+          {
+            handle,
+            title: null,
+            whenToRead: null,
+            level: null,
+            reviewed: null,
+          },
+        ]
+      : knowledgeToolDocsOf(headerOf(text));
   return {
     tool: 'knowledge_read',
     handle,
-    documents:
-      text === null || changed ? [] : knowledgeToolDocsOf(headerOf(text)),
+    documents: changed ? [] : named,
     changed,
     failure: null,
   };
@@ -461,6 +483,16 @@ function Detail({
   }
 }
 
+function lineOfHead(head: KnowledgeHead): KnowledgeDocLine {
+  return {
+    handle: head.handle,
+    title: head.title,
+    whenToRead: head.whenToRead,
+    level: levelOfPlace(head.place),
+    reviewed: head.approvedAt !== null,
+  };
+}
+
 function KnowledgePeekPanel({
   documents,
   fresh,
@@ -475,6 +507,11 @@ function KnowledgePeekPanel({
     <div
       data-slot="knowledge-peek"
       className="flex max-h-[min(24rem,60vh)] w-[min(28rem,calc(100vw-2rem))] flex-col divide-y divide-border/60 overflow-y-auto">
+      {documents.length === 0 ? (
+        <p className="m-0 px-2 py-1 text-xs text-muted-foreground">
+          Nothing in Knowledge matches this search now.
+        </p>
+      ) : null}
       {documents.map((doc) => {
         const read = fresh.get(doc.handle);
         const head = read === undefined || read === 'gone' ? null : read;
@@ -549,12 +586,41 @@ export function KnowledgeToolRow({
   const Icon = TOOL_ICON[entry.tool];
   const failed = status === 'error' && entry.tool !== 'knowledge_save';
   const loadKnowledge = useContext(KnowledgeLoaderContext);
+  const searchKnowledge = useContext(KnowledgeSearcherContext);
+  const blindQuery =
+    status === 'done' &&
+    searchKnowledge !== null &&
+    entry.tool === 'knowledge_search' &&
+    entry.count === null
+      ? entry.query
+      : null;
+  const [found, setFound] = useState<readonly KnowledgeDocLine[] | null>(null);
+  const documents = found ?? entry.documents;
   const [fresh, setFresh] = useState<ReadonlyMap<string, KnowledgeFresh>>(
     () => new Map(),
   );
   const onOpenChange = useLatestCallback(
     (open: boolean) => {
-      if (!open || loadKnowledge === null) {
+      if (!open) {
+        return;
+      }
+      if (blindQuery !== null && searchKnowledge !== null) {
+        searchKnowledge(blindQuery).then(
+          (heads) => {
+            const byHandle = new Map<string, KnowledgeHead>();
+            for (const head of heads) {
+              if (!byHandle.has(head.handle)) {
+                byHandle.set(head.handle, head);
+              }
+            }
+            setFresh(byHandle);
+            setFound([...byHandle.values()].map(lineOfHead));
+          },
+          () => setFound([]),
+        );
+        return;
+      }
+      if (loadKnowledge === null) {
         return;
       }
       for (const doc of entry.documents) {
@@ -574,7 +640,7 @@ export function KnowledgeToolRow({
         );
       }
     },
-    [entry, loadKnowledge],
+    [entry, loadKnowledge, searchKnowledge, blindQuery],
   );
   const line = (
     <>
@@ -595,7 +661,7 @@ export function KnowledgeToolRow({
   );
   const lineClass =
     'flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 py-0.5 text-xs text-muted-foreground';
-  if (entry.documents.length === 0) {
+  if (documents.length === 0 && blindQuery === null) {
     return (
       <div
         data-role="knowledge-tool"
@@ -605,7 +671,7 @@ export function KnowledgeToolRow({
       </div>
     );
   }
-  const handles = entry.documents.map((doc) => doc.handle).join(', ');
+  const handles = documents.map((doc) => doc.handle).join(', ');
   return (
     <div
       data-role="knowledge-tool"
@@ -626,7 +692,7 @@ export function KnowledgeToolRow({
         onOpenChange={onOpenChange}>
         {(close) => (
           <KnowledgePeekPanel
-            documents={entry.documents}
+            documents={documents}
             fresh={fresh}
             close={close}
           />

@@ -3773,6 +3773,17 @@ export function Chats({
     [apis, activeRunId],
   );
 
+  const searchKnowledge = useLatestCallback(
+    async (q: string) =>
+      (
+        await apis.knowledge.listKnowledge({
+          q,
+          runId: activeRunId ?? undefined,
+        })
+      ).documents,
+    [apis, activeRunId],
+  );
+
   const openKnowledge = useLatestCallback(
     (target: KnowledgeOpenTarget) =>
       onOpenKnowledge?.(
@@ -9598,7 +9609,8 @@ export function Chats({
         notSent={notSent}
         chatActions={chatActions}
         loadMemory={loadMemory}
-        loadKnowledge={loadKnowledge}>
+        loadKnowledge={loadKnowledge}
+        searchKnowledge={searchKnowledge}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

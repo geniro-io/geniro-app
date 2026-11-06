@@ -180,6 +180,7 @@ export function KnowledgeForm({
         <MdEditor
           value={value.body}
           preview="edit"
+          highlight={false}
           height={420}
           onChange={(body) => set({ body })}
         />

@@ -63,6 +63,7 @@ export function MdEditor({
   onChange,
   height = 400,
   preview = 'live',
+  highlight = true,
   readOnly = false,
   placeholder,
   className,
@@ -72,6 +73,8 @@ export function MdEditor({
   height?: number;
   /** 'live' = split (default), 'edit' = editor only, 'preview' = preview only */
   preview?: MDEditorProps['preview'];
+  /** False drops syntax colouring, whose cost grows with the text on every key. */
+  highlight?: boolean;
   /** The same panes and view switches, with the text locked and no formatting buttons. */
   readOnly?: boolean;
   placeholder?: string;
@@ -86,6 +89,7 @@ export function MdEditor({
         onChange={(next) => onChange?.(next ?? '')}
         height={height}
         preview={preview}
+        highlightEnable={highlight}
         {...(readOnly ? { commands: [] } : {})}
         previewOptions={PREVIEW_OPTIONS}
         textareaProps={{ placeholder, readOnly }}

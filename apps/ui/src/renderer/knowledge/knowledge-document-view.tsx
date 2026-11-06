@@ -176,6 +176,7 @@ export function KnowledgeDocumentView({
         <CopyButton
           text={referenceOf(document.handle)}
           label="Copy reference"
+          showLabel
         />
         <span className="text-xs text-muted-foreground">Stored in Geniro</span>
       </div>

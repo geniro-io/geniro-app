@@ -91,12 +91,12 @@ Stack: TypeScript 6, Node 24.15+, NestJS 12 (Fastify), MikroORM + better-sqlite3
 
 The repo is indexed by CodeGraph (`.codegraph/`, gitignored, always present locally). Use it before grep/find/Read for every code lookup, not just the first.
 
-- MCP tool `codegraph_explore` (load it via tool search if deferred), or shell `codegraph explore "<symbols>"` (`-p <path>` for another checkout).
+- MCP tool `codegraph_explore` (load it via tool search if deferred), or shell `codegraph explore "<symbols>"` (`-p <path>` for another checkout). `geniro:*` agents have no MCP tools and no tool search, so they use the shell form.
 - Query with symbol names, not prose. Prose matches the commonest symbol names (`error`, `status`) and ranks the wrong files first; output is cut after a few files, so ranking is the answer. For a flow, name the symbols that span it.
 - `codegraph.json` `deprioritize` lowers stories, `__tests__/`, the generated client and `packages/` in ranking without hiding them; use `exclude` to hide.
 - It cannot answer git provenance (`git show origin/main:<file>`), prevalence counts (`grep -c`) or questions about config files. It beats grep for "what consumes this?", since it follows dynamic dispatch.
 - In a worktree, pass `projectPath: <worktree root>` to the MCP tool. The server's default project is fixed at launch, so a bare call answers silently from the launch checkout.
-- The MCP tool catches up on its own. The shell form does not: run `codegraph sync` first in a worktree no MCP session is watching.
+- The MCP tool catches up on its own. The shell form does not: the orchestrator runs `codegraph sync` once before spawning subagents, and a subagent never syncs, because parallel syncs fight over the index lock.
 - A worktree without its own `.codegraph/` borrows the main checkout's index (a banner says so); run `codegraph init` there. Never run `init`/`index` just for freshness (full rebuild, ~580 MB).
 
 ---

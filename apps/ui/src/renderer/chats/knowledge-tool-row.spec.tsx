@@ -11,7 +11,9 @@ import {
   KnowledgeLoaderContext,
   KnowledgeOpenContext,
   type KnowledgeOpenTarget,
+  KnowledgeSearcherContext,
   knowledgeToolDocsOf,
+  type KnowledgeToolEntry,
   knowledgeToolEntryOf,
   KnowledgeToolRow,
 } from './knowledge-tool-row';
@@ -521,6 +523,16 @@ describe('the documents a panel reads as they stand now', () => {
     );
   }
 
+  function bareSuccess(tool: string, input: unknown): KnowledgeToolEntry {
+    const entry = knowledgeToolEntryOf(
+      pair(tool, input, { text: { success: true } }),
+    );
+    if (entry === null) {
+      throw new Error('expected a knowledge entry');
+    }
+    return entry;
+  }
+
   async function settle(): Promise<void> {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -642,6 +654,67 @@ describe('the documents a panel reads as they stand now', () => {
 
     expect(container.textContent).toContain('Live global one');
     expect(container.textContent).not.toContain('Old project one');
+  });
+
+  it('searches for itself when the CLI reported the result as a bare success', async () => {
+    const entry = bareSuccess('knowledge_search', { query: 'release' });
+    const search = vi.fn(async () => [
+      aKnowledgeHead({ title: 'Nearest one' }),
+      aKnowledgeHead({ place: 'global', title: 'Shadowed one' }),
+    ]);
+    const open = vi.fn();
+    act(() =>
+      root.render(
+        <KnowledgeSearcherContext.Provider value={search}>
+          <KnowledgeOpenContext.Provider value={open}>
+            <KnowledgeToolRow entry={entry} status="done" />
+          </KnowledgeOpenContext.Provider>
+        </KnowledgeSearcherContext.Provider>,
+      ),
+    );
+    await press();
+    await settle();
+
+    expect(search).toHaveBeenCalledExactlyOnceWith('release');
+    expect(container.textContent).toContain('Nearest one');
+    expect(container.textContent).not.toContain('Shadowed one');
+    act(() => linksToKnowledge()[0]?.click());
+    expect(open).toHaveBeenCalledExactlyOnceWith({ documentId: 'd1' });
+  });
+
+  it('says nothing matches now when its own search comes back empty', async () => {
+    const entry = bareSuccess('knowledge_search', { query: 'release' });
+    act(() =>
+      root.render(
+        <KnowledgeSearcherContext.Provider value={async () => []}>
+          <KnowledgeToolRow entry={entry} status="done" />
+        </KnowledgeSearcherContext.Provider>,
+      ),
+    );
+    await press();
+    await settle();
+
+    expect(container.textContent).toContain(
+      'Nothing in Knowledge matches this search now.',
+    );
+  });
+
+  it('offers a read’s document from its arguments when the result has no text', async () => {
+    const entry = bareSuccess('knowledge_read', {
+      handle: 'release-checklist',
+    });
+    act(() =>
+      root.render(
+        <KnowledgeLoaderContext.Provider
+          value={async () => [aKnowledgeHead({ title: 'Fresh title' })]}>
+          <KnowledgeToolRow entry={entry} status="done" />
+        </KnowledgeLoaderContext.Provider>,
+      ),
+    );
+    await press();
+    await settle();
+
+    expect(container.textContent).toContain('Fresh title');
   });
 
   it('opens a document whose handle is an inherited object key', async () => {

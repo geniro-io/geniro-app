@@ -31,6 +31,7 @@ import {
   KNOWLEDGE_HANDLE_MAX_CHARS,
   KNOWLEDGE_HANDLE_PATTERN,
   KNOWLEDGE_LIST_LIMIT_DEFAULT,
+  KNOWLEDGE_LIST_SEARCH_POOL,
   KNOWLEDGE_PENDING_MAX,
   KNOWLEDGE_REASON_MAX_CHARS,
   KNOWLEDGE_REVISIONS_KEPT,
@@ -245,6 +246,15 @@ export class KnowledgeService {
     if (text.length === 0) {
       return heads;
     }
+    return this.rankedMatches(text, heads, em);
+  }
+
+  /** Of `heads`, what `text` finds, best first: see {@link matchingIds}. */
+  private async rankedMatches(
+    text: string,
+    heads: readonly KnowledgeHead[],
+    em: EntityManager,
+  ): Promise<KnowledgeHead[]> {
     const ids = await this.matchingIds(text, heads, em);
     const byId = new Map(heads.map((head) => [head.id, head]));
     return ids
@@ -285,38 +295,39 @@ export class KnowledgeService {
   async list(query: KnowledgeListQuery): Promise<KnowledgeList> {
     const em = this.em.fork();
     const limit = query.limit ?? KNOWLEDGE_LIST_LIMIT_DEFAULT;
-    let match: string | undefined;
-    if (query.q !== undefined) {
-      const ready = chatTextMatchQuery(query.q);
-      if (ready === null) {
-        return { documents: [], next: null };
-      }
-      match = ready;
-    }
     const status = query.status ?? 'active';
     const runKeys =
       query.runId === undefined
         ? undefined
         : placeKeysOf(await this.memory.scopeOf(query.runId));
+    const filter = {
+      placeKey: query.place,
+      placeKeys: runKeys,
+      handle: query.handle,
+      statuses:
+        query.handle !== undefined && query.status === undefined
+          ? (['active', 'proposed', 'archived'] as const)
+          : status === 'waiting'
+            ? []
+            : [status],
+      waitingIds:
+        status === 'waiting'
+          ? [...(await this.revisionRows.pendingCounts(null, em)).keys()]
+          : undefined,
+    };
+    if (query.q !== undefined) {
+      const pool = await this.documents.page(
+        { ...filter, limit: KNOWLEDGE_LIST_SEARCH_POOL },
+        em,
+      );
+      const ranked = await this.rankedMatches(query.q, pool, em);
+      return {
+        documents: await this.toHeads(ranked.slice(0, limit), em),
+        next: null,
+      };
+    }
     const heads = await this.documents.page(
-      {
-        placeKey: query.place,
-        placeKeys: runKeys,
-        handle: query.handle,
-        statuses:
-          query.handle !== undefined && query.status === undefined
-            ? ['active', 'proposed', 'archived']
-            : status === 'waiting'
-              ? []
-              : [status],
-        waitingIds:
-          status === 'waiting'
-            ? [...(await this.revisionRows.pendingCounts(null, em)).keys()]
-            : undefined,
-        match,
-        before: parseCursor(query.cursor),
-        limit,
-      },
+      { ...filter, before: parseCursor(query.cursor), limit },
       em,
     );
     const last = heads.at(-1);

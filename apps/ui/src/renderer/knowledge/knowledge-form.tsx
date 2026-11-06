@@ -170,6 +170,7 @@ export function KnowledgeForm({
             <Select
               aria-label="Place"
               groups={placeGroups(places)}
+              side="bottom"
               value={value.place}
               onValueChange={(place) => set({ place })}
             />

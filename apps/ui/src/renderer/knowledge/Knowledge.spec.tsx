@@ -506,6 +506,44 @@ async function confirmDialog(name: string): Promise<void> {
 }
 
 describe('Knowledge — the page’s own actions', () => {
+  it('counts the waiting chip in the place on show', async () => {
+    knowledgeApi.knowledgeCounts.mockResolvedValue({
+      places: [
+        { place: 'project:p1', active: 1, waiting: 2, documents: 3 },
+        { place: 'global', active: 1, waiting: 5, documents: 6 },
+      ],
+      active: 2,
+      waiting: 7,
+    });
+
+    const all = await mount();
+    expect(all.textContent).toContain('7 waiting');
+  });
+
+  it('says only the picked place’s waiting documents', async () => {
+    knowledgeApi.knowledgeCounts.mockResolvedValue({
+      places: [{ place: 'global', active: 1, waiting: 5, documents: 6 }],
+      active: 1,
+      waiting: 5,
+    });
+
+    const el = await mount({ place: 'project:p1' });
+
+    expect(el.textContent).not.toContain('waiting');
+  });
+
+  it('opens Place downward, clear of the window’s drag strip', async () => {
+    const el = await mount();
+    const place = el.querySelector<HTMLElement>('[aria-label="Place"]');
+    await act(async () => {
+      place?.click();
+    });
+
+    const panel = document.body.querySelector('[role="listbox"]');
+    expect(panel?.closest('.top-full')).not.toBeNull();
+    expect(panel?.closest('.bottom-full')).toBeNull();
+  });
+
   it('says an agent’s document is unreviewed, and offers no Approve on the page', async () => {
     knowledgeApi.readKnowledge.mockResolvedValue(
       aKnowledgeDocument({ approvedAt: null }),

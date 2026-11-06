@@ -611,7 +611,9 @@ describe('the documents a panel reads as they stand now', () => {
     await press();
     await settle();
 
-    expect(container.textContent).toContain('No longer in Knowledge.');
+    expect(container.textContent).toContain(
+      'This run does not see this document now.',
+    );
     expect(linksToKnowledge()).toHaveLength(0);
   });
 
@@ -622,7 +624,9 @@ describe('the documents a panel reads as they stand now', () => {
     await press();
     await settle();
 
-    expect(container.textContent).toContain('No longer in Knowledge.');
+    expect(container.textContent).toContain(
+      'This run does not see this document now.',
+    );
     expect(container.textContent).not.toContain('Team one');
   });
 
@@ -818,7 +822,9 @@ describe('the documents a panel reads as they stand now', () => {
       container.querySelector('[data-knowledge-doc="constructor"]'),
     ).not.toBeNull();
     await settle();
-    expect(container.textContent).toContain('No longer in Knowledge.');
+    expect(container.textContent).toContain(
+      'This run does not see this document now.',
+    );
   });
 
   it('keeps what the call said when the loader fails', async () => {

@@ -2241,6 +2241,38 @@ describe('Teams — the knowledge question of a delete', () => {
     expect(deleteConfirm().disabled).toBe(false);
   });
 
+  it('starts the next delete dialog without the last one’s rename message', async () => {
+    deleteTeam.mockImplementationOnce(async () => ({
+      deleted: true,
+      knowledgeRenamed: [{ from: 'guide', to: 'guide-2' }] as never[],
+    }));
+    listTeams.mockImplementation(async () => [
+      summary('dev-team', 'Dev Team'),
+      summary('other', 'Other'),
+    ]);
+    await paint(true);
+    await press('Delete Dev Team');
+    await press('Delete');
+    expect(document.body.textContent).toContain('guide-2');
+
+    await press('Delete Other');
+
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).not.toContain('guide-2');
+  });
+
+  it('says it, not them, of a team’s one document', async () => {
+    knowledgeCounts.mockResolvedValue({
+      places: [{ place: 'team:dev-team', active: 1, waiting: 0, documents: 1 }],
+      active: 1,
+      waiting: 0,
+    });
+    await openDeleteFromBuilder();
+
+    expect(document.body.textContent).toContain('Move it to Global');
+    expect(document.body.textContent).not.toContain('Move them to Global');
+  });
+
   it('says the count of the team’s documents failed, and deletes on Global', async () => {
     knowledgeCounts.mockRejectedValue(
       new Error('daemon GET /v1/knowledge/counts failed (500): boom'),

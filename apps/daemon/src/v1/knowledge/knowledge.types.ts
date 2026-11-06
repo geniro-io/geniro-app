@@ -55,6 +55,8 @@ export const KNOWLEDGE_REVISIONS_KEPT = 50;
 export const KNOWLEDGE_SEARCH_DEFAULT = 10;
 export const KNOWLEDGE_SEARCH_MAX = 30;
 export const KNOWLEDGE_QUERY_MAX_CHARS = 300;
+/** How many rows of a filter the page's search ranks. */
+export const KNOWLEDGE_LIST_SEARCH_POOL = 2000;
 export const KNOWLEDGE_EDITS_MAX = 50;
 export const KNOWLEDGE_LIST_LIMIT_DEFAULT = 50;
 export const KNOWLEDGE_LIST_LIMIT_MAX = 200;

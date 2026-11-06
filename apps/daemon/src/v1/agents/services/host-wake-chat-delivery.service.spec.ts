@@ -211,6 +211,63 @@ describe('HostWakeChatDelivery', () => {
     expect(delivered).toHaveBeenCalledTimes(1);
   });
 
+  it('leaves a wake with no note unsettled when its chat is being archived', async () => {
+    const h = harness();
+    h.delivery.startDelivering();
+    h.setHold('closing');
+    const delivered = vi.fn();
+
+    h.bus.publish({ ...wake(delivered), note: null });
+    await Promise.resolve();
+
+    expect(h.sendMessage).not.toHaveBeenCalled();
+    expect(h.oweKeyNote).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+  });
+
+  it('starts no turn for a wake that went stale while its chat was busy', async () => {
+    const h = harness();
+    h.delivery.startDelivering();
+    h.setHold('wait');
+    const delivered = vi.fn();
+
+    h.bus.publish({ ...wake(delivered), stale: async () => true });
+    await Promise.resolve();
+    h.setHold(null);
+    h.settle();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(h.sendMessage).not.toHaveBeenCalled();
+    expect(h.oweKeyNote).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+  });
+
+  it('carries the thread wake on the opening row of a turn that joins several wakes', async () => {
+    const h = harness();
+    h.delivery.startDelivering();
+    h.setHold('wait');
+    const threadWake = { fromRunId: 'alpha', fromTitle: 'Alpha' };
+    const plain = wake(vi.fn(), 'share:s1');
+    const woken = {
+      ...wake(vi.fn(), 'share:s2'),
+      row: {
+        ...wake().row,
+        threadWake,
+        message: 'Woken by a message from Alpha.',
+      },
+    };
+    h.bus.publish(plain);
+    h.bus.publish(woken);
+    await Promise.resolve();
+    h.setHold(null);
+    h.settle();
+
+    await expect.poll(() => h.sendMessage.mock.calls.length).toBe(1);
+    expect(h.sendMessage.mock.calls[0]?.[3]).toMatchObject({
+      hostRow: { threadWake },
+    });
+  });
+
   it('never retries a send that failed after its row was written — that would show the link twice', async () => {
     const h = harness();
     h.delivery.startDelivering();

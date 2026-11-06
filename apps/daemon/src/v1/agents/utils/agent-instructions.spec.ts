@@ -15,7 +15,9 @@ import {
   HOST_FINDINGS_TOOL,
   HOST_GALLERY_TOOL,
   HOST_GOALS_TOOL,
+  HOST_LIST_THREADS_TOOL,
   HOST_MEMORY_TOOLS,
+  HOST_MESSAGE_THREAD_TOOL,
   HOST_METRICS_TOOL,
   HOST_MONITOR_TOOL,
   HOST_NOTIFY_TOOL,
@@ -175,6 +177,8 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
       ...HOST_MEMORY_TOOLS,
       HOST_SEARCH_CHATS_TOOL,
       HOST_READ_CHAT_CONTEXT_TOOL,
+      HOST_LIST_THREADS_TOOL,
+      HOST_MESSAGE_THREAD_TOOL,
       ...BOARD_TOOLS_NAMED,
       HOST_READ_TEAMS_TOOL,
       HOST_PROPOSE_TEAM_TOOL,
@@ -208,6 +212,12 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
 
     expect(line).toContain('pull request being merged');
     expect(line).toContain('whenever you leave a server or watcher running');
+  });
+
+  it('names ListAgents, in backticks, on the line that offers the thread tools in its place', () => {
+    expect(lineStartingWith(`- \`${HOST_LIST_THREADS_TOOL}\``)).toContain(
+      '`ListAgents`',
+    );
   });
 
   it('stays true on a turn that registers none of the tools', () => {

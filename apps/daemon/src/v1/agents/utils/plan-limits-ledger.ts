@@ -54,10 +54,11 @@ export class PlanLimitsLedger {
       preferOffered && offered !== null ? offered : pickBetter(live, offered);
     if (best === null) {
       this.entries.delete(key);
-    } else {
-      this.entries.set(key, best);
+      return null;
     }
-    return best;
+    const kept = live === null ? best : withoutLoweredWindows(best, live);
+    this.entries.set(key, kept);
+    return kept;
   }
 
   /**
@@ -106,6 +107,56 @@ export const LEDGER_MAX_AGE_MS = 6 * 60 * 60 * 1000;
  * panel still says when what it shows is an estimate.
  */
 export const REAL_READING_PREFERRED_MS = 5 * 60 * 1000;
+
+/**
+ * How far apart two stamps of one window's reset may be: the usage service
+ * dates it to the microsecond around the moment the rate-limit headers state.
+ */
+const SAME_RESET_TOLERANCE_MS = 60_000;
+
+function sameWindow(
+  a: PlanLimitsWire['windows'][number],
+  b: PlanLimitsWire['windows'][number],
+): boolean {
+  if (a.key !== b.key || a.label !== b.label) {
+    return false;
+  }
+  const apart = Math.abs(
+    Date.parse(a.resetsAt ?? '') - Date.parse(b.resetsAt ?? ''),
+  );
+  return Number.isFinite(apart) && apart <= SAME_RESET_TOLERANCE_MS;
+}
+
+/**
+ * An estimate with no window under what this account already reached.
+ *
+ * A window's usage only rises until it resets, and an estimate comes from one
+ * process's last request, so a lower figure for the same window is an older
+ * one. Left alone, a refresh flips between the service's figure and the lower
+ * estimate, as the service answers or does not. A real reading stands.
+ */
+function withoutLoweredWindows(
+  reading: PlanReading,
+  held: PlanReading,
+): PlanReading {
+  if (!reading.plan.estimated) {
+    return reading;
+  }
+  return {
+    ...reading,
+    plan: {
+      ...reading.plan,
+      windows: reading.plan.windows.map((window) => {
+        const reached = held.plan.windows.find((known) =>
+          sameWindow(known, window),
+        );
+        return reached === undefined || reached.percent <= window.percent
+          ? window
+          : { ...window, percent: reached.percent };
+      }),
+    },
+  };
+}
 
 /** The better of two readings of one account, either of which may be absent. */
 export function pickBetter(

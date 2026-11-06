@@ -694,14 +694,14 @@ function Totals({
           </span>
         )}
       </div>
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+      <dl className="grid grid-cols-[max-content_1fr_max-content_1fr] items-baseline gap-x-3 gap-y-0.5">
         {figures.map((figure) => (
           <div
             key={figure.label}
             data-thread-figure={figure.label}
-            className="flex min-w-0 items-baseline gap-2">
-            <dt className="truncate text-muted-foreground">{figure.label}</dt>
-            <dd className="ml-auto shrink-0 tabular-nums text-foreground">
+            className="contents">
+            <dt className="text-muted-foreground">{figure.label}</dt>
+            <dd className="whitespace-nowrap tabular-nums text-foreground">
               {figure.value}
             </dd>
           </div>

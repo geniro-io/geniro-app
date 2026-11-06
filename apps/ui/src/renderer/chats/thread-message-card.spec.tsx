@@ -1,35 +1,15 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
+import { mountIntoDocument } from '../__tests__/mount-into-document';
 import { ThreadMessageCard, ThreadOpenContext } from './thread-message-card';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-let root: Root | null = null;
-let container: HTMLDivElement | null = null;
-
-function render(element: React.ReactElement): HTMLDivElement {
-  container = document.createElement('div');
-  document.body.appendChild(container);
-  root = createRoot(container);
-  act(() => {
-    root!.render(element);
-  });
-  return container;
-}
-
-afterEach(() => {
-  act(() => {
-    root?.unmount();
-  });
-  container?.remove();
-  root = null;
-  container = null;
-});
+const render = mountIntoDocument();
 
 const LONG_TEXT = `${'a'.repeat(1_500)}\nthe last line`;
 
@@ -59,6 +39,12 @@ describe('ThreadMessageCard', () => {
     expect(cards[0]?.textContent).toContain('hi there');
     expect(cards[1]?.textContent).toContain('Backend Engineer');
     expect(cards[1]?.textContent).toContain('the last line');
+  });
+
+  it('holds a long received text to four lines', () => {
+    const el = render(<ThreadMessageCard messages={MESSAGES} />);
+    const texts = el.querySelectorAll('[data-slot="thread-message-text"]');
+    expect(texts[1]?.className).toContain('line-clamp-4');
   });
 
   it('opens the sending thread when its title is pressed, where threads can open', () => {

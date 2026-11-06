@@ -136,7 +136,8 @@ function readSent(value: unknown): ThreadMessageSent | null {
  * Why a message waits, in the words the sender and the user both read. The
  * same sentences the daemon writes into the sender's row.
  *
- * TWIN: `REASON_WORDS` in `apps/daemon/src/v1/agents/utils/thread-message-text.ts`.
+ * TWIN PARSER: `REASON_WORDS` in `apps/daemon/src/v1/agents/utils/thread-message-text.ts`
+ * writes these sentences — a wording changed there must be mirrored here, and vice versa.
  */
 const REASON_WORDS: Record<ThreadMessageReason, string> = {
   running_turn: 'waits for the turn running there to end',

@@ -1055,6 +1055,80 @@ function QuestionCard({
 }
 
 /**
+ * The verdict footer of an approval card: the hazard tick, Approve and Deny,
+ * and the verdict line once the call is answered. A permission card and a
+ * thread message share it, so Approve is gated the same way on both.
+ */
+function VerdictFooter({
+  verdict,
+  expired,
+  sending,
+  gate,
+  respond,
+  optionButtons,
+  notes,
+  verdictLine,
+}: {
+  verdict: boolean | null;
+  expired: boolean;
+  sending: boolean;
+  gate: ReturnType<typeof useHazardGate>;
+  respond: (allow: boolean) => void;
+  /**
+   * The options the agent offers beside a one-time Approve. Approve and Deny
+   * stay first and last: a one-time answer is the default, and what the agent
+   * would remember sits between them, in its own words. An option that lets
+   * the call run is gated on the hazard tick exactly as Approve is.
+   */
+  optionButtons?: React.ReactNode;
+  /** Remarks drawn under the answer row. */
+  notes?: React.ReactNode;
+  /** The verdict line, drawn once the call is answered. */
+  verdictLine: React.ReactNode;
+}): React.JSX.Element {
+  if (expired && verdict === null) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        ⏱ expired — the turn ended before an answer
+      </p>
+    );
+  }
+  if (sending) {
+    return <p className="text-xs text-muted-foreground">Sending…</p>;
+  }
+  if (verdict !== null) {
+    return <>{verdictLine}</>;
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      {/* Deny is never gated here — refusing a suspicious call must stay
+          one click, on the same rule the question card's arity warning
+          follows: only the button that COMMITS needs a second thought. */}
+      {gate.hazards.gates ? (
+        <HazardAck
+          id={gate.ackId}
+          checked={gate.acknowledged}
+          onCheckedChange={gate.setAcknowledged}
+        />
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          disabled={gate.blocksApprove}
+          onClick={() => respond(true)}>
+          Approve
+        </Button>
+        {optionButtons}
+        <Button type="button" variant="outline" onClick={() => respond(false)}>
+          Deny
+        </Button>
+      </div>
+      {notes}
+    </div>
+  );
+}
+
+/**
  * A paused tool call under review: Approve/Deny over the tool's input, with a
  * file edit rendered as the same red/green diff the tool-group rows use.
  */
@@ -1162,6 +1236,24 @@ function PermissionCard({
   // drawn. A space is `\p{Zs}` and is in none of the classes.
   const hazardScanText = `${toolName} ${inputScanText} ${diffScanText}`;
   const gate = useHazardGate(hazardScanText);
+  const verdictLine =
+    verdict && outcome === 'not-saved' && isProposedChange(toolName) ? (
+      <p className="text-xs text-destructive">
+        ✗ Not saved{answer === null ? null : ` — ${answer}`}
+      </p>
+    ) : (
+      <p
+        className={cn(
+          'text-xs',
+          verdict ? 'text-success' : 'text-destructive',
+        )}>
+        {verdict ? '✓ approved' : '✗ denied'}
+        {verdictOption === null ? null : ` — ${verdictOption}`}
+        {verdict && answer !== null && isProposedChange(toolName)
+          ? ` — ${answer}`
+          : null}
+      </p>
+    );
   return (
     <Card className="flex flex-col gap-2.5 border-primary/40 p-3">
       <div className="flex items-center gap-2">
@@ -1211,89 +1303,47 @@ function PermissionCard({
           {inputPreview}
         </pre>
       ) : null}
-      {expired && verdict === null ? (
-        <p className="text-xs text-muted-foreground">
-          ⏱ expired — the turn ended before an answer
-        </p>
-      ) : sending ? (
-        <p className="text-xs text-muted-foreground">Sending…</p>
-      ) : verdict === null ? (
-        <div className="flex flex-col gap-2">
-          {/* Deny is never gated here — refusing a suspicious call must stay
-              one click, on the same rule the question card's arity warning
-              follows: only the button that COMMITS needs a second thought. */}
-          {gate.hazards.gates ? (
-            <HazardAck
-              id={gate.ackId}
-              checked={gate.acknowledged}
-              onCheckedChange={gate.setAcknowledged}
-            />
-          ) : null}
-          {/* Approve and Deny stay first and last: a one-time answer is the
-              default, and what the agent would remember sits between them,
-              in its own words. An option that lets the call run is gated on
-              the hazard tick exactly as Approve is. */}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              disabled={gate.blocksApprove}
-              onClick={() => respond(true)}>
-              Approve
-            </Button>
-            {options.map((option) => (
-              <Button
-                key={option.id}
-                type="button"
-                variant="outline"
-                title={optionScopeHint(option)}
-                disabled={option.allow && gate.blocksApprove}
-                onClick={() =>
-                  respond(option.allow, undefined, undefined, option.id)
-                }>
-                {option.label}
-              </Button>
-            ))}
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => respond(false)}>
-              Deny
-            </Button>
-          </div>
-          {/* The CLI remembers the TOOL, not this command line: a remembered
-              answer lets every later monitor command run unasked. */}
-          {options.some((option) => option.allow) &&
-          namesGeniroMonitor(toolName) ? (
-            <p className="text-xs text-muted-foreground">
-              Remembering this approves every command a monitor runs from now
-              on, not only this one.
-            </p>
-          ) : null}
-          {options.some((option) => option.allow) &&
-          namesGeniroGallery(toolName) ? (
-            <p className="text-xs text-muted-foreground">
-              Remembering this lets every later gallery download pictures from
-              any web address unasked, not only these.
-            </p>
-          ) : null}
-        </div>
-      ) : verdict && outcome === 'not-saved' && isProposedChange(toolName) ? (
-        <p className="text-xs text-destructive">
-          ✗ Not saved{answer === null ? null : ` — ${answer}`}
-        </p>
-      ) : (
-        <p
-          className={cn(
-            'text-xs',
-            verdict ? 'text-success' : 'text-destructive',
-          )}>
-          {verdict ? '✓ approved' : '✗ denied'}
-          {verdictOption === null ? null : ` — ${verdictOption}`}
-          {verdict && answer !== null && isProposedChange(toolName)
-            ? ` — ${answer}`
-            : null}
-        </p>
-      )}
+      <VerdictFooter
+        verdict={verdict}
+        expired={expired}
+        sending={sending}
+        gate={gate}
+        respond={respond}
+        optionButtons={options.map((option) => (
+          <Button
+            key={option.id}
+            type="button"
+            variant="outline"
+            title={optionScopeHint(option)}
+            disabled={option.allow && gate.blocksApprove}
+            onClick={() =>
+              respond(option.allow, undefined, undefined, option.id)
+            }>
+            {option.label}
+          </Button>
+        ))}
+        notes={
+          <>
+            {/* The CLI remembers the TOOL, not this command line: a remembered
+                answer lets every later monitor command run unasked. */}
+            {options.some((option) => option.allow) &&
+            namesGeniroMonitor(toolName) ? (
+              <p className="text-xs text-muted-foreground">
+                Remembering this approves every command a monitor runs from now
+                on, not only this one.
+              </p>
+            ) : null}
+            {options.some((option) => option.allow) &&
+            namesGeniroGallery(toolName) ? (
+              <p className="text-xs text-muted-foreground">
+                Remembering this lets every later gallery download pictures from
+                any web address unasked, not only these.
+              </p>
+            ) : null}
+          </>
+        }
+        verdictLine={verdictLine}
+      />
     </Card>
   );
 }
@@ -1327,7 +1377,7 @@ function ThreadMessageApproval({
 }): React.JSX.Element {
   const { sending, respond } = useOneShotVerdict(verdict, expired, onRespond);
   // Line breaks are control characters the scan would flag, so they are read as spaces.
-  const gate = useHazardGate(text.replace(/[\n\t\r]/g, ' '));
+  const gate = useHazardGate(`${title} ${text}`.replace(/[\n\t\r]/g, ' '));
   return (
     <Card className="flex min-w-0 flex-col gap-2.5 border-primary/40 p-3">
       <div className="flex min-w-0 items-center gap-2">
@@ -1343,45 +1393,22 @@ function ThreadMessageApproval({
       <p className="m-0 min-w-0 text-sm break-words whitespace-pre-wrap">
         {text}
       </p>
-      {expired && verdict === null ? (
-        <p className="text-xs text-muted-foreground">
-          ⏱ expired — the turn ended before an answer
-        </p>
-      ) : sending ? (
-        <p className="text-xs text-muted-foreground">Sending…</p>
-      ) : verdict === null ? (
-        <div className="flex flex-col gap-2">
-          {gate.hazards.gates ? (
-            <HazardAck
-              id={gate.ackId}
-              checked={gate.acknowledged}
-              onCheckedChange={gate.setAcknowledged}
-            />
-          ) : null}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              disabled={gate.blocksApprove}
-              onClick={() => respond(true)}>
-              Approve
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => respond(false)}>
-              Deny
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <p
-          className={cn(
-            'text-xs',
-            verdict ? 'text-success' : 'text-destructive',
-          )}>
-          {verdict ? '✓ approved' : '✗ denied'}
-        </p>
-      )}
+      <VerdictFooter
+        verdict={verdict}
+        expired={expired}
+        sending={sending}
+        gate={gate}
+        respond={respond}
+        verdictLine={
+          <p
+            className={cn(
+              'text-xs',
+              verdict ? 'text-success' : 'text-destructive',
+            )}>
+            {verdict ? '✓ approved' : '✗ denied'}
+          </p>
+        }
+      />
     </Card>
   );
 }

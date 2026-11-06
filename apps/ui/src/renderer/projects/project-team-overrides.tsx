@@ -24,7 +24,7 @@ import { MemberSheet } from '../teams/member-sheet';
 import { type RowScope, ScopedGroup } from '../teams/overridable-row';
 import { ProjectScopeInstructions } from '../teams/project-scope-instructions';
 import { stageTitle } from '../teams/stage-validate';
-import { teamSnapshot, triggerMemberOf } from '../teams/team-doc';
+import { nextBlockId, teamSnapshot, triggerMemberOf } from '../teams/team-doc';
 import {
   effectiveMemberOf,
   isOverridden,
@@ -266,6 +266,14 @@ export function ProjectTeamOverrides({
       [],
     );
 
+  const addBlock = (): void =>
+    overlayState.edit((current) => {
+      const blocks = current.instructionBlocks ?? [];
+      return withOverlayBlocks(current, [
+        ...blocks,
+        { id: nextBlockId(blocks), title: '', text: '', audience: 'everyone' },
+      ]);
+    });
   const patchBlock = (
     blockId: string,
     patch: Partial<Omit<InstructionBlock, 'id'>>,
@@ -516,23 +524,23 @@ export function ProjectTeamOverrides({
               </ul>
             </Part>
 
-            {(overlay.instructionBlocks ?? []).length === 0 ? null : (
-              <Part
-                title={`Team blocks only in ${projectName}`}
-                hint={`Blocks this project’s overlay of the team still carries. Move what they say into ${projectName}’s instructions and remove them here.`}>
-                <ProjectScopeInstructions
-                  overlayBlocks={overlay.instructionBlocks ?? []}
-                  members={members}
-                  overlaySizeOf={(blockId) =>
-                    instructionSizes.blocks?.get(
-                      `project:${projectId}:${blockId}`,
-                    )
-                  }
-                  onChange={patchBlock}
-                  onRemove={removeBlock}
-                />
-              </Part>
-            )}
+            <Part
+              title={`Team blocks only in ${projectName}`}
+              hint={`Text for the members you pick, carried only by ${projectName}’s runs of this team. For every member, use ${projectName}’s instructions.`}>
+              <ProjectScopeInstructions
+                projectName={projectName}
+                overlayBlocks={overlay.instructionBlocks ?? []}
+                members={members}
+                overlaySizeOf={(blockId) =>
+                  instructionSizes.blocks?.get(
+                    `project:${projectId}:${blockId}`,
+                  )
+                }
+                onAdd={addBlock}
+                onChange={patchBlock}
+                onRemove={removeBlock}
+              />
+            </Part>
           </div>
         </MenuAnchorContext.Provider>
       )}

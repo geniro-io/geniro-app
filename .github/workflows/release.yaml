@@ -18,6 +18,11 @@ on:
       - 'main'
       - 'develop'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Build and publish this existing draft release (e.g. v1.242.5) instead of cutting a new version'
+        required: false
+        default: ''
 
 env:
   # geniro-app ships as ONE product (the Electron app bundles the daemon; the
@@ -33,6 +38,7 @@ jobs:
   version:
     runs-on: ubuntu-22.04
     name: Version
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.tag == '' }}
     outputs:
       released: ${{ steps.semantic.outputs.released }}
     steps:
@@ -159,7 +165,7 @@ jobs:
     runs-on: macos-15 # arm64 runner — the only published arch
     name: Build & attach macOS app
     needs: [version, create-release]
-    if: ${{ needs.version.outputs.released == 'true' && github.ref_name == 'main' }}
+    if: ${{ !cancelled() && github.ref_name == 'main' && ((needs.version.outputs.released == 'true' && needs.create-release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) }}
     permissions:
       contents: write
     outputs:
@@ -170,12 +176,30 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ inputs.tag || '' }}
 
       - name: Resolve release tag
         id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REBUILD_TAG: ${{ inputs.tag || '' }}
         run: |
+          set -euo pipefail
           git fetch --tags --force --prune
-          CURRENT_TAG="$(git tag --merged HEAD --list 'v[0-9]*' | sort -V | tail -n 1)"
+          if [[ -n "$REBUILD_TAG" ]]; then
+            if [[ ! "$REBUILD_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::'$REBUILD_TAG' is not a v<x.y.z> tag."
+              exit 1
+            fi
+            # Never re-upload over a published release: users already verified its checksums.
+            if [[ "$(gh release view "$REBUILD_TAG" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft)" != "true" ]]; then
+              echo "::error::$REBUILD_TAG is not a draft release; only a draft can be rebuilt."
+              exit 1
+            fi
+            CURRENT_TAG="$REBUILD_TAG"
+          else
+            CURRENT_TAG="$(git tag --merged HEAD --list 'v[0-9]*' | sort -V | tail -n 1)"
+          fi
           echo "current_tag=$CURRENT_TAG" >> "$GITHUB_OUTPUT"
           echo "version=${CURRENT_TAG#v}" >> "$GITHUB_OUTPUT"
 
@@ -332,7 +356,7 @@ jobs:
     runs-on: ubuntu-22.04
     name: Bump Homebrew cask
     needs: [build-app]
-    if: ${{ needs.build-app.result == 'success' && vars.HOMEBREW_TAP_REPO != '' }}
+    if: ${{ !cancelled() && needs.build-app.result == 'success' && vars.HOMEBREW_TAP_REPO != '' }}
     steps:
       - name: Checkout tap
         uses: actions/checkout@v5

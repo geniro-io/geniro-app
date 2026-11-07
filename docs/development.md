@@ -105,6 +105,12 @@ the release signing certificate from the `GENIRO_SIGNING_P12` /
 secrets are missing the job fails instead of shipping an unsigned build,
 which would silently reset every user's macOS permissions.
 
+The release stays a draft until `build-app` publishes it, and the app's
+updater skips drafts. A draft left by a failed build is rebuilt and published
+by running the workflow by hand (**Actions → Release → Run workflow** on
+`main`, or `gh workflow run release.yaml -f tag=v<x.y.z>`) with its tag; it
+builds that tag's commit and refuses a release that is already published.
+
 **Homebrew tap auto-bump** (optional): the tap repo `geniro-io/homebrew-tap`
 holds the cask ([`packaging/homebrew/geniro.rb`](../packaging/homebrew/geniro.rb)
 is its starting point). To have each release update the cask's version and

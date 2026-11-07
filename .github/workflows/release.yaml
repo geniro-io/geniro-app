@@ -156,7 +156,7 @@ jobs:
   # and an executing app, and the app updates ITSELF from these assets
   # (download → checksum → swap the bundle → relaunch).
   build-app:
-    runs-on: macos-14 # arm64 runner — the only published arch
+    runs-on: macos-15 # arm64 runner — the only published arch
     name: Build & attach macOS app
     needs: [version, create-release]
     if: ${{ needs.version.outputs.released == 'true' && github.ref_name == 'main' }}

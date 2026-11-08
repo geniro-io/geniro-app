@@ -23,6 +23,7 @@ import {
   THREAD_MESSAGE_REPEAT_WINDOW_MS,
   THREAD_MESSAGES_PER_MINUTE,
   THREAD_MESSAGES_TURN_MAX_CHARS,
+  threadMessageNotDeliveredNote,
   threadMessageNotDeliveredSentence,
   UNTITLED_THREAD,
 } from '../utils/thread-message-text';
@@ -287,6 +288,7 @@ export class ThreadInboxService {
     this.bus.publishThreadMessagesChanged(runId);
     const target = await this.runDao.getById(runId, em);
     await this.tellSenders(
+      runId,
       [row],
       redactSecrets(target?.title ?? UNTITLED_THREAD),
       'removed',
@@ -304,6 +306,7 @@ export class ThreadInboxService {
       );
       const target = await this.runDao.getById(runId, em);
       await this.tellSenders(
+        runId,
         waiting,
         redactSecrets(target?.title ?? UNTITLED_THREAD),
         why,
@@ -318,16 +321,18 @@ export class ThreadInboxService {
   }
 
   private async tellSenders(
+    toRunId: string,
     rows: readonly ThreadMessage[],
     toTitle: string,
     why: 'archived' | 'deleted' | 'removed',
   ): Promise<void> {
     const sentence = threadMessageNotDeliveredSentence(toTitle, why);
+    const note = threadMessageNotDeliveredNote(toRunId, why);
     for (const runId of new Set(rows.map((row) => row.fromRunId))) {
       await this.notices.warn(runId, sentence, 'Not delivered');
     }
     for (const key of new Set(rows.map((row) => row.fromSessionKey))) {
-      if (!this.sessions.oweKeyNote(key, sentence)) {
+      if (!this.sessions.oweKeyNote(key, note)) {
         this.logger.warn(
           `conversation ${key} not told of an undelivered message: the daemon is shutting down`,
         );

@@ -36,6 +36,7 @@ import { PARKED_SEND_TITLE } from './follow-up-delivery';
 import type { HostedThread } from './hosted-thread';
 import type { LiveTextEvent } from './live-text';
 import { RUN_LIST_PAGE } from './run-list-pages';
+import { forgetThread } from './thread-ui-memory';
 import { HISTORY_PAGE } from './use-chat-run';
 import { PROCESS_POLL_MS } from './use-run-processes';
 import { REREAD_DELAY_MS } from './use-run-state';
@@ -792,6 +793,7 @@ beforeEach(() => {
   // behind would be drained into the next one's run.
   localStorage.removeItem('geniro.queuedMessages');
   localStorage.removeItem('geniro.queuedMessages:team-chat:dev-team');
+  forgetThread('w1');
   // jsdom implements no element scrolling at all; the transcript auto-scroll
   // effect calls `scrollTo` on the scroll box itself — never `scrollIntoView`,
   // which would take every scrollable ancestor, the window included, with it.
@@ -5253,6 +5255,11 @@ describe('Chats team runs', () => {
       });
     });
 
+    await act(async () => {
+      container
+        .querySelector('[data-slot="working-agents-toggle"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     expect(
       container.querySelector('[data-slot="working-agents-summary"]')
         ?.textContent,
@@ -5262,6 +5269,13 @@ describe('Chats team runs', () => {
     );
     expect(row?.dataset.conversation).toBe('call-5');
     expect(row?.textContent).toContain('5m');
+    expect(
+      container
+        .querySelector('[data-slot="transcript"]')
+        ?.nextElementSibling?.querySelector(
+          '[data-slot="working-agents-card"]',
+        ),
+    ).not.toBeNull();
     expect(container.querySelector('[data-slot="running-calls"]')).toBeNull();
 
     // A press reads that conversation's newest messages and nothing else of it.
@@ -5303,7 +5317,7 @@ describe('Chats team runs', () => {
       emitRunStatus({ runId: 'w1', status: 'completed' });
     });
     expect(
-      container.querySelector('[data-slot="working-agents-summary"]')
+      container.querySelector('[data-slot="working-agents-finished-toggle"]')
         ?.textContent,
     ).toBe('1 finished');
   });
@@ -5544,6 +5558,11 @@ describe('Chats team runs', () => {
     const container = await mount(client);
     await clickRun(container, 'Review team');
 
+    await act(async () => {
+      container
+        .querySelector('[data-slot="working-agents-toggle"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     expect(
       container.querySelector('[data-slot="working-agents-summary"]')
         ?.textContent,

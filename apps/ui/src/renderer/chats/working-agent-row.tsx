@@ -14,15 +14,55 @@ import {
 
 const STATE_LOOK: Record<
   WorkingAgentState,
-  { word: string; tone: StatusTone; hollow?: boolean }
+  { word: string; shortWord?: string; tone: StatusTone; hollow?: boolean }
 > = {
   working: { word: 'working', tone: 'ok' },
   queued: { word: 'queued', tone: 'unknown', hollow: true },
-  quiet: { word: 'gone quiet', tone: 'warn' },
+  quiet: { word: 'gone quiet', shortWord: 'quiet', tone: 'warn' },
   finished: { word: 'finished', tone: 'unknown' },
   failed: { word: 'failed', tone: 'bad' },
   stopped: { word: 'stopped', tone: 'unknown' },
 };
+
+function WorkingAgentStateDot({
+  state,
+}: {
+  state: WorkingAgentState;
+}): React.JSX.Element {
+  const look = STATE_LOOK[state];
+  return (
+    <StatusDot
+      tone={look.tone}
+      className={cn(
+        'size-1.5 shrink-0',
+        look.hollow === true && 'border border-muted-foreground bg-transparent',
+      )}
+    />
+  );
+}
+
+/** One agent on the folded card's strip: its face and its state in a word. */
+export function WorkingAgentStripItem({
+  row,
+}: {
+  row: WorkingAgentRow;
+}): React.JSX.Element {
+  const look = STATE_LOOK[row.state];
+  return (
+    <span
+      data-slot="working-agents-strip-item"
+      className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+      <MemberAvatar
+        size={20}
+        name={row.callee}
+        colorKey={row.calleeKey}
+        avatar={row.calleeAvatar}
+      />
+      <WorkingAgentStateDot state={row.state} />
+      {look.shortWord ?? look.word}
+    </span>
+  );
+}
 
 /** Who was called, and by whom when that is recorded. */
 export function WorkingAgentFaces({
@@ -96,14 +136,7 @@ export function WorkingAgentFacts({
         <WorkingAgentElapsed row={row} />
       </span>
       <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-        <StatusDot
-          tone={state.tone}
-          className={cn(
-            'size-1.5 shrink-0',
-            state.hollow === true &&
-              'border border-muted-foreground bg-transparent',
-          )}
-        />
+        <WorkingAgentStateDot state={row.state} />
         <span data-slot="working-agent-state" className="shrink-0">
           {state.word}
         </span>

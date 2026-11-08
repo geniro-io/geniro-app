@@ -79,7 +79,7 @@ function mount(element: React.ReactElement): HTMLElement {
   return container;
 }
 
-function renderCard(
+function renderFolded(
   rows: readonly WorkingAgentRow[],
   onShowInChat: (callId: string) => void = () => undefined,
 ) {
@@ -94,6 +94,21 @@ function renderCard(
     />,
   );
   return { el, ...spies };
+}
+
+/** The card as a reader sees it once they have pressed it open. */
+function renderCard(
+  rows: readonly WorkingAgentRow[],
+  onShowInChat: (callId: string) => void = () => undefined,
+) {
+  const rendered = renderFolded(rows, onShowInChat);
+  const toggle = slot(rendered.el, 'working-agents-toggle');
+  if (toggle !== null) {
+    act(() => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+  return rendered;
 }
 
 async function press(target: Element): Promise<void> {
@@ -316,17 +331,15 @@ describe('WorkingAgentsCard', () => {
       );
     });
 
-    it('keeps every count on the folded pill', async () => {
-      const { el } = renderCard(longSet());
+    it('keeps every count in the folded card’s tooltip', () => {
+      const { el } = renderFolded(longSet());
 
-      await press(slot(el, 'working-agents-toggle')!);
-
-      expect(slot(el, 'working-agents-summary')?.textContent).toBe(
-        '2 working · 1 queued · 4 finished · 1 failed',
+      expect(slot(el, 'working-agents-toggle')?.title).toBe(
+        'Agents · 2 working · 1 queued · 4 finished · 1 failed',
       );
     });
 
-    it('counts failed and stopped apart from finished once a settled set is opened', async () => {
+    it('counts failed and stopped apart from finished once a settled set is opened', () => {
       const { el } = renderCard([
         row({ state: 'finished' }),
         row({
@@ -343,8 +356,6 @@ describe('WorkingAgentsCard', () => {
         }),
       ]);
 
-      await press(slot(el, 'working-agents-toggle')!);
-
       expect(slot(el, 'working-agents-summary')?.textContent).toBe('');
       expect(slot(el, 'working-agents-finished-toggle')?.textContent).toBe(
         '1 finished · 1 failed · 1 stopped',
@@ -352,38 +363,400 @@ describe('WorkingAgentsCard', () => {
     });
   });
 
-  it('starts folded when no row is live', () => {
-    const { el } = renderCard([row({ state: 'finished' })]);
+  it('starts as the square when no row is live', () => {
+    const { el } = renderFolded([row({ state: 'finished' })]);
 
-    expect(slot(el, 'working-agents-card')?.getAttribute('data-folded')).toBe(
-      'true',
-    );
+    expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('true');
     expect(rowsOf(el)).toHaveLength(0);
   });
 
-  it('starts open when a row is live', () => {
-    const { el } = renderCard([row()]);
+  it('starts as the square while an agent works, on a wide window too', () => {
+    const { el } = renderFolded([row()]);
 
-    expect(slot(el, 'working-agents-card')?.getAttribute('data-folded')).toBe(
-      'false',
-    );
-    expect(rowsOf(el)).toHaveLength(1);
+    expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('true');
+    expect(rowsOf(el)).toHaveLength(0);
   });
 
-  it('folds its rows away on a press of its toggle, and brings them back on the next', async () => {
-    const { el } = renderCard([row()]);
+  it('opens on a press of its toggle, and folds its rows away on the next', async () => {
+    const { el } = renderFolded([row()]);
 
     await press(slot(el, 'working-agents-toggle')!);
-    expect(slot(el, 'working-agents-card')?.getAttribute('data-folded')).toBe(
-      'true',
-    );
-    expect(rowsOf(el)).toHaveLength(0);
-
-    await press(slot(el, 'working-agents-toggle')!);
-    expect(slot(el, 'working-agents-card')?.getAttribute('data-folded')).toBe(
-      'false',
-    );
+    expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('false');
     expect(rowsOf(el)).toHaveLength(1);
+
+    await press(slot(el, 'working-agents-toggle')!);
+    expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('true');
+    expect(rowsOf(el)).toHaveLength(0);
+  });
+
+  describe('where it stands', () => {
+    const inPane = (
+      rows: readonly WorkingAgentRow[],
+      pane: { width: number; height: number },
+    ): HTMLElement => {
+      vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(
+        pane.width,
+      );
+      vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(
+        pane.height,
+      );
+      const spies = doubles();
+      return mount(
+        <>
+          <div data-slot="pane" />
+          <WorkingAgentsCard
+            rows={rows}
+            runId="run-1"
+            api={spies.api}
+            client={spies.client}
+            onShowInChat={() => undefined}
+          />
+        </>,
+      );
+    };
+    const live = (count: number): WorkingAgentRow[] =>
+      Array.from({ length: count }, (_, index) =>
+        row({
+          conversationId: `call-${index}`,
+          callId: `call-${index}`,
+          callIds: [`call-${index}`],
+          callee: `Agent ${index}`,
+          calleeKey: `agent-${index}`,
+        }),
+      );
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('anchors to the bottom right corner, closed and open', async () => {
+      const { el } = renderFolded([row()]);
+      const card = slot(el, 'working-agents-card')!;
+
+      expect(card.className).toContain('right-4');
+      expect(card.className).toContain('-bottom-2');
+
+      await press(slot(el, 'working-agents-toggle')!);
+
+      expect(card.className).toContain('right-4');
+      expect(card.className).toContain('-bottom-2');
+    });
+
+    it('keeps the toggle under the rows, so an open card grows upward from it', () => {
+      const { el } = renderCard([row()]);
+      const toggle = slot(el, 'working-agents-toggle')!;
+
+      expect(toggle.nextElementSibling).toBeNull();
+      expect(toggle.previousElementSibling?.contains(rowsOf(el)[0]!)).toBe(
+        true,
+      );
+    });
+
+    it('stays inside its pane, and lifts over Latest on a pane too narrow to share the line', async () => {
+      const wide = inPane([row()], { width: 926, height: 673 });
+      await press(slot(wide, 'working-agents-toggle')!);
+      expect(slot(wide, 'working-agents-card')?.className).toContain(
+        '-bottom-2',
+      );
+      expect(slot(wide, 'working-agents-card')?.style.maxHeight).toBe('673px');
+      act(() => root.unmount());
+      container.remove();
+
+      const narrow = inPane([row()], { width: 390, height: 400 });
+      await press(slot(narrow, 'working-agents-toggle')!);
+
+      expect(slot(narrow, 'working-agents-card')?.className).toContain(
+        'bottom-12',
+      );
+      expect(slot(narrow, 'working-agents-card')?.style.maxHeight).toBe(
+        '344px',
+      );
+    });
+
+    it('caps the strip to what its pane leaves clear of Latest, and counts the rest', () => {
+      const wide = inPane(live(6), { width: 926, height: 673 });
+      expect(
+        wide.querySelectorAll('[data-slot="working-agents-strip-item"]'),
+      ).toHaveLength(3);
+      expect(slot(wide, 'working-agents-strip-more')?.textContent).toBe('+3');
+      act(() => root.unmount());
+      container.remove();
+
+      const narrow = inPane(live(6), { width: 390, height: 400 });
+      expect(
+        narrow.querySelectorAll('[data-slot="working-agents-strip-item"]'),
+      ).toHaveLength(1);
+      expect(slot(narrow, 'working-agents-strip-more')?.textContent).toBe('+5');
+    });
+  });
+
+  describe('the folded square', () => {
+    const named = (
+      id: string,
+      callee: string,
+      state: WorkingAgentRow['state'],
+    ): WorkingAgentRow =>
+      row({
+        conversationId: id,
+        callId: id,
+        callIds: [id],
+        callee,
+        calleeKey: callee.toLowerCase(),
+        state,
+      });
+    const tile = (el: Element): HTMLElement => slot(el, 'working-agents-tile')!;
+    const ring = (el: Element): HTMLElement | null =>
+      slot(el, 'working-agents-tile-ring');
+    const dot = (el: Element): Element | null =>
+      slot(el, 'working-agents-toggle')!.querySelector(
+        ':scope > [data-slot="status-dot"][data-tone="bad"]',
+      );
+    const remembered = (
+      rows: readonly WorkingAgentRow[],
+      runId = 'run-1',
+    ): React.JSX.Element => {
+      const spies = doubles();
+      return (
+        <ThreadUiMemoryContext.Provider value={runId}>
+          <WorkingAgentsCard
+            rows={rows}
+            runId={runId}
+            api={spies.api}
+            client={spies.client}
+            onShowInChat={() => undefined}
+          />
+        </ThreadUiMemoryContext.Provider>
+      );
+    };
+
+    it('grows into the strip on hover and on keyboard focus, and the square gives way', () => {
+      const { el } = renderFolded([
+        named('call-1', 'Engineer', 'working'),
+        named('call-2', 'QA', 'queued'),
+      ]);
+      const toggle = slot(el, 'working-agents-toggle')!;
+      const stripTrack = slot(el, 'working-agents-strip')!.parentElement!
+        .parentElement!;
+      const tileTrack = tile(el).parentElement!.parentElement!;
+
+      expect(toggle.className.split(' ')).toContain('group');
+      for (const state of ['group-hover', 'group-focus-visible']) {
+        expect(stripTrack.className).toContain(`${state}:grid-cols-[1fr]`);
+        expect(tileTrack.className).toContain(`${state}:grid-cols-[0fr]`);
+      }
+      expect(stripTrack.className).toContain('grid-cols-[0fr]');
+    });
+
+    it('names every live agent on the strip, whatever the square shows', () => {
+      const { el } = renderFolded([
+        named('call-1', 'Engineer', 'working'),
+        named('call-2', 'QA', 'quiet'),
+        named('call-3', 'Researcher', 'queued'),
+      ]);
+
+      const items = [
+        ...el.querySelectorAll('[data-slot="working-agents-strip-item"]'),
+      ];
+      expect(faces(slot(el, 'working-agents-strip')!)).toEqual([
+        'Engineer',
+        'QA',
+        'Researcher',
+      ]);
+      expect(items[0]?.textContent).toContain('working');
+      expect(items[1]?.textContent).toContain('quiet');
+      expect(items[2]?.textContent).toContain('queued');
+      expect(faces(tile(el))).toEqual(['Engineer']);
+    });
+
+    it('leads with the unseen failure, over someone working', () => {
+      const { el } = renderFolded([
+        named('call-1', 'Engineer', 'working'),
+        named('call-2', 'QA', 'failed'),
+      ]);
+
+      expect(faces(tile(el))).toEqual(['QA']);
+    });
+
+    it('leads with whoever works once the failure is seen', async () => {
+      const { el } = renderFolded([
+        named('call-2', 'QA', 'failed'),
+        named('call-1', 'Engineer', 'working'),
+      ]);
+      await press(slot(el, 'working-agents-toggle')!);
+      await press(slot(el, 'working-agents-toggle')!);
+
+      expect(faces(tile(el))).toEqual(['Engineer']);
+    });
+
+    it('counts the other live agents, once each', () => {
+      const { el } = renderFolded([
+        named('call-1', 'Engineer', 'working'),
+        named('call-2', 'QA', 'queued'),
+        named('call-3', 'QA', 'quiet'),
+        named('call-4', 'Researcher', 'finished'),
+      ]);
+
+      expect(slot(el, 'working-agents-tile-more')?.textContent).toBe('+1');
+    });
+
+    it('counts the run’s other agents when nobody is live', () => {
+      const { el } = renderFolded([
+        named('call-1', 'Engineer', 'finished'),
+        named('call-2', 'QA', 'finished'),
+        named('call-3', 'Researcher', 'stopped'),
+      ]);
+
+      expect(slot(el, 'working-agents-tile-more')?.textContent).toBe('+2');
+    });
+
+    it('shows no count with nobody else', () => {
+      const { el } = renderFolded([named('call-1', 'Engineer', 'working')]);
+
+      expect(slot(el, 'working-agents-tile-more')).toBeNull();
+    });
+
+    it('spins its ring while someone works, unless the reader asked for less motion', () => {
+      const { el } = renderFolded([
+        named('call-1', 'Engineer', 'working'),
+        named('call-2', 'QA', 'queued'),
+      ]);
+
+      expect(tile(el).dataset.activity).toBe('working');
+      expect(ring(el)?.className).toContain('animate-spin');
+      expect(ring(el)?.className).toContain('motion-reduce:animate-none');
+    });
+
+    it.each<[readonly WorkingAgentRow['state'][]]>([
+      [['queued']],
+      [['quiet']],
+      [['queued', 'quiet']],
+    ])('holds its ring still while the live ones are only %j', (states) => {
+      const { el } = renderFolded(
+        states.map((state, index) =>
+          named(`call-${index}`, `A${index}`, state),
+        ),
+      );
+
+      expect(tile(el).dataset.activity).toBe('waiting');
+      expect(ring(el)).not.toBeNull();
+      expect(ring(el)?.className).not.toContain('animate-spin');
+    });
+
+    it('draws no ring once everyone has finished', () => {
+      const { el } = renderFolded([named('call-1', 'Engineer', 'finished')]);
+
+      expect(tile(el).dataset.activity).toBe('idle');
+      expect(ring(el)).toBeNull();
+    });
+
+    it('fades once everyone has finished, and not while anyone is live', () => {
+      const settled = renderFolded([named('call-1', 'Engineer', 'finished')]);
+      expect(slot(settled.el, 'working-agents-card')?.className).toContain(
+        'opacity-60',
+      );
+      act(() => root.unmount());
+      container.remove();
+
+      const live = renderFolded([named('call-1', 'Engineer', 'queued')]);
+      expect(slot(live.el, 'working-agents-card')?.className).not.toContain(
+        'opacity-60',
+      );
+    });
+
+    it('does not fade over an unseen failure, and fades once it is seen', async () => {
+      const { el } = renderFolded([named('call-1', 'Engineer', 'failed')]);
+      expect(slot(el, 'working-agents-card')?.className).not.toContain(
+        'opacity-60',
+      );
+
+      await press(slot(el, 'working-agents-toggle')!);
+      await press(slot(el, 'working-agents-toggle')!);
+
+      expect(slot(el, 'working-agents-card')?.className).toContain(
+        'opacity-60',
+      );
+    });
+
+    it('lights the dot for a failure not yet seen, and puts it out when the card opens', async () => {
+      const { el } = renderFolded([
+        named('call-1', 'Engineer', 'working'),
+        named('call-2', 'QA', 'failed'),
+      ]);
+      expect(dot(el)).not.toBeNull();
+
+      await press(slot(el, 'working-agents-toggle')!);
+      await press(slot(el, 'working-agents-toggle')!);
+
+      expect(dot(el)).toBeNull();
+    });
+
+    it('keeps the failure counted on the strip after the dot goes out', async () => {
+      const { el } = renderFolded([named('call-2', 'QA', 'failed')]);
+
+      await press(slot(el, 'working-agents-toggle')!);
+      await press(slot(el, 'working-agents-toggle')!);
+
+      expect(slot(el, 'working-agents-failed')?.textContent).toBe('1');
+    });
+
+    it('lights the dot again for a later failure', async () => {
+      const first = named('call-2', 'QA', 'failed');
+      const el = mount(remembered([first]));
+      await press(slot(el, 'working-agents-toggle')!);
+      await press(slot(el, 'working-agents-toggle')!);
+      expect(dot(el)).toBeNull();
+
+      act(() =>
+        root.render(
+          remembered([first, named('call-3', 'Researcher', 'failed')]),
+        ),
+      );
+
+      expect(dot(el)).not.toBeNull();
+    });
+
+    it('counts a failure that lands while the card is open as seen', async () => {
+      const el = mount(remembered([named('call-1', 'Engineer', 'working')]));
+      await press(slot(el, 'working-agents-toggle')!);
+
+      const failing = [named('call-1', 'Engineer', 'failed')];
+      act(() => root.render(remembered(failing)));
+      await press(slot(el, 'working-agents-toggle')!);
+
+      expect(dot(el)).toBeNull();
+    });
+
+    it('remembers a seen failure per thread', async () => {
+      const failure = [named('call-2', 'QA', 'failed')];
+      const el = mount(remembered(failure));
+      await press(slot(el, 'working-agents-toggle')!);
+      await press(slot(el, 'working-agents-toggle')!);
+      act(() => root.unmount());
+      container.remove();
+
+      const same = mount(remembered(failure));
+      expect(dot(same)).toBeNull();
+      act(() => root.unmount());
+      container.remove();
+
+      const other = mount(remembered(failure, 'run-2'));
+      expect(dot(other)).not.toBeNull();
+    });
+
+    it('remembers the press that opened it per thread', async () => {
+      const el = mount(remembered([row()]));
+      await press(slot(el, 'working-agents-toggle')!);
+      act(() => root.unmount());
+      container.remove();
+
+      const same = mount(remembered([row()]));
+      expect(slot(same, 'working-agents-card')?.dataset.folded).toBe('false');
+      act(() => root.unmount());
+      container.remove();
+
+      const other = mount(remembered([row()], 'run-2'));
+      expect(slot(other, 'working-agents-card')?.dataset.folded).toBe('true');
+    });
   });
 
   it('calls no API until a row is pressed', async () => {
@@ -650,7 +1023,7 @@ describe('WorkingAgentsCard', () => {
   it('starts folded at phone width, a live agent or not', () => {
     narrowViewport();
     try {
-      const { el } = renderCard([row()]);
+      const { el } = renderFolded([row()]);
 
       expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('true');
     } finally {
@@ -658,7 +1031,7 @@ describe('WorkingAgentsCard', () => {
     }
   });
 
-  it('keeps the press that folded it when the thread is opened again', async () => {
+  it('keeps the press that folded it again when the thread is opened again', async () => {
     const card = (spies: ReturnType<typeof doubles>): React.JSX.Element => (
       <ThreadUiMemoryContext.Provider value="run-1">
         <WorkingAgentsCard
@@ -672,6 +1045,7 @@ describe('WorkingAgentsCard', () => {
     );
     const el = mount(card(doubles()));
     await press(slot(el, 'working-agents-toggle')!);
+    await press(slot(el, 'working-agents-toggle')!);
     act(() => root.unmount());
     container.remove();
 
@@ -680,13 +1054,13 @@ describe('WorkingAgentsCard', () => {
     expect(slot(again, 'working-agents-card')?.dataset.folded).toBe('true');
   });
 
-  it('lets one member with two conversations show one face on the pill', () => {
-    const { el } = renderCard([
+  it('lets one member with two conversations show one face on the strip', () => {
+    const { el } = renderFolded([
       row({ conversationId: 'call-1', state: 'finished' }),
       row({ conversationId: 'call-2', callId: 'call-2', state: 'finished' }),
     ]);
 
-    expect(faces(slot(el, 'working-agents-toggle')!)).toHaveLength(1);
+    expect(faces(slot(el, 'working-agents-strip')!)).toHaveLength(1);
   });
 
   it('tints the glyph while somebody works, and not while every call is queued', async () => {
@@ -743,6 +1117,7 @@ describe('WorkingAgentsCard', () => {
       />
     );
     const el = mount(card('working'));
+    await press(slot(el, 'working-agents-toggle')!);
     await press(rowsOf(el)[0]!);
 
     act(() => root.render(card('finished')));
@@ -819,7 +1194,6 @@ describe('WorkingAgentsCard', () => {
     narrowViewport();
     try {
       const narrow = renderCard([chained()]);
-      await press(slot(narrow.el, 'working-agents-toggle')!);
       await press(rowsOf(narrow.el)[0]!);
       await press(slot(narrow.el, 'working-agent-show-in-chat')!);
 

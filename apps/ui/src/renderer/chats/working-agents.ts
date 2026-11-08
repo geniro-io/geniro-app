@@ -193,8 +193,9 @@ export function isWorkingAgentBusy(row: WorkingAgentRow): boolean {
   return row.state === 'working' || row.state === 'quiet';
 }
 
-/** "2 working · 1 queued · 3 finished · 1 failed", leaving out what there is none of. */
-export function workingAgentsSummary(rows: readonly WorkingAgentRow[]): string {
+function workingAgentsCounts(
+  rows: readonly WorkingAgentRow[],
+): readonly (readonly [string, number])[] {
   const count = (test: (row: WorkingAgentRow) => boolean): number =>
     rows.filter(test).length;
   return (
@@ -205,8 +206,53 @@ export function workingAgentsSummary(rows: readonly WorkingAgentRow[]): string {
       ['failed', count((row) => row.state === 'failed')],
       ['stopped', count((row) => row.state === 'stopped')],
     ] as const
-  )
-    .filter(([, figure]) => figure > 0)
+  ).filter(([, figure]) => figure > 0);
+}
+
+/** "2 working · 1 queued · 3 finished · 1 failed", leaving out what there is none of. */
+export function workingAgentsSummary(rows: readonly WorkingAgentRow[]): string {
+  return workingAgentsCounts(rows)
     .map(([word, figure]) => `${figure} ${word}`)
     .join(' · ');
+}
+
+/** The folded card's one figure, the most current there is; failures are marked beside it. */
+export function workingAgentsShortCount(
+  rows: readonly WorkingAgentRow[],
+): string {
+  const first = workingAgentsCounts(rows).find(([word]) => word !== 'failed');
+  return first === undefined ? '' : `${first[1]} ${first[0]}`;
+}
+
+/**
+ * Who stands for the whole set on the folded card: an unseen failure first, then
+ * whoever works, newest first, then the rest. `others` counts the other live
+ * agents, or with nobody live the run's other agents.
+ */
+export function leadWorkingAgent(
+  rows: readonly WorkingAgentRow[],
+  isUnseenFailure: (row: WorkingAgentRow) => boolean,
+): { lead: WorkingAgentRow; others: number } | null {
+  const rank = (row: WorkingAgentRow): number => {
+    if (isUnseenFailure(row)) {
+      return 0;
+    }
+    if (row.state === 'working') {
+      return 1;
+    }
+    return isWorkingAgentLive(row) ? 2 : 3;
+  };
+  const lead = rows.reduce<WorkingAgentRow | null>(
+    (best, row) => (best === null || rank(row) < rank(best) ? row : best),
+    null,
+  );
+  if (lead === null) {
+    return null;
+  }
+  const live = rows.filter(isWorkingAgentLive);
+  const others = new Set(
+    (live.length > 0 ? live : rows).map((row) => row.calleeKey),
+  );
+  others.delete(lead.calleeKey);
+  return { lead, others: others.size };
 }

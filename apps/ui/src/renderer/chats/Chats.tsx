@@ -10483,20 +10483,6 @@ export function Chats({
                       revealCallBlock={revealCallBlock}
                       revealCall={revealCall}
                       openSubagentDetail={openSubagentDetail}>
-                      {activeRun === null ? null : (
-                        <WorkingAgentsCard
-                          key={activeRun.id}
-                          rows={startedAgents}
-                          runId={activeRun.id}
-                          api={chatApi}
-                          client={client}
-                          onShowInChat={openCall}
-                          nodes={nodeMeta}
-                          chatAgentName={activeRun.agentKind}
-                          delegateState={runState}
-                          collapseToolSteps={collapseToolSteps}
-                        />
-                      )}
                       <div
                         data-slot="transcript"
                         className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4 [overflow-anchor:none] [&>*:first-child]:mt-auto">
@@ -10683,6 +10669,20 @@ export function Chats({
                         })}
                         <div ref={transcriptEndRef} />
                       </div>
+                      {activeRun === null ? null : (
+                        <WorkingAgentsCard
+                          key={activeRun.id}
+                          rows={startedAgents}
+                          runId={activeRun.id}
+                          api={chatApi}
+                          client={client}
+                          onShowInChat={openCall}
+                          nodes={nodeMeta}
+                          chatAgentName={activeRun.agentKind}
+                          delegateState={runState}
+                          collapseToolSteps={collapseToolSteps}
+                        />
+                      )}
                     </TranscriptContexts>
 
                     {/* Between the scroller and the composer, and drawn OVER

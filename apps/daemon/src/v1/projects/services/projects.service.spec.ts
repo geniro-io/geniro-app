@@ -815,6 +815,26 @@ describe('ProjectsService (in-memory sqlite)', () => {
     expect((await projectDao.getById(created.id))?.instructions).toBeNull();
   });
 
+  it('reads a usage-limit wait while it stands, ends it on a re-arm, and drops a lapsed one', async () => {
+    const project = await service.create({ name: 'board', folder });
+    const row = (await projectDao.getById(project.id, em)) as Project;
+    const until = new Date(Date.now() + 60_000);
+    row.autopilotLimitUntil = until;
+    await em.flush();
+
+    expect((await service.get(project.id)).autopilotLimitUntil).toBe(
+      until.toISOString(),
+    );
+    expect(
+      (await service.rearmAutopilot(project.id)).autopilotLimitUntil,
+    ).toBeNull();
+
+    row.autopilotLimitUntil = new Date(Date.now() - 1);
+    await em.flush();
+
+    expect((await service.get(project.id)).autopilotLimitUntil).toBeNull();
+  });
+
   // Re-arming is its own press rather than a field on the patch: the breaker
   // opened because runs kept failing, so resuming is presumed deliberate.
   it('clears the failure streak on a re-arm, and a second press is a no-op', async () => {

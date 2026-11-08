@@ -797,6 +797,12 @@ export class TaskRunsService {
         `project ${project.id} has ${queue.failureStreak} failed runs in a row — re-arm it before the autopilot starts another`,
       );
     }
+    if (queue.limitHoldUntil !== null) {
+      throw new ConflictException(
+        'AUTOPILOT_LIMIT_HOLD',
+        `project ${project.id} waits for its usage limit to reset at ${queue.limitHoldUntil.toISOString()}`,
+      );
+    }
     if (queue.running >= queue.cap) {
       throw new ConflictException(
         'AUTOPILOT_AT_CAP',

@@ -37,6 +37,7 @@ Main process (git, task worktrees, **Daemon supervision**, **Terminal panel**, *
   - A refused edit is undone only in fields that still hold what it wrote.
 - The New task dialog stages pictures and files. `useBoard.createTask` creates the card without the staged references, writes the pictures, repoints the references, then binds files.
 - The dialog is hidden, not unmounted, so its reset on open must also clear staged phone uploads.
+- A paused autopilot (`autopilotIsPaused`: its breaker tripped, or `autopilotResumesAt` while a usage limit stands) draws its `AutopilotControl` on the every-project board too, one `named` chip per project. A limit's lapse announces nothing, so the board and `useProjects` re-read the list at the soonest `autopilotLimitUntil` (`use-autopilot-limit-lapse.ts`), re-armed on every answer.
 - The "cannot start" popover offers the board's run settings only for a blocked `kind` they can answer (`FIXED_IN_RUN_SETTINGS`); the board re-reads the queue after the soonest blocked `retryInMs` (`soonestRetryInMs`), re-armed on every queue answer, since nothing announces a hold lapsing.
 
 **Stats (`stats/`):**

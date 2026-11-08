@@ -116,6 +116,17 @@ describe('ProjectCard', () => {
     expect(
       stopped.querySelector('[data-slot="autopilot-pill"]')?.textContent,
     ).toContain('Stopped');
+    act(() => root?.unmount());
+
+    const waiting = render({
+      project: aProject({
+        autopilotEnabled: true,
+        autopilotLimitUntil: '2099-11-08T11:01:00.000Z',
+      }),
+    });
+    expect(
+      waiting.querySelector('[data-slot="autopilot-pill"]')?.textContent,
+    ).toContain('Waiting');
   });
 
   it('shows a project from before card keys by its name’s initials', () => {

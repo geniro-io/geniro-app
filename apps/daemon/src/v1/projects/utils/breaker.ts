@@ -13,3 +13,11 @@ export function isBreakerOpen(project: {
 }): boolean {
   return project.autopilotFailureStreak >= PROJECT_FAILURE_BREAKER_THRESHOLD;
 }
+
+/** The moment a project's wait on a spent usage limit ends, while it stands. */
+export function limitHoldUntil(project: {
+  autopilotLimitUntil: Date | null;
+}): Date | null {
+  const until = project.autopilotLimitUntil;
+  return until !== null && until.getTime() > Date.now() ? until : null;
+}

@@ -20,6 +20,7 @@ import {
   describeDaemonError,
 } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import { useAutopilotLimitLapse } from '../projects/use-autopilot-limit-lapse';
 import { currentRunSettings } from '../run-settings';
 import type { NewTaskAttachments } from './new-task-dialog';
 import {
@@ -328,12 +329,15 @@ export interface BoardApi {
    */
   queue: ProjectQueueDto | null;
   stopAutopilot: () => Promise<void>;
-  /** Write the open project's autopilot policy — switch, intake column, cap. */
-  updateAutopilot: (patch: {
-    autopilotEnabled?: boolean;
-    autopilotIntakeStatus?: TaskDto['status'];
-    autopilotMaxConcurrent?: number;
-  }) => Promise<void>;
+  /** Write a project's autopilot policy — switch, intake column, cap — the open one's by default. */
+  updateAutopilot: (
+    patch: {
+      autopilotEnabled?: boolean;
+      autopilotIntakeStatus?: TaskDto['status'];
+      autopilotMaxConcurrent?: number;
+    },
+    projectId?: string,
+  ) => Promise<void>;
   /**
    * Write the open project's RUN defaults — the agent or team every task
    * on this board takes, and the model and effort under it.
@@ -345,7 +349,7 @@ export interface BoardApi {
    */
   updateProject: (patch: UpdateProjectDto) => Promise<void>;
   /** Close a tripped breaker so the autopilot resumes. */
-  rearmAutopilot: () => Promise<void>;
+  rearmAutopilot: (projectId?: string) => Promise<void>;
 }
 
 export function useBoard(
@@ -385,6 +389,24 @@ export function useBoard(
   const refreshProjects = useLatestCallback(() => {
     setProjectsNonce((n) => n + 1);
   }, []);
+
+  useAutopilotLimitLapse(projects, refreshProjects);
+
+  useEffect(() => {
+    if (!client) {
+      return;
+    }
+    const stopReading = client.onProjectsChanged((event) => {
+      if (!event.textsOnly) {
+        refreshProjects();
+      }
+    });
+    const stopReconnect = client.onReconnect(refreshProjects);
+    return () => {
+      stopReading();
+      stopReconnect();
+    };
+  }, [client, refreshProjects]);
 
   useEffect(() => {
     if (!apis) {
@@ -1143,8 +1165,10 @@ export function useBoard(
    * around it.
    */
   const patchProject = useLatestCallback(
-    async (patch: UpdateProjectDto): Promise<void> => {
-      const projectId = selectedRef.current;
+    async (
+      patch: UpdateProjectDto,
+      projectId: string | null = selectedRef.current,
+    ): Promise<void> => {
       if (!apis || projectId === null) {
         return;
       }
@@ -1168,20 +1192,22 @@ export function useBoard(
     [patchProject],
   );
 
-  const rearmAutopilot = useLatestCallback(async (): Promise<void> => {
-    const projectId = selectedRef.current;
-    if (!apis || projectId === null) {
-      return;
-    }
-    try {
-      const saved = await apis.projects.rearmProjectAutopilot({ projectId });
-      setProjects((current) =>
-        current.map((row) => (row.id === saved.id ? saved : row)),
-      );
-    } catch (err: unknown) {
-      setError(describeDaemonError(err));
-    }
-  }, [apis]);
+  const rearmAutopilot = useLatestCallback(
+    async (projectId: string | null = selectedRef.current): Promise<void> => {
+      if (!apis || projectId === null) {
+        return;
+      }
+      try {
+        const saved = await apis.projects.rearmProjectAutopilot({ projectId });
+        setProjects((current) =>
+          current.map((row) => (row.id === saved.id ? saved : row)),
+        );
+      } catch (err: unknown) {
+        setError(describeDaemonError(err));
+      }
+    },
+    [apis],
+  );
 
   return {
     projects,

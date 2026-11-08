@@ -8,16 +8,28 @@ import {
 } from '../../../utils/stop-cause';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
-import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
+import {
+  asRecord,
+  parseJsonColumn,
+  payloadString,
+} from '../../agents/utils/json-util';
 import { ProjectDao } from '../../projects/dao/project.dao';
+import type { Project } from '../../projects/entity/project.entity';
+import {
+  AUTOPILOT_LIMIT_FALLBACK_MS,
+  AUTOPILOT_LIMIT_RESET_GRACE_MS,
+} from '../../projects/projects.types';
 import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { isBreakerOpen } from '../../projects/utils/breaker';
 import {
+  type AgentKind,
   isTerminalRunStatus,
   type ItemKind,
   type RunStatus,
 } from '../../runs/runs.types';
+import { resetInstantFrom } from '../../teams/utils/reset-instant';
 import { TaskDao } from '../dao/task.dao';
 import type { Task } from '../entity/task.entity';
 import type { TaskStatus, TaskWire } from '../tasks.types';
@@ -112,6 +124,7 @@ export class TaskSettleService implements OnModuleInit {
      */
     private readonly itemDao: ItemDao,
     private readonly projectEvents: ProjectEventBus,
+    private readonly adapters: AgentAdapterRegistry,
   ) {}
 
   onModuleInit(): void {
@@ -279,6 +292,10 @@ export class TaskSettleService implements OnModuleInit {
     const interruptedBy =
       status === 'failed' ? await this.interruptCauseOf(runId, em) : null;
     const ending: RunEnding = interruptedBy !== null ? 'interrupted' : status;
+    const limitUntil =
+      ending === 'failed'
+        ? await this.usageLimitEndOf(runId, run.agentKind, em)
+        : null;
     // A Stop is recorded on the CARD, ahead of the move that puts it back in
     // the intake column, so it arrives there already marked. The run's own
     // `cancelled` is not enough to go on: the user continuing the thread moves
@@ -308,6 +325,7 @@ export class TaskSettleService implements OnModuleInit {
         task.projectId,
         declaredFailed ? 'failed' : ending,
         worked || declaredFailed,
+        limitUntil,
         em,
       );
     }
@@ -358,7 +376,7 @@ export class TaskSettleService implements OnModuleInit {
     // After the move rather than before it, so two boards reconciling at once
     // count only the one whose compare-and-set won.
     if (from === 'reconcile') {
-      await this.recordOutcome(task.projectId, ending, worked, em);
+      await this.recordOutcome(task.projectId, ending, worked, limitUntil, em);
     }
   }
 
@@ -392,6 +410,47 @@ export class TaskSettleService implements OnModuleInit {
     return payload?.interrupted === true
       ? parseInterruptCause(payload.interruptCause)
       : null;
+  }
+
+  /**
+   * When a usage limit that ended this run reopens, or null when the run failed
+   * for any other reason. The CLI's own words decide (`AgentAdapter.failureFrom`);
+   * a team run names no CLI of its own, so any CLI's reading of the row counts.
+   */
+  private async usageLimitEndOf(
+    runId: string,
+    agentKind: AgentKind | null,
+    em: EntityManager,
+  ): Promise<Date | null> {
+    const last = await this.itemDao.getOne(
+      { runId, kind: 'error' },
+      { orderBy: { seq: 'desc' }, disableIdentityMap: true },
+      em,
+    );
+    const message = payloadString(parseJsonColumn(last?.payload), 'message');
+    if (message === null) {
+      return null;
+    }
+    const adapters =
+      agentKind !== null
+        ? [this.adapters.for(agentKind)]
+        : [...this.adapters.all().values()];
+    const limit = adapters
+      .map((adapter) => adapter.failureFrom(message))
+      .find((failure) => failure.class === 'rate_limited');
+    if (limit === undefined) {
+      return null;
+    }
+    const now = Date.now();
+    const instant =
+      limit.resetsAt === null
+        ? null
+        : resetInstantFrom(limit.resetsAt, new Date(now));
+    return new Date(
+      instant === null
+        ? now + AUTOPILOT_LIMIT_FALLBACK_MS
+        : Math.max(instant, now) + AUTOPILOT_LIMIT_RESET_GRACE_MS,
+    );
   }
 
   /**
@@ -434,11 +493,15 @@ export class TaskSettleService implements OnModuleInit {
    * started the run, the thing works. The one completion that is NOT a success
    * is a card its agent moved to `failed`, which {@link settle} hands in as the
    * failure it is.
+   *
+   * A spent usage limit is the account's state, not a fault of the work: it
+   * moves nothing in the streak and holds an armed project until it reopens.
    */
   private async recordOutcome(
     projectId: string,
     ending: RunEnding,
     worked: boolean,
+    limitUntil: Date | null,
     em: EntityManager,
   ): Promise<void> {
     if (ending === 'cancelled' || ending === 'interrupted') {
@@ -449,11 +512,19 @@ export class TaskSettleService implements OnModuleInit {
       return;
     }
     if (ending === 'completed') {
-      if (project.autopilotFailureStreak !== 0) {
+      if (
+        project.autopilotFailureStreak !== 0 ||
+        project.autopilotLimitUntil !== null
+      ) {
         project.autopilotFailureStreak = 0;
+        project.autopilotLimitUntil = null;
         await em.flush();
         this.projectEvents.publish({ projectId });
       }
+      return;
+    }
+    if (limitUntil !== null) {
+      await this.holdForUsageLimit(project, limitUntil, em);
       return;
     }
     if (!worked || !project.autopilotEnabled) {
@@ -467,6 +538,24 @@ export class TaskSettleService implements OnModuleInit {
         `project ${project.id} has ${project.autopilotFailureStreak} failed runs in a row — the autopilot has stopped picking work up`,
       );
     }
+  }
+
+  /** The later of two limits stands: the project waits until both have reopened. */
+  private async holdForUsageLimit(
+    project: Project,
+    until: Date,
+    em: EntityManager,
+  ): Promise<void> {
+    const held = project.autopilotLimitUntil;
+    if (!project.autopilotEnabled || (held !== null && held >= until)) {
+      return;
+    }
+    project.autopilotLimitUntil = until;
+    await em.flush();
+    this.projectEvents.publish({ projectId: project.id });
+    this.logger.log(
+      `project ${project.id} hit a usage limit — the autopilot goes on at ${until.toISOString()}`,
+    );
   }
 
   /**

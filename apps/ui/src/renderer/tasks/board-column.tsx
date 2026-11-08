@@ -84,6 +84,8 @@ export function BoardColumn({
    */
   autopilot?: {
     breakerOpen: boolean;
+    /** When it goes on after a spent usage limit; null while it is not waiting. */
+    resumesAt: string | null;
     /**
      * How many cards in THIS column are queued — from the daemon's queue and
      * not from the column, since a card's column is written optimistically on
@@ -252,6 +254,7 @@ export function BoardColumn({
  */
 function AutopilotBanner({
   breakerOpen,
+  resumesAt,
   waiting,
   blocked,
   onStop,
@@ -259,6 +262,7 @@ function AutopilotBanner({
   onOpenTask,
 }: {
   breakerOpen: boolean;
+  resumesAt: string | null;
   waiting: number | null;
   blocked: readonly BlockedTask[];
   onStop: () => void;
@@ -267,7 +271,7 @@ function AutopilotBanner({
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const lineRef = useRef<HTMLButtonElement | null>(null);
-  const stuck = !breakerOpen && blocked.length > 0;
+  const stuck = !breakerOpen && resumesAt === null && blocked.length > 0;
   // Closed once nothing is held: the banner stays mounted while armed, so a
   // card held again later (a worktree retry that failed) would otherwise pop
   // the panel back open unasked.
@@ -276,7 +280,9 @@ function AutopilotBanner({
   }
   const line = breakerOpen
     ? 'Autopilot is stopped.'
-    : (queueLine(waiting, blocked.length) ?? 'Autopilot starts tasks here.');
+    : resumesAt !== null
+      ? `Usage limit: autopilot goes on ${resumesAt}.`
+      : (queueLine(waiting, blocked.length) ?? 'Autopilot starts tasks here.');
   return (
     <div
       data-slot="autopilot-banner"
@@ -292,7 +298,7 @@ function AutopilotBanner({
         // board that merely has autopilot switched on. A board where nothing
         // CAN start is the exception, and it wears the breaker's own tone:
         // that is a state the user has to act on, not one to sit under.
-        breakerOpen || stuck
+        breakerOpen || resumesAt !== null || stuck
           ? 'bg-warning/10 text-warning'
           : 'bg-accent/50 text-muted-foreground',
       )}>

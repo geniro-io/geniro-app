@@ -33,6 +33,7 @@ import {
   type ProjectInstructionField,
   type ProjectWire,
 } from '../projects.types';
+import { limitHoldUntil } from '../utils/breaker';
 import {
   blocksDocument,
   joinedBlockTexts,
@@ -408,8 +409,12 @@ export class ProjectsService {
   async rearmAutopilot(projectId: string): Promise<ProjectWire> {
     const em = this.em.fork();
     const project = await this.require(projectId, em);
-    if (project.autopilotFailureStreak !== 0) {
+    if (
+      project.autopilotFailureStreak !== 0 ||
+      project.autopilotLimitUntil !== null
+    ) {
       project.autopilotFailureStreak = 0;
+      project.autopilotLimitUntil = null;
       await em.flush();
       this.events.publish({ projectId: project.id });
     }
@@ -636,6 +641,7 @@ function toWire(project: Project): ProjectWire {
     autopilotIntakeStatus: project.autopilotIntakeStatus,
     autopilotMaxConcurrent: project.autopilotMaxConcurrent,
     autopilotFailureStreak: project.autopilotFailureStreak,
+    autopilotLimitUntil: limitHoldUntil(project)?.toISOString() ?? null,
     provider: project.provider,
     createdAt: project.createdAt.toISOString(),
     updatedAt: project.updatedAt.toISOString(),

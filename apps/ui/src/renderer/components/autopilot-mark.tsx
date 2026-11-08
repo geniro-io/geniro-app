@@ -14,6 +14,29 @@ import { cn } from './ui/utils';
 export const FAILURE_BREAKER_THRESHOLD = 3;
 
 /**
+ * When an armed project's autopilot goes on after a spent usage limit, in the
+ * reader's own clock, or null while it is not waiting on one. A stopped
+ * autopilot needs a press, so it is never read as waiting.
+ */
+export function autopilotResumesAt(project: ProjectDto): string | null {
+  const until = project.autopilotLimitUntil;
+  if (
+    !project.autopilotEnabled ||
+    !until ||
+    project.autopilotFailureStreak >= FAILURE_BREAKER_THRESHOLD ||
+    Date.parse(until) <= Date.now()
+  ) {
+    return null;
+  }
+  return new Date(until).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+/**
  * The ambient state of one project's autopilot, or nothing at all.
  *
  * Nothing is the common case and has to LOOK like nothing: a project nobody
@@ -39,13 +62,17 @@ export function AutopilotMark({
     return null;
   }
   const stopped = project.autopilotFailureStreak >= FAILURE_BREAKER_THRESHOLD;
-  if (!stopped && !showArmed) {
+  const resumesAt = autopilotResumesAt(project);
+  const paused = stopped || resumesAt !== null;
+  if (!paused && !showArmed) {
     return null;
   }
   const label = stopped
     ? `${project.name}: autopilot stopped after ${project.autopilotFailureStreak} failed runs`
-    : `${project.name}: autopilot on`;
-  const Icon = stopped ? CirclePause : Zap;
+    : resumesAt !== null
+      ? `${project.name}: autopilot waits for the usage limit, goes on ${resumesAt}`
+      : `${project.name}: autopilot on`;
+  const Icon = paused ? CirclePause : Zap;
   return (
     <Icon
       // The accessible name rather than a `title`, and for this app's usual
@@ -55,7 +82,7 @@ export function AutopilotMark({
       aria-label={label}
       className={cn(
         'size-3.5 shrink-0',
-        stopped ? 'text-warning' : 'text-muted-foreground',
+        paused ? 'text-warning' : 'text-muted-foreground',
       )}
     />
   );

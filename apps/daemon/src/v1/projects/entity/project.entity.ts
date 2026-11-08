@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { DateTimeType } from '@mikro-orm/core';
 import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
@@ -158,6 +159,13 @@ export class Project extends TimestampsEntity {
    */
   @Property({ type: 'integer' })
   autopilotFailureStreak: number = 0;
+
+  /**
+   * Until when the autopilot waits out a spent usage limit. The moment passing
+   * ends the wait, so nothing has to clear this.
+   */
+  @Property({ type: DateTimeType, nullable: true })
+  autopilotLimitUntil: Date | null = null;
 
   /**
    * Where this project's tasks come from, and the value they carry as their

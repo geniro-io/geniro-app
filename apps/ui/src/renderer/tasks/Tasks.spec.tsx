@@ -14,6 +14,7 @@ import { aProject, aTask } from './__tests__/fixtures';
 
 const mocks = vi.hoisted(() => ({
   listProjects: vi.fn(),
+  rearmProjectAutopilot: vi.fn(),
   listTasks: vi.fn(),
   moveTaskStatus: vi.fn(),
   createTask: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
   createDaemonApis: () => ({
     projects: {
       listProjects: mocks.listProjects,
+      rearmProjectAutopilot: mocks.rearmProjectAutopilot,
       readProjectQueue: mocks.readProjectQueue,
     },
     tasks: {
@@ -169,6 +171,63 @@ const headerTrigger = (el: HTMLElement): HTMLButtonElement =>
 const options = (el: HTMLElement): HTMLElement[] => [
   ...el.querySelectorAll<HTMLElement>('[role="option"]'),
 ];
+
+describe('a paused autopilot on the every-project board', () => {
+  const paused = aProject({
+    id: 'p-paused',
+    name: 'Paused',
+    autopilotEnabled: true,
+    autopilotFailureStreak: 5,
+  });
+  const waiting = aProject({
+    id: 'p-waiting',
+    name: 'Waiting',
+    autopilotEnabled: true,
+    autopilotLimitUntil: '2099-11-08T11:01:00.000Z',
+  });
+  const running = aProject({
+    id: 'p-running',
+    name: 'Running',
+    autopilotEnabled: true,
+  });
+
+  it('draws a named chip for each paused project and none for the others', async () => {
+    mocks.listProjects.mockResolvedValue([paused, waiting, running]);
+
+    const el = await board();
+
+    expect(el.textContent).toContain('Paused: Autopilot stopped');
+    expect(el.textContent).toContain('Waiting: Autopilot waits');
+    expect(
+      el.querySelector('[aria-label="Autopilot settings for Running"]'),
+    ).toBeNull();
+  });
+
+  it('re-arms the project of the pressed chip', async () => {
+    mocks.listProjects.mockResolvedValue([paused, running]);
+    mocks.rearmProjectAutopilot.mockResolvedValue({
+      ...paused,
+      autopilotFailureStreak: 0,
+    });
+    const el = await board();
+
+    await act(async () => {
+      el.querySelector<HTMLButtonElement>(
+        '[aria-label="Autopilot settings for Paused"]',
+      )?.click();
+    });
+    await act(async () => {
+      [...document.body.querySelectorAll('button')]
+        .find((node) => (node.textContent ?? '').includes('Start it again'))
+        ?.click();
+    });
+
+    expect(mocks.rearmProjectAutopilot).toHaveBeenCalledWith({
+      projectId: 'p-paused',
+    });
+    expect(el.textContent).not.toContain('Paused: Autopilot stopped');
+  });
+});
 
 /** The board with its first project picked — it opens on every project. */
 async function boardOnProject(): Promise<HTMLDivElement> {

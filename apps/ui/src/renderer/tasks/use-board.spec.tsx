@@ -124,10 +124,17 @@ function fakeClient(): {
   client: DaemonClient;
   taskChanged: (event: unknown) => void;
   runStatus: (event: unknown) => void;
+  projectsChanged: (event: unknown) => void;
 } {
   let onTask: ((event: unknown) => void) | null = null;
   let onRun: ((event: unknown) => void) | null = null;
+  let onProjects: ((event: unknown) => void) | null = null;
   const client = {
+    onProjectsChanged: (listener: (event: unknown) => void) => {
+      onProjects = listener;
+      return () => undefined;
+    },
+    onReconnect: () => () => undefined,
     onTaskChanged: (listener: (event: unknown) => void) => {
       onTask = listener;
       return () => undefined;
@@ -141,6 +148,7 @@ function fakeClient(): {
     client,
     taskChanged: (event: unknown) => onTask?.(event),
     runStatus: (event: unknown) => onRun?.(event),
+    projectsChanged: (event: unknown) => onProjects?.(event),
   };
 }
 
@@ -162,6 +170,69 @@ async function mount(
   });
   return handle;
 }
+
+describe('the project row the board holds', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('re-reads on a project change, but not on an edit of its texts', async () => {
+    const { apis } = stubApis();
+    const { client, projectsChanged } = fakeClient();
+    await mount(apis, client);
+    const listProjects = apis.projects.listProjects as ReturnType<typeof vi.fn>;
+    const reads = listProjects.mock.calls.length;
+
+    await act(async () => {
+      projectsChanged({ projectId: 'p1', textsOnly: true });
+    });
+    expect(listProjects.mock.calls.length).toBe(reads);
+
+    await act(async () => {
+      projectsChanged({ projectId: 'p1' });
+    });
+    expect(listProjects.mock.calls.length).toBe(reads + 1);
+  });
+
+  it('re-reads once a usage-limit wait has lapsed', async () => {
+    vi.useFakeTimers();
+    const { apis } = stubApis();
+    const listProjects = apis.projects.listProjects as ReturnType<typeof vi.fn>;
+    listProjects.mockResolvedValue([
+      project({
+        autopilotEnabled: true,
+        autopilotLimitUntil: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    ]);
+    await mount(apis);
+    const reads = listProjects.mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(59_000);
+    });
+    expect(listProjects.mock.calls.length).toBe(reads);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_001);
+    });
+    expect(listProjects.mock.calls.length).toBeGreaterThan(reads);
+  });
+
+  it('re-arms the named project, not the open one', async () => {
+    const { apis } = stubApis();
+    const rearm = vi.fn().mockResolvedValue(project({ id: 'p9' }));
+    (
+      apis.projects as unknown as Record<string, unknown>
+    ).rearmProjectAutopilot = rearm;
+    const board = await mount(apis);
+
+    await act(async () => {
+      await board.current.rearmAutopilot('p9');
+    });
+
+    expect(rearm).toHaveBeenCalledWith({ projectId: 'p9' });
+  });
+});
 
 describe('where a dropped card lands', () => {
   const board = [

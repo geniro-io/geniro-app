@@ -27,6 +27,7 @@ export function aProject(over: Partial<ProjectDto> = {}): ProjectDto {
     autopilotIntakeStatus: TaskStatus.Todo,
     autopilotMaxConcurrent: 1,
     autopilotFailureStreak: 0,
+    autopilotLimitUntil: null,
     provider: TaskSource.Geniro,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',

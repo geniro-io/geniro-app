@@ -5,6 +5,7 @@ import { useLatestCallback } from '../components/use-latest-callback';
 import { type DaemonApis, describeDaemonError } from '../daemon-api';
 import type { DaemonClient, ProjectsChangedEvent } from '../daemon-client';
 import type { ProjectTargetFields } from './project-composer-target';
+import { useAutopilotLimitLapse } from './use-autopilot-limit-lapse';
 
 export interface ProjectsList {
   /** Null until the first answer. */
@@ -92,6 +93,7 @@ export function useProjects(
     neverSame,
     noEvent,
   );
+  useAutopilotLimitLapse(value, reload);
   return { projects: value, error, reload };
 }
 

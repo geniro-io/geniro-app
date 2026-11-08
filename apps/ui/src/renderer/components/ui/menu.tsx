@@ -3,6 +3,7 @@ import * as React from 'react';
 
 import type { ProfileColor } from '../../../shared/contracts';
 import { pointOf, usePointerGrace } from '../use-pointer-grace';
+import { closeOnFrameFocus } from './frame-focus';
 import { MenuAnchorContext } from './menu-anchor';
 import { PALETTE_BORDER_CLASS } from './palette';
 import { popoverSurface } from './popover';
@@ -541,7 +542,11 @@ export function Menu({
       }
     };
     document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
+    const stopFrameFocus = closeOnFrameFocus(panelRef, onClose);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      stopFrameFocus();
+    };
   }, [open, onClose, triggerRef]);
 
   if (!open) {

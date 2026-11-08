@@ -3,7 +3,6 @@ import {
   type RefObject,
   type SetStateAction,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -32,10 +31,7 @@ import { reportRendererIssue } from '../debug/report-ui-errors';
  */
 export type ChatListScope = ListChatsScopeEnum;
 import type { AgentNotice } from '../notifications/run-notifications';
-import type {
-  CallConversationLoader,
-  CallConversationState,
-} from './call-conversation';
+import type { CallConversationLoader } from './call-conversation';
 import {
   previewMessageOf,
   previewsThread,
@@ -73,6 +69,7 @@ import {
 } from './settled-status';
 import { unsentMessageIds } from './system-payload';
 import { laterInstant } from './unread';
+import { useCallPages } from './use-call-pages';
 import { EMPTY_LIVE_TEXT, useRunStream } from './use-run-stream';
 
 /** Shared empty set, so "nothing is being named" is one stable identity. */
@@ -137,9 +134,6 @@ export const REMOTE_HISTORY_PAGE = 250;
  * parameter was needed for any of this.
  */
 const JUMP_CONTEXT_AFTER = 50;
-
-/** Where an opened call card's conversation stands, and the oldest row it read. */
-type CallPage = CallConversationState;
 
 /**
  * A TEAM run that is `running` while every agent a message goes to has
@@ -1177,194 +1171,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     },
   });
 
-  /**
-   * The call conversations an opened card has read, keyed by the conversation
-   * the card asked for. The rows themselves join {@link callRows}.
-   */
-  const [callPages, setCallPages] = useState<ReadonlyMap<string, CallPage>>(
-    () => new Map(),
-  );
-  // Written with the state, not after the render: a load asked for in the
-  // same tick as a reset must see the reset.
-  const callPagesRef = useRef(callPages);
-  const writeCallPages = useLatestCallback(
-    (
-      update: (
-        prev: ReadonlyMap<string, CallPage>,
-      ) => ReadonlyMap<string, CallPage>,
-    ): void => {
-      const next = update(callPagesRef.current);
-      callPagesRef.current = next;
-      setCallPages(next);
-    },
-    [],
-  );
-  /** Moves at every forget, so a read asked for before one cannot land after it. */
-  const callPagesGenerationRef = useRef(0);
-  /**
-   * Forget what the cards have read, at every place their rows go: a thread
-   * opened — the same one again included — or closed, and a window back at the
-   * tail, whose return skipped the calls' rows written while it was away. An
-   * opened card asks again.
-   */
-  const forgetCallPages = useLatestCallback((): void => {
-    callPagesGenerationRef.current += 1;
-    writeCallPages(() => new Map());
-  }, [writeCallPages]);
-
-  /** The read each conversation has in flight, for a caller that must wait on it. */
-  const callPageReadsRef = useRef(new Map<string, Promise<void>>());
-  const loadCallConversation = useLatestCallback(
-    (conversation: string, older: boolean): Promise<void> => {
-      const runId = activeRunIdRef.current;
-      const held = callPagesRef.current.get(conversation);
-      if (held?.loading === true) {
-        return callPageReadsRef.current.get(conversation) ?? Promise.resolve();
-      }
-      if (
-        runId === null ||
-        (older ? held?.hasOlder !== true : held !== undefined)
-      ) {
-        return Promise.resolve();
-      }
-      const beforeSeq = older ? held?.oldestSeq : null;
-      const generation = callPagesGenerationRef.current;
-      const current = (): boolean =>
-        activeRunIdRef.current === runId &&
-        callPagesGenerationRef.current === generation;
-      const settle = (next: CallPage): void => {
-        writeCallPages((prev) => new Map(prev).set(conversation, next));
-      };
-      settle({
-        loading: true,
-        failed: false,
-        hasOlder: held?.hasOlder ?? false,
-        oldestSeq: held?.oldestSeq ?? null,
-      });
-      const pageSize = pageSizeRef.current;
-      const read = chatApi
-        .listRunItems({
-          runId,
-          limit: pageSize,
-          call: conversation,
-          ...(beforeSeq === null || beforeSeq === undefined
-            ? {}
-            : { beforeSeq }),
-        })
-        .then(({ items: page, anchors: pageAnchors }) => {
-          if (!current()) {
-            return;
-          }
-          // The page's anchors with it: they place what the page names — a
-          // tool call above it, a delegate's launch — and, kept with the rows,
-          // they outlive a window replaced by a jump.
-          commitCallRows((prev) =>
-            mergeAnchorRows(prev, [...page, ...pageAnchors]),
-          );
-          settle({
-            loading: false,
-            failed: false,
-            hasOlder: page.length === pageSize,
-            oldestSeq: page[0]?.seq ?? held?.oldestSeq ?? null,
-          });
-        })
-        .catch(() => {
-          if (!current()) {
-            return;
-          }
-          // Parked, never re-asked by itself: the card's pager would otherwise
-          // ask again on every render the failure causes. An older page keeps
-          // the button it was pressed from.
-          settle(
-            older && held !== undefined
-              ? held
-              : {
-                  loading: false,
-                  failed: true,
-                  hasOlder: false,
-                  oldestSeq: null,
-                },
-          );
-        })
-        .finally(() => {
-          if (callPageReadsRef.current.get(conversation) === read) {
-            callPageReadsRef.current.delete(conversation);
-          }
-        });
-      callPageReadsRef.current.set(conversation, read);
-      return read;
-    },
-    [chatApi, commitCallRows, writeCallPages],
-  );
-  /**
-   * Read a conversation's pages back from its newest until the oldest held
-   * reaches `seq` — a jump's way into a card, which keeps the card one stretch
-   * from the row it lands on to the conversation's tail, as paging older does.
-   * Answers whether `seq` is now held.
-   */
-  const loadCallConversationThrough = useLatestCallback(
-    async (conversation: string, seq: number): Promise<boolean> => {
-      for (;;) {
-        const held = callPagesRef.current.get(conversation);
-        if (held?.loading === true) {
-          const inFlight = callPageReadsRef.current.get(conversation);
-          if (inFlight === undefined) {
-            return false;
-          }
-          await inFlight;
-          continue;
-        }
-        if (held?.failed === true) {
-          return false;
-        }
-        if (held !== undefined) {
-          if (
-            !held.hasOlder ||
-            held.oldestSeq === null ||
-            held.oldestSeq <= seq
-          ) {
-            return true;
-          }
-        }
-        const before = held?.oldestSeq ?? null;
-        await loadCallConversation(conversation, held !== undefined);
-        const after = callPagesRef.current.get(conversation);
-        // Nothing moved — the thread was switched or the read refused.
-        if (
-          after === undefined ||
-          after.failed ||
-          (held !== undefined && after.oldestSeq === before)
-        ) {
-          return false;
-        }
-      }
-    },
-    [loadCallConversation],
-  );
-
-  const callConversations = useMemo<CallConversationLoader>(
-    () => ({
-      load: (conversation, older) => {
-        void loadCallConversation(conversation, older);
-      },
-      loadThrough: loadCallConversationThrough,
-      retry: (conversation) => {
-        writeCallPages((prev) => {
-          const next = new Map(prev);
-          next.delete(conversation);
-          return next;
-        });
-        void loadCallConversation(conversation, false);
-      },
-      stateOf: (conversation) => callPages.get(conversation) ?? null,
-    }),
-    [
-      loadCallConversation,
-      loadCallConversationThrough,
-      writeCallPages,
-      callPages,
-    ],
-  );
+  const { callConversations, forgetCallPages } = useCallPages({
+    runIdRef: activeRunIdRef,
+    api: chatApi,
+    pageSizeRef,
+    commitRows: commitCallRows,
+  });
 
   /**
    * A replay's one reading of the sidebar row — the run's status, taken from

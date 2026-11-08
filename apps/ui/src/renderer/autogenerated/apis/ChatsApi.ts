@@ -20,6 +20,7 @@ import type {
   AppProcessesDto,
   ApplyRecommendationsDto,
   AttachmentDataDto,
+  CallMessagesDto,
   CancelledDto,
   ChatDeletedDto,
   ChatExportDto,
@@ -128,6 +129,12 @@ export interface ChatsApiGetThreadAnalysisRequest {
 export interface ChatsApiKillChatShellRequest {
     runId: string;
     callId: string;
+}
+
+export interface ChatsApiListCallMessagesRequest {
+    runId: string;
+    callId: string;
+    limit: number;
 }
 
 export interface ChatsApiListChatsRequest {
@@ -1017,6 +1024,70 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async killChatShell(requestParameters: ChatsApiKillChatShellRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ShellKillDto> {
         const response = await this.killChatShellRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listCallMessagesRaw(requestParameters: ChatsApiListCallMessagesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<CallMessagesDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling listCallMessages().'
+            );
+        }
+
+        if (requestParameters['callId'] == null) {
+            throw new runtime.RequiredError(
+                'callId',
+                'Required parameter "callId" was null or undefined when calling listCallMessages().'
+            );
+        }
+
+        if (requestParameters['limit'] == null) {
+            throw new runtime.RequiredError(
+                'limit',
+                'Required parameter "limit" was null or undefined when calling listCallMessages().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['limit'] != null) {
+            queryParameters['limit'] = requestParameters['limit'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/calls/{callId}/messages`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+        urlPath = urlPath.replace(`{${"callId"}}`, encodeURIComponent(String(requestParameters['callId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listCallMessages(requestParameters: ChatsApiListCallMessagesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CallMessagesDto> {
+        const response = await this.listCallMessagesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

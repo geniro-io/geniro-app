@@ -7,8 +7,6 @@ import {
   ComposerShelf,
   FolderChangesChip,
   LeadChip,
-  type OpenCallChipRow,
-  RunningCallChips,
   RunningMonitorChips,
   RunningShellChips,
   RunningSubagentChips,
@@ -225,46 +223,6 @@ const goals: RunGoals = {
   },
 };
 
-const calls: OpenCallChipRow[] = [
-  {
-    blockId: 'b1',
-    callId: 'call-32',
-    callee: 'Engineer',
-    calleeKey: 'engineer',
-    caller: 'Manager',
-    callerKey: 'manager',
-    title:
-      'Answer the Bugbot thread on PR #346 and push the fix for the flaky drop-zone spec',
-    startedAt: Date.now() - 90_000,
-    stalled: false,
-    queued: false,
-  },
-  {
-    blockId: 'b2',
-    callId: 'call-33',
-    callee: 'QA',
-    calleeKey: 'qa',
-    caller: 'Manager',
-    callerKey: 'manager',
-    title: 'Review PR #346',
-    startedAt: Date.now() - 12_000,
-    stalled: false,
-    queued: true,
-  },
-  {
-    blockId: 'b3',
-    callId: 'call-29',
-    callee: 'Researcher',
-    calleeKey: 'researcher',
-    caller: null,
-    callerKey: null,
-    title: null,
-    startedAt: Date.now() - 1_260_000,
-    stalled: true,
-    queued: false,
-  },
-];
-
 const manyNotes = Array.from({ length: 64 }, (_, index) =>
   note(index + 1, { text: `Note ${index + 1}` }),
 );
@@ -277,7 +235,6 @@ export const OnAPhone: Story = {
         <ComposerShelf
           status={
             <>
-              <RunningCallChips calls={calls} onReveal={() => {}} />
               <TeamNotesChip {...args} notes={manyNotes} />
               <TaskListChip done={5} total={5} tasks={tasks} live={false} />
               <ProgressChip goals={goals} stages={stages} onOpen={() => {}} />
@@ -302,7 +259,6 @@ export const OnTheShelf: Story = {
               onOpen={() => {}}
               onKill={() => {}}
             />
-            <RunningCallChips calls={calls} onReveal={() => {}} />
             <RunningMonitorChips monitors={monitors} />
             <RunningSubagentChips running={1} threads={threads} />
             <TeamNotesChip {...args} />

@@ -3,15 +3,35 @@ import { describe, expect, it } from 'vitest';
 import { startTaskRunSchema } from '../../tasks/dto/task-run.dto';
 import { runTeamSchema } from '../../teams/dto/teams.dto';
 import { StartTeamChatSchema } from '../../teams/teams.types';
-import { MAX_RUN_NOTES_LENGTH, REPLY_LANGUAGE_MAX_LENGTH } from '../chat.types';
+import {
+  CALL_MESSAGES_MAX,
+  MAX_RUN_NOTES_LENGTH,
+  REPLY_LANGUAGE_MAX_LENGTH,
+} from '../chat.types';
 import {
   analyzeThreadSchema,
+  callMessagesQuerySchema,
   createChatSchema,
   listChatsQuerySchema,
   searchChatQuerySchema,
   setRunNotesSchema,
   updateChatSettingsSchema,
 } from './chat.dto';
+
+describe('callMessagesQuerySchema', () => {
+  it('coerces a limit in range from the query string', () => {
+    expect(callMessagesQuerySchema.parse({ limit: '5' }).limit).toBe(5);
+  });
+
+  it.each([
+    ['none', {}],
+    ['zero', { limit: '0' }],
+    ['past the cap', { limit: String(CALL_MESSAGES_MAX + 1) }],
+    ['a fraction', { limit: '1.5' }],
+  ])('refuses a limit of %s', (_label, query) => {
+    expect(callMessagesQuerySchema.safeParse(query).success).toBe(false);
+  });
+});
 
 describe('setRunNotesSchema', () => {
   it('accepts an empty string, which is how notes are cleared', () => {

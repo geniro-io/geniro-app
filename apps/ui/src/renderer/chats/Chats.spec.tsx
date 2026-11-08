@@ -53,6 +53,7 @@ import type { WaitReading } from './waiting';
 const api = vi.hoisted(() => ({
   listChats: vi.fn(),
   listRunItems: vi.fn(),
+  listCallMessages: vi.fn(),
   sendChatMessage: vi.fn(),
   cancelChat: vi.fn(),
   createChat: vi.fn(),
@@ -5162,10 +5163,11 @@ describe('Chats team runs', () => {
     ).toContain('33.3k of 200k');
   });
 
-  it('lists a running call on the Agents chip, timed from the DAEMON’s start, and drops it once the run settles', async () => {
-    // The row the chip replaced counted from the callee's last row and read 0s
-    // after every tool call. The daemon's recorded start outranks the card's own
-    // `call_started` time, which for a call older than the window is a guess.
+  it('lists a running call on the working-agents card, timed from the DAEMON’s start, and reads it finished once the run settles', async () => {
+    api.listCallMessages.mockResolvedValue({ messages: [], hasOlder: false });
+    // A row counting from the callee's last row would read 0s after every tool
+    // call. The daemon's recorded start outranks the card's own `call_started`
+    // time, which for a call older than the window is a guess.
     teamApi.listTeamRunNodes.mockResolvedValue([
       {
         promptCacheExpiresAt: null,
@@ -5235,7 +5237,8 @@ describe('Chats team runs', () => {
     await clickRun(container, 'Review team');
     await act(async () => {
       emitItem({
-        ...wfItem(5, 'call_started', 'orch'),
+        // Its own row id: Show in chat leaves this card open in the thread's memory.
+        ...wfItem(55, 'call_started', 'orch'),
         payload: {
           callId: 'call-5',
           calleeNodeId: 'helper',
@@ -5245,27 +5248,33 @@ describe('Chats team runs', () => {
         },
       });
       emitItem({
-        ...wfItem(6, 'status', 'helper'),
+        ...wfItem(56, 'status', 'helper'),
         payload: { nodeId: 'helper', status: 'running', callId: 'call-5' },
       });
     });
 
-    const chip = container.querySelector('[data-slot="running-calls"]');
-    expect(chip?.textContent).toBe('1');
-    // Opened by a CLICK — every shelf chip opens on a press alone.
-    await act(async () => {
-      chip!
-        .querySelector('button')!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    const row = document.querySelector<HTMLButtonElement>(
-      '[data-slot="running-call-row"]',
+    expect(
+      container.querySelector('[data-slot="working-agents-summary"]')
+        ?.textContent,
+    ).toBe('1 working');
+    const row = container.querySelector<HTMLButtonElement>(
+      '[data-slot="working-agent-row"]',
     );
-    expect(row?.title).toContain('call-5');
+    expect(row?.dataset.conversation).toBe('call-5');
     expect(row?.textContent).toContain('5m');
+    expect(container.querySelector('[data-slot="running-calls"]')).toBeNull();
 
-    // Pressing the row takes the reader to that call's card and MARKS it —
-    // REPORTED as a press that did nothing, and asked to "как-то выделять его".
+    // A press reads that conversation's newest messages and nothing else of it.
+    await act(async () => {
+      row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(api.listCallMessages).toHaveBeenCalledWith({
+      runId: 'w1',
+      callId: 'call-5',
+      limit: 5,
+    });
+
+    // Show in chat takes the reader to that call's card, opened and MARKED.
     const card = container.querySelector<HTMLElement>(
       '[data-role="call-block"]',
     );
@@ -5275,22 +5284,28 @@ describe('Chats team runs', () => {
     vi.stubGlobal('CSS', { escape: (value: string) => value });
     try {
       await act(async () => {
-        row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        container
+          .querySelector('[data-slot="working-agent-show-in-chat"]')!
+          .dispatchEvent(new MouseEvent('click', { bubbles: true }));
       });
     } finally {
       vi.unstubAllGlobals();
     }
-    expect(card?.dataset.revealed).toBe('true');
-    // Shown, not opened: only an action card's link opens the card it names.
+    const revealed = container.querySelector<HTMLElement>(
+      '[data-role="call-block"]',
+    );
+    expect(revealed?.dataset.revealed).toBe('true');
     expect(
-      card?.querySelector('[aria-expanded]')?.getAttribute('aria-expanded'),
-    ).toBe('false');
-    expect(document.querySelector('[data-slot="running-call-row"]')).toBeNull();
+      revealed?.querySelector('[aria-expanded]')?.getAttribute('aria-expanded'),
+    ).toBe('true');
 
     await act(async () => {
       emitRunStatus({ runId: 'w1', status: 'completed' });
     });
-    expect(container.querySelector('[data-slot="running-calls"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="working-agents-summary"]')
+        ?.textContent,
+    ).toBe('1 finished');
   });
 
   const heldCall = (
@@ -5347,7 +5362,7 @@ describe('Chats team runs', () => {
     expect(container.querySelectorAll('[data-seq="5"]')).toHaveLength(0);
   });
 
-  it('lists no call the window has seen settle, while the daemon’s list still says running', async () => {
+  it('reads a call the window has seen settle as finished, while the daemon’s list still says running', async () => {
     // The run state is re-read a moment after a call settles; until then it
     // still names the call, and the card beside the chip has already closed.
     api.readRunState.mockResolvedValue({
@@ -5380,7 +5395,10 @@ describe('Chats team runs', () => {
     const container = await mount(client);
     await clickRun(container, 'Review team');
 
-    expect(container.querySelector('[data-slot="running-calls"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="working-agents-summary"]')
+        ?.textContent,
+    ).toBe('1 finished');
   });
 
   it("opens the card of the call a search hit was written in, reads that call's conversation back to it, and marks the hit there", async () => {
@@ -5507,8 +5525,9 @@ describe('Chats team runs', () => {
   });
 
   it('lists a call the daemon holds open whose rows are all ABOVE the window, and jumps to it', async () => {
-    // A call that went quiet before the loaded page used to be missing from the
-    // chip altogether: nothing in the window named it.
+    api.listCallMessages.mockResolvedValue({ messages: [], hasOlder: false });
+    // A call that went quiet before the loaded page has no card in the window:
+    // only the daemon names it.
     api.readRunState.mockResolvedValue({
       ...emptyRunState(),
       calls: [heldCall('call-9', 'running', 40)],
@@ -5525,21 +5544,23 @@ describe('Chats team runs', () => {
     const container = await mount(client);
     await clickRun(container, 'Review team');
 
-    const chip = container.querySelector('[data-slot="running-calls"]');
-    expect(chip?.textContent).toBe('1');
-    await act(async () => {
-      chip!
-        .querySelector('button')!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    const row = document.querySelector<HTMLButtonElement>(
-      '[data-slot="running-call-row"]',
+    expect(
+      container.querySelector('[data-slot="working-agents-summary"]')
+        ?.textContent,
+    ).toBe('1 working');
+    const row = container.querySelector<HTMLButtonElement>(
+      '[data-slot="working-agent-row"]',
     );
-    expect(row?.title).toContain('call-9');
+    expect(row?.dataset.conversation).toBe('call-9');
     expect(row?.textContent).toContain('10m');
 
     await act(async () => {
       row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector('[data-slot="working-agent-show-in-chat"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     // The window moves to the call's own start row.
     expect(api.listRunItems).toHaveBeenCalledWith(
@@ -5547,9 +5568,9 @@ describe('Chats team runs', () => {
     );
   });
 
-  it('does not list a call the daemon says RETURNED, though its callee is still writing rows', async () => {
+  it('reads a call the daemon says RETURNED as finished, though its callee is still writing rows', async () => {
     // The call returned and its callee carried on under the same call id;
-    // with the call's start and settle above the window the chip must not
+    // with the call's start and settle above the window the card must not
     // list it as running.
     api.readRunState.mockResolvedValue({
       ...emptyRunState(),
@@ -5571,7 +5592,10 @@ describe('Chats team runs', () => {
     const container = await mount(client);
     await clickRun(container, 'Review team');
 
-    expect(container.querySelector('[data-slot="running-calls"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="working-agents-summary"]')
+        ?.textContent,
+    ).toBe('1 finished');
   });
 
   it('gives a call OLDER than the loaded window its own instance, from the durable call row', async () => {

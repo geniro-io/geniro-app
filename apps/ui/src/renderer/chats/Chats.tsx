@@ -174,9 +174,7 @@ import {
   ComposerShelf,
   FolderChangesChip,
   LeadChip,
-  type OpenCallChipRow,
   ResetWakeChip,
-  RunningCallChips,
   RunningMonitorChips,
   RunningShellChips,
   RunningSubagentChips,
@@ -275,7 +273,6 @@ import { runOutcomesOf } from './run-outcome';
 import { effectiveConfigDir } from './run-profile';
 import {
   callEndedPerDaemon,
-  OFF_WINDOW_CALL_PREFIX,
   withDurableDelegates,
   withDurableShells,
   withoutDaemonEndedShells,
@@ -441,6 +438,8 @@ import {
 import { useUnseenRuns, useWindowWatched } from './use-unseen-runs';
 import { useWorktreeOrigin } from './use-worktree-origin';
 import { type WaitReading, waitReadings, waitsOnUser } from './waiting';
+import { type WorkingAgentRow, workingAgentRows } from './working-agents';
+import { WorkingAgentsCard } from './working-agents-card';
 
 /**
  * A follow-up typed while the agent was still working. It carries its images
@@ -6688,134 +6687,43 @@ export function Chats({
     [callBlockIndex, revealCallBlock],
   );
   /**
-   * The calls still out, for the shelf's Agents chip — nothing once the run
-   * has settled, since a card left open by a lost row would otherwise claim an
-   * agent is working on a finished thread.
+   * The agents this team run has started, for the working-agents card. Which
+   * calls ever ran is the daemon's, over the whole run; the window only says
+   * what has moved since it read them.
    */
-  const openCallRows = useMemo((): OpenCallChipRow[] => {
-    if (activeRun === null || isSettledRunStatus(activeRun.status)) {
+  const startedAgents = useMemo((): WorkingAgentRow[] => {
+    if (activeRun?.teamId == null) {
       return [];
     }
-    const nameOf = (memberId: string | null): string | null =>
-      memberId === null ? null : (nodeMeta.get(memberId)?.name ?? memberId);
-    const faces = (
-      calleeId: string | null,
-      callerId: string | null,
-    ): Pick<
-      OpenCallChipRow,
-      | 'callee'
-      | 'calleeKey'
-      | 'calleeAvatar'
-      | 'caller'
-      | 'callerKey'
-      | 'callerAvatar'
-    > => {
-      const callee = nameOf(calleeId) ?? 'a called agent';
-      const caller = nameOf(callerId);
-      return {
-        callee,
-        calleeKey: calleeId ?? callee,
-        calleeAvatar:
-          calleeId === null ? undefined : nodeMeta.get(calleeId)?.avatar,
-        caller,
-        callerKey: callerId,
-        callerAvatar:
-          callerId === null ? undefined : nodeMeta.get(callerId)?.avatar,
-      };
-    };
-    const startOf = new Map(
-      runState.calls.map((call) => [call.callId, Date.parse(call.startedAt)]),
-    );
     const callsById = new Map(
       runState.calls.map((call) => [call.callId, call] as const),
     );
     // A card open on a page that holds its start and not its end is over by
     // the daemon's word once every call it holds is (`callEndedPerDaemon`).
-    const blocks = openCallBlocks(durableEntries).filter(
+    const open = openCallBlocks(durableEntries).filter(
       (block) =>
         !block.callIds.every(
           (callId) => callEndedPerDaemon(callsById, runState, callId) !== null,
         ),
     );
-    // EVERY call the window draws a card for, settled ones included: the
-    // daemon's list is re-read a moment after a call settles, and until then
-    // it still says `running` about a card that has already closed.
-    const drawn = new Set(callBlockIndex.keys());
-    const fromWindow = blocks.map((block): OpenCallChipRow => {
-      // The daemon's start first, the card's own start row otherwise — the
-      // same row, read where it was recorded.
-      const recorded = startOf.get(block.callId);
-      const parsed = Date.parse(block.createdAt);
-      return {
-        blockId: block.id,
-        callId: block.callId,
-        ...faces(block.calleeMemberId, block.callerMemberId),
-        title: block.title,
-        startedAt:
-          recorded !== undefined && Number.isFinite(recorded)
-            ? recorded
-            : Number.isFinite(parsed)
-              ? parsed
-              : null,
-        stalled: block.stalled,
-        queued: block.queued === true,
-      };
+    return workingAgentRows({
+      calls: runState.calls,
+      chains: callChains,
+      blocks: { open, drawn: new Set(callBlockIndex.keys()) },
+      runSettled: isSettledRunStatus(activeRun.status),
+      nodes: nodeMeta,
+      clocks: callClocks,
     });
-    // Every call the daemon still holds open that the window holds no card
-    // for — a call that went quiet before the loaded page is still out.
-    const elsewhere = runState.calls
-      .filter((call) => call.status === 'running' && !drawn.has(call.callId))
-      .map((call): OpenCallChipRow => {
-        const startedAt = Date.parse(call.startedAt);
-        return {
-          blockId: `${OFF_WINDOW_CALL_PREFIX}${call.callId}`,
-          callId: call.callId,
-          ...faces(call.calleeMemberId, call.callerMemberId),
-          title: call.title,
-          startedAt: Number.isFinite(startedAt) ? startedAt : null,
-          stalled: false,
-          queued: call.queued,
-        };
-      });
-    return [...elsewhere, ...fromWindow];
-  }, [activeRun, durableEntries, callBlockIndex, nodeMeta, runState]);
-  /**
-   * Reveal what the Agents chip names: the call's card when the window draws
-   * it, else the conversation around the call's own start row.
-   */
-  /** A call whose card the window was paged to, revealed once it is drawn. */
-  const [pagedToCall, setPagedToCall] = useState<string | null>(null);
-  useEffect(() => {
-    if (pagedToCall === null) {
-      return;
-    }
-    setPagedToCall(null);
-    const block = callBlockIndex.get(pagedToCall);
-    if (block !== undefined) {
-      revealCallBlock(block.id);
-    }
-  }, [pagedToCall, callBlockIndex, revealCallBlock]);
-  const revealOpenCall = useLatestCallback(
-    (blockId: string): void => {
-      if (!blockId.startsWith(OFF_WINDOW_CALL_PREFIX)) {
-        revealCallBlock(blockId);
-        return;
-      }
-      const callId = blockId.slice(OFF_WINDOW_CALL_PREFIX.length);
-      const call = runState.calls.find((each) => each.callId === callId);
-      if (call === undefined) {
-        return;
-      }
-      // The CARD, not the row nearest its start: a card is drawn from its first
-      // row, which a jump to the start seq lands just above.
-      void loadAround(call.startSeq).then((ok) => {
-        if (ok) {
-          setPagedToCall(callId);
-        }
-      });
-    },
-    [revealCallBlock, runState.calls, loadAround],
-  );
+  }, [
+    activeRun?.teamId,
+    activeRun?.status,
+    durableEntries,
+    callBlockIndex,
+    callChains,
+    nodeMeta,
+    runState,
+    callClocks,
+  ]);
   /**
    * A call whose card a link asked to OPEN (`openCall`), waiting until the
    * transcript draws it: then every card around it is opened, outermost first
@@ -9471,7 +9379,6 @@ export function Chats({
             // looked clickable would be a step back from it.
             onOpen={openSubagentById}
           />
-          <RunningCallChips calls={openCallRows} onReveal={revealOpenCall} />
           <TeamNotesChip
             notes={teamNotes}
             agentName={shelfAgentName}
@@ -10576,6 +10483,20 @@ export function Chats({
                       revealCallBlock={revealCallBlock}
                       revealCall={revealCall}
                       openSubagentDetail={openSubagentDetail}>
+                      {activeRun === null ? null : (
+                        <WorkingAgentsCard
+                          key={activeRun.id}
+                          rows={startedAgents}
+                          runId={activeRun.id}
+                          api={chatApi}
+                          client={client}
+                          onShowInChat={openCall}
+                          nodes={nodeMeta}
+                          chatAgentName={activeRun.agentKind}
+                          delegateState={runState}
+                          collapseToolSteps={collapseToolSteps}
+                        />
+                      )}
                       <div
                         data-slot="transcript"
                         className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4 [overflow-anchor:none] [&>*:first-child]:mt-auto">

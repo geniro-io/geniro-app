@@ -387,6 +387,150 @@ function CallFigures({
 }
 
 /**
+ * A call's conversation, row by row.
+ *
+ * The card's header IS the callee's identity, so its rows carry none of their
+ * own: the rule, and the context, the sub-agent block applies to a delegate's
+ * thread.
+ */
+function CallConversationRows({
+  block,
+  drawnFrom,
+  requestLabel,
+  nodes,
+  chatAgentName,
+}: {
+  block: CallBlockEntry;
+  /**
+   * Where the conversation's read pages begin, while older ones are unread: the
+   * rows anchored above it are scattered, and are not drawn as if they joined it.
+   */
+  drawnFrom: number | null;
+  requestLabel: string;
+  nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
+  chatAgentName?: string | null;
+}): React.JSX.Element {
+  const mark = useContext(JumpMarkContext);
+  return (
+    <NestedThreadContext.Provider value={true}>
+      {withReasoningRuns(
+        block.entries.filter((entry) => {
+          const endSeq = entryEndSeq(entry);
+          return !(drawnFrom !== null && endSeq !== null && endSeq < drawnFrom);
+        }),
+      ).map((piece) => {
+        if (piece.type === 'reasoning-run') {
+          const runSeq = piece.entries[0]!.item.seq;
+          return (
+            <TranscriptRow
+              key={piece.id}
+              className={cn(
+                mark?.key === `card-row:${runSeq}` && JUMP_MARK_CLASS,
+              )}
+              {...jumpAnchorProps('call', runSeq, `card-row:${runSeq}`)}>
+              <ReasoningRunFold
+                headings={piece.headings}
+                memoryKey={reasoningRunFoldKey(piece)}
+              />
+            </TranscriptRow>
+          );
+        }
+        const entry = piece;
+        const startSeq = entryStartSeq(entry);
+        // A CONTINUED call's ask, at the point it was sent — drawn exactly
+        // as the first ask is, since the card is one conversation and each
+        // ask is a brief to the same callee.
+        if (isCallContinuation(entry)) {
+          const ask = payloadString(entry.item.payload, 'message');
+          return ask ? (
+            <BlockRequest key={entry.item.id} label={requestLabel} text={ask} />
+          ) : null;
+        }
+        // Each row is a place a jump can land (`data-call-seq`), marked
+        // the way the transcript marks its own rows.
+        return (
+          <TranscriptRow
+            key={entry.type === 'item' ? entry.item.id : entry.id}
+            className={cn(
+              mark?.key === `card-row:${startSeq}` && JUMP_MARK_CLASS,
+            )}
+            {...jumpAnchorProps('call', startSeq, `card-row:${startSeq}`)}>
+            <TranscriptEntryView
+              entry={entry}
+              nodes={nodes}
+              chatAgentName={chatAgentName}
+            />
+          </TranscriptRow>
+        );
+      })}
+    </NestedThreadContext.Provider>
+  );
+}
+
+/**
+ * What a call's card holds when open, and what its Show all popup holds: the
+ * brief, the conversation row by row, the result.
+ */
+export function CallConversationBody({
+  block,
+  callee,
+  nodes,
+  chatAgentName,
+}: {
+  block: CallBlockEntry;
+  callee: string;
+  nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
+  chatAgentName?: string | null;
+}): React.JSX.Element {
+  const requestLabel = `Providing instructions for ${callee}`;
+  const conversation = block.conversationCallIds[0] ?? block.callId;
+  const pages = useContext(CallConversationContext)?.stateOf(conversation);
+  // Where the read pages begin, while older ones are still unread: the rows a
+  // page of the run's own flow anchored for the folded readings lie above it,
+  // scattered, and are not drawn as if they joined it.
+  const drawnFrom = pages?.hasOlder === true ? (pages.oldestSeq ?? null) : null;
+  const handOff = block.poolHandOff;
+  const handOffRowDrawn =
+    handOff !== undefined &&
+    block.entries.some((entry) => {
+      const endSeq = entryEndSeq(entry);
+      return (
+        !(drawnFrom !== null && endSeq !== null && endSeq < drawnFrom) &&
+        containsRow(entry, handOff.seq)
+      );
+    });
+  return (
+    <>
+      {block.message ? (
+        <BlockRequest
+          label={requestLabel}
+          text={block.message}
+          memoryKey={`call:${block.id}:request`}
+        />
+      ) : null}
+      <CallConversationPager conversation={conversation} />
+      {handOff !== undefined && !handOffRowDrawn ? (
+        <MessageBubble variant="note">{handOff.message}</MessageBubble>
+      ) : null}
+      <CallConversationRows
+        block={block}
+        drawnFrom={drawnFrom}
+        requestLabel={requestLabel}
+        nodes={nodes}
+        chatAgentName={chatAgentName}
+      />
+      {block.result ? (
+        <BlockResult
+          label={`Result from ${callee}`}
+          text={block.result}
+          memoryKey={`call:${block.id}:result`}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
  * One agent-to-agent call — geniro web's CommunicationBlock, always
  * expanded: an "Agent communication" eyebrow, a neutral card whose header
  * carries the caller→callee avatar pair, the name line, a live spinner and
@@ -528,7 +672,6 @@ export const CallBlock = memo(function CallBlock({
   const toggleLabel = block.title
     ? `${block.title} — ${baseToggleLabel}`
     : baseToggleLabel;
-  const requestLabel = `Providing instructions for ${callee}`;
   // The callee's live row draws its own spinner and its own clock, so the
   // static hint below it would be the second line in a row saying the same
   // agent is still going.
@@ -663,25 +806,6 @@ export const CallBlock = memo(function CallBlock({
       clockRunning={clockRunning}
     />
   );
-  /**
-   * Where the conversation's read pages begin, while older ones are still
-   * unread — the rows a page of the run's own flow anchored for the folded
-   * readings lie above it, scattered, and are not drawn as if they joined it.
-   */
-  const conversation = block.conversationCallIds[0] ?? block.callId;
-  const pages = useContext(CallConversationContext)?.stateOf(conversation);
-  const drawnFrom = pages?.hasOlder === true ? (pages.oldestSeq ?? null) : null;
-  const handOff = block.poolHandOff;
-  const handOffRowDrawn =
-    handOff !== undefined &&
-    block.entries.some((entry) => {
-      const endSeq = entryEndSeq(entry);
-      return (
-        !(drawnFrom !== null && endSeq !== null && endSeq < drawnFrom) &&
-        containsRow(entry, handOff.seq)
-      );
-    });
-  const mark = useContext(JumpMarkContext);
   const hasSummary =
     summaryText !== null ||
     pending ||
@@ -809,94 +933,12 @@ export const CallBlock = memo(function CallBlock({
             ) : null}
           </>
         }>
-        {block.message ? (
-          <BlockRequest
-            label={requestLabel}
-            text={block.message}
-            memoryKey={`call:${block.id}:request`}
-          />
-        ) : null}
-        <CallConversationPager conversation={conversation} />
-        {handOff !== undefined && !handOffRowDrawn ? (
-          <MessageBubble variant="note">{handOff.message}</MessageBubble>
-        ) : null}
-        {/*
-          The card's header IS the callee's identity, so its rows carry none of
-          their own — the same rule, and the same context, the sub-agent block
-          applies to a delegate's thread. Without it every message the callee
-          streamed wore an avatar and a `<callee> · 14:51` line of its own, so a
-          six-message sub-turn drew the same face six times inside a card whose
-          header had just named it. Reported as "иконка инженера просто
-          дублируется — она должна быть просто один раз в хедере блока".
-        */}
-        <NestedThreadContext.Provider value={true}>
-          {withReasoningRuns(
-            block.entries.filter((entry) => {
-              const endSeq = entryEndSeq(entry);
-              // Wholly above the pages read: a scattered card row, not one of them.
-              return !(
-                drawnFrom !== null &&
-                endSeq !== null &&
-                endSeq < drawnFrom
-              );
-            }),
-          ).map((piece) => {
-            if (piece.type === 'reasoning-run') {
-              const runSeq = piece.entries[0]!.item.seq;
-              return (
-                <TranscriptRow
-                  key={piece.id}
-                  className={cn(
-                    mark?.key === `card-row:${runSeq}` && JUMP_MARK_CLASS,
-                  )}
-                  {...jumpAnchorProps('call', runSeq, `card-row:${runSeq}`)}>
-                  <ReasoningRunFold
-                    headings={piece.headings}
-                    memoryKey={reasoningRunFoldKey(piece)}
-                  />
-                </TranscriptRow>
-              );
-            }
-            const entry = piece;
-            const startSeq = entryStartSeq(entry);
-            // A CONTINUED call's ask, at the point it was sent — drawn exactly
-            // as the first ask is, since the card is one conversation and each
-            // ask is a brief to the same callee.
-            if (isCallContinuation(entry)) {
-              const ask = payloadString(entry.item.payload, 'message');
-              return ask ? (
-                <BlockRequest
-                  key={entry.item.id}
-                  label={requestLabel}
-                  text={ask}
-                />
-              ) : null;
-            }
-            // Each row is a place a jump can land (`data-call-seq`), marked
-            // the way the transcript marks its own rows.
-            return (
-              <TranscriptRow
-                key={entry.type === 'item' ? entry.item.id : entry.id}
-                className={cn(
-                  mark?.key === `card-row:${startSeq}` && JUMP_MARK_CLASS,
-                )}
-                {...jumpAnchorProps('call', startSeq, `card-row:${startSeq}`)}>
-                <TranscriptEntryView
-                  entry={entry}
-                  nodes={nodes}
-                  chatAgentName={chatAgentName}
-                />
-              </TranscriptRow>
-            );
-          })}
-        </NestedThreadContext.Provider>
-        {block.result ? (
-          <BlockResult
-            label={`Result from ${callee}`}
-            text={block.result}
-            memoryKey={`call:${block.id}:result`}
-          />
-        ) : null}
+        <CallConversationBody
+          block={block}
+          callee={callee}
+          nodes={nodes}
+          chatAgentName={chatAgentName}
+        />
         {status === 'running' && !liveTail ? (
           <BlockPendingLine clamp="one">{pendingLine}</BlockPendingLine>
         ) : null}

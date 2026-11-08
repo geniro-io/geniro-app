@@ -659,6 +659,153 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
 
       expect(items.map((item) => item.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     });
+
+    describe('callMessages', () => {
+      const reply = (
+        seq: number,
+        callId: string,
+        text: string,
+        payload: Record<string, unknown> = {},
+      ): Promise<unknown> =>
+        dao.create({
+          runId: 'run-a',
+          seq,
+          kind: 'message',
+          memberId: 'eng',
+          payload: JSON.stringify({ text, callId, ...payload }),
+        });
+
+      const texts = (messages: readonly ItemWire[]): unknown[] =>
+        messages.map((item) => (item.payload as { text?: unknown }).text);
+
+      it('answers nothing for a run that holds no calls', async () => {
+        await expect(
+          readingService().callMessages('no-such-run', 'call-1', 5),
+        ).resolves.toEqual({ messages: [], hasOlder: false });
+      });
+
+      it('answers the newest rows of a chain in seq order, across every call of it, and says more are older', async () => {
+        await teamRun();
+        await reply(9, 'call-1', 'one');
+        await reply(10, 'call-3', 'two');
+        await reply(11, 'call-1', 'three');
+        await reply(12, 'call-3', 'four');
+
+        const { messages, hasOlder } = await readingService().callMessages(
+          'run-a',
+          'call-3',
+          3,
+        );
+
+        expect(messages.map((item) => item.seq)).toEqual([10, 11, 12]);
+        expect(texts(messages)).toEqual(['two', 'three', 'four']);
+        expect(hasOlder).toBe(true);
+      });
+
+      it('answers the whole chain with no older rows when the limit holds all of it', async () => {
+        await teamRun();
+        await reply(9, 'call-1', 'one');
+        await reply(10, 'call-3', 'two');
+
+        const { messages, hasOlder } = await readingService().callMessages(
+          'run-a',
+          'call-3',
+          3,
+        );
+
+        expect(messages.map((item) => item.seq)).toEqual([8, 9, 10]);
+        expect(hasOlder).toBe(false);
+      });
+
+      it("reaches a message older than the run's newest page", async () => {
+        await teamRun();
+        await reply(9, 'call-1', 'first');
+        for (let seq = 10; seq <= 80; seq += 1) {
+          await row(seq, 'status', 'qa', {
+            callId: 'call-2',
+            status: 'running',
+          });
+        }
+        await reply(81, 'call-3', 'latest');
+
+        const newest = await readingService().read('run-a', -1, {
+          limit: 50,
+          take: 'newest',
+        });
+        const { messages } = await readingService().callMessages(
+          'run-a',
+          'call-3',
+          20,
+        );
+
+        expect(newest.items.map((item) => item.seq)).not.toContain(9);
+        expect(messages.map((item) => item.seq)).toEqual([8, 9, 81]);
+      });
+
+      it("never answers a tool row, a delegate's words, the user's words or a blank message", async () => {
+        await teamRun();
+        await row(9, 'tool_call', 'eng', {
+          id: 't9',
+          name: 'Bash',
+          callId: 'call-3',
+        });
+        await row(10, 'tool_result', 'eng', { id: 't9', callId: 'call-3' });
+        await reply(11, 'call-3', 'for a delegate', {
+          parentToolUseId: 'task-1',
+        });
+        await dao.create({
+          runId: 'run-a',
+          seq: 12,
+          kind: 'message',
+          memberId: 'eng',
+          role: 'user',
+          payload: JSON.stringify({ text: 'ping', callId: 'call-3' }),
+        });
+        await reply(13, 'call-3', '\n\t\n');
+        await reply(14, 'call-3', '');
+        await reply(15, 'call-3', 'kept');
+
+        const { messages } = await readingService().callMessages(
+          'run-a',
+          'call-3',
+          20,
+        );
+
+        expect(texts(messages)).toEqual(['continued', 'kept']);
+      });
+
+      it('keeps to the chain: another call of the same member, and another run, are not its words', async () => {
+        await teamRun();
+        await row(9, 'call_started', 'manager', {
+          callId: 'call-7',
+          calleeNodeId: 'eng',
+        });
+        await reply(10, 'call-7', 'unrelated');
+        await dao.create({
+          runId: 'run-b',
+          seq: 1,
+          kind: 'message',
+          memberId: 'eng',
+          payload: JSON.stringify({ text: 'other run', callId: 'call-3' }),
+        });
+
+        const { messages } = await readingService().callMessages(
+          'run-a',
+          'call-3',
+          20,
+        );
+
+        expect(texts(messages)).toEqual(['continued']);
+      });
+
+      it('answers no messages and no older rows for a call the run never made', async () => {
+        await teamRun();
+
+        expect(
+          await readingService().callMessages('run-a', 'call-404', 5),
+        ).toEqual({ messages: [], hasOlder: false });
+      });
+    });
   });
 
   async function pageOf(from: number, to: number): Promise<ItemWire[]> {

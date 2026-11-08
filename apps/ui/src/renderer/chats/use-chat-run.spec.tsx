@@ -3704,7 +3704,7 @@ describe('useChatRun — anchors', () => {
   });
 
   it('brings no anchors with a thread’s first page when the reader jumped away while it loaded', async () => {
-    // A jump (the Agents chip, a search hit) can land before the page does;
+    // A jump (the working-agents card, a search hit) can land before the page does;
     // that page's rows are refused, and so must be the calls they refer to.
     const { client, joinRun } = makeClient();
     let releaseJoin: () => void = () => undefined;

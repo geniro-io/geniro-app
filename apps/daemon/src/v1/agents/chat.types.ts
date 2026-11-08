@@ -4611,9 +4611,13 @@ export interface MonitorStartRequest {
   cwd?: string;
 }
 
+/** A running monitor as a message to its agent names it. */
+export type MonitorNamed = Pick<MonitorListing, 'id' | 'description'>;
+
 /** What a `monitor` call came to. */
 export type MonitorStartOutcome =
-  { status: 'started'; id: string } | { status: 'refused'; reason: string };
+  | { status: 'started'; id: string; alsoRunning: MonitorNamed[] }
+  | { status: 'refused'; reason: string };
 
 /** What a `stop_monitor` call came to. */
 export type MonitorStopOutcome =

@@ -7,6 +7,7 @@ import {
   type MonitorMessage,
   monitorMessageOf,
   monitorWake,
+  promptNamingRunning,
   undeliveredMonitorNote,
   undeliveredMonitorNotice,
 } from '../utils/monitor-text';
@@ -196,13 +197,18 @@ export class MonitorChatDelivery implements OnModuleInit {
     const stopsBefore = this.stops.get(runId) ?? 0;
     this.sending.add(runId);
     try {
-      await this.chats.sendMessage(runId, prompt, [], {
-        ownTurn: true,
-        hostRow: row,
-        onHostRowWritten: () => {
-          opened = true;
+      await this.chats.sendMessage(
+        runId,
+        promptNamingRunning(prompt, this.monitors.stillRunning(runId)),
+        [],
+        {
+          ownTurn: true,
+          hostRow: row,
+          onHostRowWritten: () => {
+            opened = true;
+          },
         },
-      });
+      );
       this.forgetFailures(runId);
     } catch (err) {
       if ((this.stops.get(runId) ?? 0) !== stopsBefore) {

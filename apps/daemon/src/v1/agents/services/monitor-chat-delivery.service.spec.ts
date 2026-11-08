@@ -212,6 +212,49 @@ describe('MonitorChatDelivery', () => {
     expect(chat.sendMessage.mock.calls[1]![1]).toContain('hi');
   });
 
+  it('tells the agent a monitor that printed has not ended, and names its others', async () => {
+    const chat = fakeChat();
+    chat.setHold('wait');
+    delivery(chat);
+    registry.start({
+      owner,
+      command: `echo SEED_EXIT=0; ${FOREVER}`,
+      description: 'seed run',
+      timeoutMs: 60_000,
+    });
+    registry.start({
+      owner,
+      command: FOREVER,
+      description: 'quiet one',
+      timeoutMs: 60_000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    chat.setHold(null);
+    chat.settle();
+    await until(() => chat.sendMessage.mock.calls.length === 1);
+    const prompt = chat.sendMessage.mock.calls[0]?.[1];
+    expect(prompt).toContain('SEED_EXIT=0');
+    expect(prompt).toContain(
+      '[geniro] Still running: m1 (seed run), m2 (quiet one).',
+    );
+  });
+
+  it('names nothing as running once the monitor has ended', async () => {
+    const chat = fakeChat();
+    delivery(chat);
+    registry.start({
+      owner,
+      command: 'echo done',
+      description: 'once',
+      timeoutMs: 5000,
+    });
+    await until(() => chat.sendMessage.mock.calls.length > 0);
+    await registry.settled(owner.runId, 5000);
+    const prompt = chat.sendMessage.mock.calls.at(-1)?.[1];
+    expect(prompt).toContain('exit code 0');
+    expect(prompt).not.toContain('Still running');
+  });
+
   it("sends nothing more once the agent's own stop or the thread's Stop ended the monitor", async () => {
     const chat = fakeChat();
     chat.setHold('wait');

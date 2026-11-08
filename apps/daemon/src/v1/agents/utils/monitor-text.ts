@@ -1,4 +1,9 @@
-import type { HostRowWire, MonitorEnd, MonitorRowPayload } from '../chat.types';
+import type {
+  HostRowWire,
+  MonitorEnd,
+  MonitorNamed,
+  MonitorRowPayload,
+} from '../chat.types';
 import type { MonitorEvent } from '../chat.types';
 import type { MonitorBatch } from '../chat.types';
 import { randomFenceTag } from './fence-tag';
@@ -167,6 +172,24 @@ export function monitorWake(messages: readonly MonitorMessage[]): {
       true,
     ),
   };
+}
+
+/**
+ * A wake's prompt with the conversation's monitors that have not ended named
+ * after it, the one that just printed included: a line that looks final reads
+ * as the monitor being over, and nothing else in the wake says it is not.
+ */
+export function promptNamingRunning(
+  prompt: string,
+  running: readonly MonitorNamed[],
+): string {
+  if (running.length === 0) {
+    return prompt;
+  }
+  const named = running
+    .map(({ id, description }) => `${id} (${description})`)
+    .join(', ');
+  return `${prompt}\n\n[geniro] Still running: ${named}. Printing does not end a monitor: it has ended only when a message of its says how, and until then it runs to its timeout. If you have what you were waiting for, stop it with stop_monitor.`;
 }
 
 /**

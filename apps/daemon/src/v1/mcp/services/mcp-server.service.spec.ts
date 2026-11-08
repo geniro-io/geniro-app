@@ -5407,6 +5407,8 @@ describe('McpServerService — the monitor tools', () => {
     expect(text('monitor')).toMatch(/Do not use it/);
     expect(text('monitor')).toMatch(/end your turn rather than wait/);
     expect(text('monitor')).toMatch(/grep --line-buffered/);
+    expect(text('monitor')).toMatch(/until grep -q/);
+    expect(text('monitor')).toMatch(/already runs is refused/);
     for (const name of NAMES) {
       for (const other of NAMES.filter((n) => n !== name)) {
         expect(text(name)).toContain(other);
@@ -5445,6 +5447,37 @@ describe('McpServerService — the monitor tools', () => {
     }
   });
 
+  it('refuses a second monitor on the command the conversation already runs, and names the others on a new start', async () => {
+    const { broker, registry } = monitorBroker();
+    const subject = monitorService(broker);
+    try {
+      await call(subject, 'monitor', {
+        command: 'sleep 30',
+        description: 'nap',
+        timeout_ms: 60_000,
+      });
+      const again = await call(subject, 'monitor', {
+        command: 'sleep 30',
+        description: 'nap again',
+        timeout_ms: 60_000,
+      });
+      expect(again.isError).toBe(true);
+      expect(again.content[0]?.text).toContain('m1 (nap) already runs');
+
+      const other = await call(subject, 'monitor', {
+        command: 'sleep 31',
+        description: 'other nap',
+        timeout_ms: 60_000,
+      });
+      expect(other.isError).toBe(false);
+      expect(other.content[0]?.text).toMatch(/^Started monitor m2\./);
+      expect(other.content[0]?.text).toContain('also have running: m1 (nap)');
+    } finally {
+      registry.stopRun('run-1', 'teardown');
+      await registry.settled('run-1', 5000);
+    }
+  });
+
   it('refuses an empty command, an over-long description and a timeout out of range, starting nothing', async () => {
     const { broker, registry } = monitorBroker();
     const subject = monitorService(broker);
@@ -5454,6 +5487,7 @@ describe('McpServerService — the monitor tools', () => {
       { command: 'true', description: 'x', timeout_ms: 999 },
       { command: 'true', description: 'x', timeout_ms: 86_400_001 },
       { command: 'true', description: 'x', timeout_ms: 1500.5 },
+      { command: 'tail -f a.log | grep -m 1 DONE', description: 'x' },
     ]) {
       const result = await call(subject, 'monitor', args);
       expect(result.isError).toBe(true);

@@ -89,7 +89,7 @@ describe('MonitorRegistry', () => {
         description: 'count',
         timeoutMs: 10_000,
       }),
-    ).toEqual({ status: 'started', id: 'm1' });
+    ).toEqual({ status: 'started', id: 'm1', alsoRunning: [] });
     const end = await ended;
 
     expect(events[0]?.type).toBe('start');
@@ -128,7 +128,7 @@ describe('MonitorRegistry', () => {
       expect(
         registry.start({
           owner,
-          command: FOREVER,
+          command: `${FOREVER} # ${i}`,
           description: `m${i}`,
           timeoutMs: 10_000,
         }).status,
@@ -137,11 +137,109 @@ describe('MonitorRegistry', () => {
     expect(
       registry.start({
         owner,
-        command: FOREVER,
+        command: `${FOREVER} # one more`,
         description: 'one more',
         timeoutMs: 10_000,
       }),
-    ).toMatchObject({ status: 'refused' });
+    ).toEqual({
+      status: 'refused',
+      reason: expect.stringContaining(`already runs ${MONITOR_RUN_MAX}`),
+    });
+  });
+
+  it('refuses a command the conversation already runs, naming the monitor that runs it', () => {
+    registry.start({
+      owner,
+      command: FOREVER,
+      description: 'first watch',
+      timeoutMs: 10_000,
+    });
+    expect(
+      registry.start({
+        owner,
+        command: FOREVER,
+        description: 'second watch',
+        timeoutMs: 10_000,
+      }),
+    ).toEqual({
+      status: 'refused',
+      reason: expect.stringContaining('monitor m1 (first watch) already runs'),
+    });
+    expect(registry.list(owner.runId).map(({ id }) => id)).toEqual(['m1']);
+  });
+
+  it('lets another conversation run the same command, and names only the caller’s own as also running', () => {
+    registry.start({
+      owner,
+      command: FOREVER,
+      description: 'mine',
+      timeoutMs: 10_000,
+    });
+    expect(
+      registry.start({
+        owner: { ...owner, caller: 'other' },
+        command: FOREVER,
+        description: 'theirs',
+        timeoutMs: 10_000,
+      }),
+    ).toEqual({ status: 'started', id: 'm2', alsoRunning: [] });
+    expect(
+      registry.start({
+        owner,
+        command: `${FOREVER} # newer`,
+        description: 'newer',
+        timeoutMs: 10_000,
+      }),
+    ).toEqual({
+      status: 'started',
+      id: 'm3',
+      alsoRunning: [{ id: 'm1', description: 'mine' }],
+    });
+  });
+
+  it('takes the same command again once the running one is being stopped, and no longer counts it as running', async () => {
+    registry.start({
+      owner,
+      command: FOREVER,
+      description: 'old',
+      timeoutMs: 10_000,
+    });
+    expect(registry.stillRunning(owner.runId).map(({ id }) => id)).toEqual([
+      'm1',
+    ]);
+    registry.stop(owner.runId, 'm1', 'agent');
+    expect(registry.stillRunning(owner.runId)).toEqual([]);
+    expect(registry.list(owner.runId).map(({ id }) => id)).toEqual(['m1']);
+    expect(
+      registry.start({
+        owner,
+        command: FOREVER,
+        description: 'new',
+        timeoutMs: 10_000,
+      }),
+    ).toEqual({ status: 'started', id: 'm2', alsoRunning: [] });
+  });
+
+  it('answers still running by conversation', () => {
+    registry.start({
+      owner,
+      command: FOREVER,
+      description: 'mine',
+      timeoutMs: 10_000,
+    });
+    registry.start({
+      owner: { ...owner, caller: 'other' },
+      command: FOREVER,
+      description: 'theirs',
+      timeoutMs: 10_000,
+    });
+    expect(
+      registry.stillRunning(owner.runId, owner.caller).map(({ id }) => id),
+    ).toEqual(['m1']);
+    expect(registry.stillRunning(owner.runId).map(({ id }) => id)).toEqual([
+      'm1',
+      'm2',
+    ]);
   });
 
   it('stops the whole group on a user stop, ending stopped and waking the agent', async () => {
@@ -252,7 +350,7 @@ describe('MonitorRegistry', () => {
         description: 'next',
         timeoutMs: 5000,
       }),
-    ).toEqual({ status: 'started', id: 'm5' });
+    ).toEqual({ status: 'started', id: 'm5', alsoRunning: [] });
   });
 
   it('refuses new monitors for a moment after the run is torn down', async () => {

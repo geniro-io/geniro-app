@@ -11,6 +11,7 @@ import {
   type MonitorMessage,
   monitorMessageOf,
   monitorWake,
+  promptNamingRunning,
 } from '../../agents/utils/monitor-text';
 import { TeamExecutorService } from './team-executor.service';
 
@@ -118,7 +119,7 @@ export class MonitorGraphDelivery implements OnModuleInit {
     const woke = this.executor.wakeConversation(
       runId,
       caller,
-      prompt,
+      promptNamingRunning(prompt, this.monitors.stillRunning(runId, caller)),
       row,
       handedBack,
     );

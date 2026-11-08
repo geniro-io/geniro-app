@@ -78,7 +78,8 @@ function clamp(offset: number, ceiling: number): number {
  * caller decides what it hangs off. Closes on Escape and on a pointer press
  * outside itself; a press on the trigger is left alone, since the trigger owns
  * its own toggle and swallowing it here would make a second press reopen what
- * the toggle had just closed.
+ * the toggle had just closed. A press inside a frame never reaches this
+ * document, so focus entering a frame outside the panel counts as that press.
  */
 export function Popover({
   open,
@@ -232,9 +233,20 @@ export function Popover({
         onClose();
       }
     };
+    const onWindowBlur = (): void => {
+      const focused = document.activeElement;
+      if (
+        focused instanceof HTMLIFrameElement &&
+        !panelRef.current?.contains(focused)
+      ) {
+        onClose();
+      }
+    };
     document.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('blur', onWindowBlur);
     return () => {
       document.removeEventListener('mousedown', onPointerDown);
+      window.removeEventListener('blur', onWindowBlur);
     };
   }, [open, onClose, triggerRef]);
 

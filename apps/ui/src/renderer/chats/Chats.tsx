@@ -3628,6 +3628,7 @@ export function Chats({
         setRuns((prev) =>
           prev.map((run) => (run.id === updated.id ? updated : run)),
         );
+        void hostedRef.current?.onRunSettingsChanged?.(updated);
       } catch (err) {
         // A RUN_BUSY here is not a fault — it is the daemon saying this turn
         // was spawned with no permission gate, so its mode cannot be changed
@@ -11695,6 +11696,9 @@ export function Chats({
                     configDir: configDirs[agentKind] ?? null,
                     model: models[agentKind] ?? null,
                     effort: efforts[agentKind] ?? null,
+                    contextWindow: contextWindows[agentKind] ?? null,
+                    autoCompactPercent,
+                    modelParameters: modelParameters[agentKind] ?? {},
                     // Never the composer's mode: an analysis starts on auto.
                     approval: null,
                   }}

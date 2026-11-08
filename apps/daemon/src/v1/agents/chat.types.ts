@@ -1205,6 +1205,9 @@ export interface StartThreadAnalysis {
   approval?: ChatApprovalMode;
   model?: string;
   effort?: string;
+  contextWindow?: string;
+  autoCompactPercent?: number;
+  modelParameters?: Record<string, string>;
   configDir?: string;
   cwd?: string;
   focus?: string;

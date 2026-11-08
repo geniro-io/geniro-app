@@ -36,4 +36,6 @@ export interface HostedThread {
    * behind it, so `onBeforeSend` can wait on what this starts.
    */
   onTurnSettled?: () => void | Promise<void>;
+  /** The user changed the conversation's settings; `run` reads as they now stand. */
+  onRunSettingsChanged?: (run: RunDto) => void | Promise<void>;
 }

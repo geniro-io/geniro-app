@@ -321,7 +321,7 @@ Every chat and team run can say what it set out to do and whether it did it.
 
 Finished a long run and wondering why it took 40 minutes? Press **Analyze thread**.
 
-1. Pick the agent, account, model and effort that should do the analysis.
+1. Pick the agent, account, model and its settings that should do the analysis. Analyses and the team and project chats open on the setup you last used in any of them, including a change you made inside the chat; the team and project chats keep their own approval mode.
 2. It reads a snapshot of the thread: timings, slow or failed tools, the critical path and every row.
 3. You get a **recommendations card** that explains itself: what cost the most time and money and why, then each fix with its evidence, the minutes and dollars it should save per run and what the next run looks like with it, tagged by where the fix belongs: your team, your repo, your own instruction files, the shared memory, or the project's instructions.
 4. Tick what you want: the card projects the time and cost per run with exactly those fixes. Press **Apply selected**. Team edits are saved only if the file has not changed in the meantime, and a backup is written first. A project-instructions fix is shown to you as a card with the old and new text, in every approval mode, and written only when you press **Apply** there — only for the items you ticked, and only if nobody changed the instructions since the agent read them; the next analysis sees every change made to them and who made it.

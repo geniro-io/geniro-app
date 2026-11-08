@@ -184,6 +184,23 @@ describe('analyzeThreadSchema', () => {
     ).toBe(true);
   });
 
+  it('carries the whole model setup, on the bounds a chat has', () => {
+    const setup = {
+      contextWindow: '1m',
+      autoCompactPercent: 80,
+      modelParameters: { fast: 'on' },
+    };
+    expect(
+      analyzeThreadSchema.parse({ agentKind: 'claude', ...setup }),
+    ).toMatchObject(setup);
+    expect(
+      analyzeThreadSchema.safeParse({
+        agentKind: 'claude',
+        autoCompactPercent: 9,
+      }).success,
+    ).toBe(false);
+  });
+
   it('carries the approval mode the dialog picked, and refuses an unknown one', () => {
     expect(
       analyzeThreadSchema.parse({ agentKind: 'claude', approval: 'ask' })

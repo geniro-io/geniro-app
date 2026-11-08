@@ -112,6 +112,25 @@ describe('ThreadAnalysisService.start', () => {
     };
   }
 
+  it('starts the analysis chat on the whole model setup it was given', async () => {
+    const { service, createChat } = build({
+      projectId: null,
+      projectSource: 'none',
+    });
+    const setup = {
+      model: 'opus',
+      effort: 'xhigh',
+      contextWindow: '1m',
+      autoCompactPercent: 80,
+      modelParameters: { fast: 'on' },
+      configDir: '/profiles/work',
+    };
+
+    await service.start('source', { agentKind: 'claude', ...setup });
+
+    expect(createChat.mock.calls[0]![0]).toMatchObject(setup);
+  });
+
   it('an analysis chat inherits the analysed run project, and none explicitly when it has none', async () => {
     const bound = build({ projectId: 'p-billing', projectSource: 'folder' });
     await bound.service.start('source', { agentKind: 'claude' });

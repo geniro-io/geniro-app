@@ -7,6 +7,7 @@ import {
 } from '../../../db/memory-text-index.ddl';
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import { Project } from '../../projects/entity/project.entity';
+import type { RunPlace } from '../../projects/projects.types';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { Task } from '../../tasks/entity/task.entity';
@@ -17,16 +18,15 @@ import {
   MEMORY_INDEX_PREFACE,
   type MemoryActor,
   type MemoryChangedEvent,
-  type MemoryPlace,
   type MemorySaveOutcome,
   type MemoryStatusOutcome,
   type MemoryTextDatabase,
 } from '../memory.types';
 import type { MemoryService } from './memory.service';
 
-const NONE: MemoryPlace = { projectId: null, teamSlug: null };
+const NONE: RunPlace = { projectId: null, teamSlug: null };
 
-function inProject(projectId: string): MemoryPlace {
+function inProject(projectId: string): RunPlace {
   return { projectId, teamSlug: null };
 }
 
@@ -1103,12 +1103,12 @@ describe('MemoryService', () => {
   });
 
   describe('team memory', () => {
-    const TEAM_A: MemoryPlace = { projectId: null, teamSlug: 'a' };
-    const TEAM_B: MemoryPlace = { projectId: null, teamSlug: 'b' };
-    const RUN_IN_A: MemoryPlace = { projectId: 'p1', teamSlug: 'a' };
+    const TEAM_A: RunPlace = { projectId: null, teamSlug: 'a' };
+    const TEAM_B: RunPlace = { projectId: null, teamSlug: 'b' };
+    const RUN_IN_A: RunPlace = { projectId: 'p1', teamSlug: 'a' };
 
     async function seedPlaces() {
-      const save = async (title: string, place: MemoryPlace) =>
+      const save = async (title: string, place: RunPlace) =>
         created(
           await db.service.save(
             USER,

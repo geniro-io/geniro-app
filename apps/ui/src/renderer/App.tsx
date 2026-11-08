@@ -26,6 +26,9 @@ import { createDaemonApis } from './daemon-api';
 import { DaemonClient } from './daemon-client';
 import { DebugPanel } from './debug/debug-panel';
 import { reportUiErrors } from './debug/report-ui-errors';
+import type { KnowledgeRequest } from './knowledge/Knowledge';
+import { projectPlace } from './knowledge/knowledge-text';
+import { useKnowledgeCounts } from './knowledge/use-knowledge';
 import type { FirstLaunch, TeamLaunch } from './onboarding/first-launch';
 import { Onboarding } from './onboarding/Onboarding';
 import type { ProjectsRequest } from './projects/Projects';
@@ -67,6 +70,9 @@ const Tasks = lazy(() =>
 const Projects = lazy(() =>
   import('./projects/Projects').then((m) => ({ default: m.Projects })),
 );
+const Knowledge = lazy(() =>
+  import('./knowledge/Knowledge').then((m) => ({ default: m.Knowledge })),
+);
 
 type Phase = 'loading' | 'onboarding' | 'ready';
 
@@ -82,6 +88,7 @@ const VIEW_TITLE: Record<AppView, string> = {
   teams: 'Teams',
   tasks: 'Tasks',
   projects: 'Projects',
+  knowledge: 'Knowledge',
   stats: 'Stats',
   settings: 'Settings',
 };
@@ -105,6 +112,7 @@ function currentRoute(
   view: AppView,
   openRunId: string | null,
   shownProjectId: string | null,
+  shownDocumentId: string | null,
 ): Route {
   switch (view) {
     case 'chats':
@@ -115,6 +123,8 @@ function currentRoute(
       return { view: 'tasks', projectId: null };
     case 'projects':
       return { view: 'projects', projectId: shownProjectId };
+    case 'knowledge':
+      return { view: 'knowledge', documentId: shownDocumentId };
     case 'settings':
       return { view: 'settings' };
     case 'stats':
@@ -178,6 +188,17 @@ export function App(): React.JSX.Element {
   const [boardProjectRequest, setBoardProjectRequest] = useState<string | null>(
     null,
   );
+  /** Inbound and one-shot; `shownDocumentId` is its outbound twin. */
+  const [knowledgeRequest, setKnowledgeRequest] =
+    useState<KnowledgeRequest | null>(() =>
+      initialRoute?.view === 'knowledge' && initialRoute.documentId !== null
+        ? { documentId: initialRoute.documentId }
+        : null,
+    );
+  const [shownDocumentId, setShownDocumentId] = useState<string | null>(() =>
+    initialRoute?.view === 'knowledge' ? initialRoute.documentId : null,
+  );
+  const [knowledgePlace, setKnowledgePlace] = useState<string | null>(null);
   /** Every thread's wait, ranked, as `Chats` reports it. */
   const [waiting, setWaiting] = useState<readonly WaitReading[]>([]);
   // Teams mounts lazily on first visit, then stays mounted (hidden) like
@@ -541,6 +562,11 @@ export function App(): React.JSX.Element {
       lastJumpRef.current = null;
     }
   }, [openRunId]);
+  const knowledgeCounts = useKnowledgeCounts(apis, clientRef.current);
+  const navCounts = useMemo(
+    () => ({ knowledge: knowledgeCounts?.waiting ?? 0 }),
+    [knowledgeCounts],
+  );
   const waitingByRun = useMemo(
     () => new Map(waiting.map((reading) => [reading.runId, reading.state])),
     [waiting],
@@ -555,14 +581,16 @@ export function App(): React.JSX.Element {
    */
   const lastWrittenHashRef = useRef<string | null>(null);
   useEffect(() => {
-    const hash = formatRoute(currentRoute(view, openRunId, shownProjectId));
+    const hash = formatRoute(
+      currentRoute(view, openRunId, shownProjectId, shownDocumentId),
+    );
     if (hash !== window.location.hash) {
       // `history.state` is kept: it carries the phone back-entry marks
       // (`components/use-phone-back-entry.ts`).
       history.replaceState(history.state, '', hash);
     }
     lastWrittenHashRef.current = hash;
-  }, [view, openRunId, shownProjectId]);
+  }, [view, openRunId, shownProjectId, shownDocumentId]);
 
   // A link pasted into this SAME already-open tab fires `hashchange` rather
   // than a reload, so this is what makes that act like a navigation. Guarded
@@ -587,6 +615,9 @@ export function App(): React.JSX.Element {
       }
       if (route.view === 'projects') {
         setProjectRequest({ projectId: route.projectId });
+      }
+      if (route.view === 'knowledge' && route.documentId !== null) {
+        setKnowledgeRequest({ documentId: route.documentId });
       }
     };
     window.addEventListener('hashchange', onHashChange);
@@ -705,6 +736,7 @@ export function App(): React.JSX.Element {
                   collapsed={sidebar.collapsed}
                   hydrated={sidebar.hydrated}
                   onToggleCollapsed={sidebar.toggle}
+                  counts={navCounts}
                 />
               </div>
               {/* min-w-0 + overflow-hidden: a flex child's min-width defaults to its
@@ -778,6 +810,10 @@ export function App(): React.JSX.Element {
                         setSettingsSection(section);
                         setSettingsSectionOpen(true);
                         setView('settings');
+                      }}
+                      onOpenKnowledge={(target) => {
+                        setKnowledgeRequest(target);
+                        setView('knowledge');
                       }}
                       onOpenMemory={(memoryHandle) => {
                         setMemoryFocus(memoryHandle);
@@ -879,6 +915,25 @@ export function App(): React.JSX.Element {
                           setTeamRequest(slug);
                           setView('teams');
                         }}
+                        onOpenKnowledge={(projectId) => {
+                          setKnowledgeRequest({
+                            place: projectPlace(projectId),
+                          });
+                          setView('knowledge');
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                  {view === 'knowledge' && !showStartup ? (
+                    <div className="min-h-0 flex-1">
+                      <Knowledge
+                        handle={handle}
+                        client={clientRef.current}
+                        place={knowledgePlace}
+                        onPlaceChange={setKnowledgePlace}
+                        request={knowledgeRequest}
+                        onRequestHandled={() => setKnowledgeRequest(null)}
+                        onDocumentShown={setShownDocumentId}
                       />
                     </div>
                   ) : null}
@@ -949,6 +1004,7 @@ export function App(): React.JSX.Element {
             {/* On every phone page: it is the phone's only navigation. */}
             <BottomTabBar
               view={view}
+              counts={navCounts}
               onNavigate={(next) => {
                 // Pressing the tab already on show goes back to its first
                 // page, the way a phone's tab bar does.

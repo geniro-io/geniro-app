@@ -27,6 +27,7 @@ import {
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
+import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { Item } from '../../runs/entity/item.entity';
@@ -154,6 +155,10 @@ import { WallWorkService } from './wall-work.service';
 
 const MEMORY_OFF: Pick<MemoryService, 'runSnapshot'> = {
   runSnapshot: async () => ({ nativeMemoryOff: false, memoryIndex: null }),
+};
+
+const KNOWLEDGE_OFF: Pick<KnowledgeService, 'runSnapshot'> = {
+  runSnapshot: async () => ({ knowledgeIndex: null }),
 };
 
 const NO_PROJECT: Pick<ProjectScopeService, 'placeNewRun' | 'liveNamesOf'> = {
@@ -1126,6 +1131,7 @@ function setup(
     runWrites?: RunWriteQueue;
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot'>;
+    knowledge?: Pick<KnowledgeService, 'runSnapshot'>;
     /** What the run's project tells it; no project when absent. */
     projectScope?: Partial<
       Pick<ProjectScopeService, 'placeNewRun' | 'liveNamesOf'>
@@ -1412,6 +1418,7 @@ function setup(
     teamBuilders,
     opts.runWrites ?? new RunWriteQueue(),
     (opts.memory ?? MEMORY_OFF) as unknown as MemoryService,
+    (opts.knowledge ?? KNOWLEDGE_OFF) as unknown as KnowledgeService,
     { ...NO_PROJECT, ...opts.projectScope } as unknown as ProjectScopeService,
     opts.holds ?? new RunHoldRegistry(),
     {
@@ -8530,6 +8537,49 @@ describe('ChatService', () => {
         memoryIndex: 'INDEX AT CREATION',
         nativeMemoryOff: true,
       });
+    }
+  });
+
+  it('snapshots the knowledge index onto the run and spawns every turn with it, whatever the store holds later', async () => {
+    const asked: unknown[] = [];
+    let index = 'INDEX AT CREATION';
+    const { service, claude, runDao } = setup({
+      knowledge: {
+        runSnapshot: async (facts) => {
+          asked.push(facts);
+          return { knowledgeIndex: index };
+        },
+      },
+      projectScope: {
+        placeNewRun: async () => ({
+          projectId: 'p-billing',
+          chosenProjectGroupId: null,
+          source: 'card',
+          instructions: null,
+        }),
+      },
+    });
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      taskId: 'task-7',
+    });
+    index = 'INDEX AFTER A SAVE';
+
+    await service.sendMessage(run.id, 'go');
+    claude.finish();
+    await drain();
+    await service.sendMessage(run.id, 'again');
+
+    expect(asked).toEqual([
+      { taskId: 'task-7', cwd: run.cwd, projectId: 'p-billing' },
+    ]);
+    expect(runDao.runs.get(run.id)).toMatchObject({
+      knowledgeIndex: 'INDEX AT CREATION',
+    });
+    expect(claude.start).toHaveBeenCalledTimes(2);
+    for (const [input] of claude.start.mock.calls) {
+      expect(input).toMatchObject({ knowledgeIndex: 'INDEX AT CREATION' });
     }
   });
 

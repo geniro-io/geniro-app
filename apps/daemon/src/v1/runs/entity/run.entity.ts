@@ -349,6 +349,15 @@ export class Run extends TimestampsEntity {
   memoryIndex: string | null = null;
 
   /**
+   * The knowledge index this run's agents are given: the documents the user
+   * wrote or approved that it may see. A snapshot for
+   * {@link customInstructions}' reason: a live read would respawn the kept CLI
+   * whenever a document changed. Bodies are read live through `knowledge_read`.
+   */
+  @Property({ type: 'text', nullable: true })
+  knowledgeIndex: string | null = null;
+
+  /**
    * Whether each CLI's own memory is switched off for this run, decided when
    * it was created (`MemoryService.runSnapshot`). Null for every row predating
    * it, read as not switched off.

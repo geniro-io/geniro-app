@@ -53,6 +53,7 @@ const mocks = vi.hoisted(() => {
       autoRevokeAfterDays: null,
     },
     memory: { enabled: true, agentWrites: 'active', nativeMemoryOff: false },
+    knowledge: { enabled: true, agentWrites: 'review' },
   };
   return {
     handlers,
@@ -117,6 +118,7 @@ const DENIED_CHANNEL_KEYS: (keyof typeof IPC)[] = [
   'saveChatExport',
   'saveArtifact',
   'saveMemoryExport',
+  'saveKnowledgeExport',
   'openInTerminal',
   'revealPath',
   'getAppStorage',

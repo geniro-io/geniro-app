@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AgentsModule } from '../agents/agents.module';
 import { RunDao } from '../agents/dao/run.dao';
 import { ConfigDirPinService } from '../agents/services/config-dir-pin.service';
+import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { MemoryModule } from '../memory/memory.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { CapabilitiesController } from './controllers/capabilities.controller';
@@ -49,7 +50,7 @@ import { TeamStoreService } from './services/team-store.service';
  * `AgentAdapterRegistry` that {@link AgentsModule} exports.
  */
 @Module({
-  imports: [AgentsModule, MemoryModule, ProjectsModule],
+  imports: [AgentsModule, MemoryModule, KnowledgeModule, ProjectsModule],
   controllers: [
     TeamsController,
     CapabilitiesController,

@@ -91,6 +91,9 @@ vi.mock('./daemon-client', () => ({
     onProjectsChanged(): () => void {
       return () => {};
     }
+    onKnowledgeChanged(): () => void {
+      return () => {};
+    }
     onTaskChanged(): () => void {
       return () => {};
     }

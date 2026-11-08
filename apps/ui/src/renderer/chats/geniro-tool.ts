@@ -184,6 +184,33 @@ export function geniroMemoryToolOf(
 }
 
 /**
+ * The knowledge store's tools, which tell their story as one compact row inside
+ * the tool group (`KnowledgeToolRow`) and so are kept OUT of
+ * {@link GENIRO_TOOLS} for the reason {@link GENIRO_MEMORY_TOOLS} is.
+ *
+ * TWIN PARSER: `HOST_KNOWLEDGE_TOOLS` in `apps/daemon/src/v1/agents/chat.types.ts`.
+ */
+export const GENIRO_KNOWLEDGE_TOOLS = [
+  'knowledge_search',
+  'knowledge_read',
+  'knowledge_save',
+] as const;
+
+export type GeniroKnowledgeTool = (typeof GENIRO_KNOWLEDGE_TOOLS)[number];
+
+/** The knowledge tool a call NAMES on this run's own geniro server, else null. */
+export function geniroKnowledgeToolOf(
+  name: string,
+  runId: string,
+): GeniroKnowledgeTool | null {
+  return (
+    GENIRO_KNOWLEDGE_TOOLS.find((tool) =>
+      namesToolOnRunServer(name, runId, tool),
+    ) ?? null
+  );
+}
+
+/**
  * Whether `tool` appears in `name` as a whole word — not inside a longer tool
  * name, so cursor's label for `team_notes` is not read as `team_note`.
  */

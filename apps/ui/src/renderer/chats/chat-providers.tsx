@@ -15,6 +15,12 @@ import {
 } from './call-message-box';
 import { CliLoginContext, type SignInResolver } from './cli-login-context';
 import { CommandConfirmDialog } from './command-confirm-dialog';
+import {
+  type KnowledgeLoader,
+  KnowledgeLoaderContext,
+  KnowledgeOpenContext,
+  type KnowledgeOpenTarget,
+} from './knowledge-tool-row';
 import { RunActivityContext, RunSettledContext } from './live-row';
 import {
   type MemberVerdicts,
@@ -75,6 +81,8 @@ export interface TranscriptValues {
   openTeamNote: ((seq: number) => void) | null;
   /** Open Settings → Memory on one entry — see `MemoryOpenContext`. */
   openMemory?: ((handle: string) => void) | null;
+  /** Open the Knowledge page on one document — see `KnowledgeOpenContext`. */
+  openKnowledge?: ((target: KnowledgeOpenTarget) => void) | null;
 }
 
 /**
@@ -109,6 +117,7 @@ export function ChatProviders({
   notSent = null,
   chatActions = null,
   loadMemory = null,
+  loadKnowledge = null,
   children,
 }: {
   /**
@@ -185,6 +194,8 @@ export function ChatProviders({
    * the sub-agent detail dialog and call cards alike.
    */
   loadMemory?: MemoryLoader | null;
+  /** How a knowledge row reads its documents — see `KnowledgeLoaderContext`. */
+  loadKnowledge?: KnowledgeLoader | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -208,22 +219,25 @@ export function ChatProviders({
                                   value={chatActions}>
                                   <MemoryLoaderContext.Provider
                                     value={loadMemory}>
-                                    {children}
-                                    {chatActions === null ? null : (
-                                      <CommandConfirmDialog
-                                        action={chatActions.confirming}
-                                        changed={
-                                          chatActions.confirming !== null &&
-                                          !chatActions.actions.some(
-                                            (a) =>
-                                              a.seq ===
-                                              chatActions.confirming?.seq,
-                                          )
-                                        }
-                                        onCancel={chatActions.cancelCommand}
-                                        onConfirm={chatActions.confirmCommand}
-                                      />
-                                    )}
+                                    <KnowledgeLoaderContext.Provider
+                                      value={loadKnowledge}>
+                                      {children}
+                                      {chatActions === null ? null : (
+                                        <CommandConfirmDialog
+                                          action={chatActions.confirming}
+                                          changed={
+                                            chatActions.confirming !== null &&
+                                            !chatActions.actions.some(
+                                              (a) =>
+                                                a.seq ===
+                                                chatActions.confirming?.seq,
+                                            )
+                                          }
+                                          onCancel={chatActions.cancelCommand}
+                                          onConfirm={chatActions.confirmCommand}
+                                        />
+                                      )}
+                                    </KnowledgeLoaderContext.Provider>
                                   </MemoryLoaderContext.Provider>
                                 </ChatActionsContext.Provider>
                               </NotSentMessagesContext.Provider>
@@ -255,6 +269,7 @@ export function TranscriptContexts({
   runStages,
   openTeamNote,
   openMemory = null,
+  openKnowledge = null,
   children,
 }: TranscriptValues & { children: React.ReactNode }): React.JSX.Element {
   return (
@@ -269,7 +284,9 @@ export function TranscriptContexts({
                     <RevealCallContext.Provider value={revealCall}>
                       <SubagentDetailContext.Provider
                         value={openSubagentDetail}>
-                        {children}
+                        <KnowledgeOpenContext.Provider value={openKnowledge}>
+                          {children}
+                        </KnowledgeOpenContext.Provider>
                       </SubagentDetailContext.Provider>
                     </RevealCallContext.Provider>
                   </RevealCallBlockContext.Provider>

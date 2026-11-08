@@ -77,6 +77,7 @@ function doc(items: ItemDto[]): ChatExportDto {
       projectInstructions: null,
       replyLanguage: null,
       teamInstructions: null,
+      knowledgeIndex: null,
       memoryIndex: null,
       nativeMemoryOff: null,
       taskInstructions: null,

@@ -8,9 +8,9 @@ import {
   DROP_RETIRED_MEMORY_TEXT_TRIGGERS,
   MEMORY_TEXT_TRIGGERS,
 } from '../../../db/memory-text-index.ddl';
+import type { RunPlace } from '../../projects/projects.types';
 import { Memory } from '../entity/memory.entity';
 import type {
-  MemoryPlace,
   MemoryStatus,
   MemoryTextDatabase,
   MemoryType,
@@ -24,7 +24,7 @@ export interface MemoryMatchScope {
    * `exactly`: entries filed under exactly this place (both null = global).
    * `any`: every scope — the user's own view.
    */
-  places: { visibleTo: MemoryPlace } | { exactly: MemoryPlace } | { any: true };
+  places: { visibleTo: RunPlace } | { exactly: RunPlace } | { any: true };
 }
 
 /** One page of the user's list, newest edit first. */

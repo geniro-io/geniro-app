@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   geniroCardKindOf,
+  geniroKnowledgeToolOf,
   geniroMemoryToolOf,
   isGeniroCardKind,
   isGeniroToolName,
@@ -126,6 +127,43 @@ describe('shared-memory tools', () => {
   });
 
   it.each(MEMORY_TOOLS)(
+    'keeps the raw %s call visible, since its row is drawn from that pair',
+    (tool) => {
+      expect(isGeniroToolName(`mcp__${SERVER}__${tool}`, RUN)).toBe(false);
+      expect(geniroCardKindOf(`mcp__${SERVER}__${tool}`, RUN)).toBeNull();
+    },
+  );
+});
+
+describe('shared-knowledge tools', () => {
+  const KNOWLEDGE_TOOLS = [
+    'knowledge_search',
+    'knowledge_read',
+    'knowledge_save',
+  ] as const;
+
+  it.each(KNOWLEDGE_TOOLS)('recognises %s in claude’s spelling', (tool) => {
+    expect(geniroKnowledgeToolOf(`mcp__${SERVER}__${tool}`, RUN)).toBe(tool);
+  });
+
+  it.each(KNOWLEDGE_TOOLS)('recognises %s in cursor’s spelling', (tool) => {
+    expect(geniroKnowledgeToolOf(`${SERVER}-${tool}: ${tool}`, RUN)).toBe(tool);
+    expect(geniroKnowledgeToolOf(`Geniro ${SERVER}: ${tool}`, RUN)).toBe(tool);
+  });
+
+  it('refuses another server, another run and a longer name', () => {
+    expect(
+      geniroKnowledgeToolOf('mcp__geniro-mine__knowledge_save', RUN),
+    ).toBeNull();
+    expect(
+      geniroKnowledgeToolOf(`mcp__${SERVER}__knowledge_save`, 'ffffffff-0000'),
+    ).toBeNull();
+    expect(
+      geniroKnowledgeToolOf(`mcp__${SERVER}__knowledge_saved`, RUN),
+    ).toBeNull();
+  });
+
+  it.each(KNOWLEDGE_TOOLS)(
     'keeps the raw %s call visible, since its row is drawn from that pair',
     (tool) => {
       expect(isGeniroToolName(`mcp__${SERVER}__${tool}`, RUN)).toBe(false);

@@ -1192,6 +1192,7 @@ export interface AnalysedTeamRef {
     taskInstructions: string | null;
     projectInstructions: string | null;
     memoryIndex: string | null;
+    knowledgeIndex: string | null;
   } | null;
 }
 
@@ -5011,6 +5012,12 @@ export const ChatExportRunSchema = z
       .describe(
         "The shared memory's title index this run's agents were given, as snapshotted at creation; null when memory was off or held nothing the run could see",
       ),
+    knowledgeIndex: z
+      .string()
+      .nullable()
+      .describe(
+        "The knowledge index this run's agents were given, as snapshotted at creation; null when knowledge was off or held nothing the run could see",
+      ),
     nativeMemoryOff: z
       .boolean()
       .nullable()
@@ -7634,6 +7641,21 @@ export const HOST_MEMORY_TOOLS = [
   HOST_MEMORY_READ_TOOL,
   HOST_MEMORY_SAVE_TOOL,
   HOST_MEMORY_FORGET_TOOL,
+] as const;
+
+export const HOST_KNOWLEDGE_SEARCH_TOOL = 'knowledge_search';
+export const HOST_KNOWLEDGE_READ_TOOL = 'knowledge_read';
+export const HOST_KNOWLEDGE_SAVE_TOOL = 'knowledge_save';
+
+/**
+ * The knowledge store's tools, in `tools/list` order.
+ *
+ * TWIN PARSER: `GENIRO_KNOWLEDGE_TOOLS` in `apps/ui/src/renderer/chats/geniro-tool.ts`.
+ */
+export const HOST_KNOWLEDGE_TOOLS = [
+  HOST_KNOWLEDGE_SEARCH_TOOL,
+  HOST_KNOWLEDGE_READ_TOOL,
+  HOST_KNOWLEDGE_SAVE_TOOL,
 ] as const;
 
 /**

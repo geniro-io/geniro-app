@@ -108,6 +108,7 @@ function exportRun(run: Run): ChatExportRunWire {
     teamInstructions: run.teamInstructions,
     projectInstructions: run.projectInstructions,
     memoryIndex: run.memoryIndex,
+    knowledgeIndex: run.knowledgeIndex,
     nativeMemoryOff: run.nativeMemoryOff,
     agentOptions:
       run.agentOptions === null ? null : readAgentOptions(run.agentOptions),

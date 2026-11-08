@@ -101,13 +101,21 @@ export function proposeTeamSchema(
         type: 'string',
         description: `With \`edits\`: the slug of the library team they change, as ${HOST_READ_TEAMS_TOOL} names it. Leave it out for a new team.`,
       },
+      overlay: {
+        ...overlayJsonSchema(),
+        description: `With \`overlayProjectId\`, and without \`team\`, \`edits\` or \`replaces\`: that project's WHOLE overlay of its default team as it should stand, the one ${HOST_READ_TEAMS_TOOL} answers with your change made; an empty object removes every override.`,
+      },
+      overlayProjectId: {
+        type: 'string',
+        description: "With `overlay`: the project's `id` list_projects names.",
+      },
       summary: {
         type: 'string',
-        description: `One line for the card, at most ${TEAM_SUMMARY_MAX} characters: what this team does, or what the change does. Required with \`edits\`.`,
+        description: `One line for the card, at most ${TEAM_SUMMARY_MAX} characters: what this team does, or what the change does. Required with \`edits\` or \`overlay\`.`,
       },
       reason: {
         type: 'string',
-        description: `${REASON_DESCRIPTION} Required with \`edits\`.`,
+        description: `${REASON_DESCRIPTION} Required with \`edits\` or \`overlay\`.`,
       },
     },
     additionalProperties: false,

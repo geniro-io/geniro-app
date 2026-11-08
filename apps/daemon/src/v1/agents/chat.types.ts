@@ -441,6 +441,10 @@ export type TeamProposalVerdict =
       note: string | null;
       /** A project whose instructions the same approval wrote, and the revision it saved them as. */
       project?: { name: string; revision: number };
+      /** The project whose overlay the same approval wrote. */
+      overlayProject?: string;
+      /** The approval wrote only that overlay or those instructions, never the team file. */
+      teamUnchanged?: true;
     }
   | { kind: 'declined'; note: string | null }
   | {

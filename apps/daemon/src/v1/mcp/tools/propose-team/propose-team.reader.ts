@@ -57,8 +57,29 @@ const TeamEditsArgsSchema = z
   })
   .strict();
 
+/**
+ * An ordinary chat's change to one project's overlay: the project is named,
+ * and the team is the one that project runs by default, never the model's.
+ */
+export const ChatOverlayArgsSchema = z
+  .object({
+    overlay: z
+      .record(z.string(), z.unknown())
+      .describe("The project's WHOLE overlay document as it should stand"),
+    overlayProjectId: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe("The project's `id` list_projects names"),
+    summary: summaryField,
+    reason: reasonField,
+  })
+  .strict();
+
 export type ChatTeamProposal =
-  z.infer<typeof WholeTeamArgsSchema> | z.infer<typeof TeamEditsArgsSchema>;
+  | z.infer<typeof WholeTeamArgsSchema>
+  | z.infer<typeof TeamEditsArgsSchema>
+  | z.infer<typeof ChatOverlayArgsSchema>;
 
 /**
  * A team builder chat's proposal: edits to its own team, never the
@@ -142,6 +163,15 @@ export function readProposeTeamArgs(
       error:
         'send `team` for a new team, or `edits` with `replaces` for a change to one — never both',
     };
+  }
+  if ('overlay' in given) {
+    return 'team' in given || 'edits' in given || 'replaces' in given
+      ? {
+          ok: false,
+          error:
+            'send `overlay` with `overlayProjectId` alone — a change to a team goes on its own card',
+        }
+      : readToolArgs(ChatOverlayArgsSchema, args);
   }
   return 'edits' in given
     ? readToolArgs(TeamEditsArgsSchema, args)

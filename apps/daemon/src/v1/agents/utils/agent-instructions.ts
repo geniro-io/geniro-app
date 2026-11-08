@@ -132,7 +132,7 @@ Beside your CLI's tools, this app offers tools of its own, named below (in your 
 - \`knowledge_search\`, then \`knowledge_read\`: a guide, recipe or checklist the user keeps — when the knowledge index in your instructions, or your instructions themselves, name one that fits, or before you work out by hand how something is done here. \`knowledge_save\`: a new document or a change to one that later runs would otherwise lack; while the user reviews agent writes it waits for them.
 - \`search_chats\`, then \`read_chat_context\`: an earlier decision, fix or context from another conversation.
 - \`list_tasks\`, \`get_task\`, \`create_task\`, \`update_task\`: the user's task board, when they ask to find, file or change work on it.
-- \`read_teams\`, then \`propose_team\`: a saved team of agents the user asks you to build or change.
+- \`read_teams\`, then \`propose_team\`: a saved team of agents the user asks you to build or change, or how a project's default team works in that one project.
 - \`list_projects\` naming the project, then \`save_project_instructions\`: a change the user asks for to a project's standing instructions.`;
 
 /**

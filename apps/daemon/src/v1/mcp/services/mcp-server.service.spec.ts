@@ -4920,6 +4920,171 @@ describe('McpServerService — what the descriptions tell a model', () => {
     });
   });
 
+  describe("an ordinary chat's project overlays", () => {
+    const toolsWith = (
+      gate: TeamProposalBroker,
+      projectChats: ProjectChatBroker,
+      teamProposals: unknown,
+    ): ReturnType<typeof createMcpTools> =>
+      createMcpTools({
+        calls: new CallBroker(),
+        questions: new UserQuestionBroker(),
+        findings: new FindingsReportBroker(),
+        charts: new ChartBroker(),
+        metrics: new MetricsBroker(),
+        comparisons: new ComparisonBroker(),
+        galleries: new GalleryBroker(),
+        galleryImages: {} as GalleryImageService,
+        artifacts: new ArtifactBroker(),
+        actions: new ActionBroker(),
+        patches: new PatchBroker(),
+        plans: new PlanBroker(),
+        notices: new NotifyBroker(),
+        board: new TaskBoardBroker(),
+        history: new GlobalChatSearchService({} as ChatSearchIndexDao),
+        analysis: new AnalysisBroker(),
+        threads: {} as ThreadReaderService,
+        teamChanges: {} as TeamChangeService,
+        projectInstructions: {} as ProjectInstructionsChangeService,
+        projectInstructionCards: new ProjectInstructionsBroker(),
+        teamHistory: {} as TeamHistoryService,
+        teamGate: gate,
+        teamBuilders: new TeamBuilderBroker(),
+        projectChats,
+        teamStore: {
+          get: (slug: string) =>
+            Promise.resolve({
+              slug,
+              hash: 'h1',
+              team: teamOf([member('agent')], { name: 'Team' }),
+            }),
+        } as unknown as TeamStoreService,
+        teamOverlays: {
+          overlaySources: () =>
+            Promise.resolve([
+              {
+                projectId: 'p1',
+                projectName: 'Billing',
+                active: true,
+                source: 'members:\n  agent:\n    effort: high\n',
+              },
+            ]),
+        } as unknown as TeamOverlayService,
+        teamProposals: teamProposals as TeamProposalService,
+        shares: fakeShares(false).service,
+        memory: fakeMemory(false).service,
+        knowledge: fakeKnowledge(false).service,
+        monitors: monitorBroker().broker,
+        teamNotes: teamNoteBroker(),
+        runOutcomes: runOutcomeBroker(),
+        goals: {} as GoalsService,
+        stages: stageService(),
+      });
+    type ToolCallContext = Parameters<
+      ReturnType<typeof createMcpTools>[number]['call']
+    >[2];
+    const context = (runId: string): ToolCallContext =>
+      ({ runId, memberId: 'agent' }) as ToolCallContext;
+
+    it('lists the overlay fields and reads every overlay of the slug it names', async () => {
+      const gate = new TeamProposalBroker();
+      gate.register('run-1', 'agent', { runId: 'run-1' });
+      const tools = toolsWith(gate, new ProjectChatBroker(), {});
+      const listed = tools.flatMap((tool) =>
+        tool.list({ runId: 'run-1', memberId: 'agent', conversationId: null }),
+      );
+      const schemaOf = (name: string): { properties: object } =>
+        listed.find((entry) => entry.name === name)!.inputSchema as {
+          properties: object;
+        };
+      const read = tools.find((t) => t.handles(HOST_READ_TEAMS_TOOL))!;
+
+      expect(Object.keys(schemaOf(HOST_PROPOSE_TEAM_TOOL).properties)).toEqual(
+        expect.arrayContaining(['overlay', 'overlayProjectId']),
+      );
+      expect(Object.keys(schemaOf(HOST_READ_TEAMS_TOOL).properties)).toEqual(
+        expect.arrayContaining(['slug', 'overlays']),
+      );
+      expect(
+        Object.keys(schemaOf(HOST_READ_TEAMS_TOOL).properties),
+      ).not.toContain('projects');
+      const answer = await read.call(
+        HOST_READ_TEAMS_TOOL,
+        { slug: 'team', overlays: true },
+        context('run-1'),
+      );
+      expect(answer.isError).toBe(false);
+      expect(answer.content[0]!.text).toContain(
+        '=== overlay Billing (p1) · its runs apply it ===',
+      );
+      expect(answer.content[0]!.text).not.toContain('read-only');
+      const projects = await read.call(
+        HOST_READ_TEAMS_TOOL,
+        { slug: 'team', projects: true },
+        context('run-1'),
+      );
+      expect(projects).toMatchObject({ isError: true });
+    });
+
+    it("leaves a project chat's read of overlays refused", async () => {
+      const projectChats = new ProjectChatBroker();
+      projectChats.register('run-2', 'agent', {
+        projectId: 'p1',
+        teamSlug: 'team',
+      });
+      const read = toolsWith(new TeamProposalBroker(), projectChats, {}).find(
+        (t) => t.handles(HOST_READ_TEAMS_TOOL),
+      )!;
+
+      const answer = await read.call(
+        HOST_READ_TEAMS_TOOL,
+        { overlays: true },
+        context('run-2'),
+      );
+
+      expect(answer).toMatchObject({ isError: true });
+    });
+
+    it('hands the overlay and the named project to the proposal service', async () => {
+      const gate = new TeamProposalBroker();
+      gate.register('run-1', 'agent', { runId: 'run-1' });
+      const proposeOverlay = vi.fn(() =>
+        Promise.resolve({
+          status: 'refused' as const,
+          code: 'PROJECT_HAS_NO_TEAM',
+          message: 'Solo has no default team',
+        }),
+      );
+      const propose = vi.fn();
+      const tool = toolsWith(gate, new ProjectChatBroker(), {
+        propose,
+        proposeOverlay,
+      }).find((t) => t.handles(HOST_PROPOSE_TEAM_TOOL))!;
+      const overlay = { members: { agent: { settings: { effort: 'max' } } } };
+
+      const result = await tool.call(
+        HOST_PROPOSE_TEAM_TOOL,
+        {
+          overlay,
+          overlayProjectId: 'p3',
+          summary: 'Agent thinks harder',
+          reason: 'asked',
+        },
+        context('run-1'),
+      );
+
+      expect(proposeOverlay).toHaveBeenCalledWith('run-1', {
+        projectId: 'p3',
+        overlay,
+        summary: 'Agent thinks harder',
+        reason: 'asked',
+      });
+      expect(propose).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ isError: true });
+      expect(result.content[0]!.text).toContain('PROJECT_HAS_NO_TEAM');
+    });
+  });
+
   it('answers read_teams failures with a code, never a path', async () => {
     const gate = new TeamProposalBroker();
     gate.register('run-1', 'agent', { runId: 'run-1' });

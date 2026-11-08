@@ -55,6 +55,44 @@ describe('readProposeTeamArgs', () => {
     ).toBe(true);
   });
 
+  it('reads an overlay of a named project, with what it changes and why required', () => {
+    const overlay = { members: { lead: { settings: { effort: 'max' } } } };
+    const whole = {
+      overlay,
+      overlayProjectId: 'p1',
+      summary: 'Lead thinks harder here',
+      reason: 'asked',
+    };
+
+    expect(readProposeTeamArgs(whole)).toEqual({ ok: true, query: whole });
+    expect(readProposeTeamArgs({ ...whole, team: null }).ok).toBe(true);
+    const { overlayProjectId: _project, ...noProject } = whole;
+    expect(readProposeTeamArgs(noProject).ok).toBe(false);
+    const { reason: _reason, ...noReason } = whole;
+    expect(readProposeTeamArgs(noReason).ok).toBe(false);
+  });
+
+  it('refuses an overlay beside a team, edits or a replacement', () => {
+    const overlay = {
+      overlay: {},
+      overlayProjectId: 'p1',
+      summary: 's',
+      reason: 'r',
+    };
+
+    for (const beside of [
+      { team: TEAM },
+      { edits: [{ path: 'name', value: 'x' }] },
+      { replaces: 'team' },
+    ]) {
+      expect(readProposeTeamArgs({ ...overlay, ...beside })).toEqual({
+        ok: false,
+        error:
+          'send `overlay` with `overlayProjectId` alone — a change to a team goes on its own card',
+      });
+    }
+  });
+
   it('refuses a misspelt target rather than proposing a second team', () => {
     expect(readProposeTeamArgs({ team: TEAM, replace: 'team' }).ok).toBe(false);
     expect(readProposeTeamArgs({ team: 'name: Team' }).ok).toBe(false);

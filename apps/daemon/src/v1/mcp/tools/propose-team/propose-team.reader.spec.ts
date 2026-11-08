@@ -60,6 +60,47 @@ describe('readProposeTeamArgs', () => {
     expect(readProposeTeamArgs({ team: 'name: Team' }).ok).toBe(false);
     expect(readProposeTeamArgs({}).ok).toBe(false);
   });
+
+  const EDITS = [{ find: 'old text', replace: 'new text' }];
+
+  it('reads a change to a library team as edits, with the slug, summary and reason the card shows', () => {
+    expect(
+      readProposeTeamArgs({
+        replaces: 'dev-team',
+        edits: EDITS,
+        summary: 'Clean up after every run',
+        reason: 'The stand logs filled the disk.',
+      }),
+    ).toEqual({
+      ok: true,
+      query: {
+        replaces: 'dev-team',
+        edits: EDITS,
+        summary: 'Clean up after every run',
+        reason: 'The stand logs filled the disk.',
+      },
+    });
+  });
+
+  it('refuses edits with no team to change, without the card’s account, empty, or beside a whole team', () => {
+    const base = {
+      replaces: 'dev-team',
+      edits: EDITS,
+      summary: 's',
+      reason: 'r',
+    };
+    expect(readProposeTeamArgs({ ...base, replaces: undefined }).ok).toBe(
+      false,
+    );
+    expect(readProposeTeamArgs({ ...base, summary: undefined }).ok).toBe(false);
+    expect(readProposeTeamArgs({ ...base, reason: undefined }).ok).toBe(false);
+    expect(readProposeTeamArgs({ ...base, edits: [] }).ok).toBe(false);
+    expect(readProposeTeamArgs({ ...base, team: TEAM })).toEqual({
+      ok: false,
+      error:
+        'send `team` for a new team, or `edits` with `replaces` for a change to one — never both',
+    });
+  });
 });
 
 describe('readProposeTeamChangeArgs', () => {

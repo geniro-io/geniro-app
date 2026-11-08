@@ -22,8 +22,8 @@ import {
 } from './propose-team.schema';
 
 /**
- * `propose_team` — a team on a card the user approves: a whole one
- * from an ordinary chat, edits to its own from a team's builder chat, or a
+ * `propose_team` — a team on a card the user approves: a new one or edits to
+ * a library team from an ordinary chat, edits to its own from a team's builder chat, or a
  * project's overlay of its default team from that project's own chat.
  * It does NOT wait for the answer: the card outlives the turn and the verdict
  * arrives as the run's next message (`TeamProposalService`), so no CLI's
@@ -97,7 +97,16 @@ export class ProposeTeamTool extends BaseMcpTool {
         true,
       );
     }
-    const outcome = await this.proposals.propose(runId, read.query);
+    const query = read.query;
+    const outcome =
+      'edits' in query
+        ? await this.proposals.proposeEdits(runId, {
+            slug: query.replaces,
+            edits: query.edits,
+            summary: query.summary,
+            reason: query.reason,
+          })
+        : await this.proposals.propose(runId, query);
     return this.text(
       proposeTeamResultText(outcome),
       outcome.status === 'refused',

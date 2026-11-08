@@ -3445,14 +3445,12 @@ const PREAMBLE_EXEMPT: Readonly<Record<string, string>> = {
     'companion of publish_action, named in its description',
   [HOST_STOP_MONITOR_TOOL]: 'companion of monitor, named in its description',
   [HOST_LIST_MONITORS_TOOL]: 'companion of monitor, named in its description',
-  list_projects: 'board helper the named board tools point to',
   board_vocabulary: 'board helper the named board tools point to',
   [HOST_ANALYZED_THREAD_TOOL]: 'analysis chats only; their brief names it',
   [HOST_RECOMMENDATIONS_TOOL]: 'analysis chats only; their brief names it',
   [HOST_RECOMMENDATION_MARKS_TOOL]: 'analysis chats only; their brief names it',
   [HOST_TEAM_CHANGE_TOOL]:
     'analysis and builder chats only; their brief names it',
-  [HOST_PROJECT_INSTRUCTIONS_TOOL]: 'analysis chats only; their brief names it',
 };
 
 describe('McpServerService — the host preamble names every tool', () => {

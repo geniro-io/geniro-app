@@ -16,7 +16,12 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { isHostBoardTool } from '../../agents/utils/host-board';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { Project } from '../../projects/entity/project.entity';
+import { PROJECT_INSTRUCTIONS_MAX } from '../../projects/projects.types';
 import { isBreakerOpen } from '../../projects/utils/breaker';
+import {
+  instructionsLength,
+  projectBlocksOf,
+} from '../../projects/utils/project-instruction-blocks';
 import { taskIdentifier } from '../../projects/utils/project-key';
 import { type AgentKind, AgentKindSchema } from '../../runs/runs.types';
 import { TaskBoardBroker } from '../../teams/services/task-board.broker';
@@ -168,7 +173,9 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
     rejectUnknownArgs(args, boardToolArgs(name));
     switch (name) {
       case 'list_projects':
-        return this.listProjects();
+        return args.project === undefined
+          ? this.listProjects()
+          : this.readProject(args.project);
       case 'board_vocabulary':
         return this.boardVocabulary(args);
       case 'list_tasks':
@@ -225,6 +232,27 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
         },
         cards: counts.get(project.id) ?? emptyCounts(),
       })),
+    );
+  }
+
+  private async readProject(ref: unknown): Promise<string> {
+    const em = this.em.fork();
+    const project = resolveProject(ref, await this.projectDao.listAll(em));
+    const blocks = projectBlocksOf(project);
+    return withJson(
+      `Project ${projectLabel(project)}, at instructions revision ${project.instructionsRevision}.`,
+      {
+        id: project.id,
+        key: project.taskKey,
+        name: project.name,
+        folder: project.folder,
+        description: project.description,
+        instructionBlocks: blocks,
+        instructionsRevision: project.instructionsRevision,
+        instructionsChars: instructionsLength(blocks),
+        instructionsMaxChars: PROJECT_INSTRUCTIONS_MAX,
+        runConfiguration: projectRunConfig(project),
+      },
     );
   }
 

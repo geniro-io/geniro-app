@@ -1039,6 +1039,11 @@ export interface TeamChangeProposalRequest {
   reason?: string;
 }
 
+export type TeamEditsProposalRequest = Pick<
+  TeamChangeProposalRequest,
+  'slug' | 'edits'
+> & { summary: string; reason: string };
+
 /** What `propose_team` tells the agent. */
 export type ProposalOutcome =
   | { status: 'shown'; proposal: TeamProposal }

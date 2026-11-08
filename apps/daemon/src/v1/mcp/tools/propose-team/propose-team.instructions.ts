@@ -34,10 +34,10 @@ export function proposeTeamInstructions(audience: ProposeTeamAudience): string {
     ].join('\n');
   }
   return [
-    "Propose a whole geniro team — CLI agents as members who may call each other — on a card the user approves. The daemon checks it the way a run start would and, only on the user's Approve, writes it to their team library (backing up a file it replaces). You never write the file yourself.",
-    `Use it when the user asks you to build, set up or change a team of agents. Read the library first with ${HOST_READ_TEAMS_TOOL}; to change an existing team, send it whole with \`replaces\` set to its slug.`,
+    "Propose a geniro team — CLI agents as members who may call each other — or a change to one in the library, on a card the user approves. The daemon checks it the way a run start would and, only on the user's Approve, writes it to their team library (backing up a file it replaces). You never write the file yourself.",
+    `Use it when the user asks you to build, set up or change a team of agents. Read the library first with ${HOST_READ_TEAMS_TOOL}. A new team goes whole in \`team\`. To change a team the library holds, send only the EDITS with \`replaces\` set to its slug and a one-line \`summary\` and \`reason\` — never the whole team, which runs to hundreds of kilobytes: read the parts you change with ${HOST_READ_TEAMS_TOOL} (\`members\`, \`blocks\`, \`search\`) and copy each \`find\` from the text between a field's \`===\` markers. The card shows the exact difference. Put everything one request needs on one card.`,
     `Do not use it to lay out a plan of work for this chat — use ${HOST_PLAN_TOOL} instead. It never runs a team.`,
     "Every member must state `approval`: 'auto' lets that member run tools without asking — choose it only where the user wants that; the card lists every such member for the user. Give each member a `name`, a public `role` (what it does — the others read it to decide whom to call) and private `instructions`. A team has `mode: lead` and exactly one trigger, `{kind: first-message, member}`, naming the member that coordinates; `instructionBlocks` reach their `audience` (`everyone` or member ids).",
-    `A proposal that could not run is refused with the reason, and no card is shown. ${ANSWER_ARRIVES}`,
+    `A proposal that could not run, and edits that do not apply, break the schema or the team rules, or change nothing, are refused with the reason, and no card is shown. ${ANSWER_ARRIVES}`,
   ].join('\n');
 }

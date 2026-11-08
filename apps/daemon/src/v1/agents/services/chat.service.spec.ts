@@ -2899,6 +2899,36 @@ describe('ChatService', () => {
       await settle(claude);
     });
 
+    it('offers the project-instructions card to an ordinary chat turn, and not to a builder chat with no runs', async () => {
+      const { service, claude, runDao, projectCards } = setup();
+      const ordinary = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+      });
+      expect(projectCards.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
+        false,
+      );
+      await service.sendMessage(ordinary.id, 'hello');
+      expect(projectCards.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
+        true,
+      );
+      await settle(claude);
+      expect(projectCards.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
+        false,
+      );
+
+      const builder = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+      });
+      runDao.runs.get(builder.id)!.editsTeamSlug = 'team';
+      await service.sendMessage(builder.id, 'hello');
+      expect(projectCards.canPropose(builder.id, SINGLE_AGENT_NODE)).toBe(
+        false,
+      );
+      await settle(claude);
+    });
+
     it('lets a builder chat turn change its own team, and only while the turn runs', async () => {
       const { service, claude, runDao, teamBuilders } = setup();
       const builder = await service.createChat({
@@ -6956,9 +6986,7 @@ describe('ChatService', () => {
       approval: 'auto',
       analysisSource: { runId: plain.id, seq: 3, working: false },
     });
-    await service.sendMessage(plain.id, 'hello');
     await service.sendMessage(analysis.id, 'analyse');
-    expect(projectCards.canPropose(plain.id, SINGLE_AGENT_NODE)).toBe(false);
     expect(projectCards.canPropose(analysis.id, SINGLE_AGENT_NODE)).toBe(true);
 
     const change = {

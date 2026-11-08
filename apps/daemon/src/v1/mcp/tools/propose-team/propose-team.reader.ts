@@ -6,7 +6,6 @@ import {
   TEAM_REASON_MAX,
   TEAM_SUMMARY_MAX,
   type TeamChangeProposalRequest,
-  type TeamProposalRequest,
 } from '../../../teams/teams.types';
 import type { ToolArgs } from '../../mcp.types';
 import { blocksField } from '../project-block-args';
@@ -37,7 +36,7 @@ const reasonField = z
  * replacement into a second team. The team itself is read whole and
  * checked by the service against the library's own schema.
  */
-const ProposeTeamArgsSchema = z
+const WholeTeamArgsSchema = z
   .object({
     team: z.record(z.string(), z.unknown()),
     replaces: z.string().min(1).optional(),
@@ -45,6 +44,21 @@ const ProposeTeamArgsSchema = z
     reason: reasonField.optional(),
   })
   .strict();
+
+export const TEAM_EDITS_READ_COPY =
+  'the team as read_teams answers it — copy a `find` from the text between a field’s `===` markers';
+
+const TeamEditsArgsSchema = z
+  .object({
+    replaces: z.string().min(1),
+    edits: editsField(TEAM_EDITS_READ_COPY),
+    summary: summaryField,
+    reason: reasonField,
+  })
+  .strict();
+
+export type ChatTeamProposal =
+  z.infer<typeof WholeTeamArgsSchema> | z.infer<typeof TeamEditsArgsSchema>;
 
 /**
  * A team builder chat's proposal: edits to its own team, never the
@@ -118,8 +132,20 @@ export function readProposeProjectOverlayArgs(
 /** The call's arguments, or what is wrong with them. Never throws. */
 export function readProposeTeamArgs(
   args: Record<string, unknown>,
-): ToolArgs<TeamProposalRequest> {
-  return readToolArgs(ProposeTeamArgsSchema, args);
+): ToolArgs<ChatTeamProposal> {
+  const given = Object.fromEntries(
+    Object.entries(args).filter(([, value]) => value !== null),
+  );
+  if ('edits' in given && 'team' in given) {
+    return {
+      ok: false,
+      error:
+        'send `team` for a new team, or `edits` with `replaces` for a change to one — never both',
+    };
+  }
+  return 'edits' in given
+    ? readToolArgs(TeamEditsArgsSchema, args)
+    : readToolArgs(WholeTeamArgsSchema, args);
 }
 
 /** A builder chat's call arguments, or what is wrong with them. Never throws. */

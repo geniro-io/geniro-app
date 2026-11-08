@@ -8,10 +8,12 @@ import {
   TeamSchema,
 } from '../../../teams/teams.types';
 import { CONFIG_DIR_TOKEN_PREFIX } from '../../../teams/utils/config-dir-redaction';
+import { editsField } from '../team-edit-args';
 import { toolInputSchema } from '../tool-args';
 import {
   ProposeProjectOverlayArgsSchema,
   ProposeTeamChangeArgsSchema,
+  TEAM_EDITS_READ_COPY,
 } from './propose-team.reader';
 
 /** Which chat is listing the tool: an ordinary one, a team's builder, or a project's own. */
@@ -84,24 +86,30 @@ export function proposeTeamSchema(
   const { $schema: _dialect, ...team } = z.toJSONSchema(TeamSchema, {
     io: 'input',
   });
+  const editsSchema = toolInputSchema(
+    z.object({ edits: editsField(TEAM_EDITS_READ_COPY) }),
+  );
   return {
     type: 'object',
     properties: {
       team: {
         ...team,
-        description: `The whole team, as the library file would hold it. Every member states its own \`approval\`. A \`configDir\` read from ${HOST_READ_TEAMS_TOOL} as "${CONFIG_DIR_TOKEN_PREFIX}…>" is sent back as that token (only when replacing that team); never guess a path.`,
+        description: `A NEW team, whole, as the library file would hold it. Every member states its own \`approval\`. To change a team the library holds, send \`edits\` with \`replaces\` instead — never the whole team. A \`configDir\` read from ${HOST_READ_TEAMS_TOOL} as "${CONFIG_DIR_TOKEN_PREFIX}…>" is sent back as that token; never guess a path.`,
       },
+      edits: (editsSchema.properties as Record<string, unknown>).edits,
       replaces: {
         type: 'string',
-        description: `The slug of the library team this proposal replaces, as ${HOST_READ_TEAMS_TOOL} names it. Leave it out for a new team.`,
+        description: `With \`edits\`: the slug of the library team they change, as ${HOST_READ_TEAMS_TOOL} names it. Leave it out for a new team.`,
       },
       summary: {
         type: 'string',
-        description: `One line for the card, at most ${TEAM_SUMMARY_MAX} characters: what this team does, or what the replacement changes.`,
+        description: `One line for the card, at most ${TEAM_SUMMARY_MAX} characters: what this team does, or what the change does. Required with \`edits\`.`,
       },
-      reason: { type: 'string', description: REASON_DESCRIPTION },
+      reason: {
+        type: 'string',
+        description: `${REASON_DESCRIPTION} Required with \`edits\`.`,
+      },
     },
-    required: ['team'],
     additionalProperties: false,
   };
 }

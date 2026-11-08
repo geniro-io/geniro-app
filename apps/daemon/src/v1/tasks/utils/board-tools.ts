@@ -222,10 +222,20 @@ const TOOLS: Readonly<Record<HostBoardTool, TaskBoardTool>> = {
       'cards inherit (agent, model, effort, approval mode, config directory, team — null means not set), its ' +
       'autopilot (whether it is ARMED and which column it takes work from), and how many cards each column holds. ' +
       'Use it when you need a project id or key, before creating a card, or to check whether a column is an armed ' +
-      'intake. Do not use it to read cards — list_tasks does that.',
+      'intake. With `project` it answers that one project with its description and its instructions as blocks — ' +
+      'what save_project_instructions changes. Do not use it to read cards — list_tasks does that.',
     inputSchema: {
       type: 'object',
-      properties: {},
+      properties: {
+        project: {
+          type: 'string',
+          description:
+            'One project — its id, its card key (e.g. "GEN", case-insensitive) or its exact name: answers it alone, ' +
+            'adding its description, its instruction blocks (id, title, text, in the order every run receives them), ' +
+            'their `instructionsRevision`, and `instructionsChars` of the `instructionsMaxChars` they may hold ' +
+            'together. Omit to list every project.',
+        },
+      },
       additionalProperties: false,
     },
   },

@@ -749,6 +749,110 @@ describe('UpdateService reporting', () => {
     expect(failure?.message).toContain('checksum mismatch');
   });
 
+  it('keeps a standing offer when a scheduled check fails, and logs the failure', async () => {
+    let feedUp = true;
+    const service = build({
+      fetchLatest: () =>
+        Promise.resolve(
+          feedUp
+            ? { ok: true, release: RELEASE, published: RELEASE.version }
+            : { ok: false, error: 'release feed returned HTTP 504' },
+        ),
+    });
+    await service.check();
+    expect(service.getState().phase).toBe('available');
+    const pushed = broadcasts.length;
+
+    feedUp = false;
+    await service.check({ announce: false });
+
+    expect(service.getState()).toMatchObject({
+      phase: 'available',
+      version: '1.4.0',
+      failedPhase: null,
+    });
+    expect(broadcasts).toHaveLength(pushed);
+    expect(
+      logged.find((l) => l.context.kind === 'update-check-failed')?.message,
+    ).toContain('HTTP 504');
+  });
+
+  it('keeps "up to date" when a scheduled check fails', async () => {
+    let feedUp = true;
+    const service = build({
+      currentVersion: () => '1.4.0',
+      fetchLatest: () =>
+        Promise.resolve(
+          feedUp
+            ? { ok: true, release: RELEASE, published: RELEASE.version }
+            : { ok: false, error: 'release feed returned HTTP 504' },
+        ),
+    });
+    await service.check();
+    expect(service.getState().phase).toBe('up-to-date');
+
+    feedUp = false;
+    await service.check({ announce: false });
+
+    expect(service.getState().phase).toBe('up-to-date');
+  });
+
+  it('reports a failed check the user pressed, over a standing offer', async () => {
+    let feedUp = true;
+    const service = build({
+      fetchLatest: () =>
+        Promise.resolve(
+          feedUp
+            ? { ok: true, release: RELEASE, published: RELEASE.version }
+            : { ok: false, error: 'release feed returned HTTP 504' },
+        ),
+    });
+    await service.check();
+
+    feedUp = false;
+    await service.check();
+
+    expect(service.getState()).toMatchObject({
+      phase: 'error',
+      failedPhase: 'checking',
+      message: 'release feed returned HTTP 504',
+    });
+  });
+
+  it('keeps the state and frees the latch when a scheduled check never answers', async () => {
+    vi.useFakeTimers();
+    let hang = false;
+    const service = build({
+      checkDeadlineMs: 1000,
+      fetchLatest: () =>
+        hang
+          ? new Promise<ReleaseLookup>(() => undefined)
+          : Promise.resolve({
+              ok: true,
+              release: RELEASE,
+              published: RELEASE.version,
+            }),
+    });
+    await service.check();
+    expect(service.getState().phase).toBe('available');
+
+    hang = true;
+    void service.check({ announce: false });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(service.getState().phase).toBe('available');
+    expect(
+      logged.find((l) => l.context.kind === 'update-timed-out')?.message,
+    ).toContain('did not finish');
+
+    hang = false;
+    await service.check();
+    expect(service.getState().phase).toBe('available');
+    expect(
+      logged.filter((l) => l.context.kind === 'update-timed-out'),
+    ).toHaveLength(1);
+  });
+
   it('writes the check failure the user never sees a banner for', async () => {
     const service = build({
       fetchLatest: () => Promise.resolve({ ok: false, error: 'HTTP 503' }),

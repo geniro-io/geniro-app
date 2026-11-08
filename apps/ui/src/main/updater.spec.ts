@@ -269,6 +269,21 @@ describe('fetchLatestRelease', () => {
     expect(!lookup.ok && lookup.error).toContain('network down');
   });
 
+  it('names GitHub and the wait when the feed does not answer in time', async () => {
+    const timedOut = AbortSignal.timeout(0);
+    await new Promise((resolve) => {
+      timedOut.addEventListener('abort', resolve);
+    });
+    mockFetch(() => Promise.reject(timedOut.reason as Error));
+
+    const lookup = await fetchLatestRelease();
+
+    expect(lookup).toEqual({
+      ok: false,
+      error: 'GitHub did not answer within 10s',
+    });
+  });
+
   it('maps an unreadable tag to a structured error', async () => {
     mockFetch(() =>
       feedResponse([{ tag_name: 42, assets: [asset('Geniro-x-mac.zip')] }]),

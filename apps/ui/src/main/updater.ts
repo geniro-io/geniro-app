@@ -53,6 +53,13 @@ const RELEASES_API =
  */
 const CHECK_TIMEOUT_MS = 10_000;
 
+function feedFailure(err: unknown): string {
+  if (err instanceof Error && err.name === 'TimeoutError') {
+    return `GitHub did not answer within ${CHECK_TIMEOUT_MS / 1000}s`;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** One downloadable file on a release. */
 export interface ReleaseAsset {
   name: string;
@@ -213,10 +220,7 @@ export async function fetchLatestRelease(): Promise<ReleaseLookup> {
       signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
     });
   } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
+    return { ok: false, error: feedFailure(err) };
   }
   if (!res.ok) {
     return { ok: false, error: `release feed returned HTTP ${res.status}` };
@@ -226,10 +230,7 @@ export async function fetchLatestRelease(): Promise<ReleaseLookup> {
   try {
     body = await res.json();
   } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
+    return { ok: false, error: feedFailure(err) };
   }
   if (!Array.isArray(body)) {
     return { ok: false, error: 'could not read the release feed' };

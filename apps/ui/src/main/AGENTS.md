@@ -132,7 +132,7 @@ Smaller rules:
 - A release without `SHA256SUMS.txt` is refused.
 - `fetchLatestRelease` reads the release list, filters drafts and pre-releases, and orders by parsed version. It answers both `release` (installable) and `published` (newest tag).
 - `ready` is an ending: `check()` returns early.
-- Automatic checks are silent unless the state changed. `emit` broadcasts only on a real difference.
+- Automatic checks are silent unless the state changed. `emit` broadcasts only on a real difference. One that fails or times out changes nothing, so a standing offer or status stays; only a pressed check reports an error.
 - `canInstall` is asked of the filesystem on each use. A translocated, read-only or other-account install gets the `brew upgrade --cask geniro` sentence instead.
 - Main owns the state, and the renderer reports presses. Every non-terminal phase has a deadline. A trip bumps `attempt` and aborts the work.
 - `sweepUpdateDebris` runs at launch and matches only the names this code writes.

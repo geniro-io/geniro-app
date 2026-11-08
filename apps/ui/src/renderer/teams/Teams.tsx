@@ -2123,6 +2123,9 @@ export function Teams({
               configDir: null,
               model: null,
               effort: null,
+              contextWindow: null,
+              autoCompactPercent: null,
+              modelParameters: {},
               approval: null,
             }}
             recentConfigDirsFor={(kind) => recentConfigDirs[kind] ?? []}

@@ -32,16 +32,40 @@ import {
   approvalOptions,
   PLAN_WITHHELD,
 } from './approval-mode-select';
+import { AutoCompactSelect } from './auto-compact-select';
 import { isChatApprovalMode, targetAgentKind } from './composer-values';
 import { ConfigDirSelect } from './config-dir-select';
+import { ContextWindowSelect } from './context-window-select';
 import { shortenPath } from './directory-select';
 import { EffortSelect } from './effort-select';
+import { setupFieldsOf } from './improvement-chat-setup';
+import {
+  ModelParameterSelect,
+  withModelParameter,
+} from './model-parameter-select';
 import { ModelSelect } from './model-select';
 import { ModelSettingsPendingRow } from './model-settings-pending-row';
 import { TargetSelect } from './target-select';
 import { formatDuration } from './turn-duration';
+import { useAgentContextWindows } from './use-agent-context-windows';
 import { useAgentEfforts } from './use-agent-efforts';
+import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
+
+/** What a model, profile or agent change clears: these belong to the model that offered them. */
+const MODEL_BOUND_BLANK = {
+  contextWindow: null,
+  modelParameters: {},
+} satisfies Partial<AnalysisConfig>;
+
+/** A new CLI starts blank; it need not honour the mode picked for the last one. */
+const AGENT_BLANK = {
+  ...MODEL_BOUND_BLANK,
+  model: null,
+  effort: null,
+  configDir: null,
+  approval: null,
+} satisfies Partial<AnalysisConfig>;
 
 /**
  * The mode an analysis starts in until the user picks another. Twin of the
@@ -79,7 +103,7 @@ export type AnalysisSubject =
  *
  * Starts a NEW chat linked to its subject (`POST /v1/chats/:runId/analyses`,
  * `POST /v1/teams/:slug/analyses`); the analysis itself happens there.
- * Opens on the last analysis choice
+ * Opens on the setup last used in an analysis or a team's or project's chat
  * (`Settings.lastAnalysisConfig`), else the composer's own setup — except the
  * approval mode, which starts on auto-approve rather than the composer's: the
  * analysis works unwatched in its popup, where a card per read stalls it.
@@ -182,6 +206,18 @@ export function AnalyzeThreadDialog({
     config.model,
     configDir,
   );
+  const windows = useAgentContextWindows(
+    agentsApi,
+    open ? kind : null,
+    config.model,
+    configDir,
+  );
+  const parameters = useAgentModelParameters(
+    agentsApi,
+    open ? kind : null,
+    config.model,
+    configDir,
+  );
   const isTeam = team !== null || source?.teamId != null;
   const approval: ChatApprovalMode = isChatApprovalMode(config.approval)
     ? config.approval
@@ -242,9 +278,7 @@ export function AnalyzeThreadDialog({
       const dto = {
         agentKind: kind,
         approval,
-        ...(config.model === null ? {} : { model: config.model }),
-        ...(config.effort === null ? {} : { effort: config.effort }),
-        ...(configDir === null ? {} : { configDir }),
+        ...setupFieldsOf({ ...config, configDir }),
         ...(folder === null ? {} : { cwd: folder }),
         ...(focus.trim() === '' ? {} : { focus: focus.trim() }),
         ...(await runSettings()),
@@ -342,14 +376,7 @@ export function AnalyzeThreadDialog({
               cliDetections={cliDetections}
               aria-label="Agent that runs the analysis"
               onChange={(target) =>
-                set({
-                  agent: targetAgentKind(target),
-                  model: null,
-                  effort: null,
-                  configDir: null,
-                  // Another CLI need not honour the mode picked for this one.
-                  approval: null,
-                })
+                set({ ...AGENT_BLANK, agent: targetAgentKind(target) })
               }
             />
           </SettingRow>
@@ -361,7 +388,9 @@ export function AnalyzeThreadDialog({
                 configProfiles={configProfilesFor(kind)}
                 unavailableReason={configDirReasonFor(kind)}
                 ariaLabel="Profile the analysis runs as"
-                onChange={(next) => set({ configDir: next, model: null })}
+                onChange={(next) =>
+                  set({ ...MODEL_BOUND_BLANK, configDir: next, model: null })
+                }
                 onBrowse={() => browse((chosen) => set({ configDir: chosen }))}
               />
             </SettingRow>
@@ -372,7 +401,9 @@ export function AnalyzeThreadDialog({
               models={models}
               loading={modelsLoading}
               value={config.model}
-              onChange={(model) => set({ model, effort: null })}
+              onChange={(model) =>
+                set({ ...MODEL_BOUND_BLANK, model, effort: null })
+              }
             />
           </SettingRow>
           {!sameVendorJudge ? null : (
@@ -398,13 +429,7 @@ export function AnalyzeThreadDialog({
                       variant="outline"
                       disabled={starting}
                       onClick={() =>
-                        set({
-                          agent: alternative,
-                          model: null,
-                          effort: null,
-                          configDir: null,
-                          approval: null,
-                        })
+                        set({ ...AGENT_BLANK, agent: alternative })
                       }>
                       Use {agentLabelOf?.(alternative) ?? alternative}
                     </Button>
@@ -413,17 +438,57 @@ export function AnalyzeThreadDialog({
               )}
             </div>
           )}
-          {efforts.loading ? (
+          {efforts.loading || windows.loading || parameters.loading ? (
             <ModelSettingsPendingRow />
-          ) : efforts.efforts.length === 0 ? null : (
-            <SettingRow label="Effort">
-              <EffortSelect
-                efforts={efforts.efforts}
-                value={config.effort}
-                onChange={(effort) => set({ effort })}
-              />
-            </SettingRow>
+          ) : (
+            <>
+              {efforts.efforts.length === 0 ? null : (
+                <SettingRow label="Effort">
+                  <EffortSelect
+                    efforts={efforts.efforts}
+                    value={config.effort}
+                    onChange={(effort) => set({ effort })}
+                  />
+                </SettingRow>
+              )}
+              {windows.windows.length === 0 ? null : (
+                <SettingRow label="Context window">
+                  <ContextWindowSelect
+                    windows={windows.windows}
+                    value={config.contextWindow}
+                    onChange={(contextWindow) => set({ contextWindow })}
+                  />
+                </SettingRow>
+              )}
+              {parameters.parameters.map((parameter) =>
+                parameter.values.length === 0 ? null : (
+                  <SettingRow key={parameter.id} label={parameter.label}>
+                    <ModelParameterSelect
+                      parameter={parameter}
+                      value={config.modelParameters[parameter.id] ?? null}
+                      showAxisName={false}
+                      onChange={(value) =>
+                        set({
+                          modelParameters: withModelParameter(
+                            config.modelParameters,
+                            parameter.id,
+                            value,
+                          ),
+                        })
+                      }
+                    />
+                  </SettingRow>
+                ),
+              )}
+            </>
           )}
+          <SettingRow label="Auto-compact">
+            <AutoCompactSelect
+              value={config.autoCompactPercent}
+              ariaLabel="Auto-compact of the analysis"
+              onChange={(autoCompactPercent) => set({ autoCompactPercent })}
+            />
+          </SettingRow>
           {approvalPickable ? (
             <SettingRow label="Approval">
               <ApprovalModeSelect

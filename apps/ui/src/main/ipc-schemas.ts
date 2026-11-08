@@ -356,12 +356,24 @@ export const settingsPatchSchema = z.strictObject({
       configDir: absolutePath.nullable(),
       model: z.string().min(1).max(64).nullable(),
       effort: z.string().min(1).max(64).nullable(),
-      // Defaulted, so a choice saved before the dialog offered a mode still
-      // reads (as auto-approve) rather than being dropped whole.
+      // These four are defaulted, so a choice saved before they were part of it
+      // still reads (a missing mode as auto-approve) rather than being dropped whole.
+      contextWindow: z.string().min(1).max(64).nullable().default(null),
+      autoCompactPercent: z
+        .number()
+        .int()
+        .min(MIN_AUTO_COMPACT_PERCENT)
+        .max(MAX_AUTO_COMPACT_PERCENT)
+        .nullable()
+        .default(null),
+      modelParameters: z
+        .record(z.string().min(1).max(64), z.string().min(1).max(200))
+        .default({}),
       approval: z.string().min(1).max(32).nullable().default(null),
     })
     .nullable()
     .optional(),
+  lastChangeChatApproval: z.string().min(1).max(32).nullable().optional(),
   lastMemoryTriage: z
     .strictObject({
       agent: cliKind,

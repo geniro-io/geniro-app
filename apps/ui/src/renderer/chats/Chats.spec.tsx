@@ -20418,6 +20418,27 @@ describe('Chats — one hosted conversation', () => {
     ).not.toBeNull();
   });
 
+  it('tells the surface a chip changed the conversation’s settings, and not a refused one', async () => {
+    const { client } = makeClient();
+    const onRunSettingsChanged = vi.fn();
+    const updated = { ...HOSTED, model: 'opus' };
+    api.updateChatSettings.mockResolvedValueOnce(updated);
+    const container = await mount(client, undefined, {
+      hosted: hostedThread({ onRunSettingsChanged }),
+    });
+
+    await pickSetting(container, 'Model', 'opus');
+
+    expect(onRunSettingsChanged).toHaveBeenCalledTimes(1);
+    expect(onRunSettingsChanged).toHaveBeenCalledWith(updated);
+
+    api.updateChatSettings.mockRejectedValueOnce(new Error('refused'));
+    await pickSetting(container, 'Model', 'default model');
+
+    expect(api.updateChatSettings).toHaveBeenCalledTimes(2);
+    expect(onRunSettingsChanged).toHaveBeenCalledTimes(1);
+  });
+
   it('says what an empty conversation is for, in the composer the surface names', async () => {
     const { client } = makeClient();
 

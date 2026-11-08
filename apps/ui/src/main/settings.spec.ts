@@ -125,12 +125,39 @@ describe('readSettings', () => {
 
     expect(readSettings().lastAnalysisConfig).toEqual({
       ...choice,
+      contextWindow: null,
+      autoCompactPercent: null,
+      modelParameters: {},
       approval: null,
     });
 
     writeRaw({ lastAnalysisConfig: { ...choice, approval: 'ask' } });
 
     expect(readSettings().lastAnalysisConfig?.approval).toBe('ask');
+  });
+
+  it('a remembered setup keeps its window, threshold and model parameters', () => {
+    const setup = {
+      agent: 'claude',
+      configDir: null,
+      model: 'opus',
+      effort: null,
+      contextWindow: '1m',
+      autoCompactPercent: 80,
+      modelParameters: { fast: 'on' },
+      approval: 'auto',
+    };
+    writeRaw({ lastAnalysisConfig: setup });
+
+    expect(readSettings().lastAnalysisConfig).toEqual(setup);
+  });
+
+  it('a change chat’s approval mode survives a read', () => {
+    expect(readSettings().lastChangeChatApproval).toBeNull();
+
+    writeRaw({ lastChangeChatApproval: 'ask' });
+
+    expect(readSettings().lastChangeChatApproval).toBe('ask');
   });
 
   it('a memory sort’s choice survives a read, and a malformed one costs only that key', () => {

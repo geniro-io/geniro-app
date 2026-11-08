@@ -8,6 +8,7 @@ import { useLatestCallback } from '../components/use-latest-callback';
 import type { DaemonApis } from '../daemon-api';
 import type { AnalysedTeamSubject } from './analyze-thread-dialog';
 import type { HostedThread } from './hosted-thread';
+import { rememberAnalysisSetup } from './improvement-chat-setup';
 
 /**
  * A thread's analysis, in a popup over the thread it reads.
@@ -121,6 +122,7 @@ export function AnalysisDialog({
               composerPlaceholder:
                 'Ask about a finding, or what to change instead…',
               onTurnSettled,
+              onRunSettingsChanged: rememberAnalysisSetup,
               headerActions,
             })}
           </Fragment>

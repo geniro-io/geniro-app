@@ -266,13 +266,17 @@ export interface OnboardingProgress {
   brief: string;
 }
 
-/** Who runs an analysis — see `Settings.lastAnalysisConfig`. */
+/** Who runs an analysis or a change chat — see `Settings.lastAnalysisConfig`. */
 export interface AnalysisConfig {
   agent: CliKind;
   /** The profile (config directory), or null for the CLI's own. */
   configDir: string | null;
   model: string | null;
   effort: string | null;
+  contextWindow: string | null;
+  /** The auto-compact threshold, or null for never. */
+  autoCompactPercent: number | null;
+  modelParameters: Record<string, string>;
   /**
    * The tool-approval mode, opaque for `lastApprovalMode`'s reason; null =
    * auto-approve, the analysis default (it works unwatched in its popup).
@@ -486,11 +490,19 @@ export interface Settings {
    */
   lastAutoCompactPercent: number | null;
   /**
-   * The "Analyze thread" dialog's last choice, so the next analysis opens on
-   * it; null until one has been started (the dialog then starts from the
-   * composer's setup).
+   * The setup last used in a chat that improves something: a thread's or a
+   * team's analysis, a team's or a project's chat. Written when one starts from
+   * the analysis dialog and when its settings are changed in the chat; the next
+   * of any of them opens on it. Null until then (the dialog starts from the
+   * composer's setup, a change chat from the CLI's defaults).
    */
   lastAnalysisConfig: AnalysisConfig | null;
+  /**
+   * The approval mode last chosen in a team's or a project's chat, opaque for
+   * `lastApprovalMode`'s reason. Apart from `lastAnalysisConfig.approval`, whose
+   * auto-approve must not reach a chat whose changes wait on the user's press.
+   */
+  lastChangeChatApproval: string | null;
   /**
    * The memory import's "Sort with AI" last choice, so the next sort opens on
    * it; null until one has been made.
@@ -808,6 +820,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastContextWindows: {},
   lastAutoCompactPercent: null,
   lastAnalysisConfig: null,
+  lastChangeChatApproval: null,
   lastMemoryTriage: null,
   lastModelParameters: {},
   cliPaths: {},

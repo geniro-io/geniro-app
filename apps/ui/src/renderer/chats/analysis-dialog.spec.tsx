@@ -85,6 +85,33 @@ function thread(): HostedThread {
 }
 
 describe('AnalysisDialog', () => {
+  it('remembers a setup changed in the analysis’s chat for the next one', async () => {
+    const updateSettings = vi.fn().mockResolvedValue({});
+    window.geniro = createPreloadStub({ updateSettings });
+    await paint({ kind: 'thread', run: SOURCE });
+
+    await thread().onRunSettingsChanged!({
+      id: 'a1',
+      agentKind: 'claude',
+      configDir: null,
+      model: 'opus',
+      effort: 'xhigh',
+      contextWindow: null,
+      autoCompactPercent: null,
+      modelParameters: {},
+      approval: 'auto',
+    } as RunDto);
+
+    expect(updateSettings).toHaveBeenCalledWith({
+      lastAnalysisConfig: expect.objectContaining({
+        agent: 'claude',
+        model: 'opus',
+        effort: 'xhigh',
+        approval: 'auto',
+      }),
+    });
+  });
+
   it('opens a thread’s analysis by the thread it reads', async () => {
     await paint({ kind: 'thread', run: SOURCE });
 

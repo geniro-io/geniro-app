@@ -38,6 +38,9 @@ const COMPOSER: AnalysisConfig = {
   configDir: null,
   model: 'opus',
   effort: null,
+  contextWindow: null,
+  autoCompactPercent: null,
+  modelParameters: {},
   approval: null,
 };
 
@@ -180,6 +183,9 @@ describe('AnalyzeThreadDialog', () => {
         configDir: null,
         model: 'gpt-5.5',
         effort: 'high',
+        contextWindow: '1m',
+        autoCompactPercent: 80,
+        modelParameters: { fast: 'on' },
         approval: 'acceptEdits',
       },
     };
@@ -192,8 +198,44 @@ describe('AnalyzeThreadDialog', () => {
       agentKind: 'codex',
       model: 'gpt-5.5',
       effort: 'high',
+      contextWindow: '1m',
+      autoCompactPercent: 80,
+      modelParameters: { fast: 'on' },
       approval: 'acceptEdits',
     });
+    expect(updates[0]!.lastAnalysisConfig).toMatchObject({
+      contextWindow: '1m',
+      autoCompactPercent: 80,
+      modelParameters: { fast: 'on' },
+    });
+  });
+
+  it('shows the remembered auto-compact threshold and changes it', async () => {
+    settings = {
+      lastAnalysisConfig: { ...COMPOSER, autoCompactPercent: 80 },
+    };
+    const analyzeThread = vi.fn().mockResolvedValue({ id: 'analysis' });
+    await render(source(), analyzeThread);
+
+    const trigger = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Auto-compact of the analysis"]',
+    )!;
+    expect(trigger.textContent).toContain('80');
+    act(() => {
+      trigger.click();
+    });
+    const never = [
+      ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((option) => !/\d/.test(option.textContent ?? ''))!;
+    await act(async () => {
+      never.click();
+    });
+    await press('Start analysis');
+
+    expect(analyzeThread.mock.calls[0]![0].analyzeThreadDto).not.toHaveProperty(
+      'autoCompactPercent',
+    );
+    expect(updates[0]!.lastAnalysisConfig?.autoCompactPercent).toBeNull();
   });
 
   it('says what will be suggested by the kind of thread', async () => {

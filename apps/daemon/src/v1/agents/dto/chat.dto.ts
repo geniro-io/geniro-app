@@ -194,6 +194,9 @@ export const analyzeThreadSchema = z.object({
   approval: ChatApprovalModeSchema.optional(),
   model: z.string().min(1).optional(),
   effort: z.string().min(1).optional(),
+  contextWindow: z.string().min(1).optional(),
+  autoCompactPercent: AutoCompactPercentSchema.optional(),
+  modelParameters: z.record(z.string(), z.string()).optional(),
   configDir: z.string().min(1).optional(),
   cwd: z.string().min(1).optional(),
   focus: z

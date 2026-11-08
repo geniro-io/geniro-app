@@ -1639,6 +1639,24 @@ export interface AnalyzeTeamDto {
      * @type {string}
      * @memberof AnalyzeTeamDto
      */
+    contextWindow?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof AnalyzeTeamDto
+     */
+    autoCompactPercent?: number;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof AnalyzeTeamDto
+     */
+    modelParameters?: { [key: string]: string; };
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeTeamDto
+     */
     configDir?: string;
     /**
      * 
@@ -1709,6 +1727,24 @@ export interface AnalyzeThreadDto {
      * @memberof AnalyzeThreadDto
      */
     effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AnalyzeThreadDto
+     */
+    contextWindow?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof AnalyzeThreadDto
+     */
+    autoCompactPercent?: number;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof AnalyzeThreadDto
+     */
+    modelParameters?: { [key: string]: string; };
     /**
      * 
      * @type {string}

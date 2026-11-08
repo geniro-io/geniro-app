@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import { simulateSleep } from '../../../__tests__/simulate-sleep';
 import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
-import type { AgentEvent, TurnIo } from '../adapters/adapter.types';
+import type {
+  AgentEvent,
+  CommandRecord,
+  TurnIo,
+} from '../adapters/adapter.types';
 import type { PlainProcess } from './run-process-scan';
 import {
   COMMAND_GROUP_READ_DELAY_MS,
@@ -5327,6 +5331,405 @@ describe('runCliSession — a CLI that reports a backgrounded command finished',
   });
 });
 
+describe('runCliSession — a CLI that says nothing while it waits on a command it detached', () => {
+  const QUIET_MS = 1000;
+  const HEREDOC = "python3 << 'PY'\nimport time\nPY";
+  const WRAPPER = { pid: 500, ppid: 999, args: '/bin/zsh -c __cursor_command' };
+
+  const mapper = (obj: unknown): AgentEvent[] => {
+    const row = obj as {
+      run?: string;
+      id?: string;
+      answered?: string;
+      says?: string;
+      done?: boolean;
+    };
+    if (typeof row.run === 'string') {
+      return [
+        {
+          type: 'tool_call',
+          id: row.id ?? 'call-1',
+          name: 'shell',
+          input: { command: row.run },
+          kind: 'execute',
+        },
+      ];
+    }
+    if (typeof row.answered === 'string') {
+      return [
+        {
+          type: 'tool_result',
+          id: row.answered,
+          name: null,
+          result: { exitCode: 0, stdout: '', stderr: '' },
+          isError: false,
+        },
+      ];
+    }
+    if (typeof row.says === 'string') {
+      return [{ type: 'text_delta', text: row.says }];
+    }
+    return row.done === true ? [COMPLETE] : [];
+  };
+
+  /** A turn past a backgrounded heredoc: answered, and still running. */
+  function waitingTurn(
+    options: {
+      silent?: boolean;
+      running?: boolean;
+      onQuiet?: () => AgentEvent[] | null;
+      /** Holds each process-table read until the test lets it answer. */
+      heldReads?: boolean;
+    } = {},
+  ) {
+    vi.useFakeTimers();
+    const machine = {
+      running: options.running ?? true,
+      release: (): void => {},
+    };
+    const listProcesses = vi.fn(async () => {
+      if (options.heldReads) {
+        await new Promise<void>((resolve) => {
+          machine.release = resolve;
+        });
+      }
+      return machine.running ? [WRAPPER] : [];
+    });
+    const { spawn, child } = fakeSpawn(new FakeChild(999));
+    const events: AgentEvent[] = [];
+    const session = runCliSession({
+      command: 'cursor-agent',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper,
+      spawn,
+      detectDetachedShells: true,
+      silentCommandWait: options.silent ?? true,
+      commandWaitQuietMs: QUIET_MS,
+      listProcesses,
+      listProcessGroups: () => Promise.resolve(null),
+      readCommandRecords: async () => [
+        { pid: 500, command: HEREDOC, running: machine.running },
+      ],
+      onBetweenTurnEvent: (e) => events.push(e),
+    });
+    const handle = session.startTurn({
+      onEvent: (e) => events.push(e),
+      onQuiet: options.onQuiet ?? (() => []),
+      sendFollowUp: () => true,
+    });
+    line(child, { run: HEREDOC });
+    line(child, { answered: 'call-1' });
+    const holds = () =>
+      events.flatMap((e) => (e.type === 'turn_held' ? [e] : []));
+    return { session, child, events, handle, holds, machine, listProcesses };
+  }
+
+  it('announces the wait once the turn has gone quiet with the command alive', async () => {
+    const turn = waitingTurn();
+    await vi.advanceTimersByTimeAsync(QUIET_MS - 1);
+    expect(turn.holds()).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(turn.holds()).toEqual([
+      { type: 'turn_held', open: 1, unit: 'command' },
+    ]);
+    expect(turn.events.some((e) => e.type === 'shell_open')).toBe(true);
+  });
+
+  it('writes what the agent said ahead of the announcement', async () => {
+    const turn = waitingTurn({
+      onQuiet: () => [{ type: 'reasoning', text: 'I will wait.' }],
+    });
+    await vi.advanceTimersByTimeAsync(QUIET_MS);
+
+    const kinds = turn.events.map((e) => e.type);
+    expect(kinds.indexOf('reasoning')).toBeGreaterThan(-1);
+    expect(kinds.indexOf('reasoning')).toBeLessThan(kinds.indexOf('turn_held'));
+  });
+
+  it('writes the words and announces no wait with no command alive', async () => {
+    const turn = waitingTurn({
+      running: false,
+      onQuiet: () => [{ type: 'reasoning', text: 'Still thinking.' }],
+    });
+    await vi.advanceTimersByTimeAsync(QUIET_MS);
+
+    expect(turn.events.some((e) => e.type === 'reasoning')).toBe(true);
+    expect(turn.holds()).toEqual([]);
+  });
+
+  it('asks the table nothing while the driver says the quiet is explained', async () => {
+    const turn = waitingTurn({ onQuiet: () => null });
+    await vi.advanceTimersByTimeAsync(QUIET_MS * 3);
+
+    expect(turn.listProcesses).not.toHaveBeenCalled();
+    expect(turn.holds()).toEqual([]);
+  });
+
+  it('does nothing for a CLI whose waits are not silent', async () => {
+    const turn = waitingTurn({ silent: false });
+    await vi.advanceTimersByTimeAsync(QUIET_MS * 3);
+
+    expect(turn.holds()).toEqual([]);
+  });
+
+  it('ends the wait when the agent speaks again', async () => {
+    const turn = waitingTurn();
+    await vi.advanceTimersByTimeAsync(QUIET_MS);
+
+    line(turn.child, { says: 'It finished.' });
+
+    expect(turn.holds().at(-1)).toEqual({ type: 'turn_held', open: 0 });
+    const kinds = turn.events.map((e) => e.type);
+    expect(kinds.lastIndexOf('turn_held')).toBeLessThan(
+      kinds.lastIndexOf('text_delta'),
+    );
+  });
+
+  it('ends the wait when a message reaches the agent', async () => {
+    const turn = waitingTurn();
+    await vi.advanceTimersByTimeAsync(QUIET_MS);
+
+    expect(turn.handle?.sendUserMessage({ text: '?' })).toBe(true);
+
+    expect(turn.holds().at(-1)).toEqual({ type: 'turn_held', open: 0 });
+  });
+
+  it('ends the wait when the command itself ends', async () => {
+    const turn = waitingTurn();
+    await vi.advanceTimersByTimeAsync(QUIET_MS);
+
+    turn.machine.running = false;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(turn.holds().at(-1)).toEqual({ type: 'turn_held', open: 0 });
+    expect(turn.events.some((e) => e.type === 'shell_info')).toBe(true);
+  });
+
+  it('lets a wait outlast the silence deadline, past the CLI’s own limit', async () => {
+    const turn = waitingTurn();
+    const failures = () => turn.events.filter((e) => e.type === 'error');
+    await vi.advanceTimersByTimeAsync(149 * 60 * 1000);
+    expect(failures()).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+
+    expect(failures()).toEqual([
+      {
+        type: 'error',
+        message:
+          'cursor-agent produced nothing for 150 minutes — giving up on the turn',
+      },
+    ]);
+  });
+
+  it('gives the agent a full window to answer once its wait ends', async () => {
+    const turn = waitingTurn();
+    await vi.advanceTimersByTimeAsync(59 * 60 * 1000);
+    turn.machine.running = false;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(turn.holds().at(-1)).toEqual({ type: 'turn_held', open: 0 });
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+    expect(turn.events.filter((e) => e.type === 'error')).toEqual([]);
+  });
+
+  it('stretches no silence for a command an earlier turn started', async () => {
+    const turn = waitingTurn();
+    line(turn.child, { done: true });
+    await turn.handle?.done;
+    const events: AgentEvent[] = [];
+    turn.session.startTurn({
+      onEvent: (e) => events.push(e),
+      onQuiet: () => [],
+    });
+    await vi.advanceTimersByTimeAsync(QUIET_MS);
+    expect(events).toContainEqual({
+      type: 'turn_held',
+      open: 1,
+      unit: 'command',
+    });
+
+    await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      {
+        type: 'error',
+        message:
+          'cursor-agent produced nothing for 30 minutes — giving up on the turn',
+      },
+    ]);
+  });
+
+  it('counts down as its commands end', async () => {
+    vi.useFakeTimers();
+    const live = new Set([500, 600]);
+    const { spawn, child } = fakeSpawn(new FakeChild(999));
+    const events: AgentEvent[] = [];
+    const session = runCliSession({
+      command: 'cursor-agent',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper,
+      spawn,
+      detectDetachedShells: true,
+      silentCommandWait: true,
+      commandWaitQuietMs: QUIET_MS,
+      listProcesses: async () =>
+        [...live].map((pid) => ({ pid, ppid: 999, args: 'wrapper' })),
+      listProcessGroups: () => Promise.resolve(null),
+      readCommandRecords: async () => [
+        { pid: 500, command: 'first', running: live.has(500) },
+        { pid: 600, command: 'second', running: live.has(600) },
+      ],
+    });
+    session.startTurn({ onEvent: (e) => events.push(e), onQuiet: () => [] });
+    line(child, { run: 'first', id: 'a' });
+    line(child, { answered: 'a' });
+    line(child, { run: 'second', id: 'b' });
+    line(child, { answered: 'b' });
+    await vi.advanceTimersByTimeAsync(QUIET_MS);
+    live.delete(500);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(events.filter((e) => e.type === 'turn_held')).toEqual([
+      { type: 'turn_held', open: 2, unit: 'command' },
+      { type: 'turn_held', open: 1, unit: 'command' },
+    ]);
+  });
+
+  describe('while the table is being read', () => {
+    async function midReading() {
+      const turn = waitingTurn({ heldReads: true });
+      await vi.advanceTimersByTimeAsync(QUIET_MS);
+      expect(turn.listProcesses).toHaveBeenCalledTimes(1);
+      return turn;
+    }
+
+    it('announces no wait when the agent spoke meanwhile', async () => {
+      const turn = await midReading();
+      line(turn.child, { says: 'Still going.' });
+      turn.machine.release();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(turn.events.some((e) => e.type === 'shell_open')).toBe(true);
+      expect(turn.holds()).toEqual([]);
+    });
+
+    it('announces no wait when a message reached the agent meanwhile', async () => {
+      const turn = await midReading();
+      expect(turn.handle?.sendUserMessage({ text: '?' })).toBe(true);
+      turn.machine.release();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(turn.holds()).toEqual([]);
+    });
+
+    it('announces no wait once the user has pressed Stop', async () => {
+      const turn = await midReading();
+      turn.handle?.cancel();
+      turn.machine.release();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(turn.holds()).toEqual([]);
+    });
+
+    it('reads again for an ask that came meanwhile, opening each command once', async () => {
+      const turn = await midReading();
+      line(turn.child, { done: true });
+      turn.machine.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(turn.listProcesses).toHaveBeenCalledTimes(2);
+      turn.machine.release();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(turn.events.filter((e) => e.type === 'shell_open')).toHaveLength(
+        1,
+      );
+    });
+  });
+
+  it('still gives up after one window with nothing to wait on', async () => {
+    const turn = waitingTurn({ running: false });
+    await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+
+    expect(turn.events.filter((e) => e.type === 'error')).toEqual([
+      {
+        type: 'error',
+        message:
+          'cursor-agent produced nothing for 30 minutes — giving up on the turn',
+      },
+    ]);
+  });
+
+  /** A session whose table holds the wrapper and whose CLI records these. */
+  function recordedSession(records: readonly CommandRecord[]) {
+    vi.useFakeTimers();
+    const { spawn, child } = fakeSpawn(new FakeChild(999));
+    const events: AgentEvent[] = [];
+    const session = runCliSession({
+      command: 'cursor-agent',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper,
+      spawn,
+      detectDetachedShells: true,
+      silentCommandWait: true,
+      commandWaitQuietMs: QUIET_MS,
+      listProcesses: async () => [WRAPPER],
+      listProcessGroups: () => Promise.resolve(null),
+      readCommandRecords: async () => records,
+    });
+    session.startTurn({ onEvent: (e) => events.push(e), onQuiet: () => [] });
+    return { child, events };
+  }
+
+  it('leaves a finished call alone while a call written alike runs unanswered', async () => {
+    const { child, events } = recordedSession([
+      { pid: 400, command: HEREDOC, running: false },
+      { pid: 500, command: HEREDOC, running: true },
+    ]);
+    line(child, { run: HEREDOC, id: 'done-earlier' });
+    line(child, { answered: 'done-earlier' });
+    line(child, { run: HEREDOC, id: 'still-open' });
+
+    await vi.advanceTimersByTimeAsync(QUIET_MS);
+
+    expect(events.some((e) => e.type === 'shell_open')).toBe(false);
+  });
+
+  it('keeps a running command’s row while a call written alike has yet to start', async () => {
+    const { child, events } = recordedSession([
+      { pid: 500, command: HEREDOC, running: true },
+    ]);
+    line(child, { run: HEREDOC, id: 'running' });
+    line(child, { answered: 'running' });
+    await vi.advanceTimersByTimeAsync(QUIET_MS);
+    expect(events.filter((e) => e.type === 'shell_open')).toHaveLength(1);
+
+    line(child, { run: HEREDOC, id: 'not-started' });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(events.some((e) => e.type === 'shell_info')).toBe(false);
+  });
+
+  it('announces no wait once the turn has ended', async () => {
+    const turn = waitingTurn();
+    line(turn.child, { done: true });
+    await turn.handle?.done;
+
+    await vi.advanceTimersByTimeAsync(QUIET_MS * 3);
+
+    expect(turn.holds()).toEqual([]);
+  });
+});
+
 describe('a follow-up written into a turn the CLI has not taken yet', () => {
   /**
    * A turn whose CLI acknowledges what it takes off stdin, with a follow-up
@@ -5797,6 +6200,7 @@ describe('where a session’s detached commands run', () => {
   function openRecordingSession(
     table: () => PlainProcess[],
     logger?: SessionLogger,
+    readCommandRecords?: () => Promise<readonly CommandRecord[]>,
   ) {
     let reads = 0;
     const { spawn, child } = fakeSpawn(new FakeChild(100));
@@ -5809,6 +6213,7 @@ describe('where a session’s detached commands run', () => {
       spawn,
       logger,
       commandGroupReadDelayMs: 0,
+      readCommandRecords,
       listProcessGroups: () => {
         reads += 1;
         return Promise.resolve().then(table);
@@ -5853,6 +6258,31 @@ describe('where a session’s detached commands run', () => {
     await afterReading(reads, 1);
 
     expect(groupsAtDeath(session, child)).toEqual([
+      {
+        pgid: 200,
+        members: [
+          { pid: 200, startedAt: 1_000_000 },
+          { pid: 201, startedAt: 2_000_000 },
+        ],
+      },
+    ]);
+  });
+
+  it('finds a command whose text is not in the table through the CLI’s own record', async () => {
+    const heredoc = "python3 << 'PY'\nprint(1)\nPY";
+    const { session, child, reads } = openRecordingSession(
+      () => [
+        ...CLI_AND_MCP,
+        row(200, 100, 200, '/bin/zsh -c __cursor_command'),
+        row(201, 200, 200, 'Python', 2_000_000),
+      ],
+      undefined,
+      async () => [{ pid: 200, command: heredoc, running: true }],
+    );
+    background(child, 'b1', 't1', heredoc);
+    await afterReading(reads, 1);
+
+    expect(session.recordedGroupsOf('t1')).toEqual([
       {
         pgid: 200,
         members: [

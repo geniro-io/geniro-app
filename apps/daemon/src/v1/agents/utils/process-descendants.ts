@@ -1,4 +1,5 @@
 import { isSameProcess } from '../../../utils/process-identity';
+import type { CommandRecord } from '../adapters/adapter.types';
 import { decodePsText } from './process-usage';
 import type { PlainProcess } from './run-process-scan';
 import { runPs } from './run-ps';
@@ -12,11 +13,11 @@ export interface ProcessRow {
 }
 
 /**
- * How much of a command has to match. `ps` reports the whole line, but a shell
- * wrapper rewrites the tail (cursor's is a ~400-character zsh preamble ending
- * `-- <command>`), so the comparison is a PREFIX of what the agent asked for
- * rather than the whole string. Long enough that two genuinely different
- * commands cannot share it, short enough to survive the wrapping.
+ * How much of a command has to match. `ps` reports the whole line, but a CLI
+ * may run a command through a shell that rewrites its tail, so the comparison
+ * is a PREFIX of what the agent asked for rather than the whole string. Long
+ * enough that two genuinely different commands cannot share it, short enough to
+ * survive the wrapping.
  */
 const COMMAND_MATCH_CHARS = 120;
 
@@ -143,11 +144,10 @@ export function descendantsOf<T extends ProcessRow>(
 /**
  * Whether any of these processes is running `command`.
  *
- * A CONTAINS on a normalized prefix rather than an equality, because a CLI
- * wraps what it runs: cursor's `sleep 300` appears twice in the table, once as
- * itself and once inside a zsh preamble that sets up its sandbox and ends
- * `-- sleep 300`. Either row is the same answer to the only question asked
- * here — is this command still alive under that agent.
+ * A CONTAINS on a normalized prefix rather than an equality, because a CLI may
+ * wrap what it runs, and the wrapper and the command are one answer to the only
+ * question asked here — is this command still alive under that agent. A command
+ * whose text never reaches the table is {@link commandLiveness}'s to answer.
  *
  * Whitespace is collapsed on both sides: a multi-line command reaches `ps` as
  * one line, so comparing the agent's own newlines against it never matches.
@@ -187,6 +187,50 @@ export function pidsRunningCommand(
   return processes
     .filter((row) => normalizeCommand(row.args).includes(needle))
     .map((row) => row.pid);
+}
+
+/**
+ * Answers, per command line, whether a process of `alive` still runs it. A line
+ * the CLI recorded is decided by its records, each answering for one call: its
+ * text is not always in the table (a heredoc), and a finished record is proof.
+ * Any other line falls back to {@link isCommandRunning}.
+ */
+export function commandLiveness(
+  alive: readonly ProcessRow[],
+  records: readonly CommandRecord[],
+): (command: string) => boolean {
+  const known = new Set(records.map((r) => normalizeCommand(r.command)));
+  const liveCounts = new Map<string, number>();
+  for (const line of known) {
+    liveCounts.set(line, recordedPidsRunning(alive, records, line).length);
+  }
+  return (command) => {
+    const line = normalizeCommand(command);
+    if (!known.has(line)) {
+      return isCommandRunning(alive, command);
+    }
+    const left = liveCounts.get(line) ?? 0;
+    liveCounts.set(line, Math.max(0, left - 1));
+    return left > 0;
+  };
+}
+
+/** The processes of `alive` the CLI recorded as running `command`. */
+export function recordedPidsRunning(
+  alive: readonly ProcessRow[],
+  records: readonly CommandRecord[],
+  command: string,
+): number[] {
+  const line = normalizeCommand(command);
+  const pids = new Set(alive.map((row) => row.pid));
+  return records
+    .filter(
+      (record) =>
+        record.running &&
+        pids.has(record.pid) &&
+        normalizeCommand(record.command) === line,
+    )
+    .map((record) => record.pid);
 }
 
 function normalizeCommand(value: string): string {

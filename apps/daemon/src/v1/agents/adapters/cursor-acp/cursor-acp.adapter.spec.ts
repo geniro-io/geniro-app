@@ -3502,6 +3502,46 @@ describe('CursorAcpAdapter — sub-agent sessions', () => {
     );
   });
 
+  describe('when the CLI goes quiet', () => {
+    const QUIET_MS = 45_000;
+    const thought = (child: FakeChild): void => {
+      child.stdout.emitData(
+        sessionUpdate({
+          sessionUpdate: 'agent_thought_chunk',
+          content: { type: 'text', text: 'I will wait.' },
+        }),
+      );
+    };
+
+    it('writes what the agent has said, so no thinking row stands over the silence', async () => {
+      vi.useFakeTimers();
+      const { child, events } = start();
+      thought(child);
+
+      await vi.advanceTimersByTimeAsync(QUIET_MS);
+
+      expect(events).toContainEqual({
+        type: 'reasoning',
+        text: 'I will wait.',
+      });
+    });
+
+    it('leaves it open while a background sub-agent explains the silence', async () => {
+      vi.useFakeTimers();
+      const { child, events } = start();
+      launch(child, true);
+      childWorks(child, 'BGDONE-77');
+      thought(child);
+
+      await vi.advanceTimersByTimeAsync(QUIET_MS);
+
+      expect(events).not.toContainEqual({
+        type: 'reasoning',
+        text: 'I will wait.',
+      });
+    });
+  });
+
   it('counts the sub-agents a message would cancel, and cancels them only when told to', () => {
     const { child, events, handle } = start();
     expect(handle?.subagentsAFollowUpCancels?.()).toBe(0);

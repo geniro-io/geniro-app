@@ -14988,6 +14988,17 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
     expect(statuses.at(-1)?.activity).toBe('waiting on 1 sub-agent');
 
+    claude.emit({ type: 'turn_held', open: 1, unit: 'command' });
+    await drain();
+    expect(statuses.at(-1)).toMatchObject({
+      activity: 'waiting on 1 background command',
+      holdingFor: 1,
+    });
+
+    claude.emit({ type: 'turn_held', open: 2, unit: 'command' });
+    await drain();
+    expect(statuses.at(-1)?.activity).toBe('waiting on 2 background commands');
+
     claude.emit({ type: 'turn_held', open: 0 });
     await drain();
     // Nothing outstanding — back to the run's own "Working…", and the composer

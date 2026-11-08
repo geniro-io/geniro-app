@@ -265,15 +265,13 @@ import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
 
 /** A deferred card another module raised — one that stands across turns. */
-/**
- * The sentence under the badge while a turn is held for `count` sub-agents —
- * the only unit a hold counts (`openWork` adds `unit === 'agent'` alone), and
- * the app's own word for a delegate in the panel and the transcript alike.
- */
-function heldActivity(count: number): string | null {
-  return count === 0
-    ? null
-    : `waiting on ${count} sub-agent${count === 1 ? '' : 's'}`;
+/** The sentence under the badge while a turn is held for `count` units. */
+function heldActivity(count: number, unit?: 'command'): string | null {
+  if (count === 0) {
+    return null;
+  }
+  const noun = unit === 'command' ? 'background command' : 'sub-agent';
+  return `waiting on ${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 function isStandingCard(entry: PendingApproval): boolean {
@@ -4193,7 +4191,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // no row, so it is read ahead of the row gate.
     if (event.type === 'turn_held') {
       if (this.ownsSession(runId, session)) {
-        this.announceRunHold(runId, event.open, heldActivity(event.open));
+        this.announceRunHold(
+          runId,
+          event.open,
+          heldActivity(event.open, event.unit),
+        );
       }
       return;
     }
@@ -6201,6 +6203,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * finished, but it says it's still in process".
        */
       let heldOnBackgroundWork = 0;
+      let heldOnUnit: 'command' | undefined;
       /**
        * The MAIN thread's tool calls that have started and not yet returned,
        * `id → name`, newest last (a `Map` keeps insertion order).
@@ -6244,7 +6247,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * phrase for an agent that is simply thinking.
        */
       const idleActivity = (): string | null =>
-        heldActivity(heldOnBackgroundWork);
+        heldActivity(heldOnBackgroundWork, heldOnUnit);
       const enqueue = (work: () => Promise<void>): void => {
         chain = chain.then(work).catch((err: unknown) => {
           eventHandlingFailed = true;
@@ -7748,6 +7751,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               // counts anything and the phrase never appears — which is how the
               // first version of this branch was written.
               heldOnBackgroundWork = event.open;
+              heldOnUnit = event.unit;
               // The agent has stopped talking, so nothing it was doing is still
               // true — a tool left open by a turn that ended is not running.
               openMainTools.clear();

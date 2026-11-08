@@ -496,6 +496,10 @@ export class AcpSession implements TurnDriver {
     return this.turn.onProcessEnded();
   }
 
+  onQuiet(): AgentEvent[] | null {
+    return this.turn.onQuiet();
+  }
+
   /**
    * Whether this process can serve ANOTHER turn — `TurnDriver.canOpenTurn`.
    *

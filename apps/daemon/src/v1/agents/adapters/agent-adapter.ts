@@ -87,6 +87,7 @@ import type {
   ApprovalResolution,
   CarrySessionInput,
   CarrySessionResult,
+  CommandRecord,
   ConfigDirPin,
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
@@ -2265,6 +2266,17 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * How this CLI's own record of the commands it started is read, for the
+   * process about to spawn with `env`. Undefined = it keeps none.
+   */
+  protected commandRecordReader(
+    _input: AgentTurnInput,
+    _env: Readonly<Record<string, string | undefined>>,
+  ): (() => Promise<readonly CommandRecord[]>) | undefined {
+    return undefined;
+  }
+
+  /**
    * Extra environment merged over the stripped child env. The default passes
    * through the caller's `input.env`; an adapter whose CLI needs a secret
    * re-injects it here for its OWN child only (see `CursorAcpAdapter`).
@@ -2931,17 +2943,18 @@ export abstract class AgentAdapter {
         }
         return mapped;
       };
+      // The run tag last: no adapter's `buildEnv` and no caller's `input.env`
+      // may replace the id the run's teardown searches for.
+      const env = {
+        ...this.buildEnv(input),
+        ...local.env,
+        ...opts.runTag,
+      };
       session = runCliSession({
         command,
         args,
         cwd: input.cwd,
-        // The run tag last: no adapter's `buildEnv` and no caller's
-        // `input.env` may replace the id the run's teardown searches for.
-        env: {
-          ...this.buildEnv(input),
-          ...local.env,
-          ...opts.runTag,
-        },
+        env,
         stdinLifetime: runScoped
           ? 'session'
           : this.keepStdinOpen(input)
@@ -2959,6 +2972,8 @@ export abstract class AgentAdapter {
         // CLI it is talking to — the rule every field beside it follows.
         detectDetachedShells:
           this.getConfig().shells.unreportedDetachReason !== null,
+        silentCommandWait: this.getConfig().shells.silentWaitReason !== null,
+        readCommandRecords: this.commandRecordReader(input, env),
         listProcessGroups: this.options.listProcessGroupsFn,
         // Passed straight through: what to answer between turns depends on the
         // run's approval posture, which the CALLER holds — an adapter deciding
@@ -3143,6 +3158,7 @@ export abstract class AgentAdapter {
           onProcessEnded: driver.onProcessEnded
             ? () => driver.onProcessEnded!()
             : undefined,
+          onQuiet: driver.onQuiet ? () => driver.onQuiet!() : undefined,
           closeGraceMs: driver.closeGraceMs
             ? () => driver.closeGraceMs!()
             : undefined,

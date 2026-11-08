@@ -68,6 +68,7 @@ import type {
   AgentSessionReadInput,
   AgentSessionsInput,
   AgentTurnInput,
+  CommandRecord,
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
   NO_PLAN_LIMITS,
@@ -207,6 +208,11 @@ import {
   readCursorTask,
   readCursorTaskInput,
 } from './utils/cursor-task.utils';
+import {
+  type CursorTerminalCache,
+  cursorTerminalDirs,
+  readCursorTerminalRecords,
+} from './utils/cursor-terminals.utils';
 import { parseCursorPlan, parseCursorTodos } from './utils/cursor-todos.utils';
 import { cursorToolCallMetric } from './utils/cursor-tool-metric.utils';
 import { cursorTransientResumePrompt } from './utils/cursor-transient-resume.utils';
@@ -384,22 +390,12 @@ export class CursorAcpAdapter extends AgentAdapter {
        * a payload it can actually read and otherwise declines as before.
        */
       shells: {
-        // MEASURED on 2026.08.31-4057e58, driven through this daemon with the
-        // raw ACP frames captured: asked for `sleep 300` in the background, it
-        // answered the tool call `status: "completed"` with
-        // `rawOutput: {exitCode: 0, stdout: "", stderr: ""}` three seconds in,
-        // while the process ran its full four minutes. Nothing else on the wire
-        // mentions it — the bundle carries the same seven `cursor/*` extension
-        // methods and no background one — it writes nothing to disk about it,
-        // and although its own ACP SDK ships the `terminal/*` client methods
-        // this CLI never calls them (no caller of `createTerminal`, no read of
-        // a `terminal` client capability anywhere in the bundle), so the client
-        // cannot host the process either. The process table is what is left,
-        // and it is enough: the command runs under the CLI child geniro
-        // spawned.
+        // apps/daemon/AGENTS.md → ACP and cursor transport has the measurements.
         unreportedDetachReason:
           'cursor-agent reports a backgrounded command as finished, so whether ' +
-          'it is still running is read from the process table instead',
+          'it is still running is read from its terminal records and the process table instead',
+        silentWaitReason:
+          'cursor-agent presents no tool_call for its AwaitShell tool (its ACP layer drops a call it has no title for), so a wait of up to 119 minutes sends no frame at all',
       },
       questionToolName: CURSOR_ASK_QUESTION_METHOD,
       /**
@@ -2843,6 +2839,16 @@ export class CursorAcpAdapter extends AgentAdapter {
       ...(dataDir ? { [CURSOR_DATA_DIR_ENV]: dataDir } : {}),
       ...input.env,
     };
+  }
+
+  protected override commandRecordReader(
+    input: AgentTurnInput,
+    env: Readonly<Record<string, string | undefined>>,
+  ): () => Promise<readonly CommandRecord[]> {
+    const spawnedAt = Date.now();
+    const dirs = cursorTerminalDirs(input.cwd, env);
+    const cache: CursorTerminalCache = new Map();
+    return async () => readCursorTerminalRecords(await dirs, spawnedAt, cache);
   }
 
   /** Per-turn config directory paths, created by `prepareTurn`. */

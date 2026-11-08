@@ -4999,6 +4999,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamProposals: unknown,
     ): ReturnType<typeof createMcpTools> =>
       createMcpTools({
+        threadDelivery: {} as ThreadDeliveryService,
         calls: new CallBroker(),
         questions: new UserQuestionBroker(),
         findings: new FindingsReportBroker(),

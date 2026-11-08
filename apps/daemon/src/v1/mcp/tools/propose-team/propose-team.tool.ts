@@ -99,14 +99,21 @@ export class ProposeTeamTool extends BaseMcpTool {
     }
     const query = read.query;
     const outcome =
-      'edits' in query
-        ? await this.proposals.proposeEdits(runId, {
-            slug: query.replaces,
-            edits: query.edits,
+      'overlay' in query
+        ? await this.proposals.proposeOverlay(runId, {
+            projectId: query.overlayProjectId,
+            overlay: query.overlay,
             summary: query.summary,
             reason: query.reason,
           })
-        : await this.proposals.propose(runId, query);
+        : 'edits' in query
+          ? await this.proposals.proposeEdits(runId, {
+              slug: query.replaces,
+              edits: query.edits,
+              summary: query.summary,
+              reason: query.reason,
+            })
+          : await this.proposals.propose(runId, query);
     return this.text(
       proposeTeamResultText(outcome),
       outcome.status === 'refused',

@@ -1324,6 +1324,7 @@ export function ApprovalCard({
   requestId,
   onRespond,
   onOpenTeam,
+  onOpenProject,
 }: {
   toolName: string;
   input: unknown;
@@ -1367,6 +1368,8 @@ export function ApprovalCard({
   expired?: boolean;
   /** Open a saved library team on its canvas; absent, nothing offers to. */
   onOpenTeam?: (slug: string) => void;
+  /** Open the project a team card saved without touching the team; absent, nothing offers to. */
+  onOpenProject?: (projectId: string) => void;
   /**
    * `images` arrive only from the QUESTION body, and only as a SEPARATE
    * delivery — see its `onRespond` note. A permission card never sends any:
@@ -1399,6 +1402,7 @@ export function ApprovalCard({
         memoryKey={requestId ?? undefined}
         onRespond={onRespond}
         onOpenTeam={onOpenTeam}
+        onOpenProject={onOpenProject}
       />
     );
   }

@@ -1044,6 +1044,14 @@ export type TeamEditsProposalRequest = Pick<
   'slug' | 'edits'
 > & { summary: string; reason: string };
 
+/** An ordinary chat's change to one project's overlay of its default team. */
+export interface TeamOverlayProposalRequest {
+  projectId: string;
+  overlay: unknown;
+  summary: string;
+  reason: string;
+}
+
 /** What `propose_team` tells the agent. */
 export type ProposalOutcome =
   | { status: 'shown'; proposal: TeamProposal }

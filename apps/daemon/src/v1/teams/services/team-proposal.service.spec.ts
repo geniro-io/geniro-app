@@ -598,6 +598,93 @@ describe('TeamProposalService', () => {
     });
   });
 
+  describe("an ordinary chat's overlay of a project", () => {
+    const CODER_AUTO = {
+      members: { coder: { settings: { approval: 'auto' as const } } },
+    };
+    const request = {
+      projectId: 'p1',
+      overlay: CODER_AUTO,
+      summary: 'Coder runs unattended here',
+      reason: 'The user asked.',
+    };
+
+    it("cards the overlay on the project's default team, with the team itself unchanged", async () => {
+      const { hash } = await store.create(TEAM, 'team');
+
+      const prepared = await service.prepareOverlay(request);
+
+      expect(prepared).toMatchObject({
+        ok: true,
+        proposal: {
+          mode: 'replace',
+          slug: 'team',
+          baseHash: hash,
+          team: TEAM,
+          summary: 'Coder runs unattended here',
+          reason: 'The user asked.',
+          autoAgents: expect.arrayContaining(['coder']),
+          diff: { identical: true },
+          overlay: {
+            projectId: 'p1',
+            projectName: 'Geniro',
+            overlay: CODER_AUTO,
+            baseHash: null,
+          },
+        },
+      });
+      await expect(overlayStore.get('team', 'p1')).resolves.toBeNull();
+    });
+
+    it('refuses a project that does not exist, one with no default team, and an overlay that changes nothing', async () => {
+      await store.create(TEAM, 'team');
+      await overlayStore.save('team', 'p1', CODER_AUTO);
+      projectRows.set('p3', {
+        id: 'p3',
+        name: 'Solo',
+        teamSlug: null,
+        instructionsRevision: 0,
+        instructionBlocks: [],
+      });
+
+      await expect(
+        service.prepareOverlay({ ...request, projectId: 'ghost' }),
+      ).resolves.toMatchObject({ ok: false, code: 'PROJECT_GONE' });
+      await expect(
+        service.prepareOverlay({ ...request, projectId: 'p3' }),
+      ).resolves.toMatchObject({ ok: false, code: 'PROJECT_HAS_NO_TEAM' });
+      await expect(service.prepareOverlay(request)).resolves.toMatchObject({
+        ok: false,
+        code: 'NOTHING_TO_CHANGE',
+      });
+    });
+
+    it('raises the card on the run, and Approve writes the overlay alone, logged as the chat’s', async () => {
+      const { hash } = await store.create(TEAM, 'team');
+
+      const outcome = await service.proposeOverlay('run-1', request);
+
+      expect(outcome).toMatchObject({
+        status: 'shown',
+        proposal: { slug: 'team', overlay: { projectId: 'p1' } },
+      });
+      await expect(overlayStore.get('team', 'p1')).resolves.toBeNull();
+      approvals.resolve('run-1', standingCard('run-1'), true);
+      const { outcome: verdict, message } = await verdictAfterPress();
+      expect(verdict).toMatchObject({ kind: 'saved', slug: 'team' });
+      expect(message).toBe(
+        "(Approved — the shared team 'team' stays as it is. The overlay of Geniro is saved.)",
+      );
+      expect((await overlayStore.get('team', 'p1'))?.overlay).toEqual(
+        CODER_AUTO,
+      );
+      expect((await store.get('team')).hash).toBe(hash);
+      expect(logged).toEqual([
+        expect.objectContaining({ source: 'chat', projectId: 'p1' }),
+      ]);
+    });
+  });
+
   describe("a builder chat's change", () => {
     const TO_SONNET = [{ path: 'members/reviewer/model', value: 'sonnet' }];
 

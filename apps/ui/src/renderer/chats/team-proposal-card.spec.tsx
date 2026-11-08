@@ -270,6 +270,8 @@ describe('TeamProposalCard', () => {
     expect(el.textContent).toContain(
       'Approving changes Billing’s overlay of Review Pair; the shared team stays as it is.',
     );
+    expect(el.textContent).toContain('Review Pair stays as it is');
+    expect(el.textContent).not.toContain('Replaces Review Pair');
   });
 
   it('draws the team change and the project’s instructions diff under one Approve, saying the instructions are put back on a failed team write', () => {
@@ -715,6 +717,41 @@ describe('TeamProposalCard', () => {
       openAgents(el);
       expect(rosterRow(el, 'coder')).not.toBeNull();
       expect(el.querySelector('[data-slot="team-diff"]')).not.toBeNull();
+    });
+
+    it('says a card that wrote only the overlay saved that overlay, and opens its project rather than the team', () => {
+      const onOpenTeam = vi.fn();
+      const onOpenProject = vi.fn();
+      const el = render(
+        card({
+          input: OVERLAY_ONLY_PROPOSAL,
+          verdict: true,
+          outcome: { kind: 'saved', slug: 'review-pair' },
+          onOpenTeam,
+          onOpenProject,
+        }),
+      );
+      expect(el.textContent).toContain('✓ Saved Billing’s overlay');
+      expect(el.textContent).not.toContain('Saved as');
+      expect(buttonNamed(el, 'Open team')).toBeUndefined();
+      click(buttonNamed(el, 'Open project')!);
+      expect(onOpenProject).toHaveBeenCalledWith(
+        (OVERLAY_ONLY_PROPOSAL as { overlay: { projectId: string } }).overlay
+          .projectId,
+      );
+    });
+
+    it('offers no project where the surface cannot open one, as on the project’s own page', () => {
+      const el = render(
+        card({
+          input: OVERLAY_ONLY_PROPOSAL,
+          verdict: true,
+          outcome: { kind: 'saved', slug: 'review-pair' },
+          onOpenTeam: vi.fn(),
+        }),
+      );
+      expect(buttonNamed(el, 'Open project')).toBeUndefined();
+      expect(buttonNamed(el, 'Open team')).toBeUndefined();
     });
 
     it('offers no canvas where the surface cannot open one', () => {

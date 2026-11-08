@@ -54,7 +54,8 @@ export function readTeamsInstructions(audience: ReadTeamsAudience): string {
     WHAT_IT_ANSWERS +
     HOW_TO_READ_PARTS +
     'a replacement of that team that keeps the token on an agent of the same CLI keeps that ' +
-    'profile, wherever the agent moves; a new team cannot carry one. ' +
+    'profile, wherever the agent moves, and so does an overlay that keeps it; a new team cannot carry one. ' +
+    "`overlays` with `slug` reads every project's overlay of that team, each under its project's id. " +
     `Use it when the user talks about their teams, and before ${HOST_PROPOSE_TEAM_TOOL}: to ` +
     'see what already exists, to avoid proposing a duplicate, and to start a change from the team ' +
     'as it stands rather than from memory. ' +

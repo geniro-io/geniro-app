@@ -85,10 +85,18 @@ export function teamVerdictMessage(verdict: TeamProposalVerdict): string {
   const noted = note.length === 0 ? '' : ` The user's note: ${note}`;
   switch (verdict.kind) {
     case 'saved':
-      return `(Approved — saved as '${verdict.slug}' in the team library.${
+      return `(Approved — ${
+        verdict.teamUnchanged === true
+          ? `the shared team '${verdict.slug}' stays as it is.`
+          : `saved as '${verdict.slug}' in the team library.`
+      }${
         verdict.backup === null
           ? ''
           : ` The previous version is backed up as ${verdict.backup}.`
+      }${
+        verdict.overlayProject === undefined
+          ? ''
+          : ` The overlay of ${verdict.overlayProject} is saved.`
       }${
         verdict.project === undefined
           ? ''

@@ -4999,6 +4999,7 @@ export function Chats({
           answer={settled?.answer ?? null}
           outcome={settled?.outcome ?? null}
           onOpenTeam={onOpenTeam}
+          onOpenProject={onOpenProject}
           expired={
             requestId !== null &&
             (unanswerableIds.has(requestId) ||
@@ -5013,7 +5014,14 @@ export function Chats({
         />
       );
     },
-    [verdicts, unanswerableIds, deadRequestKeys, respondApproval, onOpenTeam],
+    [
+      verdicts,
+      unanswerableIds,
+      deadRequestKeys,
+      respondApproval,
+      onOpenTeam,
+      onOpenProject,
+    ],
   );
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;

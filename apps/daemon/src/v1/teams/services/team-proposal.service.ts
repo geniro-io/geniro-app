@@ -36,6 +36,7 @@ import {
   type Team,
   type TeamChangeProposalRequest,
   type TeamEditsProposalRequest,
+  type TeamOverlayProposalRequest,
   type TeamProposal,
   type TeamProposalOverlay,
   type TeamProposalProject,
@@ -159,6 +160,13 @@ export class TeamProposalService {
     request: TeamEditsProposalRequest,
   ): Promise<ProposalOutcome> {
     return this.raiseSerialized(runId, () => this.prepareEdits(request));
+  }
+
+  proposeOverlay(
+    runId: string,
+    request: TeamOverlayProposalRequest,
+  ): Promise<ProposalOutcome> {
+    return this.raiseSerialized(runId, () => this.prepareOverlay(request));
   }
 
   private async raiseSerialized(
@@ -611,6 +619,43 @@ export class TeamProposalService {
         : prepared;
     }
     return (await this.runnableRefusal(prepared.proposal.team)) ?? prepared;
+  }
+
+  /**
+   * An ordinary chat's change to a project's overlay, on the card a project's
+   * own chat raises: the team is the one the project runs by default now.
+   */
+  async prepareOverlay(
+    request: TeamOverlayProposalRequest,
+  ): Promise<PreparedProposal> {
+    let project: ProjectWire;
+    try {
+      project = await this.projects.get(request.projectId);
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        return {
+          ok: false,
+          code: 'PROJECT_GONE',
+          message: `no project ${request.projectId} — list_projects names them`,
+        };
+      }
+      throw error;
+    }
+    if (project.teamSlug === null || project.teamSlug === '') {
+      return {
+        ok: false,
+        code: 'PROJECT_HAS_NO_TEAM',
+        message: `${project.name} has no default team, so it has no overlay to change`,
+      };
+    }
+    return this.prepareChange({
+      slug: project.teamSlug,
+      edits: [],
+      overlay: request.overlay,
+      projectId: project.id,
+      summary: request.summary,
+      reason: request.reason,
+    });
   }
 
   private async runnableRefusal(
@@ -1080,6 +1125,12 @@ function verdictOf(
         backup: applied.backup,
         note,
         ...(applied.project === undefined ? {} : { project: applied.project }),
+        ...(proposal.mode === 'replace' && proposal.overlay !== undefined
+          ? { overlayProject: proposal.overlay.projectName }
+          : {}),
+        ...(proposal.mode === 'replace' && proposal.diff.identical
+          ? { teamUnchanged: true as const }
+          : {}),
       };
     case 'changed':
       return {

@@ -324,6 +324,18 @@ function joinedChanges(changes: readonly string[]): string {
     : `${changes.slice(0, -1).join(', ')} and ${changes.at(-1)}`;
 }
 
+/** What an approval saved, naming the team file only when it wrote one. */
+function savedText(proposal: ParsedTeamProposal, slug: string): string {
+  const { diff, overlay, project } = proposal;
+  const saved = [
+    overlay === null ? null : `${overlay.projectName}’s overlay`,
+    project === null ? null : `${project.projectName}’s instructions`,
+  ].filter((part): part is string => part !== null);
+  return diff?.identical === true && saved.length > 0
+    ? `✓ Saved ${joinedChanges(saved)}`
+    : `✓ Saved as “${slug}”`;
+}
+
 /**
  * A whole team an agent proposes for the library — `propose_team`'s
  * card. Approve writes it (the daemon does, never the agent); Decline writes
@@ -343,6 +355,7 @@ export function TeamProposalCard({
   memoryKey,
   onRespond,
   onOpenTeam,
+  onOpenProject,
 }: {
   proposal: ParsedTeamProposal;
   /** null while pending; the user's decision once the verdict item arrived. */
@@ -358,8 +371,11 @@ export function TeamProposalCard({
   onRespond: (allow: boolean, answer?: string) => void;
   /** Open the saved team in the editor; absent, nothing offers to. */
   onOpenTeam?: (slug: string) => void;
+  /** Open the project a card saved without touching the team; absent, nothing offers to. */
+  onOpenProject?: (projectId: string) => void;
 }): React.JSX.Element {
   const { team, autoAgents, diff, overlay, project } = proposal;
+  const savedProject = diff?.identical === true ? (overlay ?? project) : null;
   const stages = team.stages ?? [];
   const { sending, respond } = useOneShotVerdict(verdict, expired, onRespond);
   const remembered = (name: string) =>
@@ -447,7 +463,9 @@ export function TeamProposalCard({
           <Badge variant="outline">New</Badge>
         ) : (
           <Badge variant="secondary" className="max-w-full truncate">
-            Replaces {proposal.replacesName}
+            {diff?.identical === true
+              ? `${proposal.replacesName} stays as it is`
+              : `Replaces ${proposal.replacesName}`}
           </Badge>
         )}
         <span className="text-xs text-muted-foreground">
@@ -572,9 +590,20 @@ export function TeamProposalCard({
           ) : outcome?.kind === 'saved' ? (
             <div className="flex flex-wrap items-center gap-2">
               <p className="m-0 text-xs text-success">
-                ✓ Saved as “{outcome.slug}”
+                {savedText(proposal, outcome.slug)}
               </p>
-              {onOpenTeam ? (
+              {savedProject !== null ? (
+                onOpenProject ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="max-sm:min-h-11"
+                    onClick={() => onOpenProject(savedProject.projectId)}>
+                    Open project
+                  </Button>
+                ) : null
+              ) : onOpenTeam ? (
                 <Button
                   type="button"
                   variant="outline"

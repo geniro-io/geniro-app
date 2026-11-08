@@ -122,7 +122,11 @@ export class ReadTeamsTool extends BaseMcpTool {
         true,
       );
     }
-    if (teamRead.kind === 'overlays' || teamRead.kind === 'projects') {
+    const audience = this.audienceOf(runId, memberId);
+    if (
+      teamRead.kind === 'projects' ||
+      (teamRead.kind === 'overlays' && audience !== 'chat')
+    ) {
       const own = await this.builders.teamOf(runId, memberId);
       if ('status' in own) {
         return this.text(
@@ -151,6 +155,7 @@ export class ReadTeamsTool extends BaseMcpTool {
               wire,
               await this.overlays.overlaySources(slug),
               teamRead.offset,
+              audience !== 'chat',
             ),
           );
         case 'projects':

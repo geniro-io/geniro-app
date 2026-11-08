@@ -91,6 +91,13 @@ const PROJECTS_FIELD = z
     'true reads every project that runs this team by default: its id, instructions revision, size and instruction blocks — what a `project` change on propose_team starts from',
   );
 
+const CHAT_OVERLAYS_FIELD = z
+  .boolean()
+  .optional()
+  .describe(
+    "With `slug`, true reads every project's overlay of that team as its file stands, under the project's id — what an `overlay` change on propose_team starts from. A project it does not name has none yet.",
+  );
+
 const BUILDER_FIELDS = { overlays: OVERLAYS_FIELD, projects: PROJECTS_FIELD };
 
 const ReadTeamsArgsSchema = z
@@ -99,7 +106,7 @@ const ReadTeamsArgsSchema = z
 
 export type ReadTeamsQuery = z.infer<typeof ReadTeamsArgsSchema>;
 
-/** The schema one audience is shown: a project's chat names no slug, only a builder chat reads overlays. */
+/** The schema one audience is shown: a project's chat names no slug, its brief carries its overlay. */
 export function readTeamsArgsSchema(
   audience: 'chat' | 'builder' | 'project',
 ): z.ZodObject {
@@ -108,7 +115,11 @@ export function readTeamsArgsSchema(
   }
   return audience === 'builder'
     ? z.object({ slug: SLUG_FIELD, ...PART_FIELDS, ...BUILDER_FIELDS })
-    : z.object({ slug: SLUG_FIELD, ...PART_FIELDS });
+    : z.object({
+        slug: SLUG_FIELD,
+        ...PART_FIELDS,
+        overlays: CHAT_OVERLAYS_FIELD,
+      });
 }
 
 /** The call's arguments, or what is wrong with them. Never throws. */
@@ -288,6 +299,7 @@ export function teamOverlaysText(
     source: string | null;
   }[],
   offset: number,
+  readOnly = true,
 ): string {
   if (overlays.length === 0) {
     return `${TEAM_RESULT_PREFACE}\nNo project has an overlay of the team \`${wire.slug}\`.`;
@@ -304,7 +316,7 @@ export function teamOverlaysText(
     .join('\n\n');
   return teamPage(
     wire,
-    `${overlays.length} project overlays, read-only here`,
+    `${overlays.length} project overlays${readOnly ? ', read-only here' : ''}`,
     body,
     offset,
   );

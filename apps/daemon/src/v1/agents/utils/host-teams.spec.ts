@@ -89,6 +89,35 @@ describe('teamVerdictMessage', () => {
     );
   });
 
+  it('says an overlay was saved and the shared team stayed, never that the library was written', () => {
+    expect(
+      teamVerdictMessage({
+        kind: 'saved',
+        slug: 'team',
+        backup: null,
+        note: null,
+        overlayProject: 'Geniro',
+        teamUnchanged: true,
+      }),
+    ).toBe(
+      "(Approved — the shared team 'team' stays as it is. The overlay of Geniro is saved.)",
+    );
+  });
+
+  it('names the overlay beside a team that was saved too', () => {
+    expect(
+      teamVerdictMessage({
+        kind: 'saved',
+        slug: 'team',
+        backup: null,
+        note: null,
+        overlayProject: 'Geniro',
+      }),
+    ).toBe(
+      "(Approved — saved as 'team' in the team library. The overlay of Geniro is saved.)",
+    );
+  });
+
   it('quotes the note typed on Approve, and on a write that did not happen', () => {
     expect(
       teamVerdictMessage({

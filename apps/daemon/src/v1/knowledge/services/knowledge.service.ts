@@ -1136,29 +1136,39 @@ function withoutHiddenCharacters<T extends KnowledgeText>(text: T): T {
   };
 }
 
+function refuseBadLine(
+  label: string,
+  value: string,
+  maxChars: number,
+): KnowledgeRefusal | null {
+  if (value.length === 0) {
+    return refused('INVALID_DOCUMENT', `${label} must not be empty`);
+  }
+  const chars = [...value].length;
+  if (chars > maxChars) {
+    return refused(
+      'INVALID_DOCUMENT',
+      `${label} is ${chars} characters; the limit is ${maxChars}`,
+    );
+  }
+  if (hasHiddenText(value, false)) {
+    return refused(
+      'INVALID_DOCUMENT',
+      `${label} holds a line break, a control or an invisible character`,
+    );
+  }
+  return null;
+}
+
 function refuseInvalid(text: KnowledgeText): KnowledgeRefusal | null {
   const title = text.title.trim();
   const whenToRead = text.whenToRead.trim();
   const body = text.body.trim();
-  if (
-    title.length === 0 ||
-    [...title].length > KNOWLEDGE_TITLE_MAX_CHARS ||
-    hasHiddenText(title, false)
-  ) {
-    return refused(
-      'INVALID_DOCUMENT',
-      `the title must be one line of 1–${KNOWLEDGE_TITLE_MAX_CHARS} characters`,
-    );
-  }
-  if (
-    whenToRead.length === 0 ||
-    [...whenToRead].length > KNOWLEDGE_WHEN_MAX_CHARS ||
-    hasHiddenText(whenToRead, false)
-  ) {
-    return refused(
-      'INVALID_DOCUMENT',
-      `when to read must be one line of 1–${KNOWLEDGE_WHEN_MAX_CHARS} characters`,
-    );
+  const badLine =
+    refuseBadLine('the title', title, KNOWLEDGE_TITLE_MAX_CHARS) ??
+    refuseBadLine('when to read', whenToRead, KNOWLEDGE_WHEN_MAX_CHARS);
+  if (badLine) {
+    return badLine;
   }
   if (body.length === 0) {
     return refused('INVALID_DOCUMENT', 'the text must not be empty');

@@ -11,6 +11,7 @@ import { knowledgeDb } from '../__tests__/knowledge-db';
 import {
   KNOWLEDGE_INDEX_MAX_BYTES,
   KNOWLEDGE_REVISIONS_KEPT,
+  KNOWLEDGE_TITLE_MAX_CHARS,
   type KnowledgeActor,
   type KnowledgeChangedEvent,
   type KnowledgeSaveOutcome,
@@ -774,9 +775,50 @@ describe('KnowledgeService', () => {
       expect(edited.body).toBe('clean text');
     });
 
-    it('refuses a person’s text that is nothing but hidden characters', async () => {
-      const refused = await service.create(doc({ title: '\u200b' }));
-      expect(refusalOf(refused)).toBe('INVALID_DOCUMENT');
+    it.each([
+      ['title', 'the title must not be empty'],
+      ['whenToRead', 'when to read must not be empty'],
+      ['body', 'the text must not be empty'],
+    ])(
+      'refuses a person’s %s that is nothing but hidden characters as empty',
+      async (field, reason) => {
+        const refused = await service.create(doc({ [field]: '\u200b\u202e' }));
+        expect(refused).toMatchObject({
+          kind: 'refused',
+          code: 'INVALID_DOCUMENT',
+          reason,
+        });
+      },
+    );
+
+    it.each([
+      ['title', 'the title holds'],
+      ['whenToRead', 'when to read holds'],
+    ])(
+      'tells an agent its %s holds a hidden character, not a wrong length',
+      async (field, reason) => {
+        const hidden = await service.save(
+          AGENT,
+          {
+            title: 'T',
+            whenToRead: 'W.',
+            body: 'text',
+            reason: 'r',
+            [field]: 'Rel\u200bease',
+          },
+          NOWHERE,
+        );
+        expect(hidden.kind === 'refused' && hidden.reason).toContain(reason);
+      },
+    );
+
+    it('names the length of a title over the limit', async () => {
+      const length = KNOWLEDGE_TITLE_MAX_CHARS + 1;
+      const refused = await service.create(doc({ title: 'x'.repeat(length) }));
+      expect(refused).toMatchObject({
+        kind: 'refused',
+        reason: `the title is ${length} characters; the limit is ${KNOWLEDGE_TITLE_MAX_CHARS}`,
+      });
     });
 
     it('refuses a secret split by a hidden character', async () => {

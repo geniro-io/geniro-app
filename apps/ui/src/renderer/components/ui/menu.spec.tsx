@@ -361,6 +361,35 @@ describe('Menu', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('closes when focus enters a frame outside the panel', () => {
+    const onClose = vi.fn();
+    open(BRANCHES, { onClose });
+    const frame = document.createElement('iframe');
+    document.body.appendChild(frame);
+
+    act(() => {
+      frame.focus();
+      window.dispatchEvent(new Event('blur'));
+    });
+
+    expect(document.activeElement).toBe(frame);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    frame.remove();
+  });
+
+  it('stays open when the window loses focus with no frame focused', () => {
+    const onClose = vi.fn();
+    open(BRANCHES, { onClose });
+
+    act(() => {
+      (document.activeElement as HTMLElement).blur();
+      window.dispatchEvent(new Event('blur'));
+    });
+
+    expect(document.activeElement).toBe(document.body);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('says so when nothing matches', () => {
     const el = open(BRANCHES, { searchPlaceholder: 'Search branches…' });
 

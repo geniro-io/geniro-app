@@ -86,6 +86,26 @@ export class ThreadMessageDao extends BaseDao<ThreadMessage> {
     return rows.reduce((sum, row) => sum + row.wakes, 0);
   }
 
+  /**
+   * Messages joined into a thread's running turns since `since`. Only a join
+   * stamps a delivery id, and a dropped join loses it again.
+   */
+  async countJoinedSince(
+    toRunId: string,
+    since: Date,
+    txEm?: EntityManager,
+  ): Promise<number> {
+    return this.count(
+      {
+        toRunId,
+        status: 'delivered',
+        deliveryId: { $ne: null },
+        deliveredAt: { $gte: since },
+      },
+      txEm ?? this.em.fork(),
+    );
+  }
+
   async setReason(
     ids: readonly string[],
     reason: ThreadMessageReason | null,

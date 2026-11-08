@@ -96,7 +96,12 @@ function runOf(extra: Partial<Run> = {}): Run {
 
 function harness(
   target: Partial<Run> = {},
-  opts: { interrupts?: boolean; running?: boolean; wakes?: number } = {},
+  opts: {
+    interrupts?: boolean;
+    running?: boolean;
+    wakes?: number;
+    joins?: number;
+  } = {},
 ) {
   const runs = new Map<string, Run>([
     [TARGET, runOf(target)],
@@ -174,10 +179,11 @@ function harness(
       }
     }),
     wakesInLastHour: vi.fn(async () => opts.wakes ?? 0),
+    joinsInLastHour: vi.fn(async () => opts.joins ?? 0),
   };
   const chats = {
     sendMessage: vi.fn(async () => ({})),
-    hasQuestionWaiting: vi.fn(() => false),
+    awaitsCardAnswer: vi.fn(() => false),
   };
   const approvals = {
     awaitingFor: vi.fn((): 'question' | 'approval' | null => null),
@@ -186,7 +192,7 @@ function harness(
   const executor = {
     joinThreadMessage: vi.fn(
       async (_run: string, _join: ThreadMessageJoin) =>
-        'idle' as 'joined' | 'busy' | 'idle',
+        'idle' as 'joined' | 'busy' | 'idle' | 'over_budget',
     ),
     wakeLeadForThreadMessage: vi.fn(
       async () => 'woken' as 'woken' | 'busy' | 'refused',
@@ -341,7 +347,7 @@ describe('ThreadDeliveryService: an idle chat', () => {
 
   it('starts nothing past a question waiting for the user', async () => {
     const h = harness();
-    h.chats.hasQuestionWaiting.mockReturnValue(true);
+    h.chats.awaitsCardAnswer.mockReturnValue(true);
 
     await expect(h.send()).resolves.toMatchObject({ reason: 'question' });
     expect(h.published).toEqual([]);
@@ -466,6 +472,101 @@ describe('ThreadDeliveryService: a running chat', () => {
 
     await expect(h.send()).resolves.toMatchObject({ outcome: 'woken' });
     expect(h.published).toHaveLength(1);
+  });
+});
+
+describe('ThreadDeliveryService: the budget of joins', () => {
+  it('still joins the thirtieth message of the hour', async () => {
+    const h = harness({ status: 'running' }, { running: true, joins: 29 });
+
+    await expect(h.send()).resolves.toMatchObject({ outcome: 'joined' });
+    expect(h.chats.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the thirty-first waiting with wake_limit, sends nothing into the turn and says so', async () => {
+    const h = harness({ status: 'running' }, { running: true, joins: 30 });
+
+    const answer = await h.send();
+
+    expect(answer).toEqual({
+      outcome: 'waiting',
+      reason: 'wake_limit',
+      title: 'Target',
+    });
+    expect(h.chats.sendMessage).not.toHaveBeenCalled();
+    expect(h.inbox.markDelivered).not.toHaveBeenCalled();
+    expect(h.published).toEqual([]);
+    expect(h.messages[0]).toMatchObject({
+      status: 'waiting',
+      reason: 'wake_limit',
+    });
+    expect(sentRow()).toMatchObject({
+      outcome: 'waiting',
+      reason: 'wake_limit',
+    });
+  });
+
+  it('wakes nobody when that turn ends, so a loop between two threads dies out', async () => {
+    const h = harness({ status: 'running' }, { running: true, joins: 30 });
+    await h.send();
+
+    await h.settle('completed');
+
+    expect(h.published).toEqual([]);
+    expect(h.chats.sendMessage).not.toHaveBeenCalled();
+    expect(h.messages[0]).toMatchObject({
+      status: 'waiting',
+      reason: 'wake_limit',
+    });
+  });
+
+  it('counts only a join: an idle thread past the budget is still woken', async () => {
+    const h = harness({}, { joins: 30 });
+
+    await expect(h.send()).resolves.toMatchObject({ outcome: 'woken' });
+    expect(h.published).toHaveLength(1);
+  });
+
+  it('counts only a join: a CLI whose follow-up interrupts still waits for the turn to end', async () => {
+    const h = harness(
+      { status: 'running' },
+      { running: true, interrupts: true, joins: 30 },
+    );
+
+    await expect(h.send()).resolves.toMatchObject({
+      outcome: 'waiting',
+      reason: 'running_turn',
+    });
+  });
+
+  it('tells a team’s executor, flips nothing, and leaves it waiting with wake_limit', async () => {
+    const h = harness({ teamId: 'team', status: 'running' }, { joins: 30 });
+    h.executor.joinThreadMessage.mockResolvedValue('over_budget');
+
+    await expect(h.send()).resolves.toMatchObject({
+      outcome: 'waiting',
+      reason: 'wake_limit',
+    });
+
+    expect(h.executor.joinThreadMessage.mock.calls[0]![1].overBudget).toBe(
+      true,
+    );
+    expect(h.inbox.markDelivered).not.toHaveBeenCalled();
+    expect(h.messages[0]).toMatchObject({
+      status: 'waiting',
+      reason: 'wake_limit',
+    });
+  });
+
+  it('asks a team’s executor to join under the budget', async () => {
+    const h = harness({ teamId: 'team', status: 'running' }, { joins: 29 });
+    h.executor.joinThreadMessage.mockResolvedValue('joined');
+
+    await expect(h.send()).resolves.toMatchObject({ outcome: 'joined' });
+    expect(h.executor.joinThreadMessage.mock.calls[0]![1].overBudget).toBe(
+      false,
+    );
+    expect(h.inbox.markDelivered).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -774,7 +875,7 @@ describe('ThreadDeliveryService: who may reach whom', () => {
     );
     h.runs.set('chat', runOf({ id: 'chat', status: 'running' }));
     h.approvals.awaitingFor.mockReturnValue('question');
-    h.chats.hasQuestionWaiting.mockImplementation(
+    h.chats.awaitsCardAnswer.mockImplementation(
       ((runId: string) => runId === 'chat') as unknown as () => boolean,
     );
 

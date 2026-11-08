@@ -561,16 +561,22 @@ interface LiveRunControl {
 /**
  * A message from another thread going into the lead's running turn. `row` is
  * what the run shows for it; `onDropped` runs when the turn gave it back.
+ * `overBudget`: the thread has taken its joins for this hour.
  */
 export interface ThreadMessageJoin {
   prompt: string;
   row: HostRowWire;
   deliveryId: string;
+  overBudget: boolean;
   onDropped: () => void;
 }
 
-/** `idle`: no turn of the lead to join. `busy`: one that cannot take it now. */
-export type ThreadMessageJoinAnswer = 'joined' | 'busy' | 'idle';
+/**
+ * `idle`: no turn of the lead to join. `busy`: one that cannot take it now.
+ * `over_budget`: one that could, and the thread has taken its joins this hour.
+ */
+export type ThreadMessageJoinAnswer =
+  'joined' | 'busy' | 'idle' | 'over_budget';
 
 /** The refusal for a message addressed to a call that is not running. */
 function callNotRunning(): ConflictException {
@@ -7482,6 +7488,9 @@ export class TeamExecutorService
       const running = conversationNodes.get(lead.id) ?? lead;
       if (this.adapterFor(running.agent).getConfig().followUp.interrupts) {
         return 'busy';
+      }
+      if (join.overBudget) {
+        return 'over_budget';
       }
       const told = (
         runningHandles.get(lead.id) ?? continuationHandles.get(lead.id)

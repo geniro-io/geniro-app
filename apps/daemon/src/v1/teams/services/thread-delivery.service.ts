@@ -30,6 +30,7 @@ import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { KeyedChain } from '../../agents/utils/keyed-chain';
 import { persistItemAndEmit } from '../../agents/utils/persist-item';
 import {
+  THREAD_JOINS_PER_HOUR,
   THREAD_WAKE_PROMPT,
   THREAD_WAKES_PER_HOUR,
   threadMessageReturnedRow,
@@ -44,7 +45,10 @@ import { redactSecrets } from '../../diagnostics/utils/redact';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { Run } from '../../runs/entity/run.entity';
 import { isColdAndLarge } from '../utils/prompt-cache-standing';
-import { TeamExecutorService } from './team-executor.service';
+import {
+  TeamExecutorService,
+  type ThreadMessageJoinAnswer,
+} from './team-executor.service';
 
 /** How many runs a listing reads before it hides the caller and ranks its project. */
 const THREAD_LIST_WINDOW = 200;
@@ -304,15 +308,20 @@ export class ThreadDeliveryService implements OnModuleInit {
       return { outcome: 'waiting', reason: null };
     }
     if (mayJoin) {
+      const overBudget =
+        (await this.inbox.joinsInLastHour(runId)) >= THREAD_JOINS_PER_HOUR;
       const joined =
         run.teamId === null
-          ? await this.joinChat(run, messages)
-          : await this.joinTeam(run, messages);
+          ? await this.joinChat(run, messages, overBudget)
+          : await this.joinTeam(run, messages, overBudget);
       if (joined === 'joined') {
         return { outcome: 'joined', reason: null };
       }
       if (joined === 'busy') {
         return this.leave(runId, messages, 'running_turn');
+      }
+      if (joined === 'over_budget') {
+        return this.leave(runId, messages, 'wake_limit');
       }
     }
     const reason = await this.whyNotWake(run, messages, resending);
@@ -352,7 +361,8 @@ export class ThreadDeliveryService implements OnModuleInit {
   private async joinChat(
     run: Run,
     messages: readonly Routable[],
-  ): Promise<'joined' | 'busy' | 'idle'> {
+    overBudget: boolean,
+  ): Promise<ThreadMessageJoinAnswer> {
     if (!this.processes.has(run.id)) {
       return 'idle';
     }
@@ -367,6 +377,9 @@ export class ThreadDeliveryService implements OnModuleInit {
       followUp.interrupts
     ) {
       return 'busy';
+    }
+    if (overBudget) {
+      return 'over_budget';
     }
     const deliveryId = randomUUID();
     // Delivered BEFORE the send: a drop reported at once must find its row.
@@ -394,17 +407,21 @@ export class ThreadDeliveryService implements OnModuleInit {
   private async joinTeam(
     run: Run,
     messages: readonly Routable[],
-  ): Promise<'joined' | 'busy' | 'idle'> {
+    overBudget: boolean,
+  ): Promise<ThreadMessageJoinAnswer> {
     const deliveryId = randomUUID();
-    await this.inbox.markDelivered(
-      run.id,
-      messages.map((message) => message.id),
-      deliveryId,
-    );
+    if (!overBudget) {
+      await this.inbox.markDelivered(
+        run.id,
+        messages.map((message) => message.id),
+        deliveryId,
+      );
+    }
     const answer = await this.executor.joinThreadMessage(run.id, {
       prompt: threadMessagesPrompt(messages),
       row: threadMessagesRow(messages),
       deliveryId,
+      overBudget,
       onDropped: () => {
         void this.returnJoined(run.id, deliveryId);
       },

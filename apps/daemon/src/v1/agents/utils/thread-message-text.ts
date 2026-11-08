@@ -14,6 +14,7 @@ export const THREAD_MESSAGES_PER_MINUTE = 5;
 export const THREAD_MESSAGE_REPEAT_WINDOW_MS = 10 * 60_000;
 export const THREAD_INBOX_MAX_WAITING = 50;
 export const THREAD_WAKES_PER_HOUR = 6;
+export const THREAD_JOINS_PER_HOUR = 30;
 export const UNTITLED_THREAD = 'Untitled thread';
 
 /**
@@ -109,7 +110,7 @@ const REASON_WORDS: Record<ThreadMessageReason, string> = {
   cold_and_large:
     'waits for its next turn, because waking that large idle thread would be costly',
   wake_limit:
-    'waits for its next turn, because that thread was woken too often this hour',
+    'waits for its next turn, because other threads reached that thread too often this hour',
 };
 
 /** A waiting message's reason as the sender and the user read it. */

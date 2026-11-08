@@ -1957,6 +1957,7 @@ describe('TeamExecutorService', () => {
       prompt: 'fenced text',
       row,
       deliveryId: 'join-1',
+      overBudget: false,
       onDropped,
     });
     const threadRows = (itemDao: FakeItemDao, runId: string) =>
@@ -2010,6 +2011,57 @@ describe('TeamExecutorService', () => {
         'busy',
       );
       expect(cursor.starts[0]!.sendUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('answers over_budget, tells the running lead nothing and writes no row', async () => {
+      const { service, claude, itemDao } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      await expect(
+        service.joinThreadMessage(run.id, { ...join(), overBudget: true }),
+      ).resolves.toBe('over_budget');
+      await drain();
+
+      expect(claude.starts[0]!.sendUserMessage).not.toHaveBeenCalled();
+      expect(threadRows(itemDao, run.id)).toEqual([]);
+    });
+
+    it('answers idle over budget once the run has settled, so a wake may still open a turn', async () => {
+      const { service, claude } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+
+      await expect(
+        service.joinThreadMessage(run.id, { ...join(), overBudget: true }),
+      ).resolves.toBe('idle');
+    });
+
+    it('answers busy over budget for a CLI whose follow-up interrupts: that never counted as a join', async () => {
+      const { service, cursor } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a', { agent: 'cursor-agent' })], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      await expect(
+        service.joinThreadMessage(run.id, { ...join(), overBudget: true }),
+      ).resolves.toBe('busy');
     });
 
     it('answers busy when the turn refuses the write', async () => {

@@ -232,6 +232,13 @@ export class ThreadInboxService {
     return this.messages.sumWakesSince(runId, new Date(Date.now() - HOUR_MS));
   }
 
+  joinsInLastHour(runId: string): Promise<number> {
+    return this.messages.countJoinedSince(
+      runId,
+      new Date(Date.now() - HOUR_MS),
+    );
+  }
+
   async markWoken(
     runId: string,
     message: Pick<ThreadMessage, 'id' | 'wakes'>,

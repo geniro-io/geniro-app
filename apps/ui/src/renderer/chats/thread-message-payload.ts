@@ -149,7 +149,7 @@ const REASON_WORDS: Record<ThreadMessageReason, string> = {
   cold_and_large:
     'waits for its next turn, because waking that large idle thread would be costly',
   wake_limit:
-    'waits for its next turn, because that thread was woken too often this hour',
+    'waits for its next turn, because other threads reached that thread too often this hour',
 };
 
 export function threadMessageReasonWords(reason: ThreadMessageReason): string {
@@ -168,7 +168,7 @@ const WAITING_WORDS: Record<ThreadMessageReason, string> = {
   cold_and_large:
     'Goes out with the next turn: waking this large idle thread would be costly',
   wake_limit:
-    'Goes out with the next turn: this thread was woken too often this hour',
+    'Goes out with the next turn: other threads reached this one too often this hour',
 };
 
 export function waitingMessageReasonWords(reason: ThreadMessageReason): string {

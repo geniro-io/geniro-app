@@ -397,6 +397,49 @@ describe('ThreadInboxService.wakesInLastHour', () => {
   });
 });
 
+describe('ThreadInboxService.joinsInLastHour', () => {
+  it('counts the messages joined into a thread in the last hour only', async () => {
+    const h = await threadInboxDb();
+    const joined = (extra: Parameters<typeof h.seedMessage>[0]) =>
+      h.seedMessage({
+        status: 'delivered',
+        deliveryId: 'join',
+        deliveredAt: new Date(T0.getTime() - 30 * MINUTE),
+        ...extra,
+      });
+    await joined({});
+    await joined({ deliveredAt: new Date(T0.getTime() - 61 * MINUTE) });
+    await joined({ deliveryId: null });
+    await joined({ toRunId: 'elsewhere' });
+    await h.seedMessage({ status: 'waiting' });
+
+    expect(await h.service.joinsInLastHour(TARGET)).toBe(1);
+
+    at(31 * MINUTE);
+    expect(await h.service.joinsInLastHour(TARGET)).toBe(0);
+  });
+
+  it('counts a join when it is flipped, and takes it back when the turn dropped it', async () => {
+    const h = await threadInboxDb();
+    const message = await h.seedMessage({});
+
+    await h.service.markDelivered(TARGET, [message.id], 'join-1');
+    expect(await h.service.joinsInLastHour(TARGET)).toBe(1);
+
+    await h.service.returnDropped(['join-1']);
+    expect(await h.service.joinsInLastHour(TARGET)).toBe(0);
+  });
+
+  it('does not count a message a turn drained at its start', async () => {
+    const h = await threadInboxDb();
+    const message = await h.seedMessage({});
+
+    await h.service.markDelivered(TARGET, [message.id]);
+
+    expect(await h.service.joinsInLastHour(TARGET)).toBe(0);
+  });
+});
+
 describe('ThreadInboxService.listOwed', () => {
   it('lists the messages a turn is still owed to carry: waiting, wanting a wake, with no final reason', async () => {
     const h = await threadInboxDb();

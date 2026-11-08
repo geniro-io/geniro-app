@@ -47,6 +47,8 @@ export const REMOTE_ACCESS_POLL_WINDOW_MS = 5 * 60_000;
 const EXPIRY_REREAD_MARGIN_MS = 1_000;
 const DEVICES_SHOWN = 5;
 
+type TunnelPress = 'open' | 'close';
+
 /**
  * One copyable link — the `.local` primary or the IP fallback.
  *
@@ -93,9 +95,12 @@ function TunnelPanel({
   tunnel: RemoteAccessState['tunnel'];
   onOpen: () => void;
   onClose: () => void;
-  pending: boolean;
+  pending: TunnelPress | null;
 }): React.JSX.Element {
-  const busy = pending || tunnel.status === 'starting';
+  const open = tunnel.status === 'open';
+  const closing = pending === 'close';
+  const connecting =
+    !open && (tunnel.status === 'starting' || pending === 'open');
   return (
     <SettingsPanel>
       <SettingsPanelRow
@@ -103,7 +108,7 @@ function TunnelPanel({
         label="Internet address"
         description="Runs a tunnel client on this Mac (cloudflared, else ngrok) and forwards a public address to it. Anyone with the link reaches the pairing screen, so the 6-digit code becomes the only thing in front of your agents.">
         <div className="flex flex-col gap-2">
-          {tunnel.status === 'open' && tunnel.url ? (
+          {open && tunnel.url ? (
             <RemoteLinkRow
               label={`Public (via ${tunnel.provider ?? 'tunnel'})`}
               url={tunnel.url}
@@ -115,12 +120,12 @@ function TunnelPanel({
           <div className="flex items-center gap-2">
             <Button
               type="button"
-              variant={tunnel.status === 'open' ? 'outline' : 'default'}
+              variant={open || connecting ? 'outline' : 'default'}
               size="sm"
               className="shrink-0 gap-1.5"
-              disabled={busy}
-              onClick={tunnel.status === 'open' ? onClose : onOpen}>
-              {busy ? (
+              disabled={closing}
+              onClick={open || connecting ? onClose : onOpen}>
+              {closing || connecting ? (
                 <Loader2
                   aria-hidden="true"
                   className="size-3.5 shrink-0 animate-spin"
@@ -128,17 +133,28 @@ function TunnelPanel({
               ) : (
                 <Globe aria-hidden="true" className="size-3.5 shrink-0" />
               )}
-              {tunnel.status === 'open' ? 'Close address' : 'Get an address'}
+              {connecting
+                ? 'Cancel'
+                : open
+                  ? 'Close address'
+                  : 'Get an address'}
             </Button>
-            {tunnel.status === 'starting' ? (
+            {connecting ? (
               <span className="text-xs text-muted-foreground">
-                Waiting for the tunnel to report its address…
+                Connecting… The address appears here once it works.
               </span>
             ) : null}
           </div>
+          {connecting && tunnel.detail ? (
+            <p
+              data-slot="tunnel-detail"
+              className="m-0 text-xs break-words text-muted-foreground">
+              {tunnel.provider}: {tunnel.detail}
+            </p>
+          ) : null}
         </div>
       </SettingsPanelRow>
-      {tunnel.status === 'open' && tunnel.url ? (
+      {open && tunnel.url ? (
         <SettingsPanelRow layout="block">
           <div className="flex items-center gap-3">
             <QrCode
@@ -299,7 +315,10 @@ export function RemoteAccess({
   // Keep the page current while somebody is looking at it — see
   // `REMOTE_ACCESS_POLL_MS` for what changes behind its back. A focus or a
   // reveal re-reads at once and restarts the bounded window; a hidden window
-  // stops the poll outright rather than ticking to no purpose.
+  // stops the poll outright rather than ticking to no purpose. A tunnel that
+  // starts or stops connecting restarts it too: the wait can run for minutes,
+  // and pairing follows it.
+  const tunnelConnecting = state?.tunnel.status === 'starting';
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
     let until = 0;
@@ -341,7 +360,7 @@ export function RemoteAccess({
       window.removeEventListener('focus', onLook);
       document.removeEventListener('visibilitychange', onLook);
     };
-  }, [refresh]);
+  }, [refresh, tunnelConnecting]);
 
   // The code's own clock, which outlives the poll's window: re-read just past
   // the stated expiry, when main has minted the next one. Re-armed whenever
@@ -420,15 +439,14 @@ export function RemoteAccess({
       });
   }, []);
 
-  // ONE flag for both presses: opening and closing are the same control in
-  // two states, so a second flag could only ever describe a press that is not
-  // the one on screen.
-  const [tunnelPending, setTunnelPending] = useState(false);
+  // ONE state for both presses: opening and closing are the same control, and
+  // a Cancel replaces the open press it ends.
+  const [tunnelPending, setTunnelPending] = useState<TunnelPress | null>(null);
   const runTunnel = useLatestCallback(
-    (call: () => Promise<RemoteAccessState>): void => {
+    (press: TunnelPress, call: () => Promise<RemoteAccessState>): void => {
       pressEpochRef.current += 1;
       setError(null);
-      setTunnelPending(true);
+      setTunnelPending(press);
       void call()
         .then((next) => {
           if (mountedRef.current) {
@@ -442,7 +460,7 @@ export function RemoteAccess({
         })
         .finally(() => {
           if (mountedRef.current) {
-            setTunnelPending(false);
+            setTunnelPending(null);
           }
         });
     },
@@ -536,8 +554,12 @@ export function RemoteAccess({
           <TunnelPanel
             tunnel={state.tunnel}
             pending={tunnelPending}
-            onOpen={() => runTunnel(() => window.geniro.startRemoteTunnel())}
-            onClose={() => runTunnel(() => window.geniro.stopRemoteTunnel())}
+            onOpen={() =>
+              runTunnel('open', () => window.geniro.startRemoteTunnel())
+            }
+            onClose={() =>
+              runTunnel('close', () => window.geniro.stopRemoteTunnel())
+            }
           />
 
           <SettingsPanel>

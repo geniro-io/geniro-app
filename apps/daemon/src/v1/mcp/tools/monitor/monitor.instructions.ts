@@ -19,13 +19,19 @@ export function monitorInstructions(): string {
   return (
     'Run a shell command in the background and be woken with what it prints, instead of waiting ' +
     'with sleep-and-poll loops. Use it to wait on something slow that reports as it goes — a CI ' +
-    'run (`gh run watch <id> --exit-status`), a long build or test run, a log you need a line from ' +
-    '(`tail -f app.log | grep --line-buffered ERROR`). Do not use it for a command that finishes ' +
-    'in seconds (run that with your shell tool) or to keep a server running (start that detached). ' +
+    'run (`gh run watch <id> --exit-status`), a long build or test run, a log you follow until you ' +
+    'stop it (`tail -f app.log | grep --line-buffered ERROR`), or one line you wait for, which ends ' +
+    'by itself (`until grep -q DONE app.log; do sleep 5; done; grep DONE app.log`). A `tail -f` piped ' +
+    'into a reader that stops early (`grep -m 1`, `grep -q`, `head`) is refused: `tail` notices only ' +
+    'when it next writes, so the pipeline never ends once the file stops growing. Do not use it for ' +
+    'a command that finishes in seconds (run that with your shell tool) or to keep a server running ' +
+    '(start that detached). ' +
     "It returns at once with the monitor's id (`m1`, `m2`, …); end your turn rather than wait. " +
     'What the command prints arrives as your next turn, after the current one, in a ' +
     '`<message from="<description> · monitor" monitor="m1">` block — the command\'s output, not ' +
-    "the user's words. The last one says how it ended (`· exit code 0`, `· timed out`, `· stopped`). " +
+    "the user's words. The last one says how it ended (`· exit code 0`, `· timed out`, `· stopped`); " +
+    'until then the monitor is still running, however final its output looks, and each wake names the ' +
+    'ones that are. ' +
     `stdout and stderr are read together. Output is gathered for ${MONITOR_BATCH_WINDOW_MS} ms at a time; one ` +
     `message carries at most ${MONITOR_EVENT_MAX_LINES} lines or ${MONITOR_EVENT_MAX_BYTES / 1024} KiB (the rest is ` +
     `counted, not sent), and a line is cut at ${MONITOR_LINE_MAX_CHARS} characters. Output that arrives while you ` +
@@ -38,8 +44,9 @@ export function monitorInstructions(): string {
     'costs as much as a real turn. For a watcher that prints only when something happens (pull-request feedback, ' +
     'a deploy finishing), write the command to print nothing until then and give it a timeout as long as you are ' +
     'prepared to wait, rather than restarting a short one each time it times out quietly. ' +
-    `A thread runs at most ${MONITOR_RUN_MAX} monitors at once. ` +
-    "It runs in this conversation's folder, under `/bin/sh`. Stop one early with stop_monitor; " +
+    `A thread runs at most ${MONITOR_RUN_MAX} monitors at once, and a command one of your monitors already runs ` +
+    'is refused. A newer monitor does not end an older one: the answer names your others, so stop the one it ' +
+    "replaces. It runs in this conversation's folder, under `/bin/sh`. Stop one early with stop_monitor; " +
     `list_monitors names the ones still running. \`description\` (at most ${MONITOR_DESCRIPTION_MAX} characters) is ` +
     'how the user and you will tell its messages apart, e.g. "CI run 4812".'
   );

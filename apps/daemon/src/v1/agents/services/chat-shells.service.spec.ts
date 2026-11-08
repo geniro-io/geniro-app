@@ -22,13 +22,31 @@ import type { RunKindRowsCache } from './run-kind-rows.cache';
  * below describing the fake.
  */
 const machine = vi.hoisted(() => ({
-  processes: [] as { pid: number; ppid: number; args: string }[],
+  processes: [] as {
+    pid: number;
+    ppid: number;
+    args: string;
+    pgid?: number;
+    startedAt?: number;
+  }[],
   signals: [] as { pid: number | undefined; signal: string }[],
 }));
 
 vi.mock('../utils/process-descendants', async (importActual) => ({
   ...(await importActual<object>()),
   listProcesses: async () => machine.processes,
+}));
+
+vi.mock('../utils/run-process-scan', async (importActual) => ({
+  ...(await importActual<object>()),
+  scanPlainTable: async () =>
+    machine.processes.map((row) => ({
+      ...row,
+      pgid: row.pgid ?? row.pid,
+      uid: 501,
+      tty: null,
+      startedAt: row.startedAt ?? 0,
+    })),
 }));
 
 vi.mock('../utils/kill-tree', async (importActual) => ({
@@ -89,6 +107,11 @@ function service(
      * absent here is one no live process reports running.
      */
     recorded?: Record<string, number[]>;
+    /** Whole groups, where a test needs more than one member or a dead leader. */
+    recordedGroups?: Record<
+      string,
+      { pgid: number; members: { pid: number; startedAt: number }[] }[]
+    >;
   } = {},
 ): {
   service: ChatShellsService;
@@ -198,10 +221,12 @@ function service(
             pid,
           })),
         recordedGroupsOf: (_runId: string, callId: string) =>
+          live.recordedGroups?.[callId] ??
           live.recorded?.[callId]?.map((pid) => ({
             pgid: pid,
             members: [{ pid, startedAt: 0 }],
-          })) ?? null,
+          })) ??
+          null,
       } as unknown as AgentSessionRegistry,
       NO_CALL_INDEX,
       {
@@ -422,6 +447,52 @@ describe('ChatShellsService.kill', () => {
       { pid: 51, signal: 'SIGTERM' },
       { pid: 52, signal: 'SIGTERM' },
     ]);
+  });
+
+  it('stops the recorded group of a command whose text is not in the table', async () => {
+    // A heredoc: the wrapper takes the line over a descriptor, so nothing in
+    // the table reads as what the agent wrote. The wrapper has gone too, so the
+    // group's id names no live process: only a signal to the group reaches it.
+    machine.processes = [{ pid: 42, ppid: 1, pgid: 41, args: 'Python' }];
+    const { service: svc } = service(
+      [lifecycle(1, 'shell_open', 'call-1')],
+      [{ id: 'call-1', command: "python3 << 'PY'\nprint(1)\nPY" }],
+      {
+        answered: ['call-1'],
+        recordedGroups: {
+          'call-1': [{ pgid: 41, members: [{ pid: 42, startedAt: 0 }] }],
+        },
+      },
+    );
+
+    expect(await svc.kill('run-1', 'call-1')).toEqual({
+      killed: true,
+      reason: null,
+    });
+    expect(machine.signals).toEqual([{ pid: 41, signal: 'SIGTERM' }]);
+  });
+
+  it('never signals a recorded group whose member is another process by now', async () => {
+    machine.processes = [
+      { pid: 42, ppid: 1, pgid: 41, args: 'stranger', startedAt: 999_000 },
+    ];
+    const { service: svc, written } = service(
+      [lifecycle(1, 'shell_open', 'call-1')],
+      [{ id: 'call-1', command: "python3 << 'PY'\nprint(1)\nPY" }],
+      {
+        answered: ['call-1'],
+        recordedGroups: {
+          'call-1': [{ pgid: 41, members: [{ pid: 42, startedAt: 5_000 }] }],
+        },
+      },
+    );
+
+    expect(await svc.kill('run-1', 'call-1')).toEqual({
+      killed: false,
+      reason: expect.stringContaining('already stopped'),
+    });
+    expect(machine.signals).toEqual([]);
+    expect(written).toHaveLength(1);
   });
 
   it('writes the close itself, since nothing else will', async () => {

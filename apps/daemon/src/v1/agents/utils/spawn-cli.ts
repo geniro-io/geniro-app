@@ -6,6 +6,7 @@ import type {
   AgentEvent,
   AgentTurnHandle,
   ApprovalOption,
+  CommandRecord,
   FollowUpMessage,
   SessionCloseCause,
   SubagentTrackingLost,
@@ -18,13 +19,14 @@ import { foldTurnComplete, foldUsage } from './fold-turn-complete';
 import { createGroupTerminator } from './kill-tree';
 import { MAX_BUFFERED_LINE_CHARS, NdjsonBuffer } from './ndjson-buffer';
 import {
+  commandLiveness,
   commandTargets,
   descendantsOf,
-  isCommandRunning,
   isGroupAnchored,
   listProcesses,
   type ProcessRow,
   type RecordedGroup,
+  recordedPidsRunning,
 } from './process-descendants';
 import { decodePsText } from './process-usage';
 import { type PlainProcess, scanPlainTable } from './run-process-scan';
@@ -220,6 +222,8 @@ export interface CliTurnOptions {
    * terminal this module writes.
    */
   onProcessEnded?: () => AgentEvent[];
+  /** `TurnDriver.onQuiet`. */
+  onQuiet?: () => AgentEvent[] | null;
   /**
    * Asked when the session is CLOSED under this live turn: how long to let the
    * turn end on its own before the group is signalled
@@ -278,6 +282,19 @@ export interface CliSessionOptions {
    * are also what records where its commands run ({@link commandWork}).
    */
   detectDetachedShells?: boolean;
+  /**
+   * The CLI's own record of the commands it started, for a CLI that keeps one:
+   * what ties a command to its process when its text is not in the table (a
+   * heredoc, or a wrapper that takes the line over a file descriptor).
+   */
+  readCommandRecords?: () => Promise<readonly CommandRecord[]>;
+  /**
+   * This CLI sends nothing while it waits on a command it detached
+   * (`AdapterConfig.shells.silentWaitReason`).
+   */
+  silentCommandWait?: boolean;
+  /** {@link COMMAND_WAIT_QUIET_MS}. A TEST SEAM. */
+  commandWaitQuietMs?: number;
   /**
    * How the process table is read, for the sweep above. A TEST SEAM on the
    * `spawn` option's terms — production passes nothing and gets the real `ps`.
@@ -647,6 +664,21 @@ const TURN_END_EXIT_GRACE_MS = 2000;
 const DETACHED_SHELL_POLL_MS = 5000;
 
 /**
+ * How long a turn must go quiet, with a command it detached still alive, before
+ * it reads as waiting on that command. Real thinking runs to tens of seconds
+ * (cursor chats, 2026-11: 111 of 4359 quiet gaps ran between 30 and 60 s), and a
+ * false reading lets a message cancel that thinking.
+ */
+const COMMAND_WAIT_QUIET_MS = 45_000;
+
+/**
+ * Silence windows a turn waiting on a command it started may take, against the
+ * one any other turn gets: the CLI's own wait tool blocks for at most 119
+ * minutes, and the model needs time to answer once it returns.
+ */
+const COMMAND_WAIT_SILENCE_WINDOWS = 5;
+
+/**
  * How often a session re-reads where the commands its CLI reported running
  * run while any is out — see `recordCommandGroups`. A process a command forks later joins its
  * group's record on the next reading; one that starts yet another session in
@@ -978,6 +1010,16 @@ interface TurnState {
   continuedSegment: Extract<AgentEvent, { type: 'turn_complete' }> | null;
   /** Whether the owner was last told this turn is held. */
   holdAnnounced: boolean;
+  /** Armed while the CLI talks; firing means it has gone quiet. */
+  quietTimer: AwakeTimer | null;
+  /** Counts the CLI talking, so a slow reading can tell it spoke meanwhile. */
+  spokenCount: number;
+  /** The detached commands the quiet turn is announced as waiting on. */
+  commandWaitFor: number;
+  /** Silence windows this wait has already taken past the first. */
+  commandWaitWindows: number;
+  /** The command calls this turn made, which alone can stretch its silence. */
+  ownCommands: Set<string>;
   /**
    * The CLI's own latest `cost_progress` figure — what it has spent since its
    * last `result` line — kept so {@link heldCostOf} can be added to it.
@@ -1250,6 +1292,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * is what finally closes it.
    */
   const osDetachedShells = new Set<string>();
+  /** The sweep in flight, so that overlapping asks never open a shell twice. */
+  let shellSweep: Promise<void> | null = null;
+  let shellSweepOwed = false;
   let detachedShellTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Where each command the CLI reports running runs, by its unit id — see
@@ -1385,12 +1430,89 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   };
 
   /** The in-turn hold's announcement, each change once. */
-  const announceTurnHold = (turn: TurnState, open: number): void => {
+  const announceTurnHold = (
+    turn: TurnState,
+    open: number,
+    unit?: 'command',
+  ): void => {
     if (open === 0 && !turn.holdAnnounced) {
       return;
     }
     turn.holdAnnounced = open > 0;
-    turn.options.onEvent({ type: 'turn_held', open });
+    turn.options.onEvent({
+      type: 'turn_held',
+      open,
+      ...(unit === undefined ? {} : { unit }),
+    });
+  };
+
+  /** The agent is producing again, or has been given work: the wait is over. */
+  const endCommandWait = (turn: TurnState): void => {
+    if (turn.commandWaitFor === 0) {
+      return;
+    }
+    turn.commandWaitFor = 0;
+    turn.commandWaitWindows = 0;
+    announceTurnHold(turn, 0);
+    // The agent owes an answer now: a full window for it, not the wait's tail.
+    armSilenceDeadline(turn);
+  };
+
+  /** Keep a standing wait's count on what the last sweep found. */
+  const refreshCommandWait = (): void => {
+    const turn = current;
+    if (turn === null || turn.commandWaitFor === 0) {
+      return;
+    }
+    const open = osDetachedShells.size;
+    if (open === 0) {
+      endCommandWait(turn);
+    } else if (open !== turn.commandWaitFor) {
+      turn.commandWaitFor = open;
+      announceTurnHold(turn, open, 'command');
+    }
+  };
+
+  /**
+   * The turn has gone quiet. Its CLI may be blocked on a command it detached,
+   * which it does not report (`AdapterConfig.shells.silentWaitReason`): what it
+   * has written so far becomes rows either way, and with such a command alive
+   * the turn is announced as waiting on it, which is not the agent thinking.
+   */
+  const onTurnQuiet = async (turn: TurnState): Promise<void> => {
+    if (
+      turn.settled ||
+      turn.cancelRequested ||
+      turn.commandWaitFor > 0 ||
+      turn.outstanding.size > 0 ||
+      turn.deferredTerminal !== null ||
+      openWork.size > 0
+    ) {
+      return;
+    }
+    const written = turn.options.onQuiet?.() ?? null;
+    if (written === null) {
+      return;
+    }
+    // Straight to the owner: these are the CLI's earlier words, so they neither
+    // rearm the watch that just fired nor say the CLI has spoken since.
+    for (const event of written) {
+      turn.options.onEvent(event);
+    }
+    const spokenCount = turn.spokenCount;
+    await sweepDetachedShells();
+    if (
+      turn.settled ||
+      turn !== current ||
+      turn.cancelRequested ||
+      turn.spokenCount !== spokenCount ||
+      turn.commandWaitFor > 0 ||
+      osDetachedShells.size === 0
+    ) {
+      return;
+    }
+    turn.commandWaitFor = osDetachedShells.size;
+    announceTurnHold(turn, turn.commandWaitFor, 'command');
   };
 
   const continueOffTurnPast = (held: AgentEvent): void => {
@@ -1626,6 +1748,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       turn.silenceTimer.clear();
       turn.silenceTimer = null;
     }
+    if (turn.quietTimer) {
+      turn.quietTimer.clear();
+      turn.quietTimer = null;
+    }
     if (current === turn) {
       current = null;
     }
@@ -1731,6 +1857,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (!settlesOnTerminalEvent || turn.settled) {
       return;
     }
+    armQuietWatch(turn);
     if (turn.outstanding.size > 0) {
       if (turn.silenceTimer) {
         turn.silenceTimer.clear();
@@ -1793,15 +1920,43 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         finishTurn(turn, answeredByContinuation(turn.continuationAnswer));
         return;
       }
+      // Silence with a known reason: the CLI's own wait tool sends nothing. Only
+      // a command this turn started: a dev server from an earlier one explains
+      // no silence, and a wedged CLI beside it must still be given up on.
+      if (
+        turn.commandWaitFor > 0 &&
+        turn.commandWaitWindows + 1 < COMMAND_WAIT_SILENCE_WINDOWS &&
+        [...osDetachedShells].some((id) => turn.ownCommands.has(id))
+      ) {
+        turn.commandWaitWindows += 1;
+        armSilenceDeadline(turn);
+        return;
+      }
       // Through `emit`, so this takes the one-terminal gate with every other
       // outcome and cannot contradict a `result` line that arrives beside it.
       emit({
         type: 'error',
         message: `${opts.command} produced nothing for ${Math.round(
-          TURN_SILENCE_DEADLINE_MS / 60_000,
+          (TURN_SILENCE_DEADLINE_MS * (turn.commandWaitWindows + 1)) / 60_000,
         )} minutes — giving up on the turn`,
       });
     }, TURN_SILENCE_DEADLINE_MS);
+  };
+
+  /** Restart the wait for {@link onTurnQuiet}, for a CLI whose waits are silent. */
+  const armQuietWatch = (turn: TurnState): void => {
+    if (!opts.silentCommandWait) {
+      return;
+    }
+    turn.spokenCount += 1;
+    if (turn.quietTimer) {
+      turn.quietTimer.refresh();
+      return;
+    }
+    turn.quietTimer = awakeTimeout(() => {
+      turn.quietTimer = null;
+      void onTurnQuiet(turn);
+    }, opts.commandWaitQuietMs ?? COMMAND_WAIT_QUIET_MS);
   };
 
   /**
@@ -2633,6 +2788,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     const command = commandLineOf(event);
     if (command !== null) {
       executeCalls.set(event.id, { command, returned: false });
+      current?.ownCommands.add(event.id);
       requestCommandGroups();
     }
   };
@@ -2681,41 +2837,42 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   };
 
   /**
-   * Ask the OPERATING SYSTEM which of this turn's finished commands are still
-   * running, and open a shell row for each — the only truthful answer for a CLI
-   * that backgrounds a command and reports it complete.
+   * Which of this CLI's answered commands still run, for a CLI that reports a
+   * backgrounded command finished; each opens a shell row. Decided by the CLI's
+   * own record where it keeps one (`apps/daemon/AGENTS.md` → ACP and cursor
+   * transport), else by the command's text in the process table under this CLI.
    *
-   * MEASURED on cursor-agent 2026.08.31-4057e58, driven through this daemon
-   * with the raw ACP frames captured: asked to run `sleep 300` in the
-   * background, it answered the tool call
-   * `status: "completed", rawOutput: {exitCode: 0, stdout: "", stderr: ""}`
-   * three seconds in — while the process went on running for its full four
-   * minutes. There is no marker anywhere on that wire (the bundle carries the
-   * same seven `cursor/*` extension methods and no background one), it writes
-   * nothing to disk about it, and it never calls the ACP terminal methods its
-   * own SDK ships, so the client cannot host the process either. Every channel
-   * the CLI could have spoken on was checked; it says the opposite of the truth
-   * on the only one it uses.
-   *
-   * What is left is the process table, and it is enough because the command is
-   * OURS: it runs under the CLI child this module spawned — measured
-   * `sleep 300 → /bin/zsh → cursor-agent → the daemon` — so a descendant still
-   * running it is direct evidence, not an inference about another program's
-   * intentions.
-   *
-   * It looks only at calls the CLI has ANSWERED. An unanswered one is an
-   * ordinary foreground command that the transcript already shows as running,
-   * and announcing those would list every command twice.
-   *
-   * The result is fed back through {@link announceShellWork} as an ordinary
-   * `background_work` bracket, so a shell found this way is the same row, the
-   * same count and the same chip as one the CLI reported itself — there is no
-   * second kind of shell anywhere downstream.
+   * An unanswered call is an ordinary foreground command, which the transcript
+   * already shows as running. The result goes through {@link announceShellWork}
+   * as an ordinary `background_work` bracket, so there is no second kind of
+   * shell downstream.
    */
   const sweepDetachedShells = async (): Promise<void> => {
     if (!opts.detectDetachedShells) {
       return;
     }
+    if (shellSweep !== null) {
+      shellSweepOwed = true;
+      return shellSweep;
+    }
+    shellSweep = (async () => {
+      try {
+        do {
+          shellSweepOwed = false;
+          await readDetachedShells();
+        } while (shellSweepOwed && !processGone);
+      } catch (err) {
+        opts.logger?.warn(
+          `${opts.command}: could not read which of its commands still run: ${errorMessage(err)}`,
+        );
+      } finally {
+        shellSweep = null;
+      }
+    })();
+    return shellSweep;
+  };
+
+  const readDetachedShells = async (): Promise<void> => {
     const pending = [...executeCalls].filter(
       ([id, call]) => call.returned && !osDetachedShells.has(id),
     );
@@ -2730,8 +2887,26 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       await (opts.listProcesses ?? listProcesses)(),
       rootPid,
     );
-    for (const [id, call] of pending) {
-      if (!isCommandRunning(alive, call.command)) {
+    const stillRunning = commandLiveness(
+      alive,
+      (await opts.readCommandRecords?.()) ?? [],
+    );
+    const keptOpen = new Set(
+      [...osDetachedShells].filter((id) => {
+        const call = executeCalls.get(id);
+        return call !== undefined && stillRunning(call.command);
+      }),
+    );
+    // A call the CLI has not answered holds its own record: an earlier call
+    // written alike has ended, whatever that record says.
+    for (const call of executeCalls.values()) {
+      if (!call.returned) {
+        stillRunning(call.command);
+      }
+    }
+    // Newest first: of several calls written alike, the newest holds the record.
+    for (const [id, call] of pending.reverse()) {
+      if (!stillRunning(call.command)) {
         // Answered and gone — the ordinary case, and the reason this map is
         // pruned here rather than growing for the life of the session.
         executeCalls.delete(id);
@@ -2739,6 +2914,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         continue;
       }
       osDetachedShells.add(id);
+      keptOpen.add(id);
       announceShellWork({
         type: 'background_work',
         id,
@@ -2751,8 +2927,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       });
     }
     for (const id of [...osDetachedShells]) {
-      const call = executeCalls.get(id);
-      if (call !== undefined && isCommandRunning(alive, call.command)) {
+      if (keptOpen.has(id)) {
         continue;
       }
       osDetachedShells.delete(id);
@@ -2765,6 +2940,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         toolCallId: null,
       });
     }
+    refreshCommandWait();
     armDetachedShellPoll();
   };
 
@@ -2851,6 +3027,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }));
     const groupOf = new Map(rows.map((row) => [row.pid, row.pgid]));
     const ownGroup = groupOf.get(rootPid) ?? rootPid;
+    const records = (await opts.readCommandRecords?.()) ?? [];
+    if (processGone) {
+      return;
+    }
     for (const workId of running) {
       // A call the CLI answered as finished (cursor) is only what still runs
       // in its tree: a group a reading caught it in while it ran is not
@@ -2868,7 +3048,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         (call === undefined ? undefined : callCommands.get(call)) ??
         executeCalls.get(workId)?.command;
       if (command !== undefined) {
-        for (const pid of commandTargets(tree, command)) {
+        for (const pid of [
+          ...commandTargets(tree, command),
+          ...recordedPidsRunning(tree, records, command),
+        ]) {
           const pgid = groupOf.get(pid);
           if (pgid !== undefined) {
             pgids.add(pgid);
@@ -3379,6 +3562,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       );
       supersedeHeldTerminal(turn);
       announceTurnHold(turn, 0);
+    }
+    if (
+      event.parentToolUseId === undefined &&
+      RESUMES_A_HELD_TURN.has(event.type)
+    ) {
+      endCommandWait(turn);
     }
     // The CLI is still talking, so it has not wedged — push the deadline out.
     armSilenceDeadline(turn);
@@ -3985,6 +4174,11 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       supersededTerminal: null,
       continuedSegment: null,
       holdAnnounced: false,
+      quietTimer: null,
+      spokenCount: 0,
+      commandWaitFor: 0,
+      commandWaitWindows: 0,
+      ownCommands: new Set(),
       liveCostUsd: 0,
       liveEstimatedCostUsd: 0,
       costPublished: false,
@@ -4301,6 +4495,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           supersedeHeldTerminal(turn);
           announceTurnHold(turn, 0);
           armSilenceDeadline(turn);
+        }
+        if (delivered) {
+          turn.spokenCount += 1;
+          endCommandWait(turn);
         }
         return delivered;
       },

@@ -87,6 +87,7 @@ import type {
   ApprovalResolution,
   CarrySessionInput,
   CarrySessionResult,
+  CommandRecord,
   ConfigDirPin,
   DeleteSessionTranscriptInput,
   DeleteSessionTranscriptResult,
@@ -2243,6 +2244,7 @@ export abstract class AgentAdapter {
       customInstructions: input.customInstructions,
       projectInstructions: input.projectInstructions,
       memoryIndex: granted ? input.memoryIndex : null,
+      knowledgeIndex: granted ? input.knowledgeIndex : null,
       taskInstructions: input.taskInstructions,
       teamInstructions: input.teamInstructions,
       instructionBlocks: input.instructionBlocks,
@@ -2261,6 +2263,17 @@ export abstract class AgentAdapter {
    * instead of dropping into an interactive login TTY).
    */
   protected buildStdinPayload(_input: AgentTurnInput): string | undefined {
+    return undefined;
+  }
+
+  /**
+   * How this CLI's own record of the commands it started is read, for the
+   * process about to spawn with `env`. Undefined = it keeps none.
+   */
+  protected commandRecordReader(
+    _input: AgentTurnInput,
+    _env: Readonly<Record<string, string | undefined>>,
+  ): (() => Promise<readonly CommandRecord[]>) | undefined {
     return undefined;
   }
 
@@ -2570,6 +2583,8 @@ export abstract class AgentAdapter {
       // The same block again; snapshotted on the run, so a note saved while
       // the run works restarts nothing.
       input.memoryIndex ?? null,
+      // Likewise: a document saved while the run works restarts nothing.
+      input.knowledgeIndex ?? null,
       // Env on claude and thread config on codex, both fixed at spawn.
       input.nativeMemoryOff === true,
       // The same block again: a card whose label instructions changed since
@@ -2931,17 +2946,18 @@ export abstract class AgentAdapter {
         }
         return mapped;
       };
+      // The run tag last: no adapter's `buildEnv` and no caller's `input.env`
+      // may replace the id the run's teardown searches for.
+      const env = {
+        ...this.buildEnv(input),
+        ...local.env,
+        ...opts.runTag,
+      };
       session = runCliSession({
         command,
         args,
         cwd: input.cwd,
-        // The run tag last: no adapter's `buildEnv` and no caller's
-        // `input.env` may replace the id the run's teardown searches for.
-        env: {
-          ...this.buildEnv(input),
-          ...local.env,
-          ...opts.runTag,
-        },
+        env,
         stdinLifetime: runScoped
           ? 'session'
           : this.keepStdinOpen(input)
@@ -2959,6 +2975,8 @@ export abstract class AgentAdapter {
         // CLI it is talking to — the rule every field beside it follows.
         detectDetachedShells:
           this.getConfig().shells.unreportedDetachReason !== null,
+        silentCommandWait: this.getConfig().shells.silentWaitReason !== null,
+        readCommandRecords: this.commandRecordReader(input, env),
         listProcessGroups: this.options.listProcessGroupsFn,
         // Passed straight through: what to answer between turns depends on the
         // run's approval posture, which the CALLER holds — an adapter deciding
@@ -3143,6 +3161,7 @@ export abstract class AgentAdapter {
           onProcessEnded: driver.onProcessEnded
             ? () => driver.onProcessEnded!()
             : undefined,
+          onQuiet: driver.onQuiet ? () => driver.onQuiet!() : undefined,
           closeGraceMs: driver.closeGraceMs
             ? () => driver.closeGraceMs!()
             : undefined,

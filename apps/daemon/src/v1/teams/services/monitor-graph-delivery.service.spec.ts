@@ -99,6 +99,30 @@ describe('MonitorGraphDelivery', () => {
     expect(fake.held()).toBe(false);
   });
 
+  it("names the conversation's monitors still running in its wake, never another conversation's", async () => {
+    const fake = fakeExecutor();
+    delivery(fake);
+    registry.start({
+      owner,
+      command: 'echo SEED_EXIT=0; while true; do sleep 1; done',
+      description: 'seed run',
+      timeoutMs: 60_000,
+    });
+    registry.start({
+      owner: { ...owner, caller: 'dev::call-2', conversationId: 'call-2' },
+      command: 'while true; do sleep 1; done',
+      description: 'someone else',
+      timeoutMs: 60_000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    fake.answer('woken');
+    fake.endTurn();
+    const prompt = fake.wakeConversation.mock.calls.at(-1)?.[2];
+    expect(prompt).toContain('SEED_EXIT=0');
+    expect(prompt).toContain('[geniro] Still running: m1 (seed run).');
+    expect(prompt).not.toContain('someone else');
+  });
+
   it('records the end of output no turn can take', async () => {
     const fake = fakeExecutor();
     fake.answer('refused');

@@ -15,10 +15,12 @@ import { persistItemAndEmit } from '../utils/persist-item';
 import {
   commandTargets,
   descendantsOf,
+  isGroupAnchored,
   listProcesses,
   pidsRunningCommand,
   type ProcessRow,
 } from '../utils/process-descendants';
+import { scanPlainTable } from '../utils/run-process-scan';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ChatService } from './chat.service';
@@ -262,10 +264,13 @@ export class ChatShellsService {
       };
     }
     const table = await listProcesses();
-    const pids = pidsRunningCommand(
+    const written = pidsRunningCommand(
       this.recordedScope(runId, callId, table, table),
       shell.command,
     );
+    // A heredoc's text is nowhere in the table; its recorded group still is.
+    const pids =
+      written.length > 0 ? written : await this.recordedGroups(runId, callId);
     if (pids.length === 0) {
       // The transcript says open and the machine says otherwise — a command
       // that died with no one to write its close. Recording it is the useful
@@ -420,6 +425,23 @@ export class ChatShellsService {
       ]),
     );
     return rows.filter((row) => scope.has(row.pid));
+  }
+
+  /** The group ids still anchored by a recorded member: {@link kill} signals groups. */
+  private async recordedGroups(
+    runId: string,
+    callId: string,
+  ): Promise<number[]> {
+    const groups = this.sessions.recordedGroupsOf(runId, callId) ?? [];
+    if (groups.length === 0) {
+      return [];
+    }
+    const rows = await scanPlainTable();
+    return rows === null
+      ? []
+      : groups
+          .filter((group) => isGroupAnchored(group, rows))
+          .map((group) => group.pgid);
   }
 
   /** The call that started a command, and its result once answered. */

@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { pushEscapeLayer } from './escape-layers';
+import { closeOnFrameFocus } from './frame-focus';
 import { MenuAnchorContext } from './menu-anchor';
 import { cn } from './utils';
 
@@ -233,8 +234,10 @@ export function Popover({
       }
     };
     document.addEventListener('mousedown', onPointerDown);
+    const stopFrameFocus = closeOnFrameFocus(panelRef, onClose);
     return () => {
       document.removeEventListener('mousedown', onPointerDown);
+      stopFrameFocus();
     };
   }, [open, onClose, triggerRef]);
 

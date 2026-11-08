@@ -1497,6 +1497,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           taskInstructions: 'CARD',
           projectInstructions: 'PROJECT',
           memoryIndex: 'INDEX',
+          knowledgeIndex: null,
         },
       });
       expect(
@@ -1530,6 +1531,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
           taskInstructions: null,
           projectInstructions: null,
           memoryIndex: null,
+          knowledgeIndex: null,
         },
       });
       expect(

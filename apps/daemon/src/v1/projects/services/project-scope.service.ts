@@ -8,6 +8,8 @@ import { TaskDao } from '../../tasks/dao/task.dao';
 import { ProjectDao } from '../dao/project.dao';
 import type { Project } from '../entity/project.entity';
 import type {
+  RunPlace,
+  RunPlaceFacts,
   RunPlacement,
   RunProject,
   RunProjectFacts,
@@ -21,9 +23,12 @@ export type RunProjectColumns = Pick<
   'projectId' | 'projectSource' | 'taskId' | 'cwd'
 >;
 
+/** The columns a run's place is read from. */
+export type RunPlaceColumns = RunProjectColumns & Pick<Run, 'teamId'>;
+
 /**
- * Which project a run belongs to — the one resolution its shared memory and its
- * project instructions both follow.
+ * Which project a run belongs to — the one resolution its shared memory, its
+ * knowledge and its project instructions all follow.
  */
 @Injectable()
 export class ProjectScopeService {
@@ -118,6 +123,27 @@ export class ProjectScopeService {
       return card;
     }
     return this.projects.findAnyByFolder(await this.rootOf(run.cwd), em);
+  }
+
+  /**
+   * Where a run reads and files what it shares. The project: the live project
+   * settled when the run was created ({@link projectOfRun}), else none. The
+   * team: a team run's, else none — a chat, an analysis and a builder chat have
+   * global and project places only.
+   */
+  async placeOf(run: RunPlaceColumns): Promise<RunPlace> {
+    return {
+      projectId: (await this.projectOfRun(run))?.id ?? null,
+      teamSlug: run.teamId,
+    };
+  }
+
+  /** {@link placeOf} for a run whose row does not exist yet. */
+  async placeFor(facts: RunPlaceFacts): Promise<RunPlace> {
+    return {
+      projectId: (await this.projectOf(facts)).project?.id ?? null,
+      teamSlug: facts.teamSlug ?? null,
+    };
   }
 
   /** The names of the projects among `ids` that still exist, by id — one read per listing. */

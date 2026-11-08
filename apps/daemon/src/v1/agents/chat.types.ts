@@ -1192,6 +1192,7 @@ export interface AnalysedTeamRef {
     taskInstructions: string | null;
     projectInstructions: string | null;
     memoryIndex: string | null;
+    knowledgeIndex: string | null;
   } | null;
 }
 
@@ -4614,9 +4615,13 @@ export interface MonitorStartRequest {
   cwd?: string;
 }
 
+/** A running monitor as a message to its agent names it. */
+export type MonitorNamed = Pick<MonitorListing, 'id' | 'description'>;
+
 /** What a `monitor` call came to. */
 export type MonitorStartOutcome =
-  { status: 'started'; id: string } | { status: 'refused'; reason: string };
+  | { status: 'started'; id: string; alsoRunning: MonitorNamed[] }
+  | { status: 'refused'; reason: string };
 
 /** What a `stop_monitor` call came to. */
 export type MonitorStopOutcome =
@@ -5009,6 +5014,12 @@ export const ChatExportRunSchema = z
       .nullable()
       .describe(
         "The shared memory's title index this run's agents were given, as snapshotted at creation; null when memory was off or held nothing the run could see",
+      ),
+    knowledgeIndex: z
+      .string()
+      .nullable()
+      .describe(
+        "The knowledge index this run's agents were given, as snapshotted at creation; null when knowledge was off or held nothing the run could see",
       ),
     nativeMemoryOff: z
       .boolean()
@@ -7633,6 +7644,21 @@ export const HOST_MEMORY_TOOLS = [
   HOST_MEMORY_READ_TOOL,
   HOST_MEMORY_SAVE_TOOL,
   HOST_MEMORY_FORGET_TOOL,
+] as const;
+
+export const HOST_KNOWLEDGE_SEARCH_TOOL = 'knowledge_search';
+export const HOST_KNOWLEDGE_READ_TOOL = 'knowledge_read';
+export const HOST_KNOWLEDGE_SAVE_TOOL = 'knowledge_save';
+
+/**
+ * The knowledge store's tools, in `tools/list` order.
+ *
+ * TWIN PARSER: `GENIRO_KNOWLEDGE_TOOLS` in `apps/ui/src/renderer/chats/geniro-tool.ts`.
+ */
+export const HOST_KNOWLEDGE_TOOLS = [
+  HOST_KNOWLEDGE_SEARCH_TOOL,
+  HOST_KNOWLEDGE_READ_TOOL,
+  HOST_KNOWLEDGE_SAVE_TOOL,
 ] as const;
 
 /**

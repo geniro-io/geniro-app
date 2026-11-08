@@ -730,6 +730,26 @@ describe('memory settings', () => {
   });
 });
 
+describe('knowledge settings', () => {
+  it('a half-valid knowledge object keeps its valid field and defaults the other', () => {
+    writeRaw({ knowledge: { enabled: false, agentWrites: 'bogus' } });
+
+    expect(readSettings().knowledge).toEqual({
+      enabled: false,
+      agentWrites: 'review',
+    });
+  });
+
+  it('a file from before the setting reads it on, with agent writes waiting for review', () => {
+    writeRaw({});
+
+    expect(readSettings().knowledge).toEqual({
+      enabled: true,
+      agentWrites: 'review',
+    });
+  });
+});
+
 describe('onSettingsWritten', () => {
   it('tells a listener every write, with the settings as written', () => {
     const seen: boolean[] = [];

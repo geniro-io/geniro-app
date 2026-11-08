@@ -9,6 +9,7 @@ import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { type BlockStatus } from './block-shell';
 import { jumpAnchorProps } from './jump-target';
+import { knowledgeToolEntryOf, KnowledgeToolRow } from './knowledge-tool-row';
 import { RunSettledContext } from './live-row';
 import { memoryToolEntryOf, MemoryToolRow } from './memory-tool-row';
 import { NestedThreadContext } from './subagent-context';
@@ -415,9 +416,13 @@ export const ToolGroup = memo(function ToolGroup({
   const lifted = group.pairs.map((pair) => ({
     action: agentActionOf(pair),
     memory: memoryToolEntryOf(pair),
+    knowledge: knowledgeToolEntryOf(pair),
   }));
   if (
-    lifted.every(({ action, memory }) => action === null && memory === null)
+    lifted.every(
+      ({ action, memory, knowledge }) =>
+        action === null && memory === null && knowledge === null,
+    )
   ) {
     return <GroupedTools group={group} />;
   }
@@ -432,7 +437,7 @@ export const ToolGroup = memo(function ToolGroup({
     run = [];
   };
   group.pairs.forEach((pair, index) => {
-    const { action, memory } = lifted[index]!;
+    const { action, memory, knowledge } = lifted[index]!;
     const status = toolPairStatus(pair, group.closed || runSettled);
     if (action !== null) {
       flush();
@@ -449,6 +454,15 @@ export const ToolGroup = memo(function ToolGroup({
       flush();
       rows.push(
         <MemoryToolRow key={pair.call.id} entry={memory} status={status} />,
+      );
+    } else if (knowledge !== null) {
+      flush();
+      rows.push(
+        <KnowledgeToolRow
+          key={pair.call.id}
+          entry={knowledge}
+          status={status}
+        />,
       );
     } else {
       run.push(pair);

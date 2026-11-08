@@ -1902,6 +1902,99 @@ function chunk(kind: string, text: string): unknown {
   return update({ sessionUpdate: kind, content: { type: 'text', text } });
 }
 
+describe('AcpSession — the CLI going quiet', () => {
+  /** A turn whose prompt is out. */
+  function promptOut() {
+    const h = harness();
+    h.feed(initializeReply(h.sentMethod('initialize')?.id as number));
+    h.feed({
+      id: h.sentMethod('session/new')?.id,
+      result: { sessionId: 's1' },
+    });
+    expect(h.sentMethod('session/prompt')).toBeDefined();
+    return h;
+  }
+  const toolCall = (
+    id: string,
+    status: string,
+    rawInput?: unknown,
+  ): unknown => ({
+    method: 'session/update',
+    params: {
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: id,
+        title: 'Read',
+        kind: 'read',
+        status,
+        ...(rawInput === undefined ? {} : { rawInput }),
+      },
+    },
+  });
+  const toolDone = (id: string): unknown => ({
+    method: 'session/update',
+    params: {
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: id,
+        status: 'completed',
+      },
+    },
+  });
+
+  it('closes the open block as its row, once', () => {
+    const h = promptOut();
+    h.feed(chunk('agent_thought_chunk', 'I will wait.'));
+
+    expect(h.driver.onQuiet()).toEqual([
+      { type: 'reasoning', text: 'I will wait.' },
+    ]);
+    expect(h.driver.onQuiet()).toEqual([]);
+  });
+
+  it('starts a new block for what the agent says next', () => {
+    const h = promptOut();
+    h.feed(chunk('agent_message_chunk', 'first'));
+    h.driver.onQuiet();
+    h.feed(chunk('agent_message_chunk', 'second'));
+
+    expect(h.driver.onQuiet()).toEqual([{ type: 'text', text: 'second' }]);
+  });
+
+  it('answers null while a call it reported is open, and not after', () => {
+    const h = promptOut();
+    h.feed(toolCall('t1', 'pending', { path: '/a' }));
+    expect(h.driver.onQuiet()).toBeNull();
+
+    h.feed(toolDone('t1'));
+    expect(h.driver.onQuiet()).toEqual([]);
+  });
+
+  it('answers null while a call is still being written', () => {
+    const h = promptOut();
+    h.feed(toolCall('t1', 'pending'));
+    expect(h.driver.onQuiet()).toBeNull();
+  });
+
+  it('answers null with no prompt out', () => {
+    expect(harness().driver.onQuiet()).toBeNull();
+  });
+
+  it('answers null once the user has asked it to stop', () => {
+    const h = promptOut();
+    h.driver.buildInterruptPayload();
+    expect(h.driver.onQuiet()).toBeNull();
+  });
+
+  it('answers null while a message waits on the cancel it sent', () => {
+    const h = promptOut();
+    expect(h.driver.sendFollowUp({ text: 'do X instead' })).toBe(true);
+    expect(h.driver.onQuiet()).toBeNull();
+  });
+});
+
 describe('AcpSession session updates', () => {
   it('streams a message chunk as an ephemeral delta, not a transcript row', () => {
     const h = harness();

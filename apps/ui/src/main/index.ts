@@ -30,6 +30,7 @@ import { readGitStamp } from './git-info';
 import { registerIpc } from './ipc';
 import { KeepAwake } from './keep-awake';
 import { KeptSessionConfigPush } from './kept-session-config-push';
+import { KnowledgeConfigPush } from './knowledge-config-push';
 import { flushWindowsThen } from './line-measurement-flush';
 import { MemoryConfigPush } from './memory-config-push';
 import {
@@ -189,6 +190,11 @@ const memoryConfigPush = new MemoryConfigPush((message) => {
     source: 'memory-config',
   });
 });
+const knowledgeConfigPush = new KnowledgeConfigPush((message) => {
+  void reportMainLog(supervisor.getHandle(), 'warn', message, {
+    source: 'knowledge-config',
+  });
+});
 onSettingsWritten((settings) => {
   notifySettingsChanged(BrowserWindow.getAllWindows());
   void shareConfigPush.pushIfChanged(supervisor.getHandle(), settings.sharing);
@@ -196,6 +202,10 @@ onSettingsWritten((settings) => {
     idleMinutes: settings.keptSessionIdleMinutes,
   });
   void memoryConfigPush.pushIfChanged(supervisor.getHandle(), settings.memory);
+  void knowledgeConfigPush.pushIfChanged(
+    supervisor.getHandle(),
+    settings.knowledge,
+  );
   keepAwake.setEnabled(settings.preventSleepWhileWorking);
 });
 
@@ -642,6 +652,7 @@ function pushDaemonConfig(handle: DaemonHandle): void {
     idleMinutes: settings.keptSessionIdleMinutes,
   });
   void memoryConfigPush.push(handle, settings.memory);
+  void knowledgeConfigPush.push(handle, settings.knowledge);
 }
 
 /**

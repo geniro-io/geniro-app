@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  commandLiveness,
   commandNeedles,
   descendantsOf,
   isCommandRunning,
   parseProcessRows,
   type ProcessRow,
+  recordedPidsRunning,
 } from './process-descendants';
 
 describe('parseProcessRows', () => {
@@ -173,5 +175,80 @@ describe('commandNeedles', () => {
 
   it('keeps nothing too short to be specific', () => {
     expect(commandNeedles('ls')).toEqual([]);
+  });
+});
+
+describe('commandLiveness', () => {
+  const heredoc = "python3 << 'PY'\nimport time\nPY";
+  const wrapper: ProcessRow = {
+    pid: 500,
+    ppid: 999,
+    args: "/bin/zsh -c IFS= builtin read -r -d '' __cursor_command <&5",
+  };
+  const python: ProcessRow = {
+    pid: 501,
+    ppid: 500,
+    args: '/opt/homebrew/Python.app/Contents/MacOS/Python',
+  };
+
+  it('finds a heredoc through the CLI record, as its text is not in the table', () => {
+    const alive = [wrapper, python];
+    expect(isCommandRunning(alive, heredoc)).toBe(false);
+    expect(
+      commandLiveness(alive, [{ pid: 500, command: heredoc, running: true }])(
+        heredoc,
+      ),
+    ).toBe(true);
+  });
+
+  it('reads a command as ended once its record says so, whatever the table holds', () => {
+    const alive: ProcessRow[] = [{ pid: 7, ppid: 1, args: 'sleep 300' }];
+    expect(
+      commandLiveness(alive, [
+        { pid: 7, command: 'sleep 300', running: false },
+      ])('sleep 300'),
+    ).toBe(false);
+  });
+
+  it('never counts a record whose process is outside this CLI', () => {
+    expect(
+      commandLiveness(
+        [python],
+        [{ pid: 500, command: heredoc, running: true }],
+      )(heredoc),
+    ).toBe(false);
+  });
+
+  it('gives each live record to one call of the lines written alike', () => {
+    const stillRunning = commandLiveness(
+      [{ pid: 7, ppid: 1, args: 'sleep 300' }],
+      [
+        { pid: 7, command: 'sleep 300', running: true },
+        { pid: 8, command: 'sleep 300', running: false },
+      ],
+    );
+    expect([stillRunning('sleep 300'), stillRunning('sleep 300')]).toEqual([
+      true,
+      false,
+    ]);
+  });
+
+  it('falls back to the table for a line the CLI did not record', () => {
+    const stillRunning = commandLiveness(
+      [{ pid: 7, ppid: 1, args: 'pnpm dev' }],
+      [{ pid: 8, command: 'other', running: true }],
+    );
+    expect(stillRunning('pnpm dev')).toBe(true);
+    expect(stillRunning('pnpm build')).toBe(false);
+  });
+
+  it('compares lines with whitespace collapsed, as the table reports them', () => {
+    expect(
+      recordedPidsRunning(
+        [wrapper],
+        [{ pid: 500, command: 'a\n  b', running: true }],
+        'a b',
+      ),
+    ).toEqual([500]);
   });
 });

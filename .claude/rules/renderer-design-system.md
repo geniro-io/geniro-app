@@ -23,6 +23,7 @@ Style only from design tokens (Tailwind CSS v4, CSS-first `@theme`); never hardc
 - Raw hex / `rgb()` / `hsl()` / `oklch()` / `oklab()` are banned. The `no-restricted-syntax` override in `eslint.config.mjs` catches them in Tailwind arbitrary values and `#hex` literals, but not a bare `rgb(…)`-style string (e.g. in `style={{}}`) — never write one.
 - Non-colour arbitrary values are fine (`size-[26px]`, `shadow-[0_0_0_1px_var(--border)]`).
 - Floating panels use the shared `popoverSurface` constant (`components/ui/popover.tsx`: `shadow-panel-lg` + `border-border/60` hairline). Panels that sit in the page (dialog) use `shadow-panel-md`.
+- A control that opens a `fixed` panel (`anchor="viewport"`) sits under no `backdrop-*`, `filter`, `transform`, `translate`, `will-change` or `contain`: each captures the panel's box, so it lands far from its trigger and is clipped by the scroller.
 
 ## Class names
 

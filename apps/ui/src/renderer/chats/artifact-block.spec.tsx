@@ -4,10 +4,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ArtifactCard } from './artifact-block';
+import { ArtifactShareContext } from './artifact-share';
 import {
   ArtifactUrlContext,
   type PublishedArtifact,
 } from './published-artifact';
+import type { ArtifactSharing } from './use-artifact-sharing';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -98,6 +100,56 @@ function stubSaving(html = '<html><head></head><body>p</body></html>'): {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('ArtifactCard — the share panel', () => {
+  const CAPTURES_FIXED_BOX =
+    /(^|\s)-?(backdrop-|blur|filter|transform|translate-|scale-|rotate-|skew-|perspective-|will-change-|contain-)/;
+
+  async function openPanel(latest: boolean): Promise<HTMLElement | null> {
+    const sharing = {
+      shareOf: () => null,
+    } as unknown as ArtifactSharing;
+    await act(async () => {
+      root.render(
+        <ArtifactUrlContext.Provider value={() => 'http://127.0.0.1:1/a'}>
+          <ArtifactShareContext.Provider value={sharing}>
+            <ArtifactCard artifact={ARTIFACT} latest={latest} />
+          </ArtifactShareContext.Provider>
+        </ArtifactUrlContext.Provider>,
+      );
+    });
+    await act(async () => {
+      button(/^Share Migration plan as a link$/).click();
+    });
+    return container.querySelector<HTMLElement>('[data-slot="popover-panel"]');
+  }
+
+  it.each([
+    ['the open frame', true],
+    ['the folded heading', false],
+  ])(
+    'opens fixed under no element that would capture its box, from %s',
+    async (_place, latest) => {
+      const panel = await openPanel(latest);
+
+      expect(panel?.style.position).toBe('fixed');
+      const capturing: string[] = [];
+      for (let el = panel?.parentElement; el; el = el.parentElement) {
+        if (CAPTURES_FIXED_BOX.test(el.className)) {
+          capturing.push(el.className);
+        }
+      }
+      expect(capturing).toEqual([]);
+    },
+  );
+
+  it('stays out of the folded heading’s caption, whose type it would inherit', async () => {
+    const panel = await openPanel(false);
+
+    expect(panel).not.toBeNull();
+    expect(panel?.closest('p')).toBeNull();
+  });
 });
 
 describe('ArtifactCard — saving the page as a file', () => {
@@ -240,8 +292,12 @@ describe('ArtifactCard', () => {
     await render(ARTIFACT, false);
     expect(inlineFrame()).toBeNull();
 
-    expect(button(/Save .* as an HTML file/).closest('p')).not.toBeNull();
-    expect(button(/full screen/i).closest('p')).not.toBeNull();
+    const toggle = button(/^Migration plan/);
+    for (const label of [/Save .* as an HTML file/, /full screen/i]) {
+      const row = button(label).closest('div');
+      expect(row?.contains(toggle)).toBe(true);
+      expect(row?.getAttribute('data-slot')).not.toBe('artifact-card');
+    }
   });
 
   it('states the version only once there is more than one', async () => {

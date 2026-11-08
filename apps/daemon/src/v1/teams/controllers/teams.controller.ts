@@ -37,6 +37,7 @@ import {
   ThreadAnalysisDto,
 } from '../../agents/dto/chat.dto';
 import { runListPageOf } from '../../agents/utils/run-list-page';
+import type { KnowledgeRenamed } from '../../projects/projects.types';
 import {
   AnalysisJudgeCheckDto,
   AnalysisJudgeQueryDto,
@@ -68,6 +69,7 @@ import {
   TeamHealthQueryDto,
   TeamOverlayDto,
   TeamOverlayScopesDto,
+  TeamRemovedDto,
   TeamSummaryDto,
   UploadTeamAvatarDto,
 } from '../dto/teams.dto';
@@ -471,13 +473,20 @@ export class TeamsController {
    */
   @Delete(':slug')
   @ApiOperation({ operationId: 'deleteTeam' })
-  @ZodResponse({ status: 200, type: TeamDeletedDto })
+  @ZodResponse({ status: 200, type: TeamRemovedDto })
   async delete(
     @Param('slug') slug: string,
     @Query() query: DeleteTeamQueryDto,
-  ): Promise<{ deleted: boolean }> {
-    await this.teamChats.deleteTeam(slug, query.memories ?? 'keep');
-    return { deleted: true };
+  ): Promise<{
+    deleted: boolean;
+    knowledgeRenamed: KnowledgeRenamed[];
+  }> {
+    const knowledgeRenamed = await this.teamChats.deleteTeam(
+      slug,
+      query.memories ?? 'keep',
+      query.knowledge ?? 'global',
+    );
+    return { deleted: true, knowledgeRenamed };
   }
 
   /**

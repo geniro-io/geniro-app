@@ -33,6 +33,7 @@ export interface ProjectInstructionSizesInput {
   replyLanguage?: string;
   projectInstructions?: string;
   memoryIndex?: string;
+  knowledgeIndex?: string;
 }
 
 export interface InstructionSizesInput {
@@ -48,6 +49,8 @@ export interface InstructionSizesInput {
   projectInstructions?: string;
   /** The shared memory's index — known only when measuring for one run. */
   memoryIndex?: string;
+  /** The knowledge index — known only when measuring for one run. */
+  knowledgeIndex?: string;
 }
 
 /**
@@ -102,6 +105,7 @@ export class InstructionSizesService {
           taskInstructions: input.taskInstructions,
           projectInstructions: input.projectInstructions,
           memoryIndex: input.memoryIndex,
+          knowledgeIndex: input.knowledgeIndex,
           stageMap,
         }),
       );
@@ -138,6 +142,7 @@ export class InstructionSizesService {
       taskInstructions: string | undefined;
       projectInstructions: string | undefined;
       memoryIndex: string | undefined;
+      knowledgeIndex: string | undefined;
       stageMap: string | null;
     },
   ): MemberInstructionSize {
@@ -149,6 +154,7 @@ export class InstructionSizesService {
         taskInstructions: context.taskInstructions,
         projectInstructions: context.projectInstructions,
         memoryIndex: context.memoryIndex,
+        knowledgeIndex: context.knowledgeIndex,
         ...memberInstructionFields(member, {
           blocks: context.blocks,
           callees: context.callees,

@@ -22,6 +22,7 @@ import type { TeamNoteBroker } from '../../agents/services/team-note.broker';
 import type { TeamProposalBroker } from '../../agents/services/team-proposal.broker';
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import type { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ShareService } from '../../shares/services/share.service';
 import type { TeamHistoryService } from '../../stats/services/team-history.service';
@@ -41,6 +42,9 @@ import { BoardTools } from './board/board.tools';
 import { CallAgentTool } from './call-agent/call-agent.tool';
 import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
 import { GoalsTool } from './goals/goals.tool';
+import { KnowledgeReadTool } from './knowledge-read/knowledge-read.tool';
+import { KnowledgeSaveTool } from './knowledge-save/knowledge-save.tool';
+import { KnowledgeSearchTool } from './knowledge-search/knowledge-search.tool';
 import { ListAgentThreadsTool } from './list-agent-threads/list-agent-threads.tool';
 import { ListMonitorsTool } from './list-monitors/list-monitors.tool';
 import { MarkRecommendationsTool } from './mark-recommendations/mark-recommendations.tool';
@@ -101,6 +105,7 @@ export interface McpToolDeps {
   board: TaskBoardBroker;
   history: GlobalChatSearchService;
   memory: MemoryService;
+  knowledge: KnowledgeService;
   analysis: AnalysisBroker;
   threads: ThreadReaderService;
   teamChanges: TeamChangeService;
@@ -160,6 +165,9 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new MemoryReadTool(deps.memory),
     new MemorySaveTool(deps.memory),
     new MemoryForgetTool(deps.memory),
+    new KnowledgeSearchTool(deps.knowledge),
+    new KnowledgeReadTool(deps.knowledge),
+    new KnowledgeSaveTool(deps.knowledge),
     new ReadTeamsTool(
       deps.teamGate,
       deps.teamBuilders,

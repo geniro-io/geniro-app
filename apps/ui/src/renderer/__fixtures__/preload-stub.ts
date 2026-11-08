@@ -366,6 +366,10 @@ export function createPreloadStub(
       note('saveMemoryExport');
       return Promise.resolve({ saved: false, path: null });
     },
+    saveKnowledgeExport: (): Promise<FileSaveResult> => {
+      note('saveKnowledgeExport');
+      return Promise.resolve({ saved: false, path: null });
+    },
     getAppStorage: () => {
       note('getAppStorage');
       return Promise.resolve({ worktrees: [], browserCache: [], appData: [] });

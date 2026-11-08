@@ -24,6 +24,7 @@ const COPIED_WINDOW_MS = 1500;
 export function CopyButton({
   text,
   label = 'Copy',
+  showLabel = false,
   className,
   ...rest
 }: Omit<React.ComponentProps<'button'>, 'onClick' | 'children'> & {
@@ -31,6 +32,8 @@ export function CopyButton({
   text: string;
   /** Accessible name; also the tooltip. */
   label?: string;
+  /** Write the label beside the icon. */
+  showLabel?: boolean;
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -72,10 +75,10 @@ export function CopyButton({
     <Button
       type="button"
       variant="ghost"
-      size="icon"
+      size={showLabel ? 'sm' : 'icon'}
       aria-label={failed ? `${label} failed` : label}
       title={failed ? `${label} failed` : label}
-      className={cn('size-6 text-muted-foreground', className)}
+      className={cn(!showLabel && 'size-6', 'text-muted-foreground', className)}
       onClick={() => void handleClick()}
       {...rest}>
       {copied ? (
@@ -85,6 +88,7 @@ export function CopyButton({
       ) : (
         <Copy className="size-3.5" aria-hidden />
       )}
+      {showLabel ? label : null}
     </Button>
   );
 }

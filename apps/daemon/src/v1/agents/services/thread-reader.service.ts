@@ -526,6 +526,7 @@ export class ThreadReaderService {
         taskInstructions: run.taskInstructions,
         projectInstructions: run.projectInstructions,
         memoryIndex: run.memoryIndex,
+        knowledgeIndex: run.knowledgeIndex,
       },
     };
   }

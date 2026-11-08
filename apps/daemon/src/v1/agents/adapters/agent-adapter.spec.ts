@@ -1349,6 +1349,8 @@ describe('AgentAdapter sessions and the shared memory', () => {
     prompt: 'first',
     cwd: '/proj',
     memoryIndex: 'Memory index …\n- m1 [user] Terse (global)',
+    knowledgeIndex:
+      'Knowledge index …\n- release — Release. When: now. (global, 1.0 KB)',
     nativeMemoryOff: true,
   };
 
@@ -1393,6 +1395,17 @@ describe('AgentAdapter sessions and the shared memory', () => {
     ).not.toBeNull();
   });
 
+  it('moves the session key with the index', async () => {
+    const session = await sessionAfterFirstTurn();
+
+    expect(
+      session.startTurn(
+        { ...FIRST, prompt: 'second', knowledgeIndex: null },
+        () => {},
+      ),
+    ).toBeNull();
+  });
+
   it('refuses a turn whose memory index differs from the spawn’s', async () => {
     const session = await sessionAfterFirstTurn();
 
@@ -1423,6 +1436,8 @@ describe('AgentAdapter sessions and the shared memory', () => {
 
     expect(granted.map((part) => part.source)).toContain('memoryIndex');
     expect(withheld.map((part) => part.source)).not.toContain('memoryIndex');
+    expect(granted.map((part) => part.source)).toContain('knowledgeIndex');
+    expect(withheld.map((part) => part.source)).not.toContain('knowledgeIndex');
   });
 });
 

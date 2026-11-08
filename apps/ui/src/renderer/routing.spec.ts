@@ -50,6 +50,16 @@ const EXAMPLES: readonly { label: string; hash: string; route: Route }[] = [
     route: { view: 'settings' },
   },
   {
+    label: 'the knowledge list',
+    hash: '#/knowledge',
+    route: { view: 'knowledge', documentId: null },
+  },
+  {
+    label: 'one knowledge document',
+    hash: '#/knowledge/doc-1',
+    route: { view: 'knowledge', documentId: 'doc-1' },
+  },
+  {
     label: 'stats',
     hash: '#/stats',
     route: { view: 'stats' },

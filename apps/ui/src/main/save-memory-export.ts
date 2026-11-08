@@ -3,7 +3,6 @@ import { writeFile } from 'node:fs/promises';
 import { dialog, type FileFilter } from 'electron';
 
 import type { FileSaveResult } from '../shared/contracts';
-
 const MEMORY_EXPORT_FORMATS: FileFilter[] = [
   { name: 'Markdown', extensions: ['md'] },
 ];
@@ -20,11 +19,20 @@ function localDate(now: Date): string {
  * so the renderer sends no text that reaches the dialog's path. A cancel is an
  * outcome (`saved: false`), not a failure.
  */
-export async function saveMemoryExport(
+export function saveMemoryExport(markdown: string): Promise<FileSaveResult> {
+  return saveMarkdown(
+    `geniro-memory-${localDate(new Date())}.${MEMORY_EXPORT_FORMATS[0]!.extensions[0]!}`,
+    markdown,
+  );
+}
+
+/** Ask where to keep a Markdown document, and write it there. */
+export async function saveMarkdown(
+  defaultPath: string,
   markdown: string,
 ): Promise<FileSaveResult> {
   const result = await dialog.showSaveDialog({
-    defaultPath: `geniro-memory-${localDate(new Date())}.${MEMORY_EXPORT_FORMATS[0]!.extensions[0]!}`,
+    defaultPath,
     filters: MEMORY_EXPORT_FORMATS,
   });
   if (result.canceled || !result.filePath) {

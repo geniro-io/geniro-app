@@ -278,6 +278,15 @@ export const memorySchema = z.strictObject({
 });
 
 /**
+ * TWIN PARSER: `KnowledgeConfigSchema` in `apps/daemon/src/v1/knowledge/knowledge.types.ts`,
+ * which `knowledge-config-push.ts` pushes this to.
+ */
+export const knowledgeSchema = z.strictObject({
+  enabled: z.boolean(),
+  agentWrites: z.enum(['review', 'direct', 'off']),
+});
+
+/**
  * A `Partial<Settings>` patch. `strictObject` rejects unknown keys, so the
  * renderer can't write arbitrary fields into settings.json.
  */
@@ -397,6 +406,7 @@ export const settingsPatchSchema = z.strictObject({
   remoteAccessEnabled: z.boolean().optional(),
   sharing: sharingSchema.optional(),
   memory: memorySchema.optional(),
+  knowledge: knowledgeSchema.optional(),
   // The retention window, or null for "keep the archive". Bounded to exactly
   // what the daemon's own schema accepts, so a value this side lets through can
   // never be one that route refuses — and NULLABLE rather than absent, because
@@ -739,6 +749,13 @@ export const artifactSaveSchema = z.strictObject({
  * save: the memory holds as many entries as were saved or imported.
  */
 export const memoryExportSaveSchema = z.string();
+
+/** A knowledge export on its way to disk, under a name the daemon composed. */
+export const knowledgeExportSaveSchema = z.strictObject({
+  suggestedName: saveFileNameSchema,
+  markdown: z.string(),
+});
+export type KnowledgeExportSave = z.infer<typeof knowledgeExportSaveSchema>;
 
 /**
  * One system notification the renderer asks main to post.

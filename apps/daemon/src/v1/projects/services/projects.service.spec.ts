@@ -516,6 +516,43 @@ describe('ProjectsService (in-memory sqlite)', () => {
     expect(cleared.groupId).toBeNull();
   });
 
+  it('settles the project’s knowledge inside the removal, and announces it after the commit', async () => {
+    const project = await service.create({ name: 'Doomed', folder });
+    const order: string[] = [];
+    const seen: unknown[] = [];
+    service.useRemovalParticipant(async (projectId, fate, tx) => {
+      order.push('settled');
+      seen.push({ projectId, fate });
+      expect(tx.isInTransaction()).toBe(true);
+      return {
+        moved: 2,
+        deleted: 0,
+        renamed: [{ from: 'a', to: 'a-2' }],
+        announce: () => order.push('announced'),
+      };
+    });
+
+    const result = await service.remove(project.id, 'delete');
+
+    expect(seen).toEqual([{ projectId: project.id, fate: 'delete' }]);
+    expect(order).toEqual(['settled', 'announced']);
+    expect(result).toMatchObject({
+      knowledgeMoved: 2,
+      knowledgeRenamed: [{ from: 'a', to: 'a-2' }],
+    });
+  });
+
+  it('rolls the whole removal back when the participant fails', async () => {
+    const project = await service.create({ name: 'Kept', folder });
+    service.useRemovalParticipant(async () => {
+      throw new Error('refused');
+    });
+
+    await expect(service.remove(project.id)).rejects.toThrow('refused');
+
+    expect((await service.list()).map((row) => row.id)).toContain(project.id);
+  });
+
   it('removes a project’s tasks along with the project', async () => {
     const project = await service.create({ name: 'Board', folder });
     await taskDao.create({ projectId: project.id, title: 'first' });
@@ -523,7 +560,13 @@ describe('ProjectsService (in-memory sqlite)', () => {
 
     const result = await service.remove(project.id);
 
-    expect(result).toEqual({ deleted: true, tasksRemoved: 2 });
+    expect(result).toEqual({
+      deleted: true,
+      tasksRemoved: 2,
+      knowledgeMoved: 0,
+      knowledgeDeleted: 0,
+      knowledgeRenamed: [],
+    });
     // The real observable: a read after the delete returns nothing. The rows
     // are soft-deleted, so this is the `softDelete` filter hiding them — which
     // is exactly what every other reader of this table will see.

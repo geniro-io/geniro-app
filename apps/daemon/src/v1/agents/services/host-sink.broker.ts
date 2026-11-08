@@ -43,7 +43,8 @@ interface HostSinkEntry<TSink> {
  * In memory and per LAUNCH, deliberately. A sink closes over a live turn — its
  * seq allocator, its parked promises — so an entry that outlived the turn would
  * file rows against a conversation nothing is watching, or be answered into
- * nothing.
+ * nothing. A sink that closes over none of that may outlive the turn, which is
+ * what a CLI working by itself between turns needs (`ChatService.keepHostTools`).
  *
  * Subclasses add only what is genuinely per-tool: the public verb (`canAsk` /
  * `ask`, `canReport` / `report`), the sentence said when no turn is running, and

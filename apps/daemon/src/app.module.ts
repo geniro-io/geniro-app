@@ -14,6 +14,7 @@ import { ProcessRegistry } from './v1/agents/services/process-registry';
 import { AuthModule } from './v1/auth/auth.module';
 import { DiagnosticsModule } from './v1/diagnostics/diagnostics.module';
 import { HandoffModule } from './v1/handoff/handoff.module';
+import { KnowledgeModule } from './v1/knowledge/knowledge.module';
 import { McpModule } from './v1/mcp/mcp.module';
 import { MemoryModule } from './v1/memory/memory.module';
 import { MigrationsModule } from './v1/migrations/migrations.module';
@@ -58,6 +59,7 @@ export class AppModule {
         TasksModule,
         SharesModule,
         MemoryModule,
+        KnowledgeModule,
         StorageModule,
         MigrationsModule,
       ],

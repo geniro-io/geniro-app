@@ -19,6 +19,7 @@ vi.mock('electron', () => ({
 }));
 
 const { saveMemoryExport } = await import('./save-memory-export');
+const { saveKnowledgeExport } = await import('./save-knowledge-export');
 
 const MARKDOWN = '# Memory\n\n- prefers pnpm\n';
 
@@ -39,6 +40,23 @@ function picks(name: string): string {
   mocks.showSaveDialog.mockResolvedValue({ canceled: false, filePath });
   return filePath;
 }
+
+describe('saveKnowledgeExport', () => {
+  it('suggests the daemon’s name and writes the text there', async () => {
+    const path = picks('release-checklist.md');
+
+    await saveKnowledgeExport({
+      suggestedName: 'release-checklist.md',
+      markdown: MARKDOWN,
+    });
+
+    const options = mocks.showSaveDialog.mock.calls[0]![0] as {
+      defaultPath: string;
+    };
+    expect(options.defaultPath).toBe('release-checklist.md');
+    expect(readFileSync(path, 'utf8')).toBe(MARKDOWN);
+  });
+});
 
 describe('saveMemoryExport', () => {
   it('suggests geniro-memory-<today>.md and offers only Markdown', async () => {

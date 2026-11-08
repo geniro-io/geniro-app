@@ -4,9 +4,11 @@ import type { RemoteTunnelState, TunnelProviderId } from '../../shared/remote';
 import { resolveBinary } from '../resolve-binary';
 import {
   TUNNEL_ANSWER_GAP_MS,
+  TUNNEL_CONNECT_WAIT_MS,
   TUNNEL_EXPIRED_AFTER_MS,
   TUNNEL_EXPIRY_CONFIRM_MS,
   TUNNEL_LIVENESS_POLL_MS,
+  TUNNEL_NAME_SETTLE_MS,
   TUNNEL_OUTPUT_KEPT,
   TUNNEL_READY_PROBE_TIMEOUT_MS,
   TUNNEL_URL_WAIT_MS,
@@ -32,6 +34,14 @@ interface TunnelProvider {
    * has one (ngrok's URL is a JSON field), else the whole match.
    */
   url: RegExp;
+  /**
+   * For a client that prints its URL before the URL answers: its line for
+   * holding a connection to the provider, with the name settling in DNS on top
+   * ({@link TUNNEL_NAME_SETTLE_MS}). Without one, the URL line means it works.
+   */
+  connected?: RegExp;
+  /** The client's own complaint about why it has no connection yet, group 1. */
+  complaint?: RegExp;
   /**
    * The client's own readiness endpoint, which answers 200 only while the
    * client holds a connection to the provider: `address` captures (group 1)
@@ -75,6 +85,9 @@ const PROVIDERS: readonly TunnelProvider[] = [
       `http://127.0.0.1:${port}`,
     ],
     url: /(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/i,
+    connected: /Registered tunnel connection/,
+    // Every quick tunnel logs the missing origin certificate as an error.
+    complaint: /\bERR\s+(?!Cannot determine default origin certificate)(.+)/,
     readiness: {
       address: /Starting metrics server on (127\.0\.0\.1:\d+)\/metrics/,
       path: '/ready',
@@ -101,6 +114,7 @@ const OFF: RemoteTunnelState = {
   provider: null,
   url: null,
   error: null,
+  detail: null,
 };
 
 /**
@@ -138,6 +152,10 @@ export interface RemoteTunnelOptions {
   resolveBin?: (name: string) => string | null;
   /** Test seam for the URL wait; defaults to {@link TUNNEL_URL_WAIT_MS}. */
   urlWaitMs?: number;
+  /** Test seam for the connect wait; defaults to {@link TUNNEL_CONNECT_WAIT_MS}. */
+  connectWaitMs?: number;
+  /** Test seam for the DNS hold; defaults to {@link TUNNEL_NAME_SETTLE_MS}. */
+  nameSettleMs?: number;
   /** Test seam for the liveness poll; defaults to {@link TUNNEL_LIVENESS_POLL_MS}. */
   livenessPollMs?: number;
   /** Test seam for the readiness request; defaults to {@link probeReady}. */
@@ -208,6 +226,8 @@ export class RemoteTunnel {
   private readonly spawnProcess: typeof spawn;
   private readonly resolveBin: (name: string) => string | null;
   private readonly urlWaitMs: number;
+  private readonly connectWaitMs: number;
+  private readonly nameSettleMs: number;
   private readonly livenessPollMs: number;
   private readonly probeReadyFn: (url: string) => Promise<boolean>;
   private liveness: ReturnType<typeof setInterval> | null = null;
@@ -216,6 +236,8 @@ export class RemoteTunnel {
     this.spawnProcess = options.spawnProcess ?? spawn;
     this.resolveBin = options.resolveBin ?? ((name) => resolveBinary(name));
     this.urlWaitMs = options.urlWaitMs ?? TUNNEL_URL_WAIT_MS;
+    this.connectWaitMs = options.connectWaitMs ?? TUNNEL_CONNECT_WAIT_MS;
+    this.nameSettleMs = options.nameSettleMs ?? TUNNEL_NAME_SETTLE_MS;
     this.livenessPollMs = options.livenessPollMs ?? TUNNEL_LIVENESS_POLL_MS;
     this.probeReadyFn = options.probeReady ?? probeReady;
   }
@@ -276,6 +298,7 @@ export class RemoteTunnel {
         url: null,
         error:
           'No tunnel client found. Install one with `brew install cloudflared` (no account needed) or `brew install ngrok`.',
+        detail: null,
       };
       return this.current;
     }
@@ -286,6 +309,7 @@ export class RemoteTunnel {
       provider: chosen.id,
       url: null,
       error: null,
+      detail: null,
     };
 
     const child = this.spawnProcess(bin, chosen.args(port), {
@@ -303,42 +327,99 @@ export class RemoteTunnel {
       const output: string[] = [];
       let settled = false;
       let watching = false;
+      let publicUrl: string | null = null;
+      let connected = !chosen.connected;
+      let nameSettled = !chosen.connected;
+      let complaint: string | null = null;
+      let nameSettle: ReturnType<typeof setTimeout> | undefined;
       const finish = (next: RemoteTunnelState): void => {
         if (settled) {
           return;
         }
         settled = true;
         clearTimeout(timer);
+        clearTimeout(nameSettle);
         this.current = next;
         resolve(next);
       };
 
+      // Written on EVERY new URL rather than only the first, because ngrok was
+      // measured handing out a new URL on a mid-session reconnect: the mask
+      // still admits it, but a screen showing the old address would send the
+      // user to a name nothing answers on.
+      const openIfServing = (): void => {
+        if (
+          this.child !== child ||
+          publicUrl === null ||
+          !connected ||
+          !nameSettled
+        ) {
+          return;
+        }
+        this.current = {
+          status: 'open',
+          provider: chosen.id,
+          url: publicUrl,
+          error: null,
+          detail: null,
+        };
+        finish(this.current);
+      };
+
+      const markConnected = (): void => {
+        connected = true;
+        openIfServing();
+      };
+
+      const awaitConnection = (): void => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          fail(
+            `${chosen.label} could not connect within ${String(
+              Math.round(this.connectWaitMs / 60_000),
+            )} minutes: ${complaint ?? 'it reported no error'}`,
+            true,
+          );
+        }, this.connectWaitMs);
+        timer.unref?.();
+        nameSettle = setTimeout(() => {
+          nameSettled = true;
+          openIfServing();
+        }, this.nameSettleMs);
+        nameSettle.unref?.();
+      };
+
       const readLine = (line: string): void => {
-        const address = chosen.readiness?.address.exec(line)?.[1];
-        if (address && chosen.readiness && !watching) {
+        const readiness = chosen.readiness?.address.exec(line)?.[1];
+        if (readiness && chosen.readiness && !watching) {
           watching = true;
           this.watchLiveness(
             child,
             chosen,
-            `http://${address}${chosen.readiness.path}`,
+            `http://${readiness}${chosen.readiness.path}`,
+            markConnected,
           );
+        }
+        const said = chosen.complaint?.exec(line)?.[1];
+        if (said) {
+          complaint = said;
+          if (this.current.status === 'starting') {
+            this.current = { ...this.current, detail: said };
+          }
+        }
+        if (chosen.connected?.test(line)) {
+          markConnected();
         }
         const found = chosen.url.exec(line);
         const url = found?.[1] ?? found?.[0];
         if (!url) {
           return;
         }
-        // Written on EVERY match rather than only the first, because ngrok
-        // was measured handing out a new URL on a mid-session reconnect: the
-        // mask still admits it, but a screen showing the old address would
-        // send the user to a name nothing answers on.
-        this.current = {
-          status: 'open',
-          provider: chosen.id,
-          url,
-          error: null,
-        };
-        finish(this.current);
+        if (publicUrl === null && chosen.connected) {
+          awaitConnection();
+        }
+        publicUrl = url;
+        openIfServing();
       };
 
       // One reader per stream. A pipe read can end mid-line, so lines are
@@ -388,7 +469,7 @@ export class RemoteTunnel {
         );
       });
 
-      const timer = setTimeout(() => {
+      let timer = setTimeout(() => {
         fail(
           `${chosen.label} did not report an address within ${String(
             Math.round(this.urlWaitMs / 1000),
@@ -417,7 +498,13 @@ export class RemoteTunnel {
     }
     this.child = null;
     this.stopLiveness();
-    this.current = { status: 'error', provider: provider.id, url: null, error };
+    this.current = {
+      status: 'error',
+      provider: provider.id,
+      url: null,
+      error,
+      detail: null,
+    };
     if (reapClient) {
       void reap(child);
     }
@@ -438,6 +525,7 @@ export class RemoteTunnel {
     child: ChildProcess,
     provider: TunnelProvider,
     readinessUrl: string,
+    onConnected: () => void,
   ): void {
     this.stopLiveness();
     let connectedAt = Date.now();
@@ -453,9 +541,20 @@ export class RemoteTunnel {
         .catch(() => false)
         .then((ready) => {
           probing = false;
-          // A probe answered after the client was stopped or replaced, or
-          // before it reported an address, decides nothing.
-          if (this.child !== child || this.current.status !== 'open') {
+          // A probe answered after the client was stopped or replaced decides
+          // nothing.
+          if (this.child !== child) {
+            return;
+          }
+          // Before the first connection there is none to lose, so the expiry
+          // clock has not started. Also opens a client whose log line for
+          // connecting no longer reads as expected.
+          if (this.current.status === 'starting') {
+            connectedAt = Date.now();
+            failingSince = connectedAt;
+            if (ready) {
+              onConnected();
+            }
             return;
           }
           const now = Date.now();

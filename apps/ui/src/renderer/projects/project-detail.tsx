@@ -27,6 +27,14 @@ import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { type DaemonApis, describeDaemonError } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import {
+  type KnowledgeFate,
+  KnowledgeFatePick,
+  useKnowledgeHeld,
+} from '../knowledge/knowledge-fate';
+import { KnowledgeProjectSection } from '../knowledge/knowledge-project-section';
+import { projectPlace, renamedNotice } from '../knowledge/knowledge-text';
+import { useKnowledgeCounts } from '../knowledge/use-knowledge';
 import { AutopilotControl } from '../tasks/autopilot-control';
 import { ProjectRunConfig } from '../tasks/project-run-config';
 import { taskStatusMeta } from '../tasks/task-status';
@@ -104,6 +112,7 @@ export function ProjectDetail({
   onError,
   onOpenBoard,
   onOpenTeam,
+  onOpenKnowledge,
   onDeleted,
 }: {
   project: ProjectDto;
@@ -122,6 +131,8 @@ export function ProjectDetail({
   onError: (message: string) => void;
   onOpenBoard: (projectId: string) => void;
   onOpenTeam: (slug: string) => void;
+  /** Open Knowledge with this project picked. */
+  onOpenKnowledge: (projectId: string) => void;
   onDeleted: (projectId: string) => void;
 }): React.JSX.Element {
   const [savedFlash, setSavedFlash] = useState(false);
@@ -227,6 +238,15 @@ export function ProjectDetail({
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [knowledgeFate, setKnowledgeFate] = useState<KnowledgeFate>('global');
+  const knowledgeCounts = useKnowledgeCounts(apis, client);
+  const placed = knowledgeCounts?.places.find(
+    (row) => row.place === projectPlace(project.id),
+  );
+  const knowledgeHeld = useKnowledgeHeld(
+    apis,
+    confirming ? projectPlace(project.id) : null,
+  );
   const linkedCount = sources.runConfigs.filter(
     (config) => config.projectId === project.id,
   ).length;
@@ -239,7 +259,14 @@ export function ProjectDetail({
     setDeleting(true);
     setDeleteError(null);
     try {
-      await apis.projects.deleteProject({ projectId });
+      const { knowledgeRenamed } = await apis.projects.deleteProject({
+        projectId,
+        knowledge: knowledgeFate,
+      });
+      const renamed = renamedNotice(knowledgeRenamed);
+      if (renamed !== null) {
+        onError(renamed);
+      }
     } catch (err: unknown) {
       setDeleteError(describeDaemonError(err));
       setDeleting(false);
@@ -259,7 +286,7 @@ export function ProjectDetail({
     setDeleting(false);
     setConfirming(false);
     onDeleted(projectId);
-  }, [apis, project.id, sources, onError, onDeleted]);
+  }, [apis, project.id, sources, onError, onDeleted, knowledgeFate]);
 
   return (
     <>
@@ -387,6 +414,7 @@ export function ProjectDetail({
               title={`Delete ${project.name} and its tasks`}
               onClick={() => {
                 setDeleteError(null);
+                setKnowledgeFate('global');
                 setConfirming(true);
               }}>
               <Trash2 className="size-4" aria-hidden />
@@ -434,6 +462,12 @@ export function ProjectDetail({
               </SettingRow>
             </div>
           </ProjectSection>
+
+          <KnowledgeProjectSection
+            active={knowledgeCounts === null ? null : (placed?.active ?? 0)}
+            waiting={placed?.waiting ?? 0}
+            onOpen={() => onOpenKnowledge(project.id)}
+          />
 
           <ProjectSection
             slot="project-board"
@@ -535,6 +569,7 @@ export function ProjectDetail({
         open={confirming}
         busy={deleting}
         error={deleteError}
+        confirmDisabled={!knowledgeHeld.settled}
         title={`Delete ${project.name}?`}
         confirmLabel="Delete project"
         busyLabel="Deleting…"
@@ -545,6 +580,11 @@ export function ProjectDetail({
         {linkedCount > 0
           ? ` Its ${linkedCount} run ${linkedCount === 1 ? 'configuration is' : 'configurations are'} kept on the Projects page, waiting for another project.`
           : null}
+        <KnowledgeFatePick
+          held={knowledgeHeld}
+          value={knowledgeFate}
+          onChange={setKnowledgeFate}
+        />
       </ConfirmDialog>
     </>
   );

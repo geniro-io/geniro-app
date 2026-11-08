@@ -99,7 +99,19 @@ export class MonitorRegistry implements BeforeApplicationShutdown {
     if (this.isEnding(runId)) {
       return { status: 'refused', reason: 'this thread is being closed' };
     }
-    const monitors = this.running.get(runId) ?? new Map();
+    const monitors =
+      this.running.get(runId) ?? new Map<string, RunningMonitor>();
+    const alsoRunning = [...monitors.values()].filter(
+      ({ owner, cause }) =>
+        owner.caller === request.owner.caller && cause === null,
+    );
+    const same = alsoRunning.find(({ command }) => command === request.command);
+    if (same !== undefined) {
+      return {
+        status: 'refused',
+        reason: `monitor ${same.id} (${same.description}) already runs this exact command and wakes you with its output — stop it with stop_monitor first if you mean to start it over`,
+      };
+    }
     if (monitors.size >= MONITOR_RUN_MAX) {
       return {
         status: 'refused',
@@ -145,7 +157,14 @@ export class MonitorRegistry implements BeforeApplicationShutdown {
     void monitor.stream.ended
       .then((end) => this.finish(monitor, end))
       .finally(resolveEnded);
-    return { status: 'started', id };
+    return {
+      status: 'started',
+      id,
+      alsoRunning: alsoRunning.map(({ id: other, description }) => ({
+        id: other,
+        description,
+      })),
+    };
   }
 
   /**
@@ -273,6 +292,17 @@ export class MonitorRegistry implements BeforeApplicationShutdown {
     return [...(this.running.get(runId)?.values() ?? [])]
       .filter(
         (monitor) => caller === undefined || monitor.owner.caller === caller,
+      )
+      .map((monitor) => this.snapshot(monitor));
+  }
+
+  /** The run's monitors nothing has stopped — every conversation's, or one caller's. */
+  stillRunning(runId: string, caller?: string): MonitorSnapshot[] {
+    return [...(this.running.get(runId)?.values() ?? [])]
+      .filter(
+        (monitor) =>
+          monitor.cause === null &&
+          (caller === undefined || monitor.owner.caller === caller),
       )
       .map((monitor) => this.snapshot(monitor));
   }

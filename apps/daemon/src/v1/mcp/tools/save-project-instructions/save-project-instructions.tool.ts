@@ -12,21 +12,28 @@ import type {
 } from '../../mcp.types';
 import { BaseMcpTool } from '../base-mcp-tool';
 import {
+  ordinaryChatInstructionsInstructions,
   projectChatInstructionsInstructions,
   saveProjectInstructionsInstructions,
 } from './save-project-instructions.instructions';
 import {
+  type OrdinaryChatInstructionsArgs,
   projectInstructionsResultText,
+  readOrdinaryChatInstructionsArgs,
   readProjectChatInstructionsArgs,
   readSaveProjectInstructionsArgs,
 } from './save-project-instructions.reader';
-import { saveProjectInstructionsSchema } from './save-project-instructions.schema';
+import {
+  type ProjectInstructionsAudience,
+  saveProjectInstructionsSchema,
+} from './save-project-instructions.schema';
 
 /**
  * `save_project_instructions` — an analysis's one write to a project, for the
- * `P-` items the user applied, and a project chat's write to its own project,
- * both through `ProjectInstructionsChangeService`. Offered wherever
- * `report_recommendations` is and in a project's chat. It parks on a card
+ * `P-` items the user applied, a project chat's write to its own project, and
+ * an ordinary chat's write to the project it names, all through
+ * `ProjectInstructionsChangeService`. Offered wherever
+ * `report_recommendations` is, in a project's chat and in an ordinary chat. It parks on a card
  * showing the old and new text in every approval mode, and only that card's
  * Apply writes.
  */
@@ -44,27 +51,36 @@ export class SaveProjectInstructionsTool extends BaseMcpTool {
   }
 
   protected isOffered({ runId, memberId }: McpListContext): boolean {
-    return (
-      (this.analysis.canAnalyse(runId, memberId) ||
-        this.projectChats.canEdit(runId, memberId)) &&
-      this.cards.canPropose(runId, memberId)
-    );
+    return this.cards.canPropose(runId, memberId);
+  }
+
+  private audienceOf(
+    runId: string,
+    memberId: string,
+  ): ProjectInstructionsAudience {
+    if (this.projectChats.canEdit(runId, memberId)) {
+      return 'project';
+    }
+    return this.analysis.canAnalyse(runId, memberId) ? 'analysis' : 'chat';
   }
 
   protected instructions({ runId, memberId }: McpListContext): string {
     const answersAtOnce = this.cards.answersAtOnce(runId, memberId);
-    return this.projectChats.canEdit(runId, memberId)
-      ? projectChatInstructionsInstructions(answersAtOnce)
-      : saveProjectInstructionsInstructions(answersAtOnce);
+    switch (this.audienceOf(runId, memberId)) {
+      case 'project':
+        return projectChatInstructionsInstructions(answersAtOnce);
+      case 'chat':
+        return ordinaryChatInstructionsInstructions(answersAtOnce);
+      case 'analysis':
+        return saveProjectInstructionsInstructions(answersAtOnce);
+    }
   }
 
   protected inputSchema({
     runId,
     memberId,
   }: McpListContext): Record<string, unknown> {
-    return saveProjectInstructionsSchema(
-      this.projectChats.canEdit(runId, memberId),
-    );
+    return saveProjectInstructionsSchema(this.audienceOf(runId, memberId));
   }
 
   protected async run(
@@ -81,7 +97,19 @@ export class SaveProjectInstructionsTool extends BaseMcpTool {
     }
     const projectChat = this.projectChats.projectOf(runId, memberId);
     if (projectChat !== null) {
-      return this.saveForChat(args, context, projectChat.projectId);
+      const read = readProjectChatInstructionsArgs(args);
+      return read.ok
+        ? this.saveForChat(context, {
+            projectId: projectChat.projectId,
+            ...read.query,
+          })
+        : this.invalidArgs(read.error);
+    }
+    if (!this.analysis.canAnalyse(runId, memberId)) {
+      const read = readOrdinaryChatInstructionsArgs(args);
+      return read.ok
+        ? this.saveForChat(context, read.query)
+        : this.invalidArgs(read.error);
     }
     const read = readSaveProjectInstructionsArgs(args);
     if (!read.ok) {
@@ -111,27 +139,21 @@ export class SaveProjectInstructionsTool extends BaseMcpTool {
   }
 
   private async saveForChat(
-    args: Record<string, unknown>,
     context: McpCallContext,
-    projectId: string,
+    change: OrdinaryChatInstructionsArgs,
   ): Promise<McpToolResult> {
     const { runId, memberId } = context;
-    const read = readProjectChatInstructionsArgs(args);
-    if (!read.ok) {
-      return this.invalidArgs(read.error);
-    }
     try {
       const answer = await context.whileCancellable((signal) =>
-        this.changes.saveForChat(
-          { chatRunId: runId, projectId, ...read.query },
-          (change) => this.cards.propose(runId, memberId, change, signal),
+        this.changes.saveForChat({ chatRunId: runId, ...change }, (card) =>
+          this.cards.propose(runId, memberId, card, signal),
         ),
       );
       const result = projectInstructionsResultText(answer);
       return this.text(result.text, result.isError);
     } catch (error) {
       this.logger.error(
-        `project chat ${runId} could not save project instructions: ${error instanceof Error ? error.message : String(error)}`,
+        `chat ${runId} could not save project instructions: ${error instanceof Error ? error.message : String(error)}`,
       );
       return this.text(
         `${this.name} failed internally — nothing was saved.`,

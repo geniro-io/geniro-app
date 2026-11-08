@@ -7245,11 +7245,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // proposes changes to its own through the `TeamBuilderBroker` sink
       // below, and an analysis saves the analysed one through
       // `save_team_change` — see `TeamProposalBroker`.
-      const disposeTeamProposals =
-        mcpEndpoint &&
+      const ordinaryChat =
         run.editsTeamSlug === null &&
         !isProjectChat(run) &&
-        !isAnalysisRun(run)
+        !isAnalysisRun(run);
+      const disposeTeamProposals =
+        mcpEndpoint && ordinaryChat
           ? this.teamProposals.register(runId, SINGLE_AGENT_NODE, {
               runId,
             })
@@ -7296,7 +7297,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           : null;
       const disposeProjectCards =
         mcpEndpoint &&
-        (analysisTurn !== null || isProjectChat(run)) &&
+        (analysisTurn !== null || isProjectChat(run) || ordinaryChat) &&
         this.projectInstructionCards !== undefined
           ? this.projectInstructionCards.register(
               runId,

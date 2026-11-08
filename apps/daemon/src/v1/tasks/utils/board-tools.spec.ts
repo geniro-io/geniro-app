@@ -47,7 +47,7 @@ describe('BOARD_TOOLS — the listing is the whole manual', () => {
   });
 
   it('accepts exactly the arguments each schema lists', () => {
-    expect(boardToolArgs('list_projects')).toEqual([]);
+    expect(boardToolArgs('list_projects')).toEqual(['project']);
     expect(boardToolArgs('get_task')).toEqual(['task']);
     expect(boardToolArgs('update_task')).toEqual(
       expect.arrayContaining(['task', 'status', 'fromStatus', 'report']),

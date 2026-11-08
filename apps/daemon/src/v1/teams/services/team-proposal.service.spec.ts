@@ -516,6 +516,88 @@ describe('TeamProposalService', () => {
     await expect(readdir(dir)).resolves.toEqual(['keep.txt']);
   });
 
+  describe("an ordinary chat's edits to a library team", () => {
+    const TO_SONNET = [{ path: 'members/reviewer/model', value: 'sonnet' }];
+    const request = {
+      slug: 'team',
+      edits: TO_SONNET,
+      summary: 'Reviewer on sonnet',
+      reason: 'The user asked for a cheaper reviewer.',
+    };
+
+    it('applies the edits to the file as it stands, checks the result could run, and cards the difference', async () => {
+      const { hash } = await store.create(TEAM, 'team');
+
+      const prepared = await service.prepareEdits(request);
+
+      expect(prepared).toEqual({
+        ok: true,
+        proposal: {
+          mode: 'replace',
+          autoAgents: ['reviewer'],
+          summary: 'Reviewer on sonnet',
+          reason: 'The user asked for a cheaper reviewer.',
+          slug: 'team',
+          replacesName: 'Review Team',
+          diff: expect.objectContaining({
+            identical: false,
+            changedMembers: [expect.objectContaining({ id: 'reviewer' })],
+          }),
+          baseHash: hash,
+          team: FASTER,
+        },
+      });
+      expect(assertRunnable).toHaveBeenCalledWith(FASTER);
+      expect((await store.get('team')).team).toEqual(TEAM);
+    });
+
+    it('refuses edits whose result a run start would refuse, with the check’s own code', async () => {
+      await store.create(TEAM, 'team');
+      assertRunnable.mockRejectedValueOnce(
+        new BadRequestException('MODEL_UNKNOWN', 'no model sonnet'),
+      );
+
+      await expect(service.prepareEdits(request)).resolves.toEqual({
+        ok: false,
+        code: 'MODEL_UNKNOWN',
+        message: 'no model sonnet',
+      });
+    });
+
+    it('refuses a team the library does not hold, a slug it could not hold, and edits that do not apply', async () => {
+      await store.create(TEAM, 'team');
+
+      await expect(
+        service.prepareEdits({ ...request, slug: 'ghost' }),
+      ).resolves.toMatchObject({ ok: false, code: 'TEAM_NOT_FOUND' });
+      await expect(
+        service.prepareEdits({ ...request, slug: 'Dev Team' }),
+      ).resolves.toMatchObject({ ok: false, code: 'TEAM_SLUG_INVALID' });
+      await expect(
+        service.prepareEdits({
+          ...request,
+          edits: [{ find: 'no such text', replace: 'x' }],
+        }),
+      ).resolves.toMatchObject({ ok: false, code: 'INVALID_EDIT' });
+      expect(assertRunnable).not.toHaveBeenCalled();
+    });
+
+    it('raises the card on the run, and Approve writes exactly the edited team', async () => {
+      await store.create(TEAM, 'team');
+
+      const outcome = await service.proposeEdits('run-1', request);
+
+      expect(outcome).toMatchObject({
+        status: 'shown',
+        proposal: { mode: 'replace', slug: 'team', team: FASTER },
+      });
+      approvals.resolve('run-1', standingCard('run-1'), true);
+      const { outcome: verdict } = await verdictAfterPress();
+      expect(verdict).toMatchObject({ kind: 'saved', slug: 'team' });
+      expect((await store.get('team')).team).toEqual(FASTER);
+    });
+  });
+
   describe("a builder chat's change", () => {
     const TO_SONNET = [{ path: 'members/reviewer/model', value: 'sonnet' }];
 

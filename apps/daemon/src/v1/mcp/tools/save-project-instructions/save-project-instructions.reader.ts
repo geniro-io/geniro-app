@@ -49,6 +49,29 @@ export type ProjectChatInstructionsArgs = z.infer<
   typeof ProjectChatInstructionsArgsSchema
 >;
 
+export const OrdinaryChatInstructionsArgsSchema = z.object({
+  projectId: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe("The project's `id` list_projects names"),
+  blocks: blocksField('list_projects with `project`'),
+  baseRevision: z
+    .number()
+    .int()
+    .min(0)
+    .describe('The `instructionsRevision` list_projects with `project` named'),
+});
+export type OrdinaryChatInstructionsArgs = z.infer<
+  typeof OrdinaryChatInstructionsArgsSchema
+>;
+
+export function readOrdinaryChatInstructionsArgs(
+  args: Record<string, unknown>,
+): ToolArgs<OrdinaryChatInstructionsArgs> {
+  return readToolArgs(OrdinaryChatInstructionsArgsSchema.strict(), args);
+}
+
 /** A project chat's `save_project_instructions` arguments, or why they cannot be read. */
 export function readProjectChatInstructionsArgs(
   args: Record<string, unknown>,

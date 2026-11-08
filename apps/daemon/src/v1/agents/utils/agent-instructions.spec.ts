@@ -21,6 +21,7 @@ import {
   HOST_NOTIFY_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
+  HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_PUBLISH_ACTION_TOOL,
   HOST_READ_CHAT_CONTEXT_TOOL,
@@ -82,6 +83,7 @@ const BOARD_TOOLS_NAMED: readonly HostBoardTool[] = [
   'get_task',
   'create_task',
   'update_task',
+  'list_projects',
 ];
 
 describe('GENIRO_UI_PREAMBLE', () => {
@@ -178,6 +180,7 @@ describe("GENIRO_UI_PREAMBLE — geniro's own tools", () => {
       ...BOARD_TOOLS_NAMED,
       HOST_READ_TEAMS_TOOL,
       HOST_PROPOSE_TEAM_TOOL,
+      HOST_PROJECT_INSTRUCTIONS_TOOL,
     ]) {
       expect(section).toContain(`\`${name}\``);
     }

@@ -15,7 +15,10 @@ import { HOST_BOARD_TOOLS } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
-import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
+import {
+  PROJECT_FAILURE_BREAKER_THRESHOLD,
+  PROJECT_INSTRUCTIONS_MAX,
+} from '../../projects/projects.types';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { TaskBoardBroker } from '../../teams/services/task-board.broker';
@@ -954,6 +957,39 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     expect(
       (jsonOf(byStatus.text) as { title: string }[]).map((row) => row.title),
     ).toEqual(['Write docs']);
+  });
+
+  it('reads one project with its instruction blocks, their revision and the size limit when asked for it', async () => {
+    const row = await projectDao.getById(project.id, em);
+    row!.description = 'The desktop app';
+    row!.instructionBlocks = JSON.stringify([
+      { id: 'repo', title: 'Repo', text: 'Use pnpm.' },
+      { id: 'stand', title: 'Stand', text: 'Boot it.' },
+    ]);
+    row!.instructionsRevision = 7;
+    await em.flush();
+
+    const answer = await call('list_projects', { project: 'gen' });
+
+    expect(answer.isError).toBe(false);
+    expect(answer.text).toMatch(
+      /^Project GEN \(Geniro\), at instructions revision 7\./,
+    );
+    expect(jsonOf(answer.text)).toMatchObject({
+      id: project.id,
+      key: 'GEN',
+      description: 'The desktop app',
+      instructionBlocks: [
+        { id: 'repo', title: 'Repo', text: 'Use pnpm.' },
+        { id: 'stand', title: 'Stand', text: 'Boot it.' },
+      ],
+      instructionsRevision: 7,
+      instructionsChars: 'Use pnpm.\n\nBoot it.'.length,
+      instructionsMaxChars: PROJECT_INSTRUCTIONS_MAX,
+    });
+    expect(await call('list_projects', { project: 'nope' })).toMatchObject({
+      isError: true,
+    });
   });
 
   it('lists the projects with their armed autopilot and card counts', async () => {

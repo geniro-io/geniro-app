@@ -11,6 +11,7 @@ import {
 import {
   type DeferredCardResponder,
   HOST_PROPOSE_TEAM_TOOL,
+  HOST_READ_TEAMS_TOOL,
   type TeamProposalOutcome,
   type TeamProposalVerdict,
 } from '../../agents/chat.types';
@@ -34,6 +35,7 @@ import {
   type ProposalOutcome,
   type Team,
   type TeamChangeProposalRequest,
+  type TeamEditsProposalRequest,
   type TeamProposal,
   type TeamProposalOverlay,
   type TeamProposalProject,
@@ -150,6 +152,13 @@ export class TeamProposalService {
     request: TeamChangeProposalRequest,
   ): Promise<ProposalOutcome> {
     return this.raiseSerialized(runId, () => this.prepareChange(request));
+  }
+
+  proposeEdits(
+    runId: string,
+    request: TeamEditsProposalRequest,
+  ): Promise<ProposalOutcome> {
+    return this.raiseSerialized(runId, () => this.prepareEdits(request));
   }
 
   private async raiseSerialized(
@@ -474,23 +483,9 @@ export class TeamProposalService {
       };
     }
     const team = restored.team;
-    // A refusal from here on may quote a path just put back (a profile folder
-    // that no longer exists): it goes to the agent as its token.
-    const hidePaths = (text: string): string => redactConfigDirText(text, team);
-    try {
-      await this.executor.assertRunnable(team);
-    } catch (error) {
-      // The team checks refuse with geniro's exceptions; the model check
-      // (`AgentAdapter.validateModel`) throws plain errors, in geniro's own
-      // words and quoting at most the local Ollama server's answer — its
-      // reason is what lets the agent pick another model.
-      return error instanceof BaseException || !(error instanceof Error)
-        ? refusalOf(error, 'NOT_RUNNABLE', hidePaths)
-        : {
-            ok: false,
-            code: 'MODEL_UNAVAILABLE',
-            message: hidePaths(error.message).slice(0, MAX_REFUSAL_LENGTH),
-          };
+    const notRunnable = await this.runnableRefusal(team);
+    if (notRunnable !== null) {
+      return notRunnable;
     }
     const summarized = summarizedFor(team, request);
     if (current === null) {
@@ -595,6 +590,51 @@ export class TeamProposalService {
         ...(project === null ? {} : { project }),
       },
     };
+  }
+
+  async prepareEdits(
+    request: TeamEditsProposalRequest,
+  ): Promise<PreparedProposal> {
+    try {
+      this.store.locate(request.slug);
+    } catch (error) {
+      return refusalOf(error, 'TEAM_NOT_FOUND', (message) => message);
+    }
+    const prepared = await this.prepareChange({ ...request, projectId: null });
+    if (!prepared.ok) {
+      return prepared.code === 'TEAM_GONE'
+        ? {
+            ok: false,
+            code: 'TEAM_NOT_FOUND',
+            message: `the library holds no team '${request.slug}' — ${HOST_READ_TEAMS_TOOL} lists them`,
+          }
+        : prepared;
+    }
+    return (await this.runnableRefusal(prepared.proposal.team)) ?? prepared;
+  }
+
+  private async runnableRefusal(
+    team: Team,
+  ): Promise<Extract<PreparedProposal, { ok: false }> | null> {
+    // A refusal from here on may quote a path just put back (a profile folder
+    // that no longer exists): it goes to the agent as its token.
+    const hidePaths = (text: string): string => redactConfigDirText(text, team);
+    try {
+      await this.executor.assertRunnable(team);
+      return null;
+    } catch (error) {
+      // The team checks refuse with geniro's exceptions; the model check
+      // (`AgentAdapter.validateModel`) throws plain errors, in geniro's own
+      // words and quoting at most the local Ollama server's answer — its
+      // reason is what lets the agent pick another model.
+      return error instanceof BaseException || !(error instanceof Error)
+        ? refusalOf(error, 'NOT_RUNNABLE', hidePaths)
+        : {
+            ok: false,
+            code: 'MODEL_UNAVAILABLE',
+            message: hidePaths(error.message).slice(0, MAX_REFUSAL_LENGTH),
+          };
+    }
   }
 
   /** The projects that run `slug` by default — whose instructions a builder card may change beside the team. */

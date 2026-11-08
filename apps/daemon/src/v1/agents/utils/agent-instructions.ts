@@ -131,7 +131,8 @@ Beside your CLI's tools, this app offers tools of its own, named below (in your 
 - \`memory_search\`, then \`memory_read\`: a preference, convention, decision or command another agent may already have recorded — at the start of a task, and before you ask the user or guess. \`memory_save\`: one durable fact the next agent, on any CLI and in any later chat, would otherwise have to rediscover — a correction the user gave, a convention and its reason, a command that works; never a secret or your progress. \`memory_forget\`: an entry that turned out wrong.
 - \`search_chats\`, then \`read_chat_context\`: an earlier decision, fix or context from another conversation.
 - \`list_tasks\`, \`get_task\`, \`create_task\`, \`update_task\`: the user's task board, when they ask to find, file or change work on it.
-- \`read_teams\`, then \`propose_team\`: a saved team of agents the user asks you to build or change.`;
+- \`read_teams\`, then \`propose_team\`: a saved team of agents the user asks you to build or change.
+- \`list_projects\` naming the project, then \`save_project_instructions\`: a change the user asks for to a project's standing instructions.`;
 
 /**
  * The instruction parts one turn contributes, in the order they are joined.

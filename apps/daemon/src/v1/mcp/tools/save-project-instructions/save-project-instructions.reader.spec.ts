@@ -700,6 +700,142 @@ describe('save_project_instructions (in-memory sqlite)', () => {
       expect((await projects.get(projectId)).instructions).toBe('Use pnpm.');
     });
   });
+
+  describe('in an ordinary chat', () => {
+    const chatContext = { ...CONTEXT, runId: 'plain-chat' } as McpCallContext;
+    let chatTool: SaveProjectInstructionsTool;
+
+    beforeEach(() => {
+      const broker = new ProjectInstructionsBroker();
+      broker.register('plain-chat', 'agent', (change) => {
+        cards.push(change);
+        return changes.write('plain-chat', change);
+      });
+      chatTool = new SaveProjectInstructionsTool(
+        new AnalysisBroker(),
+        new ProjectChatBroker(),
+        changes,
+        broker,
+      );
+    });
+
+    const chatCall = async (args: Record<string, unknown>) => {
+      const result = await chatTool.call(
+        HOST_PROJECT_INSTRUCTIONS_TOOL,
+        args,
+        chatContext,
+      );
+      return {
+        isError: result.isError,
+        answer: JSON.parse(result.content[0]?.text ?? '') as Record<
+          string,
+          unknown
+        >,
+      };
+    };
+
+    it('lists its own form, naming the project, and is not listed where no card can be shown', () => {
+      const [listed] = chatTool.list(chatContext);
+      const properties = Object.keys(
+        (listed?.inputSchema as { properties: Record<string, unknown> })
+          .properties,
+      );
+      expect(properties).toEqual(['projectId', 'blocks', 'baseRevision']);
+      expect(listed?.description).toContain('list_projects');
+      expect(
+        chatTool.list({ ...chatContext, runId: 'other' } as McpCallContext),
+      ).toEqual([]);
+    });
+
+    it('writes the project it names behind the card and logs this chat as the source', async () => {
+      const saved = await chatCall({
+        projectId,
+        blocks: [
+          { id: 'b1', title: '', text: 'Use pnpm. Read logs with tail.' },
+        ],
+        baseRevision: 0,
+      });
+
+      expect(cards).toEqual([
+        {
+          projectId,
+          project: 'Billing',
+          previous: 'Use pnpm.',
+          next: 'Use pnpm. Read logs with tail.',
+          blocks: [
+            { id: 'b1', title: '', text: 'Use pnpm. Read logs with tail.' },
+          ],
+          baseRevision: 0,
+          ids: [],
+          cardSeq: null,
+        },
+      ]);
+      expect(saved).toMatchObject({
+        isError: false,
+        answer: { saved: true, changed: true, instructionsRevision: 1 },
+      });
+      const [newest] = await changeDao.recentFor(projectId, 20);
+      expect(newest).toMatchObject({
+        source: 'chat',
+        chatRunId: 'plain-chat',
+        cardSeq: null,
+        next: 'Use pnpm. Read logs with tail.',
+      });
+    });
+
+    it('refuses a moved revision with the blocks as they stand, and a project that does not exist, raising no card', async () => {
+      await projects.update(projectId, { ...asBlock('Use pnpm only.') });
+
+      const stale = await chatCall({
+        projectId,
+        blocks: [{ id: 'b1', title: '', text: 'Use npm.' }],
+        baseRevision: 0,
+      });
+      expect(stale).toMatchObject({
+        isError: true,
+        answer: {
+          error: 'REVISION_DRIFT',
+          instructionsRevision: 1,
+          blocks: [{ id: 'b1', title: '', text: 'Use pnpm only.' }],
+        },
+      });
+
+      const gone = await chatCall({
+        projectId: 'p-nowhere',
+        blocks: [{ id: 'b1', title: '', text: 'x' }],
+        baseRevision: 0,
+      });
+      expect(gone).toMatchObject({
+        isError: true,
+        answer: { error: 'PROJECT_GONE' },
+      });
+      expect(cards).toEqual([]);
+    });
+
+    it('refuses item ids and a call with no project', async () => {
+      const withIds = await chatTool.call(
+        HOST_PROJECT_INSTRUCTIONS_TOOL,
+        {
+          projectId,
+          blocks: [{ id: 'b1', title: '', text: 'x' }],
+          baseRevision: 0,
+          ids: ['P-1'],
+        },
+        chatContext,
+      );
+      const noProject = await chatTool.call(
+        HOST_PROJECT_INSTRUCTIONS_TOOL,
+        { blocks: [{ id: 'b1', title: '', text: 'x' }], baseRevision: 0 },
+        chatContext,
+      );
+
+      expect(withIds.isError).toBe(true);
+      expect(noProject.isError).toBe(true);
+      expect(noProject.content[0]?.text).toContain('projectId');
+      expect(cards).toEqual([]);
+      expect((await projects.get(projectId)).instructions).toBe('Use pnpm.');
+    });
+  });
 });
 
 describe('readSaveProjectInstructionsArgs', () => {

@@ -113,6 +113,7 @@ Smaller rules:
 - `host-guard.ts` matches a `*.suffix` at a label boundary.
 - The tunnel mask is derived from the URL the client printed, never stored per provider.
 - `tunnel.ts` providers are a table in preference order (cloudflared, then ngrok). The client is spawned with only `PATH` and `HOME`.
+- An address is `open` only once it can answer. cloudflared prints its URL before it has a connection and before the name is in DNS, and a lookup that beats the record is cached as NXDOMAIN by the user's router, so reloading does not help. So a provider with a `connected` line stays `starting` until that line (or its `/ready`) and `TUNNEL_NAME_SETTLE_MS` since the URL line, with the client's latest complaint as `detail`, and fails at `TUNNEL_CONNECT_WAIT_MS` in its own words.
 - An open tunnel is watched after its address is shown: an exit nobody asked for, or cloudflared's loopback `/ready` failing for `TUNNEL_EXPIRED_AFTER_MS` on the wall clock (a quick tunnel is deleted ~13 min after it disconnects, e.g. through sleep), ends it as `status: 'error'` and reaps the client. A connection counts only when two answers in a row report it (the client reports its pre-sleep connection for seconds after wake), and expiry needs `TUNNEL_EXPIRY_CONFIRM_MS` of failures without a break. The public URL is never probed.
 - `pairing.ts` is a constant-time compare.
 - `device-registry.ts` stores only a token hash, written atomically with mode 0600.

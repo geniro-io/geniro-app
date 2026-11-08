@@ -76,10 +76,12 @@ export interface RemoteTunnelState {
   status: 'off' | 'starting' | 'open' | 'error';
   /** Which client is running, once one has been picked. */
   provider: TunnelProviderId | null;
-  /** The public URL, only in `open`. */
+  /** The public URL, only in `open`: it is never shown before it answers. */
   url: string | null;
   /** Why it is not open, only in `error`. */
   error: string | null;
+  /** The client's latest complaint while it connects, only in `starting`. */
+  detail: string | null;
 }
 
 /**
@@ -94,6 +96,7 @@ export const TUNNEL_OFF: RemoteTunnelState = {
   provider: null,
   url: null,
   error: null,
+  detail: null,
 };
 
 /** What Settings draws, and what the "open in browser" action builds a link from. */

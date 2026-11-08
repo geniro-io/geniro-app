@@ -1202,13 +1202,14 @@ describe('WaitingMessagesChip', () => {
     expect(trigger?.textContent).toBe('2');
   });
 
-  it('lists each message with its sender, its first line and why it waits', () => {
+  it('lists each message with its sender, its whole text and why it waits', () => {
     mount([waiting('w1')]);
     openPanel();
     const row = document.querySelector('[data-slot="waiting-message"]');
     expect(row?.textContent).toContain('Pelican');
-    expect(row?.textContent).toContain('first line of w1');
-    expect(row?.textContent).not.toContain('second line');
+    const text = row?.querySelector('[data-slot="waiting-message-text"]');
+    expect(text?.textContent).toContain('first line of w1');
+    expect(text?.textContent).toContain('second line');
     expect(row?.textContent).toContain(
       'Goes out with the next turn: this thread was stopped',
     );

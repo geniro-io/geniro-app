@@ -162,7 +162,7 @@ const WAITING_WORDS: Record<ThreadMessageReason, string> = {
   stopped: 'Goes out with the next turn: this thread was stopped',
   failed: 'Goes out with the next turn: the last turn failed',
   not_started: 'Goes out with the first turn',
-  question: 'Goes out with the next turn: a question waits for you here',
+  question: 'Goes out once you have answered: a question waits for you here',
   sender_opted_out:
     'Goes out with the next turn: the sender did not wake this thread',
   cold_and_large:
@@ -173,14 +173,4 @@ const WAITING_WORDS: Record<ThreadMessageReason, string> = {
 
 export function waitingMessageReasonWords(reason: ThreadMessageReason): string {
   return WAITING_WORDS[reason];
-}
-
-/** The first line of a message that has text on it — all a waiting list previews. */
-export function firstLineOf(text: string): string {
-  return (
-    text
-      .split('\n')
-      .map((line) => line.trim())
-      .find((line) => line !== '') ?? ''
-  );
 }

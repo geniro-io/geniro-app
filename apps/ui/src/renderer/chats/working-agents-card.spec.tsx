@@ -283,6 +283,75 @@ describe('WorkingAgentsCard', () => {
     expect(ids.slice(1).sort()).toEqual(['call-2', 'call-5']);
   });
 
+  describe('its counter', () => {
+    const longSet = (): WorkingAgentRow[] =>
+      (
+        [
+          'working',
+          'quiet',
+          'queued',
+          'finished',
+          'finished',
+          'finished',
+          'finished',
+          'failed',
+        ] as const
+      ).map((state, index) =>
+        row({
+          conversationId: `call-${index}`,
+          callId: `call-${index}`,
+          callIds: [`call-${index}`],
+          state,
+        }),
+      );
+
+    it('names only what is live in the open header, and leaves the rest on the toggle under the rows', () => {
+      const { el } = renderCard(longSet());
+
+      expect(slot(el, 'working-agents-summary')?.textContent).toBe(
+        '2 working · 1 queued',
+      );
+      expect(slot(el, 'working-agents-finished-toggle')?.textContent).toBe(
+        '4 finished · 1 failed',
+      );
+    });
+
+    it('keeps every count on the folded pill', async () => {
+      const { el } = renderCard(longSet());
+
+      await press(slot(el, 'working-agents-toggle')!);
+
+      expect(slot(el, 'working-agents-summary')?.textContent).toBe(
+        '2 working · 1 queued · 4 finished · 1 failed',
+      );
+    });
+
+    it('counts failed and stopped apart from finished once a settled set is opened', async () => {
+      const { el } = renderCard([
+        row({ state: 'finished' }),
+        row({
+          conversationId: 'call-2',
+          callId: 'call-2',
+          callIds: ['call-2'],
+          state: 'failed',
+        }),
+        row({
+          conversationId: 'call-3',
+          callId: 'call-3',
+          callIds: ['call-3'],
+          state: 'stopped',
+        }),
+      ]);
+
+      await press(slot(el, 'working-agents-toggle')!);
+
+      expect(slot(el, 'working-agents-summary')?.textContent).toBe('');
+      expect(slot(el, 'working-agents-finished-toggle')?.textContent).toBe(
+        '1 finished · 1 failed · 1 stopped',
+      );
+    });
+  });
+
   it('starts folded when no row is live', () => {
     const { el } = renderCard([row({ state: 'finished' })]);
 

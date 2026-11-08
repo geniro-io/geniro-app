@@ -105,6 +105,48 @@ type Story = StoryObj<typeof meta>;
 
 export const Open: Story = {};
 
+export const LongSet: Story = {
+  args: {
+    rows: [
+      row({}),
+      row({
+        conversationId: 'call-3',
+        callId: 'call-3',
+        callIds: ['call-3'],
+        callee: 'QA',
+        calleeKey: 'qa',
+        state: 'quiet',
+        title: 'Re-run after the patch',
+      }),
+      row({
+        conversationId: 'call-4',
+        callId: 'call-4',
+        callIds: ['call-4'],
+        callee: 'Researcher',
+        calleeKey: 'researcher',
+        state: 'queued',
+        title: 'Export options for the docs',
+      }),
+      ...['call-5', 'call-6', 'call-7', 'call-8'].map((id) =>
+        row({
+          conversationId: id,
+          callId: id,
+          callIds: [id],
+          state: 'finished',
+          title: 'An earlier pass',
+        }),
+      ),
+      row({
+        conversationId: 'call-9',
+        callId: 'call-9',
+        callIds: ['call-9'],
+        state: 'failed',
+        title: 'Build the sandbox image',
+      }),
+    ],
+  },
+};
+
 export const AllFinishedFolded: Story = {
   args: {
     rows: [

@@ -315,7 +315,7 @@ export function WorkingAgentsCard({
             <span
               data-slot="working-agents-summary"
               className="min-w-0 truncate text-xs text-muted-foreground">
-              {summary}
+              {open ? workingAgentsSummary(live) : summary}
             </span>
             <ChevronDown
               aria-hidden="true"

@@ -21,35 +21,42 @@ afterEach(() => {
   container = null;
 });
 
-function render(onFiles: (files: File[]) => void): HTMLDivElement {
+function render(
+  onFiles: (files: File[]) => void,
+  disabled = false,
+): HTMLDivElement {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
-    root!.render(<AttachFilesButton onFiles={onFiles} />);
+    root!.render(<AttachFilesButton onFiles={onFiles} disabled={disabled} />);
   });
   return container;
 }
 
 describe('AttachFilesButton', () => {
-  it('opens the browser’s own picker, which a phone can use too', () => {
+  it('is the file input itself, so a press reaches it with no scripted click', () => {
     const host = render(() => {});
     const input = host.querySelector<HTMLInputElement>(
-      '[data-slot="composer-attach-input"]',
+      'input[aria-label="Attach files or images"]',
     )!;
-    const click = vi.spyOn(input, 'click');
-
-    act(() => {
-      host
-        .querySelector<HTMLButtonElement>(
-          'button[aria-label="Attach files or images"]',
-        )!
-        .click();
-    });
 
     expect(input.type).toBe('file');
     expect(input.multiple).toBe(true);
-    expect(click).toHaveBeenCalledTimes(1);
+    expect(input.hidden).toBe(false);
+    expect(input.className).toContain('absolute inset-0 size-full');
+    expect(input.className).toContain('opacity-0');
+    expect(host.querySelector('button')).toBeNull();
+  });
+
+  it('refuses the press while the composer is disabled', () => {
+    const host = render(() => {}, true);
+
+    expect(
+      host.querySelector<HTMLInputElement>(
+        '[data-slot="composer-attach-input"]',
+      )!.disabled,
+    ).toBe(true);
   });
 
   it('hands over what was picked and clears the input for the same file again', () => {

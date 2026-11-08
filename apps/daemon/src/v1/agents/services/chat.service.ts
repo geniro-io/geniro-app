@@ -241,7 +241,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
 import { MetricsBroker } from './metrics.broker';
-import { MonitorBroker } from './monitor.broker';
+import { MonitorBroker, type MonitorSink } from './monitor.broker';
 import { MonitorRegistry } from './monitor.registry';
 import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
@@ -435,6 +435,23 @@ function adoptsStanding(standing: PendingCardSnapshot, key: string): boolean {
  */
 function startsLateWork(event: AgentEvent): boolean {
   return event.type === 'tool_call' && event.parentToolUseId === undefined;
+}
+
+/** What a chat's monitor tools know: whose a monitor is, and where it runs. */
+function monitorSinkOf(runId: string, cwd: string): MonitorSink {
+  return {
+    ownerOf: (caller) => ({
+      owner: {
+        runId,
+        memberId: SINGLE_AGENT_NODE,
+        caller,
+        conversationId: null,
+        callId: null,
+        target: 'chat',
+      },
+      cwd,
+    }),
+  };
 }
 
 /**
@@ -793,17 +810,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   );
 
   /**
-   * Each chat's `notify_user` sink, kept past its turn.
+   * Each chat's host tools that hold nothing of the turn, kept past it.
    *
-   * Every other host tool dies with the turn that registered it, and so did
-   * this one — which made it refuse exactly where it is needed: the CLI opens a
-   * continuation BY ITSELF when a background command reports, with no turn of
-   * ours in flight, and an agent that finishes there with a server left up is
-   * the one case the automatic turn-end rule cannot announce. It sends a
-   * broadcast and holds nothing of the turn, so it may outlive one; the next
-   * turn's registration replaces it, and a deleted run drops it.
+   * The CLI outlives a turn and opens a continuation BY ITSELF when a background
+   * command reports, with no turn of ours in flight. A tool that died with the
+   * turn refused exactly there, where an agent reports what the command found
+   * or starts the next wait. These write a row or a broadcast and park nothing,
+   * as a team member's do between passes; a card that parks on the user still
+   * dies with its turn, which is what sweeps it. The next turn's registration
+   * replaces them, and a deleted run drops them.
    */
-  private readonly notifiers = new Map<string, () => void>();
+  private readonly keptHostTools = new Map<string, (() => void)[]>();
 
   private teamBrief:
     | ((slug: string, cwd: string, projectId: string | null) => Promise<string>)
@@ -3821,8 +3838,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       this.contexts.forget(runId);
       this.compactionBaselines.delete(runId);
       // Nor send a notification about it.
-      this.notifiers.get(runId)?.();
-      this.notifiers.delete(runId);
+      this.dropKeptHostTools(runId);
     }
   }
 
@@ -5751,6 +5767,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      * no turn behind them. Reassigned once the registrations exist.
      */
     let disposeHostTools = (): void => {};
+    let dropKeptOnFailedStart = (): void => {};
     const compactionToken = Symbol(runId);
     if (geniroCommand) {
       this.compactingRuns.set(runId, compactionToken);
@@ -6575,260 +6592,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         });
       };
       /**
-       * geniro's own findings channel: the tool hands over an already-parsed
-       * report, this writes the one row the card is drawn from.
-       *
-       * Nothing is parked, unlike {@link askUser}: the agent is not waiting on
-       * a person, only on the row being durable. Resolving on the persist is
-       * also what keeps the receipt honest — it says the findings are on
-       * screen, and by then they are.
-       */
-      const reportFindings = async (
-        report: HostFindingsReport,
-      ): Promise<HostFindingsOutcome> => {
-        try {
-          await this.persist(
-            em,
-            runId,
-            await this.seqs.reserve(runId),
-            'report_findings',
-            null,
-            this.attributeCard(runId, report),
-          );
-        } catch (err) {
-          // The row IS the card, so a row that was never written is a report
-          // nobody will ever see. Said so, rather than answered with a count
-          // the agent would take as delivery — but the REASON is logged here
-          // and kept here: a persist failure names an absolute database path,
-          // and this string is handed to a model whose provider is off this
-          // machine. The MCP host's own error path refuses the same thing.
-          this.logger.error(
-            `run ${runId} could not persist a findings report: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return {
-            status: 'unavailable',
-            reason: 'the transcript row could not be written',
-          };
-        }
-        return { status: 'recorded', count: report.findings.length };
-      };
-      /**
-       * geniro's own chart channel — {@link reportFindings}'s twin, and
-       * deliberately its structural copy rather than a shared helper: what the
-       * two share is the SINK contract, which {@link HostSinkBroker} already
-       * holds, while the item kind, the payload and the receipt's counts are
-       * each tool's own. Folding them together would buy four lines and cost
-       * the ability to give either one a different failure.
-       */
-      const drawChart = async (chart: HostChart): Promise<HostChartOutcome> => {
-        try {
-          await this.persist(
-            em,
-            runId,
-            await this.seqs.reserve(runId),
-            'show_chart',
-            null,
-            this.attributeCard(runId, chart),
-          );
-        } catch (err) {
-          // Logged here and kept here, for the reason spelled out above: a
-          // persist failure names an absolute database path, and the string
-          // this returns is handed to a model whose provider is off this
-          // machine.
-          this.logger.error(
-            `run ${runId} could not persist a chart: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return {
-            status: 'unavailable',
-            reason: 'the transcript row could not be written',
-          };
-        }
-        return {
-          status: 'drawn',
-          series: chart.series.length,
-          // The labels ARE the points: every series was aligned to them at the
-          // reader, so this is the x-axis length rather than any one series'.
-          points: chart.labels.length,
-        };
-      };
-      /**
-       * geniro's own scorecard channel — {@link drawChart}'s twin, and its
-       * structural copy for the reason spelled out there: what the drawing
-       * tools share is the SINK contract, which `HostSinkBroker` already holds,
-       * while the item kind, the payload and the receipt's count belong to each
-       * tool alone.
-       */
-      const drawMetrics = async (
-        metrics: HostMetrics,
-      ): Promise<HostMetricsOutcome> => {
-        try {
-          await this.persist(
-            em,
-            runId,
-            await this.seqs.reserve(runId),
-            'show_metrics',
-            null,
-            this.attributeCard(runId, metrics),
-          );
-        } catch (err) {
-          // Logged here and kept here, like its siblings: a persist failure
-          // names an absolute database path, and the string this returns is
-          // handed to a model whose provider is off this machine.
-          this.logger.error(
-            `run ${runId} could not persist a scorecard: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return {
-            status: 'unavailable',
-            reason: 'the transcript row could not be written',
-          };
-        }
-        return { status: 'drawn', count: metrics.metrics.length };
-      };
-      /**
-       * geniro's own comparison channel — the third of the drawing twins, and
-       * its structural copy for the reason spelled out at {@link drawChart}.
-       */
-      const drawComparison = async (
-        comparison: HostComparison,
-      ): Promise<HostComparisonOutcome> => {
-        try {
-          await this.persist(
-            em,
-            runId,
-            await this.seqs.reserve(runId),
-            'show_comparison',
-            null,
-            this.attributeCard(runId, comparison),
-          );
-        } catch (err) {
-          // Logged here and kept here, like its siblings: a persist failure
-          // names an absolute database path, and the string this returns is
-          // handed to a model whose provider is off this machine.
-          this.logger.error(
-            `run ${runId} could not persist a comparison: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return {
-            status: 'unavailable',
-            reason: 'the transcript row could not be written',
-          };
-        }
-        return {
-          status: 'drawn',
-          options: comparison.options.length,
-          criteria: comparison.criteria.length,
-        };
-      };
-      /**
-       * geniro's own gallery channel — the fourth drawing twin, and its
-       * structural copy for the reason spelled out at {@link drawChart}.
-       *
-       * What is NOT copied is any reading of the files: this stores the paths
-       * the gallery names — the agent's, or the files a URL was downloaded to
-       * before the call reached here — and nothing else. The renderer fetches
-       * each one over
-       * the image route, which owns the guards, so a picture that has since
-       * moved or was never there costs one broken tile rather than a failed
-       * call — and the agent is told the row landed, which is the only thing
-       * this step actually did.
-       */
-      const drawGallery = async (
-        gallery: HostGallery,
-      ): Promise<HostGalleryOutcome> => {
-        try {
-          await this.persist(
-            em,
-            runId,
-            await this.seqs.reserve(runId),
-            'show_gallery',
-            null,
-            this.attributeCard(runId, gallery),
-          );
-        } catch (err) {
-          // Logged here and kept here, like its siblings: a persist failure
-          // names an absolute database path, and the string this returns is
-          // handed to a model whose provider is off this machine.
-          this.logger.error(
-            `run ${runId} could not persist a gallery: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return {
-            status: 'unavailable',
-            reason: 'the transcript row could not be written',
-          };
-        }
-        return { status: 'drawn', images: gallery.images.length };
-      };
-      /**
-       * geniro's own artifact channel — the agent publishing a page it wrote.
-       *
-       * Unlike its five drawing siblings this one STORES before it persists,
-       * and the order is load-bearing in the same direction persist-then-emit
-       * is: the row advertises a page, so the page has to exist before any
-       * reader can be told about it. A store failure therefore returns without
-       * writing a row at all, where a row written first would name a document
-       * the artifact route answers 404 for, permanently, in the scrollback.
-       *
-       * The row carries the DESCRIPTOR and never the html — the same split the
-       * gallery makes, for a sharper version of the same reason. A transcript
-       * is replayed whole on every reopen, and a conversation that published a
-       * handful of 512KB pages would otherwise pay for all of them on every
-       * load, forever.
-       */
-      const publishArtifact = async (
-        artifact: HostArtifact,
-      ): Promise<HostArtifactOutcome> => {
-        const stored = await this.artifactStore.publish(runId, artifact);
-        if (!stored.ok) {
-          return { status: 'rejected', reason: stored.reason };
-        }
-        const row: HostArtifactRow = {
-          artifactId: stored.stored.artifactId,
-          version: stored.stored.version,
-          title: artifact.title,
-          key: stored.stored.key,
-          ...(artifact.summary === undefined
-            ? {}
-            : { summary: artifact.summary }),
-        };
-        try {
-          await this.persist(
-            em,
-            runId,
-            await this.seqs.reserve(runId),
-            'show_artifact',
-            null,
-            this.attributeCard(runId, row),
-          );
-        } catch (err) {
-          // Logged here and kept here, like its siblings: a persist failure
-          // names an absolute database path, and the string this returns is
-          // handed to a model whose provider is off this machine.
-          this.logger.error(
-            `run ${runId} could not persist an artifact: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          return {
-            status: 'unavailable',
-            reason: 'the transcript row could not be written',
-          };
-        }
-        return {
-          status: 'published',
-          artifactId: stored.stored.artifactId,
-          version: stored.stored.version,
-        };
-      };
-      /**
-       * geniro's own notification channel — the agent telling the user,
-       * outside the app, that it is done (`HOST_NOTIFY_TOOL`).
-       *
-       * Writes no row. The message rides the client-wide `run_status`
-       * broadcast, which is what reaches a window not looking at this chat —
-       * and a notification is only ever for that window.
-       */
-      const notifyUser = (message: string): Promise<HostNotifyOutcome> => {
-        this.bus.publishRunStatus({ runId, status: null, notify: message });
-        return Promise.resolve({ status: 'sent' });
-      };
-      /**
        * A card whose Apply runs a write: put on screen as an
        * `approval_request`, parked until the press, the write run behind
        * Apply, and the verdict row recording what it did — the patch card and
@@ -7148,16 +6911,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         mcpEndpoint && questionServer !== null
           ? this.userQuestions.register(runId, SINGLE_AGENT_NODE, askUser)
           : null;
-      const disposeReporter = mcpEndpoint
-        ? this.findingsReports.register(
-            runId,
-            SINGLE_AGENT_NODE,
-            reportFindings,
-          )
-        : null;
-      const disposeDrawer = mcpEndpoint
-        ? this.charts.register(runId, SINGLE_AGENT_NODE, drawChart)
-        : null;
       // The listing says whether the call returns at once. Stored with the
       // sink and gone with it, so a later turn of the same run is described
       // from its own adapter.
@@ -7173,74 +6926,29 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             answersAtOnce,
           })
         : null;
-      const disposeScorer = mcpEndpoint
-        ? this.metrics.register(runId, SINGLE_AGENT_NODE, drawMetrics)
-        : null;
-      const disposeComparer = mcpEndpoint
-        ? this.comparisons.register(runId, SINGLE_AGENT_NODE, drawComparison)
-        : null;
-      const disposeGallerist = mcpEndpoint
-        ? this.galleries.register(runId, SINGLE_AGENT_NODE, drawGallery)
-        : null;
-      const disposePublisher = mcpEndpoint
-        ? this.artifacts.register(runId, SINGLE_AGENT_NODE, publishArtifact)
-        : null;
-      const disposeNotifier = mcpEndpoint
-        ? this.notices.register(runId, SINGLE_AGENT_NODE, notifyUser)
-        : null;
-      const actionContext = {
-        runId,
-        rowNodeId: null,
-        publisher: { nodeId: SINGLE_AGENT_NODE, conversationId: '' },
-      };
-      const disposeActions = mcpEndpoint
-        ? this.actionSinks.register(runId, SINGLE_AGENT_NODE, {
-            publish: (input) =>
-              this.actionPublisher.publish(actionContext, input),
-            remove: (actionId) =>
-              this.actionPublisher.remove(actionContext, actionId),
-          })
-        : null;
+      if (mcpEndpoint) {
+        this.keepHostTools(runId);
+        dropKeptOnFailedStart = () => this.dropKeptHostTools(runId);
+      }
       // A monitor's command runs in no sandbox of its own, so the tools are
       // offered only where calling one is put to the user first, or where the
-      // turn already runs unattended — see `hostToolCallUngatedReason`.
+      // turn already runs unattended — see `hostToolCallUngatedReason`. The
+      // chip can move while no turn runs, so only the first outlives the turn.
       const disposeMonitors =
         mcpEndpoint &&
         this.monitorSinks !== undefined &&
         offersMonitorTools(adapter.getConfig(), approvalMode)
-          ? this.monitorSinks.register(runId, SINGLE_AGENT_NODE, {
-              ownerOf: (caller) => ({
-                owner: {
-                  runId,
-                  memberId: SINGLE_AGENT_NODE,
-                  caller,
-                  conversationId: null,
-                  callId: null,
-                  target: 'chat',
-                },
-                cwd,
-              }),
-            })
+          ? this.monitorSinks.register(
+              runId,
+              SINGLE_AGENT_NODE,
+              monitorSinkOf(runId, cwd),
+            )
           : null;
-      const disposeOutcomes =
-        mcpEndpoint && this.runOutcomes !== undefined
-          ? this.runOutcomes.register(runId, SINGLE_AGENT_NODE, {
-              persistItem: async (_memberId, kind, role, payload) =>
-                this.persist(
-                  em,
-                  runId,
-                  await this.seqs.reserve(runId),
-                  kind,
-                  role,
-                  payload,
-                ),
-              recorder: () => ({
-                memberId: SINGLE_AGENT_NODE,
-                conversationId: null,
-                callId: null,
-              }),
-            })
-          : null;
+      const monitorsDieWithTurn =
+        adapter.getConfig().hostToolCallUngatedReason !== null;
+      if (disposeMonitors !== null && !monitorsDieWithTurn) {
+        this.keptHostTools.get(runId)?.push(disposeMonitors);
+      }
       // Only an ORDINARY chat proposes whole teams: a builder chat
       // proposes changes to its own through the `TeamBuilderBroker` sink
       // below, and an analysis saves the analysed one through
@@ -7306,27 +7014,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               { answersAtOnce },
             )
           : null;
-      // NOT disposed with the turn — see `notifiers`.
-      if (disposeNotifier) {
-        this.notifiers.set(runId, disposeNotifier);
-      }
       // Idempotent by construction — each disposer only deletes the entry it
       // installed — which is what lets the settle path call it for ORDERING
       // (before the sweep) while the two failure paths call it for COVERAGE,
       // without either having to know about the other.
       disposeHostTools = (): void => {
         disposeAsker?.();
-        disposeReporter?.();
-        disposeDrawer?.();
         disposeProposer?.();
         disposePlanner?.();
-        disposeScorer?.();
-        disposeComparer?.();
-        disposeGallerist?.();
-        disposePublisher?.();
-        disposeActions?.();
-        disposeMonitors?.();
-        disposeOutcomes?.();
+        if (monitorsDieWithTurn) {
+          disposeMonitors?.();
+        }
         disposeTeamProposals?.();
         disposeTeamBuilder?.();
         disposeAnalysis?.();
@@ -8422,6 +8120,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // down with it: `startTurn` can throw synchronously, and nothing else
       // would ever unregister them.
       disposeHostTools();
+      dropKeptOnFailedStart();
       // No terminal row stands behind this settle. While a window shows the
       // run working, the flag is what ends that state in every window, not
       // only the one that sent; a send refused over a settled run changed no
@@ -8767,6 +8466,317 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // a payload key with no reader is indistinguishable from one whose reader
       // was lost. Bringing the explanation back means bringing both back.
     });
+  }
+
+  /** Take a chat's kept host tools down — see {@link keptHostTools}. */
+  private dropKeptHostTools(runId: string): void {
+    for (const dispose of this.keptHostTools.get(runId) ?? []) {
+      dispose();
+    }
+    this.keptHostTools.delete(runId);
+  }
+
+  /**
+   * Install a chat's host tools that hold nothing of the turn — see
+   * {@link keptHostTools}. Out here, off the turn's own scope, so a sink kept
+   * past it cannot close over anything of it: each row is written on a fork of
+   * its own.
+   */
+  private keepHostTools(runId: string): void {
+    this.dropKeptHostTools(runId);
+    /**
+     * geniro's own findings channel: the tool hands over an already-parsed
+     * report, this writes the one row the card is drawn from.
+     *
+     * Nothing is parked, unlike {@link askUser}: the agent is not waiting on
+     * a person, only on the row being durable. Resolving on the persist is
+     * also what keeps the receipt honest — it says the findings are on
+     * screen, and by then they are.
+     */
+    const reportFindings = async (
+      report: HostFindingsReport,
+    ): Promise<HostFindingsOutcome> => {
+      try {
+        await this.persist(
+          this.em.fork(),
+          runId,
+          await this.seqs.reserve(runId),
+          'report_findings',
+          null,
+          this.attributeCard(runId, report),
+        );
+      } catch (err) {
+        // The row IS the card, so a row that was never written is a report
+        // nobody will ever see. Said so, rather than answered with a count
+        // the agent would take as delivery — but the REASON is logged here
+        // and kept here: a persist failure names an absolute database path,
+        // and this string is handed to a model whose provider is off this
+        // machine. The MCP host's own error path refuses the same thing.
+        this.logger.error(
+          `run ${runId} could not persist a findings report: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return {
+          status: 'unavailable',
+          reason: 'the transcript row could not be written',
+        };
+      }
+      return { status: 'recorded', count: report.findings.length };
+    };
+    /**
+     * geniro's own chart channel — {@link reportFindings}'s twin, and
+     * deliberately its structural copy rather than a shared helper: what the
+     * two share is the SINK contract, which {@link HostSinkBroker} already
+     * holds, while the item kind, the payload and the receipt's counts are
+     * each tool's own. Folding them together would buy four lines and cost
+     * the ability to give either one a different failure.
+     */
+    const drawChart = async (chart: HostChart): Promise<HostChartOutcome> => {
+      try {
+        await this.persist(
+          this.em.fork(),
+          runId,
+          await this.seqs.reserve(runId),
+          'show_chart',
+          null,
+          this.attributeCard(runId, chart),
+        );
+      } catch (err) {
+        // Logged here and kept here, for the reason spelled out above: a
+        // persist failure names an absolute database path, and the string
+        // this returns is handed to a model whose provider is off this
+        // machine.
+        this.logger.error(
+          `run ${runId} could not persist a chart: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return {
+          status: 'unavailable',
+          reason: 'the transcript row could not be written',
+        };
+      }
+      return {
+        status: 'drawn',
+        series: chart.series.length,
+        // The labels ARE the points: every series was aligned to them at the
+        // reader, so this is the x-axis length rather than any one series'.
+        points: chart.labels.length,
+      };
+    };
+    /**
+     * geniro's own scorecard channel — {@link drawChart}'s twin, and its
+     * structural copy for the reason spelled out there: what the drawing
+     * tools share is the SINK contract, which `HostSinkBroker` already holds,
+     * while the item kind, the payload and the receipt's count belong to each
+     * tool alone.
+     */
+    const drawMetrics = async (
+      metrics: HostMetrics,
+    ): Promise<HostMetricsOutcome> => {
+      try {
+        await this.persist(
+          this.em.fork(),
+          runId,
+          await this.seqs.reserve(runId),
+          'show_metrics',
+          null,
+          this.attributeCard(runId, metrics),
+        );
+      } catch (err) {
+        // Logged here and kept here, like its siblings: a persist failure
+        // names an absolute database path, and the string this returns is
+        // handed to a model whose provider is off this machine.
+        this.logger.error(
+          `run ${runId} could not persist a scorecard: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return {
+          status: 'unavailable',
+          reason: 'the transcript row could not be written',
+        };
+      }
+      return { status: 'drawn', count: metrics.metrics.length };
+    };
+    /**
+     * geniro's own comparison channel — the third of the drawing twins, and
+     * its structural copy for the reason spelled out at {@link drawChart}.
+     */
+    const drawComparison = async (
+      comparison: HostComparison,
+    ): Promise<HostComparisonOutcome> => {
+      try {
+        await this.persist(
+          this.em.fork(),
+          runId,
+          await this.seqs.reserve(runId),
+          'show_comparison',
+          null,
+          this.attributeCard(runId, comparison),
+        );
+      } catch (err) {
+        // Logged here and kept here, like its siblings: a persist failure
+        // names an absolute database path, and the string this returns is
+        // handed to a model whose provider is off this machine.
+        this.logger.error(
+          `run ${runId} could not persist a comparison: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return {
+          status: 'unavailable',
+          reason: 'the transcript row could not be written',
+        };
+      }
+      return {
+        status: 'drawn',
+        options: comparison.options.length,
+        criteria: comparison.criteria.length,
+      };
+    };
+    /**
+     * geniro's own gallery channel — the fourth drawing twin, and its
+     * structural copy for the reason spelled out at {@link drawChart}.
+     *
+     * What is NOT copied is any reading of the files: this stores the paths
+     * the gallery names — the agent's, or the files a URL was downloaded to
+     * before the call reached here — and nothing else. The renderer fetches
+     * each one over
+     * the image route, which owns the guards, so a picture that has since
+     * moved or was never there costs one broken tile rather than a failed
+     * call — and the agent is told the row landed, which is the only thing
+     * this step actually did.
+     */
+    const drawGallery = async (
+      gallery: HostGallery,
+    ): Promise<HostGalleryOutcome> => {
+      try {
+        await this.persist(
+          this.em.fork(),
+          runId,
+          await this.seqs.reserve(runId),
+          'show_gallery',
+          null,
+          this.attributeCard(runId, gallery),
+        );
+      } catch (err) {
+        // Logged here and kept here, like its siblings: a persist failure
+        // names an absolute database path, and the string this returns is
+        // handed to a model whose provider is off this machine.
+        this.logger.error(
+          `run ${runId} could not persist a gallery: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return {
+          status: 'unavailable',
+          reason: 'the transcript row could not be written',
+        };
+      }
+      return { status: 'drawn', images: gallery.images.length };
+    };
+    /**
+     * geniro's own artifact channel — the agent publishing a page it wrote.
+     *
+     * Unlike its five drawing siblings this one STORES before it persists,
+     * and the order is load-bearing in the same direction persist-then-emit
+     * is: the row advertises a page, so the page has to exist before any
+     * reader can be told about it. A store failure therefore returns without
+     * writing a row at all, where a row written first would name a document
+     * the artifact route answers 404 for, permanently, in the scrollback.
+     *
+     * The row carries the DESCRIPTOR and never the html — the same split the
+     * gallery makes, for a sharper version of the same reason. A transcript
+     * is replayed whole on every reopen, and a conversation that published a
+     * handful of 512KB pages would otherwise pay for all of them on every
+     * load, forever.
+     */
+    const publishArtifact = async (
+      artifact: HostArtifact,
+    ): Promise<HostArtifactOutcome> => {
+      const stored = await this.artifactStore.publish(runId, artifact);
+      if (!stored.ok) {
+        return { status: 'rejected', reason: stored.reason };
+      }
+      const row: HostArtifactRow = {
+        artifactId: stored.stored.artifactId,
+        version: stored.stored.version,
+        title: artifact.title,
+        key: stored.stored.key,
+        ...(artifact.summary === undefined
+          ? {}
+          : { summary: artifact.summary }),
+      };
+      try {
+        await this.persist(
+          this.em.fork(),
+          runId,
+          await this.seqs.reserve(runId),
+          'show_artifact',
+          null,
+          this.attributeCard(runId, row),
+        );
+      } catch (err) {
+        // Logged here and kept here, like its siblings: a persist failure
+        // names an absolute database path, and the string this returns is
+        // handed to a model whose provider is off this machine.
+        this.logger.error(
+          `run ${runId} could not persist an artifact: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return {
+          status: 'unavailable',
+          reason: 'the transcript row could not be written',
+        };
+      }
+      return {
+        status: 'published',
+        artifactId: stored.stored.artifactId,
+        version: stored.stored.version,
+      };
+    };
+    /**
+     * geniro's own notification channel — the agent telling the user,
+     * outside the app, that it is done (`HOST_NOTIFY_TOOL`).
+     *
+     * Writes no row. The message rides the client-wide `run_status`
+     * broadcast, which is what reaches a window not looking at this chat —
+     * and a notification is only ever for that window.
+     */
+    const notifyUser = (message: string): Promise<HostNotifyOutcome> => {
+      this.bus.publishRunStatus({ runId, status: null, notify: message });
+      return Promise.resolve({ status: 'sent' });
+    };
+    const actionContext = {
+      runId,
+      rowNodeId: null,
+      publisher: { nodeId: SINGLE_AGENT_NODE, conversationId: '' },
+    };
+    this.keptHostTools.set(runId, [
+      this.findingsReports.register(runId, SINGLE_AGENT_NODE, reportFindings),
+      this.charts.register(runId, SINGLE_AGENT_NODE, drawChart),
+      this.metrics.register(runId, SINGLE_AGENT_NODE, drawMetrics),
+      this.comparisons.register(runId, SINGLE_AGENT_NODE, drawComparison),
+      this.galleries.register(runId, SINGLE_AGENT_NODE, drawGallery),
+      this.artifacts.register(runId, SINGLE_AGENT_NODE, publishArtifact),
+      this.notices.register(runId, SINGLE_AGENT_NODE, notifyUser),
+      this.actionSinks.register(runId, SINGLE_AGENT_NODE, {
+        publish: (input) => this.actionPublisher.publish(actionContext, input),
+        remove: (actionId) =>
+          this.actionPublisher.remove(actionContext, actionId),
+      }),
+      ...(this.runOutcomes === undefined
+        ? []
+        : [
+            this.runOutcomes.register(runId, SINGLE_AGENT_NODE, {
+              persistItem: async (_memberId, kind, role, payload) =>
+                this.persist(
+                  this.em.fork(),
+                  runId,
+                  await this.seqs.reserve(runId),
+                  kind,
+                  role,
+                  payload,
+                ),
+              recorder: () => ({
+                memberId: SINGLE_AGENT_NODE,
+                conversationId: null,
+                callId: null,
+              }),
+            }),
+          ]),
+    ]);
   }
 
   /**

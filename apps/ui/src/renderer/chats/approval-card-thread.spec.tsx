@@ -24,6 +24,7 @@ describe('a message to another thread, as an approval card', () => {
         toolName="message_thread"
         input={SEND}
         threadTitle="Pelican"
+        threadText={SEND.message}
         verdict={null}
         requestId="req-1"
         onRespond={() => {}}
@@ -40,6 +41,7 @@ describe('a message to another thread, as an approval card', () => {
         toolName="message_thread"
         input={SEND}
         threadTitle="Pelican"
+        threadText={SEND.message}
         verdict={null}
         requestId="req-1"
         onRespond={onRespond}
@@ -60,6 +62,7 @@ describe('a message to another thread, as an approval card', () => {
         toolName="message_thread"
         input={SEND}
         threadTitle="Pelican"
+        threadText={SEND.message}
         verdict={true}
         requestId="req-1"
         onRespond={() => {}}
@@ -75,6 +78,7 @@ describe('a message to another thread, as an approval card', () => {
         toolName="message_thread"
         input={SEND}
         threadTitle={'Peli‮can'}
+        threadText={SEND.message}
         verdict={null}
         requestId="req-1"
         onRespond={() => {}}
@@ -88,6 +92,20 @@ describe('a message to another thread, as an approval card', () => {
     expect(approve().disabled).toBe(true);
     act(() => el.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
     expect(approve().disabled).toBe(false);
+  });
+
+  it('draws the ordinary permission card when a title comes with no text', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="message_thread"
+        input={SEND}
+        threadTitle="Pelican"
+        verdict={null}
+        requestId="req-1"
+        onRespond={() => {}}
+      />,
+    );
+    expect(el.textContent).toContain('Agent asks to run a tool');
   });
 
   it('draws the ordinary permission card when no thread title is given', () => {

@@ -4993,6 +4993,7 @@ export function Chats({
           options={(item.payload as { options?: unknown } | null)?.options}
           requestId={requestId}
           threadTitle={payloadString(item.payload, 'threadTitle')}
+          threadText={payloadString(item.payload, 'threadText')}
           verdict={settled?.allow ?? null}
           verdictOption={settled?.optionLabel ?? null}
           // The user's own words, read back from the SAME item that settled the

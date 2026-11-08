@@ -15,6 +15,24 @@ describe('threadCardFields — the title a message card names', () => {
       MESSAGE_CALL,
       { thread: 'run-7', message: 'hi' },
       () => Promise.resolve({ title: 'Pelican' }),
+      { threadTitle: 'Pelican', threadText: 'hi' },
+    ],
+    [
+      "reads the thread and the text out of cursor's envelope",
+      `${SERVER}-message_thread: message_thread`,
+      {
+        providerIdentifier: SERVER,
+        toolName: 'message_thread',
+        args: { thread: 'run-7', message: 'hi', wake: true },
+      },
+      () => Promise.resolve({ title: 'Pelican' }),
+      { threadTitle: 'Pelican', threadText: 'hi' },
+    ],
+    [
+      'names the thread and no text for a call with no message',
+      MESSAGE_CALL,
+      { thread: 'run-7' },
+      () => Promise.resolve({ title: 'Pelican' }),
       { threadTitle: 'Pelican' },
     ],
     [
@@ -22,7 +40,7 @@ describe('threadCardFields — the title a message card names', () => {
       MESSAGE_CALL,
       { thread: 'run-7', message: 'hi' },
       () => Promise.resolve({ title: null }),
-      { threadTitle: 'Untitled thread' },
+      { threadTitle: 'Untitled thread', threadText: 'hi' },
     ],
     [
       'names nothing for an input that names no thread',

@@ -2,7 +2,8 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 
 import { HOST_MESSAGE_THREAD_TOOL } from '../chat.types';
 import type { RunDao } from '../dao/run.dao';
-import { isHostToolCall } from './host-tool';
+import { hostToolArguments, isHostToolCall } from './host-tool';
+import { asRecord } from './json-util';
 
 /**
  * Whether a permission request names `message_thread`. Used only to draw its
@@ -17,7 +18,7 @@ export function isHostThreadMessageCall(
 }
 
 /**
- * The target's title for a `message_thread` card, spread into the
+ * The target's title and the text for a `message_thread` card, spread into the
  * `approval_request` row. Empty for any other call, for a call whose input
  * names no thread, and when the read fails: a throw here would refuse the call.
  */
@@ -27,20 +28,23 @@ export async function threadCardFields(
   serverName: string | null,
   toolName: string,
   input: unknown,
-): Promise<{ threadTitle?: string }> {
+): Promise<{ threadTitle?: string; threadText?: string }> {
   if (!isHostThreadMessageCall(serverName, toolName)) {
     return {};
   }
-  const thread =
-    typeof input === 'object' && input !== null && 'thread' in input
-      ? input.thread
-      : null;
-  if (typeof thread !== 'string') {
+  const call = asRecord(hostToolArguments(input, HOST_MESSAGE_THREAD_TOOL));
+  if (typeof call?.thread !== 'string') {
     return {};
   }
   try {
-    const run = await runDao.getById(thread, em);
-    return run === null ? {} : { threadTitle: run.title ?? 'Untitled thread' };
+    const run = await runDao.getById(call.thread, em);
+    if (run === null) {
+      return {};
+    }
+    return {
+      threadTitle: run.title ?? 'Untitled thread',
+      ...(typeof call.message === 'string' ? { threadText: call.message } : {}),
+    };
   } catch {
     return {};
   }

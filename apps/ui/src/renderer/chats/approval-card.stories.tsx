@@ -100,6 +100,8 @@ export const MessageToThread: Story = {
       wake: true,
     },
     threadTitle: 'Pelican',
+    threadText:
+      'The migration is in. Two open questions:\n1. Keep the old column until the next release?\n2. Backfill in one batch or by day?',
   },
 };
 

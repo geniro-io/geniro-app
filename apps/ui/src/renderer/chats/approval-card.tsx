@@ -1349,14 +1349,6 @@ function PermissionCard({
 }
 
 /** The text a `message_thread` call would send, or null when its input holds none. */
-function messageOf(input: unknown): string | null {
-  if (input === null || typeof input !== 'object') {
-    return null;
-  }
-  const { message } = input as { message?: unknown };
-  return typeof message === 'string' ? message : null;
-}
-
 /**
  * A message another thread would receive, under review: the receiving thread's
  * title and every word of the text, approved or denied in one press. A message
@@ -1438,6 +1430,7 @@ export function ApprovalCard({
   expired = false,
   requestId,
   threadTitle = null,
+  threadText = null,
   onRespond,
   onOpenTeam,
   onOpenProject,
@@ -1445,10 +1438,12 @@ export function ApprovalCard({
   toolName: string;
   input: unknown;
   /**
-   * The title of the thread a `message_thread` call would write to. Present, the
-   * card is the whole message under that title; absent, the ordinary permission card.
+   * The title of the thread a `message_thread` call would write to, and the
+   * text it would send. Both present, the card is the whole message under that
+   * title; otherwise the ordinary permission card.
    */
   threadTitle?: string | null;
+  threadText?: string | null;
   /** The row's `questions` — the question card, when this is a question. */
   questions?: unknown;
   /**
@@ -1545,12 +1540,11 @@ export function ApprovalCard({
   }
   // A message to another thread is approved whole: its title and every word of
   // its text. Without a readable text the permission card shows the raw input.
-  const sentText = threadTitle === null ? null : messageOf(input);
-  if (threadTitle !== null && sentText !== null) {
+  if (threadTitle !== null && threadText !== null) {
     return (
       <ThreadMessageApproval
         title={threadTitle}
-        text={sentText}
+        text={threadText}
         verdict={verdict}
         expired={expired}
         onRespond={onRespond}

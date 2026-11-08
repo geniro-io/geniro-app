@@ -40,6 +40,21 @@ export const REMOTE_PREFERRED_PORT = 47616;
 export const TUNNEL_URL_WAIT_MS = 45_000;
 
 /**
+ * How long a client that printed its URL is given to connect. Measured at 3 min
+ * 16 s for cloudflared when the servers in `/etc/resolv.conf` do not answer (a
+ * VPN client left disconnected), against a second or two otherwise.
+ */
+export const TUNNEL_CONNECT_WAIT_MS = 5 * 60_000;
+
+/**
+ * How long after printing its URL a cloudflared address is withheld, so its
+ * name is in DNS first. Measured at 0.7–7.6 s over 20 quick tunnels; a lookup
+ * that beats the record is kept as NXDOMAIN by a home router for over a minute,
+ * which a reload does not clear.
+ */
+export const TUNNEL_NAME_SETTLE_MS = 10_000;
+
+/**
  * How many output chunks of a failing tunnel client are kept for its error.
  *
  * The tail is what makes a failure actionable — a client refusing an expired

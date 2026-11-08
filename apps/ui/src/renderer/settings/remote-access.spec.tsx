@@ -337,13 +337,25 @@ describe('RemoteAccess — the public address', () => {
       provider: 'cloudflared',
       url: 'https://keyword-portsmouth.trycloudflare.com',
       error: null,
+      detail: null,
     },
   };
 
-  /** The panel's one button, whichever of its two states it is in. */
+  const CONNECTING: RemoteAccessState = {
+    ...LISTENING,
+    tunnel: {
+      status: 'starting',
+      provider: 'cloudflared',
+      url: null,
+      error: null,
+      detail: 'lookup argotunnel.com on 100.95.0.253:53: i/o timeout',
+    },
+  };
+
+  /** The panel's one button, whichever of its states it is in. */
   function tunnelButton(): HTMLButtonElement {
     const button = [...container.querySelectorAll('button')].find((el) =>
-      /Get an address|Close address/.test(el.textContent ?? ''),
+      /Get an address|Close address|Cancel/.test(el.textContent ?? ''),
     );
     if (!button) {
       throw new Error('expected the tunnel button to be rendered');
@@ -413,6 +425,7 @@ describe('RemoteAccess — the public address', () => {
         provider: 'ngrok',
         url: null,
         error: 'ngrok stopped (exit 1): authentication failed',
+        detail: null,
       },
     } satisfies RemoteAccessState);
     await mount();
@@ -420,6 +433,91 @@ describe('RemoteAccess — the public address', () => {
     // The failure the user can act on is the CLIENT's, not a generic one —
     // an expired authtoken names its own fix.
     expect(container.textContent).toContain('authentication failed');
+  });
+
+  it('shows no address or code to scan while connecting, only what the client says', async () => {
+    geniro.getRemoteAccess.mockResolvedValue(CONNECTING);
+    await mount();
+
+    expect(container.textContent).toContain('Connecting…');
+    expect(
+      container.querySelector('[data-slot="tunnel-detail"]')?.textContent,
+    ).toBe(
+      'cloudflared: lookup argotunnel.com on 100.95.0.253:53: i/o timeout',
+    );
+    expect(container.textContent).not.toContain('Public (via');
+    expect(
+      container.querySelector(
+        'svg[aria-label="Scan to open the public link on your phone"]',
+      ),
+    ).toBeNull();
+  });
+
+  it('cancels a wait through the closing channel', async () => {
+    geniro.getRemoteAccess.mockResolvedValue(CONNECTING);
+    geniro.stopRemoteTunnel.mockResolvedValue(LISTENING);
+    await mount();
+
+    expect(tunnelButton().textContent).toBe('Cancel');
+    await act(async () => tunnelButton().click());
+
+    expect(geniro.stopRemoteTunnel).toHaveBeenCalledOnce();
+    expect(geniro.startRemoteTunnel).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain('Connecting…');
+  });
+
+  it('does not read as connecting when a read lands while a close is out', async () => {
+    geniro.getRemoteAccess.mockResolvedValue(OPEN);
+    geniro.stopRemoteTunnel.mockReturnValue(new Promise(() => {}));
+    await mount();
+
+    await act(async () => tunnelButton().click());
+    geniro.getRemoteAccess.mockResolvedValue(LISTENING);
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(container.textContent).not.toContain('https://keyword-portsmouth');
+    expect(container.textContent).not.toContain('Connecting…');
+    expect(tunnelButton().disabled).toBe(true);
+  });
+
+  it('offers the cancel from the press itself, before any read says it is connecting', async () => {
+    geniro.getRemoteAccess.mockResolvedValue(LISTENING);
+    geniro.startRemoteTunnel.mockReturnValue(new Promise(() => {}));
+    await mount();
+
+    await act(async () => tunnelButton().click());
+
+    expect(container.textContent).toContain('Connecting…');
+    expect(tunnelButton().textContent).toBe('Cancel');
+    expect(tunnelButton().disabled).toBe(false);
+  });
+
+  it('keeps reading through a wait that outlasts the polling window', async () => {
+    vi.useFakeTimers();
+    try {
+      geniro.getRemoteAccess.mockResolvedValue(LISTENING);
+      await mount();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          REMOTE_ACCESS_POLL_WINDOW_MS - 2 * REMOTE_ACCESS_POLL_MS,
+        );
+      });
+      geniro.getRemoteAccess.mockResolvedValue(CONNECTING);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(REMOTE_ACCESS_POLL_MS);
+      });
+      expect(container.textContent).toContain('Connecting…');
+
+      const before = geniro.getRemoteAccess.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(REMOTE_ACCESS_POLL_MS * 3);
+      });
+      expect(geniro.getRemoteAccess.mock.calls.length).toBeGreaterThan(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

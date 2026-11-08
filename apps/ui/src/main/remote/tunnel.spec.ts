@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   TUNNEL_EXPIRED_AFTER_MS,
   TUNNEL_EXPIRY_CONFIRM_MS,
+  TUNNEL_NAME_SETTLE_MS,
 } from './remote.types';
 import { probeReady, RemoteTunnel, tunnelHostPattern } from './tunnel';
 
@@ -38,7 +39,16 @@ function fakeChild(): EventEmitter & {
   return child;
 }
 
-function harness(options: { bins?: string[] } = {}) {
+const REGISTERED =
+  'INF Registered tunnel connection connIndex=0 ip=198.41.192.47 location=ala02 protocol=quic\n';
+
+function harness(
+  options: {
+    bins?: string[];
+    connectWaitMs?: number;
+    nameSettleMs?: number;
+  } = {},
+) {
   const child = fakeChild();
   const installed = new Set(options.bins ?? ['cloudflared', 'ngrok']);
   const spawnProcess = vi.fn(() => child);
@@ -47,6 +57,8 @@ function harness(options: { bins?: string[] } = {}) {
     resolveBin: (name) =>
       installed.has(name) ? `/opt/homebrew/bin/${name}` : null,
     urlWaitMs: 50,
+    connectWaitMs: options.connectWaitMs ?? 1_000,
+    nameSettleMs: options.nameSettleMs ?? 0,
   });
   return { tunnel, child, spawnProcess };
 }
@@ -82,6 +94,7 @@ describe('RemoteTunnel', () => {
     child.stderr.push(
       'INF |  https://keyword-portsmouth-product.trycloudflare.com  |\n',
     );
+    child.stderr.push(REGISTERED);
     const state = await started;
 
     expect(state.status).toBe('open');
@@ -137,6 +150,7 @@ describe('RemoteTunnel', () => {
 
     const started = tunnel.start(47616);
     child.stderr.push('https://abc.trycloudflare.com\n');
+    child.stderr.push(REGISTERED);
     await started;
     expect(tunnel.allowedHostPattern()).toBe('*.trycloudflare.com');
 
@@ -150,6 +164,7 @@ describe('RemoteTunnel', () => {
     const { tunnel, child } = harness();
     const started = tunnel.start(47616);
     child.stderr.push('https://abc.trycloudflare.com\n');
+    child.stderr.push(REGISTERED);
     await started;
 
     await tunnel.stop();
@@ -201,6 +216,7 @@ describe('RemoteTunnel', () => {
     const { tunnel, child, spawnProcess } = harness();
     const started = tunnel.start(47616);
     child.stderr.push('https://abc.trycloudflare.com\n');
+    child.stderr.push(REGISTERED);
     await started;
 
     child.exitCode = 1;
@@ -237,6 +253,7 @@ describe('RemoteTunnel', () => {
       spawnProcess: vi.fn(() => child) as never,
       resolveBin: (name) => `/opt/homebrew/bin/${name}`,
       urlWaitMs: 1_000,
+      nameSettleMs: 0,
       livenessPollMs: 5,
       probeReady,
     });
@@ -269,6 +286,7 @@ describe('RemoteTunnel', () => {
         spawnProcess: vi.fn(() => child) as never,
         resolveBin: (name) => `/opt/homebrew/bin/${name}`,
         urlWaitMs: 50,
+        nameSettleMs: 0,
         livenessPollMs: POLL_MS,
         probeReady: (url) => {
           probed.push(url);
@@ -298,11 +316,12 @@ describe('RemoteTunnel', () => {
       h.child.stderr.push(
         'INF |  https://driving-table-leather-posts.trycloudflare.com  |\n',
       );
-      await started;
       h.child.stderr.push(
         'INF Starting metrics server on 127.0.0.1:20243/metrics\n',
       );
+      h.child.stderr.push(REGISTERED);
       await vi.advanceTimersByTimeAsync(POLL_MS);
+      await started;
     }
 
     /** A sleep: no timer runs while the wall clock moves on. */
@@ -432,6 +451,26 @@ describe('RemoteTunnel', () => {
       expect(h.tunnel.state().status).toBe('error');
     });
 
+    it('starts the expiry clock at the first connection, however long connecting took', async () => {
+      const h = sleepingHarness();
+      h.setReady(false);
+      const started = h.tunnel.start(47616);
+      h.child.stderr.push('INF |  https://slow.trycloudflare.com  |\n');
+      h.child.stderr.push(
+        'INF Starting metrics server on 127.0.0.1:20243/metrics\n',
+      );
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      h.child.stderr.push(REGISTERED);
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      await started;
+
+      await vi.advanceTimersByTimeAsync(TUNNEL_EXPIRED_AFTER_MS - 3 * POLL_MS);
+      expect(h.tunnel.state().status).toBe('open');
+
+      await vi.advanceTimersByTimeAsync(4 * POLL_MS);
+      expect(h.tunnel.state().status).toBe('error');
+    });
+
     it('counts the window from the last answer that had a connection, not from the start', async () => {
       const h = sleepingHarness();
       await openWithMetrics(h);
@@ -449,10 +488,146 @@ describe('RemoteTunnel', () => {
     });
   });
 
+  describe('an address that cannot answer yet', () => {
+    const FEATURES_TIMEOUT =
+      'Failed to fetch features, default to disable error="lookup cfd-features.argotunnel.com on 100.95.0.253:53: dial udp 100.95.0.253:53: i/o timeout"';
+    const delivered = (): Promise<void> =>
+      new Promise((resolve) => setTimeout(resolve, 5));
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('stays starting after the URL line until the client holds a connection', async () => {
+      const { tunnel, child } = harness();
+      const started = tunnel.start(47616);
+      child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
+      await delivered();
+
+      expect(tunnel.state()).toMatchObject({ status: 'starting', url: null });
+      expect(tunnel.allowedHostPattern()).toBeNull();
+
+      child.stderr.push(REGISTERED);
+      const state = await started;
+      expect(state.status).toBe('open');
+      expect(state.url).toBe('https://abc.trycloudflare.com');
+      expect(tunnel.allowedHostPattern()).toBe('*.trycloudflare.com');
+    });
+
+    it('holds a connected address until its name has had time to reach DNS', async () => {
+      vi.useFakeTimers();
+      const child = fakeChild();
+      const tunnel = new RemoteTunnel({
+        spawnProcess: vi.fn(() => child) as never,
+        resolveBin: (name) => `/opt/homebrew/bin/${name}`,
+      });
+      const started = tunnel.start(47616);
+      child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
+      child.stderr.push(REGISTERED);
+
+      await vi.advanceTimersByTimeAsync(TUNNEL_NAME_SETTLE_MS - 1);
+      expect(tunnel.state()).toMatchObject({ status: 'starting', url: null });
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await started).url).toBe('https://abc.trycloudflare.com');
+    });
+
+    it('opens on the readiness endpoint when the connected line never comes', async () => {
+      let ready = false;
+      const child = fakeChild();
+      const tunnel = new RemoteTunnel({
+        spawnProcess: vi.fn(() => child) as never,
+        resolveBin: (name) => `/opt/homebrew/bin/${name}`,
+        nameSettleMs: 0,
+        livenessPollMs: 2,
+        probeReady: async () => ready,
+      });
+      const started = tunnel.start(47616);
+      child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
+      child.stderr.push(
+        'INF Starting metrics server on 127.0.0.1:20243/metrics\n',
+      );
+      await delivered();
+      await delivered();
+      expect(tunnel.state().status).toBe('starting');
+
+      ready = true;
+      expect((await started).status).toBe('open');
+      await tunnel.stop();
+    });
+
+    it('says what the client complains about while it connects, leaving out the certificate noise', async () => {
+      const { tunnel, child } = harness();
+      const started = tunnel.start(47616);
+      child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
+      child.stderr.push(`2026-11-08T12:30:40Z ERR ${FEATURES_TIMEOUT}\n`);
+      await delivered();
+      expect(tunnel.state().detail).toBe(FEATURES_TIMEOUT);
+
+      child.stderr.push(
+        '2026-11-08T12:32:40Z ERR Cannot determine default origin certificate path. No file cert.pem\n',
+      );
+      await delivered();
+      expect(tunnel.state().detail).toBe(FEATURES_TIMEOUT);
+
+      child.stderr.push(REGISTERED);
+      expect((await started).detail).toBeNull();
+    });
+
+    it('gives up in the client’s own words when it never connects, and reaps it', async () => {
+      const { tunnel, child } = harness({ connectWaitMs: 20 });
+      const started = tunnel.start(47616);
+      child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
+      child.stderr.push(`2026-11-08T12:30:40Z ERR ${FEATURES_TIMEOUT}\n`);
+
+      const state = await started;
+      expect(state.status).toBe('error');
+      expect(state.url).toBeNull();
+      expect(state.error).toContain('could not connect');
+      expect(state.error).toContain('i/o timeout');
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+
+    it('lets a stop end the wait, and nothing reopens it afterwards', async () => {
+      vi.useFakeTimers();
+      const child = fakeChild();
+      child.kill = vi.fn(() => true);
+      const tunnel = new RemoteTunnel({
+        spawnProcess: vi.fn(() => child) as never,
+        resolveBin: (name) => `/opt/homebrew/bin/${name}`,
+      });
+      void tunnel.start(47616);
+      child.stderr.push('INF |  https://abc.trycloudflare.com  |\n');
+      child.stderr.push(REGISTERED);
+      await vi.advanceTimersByTimeAsync(1);
+
+      void tunnel.stop();
+      await vi.advanceTimersByTimeAsync(TUNNEL_NAME_SETTLE_MS);
+
+      expect(tunnel.state().status).toBe('off');
+      expect(tunnel.allowedHostPattern()).toBeNull();
+    });
+
+    it('takes ngrok’s URL line as working, with no wait on top', async () => {
+      vi.useFakeTimers();
+      const child = fakeChild();
+      const tunnel = new RemoteTunnel({
+        spawnProcess: vi.fn(() => child) as never,
+        resolveBin: (name) =>
+          name === 'ngrok' ? '/opt/homebrew/bin/ngrok' : null,
+      });
+      const started = tunnel.start(47616);
+      child.stdout.push('{"url":"https://9b36-1-2-3-4.ngrok-free.app"}\n');
+
+      expect((await started).status).toBe('open');
+    });
+  });
+
   it('does not start a second client while one is already open', async () => {
     const { tunnel, child, spawnProcess } = harness();
     const started = tunnel.start(47616);
     child.stderr.push('https://abc.trycloudflare.com\n');
+    child.stderr.push(REGISTERED);
     await started;
 
     await tunnel.start(47616);

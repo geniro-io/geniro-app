@@ -2013,6 +2013,65 @@ describe('TeamExecutorService', () => {
       expect(cursor.starts[0]!.sendUserMessage).not.toHaveBeenCalled();
     });
 
+    it('answers question for a lead parked on its own question, and tells it nothing', async () => {
+      const { service, claude, approvals } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      approvals.track({
+        runId: run.id,
+        memberId: 'a',
+        requestId: 'q-1',
+        toolName: 'AskUserQuestion',
+        input: null,
+        question: true,
+        respond: () => true,
+      });
+
+      await expect(service.joinThreadMessage(run.id, join())).resolves.toBe(
+        'question',
+      );
+      expect(claude.starts[0]!.sendUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('still joins a lead while another member’s question is open, or its own permission card', async () => {
+      const { service, claude, approvals } = setup();
+      const run = await service.startRun({
+        slug: 's',
+        team: teamOf([member('a')], { name: 's' }),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const card = {
+        runId: run.id,
+        toolName: 'tool',
+        input: null,
+        respond: () => true,
+      };
+      approvals.track({
+        ...card,
+        memberId: 'helper',
+        requestId: 'q-1',
+        question: true,
+      });
+      approvals.track({
+        ...card,
+        memberId: 'a',
+        requestId: 'p-1',
+        question: false,
+      });
+
+      await expect(service.joinThreadMessage(run.id, join())).resolves.toBe(
+        'joined',
+      );
+      expect(claude.starts[0]!.sendUserMessage).toHaveBeenCalledTimes(1);
+    });
+
     it('answers over_budget, tells the running lead nothing and writes no row', async () => {
       const { service, claude, itemDao } = setup();
       const run = await service.startRun({

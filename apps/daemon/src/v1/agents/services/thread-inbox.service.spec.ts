@@ -451,6 +451,7 @@ describe('ThreadInboxService.listOwed', () => {
       reason: 'sender_opted_out',
     });
     await h.seedMessage({ text: 'stopped', reason: 'stopped' });
+    await h.seedMessage({ text: 'asked', reason: 'question' });
     await h.seedMessage({
       text: 'delivered',
       status: 'delivered',
@@ -461,6 +462,7 @@ describe('ThreadInboxService.listOwed', () => {
     const owed = await h.service.listOwed(TARGET);
 
     expect(owed.map((message) => message.text).sort()).toEqual([
+      'asked',
       'owed',
       'running',
     ]);

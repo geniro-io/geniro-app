@@ -573,10 +573,11 @@ export interface ThreadMessageJoin {
 
 /**
  * `idle`: no turn of the lead to join. `busy`: one that cannot take it now.
+ * `question`: one parked on the user's question, which reads nothing until they answer.
  * `over_budget`: one that could, and the thread has taken its joins this hour.
  */
 export type ThreadMessageJoinAnswer =
-  'joined' | 'busy' | 'idle' | 'over_budget';
+  'joined' | 'busy' | 'idle' | 'question' | 'over_budget';
 
 /** The refusal for a message addressed to a call that is not running. */
 function callNotRunning(): ConflictException {
@@ -7484,6 +7485,13 @@ export class TeamExecutorService
       );
       if (lead === undefined) {
         return 'idle';
+      }
+      if (
+        this.approvals
+          .listByRun(runId)
+          .some((card) => card.question && card.memberId === lead.id)
+      ) {
+        return 'question';
       }
       const running = conversationNodes.get(lead.id) ?? lead;
       if (this.adapterFor(running.agent).getConfig().followUp.interrupts) {

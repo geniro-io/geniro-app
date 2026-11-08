@@ -132,7 +132,9 @@ function harness(
         (row) =>
           row.status === 'waiting' &&
           row.wake &&
-          (row.reason === null || row.reason === 'running_turn'),
+          (row.reason === null ||
+            row.reason === 'running_turn' ||
+            row.reason === 'question'),
       ),
     ),
     owedRunIds: vi.fn(async () =>
@@ -192,7 +194,7 @@ function harness(
   const executor = {
     joinThreadMessage: vi.fn(
       async (_run: string, _join: ThreadMessageJoin) =>
-        'idle' as 'joined' | 'busy' | 'idle' | 'over_budget',
+        'idle' as 'joined' | 'busy' | 'idle' | 'question' | 'over_budget',
     ),
     wakeLeadForThreadMessage: vi.fn(
       async () => 'woken' as 'woken' | 'busy' | 'refused',
@@ -472,6 +474,90 @@ describe('ThreadDeliveryService: a running chat', () => {
 
     await expect(h.send()).resolves.toMatchObject({ outcome: 'woken' });
     expect(h.published).toHaveLength(1);
+  });
+});
+
+describe('ThreadDeliveryService: a turn parked on the user’s question', () => {
+  it('sends nothing into it: the message waits with reason question', async () => {
+    const h = harness({ status: 'running' }, { running: true });
+    h.approvals.awaitingFor.mockReturnValue('question');
+
+    await expect(h.send()).resolves.toEqual({
+      outcome: 'waiting',
+      reason: 'question',
+      title: 'Target',
+    });
+
+    expect(h.chats.sendMessage).not.toHaveBeenCalled();
+    expect(h.inbox.markDelivered).not.toHaveBeenCalled();
+    expect(h.published).toEqual([]);
+    expect(h.messages[0]).toMatchObject({
+      status: 'waiting',
+      reason: 'question',
+    });
+  });
+
+  it('ignores a card that stands across turns, as a team proposal does', async () => {
+    const h = harness({ status: 'running' }, { running: true });
+    h.approvals.awaitingFor.mockImplementation(((
+      _runId: string,
+      ignore: (card: { standing: boolean }) => boolean,
+    ) => (ignore({ standing: true }) ? null : 'question')) as never);
+
+    await expect(h.send()).resolves.toMatchObject({ outcome: 'joined' });
+  });
+
+  it('wakes once the turn has ended with the question answered', async () => {
+    const h = harness({ status: 'running' }, { running: true });
+    h.approvals.awaitingFor.mockReturnValue('question');
+    await h.send();
+    h.runs.set(TARGET, runOf({ status: 'completed' }));
+    h.approvals.awaitingFor.mockReturnValue(null);
+
+    await h.settle('completed');
+
+    expect(h.published).toHaveLength(1);
+    expect(h.messages[0]).toMatchObject({ status: 'waiting', reason: null });
+  });
+
+  it('starts nothing while the question still stands after a status', async () => {
+    const h = harness({ status: 'running' }, { running: true });
+    h.approvals.awaitingFor.mockReturnValue('question');
+    await h.send();
+    h.runs.set(TARGET, runOf({ status: 'completed' }));
+
+    await h.settle('completed');
+
+    expect(h.published).toEqual([]);
+    expect(h.messages[0]).toMatchObject({
+      status: 'waiting',
+      reason: 'question',
+    });
+  });
+
+  it('lists such a thread as needing the user, not as working', async () => {
+    const h = harness({ status: 'running' }, { running: true });
+    h.approvals.awaitingFor.mockReturnValue('question');
+
+    const rows = await h.service.listThreads(SENDER, { limit: 20 });
+
+    expect(rows.find((row) => row.thread === TARGET)?.status).toBe(
+      'needs_user',
+    );
+  });
+
+  it('leaves a team’s lead parked on its own question waiting too', async () => {
+    const h = harness({ teamId: 'team-1', status: 'running' });
+    h.executor.joinThreadMessage.mockResolvedValue('question');
+
+    await expect(h.send()).resolves.toMatchObject({
+      outcome: 'waiting',
+      reason: 'question',
+    });
+    expect(h.messages[0]).toMatchObject({
+      status: 'waiting',
+      deliveryId: null,
+    });
   });
 });
 
@@ -874,7 +960,8 @@ describe('ThreadDeliveryService: who may reach whom', () => {
       runOf({ id: 'team', teamId: 'team-1', status: 'running' }),
     );
     h.runs.set('chat', runOf({ id: 'chat', status: 'running' }));
-    h.approvals.awaitingFor.mockReturnValue('question');
+    h.approvals.awaitingFor.mockImplementation(((runId: string) =>
+      runId === 'team' ? 'question' : null) as never);
     h.chats.awaitsCardAnswer.mockImplementation(
       ((runId: string) => runId === 'chat') as unknown as () => boolean,
     );

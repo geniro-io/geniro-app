@@ -9,7 +9,7 @@ import type { ThreadMessageReason } from '../chat.types';
 const OWED = {
   status: 'waiting',
   wake: true,
-  $or: [{ reason: null }, { reason: 'running_turn' }],
+  $or: [{ reason: null }, { reason: 'running_turn' }, { reason: 'question' }],
 } satisfies FilterQuery<ThreadMessage>;
 
 /** `thread_messages` — the mailbox between threads. */

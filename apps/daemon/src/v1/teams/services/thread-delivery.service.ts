@@ -180,11 +180,17 @@ export class ThreadDeliveryService implements OnModuleInit {
       }));
   }
 
-  /** A question waits for the user: a chat's card, or any member's in a team. */
+  /**
+   * A question waits for the user: any member's in a team; in a chat, one its
+   * open turn is parked on or a card that outlived its turn.
+   */
   private awaitsAnswer(run: Run): boolean {
-    return run.teamId === null
-      ? this.chats.awaitsCardAnswer(run.id)
-      : this.approvals.awaitingFor(run.id) === 'question';
+    const asked =
+      this.approvals.awaitingFor(run.id, (card) => card.standing === true) ===
+      'question';
+    return (
+      asked || (run.teamId === null && this.chats.awaitsCardAnswer(run.id))
+    );
   }
 
   private statusOf(run: Run): ThreadListRow['status'] {
@@ -323,6 +329,9 @@ export class ThreadDeliveryService implements OnModuleInit {
       if (joined === 'over_budget') {
         return this.leave(runId, messages, 'wake_limit');
       }
+      if (joined === 'question') {
+        return this.leave(runId, messages, 'question');
+      }
     }
     const reason = await this.whyNotWake(run, messages, resending);
     if (reason !== null) {
@@ -365,6 +374,9 @@ export class ThreadDeliveryService implements OnModuleInit {
   ): Promise<ThreadMessageJoinAnswer> {
     if (!this.processes.has(run.id)) {
       return 'idle';
+    }
+    if (this.awaitsAnswer(run)) {
+      return 'question';
     }
     const adapter =
       run.agentKind === null

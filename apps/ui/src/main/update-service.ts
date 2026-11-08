@@ -269,7 +269,8 @@ export class UpdateService {
    * pushed at every window, re-rendered the whole renderer from `App` down —
    * the transcript with it — and drew exactly nothing. REPORTED as the app
    * seeming to re-render itself every so often, which was the one event on
-   * that cadence.
+   * that cadence. A scheduled check that fails leaves the state as it found it,
+   * so an offer or a status stands; only the log hears of it.
    */
   async check({
     announce = true,
@@ -293,7 +294,7 @@ export class UpdateService {
       return this.state;
     }
     const deadline = this.deps.checkDeadlineMs ?? CHECK_DEADLINE_MS;
-    const attempt = this.begin(deadline, checkTimedOut(deadline));
+    const attempt = this.begin(deadline, checkTimedOut(deadline), !announce);
     try {
       if (announce) {
         this.emit({ phase: 'checking', message: null, progress: null });
@@ -306,7 +307,9 @@ export class UpdateService {
         this.deps.log('warn', `the update check failed: ${lookup.error}`, {
           kind: 'update-check-failed',
         });
-        return this.emit({ phase: 'error', message: lookup.error });
+        return announce
+          ? this.emit({ phase: 'error', message: lookup.error })
+          : this.state;
       }
       const { release } = lookup;
       const current = this.deps.currentVersion();
@@ -589,10 +592,10 @@ export class UpdateService {
    * one question: `busy` is "may something else start", `attempt` is "is this
    * still the thing that may finish".
    */
-  private begin(deadlineMs: number, timedOut: string): number {
+  private begin(deadlineMs: number, timedOut: string, quiet = false): number {
     this.busy = true;
     this.attempt += 1;
-    this.armWatchdog(this.attempt, deadlineMs, timedOut);
+    this.armWatchdog(this.attempt, deadlineMs, timedOut, quiet);
     return this.attempt;
   }
 
@@ -622,7 +625,12 @@ export class UpdateService {
    * the previous timer first: two live watchdogs over one attempt would mean
    * the first one's deadline still firing long after progress resumed.
    */
-  private armWatchdog(attempt: number, ms: number, timedOut: string): void {
+  private armWatchdog(
+    attempt: number,
+    ms: number,
+    timedOut: string,
+    quiet = false,
+  ): void {
     this.disarmWatchdog();
     this.watchdog = setTimeout(() => {
       this.watchdog = null;
@@ -640,7 +648,9 @@ export class UpdateService {
         kind: 'update-timed-out',
         phase: this.state.phase,
       });
-      this.emit({ phase: 'error', progress: null, message: timedOut });
+      if (!quiet) {
+        this.emit({ phase: 'error', progress: null, message: timedOut });
+      }
     }, ms);
     // Never the reason this process stays alive.
     this.watchdog.unref?.();

@@ -571,6 +571,7 @@ describe('NotificationsGateway', () => {
       new ShareEventBus(),
       new MemoryEventBus(),
       new ProjectEventBus(),
+      new KnowledgeEventBus(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));

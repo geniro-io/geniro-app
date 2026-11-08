@@ -127,6 +127,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { MessageSendService } from './message-send.service';
 import { MetricsBroker } from './metrics.broker';
+import { MonitorBroker } from './monitor.broker';
 import { MonitorRegistry } from './monitor.registry';
 import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
@@ -1121,6 +1122,7 @@ function setup(
     agentMcp?: Pick<AgentMcpService, 'turnMismatchNotice'>;
     /** The monitor registry a Stop reaches, when a test drives one. */
     monitors?: MonitorRegistry;
+    monitorSinks?: MonitorBroker;
     runWrites?: RunWriteQueue;
     /** What the shared memory hands a new run; memory off when absent. */
     memory?: Pick<MemoryService, 'runSnapshot'>;
@@ -1420,7 +1422,7 @@ function setup(
     },
     opts.agentMcp as AgentMcpService | undefined,
     opts.monitors,
-    undefined,
+    opts.monitorSinks,
     runOutcomes,
     projectCards,
     opts.projectWrites as ProjectInstructionsChangeService | undefined,
@@ -2184,7 +2186,7 @@ describe('ChatService', () => {
       await settle(claude);
     });
 
-    it('offers record_outcome in a chat turn, and takes it away with the turn', async () => {
+    it('offers record_outcome from a chat turn on, for what the CLI does after it too', async () => {
       const { service, cursor, runOutcomes } = setup();
       const run = await service.createChat({
         agentKind: 'cursor-agent',
@@ -2194,7 +2196,7 @@ describe('ChatService', () => {
 
       expect(runOutcomes.canUse(run.id, SINGLE_AGENT_NODE)).toBe(true);
       await settle(cursor);
-      expect(runOutcomes.canUse(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      expect(runOutcomes.canUse(run.id, SINGLE_AGENT_NODE)).toBe(true);
     });
 
     it('hands a cursor turn the findings tool too — every chat can draw a card', async () => {
@@ -2285,6 +2287,111 @@ describe('ChatService', () => {
           }),
       },
     ];
+
+    it.each(CARD_SINKS)(
+      'writes a $kind card after its turn ended, for what the CLI does by itself',
+      async ({ kind, draw }) => {
+        const harness = setup();
+        const { service, claude, itemDao } = harness;
+        const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+        await service.sendMessage(run.id, 'hello');
+        await settle(claude);
+
+        await draw(harness, run.id);
+
+        const rows = itemDao.items.filter((item) => item.runId === run.id);
+        const card = rows.find((item) => item.kind === kind);
+        const ended = rows.find((item) => item.kind === 'turn_complete');
+        expect(card).toBeDefined();
+        expect(card!.seq).toBeGreaterThan(ended!.seq);
+      },
+    );
+
+    it('publishes a page after its turn ended, for what the CLI does by itself', async () => {
+      const { service, claude, artifacts, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      await settle(claude);
+
+      await expect(
+        artifacts.publish(
+          run.id,
+          SINGLE_AGENT_NODE,
+          { title: 'Plan', html: '<p>x' },
+          SINGLE_AGENT_NODE,
+        ),
+      ).resolves.toMatchObject({ status: 'published' });
+      expect(
+        itemDao.items.some(
+          (item) => item.runId === run.id && item.kind === 'show_artifact',
+        ),
+      ).toBe(true);
+    });
+
+    it('takes the cards that park on the user down with the turn, and drops what it kept with a deleted run', async () => {
+      const { service, claude, plans, patches, charts } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      expect(plans.canPropose(run.id, SINGLE_AGENT_NODE)).toBe(true);
+      expect(patches.canPropose(run.id, SINGLE_AGENT_NODE)).toBe(true);
+      await settle(claude);
+
+      expect(plans.canPropose(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      expect(patches.canPropose(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await service.delete(run.id);
+      expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
+    });
+
+    it('starts a monitor after its turn ended, on the folder that turn ran in', async () => {
+      const registry = new MonitorRegistry(new ProcessRegistry());
+      const monitorSinks = new MonitorBroker(registry);
+      const { service, claude } = setup({ monitors: registry, monitorSinks });
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      await settle(claude);
+
+      expect(monitorSinks.canMonitor(run.id, SINGLE_AGENT_NODE)).toBe(true);
+      try {
+        await expect(
+          monitorSinks.start(
+            run.id,
+            SINGLE_AGENT_NODE,
+            { command: 'sleep 30', description: 'nap', timeoutMs: 60_000 },
+            SINGLE_AGENT_NODE,
+          ),
+        ).resolves.toMatchObject({ status: 'started', id: 'm1' });
+        expect(registry.list(run.id)).toMatchObject([
+          { id: 'm1', owner: { target: 'chat', caller: SINGLE_AGENT_NODE } },
+        ]);
+      } finally {
+        registry.stopRun(run.id, 'teardown');
+        await registry.settled(run.id, 5000);
+      }
+    });
+
+    it('keeps the monitor tools only where a call is put to the user first, since the chip can move between turns', async () => {
+      const monitorSinks = new MonitorBroker(
+        new MonitorRegistry(new ProcessRegistry()),
+      );
+      const { service, claude } = setup({ monitorSinks });
+      const config = claude.adapter.getConfig();
+      vi.spyOn(claude.adapter, 'getConfig').mockReturnValue({
+        ...config,
+        hostToolCallUngatedReason: 'calls run unasked in ask',
+      });
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        approval: 'auto',
+      });
+      await service.sendMessage(run.id, 'hello');
+      expect(monitorSinks.canMonitor(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+      expect(monitorSinks.canMonitor(run.id, SINGLE_AGENT_NODE)).toBe(false);
+    });
 
     it.each(CARD_SINKS)(
       'attributes a $kind card to the delegate the turn names',
@@ -2554,46 +2661,6 @@ describe('ChatService', () => {
       await settle(claude);
     });
 
-    it('stops accepting comparisons once the turn that could draw them is over', async () => {
-      const { service, claude, comparisons } = setup();
-      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
-      await service.sendMessage(run.id, 'hello');
-      expect(comparisons.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
-
-      await settle(claude);
-
-      expect(comparisons.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
-      await expect(
-        comparisons.draw(run.id, SINGLE_AGENT_NODE, {
-          title: 'Late',
-          options: [{ name: 'A' }, { name: 'B' }],
-          criteria: [{ label: 'r', cells: [{ value: 'a' }, { value: 'b' }] }],
-        }),
-      ).resolves.toEqual({
-        status: 'unavailable',
-        reason: 'no turn is running that could draw it',
-      });
-    });
-
-    it('stops accepting scorecards once the turn that could draw them is over', async () => {
-      const { service, claude, metrics } = setup();
-      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
-      await service.sendMessage(run.id, 'hello');
-      expect(metrics.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
-
-      await settle(claude);
-
-      expect(metrics.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
-      await expect(
-        metrics.draw(run.id, SINGLE_AGENT_NODE, {
-          metrics: [{ label: 'Late', value: '1' }],
-        }),
-      ).resolves.toEqual({
-        status: 'unavailable',
-        reason: 'no turn is running that could draw it',
-      });
-    });
-
     it('answers a chart it could not write without naming the database', async () => {
       // Same rule as the findings row: a persist failure names an absolute
       // database path, and this string is handed to a model whose provider is
@@ -2828,9 +2895,7 @@ describe('ChatService', () => {
       await settle(claude);
     });
 
-    it('offers the action tools only while a turn can publish', async () => {
-      // The registration and its disposer: without the first the tools are
-      // never listed, without the second a settled chat keeps publishing.
+    it('offers the action tools from the first turn on, for what the CLI does after it too', async () => {
       const { service, claude, actionSinks } = setup();
       const run = await service.createChat({ agentKind: 'claude', cwd: dir });
       expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(false);
@@ -2839,7 +2904,7 @@ describe('ChatService', () => {
       expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(true);
 
       await settle(claude);
-      expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(true);
     });
 
     it('offers the team tools to an ordinary chat turn only', async () => {
@@ -2996,76 +3061,6 @@ describe('ChatService', () => {
       await settle(claude);
       expect(projectChats.canEdit(chat.id, SINGLE_AGENT_NODE)).toBe(false);
       expect(projectCards.canPropose(chat.id, SINGLE_AGENT_NODE)).toBe(false);
-    });
-
-    it('stops accepting artifacts once the turn that could show them is over', async () => {
-      // The disposer. Without it a settled turn goes on publishing into a
-      // transcript nobody is producing any more.
-      const { service, claude, artifacts } = setup();
-      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
-      await service.sendMessage(run.id, 'hello');
-      expect(artifacts.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(true);
-
-      await settle(claude);
-
-      expect(artifacts.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(false);
-      await expect(
-        artifacts.publish(
-          run.id,
-          SINGLE_AGENT_NODE,
-          {
-            title: 'Plan',
-            html: '<p>x',
-          },
-          SINGLE_AGENT_NODE,
-        ),
-      ).resolves.toEqual({
-        status: 'unavailable',
-        reason: 'no turn is running that could show it',
-      });
-    });
-
-    it('stops accepting galleries once the turn that could show them is over', async () => {
-      // The disposer. Without it a settled turn goes on drawing into a
-      // transcript nobody is producing any more.
-      const { service, claude, galleries } = setup();
-      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
-      await service.sendMessage(run.id, 'hello');
-      expect(galleries.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
-
-      await settle(claude);
-
-      expect(galleries.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
-      await expect(
-        galleries.draw(run.id, SINGLE_AGENT_NODE, {
-          images: [{ path: 'late.png' }],
-        }),
-      ).resolves.toEqual({
-        status: 'unavailable',
-        reason: 'no turn is running that could show it',
-      });
-    });
-
-    it('stops accepting charts once the turn that could draw them is over', async () => {
-      const { service, claude, charts } = setup();
-      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
-      await service.sendMessage(run.id, 'hello');
-      expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
-
-      await settle(claude);
-
-      expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
-      await expect(
-        charts.draw(run.id, SINGLE_AGENT_NODE, {
-          title: 'Late',
-          kind: 'line',
-          labels: ['a'],
-          series: [{ name: 'unit', values: [1] }],
-        }),
-      ).resolves.toEqual({
-        status: 'unavailable',
-        reason: 'no turn is running that could draw it',
-      });
     });
 
     it('puts a patch on the SAME card machinery, flagged as a gate not a question', async () => {
@@ -3324,23 +3319,6 @@ describe('ChatService', () => {
       await expect(proposed).resolves.toEqual({
         status: 'unavailable',
         reason: 'the turn ended before the plan was answered',
-      });
-    });
-
-    it('stops accepting reports once the turn that could persist them is over', async () => {
-      const { service, claude, findingsReports } = setup();
-      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
-      await service.sendMessage(run.id, 'hello');
-      expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(true);
-
-      await settle(claude);
-
-      expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(false);
-      await expect(
-        findingsReports.report(run.id, SINGLE_AGENT_NODE, { findings: [] }),
-      ).resolves.toEqual({
-        status: 'unavailable',
-        reason: 'no turn is running that could record them',
       });
     });
 

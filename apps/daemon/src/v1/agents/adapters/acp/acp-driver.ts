@@ -2340,6 +2340,21 @@ export class AcpTurnDriver {
     return this.dropped(this.queuedFollowUps.splice(0));
   }
 
+  /** `TurnDriver.onQuiet`: the text block only, as a held call is still being written. */
+  onQuiet(): AgentEvent[] | null {
+    if (
+      !this.promptOutstanding ||
+      this.stopRequested ||
+      this.interruptedPromptId !== null ||
+      this.openToolCalls.size > 0 ||
+      this.heldToolCalls.size > 0 ||
+      this.subagentsAFollowUpCancels() > 0
+    ) {
+      return null;
+    }
+    return this.flushTextBlock();
+  }
+
   /** Forget an interrupt in flight — confirmed, or overtaken by a Stop. */
   private clearInterrupt(): void {
     this.interruptedPromptId = null;

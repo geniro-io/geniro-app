@@ -1731,6 +1731,8 @@ type AgentEventBody =
       type: 'turn_held';
       /** How many units of background work are still outstanding. */
       open: number;
+      /** What it waits on when that is a command rather than a sub-agent. */
+      unit?: 'command';
     }
   | {
       /**
@@ -3725,6 +3727,13 @@ export interface TurnIo {
   processAlive?: () => boolean;
 }
 
+/** One command as the CLI itself recorded it. */
+export interface CommandRecord {
+  pid: number;
+  command: string;
+  running: boolean;
+}
+
 /**
  * Per-turn protocol state for ONE turn of one CLI.
  *
@@ -3826,6 +3835,11 @@ export interface TurnDriver {
    * of the terminal `spawn-cli` writes. Undefined = nothing to report.
    */
   onProcessEnded?(): AgentEvent[];
+  /**
+   * The CLI has said nothing for a while. Null when that is explained (a call
+   * it reported is open), else the rows of what it has written so far.
+   */
+  onQuiet?(): AgentEvent[] | null;
   /**
    * How long closing the session should let a STOPPED turn finish before the
    * process is signalled — for a driver that will only learn a delivered
@@ -4328,6 +4342,12 @@ export interface AdapterConfig {
    */
   readonly shells: {
     readonly unreportedDetachReason: string | null;
+    /**
+     * Non-null when this CLI sends nothing at all while it waits on a command
+     * it detached, so that wait reads as a hung turn. The daemon then treats a
+     * quiet turn with such a command alive as waiting on it.
+     */
+    readonly silentWaitReason: string | null;
   };
   readonly questionToolName: string | null;
   /**

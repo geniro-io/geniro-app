@@ -367,6 +367,7 @@ export class ClaudeAdapter extends AgentAdapter {
         // on 2.1.237 against a 45-second `sleep`). Asking the OS as well would
         // open every one of them a second time.
         unreportedDetachReason: null,
+        silentWaitReason: null,
       },
       questionToolName: CLAUDE_QUESTION_TOOL_NAME,
       /**

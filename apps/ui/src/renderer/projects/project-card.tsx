@@ -12,7 +12,10 @@ import { teamSlugOf } from '../chats/composer-values';
 import { shortenPath } from '../chats/directory-select';
 import { plural } from '../chats/run-outcome';
 import type { TargetTeam } from '../chats/target-select';
-import { AutopilotMark } from '../components/autopilot-mark';
+import {
+  AutopilotMark,
+  autopilotResumesAt,
+} from '../components/autopilot-mark';
 import { NAV_CARD_CLASS } from '../components/card-hover';
 import { initialsOf } from '../components/member-avatar';
 import { NavListItem } from '../components/nav-list-item';
@@ -62,15 +65,18 @@ export function AutopilotPill({
     return null;
   }
   const stopped = isBreakerOpen(project);
+  const waiting = autopilotResumesAt(project) !== null;
   return (
     <span
       data-slot="autopilot-pill"
       className={cn(
         'inline-flex h-6 shrink-0 items-center gap-1 rounded-pill px-2 text-xs font-medium',
-        stopped ? 'bg-warning/15 text-warning' : 'bg-primary/10 text-primary',
+        stopped || waiting
+          ? 'bg-warning/15 text-warning'
+          : 'bg-primary/10 text-primary',
       )}>
       <AutopilotMark project={project} />
-      {stopped ? 'Stopped' : 'Autopilot'}
+      {stopped ? 'Stopped' : waiting ? 'Waiting' : 'Autopilot'}
     </span>
   );
 }

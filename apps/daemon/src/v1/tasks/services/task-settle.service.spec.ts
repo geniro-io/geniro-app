@@ -19,10 +19,15 @@ import {
 
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
+import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
-import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
+import {
+  AUTOPILOT_LIMIT_FALLBACK_MS,
+  AUTOPILOT_LIMIT_RESET_GRACE_MS,
+  PROJECT_FAILURE_BREAKER_THRESHOLD,
+} from '../../projects/projects.types';
 import { ProjectEventBus } from '../../projects/services/project-events.bus';
 import { isBreakerOpen } from '../../projects/utils/breaker';
 import { Item } from '../../runs/entity/item.entity';
@@ -43,6 +48,28 @@ import { TasksService } from './tasks.service';
  * nothing to observe.
  */
 const ATTACHMENTS_ROOT = join(tmpdir(), 'geniro-task-settle-spec');
+
+const limitReadingAdapter = {
+  failureFrom: (message: string) =>
+    /hit your (?:[a-z0-9'-]+ )*limit/i.test(message)
+      ? {
+          class: 'rate_limited',
+          resetsAt: /resets\s+(.+)$/i.exec(message)?.[1] ?? null,
+        }
+      : { class: 'crashed', resetsAt: null },
+};
+const noLimitAdapter = {
+  failureFrom: () => ({ class: 'crashed', resetsAt: null }),
+};
+const adapters = {
+  for: (kind: string) =>
+    kind === 'claude' ? limitReadingAdapter : noLimitAdapter,
+  all: () =>
+    new Map<string, unknown>([
+      ['cursor-agent', noLimitAdapter],
+      ['claude', limitReadingAdapter],
+    ]),
+} as unknown as AgentAdapterRegistry;
 
 describe('TaskSettleService (in-memory sqlite)', () => {
   let orm: MikroORM;
@@ -114,6 +141,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       tasks,
       itemDao,
       projectEvents,
+      adapters,
     );
     const project = await projectDao.create({
       name: 'Board',
@@ -682,6 +710,145 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await service.settle('run-1', 'failed');
 
     expect(await streak()).toBe(0);
+  });
+
+  // ── A spent usage limit ────────────────────────────────────────────────────
+
+  const NAMED_RESET = Date.UTC(2099, 11, 1, 16, 0);
+  const LIMIT_WITH_RESET =
+    "You've hit your weekly limit · resets Dec 1, 2099 at 4pm (UTC)";
+
+  const failWith = async (message: string, seq = 1): Promise<void> => {
+    await itemDao.create({
+      runId: 'run-1',
+      seq,
+      kind: 'error',
+      role: null,
+      payload: JSON.stringify({ message }),
+    });
+    await service.settle('run-1', 'failed');
+  };
+
+  it('holds an armed project until the reset a usage limit names, without counting a failure', async () => {
+    await armProject({ enabled: true, streak: 1 });
+    await working();
+
+    await failWith(LIMIT_WITH_RESET);
+
+    const project = await freshProject();
+    expect(project.autopilotFailureStreak).toBe(1);
+    expect(project.autopilotLimitUntil?.getTime()).toBe(
+      NAMED_RESET + AUTOPILOT_LIMIT_RESET_GRACE_MS,
+    );
+    expect(projectChanges).toContain(projectId);
+  });
+
+  it('never opens the breaker on a limit met again and again', async () => {
+    await armProject({ enabled: true });
+    await working();
+
+    for (const seq of [1, 2, 3, 4, 5]) {
+      await failWith(LIMIT_WITH_RESET, seq);
+    }
+
+    expect(await streak()).toBe(0);
+    expect(isBreakerOpen(await freshProject())).toBe(false);
+  });
+
+  it('holds for the fallback window when a limit names no reset', async () => {
+    await armProject({ enabled: true });
+    await working();
+    const before = Date.now();
+
+    await failWith("You've hit your usage limit");
+
+    const until = (await freshProject()).autopilotLimitUntil?.getTime() ?? 0;
+    expect(until).toBeGreaterThanOrEqual(before + AUTOPILOT_LIMIT_FALLBACK_MS);
+    expect(until).toBeLessThanOrEqual(Date.now() + AUTOPILOT_LIMIT_FALLBACK_MS);
+  });
+
+  it('keeps the later of two limits', async () => {
+    await armProject({ enabled: true });
+    await working();
+    await failWith(LIMIT_WITH_RESET, 1);
+
+    await failWith("You've hit your usage limit", 2);
+
+    expect((await freshProject()).autopilotLimitUntil?.getTime()).toBe(
+      NAMED_RESET + AUTOPILOT_LIMIT_RESET_GRACE_MS,
+    );
+  });
+
+  it('counts any other failure and holds nothing', async () => {
+    await armProject({ enabled: true });
+    await working();
+
+    await failWith('the CLI crashed');
+
+    const project = await freshProject();
+    expect(project.autopilotFailureStreak).toBe(1);
+    expect(project.autopilotLimitUntil).toBeNull();
+  });
+
+  it('holds nothing on a disarmed project', async () => {
+    await armProject({ enabled: false });
+    await working();
+
+    await failWith(LIMIT_WITH_RESET);
+
+    expect((await freshProject()).autopilotLimitUntil).toBeNull();
+  });
+
+  it('ends the hold on a completed run', async () => {
+    await armProject({ enabled: true });
+    const task = await working();
+    await failWith(LIMIT_WITH_RESET);
+    await tasks.moveStatus(task.id, { from: 'failed', to: 'in_progress' });
+
+    await settleRun('run-1', 'completed');
+
+    expect((await freshProject()).autopilotLimitUntil).toBeNull();
+  });
+
+  it('reads a team run by any CLI, and a chat by its own', async () => {
+    await armProject({ enabled: true });
+    await working();
+    const run = await runDao.getById('run-1');
+    (run as Run).agentKind = 'cursor-agent';
+    await em.flush();
+
+    await failWith(LIMIT_WITH_RESET, 1);
+    expect(await streak()).toBe(1);
+    expect((await freshProject()).autopilotLimitUntil).toBeNull();
+
+    (run as Run).agentKind = null;
+    await em.flush();
+
+    await failWith(LIMIT_WITH_RESET, 2);
+    expect(await streak()).toBe(1);
+    expect((await freshProject()).autopilotLimitUntil?.getTime()).toBe(
+      NAMED_RESET + AUTOPILOT_LIMIT_RESET_GRACE_MS,
+    );
+  });
+
+  it('holds instead of counting when a reconcile settles the limit', async () => {
+    await armProject({ enabled: true });
+    const task = await working();
+    await itemDao.create({
+      runId: 'run-1',
+      seq: 1,
+      kind: 'error',
+      role: null,
+      payload: JSON.stringify({ message: LIMIT_WITH_RESET }),
+    });
+
+    await service.settle('run-1', 'failed', 'reconcile');
+
+    expect(await statusOf(task.id)).toBe('failed');
+    expect(await streak()).toBe(0);
+    expect((await freshProject()).autopilotLimitUntil?.getTime()).toBe(
+      NAMED_RESET + AUTOPILOT_LIMIT_RESET_GRACE_MS,
+    );
   });
 
   /** Write `status` onto run-1's row, as a settle nobody announced leaves it. */

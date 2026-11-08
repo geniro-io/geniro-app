@@ -1708,6 +1708,23 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
   });
 
+  it('refuses an autopilot start while a usage limit stands, and lets a person start', async () => {
+    const row = await projectDao.getById(projectId, em);
+    (row as Project).autopilotLimitUntil = new Date(Date.now() + 60_000);
+    await em.flush();
+    const task = await seed();
+
+    await expect(
+      service.start(task.id, { ...start(), startedBy: 'autopilot' }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('usage limit'),
+    });
+
+    const started = await service.start(task.id, start());
+
+    expect(started.status).toBe('in_progress');
+  });
+
   // How a user checks that whatever broke is fixed, before re-arming.
   it('lets a person start while the breaker is open', async () => {
     await arm({ streak: PROJECT_FAILURE_BREAKER_THRESHOLD });

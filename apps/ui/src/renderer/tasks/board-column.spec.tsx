@@ -66,6 +66,7 @@ const byLabel = (el: HTMLElement, label: string): HTMLElement | null =>
 
 const armed = {
   breakerOpen: false,
+  resumesAt: null,
   waiting: null,
   blocked: [],
   onStop: vi.fn(),
@@ -413,6 +414,17 @@ describe('BoardColumn — the autopilot banner', () => {
 
     expect(el.textContent).toContain('Autopilot is stopped');
     expect(byLabel(el, 'Stop the autopilot')).toBeNull();
+  });
+
+  it('says when the autopilot goes on after a usage limit, in the warning tone', () => {
+    const el = column({ ...armed, resumesAt: 'Nov 8, 4:01 PM' });
+
+    expect(el.textContent).toContain(
+      'Usage limit: autopilot goes on Nov 8, 4:01 PM.',
+    );
+    expect(
+      el.querySelector('[data-slot="autopilot-banner"]')?.className,
+    ).toContain('text-warning');
   });
 
   // The whole point of the wording: a Stop that silently left an agent working

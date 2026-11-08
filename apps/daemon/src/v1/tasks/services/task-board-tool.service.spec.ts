@@ -226,6 +226,32 @@ describe('TaskBoardToolService (in-memory sqlite)', () => {
     });
   });
 
+  it('says when an armed project waits for its usage limit', async () => {
+    await arm();
+    const row = await projectDao.getById(project.id, em);
+    const until = new Date(Date.now() + 60_000);
+    row!.autopilotLimitUntil = until;
+    await em.flush();
+
+    const listed = await call('list_projects', {});
+
+    expect(listed.text).toContain('waiting for its usage limit to reset');
+    expect(listed.text).toContain(
+      `"waitingForUsageLimitUntil": "${until.toISOString()}"`,
+    );
+
+    const filed = await call('create_task', {
+      project: 'GEN',
+      title: 'x',
+      status: 'todo',
+      agentKind: 'claude',
+    });
+
+    expect(filed.text).toContain(
+      `usage limit to reset at ${until.toISOString()}`,
+    );
+  });
+
   it('files a card from a plain chat with its own fields set, through the service the board uses', async () => {
     const answer = await call('create_task', {
       project: 'gen',

@@ -17,7 +17,7 @@ import { isHostBoardTool } from '../../agents/utils/host-board';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { Project } from '../../projects/entity/project.entity';
 import { PROJECT_INSTRUCTIONS_MAX } from '../../projects/projects.types';
-import { isBreakerOpen } from '../../projects/utils/breaker';
+import { isBreakerOpen, limitHoldUntil } from '../../projects/utils/breaker';
 import {
   instructionsLength,
   projectBlocksOf,
@@ -212,7 +212,9 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
                 `${projectLabel(project)} (starts an agent on cards in \`${project.autopilotIntakeStatus}\`${
                   isBreakerOpen(project)
                     ? ' — currently paused by its failure breaker'
-                    : ''
+                    : limitHoldUntil(project) !== null
+                      ? ' — waiting for its usage limit to reset'
+                      : ''
                 })`,
             )
             .join(', ')}.`);
@@ -229,6 +231,8 @@ export class TaskBoardToolService implements OnModuleInit, OnModuleDestroy {
           intakeColumn: project.autopilotIntakeStatus,
           maxConcurrentRuns: project.autopilotMaxConcurrent,
           pausedByFailureBreaker: isBreakerOpen(project),
+          waitingForUsageLimitUntil:
+            limitHoldUntil(project)?.toISOString() ?? null,
         },
         cards: counts.get(project.id) ?? emptyCounts(),
       })),
@@ -1017,10 +1021,13 @@ function startNotes(project: Project, status: TaskStatus): string[] {
   if (!landsInArmedIntake(project, status)) {
     return [];
   }
+  const resumesAt = limitHoldUntil(project);
   return [
     isBreakerOpen(project)
       ? `Project ${projectLabel(project)} has its autopilot armed on \`${status}\`, but it is paused by its failure breaker, so this card starts as soon as a person re-arms it.`
-      : `AUTOPILOT: project ${projectLabel(project)} is ARMED and takes work from \`${status}\` — it will start an agent on this card by itself within about ${AUTOPILOT_PICKUP_SECONDS} seconds (when one of its ${project.autopilotMaxConcurrent} run slots is free). Move the card to \`${quietColumn(project)}\` now if that is not what the user wants.`,
+      : resumesAt !== null
+        ? `AUTOPILOT: project ${projectLabel(project)} is ARMED on \`${status}\` and waits for its usage limit to reset at ${resumesAt.toISOString()}. It will start an agent on this card by itself after that. Move the card to \`${quietColumn(project)}\` now if that is not what the user wants.`
+        : `AUTOPILOT: project ${projectLabel(project)} is ARMED and takes work from \`${status}\` — it will start an agent on this card by itself within about ${AUTOPILOT_PICKUP_SECONDS} seconds (when one of its ${project.autopilotMaxConcurrent} run slots is free). Move the card to \`${quietColumn(project)}\` now if that is not what the user wants.`,
   ];
 }
 

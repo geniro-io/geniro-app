@@ -116,6 +116,12 @@ export const PROJECT_DEFAULT_MAX_CONCURRENT = 1;
  */
 export const PROJECT_FAILURE_BREAKER_THRESHOLD = 3;
 
+/** How long past a named reset the autopilot waits: a start a few seconds early is refused again. */
+export const AUTOPILOT_LIMIT_RESET_GRACE_MS = 60_000;
+
+/** How long the autopilot waits on a usage limit that named no reset. */
+export const AUTOPILOT_LIMIT_FALLBACK_MS = 30 * 60_000;
+
 /**
  * One project on the wire.
  *
@@ -198,6 +204,12 @@ export const ProjectWireSchema = z.object({
     .int()
     .describe(
       'Consecutive failed autopilot runs — the breaker reads it, and a success resets it to 0',
+    ),
+  autopilotLimitUntil: z.iso
+    .datetime()
+    .nullable()
+    .describe(
+      'When the autopilot goes on after a spent usage limit; null while it is not waiting on one',
     ),
   provider: TaskSourceSchema.describe(
     "Where this project's tasks come from — the value its tasks carry as their own source",
@@ -378,6 +390,8 @@ export interface ProjectQueueRaw {
   waiting: number;
   breakerOpen: boolean;
   failureStreak: number;
+  /** Set while the autopilot waits out a spent usage limit. */
+  limitHoldUntil: Date | null;
   active: ActiveTask[];
   /** What a card inherits when it names no folder of its own. */
   folder: string;

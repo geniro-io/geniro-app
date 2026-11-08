@@ -24,6 +24,16 @@ export const Tripped: Story = {
   },
 };
 
+export const WaitingForUsageLimit: Story = {
+  args: {
+    project: aProject({
+      name: 'Billing',
+      autopilotEnabled: true,
+      autopilotLimitUntil: '2099-11-08T11:01:00.000Z',
+    }),
+  },
+};
+
 export const Off: Story = {
   args: { project: aProject({ name: 'Billing' }) },
 };

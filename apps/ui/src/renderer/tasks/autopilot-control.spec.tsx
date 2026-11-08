@@ -55,6 +55,7 @@ function control(
     onUpdate?: () => void;
     onRearm?: () => void;
     blocked?: BlockedTask[];
+    named?: boolean;
   } = {},
 ): HTMLDivElement {
   container = document.createElement('div');
@@ -65,6 +66,7 @@ function control(
       <AutopilotControl
         project={project(over)}
         blocked={handlers.blocked ?? []}
+        named={handlers.named ?? false}
         onUpdate={handlers.onUpdate ?? vi.fn()}
         onRearm={handlers.onRearm ?? vi.fn()}
       />,
@@ -193,6 +195,84 @@ describe('AutopilotControl', () => {
     expect(text).toContain('Autopilot stopped itself');
     expect(text).toContain(`${FAILURE_BREAKER_THRESHOLD} runs failed`);
     expect(text).toContain('Your tasks are untouched');
+  });
+
+  describe('waiting for a usage limit', () => {
+    const until = '2099-11-08T11:01:00.000Z';
+    const shownAt = new Date(until).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+
+    it('says on the chip when it goes on', () => {
+      expect(
+        trigger(control({ autopilotEnabled: true, autopilotLimitUntil: until }))
+          .textContent,
+      ).toContain(`Autopilot waits · ${shownAt}`);
+    });
+
+    it('explains the wait in the panel and offers to start now', () => {
+      const onRearm = vi.fn();
+      openPanel(
+        control(
+          { autopilotEnabled: true, autopilotLimitUntil: until },
+          { onRearm },
+        ),
+      );
+
+      const text = panelText();
+      expect(text).toContain(
+        `usage limit, so it starts nothing here until ${shownAt}`,
+      );
+      expect(text).toContain('goes on by itself');
+      const button = [...document.body.querySelectorAll('button')].find(
+        (node) => (node.textContent ?? '').includes('Start it now'),
+      );
+      act(() => {
+        button?.click();
+      });
+      expect(onRearm).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads as running again once the moment has passed', () => {
+      expect(
+        trigger(
+          control({
+            autopilotEnabled: true,
+            autopilotLimitUntil: '2020-01-01T00:00:00.000Z',
+          }),
+        ).textContent,
+      ).toContain('Autopilot · To do');
+    });
+
+    it('reads as stopped when the breaker tripped too', () => {
+      expect(
+        trigger(
+          control({
+            autopilotEnabled: true,
+            autopilotLimitUntil: until,
+            autopilotFailureStreak: FAILURE_BREAKER_THRESHOLD,
+          }),
+        ).textContent,
+      ).toContain('Autopilot stopped');
+    });
+  });
+
+  it('names the project when asked to', () => {
+    const el = control(
+      {
+        autopilotEnabled: true,
+        autopilotFailureStreak: FAILURE_BREAKER_THRESHOLD,
+      },
+      { named: true },
+    );
+
+    expect(el.textContent).toContain('geniro-app: Autopilot stopped');
+    expect(
+      el.querySelector('[aria-label="Autopilot settings for geniro-app"]'),
+    ).not.toBeNull();
   });
 
   it('restarts a stopped autopilot from the panel', () => {

@@ -8,7 +8,7 @@ import { TaskDao } from '../../tasks/dao/task.dao';
 import { ProjectDao } from '../dao/project.dao';
 import { Project } from '../entity/project.entity';
 import type { ActiveTask, ProjectQueueRaw } from '../projects.types';
-import { isBreakerOpen } from '../utils/breaker';
+import { isBreakerOpen, limitHoldUntil } from '../utils/breaker';
 
 /**
  * What one project's autopilot may start right now.
@@ -54,9 +54,13 @@ export class ProjectQueueService {
     ];
     const running = active.length;
     const breakerOpen = isBreakerOpen(project);
+    const heldUntil = limitHoldUntil(project);
     const freeSlots = Math.max(0, project.autopilotMaxConcurrent - running);
     const handOutWork =
-      project.autopilotEnabled && !breakerOpen && freeSlots > 0;
+      project.autopilotEnabled &&
+      !breakerOpen &&
+      heldUntil === null &&
+      freeSlots > 0;
 
     const waitingTasks = tasks.filter(
       (task) => task.status === project.autopilotIntakeStatus,
@@ -71,6 +75,7 @@ export class ProjectQueueService {
       waiting: waitingTasks.length,
       breakerOpen,
       failureStreak: project.autopilotFailureStreak,
+      limitHoldUntil: heldUntil,
       active,
       folder: project.folder,
       agentKind: project.agentKind,

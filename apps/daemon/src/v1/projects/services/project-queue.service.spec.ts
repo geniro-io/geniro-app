@@ -301,6 +301,23 @@ describe('ProjectQueueService (in-memory sqlite)', () => {
     expect(queue.handOutWork).toBe(false);
   });
 
+  it('hands out nothing while a usage limit stands, and works again once it lapses', async () => {
+    await addTask('a', 'todo', 0);
+    await arm({ autopilotLimitUntil: new Date(Date.now() + 60_000) });
+
+    const held = await service.readRaw(projectId);
+
+    expect(held.limitHoldUntil).not.toBeNull();
+    expect(held.handOutWork).toBe(false);
+
+    await arm({ autopilotLimitUntil: new Date(Date.now() - 1) });
+
+    const lapsed = await service.readRaw(projectId);
+
+    expect(lapsed.limitHoldUntil).toBeNull();
+    expect(lapsed.handOutWork).toBe(true);
+  });
+
   it('keeps the breaker shut one failure short of the threshold', async () => {
     await arm({
       autopilotFailureStreak: PROJECT_FAILURE_BREAKER_THRESHOLD - 1,

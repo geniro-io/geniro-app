@@ -7560,6 +7560,12 @@ export interface ProjectDto {
      */
     autopilotFailureStreak: number;
     /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    autopilotLimitUntil: string | null;
+    /**
      * Where this project's tasks come from — the value its tasks carry as their own source
      * @type {TaskSource}
      * @memberof ProjectDto
@@ -7725,6 +7731,12 @@ export interface ProjectForFolderDtoProject {
      * @memberof ProjectForFolderDtoProject
      */
     autopilotFailureStreak: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectForFolderDtoProject
+     */
+    autopilotLimitUntil: string | null;
     /**
      * Where this project's tasks come from — the value its tasks carry as their own source
      * @type {TaskSource}

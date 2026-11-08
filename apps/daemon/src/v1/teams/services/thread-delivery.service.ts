@@ -8,6 +8,7 @@ import {
   type HostRowWire,
   type HostWake,
   type HostWakeOwner,
+  type RunAwaiting,
   SINGLE_AGENT_NODE,
   type ThreadListQuery,
   type ThreadListRow,
@@ -180,21 +181,24 @@ export class ThreadDeliveryService implements OnModuleInit {
       }));
   }
 
+  /** The card a thread is parked on, leaving out one that stands across turns. */
+  private parkedOn(run: Run): RunAwaiting | null {
+    return this.approvals.awaitingFor(run.id, (card) => card.standing === true);
+  }
+
   /**
    * A question waits for the user: any member's in a team; in a chat, one its
    * open turn is parked on or a card that outlived its turn.
    */
   private awaitsAnswer(run: Run): boolean {
-    const asked =
-      this.approvals.awaitingFor(run.id, (card) => card.standing === true) ===
-      'question';
     return (
-      asked || (run.teamId === null && this.chats.awaitsCardAnswer(run.id))
+      this.parkedOn(run) === 'question' ||
+      (run.teamId === null && this.chats.awaitsCardAnswer(run.id))
     );
   }
 
   private statusOf(run: Run): ThreadListRow['status'] {
-    if (this.awaitsAnswer(run)) {
+    if (this.awaitsAnswer(run) || this.parkedOn(run) !== null) {
       return 'needs_user';
     }
     if (run.status === 'cancelled') {
@@ -328,9 +332,6 @@ export class ThreadDeliveryService implements OnModuleInit {
       }
       if (joined === 'over_budget') {
         return this.leave(runId, messages, 'wake_limit');
-      }
-      if (joined === 'question') {
-        return this.leave(runId, messages, 'question');
       }
     }
     const reason = await this.whyNotWake(run, messages, resending);
@@ -478,11 +479,13 @@ export class ThreadDeliveryService implements OnModuleInit {
     if (run.status === 'pending') {
       return 'not_started';
     }
-    if (this.awaitsAnswer(run)) {
-      return 'question';
-    }
+    // Before a question: a message that asked not to wake anyone goes out with
+    // the next turn, and answering the question opens none on its own.
     if (messages.every((message) => !message.wake)) {
       return 'sender_opted_out';
+    }
+    if (this.awaitsAnswer(run)) {
+      return 'question';
     }
     // After a restart the wake already spent on them goes out again, uncounted.
     // Anywhere else a turn came and left them, so another turn is another wake.

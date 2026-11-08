@@ -535,6 +535,25 @@ describe('ThreadDeliveryService: a turn parked on the user’s question', () => 
     });
   });
 
+  it('says the sender opted out, not question, for a message that asked not to wake', async () => {
+    const h = harness({ status: 'running' }, { running: true });
+    h.approvals.awaitingFor.mockReturnValue('question');
+
+    await expect(h.send(false)).resolves.toMatchObject({
+      outcome: 'waiting',
+      reason: 'sender_opted_out',
+    });
+    h.runs.set(TARGET, runOf({ status: 'completed' }));
+    h.approvals.awaitingFor.mockReturnValue(null);
+    await h.settle('completed');
+
+    expect(h.published).toEqual([]);
+    expect(h.messages[0]).toMatchObject({
+      status: 'waiting',
+      reason: 'sender_opted_out',
+    });
+  });
+
   it('lists such a thread as needing the user, not as working', async () => {
     const h = harness({ status: 'running' }, { running: true });
     h.approvals.awaitingFor.mockReturnValue('question');
@@ -548,6 +567,7 @@ describe('ThreadDeliveryService: a turn parked on the user’s question', () => 
 
   it('leaves a team’s lead parked on its own question waiting too', async () => {
     const h = harness({ teamId: 'team-1', status: 'running' });
+    h.approvals.awaitingFor.mockReturnValue('question');
     h.executor.joinThreadMessage.mockResolvedValue('question');
 
     await expect(h.send()).resolves.toMatchObject({
@@ -558,6 +578,41 @@ describe('ThreadDeliveryService: a turn parked on the user’s question', () => 
       status: 'waiting',
       deliveryId: null,
     });
+  });
+});
+
+describe('ThreadDeliveryService: a turn parked on a tool approval', () => {
+  it('lists it as needing the user, and the message still joins', async () => {
+    const h = harness({ status: 'running' }, { running: true });
+    h.approvals.awaitingFor.mockReturnValue('approval');
+
+    const rows = await h.service.listThreads(SENDER, { limit: 20 });
+
+    expect(rows.find((row) => row.thread === TARGET)?.status).toBe(
+      'needs_user',
+    );
+    await expect(h.send()).resolves.toMatchObject({ outcome: 'joined' });
+    expect(h.chats.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists it as working again once the card is answered', async () => {
+    const h = harness({ status: 'running' }, { running: true });
+
+    const rows = await h.service.listThreads(SENDER, { limit: 20 });
+
+    expect(rows.find((row) => row.thread === TARGET)?.status).toBe('working');
+  });
+
+  it('does not count a card that stands across turns', async () => {
+    const h = harness({ status: 'running' }, { running: true });
+    h.approvals.awaitingFor.mockImplementation(((
+      _runId: string,
+      ignore: (card: { standing: boolean }) => boolean,
+    ) => (ignore({ standing: true }) ? null : 'approval')) as never);
+
+    const rows = await h.service.listThreads(SENDER, { limit: 20 });
+
+    expect(rows.find((row) => row.thread === TARGET)?.status).toBe('working');
   });
 });
 

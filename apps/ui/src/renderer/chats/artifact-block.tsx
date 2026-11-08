@@ -82,35 +82,37 @@ export function ArtifactCard({
 
   return (
     <div data-slot="artifact-card" data-open={open} className="min-w-0">
-      <SectionLabel>
-        {/* A flex SPAN, not the caption's own box: `SectionLabel` renders a
-            `<p>`, so a control meant to sit at the far right of the heading
-            falls to a line of its own instead. A span keeps the markup valid
-            inside a paragraph. */}
-        <span className="flex min-w-0 items-center gap-1">
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={() => setOverride(!open)}
-            className="flex min-w-0 items-center gap-1">
-            <ChevronRight
-              aria-hidden="true"
-              className="size-3 shrink-0 transition-transform"
-              style={{ transform: open ? 'rotate(90deg)' : undefined }}
-            />
-            <span className="truncate" title={artifact.title}>
-              {artifact.title}
+      <div className="flex min-w-0 items-center gap-1">
+        <div className="min-w-0">
+          <SectionLabel>
+            <span className="flex min-w-0 items-center gap-1">
+              <button
+                type="button"
+                aria-expanded={open}
+                onClick={() => setOverride(!open)}
+                className="flex min-w-0 items-center gap-1">
+                <ChevronRight
+                  aria-hidden="true"
+                  className="size-3 shrink-0 transition-transform"
+                  style={{ transform: open ? 'rotate(90deg)' : undefined }}
+                />
+                <span className="truncate" title={artifact.title}>
+                  {artifact.title}
+                </span>
+                {artifact.version > 1 && (
+                  <span className="shrink-0">· v{artifact.version}</span>
+                )}
+              </button>
             </span>
-            {artifact.version > 1 && (
-              <span className="shrink-0">· v{artifact.version}</span>
-            )}
-          </button>
-          {/* FOLDED only — see the block comment on {@link controls}. */}
-          {!open && (
-            <span className="ml-auto flex items-center gap-1">{controls}</span>
-          )}
-        </span>
-      </SectionLabel>
+          </SectionLabel>
+        </div>
+        {/* FOLDED only — see the block comment on {@link controls}. */}
+        {!open && (
+          <span className="mb-1 ml-auto flex shrink-0 items-center gap-1">
+            {controls}
+          </span>
+        )}
+      </div>
       {artifact.summary !== null && (
         <p className="mb-1.5 text-xs text-muted-foreground">
           {artifact.summary}
@@ -136,7 +138,7 @@ export function ArtifactCard({
            say in what it draws in that corner. */
         <div className="relative">
           <ArtifactFrame artifact={artifact} />
-          <span className="absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-md border border-border/60 bg-background/80 p-0.5 backdrop-blur-sm">
+          <span className="absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5">
             {controls}
           </span>
         </div>

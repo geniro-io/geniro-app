@@ -417,6 +417,59 @@ describe('Popover — a menu opened inside it', () => {
   });
 });
 
+describe('Popover — focus entering a frame', () => {
+  function blurInto(frame: HTMLIFrameElement | null): void {
+    act(() => {
+      frame?.focus();
+      window.dispatchEvent(new Event('blur'));
+    });
+  }
+
+  it('closes on a frame outside the panel', () => {
+    const onClose = vi.fn();
+    const container = render(
+      <>
+        <iframe title="page" />
+        <Popover open onClose={onClose} label="Panel">
+          Body
+        </Popover>
+      </>,
+    );
+
+    blurInto(container.querySelector('iframe'));
+
+    expect(document.activeElement?.tagName).toBe('IFRAME');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays open on a frame inside the panel', () => {
+    const onClose = vi.fn();
+    const container = render(
+      <Popover open onClose={onClose} label="Panel">
+        <iframe title="page" />
+      </Popover>,
+    );
+
+    blurInto(container.querySelector('iframe'));
+
+    expect(document.activeElement?.tagName).toBe('IFRAME');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('stays open when the window loses focus with no frame focused', () => {
+    const onClose = vi.fn();
+    render(
+      <Popover open onClose={onClose} label="Panel">
+        Body
+      </Popover>,
+    );
+
+    blurInto(null);
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
 describe('Popover — Escape', () => {
   function press(key: string): void {
     act(() => {

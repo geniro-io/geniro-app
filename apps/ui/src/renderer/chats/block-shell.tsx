@@ -373,6 +373,7 @@ export function BlockToolFooter({
   contextWindowTokens = null,
   note,
   action,
+  className,
 }: {
   count: number;
   /**
@@ -410,6 +411,7 @@ export function BlockToolFooter({
   note?: React.ReactNode;
   /** A control drawn at the row's start, beside Collapse. */
   action?: React.ReactNode;
+  className?: string;
 }): React.JSX.Element | null {
   const showContext = tokens === null && contextTokens !== null;
   const collapse = useContext(BlockCollapseContext);
@@ -440,7 +442,10 @@ export function BlockToolFooter({
   return (
     <div
       data-slot="block-footer"
-      className="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border pt-2.5 text-xs text-muted-foreground">
+      className={cn(
+        'flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border pt-2.5 text-xs text-muted-foreground',
+        className,
+      )}>
       {collapse === null ? null : (
         <button
           type="button"

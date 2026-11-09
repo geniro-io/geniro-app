@@ -386,6 +386,229 @@ function CallFigures({
   );
 }
 
+/** What a call card states about its callee's conversation, the daemon's figures first. */
+interface CallReadings {
+  figures: (slot: 'call-summary' | 'call-footer') => React.JSX.Element;
+  hasFigures: boolean;
+  toolCount: number;
+  toolCountIsConversation: boolean;
+}
+
+function useCallReadings(block: CallBlockEntry, callee: string): CallReadings {
+  const resolveCallReading = useContext(CalleeContextResolverContext);
+  const runId = useContext(ThreadUiMemoryContext);
+  const status = blockStatusOf(
+    block.calleeWorking ? 'running' : block.status,
+    block.queued === true,
+  );
+  const waiting = status === 'running' ? (block.waiting ?? null) : null;
+  /**
+   * The callee's window, live first and the block's own settled rows last.
+   *
+   * The fold alone could only ever answer AFTER the call — a `turn_complete` is
+   * the one row it reads and the callee has not written one yet — so the ring
+   * was blank for the whole of every call and appeared at the moment it stopped
+   * being worth watching. REPORTED against a running cursor call, and measured
+   * on that same run: no ring for 46 seconds, then `80.4k / 200k` at the settle.
+   *
+   * Each figure falls back on its own, the rule `resolveCalleeContext` states in
+   * full: a source that reports one half says nothing about the other, so a
+   * live delta carrying only a count must not erase a window the settled turn
+   * already had.
+   *
+   * The resolver is handed every call of the conversation, so a continuation
+   * that has not reported yet reads on the same rule the agents panel's instance
+   * ring does (`CalleeContextResolver`).
+   */
+  const folded = callBlockContext(block);
+  const live =
+    resolveCallReading !== null && block.calleeMemberId !== null
+      ? // The WHOLE conversation rather than the calls this window drew: both
+        // figures the resolver answers are about the callee's SESSION, which
+        // outlives the window. The ring only gains older fallbacks; the SPEND
+        // was silently short by every call that had paged out — see
+        // `CallBlockEntry.conversationCallIds` for what that cost.
+        resolveCallReading(block.calleeMemberId, block.conversationCallIds)
+      : null;
+  // The daemon's whole-run spend for this conversation, over the window's
+  // fold — a call that started above the loaded window, or was continued many
+  // times, otherwise states only the part of its cost on screen. The running
+  // turn's unrecorded dollars go on top of whichever of the two is drawn: a
+  // call hours into its turn otherwise states its FINISHED turns as the bill.
+  const usage = withLiveCost(
+    live?.spend ?? callBlockUsage(block),
+    live?.liveCost ?? null,
+  );
+  const context = {
+    contextTokens: live?.contextTokens ?? folded.contextTokens,
+    contextEstimated:
+      live?.contextTokens != null
+        ? live.contextEstimated === true
+        : folded.contextEstimated === true,
+    contextWindowTokens:
+      live?.contextWindowTokens ?? folded.contextWindowTokens,
+  };
+  const tasks = callBlockTasks(block);
+  const clockRunning = status === 'running';
+  const clockMs = useCallClockMs(live?.clocks, clockRunning);
+  const hasFigures =
+    (clockMs !== null && clockMs > 0) ||
+    tasks.length > 0 ||
+    usage.costUsd !== null ||
+    context.contextTokens !== null;
+  return {
+    figures: (slot) => (
+      <CallFigures
+        slot={slot}
+        tasks={tasks}
+        live={status === 'running' && waiting === null}
+        callee={callee}
+        runId={runId}
+        callId={block.callId}
+        contextTokens={context.contextTokens}
+        contextWindowTokens={context.contextWindowTokens}
+        contextEstimated={context.contextEstimated}
+        costUsd={usage.costUsd}
+        estimatedCostUsd={usage.estimatedCostUsd ?? null}
+        runningCost={live?.liveCost ?? null}
+        clockMs={clockMs}
+        clockRunning={clockRunning}
+      />
+    ),
+    hasFigures,
+    /**
+     * Every tool the callee ran in this CONVERSATION, on the same rule — the
+     * daemon's per-call counts over the fold, which holds only the loaded window.
+     */
+    toolCount: live?.toolCalls ?? countTools(block.entries),
+    toolCountIsConversation: live?.toolCalls != null,
+  };
+}
+
+/**
+ * The foot of a call's conversation: the message box for its callee, and the
+ * tool count and figures. One component for the card and the agent's popup, so
+ * the two never state a call differently.
+ */
+function CallFooterRow({
+  block,
+  callee,
+  caller,
+  calleeAgent,
+  readings,
+  className,
+}: {
+  block: CallBlockEntry;
+  callee: string;
+  caller: string | null;
+  calleeAgent: string | null;
+  readings: CallReadings;
+  className?: string;
+}): React.JSX.Element {
+  const callChannel = useContext(CallMessageChannelContext);
+  const [messageOpen, setMessageOpen] = useState(false);
+  // The block's own status, not the card's: a call still pending — queued
+  // under the run's cap, or not yet started — has no turn to join yet.
+  const callRunning = block.status === 'running';
+  const failed = block.status === 'failed';
+  return (
+    <>
+      {block.calleeMemberId !== null ? (
+        <CallMessagePanel
+          blockId={block.id}
+          callId={block.callId}
+          calleeMemberId={block.calleeMemberId}
+          callee={callee}
+          calleeAgent={calleeAgent}
+          caller={caller}
+          running={callRunning}
+          open={messageOpen}
+          onClose={() => setMessageOpen(false)}
+        />
+      ) : null}
+      <BlockToolFooter
+        count={readings.toolCount}
+        className={className}
+        {...(readings.toolCountIsConversation
+          ? {
+              countTitle: `Every tool ${callee} has run in this conversation, its sub-agents' not included`,
+            }
+          : {})}
+        action={
+          // Only when there is a button to draw: an element the button
+          // renders as null still makes the footer think it has content.
+          callChannel === null ||
+          block.calleeMemberId === null ||
+          !callRunning ||
+          messageOpen ? undefined : (
+            <CallMessageButton
+              callee={callee}
+              calleeAgent={calleeAgent}
+              running={callRunning}
+              open={messageOpen}
+              onOpen={() => setMessageOpen(true)}
+            />
+          )
+        }
+        // The SAME figures the shut band draws — task chip, ring and cost,
+        // in the band's own size — pushed to the right as they sit
+        // there, so opening the card never changes how its numbers look.
+        note={
+          failed || readings.hasFigures ? (
+            <>
+              {failed ? <span>finished with an error</span> : null}
+              {readings.hasFigures ? (
+                <span
+                  data-slot="call-footer-figures"
+                  className="ml-auto flex items-center gap-2 whitespace-nowrap text-xs">
+                  {readings.figures('call-footer')}
+                </span>
+              ) : null}
+            </>
+          ) : undefined
+        }
+      />
+    </>
+  );
+}
+
+/** Who a call is from and to, by the names the run's team gives them. */
+function callPartiesOf(
+  block: CallBlockEntry,
+  nodes: ReadonlyMap<string, TranscriptNodeMeta> | undefined,
+): { callee: string; caller: string | null } {
+  const nameOf = (id: string | null): string | null =>
+    id === null ? null : (nodes?.get(id)?.name ?? id);
+  return {
+    callee: nameOf(block.calleeMemberId) ?? 'agent',
+    caller: nameOf(block.callerMemberId),
+  };
+}
+
+/** {@link CallFooterRow} for a call drawn outside its card: the agent's popup. */
+export function CallConversationFooter({
+  block,
+  nodes,
+  className,
+}: {
+  block: CallBlockEntry;
+  nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
+  className?: string;
+}): React.JSX.Element {
+  const { callee, caller } = callPartiesOf(block, nodes);
+  const readings = useCallReadings(block, callee);
+  return (
+    <CallFooterRow
+      block={block}
+      callee={callee}
+      caller={caller}
+      calleeAgent={calleeAgentOf(block, nodes)}
+      readings={readings}
+      className={className}
+    />
+  );
+}
+
 /**
  * A call's conversation, row by row.
  *
@@ -566,12 +789,9 @@ export const CallBlock = memo(function CallBlock({
   chatAgentName?: string | null;
 }): React.JSX.Element {
   const identities = useContext(AgentIdentityContext);
-  const nameOf = (id: string | null): string | null =>
-    id === null ? null : (nodes?.get(id)?.name ?? id);
   const avatarOf = (id: string | null): AvatarLook | undefined =>
     id === null ? undefined : nodes?.get(id)?.avatar;
-  const callee = nameOf(block.calleeMemberId) ?? 'agent';
-  const caller = nameOf(block.callerMemberId);
+  const { callee, caller } = callPartiesOf(block, nodes);
   const calleeKind = calleeAgentOf(block, nodes);
   const calleeAgent =
     calleeKind === null ? null : agentShortName(identities, calleeKind);
@@ -592,76 +812,12 @@ export const CallBlock = memo(function CallBlock({
         : calleeAgent;
   // A callee carrying on by itself after the call settled is working IN this
   // card — its live row is drawn inside it — so the card's mark spins with it.
-  // The call itself stays settled: `callRunning` below still reads the call.
+  // The call itself stays settled: `CallFooterRow` still reads the call.
   const status = blockStatusOf(
     block.calleeWorking ? 'running' : block.status,
     block.queued === true,
   );
-  const foldedUsage = callBlockUsage(block);
-  /**
-   * The callee's window, live first and the block's own settled rows last.
-   *
-   * The fold alone could only ever answer AFTER the call — a `turn_complete` is
-   * the one row it reads and the callee has not written one yet — so the ring
-   * was blank for the whole of every call and appeared at the moment it stopped
-   * being worth watching. REPORTED against a running cursor call, and measured
-   * on that same run: no ring for 46 seconds, then `80.4k / 200k` at the settle.
-   *
-   * Each figure falls back on its own, the rule `resolveCalleeContext` states in
-   * full: a source that reports one half says nothing about the other, so a
-   * live delta carrying only a count must not erase a window the settled turn
-   * already had.
-   *
-   * The resolver is handed every call of the conversation, so a continuation
-   * that has not reported yet reads on the same rule the agents panel's instance
-   * ring does (`CalleeContextResolver`).
-   */
-  const folded = callBlockContext(block);
-  const resolveCallReading = useContext(CalleeContextResolverContext);
-  const callChannel = useContext(CallMessageChannelContext);
-  // The open run — the one this block's transcript belongs to.
-  const runId = useContext(ThreadUiMemoryContext);
-  const [messageOpen, setMessageOpen] = useState(false);
-  const calleeNodeAgent = calleeAgentOf(block, nodes);
-  // The block's own status, not the card's: a call still pending — queued
-  // under the run's cap, or not yet started — has no turn to join yet.
-  const callRunning = block.status === 'running';
-  const live =
-    resolveCallReading !== null && block.calleeMemberId !== null
-      ? // The WHOLE conversation rather than the calls this window drew: both
-        // figures the resolver answers are about the callee's SESSION, which
-        // outlives the window. The ring only gains older fallbacks; the SPEND
-        // was silently short by every call that had paged out — see
-        // `CallBlockEntry.conversationCallIds` for what that cost.
-        resolveCallReading(block.calleeMemberId, block.conversationCallIds)
-      : null;
-  // The daemon's whole-run spend for this conversation, over the window's
-  // fold — a call that started above the loaded window, or was continued many
-  // times, otherwise states only the part of its cost on screen. The running
-  // turn's unrecorded dollars go on top of whichever of the two is drawn: a
-  // call hours into its turn otherwise states its FINISHED turns as the bill.
-  const usage = withLiveCost(
-    live?.spend ?? foldedUsage,
-    live?.liveCost ?? null,
-  );
-  /**
-   * Every tool the callee ran in this CONVERSATION, on the same rule — the
-   * daemon's per-call counts over the fold, which holds only the loaded window.
-   */
-  const toolCount = live?.toolCalls ?? countTools(block.entries);
-  const context = {
-    contextTokens: live?.contextTokens ?? folded.contextTokens,
-    contextEstimated:
-      live?.contextTokens != null
-        ? live.contextEstimated === true
-        : folded.contextEstimated === true,
-    contextWindowTokens:
-      live?.contextWindowTokens ?? folded.contextWindowTokens,
-  };
-  const tasks = callBlockTasks(block);
-  const clockRunning = status === 'running';
-  const clockMs = useCallClockMs(live?.clocks, clockRunning);
-  const failed = block.status === 'failed';
+  const readings = useCallReadings(block, callee);
   const identityText = caller ? `${caller} → ${callee}` : callee;
   const baseToggleLabel = caller ? `${identityText} call` : `Call to ${callee}`;
   /**
@@ -778,34 +934,6 @@ export const CallBlock = memo(function CallBlock({
                   // the callee has been quiet long enough for a still line to read as a
                   // frozen one, which on a called agent is routinely minutes.
                   `${callee} is ${calleeWord.toLowerCase()}...`;
-  /**
-   * Whether there is anything to put in the band at all — `BlockShell` renders
-   * it on `summary ?`, and an element is always truthy, so the caller has to
-   * pass `undefined` to say it has nothing to show.
-   */
-  const hasFigures =
-    (clockMs !== null && clockMs > 0) ||
-    tasks.length > 0 ||
-    usage.costUsd !== null ||
-    context.contextTokens !== null;
-  const figures = (slot: 'call-summary' | 'call-footer'): React.JSX.Element => (
-    <CallFigures
-      slot={slot}
-      tasks={tasks}
-      live={status === 'running' && waiting === null}
-      callee={callee}
-      runId={runId}
-      callId={block.callId}
-      contextTokens={context.contextTokens}
-      contextWindowTokens={context.contextWindowTokens}
-      contextEstimated={context.contextEstimated}
-      costUsd={usage.costUsd}
-      estimatedCostUsd={usage.estimatedCostUsd ?? null}
-      runningCost={live?.liveCost ?? null}
-      clockMs={clockMs}
-      clockRunning={clockRunning}
-    />
-  );
   const hasSummary =
     summaryText !== null ||
     pending ||
@@ -814,7 +942,7 @@ export const CallBlock = memo(function CallBlock({
     // terms the marker itself is drawn, or the band could open empty.
     (block.stalled && status === 'running') ||
     heldText !== null ||
-    hasFigures;
+    readings.hasFigures;
   return (
     <div
       data-role="call-block"
@@ -879,7 +1007,7 @@ export const CallBlock = memo(function CallBlock({
                   quiet
                 </span>
               ) : null}
-              {figures('call-summary')}
+              {readings.figures('call-summary')}
             </>
           ) : undefined
         }
@@ -942,59 +1070,12 @@ export const CallBlock = memo(function CallBlock({
         {status === 'running' && !liveTail ? (
           <BlockPendingLine clamp="one">{pendingLine}</BlockPendingLine>
         ) : null}
-        {block.calleeMemberId !== null ? (
-          <CallMessagePanel
-            blockId={block.id}
-            callId={block.callId}
-            calleeMemberId={block.calleeMemberId}
-            callee={callee}
-            calleeAgent={calleeNodeAgent}
-            caller={caller}
-            running={callRunning}
-            open={messageOpen}
-            onClose={() => setMessageOpen(false)}
-          />
-        ) : null}
-        <BlockToolFooter
-          count={toolCount}
-          {...(live?.toolCalls == null
-            ? {}
-            : {
-                countTitle: `Every tool ${callee} has run in this conversation, its sub-agents' not included`,
-              })}
-          action={
-            // Only when there is a button to draw: an element the button
-            // renders as null still makes the footer think it has content.
-            callChannel === null ||
-            block.calleeMemberId === null ||
-            !callRunning ||
-            messageOpen ? undefined : (
-              <CallMessageButton
-                callee={callee}
-                calleeAgent={calleeNodeAgent}
-                running={callRunning}
-                open={messageOpen}
-                onOpen={() => setMessageOpen(true)}
-              />
-            )
-          }
-          // The SAME figures the shut band draws — task chip, ring and cost,
-          // in the band's own size — pushed to the right as they sit
-          // there, so opening the card never changes how its numbers look.
-          note={
-            failed || hasFigures ? (
-              <>
-                {failed ? <span>finished with an error</span> : null}
-                {hasFigures ? (
-                  <span
-                    data-slot="call-footer-figures"
-                    className="ml-auto flex items-center gap-2 whitespace-nowrap text-xs">
-                    {figures('call-footer')}
-                  </span>
-                ) : null}
-              </>
-            ) : undefined
-          }
+        <CallFooterRow
+          block={block}
+          callee={callee}
+          caller={caller}
+          calleeAgent={calleeKind}
+          readings={readings}
         />
       </BlockShell>
     </div>

@@ -3,10 +3,20 @@ import {
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import type { RunDao } from '../../agents/dao/run.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import type { ProjectDao } from '../../projects/dao/project.dao';
+import type { ProjectRootsService } from '../../projects/services/project-roots.service';
 import { member, teamOf } from '../../teams/__tests__/team-builders';
 import { TeamChangeLogDao } from '../../teams/dao/team-change-log.dao';
 import { TeamChangeLogEntry } from '../../teams/entity/team-change-log-entry.entity';
@@ -35,6 +45,7 @@ import { TeamHistoryService } from './team-history.service';
 import type { TeamStatsService } from './team-stats.service';
 import { TeamVersionsService } from './team-versions.service';
 
+const DAY_MS = 86_400_000;
 const FIRST: Team = teamOf([member('dev')], { name: 'Dev Team' });
 const SECOND: Team = {
   ...FIRST,
@@ -56,6 +67,8 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
   let changeLog: TeamChangeLogService;
   let liveRuns: Set<string>;
   let members: TeamStatsMemberWire[];
+  let adapterKinds: Map<string, unknown>;
+  let projectRefs: { id: string; name: string; folder: string }[];
   let service: TeamHistoryService;
 
   beforeAll(async () => {
@@ -91,9 +104,29 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
     recommendations = new TeamRecommendationDao(em);
     changeLog = new TeamChangeLogService(new TeamChangeLogDao(em));
     liveRuns = new Set(['analysis-new']);
+    adapterKinds = new Map();
+    projectRefs = [{ id: 'p-app', name: 'Geniro App', folder: '/work/app' }];
     const adapters = {
-      all: () => new Map(),
+      all: () => adapterKinds,
     } as unknown as AgentAdapterRegistry;
+    const worktreeRepos = new Map([
+      ['/work/app/.claude/worktrees/feat', '/work/app'],
+    ]);
+    const projectRoots = {
+      rootsOf: (cwds: Iterable<string | null>) =>
+        Promise.resolve(
+          new Map(
+            [...cwds].flatMap((cwd) =>
+              cwd !== null && worktreeRepos.has(cwd)
+                ? [[cwd, worktreeRepos.get(cwd)!] as const]
+                : [],
+            ),
+          ),
+        ),
+    } as unknown as ProjectRootsService;
+    const projects = {
+      listRefs: () => Promise.resolve(projectRefs),
+    } as unknown as ProjectDao;
     service = new TeamHistoryService(
       em,
       new TeamVersionsService(
@@ -120,6 +153,8 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
       {
         read: () => Promise.resolve({ byMember: members }),
       } as unknown as TeamStatsService,
+      projectRoots,
+      projects,
     );
     members = [];
     for (const [team, version, at] of [
@@ -639,5 +674,80 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
     });
 
     expect(history.members).toEqual(members);
+  });
+
+  it('reads a team’s spend from its ledgers alone: an ended run counts, another team’s run does not, a worktree is filed under its repository, and each turn is priced at its adapter’s billing rates', async () => {
+    const billingRatesOf = vi.fn((_model: string | null) => ({
+      input: 4,
+      output: 20,
+      cacheRead: 0.2,
+      cacheWrite: 8,
+    }));
+    adapterKinds = new Map([['claude', { billingRatesOf }]]);
+    const longAgo = new Date(Date.now() - 400 * DAY_MS);
+    const turn = (
+      runId: string,
+      cwd: string | null,
+      costUsd: number,
+    ): UsageEventInput => ({
+      runId,
+      memberId: 'dev',
+      seq: 1,
+      occurredAt: longAgo,
+      agentKind: 'claude',
+      model: 'opus-5',
+      cwd,
+      teamName: 'Dev Team',
+      costUsd,
+      estimatedCostUsd: null,
+      inputTokens: 1_000,
+      outputTokens: 100,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      thinkingTokens: null,
+      durationMs: null,
+      apiMs: null,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
+    });
+    await activityDao.stampThreadVersion('run-gone', longAgo, {
+      slug: 'dev-team',
+      version: V1,
+      inferred: false,
+    });
+    await usageDao.recordOnce(
+      turn('run-gone', '/work/app/.claude/worktrees/feat', 3),
+    );
+    await activityDao.stampThreadVersion('run-other-team', longAgo, {
+      slug: 'other-team',
+      version: V1,
+      inferred: false,
+    });
+    await usageDao.recordOnce(turn('run-other-team', null, 50));
+
+    const spend = await service.spend('dev-team', {
+      analysedRunIds: ['run-gone'],
+    });
+
+    expect(spend.population.runs).toBe(1);
+    expect(spend.windows[0]).toMatchObject({
+      window: 'all',
+      runs: 1,
+      costUsd: 3,
+    });
+    expect(spend.windows[1]).toMatchObject({
+      window: 'last30Days',
+      runs: 0,
+      costUsd: null,
+    });
+    expect(spend.byProject).toEqual([
+      expect.objectContaining({
+        project: 'Geniro App',
+        folder: '/work/app',
+        all: expect.objectContaining({ costUsd: 3 }),
+      }),
+    ]);
+    expect(billingRatesOf).toHaveBeenCalledWith('opus-5');
   });
 });

@@ -1,6 +1,7 @@
 import {
   HOST_KNOWLEDGE_READ_TOOL,
   HOST_MEMORY_SAVE_TOOL,
+  HOST_RECOMMENDATION_MARKS_TOOL,
 } from '../../../agents/chat.types';
 
 /** What a model reads about `knowledge_save`. */
@@ -13,5 +14,13 @@ export function knowledgeSaveInstructions(): string {
     'each find unique in the text, and optionally a new title or whenToRead, never a whole body. Always say why in reason. ' +
     'While the user reviews agent writes, what you save waits for them on the Knowledge page: no agent sees it, and the document stays as it was. ' +
     `Do NOT use it for one durable fact — ${HOST_MEMORY_SAVE_TOOL} does that — nor for secrets, or your progress.`
+  );
+}
+
+/** What an analysis also reads about `knowledge_save`. */
+export function knowledgeItemInstructions(): string {
+  return (
+    " To carry out a knowledge item (K-) the user applied from your recommendations card, pass only `item` with its id: geniro writes the text on the card, since pressing Apply was the user's review, and the document is live at once. " +
+    `Then record it with ${HOST_RECOMMENDATION_MARKS_TOOL}.`
   );
 }

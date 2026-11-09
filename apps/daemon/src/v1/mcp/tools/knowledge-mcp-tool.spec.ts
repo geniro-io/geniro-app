@@ -168,11 +168,9 @@ describe('a knowledge tool naming another place', () => {
       reason: 'The user asked.',
     };
 
-    await new KnowledgeSaveTool(knowledge, analysisChat()).call(
-      'knowledge_save',
-      { ...body, project: 'p2' },
-      CALL,
-    );
+    await new KnowledgeSaveTool(knowledge, analysisChat(), {
+      carryOut: () => Promise.reject(new Error('unused')),
+    }).call('knowledge_save', { ...body, project: 'p2' }, CALL);
 
     expect(service.save).toHaveBeenCalledWith(AGENT_SCOPE.actor, body, OTHER);
   });

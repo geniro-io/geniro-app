@@ -91,6 +91,7 @@ import { HostWakeBus } from './services/host-wake.bus';
 import { HostWakeChatDelivery } from './services/host-wake-chat-delivery.service';
 import { ItemCallIndexService } from './services/item-call-index.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
+import { KnowledgeItemsService } from './services/knowledge-items.service';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
 import { MemoryImportService } from './services/memory-import.service';
@@ -252,6 +253,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     AnalysisBroker,
     AnalysisReportsService,
     ProjectInstructionsChangeService,
+    KnowledgeItemsService,
     ProjectInstructionsBroker,
     ProjectChatBroker,
     ChartBroker,
@@ -592,6 +594,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ThreadReaderService,
     // For the MCP host's `save_project_instructions`.
     ProjectInstructionsChangeService,
+    KnowledgeItemsService,
     GlobalChatSearchService,
     AgentEventBus,
     ApprovalRegistry,

@@ -272,6 +272,20 @@ export interface KnowledgeSaveInput {
   reason: string;
 }
 
+/** A recommendation the user applied, as the store writes it. */
+export interface KnowledgeItemWrite {
+  kind: 'add' | 'update' | 'retire';
+  /** The place key: `project:<id>`, `team:<slug>` or `global`. */
+  place: string;
+  handle?: string;
+  rev?: number;
+  title?: string;
+  whenToRead?: string;
+  /** The whole text as it should read; a retire's is only why it goes. */
+  body: string;
+  reason: string;
+}
+
 export const KNOWLEDGE_REFUSAL_CODES = [
   'KNOWLEDGE_DISABLED',
   'KNOWLEDGE_READ_ONLY',
@@ -303,6 +317,10 @@ export type KnowledgeSaveOutcome =
   | { kind: 'proposed'; document: KnowledgeHeadDto; created: boolean }
   | { kind: 'stale'; current: KnowledgeDocumentDto }
   | KnowledgeRefusal;
+
+/** What writing a recommendation came to. */
+export type KnowledgeItemOutcome =
+  KnowledgeSaveOutcome | { kind: 'archived'; document: KnowledgeHeadDto };
 
 export type KnowledgeRead =
   | { kind: 'found'; document: KnowledgeDocumentDto }

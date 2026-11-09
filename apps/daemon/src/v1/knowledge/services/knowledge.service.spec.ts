@@ -8,12 +8,14 @@ import { Project } from '../../projects/entity/project.entity';
 import type { RunPlace } from '../../projects/projects.types';
 import { Run } from '../../runs/entity/run.entity';
 import { knowledgeDb } from '../__tests__/knowledge-db';
+import { KnowledgeRevision } from '../entity/knowledge-revision.entity';
 import {
   KNOWLEDGE_INDEX_MAX_BYTES,
   KNOWLEDGE_REVISIONS_KEPT,
   KNOWLEDGE_TITLE_MAX_CHARS,
   type KnowledgeActor,
   type KnowledgeChangedEvent,
+  type KnowledgeItemWrite,
   type KnowledgeSaveOutcome,
 } from '../knowledge.types';
 import type { KnowledgeService } from './knowledge.service';
@@ -1470,6 +1472,131 @@ describe('KnowledgeService', () => {
         ),
       );
       expect(edited.body).toBe('Start it last.');
+    });
+  });
+
+  describe('a recommendation the user applied', () => {
+    const ADD: KnowledgeItemWrite = {
+      kind: 'add',
+      place: 'project:p1',
+      title: 'Stand',
+      whenToRead: 'Starting the stand.',
+      body: 'Start it first.',
+      reason: 'K-1: Keep the guide as a document',
+    };
+    const added = async () =>
+      applied(
+        (await service.applyRecommended(AGENT, ADD)) as KnowledgeSaveOutcome,
+      );
+
+    it('is live and approved at once under review, written by the agent that filed it', async () => {
+      const document = await added();
+
+      expect(document).toMatchObject({
+        status: 'active',
+        rev: 1,
+        place: 'project:p1',
+        body: 'Start it first.',
+        source: { actor: 'agent' },
+      });
+      expect(document.approvedAt).not.toBeNull();
+      const { revisions } = await service.revisions(document.id);
+      expect(revisions[0]).toMatchObject({
+        status: 'applied',
+        reason: 'K-1: Keep the guide as a document',
+      });
+      const stored = await orm.em
+        .fork()
+        .findOneOrFail(KnowledgeRevision, { id: revisions[0]?.id });
+      expect(stored.approvedAt).not.toBeNull();
+      expect(
+        (await service.search({ projectId: 'p1', teamSlug: null }, 'stand'))
+          .total,
+      ).toBe(1);
+    });
+
+    it('replaces a document’s whole text at the rev read, and stays approved', async () => {
+      const { handle, rev } = await added();
+
+      const updated = applied(
+        (await service.applyRecommended(AGENT, {
+          kind: 'update',
+          place: 'project:p1',
+          handle,
+          rev,
+          body: 'Start it last.',
+          reason: 'K-2',
+        })) as KnowledgeSaveOutcome,
+      );
+
+      expect(updated.body).toBe('Start it last.');
+      expect(updated.rev).toBe(rev + 1);
+      expect(updated.approvedAt).not.toBeNull();
+    });
+
+    it('archives a retired document, which only an Apply lets an agent do', async () => {
+      const { handle, rev } = await added();
+
+      const retired = await service.applyRecommended(AGENT, {
+        kind: 'retire',
+        place: 'project:p1',
+        handle,
+        rev,
+        body: 'It moved into the instructions.',
+        reason: 'K-3',
+      });
+
+      expect(retired).toMatchObject({
+        kind: 'archived',
+        document: { handle, status: 'archived' },
+      });
+      expect(
+        await service.read({ projectId: 'p1', teamSlug: null }, handle),
+      ).toMatchObject({ kind: 'missing' });
+    });
+
+    it('refuses a moved rev, a document that is not there, an unknown place and invalid text, writing nothing', async () => {
+      const { handle, rev } = await added();
+      const update: KnowledgeItemWrite = {
+        kind: 'update',
+        place: 'project:p1',
+        handle,
+        rev,
+        body: 'x',
+        reason: 'r',
+      };
+
+      for (const [write, code] of [
+        [{ ...update, rev: rev + 5 }, 'INVALID_DOCUMENT'],
+        [{ ...update, handle: 'ghost' }, 'NOT_FOUND'],
+        [{ ...update, place: 'global' }, 'NOT_FOUND'],
+        [{ ...ADD, place: 'project:ghost' }, 'NO_PROJECT'],
+        [{ ...ADD, place: 'nowhere' }, 'INVALID_DOCUMENT'],
+        [{ ...ADD, title: '' }, 'INVALID_DOCUMENT'],
+        [{ ...ADD, body: '' }, 'INVALID_DOCUMENT'],
+      ] as const) {
+        await expect(service.checkRecommended(write)).resolves.toMatchObject({
+          code,
+        });
+        await expect(
+          service.applyRecommended(AGENT, write),
+        ).resolves.toMatchObject({ kind: 'refused', code });
+      }
+      expect(
+        (await service.read({ projectId: 'p1', teamSlug: null }, handle))
+          .kind === 'found',
+      ).toBe(true);
+    });
+
+    it('is refused once the user made knowledge read-only', async () => {
+      service.setConfig({ enabled: true, agentWrites: 'off' });
+
+      await expect(service.checkRecommended(ADD)).resolves.toMatchObject({
+        code: 'KNOWLEDGE_READ_ONLY',
+      });
+      await expect(service.applyRecommended(AGENT, ADD)).resolves.toMatchObject(
+        { code: 'KNOWLEDGE_READ_ONLY' },
+      );
     });
   });
 

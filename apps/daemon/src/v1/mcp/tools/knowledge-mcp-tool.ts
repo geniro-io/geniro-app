@@ -34,7 +34,7 @@ const ANOTHER_PLACE =
 export abstract class KnowledgeMcpTool extends BaseMcpTool {
   constructor(
     protected readonly knowledge: KnowledgeService,
-    private readonly gates: ThreadToolGates,
+    protected readonly gates: ThreadToolGates,
   ) {
     super();
   }

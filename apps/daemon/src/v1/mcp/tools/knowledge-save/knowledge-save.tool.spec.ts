@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   clearSecrets,
@@ -13,6 +13,7 @@ import type { RunPlace } from '../../../projects/projects.types';
 import {
   AGENT_SCOPE,
   CALL,
+  documentOf,
   headOf,
   ordinaryChat,
 } from '../__tests__/knowledge-tool-fixtures';
@@ -26,6 +27,8 @@ const NEW_DOCUMENT = {
   body: 'Tag only after CI is green.',
   reason: 'found it useful',
 };
+
+const NO_ITEMS = { carryOut: () => Promise.reject(new Error('unused')) };
 
 function fakeKnowledge(outcome: KnowledgeSaveOutcome, enabled = true) {
   const saves: { actor: KnowledgeActor; input: unknown; place: RunPlace }[] =
@@ -54,11 +57,11 @@ describe('KnowledgeSaveTool', () => {
       }),
       created: true,
     });
-    const result = await new KnowledgeSaveTool(service, ordinaryChat()).call(
-      'knowledge_save',
-      { ...NEW_DOCUMENT },
-      CALL,
-    );
+    const result = await new KnowledgeSaveTool(
+      service,
+      ordinaryChat(),
+      NO_ITEMS,
+    ).call('knowledge_save', { ...NEW_DOCUMENT }, CALL);
     expect(saves).toEqual([
       {
         actor: AGENT_SCOPE.actor,
@@ -84,11 +87,11 @@ describe('KnowledgeSaveTool', () => {
       reason:
         'the user lets agents read knowledge, not write it — tell the user what should change',
     });
-    const result = await new KnowledgeSaveTool(service, ordinaryChat()).call(
-      'knowledge_save',
-      { ...NEW_DOCUMENT },
-      CALL,
-    );
+    const result = await new KnowledgeSaveTool(
+      service,
+      ordinaryChat(),
+      NO_ITEMS,
+    ).call('knowledge_save', { ...NEW_DOCUMENT }, CALL);
     expect(result).toEqual({
       content: [
         {
@@ -108,7 +111,11 @@ describe('KnowledgeSaveTool', () => {
         code: 'NOT_FOUND',
         reason: `no document ${SECRET} this run can see — search again`,
       });
-      const result = await new KnowledgeSaveTool(service, ordinaryChat()).call(
+      const result = await new KnowledgeSaveTool(
+        service,
+        ordinaryChat(),
+        NO_ITEMS,
+      ).call(
         'knowledge_save',
         {
           handle: SECRET,
@@ -131,15 +138,121 @@ describe('KnowledgeSaveTool', () => {
       { kind: 'refused', code: 'KNOWLEDGE_DISABLED', reason: 'off' },
       false,
     );
-    const result = await new KnowledgeSaveTool(service, ordinaryChat()).call(
-      'knowledge_save',
-      { ...NEW_DOCUMENT },
-      CALL,
-    );
+    const result = await new KnowledgeSaveTool(
+      service,
+      ordinaryChat(),
+      NO_ITEMS,
+    ).call('knowledge_save', { ...NEW_DOCUMENT }, CALL);
     expect(result.isError).toBe(true);
     expect(result.content[0]).toMatchObject({
       text: 'KNOWLEDGE_DISABLED: the user has turned knowledge off; work without it.',
     });
     expect(saves).toEqual([]);
+  });
+
+  describe('an applied knowledge item', () => {
+    const analysisGates = () => {
+      const gates = ordinaryChat();
+      gates.analysis.register(CALL.runId, CALL.memberId, {
+        turn: {
+          analysisRunId: CALL.runId,
+          sourceRunId: 'source',
+          snapshotSeq: 0,
+          sourceWorking: false,
+        },
+        report: () => Promise.reject(new Error('unused')),
+        mark: () => Promise.reject(new Error('unused')),
+      });
+      return gates;
+    };
+    const saved = {
+      kind: 'applied' as const,
+      document: documentOf({ handle: 'stand', rev: 1 }),
+      created: true,
+    };
+
+    it('lists `item`, with nothing else required, only where an analysis turn runs', () => {
+      const { service } = fakeKnowledge(saved);
+      const listed = (gates: ReturnType<typeof ordinaryChat>) =>
+        new KnowledgeSaveTool(service, gates, NO_ITEMS).list(CALL)[0];
+
+      const inAnalysis = listed(analysisGates());
+      expect(
+        Object.keys(inAnalysis?.inputSchema.properties as object),
+      ).toContain('item');
+      expect(inAnalysis?.inputSchema.required).toEqual([]);
+      expect(inAnalysis?.description).toContain('pass only `item`');
+
+      const elsewhere = listed(ordinaryChat());
+      expect(
+        Object.keys(elsewhere?.inputSchema.properties as object),
+      ).not.toContain('item');
+      expect(elsewhere?.description).not.toContain('pass only `item`');
+    });
+
+    it('carries out the item, with no text of the model’s, and tells the agent to mark it', async () => {
+      const { service, saves } = fakeKnowledge(saved);
+      const carryOut = vi.fn(async () => saved);
+
+      const result = await new KnowledgeSaveTool(service, analysisGates(), {
+        carryOut,
+      }).call('knowledge_save', { item: 'K-1' }, CALL);
+
+      expect(carryOut).toHaveBeenCalledWith(
+        expect.objectContaining({ analysisRunId: CALL.runId }),
+        AGENT_SCOPE.actor,
+        'K-1',
+      );
+      expect(saves).toEqual([]);
+      expect(result.isError).toBe(false);
+      expect(result.content[0]).toMatchObject({
+        text: 'Saved `stand` at rev 1 for K-1, as the user applied it. Mark K-1 now.',
+      });
+    });
+
+    it('refuses text beside the item, another target’s id, and an item outside an analysis', async () => {
+      const { service, saves } = fakeKnowledge(saved);
+      const carryOut = vi.fn(async () => saved);
+      const inAnalysis = new KnowledgeSaveTool(service, analysisGates(), {
+        carryOut,
+      });
+
+      const withText = await inAnalysis.call(
+        'knowledge_save',
+        { item: 'K-1', body: 'other text' },
+        CALL,
+      );
+      const otherTarget = await inAnalysis.call(
+        'knowledge_save',
+        { item: 'P-1' },
+        CALL,
+      );
+      const outside = await new KnowledgeSaveTool(service, ordinaryChat(), {
+        carryOut,
+      }).call('knowledge_save', { item: 'K-1' }, CALL);
+
+      expect(withText.isError).toBe(true);
+      expect(otherTarget.isError).toBe(true);
+      expect(outside.isError).toBe(true);
+      expect(carryOut).not.toHaveBeenCalled();
+      expect(saves).toEqual([]);
+    });
+
+    it('answers a refusal as an error, with its code', async () => {
+      const { service } = fakeKnowledge(saved);
+
+      const result = await new KnowledgeSaveTool(service, analysisGates(), {
+        carryOut: async () => ({
+          kind: 'item-refused' as const,
+          code: 'NOT_SELECTED',
+          reason: 'K-1 was not selected',
+        }),
+      }).call('knowledge_save', { item: 'K-1' }, CALL);
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0]).toMatchObject({
+        text: 'NOT_SELECTED: K-1 was not selected',
+      });
+    });
   });
 });

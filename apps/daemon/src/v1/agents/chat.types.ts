@@ -567,10 +567,11 @@ export const RECOMMENDATION_TARGETS = [
   'memory',
   'project',
   'overlay',
+  'knowledge',
 ] as const;
 export type RecommendationTarget = (typeof RECOMMENDATION_TARGETS)[number];
 
-/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`, `P-1`, `O-1`. */
+/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`, `P-1`, `O-1`, `K-1`. */
 export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
   team: 'W-',
   repo: 'R-',
@@ -578,7 +579,23 @@ export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
   memory: 'M-',
   project: 'P-',
   overlay: 'O-',
+  knowledge: 'K-',
 };
+
+/** What a knowledge recommendation does to its document. */
+export const KNOWLEDGE_ITEM_KINDS = ['add', 'update', 'retire'] as const;
+
+/** The most a knowledge item's text may hold: every item's `change` limit. */
+export const KNOWLEDGE_ITEM_MAX_TEXT = 12_000;
+
+/** The targets whose text can move to or from a knowledge document. */
+export const KNOWLEDGE_MOVE_SOURCES: readonly RecommendationTarget[] = [
+  'team',
+  'repo',
+  'user',
+  'project',
+  'overlay',
+];
 
 /**
  * The territory a recommendation keeps to: how the agents work (`process`),
@@ -597,8 +614,8 @@ export const MAX_RECOMMENDATIONS =
 export const RecommendationIdSchema = z
   .string()
   .regex(
-    /^[WRUMPO]-\d{1,3}$/,
-    "an id is W-<n> for a team item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry, P-<n> for project instructions, O-<n> for the project's overlay of the team",
+    /^[WRUMPOK]-\d{1,3}$/,
+    "an id is W-<n> for a team item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry, P-<n> for project instructions, O-<n> for the project's overlay of the team, K-<n> for a knowledge document",
   );
 
 export const RecommendationTargetSchema = z.enum(RECOMMENDATION_TARGETS);
@@ -663,7 +680,7 @@ const RecommendationImpactSchema = z.object({
 
 export const RecommendationItemSchema = z.object({
   id: RecommendationIdSchema.describe(
-    'W-1, W-2… team; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory; P-1, P-2… project instructions',
+    'W-1, W-2… team; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory; P-1, P-2… project instructions; K-1, K-2… knowledge',
   ),
   target: RecommendationTargetSchema,
   territory: z
@@ -676,14 +693,14 @@ export const RecommendationItemSchema = z.object({
     .min(1)
     .max(40)
     .describe(
-      'team: role|instructions|stage|parallelize|model|effort|termination|member|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget; project: add|update|remove',
+      'team: role|instructions|stage|parallelize|model|effort|termination|member|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget; project: add|update|remove; knowledge: add|update|retire',
     ),
   location: z
     .string()
     .min(1)
     .max(300)
     .describe(
-      'A team member id, a repo file:line, the user-instructions file path, for memory the entry handle (m12) to update or forget, or new to add, or for project the projectId view=project names',
+      'A team member id, a repo file:line, the user-instructions file path, for memory the entry handle (m12) to update or forget, or new to add, for project the projectId view=project names, or for knowledge the document handle, or new to add',
     ),
   title: z.string().min(1).max(200),
   change: z
@@ -691,8 +708,45 @@ export const RecommendationItemSchema = z.object({
     .min(1)
     .max(12_000)
     .describe(
-      'The exact change: replacement text, a YAML diff, or a WHEN…→… rule',
+      "The exact change: replacement text, a YAML diff, or a WHEN…→… rule. For knowledge add or update, the document's WHOLE text as it should read; for retire, why it goes",
     ),
+  document: z
+    .object({
+      place: z
+        .string()
+        .min(1)
+        .max(220)
+        .describe(
+          "Where the document lives: 'project:<id>', 'team:<slug>' or 'global'",
+        ),
+      handle: z
+        .string()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe('The document to update or retire; leave it out to add one'),
+      rev: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe('The revision you read; required with handle'),
+      title: z
+        .string()
+        .max(300)
+        .optional()
+        .describe('The title of a new document; required to add'),
+      whenToRead: z
+        .string()
+        .max(600)
+        .optional()
+        .describe('One line saying when a new document helps; required to add'),
+    })
+    .optional()
+    .describe('Knowledge items only: the document the item acts on'),
+  movesWith: RecommendationIdSchema.optional().describe(
+    'Knowledge items only: the W-, R-, U-, P- or O- item on this card holding the other side of a move. The user selects the two together',
+  ),
   evidence: z.array(RecommendationEvidenceSchema).min(1).max(6),
   rootCause: z.string().min(1).max(600),
   impact: RecommendationImpactSchema,

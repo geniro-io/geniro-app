@@ -210,6 +210,22 @@ describe('composeTeamChatInstructions', () => {
     expect(shared).toContain('- Billing');
   });
 
+  it('tells the agent what goes where, and offers knowledge items only while agents may write it', () => {
+    const on = composeTeamChatInstructions({
+      path: `${LIBRARY}/dev-team.team.yaml`,
+      slug: 'dev-team',
+      name: 'Dev Team',
+      schemaPath: `${LIBRARY}/.team.schema.json`,
+      memory: true,
+      knowledge: true,
+      inLibrary: true,
+    });
+
+    expect(BRIEF).toContain('What goes where:');
+    expect(on).toContain('target "knowledge"');
+    expect(BRIEF).not.toContain('target "knowledge"');
+  });
+
   it('names the memory target only while the shared memory is on', () => {
     const off = composeTeamChatInstructions({
       path: `${LIBRARY}/dev-team.team.yaml`,

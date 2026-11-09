@@ -1,5 +1,5 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type {
   AnalysedTeam,
@@ -11,6 +11,8 @@ import { AnalysisBroker } from '../../../agents/services/analysis.broker';
 import { AnalysisReportsService } from '../../../agents/services/analysis-reports.service';
 import type { ThreadReaderService } from '../../../agents/services/thread-reader.service';
 import type { ThreadTimelineService } from '../../../agents/services/thread-timeline.service';
+import type { KnowledgeRefusal } from '../../../knowledge/knowledge.types';
+import type { KnowledgeService } from '../../../knowledge/services/knowledge.service';
 import type { MemoryService } from '../../../memory/services/memory.service';
 import type { ProjectScopeService } from '../../../projects/services/project-scope.service';
 import type { Run } from '../../../runs/entity/run.entity';
@@ -66,6 +68,10 @@ function setup(
   team: AnalysedTeam | null = null,
   memoryOn = true,
   lanes: { memberId: string | null }[] = [],
+  knowledge: Pick<KnowledgeService, 'agentsMayWrite'> &
+    Partial<Pick<KnowledgeService, 'checkRecommended'>> = {
+    agentsMayWrite: false,
+  },
 ) {
   const memory = { enabled: memoryOn } as MemoryService;
   const written: { kind: string; payload: unknown }[] = [];
@@ -103,6 +109,7 @@ function setup(
     memory,
     { foldRuns: () => Promise.resolve([]) } as unknown as ThreadReaderService,
     {} as ProjectScopeService,
+    knowledge as KnowledgeService,
   );
   const analysis = new AnalysisBroker();
   analysis.register(
@@ -122,14 +129,153 @@ function setup(
       },
     ),
   );
-  const tool = new ReportRecommendationsTool(analysis, memory, {
-    versionIndex: () => Promise.resolve({ current: null, numbers: new Map() }),
-  });
+  const tool = new ReportRecommendationsTool(
+    analysis,
+    memory,
+    {
+      versionIndex: () =>
+        Promise.resolve({ current: null, numbers: new Map() }),
+    },
+    knowledge,
+  );
   const report = (args: Record<string, unknown>) =>
     tool.call('report_recommendations', { hotspots: [], ...args }, CONTEXT);
   const description = () => tool.list(CONTEXT)[0]?.description ?? '';
   return { report, description, written, checked };
 }
+
+describe('ReportRecommendationsTool — knowledge items', () => {
+  const adding = {
+    ...item('K-1'),
+    target: 'knowledge',
+    kind: 'add',
+    location: 'new',
+    change: 'Start the stand first.',
+    document: {
+      place: 'global',
+      title: 'Stand',
+      whenToRead: 'Starting the stand.',
+    },
+  };
+  const writable = (refusal: KnowledgeRefusal | null = null) => ({
+    agentsMayWrite: true,
+    checkRecommended: vi.fn(async () => refusal),
+  });
+  const refusalOf = async (
+    items: unknown[],
+    knowledge: ReturnType<typeof writable> = writable(),
+  ) => {
+    const { report, written } = setup(null, null, true, [], knowledge);
+    const result = await report({ items });
+    expect(written).toEqual(result.isError ? [] : written);
+    return result.isError ? result.content[0] : null;
+  };
+
+  it('names K- items in the listing only while agents may write knowledge', () => {
+    expect(setup(null, null, true, [], writable()).description()).toContain(
+      'K-1, K-2… for a knowledge document',
+    );
+    expect(setup(null).description()).not.toContain('K-1');
+  });
+
+  it('files an item the store would write, having asked it first', async () => {
+    const knowledge = writable();
+
+    await expect(refusalOf([adding], knowledge)).resolves.toBeNull();
+
+    expect(knowledge.checkRecommended).toHaveBeenCalledWith({
+      kind: 'add',
+      place: 'global',
+      title: 'Stand',
+      whenToRead: 'Starting the stand.',
+      body: 'Start the stand first.',
+      reason: adding.title,
+    });
+  });
+
+  it('refuses what the store would refuse, in its own words', async () => {
+    await expect(
+      refusalOf(
+        [adding],
+        writable({ kind: 'refused', code: 'NO_PROJECT', reason: 'no project' }),
+      ),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining('K-1: NO_PROJECT — no project'),
+    });
+  });
+
+  it('refuses every knowledge item while agents may not write knowledge', async () => {
+    const { report } = setup(null);
+
+    const result = await report({ items: [adding] });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining('off or read-only'),
+    });
+  });
+
+  it.each([
+    ['no document', { document: undefined }, 'names its `document`'],
+    ['another kind', { kind: 'remove' }, 'add, update or retire'],
+    [
+      'a new document with no title',
+      { document: { place: 'global', whenToRead: 'W.' } },
+      'takes a title and whenToRead',
+    ],
+    [
+      'a new document naming a handle',
+      {
+        document: {
+          place: 'global',
+          title: 'T',
+          whenToRead: 'W.',
+          handle: 'h',
+          rev: 1,
+        },
+      },
+      'has no handle or rev',
+    ],
+    [
+      'an update with no rev',
+      { kind: 'update', document: { place: 'global', handle: 'h' } },
+      'handle and the rev you read',
+    ],
+    ['a move to nothing', { movesWith: 'P-9' }, 'not on this card'],
+  ])('refuses %s', async (_name, over, reason) => {
+    await expect(refusalOf([{ ...adding, ...over }])).resolves.toMatchObject({
+      text: expect.stringContaining(reason),
+    });
+  });
+
+  it('refuses a move with a memory item, and two documents moving with one item', async () => {
+    await expect(
+      refusalOf([
+        { ...item('M-1'), target: 'memory', kind: 'add', location: 'new' },
+        { ...adding, movesWith: 'M-1' },
+      ]),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining('not M-1'),
+    });
+    await expect(
+      refusalOf([
+        item('R-1'),
+        { ...adding, movesWith: 'R-1' },
+        { ...adding, id: 'K-2', movesWith: 'R-1' },
+      ]),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining('one document per item'),
+    });
+  });
+
+  it('refuses a document or a move named on any other item', async () => {
+    await expect(
+      refusalOf([{ ...item('R-1'), movesWith: 'K-1' }, adding]),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining('only a knowledge item'),
+    });
+  });
+});
 
 describe('ReportRecommendationsTool', () => {
   it('persists a recommendations row with timing the daemon measured', async () => {

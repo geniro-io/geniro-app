@@ -1,6 +1,7 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 
+import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { ItemKind } from '../../runs/runs.types';
@@ -10,9 +11,12 @@ import {
   type AnalysisSink,
   type AnalysisTurn,
   type ItemWire,
+  KNOWLEDGE_ITEM_KINDS,
+  KNOWLEDGE_MOVE_SOURCES,
   MAX_RECOMMENDATIONS_PER_TARGET,
   RECOMMENDATION_ID_PREFIX,
   RECOMMENDATION_TARGETS,
+  type RecommendationItem,
   type RecommendationMarks,
   type RecommendationsPayload,
   type RecommendationsReport,
@@ -29,7 +33,7 @@ import {
   overlayProjectIdsOf,
 } from '../utils/analysed-runs';
 import { laneOf } from '../utils/analysis-lane';
-import { readCard } from '../utils/recommendations-card';
+import { knowledgeWriteOf, readCard } from '../utils/recommendations-card';
 import { teamCardStats } from '../utils/team-runs-fold';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
 import { ThreadReaderService } from './thread-reader.service';
@@ -62,6 +66,7 @@ export class AnalysisReportsService {
     private readonly memory: MemoryService,
     private readonly threads: ThreadReaderService,
     private readonly projectScope: ProjectScopeService,
+    @Optional() private readonly knowledge?: KnowledgeService,
   ) {}
 
   sinkFor(turn: AnalysisTurn, write: AnalysisRowWriter): AnalysisSink {
@@ -101,9 +106,14 @@ export class AnalysisReportsService {
       report.items.some((item) => item.target === 'overlay')
         ? await overlayProjectIdsOf(turn, readers, em)
         : new Set(),
+      this.knowledge?.agentsMayWrite ?? false,
     );
     if (problem !== null) {
       return refused(problem);
+    }
+    const documentProblem = await this.documentProblem(report);
+    if (documentProblem !== null) {
+      return refused(documentProblem);
     }
     // Each cited row is checked against the run it names, at that run's own
     // snapshot — a team analysis cites several.
@@ -181,6 +191,23 @@ export class AnalysisReportsService {
         ? {}
         : { members: report.members.length }),
     };
+  }
+
+  /** What the store's own write would refuse of a knowledge item, ahead of any Apply. */
+  private async documentProblem(
+    report: RecommendationsReport,
+  ): Promise<string | null> {
+    for (const item of report.items) {
+      const write = knowledgeWriteOf(item);
+      const refusal =
+        write === null || this.knowledge === undefined
+          ? null
+          : await this.knowledge.checkRecommended(write);
+      if (refusal !== null) {
+        return `${item.id}: ${refusal.code} — ${refusal.reason}`;
+      }
+    }
+    return null;
   }
 
   private async mark(
@@ -333,6 +360,55 @@ export function checkHotspots(
   return null;
 }
 
+/** Why a knowledge item, or an item naming a document, cannot go on a card. */
+function knowledgeItemProblem(
+  item: RecommendationItem,
+  byId: ReadonlyMap<string, RecommendationItem>,
+  writable: boolean,
+): string | null {
+  if (item.target !== 'knowledge') {
+    return item.document === undefined && item.movesWith === undefined
+      ? null
+      : `${item.id}: only a knowledge item (K-…) names a document or what it moves with`;
+  }
+  if (!writable) {
+    return `${item.id}: knowledge is off or read-only for agents, so knowledge recommendations cannot apply`;
+  }
+  const { document, kind, movesWith } = item;
+  if (document === undefined) {
+    return `${item.id}: a knowledge item names its \`document\``;
+  }
+  if (!KNOWLEDGE_ITEM_KINDS.some((entry) => entry === kind)) {
+    return `${item.id}: a knowledge item's kind is add, update or retire`;
+  }
+  if (kind === 'add') {
+    if (document.handle !== undefined || document.rev !== undefined) {
+      return `${item.id}: a new document has no handle or rev yet — kind update or retire changes one`;
+    }
+    if (document.title === undefined || document.whenToRead === undefined) {
+      return `${item.id}: a new document takes a title and whenToRead`;
+    }
+  } else if (document.handle === undefined || document.rev === undefined) {
+    return `${item.id}: kind ${kind} names the document's handle and the rev you read`;
+  }
+  if (movesWith === undefined) {
+    return null;
+  }
+  const source = byId.get(movesWith);
+  if (source === undefined) {
+    return `${item.id}: movesWith names ${movesWith}, which is not on this card`;
+  }
+  if (!KNOWLEDGE_MOVE_SOURCES.includes(source.target)) {
+    return `${item.id}: text moves with a team, repo, user, project or overlay item, not ${movesWith}`;
+  }
+  const also = [...byId.values()].find(
+    (other) => other.id !== item.id && other.movesWith === movesWith,
+  );
+  return also === undefined
+    ? null
+    : `${movesWith} moves with both ${item.id} and ${also.id} — one document per item`;
+}
+
 /** Why a report's items cannot go on a card as they are, or null. */
 export function checkItems(
   report: RecommendationsReport,
@@ -342,8 +418,10 @@ export function checkItems(
   projectIds: ReadonlySet<string>,
   /** Of those, the ones defaulting to the analysed team — an overlay item must name one. */
   overlayProjectIds: ReadonlySet<string> = projectIds,
+  knowledgeWritable = false,
 ): string | null {
   const seen = new Set<string>();
+  const byId = new Map(report.items.map((item) => [item.id, item]));
   for (const item of report.items) {
     if (seen.has(item.id)) {
       return `duplicate id ${item.id}`;
@@ -355,6 +433,14 @@ export function checkItems(
     }
     if (item.target === 'memory' && !memoryEnabled) {
       return `${item.id}: the shared memory is off, so memory recommendations cannot apply`;
+    }
+    const knowledgeProblem = knowledgeItemProblem(
+      item,
+      byId,
+      knowledgeWritable,
+    );
+    if (knowledgeProblem !== null) {
+      return knowledgeProblem;
     }
     if (item.target === 'team' && sourceKind === 'chat') {
       return `${item.id}: the analysed thread is a plain chat, so only repo, user, memory and project recommendations apply`;

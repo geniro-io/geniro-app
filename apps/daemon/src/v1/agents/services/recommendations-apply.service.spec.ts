@@ -202,6 +202,53 @@ describe('RecommendationsApplyService.apply', () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
+  describe('a move', () => {
+    const MOVE: RecommendationsPayload = {
+      ...CARD,
+      items: [
+        item('R-1', 'Take the guide out of AGENTS.md'),
+        {
+          ...item('K-1', 'Keep the guide as a document'),
+          target: 'knowledge',
+          kind: 'add',
+          location: 'new',
+          document: { place: 'global', title: 'Guide', whenToRead: 'W.' },
+          movesWith: 'R-1',
+        },
+      ],
+    };
+
+    it.each([[['K-1']], [['R-1']]])(
+      'refuses %j alone, sending nothing',
+      async (ids) => {
+        const { service, sendMessage } = build({
+          card: { payload: JSON.stringify(MOVE) },
+        });
+
+        await expect(
+          service.apply('run-1', { cardSeq: 9, ids, clientMessageId: 'c' }),
+        ).rejects.toMatchObject({ errorCode: 'MOVE_SPLIT' });
+        expect(sendMessage).not.toHaveBeenCalled();
+      },
+    );
+
+    it('sends both sides, naming the document and what it moves with', async () => {
+      const { service, sendMessage } = build({
+        card: { payload: JSON.stringify(MOVE) },
+      });
+
+      await service.apply('run-1', {
+        cardSeq: 9,
+        ids: ['K-1', 'R-1'],
+        clientMessageId: 'c',
+      });
+
+      const [, text] = sendMessage.mock.calls[0] as unknown as [string, string];
+      expect(text).toContain('Document: global');
+      expect(text).toContain('Moves with: R-1');
+    });
+  });
+
   it('refuses an id the card does not hold', async () => {
     await expect(
       build().service.apply('analysis', {

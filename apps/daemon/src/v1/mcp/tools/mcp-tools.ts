@@ -8,6 +8,7 @@ import type { GalleryBroker } from '../../agents/services/gallery.broker';
 import type { GalleryImageService } from '../../agents/services/gallery-image.service';
 import type { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import type { GoalsService } from '../../agents/services/goals.service';
+import type { KnowledgeItemsService } from '../../agents/services/knowledge-items.service';
 import type { MetricsBroker } from '../../agents/services/metrics.broker';
 import type { MonitorBroker } from '../../agents/services/monitor.broker';
 import type { NotifyBroker } from '../../agents/services/notify.broker';
@@ -109,6 +110,7 @@ export interface McpToolDeps {
   history: GlobalChatSearchService;
   memory: MemoryService;
   knowledge: KnowledgeService;
+  knowledgeItems: KnowledgeItemsService;
   analysis: AnalysisBroker;
   threads: ThreadReaderService;
   teamChanges: TeamChangeService;
@@ -173,7 +175,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new MemoryForgetTool(deps.memory),
     new KnowledgeSearchTool(deps.knowledge, deps),
     new KnowledgeReadTool(deps.knowledge, deps),
-    new KnowledgeSaveTool(deps.knowledge, deps),
+    new KnowledgeSaveTool(deps.knowledge, deps, deps.knowledgeItems),
     new ReadTeamsTool(
       deps.teamGate,
       deps.teamStore,
@@ -193,7 +195,12 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
       deps.teamChanges,
       deps.teamHistory,
     ),
-    new ReportRecommendationsTool(deps.analysis, deps.memory, deps.teamHistory),
+    new ReportRecommendationsTool(
+      deps.analysis,
+      deps.memory,
+      deps.teamHistory,
+      deps.knowledge,
+    ),
     new MarkRecommendationsTool(deps.analysis),
     new SaveTeamChangeTool(
       deps.analysis,

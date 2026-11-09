@@ -1,10 +1,14 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { ConflictException, NotFoundException } from '@packages/common';
 
+import type { KnowledgeItemWrite } from '../../knowledge/knowledge.types';
 import {
+  type CardRecommendationItem,
+  KNOWLEDGE_ITEM_KINDS,
   RECOMMENDATION_ID_PREFIX,
   type RecommendationApply,
   RecommendationApplySchema,
+  RecommendationMarksSchema,
   type RecommendationsPayload,
   RecommendationsPayloadSchema,
 } from '../chat.types';
@@ -117,6 +121,12 @@ const WRITTEN_ITEMS = {
     many: 'are not project items',
     only: 'only P- items change project instructions',
   },
+  knowledge: {
+    code: 'NOT_A_KNOWLEDGE_ITEM',
+    one: 'is not a knowledge item',
+    many: 'are not knowledge items',
+    only: 'only K- items change knowledge',
+  },
 } as const;
 
 /**
@@ -150,4 +160,87 @@ export function unappliedRefusal(
     };
   }
   return null;
+}
+
+/** A knowledge item as the store writes it, or null for any other item. */
+export function knowledgeWriteOf(
+  item: CardRecommendationItem,
+): KnowledgeItemWrite | null {
+  const kind = KNOWLEDGE_ITEM_KINDS.find((entry) => entry === item.kind);
+  if (
+    item.target !== 'knowledge' ||
+    item.document === undefined ||
+    kind === undefined
+  ) {
+    return null;
+  }
+  return { ...item.document, kind, body: item.change, reason: item.title };
+}
+
+/** The ids of the card at `cardSeq` whose newest mark says applied. */
+export async function appliedMarksOf(
+  itemDao: ItemDao,
+  runId: string,
+  cardSeq: number,
+  em?: EntityManager,
+): Promise<Set<string>> {
+  const applied = new Set<string>();
+  for (const row of await itemDao.recommendationOutcomeRows(runId, em)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.payload);
+    } catch {
+      parsed = null;
+    }
+    const marks = RecommendationMarksSchema.safeParse(parsed);
+    if (!marks.success || marks.data.cardSeq !== cardSeq) {
+      continue;
+    }
+    for (const outcome of marks.data.outcomes) {
+      if (outcome.status === 'applied') {
+        applied.add(outcome.id);
+      } else {
+        applied.delete(outcome.id);
+      }
+    }
+  }
+  return applied;
+}
+
+/**
+ * Why `ids` may not be written yet: text leaves its source only once the
+ * document it moves to is written, so it is never in neither place. A retire
+ * goes the other way round (`KnowledgeItemsService`).
+ */
+export async function moveOrderRefusal(
+  itemDao: ItemDao,
+  runId: string,
+  apply: RecommendationApply,
+  ids: readonly string[],
+  em?: EntityManager,
+): Promise<{ error: string; message: string } | null> {
+  let card: RecommendationsPayload;
+  try {
+    card = await readCard(itemDao, runId, apply.cardSeq, em);
+  } catch {
+    // The write has its own answer to a card it cannot read; this one names no move.
+    return null;
+  }
+  const documents = card.items.filter(
+    (item) =>
+      item.movesWith !== undefined &&
+      ids.includes(item.movesWith) &&
+      item.kind !== 'retire',
+  );
+  if (documents.length === 0) {
+    return null;
+  }
+  const applied = await appliedMarksOf(itemDao, runId, apply.cardSeq, em);
+  const waiting = documents.find((item) => !applied.has(item.id));
+  return waiting === undefined
+    ? null
+    : {
+        error: 'MOVE_DOCUMENT_FIRST',
+        message: `${waiting.movesWith} moves text into ${waiting.id}: write that document with knowledge_save and mark it applied first, so the text is never in neither place`,
+      };
 }

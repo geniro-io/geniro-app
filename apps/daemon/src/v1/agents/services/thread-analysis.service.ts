@@ -5,10 +5,12 @@ import {
   type OnApplicationBootstrap,
   type OnModuleDestroy,
   type OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { ConflictException, NotFoundException } from '@packages/common';
 import type { Subscription } from 'rxjs';
 
+import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import {
@@ -75,6 +77,7 @@ export class ThreadAnalysisService
     private readonly bus: AgentEventBus,
     private readonly memory: MemoryService,
     private readonly projectScope: ProjectScopeService,
+    @Optional() private readonly knowledge?: KnowledgeService,
   ) {}
 
   /**
@@ -212,6 +215,7 @@ export class ThreadAnalysisService
         kind,
         input.focus ?? null,
         this.memory.enabled,
+        this.knowledge?.agentsMayWrite ?? false,
       ),
       analysisSource: {
         runId: source.id,
@@ -325,6 +329,7 @@ export class ThreadAnalysisService
       taskInstructions: teamAnalysisGuide(
         input.focus ?? null,
         this.memory.enabled,
+        this.knowledge?.agentsMayWrite ?? false,
       ),
       analysisTeam: { slug: target.slug, runs },
     });

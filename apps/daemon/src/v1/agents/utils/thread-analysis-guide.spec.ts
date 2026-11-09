@@ -68,6 +68,42 @@ describe('threadAnalysisGuide', () => {
     }
   });
 
+  it('offers knowledge items only while agents may write knowledge, moves first in and retires last', () => {
+    for (const on of [
+      threadAnalysisGuide('chat', null, true, true),
+      threadAnalysisGuide('team', null, true, true),
+      teamAnalysisGuide(null, true, true),
+    ]) {
+      expect(on).toContain('target "knowledge"');
+      expect(on).toContain('K-1, K-2… for knowledge items');
+      expect(on).toContain('What goes where:');
+      expect(on).toContain('`movesWith`');
+      const first = on.indexOf('First, knowledge items of kind add or update');
+      const repo = on.indexOf('- Repo items:');
+      const last = on.indexOf('Last, knowledge items of kind retire');
+      expect(first).toBeGreaterThan(-1);
+      expect(first).toBeLessThan(repo);
+      expect(last).toBeGreaterThan(repo);
+    }
+    for (const off of [
+      threadAnalysisGuide('chat', null, true),
+      threadAnalysisGuide('team', null, true),
+      teamAnalysisGuide(null, true),
+    ]) {
+      expect(off).not.toContain('target "knowledge"');
+      expect(off).not.toContain('K-1');
+      expect(off).not.toContain('kind retire');
+    }
+  });
+
+  it('counts the kinds of change a team analysis recommends', () => {
+    expect(teamAnalysisGuide(null, false)).toContain('changes of five kinds');
+    expect(teamAnalysisGuide(null, true)).toContain('changes of six kinds');
+    expect(teamAnalysisGuide(null, true, true)).toContain(
+      'changes of seven kinds',
+    );
+  });
+
   it('keeps a plain chat to repo and user changes and never names the team save', () => {
     const guide = threadAnalysisGuide('chat', null, true);
 

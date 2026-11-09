@@ -30,6 +30,7 @@ import { analysedProjectIdsOf } from '../utils/analysed-runs';
 import { hostProjectInstructionsResultText } from '../utils/host-project-instructions';
 import {
   appliesOf,
+  moveOrderRefusal,
   readCard,
   unappliedRefusal,
 } from '../utils/recommendations-card';
@@ -104,6 +105,13 @@ export class ProjectInstructionsChangeService {
     }
     const refusal =
       unappliedRefusal('project', change.ids, apply) ??
+      (await moveOrderRefusal(
+        this.itemDao,
+        change.turn.analysisRunId,
+        apply,
+        change.ids,
+        em,
+      )) ??
       (await this.refuseOtherProject(change, apply, em));
     if (refusal !== null) {
       return refusal;

@@ -7,7 +7,10 @@ import {
   pagedAnswer,
   type ThreadReaderService,
 } from '../../../agents/services/thread-reader.service';
-import { analysedSourceOf } from '../../../agents/utils/analysed-runs';
+import {
+  analysedRunIdsOf,
+  analysedSourceOf,
+} from '../../../agents/utils/analysed-runs';
 import type { TeamHistoryService } from '../../../stats/services/team-history.service';
 import type { TeamChangeService } from '../../../teams/services/team-change.service';
 import type {
@@ -19,6 +22,7 @@ import { BaseMcpTool } from '../base-mcp-tool';
 import { readAnalyzedThreadInstructions } from './read-analyzed-thread.instructions';
 import {
   analyzedThreadResultText,
+  historyAnswer,
   readAnalyzedThreadArgs,
 } from './read-analyzed-thread.reader';
 import { readAnalyzedThreadSchema } from './read-analyzed-thread.schema';
@@ -73,24 +77,34 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
       return this.text(`Nothing to read: ${turn.reason}.`, true);
     }
     try {
-      if (read.query.view === 'history') {
+      if (read.query.view === 'history' || read.query.view === 'spend') {
         const team = await this.threads.analysedTeamOf(turn);
         if (team === null) {
           return this.text(analyzedThreadResultText(NOT_A_TEAM));
         }
+        const analysedRunIds = analysedRunIdsOf(turn);
+        // Masked BEFORE any cut: a secret split across two pages matches in
+        // neither, and the per-page pass would let both halves out.
         return this.text(
           analyzedThreadResultText(
-            pagedAnswer(
-              maskedAnswer({
-                ...(await this.history.read(team.slug, {
-                  analysedRunIds: turn.team
-                    ? turn.team.runs.map((run) => run.runId)
-                    : [turn.sourceRunId],
-                  readerRunId: runId,
-                })),
-              }),
-              read.query.offset ?? 0,
-            ),
+            read.query.view === 'history'
+              ? historyAnswer(
+                  maskedAnswer({
+                    ...(await this.history.read(team.slug, {
+                      analysedRunIds,
+                      readerRunId: runId,
+                    })),
+                  }),
+                  read.query,
+                )
+              : pagedAnswer(
+                  maskedAnswer({
+                    ...(await this.history.spend(team.slug, {
+                      analysedRunIds,
+                    })),
+                  }),
+                  read.query.offset ?? 0,
+                ),
           ),
         );
       }

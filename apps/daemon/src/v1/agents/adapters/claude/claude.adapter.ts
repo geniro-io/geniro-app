@@ -930,6 +930,10 @@ export class ClaudeAdapter extends AgentAdapter {
           // claude-haiku/opus/sonnet-5-5 and claude-fable-5-1 (1,000,000) is
           // the `maxTokens` the CLI's own `get_context_usage` reports.
           catalogWindows: true,
+          // Measured 2026-11-09 on a real ledger: of 10,204 claude-opus-5-5 turns
+          // with cache writes, 8,252 match the bill within 2% at 2x input, 1,403
+          // at the catalog's rate.
+          cacheWriteInputMultiple: 2,
         },
       },
       handoff: {

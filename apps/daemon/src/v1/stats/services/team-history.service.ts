@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
@@ -5,12 +7,16 @@ import type { TeamVersionIndex } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
+import { ProjectDao } from '../../projects/dao/project.dao';
+import { ProjectRootsService } from '../../projects/services/project-roots.service';
+import { nearestProjectOf } from '../../projects/utils/nearest-project';
 import { TeamChangeLogService } from '../../teams/services/team-change-log.service';
 import { TeamRecommendationDao } from '../dao/team-recommendation.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
-import type { TeamHistory } from '../stats.types';
+import type { TeamHistory, TeamSpend } from '../stats.types';
 import { foldTeamHistory } from '../utils/team-history-fold';
+import { foldTeamSpend, type SpendPlace } from '../utils/team-spend-fold';
 import { totalsByRun } from '../utils/team-versions-fold';
 import { TeamStatsService } from './team-stats.service';
 import { TeamVersionsService } from './team-versions.service';
@@ -35,6 +41,8 @@ export class TeamHistoryService {
     private readonly runDao: RunDao,
     private readonly adapters: AgentAdapterRegistry,
     private readonly stats: TeamStatsService,
+    private readonly projectRoots: ProjectRootsService,
+    private readonly projects: ProjectDao,
   ) {}
 
   /** Each recorded version's number, and the library's version now. */
@@ -47,6 +55,55 @@ export class TeamHistoryService {
       }
     }
     return { current: table.currentVersion, numbers };
+  }
+
+  /**
+   * Where a team's money went, over every run its ledgers hold whatever the
+   * analysis samples. Filed by the folder a turn ran in, as Stats' By project
+   * files it, since a deleted run has no project of its own to ask.
+   */
+  async spend(
+    slug: string,
+    scope: { analysedRunIds: readonly string[] },
+  ): Promise<TeamSpend> {
+    const em = this.em.fork();
+    const threads = await this.activityDao.threadRowsBySlug(slug, em);
+    const rows = await this.usageDao.rowsByRuns(
+      threads.map((thread) => thread.runId),
+      em,
+    );
+    const roots = await this.projectRoots.rootsOf(rows.map((row) => row.cwd));
+    const refs = await this.projects.listRefs(em);
+    const home = homedir();
+    const places = new Map<string, SpendPlace>();
+    const adapters = this.adapters.all();
+    return foldTeamSpend({
+      slug,
+      threads,
+      rows,
+      analysedRunIds: scope.analysedRunIds,
+      now: new Date(),
+      ratesOf: (agentKind, model) =>
+        agentKind === null
+          ? null
+          : (adapters.get(agentKind)?.billingRatesOf(model) ?? null),
+      placeOf: (cwd) => {
+        if (cwd === null) {
+          return { project: null, folder: null };
+        }
+        const known = places.get(cwd);
+        if (known !== undefined) {
+          return known;
+        }
+        const folder = roots.get(cwd) ?? cwd;
+        const place = {
+          project: nearestProjectOf(folder, refs, home)?.name ?? null,
+          folder,
+        };
+        places.set(cwd, place);
+        return place;
+      },
+    });
   }
 
   async read(

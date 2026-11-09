@@ -112,8 +112,11 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
       if (read.query.view !== 'team') {
         return this.text(
           analyzedThreadResultText(
-            await this.threads.read(turn, read.query, (slug) =>
-              this.history.versionIndex(slug),
+            await this.threads.read(
+              turn,
+              read.query,
+              (slug) => this.history.versionIndex(slug),
+              (slug) => this.history.population(slug),
             ),
           ),
         );

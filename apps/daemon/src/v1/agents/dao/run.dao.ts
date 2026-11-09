@@ -262,8 +262,8 @@ export class RunDao extends BaseDao<Run> {
 
   /**
    * A library team's newest runs, newest first, at most `limit` — the
-   * ones a team analysis reads. Archived runs are left out: the user
-   * shelved them, and an analysis refuses an archived thread too.
+   * ones a team analysis reads, archived ones included: leaving them out
+   * judged a team from whichever few runs were still on the desk.
    */
   async newestTeamRuns(
     slug: string,
@@ -271,7 +271,7 @@ export class RunDao extends BaseDao<Run> {
     txEm?: EntityManager,
   ): Promise<Pick<Run, 'id' | 'status' | 'title' | 'createdAt' | 'cwd'>[]> {
     return this.getRepo(txEm).find(
-      { teamId: slug, archivedAt: null },
+      { teamId: slug },
       {
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         limit,

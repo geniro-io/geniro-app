@@ -4,7 +4,10 @@ import { basename } from 'node:path';
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
-import type { TeamVersionIndex } from '../../agents/chat.types';
+import type {
+  RecommendationsTeamPopulation,
+  TeamVersionIndex,
+} from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
@@ -106,6 +109,10 @@ export class TeamHistoryService {
         return place;
       },
     });
+  }
+
+  population(slug: string): Promise<RecommendationsTeamPopulation> {
+    return this.stats.population(slug);
   }
 
   async read(

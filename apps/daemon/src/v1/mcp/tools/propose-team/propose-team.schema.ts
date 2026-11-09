@@ -69,6 +69,11 @@ export function proposeTeamSchema(
         ...(changes.project as Record<string, unknown>),
         description: `A change to the instruction blocks of a project that runs this team by default, written by the same approval as the edits — how text moves between a team and a project in one change. Goes with \`edits\` or \`replaces\`.`,
       },
+      recommendation_ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description: `After an Apply: the W-, O- and P- ids from the card that this change carries out, each selected there. The logs keep them, so a later analysis can tell what each item changed. Leave it out for a change the user asked for in words.`,
+      },
       summary: {
         type: 'string',
         description: `One line for the card, at most ${TEAM_SUMMARY_MAX} characters: what this team does, or what the change does. Required with \`edits\`, \`overlay\` or \`project\`.`,

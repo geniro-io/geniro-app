@@ -51,6 +51,19 @@ function existingFolder(path: string): string | null {
   }
 }
 
+/** The newest of these runs' folders that still exists: an archived run's worktree may be gone. */
+function newestExistingFolder(
+  runs: readonly { cwd: string | null }[],
+): string | null {
+  for (const { cwd } of runs) {
+    const folder = cwd === null ? null : existingFolder(cwd);
+    if (folder !== null) {
+      return folder;
+    }
+  }
+  return null;
+}
+
 /**
  * A thread's analysis: ONE chat per thread, linked to its source, carrying the
  * analysis method as its task instructions and sent the brief as its first
@@ -292,20 +305,17 @@ export class ThreadAnalysisService
     const runs: AnalysedRun[] = snapshots.map(
       ({ runId, snapshotSeq, working }) => ({ runId, snapshotSeq, working }),
     );
-    const newest = snapshots[0];
     const cwd =
       input.cwd !== undefined
         ? resolveValidDirectory(input.cwd, {
             errorCode: 'ANALYSIS_FOLDER_GONE',
             noun: 'folder',
           })
-        : newest?.cwd == null
-          ? null
-          : existingFolder(newest.cwd);
+        : newestExistingFolder(snapshots);
     if (cwd === null) {
       throw new ConflictException(
         'ANALYSIS_FOLDER_GONE',
-        "the newest run's folder no longer exists — pick a folder to run the analysis in",
+        "none of the analysed runs' folders exists any more — pick a folder to run the analysis in",
       );
     }
     const earlier = (await this.runDao.listTeamAnalyses(target.slug, em)).map(

@@ -12,6 +12,7 @@ import {
   type DeferredCardResponder,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
+  type RecommendationApply,
   type TeamProposalOutcome,
   type TeamProposalVerdict,
 } from '../../agents/chat.types';
@@ -19,6 +20,12 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { instructionsDiff } from '../../agents/utils/host-project-instructions';
+import {
+  appliesOf,
+  moveOrderRefusal,
+  readCard,
+  unappliedRefusal,
+} from '../../agents/utils/recommendations-card';
 import {
   standingProposalCardId,
   teamVerdictMessage,
@@ -152,21 +159,93 @@ export class TeamProposalService {
     runId: string,
     request: TeamChangeProposalRequest,
   ): Promise<ProposalOutcome> {
-    return this.raiseSerialized(runId, () => this.prepareChange(request));
+    return this.raiseSerialized(runId, () =>
+      this.carrying(runId, request.recommendationIds, () =>
+        this.prepareChange(request),
+      ),
+    );
   }
 
   proposeEdits(
     runId: string,
     request: TeamEditsProposalRequest,
   ): Promise<ProposalOutcome> {
-    return this.raiseSerialized(runId, () => this.prepareEdits(request));
+    return this.raiseSerialized(runId, () =>
+      this.carrying(runId, request.recommendationIds, () =>
+        this.prepareEdits(request),
+      ),
+    );
   }
 
   proposeOverlay(
     runId: string,
     request: TeamOverlayProposalRequest,
   ): Promise<ProposalOutcome> {
-    return this.raiseSerialized(runId, () => this.prepareOverlay(request));
+    return this.raiseSerialized(runId, () =>
+      this.carrying(runId, request.recommendationIds, () =>
+        this.prepareOverlay(request),
+      ),
+    );
+  }
+
+  /**
+   * A prepared card with the recommendation ids it carries out, which the logs
+   * keep once it is approved. Held to what an analysis's own save is held to:
+   * selected in this chat's newest Apply, the text's document written first, and
+   * each item filed about the project this card changes.
+   */
+  private async carrying(
+    runId: string,
+    ids: readonly string[] | undefined,
+    prepare: () => Promise<PreparedProposal>,
+  ): Promise<PreparedProposal> {
+    const prepared = await prepare();
+    if (ids === undefined || !prepared.ok) {
+      return prepared;
+    }
+    const { proposal } = prepared;
+    const em = this.em.fork();
+    const apply = (await appliesOf(this.itemDao, runId, em)).at(-1);
+    if (apply === undefined) {
+      return {
+        ok: false,
+        code: 'NOT_APPLIED',
+        message:
+          'nothing has been applied in this chat yet — leave recommendation_ids out of a change the user asked for in words',
+      };
+    }
+    const refusal =
+      recommendationIdsRefusal(ids, proposal, apply) ??
+      (await moveOrderRefusal(this.itemDao, runId, apply, ids, em));
+    if (refusal !== null) {
+      return { ok: false, code: refusal.error, message: refusal.message };
+    }
+    const card = await readCard(this.itemDao, runId, apply.cardSeq, em);
+    const halves = proposal.mode === 'replace' ? proposal : null;
+    const projectOf = (id: string): string | undefined =>
+      id.startsWith('P-')
+        ? halves?.project?.projectId
+        : halves?.overlay?.projectId;
+    const elsewhere = ids.filter(
+      (id) =>
+        !id.startsWith('W-') &&
+        card.items.find((item) => item.id === id)?.location !== projectOf(id),
+    );
+    if (elsewhere.length > 0) {
+      return {
+        ok: false,
+        code: 'OTHER_PROJECT',
+        message: `${elsewhere.join(', ')} ${elsewhere.length === 1 ? 'was' : 'were'} not filed about the project this card changes`,
+      };
+    }
+    return {
+      ok: true,
+      proposal: {
+        ...proposal,
+        recommendationIds: [...ids],
+        recommendationCardSeq: apply.cardSeq,
+      },
+    };
   }
 
   private async raiseSerialized(
@@ -886,6 +965,7 @@ export class TeamProposalService {
           projectHalf,
           projectBefore,
           by,
+          proposal,
           writeTeamAndOverlay,
         );
         ({ backup, overlayWrite } = written.team);
@@ -964,13 +1044,21 @@ export class TeamProposalService {
     half: TeamProposalProject,
     before: ProjectWire,
     by: { runId: string; note: string | null } | null,
+    proposal: TeamProposal,
     writeTeam: () => Promise<T>,
   ): Promise<{ team: T; revision: number }> {
+    const recommendationIds = (proposal.recommendationIds ?? []).filter((id) =>
+      id.startsWith('P-'),
+    );
     const origin = {
-      source: 'chat' as const,
-      recommendationIds: [],
+      source:
+        recommendationIds.length > 0 ? ('analysis' as const) : ('chat' as const),
+      recommendationIds,
       chatRunId: by?.runId ?? half.projectId,
-      cardSeq: null,
+      cardSeq:
+        recommendationIds.length > 0
+          ? (proposal.recommendationCardSeq ?? null)
+          : null,
     };
     const written = await this.projects.update(
       half.projectId,
@@ -1036,19 +1124,22 @@ export class TeamProposalService {
       summary: proposal.summary,
       reason: proposal.reason,
       userNote: by?.note,
-      recommendationIds: teamItemIdsIn(
-        `${proposal.summary ?? ''}\n${proposal.reason ?? ''}`,
-        /\b[WO]-\d{1,3}\b/g,
-      ),
+      recommendationIds:
+        proposal.recommendationIds?.filter((id) => id.startsWith('O-')) ??
+        teamItemIdsIn(
+          `${proposal.summary ?? ''}\n${proposal.reason ?? ''}`,
+          /\b[WO]-\d{1,3}\b/g,
+        ),
       chatRunId: by?.runId,
+      cardSeq: proposal.recommendationCardSeq ?? null,
       backup: written.backup,
     });
   }
 
   /**
-   * The change log's entry for an approved card. A builder chat's card names
-   * the recommendation ids it carries out in its reason (its brief asks it
-   * to), so they are read from there.
+   * The change log's entry for an approved card, with the recommendation ids
+   * it carries out. A card raised without them may still name them in its
+   * summary or reason (a builder chat's standing from before), read from there.
    */
   private async logApproved(
     proposal: TeamProposal,
@@ -1069,10 +1160,13 @@ export class TeamProposalService {
       summary: proposal.summary,
       reason: proposal.reason,
       userNote: by?.note,
-      recommendationIds: builder
-        ? teamItemIdsIn(`${proposal.summary ?? ''}\n${proposal.reason ?? ''}`)
-        : [],
+      recommendationIds:
+        proposal.recommendationIds?.filter((id) => id.startsWith('W-')) ??
+        (builder
+          ? teamItemIdsIn(`${proposal.summary ?? ''}\n${proposal.reason ?? ''}`)
+          : []),
       chatRunId: by?.runId,
+      cardSeq: proposal.recommendationCardSeq ?? null,
       backup,
     });
   }
@@ -1085,6 +1179,53 @@ function readableTeam(source: string): Team | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Why a card may not name these ids: one whose half this card does not carry,
+ * of a target no card writes, or not selected in the newest Apply.
+ */
+function recommendationIdsRefusal(
+  ids: readonly string[],
+  proposal: TeamProposal,
+  apply: RecommendationApply,
+): { error: string; message: string } | null {
+  const carried =
+    proposal.mode === 'replace'
+      ? {
+          team: !proposal.diff.identical,
+          overlay: proposal.overlay !== undefined,
+          project: proposal.project !== undefined,
+        }
+      : { team: true, overlay: false, project: false };
+  const prefixes = { team: 'W-', overlay: 'O-', project: 'P-' } as const;
+  const known = Object.values(prefixes);
+  const others = ids.filter(
+    (id) => !known.some((prefix) => id.startsWith(prefix)),
+  );
+  if (others.length > 0) {
+    return {
+      error: 'NOT_ON_THIS_CARD',
+      message: `${others.join(', ')} ${others.length === 1 ? 'is' : 'are'} not carried out on a team's card — only W-, O- and P- items are`,
+    };
+  }
+  for (const target of ['team', 'overlay', 'project'] as const) {
+    const own = ids.filter((id) => id.startsWith(prefixes[target]));
+    if (own.length === 0) {
+      continue;
+    }
+    if (!carried[target]) {
+      return {
+        error: 'NOT_ON_THIS_CARD',
+        message: `${own.join(', ')} ${own.length === 1 ? 'is' : 'are'} ${target} ${own.length === 1 ? 'item' : 'items'}, and this card changes nothing there`,
+      };
+    }
+    const refusal = unappliedRefusal(target, own, apply);
+    if (refusal !== null) {
+      return refusal;
+    }
+  }
+  return null;
 }
 
 /** Every team recommendation id (`W-2`) a text names, in order. */

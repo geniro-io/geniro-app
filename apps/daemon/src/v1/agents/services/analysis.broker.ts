@@ -5,7 +5,8 @@ import type {
   AnalysisSink,
   AnalysisTurn,
   RecommendationMarks,
-  RecommendationsReport,
+  RecommendationsCall,
+  TeamPopulationReader,
   TeamVersionIndexReader,
 } from '../chat.types';
 import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
@@ -40,15 +41,16 @@ export class AnalysisBroker extends HostSinkBroker<AnalysisSink> {
   report(
     runId: string,
     memberId: string,
-    report: RecommendationsReport,
+    call: RecommendationsCall,
     versionIndex: TeamVersionIndexReader | null = null,
+    population: TeamPopulationReader | null = null,
   ): Promise<AnalysisFiled | HostSinkUnavailable> {
     return this.deliver(
       runId,
       memberId,
       'no analysis turn is running that could record them',
       'record recommendations',
-      (sink) => sink.report(report, versionIndex),
+      (sink) => sink.report(call, versionIndex, population),
     );
   }
 

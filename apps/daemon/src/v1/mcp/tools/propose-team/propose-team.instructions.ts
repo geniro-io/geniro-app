@@ -13,7 +13,7 @@ const ANSWER_ARRIVES =
 /** What a call naming no target means in the chat listing the tool, and what only that chat holds. */
 const IN_THIS_CHAT: Record<ProposeTeamAudience, string | null> = {
   chat: null,
-  builder: `In this chat \`edits\` without \`replaces\` change the team this chat edits, applied to the file as it stands, and it need not be able to run yet: a team is built up over several changes. To try edits out first, ${HOST_TEAM_CHANGE_TOOL} answers the same diff without a card. A file that cannot be loaded is refused TEAM_UNREADABLE: only then fix what the refusal names in the file with your own file tools, and propose again.`,
+  builder: `In this chat \`edits\` without \`replaces\` change the team this chat edits, applied to the file as it stands, and it need not be able to run yet: a team is built up over several changes. A refusal raises no card, so propose straight away rather than trying edits out first. A file that cannot be loaded is refused TEAM_UNREADABLE: only then fix what the refusal names in the file with your own file tools, and propose again. After an Apply, one card carries every selected W- and O- item and the P- items of a project that runs this team, with \`recommendation_ids\` naming them.`,
   project:
     "In this chat an `overlay` without `overlayProjectId` is this project's own, the one your brief shows.",
   analysis: `What the user applied from your recommendations card keeps its own tools (${HOST_TEAM_CHANGE_TOOL}, ${HOST_PROJECT_INSTRUCTIONS_TOOL}); this one is for a change they ask for in their own words.`,

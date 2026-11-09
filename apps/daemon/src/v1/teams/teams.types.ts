@@ -970,6 +970,10 @@ const TeamProposalBaseSchema = z.object({
   summary: z.string().optional(),
   /** Why the agent proposes it, for the card — its own words, never trusted. */
   reason: z.string().optional(),
+  /** The recommendations an Apply selected that this card carries out, checked when it was raised. */
+  recommendationIds: z.array(z.string()).optional(),
+  /** The analysis card those ids are on. */
+  recommendationCardSeq: z.number().int().min(0).optional(),
   /**
    * Every agent that would run tools without asking — `approval: 'auto'` only,
    * a pool member's own or inherited; an `acceptEdits` agent, which edits files
@@ -1034,6 +1038,7 @@ export interface TeamChangeProposalRequest {
     blocks: ProjectBlockInput[];
     baseRevision: number;
   };
+  recommendationIds?: string[];
   summary?: string;
   reason?: string;
 }
@@ -1047,6 +1052,7 @@ export type TeamEditsProposalRequest = TeamChangeProposalRequest & {
 export interface TeamOverlayProposalRequest {
   projectId: string;
   overlay: unknown;
+  recommendationIds?: string[];
   summary: string;
   reason: string;
 }

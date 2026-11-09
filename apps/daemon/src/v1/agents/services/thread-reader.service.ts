@@ -30,6 +30,8 @@ import {
   type RunFold,
   type RunWaterfallTurn,
   StageChangePayloadSchema,
+  type RecommendationsTeamPopulation,
+  type TeamPopulationReader,
   type TeamVersionIndex,
   type TeamVersionIndexReader,
   ThreadOutcomePayloadSchema,
@@ -207,6 +209,8 @@ export class ThreadReaderService {
      * it, or when it fails, view=runs names each run's version by hash alone.
      */
     versionIndex: TeamVersionIndexReader | null = null,
+    /** Every run the team has, which the stats module measures. */
+    population: TeamPopulationReader | null = null,
   ): Promise<Answer> {
     if (args.view === 'history' || args.view === 'spend') {
       return {
@@ -249,6 +253,9 @@ export class ThreadReaderService {
             versionIndex === null
               ? null
               : await versionIndex(turn.team.slug).catch(() => null),
+            population === null
+              ? null
+              : await population(turn.team.slug).catch(() => null),
           )),
         offset,
       );
@@ -413,6 +420,7 @@ export class ThreadReaderService {
     slug: string,
     analysedRuns: readonly AnalysedRun[],
     index: TeamVersionIndex | null,
+    population: RecommendationsTeamPopulation | null,
   ): Promise<Answer> {
     const em = this.em.fork();
     const folded: FoldedRun[] = [];
@@ -476,6 +484,8 @@ export class ThreadReaderService {
     const answer = maskedAnswer({
       team: slug,
       currentVersion: index === null ? null : versionRef(index.current, index),
+      runsRead: runs.length,
+      population,
       runs,
       versions: versionFigures(folded, index),
       nodes: nodeFigures(folded),

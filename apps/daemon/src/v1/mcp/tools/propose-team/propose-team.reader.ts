@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+import {
+  MAX_RECOMMENDATIONS,
+  RecommendationIdSchema,
+} from '../../../agents/chat.types';
 import { hasHiddenText } from '../../../agents/utils/hidden-text';
 import {
   type ProposalOutcome,
@@ -77,6 +81,11 @@ const ProposeTeamArgsSchema = z
     project: ProjectHalfSchema.optional(),
     summary: summaryField.optional(),
     reason: reasonField.optional(),
+    recommendation_ids: z
+      .array(RecommendationIdSchema)
+      .min(1)
+      .max(MAX_RECOMMENDATIONS)
+      .optional(),
   })
   .strict();
 
@@ -95,6 +104,7 @@ export interface TeamChangeProposal {
   overlay?: Record<string, unknown>;
   overlayProjectId?: string;
   project?: z.infer<typeof ProjectHalfSchema>;
+  recommendationIds?: string[];
   summary: string;
   reason: string;
 }
@@ -111,13 +121,14 @@ export function readProposeTeamArgs(
   }
   const { team, replaces, edits, overlay, overlayProjectId, project } =
     read.query;
-  const { summary, reason } = read.query;
+  const { summary, reason, recommendation_ids: recommendationIds } = read.query;
   if (team !== undefined) {
     if (
       edits !== undefined ||
       overlay !== undefined ||
       overlayProjectId !== undefined ||
-      project !== undefined
+      project !== undefined ||
+      recommendationIds !== undefined
     ) {
       return {
         ok: false,
@@ -165,6 +176,7 @@ export function readProposeTeamArgs(
       ...(overlay === undefined ? {} : { overlay }),
       ...(overlayProjectId === undefined ? {} : { overlayProjectId }),
       ...(project === undefined ? {} : { project }),
+      ...(recommendationIds === undefined ? {} : { recommendationIds }),
     },
   };
 }

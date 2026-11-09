@@ -1,4 +1,7 @@
-import type { ChatTotalsWire } from '../../agents/chat.types';
+import type {
+  ChatTotalsWire,
+  RecommendationsTeamPopulation,
+} from '../../agents/chat.types';
 import { wallTurnKey } from '../../agents/dao/wall-turn.dao';
 import {
   addPolledSpend,
@@ -58,6 +61,47 @@ export function withWallTimes<Row extends TeamStatsUsageRow>(
       ? row
       : { ...row, durationMs: wall };
   });
+}
+
+/**
+ * Every run of a team beside the few an analysis read: `threads` holds each one,
+ * `totals` what the ledgers kept of it, and a per-run figure divides by the runs
+ * that measured it.
+ */
+export function foldTeamPopulation(
+  threads: readonly Pick<ThreadLedgerRow, 'runId'>[],
+  totals: ReadonlyMap<string, ChatTotalsWire>,
+): RecommendationsTeamPopulation {
+  const runs = threads.flatMap(({ runId }) => {
+    const own = totals.get(runId);
+    return own === undefined ? [] : [own];
+  });
+  const costs = runs.flatMap(({ costUsd }) =>
+    costUsd === null ? [] : [costUsd],
+  );
+  const worked = runs.flatMap(({ workedMs }) =>
+    workedMs === null ? [] : [workedMs],
+  );
+  const sum = (values: readonly number[]): number =>
+    values.reduce((total, value) => total + value, 0);
+  return {
+    runs: threads.length,
+    perRun: {
+      costUsd:
+        costs.length === 0
+          ? null
+          : Math.round((sum(costs) / costs.length) * 100) / 100,
+      pricedRuns: costs.length,
+      workedMs:
+        worked.length === 0 ? null : Math.round(sum(worked) / worked.length),
+      timedRuns: worked.length,
+      turns:
+        threads.length === 0
+          ? 0
+          : Math.round((sum(runs.map(({ turns }) => turns)) / threads.length) * 10) /
+            10,
+    },
+  };
 }
 
 interface DayCell {

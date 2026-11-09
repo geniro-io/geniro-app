@@ -12,6 +12,7 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import {
   appliesOf,
+  moveOrderRefusal,
   readCard,
   unappliedRefusal,
 } from '../../agents/utils/recommendations-card';
@@ -239,7 +240,15 @@ export class TeamChangeService {
         'nothing has been applied in this chat yet — overlay changes are saved only for items the user selected and applied',
       );
     }
-    const refusal = unappliedRefusal('overlay', change.ids, apply);
+    const refusal =
+      unappliedRefusal('overlay', change.ids, apply) ??
+      (await moveOrderRefusal(
+        this.itemDao,
+        change.analysisRunId,
+        apply,
+        change.ids,
+        this.em.fork(),
+      ));
     if (refusal !== null) {
       return refuse(refusal.error, refusal.message);
     }
@@ -587,7 +596,15 @@ export class TeamChangeService {
         'nothing has been applied in this chat yet — team changes are saved only for items the user selected and applied',
       );
     }
-    const refusal = unappliedRefusal('team', authority.ids, apply);
+    const refusal =
+      unappliedRefusal('team', authority.ids, apply) ??
+      (await moveOrderRefusal(
+        this.itemDao,
+        authority.analysisRunId,
+        apply,
+        authority.ids,
+        this.em.fork(),
+      ));
     return refusal === null ? null : refuse(refusal.error, refusal.message);
   }
 

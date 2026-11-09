@@ -11,6 +11,7 @@ import { GalleryBroker } from '../agents/services/gallery.broker';
 import { GalleryImageService } from '../agents/services/gallery-image.service';
 import { GlobalChatSearchService } from '../agents/services/global-chat-search.service';
 import { GoalsService } from '../agents/services/goals.service';
+import { KnowledgeItemsService } from '../agents/services/knowledge-items.service';
 import { MetricsBroker } from '../agents/services/metrics.broker';
 import { MonitorBroker } from '../agents/services/monitor.broker';
 import { NotifyBroker } from '../agents/services/notify.broker';
@@ -110,6 +111,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         teamProposals: TeamProposalService,
         shares: ShareService,
         threadDelivery: ThreadDeliveryService,
+        knowledgeItems: KnowledgeItemsService,
       ) =>
         createMcpTools({
           calls,
@@ -148,6 +150,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           teamProposals,
           shares,
           threadDelivery,
+          knowledgeItems,
         }),
       inject: [
         CallBroker,
@@ -186,6 +189,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         TeamProposalService,
         ShareService,
         ThreadDeliveryService,
+        KnowledgeItemsService,
       ],
     },
     McpServerService,

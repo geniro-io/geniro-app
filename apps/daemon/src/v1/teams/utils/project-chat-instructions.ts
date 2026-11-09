@@ -5,7 +5,10 @@ import {
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
 } from '../../agents/chat.types';
-import { ANY_TEAM_OR_PROJECT } from '../../agents/utils/any-team-or-project';
+import {
+  ANY_TEAM_OR_PROJECT,
+  WHAT_GOES_WHERE,
+} from '../../agents/utils/any-team-or-project';
 import {
   PROJECT_INSTRUCTIONS_MAX,
   type ProjectInstructionBlock,
@@ -190,5 +193,7 @@ ${targetSection(project, target)}
 
 CHANGING ANY TEAM OR PROJECT
 ${ANY_TEAM_OR_PROJECT}
+
+${WHAT_GOES_WHERE} When you see such a move in what the user asked about, say so in one line; make it only when they agree, with the document first and the text out of the instructions after.
 </project-editing>`;
 }

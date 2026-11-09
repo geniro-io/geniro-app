@@ -169,6 +169,8 @@ describe('ProjectChatService', () => {
     expect(brief()).toContain('`replaces` (its slug)');
     expect(brief()).toContain('`overlayProjectId`');
     expect(brief()).toContain('`projectId`');
+    expect(brief()).toContain('What goes where:');
+    expect(brief()).toContain('with the document first');
   });
 
   it('tells a team-run project how to change its team, and never that the team is out of reach', async () => {

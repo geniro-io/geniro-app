@@ -38,7 +38,8 @@ export type RecommendationOutcomeStatus = 'applied' | 'skipped' | 'failed';
 /** One recommendation as the card draws it. */
 export interface RecommendationView {
   id: string;
-  target: 'team' | 'repo' | 'user' | 'memory' | 'project' | 'overlay';
+  target:
+    'team' | 'repo' | 'user' | 'memory' | 'project' | 'overlay' | 'knowledge';
   territory: RecommendationTerritory;
   kind: string;
   location: string;
@@ -60,6 +61,19 @@ export interface RecommendationView {
   confidence: number;
   risk: RecommendationRisk;
   riskNote: string;
+  /** A knowledge item: the document it acts on. */
+  document?: { place: string; handle: string | null; title: string | null };
+  /** A knowledge item: the item holding the other side of a move. */
+  movesWith?: string | null;
+}
+
+/** The other side of a move `id` is one side of, or null: the two are ticked together. */
+export function movePartnerOf(
+  items: readonly RecommendationView[],
+  id: string,
+): string | null {
+  const own = items.find((item) => item.id === id)?.movesWith;
+  return own ?? items.find((item) => item.movesWith === id)?.id ?? null;
 }
 
 export interface RecommendationHotspotView {
@@ -318,6 +332,7 @@ function ItemToggles({
 
 function ItemRow({
   item,
+  moveWith,
   selected,
   locked,
   outcome,
@@ -328,6 +343,8 @@ function ItemRow({
   onToggle,
 }: {
   item: RecommendationView;
+  /** The other side of the move this item is one side of. */
+  moveWith: string | null;
   selected: boolean;
   locked: boolean;
   outcome: RecommendationOutcomeView | null;
@@ -369,6 +386,14 @@ function ItemRow({
                 {territory.label}
               </Badge>
               <Badge variant="outline">{item.kind}</Badge>
+              {moveWith === null ? null : (
+                <Badge
+                  variant="muted"
+                  title="One move: the two are selected and applied together"
+                  data-slot="recommendation-move">
+                  moves with {moveWith}
+                </Badge>
+              )}
               {item.minutesSaved === 0 ? null : (
                 <Badge
                   data-slot="recommendation-time"
@@ -444,7 +469,9 @@ function ItemRow({
           open={folds.isOpen(`${item.id}:change`)}
           onToggle={() => folds.toggle(`${item.id}:change`)}>
           <p className="m-0 mb-1 font-mono text-[11px] text-muted-foreground">
-            {item.location}
+            {item.document === undefined
+              ? item.location
+              : `${item.document.place} · ${item.document.handle ?? item.document.title ?? item.location}`}
           </p>
           <pre className="m-0 max-h-64 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
             {item.change}
@@ -786,6 +813,7 @@ export function RecommendationsCard({
       ['memory', 'Memory'],
       ['project', 'Project instructions'],
       ['overlay', 'Project overlay'],
+      ['knowledge', 'Knowledge'],
     ] as const
   )
     .filter(([target]) => target !== 'team' || team)
@@ -801,12 +829,15 @@ export function RecommendationsCard({
     ),
   );
 
-  const toggle = (id: string): void =>
+  const toggle = (id: string): void => {
+    const partner = movePartnerOf(items, id);
+    const both = partner === null ? [id] : [id, partner];
     setPicked(
       picked.includes(id)
-        ? picked.filter((value) => value !== id)
-        : [...picked, id],
+        ? picked.filter((value) => !both.includes(value))
+        : [...new Set([...picked, ...both])],
     );
+  };
 
   return (
     <div
@@ -888,6 +919,7 @@ export function RecommendationsCard({
                   <ItemRow
                     key={item.id}
                     item={item}
+                    moveWith={movePartnerOf(items, item.id)}
                     selected={selected.includes(item.id)}
                     locked={locked}
                     outcome={outcomes[item.id] ?? null}

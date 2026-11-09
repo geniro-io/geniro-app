@@ -103,6 +103,102 @@ describe('RecommendationsCard', () => {
     expect(onApply).toHaveBeenCalledWith(['W-1', 'R-1']);
   });
 
+  describe('a move', () => {
+    const MOVE = [
+      { ...ITEMS[0]!, id: 'P-1', target: 'project' as const },
+      {
+        ...ITEMS[0]!,
+        id: 'K-1',
+        target: 'knowledge' as const,
+        document: {
+          place: 'project:p1',
+          handle: null,
+          title: 'Release checklist',
+        },
+        movesWith: 'P-1',
+      },
+      { ...ITEMS[0]!, id: 'R-9', target: 'repo' as const },
+    ];
+    const tick = (el: HTMLElement, id: string): HTMLButtonElement =>
+      el.querySelector<HTMLButtonElement>(
+        `[data-slot="recommendation-row"][data-id="${id}"] button[aria-pressed]`,
+      )!;
+
+    it.each([
+      ['the document', 'K-1'],
+      ['its source', 'P-1'],
+    ])('ticks and unticks both sides from %s, and no other item', (_, id) => {
+      const el = render(
+        <RecommendationsCard
+          look={LOOK}
+          summary={null}
+          timing={null}
+          team={false}
+          items={MOVE}
+          applied={null}
+          outcomes={{}}
+          onApply={() => undefined}
+        />,
+      );
+      const pressed = (name: string) =>
+        tick(el, name).getAttribute('aria-pressed');
+
+      act(() => tick(el, id).click());
+      expect([pressed('K-1'), pressed('P-1'), pressed('R-9')]).toEqual([
+        'true',
+        'true',
+        'false',
+      ]);
+
+      act(() => tick(el, id).click());
+      expect([pressed('K-1'), pressed('P-1')]).toEqual(['false', 'false']);
+    });
+
+    it('applies both sides, and names on each row what it moves with', () => {
+      const onApply = vi.fn();
+      const el = render(
+        <RecommendationsCard
+          look={LOOK}
+          summary={null}
+          timing={null}
+          team={false}
+          items={MOVE}
+          applied={null}
+          outcomes={{}}
+          onApply={onApply}
+        />,
+      );
+
+      act(() => tick(el, 'K-1').click());
+      click(button(el, 'Apply selected'));
+
+      expect(onApply).toHaveBeenCalledWith(['K-1', 'P-1']);
+      const moves = [
+        ...el.querySelectorAll('[data-slot="recommendation-move"]'),
+      ].map((badge) => badge.textContent);
+      expect(moves).toEqual(['moves with K-1', 'moves with P-1']);
+    });
+
+    it('draws the knowledge group, naming the document where the location would stand', () => {
+      const el = render(
+        <RecommendationsCard
+          look={LOOK}
+          summary={null}
+          timing={null}
+          team={false}
+          items={MOVE}
+          applied={null}
+          outcomes={{}}
+          onApply={() => undefined}
+          folds={{ isOpen: () => true, toggle: () => undefined }}
+        />,
+      );
+
+      expect(el.textContent).toContain('Knowledge');
+      expect(el.textContent).toContain('project:p1 · Release checklist');
+    });
+  });
+
   it('locks the checkboxes once an Apply is sent, and queues what has no outcome yet', () => {
     const el = render(
       <RecommendationsCard

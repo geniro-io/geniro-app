@@ -144,6 +144,40 @@ export const WithProject: Story = {
   ),
 };
 
+export const WithKnowledgeMove: Story = {
+  render: () => (
+    <div className="w-[420px]">
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={TIMING}
+        team={false}
+        items={[
+          {
+            ...recommendation('P-1'),
+            title: 'Take the release steps out of the instructions',
+          },
+          {
+            ...recommendation('K-1'),
+            target: 'knowledge',
+            kind: 'add',
+            title: 'Keep the release steps as a document',
+            document: {
+              place: 'project:p1',
+              handle: null,
+              title: 'Release checklist',
+            },
+            movesWith: 'P-1',
+          },
+        ]}
+        applied={null}
+        outcomes={{}}
+        onApply={() => undefined}
+      />
+    </div>
+  ),
+};
+
 export const WithOverlay: Story = {
   render: () => (
     <div className="w-[420px]">

@@ -912,6 +912,21 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
+  /** Every mark a run's analysis filed on its cards, oldest first. */
+  async recommendationOutcomeRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: 'recommendation_outcome' },
+      {
+        fields: ['seq', 'payload'],
+        orderBy: { seq: 'ASC' },
+        disableIdentityMap: true,
+      },
+    );
+  }
+
   /**
    * Every usage-bearing row in the database (`USAGE_ITEM_KINDS`), across all
    * runs — what the usage ledger's boot backfill sweeps to recover history

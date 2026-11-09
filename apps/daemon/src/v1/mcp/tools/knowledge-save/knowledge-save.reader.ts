@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { RecommendationIdSchema } from '../../../agents/chat.types';
+import type { KnowledgeItemAnswer } from '../../../agents/services/knowledge-items.service';
 import {
   KNOWLEDGE_BODY_MAX_BYTES,
   KNOWLEDGE_EDITS_MAX,
@@ -77,6 +79,41 @@ export const KnowledgeSaveArgsSchema = z
   })
   .strict();
 export type KnowledgeSaveArgs = z.infer<typeof KnowledgeSaveArgsSchema>;
+
+/** An analysis's call carrying out one item the user applied: the text is the card's. */
+export const KnowledgeItemArgsSchema = z
+  .object({
+    item: RecommendationIdSchema.regex(
+      /^K-/,
+      'only K- items change knowledge',
+    ).describe(
+      'The K-n id of the applied item to carry out; nothing else goes with it',
+    ),
+  })
+  .strict();
+
+export function readKnowledgeItemArgs(
+  args: Record<string, unknown>,
+): ToolArgs<z.infer<typeof KnowledgeItemArgsSchema>> {
+  return readToolArgs(KnowledgeItemArgsSchema, args);
+}
+
+/** What the agent reads back from carrying out a `K-` item. */
+export function knowledgeItemResultText(
+  id: string,
+  answer: KnowledgeItemAnswer,
+): string {
+  switch (answer.kind) {
+    case 'item-refused':
+      return `${answer.code}: ${answer.reason}`;
+    case 'archived':
+      return `Archived \`${answer.document.handle}\` for ${id}, as the user applied it. Mark ${id} now.`;
+    case 'applied':
+      return `Saved \`${answer.document.handle}\` at rev ${answer.document.rev} for ${id}, as the user applied it. Mark ${id} now.`;
+    default:
+      return knowledgeSaveResultText(answer);
+  }
+}
 
 export function readKnowledgeSaveArgs(
   args: Record<string, unknown>,

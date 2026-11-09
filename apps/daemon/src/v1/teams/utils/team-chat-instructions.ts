@@ -8,7 +8,10 @@ import {
   HOST_RECOMMENDATIONS_TOOL,
   HOST_TEAM_CHANGE_TOOL,
 } from '../../agents/chat.types';
-import { ANY_TEAM_OR_PROJECT } from '../../agents/utils/any-team-or-project';
+import {
+  ANY_TEAM_OR_PROJECT,
+  WHAT_GOES_WHERE,
+} from '../../agents/utils/any-team-or-project';
 import { builderChatAnalysisGuide } from '../../agents/utils/thread-analysis-guide';
 import {
   type ApprovalMode,
@@ -144,6 +147,8 @@ export function composeTeamChatInstructions(input: {
   schemaPath: string;
   /** Whether the shared memory is on — it decides the memory recommendations. */
   memory: boolean;
+  /** Whether agents may change knowledge — it decides the knowledge recommendations. */
+  knowledge?: boolean;
   /**
    * Whether the chat runs in the library directory. A chat opened before the
    * library moved keeps the folder it was created in.
@@ -248,6 +253,8 @@ ${overlaySection(input.overlay, input.otherOverlays ?? [])}
 CHANGING ANY TEAM OR PROJECT
 ${ANY_TEAM_OR_PROJECT}
 
+${WHAT_GOES_WHERE} When you see such a move in what the user asked about, say so in one line; make it only when they agree.
+
 On each turn a member receives, most general first: the user's own standing
 instructions, the blocks addressed to it, its own \`instructions\`, its
 \`character\`, and every other member's name and \`role\`. A later part
@@ -321,6 +328,6 @@ the member that coordinates, and any \`instructionBlocks\` and \`stages\`.
 </team-editing>
 
 <team-analysis>
-${builderChatAnalysisGuide(input.memory, BUILDER_CHAT_ANALYSED_RUNS)}
+${builderChatAnalysisGuide(input.memory, BUILDER_CHAT_ANALYSED_RUNS, input.knowledge ?? false)}
 </team-analysis>`;
 }

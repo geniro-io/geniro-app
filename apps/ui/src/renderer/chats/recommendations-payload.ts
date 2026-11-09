@@ -363,6 +363,7 @@ function readItem(value: unknown): RecommendationView | null {
     'memory',
     'project',
     'overlay',
+    'knowledge',
   ] as const);
   const territory = oneOf(row?.territory, TERRITORIES);
   const title = text(row?.title);
@@ -380,7 +381,19 @@ function readItem(value: unknown): RecommendationView | null {
   const impact = record(row.impact);
   const risk = record(row.risk);
   const evidence = readEvidence(row.evidence);
+  const document = record(row.document);
+  const documentPlace = text(document?.place);
   return {
+    ...(documentPlace === null
+      ? {}
+      : {
+          document: {
+            place: documentPlace,
+            handle: text(document?.handle),
+            title: text(document?.title),
+          },
+        }),
+    movesWith: text(row.movesWith),
     id,
     target,
     territory,

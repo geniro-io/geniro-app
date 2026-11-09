@@ -123,6 +123,44 @@ describe('recommendations payload readers', () => {
     expect(card?.items[0]).toMatchObject({ kind: 'update', location: 'm12' });
   });
 
+  it('reads a knowledge item with the document it acts on and what it moves with', () => {
+    const [w1] = CARD.items as Record<string, unknown>[];
+    const card = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        items: [
+          {
+            ...w1,
+            id: 'K-1',
+            target: 'knowledge',
+            kind: 'add',
+            location: 'new',
+            document: {
+              place: 'project:p1',
+              title: 'Release checklist',
+              whenToRead: 'Cutting a release.',
+            },
+            movesWith: 'P-1',
+          },
+          { ...w1, id: 'K-2', target: 'knowledge', document: { handle: 'x' } },
+        ],
+      }),
+    );
+
+    expect(card?.items[0]).toMatchObject({
+      target: 'knowledge',
+      document: {
+        place: 'project:p1',
+        handle: null,
+        title: 'Release checklist',
+      },
+      movesWith: 'P-1',
+    });
+    // A document naming no place is read as an item with none, never half of one.
+    expect(card?.items[1]?.document).toBeUndefined();
+    expect(card?.items[1]?.movesWith).toBeNull();
+  });
+
   it('reads a project item, its location a project id and its change the instruction text', () => {
     const [w1] = CARD.items as Record<string, unknown>[];
     const card = readRecommendations(

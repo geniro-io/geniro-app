@@ -1,5 +1,6 @@
 import { HOST_RECOMMENDATIONS_TOOL } from '../../../agents/chat.types';
 import type { AnalysisBroker } from '../../../agents/services/analysis.broker';
+import type { KnowledgeService } from '../../../knowledge/services/knowledge.service';
 import type { MemoryService } from '../../../memory/services/memory.service';
 import type { TeamHistoryService } from '../../../stats/services/team-history.service';
 import type {
@@ -23,6 +24,7 @@ export class ReportRecommendationsTool extends BaseMcpTool {
     private readonly analysis: AnalysisBroker,
     private readonly memory: Pick<MemoryService, 'enabled'>,
     private readonly history: Pick<TeamHistoryService, 'versionIndex'>,
+    private readonly knowledge: Pick<KnowledgeService, 'agentsMayWrite'>,
   ) {
     super();
   }
@@ -32,7 +34,10 @@ export class ReportRecommendationsTool extends BaseMcpTool {
   }
 
   protected instructions(): string {
-    return reportRecommendationsInstructions(this.memory.enabled);
+    return reportRecommendationsInstructions(
+      this.memory.enabled,
+      this.knowledge.agentsMayWrite,
+    );
   }
 
   protected inputSchema(): Record<string, unknown> {

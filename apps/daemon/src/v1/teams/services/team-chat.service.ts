@@ -116,6 +116,7 @@ export class TeamChatService implements OnModuleInit {
       name: team?.name ?? (await this.store.nameOf(slug)) ?? slug,
       schemaPath: await this.schemaReference(),
       memory: this.memory.enabled,
+      knowledge: this.knowledge.agentsMayWrite,
       inLibrary: canonical(cwd) === canonical(location.directory),
       ...overlays,
     });

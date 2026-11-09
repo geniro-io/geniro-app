@@ -69,6 +69,7 @@ import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { GalleryImageService } from '../../agents/services/gallery-image.service';
 import { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
 import type { GoalsService } from '../../agents/services/goals.service';
+import type { KnowledgeItemsService } from '../../agents/services/knowledge-items.service';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { MonitorBroker } from '../../agents/services/monitor.broker';
 import { MonitorRegistry } from '../../agents/services/monitor.registry';
@@ -278,6 +279,7 @@ function service(
       shares,
       memory,
       knowledge,
+      knowledgeItems: {} as KnowledgeItemsService,
     }),
     {
       token: 'launch',
@@ -3904,6 +3906,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
+      knowledgeItems: {} as KnowledgeItemsService,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
     }).find((t) => t.handles(HOST_RECORD_OUTCOME_TOOL))!;
@@ -4472,6 +4475,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
+      knowledgeItems: {} as KnowledgeItemsService,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -4562,6 +4566,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
+      knowledgeItems: {} as KnowledgeItemsService,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -4843,6 +4848,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
+      knowledgeItems: {} as KnowledgeItemsService,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -4956,6 +4962,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         shares: fakeShares(false).service,
         memory: fakeMemory(false).service,
         knowledge: fakeKnowledge(false).service,
+        knowledgeItems: {} as KnowledgeItemsService,
         monitors: monitorBroker().broker,
         teamNotes: teamNoteBroker(),
         runOutcomes: runOutcomeBroker(),
@@ -5096,6 +5103,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       shares: fakeShares(false).service,
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
+      knowledgeItems: {} as KnowledgeItemsService,
     } as Parameters<typeof createMcpTools>[0]);
     const tool = tools.find((t) => t.handles(HOST_PROPOSE_TEAM_TOOL))!;
 
@@ -5175,6 +5183,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         shares: fakeShares(false).service,
         memory: fakeMemory(false).service,
         knowledge: fakeKnowledge(false).service,
+        knowledgeItems: {} as KnowledgeItemsService,
         monitors: monitorBroker().broker,
         teamNotes: teamNoteBroker(),
         runOutcomes: runOutcomeBroker(),

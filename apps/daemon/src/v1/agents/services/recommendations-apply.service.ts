@@ -75,6 +75,17 @@ export class RecommendationsApplyService {
       );
     }
     const ids = [...new Set(input.ids)];
+    const split = card.items.find(
+      (item) =>
+        item.movesWith !== undefined &&
+        ids.includes(item.id) !== ids.includes(item.movesWith),
+    );
+    if (split !== undefined) {
+      throw new BadRequestException(
+        'MOVE_SPLIT',
+        `${split.id} and ${split.movesWith} are one move: apply both or neither`,
+      );
+    }
     return this.chats.sendMessage(
       runId,
       composeApplyMessage(
@@ -103,6 +114,12 @@ export function composeApplyMessage(
     [
       `### ${item.id} · ${item.title}`,
       `Target: ${item.target} · ${item.territory} · ${item.kind} · ${item.location}`,
+      ...(item.document === undefined
+        ? []
+        : [`Document: ${item.document.place}`]),
+      ...(item.movesWith === undefined
+        ? []
+        : [`Moves with: ${item.movesWith}`]),
       'Change:',
       item.change,
     ].join('\n'),

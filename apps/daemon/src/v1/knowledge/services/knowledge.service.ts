@@ -51,6 +51,8 @@ import {
   type KnowledgeHead,
   type KnowledgeHeadDto,
   type KnowledgeHit,
+  type KnowledgeItemOutcome,
+  type KnowledgeItemWrite,
   type KnowledgeList,
   type KnowledgeListQuery,
   type KnowledgePatch,
@@ -294,6 +296,136 @@ export class KnowledgeService {
     place: RunPlace,
   ): Promise<KnowledgeSaveOutcome> {
     return this.serialize(() => this.saveNow(actor, input, place));
+  }
+
+  /**
+   * Whether a recommendation could be written as it stands: its text, its place
+   * and the document it acts on. Asked before a card goes up, so the user never
+   * applies what the write would refuse.
+   */
+  async checkRecommended(
+    write: KnowledgeItemWrite,
+  ): Promise<KnowledgeRefusal | null> {
+    const checked = await this.readyToWrite(write, this.em.fork());
+    return 'code' in checked ? checked : null;
+  }
+
+  /**
+   * A recommendation the user applied. Pressing Apply on the card that showed
+   * this text is their review, so it is written whatever `agentWrites` says of an
+   * agent's own write, and stands approved; only a read-only store refuses it.
+   * Its author stays the agent that filed it.
+   */
+  applyRecommended(
+    actor: KnowledgeActor,
+    write: KnowledgeItemWrite,
+  ): Promise<KnowledgeItemOutcome> {
+    return this.serialize(async () => {
+      const em = this.em.fork();
+      const ready = await this.readyToWrite(write, em);
+      if ('code' in ready) {
+        return ready;
+      }
+      const reason = write.reason.slice(0, KNOWLEDGE_REASON_MAX_CHARS);
+      if (write.kind === 'add') {
+        const taken = new Set([
+          ...(await this.documents.handlesIn(ready.key, em)),
+          ...(await this.visibleHeads(ready.place, em)).map(
+            (head) => head.handle,
+          ),
+        ]);
+        return this.createRow(
+          actor,
+          ready.text,
+          ready.key,
+          freeHandle(handleFromTitle(ready.text.title), taken),
+          reason,
+          em,
+          true,
+        );
+      }
+      if (ready.row === null) {
+        return refused('NOT_FOUND', `no document ${write.handle} there`);
+      }
+      if (write.kind === 'update') {
+        return this.applyToRow(
+          ready.row,
+          actor,
+          ready.text,
+          reason,
+          em,
+          null,
+          true,
+        );
+      }
+      ready.row.status = 'archived';
+      await em.flush();
+      this.publish(ready.row, 'archived');
+      return {
+        kind: 'archived',
+        document: await this.toHeadDto(ready.row, em),
+      };
+    });
+  }
+
+  private async readyToWrite(
+    write: KnowledgeItemWrite,
+    em: EntityManager,
+  ): Promise<
+    | KnowledgeRefusal
+    | {
+        key: string;
+        place: RunPlace;
+        row: KnowledgeDocument | null;
+        text: KnowledgeText;
+      }
+  > {
+    if (!this.agentsMayWrite) {
+      return refused(
+        'KNOWLEDGE_READ_ONLY',
+        'the user has knowledge off or read-only for agents',
+      );
+    }
+    const place = placeOfKey(write.place);
+    if (place === null) {
+      return refused('INVALID_DOCUMENT', `no place ${write.place}`);
+    }
+    const unknown = await this.refuseUnknownPlace(place, em);
+    if (unknown) {
+      return unknown;
+    }
+    if (write.kind === 'add') {
+      const text = {
+        title: write.title ?? '',
+        whenToRead: write.whenToRead ?? '',
+        body: write.body,
+      };
+      return (
+        refuseInvalid(text) ?? { key: write.place, place, row: null, text }
+      );
+    }
+    const head = (
+      await this.documents.heads(
+        { placeKeys: [write.place], statuses: ['active'] },
+        em,
+      )
+    ).find((entry) => entry.handle === write.handle);
+    const row = head ? await this.documents.getById(head.id, em) : null;
+    if (!row) {
+      return refused('NOT_FOUND', `no document ${write.handle} there`);
+    }
+    if (write.rev !== row.rev) {
+      return refused(
+        'INVALID_DOCUMENT',
+        `${row.handle} is at rev ${row.rev} now, not ${write.rev} — read it again`,
+      );
+    }
+    const text = {
+      title: write.title ?? row.title,
+      whenToRead: write.whenToRead ?? row.whenToRead,
+      body: write.kind === 'update' ? write.body : row.body,
+    };
+    return refuseInvalid(text) ?? { key: write.place, place, row, text };
   }
 
   /** One page of the user's list. */
@@ -926,10 +1058,13 @@ export class KnowledgeService {
     handle: string,
     reason: string | null,
     em: EntityManager,
+    approved = false,
   ): Promise<KnowledgeSaveOutcome> {
     const place = placeOfKey(placeKey) ?? { projectId: null, teamSlug: null };
     const review =
-      actor.kind !== 'user' && this.config.agentWrites === 'review';
+      !approved &&
+      actor.kind !== 'user' &&
+      this.config.agentWrites === 'review';
     const row = new KnowledgeDocument();
     row.handle = handle;
     row.placeKey = placeKey;
@@ -937,7 +1072,7 @@ export class KnowledgeService {
     row.teamSlug = place.teamSlug;
     row.status = review ? 'proposed' : 'active';
     row.rev = review ? 0 : 1;
-    row.approvedAt = actor.kind === 'user' ? new Date() : null;
+    row.approvedAt = approved || actor.kind === 'user' ? new Date() : null;
     copyText(row, text);
     stampSource(row, sourceOf(actor));
     em.persist(row);
@@ -949,6 +1084,7 @@ export class KnowledgeService {
         reason,
         review ? 'pending' : 'applied',
         review ? null : 1,
+        approved,
       ),
     );
     await em.flush();
@@ -977,9 +1113,18 @@ export class KnowledgeService {
     reason: string | null,
     em: EntityManager,
     restored: KnowledgeRevision | null = null,
+    approved = false,
   ): Promise<KnowledgeSaveOutcome> {
     const nextRev = row.rev + 1;
-    const revision = revisionOf(row, text, actor, reason, 'applied', nextRev);
+    const revision = revisionOf(
+      row,
+      text,
+      actor,
+      reason,
+      'applied',
+      nextRev,
+      approved,
+    );
     if (restored?.approvedAt === null) {
       revision.approvedAt = null;
       revision.sourceMemberId = restored.sourceMemberId;
@@ -1315,6 +1460,7 @@ function revisionOf(
   reason: string | null,
   status: KnowledgeRevision['status'],
   rev: number | null,
+  approved = false,
 ): KnowledgeRevision {
   const body = text.body.trim();
   const revision = new KnowledgeRevision();
@@ -1330,7 +1476,7 @@ function revisionOf(
   revision.reason = reason;
   revision.sourceMemberId = 'memberId' in actor ? actor.memberId : null;
   revision.decidedAt = status === 'applied' ? new Date() : null;
-  revision.approvedAt = actor.kind === 'user' ? new Date() : null;
+  revision.approvedAt = approved || actor.kind === 'user' ? new Date() : null;
   Object.assign(revision, sourceOf(actor));
   return revision;
 }

@@ -54,6 +54,13 @@ const OPEN_CARD_CLEAR_OF_LATEST_PX = 720;
 /** The open card's lift above Latest on a narrow pane, plus a margin under the pane's top. */
 const LIFTED_CARD_CLEARANCE_PX = 56;
 
+/**
+ * A control of the card under the pointer: the menu's row tint, since `muted`
+ * is one shade off this popover surface in the dark theme.
+ */
+const CONTROL_HOVER =
+  'transition-colors duration-150 ease-out hover:bg-accent motion-reduce:transition-none';
+
 function failureSeenKey(row: WorkingAgentRow): string {
   return `working-agents:failure-seen:${row.callId}`;
 }
@@ -266,7 +273,7 @@ function AgentRow({
   client: Pick<DaemonClient, 'onItem' | 'onReconnect'>;
 }): React.JSX.Element {
   return (
-    <div className={cn('flex flex-col rounded-lg', open && 'bg-muted/40')}>
+    <div className={cn('flex flex-col rounded-lg', open && 'bg-accent/50')}>
       <button
         type="button"
         data-slot="working-agent-row"
@@ -274,7 +281,10 @@ function AgentRow({
         aria-expanded={open}
         title={`${row.callee} — ${open ? 'hide' : 'show'} the latest messages`}
         onClick={onToggle}
-        className="flex w-full min-w-0 items-start gap-2 rounded-lg px-1.5 py-1.5 text-left font-normal hover:bg-muted">
+        className={cn(
+          'flex w-full min-w-0 items-start gap-2 rounded-lg px-1.5 py-1.5 text-left font-normal',
+          CONTROL_HOVER,
+        )}>
         <WorkingAgentFaces row={row} />
         <WorkingAgentFacts row={row} />
       </button>
@@ -440,7 +450,10 @@ export function WorkingAgentsCard({
                   data-slot="working-agents-finished-toggle"
                   aria-expanded={finishedOpen}
                   onClick={() => setFinishedOpen((value) => !value)}
-                  className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs font-normal text-muted-foreground hover:text-foreground">
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs font-normal text-muted-foreground hover:text-foreground',
+                    CONTROL_HOVER,
+                  )}>
                   <ChevronRight
                     aria-hidden="true"
                     className={cn(
@@ -464,10 +477,11 @@ export function WorkingAgentsCard({
             title={`Agents · ${summary}`}
             onClick={() => setPressed(!open)}
             className={cn(
-              'flex min-w-0 shrink-0 items-center rounded-xl text-left font-normal hover:bg-muted/60',
+              'group flex min-w-0 shrink-0 items-center rounded-xl text-left font-normal',
+              CONTROL_HOVER,
               open
                 ? 'gap-2 rounded-t-none border-t border-border/60 px-2.5 py-1.5'
-                : 'group relative',
+                : 'relative',
             )}>
             {open ? (
               <>
@@ -480,12 +494,12 @@ export function WorkingAgentsCard({
                 </span>
                 <span
                   data-slot="working-agents-summary"
-                  className="min-w-0 truncate text-xs text-muted-foreground">
+                  className="min-w-0 truncate text-xs text-muted-foreground transition-colors group-hover:text-foreground motion-reduce:transition-none">
                   {workingAgentsSummary(live)}
                 </span>
                 <ChevronDown
                   aria-hidden="true"
-                  className="ml-auto size-3.5 shrink-0 text-muted-foreground"
+                  className="ml-auto size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground motion-reduce:transition-none"
                 />
               </>
             ) : (

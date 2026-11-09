@@ -259,6 +259,28 @@ describe('WorkingAgentsCard', () => {
     ).toEqual(['queued', 'gone quiet']);
   });
 
+  it('tints every control with the menu row’s colour, which shows on this surface in the dark theme', async () => {
+    const { el } = renderCard([
+      row({ state: 'working' }),
+      row({
+        conversationId: 'call-2',
+        callId: 'call-2',
+        callIds: ['call-2'],
+        state: 'finished',
+      }),
+    ]);
+
+    for (const name of [
+      'working-agent-row',
+      'working-agents-finished-toggle',
+      'working-agents-toggle',
+    ]) {
+      const control = slot(el, name)!;
+      expect(control.className, name).toContain('hover:bg-accent');
+      expect(control.className, name).not.toContain('hover:bg-muted');
+    }
+  });
+
   it('lists live rows first and holds the finished ones behind a toggle that counts them', async () => {
     const { el } = renderCard([
       row({

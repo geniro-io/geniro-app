@@ -34,7 +34,11 @@ import { TeamSchema } from '../../teams/teams.types';
 import { teamVersionOf } from '../../teams/utils/team-version';
 import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
 import { claudeToolCallMetric } from '../adapters/claude/utils/claude-mcp-tool-name.utils';
-import type { RecommendationsTeamPopulation } from '../chat.types';
+import type {
+  AnalysedTeam,
+  AnalysisSource,
+  RecommendationsTeamPopulation,
+} from '../chat.types';
 import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -1827,7 +1831,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       expect(archived).toEqual(live);
     });
 
-    it('reads one of its runs by runId, and refuses a run it was not started on', async () => {
+    it('reads one of its runs by runId, and refuses a chat of no team', async () => {
       const older = await reader.read(scope, {
         view: 'items',
         runId: 'wf-old',
@@ -1840,7 +1844,102 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
 
       expect(older.snapshotSeq).toBe(1);
       expect(newest.snapshotSeq).toBe(3);
-      expect(stranger.error).toBe('NOT_ANALYSED');
+      expect(stranger.error).toBe('NOT_A_TEAM_RUN');
+    });
+
+    describe('a run outside the sample', () => {
+      const sampleOf = (): AnalysisSource & { team: AnalysedTeam } => ({
+        sourceRunId: 'wf-new',
+        snapshotSeq: 3,
+        sourceWorking: false,
+        team: {
+          slug: 'team',
+          runs: [{ runId: 'wf-new', snapshotSeq: 3, working: false }],
+        },
+      });
+
+      it('opens an archived run of the team, pinned at its first read while it moves on', async () => {
+        const fork = orm.em.fork();
+        const shelved = await fork.findOneOrFail(Run, 'wf-old');
+        shelved.archivedAt = new Date();
+        await fork.flush();
+        const turn = sampleOf();
+
+        const first = await reader.read(turn, {
+          view: 'items',
+          runId: 'wf-old',
+        });
+        await row('wf-old', 2, 'message', { text: 'later' }, 9, 'dev');
+        const again = await reader.read(turn, {
+          view: 'items',
+          runId: 'wf-old',
+        });
+        const past = await reader.read(turn, {
+          view: 'item',
+          runId: 'wf-old',
+          seq: 2,
+        });
+
+        expect(first.snapshotSeq).toBe(1);
+        expect(again).toEqual(first);
+        expect(past.error).toBe('PAST_SNAPSHOT');
+        expect(turn.team.opened?.get('wf-old')).toEqual({
+          runId: 'wf-old',
+          snapshotSeq: 1,
+          working: false,
+        });
+        expect(turn.team.runs).toHaveLength(1);
+      });
+
+      it('reads a later turn afresh, since a new turn pins again', async () => {
+        await reader.read(sampleOf(), { view: 'items', runId: 'wf-old' });
+        await row('wf-old', 2, 'message', { text: 'later' }, 9, 'dev');
+
+        const later = await reader.read(sampleOf(), {
+          view: 'items',
+          runId: 'wf-old',
+        });
+
+        expect(later.snapshotSeq).toBe(2);
+      });
+
+      it('keeps the pin that landed first when two reads race', async () => {
+        const turn = sampleOf();
+        const winner = { runId: 'wf-old', snapshotSeq: 0, working: true };
+
+        const racing = reader.readSourceOf(turn, 'wf-old');
+        Object.assign(turn.team, { opened: new Map([['wf-old', winner]]) });
+
+        expect(await racing).toEqual({
+          sourceRunId: 'wf-old',
+          snapshotSeq: 0,
+          sourceWorking: true,
+        });
+      });
+
+      it('refuses another team, a deleted run, a chat of no team and a run with no rows, pinning none', async () => {
+        const fork = orm.em.fork();
+        fork.persist(
+          Object.assign(new Run(), {
+            id: 'wf-other',
+            title: 'Theirs',
+            status: 'completed',
+            teamId: 'other-team',
+          }),
+        );
+        await fork.flush();
+        await row('wf-other', 0, 'message', { text: 'theirs' }, 0, 'dev');
+        await teamRun('wf-empty', 50);
+        const turn = sampleOf();
+        const errorOf = async (runId: string) =>
+          (await reader.read(turn, { view: 'overview', runId })).error;
+
+        expect(await errorOf('wf-other')).toBe('OTHER_TEAM_RUN');
+        expect(await errorOf('no-such-run')).toBe('RUN_GONE');
+        expect(await errorOf('source')).toBe('NOT_A_TEAM_RUN');
+        expect(await errorOf('wf-empty')).toBe('RUN_EMPTY');
+        expect(turn.team.opened).toBeUndefined();
+      });
     });
 
     it('names its own team to view=team and the save, with the newest run’s start copy only while that run exists', async () => {

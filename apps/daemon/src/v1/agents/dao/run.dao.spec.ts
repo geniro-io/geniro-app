@@ -467,6 +467,9 @@ describe('RunDao (in-memory sqlite)', () => {
       expect(
         (await dao.newestTeamRuns('team', 10)).map((run) => run.id),
       ).toEqual(['w4', 'w3', 'w2', 'w1']);
+      expect(
+        (await dao.newestTeamRuns('team', null)).map((run) => run.id),
+      ).toEqual(['w4', 'w3', 'w2', 'w1']);
     });
   });
 

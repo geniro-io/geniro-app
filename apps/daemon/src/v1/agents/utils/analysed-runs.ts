@@ -170,9 +170,10 @@ export async function overlayProjectIdsOf(
 
 /**
  * The run a read is about: the one `runId` names among those the analysis
- * reads, or — named none — its source (a team analysis's newest run).
- * Never a run outside them: the model names it, and the analysis reads only
- * what it was started on.
+ * reads — its sample and the runs this turn has opened
+ * (`ThreadReaderService.readSourceOf`) — or, named none, its source (a team
+ * analysis's newest run). Never another: the model names it, and each of these
+ * carries the snapshot a read or a citation of it is held to.
  */
 export function analysedSourceOf(
   turn: AnalysisReadScope,
@@ -181,12 +182,14 @@ export function analysedSourceOf(
   if (runId === undefined || runId === turn.sourceRunId) {
     return turn;
   }
-  const run = turn.team?.runs.find((entry) => entry.runId === runId);
+  const run =
+    turn.team?.runs.find((entry) => entry.runId === runId) ??
+    turn.team?.opened?.get(runId);
   if (run === undefined) {
     return {
       error: 'NOT_ANALYSED',
       message: turn.team
-        ? `${runId} is not one of the runs this analysis reads — view=runs lists them.`
+        ? `${runId} is not open: read it with runId first — view=runs lists the sample, section="otherRuns" the rest.`
         : 'This analysis reads one thread: leave runId out.',
     };
   }

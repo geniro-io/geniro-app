@@ -488,6 +488,8 @@ export const ANALYSIS_HISTORY_SECTIONS = [
   'members',
   'diff',
 ] as const;
+/** What view=runs reads a page of, beside its comparison of the sample. */
+export const ANALYSIS_RUNS_SECTIONS = ['otherRuns'] as const;
 /** What view=spend reads a page of, once it is past one page. */
 export const ANALYSIS_SPEND_SECTIONS = [
   'byProject',
@@ -509,14 +511,14 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
   view: z
     .enum(ANALYSIS_VIEWS)
     .describe(
-      "overview: timing summary, per-member time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and team version, the runs compared version by version, every member's totals and every member's turns per model across them, in chunks when long (team analyses only). history: every version of the team with what its runs did, every change made to it with who made it and why, and every recommendation filed about it with what became of it; a long history answers its summary and each section's size, then reads by `section` (team threads and analyses only). spend: where the team's money went over every run the ledgers hold, archived and deleted ones included, whatever this analysis samples: cost by token class per project, member and model, the last 30 days and the analysed runs beside the whole, and cache misses, each figure saying what it covers; a long answer reads its breakdowns by `section` (team threads and analyses only). project: the project each analysed run belongs to — its description and instructions as they stand now, the instructionsRevision a write quotes, each run's start copy where it differs, and the project's newest changes with who made them",
+      "overview: timing summary, per-member time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and team version, the runs compared version by version, every member's totals and every member's turns per model across them, in chunks when long; section=otherRuns instead lists the team's runs outside that sample (team analyses only). history: every version of the team with what its runs did, every change made to it with who made it and why, and every recommendation filed about it with what became of it; a long history answers its summary and each section's size, then reads by `section` (team threads and analyses only). spend: where the team's money went over every run the ledgers hold, archived and deleted ones included, whatever this analysis samples: cost by token class per project, member and model, the last 30 days and the analysed runs beside the whole, and cache misses, each figure saying what it covers; a long answer reads its breakdowns by `section` (team threads and analyses only). project: the project each analysed run belongs to — its description and instructions as they stand now, the instructionsRevision a write quotes, each run's start copy where it differs, and the project's newest changes with who made them",
     ),
   runId: z
     .string()
     .max(200)
     .optional()
     .describe(
-      'A team analysis: which of its runs to read (view=runs lists them); omitted, the newest',
+      'A team analysis: which run to read, one of its sample (view=runs lists them) or any other run of the team (view=runs section="otherRuns" lists them); omitted, the newest',
     ),
   cursor: z
     .number()
@@ -547,10 +549,14 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
       'item, runs, team, history, spend, project: the `next.offset` the previous page returned',
     ),
   section: z
-    .enum([...ANALYSIS_HISTORY_SECTIONS, ...ANALYSIS_SPEND_SECTIONS])
+    .enum([
+      ...ANALYSIS_HISTORY_SECTIONS,
+      ...ANALYSIS_SPEND_SECTIONS,
+      ...ANALYSIS_RUNS_SECTIONS,
+    ])
     .optional()
     .describe(
-      "Which part of a long answer to read, following each page's `next`. history: versions, changeLog, recommendations and members page by record; diff is one version's diff (needs `version`). spend: byProject, byMember and byModel page by record",
+      "Which part of a long answer to read, following each page's `next`. history: versions, changeLog, recommendations and members page by record; diff is one version's diff (needs `version`). spend: byProject, byMember and byModel page by record. runs: otherRuns pages the team's runs outside this analysis's sample by record, newest first",
     ),
   version: z
     .union([z.number().int().min(1), z.string().max(200)])
@@ -564,7 +570,7 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
     .min(0)
     .optional()
     .describe(
-      'history, spend: the `next.part` of a record too long for one page',
+      'history, spend, runs: the `next.part` of a record too long for one page',
     ),
   memberId: z
     .string()
@@ -1322,6 +1328,11 @@ export interface AnalysedRun {
 export interface AnalysedTeam {
   slug: string;
   runs: AnalysedRun[];
+  /**
+   * Runs of the team outside `runs` this turn has read, each pinned at its
+   * snapshot when it was first opened (`ThreadReaderService.readSourceOf`).
+   */
+  opened?: Map<string, AnalysedRun>;
 }
 
 /**

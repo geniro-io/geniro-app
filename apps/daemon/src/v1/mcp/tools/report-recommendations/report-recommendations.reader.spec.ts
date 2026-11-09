@@ -398,7 +398,7 @@ describe('ReportRecommendationsTool', () => {
       'evidence seq 9 does not exist in the analysed run older (snapshot ends at 8)',
     );
     expect(stranger.content[0]!.text).toContain(
-      'evidence runId other is not one of the runs this analysis reads',
+      'evidence runId other has not been read in this turn',
     );
     expect(written).toHaveLength(1);
     // One run's timing would pass for the team's.

@@ -6,6 +6,7 @@ import type { ProjectScopeService } from '../../projects/services/project-scope.
 import type { Item } from '../../runs/entity/item.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import {
+  type AnalysedRun,
   type FoldedRun,
   type ItemWire,
   MAX_RECOMMENDATIONS_PER_TARGET,
@@ -622,7 +623,10 @@ const POPULATION: RecommendationsTeamPopulation = {
   },
 };
 
-function teamReporter(existing?: (runId: string, seqs: number[]) => number[]) {
+function teamReporter(
+  existing?: (runId: string, seqs: number[], upTo: number) => number[],
+  opened?: Map<string, AnalysedRun>,
+) {
   const written: { kind: string; payload: object }[] = [];
   const asked: { runId: string; seqs: number[] }[] = [];
   const runs = [
@@ -634,9 +638,9 @@ function teamReporter(existing?: (runId: string, seqs: number[]) => number[]) {
     { fork: () => ({}) } as unknown as EntityManager,
     {} as RunDao,
     {
-      existingSeqs: (runId: string, seqs: number[]) => {
+      existingSeqs: (runId: string, seqs: number[], upTo: number) => {
         asked.push({ runId, seqs });
-        return Promise.resolve(new Set(existing?.(runId, seqs) ?? seqs));
+        return Promise.resolve(new Set(existing?.(runId, seqs, upTo) ?? seqs));
       },
     } as unknown as ItemDao,
     {} as ThreadTimelineService,
@@ -666,7 +670,7 @@ function teamReporter(existing?: (runId: string, seqs: number[]) => number[]) {
         sourceRunId: 'r2',
         snapshotSeq: 30,
         sourceWorking: false,
-        team: { slug: 'dev-team', runs },
+        team: { slug: 'dev-team', runs, ...(opened ? { opened } : {}) },
       },
       (kind, payload) => {
         written.push({ kind, payload });
@@ -805,6 +809,63 @@ describe('AnalysisReportsService — a team card', () => {
     expect(written).toEqual([]);
   });
 
+  describe('a run read outside the sample', () => {
+    const outside = (seq: number) => ({
+      ...ITEM,
+      evidence: [{ runId: 'r-out', seq, quote: 'waiting' }],
+    });
+    const atOrBelow = (_runId: string, seqs: number[], upTo: number) =>
+      seqs.filter((seq) => seq <= upTo);
+    const pinned = () =>
+      new Map([['r-out', { runId: 'r-out', snapshotSeq: 5, working: false }]]);
+
+    it('takes a citation at or below the snapshot its read pinned', async () => {
+      const { report, written } = teamReporter(atOrBelow, pinned());
+
+      const filed = await report(
+        { whole: { hotspots: [], items: [outside(5)], members: [REVIEWER] } },
+        index,
+        null,
+      );
+
+      expect(filed.status).toBe('recorded');
+      expect(written).toHaveLength(1);
+    });
+
+    it('refuses a seq past that snapshot, though the run may have moved on', async () => {
+      const { report, written } = teamReporter(atOrBelow, pinned());
+
+      const filed = await report(
+        { whole: { hotspots: [], items: [outside(6)], members: [REVIEWER] } },
+        index,
+        null,
+      );
+
+      expect(filed.status).toBe('refused');
+      expect(filed.status === 'refused' ? filed.reason : '').toContain(
+        'evidence seq 6 does not exist in the analysed run r-out (snapshot ends at 5)',
+      );
+      expect(written).toEqual([]);
+    });
+
+    it('refuses a run this turn never read, asking no row of it, since a citation pins nothing', async () => {
+      const { report, written, asked } = teamReporter(atOrBelow);
+
+      const filed = await report(
+        { whole: { hotspots: [], items: [outside(1)], members: [REVIEWER] } },
+        index,
+        null,
+      );
+
+      expect(filed.status).toBe('refused');
+      expect(filed.status === 'refused' ? filed.reason : '').toContain(
+        'evidence runId r-out has not been read in this turn',
+      );
+      expect(asked.map((entry) => entry.runId)).not.toContain('r-out');
+      expect(written).toEqual([]);
+    });
+  });
+
   it('names every problem of a card at once, one refusal for all of them', async () => {
     const { report, written } = teamReporter((runId, seqs) =>
       runId === 'r1' ? seqs.filter((seq) => seq !== 7) : seqs,
@@ -830,7 +891,7 @@ describe('AnalysisReportsService — a team card', () => {
     const reason = filed.status === 'refused' ? filed.reason : '';
     expect(reason).toContain('5 problems: ');
     expect(reason).toContain('duplicate id W-1');
-    expect(reason).toContain('evidence runId nope is not one of the runs');
+    expect(reason).toContain('evidence runId nope has not been read');
     expect(reason).toContain(
       'evidence seq 7 does not exist in the analysed run r1',
     );

@@ -191,6 +191,19 @@ describe('threadAnalysisBrief', () => {
 });
 
 describe('teamAnalysisGuide', () => {
+  it.each([
+    ['a team analysis', teamAnalysisGuide(null, true)],
+    ['a builder chat', builderChatAnalysisGuide(true, 10)],
+  ])(
+    'tells %s how to reach a run outside the sample, only for a concrete question and never all of them',
+    (_name, guide) => {
+      expect(guide).toContain('view=runs section="otherRuns"');
+      expect(guide).toContain('only for a concrete question');
+      expect(guide).toContain('never sweep them');
+      expect(guide).toContain('Cite a row of one only from a read');
+    },
+  );
+
   it('starts from the history, then the cross-run comparison, and asks for models and the team structure', () => {
     const guide = teamAnalysisGuide(null, true);
 

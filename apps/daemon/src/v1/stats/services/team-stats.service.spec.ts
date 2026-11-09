@@ -1134,6 +1134,18 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       });
     });
 
+    it('answers each run its own cost from the rows the population sums, none for a run with no cost', async () => {
+      await teamRun('dev-1');
+      await turn('dev-1', { costUsd: 2 });
+      await turn('dev-1', { costUsd: 3 });
+      await teamRun('quiet');
+
+      const totals = await service.totalsOf(['dev-1', 'quiet']);
+
+      expect(totals.get('dev-1')?.costUsd).toBe(5);
+      expect(totals.get('quiet')?.costUsd ?? null).toBeNull();
+    });
+
     it('reads a team with no runs as zeros and nulls', async () => {
       expect(await service.population('nobody')).toEqual({
         runs: 0,

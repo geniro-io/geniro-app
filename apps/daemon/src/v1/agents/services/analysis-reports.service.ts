@@ -208,7 +208,9 @@ export class AnalysisReportsService {
     }
     for (const runId of unknownRuns) {
       problems.push(
-        `evidence runId ${runId} is not one of the runs this analysis reads — view=runs lists them`,
+        turn.team
+          ? `evidence runId ${runId} has not been read in this turn: a run is cited against the snapshot its read pinned, so read it first with runId`
+          : `evidence runId ${runId} is not the thread this analysis reads: leave runId out`,
       );
     }
     for (const [runId, { snapshotSeq, seqs }] of cited) {

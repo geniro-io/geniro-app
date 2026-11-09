@@ -47,6 +47,7 @@ import { collapseImageBlocks } from '../utils/collapse-image-blocks';
 import { asRecord, parseJsonColumn } from '../utils/json-util';
 import { pullRequestOutcomeKey } from '../utils/pull-request-capture';
 import { threadOutcomeOf } from '../utils/run-goals';
+import { runSnapshotOf } from '../utils/run-snapshots';
 import {
   callFigures,
   configuredModels,
@@ -260,7 +261,7 @@ export class ThreadReaderService {
         offset,
       );
     }
-    const source = analysedSourceOf(turn, args.runId);
+    const source = await this.readSourceOf(turn, args.runId);
     if ('error' in source) {
       return source;
     }
@@ -287,6 +288,60 @@ export class ThreadReaderService {
           message: 'The team view is answered by the tool, not the reader.',
         };
     }
+  }
+
+  /**
+   * The run a read names. A team analysis also opens any other run of its team
+   * by name, so it pays only for what it reads; never a thread analysis, which
+   * reads its one thread. The turn pins each at its first read, so its pages
+   * and the citations its card makes hold to one snapshot however the run moves
+   * on. A later turn reads it afresh, which only adds rows.
+   */
+  async readSourceOf(
+    turn: AnalysisReadScope,
+    runId: string | undefined,
+  ): Promise<AnalysisSource | { error: string; message: string }> {
+    const named = analysedSourceOf(turn, runId);
+    if (!('error' in named) || !turn.team || runId === undefined) {
+      return named;
+    }
+    const run = await this.runDao.getById(runId, this.em.fork());
+    if (run === null) {
+      return {
+        error: 'RUN_GONE',
+        message: `No run ${runId}: a deleted run's rows are gone, so it cannot be read. view=history and view=spend still count it.`,
+      };
+    }
+    if (run.teamId === null) {
+      return {
+        error: 'NOT_A_TEAM_RUN',
+        message: `${runId} is a chat of no team: this analysis reads only its team's runs.`,
+      };
+    }
+    if (run.teamId !== turn.team.slug) {
+      return {
+        error: 'OTHER_TEAM_RUN',
+        message: `${runId} is a run of another team: this analysis reads only ${turn.team.slug}'s.`,
+      };
+    }
+    const snapshot = await runSnapshotOf(
+      { em: this.em, runDao: this.runDao, itemDao: this.itemDao },
+      runId,
+    );
+    if (snapshot.snapshotSeq < 0) {
+      return {
+        error: 'RUN_EMPTY',
+        message: `${runId} has no rows yet.`,
+      };
+    }
+    turn.team.opened ??= new Map();
+    const opened = turn.team.opened.get(runId) ?? { runId, ...snapshot };
+    turn.team.opened.set(runId, opened);
+    return {
+      sourceRunId: opened.runId,
+      snapshotSeq: opened.snapshotSeq,
+      sourceWorking: opened.working,
+    };
   }
 
   /**
@@ -491,7 +546,7 @@ export class ThreadReaderService {
       nodes: nodeFigures(folded),
       calls: callFigures(folded),
       models: modelFigures(folded),
-      next: "Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=team runId=… is the team as the library holds it now, against that run's copy. view=history is every version of the team, the changes made to it and why, and the earlier analyses' recommendations with what became of them.",
+      next: "Read one run with runId: view=overview runId=…, then view=spans / view=items / view=item. view=team runId=… is the team as the library holds it now, against that run's copy. view=history is every version of the team, the changes made to it and why, and the earlier analyses' recommendations with what became of them. view=runs section=otherRuns lists the team's other runs, any of which runId opens: read one only for a concrete question these leave open.",
     });
     this.runsAnswers.delete(key);
     this.runsAnswers.set(key, { at: Date.now(), answer });

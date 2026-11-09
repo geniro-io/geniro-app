@@ -13,7 +13,6 @@ import { Button } from '../components/ui/button';
 import { popoverSurface } from '../components/ui/popover';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
-import { useNarrowViewport } from '../components/use-narrow-viewport';
 import type { DaemonClient } from '../daemon-client';
 import { plainMarkdownText } from './brief-text';
 import { CallConversationDialog } from './call-conversation-dialog';
@@ -433,7 +432,6 @@ export function WorkingAgentsCard({
   delegateState?: Pick<RunStateDto, 'throughSeq' | 'delegates' | 'calls'>;
   collapseToolSteps?: boolean;
 }): React.JSX.Element | null {
-  const narrow = useNarrowViewport();
   const live = rows.filter(isWorkingAgentLive);
   const [pressed, setPressed] = useThreadOverride('working-agents:open');
   const [rowPresses, setRowPresses] = useState<ReadonlyMap<string, boolean>>(
@@ -489,9 +487,7 @@ export function WorkingAgentsCard({
       onShowInChat={() => {
         // Stepping aside: left open, it would stand over the card it revealed.
         pressRow(row, false);
-        if (narrow) {
-          setPressed(false);
-        }
+        setPressed(false);
         onShowInChat(row.callId);
       }}
       runId={runId}
@@ -637,6 +633,11 @@ export function WorkingAgentsCard({
         chatAgentName={chatAgentName}
         delegateState={delegateState}
         collapseToolSteps={collapseToolSteps}
+        onShowInChat={(callId) => {
+          setDialogId(null);
+          setPressed(false);
+          onShowInChat(callId);
+        }}
       />
     </>
   );

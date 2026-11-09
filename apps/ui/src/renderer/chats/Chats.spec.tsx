@@ -5313,9 +5313,18 @@ describe('Chats team runs', () => {
     expect(
       revealed?.querySelector('[aria-expanded]')?.getAttribute('aria-expanded'),
     ).toBe('true');
+    expect(
+      container.querySelector<HTMLElement>('[data-slot="working-agents-card"]')
+        ?.dataset.folded,
+    ).toBe('true');
 
     await act(async () => {
       emitRunStatus({ runId: 'w1', status: 'completed' });
+    });
+    await act(async () => {
+      container
+        .querySelector('[data-slot="working-agents-toggle"] button')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(
       container.querySelector('[data-slot="working-agents-finished-toggle"]')

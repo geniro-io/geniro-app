@@ -39,7 +39,11 @@ import {
   overlayProjectIdsOf,
 } from '../utils/analysed-runs';
 import { laneOf } from '../utils/analysis-lane';
-import { knowledgeWriteOf, readCard } from '../utils/recommendations-card';
+import {
+  everySelectedMarked,
+  knowledgeWriteOf,
+  readCard,
+} from '../utils/recommendations-card';
 import { patchedCard } from '../utils/recommendations-patch';
 import { existingDirectory } from '../utils/resolve-directory';
 import { teamCardStats } from '../utils/team-runs-fold';
@@ -313,7 +317,17 @@ export class AnalysisReportsService {
       return refused(`the card has no ${unknown.join(', ')}`);
     }
     const row = await write('recommendation_outcome', marks);
-    return { status: 'recorded', seq: row.seq, count: marks.outcomes.length };
+    return {
+      status: 'recorded',
+      seq: row.seq,
+      count: marks.outcomes.length,
+      allMarked: await everySelectedMarked(
+        this.itemDao,
+        turn.analysisRunId,
+        marks.cardSeq,
+        this.em.fork(),
+      ).catch(() => false),
+    };
   }
 
   private async teamStats(

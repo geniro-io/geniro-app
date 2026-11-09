@@ -137,7 +137,7 @@ function plus(total: number | null, value: number | null): number | null {
   return value === null ? total : (total ?? 0) + value;
 }
 
-function roundUsd(value: number): number {
+export function roundUsd(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
 

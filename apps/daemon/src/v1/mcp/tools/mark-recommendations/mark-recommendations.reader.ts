@@ -1,5 +1,6 @@
 import {
   type AnalysisFiled,
+  HOST_RECORD_OUTCOME_TOOL,
   type RecommendationMarks,
   RecommendationMarksSchema,
 } from '../../../agents/chat.types';
@@ -29,7 +30,11 @@ export function marksResultText(outcome: AnalysisFiled | HostSinkUnavailable): {
   }
   const noun = outcome.count === 1 ? 'outcome' : 'outcomes';
   return {
-    text: `${outcome.count} ${noun} recorded on the card.`,
+    text: `${outcome.count} ${noun} recorded on the card.${
+      outcome.allMarked === true
+        ? ` Every item the Apply selected is marked: call ${HOST_RECORD_OUTCOME_TOOL} now with how the thread ended — what was applied, failed and skipped. It replaces what was recorded earlier.`
+        : ''
+    }`,
     isError: false,
   };
 }

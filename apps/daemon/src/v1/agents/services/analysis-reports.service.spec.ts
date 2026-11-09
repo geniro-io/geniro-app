@@ -61,7 +61,11 @@ const ITEM: RecommendationItem = {
   },
 };
 
-function sink(cardAt: number | null, card: unknown = CARD) {
+function sink(
+  cardAt: number | null,
+  card: unknown = CARD,
+  applied: readonly string[] = [],
+) {
   const written: { kind: string; payload: object }[] = [];
   const service = new AnalysisReportsService(
     { fork: () => ({}) } as unknown as EntityManager,
@@ -75,6 +79,25 @@ function sink(cardAt: number | null, card: unknown = CARD) {
                 payload: JSON.stringify(card),
               } as Item)
             : null,
+        ),
+      userMessagesInOrder: () =>
+        Promise.resolve(
+          applied.length === 0
+            ? []
+            : [
+                {
+                  payload: JSON.stringify({
+                    apply: { cardSeq: cardAt, ids: applied },
+                  }),
+                },
+              ],
+        ),
+      recommendationOutcomeRows: () =>
+        Promise.resolve(
+          written.map(({ payload }, seq) => ({
+            seq,
+            payload: JSON.stringify(payload),
+          })),
         ),
     } as unknown as ItemDao,
     {} as ThreadTimelineService,
@@ -113,10 +136,26 @@ describe('AnalysisReportsService — outcomes', () => {
       status: 'recorded',
       seq: 20,
       count: 1,
+      allMarked: false,
     });
     expect(written).toEqual([
       { kind: 'recommendation_outcome', payload: marks },
     ]);
+  });
+
+  it('says when the last item the Apply selected is marked, whatever its status', async () => {
+    const { mark } = sink(
+      7,
+      { ...CARD, items: [...CARD.items, { ...CARD.items[0], id: 'R-4' }] },
+      ['W-1', 'R-4'],
+    );
+
+    expect(
+      await mark({ cardSeq: 7, outcomes: [{ id: 'W-1', status: 'applied' }] }),
+    ).toMatchObject({ allMarked: false });
+    expect(
+      await mark({ cardSeq: 7, outcomes: [{ id: 'R-4', status: 'skipped' }] }),
+    ).toMatchObject({ allMarked: true });
   });
 
   it('still marks a card whose stored figures no longer read', async () => {

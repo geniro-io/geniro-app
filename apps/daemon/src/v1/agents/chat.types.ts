@@ -1638,7 +1638,14 @@ export interface ModelFigures {
 
 /** What filing a report or a set of outcomes resolved to. */
 export type AnalysisFiled =
-  | { status: 'recorded'; seq: number; count: number; members?: number }
+  | {
+      status: 'recorded';
+      seq: number;
+      count: number;
+      members?: number;
+      /** A mark: every item the Apply selected now has one. */
+      allMarked?: boolean;
+    }
   | { status: 'refused'; reason: string };
 
 /**

@@ -87,6 +87,19 @@ describe('foldTeamStats', () => {
 });
 
 describe('foldTeamPopulation', () => {
+  it('keeps a small average, as the card rounds its own', () => {
+    const population = foldTeamPopulation(
+      [{ runId: 'a' }, { runId: 'b' }, { runId: 'c' }],
+      new Map([
+        ['a', totalsOf(0.01, null, 1)],
+        ['b', totalsOf(0.02, null, 1)],
+        ['c', totalsOf(0.0416, null, 1)],
+      ]),
+    );
+
+    expect(population.perRun.costUsd).toBe(0.0239);
+  });
+
   it('counts a run with no usage in the runs, but in none of the per-run figures it did not measure', () => {
     expect(
       foldTeamPopulation(

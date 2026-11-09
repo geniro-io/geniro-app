@@ -35,6 +35,14 @@ describe('marksResultText', () => {
       isError: false,
     });
     expect(
+      marksResultText({
+        status: 'recorded',
+        seq: 9,
+        count: 1,
+        allMarked: true,
+      }).text,
+    ).toContain('Every item the Apply selected is marked: call record_outcome');
+    expect(
       marksResultText({ status: 'refused', reason: 'the card has no W-9' }),
     ).toEqual({ text: 'Not recorded: the card has no W-9.', isError: true });
   });

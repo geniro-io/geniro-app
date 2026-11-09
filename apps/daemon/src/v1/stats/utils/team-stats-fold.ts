@@ -3,6 +3,7 @@ import type {
   RecommendationsTeamPopulation,
 } from '../../agents/chat.types';
 import { wallTurnKey } from '../../agents/dao/wall-turn.dao';
+import { roundUsd } from '../../agents/utils/team-runs-fold';
 import {
   addPolledSpend,
   addUsage,
@@ -87,10 +88,7 @@ export function foldTeamPopulation(
   return {
     runs: threads.length,
     perRun: {
-      costUsd:
-        costs.length === 0
-          ? null
-          : Math.round((sum(costs) / costs.length) * 100) / 100,
+      costUsd: costs.length === 0 ? null : roundUsd(sum(costs) / costs.length),
       pricedRuns: costs.length,
       workedMs:
         worked.length === 0 ? null : Math.round(sum(worked) / worked.length),

@@ -607,7 +607,7 @@ export const RECOMMENDATION_TARGETS = [
 ] as const;
 export type RecommendationTarget = (typeof RECOMMENDATION_TARGETS)[number];
 
-/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`, `P-1`, `O-1`, `K-1`. */
+/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`, `P-1`, `O-1`, `K-1`, `X-1`. */
 export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
   team: 'W-',
   repo: 'R-',
@@ -744,7 +744,7 @@ export const RecommendationItemSchema = z.object({
     .min(1)
     .max(300)
     .describe(
-      'A team member id, a repo file:line, the user-instructions file path, for memory the entry handle (m12) to update or forget, or new to add, for project the projectId view=project names, for knowledge the document handle, or new to add, or for external the absolute folder of that repository on this Mac',
+      'A team member id, a repo file:line, the user-instructions file path, for memory the entry handle (m12) to update or forget, or new to add, for project the projectId view=project names, for knowledge the document handle, or new to add, or for external the absolute root folder of that repository on this Mac',
     ),
   title: z.string().min(1).max(200),
   change: z

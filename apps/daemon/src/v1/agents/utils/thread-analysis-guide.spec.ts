@@ -495,6 +495,12 @@ describe('analysis guides, the apply and the outcome', () => {
     expect(guide).toContain('with `recommendation_ids` naming each');
   });
 
+  it('records no outcome before the card is recorded', () => {
+    expect(teamAnalysisGuide(null, false)).toContain(
+      'Record no outcome (`record_outcome`) before the receipt says the card is recorded',
+    );
+  });
+
   it('calls record_outcome once every selected item is marked, verdicts included', () => {
     for (const guide of [
       threadAnalysisGuide('team', null, false),

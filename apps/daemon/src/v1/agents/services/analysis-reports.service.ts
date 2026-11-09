@@ -1,4 +1,5 @@
-import { isAbsolute } from 'node:path';
+import { existsSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Optional } from '@nestjs/common';
@@ -41,7 +42,7 @@ import {
 import { laneOf } from '../utils/analysis-lane';
 import { knowledgeWriteOf, readCard } from '../utils/recommendations-card';
 import { patchedCard } from '../utils/recommendations-patch';
-import { resolveValidDirectory } from '../utils/resolve-directory';
+import { existingDirectory } from '../utils/resolve-directory';
 import { teamCardStats } from '../utils/team-runs-fold';
 import { analysedThreadKindOf } from '../utils/thread-analysis-guide';
 import { ThreadReaderService } from './thread-reader.service';
@@ -69,16 +70,10 @@ function refusedFor(problems: readonly string[]): AnalysisFiled {
   return refused(`${listed}. ${KEPT_FOR_PATCH}`);
 }
 
-function isRepositoryFolder(path: string): boolean {
-  try {
-    resolveValidDirectory(path, {
-      errorCode: 'NOT_A_REPOSITORY_FOLDER',
-      noun: 'folder',
-    });
-    return true;
-  } catch {
-    return false;
-  }
+/** Whether a path is the root of a repository, where a board card's run could work. */
+function isRepositoryRoot(path: string): boolean {
+  const folder = existingDirectory(path);
+  return folder !== null && existsSync(join(folder, '.git'));
 }
 
 /**
@@ -185,7 +180,7 @@ export class AnalysisReportsService {
         ? await overlayProjectIdsOf(turn, readers, em)
         : new Set(),
       this.knowledge?.agentsMayWrite ?? false,
-      isRepositoryFolder,
+      isRepositoryRoot,
     );
     problems.push(...(await this.documentProblems(report)));
     // Each cited row is checked against the run it names, at that run's own
@@ -275,7 +270,12 @@ export class AnalysisReportsService {
     report: RecommendationsReport,
   ): Promise<string[]> {
     const problems: string[] = [];
+    const byId = new Map(report.items.map((item) => [item.id, item]));
+    const writable = this.knowledge?.agentsMayWrite ?? false;
     for (const item of report.items) {
+      if (knowledgeItemProblems(item, byId, writable).length > 0) {
+        continue;
+      }
       const write = knowledgeWriteOf(item);
       const refusal =
         write === null || this.knowledge === undefined
@@ -548,8 +548,8 @@ export function checkItems(
   /** Of those, the ones defaulting to the analysed team — an overlay item must name one. */
   overlayProjectIds: ReadonlySet<string> = projectIds,
   knowledgeWritable = false,
-  /** Whether a folder an external item names is there to file a card for. */
-  folderExists: (path: string) => boolean = () => true,
+  /** Whether a folder an external item names is a repository to file a card for. */
+  repositoryAt: (path: string) => boolean = () => true,
 ): string[] {
   const problems: string[] = [];
   const seen = new Set<string>();
@@ -608,10 +608,10 @@ export function checkItems(
     }
     if (
       item.target === 'external' &&
-      (!isAbsolute(item.location) || !folderExists(item.location))
+      (!isAbsolute(item.location) || !repositoryAt(item.location))
     ) {
       problems.push(
-        `${item.id}: location must be the absolute folder of that repository on this Mac, and ${item.location} is not one — a repository not on this Mac cannot get a card: say so in your reply instead`,
+        `${item.id}: location must be the absolute root folder of that repository on this Mac, holding its .git, and ${item.location} is not one — a repository not on this Mac cannot get a card: say so in your reply instead`,
       );
     }
   }

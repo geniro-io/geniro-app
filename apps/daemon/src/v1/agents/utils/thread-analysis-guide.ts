@@ -42,7 +42,7 @@ function repoTarget(folder: string): string {
   return `repository changes (target "repo": checks, scripts, skills, .claude/rules, AGENTS.md / CLAUDE.md in ${folder})`;
 }
 
-const EXTERNAL_TARGET = `changes to another repository (target "external": a fix that belongs in a repository these runs did not work in, a plugin or tool they use; \`location\` is that repository's absolute folder on this Mac; \`kind\` as for a repo item; \`change\` is the brief for a separate run there)`;
+const EXTERNAL_TARGET = `changes to another repository (target "external": a fix that belongs in a repository these runs did not work in, a plugin or tool they use; \`location\` is that repository's absolute root folder on this Mac; \`kind\` as for a repo item; \`change\` is the brief for a separate run there)`;
 
 const EXTERNAL_TARGET_CAVEAT =
   "Anything in the runs' own repository is a repo item. A request about another repository becomes an external item, never only words in your reply; one not on this Mac cannot be filed, so name it in your reply instead.";

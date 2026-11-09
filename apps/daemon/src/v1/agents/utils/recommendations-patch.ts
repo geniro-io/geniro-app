@@ -49,9 +49,10 @@ export function patchedCard(
   patch: RecommendationsPatch,
 ): { ok: true; card: Entry } | { ok: false; problems: string[] } {
   const problems: string[] = [];
+  // Only what the schema names: a patch cannot name a stray key to remove it.
+  const summary = patch.summary ?? held.summary;
   const card: Entry = {
-    ...held,
-    ...(patch.summary === undefined ? {} : { summary: patch.summary }),
+    ...(summary === undefined ? {} : { summary }),
     hotspots: patchedList(
       held.hotspots,
       'title',

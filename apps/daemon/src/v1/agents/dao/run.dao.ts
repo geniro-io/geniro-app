@@ -262,8 +262,7 @@ export class RunDao extends BaseDao<Run> {
 
   /**
    * A library team's newest runs, newest first, at most `limit` — the
-   * ones a team analysis reads, archived ones included: leaving them out
-   * judged a team from whichever few runs were still on the desk.
+   * ones a team analysis reads, archived ones included.
    */
   async newestTeamRuns(
     slug: string,

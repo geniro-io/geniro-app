@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -151,7 +155,11 @@ function setup(
     knowledge,
   );
   const report = (args: Record<string, unknown>) =>
-    tool.call('report_recommendations', { hotspots: [], ...args }, CONTEXT);
+    tool.call(
+      'report_recommendations',
+      args.patch === undefined ? { hotspots: [], ...args } : args,
+      CONTEXT,
+    );
   const description = () => tool.list(CONTEXT)[0]?.description ?? '';
   return { report, description, written, checked };
 }
@@ -559,6 +567,61 @@ describe('ReportRecommendationsTool', () => {
 
     expect(unreadable.content[0]!.text).toMatch(/^INVALID_ARGS/);
     expect(written).toHaveLength(1);
+  });
+
+  it('refuses a patch sent beside a whole card', async () => {
+    const { report } = setup('dev-team');
+
+    const both = await report({ items: [], patch: { summary: 'no' } });
+
+    expect(both.content[0]!.text).toMatch(/^INVALID_ARGS/);
+  });
+
+  it('files a card a patch fixes, through the tool', async () => {
+    const { report, written } = setup('dev-team');
+
+    const refused = await report({ items: [{ ...item('R-1'), id: 'W-1' }] });
+    expect(refused.content[0]!.text).toContain('Not recorded: ');
+    expect(refused.content[0]!.text).toContain('send only `patch`');
+    expect(written).toEqual([]);
+
+    const fixed = await report({
+      patch: { remove: { items: ['W-1'] }, items: [item('R-1')] },
+    });
+
+    expect(fixed.isError).toBe(false);
+    expect(written).toHaveLength(1);
+  });
+
+  it('files an external item only for a repository root that exists', async () => {
+    const { report, written } = setup('dev-team');
+    const plain = mkdtempSync(join(tmpdir(), 'external-plain-'));
+    const repository = mkdtempSync(join(tmpdir(), 'external-repo-'));
+    mkdirSync(join(repository, '.git'));
+    const external = (location: string) => ({
+      ...item('R-1'),
+      id: 'X-1',
+      target: 'external',
+      location,
+    });
+
+    try {
+      for (const location of [plain, join(plain, 'gone'), 'relative/folder']) {
+        const refused = await report({ items: [external(location)] });
+        expect(refused.content[0]!.text).toContain(
+          'location must be the absolute root folder',
+        );
+      }
+      expect(written).toEqual([]);
+
+      const filed = await report({ items: [external(repository)] });
+
+      expect(filed.isError).toBe(false);
+      expect(written).toHaveLength(1);
+    } finally {
+      rmSync(plain, { recursive: true, force: true });
+      rmSync(repository, { recursive: true, force: true });
+    }
   });
 
   it('asks every item for its cost and its outcome, and the card for its hotspots', async () => {

@@ -62,6 +62,10 @@ describe('composeTeamChatInstructions', () => {
   it('no longer advises a dry run of save_team_change, since every change goes on a card', () => {
     expect(BRIEF).not.toMatch(/answers the diff without saving/);
     expect(BRIEF).not.toMatch(/dryRun/);
+    expect(BRIEF).not.toMatch(/save_team_change/);
+    expect(BRIEF).toMatch(
+      /So propose straight away; there\s+is nothing to rehearse/,
+    );
   });
 
   it('tells the agent to read the team through read_teams before changing it, never the file', () => {

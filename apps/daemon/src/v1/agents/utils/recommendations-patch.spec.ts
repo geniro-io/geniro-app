@@ -33,6 +33,12 @@ function cardOf(patch: RecommendationsPatch): Record<string, unknown> {
 }
 
 describe('patchedCard', () => {
+  it('drops a stray top-level key a kept card was refused for, which no patch could name', () => {
+    const patched = patchedCard({ ...HELD, totals: { costUsd: 1 } }, {});
+    expect(patched).toMatchObject({ ok: true });
+    expect(patched.ok && patched.card).not.toHaveProperty('totals');
+  });
+
   it('merges an entry by its id, each field sent replacing that field and the rest staying', () => {
     const card = cardOf({ items: [{ id: 'W-1', change: 'new change' }] });
 

@@ -220,7 +220,16 @@ export class TeamProposalService {
     if (refusal !== null) {
       return { ok: false, code: refusal.error, message: refusal.message };
     }
-    const card = await readCard(this.itemDao, runId, apply.cardSeq, em);
+    const card = await readCard(this.itemDao, runId, apply.cardSeq, em).catch(
+      () => null,
+    );
+    if (card === null) {
+      return {
+        ok: false,
+        code: 'CARD_GONE',
+        message: 'the recommendations card the Apply named cannot be read',
+      };
+    }
     const halves = proposal.mode === 'replace' ? proposal : null;
     const projectOf = (id: string): string | undefined =>
       id.startsWith('P-')

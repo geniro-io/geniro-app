@@ -23,7 +23,10 @@ import {
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
 import { isAnalysisRun } from '../utils/analysed-runs';
-import { resolveValidDirectory } from '../utils/resolve-directory';
+import {
+  existingDirectory,
+  resolveValidDirectory,
+} from '../utils/resolve-directory';
 import {
   runSnapshotOf,
   type RunSnapshotReaders,
@@ -39,24 +42,12 @@ import {
 import { AgentEventBus } from './agent-events.bus';
 import { ChatService } from './chat.service';
 
-/** The folder canonicalized, or null when it is missing or not readable. */
-function existingFolder(path: string): string | null {
-  try {
-    return resolveValidDirectory(path, {
-      errorCode: 'ANALYSIS_FOLDER_GONE',
-      noun: 'folder',
-    });
-  } catch {
-    return null;
-  }
-}
-
 /** The newest of these runs' folders that still exists: an archived run's worktree may be gone. */
 function newestExistingFolder(
   runs: readonly { cwd: string | null }[],
 ): string | null {
   for (const { cwd } of runs) {
-    const folder = cwd === null ? null : existingFolder(cwd);
+    const folder = cwd === null ? null : existingDirectory(cwd);
     if (folder !== null) {
       return folder;
     }
@@ -180,7 +171,7 @@ export class ThreadAnalysisService
           })
         : source.cwd === null
           ? null
-          : existingFolder(source.cwd);
+          : existingDirectory(source.cwd);
     if (cwd === null) {
       throw new ConflictException(
         'ANALYSIS_FOLDER_GONE',

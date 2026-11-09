@@ -4510,6 +4510,12 @@ describe('McpServerService — what the descriptions tell a model', () => {
     );
     expect(described(HOST_PROPOSE_TEAM_TOOL)).toContain(HOST_TEAM_CHANGE_TOOL);
     expect(described(HOST_PROPOSE_TEAM_TOOL)).toContain('recommendation_ids');
+    expect(described(HOST_PROPOSE_TEAM_TOOL)).toMatch(
+      /never rehearsing the edits/,
+    );
+    expect(described(HOST_TEAM_CHANGE_TOOL)).toMatch(
+      /never as a rehearsal of a card/,
+    );
     expect(described(HOST_TEAM_CHANGE_TOOL)).toContain(HOST_PROPOSE_TEAM_TOOL);
     expect(described(HOST_BACKUP_TEAM_TOOL)).toContain(HOST_PROPOSE_TEAM_TOOL);
     expect(described(HOST_BACKUP_TEAM_TOOL)).toMatch(/Do NOT use it/);

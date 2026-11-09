@@ -432,7 +432,7 @@ describe('RunDao (in-memory sqlite)', () => {
       ]);
     });
 
-    it('reads a team’s newest unarchived runs, newest first, up to the limit', async () => {
+    it('reads a team’s newest runs, archived ones included, newest first, up to the limit', async () => {
       await dao.create({
         id: 'w1',
         teamId: 'team',
@@ -463,10 +463,13 @@ describe('RunDao (in-memory sqlite)', () => {
 
       expect(
         (await dao.newestTeamRuns('team', 2)).map((run) => run.id),
-      ).toEqual(['w4', 'w2']);
+      ).toEqual(['w4', 'w3']);
       expect(
         (await dao.newestTeamRuns('team', 10)).map((run) => run.id),
-      ).toEqual(['w4', 'w2', 'w1']);
+      ).toEqual(['w4', 'w3', 'w2', 'w1']);
+      expect(
+        (await dao.newestTeamRuns('team', null)).map((run) => run.id),
+      ).toEqual(['w4', 'w3', 'w2', 'w1']);
     });
   });
 
@@ -481,6 +484,13 @@ describe('RunDao (in-memory sqlite)', () => {
       expect((await dao.listOrphanedAnalyses()).map((run) => run.id)).toEqual([
         orphan.id,
       ]);
+    });
+
+    it('keeps the analysis of an archived thread', async () => {
+      const shelved = await dao.create({ archivedAt: new Date() });
+      await dao.create({ analysisSourceRunId: shelved.id });
+
+      expect(await dao.listOrphanedAnalyses()).toEqual([]);
     });
 
     it('answers none when no thread has an analysis', async () => {

@@ -21,7 +21,7 @@ export function saveTeamChangeInstructions(forBuilder: boolean): string {
   if (forBuilder) {
     return (
       'Check a change to the team this chat edits WITHOUT saving it: answers where each edit landed (`landed`, one field path per edit, in order) and the diff the edits make to the file as it stands, or which edit would be refused and why. ' +
-      `Use it when you want to try out a set of edits before you put them on a card; to make the change, send the same edits to ${HOST_PROPOSE_TEAM_TOOL}, which shows the user what changes and why and saves it on their Approve. ` +
+      `Use it when you want to see where edits would land without changing the team, never as a rehearsal of a card: ${HOST_PROPOSE_TEAM_TOOL} refuses what this refuses without raising one, so to make a change send the edits there straight away. ` +
       `Read the team with ${HOST_READ_TEAMS_TOOL}, then pass only the EDITS — never the whole team. ` +
       EDIT_SHAPES +
       `A configDir token "${CONFIG_DIR_TOKEN_PREFIX}…>" from ${HOST_READ_TEAMS_TOOL} keeps that profile when written back unchanged. ` +

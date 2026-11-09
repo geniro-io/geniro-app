@@ -39,7 +39,14 @@ export type RecommendationOutcomeStatus = 'applied' | 'skipped' | 'failed';
 export interface RecommendationView {
   id: string;
   target:
-    'team' | 'repo' | 'user' | 'memory' | 'project' | 'overlay' | 'knowledge';
+    | 'team'
+    | 'repo'
+    | 'user'
+    | 'memory'
+    | 'project'
+    | 'overlay'
+    | 'knowledge'
+    | 'external';
   territory: RecommendationTerritory;
   kind: string;
   location: string;
@@ -814,6 +821,7 @@ export function RecommendationsCard({
       ['project', 'Project instructions'],
       ['overlay', 'Project overlay'],
       ['knowledge', 'Knowledge'],
+      ['external', 'Other repositories'],
     ] as const
   )
     .filter(([target]) => target !== 'team' || team)
@@ -823,6 +831,14 @@ export function RecommendationsCard({
     }))
     .filter((group) => group.items.length > 0);
   const unit: ProjectionUnit = team ? 'run' : 'thread';
+  const projectionPopulation =
+    teamStats?.population == null
+      ? null
+      : {
+          runs: teamStats.population.runs,
+          sampleRuns: teamStats.runs,
+          costPerRunUsd: teamStats.population.perRun.costUsd,
+        };
   const hotNodes = new Set(
     hotspots.flatMap((hotspot) =>
       hotspot.node === null ? [] : [hotspot.node],
@@ -945,6 +961,7 @@ export function RecommendationsCard({
           costSavedUsd={costSavedUsd}
           scope={projectionScope(kept, picked, items.length)}
           unit={unit}
+          population={projectionPopulation}
           look={look}
         />
       )}

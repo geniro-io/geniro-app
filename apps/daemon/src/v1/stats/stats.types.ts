@@ -458,6 +458,17 @@ export interface SpendBreakdown {
   last30Days: SpendFigures | null;
 }
 
+/** A run of a team outside what its analysis samples (`read_analyzed_thread` view=runs section=otherRuns). */
+export interface TeamOtherRun {
+  runId: string;
+  title: string | null;
+  createdAt: string;
+  statusNow: string;
+  archived: boolean;
+  /** Over every row its ledgers hold; null when none reported one. */
+  costUsd: number | null;
+}
+
 /** One team's spend, as an analysis reads it (`read_analyzed_thread` view=spend). */
 export interface TeamSpend {
   team: string;

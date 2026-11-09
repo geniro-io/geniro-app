@@ -7,10 +7,7 @@ import {
   pagedAnswer,
   type ThreadReaderService,
 } from '../../../agents/services/thread-reader.service';
-import {
-  analysedRunIdsOf,
-  analysedSourceOf,
-} from '../../../agents/utils/analysed-runs';
+import { analysedRunIdsOf } from '../../../agents/utils/analysed-runs';
 import type { TeamHistoryService } from '../../../stats/services/team-history.service';
 import type { TeamChangeService } from '../../../teams/services/team-change.service';
 import type {
@@ -23,6 +20,7 @@ import { readAnalyzedThreadInstructions } from './read-analyzed-thread.instructi
 import {
   analyzedThreadResultText,
   historyAnswer,
+  otherRunsAnswer,
   readAnalyzedThreadArgs,
   spendAnswer,
 } from './read-analyzed-thread.reader';
@@ -35,10 +33,10 @@ const NOT_A_TEAM = {
 
 /**
  * `read_analyzed_thread` — an analysis chat's paged read of the one thread it
- * analyses, or of the runs a team analysis was started on. Offered only
- * while an analysis turn runs, and carries no `readOnlyHint` (codex would skip
- * its approval); its auto-approval is `isHostAnalysisReadCall`'s, scoped by
- * the broker to those sources.
+ * analyses, or of a team analysis's runs and any other run of that team it
+ * names. Offered only while an analysis turn runs, and carries no
+ * `readOnlyHint` (codex would skip its approval); its auto-approval is
+ * `isHostAnalysisReadCall`'s, scoped by the broker's turn to those sources.
  */
 export class ReadAnalyzedThreadTool extends BaseMcpTool {
   readonly name = HOST_ANALYZED_THREAD_TOOL;
@@ -109,16 +107,38 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
           ),
         );
       }
-      if (read.query.view !== 'team') {
+      if (
+        read.query.view === 'runs' &&
+        read.query.section !== undefined &&
+        turn.team
+      ) {
         return this.text(
           analyzedThreadResultText(
-            await this.threads.read(turn, read.query, (slug) =>
-              this.history.versionIndex(slug),
+            otherRunsAnswer(
+              maskedAnswer({
+                team: turn.team.slug,
+                otherRuns: await this.history.otherRuns(turn.team.slug, {
+                  analysedRunIds: analysedRunIdsOf(turn),
+                }),
+              }),
+              read.query,
             ),
           ),
         );
       }
-      const named = analysedSourceOf(turn, read.query.runId);
+      if (read.query.view !== 'team') {
+        return this.text(
+          analyzedThreadResultText(
+            await this.threads.read(
+              turn,
+              read.query,
+              (slug) => this.history.versionIndex(slug),
+              (slug) => this.history.population(slug),
+            ),
+          ),
+        );
+      }
+      const named = await this.threads.readSourceOf(turn, read.query.runId);
       if ('error' in named) {
         return this.text(analyzedThreadResultText(named));
       }

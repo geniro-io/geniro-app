@@ -95,8 +95,22 @@ export interface TeamCallStatsView {
   workedMs: number | null;
 }
 
+/** Every run the team has, deleted ones included, beside the sampled runs. */
+export interface TeamPopulationView {
+  runs: number;
+  perRun: {
+    costUsd: number | null;
+    pricedRuns: number;
+    workedMs: number | null;
+    timedRuns: number;
+    turns: number;
+  };
+}
+
 export interface TeamStatsView {
   runs: number;
+  /** Null when the card names no population: an older card, or one the daemon could not count. */
+  population: TeamPopulationView | null;
   perRun: {
     wallMs: number;
     activeMs: number;
@@ -224,6 +238,34 @@ function runsWord(count: number): string {
   return `${count} run${count === 1 ? '' : 's'}`;
 }
 
+function populationLine(
+  stats: TeamStatsView,
+  population: TeamPopulationView,
+  look: RecommendationsLook,
+): string {
+  if (population.runs <= stats.runs) {
+    return stats.runs === 1
+      ? 'Read the only run'
+      : `Read all ${runsWord(stats.runs)}`;
+  }
+  const { perRun } = population;
+  const cost =
+    perRun.costUsd === null
+      ? null
+      : `${look.formatUsd(perRun.costUsd)} per run${perRun.pricedRuns < population.runs ? ` (${perRun.pricedRuns} priced)` : ''}`;
+  const worked =
+    perRun.workedMs === null
+      ? null
+      : `${look.formatMs(perRun.workedMs)} worked`;
+  const turns = Math.round(perRun.turns);
+  const figures = [
+    cost,
+    worked,
+    `${turns} ${turns === 1 ? 'turn' : 'turns'}`,
+  ].filter((part): part is string => part !== null);
+  return `Read ${stats.runs} of ${runsWord(population.runs)}. Over all ${population.runs}: ${figures.join(' · ')}`;
+}
+
 function Scorecard({
   stats,
   look,
@@ -234,35 +276,44 @@ function Scorecard({
   const { perRun, totals } = stats;
   const unpriced = stats.runs - perRun.pricedRuns;
   return (
-    <div
-      data-slot="analysis-scorecard"
-      className="grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] gap-2">
-      <Tile
-        label="Time per run"
-        value={look.formatMs(perRun.wallMs)}
-        note={`average of ${runsWord(stats.runs)} · agents active ${look.formatMs(perRun.activeMs)}`}
-      />
-      <Tile
-        label="Cost per run"
-        value={usdOrDash(look, perRun.costUsd)}
-        note={
-          totals.costUsd === null
-            ? 'no run reported a cost'
-            : `${look.formatUsd(totals.costUsd)} in all${unpriced > 0 ? ` · ${unpriced} unpriced` : ''}`
-        }
-      />
-      <Tile
-        label="Failed turns"
-        value={String(totals.failedTurns)}
-        tone={totals.failedTurns > 0 ? 'bad' : 'default'}
-        note={`of ${totals.turns} turns · ${totals.failedToolCalls} of ${totals.toolCalls} tool calls failed`}
-      />
-      <Tile
-        label="Waiting on you"
-        value={look.formatMs(perRun.waitingOnUserMs)}
-        note={`per run · critical path ${look.formatMs(perRun.criticalPathMs)}`}
-      />
-    </div>
+    <>
+      {stats.population == null ? null : (
+        <p
+          data-slot="analysis-population"
+          className="m-0 text-[11px] leading-snug text-muted-foreground">
+          {populationLine(stats, stats.population, look)}
+        </p>
+      )}
+      <div
+        data-slot="analysis-scorecard"
+        className="grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] gap-2">
+        <Tile
+          label="Time per run"
+          value={look.formatMs(perRun.wallMs)}
+          note={`average of ${runsWord(stats.runs)} · agents active ${look.formatMs(perRun.activeMs)}`}
+        />
+        <Tile
+          label="Cost per run"
+          value={usdOrDash(look, perRun.costUsd)}
+          note={
+            totals.costUsd === null
+              ? 'no run reported a cost'
+              : `${look.formatUsd(totals.costUsd)} in all${unpriced > 0 ? ` · ${unpriced} unpriced` : ''}`
+          }
+        />
+        <Tile
+          label="Failed turns"
+          value={String(totals.failedTurns)}
+          tone={totals.failedTurns > 0 ? 'bad' : 'default'}
+          note={`of ${totals.turns} turns · ${totals.failedToolCalls} of ${totals.toolCalls} tool calls failed`}
+        />
+        <Tile
+          label="Waiting on you"
+          value={look.formatMs(perRun.waitingOnUserMs)}
+          note={`per run · critical path ${look.formatMs(perRun.criticalPathMs)}`}
+        />
+      </div>
+    </>
   );
 }
 
@@ -777,12 +828,30 @@ function ProjectionRow({
   );
 }
 
+/** The runs the baseline was measured over, against every run the team has. */
+export interface ProjectionPopulation {
+  runs: number;
+  sampleRuns: number;
+  costPerRunUsd: number | null;
+}
+
+function measuredSentence(
+  population: ProjectionPopulation,
+  look: RecommendationsLook,
+): string {
+  const sampled = `Measured over the ${runsWord(population.sampleRuns)} read`;
+  return population.costPerRunUsd === null
+    ? `${sampled} of ${population.runs}.`
+    : `${sampled}; over all ${population.runs} a run costs ${look.formatUsd(population.costPerRunUsd)}.`;
+}
+
 export function RecommendationsProjection({
   baseline,
   minutesSaved,
   costSavedUsd,
   scope,
   unit = 'run',
+  population = null,
   look,
 }: {
   baseline: ProjectionBaseline;
@@ -790,9 +859,14 @@ export function RecommendationsProjection({
   costSavedUsd: number | null;
   scope: string;
   unit?: ProjectionUnit;
+  population?: ProjectionPopulation | null;
   look: RecommendationsLook;
 }): React.JSX.Element | null {
   const savedMs = minutesSaved * 60_000;
+  const measured =
+    population === null || population.runs <= population.sampleRuns
+      ? null
+      : measuredSentence(population, look);
   const rows: React.ReactNode[] = [];
   const loose: string[] = [];
   if (baseline.wallMs !== null) {
@@ -840,6 +914,7 @@ export function RecommendationsProjection({
       <p className="m-0 text-[11px] leading-snug text-muted-foreground">
         From the analysis’s own estimates over the measured figures; items can
         overlap, so read it as the most they could save.
+        {measured === null ? null : ` ${measured}`}
       </p>
     </section>
   );

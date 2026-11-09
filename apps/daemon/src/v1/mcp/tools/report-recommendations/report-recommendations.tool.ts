@@ -11,7 +11,7 @@ import type {
 import { BaseMcpTool } from '../base-mcp-tool';
 import { reportRecommendationsInstructions } from './report-recommendations.instructions';
 import {
-  readRecommendationsReport,
+  readRecommendationsCall,
   recommendationsResultText,
 } from './report-recommendations.reader';
 import { reportRecommendationsSchema } from './report-recommendations.schema';
@@ -23,7 +23,10 @@ export class ReportRecommendationsTool extends BaseMcpTool {
   constructor(
     private readonly analysis: AnalysisBroker,
     private readonly memory: Pick<MemoryService, 'enabled'>,
-    private readonly history: Pick<TeamHistoryService, 'versionIndex'>,
+    private readonly history: Pick<
+      TeamHistoryService,
+      'versionIndex' | 'population'
+    >,
     private readonly knowledge: Pick<KnowledgeService, 'agentsMayWrite'>,
   ) {
     super();
@@ -48,13 +51,17 @@ export class ReportRecommendationsTool extends BaseMcpTool {
     args: Record<string, unknown>,
     { runId, memberId }: McpCallContext,
   ): Promise<McpToolResult> {
-    const read = readRecommendationsReport(args);
+    const read = readRecommendationsCall(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
     const result = recommendationsResultText(
-      await this.analysis.report(runId, memberId, read.query, (slug) =>
-        this.history.versionIndex(slug),
+      await this.analysis.report(
+        runId,
+        memberId,
+        read.query,
+        (slug) => this.history.versionIndex(slug),
+        (slug) => this.history.population(slug),
       ),
     );
     return this.text(result.text, result.isError);

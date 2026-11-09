@@ -488,6 +488,8 @@ export const ANALYSIS_HISTORY_SECTIONS = [
   'members',
   'diff',
 ] as const;
+/** What view=runs reads a page of, beside its comparison of the sample. */
+export const ANALYSIS_RUNS_SECTIONS = ['otherRuns'] as const;
 /** What view=spend reads a page of, once it is past one page. */
 export const ANALYSIS_SPEND_SECTIONS = [
   'byProject',
@@ -509,14 +511,14 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
   view: z
     .enum(ANALYSIS_VIEWS)
     .describe(
-      "overview: timing summary, per-member time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and team version, the runs compared version by version, every member's totals and every member's turns per model across them, in chunks when long (team analyses only). history: every version of the team with what its runs did, every change made to it with who made it and why, and every recommendation filed about it with what became of it; a long history answers its summary and each section's size, then reads by `section` (team threads and analyses only). spend: where the team's money went over every run the ledgers hold, archived and deleted ones included, whatever this analysis samples: cost by token class per project, member and model, the last 30 days and the analysed runs beside the whole, and cache misses, each figure saying what it covers; a long answer reads its breakdowns by `section` (team threads and analyses only). project: the project each analysed run belongs to — its description and instructions as they stand now, the instructionsRevision a write quotes, each run's start copy where it differs, and the project's newest changes with who made them",
+      "overview: timing summary, per-member time, slowest tools, critical path. spans: every timed span, paged. items: the transcript rows, paged, each clipped. item: one row in full, in chunks. team: the team as it is in the library now, its hash and how it differs from the copy this run started with (team threads only). runs: every run a team analysis reads, with its totals, outcome and team version, the runs compared version by version, every member's totals and every member's turns per model across them, in chunks when long; section=otherRuns instead lists the team's runs outside that sample (team analyses only). history: every version of the team with what its runs did, every change made to it with who made it and why, and every recommendation filed about it with what became of it; a long history answers its summary and each section's size, then reads by `section` (team threads and analyses only). spend: where the team's money went over every run the ledgers hold, archived and deleted ones included, whatever this analysis samples: cost by token class per project, member and model, the last 30 days and the analysed runs beside the whole, and cache misses, each figure saying what it covers; a long answer reads its breakdowns by `section` (team threads and analyses only). project: the project each analysed run belongs to — its description and instructions as they stand now, the instructionsRevision a write quotes, each run's start copy where it differs, and the project's newest changes with who made them",
     ),
   runId: z
     .string()
     .max(200)
     .optional()
     .describe(
-      'A team analysis: which of its runs to read (view=runs lists them); omitted, the newest',
+      'A team analysis: which run to read, one of its sample (view=runs lists them) or any other run of the team (view=runs section="otherRuns" lists them); omitted, the newest',
     ),
   cursor: z
     .number()
@@ -547,10 +549,14 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
       'item, runs, team, history, spend, project: the `next.offset` the previous page returned',
     ),
   section: z
-    .enum([...ANALYSIS_HISTORY_SECTIONS, ...ANALYSIS_SPEND_SECTIONS])
+    .enum([
+      ...ANALYSIS_HISTORY_SECTIONS,
+      ...ANALYSIS_SPEND_SECTIONS,
+      ...ANALYSIS_RUNS_SECTIONS,
+    ])
     .optional()
     .describe(
-      "Which part of a long answer to read, following each page's `next`. history: versions, changeLog, recommendations and members page by record; diff is one version's diff (needs `version`). spend: byProject, byMember and byModel page by record",
+      "Which part of a long answer to read, following each page's `next`. history: versions, changeLog, recommendations and members page by record; diff is one version's diff (needs `version`). spend: byProject, byMember and byModel page by record. runs: otherRuns pages the team's runs outside this analysis's sample by record, newest first",
     ),
   version: z
     .union([z.number().int().min(1), z.string().max(200)])
@@ -564,7 +570,7 @@ export const ReadAnalyzedThreadArgsSchema = z.object({
     .min(0)
     .optional()
     .describe(
-      'history, spend: the `next.part` of a record too long for one page',
+      'history, spend, runs: the `next.part` of a record too long for one page',
     ),
   memberId: z
     .string()
@@ -603,10 +609,11 @@ export const RECOMMENDATION_TARGETS = [
   'project',
   'overlay',
   'knowledge',
+  'external',
 ] as const;
 export type RecommendationTarget = (typeof RECOMMENDATION_TARGETS)[number];
 
-/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`, `P-1`, `O-1`, `K-1`. */
+/** Each target's id prefix — `W-1`, `R-1`, `U-1`, `M-1`, `P-1`, `O-1`, `K-1`, `X-1`. */
 export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
   team: 'W-',
   repo: 'R-',
@@ -615,7 +622,15 @@ export const RECOMMENDATION_ID_PREFIX: Record<RecommendationTarget, string> = {
   project: 'P-',
   overlay: 'O-',
   knowledge: 'K-',
+  external: 'X-',
 };
+
+/** The targets whose items can carry out a member's verdict: a team's, or one project's about it. */
+export const MEMBER_VERDICT_TARGETS: readonly RecommendationTarget[] = [
+  'team',
+  'overlay',
+  'project',
+];
 
 /** What a knowledge recommendation does to its document. */
 export const KNOWLEDGE_ITEM_KINDS = ['add', 'update', 'retire'] as const;
@@ -649,8 +664,8 @@ export const MAX_RECOMMENDATIONS =
 export const RecommendationIdSchema = z
   .string()
   .regex(
-    /^[WRUMPOK]-\d{1,3}$/,
-    "an id is W-<n> for a team item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry, P-<n> for project instructions, O-<n> for the project's overlay of the team, K-<n> for a knowledge document",
+    /^[WRUMPOKX]-\d{1,3}$/,
+    "an id is W-<n> for a team item, R-<n> for repo, U-<n> for a user-instructions file, M-<n> for a shared-memory entry, P-<n> for project instructions, O-<n> for the project's overlay of the team, K-<n> for a knowledge document, X-<n> for another repository",
   );
 
 export const RecommendationTargetSchema = z.enum(RECOMMENDATION_TARGETS);
@@ -715,7 +730,7 @@ const RecommendationImpactSchema = z.object({
 
 export const RecommendationItemSchema = z.object({
   id: RecommendationIdSchema.describe(
-    'W-1, W-2… team; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory; P-1, P-2… project instructions; K-1, K-2… knowledge',
+    'W-1, W-2… team; R-1, R-2… repo; U-1, U-2… user-instructions file; M-1, M-2… shared memory; P-1, P-2… project instructions; O-1, O-2… project overlay; K-1, K-2… knowledge; X-1, X-2… another repository',
   ),
   target: RecommendationTargetSchema,
   territory: z
@@ -728,14 +743,14 @@ export const RecommendationItemSchema = z.object({
     .min(1)
     .max(40)
     .describe(
-      'team: role|instructions|stage|parallelize|model|effort|termination|member|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget; project: add|update|remove; knowledge: add|update|retire',
+      'team: role|instructions|stage|parallelize|model|effort|termination|member|revert; repo/user: check|standard|rule|skill|pointer|access|remove; memory: add|update|forget; project: add|update|remove; knowledge: add|update|retire; external: as repo',
     ),
   location: z
     .string()
     .min(1)
     .max(300)
     .describe(
-      'A team member id, a repo file:line, the user-instructions file path, for memory the entry handle (m12) to update or forget, or new to add, for project the projectId view=project names, or for knowledge the document handle, or new to add',
+      'A team member id, a repo file:line, the user-instructions file path, for memory the entry handle (m12) to update or forget, or new to add, for project the projectId view=project names, for knowledge the document handle, or new to add, or for external the absolute root folder of that repository on this Mac',
     ),
   title: z.string().min(1).max(200),
   change: z
@@ -843,8 +858,9 @@ const MemberMarkSchema = z.number().int().min(1).max(5).nullable();
 /**
  * One member's work as an analysis judged it: how useful it was and how its
  * work held up, each 1–5 with the rows behind them, and what to do about it.
- * A verdict other than `keep` names the team items on the same card that
- * carry it out, so it is applied with them.
+ * A verdict other than `keep` names the items on the same card that carry it
+ * out — team items, or a project's overlay or instruction items — so it is
+ * applied with them.
  */
 export const MemberAssessmentSchema = z.object({
   member: z
@@ -875,7 +891,7 @@ export const MemberAssessmentSchema = z.object({
     .array(RecommendationIdSchema)
     .max(MAX_RECOMMENDATIONS_PER_TARGET)
     .describe(
-      'The team items (W-…) on this card that carry the verdict out; [] for keep',
+      'The team, overlay or project items (W-…, O-…, P-…) on this card that carry the verdict out; [] for keep',
     ),
 });
 export type MemberAssessment = z.infer<typeof MemberAssessmentSchema>;
@@ -903,6 +919,60 @@ export const RecommendationsReportSchema = z.object({
     ),
 });
 export type RecommendationsReport = z.infer<typeof RecommendationsReportSchema>;
+
+/**
+ * A `report_recommendations` patch against the card this turn was refused:
+ * entries merge by key, field by field, and a new key adds a whole entry.
+ */
+export const RecommendationsPatchSchema = z
+  .object({
+    summary: RecommendationsReportSchema.shape.summary,
+    hotspots: z
+      .array(
+        RecommendationHotspotSchema.partial()
+          .required({ title: true })
+          .strict(),
+      )
+      .max(MAX_RECOMMENDATION_HOTSPOTS)
+      .optional()
+      .describe("Named by `title`: the fields sent replace that hotspot's"),
+    items: z
+      .array(RecommendationItemSchema.partial().required({ id: true }).strict())
+      .max(MAX_RECOMMENDATIONS)
+      .optional()
+      .describe("Named by `id`: the fields sent replace that item's"),
+    members: z
+      .array(
+        MemberAssessmentSchema.partial().required({ member: true }).strict(),
+      )
+      .max(MAX_MEMBER_ASSESSMENTS)
+      .optional()
+      .describe("Named by `member`: the fields sent replace that assessment's"),
+    remove: z
+      .object({
+        hotspots: z
+          .array(z.string().max(200))
+          .max(MAX_RECOMMENDATION_HOTSPOTS)
+          .optional(),
+        items: z
+          .array(RecommendationIdSchema)
+          .max(MAX_RECOMMENDATIONS)
+          .optional(),
+        members: z
+          .array(z.string().max(200))
+          .max(MAX_MEMBER_ASSESSMENTS)
+          .optional(),
+      })
+      .strict()
+      .optional()
+      .describe('What leaves the card, removed before the rest merges'),
+  })
+  .strict();
+export type RecommendationsPatch = z.infer<typeof RecommendationsPatchSchema>;
+
+/** One `report_recommendations` call: a whole card as sent, unparsed, or a patch. */
+export type RecommendationsCall =
+  { whole: Record<string, unknown> } | { patch: RecommendationsPatch };
 
 const CardRecommendationItemSchema = RecommendationItemSchema.extend({
   impact: RecommendationImpactSchema.partial({
@@ -982,8 +1052,27 @@ export const RecommendationsCallStatsSchema = z.object({
   workedMs: msSchema.nullable().optional(),
 });
 
+/**
+ * Every run the team has, a deleted or archived one's included, beside the few
+ * an analysis read: per-run figures divide by the runs that measured them.
+ */
+export const RecommendationsTeamPopulationSchema = z.object({
+  runs: countSchema,
+  perRun: z.object({
+    costUsd: usdSchema,
+    pricedRuns: countSchema,
+    workedMs: msSchema.nullable(),
+    timedRuns: countSchema,
+    turns: z.number().min(0),
+  }),
+});
+export type RecommendationsTeamPopulation = z.infer<
+  typeof RecommendationsTeamPopulationSchema
+>;
+
 export const RecommendationsTeamStatsSchema = z.object({
   runs: countSchema,
+  population: RecommendationsTeamPopulationSchema.nullable().optional(),
   perRun: z.object({
     wallMs: msSchema,
     activeMs: msSchema,
@@ -1239,6 +1328,11 @@ export interface AnalysedRun {
 export interface AnalysedTeam {
   slug: string;
   runs: AnalysedRun[];
+  /**
+   * Runs of the team outside `runs` this turn has read, each pinned at its
+   * snapshot when it was first opened (`ThreadReaderService.readSourceOf`).
+   */
+  opened?: Map<string, AnalysedRun>;
 }
 
 /**
@@ -1466,6 +1560,11 @@ export type TeamVersionIndexReader = (
   slug: string,
 ) => Promise<TeamVersionIndex>;
 
+/** Every run a team has, measured over the ledgers; the stats module keeps it. */
+export type TeamPopulationReader = (
+  slug: string,
+) => Promise<RecommendationsTeamPopulation>;
+
 /** A team version as an analysis names it. */
 export interface AnalysedVersionRef {
   version: string | null;
@@ -1550,7 +1649,14 @@ export interface ModelFigures {
 
 /** What filing a report or a set of outcomes resolved to. */
 export type AnalysisFiled =
-  | { status: 'recorded'; seq: number; count: number; members?: number }
+  | {
+      status: 'recorded';
+      seq: number;
+      count: number;
+      members?: number;
+      /** A mark: every item the Apply selected now has one. */
+      allMarked?: boolean;
+    }
   | { status: 'refused'; reason: string };
 
 /**
@@ -1560,8 +1666,9 @@ export type AnalysisFiled =
 export interface AnalysisSink {
   turn: AnalysisTurn;
   report(
-    report: RecommendationsReport,
+    call: RecommendationsCall,
     versionIndex: TeamVersionIndexReader | null,
+    population: TeamPopulationReader | null,
   ): Promise<AnalysisFiled>;
   mark(marks: RecommendationMarks): Promise<AnalysisFiled>;
 }

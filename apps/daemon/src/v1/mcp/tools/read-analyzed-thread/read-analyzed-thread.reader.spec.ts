@@ -6,6 +6,7 @@ import {
   PAGE_BYTES,
   type ThreadReaderService,
 } from '../../../agents/services/thread-reader.service';
+import { analysedSourceOf } from '../../../agents/utils/analysed-runs';
 import {
   clearSecrets,
   registerSecret,
@@ -71,7 +72,11 @@ function tool(
   }
   return new ReadAnalyzedThreadTool(
     analysis,
-    reader as ThreadReaderService,
+    {
+      readSourceOf: (turn, runId) =>
+        Promise.resolve(analysedSourceOf(turn, runId)),
+      ...reader,
+    } as ThreadReaderService,
     teams as TeamChangeService,
     history as TeamHistoryService,
   );
@@ -806,6 +811,118 @@ describe('ReadAnalyzedThreadTool', () => {
 
     expect(spend).toHaveBeenCalledWith('dev-team', {
       analysedRunIds: ['source'],
+    });
+  });
+
+  describe('view=runs section=otherRuns', () => {
+    const otherRuns = (count: number, title = 'Run') =>
+      Array.from({ length: count }, (_, index) => ({
+        runId: `r${index}`,
+        title: `${title} ${index} ${'t'.repeat(400)}`,
+        createdAt: '2026-11-01T00:00:00.000Z',
+        statusNow: 'completed',
+        archived: index % 2 === 0,
+        costUsd: index === 0 ? null : index,
+      }));
+
+    it('pages every run outside the sample by record, each page parsing alone within a page, scoped to the sample and masked', async () => {
+      registerSecret(SECRET, 'github token');
+      const listed = otherRuns(150, SECRET);
+      const asked = vi.fn<TeamHistoryService['otherRuns']>(() =>
+        Promise.resolve(listed),
+      );
+      const reading = tool({}, {}, true, { otherRuns: asked }, ['newest']);
+      const seen: unknown[] = [];
+      let offset: number | undefined = 0;
+      let pages = 0;
+      while (offset !== undefined) {
+        const result = await reading.call(
+          'read_analyzed_thread',
+          { view: 'runs', section: 'otherRuns', offset },
+          CONTEXT,
+        );
+        const text = textOf(result);
+        expect(text.startsWith(HISTORY_RESULT_PREFACE)).toBe(true);
+        expect(text).not.toContain(SECRET);
+        const page = pageOf(text) as {
+          total: number;
+          records: unknown[];
+          next: { offset: number } | null;
+        };
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(
+          PAGE_BYTES,
+        );
+        expect(page.total).toBe(150);
+        seen.push(...page.records);
+        offset = page.next?.offset;
+        pages += 1;
+      }
+
+      expect(pages).toBeGreaterThan(1);
+      expect(seen.map((run) => (run as { runId: string }).runId)).toEqual(
+        listed.map((run) => run.runId),
+      );
+      expect(asked).toHaveBeenCalledWith('dev-team', {
+        analysedRunIds: ['newest'],
+      });
+    });
+
+    it('refuses another section on view=runs, and otherRuns on view=history and view=spend', async () => {
+      const otherRunsRead = vi.fn<TeamHistoryService['otherRuns']>(() =>
+        Promise.resolve([]),
+      );
+      const reading = tool(
+        { analysedTeamOf: () => Promise.resolve(TEAM) },
+        {},
+        true,
+        {
+          otherRuns: otherRunsRead,
+          read: () =>
+            Promise.resolve(
+              longHistory(1) as unknown as Awaited<
+                ReturnType<TeamHistoryService['read']>
+              >,
+            ),
+          spend: () =>
+            Promise.resolve({ team: 'dev-team' } as unknown as Awaited<
+              ReturnType<TeamHistoryService['spend']>
+            >),
+        },
+        ['newest'],
+      );
+      const errorOf = async (view: string, section: string) =>
+        pageOf(
+          textOf(
+            await reading.call(
+              'read_analyzed_thread',
+              { view, section },
+              CONTEXT,
+            ),
+          ),
+        ).error;
+
+      expect(await errorOf('runs', 'versions')).toBe('INVALID_ARGS');
+      expect(await errorOf('history', 'otherRuns')).toBe('INVALID_ARGS');
+      expect(await errorOf('spend', 'otherRuns')).toBe('INVALID_ARGS');
+    });
+
+    it('leaves a thread analysis to the reader, reading no run list, since it reads one thread', async () => {
+      const otherRunsRead = vi.fn<TeamHistoryService['otherRuns']>(() =>
+        Promise.resolve([]),
+      );
+      const read = vi.fn(() =>
+        Promise.resolve({ error: 'UNSUPPORTED', message: 'one thread' }),
+      );
+      const result = await tool({ read }, {}, true, {
+        otherRuns: otherRunsRead,
+      }).call(
+        'read_analyzed_thread',
+        { view: 'runs', section: 'otherRuns' },
+        CONTEXT,
+      );
+
+      expect(textOf(result)).toContain('UNSUPPORTED');
+      expect(otherRunsRead).not.toHaveBeenCalled();
     });
   });
 

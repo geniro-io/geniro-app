@@ -140,6 +140,41 @@ describe('readProposeTeamArgs', () => {
     });
   });
 
+  it('reads recommendation_ids through as recommendationIds, and refuses them beside a whole team', () => {
+    const edits = [{ path: 'name', value: 'x' }];
+
+    expect(
+      readProposeTeamArgs({
+        replaces: 'dev-team',
+        edits,
+        summary: 'Clean up after every run',
+        reason: 'The stand logs filled the disk.',
+        recommendation_ids: ['W-2', 'P-1'],
+      }),
+    ).toEqual({
+      ok: true,
+      query: {
+        replaces: 'dev-team',
+        edits,
+        summary: 'Clean up after every run',
+        reason: 'The stand logs filled the disk.',
+        recommendationIds: ['W-2', 'P-1'],
+      },
+    });
+    expect(
+      readProposeTeamArgs({
+        team: TEAM,
+        summary: 's',
+        reason: 'r',
+        recommendation_ids: ['W-2'],
+      }),
+    ).toEqual({
+      ok: false,
+      error:
+        'send `team` for a new team, or `edits`, `overlay` or `project` for a change — never both',
+    });
+  });
+
   it('refuses edits without the card’s account, empty, or beside a whole team', () => {
     const base = {
       replaces: 'dev-team',

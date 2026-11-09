@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -71,6 +75,7 @@ function setup(
   knowledge: Pick<KnowledgeService, 'agentsMayWrite'> &
     Partial<Pick<KnowledgeService, 'checkRecommended'>> = {
     agentsMayWrite: false,
+    checkRecommended: () => Promise.resolve(null),
   },
 ) {
   const memory = { enabled: memoryOn } as MemoryService;
@@ -135,11 +140,26 @@ function setup(
     {
       versionIndex: () =>
         Promise.resolve({ current: null, numbers: new Map() }),
+      population: () =>
+        Promise.resolve({
+          runs: 0,
+          perRun: {
+            costUsd: null,
+            pricedRuns: 0,
+            workedMs: null,
+            timedRuns: 0,
+            turns: 0,
+          },
+        }),
     },
     knowledge,
   );
   const report = (args: Record<string, unknown>) =>
-    tool.call('report_recommendations', { hotspots: [], ...args }, CONTEXT);
+    tool.call(
+      'report_recommendations',
+      args.patch === undefined ? { hotspots: [], ...args } : args,
+      CONTEXT,
+    );
   const description = () => tool.list(CONTEXT)[0]?.description ?? '';
   return { report, description, written, checked };
 }
@@ -320,7 +340,10 @@ describe('ReportRecommendationsTool', () => {
     const filed = await report({ items: [item('W-1')], members: [reviewer] });
 
     expect(missing.content[0]!.text).toContain('assess the members');
-    expect(unknownVerdict.content[0]!.text).toMatch(/^INVALID_ARGS/);
+    expect(unknownVerdict.content[0]!.text).toMatch(
+      /^Not recorded: members\.0\.verdict: /,
+    );
+    expect(unknownVerdict.isError).toBe(true);
     expect(filed.isError).toBe(false);
     expect(filed.content[0]!.text).toContain(
       'with 1 recommendation and 1 member assessment',
@@ -375,7 +398,7 @@ describe('ReportRecommendationsTool', () => {
       'evidence seq 9 does not exist in the analysed run older (snapshot ends at 8)',
     );
     expect(stranger.content[0]!.text).toContain(
-      'evidence runId other is not one of the runs this analysis reads',
+      'evidence runId other has not been read in this turn',
     );
     expect(written).toHaveLength(1);
     // One run's timing would pass for the team's.
@@ -392,7 +415,7 @@ describe('ReportRecommendationsTool', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain(
-      'only repo, user, memory and project recommendations',
+      'only repo, user, memory, project and external recommendations apply',
     );
     expect(written).toEqual([]);
   });
@@ -530,8 +553,75 @@ describe('ReportRecommendationsTool', () => {
 
     expect((await report({ items: [] })).isError).toBe(false);
     const malformed = await report({ items: [{ id: 'W-1' }] });
-    expect(malformed.content[0]!.text).toMatch(/^INVALID_ARGS/);
+    expect(malformed.isError).toBe(true);
+    expect(malformed.content[0]!.text).toMatch(/^Not recorded: /);
+    expect(malformed.content[0]!.text).toContain('items.0.target');
     expect(written).toHaveLength(1);
+  });
+
+  it('answers a patch that cannot be read as INVALID_ARGS, before any card is touched', async () => {
+    const { report, written } = setup('dev-team');
+
+    await report({ items: [] });
+    const unreadable = await report({ patch: { items: [{ title: 'no id' }] } });
+
+    expect(unreadable.content[0]!.text).toMatch(/^INVALID_ARGS/);
+    expect(written).toHaveLength(1);
+  });
+
+  it('refuses a patch sent beside a whole card', async () => {
+    const { report } = setup('dev-team');
+
+    const both = await report({ items: [], patch: { summary: 'no' } });
+
+    expect(both.content[0]!.text).toMatch(/^INVALID_ARGS/);
+  });
+
+  it('files a card a patch fixes, through the tool', async () => {
+    const { report, written } = setup('dev-team');
+
+    const refused = await report({ items: [{ ...item('R-1'), id: 'W-1' }] });
+    expect(refused.content[0]!.text).toContain('Not recorded: ');
+    expect(refused.content[0]!.text).toContain('send only `patch`');
+    expect(written).toEqual([]);
+
+    const fixed = await report({
+      patch: { remove: { items: ['W-1'] }, items: [item('R-1')] },
+    });
+
+    expect(fixed.isError).toBe(false);
+    expect(written).toHaveLength(1);
+  });
+
+  it('files an external item only for a repository root that exists', async () => {
+    const { report, written } = setup('dev-team');
+    const plain = mkdtempSync(join(tmpdir(), 'external-plain-'));
+    const repository = mkdtempSync(join(tmpdir(), 'external-repo-'));
+    mkdirSync(join(repository, '.git'));
+    const external = (location: string) => ({
+      ...item('R-1'),
+      id: 'X-1',
+      target: 'external',
+      location,
+    });
+
+    try {
+      for (const location of [plain, join(plain, 'gone'), 'relative/folder']) {
+        const refused = await report({ items: [external(location)] });
+        expect(refused.content[0]!.text).toContain(
+          'location must be the absolute root folder',
+        );
+      }
+      expect(written).toEqual([]);
+
+      const filed = await report({ items: [external(repository)] });
+
+      expect(filed.isError).toBe(false);
+      expect(written).toHaveLength(1);
+    } finally {
+      rmSync(plain, { recursive: true, force: true });
+      rmSync(repository, { recursive: true, force: true });
+    }
   });
 
   it('asks every item for its cost and its outcome, and the card for its hotspots', async () => {

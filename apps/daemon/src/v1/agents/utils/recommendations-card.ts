@@ -184,7 +184,20 @@ export async function appliedMarksOf(
   cardSeq: number,
   em?: EntityManager,
 ): Promise<Set<string>> {
-  const applied = new Set<string>();
+  const marks = await newestMarksOf(itemDao, runId, cardSeq, em);
+  return new Set(
+    [...marks].flatMap(([id, status]) => (status === 'applied' ? [id] : [])),
+  );
+}
+
+/** Each marked id of the card at `cardSeq` with its newest status. */
+async function newestMarksOf(
+  itemDao: ItemDao,
+  runId: string,
+  cardSeq: number,
+  em?: EntityManager,
+): Promise<Map<string, string>> {
+  const newest = new Map<string, string>();
   for (const row of await itemDao.recommendationOutcomeRows(runId, em)) {
     let parsed: unknown;
     try {
@@ -197,14 +210,27 @@ export async function appliedMarksOf(
       continue;
     }
     for (const outcome of marks.data.outcomes) {
-      if (outcome.status === 'applied') {
-        applied.add(outcome.id);
-      } else {
-        applied.delete(outcome.id);
-      }
+      newest.set(outcome.id, outcome.status);
     }
   }
-  return applied;
+  return newest;
+}
+
+/** Whether every item an Apply took from the card at `cardSeq` has a mark. */
+export async function everySelectedMarked(
+  itemDao: ItemDao,
+  runId: string,
+  cardSeq: number,
+  em?: EntityManager,
+): Promise<boolean> {
+  const apply = (await appliesOf(itemDao, runId, em))
+    .filter((entry) => entry.cardSeq === cardSeq)
+    .at(-1);
+  if (apply === undefined) {
+    return false;
+  }
+  const marks = await newestMarksOf(itemDao, runId, cardSeq, em);
+  return apply.ids.every((id) => marks.has(id));
 }
 
 /**

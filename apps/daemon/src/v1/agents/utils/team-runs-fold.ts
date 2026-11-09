@@ -13,6 +13,7 @@ import {
   MAX_CARD_CALL_EDGES,
   type ModelFigures,
   type NodeFigures,
+  type RecommendationsTeamPopulation,
   type RecommendationsTeamStats,
   type RunFigures,
   type RunNodeFigures,
@@ -136,7 +137,7 @@ function plus(total: number | null, value: number | null): number | null {
   return value === null ? total : (total ?? 0) + value;
 }
 
-function roundUsd(value: number): number {
+export function roundUsd(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
 
@@ -599,6 +600,7 @@ function cardAgentStats(runs: readonly FoldedRun[]): CardAgentStats[] {
 export function teamCardStats(
   runs: readonly { title: string | null; createdAt: Date; folded: FoldedRun }[],
   index: TeamVersionIndex | null,
+  population: RecommendationsTeamPopulation | null = null,
 ): RecommendationsTeamStats | null {
   if (runs.length === 0) {
     return null;
@@ -620,6 +622,7 @@ export function teamCardStats(
       : priced.reduce((total, value) => total + value, 0);
   return {
     runs: count,
+    population,
     perRun: {
       wallMs: average((run) => run.wallMs),
       activeMs: average((run) => run.activeMs),

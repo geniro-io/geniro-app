@@ -8,6 +8,7 @@ import {
   HOST_METRICS_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
+  HOST_RECOMMENDATION_MARKS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
   HOST_TEAM_CHANGE_TOOL,
 } from '../chat.types';
@@ -28,7 +29,7 @@ describe('threadAnalysisGuide', () => {
     expect(guide).toContain('W-1, W-2');
     expect(guide).toContain('U-1, U-2');
     expect(guide).toContain('M-1, M-2');
-    expect(guide).toContain('Recommend changes of six kinds');
+    expect(guide).toContain('Recommend changes of seven kinds');
     expect(guide).toContain('view=team lists them under `userInstructions`');
     expect(guide).toContain('O-1, O-2… for overlay items');
     expect(guide).toContain('target "overlay"');
@@ -102,10 +103,10 @@ describe('threadAnalysisGuide', () => {
   });
 
   it('counts the kinds of change a team analysis recommends', () => {
-    expect(teamAnalysisGuide(null, false)).toContain('changes of five kinds');
-    expect(teamAnalysisGuide(null, true)).toContain('changes of six kinds');
+    expect(teamAnalysisGuide(null, false)).toContain('changes of six kinds');
+    expect(teamAnalysisGuide(null, true)).toContain('changes of seven kinds');
     expect(teamAnalysisGuide(null, true, true)).toContain(
-      'changes of seven kinds',
+      'changes of eight kinds',
     );
   });
 
@@ -190,6 +191,19 @@ describe('threadAnalysisBrief', () => {
 });
 
 describe('teamAnalysisGuide', () => {
+  it.each([
+    ['a team analysis', teamAnalysisGuide(null, true)],
+    ['a builder chat', builderChatAnalysisGuide(true, 10)],
+  ])(
+    'tells %s how to reach a run outside the sample, only for a concrete question and never all of them',
+    (_name, guide) => {
+      expect(guide).toContain('view=runs section="otherRuns"');
+      expect(guide).toContain('only for a concrete question');
+      expect(guide).toContain('never sweep them');
+      expect(guide).toContain('Cite a row of one only from a read');
+    },
+  );
+
   it('starts from the history, then the cross-run comparison, and asks for models and the team structure', () => {
     const guide = teamAnalysisGuide(null, true);
 
@@ -265,7 +279,10 @@ describe('teamAnalysisGuide', () => {
         expect(guide).toContain(verdict);
       }
       expect(guide).toContain(
-        'Every verdict but keep names the team items (W-…) on this card that carry it out',
+        'Every verdict but keep names the items on this card that carry it out',
+      );
+      expect(guide).toContain(
+        "a project's overlay beats the team, so a model it sets is changed there",
       );
       expect(guide).toContain('`members[].assessments`');
       expect(guide).toContain(
@@ -376,7 +393,7 @@ describe('teamAnalysisBrief', () => {
       expect(guide).not.toContain('memory item');
     }
     expect(threadAnalysisGuide('team', null, false)).toContain(
-      'changes of five kinds',
+      'changes of six kinds',
     );
   });
 
@@ -385,7 +402,6 @@ describe('teamAnalysisBrief', () => {
       threadAnalysisGuide('chat', null, false),
       threadAnalysisGuide('team', null, true),
       teamAnalysisGuide(null, true),
-      builderChatAnalysisGuide(true, 5),
     ]) {
       expect(guide).toContain('target "project"');
       expect(guide).toContain('P-1, P-2');
@@ -405,7 +421,10 @@ describe('teamAnalysisBrief', () => {
       );
     }
     expect(builderChatAnalysisGuide(true, 5)).toContain(
-      'but the project items and the team items, marked once their verdict arrives',
+      `- Last, project items not on that card: read view=project, then call \`${HOST_PROJECT_INSTRUCTIONS_TOOL}\``,
+    );
+    expect(builderChatAnalysisGuide(true, 5)).toContain(
+      'but the project items and the items on the card, marked once its verdict arrives',
     );
   });
 });
@@ -421,6 +440,91 @@ describe('reportRecommendationsInstructions', () => {
       expect(reportRecommendationsInstructions(memory)).toContain(
         'P-1, P-2… for the instructions of the project',
       );
+    }
+  });
+});
+
+describe('analysis guides, the apply and the outcome', () => {
+  const GUIDES = [
+    threadAnalysisGuide('chat', null, false),
+    threadAnalysisGuide('team', null, true),
+    teamAnalysisGuide(null, false),
+    builderChatAnalysisGuide(true, 5),
+  ];
+
+  it('offers target external to every analysis and says never to write in that repository', () => {
+    for (const guide of GUIDES) {
+      expect(guide).toContain('target "external"');
+      expect(guide).toContain('never read or write files in that repository');
+    }
+  });
+
+  it('has the apply file each external item as a task and mark it with the card key', () => {
+    for (const guide of [
+      threadAnalysisGuide('team', null, false),
+      teamAnalysisGuide(null, false),
+    ]) {
+      expect(guide).toContain('Call `create_task` once per item');
+      expect(guide).toContain(
+        "Mark it applied with the card's key in the note",
+      );
+    }
+  });
+
+  it('tells a later analysis that an external item marked applied was filed, not done', () => {
+    const guide = teamAnalysisGuide(null, false);
+
+    expect(guide).toContain(
+      'An external item marked applied had its card filed, not its work done',
+    );
+    expect(guide).toContain('`get_task` with the key in its note');
+  });
+
+  it('asks for one item, one decision in every analysis', () => {
+    for (const guide of GUIDES) {
+      expect(guide).toContain('One item, one decision:');
+    }
+  });
+
+  it('no longer tells a team save to dry-run, since the save writes what the card approved', () => {
+    for (const guide of [
+      threadAnalysisGuide('team', null, false),
+      teamAnalysisGuide(null, false),
+    ]) {
+      expect(guide).toContain(
+        'save only your edits with `save_team_change` passing the hash you read',
+      );
+      expect(guide).not.toMatch(/dry[ -]?run/i);
+      expect(guide).not.toContain('dryRun');
+    }
+  });
+
+  it('puts a builder chat’s project items on its proposal card with recommendation_ids', () => {
+    const guide = builderChatAnalysisGuide(true, 5);
+
+    expect(guide).toContain(
+      'project items of a project that runs this team by default',
+    );
+    expect(guide).toContain('with `recommendation_ids` naming each');
+  });
+
+  it('records no outcome before the card is recorded', () => {
+    expect(teamAnalysisGuide(null, false)).toContain(
+      'Record no outcome (`record_outcome`) before the receipt says the card is recorded',
+    );
+  });
+
+  it('calls record_outcome once every selected item is marked, verdicts included', () => {
+    for (const guide of [
+      threadAnalysisGuide('team', null, false),
+      teamAnalysisGuide(null, false),
+    ]) {
+      expect(guide).toContain(
+        'Once every selected item is marked, verdicts included, call `record_outcome`',
+      );
+      expect(
+        guide.indexOf('Once every selected item is marked'),
+      ).toBeGreaterThan(guide.indexOf(`\`${HOST_RECOMMENDATION_MARKS_TOOL}\``));
     }
   });
 });

@@ -59,11 +59,12 @@ describe('composeTeamChatInstructions', () => {
     expect(BRIEF).toMatch(/END YOUR TURN/);
   });
 
-  it('offers save_team_change as a check that saves nothing', () => {
+  it('no longer advises a dry run of save_team_change, since every change goes on a card', () => {
+    expect(BRIEF).not.toMatch(/answers the diff without saving/);
+    expect(BRIEF).not.toMatch(/dryRun/);
+    expect(BRIEF).not.toMatch(/save_team_change/);
     expect(BRIEF).toMatch(
-      new RegExp(
-        `${HOST_TEAM_CHANGE_TOOL} checks a set of edits against the file and\\s+answers the diff without saving`,
-      ),
+      /So propose straight away; there\s+is nothing to rehearse/,
     );
   });
 
@@ -88,9 +89,7 @@ describe('composeTeamChatInstructions', () => {
   });
 
   it('lets the agent write the file itself only to repair YAML refused as unreadable', () => {
-    expect(BRIEF).toMatch(
-      /when a proposal or a check\s+answers TEAM_UNREADABLE/,
-    );
+    expect(BRIEF).toMatch(/when a proposal answers\s+TEAM_UNREADABLE/);
     expect(BRIEF).toMatch(/Fix only what that\s+refusal names/);
   });
 
@@ -144,7 +143,6 @@ describe('composeTeamChatInstructions', () => {
 
   it('routes every change through the team tools, never the agent writing the file', () => {
     expect(BRIEF).toContain(HOST_PROPOSE_TEAM_TOOL);
-    expect(BRIEF).toContain(HOST_TEAM_CHANGE_TOOL);
     expect(BRIEF).toContain(HOST_READ_TEAMS_TOOL);
     expect(BRIEF).not.toMatch(/editing the file with your own file tools/);
   });
@@ -158,7 +156,7 @@ describe('composeTeamChatInstructions', () => {
   it("carries the team analysis's method over the team's newest runs", () => {
     expect(BRIEF).toContain('<team-analysis>');
     expect(BRIEF).toContain(
-      `You read its ${BUILDER_CHAT_ANALYSED_RUNS} newest runs through \`${HOST_ANALYZED_THREAD_TOOL}\``,
+      `You read its ${BUILDER_CHAT_ANALYSED_RUNS} newest runs, archived ones included, through \`${HOST_ANALYZED_THREAD_TOOL}\``,
     );
     expect(BRIEF).toMatch(/Read view=history first/);
     expect(BRIEF).toMatch(/Read view=runs next/);
@@ -168,7 +166,7 @@ describe('composeTeamChatInstructions', () => {
   it('applies a selected team item on a proposal card, never a save', () => {
     const analysis = BRIEF.slice(BRIEF.indexOf('<team-analysis>'));
     expect(analysis).toContain(
-      `- Team items, and overlay items (as \`overlay\`, the project's whole document, with \`overlayProjectId\`): put every selected one on ONE \`${HOST_PROPOSE_TEAM_TOOL}\` card`,
+      `- Team items, overlay items (as \`overlay\`, the project's whole document, with \`overlayProjectId\`) and project items of a project that runs this team by default (as \`project\`, its blocks as they should read and the revision \`${HOST_READ_TEAMS_TOOL}\` with \`projects\` named): put every selected one on ONE \`${HOST_PROPOSE_TEAM_TOOL}\` card, with \`recommendation_ids\` naming each`,
     );
     expect(analysis).not.toContain(HOST_TEAM_CHANGE_TOOL);
   });
@@ -176,7 +174,7 @@ describe('composeTeamChatInstructions', () => {
   it("points repo items at the runs' own repository, not the library it works in", () => {
     const analysis = BRIEF.slice(BRIEF.indexOf('<team-analysis>'));
     expect(analysis).toContain(
-      "edit the files in the repository the runs worked in (each run's `cwd` in view=overview)",
+      "edit the files in the repository the runs worked in (each run's `cwd` in view=overview; an archived run's folder may be gone, so take the newest that exists)",
     );
     expect(analysis).not.toContain('working folder');
   });

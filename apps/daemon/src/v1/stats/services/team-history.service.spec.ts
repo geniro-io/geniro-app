@@ -66,6 +66,8 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
   let recommendations: TeamRecommendationDao;
   let changeLog: TeamChangeLogService;
   let liveRuns: Set<string>;
+  let teamRuns: Record<string, unknown>[];
+  let costs: Map<string, number>;
   let members: TeamStatsMemberWire[];
   let adapterKinds: Map<string, unknown>;
   let projectRefs: { id: string; name: string; folder: string }[];
@@ -98,6 +100,8 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
   beforeEach(async () => {
     await orm.schema.clear();
     const em = orm.em.fork();
+    teamRuns = [];
+    costs = new Map();
     activityDao = new UsageActivityDao(em);
     usageDao = new UsageEventDao(em);
     versionDao = new TeamVersionDao(em);
@@ -148,10 +152,25 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
       {
         getById: (id: string) =>
           Promise.resolve(liveRuns.has(id) ? { id } : null),
+        newestTeamRuns: (slug: string, limit: number | null) =>
+          Promise.resolve(
+            slug === 'dev-team' && limit === null ? teamRuns : [],
+          ),
       } as unknown as RunDao,
       adapters,
       {
         read: () => Promise.resolve({ byMember: members }),
+        totalsOf: (runIds: readonly string[]) =>
+          Promise.resolve(
+            new Map(
+              runIds.flatMap((runId) => {
+                const costUsd = costs.get(runId);
+                return costUsd === undefined
+                  ? []
+                  : [[runId, { costUsd }] as const];
+              }),
+            ),
+          ),
       } as unknown as TeamStatsService,
       projectRoots,
       projects,
@@ -260,6 +279,42 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
       risk: 'low',
     };
   }
+
+  it('lists every run of the team outside the sample newest first, however many, with what each cost', async () => {
+    const at = new Date('2026-11-01T00:00:00.000Z');
+    teamRuns = Array.from({ length: 300 }, (_, index) => ({
+      id: `run-${index}`,
+      title: `Run ${index}`,
+      status: index === 1 ? 'running' : 'completed',
+      createdAt: at,
+      archivedAt: index === 1 ? null : at,
+    }));
+    costs = new Map([['run-1', 12.5]]);
+
+    const listed = await service.otherRuns('dev-team', {
+      analysedRunIds: ['run-0'],
+    });
+
+    expect(listed).toHaveLength(299);
+    expect(listed[0]).toEqual({
+      runId: 'run-1',
+      title: 'Run 1',
+      createdAt: at.toISOString(),
+      statusNow: 'running',
+      archived: false,
+      costUsd: 12.5,
+    });
+    expect(listed[298]).toEqual(
+      expect.objectContaining({
+        runId: 'run-299',
+        archived: true,
+        costUsd: null,
+      }),
+    );
+    expect(
+      await service.otherRuns('other-team', { analysedRunIds: [] }),
+    ).toEqual([]);
+  });
 
   it('folds every version over every run the ledgers kept, deleted runs included, newest version first', async () => {
     await teamRun('run-a', V1, '2026-10-02T10:00:00.000Z', [

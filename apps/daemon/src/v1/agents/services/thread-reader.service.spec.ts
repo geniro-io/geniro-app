@@ -34,6 +34,11 @@ import { TeamSchema } from '../../teams/teams.types';
 import { teamVersionOf } from '../../teams/utils/team-version';
 import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
 import { claudeToolCallMetric } from '../adapters/claude/utils/claude-mcp-tool-name.utils';
+import type {
+  AnalysedTeam,
+  AnalysisSource,
+  RecommendationsTeamPopulation,
+} from '../chat.types';
 import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -120,8 +125,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     await orm.close(true);
   });
 
-  beforeEach(async () => {
-    await orm.schema.clear();
+  function newReader(): ThreadReaderService {
     const em = orm.em.fork();
     itemDao = new ItemDao(em);
     wallTurns = new WallTurnDao(em);
@@ -134,7 +138,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       { pollsSpend: () => false } as unknown as PolledSpendService,
       kindRowsPassthrough(itemDao),
     );
-    reader = new ThreadReaderService(
+    return new ThreadReaderService(
       em,
       runDao,
       itemDao,
@@ -173,6 +177,11 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       new ProjectInstructionChangeDao(em),
       new GoalDao(em),
     );
+  }
+
+  beforeEach(async () => {
+    await orm.schema.clear();
+    reader = newReader();
     const run = new Run();
     run.id = 'source';
     run.title = 'Slow thread';
@@ -1228,6 +1237,58 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     expect(answer.error).toBe('UNSUPPORTED');
   });
 
+  it('answers every view of an archived thread as it did while the thread was live', async () => {
+    const fork = orm.em.fork();
+    fork.persist(
+      Object.assign(new Project(), {
+        id: 'p-billing',
+        name: 'Billing',
+        folder: '/tmp/project',
+        taskKey: 'BIL',
+        instructions: 'Use pnpm.',
+      }),
+    );
+    const source = await fork.findOneOrFail(Run, 'source');
+    source.projectId = 'p-billing';
+    source.projectSource = 'folder';
+    await fork.flush();
+    await insert(0, 'message', { text: 'go' }, 0);
+    await insert(1, 'tool_call', { id: 't1', name: 'Bash' }, 1);
+    await insert(2, 'tool_result', { id: 't1', output: 'done' }, 91);
+    await insert(3, 'turn_complete', { usage: { durationMs: 95_000 } }, 96);
+    const turn = {
+      sourceRunId: 'source',
+      snapshotSeq: 3,
+      sourceWorking: false,
+    };
+    const readEveryView = async (from: ThreadReaderService) => ({
+      overview: await from.read(turn, { view: 'overview' }),
+      spans: await from.read(turn, { view: 'spans', kinds: ['turn', 'tool'] }),
+      items: await from.read(turn, { view: 'items' }),
+      item: await from.read(turn, { view: 'item', seq: 2 }),
+      project: await from.read(turn, { view: 'project' }),
+    });
+
+    const live = await readEveryView(reader);
+
+    const shelve = orm.em.fork();
+    const row = await shelve.findOneOrFail(Run, 'source');
+    row.archivedAt = new Date();
+    await shelve.flush();
+    const archived = await readEveryView(newReader());
+
+    expect(live.overview.slowestTools).toEqual([
+      expect.objectContaining({ seq: 1, name: 'Bash', ms: 90_000 }),
+    ]);
+    expect(live.spans.error).toBeUndefined();
+    expect(live.items.snapshotSeq).toBe(3);
+    expect(live.item.seq).toBe(2);
+    expect(live.project.projects).toEqual([
+      expect.objectContaining({ projectId: 'p-billing' }),
+    ]);
+    expect(archived).toEqual(live);
+  });
+
   it('answers SOURCE_GONE once the analysed thread is deleted', async () => {
     const answer = await reader.read(
       { sourceRunId: 'deleted', snapshotSeq: 0, sourceWorking: false },
@@ -1437,6 +1498,41 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
             }),
           ]),
         );
+      });
+
+      it("answers the team's whole population beside the runs read, from the reader handed in", async () => {
+        const population: RecommendationsTeamPopulation = {
+          runs: 9,
+          perRun: {
+            costUsd: 1.5,
+            pricedRuns: 9,
+            workedMs: 600_000,
+            timedRuns: 9,
+            turns: 3,
+          },
+        };
+        const asked: string[] = [];
+
+        const answer = await reader.read(
+          scope,
+          { view: 'runs' },
+          null,
+          (slug) => {
+            asked.push(slug);
+            return Promise.resolve(population);
+          },
+        );
+
+        expect(asked).toEqual(['team']);
+        expect(answer).toMatchObject({ runsRead: 3, population });
+      });
+
+      it('answers no population when its reader fails', async () => {
+        const answer = await reader.read(scope, { view: 'runs' }, null, () =>
+          Promise.reject(new Error('SQLITE_BUSY')),
+        );
+
+        expect(answer).toMatchObject({ runsRead: 3, population: null });
       });
     });
 
@@ -1706,7 +1802,36 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       }
     });
 
-    it('reads one of its runs by runId, and refuses a run it was not started on', async () => {
+    it('reads an archived run of its sample as it read the run while it was live', async () => {
+      const readEveryView = async (from: ThreadReaderService) => ({
+        runs: await from.read(scope, { view: 'runs' }),
+        overview: await from.read(scope, {
+          view: 'overview',
+          runId: 'wf-old',
+        }),
+        items: await from.read(scope, { view: 'items', runId: 'wf-old' }),
+        team: await from.analysedTeamOf(scope, {
+          sourceRunId: 'wf-old',
+          snapshotSeq: 1,
+          sourceWorking: false,
+        }),
+      });
+
+      const live = await readEveryView(reader);
+
+      const shelve = orm.em.fork();
+      const row = await shelve.findOneOrFail(Run, 'wf-old');
+      row.archivedAt = new Date();
+      await shelve.flush();
+      const archived = await readEveryView(newReader());
+
+      expect(live.items.snapshotSeq).toBe(1);
+      expect(live.team?.slug).toBe('team');
+      expect(JSON.stringify(live.runs)).toContain('wf-old');
+      expect(archived).toEqual(live);
+    });
+
+    it('reads one of its runs by runId, and refuses a chat of no team', async () => {
       const older = await reader.read(scope, {
         view: 'items',
         runId: 'wf-old',
@@ -1719,7 +1844,102 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
 
       expect(older.snapshotSeq).toBe(1);
       expect(newest.snapshotSeq).toBe(3);
-      expect(stranger.error).toBe('NOT_ANALYSED');
+      expect(stranger.error).toBe('NOT_A_TEAM_RUN');
+    });
+
+    describe('a run outside the sample', () => {
+      const sampleOf = (): AnalysisSource & { team: AnalysedTeam } => ({
+        sourceRunId: 'wf-new',
+        snapshotSeq: 3,
+        sourceWorking: false,
+        team: {
+          slug: 'team',
+          runs: [{ runId: 'wf-new', snapshotSeq: 3, working: false }],
+        },
+      });
+
+      it('opens an archived run of the team, pinned at its first read while it moves on', async () => {
+        const fork = orm.em.fork();
+        const shelved = await fork.findOneOrFail(Run, 'wf-old');
+        shelved.archivedAt = new Date();
+        await fork.flush();
+        const turn = sampleOf();
+
+        const first = await reader.read(turn, {
+          view: 'items',
+          runId: 'wf-old',
+        });
+        await row('wf-old', 2, 'message', { text: 'later' }, 9, 'dev');
+        const again = await reader.read(turn, {
+          view: 'items',
+          runId: 'wf-old',
+        });
+        const past = await reader.read(turn, {
+          view: 'item',
+          runId: 'wf-old',
+          seq: 2,
+        });
+
+        expect(first.snapshotSeq).toBe(1);
+        expect(again).toEqual(first);
+        expect(past.error).toBe('PAST_SNAPSHOT');
+        expect(turn.team.opened?.get('wf-old')).toEqual({
+          runId: 'wf-old',
+          snapshotSeq: 1,
+          working: false,
+        });
+        expect(turn.team.runs).toHaveLength(1);
+      });
+
+      it('reads a later turn afresh, since a new turn pins again', async () => {
+        await reader.read(sampleOf(), { view: 'items', runId: 'wf-old' });
+        await row('wf-old', 2, 'message', { text: 'later' }, 9, 'dev');
+
+        const later = await reader.read(sampleOf(), {
+          view: 'items',
+          runId: 'wf-old',
+        });
+
+        expect(later.snapshotSeq).toBe(2);
+      });
+
+      it('keeps the pin that landed first when two reads race', async () => {
+        const turn = sampleOf();
+        const winner = { runId: 'wf-old', snapshotSeq: 0, working: true };
+
+        const racing = reader.readSourceOf(turn, 'wf-old');
+        Object.assign(turn.team, { opened: new Map([['wf-old', winner]]) });
+
+        expect(await racing).toEqual({
+          sourceRunId: 'wf-old',
+          snapshotSeq: 0,
+          sourceWorking: true,
+        });
+      });
+
+      it('refuses another team, a deleted run, a chat of no team and a run with no rows, pinning none', async () => {
+        const fork = orm.em.fork();
+        fork.persist(
+          Object.assign(new Run(), {
+            id: 'wf-other',
+            title: 'Theirs',
+            status: 'completed',
+            teamId: 'other-team',
+          }),
+        );
+        await fork.flush();
+        await row('wf-other', 0, 'message', { text: 'theirs' }, 0, 'dev');
+        await teamRun('wf-empty', 50);
+        const turn = sampleOf();
+        const errorOf = async (runId: string) =>
+          (await reader.read(turn, { view: 'overview', runId })).error;
+
+        expect(await errorOf('wf-other')).toBe('OTHER_TEAM_RUN');
+        expect(await errorOf('no-such-run')).toBe('RUN_GONE');
+        expect(await errorOf('source')).toBe('NOT_A_TEAM_RUN');
+        expect(await errorOf('wf-empty')).toBe('RUN_EMPTY');
+        expect(turn.team.opened).toBeUndefined();
+      });
     });
 
     it('names its own team to view=team and the save, with the newest run’s start copy only while that run exists', async () => {

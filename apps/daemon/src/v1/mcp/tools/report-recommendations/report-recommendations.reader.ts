@@ -1,17 +1,37 @@
+import { z } from 'zod';
+
 import {
   type AnalysisFiled,
-  type RecommendationsReport,
-  RecommendationsReportSchema,
+  type RecommendationsCall,
+  RecommendationsPatchSchema,
 } from '../../../agents/chat.types';
 import type { HostSinkUnavailable } from '../../../agents/services/host-sink.broker';
 import type { ToolArgs } from '../../mcp.types';
 import { readToolArgs } from '../tool-args';
 
-/** A `report_recommendations` call's report, or why it cannot be read. */
-export function readRecommendationsReport(
+const PatchCallSchema = z
+  .object({ patch: RecommendationsPatchSchema })
+  .strict();
+
+/**
+ * A `report_recommendations` call, or why its patch cannot be read. A whole card
+ * stays as sent: the service parses it, so one that fails the schema is kept for
+ * a patch like one that fails the other checks.
+ */
+export function readRecommendationsCall(
   args: Record<string, unknown>,
-): ToolArgs<RecommendationsReport> {
-  return readToolArgs(RecommendationsReportSchema.strict(), args);
+): ToolArgs<RecommendationsCall> {
+  if (args.patch === undefined || args.patch === null) {
+    return {
+      ok: true,
+      query: {
+        whole: Object.fromEntries(
+          Object.entries(args).filter(([, value]) => value !== null),
+        ),
+      },
+    };
+  }
+  return readToolArgs(PatchCallSchema, args);
 }
 
 /** The receipt — never the items themselves, which are on the card. */

@@ -6,7 +6,6 @@ import {
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
-  HOST_TEAM_CHANGE_TOOL,
 } from '../../agents/chat.types';
 import {
   ANY_TEAM_OR_PROJECT,
@@ -216,15 +215,13 @@ HOW TO WORK
   \`project\` with the blocks that add it on ONE card — one approval writes
   both. Move the text whole; when it does not fit the project's limit, say
   so and ask the user what to drop before you shorten anything.
-- ${HOST_TEAM_CHANGE_TOOL} checks a set of edits against the file and
-  answers the diff without saving or showing a card; use it to try edits out
-  before you propose them.
 - Back the file up with ${HOST_BACKUP_TEAM_TOOL} whenever the user asks.
-- The one time you open the file yourself: when a proposal or a check
-  answers TEAM_UNREADABLE, the file cannot be loaded. Fix only what that
+- The one time you open the file yourself: when a proposal answers
+  TEAM_UNREADABLE, the file cannot be loaded. Fix only what that
   refusal names, with your own file tools, then propose the change.
 - A proposal refused for breaking the schema or the team rules below shows
-  no card: fix the edits and propose again.
+  no card: fix the edits and propose again. So propose straight away; there
+  is nothing to rehearse.
 - After a decline, change course as the user's note says and propose again;
   after a "not saved" verdict, read the team again before you do.
 - When you rename or remove a member, update the trigger, every block

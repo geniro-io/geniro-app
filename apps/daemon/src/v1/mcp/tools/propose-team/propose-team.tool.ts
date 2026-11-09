@@ -107,7 +107,8 @@ export class ProposeTeamTool extends BaseMcpTool {
     if (typeof target === 'string') {
       return this.invalidArgs(target);
     }
-    const { summary, reason } = query;
+    const { summary, reason, recommendationIds } = query;
+    const ids = recommendationIds === undefined ? {} : { recommendationIds };
     if (target.kind === 'overlay') {
       return this.answer(
         await this.proposals.proposeOverlay(runId, {
@@ -115,6 +116,7 @@ export class ProposeTeamTool extends BaseMcpTool {
           overlay: target.overlay,
           summary,
           reason,
+          ...ids,
         }),
       );
     }
@@ -126,6 +128,7 @@ export class ProposeTeamTool extends BaseMcpTool {
       reason,
       ...(query.overlay === undefined ? {} : { overlay: query.overlay }),
       ...(query.project === undefined ? {} : { project: query.project }),
+      ...ids,
     };
     return this.answer(
       target.slug === ownTeam

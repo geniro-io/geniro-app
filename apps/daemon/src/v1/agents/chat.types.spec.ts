@@ -172,9 +172,12 @@ describe('custom-instruction validation — the daemon is the enforcing side', (
 });
 
 describe('RecommendationIdSchema', () => {
-  it('reads an O- id as a project overlay item and keeps refusing unknown prefixes', () => {
+  it('reads an O- id as a project overlay item and an X- id as another repository, and keeps refusing an unknown prefix', () => {
     expect(RecommendationIdSchema.safeParse('O-1').success).toBe(true);
     expect(RECOMMENDATION_ID_PREFIX.overlay).toBe('O-');
-    expect(RecommendationIdSchema.safeParse('X-1').success).toBe(false);
+    expect(RecommendationIdSchema.safeParse('X-1').success).toBe(true);
+    expect(RECOMMENDATION_ID_PREFIX.external).toBe('X-');
+    expect(RecommendationIdSchema.safeParse('Z-1').success).toBe(false);
+    expect(RecommendationIdSchema.safeParse('X-1000').success).toBe(false);
   });
 });

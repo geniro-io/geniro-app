@@ -3,6 +3,18 @@ import { isAbsolute } from 'node:path';
 
 import { BadRequestException } from '@packages/common';
 
+/** The folder canonicalized, or null when it is missing or not readable. */
+export function existingDirectory(path: string): string | null {
+  try {
+    return resolveValidDirectory(path, {
+      errorCode: 'FOLDER_GONE',
+      noun: 'folder',
+    });
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Validate a directory path and return its canonical (symlink-resolved)
  * absolute form.

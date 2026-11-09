@@ -1,6 +1,10 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 
+import type {
+  ChatTotalsWire,
+  RecommendationsTeamPopulation,
+} from '../../agents/chat.types';
 import { GoalDao } from '../../agents/dao/goal.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { WallTurnDao } from '../../agents/dao/wall-turn.dao';
@@ -30,7 +34,11 @@ import {
   memberRunCells,
 } from '../utils/member-work-fold';
 import { recommendationStatusOf } from '../utils/team-history-fold';
-import { foldTeamStats, withWallTimes } from '../utils/team-stats-fold';
+import {
+  foldTeamPopulation,
+  foldTeamStats,
+  withWallTimes,
+} from '../utils/team-stats-fold';
 import { totalsByRun } from '../utils/team-versions-fold';
 import { foldThreadMetrics } from '../utils/thread-metrics-fold';
 import { TeamVersionsService } from './team-versions.service';
@@ -141,6 +149,34 @@ export class TeamStatsService {
         calls,
       }),
     };
+  }
+
+  /** Every run the team has, measured over every ledger row, whichever few an analysis read. */
+  async population(slug: string): Promise<RecommendationsTeamPopulation> {
+    const em = this.em.fork();
+    const threads = await this.activityDao.threadRowsBySlug(slug, em);
+    return foldTeamPopulation(
+      threads,
+      await this.totalsOf(
+        threads.map((thread) => thread.runId),
+        em,
+      ),
+    );
+  }
+
+  /** What each of these runs cost and did, over every row its ledgers hold. */
+  async totalsOf(
+    runIds: readonly string[],
+    em: EntityManager = this.em.fork(),
+  ): Promise<Map<string, ChatTotalsWire>> {
+    const adapters = this.adapters.all();
+    return totalsByRun(
+      withWallTimes(
+        await this.usageDao.rowsByRuns(runIds, em),
+        await this.wallTurns.turnsOfRuns(runIds, em),
+      ),
+      [...adapters.keys()].filter((kind) => pollsSpendFor(adapters, kind)),
+    );
   }
 
   /** Every recorded version's team, by version. */

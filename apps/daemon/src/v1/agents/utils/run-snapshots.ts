@@ -40,7 +40,7 @@ export async function runSnapshotOf(
 }
 
 /**
- * A team's newest unarchived runs, newest first, each read at its own
+ * A team's newest runs, archived ones included, newest first, each read at its own
  * snapshot, with the folder it ran in. A run with no rows yet is skipped.
  */
 export async function teamRunSnapshots(

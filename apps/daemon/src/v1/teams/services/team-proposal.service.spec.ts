@@ -222,6 +222,9 @@ describe('TeamProposalService', () => {
   let chats: ReturnType<typeof fakeChats>;
   /** The card ids the transcript already closes, per run. */
   let closedCards: Map<string, string[]>;
+  let cardRows: Map<string, Map<number, { kind: string; payload: string }>>;
+  let applyRows: Map<string, string[]>;
+  let markRows: Map<string, string[]>;
   let logged: TeamChangeLogRecord[];
   let overlayStore: TeamOverlayStoreService;
   let service: TeamProposalService;
@@ -238,6 +241,9 @@ describe('TeamProposalService', () => {
     approvals = new ApprovalRegistry();
     chats = fakeChats(approvals);
     closedCards = new Map();
+    cardRows = new Map();
+    applyRows = new Map();
+    markRows = new Map();
     logged = [];
     overlayStore = new TeamOverlayStoreService({ teamsDir: dir });
     const overlays = new TeamOverlayService(
@@ -285,6 +291,16 @@ describe('TeamProposalService', () => {
       { fork: () => ({}) } as unknown as EntityManager,
       runs as unknown as RunDao,
       {
+        rowAtSeq: (runId: string, seq: number) =>
+          Promise.resolve(cardRows.get(runId)?.get(seq) ?? null),
+        userMessagesInOrder: (runId: string) =>
+          Promise.resolve(
+            (applyRows.get(runId) ?? []).map((payload) => ({ payload })),
+          ),
+        recommendationOutcomeRows: (runId: string) =>
+          Promise.resolve(
+            (markRows.get(runId) ?? []).map((payload) => ({ payload })),
+          ),
         rowsByPayloadId: (runId: string, _kinds: unknown, ids: string[]) =>
           Promise.resolve(
             (closedCards.get(runId) ?? [])
@@ -1309,6 +1325,222 @@ describe('TeamProposalService', () => {
         description: 'edited in the team editor',
       });
     });
+  });
+
+  describe('the recommendation ids a card carries', () => {
+    const CARD_SEQ = 7;
+    const MOVE: TeamEdit[] = [
+      { path: 'members/reviewer/model', value: 'sonnet' },
+    ];
+    const PROJECT = {
+      projectId: 'p1',
+      blocks: [
+        { id: 'repo' },
+        { id: 'local' },
+        { id: 'visuals', title: 'Visuals', text: 'Attach screenshots.' },
+      ],
+      baseRevision: 2,
+    };
+    const OVERLAY = {
+      members: { coder: { settings: { approval: 'auto' as const } } },
+    };
+
+    const cardItem = (
+      id: string,
+      target: string,
+      location: string,
+      kind: string,
+      extra: Record<string, unknown> = {},
+    ) => ({
+      id,
+      target,
+      territory: 'process',
+      kind,
+      location,
+      title: `Item ${id}`,
+      change: 'the change',
+      evidence: [{ seq: 4, quote: 'waited' }],
+      rootCause: 'serial calls',
+      impact: { minutesSaved: 5, basis: 'critical path', confidence: 4 },
+      risk: { level: 'low', note: 'none' },
+      ...extra,
+    });
+
+    function setCard(items: ReturnType<typeof cardItem>[]): void {
+      cardRows.set(
+        'run-1',
+        new Map([
+          [
+            CARD_SEQ,
+            {
+              kind: 'recommendations',
+              payload: JSON.stringify({
+                sourceRunId: 'source',
+                sourceKind: 'team',
+                timing: null,
+                hotspots: [],
+                items,
+              }),
+            },
+          ],
+        ]),
+      );
+    }
+
+    function setApply(ids: string[]): void {
+      applyRows.set('run-1', [
+        JSON.stringify({ apply: { cardSeq: CARD_SEQ, ids } }),
+      ]);
+    }
+
+    beforeEach(async () => {
+      await store.create(TEAM, 'team');
+      runs.edits.set('run-1', 'team');
+      setCard([
+        cardItem('W-2', 'team', 'reviewer', 'parallelize'),
+        cardItem('W-3', 'team', 'coder', 'parallelize'),
+        cardItem('P-1', 'project', 'p1', 'update'),
+        cardItem('O-1', 'overlay', 'p1', 'update'),
+        cardItem('R-1', 'repo', 'AGENTS.md:1', 'check'),
+      ]);
+      setApply(['W-2', 'P-1', 'O-1']);
+    });
+
+    it("logs a project's items on the project's origin and the team's on the change log, on approval", async () => {
+      const update = vi.spyOn(projectsFake, 'update');
+
+      await service.proposeChange('run-1', {
+        slug: 'team',
+        edits: MOVE,
+        project: PROJECT,
+        summary: 'Visuals move to Geniro',
+        reason: 'asked',
+        recommendationIds: ['W-2', 'P-1'],
+      });
+      approvals.resolve('run-1', standingCard('run-1'), true, 'go');
+      await verdictAfterPress();
+
+      expect(update).toHaveBeenCalledWith('p1', expect.anything(), {
+        source: 'analysis',
+        recommendationIds: ['P-1'],
+        chatRunId: 'run-1',
+        cardSeq: CARD_SEQ,
+      });
+      expect(logged).toEqual([
+        expect.objectContaining({
+          slug: 'team',
+          recommendationIds: ['W-2'],
+          cardSeq: CARD_SEQ,
+          chatRunId: 'run-1',
+          userNote: 'go',
+        }),
+      ]);
+    });
+
+    it("keeps a project's origin a chat's, with no card, when the change names no recommendation", async () => {
+      const update = vi.spyOn(projectsFake, 'update');
+
+      await service.proposeChange('run-1', {
+        slug: 'team',
+        edits: MOVE,
+        project: PROJECT,
+        summary: 'Visuals move to Geniro',
+        reason: 'asked',
+      });
+      approvals.resolve('run-1', standingCard('run-1'), true);
+      await verdictAfterPress();
+
+      expect(update).toHaveBeenCalledWith('p1', expect.anything(), {
+        source: 'chat',
+        recommendationIds: [],
+        chatRunId: 'run-1',
+        cardSeq: null,
+      });
+    });
+
+    it("logs an overlay's O- items on the overlay's change record, on approval", async () => {
+      await service.proposeOverlay('run-1', {
+        projectId: 'p1',
+        overlay: OVERLAY,
+        summary: 'Coder unattended',
+        reason: 'asked',
+        recommendationIds: ['O-1'],
+      });
+      approvals.resolve('run-1', standingCard('run-1'), true);
+      await verdictAfterPress();
+
+      expect(logged).toEqual([
+        expect.objectContaining({
+          projectId: 'p1',
+          recommendationIds: ['O-1'],
+          cardSeq: CARD_SEQ,
+          chatRunId: 'run-1',
+        }),
+      ]);
+    });
+
+    it.each([
+      [
+        'nothing has been applied in the chat',
+        'NOT_APPLIED',
+        () => applyRows.set('run-1', []),
+        { recommendationIds: ['W-2'] },
+      ],
+      [
+        'an id the newest Apply did not take',
+        'NOT_SELECTED',
+        () => undefined,
+        { recommendationIds: ['W-3'] },
+      ],
+      [
+        'a repo id, which no team card carries',
+        'NOT_ON_THIS_CARD',
+        () => undefined,
+        { recommendationIds: ['R-1'] },
+      ],
+      [
+        'a project id on a card with no project half',
+        'NOT_ON_THIS_CARD',
+        () => undefined,
+        { recommendationIds: ['P-1'] },
+      ],
+      [
+        'a project id filed about another project',
+        'OTHER_PROJECT',
+        () =>
+          setCard([
+            cardItem('W-2', 'team', 'reviewer', 'parallelize'),
+            cardItem('P-1', 'project', 'p-other', 'update'),
+          ]),
+        { recommendationIds: ['P-1'], project: PROJECT },
+      ],
+      [
+        'a move whose document is not marked',
+        'MOVE_DOCUMENT_FIRST',
+        () =>
+          setCard([
+            cardItem('W-2', 'team', 'reviewer', 'parallelize'),
+            cardItem('K-1', 'knowledge', 'new', 'add', { movesWith: 'W-2' }),
+          ]),
+        { recommendationIds: ['W-2'], project: PROJECT },
+      ],
+    ])(
+      'refuses a change when %s, raising no card',
+      async (_why, code, arrange, names) => {
+        arrange();
+
+        expect(
+          await service.proposeChange('run-1', {
+            slug: 'team',
+            edits: MOVE,
+            summary: 'Reviewer on sonnet',
+            reason: 'asked',
+            ...names,
+          }),
+        ).toMatchObject({ status: 'refused', code });
+        expect(approvals.listByRun('run-1')).toEqual([]);
+      },
+    );
   });
 
   describe('the card', () => {

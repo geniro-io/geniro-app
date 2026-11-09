@@ -2,11 +2,13 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { useState } from 'react';
 
 import {
+  EXTERNAL_ITEM,
   HOTSPOTS,
   ITEMS,
   LOOK,
   MEMBERS,
   recommendation,
+  SAMPLED_TEAM_STATS,
   TEAM_STATS,
   TIMING,
 } from '../__fixtures__/recommendations';
@@ -214,6 +216,25 @@ export const Empty: Story = {
         timing={TIMING}
         team
         items={[]}
+        applied={null}
+        outcomes={{}}
+        onApply={() => undefined}
+      />
+    </div>
+  ),
+};
+
+export const WithPopulation: Story = {
+  render: () => (
+    <div className="w-[560px]">
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        teamStats={SAMPLED_TEAM_STATS}
+        hotspots={HOTSPOTS}
+        team
+        items={[...ITEMS, EXTERNAL_ITEM]}
         applied={null}
         outcomes={{}}
         onApply={() => undefined}

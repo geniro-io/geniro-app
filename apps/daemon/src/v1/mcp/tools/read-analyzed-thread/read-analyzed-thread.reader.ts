@@ -1,4 +1,5 @@
 import {
+  ANALYSIS_RUNS_SECTIONS,
   ANALYSIS_SPEND_SECTIONS,
   type ReadAnalyzedThreadArgs,
   ReadAnalyzedThreadArgsSchema,
@@ -40,7 +41,9 @@ const HISTORY_RECORD_SECTIONS = [
 ] as const;
 
 type SpendSection = (typeof ANALYSIS_SPEND_SECTIONS)[number];
-type RecordSection = (typeof HISTORY_RECORD_SECTIONS)[number] | SpendSection;
+type RunsSection = (typeof ANALYSIS_RUNS_SECTIONS)[number];
+type RecordSection =
+  (typeof HISTORY_RECORD_SECTIONS)[number] | SpendSection | RunsSection;
 
 /** Room a page keeps for what surrounds its records. */
 const SECTION_ENVELOPE_BYTES = 200;
@@ -210,6 +213,10 @@ function isSpendSection(section: string): section is SpendSection {
   return (ANALYSIS_SPEND_SECTIONS as readonly string[]).includes(section);
 }
 
+function isRunsSection(section: string): section is RunsSection {
+  return (ANALYSIS_RUNS_SECTIONS as readonly string[]).includes(section);
+}
+
 function wrongSection(view: string, section: string): Answer {
   return {
     error: 'INVALID_ARGS',
@@ -246,6 +253,24 @@ export function spendAnswer(
 }
 
 /**
+ * A page of the team's runs outside the sample, from a fresh read like spend's:
+ * a run started meanwhile moves the list down, so a record can repeat on the
+ * next page and none is missed.
+ */
+export function otherRunsAnswer(
+  runs: Answer,
+  query: ReadAnalyzedThreadArgs,
+): Answer {
+  const section = query.section ?? '';
+  return isRunsSection(section)
+    ? {
+        ...sectionPage(runs, section, query.offset ?? 0, query.part ?? 0),
+        note: 'Open one with runId, only for a concrete question.',
+      }
+    : wrongSection('runs', section);
+}
+
+/**
  * A team's history, masked whole by the caller, as one page: the whole of it
  * while it fits, else its summary and then one section at a time. An `offset`
  * with no section still cuts the old chunks of the whole answer.
@@ -259,7 +284,7 @@ export function historyAnswer(
     return diffPage(history, query.version, offset);
   }
   if (query.section !== undefined) {
-    return isSpendSection(query.section)
+    return isSpendSection(query.section) || isRunsSection(query.section)
       ? wrongSection('history', query.section)
       : sectionPage(history, query.section, offset, query.part ?? 0);
   }

@@ -195,7 +195,7 @@ describe('ChatListItem', () => {
       ]);
     });
 
-    it('offers Analyze thread on a live row, and never in the archive', async () => {
+    it('offers Analyze thread on a live row and on an archived one', async () => {
       const onAnalyze = vi.fn();
       const container = await mount(<ChatListItem {...props({ onAnalyze })} />);
       expect(await openMenu(container)).toEqual([
@@ -214,7 +214,10 @@ describe('ChatListItem', () => {
           {...props({ onAnalyze, archived: true, onUnarchive: vi.fn() })}
         />,
       );
-      expect(await openMenu(shelved)).not.toContain('Analyze thread…');
+      onAnalyze.mockClear();
+      expect(await openMenu(shelved)).toContain('Analyze thread…');
+      await clickMenuRow('Analyze thread…');
+      expect(onAnalyze).toHaveBeenCalledWith('run-1');
     });
 
     it('asks for the state the row should END in, never a toggle', async () => {

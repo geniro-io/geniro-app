@@ -4,7 +4,10 @@ import { basename } from 'node:path';
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
-import type { TeamVersionIndex } from '../../agents/chat.types';
+import type {
+  RecommendationsTeamPopulation,
+  TeamVersionIndex,
+} from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { pollsSpendFor } from '../../agents/utils/polled-spend';
@@ -15,7 +18,7 @@ import { TeamChangeLogService } from '../../teams/services/team-change-log.servi
 import { TeamRecommendationDao } from '../dao/team-recommendation.dao';
 import { UsageActivityDao } from '../dao/usage-activity.dao';
 import { UsageEventDao } from '../dao/usage-event.dao';
-import type { TeamHistory, TeamSpend } from '../stats.types';
+import type { TeamHistory, TeamOtherRun, TeamSpend } from '../stats.types';
 import { foldTeamHistory } from '../utils/team-history-fold';
 import { foldTeamSpend, type SpendPlace } from '../utils/team-spend-fold';
 import { totalsByRun } from '../utils/team-versions-fold';
@@ -106,6 +109,38 @@ export class TeamHistoryService {
         return place;
       },
     });
+  }
+
+  population(slug: string): Promise<RecommendationsTeamPopulation> {
+    return this.stats.population(slug);
+  }
+
+  /**
+   * Every run of the team outside what the analysis samples, newest first, for
+   * the analysis to open one by id. A deleted run has no rows to open, so it is
+   * not listed here; view=spend and view=history still count it.
+   */
+  async otherRuns(
+    slug: string,
+    scope: { analysedRunIds: readonly string[] },
+  ): Promise<TeamOtherRun[]> {
+    const em = this.em.fork();
+    const sampled = new Set(scope.analysedRunIds);
+    const runs = (await this.runDao.newestTeamRuns(slug, null, em)).filter(
+      (run) => !sampled.has(run.id),
+    );
+    const totals = await this.stats.totalsOf(
+      runs.map((run) => run.id),
+      em,
+    );
+    return runs.map((run) => ({
+      runId: run.id,
+      title: run.title,
+      createdAt: run.createdAt.toISOString(),
+      statusNow: run.status,
+      archived: run.archivedAt !== null,
+      costUsd: totals.get(run.id)?.costUsd ?? null,
+    }));
   }
 
   async read(

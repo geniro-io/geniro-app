@@ -5412,6 +5412,73 @@ describe('ChatService', () => {
       await turn(cursor, 'the summary');
     });
 
+    describe('what the run says it is doing', () => {
+      function latestActivity(
+        statuses: RunStatusEvent[],
+        runId: string,
+      ): string | null | undefined {
+        return statuses
+          .filter((s) => s.runId === runId && s.activity !== undefined)
+          .at(-1)?.activity;
+      }
+
+      it('names a compaction geniro performs for the whole of its turn', async () => {
+        const { service, cursor, statuses } = setup();
+        const run = await service.createChat({
+          agentKind: 'cursor-agent',
+          cwd: dir,
+        });
+        await service.sendMessage(run.id, '/compact');
+        await drain();
+        expect(statuses).toContainEqual(
+          expect.objectContaining({
+            runId: run.id,
+            status: 'running',
+            activity: 'compacting the conversation',
+          }),
+        );
+
+        cursor.emit({ type: 'tool_call', id: 't1', name: 'Read', input: {} });
+        await drain();
+        expect(latestActivity(statuses, run.id)).toBe('running Read');
+        cursor.emit({
+          type: 'tool_result',
+          id: 't1',
+          name: 'Read',
+          result: 'ok',
+          isError: false,
+        });
+        await drain();
+        expect(latestActivity(statuses, run.id)).toBe(
+          'compacting the conversation',
+        );
+
+        await turn(cursor, 'the summary');
+        expect(latestActivity(statuses, run.id)).toBeNull();
+      });
+
+      it('names none on an ordinary turn of the same CLI', async () => {
+        const { service, cursor, statuses } = setup();
+        const run = await service.createChat({
+          agentKind: 'cursor-agent',
+          cwd: dir,
+        });
+        await service.sendMessage(run.id, 'hello');
+        await drain();
+        expect(latestActivity(statuses, run.id)).toBeNull();
+        await turn(cursor, 'hi');
+      });
+
+      it('leaves a CLI that compacts by itself to its own report', async () => {
+        const { service, claude, statuses } = setup();
+        const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+        await service.sendMessage(run.id, '/compact');
+        await drain();
+        expect(latestActivity(statuses, run.id)).toBeNull();
+        await turn(claude, 'compacted.');
+      });
+    });
+
     it('drops the session and carries the summary into the next turn', async () => {
       const { service, cursor, nodeDao, runDao, itemDao } = setup();
       const run = await service.createChat({

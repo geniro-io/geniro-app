@@ -275,6 +275,8 @@ import { ThreadInboxService } from './thread-inbox.service';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
 
+const COMPACTING_ACTIVITY = 'compacting the conversation';
+
 /** A deferred card another module raised — one that stands across turns. */
 /** The sentence under the badge while a turn is held for `count` units. */
 function heldActivity(count: number, unit?: 'command'): string | null {
@@ -6174,7 +6176,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // set is what would otherwise grow for the life of a long chat.
       this.closedDelegates.delete(runId);
       this.holds.forget(runId);
-      await this.setRunStatus(em, runId, 'running');
+      // To the CLI this is an ordinary prompt, so it never reports a compaction.
+      const turnActivity =
+        geniroCommand?.replacesSession === true ? COMPACTING_ACTIVITY : null;
+      await this.setRunStatus(em, runId, 'running', { activity: turnActivity });
       shownWorking = true;
       wroteRunning = true;
 
@@ -6317,7 +6322,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
        * phrase for an agent that is simply thinking.
        */
       const idleActivity = (): string | null =>
-        heldActivity(heldOnBackgroundWork, heldOnUnit);
+        heldActivity(heldOnBackgroundWork, heldOnUnit) ?? turnActivity;
       const enqueue = (work: () => Promise<void>): void => {
         chain = chain.then(work).catch((err: unknown) => {
           eventHandlingFailed = true;
@@ -7462,9 +7467,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               // 14 summary rows.
               this.announceActivity(
                 runId,
-                event.phase === 'started'
-                  ? 'compacting the conversation'
-                  : null,
+                event.phase === 'started' ? COMPACTING_ACTIVITY : null,
               );
               return;
             }

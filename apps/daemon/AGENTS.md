@@ -514,7 +514,7 @@ geniro's render and card tools (`report_findings`, `show_chart`, `show_metrics`,
   - A geniro-command turn never re-arms it.
   - `compactingRuns` refuses follow-ups `RUN_BUSY` with a per-turn token.
   - Baseline: the first reading after a compaction; no re-compaction until regrowth (`AUTO_COMPACT_REGROWTH_FRACTION`).
-  - A carried compaction retires (marks) the kept process.
+  - A carried compaction retires (marks) the kept process. Its CLI reports no compaction, so the daemon announces `COMPACTING_ACTIVITY` for the whole of its turn.
 - Team nodes compact right after the filling turn, inside the unit owning the session key (`launchNode` / `launchCalleeTurn` / `continueNode`), never before a resume and never inside `enqueue`. `compactingNodes` refuses follow-ups. cursor's carried summary is held per session key in memory.
 - Never write `/compact` into a running turn's stdin.
 

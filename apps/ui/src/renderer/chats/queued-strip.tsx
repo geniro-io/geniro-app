@@ -126,7 +126,11 @@ export function QueuedStrip({
    * this the control looked broken in both windows, which is exactly how it
    * was reported.
    */
-  steerStatus: { id: string; state: 'sending' | 'held' } | null;
+  steerStatus: {
+    id: string;
+    state: 'sending' | 'held';
+    reason?: string | null;
+  } | null;
   /** Commit new text for the entry with this id. */
   onEdit: (id: string, text: string) => void;
   onRemove: (id: string) => void;
@@ -318,6 +322,10 @@ export function QueuedStrip({
           ? 'sending'
           : steerStatus?.id === message.id
             ? steerStatus.state
+            : null;
+        const heldReason =
+          steer === 'held' && steerStatus?.id === message.id
+            ? (steerStatus.reason ?? null)
             : null;
         // Where the mode's release lives — see the Send control below.
         const promoted = waitsForUser && index === 0;
@@ -531,13 +539,22 @@ export function QueuedStrip({
                     it was next, which on a three-deep queue was true of one. */}
                 {steer !== null ? (
                   <span
-                    className="shrink-0"
+                    className={cn(
+                      heldReason === null
+                        ? 'shrink-0'
+                        : 'max-w-[60%] min-w-0 truncate',
+                    )}
                     title={
                       steer === 'held'
-                        ? 'The run would not take it mid-turn — it goes out when this turn ends'
+                        ? (heldReason ??
+                          'The run would not take it mid-turn — it goes out when this turn ends')
                         : undefined
                     }>
-                    {steer === 'sending' ? 'sending…' : 'still queued'}
+                    {steer === 'sending'
+                      ? 'sending…'
+                      : heldReason === null
+                        ? 'still queued'
+                        : `still queued: ${heldReason}`}
                   </span>
                 ) : index === 0 && !waitsForUser ? (
                   // `sends next` is a PROMISE, and a queue that waits for the

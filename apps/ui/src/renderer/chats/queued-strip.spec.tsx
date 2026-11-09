@@ -642,6 +642,27 @@ describe('QueuedStrip', () => {
     ).not.toBeNull();
   });
 
+  it('says why the run would not take it when the daemon said so', () => {
+    const reason =
+      'the agent is compacting its conversation — your message goes out once it has';
+    const el = render(
+      <QueuedStrip
+        {...base}
+        messages={[message('a', 'urgent'), message('b', 'later')]}
+        steerUnavailableReason={null}
+        steerStatus={{ id: 'a', state: 'held', reason }}
+        onEdit={noop}
+        onRemove={noop}
+        onReorder={() => {}}
+        onSteer={noop}
+      />,
+    );
+    const rows = el.querySelectorAll('[data-slot="queued-message"]');
+    expect(rows[0]!.textContent).toContain(`still queued: ${reason}`);
+    expect(rows[0]!.querySelector(`[title="${reason}"]`)).not.toBeNull();
+    expect(rows[1]!.textContent).not.toContain(reason);
+  });
+
   it('reports the outcome on the steered row alone', () => {
     const el = render(
       <QueuedStrip

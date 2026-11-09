@@ -93,6 +93,7 @@ const encode = (...parts: string[]): string => parts.join(':');
  */
 const PARAMETER_ICONS: Record<string, React.ReactNode> = {
   fast: <Zap />,
+  service_tier: <Zap />,
 };
 
 /**
@@ -319,7 +320,7 @@ export function ModelSettingsSelect({
       icon: React.ReactNode,
       label: string,
       prefix: string,
-      options: { id: string; label: string }[],
+      options: { id: string; label: string; description?: string }[],
       chosen: string | null,
       defaultLabel: string,
       /** What runs when nothing is chosen, for the row's own hint. */
@@ -349,6 +350,7 @@ export function ModelSettingsSelect({
       const items: MenuItem[] = options.map((option) => ({
         value: key(option.id),
         label: option.label,
+        subLabel: option.description,
         checked: option.id === chosen,
       }));
       // A stored value the list does not contain, added back rather than dropped:

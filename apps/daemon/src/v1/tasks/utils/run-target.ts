@@ -174,7 +174,10 @@ export function resolveRunTarget(
 
   // A window or parameter is only valid for the model it was picked under.
   const modelLevel = compatible.find((level) => nonEmpty(level.model) !== null);
-  const axisLevels = modelLevel === undefined ? compatible : [modelLevel];
+  const axisLevels =
+    modelLevel === undefined
+      ? compatible
+      : compatible.slice(0, compatible.indexOf(modelLevel) + 1);
   const parameters = axisLevels.find(
     (level) =>
       Object.keys(readModelParameters(level.modelParameters ?? null)).length >

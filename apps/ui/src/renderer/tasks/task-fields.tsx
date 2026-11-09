@@ -14,6 +14,10 @@ import { teamSlugOf } from '../chats/composer-values';
 import { ConfigDirSelect } from '../chats/config-dir-select';
 import { shortenPath } from '../chats/directory-select';
 import { EffortSelect } from '../chats/effort-select';
+import {
+  ModelParameterSelect,
+  withModelParameter,
+} from '../chats/model-parameter-select';
 import { ModelSelect } from '../chats/model-select';
 import { TargetSelect, type TargetTeam } from '../chats/target-select';
 import { HoverPopover } from '../components/hover-popover';
@@ -171,6 +175,7 @@ export type TaskFieldsValue = Pick<
   | 'teamSlug'
   | 'model'
   | 'effort'
+  | 'modelParameters'
   | 'approval'
   | 'configDir'
 >;
@@ -193,6 +198,7 @@ export type TaskFieldsPatch = Partial<
     | 'teamSlug'
     | 'model'
     | 'effort'
+    | 'modelParameters'
     | 'approval'
     | 'configDir'
   >
@@ -220,6 +226,7 @@ export interface ProjectDefaults {
   runConfig: {
     model: string | null;
     effort: string | null;
+    modelParameters: TaskDto['modelParameters'];
     approval: TaskDto['approval'];
   } | null;
   /**
@@ -536,6 +543,8 @@ export function TaskRunConfigRows({
     modelsLoading,
     efforts,
     effortsLoading,
+    modelParameters,
+    modelParametersLoading,
     approvalModes,
     approvalModesLoading,
     approvalCapability,
@@ -549,6 +558,13 @@ export function TaskRunConfigRows({
   });
   // Where this card's runs are cut from: its own folder, else the project's.
   const folder = value.folder ?? project.folder;
+  // `resolveRunTarget`: a card's own model leaves the project's parameters behind.
+  const inheritedParameters =
+    value.model === null ? (inherited?.modelParameters ?? {}) : {};
+  const ownsParameters = Object.keys(value.modelParameters).length > 0;
+  const shownParameters = ownsParameters
+    ? value.modelParameters
+    : inheritedParameters;
 
   return (
     <>
@@ -584,6 +600,7 @@ export function TaskRunConfigRows({
               ...targetPatch(target),
               model: null,
               effort: null,
+              modelParameters: {},
               approval: null,
               configDir: null,
             });
@@ -614,6 +631,7 @@ export function TaskRunConfigRows({
                 ...targetPatch(null),
                 model: null,
                 effort: null,
+                modelParameters: {},
                 approval: null,
                 configDir: null,
               });
@@ -640,7 +658,7 @@ export function TaskRunConfigRows({
               onChange={(model) => {
                 // A model belongs to the CLI that offered it, so changing it
                 // drops an effort level picked under the old one.
-                onChange({ model, effort: null });
+                onChange({ model, effort: null, modelParameters: {} });
               }}
             />
             {value.model === null && inherited?.model != null ? (
@@ -666,6 +684,35 @@ export function TaskRunConfigRows({
                 <InheritedTag />
               ) : null}
             </PropertyRow>
+          )}
+
+          {modelParametersLoading ? (
+            <PropertyRow name="Model settings">
+              <LoadingChip noun="model settings" />
+            </PropertyRow>
+          ) : (
+            modelParameters.map((parameter) => (
+              <PropertyRow key={parameter.id} name={parameter.label}>
+                <ModelParameterSelect
+                  parameter={parameter}
+                  showAxisName={false}
+                  value={shownParameters[parameter.id] ?? null}
+                  onChange={(next) => {
+                    onChange({
+                      modelParameters: withModelParameter(
+                        shownParameters,
+                        parameter.id,
+                        next,
+                      ),
+                    });
+                  }}
+                />
+                {!ownsParameters &&
+                inheritedParameters[parameter.id] !== undefined ? (
+                  <InheritedTag />
+                ) : null}
+              </PropertyRow>
+            ))
           )}
 
           {approvalModesLoading ? (

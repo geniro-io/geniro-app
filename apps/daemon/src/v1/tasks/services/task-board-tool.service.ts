@@ -14,6 +14,7 @@ import type { z } from 'zod';
 import type { ChatApprovalMode } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { isHostBoardTool } from '../../agents/utils/host-board';
+import { writeModelParameters } from '../../agents/utils/model-parameters';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { Project } from '../../projects/entity/project.entity';
 import { PROJECT_INSTRUCTIONS_MAX } from '../../projects/projects.types';
@@ -981,7 +982,10 @@ function projectRunConfig(project: Project) {
 function runTargetNote(card: TaskWire, project: Project): string {
   const folder =
     card.folder === null ? `${project.folder} (from the project)` : card.folder;
-  const target = resolveRunTarget([card, project]);
+  const target = resolveRunTarget([
+    { ...card, modelParameters: writeModelParameters(card.modelParameters) },
+    project,
+  ]);
   if (target.kind === 'problem') {
     return (
       `Folder: ${folder}. Neither this card nor its project names an agent or a team, so it cannot be ` +

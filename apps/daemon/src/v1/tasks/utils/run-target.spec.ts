@@ -71,6 +71,39 @@ describe('resolveRunTarget', () => {
     });
   });
 
+  it('takes a card’s own parameters under the model it inherits', () => {
+    const target = resolveRunTarget([
+      press(),
+      { modelParameters: JSON.stringify({ service_tier: 'priority' }) },
+      {
+        agentKind: 'codex',
+        model: 'gpt-6.1-sol',
+        modelParameters: JSON.stringify({ service_tier: 'default' }),
+      },
+    ]);
+
+    expect(target).toMatchObject({
+      model: 'gpt-6.1-sol',
+      modelParameters: { service_tier: 'priority' },
+    });
+  });
+
+  it('takes a card’s own parameters under its own model', () => {
+    const target = resolveRunTarget([
+      press(),
+      {
+        model: 'gpt-6-sol',
+        modelParameters: JSON.stringify({ service_tier: 'priority' }),
+      },
+      { agentKind: 'codex', model: 'gpt-6.1-sol' },
+    ]);
+
+    expect(target).toMatchObject({
+      model: 'gpt-6-sol',
+      modelParameters: { service_tier: 'priority' },
+    });
+  });
+
   it('keeps the project window when nothing names a model', () => {
     const target = resolveRunTarget([
       press(),

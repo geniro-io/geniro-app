@@ -9,6 +9,10 @@ import type {
 } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import { RunLiveWork } from '../../agents/services/run-live-work.service';
+import {
+  readModelParameters,
+  writeModelParameters,
+} from '../../agents/utils/model-parameters';
 import { resolveValidDirectory } from '../../agents/utils/resolve-directory';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
@@ -442,6 +446,7 @@ export class TasksService implements OnModuleInit {
     agentKind?: AgentKind;
     model?: string;
     effort?: string;
+    modelParameters?: Record<string, string>;
     approval?: ChatApprovalMode;
     configDir?: string;
     teamSlug?: string;
@@ -480,6 +485,7 @@ export class TasksService implements OnModuleInit {
           agentKind: input.agentKind ?? null,
           model: input.model ?? null,
           effort: input.effort ?? null,
+          modelParameters: writeModelParameters(input.modelParameters),
           approval: input.approval ?? null,
           // Checked to exist for `Project.configDir`'s reason: a card pointing
           // at a profile that is not there starts a brand-new signed-out one,
@@ -526,6 +532,7 @@ export class TasksService implements OnModuleInit {
       agentKind?: AgentKind | null;
       model?: string | null;
       effort?: string | null;
+      modelParameters?: Record<string, string> | null;
       approval?: ChatApprovalMode | null;
       configDir?: string | null;
       teamSlug?: string | null;
@@ -566,6 +573,16 @@ export class TasksService implements OnModuleInit {
     }
     // The run configuration, each on `folder`'s contract above: `null` hands
     // the field back to the project's default, absent leaves it alone.
+    if (patch.modelParameters !== undefined) {
+      task.modelParameters = writeModelParameters(patch.modelParameters);
+    } else if (
+      (patch.agentKind !== undefined && patch.agentKind !== task.agentKind) ||
+      (patch.teamSlug !== undefined && patch.teamSlug !== task.teamSlug) ||
+      (patch.model !== undefined && patch.model !== task.model)
+    ) {
+      // A parameter is only valid for the CLI and model it was picked under.
+      task.modelParameters = null;
+    }
     if (patch.agentKind !== undefined) {
       task.agentKind = patch.agentKind;
     }
@@ -827,6 +844,7 @@ function toWire(
     agentKind: task.agentKind,
     model: task.model,
     effort: task.effort,
+    modelParameters: readModelParameters(task.modelParameters),
     approval: task.approval,
     configDir: task.configDir,
     teamSlug: task.teamSlug,

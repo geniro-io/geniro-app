@@ -1311,6 +1311,12 @@ export interface AgentModelParameterValue {
      * @memberof AgentModelParameterValue
      */
     label: string;
+    /**
+     * What picking it does, in the CLI’s own words
+     * @type {string}
+     * @memberof AgentModelParameterValue
+     */
+    description?: string;
 }
 /**
  * 
@@ -3826,6 +3832,12 @@ export interface CreateTaskDto {
      * @memberof CreateTaskDto
      */
     effort?: string;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof CreateTaskDto
+     */
+    modelParameters?: { [key: string]: string; };
     /**
      * 
      * @type {ChatApprovalMode}
@@ -13130,6 +13142,12 @@ export interface TaskDto {
      */
     effort: string | null;
     /**
+     * Every other model setting this card runs with, keyed by the CLI's own parameter id; {} means take the project's
+     * @type {{ [key: string]: string; }}
+     * @memberof TaskDto
+     */
+    modelParameters: { [key: string]: string; };
+    /**
      * 
      * @type {ChatApprovalMode}
      * @memberof TaskDto
@@ -15812,6 +15830,12 @@ export interface UpdateTaskDto {
      * @memberof UpdateTaskDto
      */
     effort?: string | null;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof UpdateTaskDto
+     */
+    modelParameters?: { [key: string]: string; } | null;
     /**
      * 
      * @type {ChatApprovalMode}

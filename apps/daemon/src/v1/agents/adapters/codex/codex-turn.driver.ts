@@ -1,4 +1,5 @@
 import { asArray, asNumber, asRecord, asString } from '../../utils/json-util';
+import type { ModelPrice } from '../../utils/model-prices';
 import { ollamaModelName } from '../../utils/ollama';
 import type {
   AgentEvent,
@@ -67,6 +68,10 @@ import {
   waitsOnSubagents,
 } from './utils/codex-items.utils';
 import { codexTurnMcpOverrides } from './utils/codex-mcp.utils';
+import {
+  codexServiceTierOf,
+  priceAtServiceTier,
+} from './utils/codex-service-tier.utils';
 import { userMessageText } from './utils/codex-threads.utils';
 import {
   baselineOf,
@@ -362,6 +367,7 @@ export class CodexTurnDriver {
       this.input.effort ?? null,
     );
     this.switchesPlanMode = collaborationMode !== null;
+    const serviceTier = codexServiceTierOf(this.input.modelParameters);
     this.session.request(
       CODEX_METHODS.turnStart,
       {
@@ -374,6 +380,9 @@ export class CodexTurnDriver {
           ? { model: ollamaModelName(this.input.model) ?? this.input.model }
           : {}),
         ...(this.input.effort ? { effort: this.input.effort } : {}),
+        // Never `serviceTier`: that sticks to the thread, across a resume too
+        // (measured on 0.166.0), so the user's own `codex resume` would stay on it.
+        ...(serviceTier ? { serviceTierForTurn: serviceTier } : {}),
         summary: CODEX_REASONING_SUMMARY,
         ...(collaborationMode ? { collaborationMode } : {}),
       },
@@ -435,6 +444,7 @@ export class CodexTurnDriver {
           break;
         }
         this.session.threadId = threadId;
+        this.session.threadServiceTier = asString(record?.serviceTier);
         const model = asString(record?.model);
         if (model) {
           this.session.threadModel = model;
@@ -1568,11 +1578,16 @@ export class CodexTurnDriver {
     const latest = this.session.lastUsage;
     return latest === null || this.baseline === null
       ? null
-      : spendBetween(
-          latest,
-          this.baseline,
-          this.session.listPriceOf(this.session.threadModel),
-        );
+      : spendBetween(latest, this.baseline, this.turnPrice());
+  }
+
+  /** The thread's model at the speed tier this turn runs on. */
+  private turnPrice(): ModelPrice | null {
+    return priceAtServiceTier(
+      this.session.listPriceOf(this.session.threadModel),
+      codexServiceTierOf(this.input.modelParameters) ??
+        this.session.threadServiceTier,
+    );
   }
 
   /** The sub-agents' spend no turn has recorded yet. */
@@ -1609,7 +1624,7 @@ export class CodexTurnDriver {
       baseline: this.baseline,
       model: this.session.threadModel,
       durationMs,
-      price: this.session.listPriceOf(this.session.threadModel),
+      price: this.turnPrice(),
       subagents,
     });
   }
@@ -1933,7 +1948,7 @@ export class CodexTurnDriver {
           baseline: this.baseline,
           model: this.session.threadModel,
           durationMs: asNumber(turn?.durationMs),
-          price: this.session.listPriceOf(this.session.threadModel),
+          price: this.turnPrice(),
         }),
       stopReason: status ?? 'completed',
       finalText: this.finalText,

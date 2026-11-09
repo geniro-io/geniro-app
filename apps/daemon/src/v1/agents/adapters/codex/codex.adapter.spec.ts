@@ -530,6 +530,51 @@ describe('listings', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('offers the speed tiers one model states, under the profile asked about', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn(
+      answered({
+        data: [
+          {
+            id: 'gpt-6.1-sol',
+            displayName: 'GPT-6.1-Sol',
+            isDefault: true,
+            serviceTiers: [
+              {
+                id: 'priority',
+                name: 'Fast',
+                description: '2x speed, increased usage',
+              },
+            ],
+          },
+          { id: 'gpt-5.5', displayName: 'GPT-5.5', serviceTiers: [] },
+        ],
+      }),
+    );
+    const adapter = adapterWith({ groupSpawnFn });
+    const options = { configDir: '/Users/x/.codex-work' };
+
+    const fast = await adapter.listModelParameters('gpt-6.1-sol', options);
+    expect(fast.parameters[0]).toMatchObject({
+      id: 'service_tier',
+      label: 'Fast mode',
+    });
+    expect(calls[0]?.env.CODEX_HOME).toBe('/Users/x/.codex-work');
+    await expect(
+      adapter.listModelParameters('gpt-5.5', options),
+    ).resolves.toMatchObject({ parameters: [], exact: true });
+    await expect(
+      adapter.listModelParameters(null, options),
+    ).resolves.toMatchObject({ parameters: [{ id: 'service_tier' }] });
+  });
+
+  it('asks codex for no settings of a local model', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn(answered(MODELS));
+    await expect(
+      adapterWith({ groupSpawnFn }).listModelParameters('ollama/llama4'),
+    ).resolves.toMatchObject({ parameters: [] });
+    expect(calls).toHaveLength(0);
+  });
+
   it('does not cache an empty model list, so the next listing asks codex again', async () => {
     // An empty answer is a failure to ask, not "this account has no models".
     const { groupSpawnFn, calls } = oneshotSpawn([
@@ -1391,6 +1436,7 @@ describe('a one-off question', () => {
     expect(args).toContain('model_reasoning_effort="high"');
     expect(args).not.toContain('model_reasoning_effort="low"');
     expect(args).toContain('model_context_window=272000');
+    expect(args.some((arg) => arg.startsWith('service_tier='))).toBe(false);
 
     const unchosen = oneshotSpawn('[]');
     await adapterWith({ groupSpawnFn: unchosen.groupSpawnFn }).askOnce({
@@ -1404,6 +1450,17 @@ describe('a one-off question', () => {
         arg.startsWith('model_context_window='),
       ),
     ).toBe(false);
+  });
+
+  it('asks at the chosen speed tier', async () => {
+    const { groupSpawnFn, calls } = oneshotSpawn('[]');
+    await adapterWith({ groupSpawnFn }).askOnce({
+      prompt: 'Sort these',
+      model: 'gpt-6.1-sol',
+      configDir: null,
+      modelParameters: { service_tier: 'priority' },
+    });
+    expect(calls[0]!.args).toContain('service_tier="priority"');
   });
 
   it('answers null for an empty reply', async () => {

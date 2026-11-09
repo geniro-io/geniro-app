@@ -84,6 +84,34 @@ describe('ModelParameterSelect', () => {
     ]);
   });
 
+  it('says under a value what picking it does, where the CLI says', () => {
+    const el = render(
+      <ModelParameterSelect
+        parameter={{
+          id: 'service_tier',
+          label: 'Fast mode',
+          values: [
+            { id: 'default', label: 'Off' },
+            {
+              id: 'priority',
+              label: 'On',
+              description: '2x speed, increased usage',
+            },
+          ],
+          current: null,
+        }}
+        value={null}
+        onChange={() => {}}
+      />,
+    );
+
+    expect(optionLabels(el)).toEqual([
+      'Off',
+      'On2x speed, increased usage',
+      'model default',
+    ]);
+  });
+
   it('shows what the model is ALREADY on when nothing is picked', () => {
     // The chip states the outcome, the menu states the choice: with no pick
     // the trigger reads `Balance` (what the turn runs at) while `model default`

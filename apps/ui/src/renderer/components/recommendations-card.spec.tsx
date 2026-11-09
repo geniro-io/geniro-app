@@ -4,11 +4,14 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  EXTERNAL_ITEM,
   HOTSPOTS,
   ITEMS,
   LOOK,
   MEMBERS,
   recommendation,
+  SAMPLED_TEAM_STATS,
+  TEAM_POPULATION,
   TEAM_STATS,
   TIMING,
 } from '../__fixtures__/recommendations';
@@ -67,6 +70,12 @@ function footer(el: HTMLElement): string {
 function projection(el: HTMLElement): string {
   return (
     el.querySelector('[data-slot="analysis-projection"]')?.textContent ?? ''
+  );
+}
+
+function populationLine(el: HTMLElement): string {
+  return (
+    el.querySelector('[data-slot="analysis-population"]')?.textContent ?? ''
   );
 }
 
@@ -879,5 +888,204 @@ describe('RecommendationsCard', () => {
       />,
     );
     expect(bare.querySelector('[data-slot="assessment-verdict"]')).toBeNull();
+  });
+
+  it('draws the runs the figures read against every run the team has, and the per-run figures over all of them', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        teamStats={SAMPLED_TEAM_STATS}
+        team
+        items={ITEMS}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+
+    expect(populationLine(el)).toBe(
+      'Read 8 of 216 runs. Over all 216: $4.60 per run · 58m worked · 27 turns',
+    );
+  });
+
+  it.each([
+    [8, 'Read all 8 runs'],
+    [1, 'Read the only run'],
+  ])(
+    'reads a population the runs read already cover as those runs, with no averages (%i run)',
+    (runs, line) => {
+      const el = render(
+        <RecommendationsCard
+          look={LOOK}
+          summary={null}
+          timing={null}
+          teamStats={{
+            ...SAMPLED_TEAM_STATS,
+            runs,
+            population: { ...TEAM_POPULATION, runs },
+          }}
+          team
+          items={ITEMS}
+          applied={null}
+          outcomes={{}}
+        />,
+      );
+
+      expect(populationLine(el)).toBe(line);
+    },
+  );
+
+  it.each([
+    [
+      'no run priced',
+      { costUsd: null, pricedRuns: 216 },
+      'Read 8 of 216 runs. Over all 216: 58m worked · 27 turns',
+    ],
+    [
+      'some runs unpriced',
+      { costUsd: 4.6, pricedRuns: 200 },
+      'Read 8 of 216 runs. Over all 216: $4.60 (200 priced) per run · 58m worked · 27 turns',
+    ],
+    [
+      'no worked time measured',
+      { workedMs: null },
+      'Read 8 of 216 runs. Over all 216: $4.60 per run · 27 turns',
+    ],
+  ])(
+    'drops a figure nothing measured, and names the priced runs when some were not (%s)',
+    (_, perRun, line) => {
+      const el = render(
+        <RecommendationsCard
+          look={LOOK}
+          summary={null}
+          timing={null}
+          teamStats={{
+            ...SAMPLED_TEAM_STATS,
+            population: {
+              ...TEAM_POPULATION,
+              perRun: { ...TEAM_POPULATION.perRun, ...perRun },
+            },
+          }}
+          team
+          items={ITEMS}
+          applied={null}
+          outcomes={{}}
+        />,
+      );
+
+      expect(populationLine(el)).toBe(line);
+    },
+  );
+
+  it('draws no population line for a card whose figures carry none', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        teamStats={TEAM_STATS}
+        team
+        items={ITEMS}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+
+    expect(el.querySelector('[data-slot="analysis-population"]')).toBeNull();
+    expect(el.querySelectorAll('[data-slot="analysis-tile"]')).toHaveLength(4);
+  });
+
+  it.each([
+    [
+      'with a cost',
+      TEAM_POPULATION,
+      'Measured over the 8 runs read; over all 216 a run costs $4.60.',
+    ],
+    [
+      'without one',
+      {
+        ...TEAM_POPULATION,
+        perRun: { ...TEAM_POPULATION.perRun, costUsd: null },
+      },
+      'Measured over the 8 runs read of 216.',
+    ],
+  ])(
+    'names the runs its projection measured against the population when it is larger (%s)',
+    (_, population, sentence) => {
+      const el = render(
+        <RecommendationsCard
+          look={LOOK}
+          summary={null}
+          timing={null}
+          teamStats={{ ...TEAM_STATS, population }}
+          team
+          items={ITEMS}
+          applied={null}
+          outcomes={{}}
+        />,
+      );
+
+      expect(projection(el)).toContain(sentence);
+      expect(projection(el)).toContain('items can overlap');
+    },
+  );
+
+  it('leaves the projection to the runs it measured when the population is no larger', () => {
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        teamStats={{
+          ...TEAM_STATS,
+          population: { ...TEAM_POPULATION, runs: 8 },
+        }}
+        team
+        items={ITEMS}
+        applied={null}
+        outcomes={{}}
+      />,
+    );
+
+    expect(projection(el)).not.toContain('Measured over');
+  });
+
+  it('draws an external item under Other repositories, last, and ticks and applies it like any other', () => {
+    const onApply = vi.fn();
+    const el = render(
+      <RecommendationsCard
+        look={LOOK}
+        summary={null}
+        timing={null}
+        team
+        items={[...ITEMS, EXTERNAL_ITEM]}
+        applied={null}
+        outcomes={{}}
+        onApply={onApply}
+      />,
+    );
+    const headings = [...el.querySelectorAll('h4')].map((h) => h.textContent);
+    const row = el.querySelector<HTMLElement>(
+      '[data-slot="recommendation-row"][data-id="X-1"]',
+    )!;
+
+    expect(headings).toEqual([
+      'Team',
+      'Repository',
+      'Your agent instructions',
+      'Other repositories',
+    ]);
+    click(
+      [...row.querySelectorAll('button')].find(
+        (b) => b.textContent === 'Change',
+      )!,
+    );
+    expect(row.textContent).toContain('/Users/dev/Projects/billing-service');
+
+    click(button(el, 'X-1'));
+    expect(footer(el)).toContain('1 of 5 selected');
+    click(button(el, 'Apply selected'));
+    expect(onApply).toHaveBeenCalledWith(['X-1']);
   });
 });

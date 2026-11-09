@@ -7,6 +7,7 @@ import type {
   RecommendationView,
   TeamStatsView,
 } from '../components/recommendations-card';
+import type { TeamPopulationView } from '../components/recommendations-figures';
 import { categoryToken } from '../stats/charts/chart-theme';
 import { formatDuration, formatPercent } from '../stats/stats-format';
 
@@ -36,6 +37,7 @@ export function recommendation(
   over: Partial<RecommendationView> = {},
 ): RecommendationView {
   const team = id.startsWith('W');
+  const external = id.startsWith('X');
   const memory = id.startsWith('M');
   const project = id.startsWith('P');
   const domain = memory || project;
@@ -43,13 +45,15 @@ export function recommendation(
     id,
     target: team
       ? 'team'
-      : id.startsWith('U')
-        ? 'user'
-        : memory
-          ? 'memory'
-          : project
-            ? 'project'
-            : 'repo',
+      : external
+        ? 'external'
+        : id.startsWith('U')
+          ? 'user'
+          : memory
+            ? 'memory'
+            : project
+              ? 'project'
+              : 'repo',
     territory: domain ? 'domain' : 'process',
     kind: team ? 'parallelize' : memory ? 'add' : project ? 'rule' : 'check',
     location: team
@@ -336,7 +340,39 @@ export const TEAM_STATS: TeamStatsView = {
       workedMs: null,
     },
   ],
+  population: null,
 };
+
+/** Every run the team has: the 8 sampled above are among its 216. */
+export const TEAM_POPULATION: TeamPopulationView = {
+  runs: 216,
+  perRun: {
+    costUsd: 4.6,
+    pricedRuns: 216,
+    workedMs: 58 * MINUTE,
+    timedRuns: 216,
+    turns: 26.6,
+  },
+};
+
+export const SAMPLED_TEAM_STATS: TeamStatsView = {
+  ...TEAM_STATS,
+  population: TEAM_POPULATION,
+};
+
+export const EXTERNAL_ITEM = recommendation('X-1', {
+  kind: 'check',
+  location: '/Users/dev/Projects/billing-service',
+  title: 'Run the billing service’s own check before its release',
+  change:
+    'WHEN a change touches billing-service/src/invoices → run `pnpm full-check` in that repository before asking for review',
+  minutesSaved: 5,
+  costSavedUsd: null,
+  outcome: 'The release check runs where the change is made',
+  confidence: 3,
+  risk: 'low',
+  riskNote: 'none — it names a command that repository already has',
+});
 
 export const HOTSPOTS: RecommendationHotspotView[] = [
   {

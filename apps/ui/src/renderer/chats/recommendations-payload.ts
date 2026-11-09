@@ -14,6 +14,7 @@ import type {
   TeamAgentStatsView,
   TeamCallStatsView,
   TeamModelStatsView,
+  TeamPopulationView,
   TeamRunStatsView,
   TeamStatsView,
 } from '../components/recommendations-figures';
@@ -237,6 +238,28 @@ function readCall(value: unknown): TeamCallStatsView | null {
     : { caller, callee, ...figures, workedMs: count(row?.workedMs) };
 }
 
+function readPopulation(value: unknown): TeamPopulationView | null {
+  const row = record(value);
+  const runs = count(row?.runs);
+  const perRunRow = record(row?.perRun);
+  const perRun = counts(perRunRow, [
+    'pricedRuns',
+    'timedRuns',
+    'turns',
+  ] as const);
+  if (row === null || runs === null || !perRun) {
+    return null;
+  }
+  return {
+    runs,
+    perRun: {
+      ...perRun,
+      costUsd: count(perRunRow?.costUsd),
+      workedMs: count(perRunRow?.workedMs),
+    },
+  };
+}
+
 function readTeamStats(value: unknown): TeamStatsView | null {
   const row = record(value);
   const runs = count(row?.runs);
@@ -267,6 +290,7 @@ function readTeamStats(value: unknown): TeamStatsView | null {
   const calls = list(row.calls, readCall);
   return {
     runs,
+    population: readPopulation(row.population),
     perRun: { ...perRun, costUsd: count(perRunRow?.costUsd) },
     totals: { ...totals, costUsd: count(totalsRow?.costUsd) },
     runList: list(row.runList, readRun),
@@ -364,6 +388,7 @@ function readItem(value: unknown): RecommendationView | null {
     'project',
     'overlay',
     'knowledge',
+    'external',
   ] as const);
   const territory = oneOf(row?.territory, TERRITORIES);
   const title = text(row?.title);

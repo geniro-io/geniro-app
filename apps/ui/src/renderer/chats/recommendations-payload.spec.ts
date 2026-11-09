@@ -218,6 +218,101 @@ describe('recommendations payload readers', () => {
     });
   });
 
+  it('reads an external item, its location the absolute folder of another repository, and drops one whose target is not a known one', () => {
+    const [w1] = CARD.items as Record<string, unknown>[];
+    const card = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        items: [
+          {
+            ...w1,
+            id: 'X-1',
+            target: 'external',
+            kind: 'check',
+            location: '/Users/dev/Projects/billing-service',
+          },
+          { ...w1, id: 'X-2', target: 'externals' },
+        ],
+      }),
+    );
+
+    expect(card?.items.map((entry) => [entry.id, entry.target])).toEqual([
+      ['X-1', 'external'],
+    ]);
+    expect(card?.items[0]).toMatchObject({
+      location: '/Users/dev/Projects/billing-service',
+    });
+  });
+
+  it('reads the population of every run beside the sampled figures, a card without one as no population, and an unreadable one without losing the figures', () => {
+    const sampled = {
+      runs: 5,
+      perRun: {
+        wallMs: 1000,
+        activeMs: 800,
+        waitingOnUserMs: 100,
+        criticalPathMs: 900,
+        turns: 4,
+        calls: 1,
+        pricedRuns: 5,
+      },
+      totals: {
+        wallMs: 5000,
+        activeMs: 4000,
+        turns: 20,
+        failedTurns: 0,
+        cancelledTurns: 0,
+        toolCalls: 30,
+        failedToolCalls: 0,
+        calls: 5,
+      },
+    };
+    const populated = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        teamStats: {
+          ...sampled,
+          population: {
+            runs: 216,
+            perRun: {
+              costUsd: 4.6,
+              pricedRuns: 210,
+              workedMs: 58_000,
+              timedRuns: 216,
+              turns: 26.6,
+            },
+          },
+        },
+      }),
+    );
+    const older = readRecommendations(
+      item(5, 'recommendations', { ...CARD, teamStats: sampled }),
+    );
+    const unreadable = readRecommendations(
+      item(5, 'recommendations', {
+        ...CARD,
+        teamStats: { ...sampled, population: { runs: 216, perRun: 'all' } },
+      }),
+    );
+
+    expect(populated?.teamStats?.population).toEqual({
+      runs: 216,
+      perRun: {
+        costUsd: 4.6,
+        pricedRuns: 210,
+        workedMs: 58_000,
+        timedRuns: 216,
+        turns: 26.6,
+      },
+    });
+    expect(older?.teamStats?.population).toBeNull();
+    expect(unreadable?.teamStats).toMatchObject({
+      runs: 5,
+      perRun: { turns: 4 },
+    });
+    expect(unreadable?.teamStats?.population).toBeNull();
+  });
+
   it("reads the team's measured figures, the hotspots and each item's estimates, an older card's missing ones as absent", () => {
     const filedItem = item(6, 'recommendations', {
       ...CARD,

@@ -332,7 +332,7 @@ Claude Code's own messaging between sessions stays closed on Geniro's turns: a t
 
 ## 🔬 Thread analyzer
 
-Finished a long run and wondering why it took 40 minutes? Press **Analyze thread**.
+Finished a long run and wondering why it took 40 minutes? Press **Analyze thread**. An archived thread can be analyzed like any other.
 
 1. Pick the agent, account, model and its settings that should do the analysis. Analyses and the team and project chats open on the setup you last used in any of them, including a change you made inside the chat; the team and project chats keep their own approval mode.
 2. It reads a snapshot of the thread: timings, slow or failed tools, the critical path and every row.

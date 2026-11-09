@@ -286,7 +286,7 @@ describe('AnalyzeThreadDialog', () => {
       .fn()
       .mockRejectedValue(
         new Error(
-          'daemon POST /v1/chats/source/analyses failed (409): {"code":"ANALYSIS_SOURCE_ARCHIVED","message":"an archived thread cannot be analysed"}',
+          'daemon POST /v1/chats/source/analyses failed (409): {"code":"ANALYSIS_SOURCE_EMPTY","message":"the thread has nothing in it to analyse yet"}',
         ),
       );
     const onStarted = vi.fn();
@@ -296,7 +296,7 @@ describe('AnalyzeThreadDialog', () => {
 
     expect(onStarted).not.toHaveBeenCalled();
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-      'an archived thread cannot be analysed',
+      'the thread has nothing in it to analyse yet',
     );
     expect(button('Start analysis').disabled).toBe(false);
   });

@@ -146,12 +146,6 @@ export class ThreadAnalysisService
     if (source === null) {
       throw new NotFoundException('RUN_NOT_FOUND', `no run: ${sourceRunId}`);
     }
-    if (source.archivedAt !== null) {
-      throw new ConflictException(
-        'ANALYSIS_SOURCE_ARCHIVED',
-        'an archived thread cannot be analysed — restore it first',
-      );
-    }
     if (isAnalysisRun(source)) {
       throw new ConflictException(
         'ANALYSIS_OF_ANALYSIS',

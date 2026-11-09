@@ -463,7 +463,7 @@ Appearance:
 - `placeRun` re-files a row on archive or unarchive, and `dropRun` is for permanent delete only.
 - Row actions read `run.archivedAt`, never the scope.
 - A scope switch keeps the open thread only if the new scope lists it.
-- An archived chat is inert (`RUN_ARCHIVED`). Archiving a running chat asks first, because it cancels the turn.
+- An archived chat is inert (`RUN_ARCHIVED`), but it can still be read: its row and the agents panel offer Analyze thread as on a live one. Archiving a running chat asks first, because it cancels the turn.
 - Groups: the auto-file rule matches the longest `autoCwd`, segment-wise, and a team claim outranks any folder claim. Adding a rule does not sweep existing chats.
 - Deleting a group releases its chats (asked first).
 - Dragging reorders; the daemon is told once, at `dragend`. The drop zone is the whole section. A drop that changes nothing writes nothing.

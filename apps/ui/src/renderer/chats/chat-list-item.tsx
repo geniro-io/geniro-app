@@ -414,7 +414,7 @@ export const ChatListItem = memo(function ChatListItem({
     if (naming.length > 0) {
       groups.push({ items: naming });
     }
-    if (!archived && onAnalyze) {
+    if (onAnalyze) {
       groups.push({
         items: [
           {

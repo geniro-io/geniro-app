@@ -410,12 +410,25 @@ describe('ThreadAnalysisService.start', () => {
     expect(remove).toHaveBeenCalledWith('analysis');
   });
 
-  it('refuses an archived source and an analysis of an analysis', async () => {
+  it('starts on an archived source as on a live one, up to its newest row', async () => {
+    const { service, createChat, sendMessage } = build({
+      archivedAt: new Date(),
+      status: 'cancelled',
+    });
+
     await expect(
-      build({ archivedAt: new Date() }).service.start('source', {
-        agentKind: 'claude',
-      }),
-    ).rejects.toMatchObject({ errorCode: 'ANALYSIS_SOURCE_ARCHIVED' });
+      service.start('source', { agentKind: 'claude' }),
+    ).resolves.toMatchObject({ id: 'analysis' });
+
+    expect(createChat.mock.calls[0]![0].analysisSource).toEqual({
+      runId: 'source',
+      seq: 41,
+      working: false,
+    });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an analysis of an analysis', async () => {
     await expect(
       build({ analysisSourceRunId: 'other' }).service.start('source', {
         agentKind: 'claude',

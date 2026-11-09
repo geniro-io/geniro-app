@@ -483,6 +483,13 @@ describe('RunDao (in-memory sqlite)', () => {
       ]);
     });
 
+    it('keeps the analysis of an archived thread', async () => {
+      const shelved = await dao.create({ archivedAt: new Date() });
+      await dao.create({ analysisSourceRunId: shelved.id });
+
+      expect(await dao.listOrphanedAnalyses()).toEqual([]);
+    });
+
     it('answers none when no thread has an analysis', async () => {
       await dao.create({});
 

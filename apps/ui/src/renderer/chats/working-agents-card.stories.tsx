@@ -47,6 +47,10 @@ const api: Pick<ChatsApi, 'listCallMessages' | 'listRunItems'> = {
           6,
           'The first test fails as it should. Writing the handler now, and keeping the CSV writer apart from the route so the same code serves the scheduled export later on.',
         ),
+        message(
+          8,
+          'Handler is in and the test passes.\nNext: the escaping cases the Researcher is checking, then the header button itself. `pnpm test:unit` is green so far.',
+        ),
       ],
     }),
   listRunItems: () => Promise.resolve({ items: [], anchors: [] }),
@@ -134,6 +138,40 @@ export const OnlyWaiting: Story = {
         callee: 'QA',
         calleeKey: 'qa',
         state: 'quiet',
+      }),
+    ],
+  },
+};
+
+export const SeveralRunsOfOneAgent: Story = {
+  args: {
+    rows: [
+      row({}),
+      row({
+        conversationId: 'call-3',
+        callId: 'call-3',
+        callIds: ['call-3'],
+        title: 'Second pass over the export',
+      }),
+      row({
+        conversationId: 'call-4',
+        callId: 'call-4',
+        callIds: ['call-4'],
+        callee: 'QA',
+        calleeKey: 'qa',
+        state: 'queued',
+      }),
+    ],
+  },
+};
+
+export const LongNames: Story = {
+  args: {
+    rows: [
+      row({
+        callee: 'Peter Parker · Middle Engineer',
+        caller: 'Nick Fury · Manager',
+        title: 'Publish the approved visuals on #7955',
       }),
     ],
   },

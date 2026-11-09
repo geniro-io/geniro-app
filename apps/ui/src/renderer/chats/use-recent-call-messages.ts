@@ -7,7 +7,7 @@ import { mergeAnchorRows } from './history-anchors';
 import { payloadString } from './transcript-payload';
 
 /** How many of a callee's newest messages its row on the card shows. */
-export const RECENT_CALL_MESSAGES = 5;
+export const RECENT_CALL_MESSAGES = 3;
 
 /**
  * TWIN PARSER: what `ChatHistoryService.callMessages` keeps for the daemon's

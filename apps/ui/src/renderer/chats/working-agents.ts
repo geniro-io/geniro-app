@@ -216,12 +216,35 @@ export function workingAgentsSummary(rows: readonly WorkingAgentRow[]): string {
     .join(' · ');
 }
 
-/** The folded card's one figure, the most current there is; failures are marked beside it. */
-export function workingAgentsShortCount(
+export interface CurrentAgentRuns {
+  key: string;
+  name: string;
+  avatar?: AvatarLook;
+  runs: readonly WorkingAgentRow[];
+}
+
+/** Each agent's live conversations, a queued one included; agents with none are left out. */
+export function currentRunsPerAgent(
   rows: readonly WorkingAgentRow[],
-): string {
-  const first = workingAgentsCounts(rows).find(([word]) => word !== 'failed');
-  return first === undefined ? '' : `${first[1]} ${first[0]}`;
+): CurrentAgentRuns[] {
+  const agents = new Map<
+    string,
+    CurrentAgentRuns & { runs: WorkingAgentRow[] }
+  >();
+  for (const row of rows.filter(isWorkingAgentLive)) {
+    const agent = agents.get(row.calleeKey);
+    if (agent === undefined) {
+      agents.set(row.calleeKey, {
+        key: row.calleeKey,
+        name: row.callee,
+        avatar: row.calleeAvatar,
+        runs: [row],
+      });
+    } else {
+      agent.runs.push(row);
+    }
+  }
+  return [...agents.values()];
 }
 
 /**

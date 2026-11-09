@@ -18,7 +18,7 @@ import { callBlockOfConversation, indexCallBlocks } from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
 import { payloadString } from './transcript-payload';
 import { useCallPages } from './use-call-pages';
-import { WorkingAgentFaces, WorkingAgentFacts } from './working-agent-row';
+import { WorkingAgentHead, WorkingAgentTitle } from './working-agent-row';
 import type { WorkingAgentRow } from './working-agents';
 
 /** How many rows one page of the popup asks for. */
@@ -169,9 +169,9 @@ function ConversationBody({
     <div
       data-slot="call-conversation-dialog"
       className="flex h-full min-h-0 flex-col">
-      <div className="flex min-w-0 shrink-0 items-start gap-2.5 border-b border-border/60 px-5 py-3">
-        <WorkingAgentFaces row={row} />
-        <WorkingAgentFacts row={row} />
+      <div className="flex min-w-0 shrink-0 flex-col gap-2 border-b border-border/60 px-5 py-3">
+        <WorkingAgentHead row={row} />
+        <WorkingAgentTitle row={row} />
       </div>
       <div
         ref={scrollerRef}

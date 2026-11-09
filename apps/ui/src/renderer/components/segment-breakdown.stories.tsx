@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
-import { SegmentBreakdown } from './segment-breakdown';
+import { SegmentBar, SegmentBreakdown } from './segment-breakdown';
 
 const meta = {
   title: 'Components/SegmentBreakdown',
@@ -44,6 +44,17 @@ type Story = StoryObj<typeof meta>;
 
 /** A window: segments over the whole, the empty tail listed as free space. */
 export const Window: Story = {};
+
+/** The bar alone, thicker and with hairline gaps, where its legend opens on a press. */
+export const BarAlone: Story = {
+  render: ({ segments, denominator }) => (
+    <SegmentBar
+      segments={segments}
+      denominator={denominator}
+      className="h-2 gap-px"
+    />
+  ),
+};
 
 /** Two figure columns per row, and no remainder. */
 export const TwoColumns: Story = {

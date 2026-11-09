@@ -1,7 +1,5 @@
 import { cva, type VariantProps } from 'class-variance-authority';
-import { ChevronRight } from 'lucide-react';
 import type React from 'react';
-import { useId, useState } from 'react';
 
 import { Label } from './ui/label';
 import { cn } from './ui/utils';
@@ -96,15 +94,11 @@ const settingsPanelRow = cva('flex flex-col gap-2 px-4 py-3', {
      * unusable. The threshold is where a description still holds a short line
      * beside the widest control these rows carry.
      *
-     * `wide` is `inline` for a control past that widest one, which would crush
-     * the name at `26rem`: it stacks until `38rem`.
-     *
      * `block` is for content that IS the width — a textarea, a run of swatches
      * — where the label sits above it and nothing is right-aligned.
      */
     layout: {
       inline: '@[26rem]:flex-row @[26rem]:items-center @[26rem]:gap-4',
-      wide: '@[38rem]:flex-row @[38rem]:items-center @[38rem]:gap-4',
       block: '',
     },
   },
@@ -113,7 +107,7 @@ const settingsPanelRow = cva('flex flex-col gap-2 px-4 py-3', {
 
 const settingsPanelHeading = cva('flex min-w-0 flex-col gap-0.5', {
   variants: {
-    layout: { inline: '@[26rem]:flex-1', wide: '@[38rem]:flex-1', block: '' },
+    layout: { inline: '@[26rem]:flex-1', block: '' },
   },
   defaultVariants: { layout: 'inline' },
 });
@@ -122,7 +116,6 @@ const settingsPanelControl = cva('flex min-w-0 items-center gap-2', {
   variants: {
     layout: {
       inline: '@[26rem]:shrink-0 @[26rem]:justify-end',
-      wide: '@[38rem]:shrink-0 @[38rem]:justify-end',
       block: 'w-full flex-col items-stretch',
     },
   },
@@ -137,16 +130,11 @@ const settingsPanelControl = cva('flex min-w-0 items-center gap-2', {
  * it one. `htmlFor` points the label at the control, which is what makes the
  * words clickable for a switch; it is omitted where the control is not a single
  * labelable element (a run of buttons, a swatch group with its own group name).
- *
- * `details` folds what most readers do not need behind the label, which becomes
- * the button that opens it; the row's control stays where it is either way. It
- * starts folded on every visit, so a page of these reads as names and figures.
  */
 export function SettingsPanelRow({
   label,
   htmlFor,
   description,
-  details,
   layout,
   children,
 }: {
@@ -154,64 +142,25 @@ export function SettingsPanelRow({
   htmlFor?: string;
   /** One line: what changing this does, never what it is. */
   description?: React.ReactNode;
-  details?: React.ReactNode;
-  children?: React.ReactNode;
+  children: React.ReactNode;
 } & VariantProps<typeof settingsPanelRow>): React.JSX.Element {
-  const [open, setOpen] = useState(false);
-  const detailsId = useId();
-  const foldable = details !== undefined && label !== undefined;
-  const row = (
+  return (
     <div
-      data-slot={foldable ? undefined : 'settings-panel-row'}
+      data-slot="settings-panel-row"
       className={cn(settingsPanelRow({ layout }))}>
       {label === undefined ? null : (
         <div className={cn(settingsPanelHeading({ layout }))}>
-          {foldable ? (
-            <button
-              type="button"
-              aria-expanded={open}
-              aria-controls={open ? detailsId : undefined}
-              onClick={() => setOpen((current) => !current)}
-              className="flex w-fit max-w-full cursor-pointer items-center gap-1.5 rounded-sm text-left text-sm leading-none font-medium outline-none select-none focus-visible:ring-2 focus-visible:ring-ring/50">
-              <ChevronRight
-                aria-hidden="true"
-                className={cn(
-                  'size-3.5 shrink-0 text-muted-foreground transition-transform',
-                  open && 'rotate-90',
-                )}
-              />
-              {label}
-            </button>
-          ) : (
-            <Label
-              htmlFor={htmlFor}
-              className={htmlFor === undefined ? undefined : 'cursor-pointer'}>
-              {label}
-            </Label>
-          )}
+          <Label
+            htmlFor={htmlFor}
+            className={htmlFor === undefined ? undefined : 'cursor-pointer'}>
+            {label}
+          </Label>
           {description === undefined ? null : (
             <span className="text-xs text-muted-foreground">{description}</span>
           )}
         </div>
       )}
-      {children === undefined || children === null ? null : (
-        <div className={cn(settingsPanelControl({ layout }))}>{children}</div>
-      )}
-    </div>
-  );
-  if (!foldable) {
-    return row;
-  }
-  return (
-    <div data-slot="settings-panel-row">
-      {row}
-      {open ? (
-        <div
-          id={detailsId}
-          className="flex flex-col gap-1.5 pr-4 pb-3 pl-9 text-xs text-muted-foreground">
-          {details}
-        </div>
-      ) : null}
+      <div className={cn(settingsPanelControl({ layout }))}>{children}</div>
     </div>
   );
 }

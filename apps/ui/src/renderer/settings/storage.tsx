@@ -1,5 +1,5 @@
-import { RefreshCw } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { ChevronRight, RefreshCw } from 'lucide-react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 import type { AppStorageUsage, StorageWorktree } from '../../shared/contracts';
 import {
@@ -18,17 +18,21 @@ import { CopyButton } from '../components/copy-button';
 import { ErrorBanner } from '../components/error-banner';
 import {
   type BreakdownSegment,
-  SegmentBreakdown,
+  SegmentBar,
+  SegmentLegend,
 } from '../components/segment-breakdown';
 import { SettingsPanel, SettingsPanelRow } from '../components/settings-panel';
 import { Button } from '../components/ui/button';
 import { ProgressBar } from '../components/ui/progress-bar';
 import { Select } from '../components/ui/select';
 import { Spinner } from '../components/ui/spinner';
+import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { describeDaemonError } from '../daemon-api';
 import { formatBytes } from '../format-bytes';
 import { isRemoteRuntime } from '../remote/remote-session';
+import { formatPercent } from '../stats/stats-format';
+import { StorageRow } from './storage-row';
 
 export type StorageClient = Pick<
   StorageApi,
@@ -141,6 +145,33 @@ function confirmOf(option: StorageCleanOption): {
   };
 }
 
+/** A quiet button that destroys something: the only red on the page. */
+const DELETES_DATA_CLASS =
+  'text-destructive hover:bg-destructive/10 hover:text-destructive';
+const KEEPS_DATA_CLASS = 'text-muted-foreground';
+
+/**
+ * How many of the largest parts get a colour of their own, and the share a part
+ * needs to get one: a colour names a stretch of the bar, so a part too small to
+ * see on it, or past the palette's distinct hues, stays neutral.
+ */
+const COLOURED_PARTS = 5;
+const COLOURED_PART_MIN_SHARE = 0.01;
+const UNCOLOURED_PART = 'bg-muted-foreground/40';
+
+/** The clean-ups that free a row's whole figure, so the button need not repeat it. */
+const FREES_THE_WHOLE_ROW: ReadonlySet<StorageCleanTarget> = new Set([
+  StorageCleanTarget.TeamBackups,
+  StorageCleanTarget.Leftovers,
+  StorageCleanTarget.SettingsCopies,
+]);
+
+function cleanButtonLabel(option: StorageCleanOption): string {
+  return FREES_THE_WHOLE_ROW.has(option.target)
+    ? cleanLabel({ ...option, bytes: null })
+    : cleanLabel(option);
+}
+
 const ALL_ARCHIVED = 'all';
 const DEFAULT_ARCHIVED_PERIOD = '30';
 
@@ -231,11 +262,13 @@ function StorageDetails({
       <p>{about}</p>
       {note === undefined ? null : <p>{note}</p>}
       {entries === undefined ? null : (
-        <ul className="flex flex-col gap-0.5">
+        <ul className="mt-1 flex flex-col gap-0.5">
           {entries.map((entry) => (
             <li key={entry.name} className="flex justify-between gap-3">
               <span className="min-w-0 break-all">{entry.name}</span>
-              <span className="shrink-0">{formatBytes(entry.bytes)}</span>
+              <span className="shrink-0 tabular-nums">
+                {formatBytes(entry.bytes)}
+              </span>
             </li>
           ))}
         </ul>
@@ -470,18 +503,29 @@ export function Storage({
     key: row.key,
     label: row.label,
     value: row.bytes,
-    colorClass: contextCategoryColor(index),
-    figures: [formatBytes(row.bytes)],
+    colorClass:
+      index < COLOURED_PARTS && row.bytes / total >= COLOURED_PART_MIN_SHARE
+        ? contextCategoryColor(index)
+        : UNCOLOURED_PART,
+    figures: [formatBytes(row.bytes), formatPercent((row.bytes / total) * 100)],
   }));
+  const dotOf = (key: string): string =>
+    segments.find((segment) => segment.key === key)?.colorClass ?? 'bg-muted';
 
   const cleanButtons = (options: readonly StorageCleanOption[]) =>
     options.map((option) => (
       <ConfirmActionButton
         key={option.target}
+        variant="ghost"
+        className={
+          option.target === StorageCleanTarget.CompactDatabase
+            ? KEEPS_DATA_CLASS
+            : DELETES_DATA_CLASS
+        }
         disabled={busy}
         {...confirmOf(option)}
         onConfirm={() => clean(option.target)}>
-        {cleanLabel(option)}
+        {cleanButtonLabel(option)}
       </ConfirmActionButton>
     ));
 
@@ -492,9 +536,12 @@ export function Storage({
     }
     const text = GROUP_TEXT[id];
     return (
-      <SettingsPanelRow
+      <StorageRow
         key={id}
-        label={`${text.title} — ${formatBytes(group.bytes)}`}
+        name={text.title}
+        figure={formatBytes(group.bytes) ?? '0 B'}
+        dot={dotOf(id)}
+        quiet={group.bytes === 0 && group.clean.length === 0}
         details={
           <StorageDetails
             about={text.about}
@@ -503,12 +550,104 @@ export function Storage({
           />
         }>
         {group.clean.length === 0 ? null : cleanButtons(group.clean)}
-      </SettingsPanelRow>
+      </StorageRow>
     );
   };
 
+  const taskRows = [
+    worktrees.length === 0 ? null : (
+      <StorageRow
+        key="worktrees"
+        name="Task worktrees"
+        figure={formatBytes(sum(worktrees)) ?? '0 B'}
+        dot={dotOf('worktrees')}
+        details={
+          <>
+            <p>
+              Checkouts the board&apos;s cards worked in. Removing one keeps its
+              branch; one holding unsaved work, or whose card is still open, is
+              kept.
+            </p>
+            <ul className="flex flex-col divide-y divide-border text-foreground">
+              {worktrees.map((worktree) => (
+                <WorktreeItem
+                  key={worktree.name}
+                  worktree={worktree}
+                  note={worktreeNotes[worktree.name] ?? null}
+                  onRemove={() => removeWorktree(worktree.name)}
+                />
+              ))}
+            </ul>
+          </>
+        }
+      />
+    ),
+    groupRow(StorageGroupIdEnum.TaskFiles),
+  ].filter((row) => row !== null);
+
+  const appRows = [
+    ...[
+      StorageGroupIdEnum.Teams,
+      StorageGroupIdEnum.TeamBackups,
+      StorageGroupIdEnum.Logs,
+      StorageGroupIdEnum.Leftovers,
+      StorageGroupIdEnum.SettingsCopies,
+      StorageGroupIdEnum.Caches,
+      StorageGroupIdEnum.AppState,
+    ].map((id) => ({ bytes: groupOf(id)?.bytes ?? 0, row: groupRow(id) })),
+    {
+      bytes: sum(browserCache),
+      row:
+        browserCache.length === 0 ? null : (
+          <StorageRow
+            key="browserCache"
+            name="Window cache"
+            figure={formatBytes(sum(browserCache)) ?? '0 B'}
+            dot={dotOf('browserCache')}
+            details={
+              <StorageDetails
+                about="What the app window caches to load faster. Clearing empties its web and script caches; they refill as you work."
+                entries={browserCache}
+              />
+            }>
+            <ConfirmActionButton
+              variant="ghost"
+              className={KEEPS_DATA_CLASS}
+              question="Clear the window cache?"
+              description="Its web and script caches are emptied; they refill as you work."
+              confirmLabel="Clear cache"
+              busyLabel="Clearing…"
+              confirmVariant="default"
+              onConfirm={clearBrowserCache}>
+              Clear cache
+            </ConfirmActionButton>
+          </StorageRow>
+        ),
+    },
+    {
+      bytes: sum(appData),
+      row:
+        appData.length === 0 ? null : (
+          <StorageRow
+            key="appData"
+            name="Window data"
+            figure={formatBytes(sum(appData)) ?? '0 B'}
+            dot={dotOf('appData')}
+            details={
+              <StorageDetails
+                about="The window’s own storage, settings and pairings. Kept."
+                entries={appData}
+              />
+            }
+          />
+        ),
+    },
+  ]
+    .filter(({ row }) => row !== null)
+    .sort((a, b) => b.bytes - a.bytes);
+
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       {error === null ? null : (
         <ErrorBanner message={error} onDismiss={() => setError(null)} />
       )}
@@ -518,35 +657,16 @@ export function Storage({
         </p>
       )}
 
-      <SettingsPanel>
-        <SettingsPanelRow
-          label={`In use — ${formatBytes(total)}`}
-          details={
-            <>
-              <SegmentBreakdown segments={segments} denominator={total} />
-              <span className="flex items-center gap-1">
-                <span className="min-w-0 break-all">{daemon.root}</span>
-                <CopyButton text={daemon.root} label="Copy the folder path" />
-              </span>
-            </>
-          }>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={loading}
-            onClick={() => void measure()}>
-            {loading ? <Spinner /> : <RefreshCw />} Measure again
-          </Button>
-        </SettingsPanelRow>
-        {running && job !== null ? (
-          <SettingsPanelRow layout="block">
-            <span className="text-sm">{RUNNING_TEXT[job.target]}</span>
-            <ProgressBar fraction={null} label={RUNNING_TEXT[job.target]} />
-          </SettingsPanelRow>
-        ) : null}
-      </SettingsPanel>
+      <InUseCard
+        total={total}
+        segments={segments}
+        folder={daemon.root}
+        loading={loading}
+        onMeasure={() => void measure()}
+        runningText={running && job !== null ? RUNNING_TEXT[job.target] : null}
+      />
 
-      <SettingsPanel>
+      <StorageSection title="Chats">
         {groupRow(
           StorageGroupIdEnum.Database,
           `${daemon.chats.active} chats, ${daemon.chats.archived} archived.`,
@@ -563,82 +683,138 @@ export function Storage({
         )}
         {groupRow(StorageGroupIdEnum.AgentSessions)}
         {groupRow(StorageGroupIdEnum.ChatFiles)}
-        {groupRow(StorageGroupIdEnum.TaskFiles)}
-      </SettingsPanel>
+      </StorageSection>
 
-      {worktrees.length === 0 ? null : (
-        <SettingsPanel>
-          <SettingsPanelRow
-            label={`Task worktrees — ${formatBytes(sum(worktrees))}`}
-            details={
-              <>
-                <p>
-                  Checkouts the board&apos;s cards worked in. Removing one keeps
-                  its branch; one holding unsaved work, or whose card is still
-                  open, is kept.
-                </p>
-                <ul className="flex flex-col divide-y divide-border text-foreground">
-                  {worktrees.map((worktree) => (
-                    <WorktreeItem
-                      key={worktree.name}
-                      worktree={worktree}
-                      note={worktreeNotes[worktree.name] ?? null}
-                      onRemove={() => removeWorktree(worktree.name)}
-                    />
-                  ))}
-                </ul>
-              </>
-            }
-          />
-        </SettingsPanel>
+      {taskRows.length === 0 ? null : (
+        <StorageSection title="Tasks">{taskRows}</StorageSection>
       )}
 
-      <SettingsPanel>
-        {groupRow(StorageGroupIdEnum.TeamBackups)}
-        {groupRow(StorageGroupIdEnum.Teams)}
-        {groupRow(StorageGroupIdEnum.Logs)}
-        {groupRow(StorageGroupIdEnum.Leftovers)}
-        {groupRow(StorageGroupIdEnum.SettingsCopies)}
-        {groupRow(StorageGroupIdEnum.Caches)}
-        {groupRow(StorageGroupIdEnum.AppState)}
-      </SettingsPanel>
-
-      {app === null ? null : (
-        <SettingsPanel>
-          {browserCache.length === 0 ? null : (
-            <SettingsPanelRow
-              label={`Window cache — ${formatBytes(sum(browserCache))}`}
-              details={
-                <StorageDetails
-                  about="What the app window caches to load faster. Clearing empties its web and script caches; they refill as you work."
-                  entries={browserCache}
-                />
-              }>
-              <ConfirmActionButton
-                question="Clear the window cache?"
-                description="Its web and script caches are emptied; they refill as you work."
-                confirmLabel="Clear cache"
-                busyLabel="Clearing…"
-                confirmVariant="default"
-                onConfirm={clearBrowserCache}>
-                Clear cache
-              </ConfirmActionButton>
-            </SettingsPanelRow>
-          )}
-          {appData.length === 0 ? null : (
-            <SettingsPanelRow
-              label={`Window data — ${formatBytes(sum(appData))}`}
-              details={
-                <StorageDetails
-                  about="The window’s own storage, settings and pairings. Kept."
-                  entries={appData}
-                />
-              }
-            />
-          )}
-        </SettingsPanel>
+      {appRows.length === 0 ? null : (
+        <StorageSection title="Teams and app">
+          {appRows.map(({ row }) => row)}
+        </StorageSection>
       )}
     </div>
+  );
+}
+
+/** A named run of rows. */
+function StorageSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="px-1 text-xs font-medium text-muted-foreground">
+        {title}
+      </h2>
+      <SettingsPanel>{children}</SettingsPanel>
+    </section>
+  );
+}
+
+/**
+ * The one number the page is for, and the bar of what makes it up. The rows
+ * below carry the bar's colours, so the list and the sizes behind Breakdown are
+ * for whoever wants them in one sorted column, with the folder they measure.
+ */
+function InUseCard({
+  total,
+  segments,
+  folder,
+  loading,
+  onMeasure,
+  runningText,
+}: {
+  total: number;
+  segments: readonly BreakdownSegment[];
+  folder: string;
+  loading: boolean;
+  onMeasure: () => void;
+  runningText: string | null;
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const detailsId = useId();
+  const [amount, unit] = (formatBytes(total) ?? '0 B').split(' ');
+  const coloured = segments.filter(
+    (segment) => segment.colorClass !== UNCOLOURED_PART,
+  );
+  const rest = sum(
+    segments
+      .filter((segment) => segment.colorClass === UNCOLOURED_PART)
+      .map((segment) => ({ bytes: segment.value })),
+  );
+  return (
+    <SettingsPanel>
+      <div className="flex flex-col gap-4 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              In use
+            </span>
+            <span
+              data-slot="storage-total"
+              className="text-4xl leading-none font-semibold tracking-tight tabular-nums">
+              {amount}
+              <span className="text-lg font-medium tracking-normal text-muted-foreground">
+                {' '}
+                {unit}
+              </span>
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            className={cn('-mt-1 -mr-2.5', KEEPS_DATA_CLASS)}
+            disabled={loading}
+            onClick={onMeasure}>
+            {loading ? <Spinner /> : <RefreshCw />} Measure again
+          </Button>
+        </div>
+        <SegmentBar
+          segments={[
+            ...coloured,
+            ...(rest > 0
+              ? [{ key: 'rest', value: rest, colorClass: UNCOLOURED_PART }]
+              : []),
+          ]}
+          denominator={total}
+          className="h-2 gap-px"
+        />
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={open ? detailsId : undefined}
+          onClick={() => setOpen((current) => !current)}
+          className="-my-1 flex w-fit cursor-pointer items-center gap-1 rounded-sm py-1 text-xs text-muted-foreground outline-none select-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+          Breakdown
+          <ChevronRight
+            aria-hidden="true"
+            className={cn('size-3 transition-transform', open && 'rotate-90')}
+          />
+        </button>
+        {open ? (
+          <div
+            id={detailsId}
+            className="flex flex-col gap-2 text-xs text-muted-foreground">
+            <SegmentLegend segments={segments} />
+            <span className="flex items-center gap-1">
+              <span className="min-w-0 break-all">{folder}</span>
+              <CopyButton text={folder} label="Copy the folder path" />
+            </span>
+          </div>
+        ) : null}
+      </div>
+      {runningText === null ? null : (
+        <SettingsPanelRow layout="block">
+          <span className="text-sm">{runningText}</span>
+          <ProgressBar fraction={null} label={runningText} />
+        </SettingsPanelRow>
+      )}
+    </SettingsPanel>
   );
 }
 
@@ -665,45 +841,46 @@ function ArchivedChatsRow({
     return null;
   }
   return (
-    <SettingsPanelRow
-      layout="wide"
-      label={`Archived chats — ${total}`}
+    <StorageRow
+      name="Archived chats"
+      figure={chatCount(total)}
+      dot={null}
       details={
         <StorageDetails about="A chat deleted here loses its transcript, its files and its agent conversation for good. Age counts from when a chat was archived, not when it was last used; chats archived more recently than the period you pick stay. Compact the database afterwards to give the space back to the disk." />
       }>
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <div className="w-60 max-w-full shrink-0">
-          <Select
-            aria-label="Which archived chats to delete"
-            value={chosen}
-            triggerLabel={periodLabel(period)}
-            disabled={disabled}
-            groups={[
-              {
-                label: 'Delete archived chats',
-                items: periods.map((candidate) => ({
-                  value: periodKey(candidate),
-                  label: `${periodLabel(candidate)} · ${candidate.count}`,
-                })),
-              },
-            ]}
-            onValueChange={setChosen}
-          />
-        </div>
-        <ConfirmActionButton
-          disabled={disabled || period.count === 0}
-          {...archivedConfirmOf(period)}
-          confirmLabel="Delete"
-          busyLabel="Deleting…"
-          onConfirm={() => onDelete(period.archivedBefore)}>
-          {cleanLabel({
-            target: StorageCleanTarget.ArchivedChats,
-            count: period.count,
-            bytes: null,
-          })}
-        </ConfirmActionButton>
-      </div>
-    </SettingsPanelRow>
+      <Select
+        variant="ghost"
+        className="ml-1 @[36rem]:ml-0"
+        aria-label="Which archived chats to delete"
+        value={chosen}
+        triggerLabel={periodLabel(period)}
+        disabled={disabled}
+        groups={[
+          {
+            label: 'Delete archived chats',
+            items: periods.map((candidate) => ({
+              value: periodKey(candidate),
+              label: `${periodLabel(candidate)} · ${candidate.count}`,
+            })),
+          },
+        ]}
+        onValueChange={setChosen}
+      />
+      <ConfirmActionButton
+        variant="ghost"
+        className={DELETES_DATA_CLASS}
+        disabled={disabled || period.count === 0}
+        {...archivedConfirmOf(period)}
+        confirmLabel="Delete"
+        busyLabel="Deleting…"
+        onConfirm={() => onDelete(period.archivedBefore)}>
+        {cleanLabel({
+          target: StorageCleanTarget.ArchivedChats,
+          count: period.count,
+          bytes: null,
+        })}
+      </ConfirmActionButton>
+    </StorageRow>
   );
 }
 
@@ -746,6 +923,8 @@ function WorktreeItem({
       </div>
       {worktree.kind === 'worktree' ? (
         <ConfirmActionButton
+          variant="ghost"
+          className={DELETES_DATA_CLASS}
           question={`Remove ${worktree.branch ?? worktree.name}?`}
           description={
             <>

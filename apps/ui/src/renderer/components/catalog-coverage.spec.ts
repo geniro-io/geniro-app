@@ -49,6 +49,7 @@ const FEATURE_NAMESPACES = {
   teams: 'Teams/',
   projects: 'Projects/',
   knowledge: 'Knowledge/',
+  settings: 'Settings/',
 };
 
 /**

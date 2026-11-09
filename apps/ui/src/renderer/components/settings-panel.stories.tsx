@@ -53,44 +53,6 @@ export const Playground: Story = {
   ),
 };
 
-/** The name and figure at rest; what most readers do not need opens from the name. */
-export const WithDetails: Story = {
-  render: () => (
-    <SettingsPanel>
-      <SettingsPanelRow
-        label="Database — 10 GB"
-        details={
-          <>
-            <p>Every chat transcript, archived ones included.</p>
-            <p>geniro.db 10 GB</p>
-          </>
-        }>
-        <Toggle id="story-details" />
-      </SettingsPanelRow>
-      <SettingsPanelRow
-        label="Window data — 12 MB"
-        details={<p>The window’s own storage. Kept.</p>}
-      />
-    </SettingsPanel>
-  ),
-};
-
-/** A control too wide to sit beside its name until the row has `38rem`. */
-export const WideControl: Story = {
-  render: () => (
-    <SettingsPanel>
-      <SettingsPanelRow layout="wide" label="Archived chats — 40">
-        <Button size="sm" variant="outline">
-          Older than 30 days
-        </Button>
-        <Button size="sm" variant="destructive">
-          Delete 29 chats
-        </Button>
-      </SettingsPanelRow>
-    </SettingsPanel>
-  ),
-};
-
 /** Several rows, which is the arrangement the divider and the enclosure are for. */
 export const Stacked: Story = {
   render: () => (

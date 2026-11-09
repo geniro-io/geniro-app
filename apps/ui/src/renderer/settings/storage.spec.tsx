@@ -146,6 +146,26 @@ async function unfold(rowName: string): Promise<void> {
   await act(async () => buttonNamed(rowName).click());
 }
 
+function rowNamed(name: string): HTMLElement {
+  const row = [
+    ...container.querySelectorAll<HTMLElement>('[data-slot="storage-row"]'),
+  ].find(
+    (candidate) => candidate.querySelector('button')?.textContent === name,
+  );
+  if (!row) {
+    throw new Error(`no row "${name}"`);
+  }
+  return row;
+}
+
+function figureOf(name: string): string | null | undefined {
+  return rowNamed(name).querySelector('.tabular-nums')?.textContent;
+}
+
+function dotOf(name: string): Element | null | undefined {
+  return rowNamed(name).querySelector('button > [aria-hidden="true"]');
+}
+
 async function pickPeriod(label: string): Promise<void> {
   const trigger = container.querySelector<HTMLButtonElement>(
     '[aria-label="Which archived chats to delete"]',
@@ -176,9 +196,9 @@ describe('Storage', () => {
     await flush();
 
     expect(getAppStorage).toHaveBeenCalledWith(['Cache', 'worktrees']);
-    expect(container.textContent).toContain('Database — 9.0 GB');
-    expect(container.textContent).toContain('Window cache — 1.2 GB');
-    expect(container.textContent).toContain('Task worktrees — 1.4 GB');
+    expect(figureOf('Database')).toBe('9.0 GB');
+    expect(figureOf('Window cache')).toBe('1.2 GB');
+    expect(figureOf('Task worktrees')).toBe('1.4 GB');
     expect(buttonNamed('Compact · 2.0 GB')).toBeTruthy();
     expect(buttonNamed('Clear cache')).toBeTruthy();
   });
@@ -204,7 +224,7 @@ describe('Storage', () => {
       expect(container.textContent).not.toContain(folded);
     }
 
-    await unfold('Database — 9.0 GB');
+    await unfold('Database');
 
     expect(container.textContent).toContain('Every chat transcript');
     expect(container.textContent).toContain('19 chats, 778 archived.');
@@ -215,11 +235,11 @@ describe('Storage', () => {
     expect(entries).toContain('geniro.db-wal1.0 MB');
     expect(container.textContent).not.toContain('teams/.backups');
 
-    await unfold('Database — 9.0 GB');
+    await unfold('Database');
     expect(container.textContent).not.toContain('Every chat transcript');
   });
 
-  it('folds the bar, the breakdown and the folder path of the In use card', async () => {
+  it('leads with the total and its bar, the breakdown and folder one press away', async () => {
     const api = {
       getStorageUsage: vi.fn(() => Promise.resolve(usage())),
       getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
@@ -230,27 +250,30 @@ describe('Storage', () => {
     const legend = (): (string | null)[] =>
       [...container.querySelectorAll('li')].map((row) => row.textContent);
 
+    expect(
+      container.querySelector('[data-slot="storage-total"]')?.textContent,
+    ).toBe('12 GB');
+    expect(container.querySelector('[data-slot="segment-bar"]')).not.toBeNull();
     expect(buttonNamed('Measure again').disabled).toBe(false);
-    expect(buttonNamed('In use —').getAttribute('aria-expanded')).toBe('false');
-    expect(legend()).not.toContain('Database9.0 GB');
-    expect(container.querySelector('.h-1\\.5.bg-muted')).toBeNull();
+    expect(buttonNamed('Breakdown').getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+    expect(legend()).not.toContain('Database9.0 GB78%');
     expect(container.textContent).not.toContain(
       '/Users/me/Library/Application Support/Geniro',
     );
 
-    await unfold('In use —');
+    await unfold('Breakdown');
 
-    expect(buttonNamed('In use —').getAttribute('aria-expanded')).toBe('true');
-    expect(legend()).toContain('Database9.0 GB');
-    expect(legend()).toContain('Task worktrees1.4 GB');
-    expect(container.querySelector('.h-1\\.5.bg-muted')).not.toBeNull();
+    expect(buttonNamed('Breakdown').getAttribute('aria-expanded')).toBe('true');
+    expect(legend()).toContain('Database9.0 GB78%');
+    expect(legend()).toContain('Task worktrees1.4 GB12%');
     expect(container.textContent).toContain(
       '/Users/me/Library/Application Support/Geniro',
     );
-    expect(buttonNamed('Measure again').disabled).toBe(false);
   });
 
-  it('stacks the archived chats row until it fits, wrapping its picker and button', async () => {
+  it('keeps sizes out of the names, in one column of their own', async () => {
     const api = {
       getStorageUsage: vi.fn(() => Promise.resolve(usage())),
       getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
@@ -259,23 +282,184 @@ describe('Storage', () => {
     await act(async () => root.render(<Storage api={api} remote={false} />));
     await flush();
 
-    const picker = container.querySelector(
-      '[aria-label="Which archived chats to delete"]',
+    const row = rowNamed('Database');
+    expect(row.querySelector('button')?.textContent).toBe('Database');
+    expect(row.querySelector('button')?.getAttribute('aria-label')).toBe(
+      'Database, 9.0 GB',
     );
-    const wrapping = picker?.closest('.flex-wrap');
-    expect(wrapping?.classList.contains('min-w-0')).toBe(true);
-    expect(wrapping?.contains(buttonNamed('Delete 300 chats'))).toBe(true);
-    expect(picker?.closest('.w-60')?.classList.contains('max-w-full')).toBe(
+    const figure = row.querySelector('.tabular-nums');
+    expect(figure?.classList.contains('text-right')).toBe(true);
+    expect(row.querySelector('button')?.contains(figure ?? null)).toBe(false);
+    expect(
+      row
+        .querySelector('[data-slot="storage-row-actions"]')
+        ?.contains(figure ?? null),
+    ).toBe(false);
+  });
+
+  it('names the groups, and drops one that holds nothing', async () => {
+    const empty = usage();
+    empty.groups = empty.groups.filter((group) => group.id === 'database');
+    const api = {
+      getStorageUsage: vi.fn(() => Promise.resolve(empty)),
+      getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
+      cleanStorage: vi.fn(),
+    };
+    getAppStorage.mockResolvedValue({
+      worktrees: [],
+      browserCache: [],
+      appData: [],
+    });
+    await act(async () => root.render(<Storage api={api} remote={false} />));
+    await flush();
+    const headings = (): (string | null)[] =>
+      [...container.querySelectorAll('h2')].map((h) => h.textContent);
+
+    expect(headings()).toEqual(['Chats']);
+
+    getAppStorage.mockResolvedValue(APP);
+    await act(async () => buttonNamed('Measure again').click());
+    await flush();
+
+    expect(headings()).toEqual(['Chats', 'Tasks', 'Teams and app']);
+    expect(
+      rowNamed('Task worktrees').closest('section')?.querySelector('h2')
+        ?.textContent,
+    ).toBe('Tasks');
+  });
+
+  it('lists the app group largest first', async () => {
+    const api = {
+      getStorageUsage: vi.fn(() => Promise.resolve(usage())),
+      getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
+      cleanStorage: vi.fn(),
+    };
+    await act(async () => root.render(<Storage api={api} remote={false} />));
+    await flush();
+
+    const names = [
+      ...(rowNamed('Window cache')
+        .closest('section')
+        ?.querySelectorAll('[data-slot="storage-row"] button[aria-expanded]') ??
+        []),
+    ].map((button) => button.textContent);
+    expect(names).toEqual(['Window cache', 'Team backups']);
+  });
+
+  it('marks in red only what destroys something', async () => {
+    const api = {
+      getStorageUsage: vi.fn(() => Promise.resolve(usage())),
+      getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
+      cleanStorage: vi.fn(),
+    };
+    await act(async () => root.render(<Storage api={api} remote={false} />));
+    await flush();
+    const red = (text: string): boolean =>
+      buttonNamed(text).classList.contains('text-destructive');
+
+    expect(red('Delete 300 chats')).toBe(true);
+    expect(red('Delete 20 backups')).toBe(true);
+    expect(red('Compact')).toBe(false);
+    expect(red('Clear cache')).toBe(false);
+    expect(red('Measure again')).toBe(false);
+
+    await unfold('Task worktrees');
+    expect(red('Remove')).toBe(true);
+  });
+
+  it('does not repeat the row’s figure on a button that frees all of it', async () => {
+    const api = {
+      getStorageUsage: vi.fn(() => Promise.resolve(usage())),
+      getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
+      cleanStorage: vi.fn(),
+    };
+    await act(async () => root.render(<Storage api={api} remote={false} />));
+    await flush();
+
+    expect(buttonNamed('Delete 20 backups').textContent).toBe(
+      'Delete 20 backups',
+    );
+    expect(buttonNamed('Compact').textContent).toBe('Compact · 2.0 GB');
+
+    await act(async () => buttonNamed('Delete 20 backups').click());
+    expect(dialogText()).toContain('Delete 20 backups · 5.0 MB?');
+  });
+
+  it('gives a colour only to a part the bar can show, and draws the rest as one', async () => {
+    const api = {
+      getStorageUsage: vi.fn(() => Promise.resolve(usage())),
+      getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
+      cleanStorage: vi.fn(),
+    };
+    await act(async () => root.render(<Storage api={api} remote={false} />));
+    await flush();
+
+    expect(dotOf('Database')?.classList.contains('bg-avatar-1')).toBe(true);
+    expect(dotOf('Task worktrees')?.classList.contains('bg-avatar-2')).toBe(
       true,
     );
     expect(
-      buttonNamed('Archived chats — 778').closest(
-        '[class*="@[38rem]:flex-row"]',
-      ),
-    ).not.toBeNull();
+      dotOf('Team backups')?.classList.contains('bg-muted-foreground/40'),
+    ).toBe(true);
     expect(
-      buttonNamed('Database — 9.0 GB').closest('[class*="@[38rem]:flex-row"]'),
-    ).toBeNull();
+      container.querySelector('[data-slot="segment-bar"]')?.children,
+    ).toHaveLength(4);
+  });
+
+  it('mutes a row that holds nothing', async () => {
+    const zero = usage();
+    zero.groups.push({ id: 'teams', bytes: 0, entries: [], clean: [] });
+    const api = {
+      getStorageUsage: vi.fn(() => Promise.resolve(zero)),
+      getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
+      cleanStorage: vi.fn(),
+    };
+    await act(async () => root.render(<Storage api={api} remote={false} />));
+    await flush();
+
+    expect(figureOf('Teams')).toBe('0 B');
+    expect(dotOf('Teams')?.classList.contains('bg-muted')).toBe(true);
+    expect(
+      rowNamed('Teams').firstElementChild?.classList.contains(
+        'text-muted-foreground',
+      ),
+    ).toBe(true);
+    expect(
+      rowNamed('Database').firstElementChild?.classList.contains(
+        'text-muted-foreground',
+      ),
+    ).toBe(false);
+  });
+
+  it('wraps the archive picker and its button under the name at phone width', async () => {
+    const api = {
+      getStorageUsage: vi.fn(() => Promise.resolve(usage())),
+      getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
+      cleanStorage: vi.fn(),
+    };
+    await act(async () => root.render(<Storage api={api} remote={false} />));
+    await flush();
+
+    const actions = rowNamed('Archived chats').querySelector(
+      '[data-slot="storage-row-actions"]',
+    );
+    expect(
+      actions?.contains(
+        container.querySelector(
+          '[aria-label="Which archived chats to delete"]',
+        ),
+      ),
+    ).toBe(true);
+    expect(actions?.contains(buttonNamed('Delete 300 chats'))).toBe(true);
+    for (const stacks of [
+      'flex-wrap',
+      'min-w-0',
+      'col-span-full',
+      'order-last',
+    ]) {
+      expect(actions?.classList.contains(stacks)).toBe(true);
+    }
+    expect(figureOf('Archived chats')).toBe('778 chats');
   });
 
   it('counts the chosen period before any press, defaulting to older than 30 days', async () => {
@@ -287,7 +471,7 @@ describe('Storage', () => {
     await act(async () => root.render(<Storage api={api} remote={false} />));
     await flush();
 
-    expect(container.textContent).toContain('Archived chats — 778');
+    expect(figureOf('Archived chats')).toBe('778 chats');
     expect(container.textContent).toContain('Older than 30 days');
     expect(buttonNamed('Delete 300 chats').disabled).toBe(false);
 
@@ -584,7 +768,7 @@ describe('Storage', () => {
     await act(async () => root.render(<Storage api={api} remote={false} />));
     await flush();
 
-    await unfold('Task worktrees — 1.4 GB');
+    await unfold('Task worktrees');
     await act(async () => buttonNamed('Remove').click());
     await act(async () => dialogButton('Remove').click());
     await flush();

@@ -103,7 +103,7 @@ function cleanLabel(option: StorageCleanOption): string {
   const size = option.bytes === null ? '' : ` · ${formatBytes(option.bytes)}`;
   switch (option.target) {
     case StorageCleanTarget.ArchivedChats:
-      return `Delete ${option.count} archived chat${option.count === 1 ? '' : 's'}`;
+      return `Delete ${chatCount(option.count)}`;
     case StorageCleanTarget.CompactDatabase:
       return `Compact${size}`;
     case StorageCleanTarget.OrphanChatFiles:
@@ -166,7 +166,10 @@ function archivedConfirmOf(period: StorageArchivedPeriod): {
 } {
   if (period.window.from === null) {
     return {
-      question: `Delete all ${chatCount(period.count)} in the archive?`,
+      question:
+        period.count === 1
+          ? 'Delete the 1 chat in the archive?'
+          : `Delete all ${period.count} chats in the archive?`,
       description:
         'Every archived chat and everything it holds are deleted for good. Chats that are not archived stay. This cannot be undone.',
     };

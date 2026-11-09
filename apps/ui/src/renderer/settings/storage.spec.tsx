@@ -230,16 +230,16 @@ describe('Storage', () => {
 
     expect(container.textContent).toContain('Archived chats — 778');
     expect(container.textContent).toContain('Archived in the last 30 days');
-    expect(buttonNamed('Delete 120 archived chats').disabled).toBe(false);
+    expect(buttonNamed('Delete 120 chats').disabled).toBe(false);
 
     await pickPeriod('Archived in the last 60 days');
-    expect(buttonNamed('Delete 300 archived chats').disabled).toBe(false);
+    expect(buttonNamed('Delete 300 chats').disabled).toBe(false);
 
     await pickPeriod('Archived in the last 7 days');
-    expect(buttonNamed('Delete 0 archived chats').disabled).toBe(true);
+    expect(buttonNamed('Delete 0 chats').disabled).toBe(true);
 
     await pickPeriod('All archived');
-    expect(buttonNamed('Delete 778 archived chats').disabled).toBe(false);
+    expect(buttonNamed('Delete 778 chats').disabled).toBe(false);
   });
 
   it('names who goes and who stays, and posts back the window that was counted', async () => {
@@ -261,7 +261,7 @@ describe('Storage', () => {
     await act(async () => root.render(<Storage api={api} remote={false} />));
     await flush();
 
-    await act(async () => buttonNamed('Delete 120 archived chats').click());
+    await act(async () => buttonNamed('Delete 120 chats').click());
     expect(dialogText()).toContain(
       'Delete 120 chats archived in the last 30 days?',
     );
@@ -292,7 +292,7 @@ describe('Storage', () => {
     await flush();
 
     await pickPeriod('All archived');
-    await act(async () => buttonNamed('Delete 778 archived chats').click());
+    await act(async () => buttonNamed('Delete 778 chats').click());
 
     expect(dialogText()).toContain('Delete all 778 chats in the archive?');
     await act(async () => dialogButton('Delete').click());
@@ -303,6 +303,27 @@ describe('Storage', () => {
         archivedWindow: { from: null, to: SCANNED_AT },
       },
     });
+  });
+
+  it('does not call one chat in the archive "all"', async () => {
+    const one = usage();
+    one.chats = {
+      active: 19,
+      archived: 1,
+      archivedPeriods: [period(30, 0, THIRTY_DAYS_BACK), period(null, 1, null)],
+    };
+    const api = {
+      getStorageUsage: vi.fn(() => Promise.resolve(one)),
+      getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
+      cleanStorage: vi.fn(),
+    };
+    await act(async () => root.render(<Storage api={api} remote={false} />));
+    await flush();
+
+    await pickPeriod('All archived');
+    await act(async () => buttonNamed('Delete 1 chat').click());
+
+    expect(dialogText()).toContain('Delete the 1 chat in the archive?');
   });
 
   it('offers no archive row when nothing is archived', async () => {
@@ -346,7 +367,7 @@ describe('Storage', () => {
     await act(async () => root.render(<Storage api={api} remote={false} />));
     await flush();
 
-    await act(async () => buttonNamed('Delete 120 archived chats').click());
+    await act(async () => buttonNamed('Delete 120 chats').click());
     expect(api.cleanStorage).not.toHaveBeenCalled();
     await act(async () => dialogButton('Delete').click());
     await flush();

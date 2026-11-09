@@ -327,7 +327,7 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Every ARCHIVED run shelved before `cutoff`, oldest first — both kinds.
+   * Every ARCHIVED run shelved at or before `cutoff`, oldest first — both kinds.
    *
    * TWO columns rather than whole rows: every one of them is about to be
    * destroyed, so hydrating entities buys nothing and a long archive would load
@@ -348,15 +348,20 @@ export class RunDao extends BaseDao<Run> {
     cutoff: Date,
     txEm?: EntityManager,
   ): Promise<{ id: string; teamId: string | null }[]> {
-    const rows = await this.getRepo(txEm).find(
-      { archivedAt: { $ne: null, $lte: cutoff } },
-      {
-        fields: ['id', 'teamId'],
-        orderBy: { archivedAt: 'asc' },
-        disableIdentityMap: true,
-      },
-    );
+    const rows = await this.getRepo(txEm).find(archivedAtOrBefore(cutoff), {
+      fields: ['id', 'teamId'],
+      orderBy: { archivedAt: 'asc' },
+      disableIdentityMap: true,
+    });
     return rows.map((run) => ({ id: run.id, teamId: run.teamId }));
+  }
+
+  /** How many runs {@link archivedRunsBefore} would answer. */
+  async countArchivedBefore(
+    cutoff: Date,
+    txEm?: EntityManager,
+  ): Promise<number> {
+    return this.getRepo(txEm).count(archivedAtOrBefore(cutoff));
   }
 
   /**
@@ -1320,4 +1325,8 @@ function pullRequestsByRun(
     }
   }
   return byRun;
+}
+
+function archivedAtOrBefore(cutoff: Date): FilterQuery<Run> {
+  return { archivedAt: { $ne: null, $lte: cutoff } };
 }

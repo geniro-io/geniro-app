@@ -506,6 +506,7 @@ describe('RunDao (in-memory sqlite)', () => {
       expect(
         (await dao.archivedRunsBefore(new Date(5_000))).map((run) => run.id),
       ).toEqual([older.id, old.id, onCutoff.id]);
+      expect(await dao.countArchivedBefore(new Date(5_000))).toBe(3);
     });
 
     it('never answers a chat that is not archived at all', async () => {
@@ -516,6 +517,7 @@ describe('RunDao (in-memory sqlite)', () => {
       await dao.create({ createdAt: new Date(1_000) });
 
       expect(await dao.archivedRunsBefore(new Date(9_999))).toEqual([]);
+      expect(await dao.countArchivedBefore(new Date(9_999))).toBe(0);
     });
 
     it('answers a TEAM run too, and says which it is', async () => {

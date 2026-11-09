@@ -4,7 +4,7 @@ import { basename, join } from 'node:path';
 
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
-import { ConflictException } from '@packages/common';
+import { BadRequestException, ConflictException } from '@packages/common';
 
 import { environment } from '../../../environments';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -12,6 +12,7 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ChatService } from '../../agents/services/chat.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { archivedCutoff } from '../../agents/utils/archived-cutoff';
 import {
   DEBUG_LOG_DIR_NAME,
   debugSink,
@@ -22,6 +23,7 @@ import { TEAM_BACKUP_DIR } from '../../teams/utils/team-backup';
 import {
   type SeenInodes,
   STORAGE_GROUP_IDS,
+  type StorageArchivedPeriod,
   type StorageClassifier,
   type StorageCleanOption,
   type StorageCleanTarget,
@@ -48,6 +50,8 @@ export const ORPHAN_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 
 const DATABASE_FILE_SUFFIXES = ['', '-wal', '-shm'] as const;
 
+const ARCHIVED_PERIOD_DAYS = [7, 30, 60, 90] as const;
+
 /** better-sqlite3's `pragma`, which `getNativeClient()` hands back untyped. */
 interface SqlitePragmas {
   pragma(source: string, options: { simple: true }): unknown;
@@ -70,6 +74,11 @@ export interface StorageServiceOptions {
 interface Doomed {
   path: string;
   bytes: number;
+}
+
+interface CleanOutcome {
+  removed: number;
+  freedBytes: number | null;
 }
 
 /**
@@ -146,20 +155,13 @@ export class StorageService {
       add(id, { name, bytes: await measurePath(join(this.root, name), seen) });
     }
 
-    const chats = await this.runDao.countByShelf(this.em.fork());
+    const scannedAt = new Date(this.now());
+    const chats = {
+      ...(await this.runDao.countByShelf(this.em.fork())),
+      archivedPeriods: await this.archivedPeriods(scannedAt),
+    };
     const cleanups: Partial<Record<StorageGroupId, StorageCleanOption[]>> = {
-      database: [
-        ...(chats.archived > 0
-          ? [
-              {
-                target: 'archivedChats' as const,
-                count: chats.archived,
-                bytes: null,
-              },
-            ]
-          : []),
-        ...(await this.compactable()),
-      ],
+      database: await this.compactable(),
       chatFiles: optionOf('orphanChatFiles', await this.orphanChatFiles()),
       taskFiles: optionOf('orphanTaskFiles', await this.orphanTaskFiles()),
       teamBackups: optionOf('teamBackups', await this.backupFiles()),
@@ -179,7 +181,7 @@ export class StorageService {
 
     return {
       root: this.root,
-      scannedAt: new Date(this.now()).toISOString(),
+      scannedAt: scannedAt.toISOString(),
       groups: STORAGE_GROUP_IDS.flatMap((id) => {
         const group = groups.get(id);
         return group === undefined ? [] : [group];
@@ -202,7 +204,11 @@ export class StorageService {
    * while any agent works, in a turn or between them. Nothing else starts while
    * one is scheduled: the restart would cut it off.
    */
-  async start(target: StorageCleanTarget): Promise<StorageJob> {
+  async start(
+    target: StorageCleanTarget,
+    archivedBefore?: string,
+  ): Promise<StorageJob> {
+    const work = this.workOf(target, archivedBefore);
     if (
       this.current?.state === 'running' ||
       this.current?.state === 'scheduled'
@@ -242,7 +248,7 @@ export class StorageService {
     if (target === 'compactDatabase') {
       await writeFile(this.markerFile(), new Date(this.now()).toISOString());
     } else {
-      void this.run(job);
+      void this.run(job, work);
     }
     return job;
   }
@@ -275,7 +281,7 @@ export class StorageService {
       this.logger.warn(`skipped the scheduled compaction: ${room}`);
       return;
     }
-    await this.run(job);
+    await this.run(job, () => this.perform('compactDatabase'));
   }
 
   /**
@@ -297,9 +303,12 @@ export class StorageService {
     return join(this.root, COMPACTION_MARKER_FILE);
   }
 
-  private async run(job: StorageJob): Promise<void> {
+  private async run(
+    job: StorageJob,
+    work: () => Promise<CleanOutcome>,
+  ): Promise<void> {
     try {
-      const outcome = await this.perform(job.target);
+      const outcome = await work();
       job.removed = outcome.removed;
       job.freedBytes = outcome.freedBytes;
       job.state = 'done';
@@ -315,14 +324,34 @@ export class StorageService {
     }
   }
 
-  private async perform(
+  /**
+   * Archived chats are never deleted without a cutoff: a client that names none
+   * is refused rather than read as "all of them".
+   */
+  private workOf(
     target: StorageCleanTarget,
-  ): Promise<{ removed: number; freedBytes: number | null }> {
+    archivedBefore: string | undefined,
+  ): () => Promise<CleanOutcome> {
+    if (target !== 'archivedChats') {
+      return () => this.perform(target);
+    }
+    if (archivedBefore === undefined) {
+      throw new BadRequestException(
+        'STORAGE_CUTOFF_REQUIRED',
+        'say which archived chats to delete',
+      );
+    }
+    const cutoff = new Date(archivedBefore);
+    return async () => {
+      const { deleted } = await this.chats.sweepArchivedBefore(cutoff);
+      return { removed: deleted, freedBytes: null };
+    };
+  }
+
+  private async perform(
+    target: Exclude<StorageCleanTarget, 'archivedChats'>,
+  ): Promise<CleanOutcome> {
     switch (target) {
-      case 'archivedChats': {
-        const { deleted } = await this.chats.sweepArchived(0);
-        return { removed: deleted, freedBytes: null };
-      }
       case 'compactDatabase': {
         const before = await this.databaseBytes();
         await this.vacuum(this.databaseFile);
@@ -347,6 +376,20 @@ export class StorageService {
     return storageClassifier(
       [...this.adapters.all().values()].map((adapter) => adapter.getConfig()),
     );
+  }
+
+  private async archivedPeriods(now: Date): Promise<StorageArchivedPeriod[]> {
+    const em = this.em.fork();
+    const periods: StorageArchivedPeriod[] = [];
+    for (const days of [...ARCHIVED_PERIOD_DAYS, null]) {
+      const cutoff = archivedCutoff(days ?? 0, now);
+      periods.push({
+        days,
+        count: await this.runDao.countArchivedBefore(cutoff, em),
+        archivedBefore: cutoff.toISOString(),
+      });
+    }
+    return periods;
   }
 
   private async compactable(): Promise<StorageCleanOption[]> {

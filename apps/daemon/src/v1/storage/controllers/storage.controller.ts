@@ -42,6 +42,6 @@ export class StorageController {
   @ApiOperation({ operationId: 'cleanStorage' })
   @ZodResponse({ status: 201, type: StorageJobDto })
   clean(@Body() body: StorageCleanDto): Promise<StorageJob> {
-    return this.storage.start(body.target);
+    return this.storage.start(body.target, body.archivedBefore);
   }
 }

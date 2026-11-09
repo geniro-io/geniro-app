@@ -87,6 +87,26 @@ export const StorageJobSchema = z
   .meta({ id: 'StorageJob' });
 export type StorageJob = z.infer<typeof StorageJobSchema>;
 
+export const StorageArchivedPeriodSchema = z
+  .object({
+    days: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        'Chats archived more than this many days ago — null for every archived chat',
+      ),
+    count: z
+      .number()
+      .int()
+      .describe('How many chats were archived at or before the cutoff'),
+    archivedBefore: z.iso
+      .datetime()
+      .describe('The cutoff, posted back to delete exactly what was counted'),
+  })
+  .meta({ id: 'StorageArchivedPeriod' });
+export type StorageArchivedPeriod = z.infer<typeof StorageArchivedPeriodSchema>;
+
 export const StorageUsageSchema = z.object({
   root: z.string().describe('The data folder every entry is under'),
   scannedAt: z.string(),
@@ -94,6 +114,7 @@ export const StorageUsageSchema = z.object({
   chats: z.object({
     active: z.number().int(),
     archived: z.number().int(),
+    archivedPeriods: z.array(StorageArchivedPeriodSchema),
   }),
   unclaimed: z
     .array(z.string())
@@ -110,6 +131,12 @@ export const StorageJobReadSchema = z.object({
 
 export const StorageCleanRequestSchema = z.object({
   target: StorageCleanTargetSchema,
+  archivedBefore: z.iso
+    .datetime()
+    .optional()
+    .describe(
+      'Required for archivedChats: delete those archived at or before this instant',
+    ),
 });
 
 /**

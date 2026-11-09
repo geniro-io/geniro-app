@@ -1,9 +1,10 @@
-import { RefreshCw } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { ChevronRight, RefreshCw } from 'lucide-react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 import type { AppStorageUsage, StorageWorktree } from '../../shared/contracts';
 import {
   type StorageApi,
+  type StorageArchivedPeriod,
   type StorageCleanOption,
   StorageCleanTarget,
   type StorageGroup,
@@ -17,16 +18,21 @@ import { CopyButton } from '../components/copy-button';
 import { ErrorBanner } from '../components/error-banner';
 import {
   type BreakdownSegment,
-  SegmentBreakdown,
+  SegmentBar,
+  SegmentLegend,
 } from '../components/segment-breakdown';
 import { SettingsPanel, SettingsPanelRow } from '../components/settings-panel';
 import { Button } from '../components/ui/button';
 import { ProgressBar } from '../components/ui/progress-bar';
+import { Select } from '../components/ui/select';
 import { Spinner } from '../components/ui/spinner';
+import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { describeDaemonError } from '../daemon-api';
 import { formatBytes } from '../format-bytes';
 import { isRemoteRuntime } from '../remote/remote-session';
+import { formatPercent } from '../stats/stats-format';
+import { StorageRow } from './storage-row';
 
 export type StorageClient = Pick<
   StorageApi,
@@ -100,7 +106,7 @@ function cleanLabel(option: StorageCleanOption): string {
   const size = option.bytes === null ? '' : ` · ${formatBytes(option.bytes)}`;
   switch (option.target) {
     case StorageCleanTarget.ArchivedChats:
-      return `Delete ${option.count} archived chat${option.count === 1 ? '' : 's'}`;
+      return `Delete ${chatCount(option.count)}`;
     case StorageCleanTarget.CompactDatabase:
       return `Compact${size}`;
     case StorageCleanTarget.OrphanChatFiles:
@@ -133,12 +139,78 @@ function confirmOf(option: StorageCleanOption): {
   }
   return {
     question: `${cleanLabel(option)}?`,
-    description:
-      option.target === StorageCleanTarget.ArchivedChats
-        ? 'The archived chats and everything they hold are deleted for good. This cannot be undone.'
-        : 'They are deleted for good. This cannot be undone.',
+    description: 'They are deleted for good. This cannot be undone.',
     confirmLabel: 'Delete',
     busyLabel: 'Deleting…',
+  };
+}
+
+/** A quiet button that destroys something: the only red on the page. */
+const DELETES_DATA_CLASS =
+  'text-destructive hover:bg-destructive/10 hover:text-destructive';
+const KEEPS_DATA_CLASS = 'text-muted-foreground';
+
+/**
+ * How many of the largest parts get a colour of their own, and the share a part
+ * needs to get one: a colour names a stretch of the bar, so a part too small to
+ * see on it, or past the palette's distinct hues, stays neutral.
+ */
+const COLOURED_PARTS = 5;
+const COLOURED_PART_MIN_SHARE = 0.01;
+const UNCOLOURED_PART = 'bg-muted-foreground/40';
+
+/** The clean-ups that free a row's whole figure, so the button need not repeat it. */
+const FREES_THE_WHOLE_ROW: ReadonlySet<StorageCleanTarget> = new Set([
+  StorageCleanTarget.TeamBackups,
+  StorageCleanTarget.Leftovers,
+  StorageCleanTarget.SettingsCopies,
+]);
+
+function cleanButtonLabel(option: StorageCleanOption): string {
+  return FREES_THE_WHOLE_ROW.has(option.target)
+    ? cleanLabel({ ...option, bytes: null })
+    : cleanLabel(option);
+}
+
+const ALL_ARCHIVED = 'all';
+const DEFAULT_ARCHIVED_PERIOD = '30';
+
+function periodKey(period: StorageArchivedPeriod): string {
+  return period.days === null ? ALL_ARCHIVED : String(period.days);
+}
+
+function periodLabel(period: StorageArchivedPeriod): string {
+  return period.days === null
+    ? 'All archived'
+    : `Older than ${period.days} days`;
+}
+
+function chatCount(count: number): string {
+  return `${count} chat${count === 1 ? '' : 's'}`;
+}
+
+/** What deleting a period's chats takes, and what it leaves. */
+function archivedConfirmOf(period: StorageArchivedPeriod): {
+  question: string;
+  description: string;
+} {
+  if (period.days === null) {
+    return {
+      question:
+        period.count === 1
+          ? 'Delete the 1 chat in the archive?'
+          : `Delete all ${period.count} chats in the archive?`,
+      description:
+        'Every archived chat and everything it holds are deleted for good. Chats that are not archived stay. This cannot be undone.',
+    };
+  }
+  const cutoff = new Date(period.archivedBefore).toLocaleString('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+  return {
+    question: `Delete ${chatCount(period.count)} older than ${period.days} days?`,
+    description: `Chats you archived more than ${period.days} days ago (before ${cutoff}) are deleted with everything they hold. Chats archived more recently, and chats that are not archived, stay. This cannot be undone.`,
   };
 }
 
@@ -175,12 +247,34 @@ function sum(entries: readonly { bytes: number }[]): number {
   return entries.reduce((total, entry) => total + entry.bytes, 0);
 }
 
-function entryLine(
-  entries: readonly { name: string; bytes: number }[],
-): string {
-  return entries
-    .map((entry) => `${entry.name} ${formatBytes(entry.bytes) ?? ''}`.trim())
-    .join(' · ');
+/** What a row keeps folded: what it is, then each thing it counts. */
+function StorageDetails({
+  about,
+  note,
+  entries,
+}: {
+  about: React.ReactNode;
+  note?: React.ReactNode;
+  entries?: readonly { name: string; bytes: number }[];
+}): React.JSX.Element {
+  return (
+    <>
+      <p>{about}</p>
+      {note === undefined ? null : <p>{note}</p>}
+      {entries === undefined ? null : (
+        <ul className="mt-1 flex flex-col gap-0.5">
+          {entries.map((entry) => (
+            <li key={entry.name} className="flex justify-between gap-3">
+              <span className="min-w-0 break-all">{entry.name}</span>
+              <span className="shrink-0 tabular-nums">
+                {formatBytes(entry.bytes)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
 }
 
 /**
@@ -311,7 +405,10 @@ export function Storage({
     );
   }
 
-  const clean = async (target: StorageCleanTarget): Promise<void> => {
+  const clean = async (
+    target: StorageCleanTarget,
+    archivedBefore?: string,
+  ): Promise<void> => {
     if (api === null) {
       return;
     }
@@ -319,7 +416,7 @@ export function Storage({
     setNotice(null);
     try {
       const started = await api.cleanStorage({
-        storageCleanDto: { target },
+        storageCleanDto: { target, archivedBefore },
       });
       setReading((current) =>
         current === null
@@ -406,107 +503,72 @@ export function Storage({
     key: row.key,
     label: row.label,
     value: row.bytes,
-    colorClass: contextCategoryColor(index),
-    figures: [formatBytes(row.bytes)],
+    colorClass:
+      index < COLOURED_PARTS && row.bytes / total >= COLOURED_PART_MIN_SHARE
+        ? contextCategoryColor(index)
+        : UNCOLOURED_PART,
+    figures: [formatBytes(row.bytes), formatPercent((row.bytes / total) * 100)],
   }));
+  const dotOf = (key: string): string =>
+    segments.find((segment) => segment.key === key)?.colorClass ?? 'bg-muted';
 
   const cleanButtons = (options: readonly StorageCleanOption[]) =>
     options.map((option) => (
       <ConfirmActionButton
         key={option.target}
+        variant="ghost"
+        className={
+          option.target === StorageCleanTarget.CompactDatabase
+            ? KEEPS_DATA_CLASS
+            : DELETES_DATA_CLASS
+        }
         disabled={busy}
         {...confirmOf(option)}
         onConfirm={() => clean(option.target)}>
-        {cleanLabel(option)}
+        {cleanButtonLabel(option)}
       </ConfirmActionButton>
     ));
 
-  const groupRow = (id: StorageGroupIdEnum, extra?: React.ReactNode) => {
+  const groupRow = (id: StorageGroupIdEnum, note?: React.ReactNode) => {
     const group = groupOf(id);
     if (group === undefined) {
       return null;
     }
     const text = GROUP_TEXT[id];
     return (
-      <SettingsPanelRow
+      <StorageRow
         key={id}
-        label={`${text.title} — ${formatBytes(group.bytes)}`}
-        description={
-          <>
-            {text.about}
-            {extra}
-            <span
-              className="mt-0.5 block truncate"
-              title={entryLine(group.entries)}>
-              {entryLine(group.entries)}
-            </span>
-          </>
+        name={text.title}
+        figure={formatBytes(group.bytes) ?? '0 B'}
+        dot={dotOf(id)}
+        quiet={group.bytes === 0 && group.clean.length === 0}
+        details={
+          <StorageDetails
+            about={text.about}
+            note={note}
+            entries={group.entries}
+          />
         }>
-        {cleanButtons(group.clean)}
-      </SettingsPanelRow>
+        {group.clean.length === 0 ? null : cleanButtons(group.clean)}
+      </StorageRow>
     );
   };
 
-  return (
-    <div className="flex flex-col gap-4">
-      {error === null ? null : (
-        <ErrorBanner message={error} onDismiss={() => setError(null)} />
-      )}
-      {notice === null ? null : (
-        <p className="text-sm text-muted-foreground" role="status">
-          {notice}
-        </p>
-      )}
-
-      <SettingsPanel>
-        <SettingsPanelRow
-          label={`In use — ${formatBytes(total)}`}
-          description={
-            <span className="flex items-center gap-1">
-              <span className="truncate" title={daemon.root}>
-                {daemon.root}
-              </span>
-              <CopyButton text={daemon.root} label="Copy the folder path" />
-            </span>
-          }>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={loading}
-            onClick={() => void measure()}>
-            {loading ? <Spinner /> : <RefreshCw />} Measure again
-          </Button>
-        </SettingsPanelRow>
-        <SettingsPanelRow layout="block">
-          <SegmentBreakdown segments={segments} denominator={total} />
-        </SettingsPanelRow>
-        {running && job !== null ? (
-          <SettingsPanelRow layout="block">
-            <span className="text-sm">{RUNNING_TEXT[job.target]}</span>
-            <ProgressBar fraction={null} label={RUNNING_TEXT[job.target]} />
-          </SettingsPanelRow>
-        ) : null}
-      </SettingsPanel>
-
-      <SettingsPanel>
-        {groupRow(
-          StorageGroupIdEnum.Database,
-          <span className="mt-0.5 block">
-            {daemon.chats.active} chats, {daemon.chats.archived} archived.
-          </span>,
-        )}
-        {groupRow(StorageGroupIdEnum.AgentSessions)}
-        {groupRow(StorageGroupIdEnum.ChatFiles)}
-        {groupRow(StorageGroupIdEnum.TaskFiles)}
-      </SettingsPanel>
-
-      {worktrees.length === 0 ? null : (
-        <SettingsPanel>
-          <SettingsPanelRow
-            label={`Task worktrees — ${formatBytes(sum(worktrees))}`}
-            description="Checkouts the board's cards worked in. Removing one keeps its branch; one holding unsaved work, or whose card is still open, is kept."
-            layout="block">
-            <ul className="flex flex-col divide-y divide-border">
+  const taskRows = [
+    worktrees.length === 0 ? null : (
+      <StorageRow
+        key="worktrees"
+        name="Task worktrees"
+        figure={formatBytes(sum(worktrees)) ?? '0 B'}
+        dot={dotOf('worktrees')}
+        details={
+          <>
+            <p>
+              Checkouts the board&apos;s cards worked in. Removing one keeps its
+              branch; one holding unsaved work, or whose card is still open, is
+              kept.
+            </p>
+            <ul className="flex flex-col divide-y divide-border text-foreground">
               {worktrees.map((worktree) => (
                 <WorktreeItem
                   key={worktree.name}
@@ -516,64 +578,309 @@ export function Storage({
                 />
               ))}
             </ul>
-          </SettingsPanelRow>
-        </SettingsPanel>
+          </>
+        }
+      />
+    ),
+    groupRow(StorageGroupIdEnum.TaskFiles),
+  ].filter((row) => row !== null);
+
+  const appRows = [
+    ...[
+      StorageGroupIdEnum.Teams,
+      StorageGroupIdEnum.TeamBackups,
+      StorageGroupIdEnum.Logs,
+      StorageGroupIdEnum.Leftovers,
+      StorageGroupIdEnum.SettingsCopies,
+      StorageGroupIdEnum.Caches,
+      StorageGroupIdEnum.AppState,
+    ].map((id) => ({ bytes: groupOf(id)?.bytes ?? 0, row: groupRow(id) })),
+    {
+      bytes: sum(browserCache),
+      row:
+        browserCache.length === 0 ? null : (
+          <StorageRow
+            key="browserCache"
+            name="Window cache"
+            figure={formatBytes(sum(browserCache)) ?? '0 B'}
+            dot={dotOf('browserCache')}
+            details={
+              <StorageDetails
+                about="What the app window caches to load faster. Clearing empties its web and script caches; they refill as you work."
+                entries={browserCache}
+              />
+            }>
+            <ConfirmActionButton
+              variant="ghost"
+              className={KEEPS_DATA_CLASS}
+              question="Clear the window cache?"
+              description="Its web and script caches are emptied; they refill as you work."
+              confirmLabel="Clear cache"
+              busyLabel="Clearing…"
+              confirmVariant="default"
+              onConfirm={clearBrowserCache}>
+              Clear cache
+            </ConfirmActionButton>
+          </StorageRow>
+        ),
+    },
+    {
+      bytes: sum(appData),
+      row:
+        appData.length === 0 ? null : (
+          <StorageRow
+            key="appData"
+            name="Window data"
+            figure={formatBytes(sum(appData)) ?? '0 B'}
+            dot={dotOf('appData')}
+            details={
+              <StorageDetails
+                about="The window’s own storage, settings and pairings. Kept."
+                entries={appData}
+              />
+            }
+          />
+        ),
+    },
+  ]
+    .filter(({ row }) => row !== null)
+    .sort((a, b) => b.bytes - a.bytes);
+
+  return (
+    <div className="flex flex-col gap-6">
+      {error === null ? null : (
+        <ErrorBanner message={error} onDismiss={() => setError(null)} />
+      )}
+      {notice === null ? null : (
+        <p className="text-sm text-muted-foreground" role="status">
+          {notice}
+        </p>
       )}
 
-      <SettingsPanel>
-        {groupRow(StorageGroupIdEnum.TeamBackups)}
-        {groupRow(StorageGroupIdEnum.Teams)}
-        {groupRow(StorageGroupIdEnum.Logs)}
-        {groupRow(StorageGroupIdEnum.Leftovers)}
-        {groupRow(StorageGroupIdEnum.SettingsCopies)}
-        {groupRow(StorageGroupIdEnum.Caches)}
-        {groupRow(StorageGroupIdEnum.AppState)}
-      </SettingsPanel>
+      <InUseCard
+        total={total}
+        segments={segments}
+        folder={daemon.root}
+        loading={loading}
+        onMeasure={() => void measure()}
+        runningText={running && job !== null ? RUNNING_TEXT[job.target] : null}
+      />
 
-      {app === null ? null : (
-        <SettingsPanel>
-          {browserCache.length === 0 ? null : (
-            <SettingsPanelRow
-              label={`Window cache — ${formatBytes(sum(browserCache))}`}
-              description={
-                <>
-                  What the app window caches to load faster. Clearing empties
-                  its web and script caches; they refill as you work.
-                  <span className="mt-0.5 block truncate">
-                    {entryLine(browserCache)}
-                  </span>
-                </>
-              }>
-              <ConfirmActionButton
-                question="Clear the window cache?"
-                description="Its web and script caches are emptied; they refill as you work."
-                confirmLabel="Clear cache"
-                busyLabel="Clearing…"
-                confirmVariant="default"
-                onConfirm={clearBrowserCache}>
-                Clear cache
-              </ConfirmActionButton>
-            </SettingsPanelRow>
-          )}
-          {appData.length === 0 ? null : (
-            <SettingsPanelRow
-              label={`Window data — ${formatBytes(sum(appData))}`}
-              description={
-                <>
-                  The window’s own storage, settings and pairings. Kept.
-                  <span
-                    className="mt-0.5 block truncate"
-                    title={entryLine(appData)}>
-                    {entryLine(appData)}
-                  </span>
-                </>
-              }>
-              {null}
-            </SettingsPanelRow>
-          )}
-        </SettingsPanel>
+      <StorageSection title="Chats">
+        {groupRow(
+          StorageGroupIdEnum.Database,
+          `${daemon.chats.active} chats, ${daemon.chats.archived} archived.`,
+        )}
+        {daemon.chats.archived === 0 ? null : (
+          <ArchivedChatsRow
+            total={daemon.chats.archived}
+            periods={daemon.chats.archivedPeriods}
+            disabled={busy}
+            onDelete={(archivedBefore) =>
+              clean(StorageCleanTarget.ArchivedChats, archivedBefore)
+            }
+          />
+        )}
+        {groupRow(StorageGroupIdEnum.AgentSessions)}
+        {groupRow(StorageGroupIdEnum.ChatFiles)}
+      </StorageSection>
+
+      {taskRows.length === 0 ? null : (
+        <StorageSection title="Tasks">{taskRows}</StorageSection>
+      )}
+
+      {appRows.length === 0 ? null : (
+        <StorageSection title="Teams and app">
+          {appRows.map(({ row }) => row)}
+        </StorageSection>
       )}
     </div>
+  );
+}
+
+/** A named run of rows. */
+function StorageSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="px-1 text-xs font-medium text-muted-foreground">
+        {title}
+      </h2>
+      <SettingsPanel>{children}</SettingsPanel>
+    </section>
+  );
+}
+
+/**
+ * The one number the page is for, and the bar of what makes it up. The rows
+ * below carry the bar's colours, so the list and the sizes behind Breakdown are
+ * for whoever wants them in one sorted column, with the folder they measure.
+ */
+function InUseCard({
+  total,
+  segments,
+  folder,
+  loading,
+  onMeasure,
+  runningText,
+}: {
+  total: number;
+  segments: readonly BreakdownSegment[];
+  folder: string;
+  loading: boolean;
+  onMeasure: () => void;
+  runningText: string | null;
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const detailsId = useId();
+  const [amount, unit] = (formatBytes(total) ?? '0 B').split(' ');
+  const coloured = segments.filter(
+    (segment) => segment.colorClass !== UNCOLOURED_PART,
+  );
+  const rest = sum(
+    segments
+      .filter((segment) => segment.colorClass === UNCOLOURED_PART)
+      .map((segment) => ({ bytes: segment.value })),
+  );
+  return (
+    <SettingsPanel>
+      <div className="flex flex-col gap-4 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              In use
+            </span>
+            <span
+              data-slot="storage-total"
+              className="text-4xl leading-none font-semibold tracking-tight tabular-nums">
+              {amount}
+              <span className="text-lg font-medium tracking-normal text-muted-foreground">
+                {' '}
+                {unit}
+              </span>
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            className={cn('-mt-1 -mr-2.5', KEEPS_DATA_CLASS)}
+            disabled={loading}
+            onClick={onMeasure}>
+            {loading ? <Spinner /> : <RefreshCw />} Measure again
+          </Button>
+        </div>
+        <SegmentBar
+          segments={[
+            ...coloured,
+            ...(rest > 0
+              ? [{ key: 'rest', value: rest, colorClass: UNCOLOURED_PART }]
+              : []),
+          ]}
+          denominator={total}
+          className="h-2 gap-px"
+        />
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={open ? detailsId : undefined}
+          onClick={() => setOpen((current) => !current)}
+          className="-my-1 flex w-fit cursor-pointer items-center gap-1 rounded-sm py-1 text-xs text-muted-foreground outline-none select-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+          Breakdown
+          <ChevronRight
+            aria-hidden="true"
+            className={cn('size-3 transition-transform', open && 'rotate-90')}
+          />
+        </button>
+        {open ? (
+          <div
+            id={detailsId}
+            className="flex flex-col gap-2 text-xs text-muted-foreground">
+            <SegmentLegend segments={segments} />
+            <span className="flex items-center gap-1">
+              <span className="min-w-0 break-all">{folder}</span>
+              <CopyButton text={folder} label="Copy the folder path" />
+            </span>
+          </div>
+        ) : null}
+      </div>
+      {runningText === null ? null : (
+        <SettingsPanelRow layout="block">
+          <span className="text-sm">{runningText}</span>
+          <ProgressBar fraction={null} label={runningText} />
+        </SettingsPanelRow>
+      )}
+    </SettingsPanel>
+  );
+}
+
+/**
+ * The archive's one delete: pick a period, read how many chats it holds, press.
+ * Each period carries the window the daemon counted, posted back as it came, so
+ * what is deleted is what was counted, whatever is archived after this reading.
+ */
+function ArchivedChatsRow({
+  total,
+  periods,
+  disabled,
+  onDelete,
+}: {
+  total: number;
+  periods: readonly StorageArchivedPeriod[];
+  disabled: boolean;
+  onDelete: (archivedBefore: string) => Promise<void>;
+}): React.JSX.Element | null {
+  const [chosen, setChosen] = useState(DEFAULT_ARCHIVED_PERIOD);
+  const period =
+    periods.find((candidate) => periodKey(candidate) === chosen) ?? periods[0];
+  if (period === undefined) {
+    return null;
+  }
+  return (
+    <StorageRow
+      name="Archived chats"
+      figure={chatCount(total)}
+      dot={null}
+      details={
+        <StorageDetails about="A chat deleted here loses its transcript, its files and its agent conversation for good. Age counts from when a chat was archived, not when it was last used; chats archived more recently than the period you pick stay. Compact the database afterwards to give the space back to the disk." />
+      }>
+      <Select
+        variant="ghost"
+        className="ml-1 @[36rem]:ml-0"
+        aria-label="Which archived chats to delete"
+        value={chosen}
+        triggerLabel={periodLabel(period)}
+        disabled={disabled}
+        groups={[
+          {
+            label: 'Delete archived chats',
+            items: periods.map((candidate) => ({
+              value: periodKey(candidate),
+              label: `${periodLabel(candidate)} · ${candidate.count}`,
+            })),
+          },
+        ]}
+        onValueChange={setChosen}
+      />
+      <ConfirmActionButton
+        variant="ghost"
+        className={DELETES_DATA_CLASS}
+        disabled={disabled || period.count === 0}
+        {...archivedConfirmOf(period)}
+        confirmLabel="Delete"
+        busyLabel="Deleting…"
+        onConfirm={() => onDelete(period.archivedBefore)}>
+        {cleanLabel({
+          target: StorageCleanTarget.ArchivedChats,
+          count: period.count,
+          bytes: null,
+        })}
+      </ConfirmActionButton>
+    </StorageRow>
   );
 }
 
@@ -616,6 +923,8 @@ function WorktreeItem({
       </div>
       {worktree.kind === 'worktree' ? (
         <ConfirmActionButton
+          variant="ghost"
+          className={DELETES_DATA_CLASS}
           question={`Remove ${worktree.branch ?? worktree.name}?`}
           description={
             <>

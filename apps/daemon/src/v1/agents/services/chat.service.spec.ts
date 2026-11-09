@@ -12618,6 +12618,47 @@ describe('ChatService — sweeping the archive is the same one-way door', () => 
     expect(await ctx.runDao.getById(second.id)).not.toBeNull();
   });
 
+  it('deletes up to a fixed cutoff and spares a chat archived after it', async () => {
+    const ctx = setup();
+    const older = await archivedChat(ctx, 1);
+    const cutoff = new Date(Date.now() - 60_000);
+    const archivedAfter = await archivedChat(ctx, 0);
+
+    expect(await ctx.service.sweepArchivedBefore(cutoff)).toEqual({
+      deleted: 1,
+    });
+
+    expect(await ctx.runDao.getById(older.id)).toBeNull();
+    expect(await ctx.runDao.getById(archivedAfter.id)).not.toBeNull();
+  });
+
+  it('spares a run archived afresh past the cutoff while the sweep was working', async () => {
+    const ctx = setup();
+    const first = await archivedChat(ctx, 10);
+    const second = await archivedChat(ctx, 5);
+    const realDelete = ctx.service.delete.bind(ctx.service);
+    vi.spyOn(ctx.service, 'delete').mockImplementation(
+      async (runId: string) => {
+        if (runId === first.id) {
+          const row = await ctx.runDao.getById(second.id);
+          if (row) {
+            row.archivedAt = new Date();
+          }
+        }
+        return realDelete(runId);
+      },
+    );
+
+    expect(
+      await ctx.service.sweepArchivedBefore(
+        new Date(Date.now() - 24 * 60 * 60 * 1000),
+      ),
+    ).toEqual({ deleted: 1 });
+
+    expect(await ctx.runDao.getById(first.id)).toBeNull();
+    expect(await ctx.runDao.getById(second.id)).not.toBeNull();
+  });
+
   it('deletes nothing when the archive holds nothing old enough', async () => {
     // The commonest real call by far — every launch of an app whose archive is
     // younger than the window — and the one that must be silent and free.

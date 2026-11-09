@@ -33,36 +33,69 @@ export function SegmentBreakdown({
 }): React.JSX.Element {
   return (
     <>
-      <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-muted">
-        {segments.map((segment) => (
-          <span
-            key={segment.key}
-            className={cn('h-full', segment.colorClass)}
-            style={{ width: `${share(segment.value, denominator)}%` }}
-          />
-        ))}
-      </div>
-      <ul className="flex flex-col gap-0.5">
-        {segments.map((segment) => (
-          <li key={segment.key} className="flex items-center gap-1.5">
-            <span
-              className={cn('size-2 shrink-0 rounded-full', segment.colorClass)}
-            />
-            <span className="truncate text-foreground">{segment.label}</span>
-            <Figures figures={segment.figures} />
-          </li>
-        ))}
-        {remainder ? (
-          <li className="flex items-center gap-1.5">
-            <span className="size-2 shrink-0 rounded-full bg-muted" />
-            <span className="truncate text-muted-foreground">
-              {remainder.label}
-            </span>
-            <Figures figures={remainder.figures} />
-          </li>
-        ) : null}
-      </ul>
+      <SegmentBar segments={segments} denominator={denominator} />
+      <SegmentLegend segments={segments} remainder={remainder} />
     </>
+  );
+}
+
+/** The bar alone, for a page whose legend sits elsewhere or opens on a press. */
+export function SegmentBar({
+  segments,
+  denominator,
+  className,
+}: {
+  segments: readonly Pick<BreakdownSegment, 'key' | 'value' | 'colorClass'>[];
+  denominator: number;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <div
+      data-slot="segment-bar"
+      className={cn(
+        'flex h-1.5 w-full overflow-hidden rounded-full bg-muted',
+        className,
+      )}>
+      {segments.map((segment) => (
+        <span
+          key={segment.key}
+          className={cn('h-full', segment.colorClass)}
+          style={{ width: `${share(segment.value, denominator)}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** A legend row per segment, its dot in the segment's colour. */
+export function SegmentLegend({
+  segments,
+  remainder,
+}: {
+  segments: readonly BreakdownSegment[];
+  remainder?: { label: React.ReactNode; figures: React.ReactNode[] };
+}): React.JSX.Element {
+  return (
+    <ul className="flex flex-col gap-0.5">
+      {segments.map((segment) => (
+        <li key={segment.key} className="flex items-center gap-1.5">
+          <span
+            className={cn('size-2 shrink-0 rounded-full', segment.colorClass)}
+          />
+          <span className="truncate text-foreground">{segment.label}</span>
+          <Figures figures={segment.figures} />
+        </li>
+      ))}
+      {remainder ? (
+        <li className="flex items-center gap-1.5">
+          <span className="size-2 shrink-0 rounded-full bg-muted" />
+          <span className="truncate text-muted-foreground">
+            {remainder.label}
+          </span>
+          <Figures figures={remainder.figures} />
+        </li>
+      ) : null}
+    </ul>
   );
 }
 

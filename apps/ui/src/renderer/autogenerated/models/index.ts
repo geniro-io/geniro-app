@@ -12693,6 +12693,31 @@ export interface StoppedDetachedProcessesDto {
 /**
  * 
  * @export
+ * @interface StorageArchivedPeriod
+ */
+export interface StorageArchivedPeriod {
+    /**
+     * 
+     * @type {number}
+     * @memberof StorageArchivedPeriod
+     */
+    days: number | null;
+    /**
+     * How many chats were archived at or before the cutoff
+     * @type {number}
+     * @memberof StorageArchivedPeriod
+     */
+    count: number;
+    /**
+     * The cutoff, posted back to delete exactly what was counted
+     * @type {string}
+     * @memberof StorageArchivedPeriod
+     */
+    archivedBefore: string;
+}
+/**
+ * 
+ * @export
  * @interface StorageCleanDto
  */
 export interface StorageCleanDto {
@@ -12702,6 +12727,12 @@ export interface StorageCleanDto {
      * @memberof StorageCleanDto
      */
     target: StorageCleanTarget;
+    /**
+     * Required for archivedChats: delete those archived at or before this instant
+     * @type {string}
+     * @memberof StorageCleanDto
+     */
+    archivedBefore?: string;
 }
 
 
@@ -12955,6 +12986,12 @@ export interface StorageUsageDtoChats {
      * @memberof StorageUsageDtoChats
      */
     archived: number;
+    /**
+     * 
+     * @type {Array<StorageArchivedPeriod>}
+     * @memberof StorageUsageDtoChats
+     */
+    archivedPeriods: Array<StorageArchivedPeriod>;
 }
 /**
  * 

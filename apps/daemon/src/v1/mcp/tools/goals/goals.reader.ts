@@ -21,6 +21,7 @@ export const GOAL_ACTIONS = [
   'update',
   'remove',
   'complete',
+  'reopen',
 ] as const;
 
 const GoalTextSchema = z
@@ -65,7 +66,7 @@ export type GoalsCall =
   | { action: 'list' }
   | { action: 'set' | 'add'; goals: GoalDraft[] }
   | { action: 'update'; id: string; text: string }
-  | { action: 'remove'; id: string }
+  | { action: 'remove' | 'reopen'; id: string }
   | {
       action: 'complete';
       id: string;
@@ -95,7 +96,10 @@ export function readGoals(
         ? { error: 'update needs "id" and the new "text"' }
         : { action, id, text };
     case 'remove':
-      return id === undefined ? { error: 'remove needs "id"' } : { action, id };
+    case 'reopen':
+      return id === undefined
+        ? { error: `${action} needs "id"` }
+        : { action, id };
     case 'complete':
       if (id === undefined || status === undefined) {
         return { error: 'complete needs "id" and "status"' };
@@ -141,6 +145,8 @@ export function goalsResultText(
       ? 'Removed.'
       : action === 'complete'
         ? `Closed ${outcome.changed.map((goal) => `${goal.id} as ${goal.status}`).join(', ')}.`
-        : `Saved ${outcome.changed.map((goal) => goal.id).join(', ')}.`;
+        : action === 'reopen'
+          ? `Reopened ${outcome.changed.map((goal) => goal.id).join(', ')}.`
+          : `Saved ${outcome.changed.map((goal) => goal.id).join(', ')}.`;
   return { text: `${head}\n${goalsListText(outcome.goals)}`, isError: false };
 }

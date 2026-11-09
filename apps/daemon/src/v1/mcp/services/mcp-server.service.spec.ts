@@ -6265,6 +6265,60 @@ describe('goals through the MCP endpoint', () => {
     );
   });
 
+  it('reopens a closed goal as its refusal says, so a retry closes the same goal', async () => {
+    await callGoals(endpoint, 'dev', {
+      action: 'add',
+      goals: [{ text: 'a', source: 'agent' }],
+    });
+    await callGoals(endpoint, 'dev', {
+      action: 'complete',
+      id: 'g1',
+      status: 'not_achieved',
+      evidence: 'the card was refused',
+    });
+
+    const closedAgain = await callGoals(endpoint, 'dev', {
+      action: 'complete',
+      id: 'g1',
+      status: 'achieved',
+      evidence: 'the retry saved it',
+    });
+    expect(closedAgain.isError).toBe(true);
+    expect(closedAgain.text).toContain('reopen it to close it again');
+
+    const reopened = await callGoals(endpoint, 'dev', {
+      action: 'reopen',
+      id: 'g1',
+    });
+    expect(reopened.isError).toBe(false);
+    expect(reopened.text).toContain('Reopened g1.');
+    expect((await db.service.list('run-1'))![0]).toMatchObject({
+      status: 'open',
+      evidence: null,
+      closedAt: null,
+      memberId: 'dev',
+    });
+
+    const retried = await callGoals(endpoint, 'dev', {
+      action: 'complete',
+      id: 'g1',
+      status: 'achieved',
+      evidence: 'the retry saved it',
+    });
+    expect(retried.text).toContain('Closed g1 as achieved.');
+    const goals = (await db.service.list('run-1'))!;
+    expect(goals.map((goal) => [goal.id, goal.status, goal.evidence])).toEqual([
+      ['g1', 'achieved', 'the retry saved it'],
+    ]);
+
+    const alreadyOpen = await callGoals(endpoint, 'dev', {
+      action: 'add',
+      goals: [{ text: 'b', source: 'agent' }],
+    }).then(() => callGoals(endpoint, 'dev', { action: 'reopen', id: 'g2' }));
+    expect(alreadyOpen.isError).toBe(true);
+    expect(alreadyOpen.text).toContain('GOAL_OPEN');
+  });
+
   it('reads the list back, refuses an unknown goal and a closed goal’s removal', async () => {
     await callGoals(endpoint, 'dev', {
       action: 'add',

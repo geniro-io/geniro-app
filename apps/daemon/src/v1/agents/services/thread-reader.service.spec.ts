@@ -45,6 +45,7 @@ import type { ItemCallIndexService } from './item-call-index.service';
 import type { PolledSpendService } from './polled-spend.service';
 import { RunOutcomeHistoryService } from './run-outcome-history.service';
 import {
+  fitToBudget,
   ITEM_TEXT_CHARS,
   OVERVIEW_BYTES,
   PAGE_BYTES,
@@ -53,6 +54,38 @@ import {
 import { ThreadTimelineService } from './thread-timeline.service';
 
 const T0 = Date.parse('2026-10-14T09:00:00.000Z');
+
+describe('fitToBudget', () => {
+  const entries = (count: number, size: number, fill: string): string[] =>
+    Array.from({ length: count }, () => fill.repeat(size));
+
+  it('shrinks a lastResort list only once every ordinary list is down to one entry', () => {
+    const fitted = fitToBudget(
+      { ordinary: entries(20, 100, 'o'), last: entries(2, 2_000, 'l') },
+      ['ordinary'],
+      2_500,
+      ['last'],
+    );
+
+    expect(fitted.ordinary).toHaveLength(1);
+    expect(fitted.last).toHaveLength(1);
+    expect(fitted.shortened).toEqual({ ordinary: '1 of 20', last: '1 of 2' });
+  });
+
+  it('leaves a lastResort list whole while an ordinary list can still drop an entry', () => {
+    const fitted = fitToBudget(
+      { ordinary: entries(20, 100, 'o'), last: entries(4, 1, 'a') },
+      ['ordinary'],
+      500,
+      ['last'],
+    );
+
+    const kept = (fitted.ordinary as unknown[]).length;
+    expect(kept).toBeGreaterThan(1);
+    expect(fitted.last).toHaveLength(4);
+    expect(fitted.shortened).toEqual({ ordinary: `${kept} of 20` });
+  });
+});
 
 describe('ThreadReaderService (in-memory sqlite)', () => {
   let orm: MikroORM;
@@ -160,6 +193,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     kind: ItemKind,
     payload: unknown,
     seconds: number,
+    memberId?: string,
   ): Promise<void> {
     const fork = orm.em.fork();
     const at = new Date(T0 + seconds * 1000);
@@ -169,6 +203,7 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
       kind,
       payload: typeof payload === 'string' ? payload : JSON.stringify(payload),
       ...(kind === 'message' ? { role: 'user' } : {}),
+      ...(memberId === undefined ? {} : { memberId }),
       createdAt: at,
       updatedAt: at,
     });
@@ -978,6 +1013,219 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     expect((answer.shortened as Record<string, string>).slowestTools).toMatch(
       /^\d+ of 400$/,
     );
+  });
+
+  it('keeps every goal, clipping only its evidence past the budget, and keeps the nodes, calls and stages whole', async () => {
+    await insert(0, 'message', { text: 'go' }, 0, 'lead');
+    await insert(
+      1,
+      'call_started',
+      {
+        callId: 'call-1',
+        callerMemberId: 'lead',
+        calleeMemberId: 'dev',
+        mode: 'sync',
+      },
+      1,
+      'lead',
+    );
+    await insert(
+      2,
+      'turn_complete',
+      { usage: { durationMs: 4_000 } },
+      5,
+      'dev',
+    );
+    await insert(
+      3,
+      'call_result',
+      { callId: 'call-1', status: 'ok' },
+      6,
+      'lead',
+    );
+    await insert(
+      4,
+      'call_started',
+      {
+        callId: 'call-2',
+        callerMemberId: 'lead',
+        calleeMemberId: 'dev',
+        mode: 'sync',
+      },
+      7,
+      'lead',
+    );
+    await insert(
+      5,
+      'turn_complete',
+      { usage: { durationMs: 9_000 } },
+      12,
+      'dev',
+    );
+    await insert(
+      6,
+      'call_result',
+      { callId: 'call-2', status: 'ok' },
+      13,
+      'lead',
+    );
+    await insert(
+      7,
+      'turn_complete',
+      { usage: { durationMs: 2_000 } },
+      14,
+      'qa',
+    );
+    for (const [seq, stageId, rev] of [
+      [8, 'build', 1],
+      [9, 'review', 2],
+    ] as const) {
+      await insert(
+        seq,
+        'stage_change',
+        {
+          action: 'complete',
+          stageId,
+          stageTitle: stageId,
+          text: 'done',
+          rev,
+          by: { kind: 'agent', nodeId: 'lead' },
+        },
+        14 + seq,
+        'lead',
+      );
+    }
+    await insert(
+      10,
+      'turn_complete',
+      { usage: { durationMs: 1_000 } },
+      25,
+      'lead',
+    );
+    const em = orm.em.fork();
+    for (let number = 1; number <= 6; number += 1) {
+      em.persist(
+        Object.assign(new Goal(), {
+          runId: 'source',
+          number,
+          text: `goal ${number}`,
+          source: 'agent',
+          status: 'achieved',
+          evidence: 'e'.repeat(3_500),
+        }),
+      );
+    }
+    await em.flush();
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 10, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    expect(answer.goals).toHaveLength(6);
+    for (const goal of answer.goals as { evidence: string }[]) {
+      expect(goal.evidence).toBe(`${'e'.repeat(300)}… [+3200 chars]`);
+    }
+    expect(answer.shortened).toEqual({
+      goalEvidence: 'clipped to 300 characters each',
+    });
+    expect(answer.nodes).toHaveLength(3);
+    expect(answer.calls).toEqual([expect.objectContaining({ calls: 2 })]);
+    expect(answer.stages).toHaveLength(2);
+    expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThanOrEqual(
+      OVERVIEW_BYTES,
+    );
+  });
+
+  it('shortens the goals themselves when clipped evidence is not enough, saying both, before it touches the nodes', async () => {
+    const em = orm.em.fork();
+    await insert(0, 'message', { text: 'go' }, 0, 'lead');
+    await insert(
+      1,
+      'turn_complete',
+      { usage: { durationMs: 1_000 } },
+      1,
+      'lead',
+    );
+    for (let number = 1; number <= 80; number += 1) {
+      em.persist(
+        Object.assign(new Goal(), {
+          runId: 'source',
+          number,
+          text: `goal ${number}`,
+          source: 'agent',
+          status: 'achieved',
+          evidence: 'e'.repeat(400),
+        }),
+      );
+    }
+    await em.flush();
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 1, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    const shortened = answer.shortened as Record<string, string>;
+    expect(shortened.goalEvidence).toBe('clipped to 300 characters each');
+    expect(shortened.goals).toMatch(/^\d+ of 80$/);
+    expect(shortened).not.toHaveProperty('nodes');
+    expect(answer.nodes).toHaveLength(1);
+    expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThanOrEqual(
+      OVERVIEW_BYTES,
+    );
+  });
+
+  it('shrinks a long tool list before it shrinks the nodes, and names only the list it shortened', async () => {
+    let seq = 0;
+    for (let index = 0; index < 400; index += 1) {
+      const name = `Tool-${index}-${'q'.repeat(40)}`;
+      await insert(seq, 'tool_call', { id: `t${index}`, name }, index, 'lead');
+      await insert(
+        seq + 1,
+        'tool_result',
+        { id: `t${index}` },
+        index + 1,
+        'lead',
+      );
+      seq += 2;
+    }
+    await insert(
+      seq,
+      'turn_complete',
+      { usage: { durationMs: 1_000 } },
+      401,
+      'dev',
+    );
+    await insert(
+      seq + 1,
+      'turn_complete',
+      { usage: { durationMs: 1_000 } },
+      402,
+      'qa',
+    );
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: seq + 1, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThanOrEqual(
+      OVERVIEW_BYTES,
+    );
+    const shortened = answer.shortened as Record<string, string>;
+    expect(shortened.slowestTools).toMatch(/^\d+ of 400$/);
+    expect(shortened).not.toHaveProperty('nodes');
+    expect(answer.nodes).toHaveLength(3);
+  });
+
+  it('answers view=spend as unsupported, because the tool answers it', async () => {
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 0, sourceWorking: false },
+      { view: 'spend' },
+    );
+
+    expect(answer.error).toBe('UNSUPPORTED');
   });
 
   it('answers SOURCE_GONE once the analysed thread is deleted', async () => {

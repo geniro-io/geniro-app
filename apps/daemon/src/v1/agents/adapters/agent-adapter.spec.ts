@@ -3022,7 +3022,7 @@ describe('AgentAdapter — how a failed turn is classified for a CALLER', () => 
 
 describe('AgentAdapter.listPriceOf — the catalog provider is the ADAPTER’s fact', () => {
   /** A lookup that records what it was asked and prices everything at $1/$2. */
-  function recordingPrices(): {
+  function recordingPrices(cacheWrite: number | null = null): {
     prices: ModelPriceLookup;
     asked: [ModelPriceProvider, string][];
   } {
@@ -3036,7 +3036,7 @@ describe('AgentAdapter.listPriceOf — the catalog provider is the ADAPTER’s f
             input: 1,
             output: 2,
             cacheRead: null,
-            cacheWrite: null,
+            cacheWrite,
             tiers: [],
             contextTokens: null,
           };
@@ -3090,5 +3090,33 @@ describe('AgentAdapter.listPriceOf — the catalog provider is the ADAPTER’s f
     expect(listPriceOf(new CodexAdapter({ prices }), null)).toBeNull();
     expect(asked).toEqual([]);
     expect(listPriceOf(new CodexAdapter(), 'gpt-6-astra')).toBeNull();
+  });
+
+  it('bills claude’s cache writes at twice its input rate, the multiple its CLI writes its cache at', () => {
+    const { prices } = recordingPrices(0.5);
+    expect(
+      new ClaudeAdapter({ prices }).billingRatesOf('claude-opus-5'),
+    ).toMatchObject({ input: 1, output: 2, cacheWrite: 2 });
+  });
+
+  it('keeps the catalog’s cache-write rate for codex, which declares no multiple', () => {
+    const { prices } = recordingPrices(0.5);
+    expect(
+      new CodexAdapter({ clientVersion: '1.0.0', prices }).billingRatesOf(
+        'gpt-6-astra',
+      ),
+    ).toMatchObject({ input: 1, output: 2, cacheWrite: 0.5 });
+  });
+
+  it('answers no billing rates for cursor, which declares no list price, or for no model', () => {
+    const { prices, asked } = recordingPrices();
+    expect(
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        prices,
+      }).billingRatesOf('claude-opus-5'),
+    ).toBeNull();
+    expect(new CodexAdapter({ prices }).billingRatesOf(null)).toBeNull();
+    expect(asked).toEqual([]);
   });
 });

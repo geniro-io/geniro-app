@@ -69,6 +69,9 @@ import { ThreadTimelineService } from './thread-timeline.service';
 /** The overview's byte budget — small enough to read whole, first. */
 export const OVERVIEW_BYTES = 12_000;
 
+/** A goal's evidence as an overview past its budget quotes it. */
+const OVERVIEW_GOAL_EVIDENCE_CHARS = 300;
+
 /**
  * A page's byte budget. Under the ~10k-token cut codex applies to one tool
  * result, with room for the data line the tool puts in front of it.
@@ -105,7 +108,7 @@ const DEFAULT_SPAN_KINDS: readonly AnalysisSpanKind[] = [
 
 type Answer = Record<string, unknown>;
 
-function bytes(value: unknown): number {
+export function bytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
 }
 
@@ -205,10 +208,10 @@ export class ThreadReaderService {
      */
     versionIndex: TeamVersionIndexReader | null = null,
   ): Promise<Answer> {
-    if (args.view === 'history') {
+    if (args.view === 'history' || args.view === 'spend') {
       return {
         error: 'UNSUPPORTED',
-        message: 'The history view is answered by the tool, not the reader.',
+        message: `The ${args.view} view is answered by the tool, not the reader.`,
       };
     }
     if (args.view === 'project') {
@@ -682,16 +685,10 @@ export class ThreadReaderService {
       next: `Read view=spans for every timed span (kinds=["tool"] with minMs for slow tools), view=items for the rows (afterSeq / fromTime / memberId / kinds), view=item seq=N for one row in full.${teamNotes > 0 ? ' The team notes are view=items kinds=["team_note"].' : ''}`,
     };
     return fitToBudget(
-      answer,
-      [
-        'slowestTools',
-        'toolTotals',
-        'criticalPath',
-        'nodes',
-        'stages',
-        'calls',
-      ],
+      withClippedGoalEvidence(answer, OVERVIEW_BYTES),
+      ['goals', 'slowestTools', 'toolTotals', 'criticalPath'],
       OVERVIEW_BYTES,
+      ['nodes', 'stages', 'calls'],
     );
   }
 
@@ -1181,18 +1178,49 @@ function maxContext(
   return max;
 }
 
+/** An answer past `budget` with each goal's evidence clipped, keeping every goal. */
+function withClippedGoalEvidence(answer: Answer, budget: number): Answer {
+  const goals = answer.goals;
+  if (!Array.isArray(goals) || bytes(answer) <= budget) {
+    return answer;
+  }
+  let clipped = false;
+  const shorter = (goals as { evidence: string | null }[]).map((goal) => {
+    const evidence = goal.evidence;
+    if (evidence === null || evidence.length <= OVERVIEW_GOAL_EVIDENCE_CHARS) {
+      return goal;
+    }
+    clipped = true;
+    return {
+      ...goal,
+      evidence: `${evidence.slice(0, OVERVIEW_GOAL_EVIDENCE_CHARS)}… [+${evidence.length - OVERVIEW_GOAL_EVIDENCE_CHARS} chars]`,
+    };
+  });
+  return clipped
+    ? {
+        ...answer,
+        goals: shorter,
+        shortened: {
+          goalEvidence: `clipped to ${OVERVIEW_GOAL_EVIDENCE_CHARS} characters each`,
+        },
+      }
+    : answer;
+}
+
 /**
- * Shorten the named lists, largest first, until the answer fits `budget`.
- * Each list says how much of it was kept.
+ * Shorten the named lists, largest first, until the answer fits `budget`, and
+ * touch `lastResort` only once none of `lists` can shrink further. Each list
+ * says how much of it was kept, beside whatever `shortened` the answer carries.
  */
 export function fitToBudget(
   answer: Answer,
   lists: readonly string[],
   budget: number,
+  lastResort: readonly string[] = [],
 ): Answer {
   const out: Answer = { ...answer };
   const totals = new Map<string, number>();
-  for (const key of lists) {
+  for (const key of [...lists, ...lastResort]) {
     const list = out[key];
     if (Array.isArray(list)) {
       totals.set(key, list.length);
@@ -1201,7 +1229,7 @@ export function fitToBudget(
   // The `shortened` note is part of what is measured: added after the loop,
   // it could carry a fitted answer past the budget.
   const noted = (candidate: Answer): Answer => {
-    const kept: Record<string, string> = {};
+    const kept: Record<string, unknown> = { ...asRecord(answer.shortened) };
     for (const [key, total] of totals) {
       const length = (candidate[key] as unknown[]).length;
       if (length < total) {
@@ -1212,17 +1240,22 @@ export function fitToBudget(
       ? candidate
       : { ...candidate, shortened: kept };
   };
-  while (bytes(noted(out)) > budget) {
+  const longestOf = (keys: readonly string[]): string | null => {
     let longest: string | null = null;
-    for (const key of totals.keys()) {
-      const list = out[key] as unknown[];
+    for (const key of keys) {
+      const list = out[key];
       if (
-        list.length > 1 &&
+        totals.has(key) &&
+        (list as unknown[]).length > 1 &&
         (longest === null || bytes(list) > bytes(out[longest]))
       ) {
         longest = key;
       }
     }
+    return longest;
+  };
+  while (bytes(noted(out)) > budget) {
+    const longest = longestOf(lists) ?? longestOf(lastResort);
     if (longest === null) {
       break;
     }

@@ -18,7 +18,11 @@ import { buildChildEnv, registerIsolatedEnvKeys } from '../utils/child-env';
 import { childProcessHandle } from '../utils/child-handle';
 import { trackDetachedChild } from '../utils/child-journal';
 import { createGroupTerminator } from '../utils/kill-tree';
-import type { ModelPrice, ModelPriceLookup } from '../utils/model-prices';
+import type {
+  ModelPrice,
+  ModelPriceLookup,
+  ModelPriceRates,
+} from '../utils/model-prices';
 import {
   ollamaBaseUrl,
   ollamaModelName,
@@ -367,6 +371,24 @@ export abstract class AgentAdapter {
       return null;
     }
     return this.options.prices?.priceOf(listPrice.provider, model) ?? null;
+  }
+
+  /**
+   * The rates a turn of `model` is billed at on this CLI, for telling a bill
+   * apart by token class; null when the catalog has no list price for it.
+   */
+  billingRatesOf(model: string | null): ModelPriceRates | null {
+    const price = this.listPriceOf(model);
+    const listPrice = this.getConfig().usage.listPrice;
+    if (price === null || listPrice.kind !== 'catalog') {
+      return null;
+    }
+    return listPrice.cacheWriteInputMultiple === undefined
+      ? price
+      : {
+          ...price,
+          cacheWrite: price.input * listPrice.cacheWriteInputMultiple,
+        };
   }
 
   /**

@@ -41,6 +41,11 @@ describe('threadAnalysisGuide', () => {
     expect(guide).not.toContain('O-1');
   });
 
+  it('points a team thread at view=spend for what the team cost, and a plain chat at none', () => {
+    expect(threadAnalysisGuide('team', null, true)).toContain('view=spend');
+    expect(threadAnalysisGuide('chat', null, true)).not.toContain('view=spend');
+  });
+
   it("has a team thread assess each member as one run's thin sample, and a plain chat none", () => {
     const team = threadAnalysisGuide('team', null, true);
     const chat = threadAnalysisGuide('chat', null, true);
@@ -196,6 +201,18 @@ describe('teamAnalysisGuide', () => {
     expect(guide).toContain('recommend nothing from a single sample');
     expect(guide).toContain('8. Team structure.');
     expect(guide).toContain('its `runId` and seq');
+  });
+
+  it('reads a version diff by section="diff" in its History step, which pages by section and not by offset, and names view=spend', () => {
+    const guide = teamAnalysisGuide(null, true);
+    const history = guide.slice(
+      guide.indexOf('1. History. Read view=history first'),
+      guide.indexOf('2. Compare the runs. Read view=runs next'),
+    );
+
+    expect(history).toContain('section="diff" version=N');
+    expect(history).not.toContain('next.offset` when it comes in chunks');
+    expect(guide).toContain('view=spend');
   });
 
   it('has the analyst judge the earlier changes by their runs and not repeat what the user passed over', () => {

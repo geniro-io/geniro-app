@@ -5543,6 +5543,13 @@ export type AdapterListPrice =
        * catalog states the vendor API's limit, and a CLI can apply its own.
        */
       readonly catalogWindows: boolean;
+      /**
+       * The catalog's `cache_write` is the vendor's shortest cache lifetime; a
+       * CLI that writes a longer one is billed this multiple of `input` instead.
+       * Read to apportion a bill among token classes (`billingRatesOf`), never to
+       * price a turn.
+       */
+      readonly cacheWriteInputMultiple?: number;
     }
   | {
       readonly kind: 'unavailable';

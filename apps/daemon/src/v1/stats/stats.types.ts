@@ -423,6 +423,80 @@ export interface TeamHistory {
   members: TeamStatsMemberWire[];
 }
 
+/** A set of ledger rows' spend. Every money and token figure is null when no row reported it. */
+export interface SpendFigures {
+  /** The runs with a ledger row in this set. */
+  runs: number;
+  /** Of those, the runs that reported or polled a cost. */
+  pricedRuns: number;
+  turns: number;
+  costUsd: number | null;
+  /** `costUsd` over `pricedRuns`. */
+  avgCostPerRunUsd: number | null;
+  /** Of `costUsd`, the part geniro priced from tokens rather than read off the CLI. */
+  estimatedCostUsd: number | null;
+  inputUsd: number | null;
+  cacheReadUsd: number | null;
+  cacheWriteUsd: number | null;
+  outputUsd: number | null;
+  /** Polled money and turns of a model with no list price; the five parts sum to `costUsd` before each is rounded to the cent. */
+  notSplitUsd: number | null;
+  inputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  outputTokens: number | null;
+  /** Turns with a heavy cache write that wrote more than they read. */
+  cacheMissTurns: number;
+  /** Turns that wrote at least `CACHE_HEAVY_WRITE_TOKENS` to the cache. */
+  heavyWriteTurns: number;
+}
+
+/** A named part of a team's spend over the whole population and its recent window. */
+export interface SpendBreakdown {
+  all: SpendFigures;
+  /** Null when this part has no row in the window. */
+  last30Days: SpendFigures | null;
+}
+
+/** One team's spend, as an analysis reads it (`read_analyzed_thread` view=spend). */
+export interface TeamSpend {
+  team: string;
+  asOf: string;
+  method: string;
+  population: {
+    covers: string;
+    runs: number;
+    runsWithUsage: number;
+    firstAt: string | null;
+    lastAt: string | null;
+  };
+  windows: ({
+    window: 'all' | 'last30Days' | 'analysedRuns';
+    covers: string;
+    from: string | null;
+    to: string;
+  } & SpendFigures)[];
+  byProject: ({
+    project: string | null;
+    folder: string | null;
+  } & SpendBreakdown)[];
+  byMember: ({ member: string | null } & SpendBreakdown)[];
+  byModel: ({ agent: string | null; model: string | null } & SpendBreakdown)[];
+  largestCacheWrites: {
+    runId: string;
+    seq: number;
+    member: string | null;
+    model: string | null;
+    at: string;
+    cacheWriteTokens: number;
+    cacheReadTokens: number | null;
+    costUsd: number | null;
+    /** Whether this analysis can read the run's rows (view=item runId=…). */
+    analysed: boolean;
+  }[];
+  next: string;
+}
+
 /** One `team_versions` row. */
 export interface TeamVersionGraph {
   version: string;

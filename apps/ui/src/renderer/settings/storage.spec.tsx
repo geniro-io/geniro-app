@@ -219,6 +219,65 @@ describe('Storage', () => {
     expect(container.textContent).not.toContain('Every chat transcript');
   });
 
+  it('folds the bar, the breakdown and the folder path of the In use card', async () => {
+    const api = {
+      getStorageUsage: vi.fn(() => Promise.resolve(usage())),
+      getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
+      cleanStorage: vi.fn(),
+    };
+    await act(async () => root.render(<Storage api={api} remote={false} />));
+    await flush();
+    const legend = (): (string | null)[] =>
+      [...container.querySelectorAll('li')].map((row) => row.textContent);
+
+    expect(buttonNamed('Measure again').disabled).toBe(false);
+    expect(buttonNamed('In use —').getAttribute('aria-expanded')).toBe('false');
+    expect(legend()).not.toContain('Database9.0 GB');
+    expect(container.querySelector('.h-1\\.5.bg-muted')).toBeNull();
+    expect(container.textContent).not.toContain(
+      '/Users/me/Library/Application Support/Geniro',
+    );
+
+    await unfold('In use —');
+
+    expect(buttonNamed('In use —').getAttribute('aria-expanded')).toBe('true');
+    expect(legend()).toContain('Database9.0 GB');
+    expect(legend()).toContain('Task worktrees1.4 GB');
+    expect(container.querySelector('.h-1\\.5.bg-muted')).not.toBeNull();
+    expect(container.textContent).toContain(
+      '/Users/me/Library/Application Support/Geniro',
+    );
+    expect(buttonNamed('Measure again').disabled).toBe(false);
+  });
+
+  it('stacks the archived chats row until it fits, wrapping its picker and button', async () => {
+    const api = {
+      getStorageUsage: vi.fn(() => Promise.resolve(usage())),
+      getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
+      cleanStorage: vi.fn(),
+    };
+    await act(async () => root.render(<Storage api={api} remote={false} />));
+    await flush();
+
+    const picker = container.querySelector(
+      '[aria-label="Which archived chats to delete"]',
+    );
+    const wrapping = picker?.closest('.flex-wrap');
+    expect(wrapping?.classList.contains('min-w-0')).toBe(true);
+    expect(wrapping?.contains(buttonNamed('Delete 300 chats'))).toBe(true);
+    expect(picker?.closest('.w-60')?.classList.contains('max-w-full')).toBe(
+      true,
+    );
+    expect(
+      buttonNamed('Archived chats — 778').closest(
+        '[class*="@[38rem]:flex-row"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      buttonNamed('Database — 9.0 GB').closest('[class*="@[38rem]:flex-row"]'),
+    ).toBeNull();
+  });
+
   it('counts the chosen period before any press, defaulting to older than 30 days', async () => {
     const api = {
       getStorageUsage: vi.fn(() => Promise.resolve(usage())),

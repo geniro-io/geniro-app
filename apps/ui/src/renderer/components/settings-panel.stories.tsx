@@ -75,6 +75,22 @@ export const WithDetails: Story = {
   ),
 };
 
+/** A control too wide to sit beside its name until the row has `38rem`. */
+export const WideControl: Story = {
+  render: () => (
+    <SettingsPanel>
+      <SettingsPanelRow layout="wide" label="Archived chats — 40">
+        <Button size="sm" variant="outline">
+          Older than 30 days
+        </Button>
+        <Button size="sm" variant="destructive">
+          Delete 29 chats
+        </Button>
+      </SettingsPanelRow>
+    </SettingsPanel>
+  ),
+};
+
 /** Several rows, which is the arrangement the divider and the enclosure are for. */
 export const Stacked: Story = {
   render: () => (

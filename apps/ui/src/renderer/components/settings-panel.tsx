@@ -96,11 +96,15 @@ const settingsPanelRow = cva('flex flex-col gap-2 px-4 py-3', {
      * unusable. The threshold is where a description still holds a short line
      * beside the widest control these rows carry.
      *
+     * `wide` is `inline` for a control past that widest one, which would crush
+     * the name at `26rem`: it stacks until `38rem`.
+     *
      * `block` is for content that IS the width — a textarea, a run of swatches
      * — where the label sits above it and nothing is right-aligned.
      */
     layout: {
       inline: '@[26rem]:flex-row @[26rem]:items-center @[26rem]:gap-4',
+      wide: '@[38rem]:flex-row @[38rem]:items-center @[38rem]:gap-4',
       block: '',
     },
   },
@@ -109,7 +113,7 @@ const settingsPanelRow = cva('flex flex-col gap-2 px-4 py-3', {
 
 const settingsPanelHeading = cva('flex min-w-0 flex-col gap-0.5', {
   variants: {
-    layout: { inline: '@[26rem]:flex-1', block: '' },
+    layout: { inline: '@[26rem]:flex-1', wide: '@[38rem]:flex-1', block: '' },
   },
   defaultVariants: { layout: 'inline' },
 });
@@ -118,6 +122,7 @@ const settingsPanelControl = cva('flex min-w-0 items-center gap-2', {
   variants: {
     layout: {
       inline: '@[26rem]:shrink-0 @[26rem]:justify-end',
+      wide: '@[38rem]:shrink-0 @[38rem]:justify-end',
       block: 'w-full flex-col items-stretch',
     },
   },

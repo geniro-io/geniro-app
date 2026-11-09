@@ -522,10 +522,13 @@ export function Storage({
         <SettingsPanelRow
           label={`In use — ${formatBytes(total)}`}
           details={
-            <span className="flex items-center gap-1">
-              <span className="min-w-0 break-all">{daemon.root}</span>
-              <CopyButton text={daemon.root} label="Copy the folder path" />
-            </span>
+            <>
+              <SegmentBreakdown segments={segments} denominator={total} />
+              <span className="flex items-center gap-1">
+                <span className="min-w-0 break-all">{daemon.root}</span>
+                <CopyButton text={daemon.root} label="Copy the folder path" />
+              </span>
+            </>
           }>
           <Button
             size="sm"
@@ -534,9 +537,6 @@ export function Storage({
             onClick={() => void measure()}>
             {loading ? <Spinner /> : <RefreshCw />} Measure again
           </Button>
-        </SettingsPanelRow>
-        <SettingsPanelRow layout="block">
-          <SegmentBreakdown segments={segments} denominator={total} />
         </SettingsPanelRow>
         {running && job !== null ? (
           <SettingsPanelRow layout="block">
@@ -666,40 +666,43 @@ function ArchivedChatsRow({
   }
   return (
     <SettingsPanelRow
+      layout="wide"
       label={`Archived chats — ${total}`}
       details={
         <StorageDetails about="A chat deleted here loses its transcript, its files and its agent conversation for good. Age counts from when a chat was archived, not when it was last used; chats archived more recently than the period you pick stay. Compact the database afterwards to give the space back to the disk." />
       }>
-      <div className="w-60 shrink-0">
-        <Select
-          aria-label="Which archived chats to delete"
-          value={chosen}
-          triggerLabel={periodLabel(period)}
-          disabled={disabled}
-          groups={[
-            {
-              label: 'Delete archived chats',
-              items: periods.map((candidate) => ({
-                value: periodKey(candidate),
-                label: `${periodLabel(candidate)} · ${candidate.count}`,
-              })),
-            },
-          ]}
-          onValueChange={setChosen}
-        />
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <div className="w-60 max-w-full shrink-0">
+          <Select
+            aria-label="Which archived chats to delete"
+            value={chosen}
+            triggerLabel={periodLabel(period)}
+            disabled={disabled}
+            groups={[
+              {
+                label: 'Delete archived chats',
+                items: periods.map((candidate) => ({
+                  value: periodKey(candidate),
+                  label: `${periodLabel(candidate)} · ${candidate.count}`,
+                })),
+              },
+            ]}
+            onValueChange={setChosen}
+          />
+        </div>
+        <ConfirmActionButton
+          disabled={disabled || period.count === 0}
+          {...archivedConfirmOf(period)}
+          confirmLabel="Delete"
+          busyLabel="Deleting…"
+          onConfirm={() => onDelete(period.archivedBefore)}>
+          {cleanLabel({
+            target: StorageCleanTarget.ArchivedChats,
+            count: period.count,
+            bytes: null,
+          })}
+        </ConfirmActionButton>
       </div>
-      <ConfirmActionButton
-        disabled={disabled || period.count === 0}
-        {...archivedConfirmOf(period)}
-        confirmLabel="Delete"
-        busyLabel="Deleting…"
-        onConfirm={() => onDelete(period.archivedBefore)}>
-        {cleanLabel({
-          target: StorageCleanTarget.ArchivedChats,
-          count: period.count,
-          bytes: null,
-        })}
-      </ConfirmActionButton>
     </SettingsPanelRow>
   );
 }

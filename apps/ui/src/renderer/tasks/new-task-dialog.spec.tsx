@@ -42,7 +42,12 @@ afterEach(() => {
 const context = (over: Partial<TaskFieldsContext> = {}): TaskFieldsContext => ({
   project: {
     target: 'claude',
-    runConfig: { model: null, effort: null, approval: null },
+    runConfig: {
+      model: null,
+      effort: null,
+      modelParameters: {},
+      approval: null,
+    },
     folder: '/repo',
   },
   teams: [],

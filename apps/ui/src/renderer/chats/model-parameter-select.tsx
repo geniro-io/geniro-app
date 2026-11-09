@@ -109,6 +109,7 @@ export function ModelParameterSelect({
     ...parameter.values.map((option) => ({
       value: option.id,
       label: option.label,
+      subLabel: option.description,
     })),
     ...(refused
       ? [{ value, label: value, disabled: true, hint: 'unavailable' }]

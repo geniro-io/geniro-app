@@ -81,7 +81,7 @@ export class ModelParametersService {
     // adapter says whether its own account is a directory at all.
     const profile = this.adapters.for(kind).vocabularyProfile(configDir);
     return this.cache.read(kind, model, profile, version, (previous) =>
-      this.fetch(kind, model, previous),
+      this.fetch(kind, model, configDir, previous),
     );
   }
 
@@ -101,19 +101,25 @@ export class ModelParametersService {
   private async fetch(
     kind: AgentKind,
     model: string | null,
+    configDir: string | null,
     previous: AgentModelParameterListing | undefined,
   ): Promise<
     AgentModelParameterListing | VolatileAnswer<AgentModelParameterListing>
   > {
     const adapter = this.adapters.for(kind);
     try {
-      return await adapter.listModelParameters(model, {
+      const listing = await adapter.listModelParameters(model, {
+        configDir,
         onSpawn: (child, spawnInfo) =>
           this.processes.register(
             `model-parameters:list:${randomUUID()}`,
             childProcessHandle(child, spawnInfo),
           ),
       });
+      // Nothing was learned from an ask that failed; the next one asks again.
+      return listing.exact || listing.parameters.length > 0
+        ? listing
+        : volatile(listing);
     } catch (err) {
       // An adapter must not throw here. Keep the last good answer rather than
       // propagate: losing the list costs the user every chip on the row.

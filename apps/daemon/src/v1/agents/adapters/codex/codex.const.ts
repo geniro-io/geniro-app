@@ -59,6 +59,19 @@ export const CODEX_DEFAULT_HOME_DIR_NAME = '.codex';
  */
 export const CODEX_CONTEXT_WINDOW_KEY = 'model_context_window';
 
+/** codex's config key for a speed tier, and the `modelParameters` id of that axis. */
+export const CODEX_SERVICE_TIER_KEY = 'service_tier';
+/** The tier id that means standard speed (`turn/start` `serviceTierForTurn`). */
+export const CODEX_STANDARD_SERVICE_TIER = 'default';
+/** Both spellings codex takes for Fast; `model/list` and replies say `priority`. */
+export const CODEX_FAST_SERVICE_TIERS: readonly string[] = ['priority', 'fast'];
+/**
+ * OpenAI's list price for Fast against Standard, which models.dev does not
+ * state: `developers.openai.com/api/docs/guides/fast-mode` gives 2x for GPT-5.6
+ * Sol, and its Codex page 2x for credits on every supported model.
+ */
+export const CODEX_FAST_PRICE_FACTOR = 2;
+
 /**
  * codex's own model catalog, which it refreshes into its home — the ONLY place
  * a model's default and maximum windows are written down: `model/list`

@@ -88,6 +88,44 @@ function notices(events: AgentEvent[]) {
   return events.filter((event) => event.type === 'notice');
 }
 
+describe('the speed tier a turn asks for', () => {
+  function started(modelParameters?: Record<string, string>) {
+    const { session, request } = openConversation({
+      prompt: 'Hello',
+      cwd: '/repo',
+      model: 'gpt-6.1-sol',
+      modelParameters,
+    });
+    session.onMessage({
+      id: request('thread/start')!.id,
+      result: { thread: { id: THREAD }, model: 'gpt-6.1-sol' },
+    });
+    return request;
+  }
+
+  it('rides that one turn and never the thread, so nothing outlives it', () => {
+    const request = started({ service_tier: 'priority' });
+
+    expect(request('turn/start')!.params).toMatchObject({
+      serviceTierForTurn: 'priority',
+    });
+    expect(request('turn/start')!.params).not.toHaveProperty('serviceTier');
+    expect(request('thread/start')!.params).not.toHaveProperty('serviceTier');
+  });
+
+  it('turns Fast off as an explicit standard tier', () => {
+    expect(
+      started({ service_tier: 'default' })('turn/start')!.params,
+    ).toMatchObject({ serviceTierForTurn: 'default' });
+  });
+
+  it('asks for no tier when none is chosen, leaving the thread’s own', () => {
+    expect(started()('turn/start')!.params).not.toHaveProperty(
+      'serviceTierForTurn',
+    );
+  });
+});
+
 describe('the model codex reports for a turn', () => {
   it('posts one notice across the thread and usage reports, naming both ids', () => {
     const { session, events } = conversation('gpt-5.5', 'gpt-5.4');

@@ -250,6 +250,11 @@ export const TaskWireSchema = z.object({
   ),
   model: z.string().nullable(),
   effort: z.string().nullable(),
+  modelParameters: z
+    .record(z.string(), z.string())
+    .describe(
+      "Every other model setting this card runs with, keyed by the CLI's own parameter id; {} means take the project's",
+    ),
   approval: ChatApprovalModeSchema.nullable(),
   configDir: z.string().nullable(),
   teamSlug: z

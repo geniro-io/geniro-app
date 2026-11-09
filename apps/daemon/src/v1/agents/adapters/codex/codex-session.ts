@@ -93,6 +93,8 @@ export class CodexSession implements TurnDriver {
   threadId: string | null = null;
   /** The model the thread runs on, as codex last stated it. */
   threadModel: string | null = null;
+  /** The speed tier the thread runs on, as codex last stated it. */
+  threadServiceTier: string | null = null;
   /** The newest token reading — the window's size between turns. */
   lastUsage: CodexTokenUsage | null = null;
   /**

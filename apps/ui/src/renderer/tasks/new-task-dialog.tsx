@@ -66,6 +66,7 @@ function blankDraft(status: string): TaskFieldsValue {
     teamSlug: null,
     model: null,
     effort: null,
+    modelParameters: {},
     approval: null,
     configDir: null,
   };
@@ -169,8 +170,16 @@ export function NewTaskDialog({
   };
 
   const submit = (): void => {
-    const { folder, agentKind, teamSlug, model, effort, approval, configDir } =
-      draft;
+    const {
+      folder,
+      agentKind,
+      teamSlug,
+      model,
+      effort,
+      modelParameters,
+      approval,
+      configDir,
+    } = draft;
     onCreate(
       {
         title: title.trim(),
@@ -189,6 +198,9 @@ export function NewTaskDialog({
         ...(teamSlug === null ? {} : { teamSlug }),
         ...(model === null ? {} : { model }),
         ...(effort === null ? {} : { effort }),
+        ...(Object.keys(modelParameters).length === 0
+          ? {}
+          : { modelParameters }),
         ...(approval === null ? {} : { approval }),
         ...(configDir === null ? {} : { configDir }),
       },

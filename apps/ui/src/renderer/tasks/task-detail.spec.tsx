@@ -791,6 +791,7 @@ describe('status', () => {
         teamSlug: null,
         model: null,
         effort: null,
+        modelParameters: {},
         approval: null,
         configDir: null,
       });

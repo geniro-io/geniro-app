@@ -31,6 +31,7 @@ Main process (git, task worktrees, **Daemon supervision**, **Terminal panel**, *
 
 **Board (`tasks/`):**
 
+- A card's Agent settings carry the model parameters the CLI offers (`TaskRunConfigRows`), each inherited from the project while the card names no model of its own (`resolveRunTarget`). A change of model or target clears them.
 - Card edits are optimistic (`useBoard.updateTask`). Never build the panel's fields from the saved card alone.
   - In-flight edits are re-applied over reloads.
   - An answer older than a newer edit is ignored.

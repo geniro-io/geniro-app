@@ -129,6 +129,10 @@ export class Task extends TimestampsEntity {
   @Property({ type: 'string', nullable: true })
   effort: string | null = null;
 
+  /** JSON `{parameterId: value}`, as `Project.modelParameters` stores it. */
+  @Property({ type: 'text', nullable: true })
+  modelParameters: string | null = null;
+
   @Property({ type: 'string', nullable: true })
   approval: ChatApprovalMode | null = null;
 

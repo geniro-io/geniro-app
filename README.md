@@ -84,7 +84,7 @@ bash /tmp/geniro-install.sh
 <td width="33%" valign="top">
 
 <b>💬 Chats</b><br>
-Pick the agent, model, effort, context window and approval mode. Queue follow-ups, import sessions from the CLIs, search every chat, and export to Markdown.
+Pick the agent, model, effort, context window, Fast mode (where the CLI offers it for that model) and approval mode. Queue follow-ups, import sessions from the CLIs, search every chat, and export to Markdown.
 
 </td>
 <td width="33%" valign="top">

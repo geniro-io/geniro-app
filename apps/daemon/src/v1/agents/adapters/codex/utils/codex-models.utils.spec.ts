@@ -11,6 +11,15 @@ const RESULT = {
       displayName: 'GPT-6-Astra',
       hidden: false,
       isDefault: true,
+      serviceTiers: [
+        {
+          id: 'priority',
+          name: 'Fast',
+          description: '2x speed, increased usage',
+        },
+        { name: 'no id, so not a tier' },
+      ],
+      defaultServiceTier: null,
       supportedReasoningEfforts: [
         { reasoningEffort: 'low', description: 'fast' },
         { reasoningEffort: 'ultra', description: 'slowest' },
@@ -23,6 +32,7 @@ const RESULT = {
       displayName: 'GPT-5.5',
       hidden: false,
       isDefault: false,
+      defaultServiceTier: 'priority',
       supportedReasoningEfforts: [
         { reasoningEffort: 'medium', description: '' },
       ],
@@ -43,11 +53,23 @@ describe('readCodexModels', () => {
           { id: 'low', label: 'low' },
           { id: 'ultra', label: 'ultra' },
         ],
+        isDefault: true,
+        serviceTiers: [
+          {
+            id: 'priority',
+            name: 'Fast',
+            description: '2x speed, increased usage',
+          },
+        ],
+        defaultServiceTier: null,
       },
       {
         id: 'gpt-5.5',
         label: 'GPT-5.5',
         efforts: [{ id: 'medium', label: 'medium' }],
+        isDefault: false,
+        serviceTiers: [],
+        defaultServiceTier: 'priority',
       },
     ]);
   });

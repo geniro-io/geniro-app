@@ -276,6 +276,39 @@ describe('TasksService (in-memory sqlite)', () => {
     expect(changes).toEqual([]);
   });
 
+  it('keeps a card’s model parameters and clears them with its model or agent', async () => {
+    const fast = { service_tier: 'priority' };
+    const task = await service.create({
+      projectId,
+      title: 'fast',
+      modelParameters: fast,
+    });
+    expect(task.modelParameters).toEqual(fast);
+
+    await expect(
+      service.update(task.id, { model: 'gpt-6.1-sol', modelParameters: fast }),
+    ).resolves.toMatchObject({ modelParameters: fast });
+    await expect(
+      service.update(task.id, { model: 'gpt-6.1-sol' }),
+    ).resolves.toMatchObject({ modelParameters: fast });
+    await expect(
+      service.update(task.id, { model: 'gpt-6-sol' }),
+    ).resolves.toMatchObject({ modelParameters: {} });
+
+    await service.update(task.id, { modelParameters: fast });
+    await expect(
+      service.update(task.id, { agentKind: 'codex' }),
+    ).resolves.toMatchObject({ modelParameters: {} });
+
+    await service.update(task.id, { modelParameters: fast });
+    await expect(
+      service.update(task.id, { title: 'renamed' }),
+    ).resolves.toMatchObject({ modelParameters: fast });
+    await expect(
+      service.update(task.id, { modelParameters: null }),
+    ).resolves.toMatchObject({ modelParameters: {} });
+  });
+
   it('emits on the task bus after a field update, naming its unchanged status', async () => {
     const task = await service.create({ projectId, title: 'ship it' });
     changes.length = 0;

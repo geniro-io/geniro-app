@@ -30,6 +30,7 @@ export function aTask(over: Partial<TaskDto> = {}): TaskDto {
     agentKind: null,
     model: null,
     effort: null,
+    modelParameters: {},
     approval: null,
     configDir: null,
     teamSlug: null,

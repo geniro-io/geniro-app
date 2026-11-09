@@ -5813,6 +5813,10 @@ export const AgentModelParameterValueWireSchema = z
       .string()
       .describe('Passed verbatim to the CLI as this parameter’s value'),
     label: z.string(),
+    description: z
+      .string()
+      .optional()
+      .describe('What picking it does, in the CLI’s own words'),
   })
   .meta({ id: 'AgentModelParameterValue' });
 

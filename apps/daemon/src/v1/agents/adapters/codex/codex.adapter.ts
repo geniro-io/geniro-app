@@ -29,6 +29,7 @@ import type {
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
+  AgentModelParameterListing,
   AgentModelsInput,
   AgentPlanLimits,
   AgentReportedCommand,
@@ -142,6 +143,10 @@ import {
   readCodexPlanLimitsReply,
 } from './utils/codex-plan-limits.utils';
 import { codexTurnPolicy } from './utils/codex-policy.utils';
+import {
+  codexModelParameterListing,
+  codexServiceTierArgs,
+} from './utils/codex-service-tier.utils';
 import { carryCodexSession } from './utils/codex-session-carry.utils';
 import {
   isCodexSubagentRecoveryRef,
@@ -779,6 +784,7 @@ export class CodexAdapter extends AgentAdapter {
           CODEX_CONFIG_FLAG,
           `${CODEX_REASONING_EFFORT_KEY}=${JSON.stringify(input.effort ?? CODEX_EXEC_ONCE_EFFORT)}`,
           ...this.contextWindowArgs(input),
+          ...codexServiceTierArgs(input.modelParameters),
           ...local.args,
           ...(model ? [CODEX_TITLE_MODEL_FLAG, model] : []),
           input.prompt,
@@ -862,6 +868,21 @@ export class CodexAdapter extends AgentAdapter {
     return entry === undefined || entry.efforts.length === 0
       ? superset
       : { efforts: entry.efforts, unavailableReason: null, exact: true };
+  }
+
+  /** The speed tiers ONE model offers, as it states them in `model/list`. */
+  override async listModelParameters(
+    model: string | null,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentModelParameterListing> {
+    const wanted = model?.trim() ?? '';
+    if (wanted.startsWith('ollama/')) {
+      return super.listModelParameters(model, options);
+    }
+    return codexModelParameterListing(
+      wanted === '' ? null : wanted,
+      await this.readModels(options.configDir ?? null, options),
+    );
   }
 
   /**

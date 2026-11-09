@@ -769,6 +769,7 @@ export function Tasks({
               : {
                   model: openTaskProject.model,
                   effort: openTaskProject.effort,
+                  modelParameters: openTaskProject.modelParameters,
                   approval: openTaskProject.approval,
                 }
           }
@@ -883,6 +884,7 @@ export function Tasks({
               runConfig: {
                 model: openProject.model,
                 effort: openProject.effort,
+                modelParameters: openProject.modelParameters,
                 approval: openProject.approval,
               },
               folder: openProject.folder,

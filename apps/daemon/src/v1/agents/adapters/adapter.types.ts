@@ -2183,6 +2183,8 @@ export interface AgentModelParameter {
 export interface AgentModelParameterValue {
   id: string;
   label: string;
+  /** What picking it does, in the CLI's own words. */
+  description?: string;
 }
 
 /**

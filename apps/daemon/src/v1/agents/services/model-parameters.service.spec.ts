@@ -118,6 +118,29 @@ describe('ModelParametersService — when the adapter throws', () => {
     expect(recovered).toEqual(OPTIMIZE_FOR);
   });
 
+  it('asks again after an ask that failed, and hands the adapter the profile', async () => {
+    const { parameters, cursor } = service({ ttlMs: 10 * 60_000 });
+    const ask = vi
+      .spyOn(cursor, 'listModelParameters')
+      .mockResolvedValueOnce({
+        parameters: [],
+        unavailableReason: 'could not be asked',
+        exact: false,
+      })
+      .mockResolvedValue(OPTIMIZE_FOR);
+
+    await parameters.list('cursor-agent', 'auto-smart', '/profiles/work');
+    const recovered = await parameters.list(
+      'cursor-agent',
+      'auto-smart',
+      '/profiles/work',
+    );
+
+    expect(recovered).toEqual(OPTIMIZE_FOR);
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(ask.mock.calls[0]?.[1]?.configDir).toBe('/profiles/work');
+  });
+
   it('remembers the answer it DID get, so a good listing is asked once', async () => {
     // The other half of the volatile rule: a real answer must still be cached,
     // or the fix above would have been "never cache anything".

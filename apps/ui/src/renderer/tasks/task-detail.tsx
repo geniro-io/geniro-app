@@ -187,6 +187,7 @@ export function TaskDetail({
   projectRunConfig?: {
     model: string | null;
     effort: string | null;
+    modelParameters: TaskDto['modelParameters'];
     approval: TaskDto['approval'];
   } | null;
   /**
@@ -220,6 +221,7 @@ export function TaskDetail({
     teamSlug?: string | null;
     model?: string | null;
     effort?: string | null;
+    modelParameters?: TaskDto['modelParameters'];
     approval?: TaskDto['approval'];
     configDir?: string | null;
   }) => void;

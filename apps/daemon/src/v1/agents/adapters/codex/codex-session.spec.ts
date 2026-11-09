@@ -3342,6 +3342,8 @@ describe('what a turn spends', () => {
 
   function pricedSession(
     facts: { threadId: string; patch: Record<string, unknown> }[] = [],
+    input = turnInput(),
+    serviceTier?: string,
   ): CodexSession {
     const session = new CodexSession(
       {
@@ -3354,7 +3356,7 @@ describe('what a turn spends', () => {
         onThreadFacts: (threadId, patch) =>
           void facts.push({ threadId, patch: { ...patch } }),
       },
-      turnInput(),
+      input,
     );
     session.onStdinReady(io());
     feed(session, {
@@ -3362,6 +3364,7 @@ describe('what a turn spends', () => {
       result: {
         thread: { id: THREAD },
         model: 'gpt-5.5',
+        serviceTier,
         instructionSources: ['/home/u/.codex/AGENTS.md', '/repo/AGENTS.md'],
       },
     });
@@ -3391,6 +3394,32 @@ describe('what a turn spends', () => {
     );
     return terminal && 'usage' in terminal ? terminal.usage : undefined;
   };
+
+  it.each([
+    ['at standard speed', undefined, undefined, 1],
+    ['at the tier it asked for', { service_tier: 'priority' }, undefined, 2],
+    ['at the tier its thread runs on', undefined, 'priority', 2],
+    [
+      'at standard over a Fast thread',
+      { service_tier: 'default' },
+      'priority',
+      1,
+    ],
+  ])('prices a turn %s', (_name, modelParameters, threadTier, factor) => {
+    const session = pricedSession(
+      [],
+      turnInput({ modelParameters }),
+      threadTier,
+    );
+    feed(session, {
+      method: 'thread/tokenUsage/updated',
+      params: usage(16_000, 36_000),
+    });
+    expect(usageOf(settle(session, 'completed'))?.costUsd).toBeCloseTo(
+      0.0648 * factor,
+      10,
+    );
+  });
 
   it('records what a STOPPED turn spent on its turn_cancelled', () => {
     const session = pricedSession();

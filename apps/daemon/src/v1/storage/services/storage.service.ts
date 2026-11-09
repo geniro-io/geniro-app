@@ -12,6 +12,7 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ChatService } from '../../agents/services/chat.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { archivedCutoff } from '../../agents/utils/archived-cutoff';
 import {
   DEBUG_LOG_DIR_NAME,
   debugSink,
@@ -23,7 +24,6 @@ import {
   type SeenInodes,
   STORAGE_GROUP_IDS,
   type StorageArchivedPeriod,
-  type StorageArchivedWindow,
   type StorageClassifier,
   type StorageCleanOption,
   type StorageCleanTarget,
@@ -33,10 +33,6 @@ import {
   type StorageJob,
   type StorageUsage,
 } from '../storage.types';
-import {
-  ARCHIVED_PERIOD_DAYS,
-  archivedPeriodWindow,
-} from '../utils/archived-periods';
 import { listNames, measurePath, newSeenInodes } from '../utils/disk-usage';
 import {
   COMPACTION_MARKER_FILE,
@@ -53,6 +49,8 @@ import { vacuumDatabase } from '../utils/vacuum-database';
 export const ORPHAN_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 
 const DATABASE_FILE_SUFFIXES = ['', '-wal', '-shm'] as const;
+
+const ARCHIVED_PERIOD_DAYS = [7, 30, 60, 90] as const;
 
 /** better-sqlite3's `pragma`, which `getNativeClient()` hands back untyped. */
 interface SqlitePragmas {
@@ -208,9 +206,9 @@ export class StorageService {
    */
   async start(
     target: StorageCleanTarget,
-    archivedWindow?: StorageArchivedWindow,
+    archivedBefore?: string,
   ): Promise<StorageJob> {
-    const work = this.workOf(target, archivedWindow);
+    const work = this.workOf(target, archivedBefore);
     if (
       this.current?.state === 'running' ||
       this.current?.state === 'scheduled'
@@ -327,28 +325,25 @@ export class StorageService {
   }
 
   /**
-   * Archived chats are never deleted without a window: a client that names none
+   * Archived chats are never deleted without a cutoff: a client that names none
    * is refused rather than read as "all of them".
    */
   private workOf(
     target: StorageCleanTarget,
-    archivedWindow: StorageArchivedWindow | undefined,
+    archivedBefore: string | undefined,
   ): () => Promise<CleanOutcome> {
     if (target !== 'archivedChats') {
       return () => this.perform(target);
     }
-    if (archivedWindow === undefined) {
+    if (archivedBefore === undefined) {
       throw new BadRequestException(
-        'STORAGE_WINDOW_REQUIRED',
+        'STORAGE_CUTOFF_REQUIRED',
         'say which archived chats to delete',
       );
     }
-    const window = {
-      from: archivedWindow.from === null ? null : new Date(archivedWindow.from),
-      to: new Date(archivedWindow.to),
-    };
+    const cutoff = new Date(archivedBefore);
     return async () => {
-      const { deleted } = await this.chats.sweepArchivedInWindow(window);
+      const { deleted } = await this.chats.sweepArchivedBefore(cutoff);
       return { removed: deleted, freedBytes: null };
     };
   }
@@ -387,14 +382,11 @@ export class StorageService {
     const em = this.em.fork();
     const periods: StorageArchivedPeriod[] = [];
     for (const days of [...ARCHIVED_PERIOD_DAYS, null]) {
-      const window = archivedPeriodWindow(days, now);
+      const cutoff = archivedCutoff(days ?? 0, now);
       periods.push({
         days,
-        count: await this.runDao.countArchivedInWindow(window, em),
-        window: {
-          from: window.from?.toISOString() ?? null,
-          to: window.to.toISOString(),
-        },
+        count: await this.runDao.countArchivedBefore(cutoff, em),
+        archivedBefore: cutoff.toISOString(),
       });
     }
     return periods;

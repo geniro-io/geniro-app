@@ -5,7 +5,6 @@ import type { AppStorageUsage, StorageWorktree } from '../../shared/contracts';
 import {
   type StorageApi,
   type StorageArchivedPeriod,
-  type StorageArchivedWindow,
   type StorageCleanOption,
   StorageCleanTarget,
   type StorageGroup,
@@ -152,7 +151,7 @@ function periodKey(period: StorageArchivedPeriod): string {
 function periodLabel(period: StorageArchivedPeriod): string {
   return period.days === null
     ? 'All archived'
-    : `Archived in the last ${period.days} days`;
+    : `Older than ${period.days} days`;
 }
 
 function chatCount(count: number): string {
@@ -164,7 +163,7 @@ function archivedConfirmOf(period: StorageArchivedPeriod): {
   question: string;
   description: string;
 } {
-  if (period.window.from === null) {
+  if (period.days === null) {
     return {
       question:
         period.count === 1
@@ -174,12 +173,13 @@ function archivedConfirmOf(period: StorageArchivedPeriod): {
         'Every archived chat and everything it holds are deleted for good. Chats that are not archived stay. This cannot be undone.',
     };
   }
-  const since = new Date(period.window.from).toLocaleDateString('en-US', {
+  const cutoff = new Date(period.archivedBefore).toLocaleString('en-US', {
     dateStyle: 'medium',
+    timeStyle: 'short',
   });
   return {
-    question: `Delete ${chatCount(period.count)} archived in the last ${period.days} days?`,
-    description: `Only chats you archived since ${since} are deleted, with everything they hold. Chats archived before then, and chats that are not archived, stay. This cannot be undone.`,
+    question: `Delete ${chatCount(period.count)} older than ${period.days} days?`,
+    description: `Chats you archived more than ${period.days} days ago (before ${cutoff}) are deleted with everything they hold. Chats archived more recently, and chats that are not archived, stay. This cannot be undone.`,
   };
 }
 
@@ -374,7 +374,7 @@ export function Storage({
 
   const clean = async (
     target: StorageCleanTarget,
-    archivedWindow?: StorageArchivedWindow,
+    archivedBefore?: string,
   ): Promise<void> => {
     if (api === null) {
       return;
@@ -383,7 +383,7 @@ export function Storage({
     setNotice(null);
     try {
       const started = await api.cleanStorage({
-        storageCleanDto: { target, archivedWindow },
+        storageCleanDto: { target, archivedBefore },
       });
       setReading((current) =>
         current === null
@@ -556,8 +556,8 @@ export function Storage({
             total={daemon.chats.archived}
             periods={daemon.chats.archivedPeriods}
             disabled={busy}
-            onDelete={(window) =>
-              clean(StorageCleanTarget.ArchivedChats, window)
+            onDelete={(archivedBefore) =>
+              clean(StorageCleanTarget.ArchivedChats, archivedBefore)
             }
           />
         )}
@@ -656,7 +656,7 @@ function ArchivedChatsRow({
   total: number;
   periods: readonly StorageArchivedPeriod[];
   disabled: boolean;
-  onDelete: (window: StorageArchivedWindow) => Promise<void>;
+  onDelete: (archivedBefore: string) => Promise<void>;
 }): React.JSX.Element | null {
   const [chosen, setChosen] = useState(DEFAULT_ARCHIVED_PERIOD);
   const period =
@@ -668,7 +668,7 @@ function ArchivedChatsRow({
     <SettingsPanelRow
       label={`Archived chats — ${total}`}
       details={
-        <StorageDetails about="A chat deleted here loses its transcript, its files and its agent conversation for good. Periods count from when a chat was archived, not when it was last used. Compact the database afterwards to give the space back to the disk." />
+        <StorageDetails about="A chat deleted here loses its transcript, its files and its agent conversation for good. Age counts from when a chat was archived, not when it was last used; chats archived more recently than the period you pick stay. Compact the database afterwards to give the space back to the disk." />
       }>
       <div className="w-60 shrink-0">
         <Select
@@ -678,7 +678,7 @@ function ArchivedChatsRow({
           disabled={disabled}
           groups={[
             {
-              label: 'Delete chats',
+              label: 'Delete archived chats',
               items: periods.map((candidate) => ({
                 value: periodKey(candidate),
                 label: `${periodLabel(candidate)} · ${candidate.count}`,
@@ -693,7 +693,7 @@ function ArchivedChatsRow({
         {...archivedConfirmOf(period)}
         confirmLabel="Delete"
         busyLabel="Deleting…"
-        onConfirm={() => onDelete(period.window)}>
+        onConfirm={() => onDelete(period.archivedBefore)}>
         {cleanLabel({
           target: StorageCleanTarget.ArchivedChats,
           count: period.count,

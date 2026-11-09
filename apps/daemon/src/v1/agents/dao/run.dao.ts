@@ -5,7 +5,6 @@ import { BaseDao } from '@packages/mikroorm';
 import { Run } from '../../runs/entity/run.entity';
 import { baseTeamSnapshotOf } from '../../teams/utils/team-snapshot';
 import type {
-  ArchivedWindow,
   ChatListScope,
   ContextLevel,
   PromptCacheTtlReason,
@@ -328,7 +327,7 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * Every ARCHIVED run shelved inside `window`, oldest first — both kinds.
+   * Every ARCHIVED run shelved at or before `cutoff`, oldest first — both kinds.
    *
    * TWO columns rather than whole rows: every one of them is about to be
    * destroyed, so hydrating entities buys nothing and a long archive would load
@@ -345,11 +344,11 @@ export class RunDao extends BaseDao<Run> {
    * window, so the next sweep resumes rather than starting over on rows it has
    * already reached.
    */
-  async archivedRunsInWindow(
-    window: ArchivedWindow,
+  async archivedRunsBefore(
+    cutoff: Date,
     txEm?: EntityManager,
   ): Promise<{ id: string; teamId: string | null }[]> {
-    const rows = await this.getRepo(txEm).find(archivedInWindow(window), {
+    const rows = await this.getRepo(txEm).find(archivedAtOrBefore(cutoff), {
       fields: ['id', 'teamId'],
       orderBy: { archivedAt: 'asc' },
       disableIdentityMap: true,
@@ -357,12 +356,12 @@ export class RunDao extends BaseDao<Run> {
     return rows.map((run) => ({ id: run.id, teamId: run.teamId }));
   }
 
-  /** How many runs {@link archivedRunsInWindow} would answer. */
-  async countArchivedInWindow(
-    window: ArchivedWindow,
+  /** How many runs {@link archivedRunsBefore} would answer. */
+  async countArchivedBefore(
+    cutoff: Date,
     txEm?: EntityManager,
   ): Promise<number> {
-    return this.getRepo(txEm).count(archivedInWindow(window));
+    return this.getRepo(txEm).count(archivedAtOrBefore(cutoff));
   }
 
   /**
@@ -1328,12 +1327,6 @@ function pullRequestsByRun(
   return byRun;
 }
 
-function archivedInWindow(window: ArchivedWindow): FilterQuery<Run> {
-  return {
-    archivedAt: {
-      $ne: null,
-      $lte: window.to,
-      ...(window.from === null ? {} : { $gte: window.from }),
-    },
-  };
+function archivedAtOrBefore(cutoff: Date): FilterQuery<Run> {
+  return { archivedAt: { $ne: null, $lte: cutoff } };
 }

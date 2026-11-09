@@ -24,9 +24,9 @@ const THIRTY_DAYS_BACK = '2026-10-01T12:00:00.000Z';
 function period(
   days: number | null,
   count: number,
-  from: string | null,
+  archivedBefore: string,
 ): StorageArchivedPeriod {
-  return { days, count, window: { from, to: SCANNED_AT } };
+  return { days, count, archivedBefore };
 }
 
 function usage(job: StorageJob | null = null): StorageUsageDto {
@@ -54,11 +54,11 @@ function usage(job: StorageJob | null = null): StorageUsageDto {
       active: 19,
       archived: 778,
       archivedPeriods: [
-        period(7, 0, '2026-10-24T12:00:00.000Z'),
-        period(30, 120, THIRTY_DAYS_BACK),
-        period(60, 300, '2026-09-01T12:00:00.000Z'),
-        period(90, 450, '2026-08-02T12:00:00.000Z'),
-        period(null, 778, null),
+        period(7, 450, '2026-10-24T12:00:00.000Z'),
+        period(30, 300, THIRTY_DAYS_BACK),
+        period(60, 120, '2026-09-01T12:00:00.000Z'),
+        period(90, 0, '2026-08-02T12:00:00.000Z'),
+        period(null, 778, SCANNED_AT),
       ],
     },
     unclaimed: ['Cache', 'worktrees'],
@@ -219,7 +219,7 @@ describe('Storage', () => {
     expect(container.textContent).not.toContain('Every chat transcript');
   });
 
-  it('counts the chosen period before any press, defaulting to the last 30 days', async () => {
+  it('counts the chosen period before any press, defaulting to older than 30 days', async () => {
     const api = {
       getStorageUsage: vi.fn(() => Promise.resolve(usage())),
       getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
@@ -229,20 +229,20 @@ describe('Storage', () => {
     await flush();
 
     expect(container.textContent).toContain('Archived chats — 778');
-    expect(container.textContent).toContain('Archived in the last 30 days');
-    expect(buttonNamed('Delete 120 chats').disabled).toBe(false);
-
-    await pickPeriod('Archived in the last 60 days');
+    expect(container.textContent).toContain('Older than 30 days');
     expect(buttonNamed('Delete 300 chats').disabled).toBe(false);
 
-    await pickPeriod('Archived in the last 7 days');
+    await pickPeriod('Older than 60 days');
+    expect(buttonNamed('Delete 120 chats').disabled).toBe(false);
+
+    await pickPeriod('Older than 90 days');
     expect(buttonNamed('Delete 0 chats').disabled).toBe(true);
 
     await pickPeriod('All archived');
     expect(buttonNamed('Delete 778 chats').disabled).toBe(false);
   });
 
-  it('names who goes and who stays, and posts back the window that was counted', async () => {
+  it('names who goes and who stays, and posts back the cutoff that was counted', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const running: StorageJob = {
       target: 'archivedChats',
@@ -261,13 +261,13 @@ describe('Storage', () => {
     await act(async () => root.render(<Storage api={api} remote={false} />));
     await flush();
 
-    await act(async () => buttonNamed('Delete 120 chats').click());
+    await act(async () => buttonNamed('Delete 300 chats').click());
+    expect(dialogText()).toContain('Delete 300 chats older than 30 days?');
     expect(dialogText()).toContain(
-      'Delete 120 chats archived in the last 30 days?',
+      'Chats you archived more than 30 days ago (before Oct 1, 2026, ',
     );
-    expect(dialogText()).toContain('Only chats you archived since Oct 1, 2026');
     expect(dialogText()).toContain(
-      'Chats archived before then, and chats that are not archived, stay.',
+      'Chats archived more recently, and chats that are not archived, stay.',
     );
     expect(api.cleanStorage).not.toHaveBeenCalled();
 
@@ -277,7 +277,7 @@ describe('Storage', () => {
     expect(api.cleanStorage).toHaveBeenCalledWith({
       storageCleanDto: {
         target: 'archivedChats',
-        archivedWindow: { from: THIRTY_DAYS_BACK, to: SCANNED_AT },
+        archivedBefore: THIRTY_DAYS_BACK,
       },
     });
   });
@@ -300,7 +300,7 @@ describe('Storage', () => {
     expect(api.cleanStorage).toHaveBeenCalledWith({
       storageCleanDto: {
         target: 'archivedChats',
-        archivedWindow: { from: null, to: SCANNED_AT },
+        archivedBefore: SCANNED_AT,
       },
     });
   });
@@ -310,7 +310,10 @@ describe('Storage', () => {
     one.chats = {
       active: 19,
       archived: 1,
-      archivedPeriods: [period(30, 0, THIRTY_DAYS_BACK), period(null, 1, null)],
+      archivedPeriods: [
+        period(30, 0, THIRTY_DAYS_BACK),
+        period(null, 1, SCANNED_AT),
+      ],
     };
     const api = {
       getStorageUsage: vi.fn(() => Promise.resolve(one)),
@@ -367,7 +370,7 @@ describe('Storage', () => {
     await act(async () => root.render(<Storage api={api} remote={false} />));
     await flush();
 
-    await act(async () => buttonNamed('Delete 120 chats').click());
+    await act(async () => buttonNamed('Delete 300 chats').click());
     expect(api.cleanStorage).not.toHaveBeenCalled();
     await act(async () => dialogButton('Delete').click());
     await flush();

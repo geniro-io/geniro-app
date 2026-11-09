@@ -46,7 +46,6 @@ import type { AgentAdapter } from '../adapters/agent-adapter';
 import {
   type AnalysedTeam,
   type AnalysisTurn,
-  type ArchivedWindow,
   type AttachmentDataWire,
   BUILDER_CHAT_ANALYSED_RUNS,
   CHAT_DEFAULT_APPROVAL,
@@ -122,6 +121,7 @@ import {
   deliverApprovalAnswer,
   isUserQuestion,
 } from '../utils/approval-answer';
+import { archivedCutoff } from '../utils/archived-cutoff';
 import {
   AUTO_COMPACT_COMMAND,
   autoCompactDue,
@@ -324,17 +324,6 @@ function parsePayload(raw: string): unknown {
  * run through {@link ChatService.restatusAfterOffTurnEvent}.
  */
 const DELEGATE_ROW_LEASE_MS = 5 * 60 * 1000;
-
-/**
- * One day, for {@link ChatService.sweepArchived}'s retention window.
- *
- * Fixed 24h rather than calendar days, deliberately: the window is a DURATION
- * somebody chose ("keep them a month"), not a date boundary, so a chat archived
- * at 09:00 is swept at 09:00 thirty days later whatever daylight saving did in
- * between. A calendar-day reading would make the same setting delete an hour
- * early or late twice a year, on rows nobody can get back.
- */
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** What `ChatService.toRunWire` reads for one run beyond its row. */
 interface RunWireRead {
@@ -2910,18 +2899,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * partial sweep from a complete one.
    */
   async sweepArchived(olderThanDays: number): Promise<{ deleted: number }> {
-    return this.sweepArchivedInWindow({
-      from: null,
-      to: new Date(Date.now() - olderThanDays * DAY_MS),
-    });
+    return this.sweepArchivedBefore(archivedCutoff(olderThanDays, new Date()));
   }
 
-  /** The sweep over any stretch of the shelf; {@link sweepArchived} is its retention form. */
-  async sweepArchivedInWindow(
-    window: ArchivedWindow,
-  ): Promise<{ deleted: number }> {
+  /** The sweep from a cutoff already fixed; {@link sweepArchived} measures one from now. */
+  async sweepArchivedBefore(cutoff: Date): Promise<{ deleted: number }> {
     const em = this.em.fork();
-    const runs = await this.runDao.archivedRunsInWindow(window, em);
+    const runs = await this.runDao.archivedRunsBefore(cutoff, em);
     let deleted = 0;
     for (const { id, teamId } of runs) {
       try {
@@ -2935,9 +2919,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         if (
           current === null ||
           current.archivedAt === null ||
-          current.archivedAt.getTime() > window.to.getTime() ||
-          (window.from !== null &&
-            current.archivedAt.getTime() < window.from.getTime())
+          current.archivedAt.getTime() > cutoff.getTime()
         ) {
           continue;
         }
@@ -2959,9 +2941,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     }
     if (deleted > 0) {
       this.logger.log(
-        `deleted ${deleted} archived run(s) shelved ${
-          window.from === null ? 'up' : `from ${window.from.toISOString()} up`
-        } to ${window.to.toISOString()}`,
+        `deleted ${deleted} archived run(s) shelved at or before ${cutoff.toISOString()}`,
       );
     }
     return { deleted };

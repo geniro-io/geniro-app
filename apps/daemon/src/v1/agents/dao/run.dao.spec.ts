@@ -490,7 +490,7 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('archivedRunsInWindow', () => {
+  describe('archivedRunsBefore', () => {
     it('answers the archived runs shelved at or before the cutoff, oldest first', async () => {
       // Oldest FIRST here, unlike every listing above, and the order is what a
       // sweep interrupted part-way depends on: it has removed the rows furthest
@@ -504,10 +504,9 @@ describe('RunDao (in-memory sqlite)', () => {
       await dao.create({ archivedAt: new Date(5_001) });
 
       expect(
-        (
-          await dao.archivedRunsInWindow({ from: null, to: new Date(5_000) })
-        ).map((run) => run.id),
+        (await dao.archivedRunsBefore(new Date(5_000))).map((run) => run.id),
       ).toEqual([older.id, old.id, onCutoff.id]);
+      expect(await dao.countArchivedBefore(new Date(5_000))).toBe(3);
     });
 
     it('never answers a chat that is not archived at all', async () => {
@@ -517,9 +516,8 @@ describe('RunDao (in-memory sqlite)', () => {
       // than restating the `$lte`.
       await dao.create({ createdAt: new Date(1_000) });
 
-      expect(
-        await dao.archivedRunsInWindow({ from: null, to: new Date(9_999) }),
-      ).toEqual([]);
+      expect(await dao.archivedRunsBefore(new Date(9_999))).toEqual([]);
+      expect(await dao.countArchivedBefore(new Date(9_999))).toBe(0);
     });
 
     it('answers a TEAM run too, and says which it is', async () => {
@@ -532,26 +530,10 @@ describe('RunDao (in-memory sqlite)', () => {
       });
       const chat = await dao.create({ archivedAt: new Date(2_000) });
 
-      expect(
-        await dao.archivedRunsInWindow({ from: null, to: new Date(9_999) }),
-      ).toEqual([
+      expect(await dao.archivedRunsBefore(new Date(9_999))).toEqual([
         { id: wf.id, teamId: 'wf-1' },
         { id: chat.id, teamId: null },
       ]);
-    });
-
-    it('bounds the window from below too, both ends inclusive, and counts what it answers', async () => {
-      await dao.create({ archivedAt: new Date(999) });
-      const onFrom = await dao.create({ archivedAt: new Date(1_000) });
-      const onTo = await dao.create({ archivedAt: new Date(5_000) });
-      await dao.create({ archivedAt: new Date(5_001) });
-      await dao.create({ createdAt: new Date(2_000) });
-      const window = { from: new Date(1_000), to: new Date(5_000) };
-
-      expect(
-        (await dao.archivedRunsInWindow(window)).map((run) => run.id),
-      ).toEqual([onFrom.id, onTo.id]);
-      expect(await dao.countArchivedInWindow(window)).toBe(2);
     });
   });
 

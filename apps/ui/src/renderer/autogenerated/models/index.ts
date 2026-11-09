@@ -12703,36 +12703,17 @@ export interface StorageArchivedPeriod {
      */
     days: number | null;
     /**
-     * How many chats its window holds
+     * How many chats were archived at or before the cutoff
      * @type {number}
      * @memberof StorageArchivedPeriod
      */
     count: number;
     /**
-     * Posted back to delete exactly what was counted
-     * @type {StorageArchivedWindow}
+     * The cutoff, posted back to delete exactly what was counted
+     * @type {string}
      * @memberof StorageArchivedPeriod
      */
-    window: StorageArchivedWindow;
-}
-/**
- * 
- * @export
- * @interface StorageArchivedWindow
- */
-export interface StorageArchivedWindow {
-    /**
-     * 
-     * @type {string}
-     * @memberof StorageArchivedWindow
-     */
-    from: string | null;
-    /**
-     * Archived at or before this instant
-     * @type {string}
-     * @memberof StorageArchivedWindow
-     */
-    to: string;
+    archivedBefore: string;
 }
 /**
  * 
@@ -12747,11 +12728,11 @@ export interface StorageCleanDto {
      */
     target: StorageCleanTarget;
     /**
-     * Required for archivedChats: which of them to delete
-     * @type {StorageArchivedWindow}
+     * Required for archivedChats: delete those archived at or before this instant
+     * @type {string}
      * @memberof StorageCleanDto
      */
-    archivedWindow?: StorageArchivedWindow;
+    archivedBefore?: string;
 }
 
 

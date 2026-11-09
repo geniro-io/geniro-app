@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import mikroOrmConfig from '../../../db/mikro-orm.config';
 import { tempDir } from '../../agents/__tests__/temp-dir';
-import type { ArchivedWindow } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import type { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import type { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
@@ -25,7 +24,7 @@ import { ORPHAN_MIN_AGE_MS, StorageService } from './storage.service';
 
 const NOW = Date.UTC(2026, 9, 31, 12);
 const OLD = new Date(NOW - ORPHAN_MIN_AGE_MS - 60_000);
-const EVERY_ARCHIVED_CHAT = { from: null, to: new Date(NOW).toISOString() };
+const SCANNED_AT = new Date(NOW).toISOString();
 
 function write(path: string, bytes = 10): void {
   mkdirSync(join(path, '..'), { recursive: true });
@@ -46,8 +45,8 @@ describe('StorageService', () => {
   let registry: ProcessRegistry;
   let sessions: { workingOffTurn: number };
   let freeDisk: number;
-  let sweepArchivedInWindow: ReturnType<
-    typeof vi.fn<(window: ArchivedWindow) => Promise<{ deleted: number }>>
+  let sweepArchivedBefore: ReturnType<
+    typeof vi.fn<(cutoff: Date) => Promise<{ deleted: number }>>
   >;
   let vacuum: ReturnType<typeof vi.fn<(file: string) => Promise<void>>>;
   let service: StorageService;
@@ -68,9 +67,7 @@ describe('StorageService', () => {
     registry = new ProcessRegistry();
     sessions = { workingOffTurn: 0 };
     freeDisk = 1024 ** 4;
-    sweepArchivedInWindow = vi.fn(async (_window: ArchivedWindow) => ({
-      deleted: 2,
-    }));
+    sweepArchivedBefore = vi.fn(async (_cutoff: Date) => ({ deleted: 2 }));
     vacuum = vi.fn(async (_file: string) => {});
     const adapters = {
       all: () =>
@@ -91,7 +88,7 @@ describe('StorageService', () => {
     } as unknown as AgentAdapterRegistry;
     service = new StorageService(
       orm.em,
-      { sweepArchivedInWindow } as unknown as ChatService,
+      { sweepArchivedBefore } as unknown as ChatService,
       registry,
       sessions as unknown as AgentSessionRegistry,
       adapters,
@@ -196,7 +193,7 @@ describe('StorageService', () => {
     expect(backups.clean[0]!.bytes).toBeGreaterThanOrEqual(100_000);
   });
 
-  it('counts the archived chats of every period, never as a one-press clean-up', async () => {
+  it('counts the archived chats older than every period, never as a one-press clean-up', async () => {
     const dao = new RunDao(orm.em);
     const DAY = 24 * 60 * 60 * 1000;
     write(join(root, 'geniro.db'));
@@ -204,29 +201,32 @@ describe('StorageService', () => {
     await dao.create({ id: 'today', archivedAt: new Date(NOW) });
     await dao.create({ id: 'week-edge', archivedAt: new Date(NOW - 7 * DAY) });
     await dao.create({ id: 'month', archivedAt: new Date(NOW - 20 * DAY) });
+    await dao.create({
+      id: 'just-inside-30',
+      archivedAt: new Date(NOW - 30 * DAY + 1),
+    });
+    await dao.create({ id: 'on-30', archivedAt: new Date(NOW - 30 * DAY) });
     await dao.create({ id: 'season', archivedAt: new Date(NOW - 75 * DAY) });
     await dao.create({ id: 'ancient', archivedAt: new Date(NOW - 400 * DAY) });
 
     const usage = await service.usage();
 
     expect(usage.chats.active).toBe(1);
-    expect(usage.chats.archived).toBe(5);
+    expect(usage.chats.archived).toBe(7);
     expect(
       usage.chats.archivedPeriods.map(({ days, count }) => [days, count]),
     ).toEqual([
-      [7, 2],
+      [7, 6],
       [30, 3],
-      [60, 3],
-      [90, 4],
-      [null, 5],
+      [60, 2],
+      [90, 1],
+      [null, 7],
     ]);
-    const to = new Date(NOW).toISOString();
-    expect(usage.chats.archivedPeriods[1]?.window).toEqual({
-      from: new Date(NOW - 30 * DAY).toISOString(),
-      to,
-    });
-    expect(usage.chats.archivedPeriods[4]?.window).toEqual({ from: null, to });
-    expect(usage.scannedAt).toBe(to);
+    expect(usage.chats.archivedPeriods[1]?.archivedBefore).toBe(
+      new Date(NOW - 30 * DAY).toISOString(),
+    );
+    expect(usage.chats.archivedPeriods[4]?.archivedBefore).toBe(SCANNED_AT);
+    expect(usage.scannedAt).toBe(SCANNED_AT);
     expect(group(usage, 'database')?.clean).not.toContainEqual(
       expect.objectContaining({ target: 'archivedChats' }),
     );
@@ -323,26 +323,22 @@ describe('StorageService', () => {
     expect(existsSync(join(root, 'settings.json'))).toBe(true);
   });
 
-  it('deletes the archived chats of the window it is handed, through the chat sweep', async () => {
-    await service.start('archivedChats', {
-      from: '2026-10-01T12:00:00.000Z',
-      to: '2026-10-31T12:00:00.000Z',
-    });
+  it('deletes the archived chats up to the cutoff it is handed, through the chat sweep', async () => {
+    await service.start('archivedChats', '2026-10-01T12:00:00.000Z');
     await settle();
 
-    expect(sweepArchivedInWindow).toHaveBeenCalledWith({
-      from: new Date('2026-10-01T12:00:00.000Z'),
-      to: new Date('2026-10-31T12:00:00.000Z'),
-    });
+    expect(sweepArchivedBefore).toHaveBeenCalledWith(
+      new Date('2026-10-01T12:00:00.000Z'),
+    );
     expect(service.job()).toMatchObject({ state: 'done', removed: 2 });
   });
 
-  it('refuses to delete archived chats with no window, and starts nothing', async () => {
+  it('refuses to delete archived chats with no cutoff, and starts nothing', async () => {
     await expect(service.start('archivedChats')).rejects.toMatchObject({
-      code: 'STORAGE_WINDOW_REQUIRED',
+      code: 'STORAGE_CUTOFF_REQUIRED',
     });
 
-    expect(sweepArchivedInWindow).not.toHaveBeenCalled();
+    expect(sweepArchivedBefore).not.toHaveBeenCalled();
     expect(service.job()).toBeNull();
   });
 
@@ -497,13 +493,13 @@ describe('StorageService', () => {
 
   it('refuses a second clean-up while one runs', async () => {
     let finish: () => void = () => {};
-    sweepArchivedInWindow.mockImplementation(
+    sweepArchivedBefore.mockImplementation(
       () =>
         new Promise((resolve) => {
           finish = () => resolve({ deleted: 0 });
         }),
     );
-    void service.start('archivedChats', EVERY_ARCHIVED_CHAT);
+    void service.start('archivedChats', SCANNED_AT);
 
     await expect(service.start('logs')).rejects.toMatchObject({
       code: 'STORAGE_BUSY',
@@ -513,9 +509,9 @@ describe('StorageService', () => {
   });
 
   it('records a failed clean-up with its reason', async () => {
-    sweepArchivedInWindow.mockRejectedValue(new Error('disk full'));
+    sweepArchivedBefore.mockRejectedValue(new Error('disk full'));
 
-    await service.start('archivedChats', EVERY_ARCHIVED_CHAT);
+    await service.start('archivedChats', SCANNED_AT);
     await settle();
 
     expect(service.job()).toMatchObject({

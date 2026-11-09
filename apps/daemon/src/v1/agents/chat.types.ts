@@ -24,12 +24,6 @@ import { RUN_PROCESS_CAP } from './utils/run-process-scan';
  */
 export const SINGLE_AGENT_NODE = 'agent';
 
-/** Archived runs shelved between `from` (null: since ever) and `to`, both inclusive. */
-export interface ArchivedWindow {
-  from: Date | null;
-  to: Date;
-}
-
 /**
  * One CLI conversation a run held, as `SessionTranscriptsService` gathers them
  * before a delete — the CLI that keeps it, its id in that CLI's namespace, and

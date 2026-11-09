@@ -87,28 +87,22 @@ export const StorageJobSchema = z
   .meta({ id: 'StorageJob' });
 export type StorageJob = z.infer<typeof StorageJobSchema>;
 
-export const StorageArchivedWindowSchema = z
-  .object({
-    from: z.iso
-      .datetime()
-      .nullable()
-      .describe('Archived at or after this instant — null for no lower bound'),
-    to: z.iso.datetime().describe('Archived at or before this instant'),
-  })
-  .meta({ id: 'StorageArchivedWindow' });
-export type StorageArchivedWindow = z.infer<typeof StorageArchivedWindowSchema>;
-
 export const StorageArchivedPeriodSchema = z
   .object({
     days: z
       .number()
       .int()
       .nullable()
-      .describe('The period in days — null for every archived chat'),
-    count: z.number().int().describe('How many chats its window holds'),
-    window: StorageArchivedWindowSchema.describe(
-      'Posted back to delete exactly what was counted',
-    ),
+      .describe(
+        'Chats archived more than this many days ago — null for every archived chat',
+      ),
+    count: z
+      .number()
+      .int()
+      .describe('How many chats were archived at or before the cutoff'),
+    archivedBefore: z.iso
+      .datetime()
+      .describe('The cutoff, posted back to delete exactly what was counted'),
   })
   .meta({ id: 'StorageArchivedPeriod' });
 export type StorageArchivedPeriod = z.infer<typeof StorageArchivedPeriodSchema>;
@@ -137,9 +131,12 @@ export const StorageJobReadSchema = z.object({
 
 export const StorageCleanRequestSchema = z.object({
   target: StorageCleanTargetSchema,
-  archivedWindow: StorageArchivedWindowSchema.optional().describe(
-    'Required for archivedChats: which of them to delete',
-  ),
+  archivedBefore: z.iso
+    .datetime()
+    .optional()
+    .describe(
+      'Required for archivedChats: delete those archived at or before this instant',
+    ),
 });
 
 /**

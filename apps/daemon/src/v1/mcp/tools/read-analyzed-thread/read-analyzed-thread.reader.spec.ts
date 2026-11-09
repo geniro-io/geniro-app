@@ -622,6 +622,177 @@ describe('ReadAnalyzedThreadTool', () => {
     expect(pageOf(textOf(result))).toMatchObject({ team: 'dev-team' });
   });
 
+  it('answers a long spend with its windows and each breakdown’s size, then each breakdown a page at a time', async () => {
+    const group = (index: number) => ({
+      member: `m${index}`,
+      all: { costUsd: index, note: 'n'.repeat(900) },
+      last30Days: null,
+    });
+    const answer = {
+      team: 'dev-team',
+      windows: [{ window: 'all', costUsd: 1 }],
+      byProject: [],
+      byMember: Array.from({ length: 60 }, (_, index) => group(index)),
+      byModel: [],
+      next: 'prose',
+    };
+    const reading = tool(
+      { analysedTeamOf: () => Promise.resolve(TEAM) },
+      {},
+      true,
+      {
+        spend: () =>
+          Promise.resolve(
+            answer as unknown as Awaited<
+              ReturnType<TeamHistoryService['spend']>
+            >,
+          ),
+      },
+      ['newest'],
+    );
+
+    const bare = pageOf(
+      textOf(
+        await reading.call('read_analyzed_thread', { view: 'spend' }, CONTEXT),
+      ),
+    );
+    expect(bare.windows).toEqual(answer.windows);
+    expect(bare).not.toHaveProperty('byMember');
+    expect(bare.sections).toMatchObject({
+      byMember: { records: 60 },
+      byModel: { records: 0 },
+    });
+    expect(bare.next).toEqual({ section: 'byMember', offset: 0 });
+
+    const members: unknown[] = [];
+    let query: Record<string, unknown> | null = {
+      view: 'spend',
+      section: 'byMember',
+      offset: 0,
+    };
+    let pages = 0;
+    for (let guard = 0; query !== null && guard < 20; guard += 1) {
+      const text = textOf(
+        await reading.call('read_analyzed_thread', query, CONTEXT),
+      );
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(PAGE_BYTES + 200);
+      const page = pageOf(text);
+      members.push(...(page.records as unknown[]));
+      pages += 1;
+      query =
+        page.next === null
+          ? null
+          : { view: 'spend', ...(page.next as Record<string, unknown>) };
+    }
+    expect(pages).toBeGreaterThan(1);
+    expect(members).toEqual(answer.byMember);
+  });
+
+  it('refuses a section of the other view, reading nothing past it', async () => {
+    const spendReading = tool(
+      { analysedTeamOf: () => Promise.resolve(TEAM) },
+      {},
+      true,
+      {
+        spend: () =>
+          Promise.resolve({ team: 'dev-team' } as unknown as Awaited<
+            ReturnType<TeamHistoryService['spend']>
+          >),
+      },
+      ['newest'],
+    );
+
+    expect(
+      pageOf(
+        textOf(
+          await spendReading.call(
+            'read_analyzed_thread',
+            { view: 'spend', section: 'versions' },
+            CONTEXT,
+          ),
+        ),
+      ).error,
+    ).toBe('INVALID_ARGS');
+    expect(
+      pageOf(
+        textOf(
+          await historyReader({ team: 'dev-team' }).call(
+            'read_analyzed_thread',
+            { view: 'history', section: 'byMember' },
+            CONTEXT,
+          ),
+        ),
+      ).error,
+    ).toBe('INVALID_ARGS');
+  });
+
+  it.each(['changeLog', 'recommendations', 'members'])(
+    'pages the %s section between records',
+    async (section) => {
+      const records = Array.from({ length: 30 }, (_, index) => ({
+        index,
+        note: 'n'.repeat(1_500),
+      }));
+      const reading = historyReader({
+        team: 'dev-team',
+        versions: [],
+        changeLog: [],
+        recommendations: [],
+        members: [],
+        [section]: records,
+      });
+
+      const page = pageOf(
+        textOf(
+          await reading.call(
+            'read_analyzed_thread',
+            { view: 'history', section },
+            CONTEXT,
+          ),
+        ),
+      );
+
+      const kept = page.records as unknown[];
+      expect(kept.length).toBeLessThan(30);
+      expect(kept).toEqual(records.slice(0, kept.length));
+      expect(page.next).toEqual({ section, offset: kept.length });
+    },
+  );
+
+  it('masks a secret a diff page would otherwise cut in two', async () => {
+    registerSecret(SECRET, 'github token');
+    const line = `${'d'.repeat(79)}\n`;
+    const diff = `${line.repeat(270)}${'e'.repeat(90)}${SECRET}\n${line.repeat(270)}`;
+    const reading = historyReader({
+      team: 'dev-team',
+      versions: [
+        {
+          version: { version: 'hash-1', number: 1, current: true },
+          changes: { added: 1, removed: 0, diff },
+        },
+      ],
+    });
+
+    const texts: string[] = [];
+    let offset: number | null = 0;
+    for (let guard = 0; offset !== null && guard < 10; guard += 1) {
+      const page = pageOf(
+        textOf(
+          await reading.call(
+            'read_analyzed_thread',
+            { view: 'history', section: 'diff', version: 1, offset },
+            CONTEXT,
+          ),
+        ),
+      );
+      texts.push(page.text as string);
+      offset = (page.next as { offset: number } | null)?.offset ?? null;
+    }
+
+    expect(texts.length).toBeGreaterThan(1);
+    expect(texts.join('')).not.toContain(SECRET.slice(0, 8));
+  });
+
   it("scopes a team thread's spend to the one thread it analyses", async () => {
     const spend = vi.fn<TeamHistoryService['spend']>(() =>
       Promise.resolve({ team: 'dev-team' } as unknown as Awaited<

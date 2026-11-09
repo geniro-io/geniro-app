@@ -1137,6 +1137,45 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
     );
   });
 
+  it('shortens the goals themselves when clipped evidence is not enough, saying both, before it touches the nodes', async () => {
+    const em = orm.em.fork();
+    await insert(0, 'message', { text: 'go' }, 0, 'lead');
+    await insert(
+      1,
+      'turn_complete',
+      { usage: { durationMs: 1_000 } },
+      1,
+      'lead',
+    );
+    for (let number = 1; number <= 80; number += 1) {
+      em.persist(
+        Object.assign(new Goal(), {
+          runId: 'source',
+          number,
+          text: `goal ${number}`,
+          source: 'agent',
+          status: 'achieved',
+          evidence: 'e'.repeat(400),
+        }),
+      );
+    }
+    await em.flush();
+
+    const answer = await reader.read(
+      { sourceRunId: 'source', snapshotSeq: 1, sourceWorking: false },
+      { view: 'overview' },
+    );
+
+    const shortened = answer.shortened as Record<string, string>;
+    expect(shortened.goalEvidence).toBe('clipped to 300 characters each');
+    expect(shortened.goals).toMatch(/^\d+ of 80$/);
+    expect(shortened).not.toHaveProperty('nodes');
+    expect(answer.nodes).toHaveLength(1);
+    expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThanOrEqual(
+      OVERVIEW_BYTES,
+    );
+  });
+
   it('shrinks a long tool list before it shrinks the nodes, and names only the list it shortened', async () => {
     let seq = 0;
     for (let index = 0; index < 400; index += 1) {

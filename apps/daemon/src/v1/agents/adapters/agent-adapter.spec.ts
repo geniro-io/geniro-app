@@ -3093,7 +3093,7 @@ describe('AgentAdapter.listPriceOf — the catalog provider is the ADAPTER’s f
   });
 
   it('bills claude’s cache writes at twice its input rate, the multiple its CLI writes its cache at', () => {
-    const { prices } = recordingPrices();
+    const { prices } = recordingPrices(0.5);
     expect(
       new ClaudeAdapter({ prices }).billingRatesOf('claude-opus-5'),
     ).toMatchObject({ input: 1, output: 2, cacheWrite: 2 });

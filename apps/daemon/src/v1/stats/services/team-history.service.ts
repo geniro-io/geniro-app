@@ -1,4 +1,5 @@
 import { homedir } from 'node:os';
+import { basename } from 'node:path';
 
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
@@ -89,17 +90,18 @@ export class TeamHistoryService {
           : (adapters.get(agentKind)?.billingRatesOf(model) ?? null),
       placeOf: (cwd) => {
         if (cwd === null) {
-          return { project: null, folder: null };
+          return { key: '', project: null, folder: null };
         }
         const known = places.get(cwd);
         if (known !== undefined) {
           return known;
         }
         const folder = roots.get(cwd) ?? cwd;
-        const place = {
-          project: nearestProjectOf(folder, refs, home)?.name ?? null,
-          folder,
-        };
+        const project = nearestProjectOf(folder, refs, home);
+        const place: SpendPlace =
+          project === null
+            ? { key: folder, project: null, folder: basename(folder) }
+            : { key: project.id, project: project.name, folder: null };
         places.set(cwd, place);
         return place;
       },

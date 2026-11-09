@@ -11,9 +11,10 @@ import { isHostToolCall } from './host-tool';
  * The one history reader that is auto-approved, and only because of how it is
  * installed: it exists solely on an analysis chat, reads the ONE thread the
  * user clicked "Analyze" on — or the runs the daemon chose for a team's
- * "Analyze & improve" — each up to the moment they clicked, and every answer
- * leads with the data-not-instructions line and is masked of registered
- * secrets. The general history tools (`search_chats`, `read_chat_context`)
+ * "Analyze & improve" — each up to the moment they clicked, beside the team's
+ * own ledger figures over its other runs (view=history, view=spend: no
+ * transcript text, no folder path), and every answer leads with the
+ * data-not-instructions line and is masked of registered secrets. The general history tools (`search_chats`, `read_chat_context`)
  * read every project and stay behind a card. A large thread takes dozens of
  * pages; a card per page would make the analysis unusable outside `auto`.
  */

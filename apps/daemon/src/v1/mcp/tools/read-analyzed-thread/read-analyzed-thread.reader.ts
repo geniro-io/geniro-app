@@ -1,5 +1,5 @@
 import {
-  type ANALYSIS_HISTORY_SECTIONS,
+  ANALYSIS_SPEND_SECTIONS,
   type ReadAnalyzedThreadArgs,
   ReadAnalyzedThreadArgsSchema,
 } from '../../../agents/chat.types';
@@ -32,21 +32,22 @@ export function analyzedThreadResultText(answer: unknown): string {
 }
 
 type Answer = Record<string, unknown>;
-type RecordSection = Exclude<(typeof ANALYSIS_HISTORY_SECTIONS)[number], 'diff'>;
-
-const RECORD_SECTIONS: readonly RecordSection[] = [
+const HISTORY_RECORD_SECTIONS = [
   'versions',
   'changeLog',
   'recommendations',
   'members',
-];
+] as const;
+
+type SpendSection = (typeof ANALYSIS_SPEND_SECTIONS)[number];
+type RecordSection = (typeof HISTORY_RECORD_SECTIONS)[number] | SpendSection;
 
 /** Room a page keeps for what surrounds its records. */
 const SECTION_ENVELOPE_BYTES = 200;
 
 /** A section's records as a page lists them: a version's diff is read on request. */
-function sectionRecords(history: Answer, section: RecordSection): unknown[] {
-  const list = history[section];
+function sectionRecords(answer: Answer, section: RecordSection): unknown[] {
+  const list = answer[section];
   const records = Array.isArray(list) ? (list as unknown[]) : [];
   if (section !== 'versions') {
     return records;
@@ -63,25 +64,33 @@ function sectionRecords(history: Answer, section: RecordSection): unknown[] {
   });
 }
 
+/** How many records each section holds and how large it is. */
+function sectionSizes(
+  answer: Answer,
+  sections: readonly RecordSection[],
+): Record<string, { records: number; bytes: number }> {
+  const sizes: Record<string, { records: number; bytes: number }> = {};
+  for (const section of sections) {
+    const records = sectionRecords(answer, section);
+    sizes[section] = { records: records.length, bytes: bytes(records) };
+  }
+  return sizes;
+}
+
 /** What a history too long for one page answers first: its summary and each section's size. */
 function historySummary(history: Answer): Answer {
-  const sections: Record<string, { records: number; bytes: number }> = {};
-  for (const section of RECORD_SECTIONS) {
-    const records = sectionRecords(history, section);
-    sections[section] = { records: records.length, bytes: bytes(records) };
-  }
-  const diffs = (Array.isArray(history.versions) ? history.versions : []).flatMap(
-    (record) => {
-      const diff = asRecord(asRecord(record)?.changes)?.diff;
-      return typeof diff === 'string' && diff !== '' ? [diff] : [];
-    },
-  );
+  const diffs = (
+    Array.isArray(history.versions) ? history.versions : []
+  ).flatMap((record) => {
+    const diff = asRecord(asRecord(record)?.changes)?.diff;
+    return typeof diff === 'string' && diff !== '' ? [diff] : [];
+  });
   return {
     team: history.team,
     currentVersion: history.currentVersion,
     summary: history.summary,
     sections: {
-      ...sections,
+      ...sectionSizes(history, HISTORY_RECORD_SECTIONS),
       diffs: { versions: diffs.length, bytes: bytes(diffs) },
     },
     note: 'This history is longer than one page, so it is read by section: pass `section` and follow each page\'s `next`. A version\'s diff is section="diff" version=<its number>: read it for a change you are judging, never every diff.',
@@ -91,13 +100,13 @@ function historySummary(history: Answer): Answer {
 
 /** One page of a section, cut between records; a record past a page comes in parts. */
 function sectionPage(
-  history: Answer,
+  answer: Answer,
   section: RecordSection,
   offset: number,
   part: number,
 ): Answer {
-  const records = sectionRecords(history, section);
-  const head = { team: history.team, section };
+  const records = sectionRecords(answer, section);
+  const head = { team: answer.team, section };
   const room = PAGE_BYTES - bytes(head) - SECTION_ENVELOPE_BYTES;
   const afterRecord = (index: number): Answer | null =>
     index < records.length ? { section, offset: index } : null;
@@ -197,6 +206,45 @@ function diffPage(
   };
 }
 
+function isSpendSection(section: string): section is SpendSection {
+  return (ANALYSIS_SPEND_SECTIONS as readonly string[]).includes(section);
+}
+
+function wrongSection(view: string, section: string): Answer {
+  return {
+    error: 'INVALID_ARGS',
+    message: `view=${view} has no section "${section}".`,
+  };
+}
+
+/**
+ * A team's spend, masked whole by the caller, as one page: the whole of it while
+ * it fits, else its windows and largest writes, then one breakdown at a time.
+ * Later pages come from a fresh fold over live ledgers, so each stands alone.
+ */
+export function spendAnswer(
+  spend: Answer,
+  query: ReadAnalyzedThreadArgs,
+): Answer {
+  if (query.section !== undefined) {
+    return isSpendSection(query.section)
+      ? sectionPage(spend, query.section, query.offset ?? 0, query.part ?? 0)
+      : wrongSection('spend', query.section);
+  }
+  if (bytes(spend) <= PAGE_BYTES) {
+    return spend;
+  }
+  const rest = Object.entries(spend).filter(
+    ([key]) => !isSpendSection(key) && key !== 'next',
+  );
+  return {
+    ...Object.fromEntries(rest),
+    sections: sectionSizes(spend, ANALYSIS_SPEND_SECTIONS),
+    note: "This answer is longer than one page, so its breakdowns are read by section: pass `section` and follow each page's `next`.",
+    next: { section: 'byMember', offset: 0 },
+  };
+}
+
 /**
  * A team's history, masked whole by the caller, as one page: the whole of it
  * while it fits, else its summary and then one section at a time. An `offset`
@@ -211,7 +259,9 @@ export function historyAnswer(
     return diffPage(history, query.version, offset);
   }
   if (query.section !== undefined) {
-    return sectionPage(history, query.section, offset, query.part ?? 0);
+    return isSpendSection(query.section)
+      ? wrongSection('history', query.section)
+      : sectionPage(history, query.section, offset, query.part ?? 0);
   }
   if (offset > 0) {
     return pagedAnswer(history, offset);

@@ -5546,6 +5546,8 @@ export type AdapterListPrice =
       /**
        * The catalog's `cache_write` is the vendor's shortest cache lifetime; a
        * CLI that writes a longer one is billed this multiple of `input` instead.
+       * Read to apportion a bill among token classes (`billingRatesOf`), never to
+       * price a turn.
        */
       readonly cacheWriteInputMultiple?: number;
     }

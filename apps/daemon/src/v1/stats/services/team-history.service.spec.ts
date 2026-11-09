@@ -744,10 +744,54 @@ describe('TeamHistoryService (in-memory sqlite)', () => {
     expect(spend.byProject).toEqual([
       expect.objectContaining({
         project: 'Geniro App',
-        folder: '/work/app',
+        folder: null,
         all: expect.objectContaining({ costUsd: 3 }),
       }),
     ]);
     expect(billingRatesOf).toHaveBeenCalledWith('opus-5');
+    expect(spend.windows[0]).toMatchObject({
+      inputUsd: 2,
+      outputUsd: 1,
+      notSplitUsd: 0,
+    });
+  });
+
+  it('names a folder in no project by its last segment alone, and leaves a turn of no registered CLI unsplit', async () => {
+    const at = new Date('2026-10-01T10:00:00.000Z');
+    await activityDao.stampThreadVersion('run-loose', at, {
+      slug: 'dev-team',
+      version: V1,
+      inferred: false,
+    });
+    await usageDao.recordOnce({
+      runId: 'run-loose',
+      memberId: 'dev',
+      seq: 1,
+      occurredAt: at,
+      agentKind: 'codex',
+      model: 'gpt-6',
+      cwd: '/home/someone/secret-client/repo',
+      teamName: 'Dev Team',
+      costUsd: 4,
+      estimatedCostUsd: null,
+      inputTokens: 1_000,
+      outputTokens: 100,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      thinkingTokens: null,
+      durationMs: null,
+      apiMs: null,
+      ttftMs: null,
+      timeToRequestMs: null,
+      numTurns: null,
+    });
+
+    const spend = await service.spend('dev-team', { analysedRunIds: [] });
+
+    expect(spend.byProject).toEqual([
+      expect.objectContaining({ project: null, folder: 'repo' }),
+    ]);
+    expect(JSON.stringify(spend)).not.toContain('secret-client');
+    expect(spend.windows[0]).toMatchObject({ costUsd: 4, notSplitUsd: 4 });
   });
 });

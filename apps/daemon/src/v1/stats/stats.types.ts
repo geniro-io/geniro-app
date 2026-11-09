@@ -439,7 +439,7 @@ export interface SpendFigures {
   cacheReadUsd: number | null;
   cacheWriteUsd: number | null;
   outputUsd: number | null;
-  /** Polled money and turns of a model with no list price; the five parts sum to `costUsd`. */
+  /** Polled money and turns of a model with no list price; the five parts sum to `costUsd`, to the cent. */
   notSplitUsd: number | null;
   inputTokens: number | null;
   cacheReadTokens: number | null;
@@ -476,7 +476,10 @@ export interface TeamSpend {
     from: string | null;
     to: string;
   } & SpendFigures)[];
-  byProject: ({ project: string | null; folder: string | null } & SpendBreakdown)[];
+  byProject: ({
+    project: string | null;
+    folder: string | null;
+  } & SpendBreakdown)[];
   byMember: ({ member: string | null } & SpendBreakdown)[];
   byModel: ({ agent: string | null; model: string | null } & SpendBreakdown)[];
   largestCacheWrites: {

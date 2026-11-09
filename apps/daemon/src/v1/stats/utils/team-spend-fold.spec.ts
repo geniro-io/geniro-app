@@ -52,8 +52,8 @@ function thread(runId: string, occurredAt: Date = NOW): ThreadLedgerRow {
 
 const placeOf = (cwd: string | null) =>
   cwd === null
-    ? { project: null, folder: null }
-    : { project: `project-${cwd}`, folder: cwd };
+    ? { key: '', project: null, folder: null }
+    : { key: cwd, project: `project-${cwd}`, folder: null };
 
 function fold(
   overrides: Partial<Parameters<typeof foldTeamSpend>[0]>,
@@ -139,6 +139,18 @@ describe('spendFiguresOf — a turn’s bill by token class', () => {
     expect(figures.outputTokens).toBe(200);
     expect(figures.cacheReadTokens).toBe(300);
     expect(figures.cacheWriteTokens).toBe(400);
+  });
+
+  it('puts a bill with no tokens behind it into notSplitUsd rather than dividing by a list price of zero', () => {
+    const figures = spendFiguresOf(
+      [row({ runId: 'run-a', costUsd: 5 })],
+      ratesOf,
+    );
+
+    expect(figures.costUsd).toBe(5);
+    expect(figures.notSplitUsd).toBe(5);
+    expect(figures.inputUsd).toBe(0);
+    expect(figures.cacheWriteUsd).toBe(0);
   });
 
   it('counts a polled bill as money with no turn behind it: notSplitUsd, turns unchanged, the run priced', () => {
@@ -339,6 +351,45 @@ describe('foldTeamSpend', () => {
     );
     expect(oldMember!.last30Days).toBeNull();
     expect(oldMember!.all.costUsd).toBe(1);
+  });
+
+  it('sets a group’s recent rows apart from its whole, and the population’s and the sample’s bounds from their rows', () => {
+    const old = new Date(NOW.getTime() - 400 * DAY_MS);
+    const result = fold({
+      threads: [thread('run-a'), thread('run-old', old)],
+      rows: [
+        row({ runId: 'run-a', costUsd: 2 }),
+        row({ runId: 'run-old', costUsd: 1, occurredAt: old }),
+      ],
+      analysedRunIds: ['run-old'],
+    });
+
+    const member = result.byMember.find((group) => group.member === 'dev');
+    expect(member!.all).toMatchObject({ runs: 2, costUsd: 3 });
+    expect(member!.last30Days).toMatchObject({ runs: 1, costUsd: 2 });
+    expect(result.population.firstAt).toBe(old.toISOString());
+    expect(result.population.lastAt).toBe(NOW.toISOString());
+    expect(result.windows[2]!.from).toBe(old.toISOString());
+  });
+
+  it('keeps one project on one row whichever folders its turns ran in, naming the project alone', () => {
+    const result = fold({
+      threads: [thread('run-a')],
+      rows: [
+        row({ runId: 'run-a', cwd: '/proj', costUsd: 2 }),
+        row({ runId: 'run-a', seq: 2, cwd: '/proj/apps', costUsd: 3 }),
+      ],
+      placeOf: () => ({ key: 'p-1', project: 'Proj', folder: null }),
+    });
+
+    expect(result.byProject).toEqual([
+      expect.objectContaining({
+        project: 'Proj',
+        folder: null,
+        all: expect.objectContaining({ costUsd: 5 }),
+      }),
+    ]);
+    expect(result.byProject[0]).not.toHaveProperty('key');
   });
 
   it('gives every window what it covers and its bounds, the recent window starting thirty days back', () => {

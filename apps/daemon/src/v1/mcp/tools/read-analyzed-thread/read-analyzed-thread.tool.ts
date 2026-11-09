@@ -24,6 +24,7 @@ import {
   analyzedThreadResultText,
   historyAnswer,
   readAnalyzedThreadArgs,
+  spendAnswer,
 } from './read-analyzed-thread.reader';
 import { readAnalyzedThreadSchema } from './read-analyzed-thread.schema';
 
@@ -97,13 +98,13 @@ export class ReadAnalyzedThreadTool extends BaseMcpTool {
                   }),
                   read.query,
                 )
-              : pagedAnswer(
+              : spendAnswer(
                   maskedAnswer({
                     ...(await this.history.spend(team.slug, {
                       analysedRunIds,
                     })),
                   }),
-                  read.query.offset ?? 0,
+                  read.query,
                 ),
           ),
         );

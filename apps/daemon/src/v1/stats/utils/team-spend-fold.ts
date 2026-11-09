@@ -44,8 +44,13 @@ export type SpendRates = (
   model: string | null,
 ) => ModelPriceRates | null;
 
-/** Where a turn's folder is filed. */
+/**
+ * Where a turn's folder is filed: `key` keeps one project on one row, and only a
+ * folder in no project is named, by its own name, since the runs read here can be
+ * work an analysis was never started on.
+ */
 export interface SpendPlace {
+  key: string;
   project: string | null;
   folder: string | null;
 }
@@ -277,7 +282,7 @@ export function foldTeamSpend(input: TeamSpendInput): TeamSpend {
     team: input.slug,
     asOf,
     method:
-      "Costs are what each CLI reported or the account poll billed. The classes apportion each turn's bill by its tokens at the model's list rates, so a turn's parts sum to its bill; notSplitUsd is polled money and turns of a model with no list price. A cache miss is a turn that wrote at least 100000 tokens and wrote more than it read; a heavy write is a turn that wrote at least that much.",
+      "Costs are what each CLI reported or the account poll billed. The classes apportion each turn's bill by its tokens at the model's list rates, so a turn's parts sum to its bill, each rounded to the cent; notSplitUsd is polled money and turns of a model with no list price. A cache miss is a turn that wrote at least 100000 tokens and wrote more than it read; a heavy write is a turn that wrote at least that much.",
     population: {
       covers:
         'Every run the ledgers hold stamped with this team: live, archived and deleted.',
@@ -311,8 +316,11 @@ export function foldTeamSpend(input: TeamSpendInput): TeamSpend {
       },
     ],
     byProject: breakdown(
-      (row) => JSON.stringify(input.placeOf(row.cwd)),
-      (row) => input.placeOf(row.cwd),
+      (row) => input.placeOf(row.cwd).key,
+      (row) => {
+        const { project, folder } = input.placeOf(row.cwd);
+        return { project, folder };
+      },
     ),
     byMember: breakdown(
       (row) => row.memberId ?? '',
@@ -339,6 +347,6 @@ export function foldTeamSpend(input: TeamSpendInput): TeamSpend {
         costUsd: row.costUsd,
         analysed: analysed.has(row.runId),
       })),
-    next: "view=history sets these figures per team version, and view=runs per analysed run; view=item runId=… seq=… reads a turn of an analysed run.",
+    next: 'view=history sets these figures per team version, and view=runs per analysed run; view=item runId=… seq=… reads a turn of an analysed run.',
   };
 }

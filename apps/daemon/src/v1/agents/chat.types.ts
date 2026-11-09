@@ -929,11 +929,9 @@ export const RecommendationsPatchSchema = z
       )
       .max(MAX_RECOMMENDATION_HOTSPOTS)
       .optional()
-      .describe('Named by `title`: the fields sent replace that hotspot\'s'),
+      .describe("Named by `title`: the fields sent replace that hotspot's"),
     items: z
-      .array(
-        RecommendationItemSchema.partial().required({ id: true }).strict(),
-      )
+      .array(RecommendationItemSchema.partial().required({ id: true }).strict())
       .max(MAX_RECOMMENDATIONS)
       .optional()
       .describe("Named by `id`: the fields sent replace that item's"),
@@ -968,8 +966,7 @@ export type RecommendationsPatch = z.infer<typeof RecommendationsPatchSchema>;
 
 /** One `report_recommendations` call: a whole card as sent, unparsed, or a patch. */
 export type RecommendationsCall =
-  | { whole: Record<string, unknown> }
-  | { patch: RecommendationsPatch };
+  { whole: Record<string, unknown> } | { patch: RecommendationsPatch };
 
 const CardRecommendationItemSchema = RecommendationItemSchema.extend({
   impact: RecommendationImpactSchema.partial({

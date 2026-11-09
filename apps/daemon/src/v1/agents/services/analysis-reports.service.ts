@@ -389,7 +389,9 @@ export function checkMembers(
   for (const assessment of assessed) {
     const { member, verdict } = assessment;
     if (seen.has(member)) {
-      problems.push(`member ${member} is assessed twice — one entry per member`);
+      problems.push(
+        `member ${member} is assessed twice — one entry per member`,
+      );
     }
     seen.add(member);
     if (!members.has(member)) {
@@ -489,7 +491,9 @@ function knowledgeItemProblems(
     problems.push(`${item.id}: a knowledge item names its \`document\``);
   }
   if (!KNOWLEDGE_ITEM_KINDS.some((entry) => entry === kind)) {
-    problems.push(`${item.id}: a knowledge item's kind is add, update or retire`);
+    problems.push(
+      `${item.id}: a knowledge item's kind is add, update or retire`,
+    );
   }
   if (document !== undefined && kind === 'add') {
     if (document.handle !== undefined || document.rev !== undefined) {

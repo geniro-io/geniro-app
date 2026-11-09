@@ -252,7 +252,7 @@ function populationLine(
   const cost =
     perRun.costUsd === null
       ? null
-      : `${look.formatUsd(perRun.costUsd)}${perRun.pricedRuns < population.runs ? ` (${perRun.pricedRuns} priced)` : ''} per run`;
+      : `${look.formatUsd(perRun.costUsd)} per run${perRun.pricedRuns < population.runs ? ` (${perRun.pricedRuns} priced)` : ''}`;
   const worked =
     perRun.workedMs === null
       ? null

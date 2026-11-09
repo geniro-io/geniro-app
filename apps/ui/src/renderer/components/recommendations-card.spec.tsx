@@ -945,7 +945,7 @@ describe('RecommendationsCard', () => {
     [
       'some runs unpriced',
       { costUsd: 4.6, pricedRuns: 200 },
-      'Read 8 of 216 runs. Over all 216: $4.60 (200 priced) per run · 58m worked · 27 turns',
+      'Read 8 of 216 runs. Over all 216: $4.60 per run (200 priced) · 58m worked · 27 turns',
     ],
     [
       'no worked time measured',

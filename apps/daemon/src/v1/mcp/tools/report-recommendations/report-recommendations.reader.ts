@@ -9,7 +9,9 @@ import type { HostSinkUnavailable } from '../../../agents/services/host-sink.bro
 import type { ToolArgs } from '../../mcp.types';
 import { readToolArgs } from '../tool-args';
 
-const PatchCallSchema = z.object({ patch: RecommendationsPatchSchema }).strict();
+const PatchCallSchema = z
+  .object({ patch: RecommendationsPatchSchema })
+  .strict();
 
 /**
  * A `report_recommendations` call, or why its patch cannot be read. A whole card

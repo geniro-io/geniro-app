@@ -1052,7 +1052,9 @@ export class TeamProposalService {
     );
     const origin = {
       source:
-        recommendationIds.length > 0 ? ('analysis' as const) : ('chat' as const),
+        recommendationIds.length > 0
+          ? ('analysis' as const)
+          : ('chat' as const),
       recommendationIds,
       chatRunId: by?.runId ?? half.projectId,
       cardSeq:

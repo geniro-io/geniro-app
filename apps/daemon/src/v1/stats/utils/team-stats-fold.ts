@@ -98,8 +98,9 @@ export function foldTeamPopulation(
       turns:
         threads.length === 0
           ? 0
-          : Math.round((sum(runs.map(({ turns }) => turns)) / threads.length) * 10) /
-            10,
+          : Math.round(
+              (sum(runs.map(({ turns }) => turns)) / threads.length) * 10,
+            ) / 10,
     },
   };
 }

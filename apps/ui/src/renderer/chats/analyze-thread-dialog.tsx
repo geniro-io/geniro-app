@@ -339,7 +339,7 @@ export function AnalyzeThreadDialog({
           )}
           <p className="text-xs text-muted-foreground" data-slot="scope-note">
             {team !== null
-              ? 'Reads the team’s latest runs, compares how its agents and their models did, and suggests team changes (models, roles, the graph’s structure, when to stop) and repository changes (AGENTS.md, rules, checks). You choose which to apply.'
+              ? 'Reads the team’s latest runs, archived ones included, compares how its agents and their models did, and suggests team changes (models, roles, the graph’s structure, when to stop) and repository changes (AGENTS.md, rules, checks). You choose which to apply.'
               : isTeam
                 ? 'Finds where the time went and suggests team changes (roles, models, parallel calls, when to stop) and repository changes (AGENTS.md, rules, checks). You choose which to apply.'
                 : 'Finds where the time went and suggests repository changes (AGENTS.md, rules, checks). You choose which to apply.'}

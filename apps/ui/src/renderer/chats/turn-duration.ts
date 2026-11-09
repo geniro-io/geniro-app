@@ -125,7 +125,7 @@ export function cliTurnApiMs(payload: unknown): number | null {
   return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : null;
 }
 
-function parsedAt(iso: string): number | null {
+export function parsedAt(iso: string): number | null {
   const at = Date.parse(iso);
   return Number.isFinite(at) ? at : null;
 }

@@ -24,6 +24,7 @@ import type {
   ActionPressWire,
   AppProcessesWire,
   AttachmentDataWire,
+  CallMessagesWire,
   ChatExportWire,
   ChatHistoryWire,
   ChatMetricsWire,
@@ -53,6 +54,8 @@ import {
   ApplyRecommendationsDto,
   AppProcessesDto,
   AttachmentDataDto,
+  CallMessagesDto,
+  CallMessagesQueryDto,
   CancelledDto,
   ChatDeletedDto,
   ChatExportDto,
@@ -348,6 +351,17 @@ export class ChatController {
           },
       historyConversationOf(query),
     );
+  }
+
+  @Get(':runId/calls/:callId/messages')
+  @ApiOperation({ operationId: 'listCallMessages' })
+  @ZodResponse({ status: 200, type: CallMessagesDto })
+  getCallMessages(
+    @Param('runId') runId: string,
+    @Param('callId') callId: string,
+    @Query() query: CallMessagesQueryDto,
+  ): Promise<CallMessagesWire> {
+    return this.history.callMessages(runId, callId, query.limit);
   }
 
   /**

@@ -25,12 +25,6 @@ import { subagentRef } from './subagent-payload';
  */
 
 /**
- * The Agents chip's id for a call whose card the window does not draw — a
- * press on it jumps to the call's own start row instead of revealing a card.
- */
-export const OFF_WINDOW_CALL_PREFIX = 'off-window-call:';
-
-/**
  * Each agent's sub-agent threads, with every delegate the run launched that the
  * window holds no block for added FIRST — those were launched before the
  * loaded page, so they come earlier in the conversation.

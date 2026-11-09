@@ -4165,10 +4165,10 @@ describe('withLiveText', () => {
       ]),
     );
 
-  it('draws NO end row for a callee whose open call the conversation moved past — the shelf lists it', () => {
+  it('draws NO end row for a callee whose open call the conversation moved past — the working-agents card lists it', () => {
     // The `Engineer is working · call-6 · 4s` row that used to end the
     // transcript counted from the callee's last row, so it reset on every tool
-    // call. Calls still out now live on the composer shelf's Agents chip,
+    // call. Calls still out now live on the working-agents card,
     // timed from their start, and the transcript draws no second row for them.
     const blocks = buriedCall();
     const entries = withLiveText(blocks, new Map(), new Set(['poet']));
@@ -4497,7 +4497,7 @@ describe('withLiveText', () => {
   });
 
   it('draws only the CALLER’s plain working row while it waits on a buried call', () => {
-    // The caller's row no longer names its calls — the shelf's Agents chip
+    // The caller's row no longer names its calls — the working-agents card
     // does — and the callee gets no row of its own at the end.
     const entries = withLiveText(
       buriedCall(),

@@ -2946,6 +2946,23 @@ export const ChatHistoryWireSchema = z.object({
 });
 export type ChatHistoryWire = z.infer<typeof ChatHistoryWireSchema>;
 
+/** The most messages one read of a call conversation's newest words may ask for. */
+export const CALL_MESSAGES_MAX = 20;
+
+/**
+ * A call conversation's newest words, without the page of tool rows around
+ * them. The root carries no `.meta({ id })`: it is a response DTO root.
+ */
+export const CallMessagesWireSchema = z.object({
+  messages: z
+    .array(ItemWireSchema)
+    .describe('The newest messages the callee itself wrote, in seq order'),
+  hasOlder: z
+    .boolean()
+    .describe('Whether the callee wrote more messages than these'),
+});
+export type CallMessagesWire = z.infer<typeof CallMessagesWireSchema>;
+
 /**
  * One search hit: where in the conversation it is, and enough to recognise it.
  *

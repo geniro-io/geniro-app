@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 
 import type { ItemKind } from '../../runs/runs.types';
 import type {
+  CallMessagesWire,
   ChatHistoryWire,
   HistoryConversation,
   HistoryWindow,
@@ -133,6 +134,49 @@ export class ChatHistoryService {
       conversation,
     );
     return { items: servedRows(items), anchors: servedRows(anchors) };
+  }
+
+  /**
+   * The newest words a callee wrote in one conversation, its continuations
+   * included: never a page of the conversation, whose rows are mostly tools, and
+   * read per call off the `(runId, inCall, kind, seq)` index, so a long call is
+   * walked only as far as `limit`. One row past `limit` says whether more exist.
+   *
+   * TWIN PARSER: `isCalleeMessage` in
+   * apps/ui/src/renderer/chats/use-recent-call-messages.ts takes the same rows
+   * off the socket.
+   */
+  async callMessages(
+    runId: string,
+    callId: string,
+    limit: number,
+  ): Promise<CallMessagesWire> {
+    const keys = await this.conversationKeys(runId, { call: callId });
+    if (keys === undefined) {
+      return { messages: [], hasOlder: false };
+    }
+    const em = this.em.fork();
+    const rows: WireRow[] = [];
+    for (const key of keys) {
+      rows.push(
+        ...(await this.itemDao.newestRowsInCall(
+          runId,
+          key,
+          {
+            kinds: ['message'],
+            said: 'text',
+            ownThread: true,
+            limit: limit + 1,
+          },
+          em,
+        )),
+      );
+    }
+    const newest = rows.sort((a, b) => a.seq - b.seq).slice(-(limit + 1));
+    return {
+      messages: servedRows(newest.slice(-limit).map(itemToWire)),
+      hasOlder: newest.length > limit,
+    };
   }
 
   private async readRows(

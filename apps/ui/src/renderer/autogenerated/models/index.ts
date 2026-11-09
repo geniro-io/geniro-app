@@ -2145,6 +2145,25 @@ export interface CallFigures {
 /**
  * 
  * @export
+ * @interface CallMessagesDto
+ */
+export interface CallMessagesDto {
+    /**
+     * The newest messages the callee itself wrote, in seq order
+     * @type {Array<ChatHistoryDtoItemsInner>}
+     * @memberof CallMessagesDto
+     */
+    messages: Array<ChatHistoryDtoItemsInner>;
+    /**
+     * Whether the callee wrote more messages than these
+     * @type {boolean}
+     * @memberof CallMessagesDto
+     */
+    hasOlder: boolean;
+}
+/**
+ * 
+ * @export
  * @interface CallStartReading
  */
 export interface CallStartReading {

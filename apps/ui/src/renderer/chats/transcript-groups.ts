@@ -3492,7 +3492,7 @@ function closeGroupsBeforeTurnEnds(
  *
  * TWIN PARSER: `callEndStatus` in
  * apps/daemon/src/v1/agents/utils/run-state-folds.ts — the run's own list of
- * calls, which the Agents chip and the panel read for calls off the window.
+ * calls, which the working-agents card and the panel read for calls off the window.
  */
 export function callResultStatus(
   payload: unknown,
@@ -4819,7 +4819,7 @@ export function withLiveText(
   for (const key of workingAgents) {
     // A callee working inside an open call block is NOT silent: the block says
     // `<callee> is thinking...` and wears a running mark. Calls still out are
-    // listed on the composer shelf's Agents chip (`openCallBlocks`), timed from
+    // listed on the working-agents card (`openCallBlocks`), timed from
     // their start — so the transcript draws no second row for them, not even
     // when the conversation has moved past the card.
     const workingNode = nodeIdOf(key);
@@ -4928,7 +4928,7 @@ const OPEN_CALL_STATUSES = new Set<CallBlockEntry['status']>([
 
 /**
  * Every call still running, in transcript order — what the composer shelf's
- * Agents chip lists. Nested calls included (a callee's own calls live inside
+ * working-agents card lists. Nested calls included (a callee's own calls live inside
  * its card), since each is an agent the user is waiting on.
  */
 export function openCallBlocks(

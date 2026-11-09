@@ -8,6 +8,8 @@ import {
   AppProcessesWireSchema,
   AttachmentMediaTypeSchema,
   AutoCompactPercentSchema,
+  CALL_MESSAGES_MAX,
+  CallMessagesWireSchema,
   ChatApprovalModeSchema,
   ChatExportWireSchema,
   ChatHistoryWireSchema,
@@ -433,6 +435,13 @@ export const historyQuerySchema = z
   );
 export class HistoryQueryDto extends createZodDto(historyQuerySchema) {}
 
+export const callMessagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(CALL_MESSAGES_MAX),
+});
+export class CallMessagesQueryDto extends createZodDto(
+  callMessagesQuerySchema,
+) {}
+
 export const listChatsQuerySchema = z
   .object({
     /**
@@ -534,6 +543,9 @@ export class ItemDto extends createZodDto(ItemWireSchema) {}
 
 /** One page of a transcript and the rows outside it the page refers to. */
 export class ChatHistoryDto extends createZodDto(ChatHistoryWireSchema) {}
+
+/** A call conversation's newest words. */
+export class CallMessagesDto extends createZodDto(CallMessagesWireSchema) {}
 
 /** What a run holds as a whole, for the readouts the transcript window must not decide. */
 export class RunStateDto extends createZodDto(RunStateWireSchema) {}

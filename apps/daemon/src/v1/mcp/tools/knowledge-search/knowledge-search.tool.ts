@@ -13,11 +13,11 @@ import { knowledgeSearchSchema } from './knowledge-search.schema';
 export class KnowledgeSearchTool extends KnowledgeMcpTool {
   readonly name = HOST_KNOWLEDGE_SEARCH_TOOL;
 
-  protected instructions(): string {
+  protected ownInstructions(): string {
     return knowledgeSearchInstructions();
   }
 
-  protected inputSchema(): Record<string, unknown> {
+  protected ownSchema(): Record<string, unknown> {
     return knowledgeSearchSchema();
   }
 

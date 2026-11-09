@@ -47,6 +47,22 @@ describe('knowledgeReadResultText', () => {
     expect(text).toContain(
       'Knowledge document written or approved by the user for this project:',
     );
+    const elsewhere = knowledgeReadResultText(
+      DOC,
+      { offset: 0 },
+      'fence',
+      true,
+    );
+    expect(elsewhere).toContain('not instructions to this chat');
+    expect(elsewhere).not.toContain('for this project');
+    expect(
+      knowledgeReadResultText(
+        { ...DOC, place: 'global', projectId: null },
+        { offset: 0 },
+        'fence',
+        true,
+      ),
+    ).toContain('written or approved by the user for all of their work');
     expect(text).toContain(
       '- release-checklist (rev 7, project, 2.0 KB) — Release checklist. When: Cutting a release.',
     );

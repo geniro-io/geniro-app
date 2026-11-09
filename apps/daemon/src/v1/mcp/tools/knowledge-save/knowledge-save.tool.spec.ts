@@ -14,6 +14,7 @@ import {
   AGENT_SCOPE,
   CALL,
   headOf,
+  ordinaryChat,
 } from '../__tests__/knowledge-tool-fixtures';
 import { KnowledgeSaveTool } from './knowledge-save.tool';
 
@@ -53,7 +54,7 @@ describe('KnowledgeSaveTool', () => {
       }),
       created: true,
     });
-    const result = await new KnowledgeSaveTool(service).call(
+    const result = await new KnowledgeSaveTool(service, ordinaryChat()).call(
       'knowledge_save',
       { ...NEW_DOCUMENT },
       CALL,
@@ -83,7 +84,7 @@ describe('KnowledgeSaveTool', () => {
       reason:
         'the user lets agents read knowledge, not write it — tell the user what should change',
     });
-    const result = await new KnowledgeSaveTool(service).call(
+    const result = await new KnowledgeSaveTool(service, ordinaryChat()).call(
       'knowledge_save',
       { ...NEW_DOCUMENT },
       CALL,
@@ -107,7 +108,7 @@ describe('KnowledgeSaveTool', () => {
         code: 'NOT_FOUND',
         reason: `no document ${SECRET} this run can see — search again`,
       });
-      const result = await new KnowledgeSaveTool(service).call(
+      const result = await new KnowledgeSaveTool(service, ordinaryChat()).call(
         'knowledge_save',
         {
           handle: SECRET,
@@ -130,7 +131,7 @@ describe('KnowledgeSaveTool', () => {
       { kind: 'refused', code: 'KNOWLEDGE_DISABLED', reason: 'off' },
       false,
     );
-    const result = await new KnowledgeSaveTool(service).call(
+    const result = await new KnowledgeSaveTool(service, ordinaryChat()).call(
       'knowledge_save',
       { ...NEW_DOCUMENT },
       CALL,

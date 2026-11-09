@@ -7,6 +7,7 @@ import {
   AGENT_SCOPE,
   CALL,
   documentOf,
+  ordinaryChat,
 } from '../__tests__/knowledge-tool-fixtures';
 import { KnowledgeReadTool } from './knowledge-read.tool';
 
@@ -33,7 +34,7 @@ describe('KnowledgeReadTool', () => {
       kind: 'found',
       document: documentOf(),
     });
-    const result = await new KnowledgeReadTool(service).call(
+    const result = await new KnowledgeReadTool(service, ordinaryChat()).call(
       'knowledge_read',
       { handle: 'release-checklist' },
       CALL,
@@ -57,7 +58,7 @@ describe('KnowledgeReadTool', () => {
       kind: 'found',
       document: documentOf({ approvedAt: null }),
     });
-    const result = await new KnowledgeReadTool(service).call(
+    const result = await new KnowledgeReadTool(service, ordinaryChat()).call(
       'knowledge_read',
       { handle: 'release-checklist' },
       CALL,
@@ -81,7 +82,7 @@ describe('KnowledgeReadTool', () => {
       kind: 'missing',
       similar: ['release-check'],
     });
-    const result = await new KnowledgeReadTool(service).call(
+    const result = await new KnowledgeReadTool(service, ordinaryChat()).call(
       'knowledge_read',
       { handle: 'release' },
       CALL,
@@ -102,7 +103,7 @@ describe('KnowledgeReadTool', () => {
       kind: 'missing',
       similar: [],
     });
-    const result = await new KnowledgeReadTool(service).call(
+    const result = await new KnowledgeReadTool(service, ordinaryChat()).call(
       'knowledge_read',
       {},
       CALL,
@@ -120,7 +121,7 @@ describe('KnowledgeReadTool', () => {
       { kind: 'found', document: documentOf() },
       false,
     );
-    const result = await new KnowledgeReadTool(service).call(
+    const result = await new KnowledgeReadTool(service, ordinaryChat()).call(
       'knowledge_read',
       { handle: 'release-checklist' },
       CALL,
@@ -138,7 +139,7 @@ describe('KnowledgeReadTool', () => {
         teamSlug: 't1',
       }),
     });
-    const result = await new KnowledgeReadTool(service).call(
+    const result = await new KnowledgeReadTool(service, ordinaryChat()).call(
       'knowledge_read',
       { handle: 'release-checklist' },
       CALL,

@@ -20,11 +20,11 @@ export class KnowledgeSaveTool extends KnowledgeMcpTool {
     return this.knowledge.agentsMayWrite;
   }
 
-  protected instructions(): string {
+  protected ownInstructions(): string {
     return knowledgeSaveInstructions();
   }
 
-  protected inputSchema(): Record<string, unknown> {
+  protected ownSchema(): Record<string, unknown> {
     return knowledgeSaveSchema();
   }
 

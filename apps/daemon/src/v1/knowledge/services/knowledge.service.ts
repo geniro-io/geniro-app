@@ -168,6 +168,11 @@ export class KnowledgeService {
     return { place, actor: { ...actor, memberId } };
   }
 
+  /** A place a chat named instead of its own, or why there is no such place. */
+  async placeNamed(place: RunPlace): Promise<RunPlace | KnowledgeRefusal> {
+    return (await this.refuseUnknownPlace(place, this.em.fork())) ?? place;
+  }
+
   /**
    * What a new run keeps of the store for its whole life. Taken once, at
    * creation: it reaches `AgentAdapter.sessionKey`, so a live read would

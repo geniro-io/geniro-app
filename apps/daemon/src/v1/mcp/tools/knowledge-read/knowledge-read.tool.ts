@@ -14,17 +14,17 @@ import { knowledgeReadSchema } from './knowledge-read.schema';
 export class KnowledgeReadTool extends KnowledgeMcpTool {
   readonly name = HOST_KNOWLEDGE_READ_TOOL;
 
-  protected instructions(): string {
+  protected ownInstructions(): string {
     return knowledgeReadInstructions();
   }
 
-  protected inputSchema(): Record<string, unknown> {
+  protected ownSchema(): Record<string, unknown> {
     return knowledgeReadSchema();
   }
 
   protected async answer(
     args: Record<string, unknown>,
-    { place }: KnowledgeCallScope,
+    { place, elsewhere }: KnowledgeCallScope,
   ): Promise<McpToolResult> {
     const read = readKnowledgeReadArgs(args);
     if (!read.ok) {
@@ -38,7 +38,12 @@ export class KnowledgeReadTool extends KnowledgeMcpTool {
       );
     }
     return this.masked(
-      knowledgeReadResultText(found.document, read.query, knowledgeFence()),
+      knowledgeReadResultText(
+        found.document,
+        read.query,
+        knowledgeFence(),
+        elsewhere === true,
+      ),
     );
   }
 }

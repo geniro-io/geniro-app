@@ -1,9 +1,13 @@
+import { AnalysisBroker } from '../../../agents/services/analysis.broker';
+import { ProjectChatBroker } from '../../../agents/services/project-chat.broker';
+import { TeamBuilderBroker } from '../../../agents/services/team-builder.broker';
 import type {
   KnowledgeCallScope,
   KnowledgeDocumentDto,
   KnowledgeHeadDto,
 } from '../../../knowledge/knowledge.types';
 import type { McpCallContext } from '../../mcp.types';
+import type { ThreadToolGates } from '../thread-tools-offer';
 
 export const AGENT_SCOPE: KnowledgeCallScope = {
   place: { projectId: 'p1', teamSlug: null },
@@ -25,6 +29,22 @@ export const CALL: McpCallContext = {
   remote: false,
   whileCancellable: (call) => call(new AbortController().signal),
 };
+
+/** The gates of a chat that is none of the app's own. */
+export function ordinaryChat(): ThreadToolGates {
+  return {
+    analysis: new AnalysisBroker(),
+    teamBuilders: new TeamBuilderBroker(),
+    projectChats: new ProjectChatBroker(),
+  };
+}
+
+/** The gates of {@link CALL}'s turn when it is a project's own chat. */
+export function projectChat(): ThreadToolGates {
+  const gates = ordinaryChat();
+  gates.projectChats.register(CALL.runId, CALL.memberId, { projectId: 'p1' });
+  return gates;
+}
 
 export function headOf(over: Partial<KnowledgeHeadDto> = {}): KnowledgeHeadDto {
   return {

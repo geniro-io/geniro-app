@@ -110,7 +110,7 @@ One home for each concern:
 - Principle: a message goes straight in when the agent will read it soon, and queues when the agent is busy with something that blocks reading.
 - `sendFollowUp` queues when the agent is working or when the queue is non-empty. Never decide on `streaming` alone.
 - Queueing behind an idle run kicks the drain. Never kick it while the agent is working.
-- RUN_BUSY from the daemon means queue and retry. The daemon is the fact, and the renderer's `streaming` is only a belief.
+- RUN_BUSY from the daemon means queue and retry. The daemon is the fact, and the renderer's `streaming` is only a belief. A Send-now it refuses draws the daemon's sentence on its row (`SteerStatus.reason`).
 - The composer refuses no geniro command itself.
 - Whether a unit is foreground or background is the CLI's own word, as announced by the daemon. Never guess it.
 - A Stop leaves the queue standing on every surface, the hosted chats included: only `settleReleasesQueue` decides whether a settle drains. The head waits for its Send.

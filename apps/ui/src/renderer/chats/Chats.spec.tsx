@@ -10900,6 +10900,35 @@ describe('Chats queued messages', () => {
     expect(container.textContent).not.toContain('RUN_BUSY');
   });
 
+  it('a “send now” refused during a compaction says so on the row, in the daemon’s words', async () => {
+    const sentence =
+      'the agent is compacting its conversation — your message goes out once it has';
+    api.sendChatMessage.mockRejectedValueOnce(
+      new Error(
+        'daemon POST /v1/chats/r1/messages failed (409): ' +
+          JSON.stringify({
+            statusCode: 409,
+            code: 'RUN_BUSY',
+            message: sentence,
+            fullMessage: `[RUN_BUSY] ${sentence}`,
+            fields: [],
+          }),
+      ),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'urgent');
+    await clickButton(container, 'Queue');
+    await clickButton(container, 'Send queued message 1 now');
+
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain(`still queued: ${sentence}`);
+    expect(container.textContent).not.toContain('RUN_BUSY');
+  });
+
   describe('a “send now” that would cancel running sub-agents', () => {
     const wouldCancel = (): Error =>
       new Error(
@@ -10962,9 +10991,11 @@ describe('Chats queued messages', () => {
 
       expect(dialog()).toBeNull();
       expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
-      expect(
-        container.querySelector('[aria-label="Queued messages"]')?.textContent,
-      ).toContain('still queued');
+      const row = container.querySelector(
+        '[aria-label="Queued messages"]',
+      )?.textContent;
+      expect(row).toContain('still queued');
+      expect(row).not.toContain('the 3 sub-agents');
     });
 
     it('drops the question once the turn’s ending has sent the message', async () => {

@@ -70,7 +70,12 @@ const NO_HANDLERS: MessageQueueHandlers = {
 
 const EMPTY_RESTORE: RestoredQueueState = { queues: {}, paused: new Set() };
 
-export type SteerStatus = { id: string; state: 'sending' | 'held' } | null;
+export type SteerStatus = {
+  id: string;
+  state: 'sending' | 'held';
+  /** The daemon's own sentence for a `held` row; null when it gave none. */
+  reason?: string | null;
+} | null;
 
 /** A Send-now that would cancel running sub-agents, put to the user. */
 export interface SubagentCancelAsk {
@@ -497,7 +502,11 @@ export function useMessageQueue({
           // replace a different row's `sending`.
           setSteerStatus((current) =>
             current === null || current.id === id
-              ? { id, state: 'held' }
+              ? {
+                  id,
+                  state: 'held',
+                  reason: wouldCancel ? null : daemonErrorDetail(err),
+                }
               : current,
           );
           return;

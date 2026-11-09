@@ -56,6 +56,7 @@ import type {
 } from '../adapters/claude/claude.types';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type {
+  ArchivedWindow,
   ChatListScope,
   HostRowWire,
   PromptCacheTtlReason,
@@ -489,7 +490,7 @@ class FakeRunDao {
     return cleared;
   }
 
-  /** The cutoffs `archivedRunsBefore` was asked about, newest call last. */
+  /** The upper bounds `archivedRunsInWindow` was asked about, newest call last. */
   readonly sweepCutoffs: Date[] = [];
 
   /**
@@ -497,15 +498,17 @@ class FakeRunDao {
    * The predicate itself is pinned against real SQL in `run.dao.spec.ts`; what
    * this exists for is the CUTOFF, which is the service's own arithmetic.
    */
-  async archivedRunsBefore(
-    cutoff: Date,
+  async archivedRunsInWindow(
+    window: ArchivedWindow,
   ): Promise<{ id: string; teamId: string | null }[]> {
-    this.sweepCutoffs.push(cutoff);
+    this.sweepCutoffs.push(window.to);
     return [...this.runs.values()]
       .filter(
         (run) =>
           run.archivedAt !== null &&
-          run.archivedAt.getTime() <= cutoff.getTime(),
+          run.archivedAt.getTime() <= window.to.getTime() &&
+          (window.from === null ||
+            run.archivedAt.getTime() >= window.from.getTime()),
       )
       .sort(
         (a, b) =>
@@ -514,6 +517,8 @@ class FakeRunDao {
       .map((run) => ({ id: run.id, teamId: run.teamId }));
   }
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 class FakeItemDao {
   async acknowledgeUserMessage(
@@ -12616,6 +12621,68 @@ describe('ChatService — sweeping the archive is the same one-way door', () => 
 
     expect(await ctx.runDao.getById(first.id)).toBeNull();
     expect(await ctx.runDao.getById(second.id)).not.toBeNull();
+  });
+
+  it('deletes only what a window names', async () => {
+    const ctx = setup();
+    const tooOld = await archivedChat(ctx, 40);
+    const inside = await archivedChat(ctx, 10);
+    const tooNew = await archivedChat(ctx, 0);
+
+    expect(
+      await ctx.service.sweepArchivedInWindow({
+        from: new Date(Date.now() - 30 * DAY_MS),
+        to: new Date(Date.now() - DAY_MS),
+      }),
+    ).toEqual({ deleted: 1 });
+
+    expect(await ctx.runDao.getById(inside.id)).toBeNull();
+    expect(await ctx.runDao.getById(tooOld.id)).not.toBeNull();
+    expect(await ctx.runDao.getById(tooNew.id)).not.toBeNull();
+  });
+
+  it('spares a run archived afresh past the window while the sweep was working', async () => {
+    const ctx = setup();
+    const first = await archivedChat(ctx, 10);
+    const second = await archivedChat(ctx, 5);
+    const realDelete = ctx.service.delete.bind(ctx.service);
+    vi.spyOn(ctx.service, 'delete').mockImplementation(
+      async (runId: string) => {
+        if (runId === first.id) {
+          const row = await ctx.runDao.getById(second.id);
+          if (row) {
+            row.archivedAt = new Date();
+          }
+        }
+        return realDelete(runId);
+      },
+    );
+
+    expect(
+      await ctx.service.sweepArchivedInWindow({
+        from: new Date(Date.now() - 30 * DAY_MS),
+        to: new Date(Date.now() - DAY_MS),
+      }),
+    ).toEqual({ deleted: 1 });
+
+    expect(await ctx.runDao.getById(first.id)).toBeNull();
+    expect(await ctx.runDao.getById(second.id)).not.toBeNull();
+  });
+
+  it('spares a listed run archived before the window opens', async () => {
+    const ctx = setup();
+    const before = await archivedChat(ctx, 40);
+    vi.spyOn(ctx.runDao, 'archivedRunsInWindow').mockResolvedValue([
+      { id: before.id, teamId: null },
+    ]);
+
+    expect(
+      await ctx.service.sweepArchivedInWindow({
+        from: new Date(Date.now() - 30 * DAY_MS),
+        to: new Date(),
+      }),
+    ).toEqual({ deleted: 0 });
+    expect(await ctx.runDao.getById(before.id)).not.toBeNull();
   });
 
   it('deletes nothing when the archive holds nothing old enough', async () => {

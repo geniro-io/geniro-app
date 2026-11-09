@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { AppStorageUsage, StorageWorktree } from '../../shared/contracts';
 import {
   type StorageApi,
+  type StorageArchivedPeriod,
+  type StorageArchivedWindow,
   type StorageCleanOption,
   StorageCleanTarget,
   type StorageGroup,
@@ -22,6 +24,7 @@ import {
 import { SettingsPanel, SettingsPanelRow } from '../components/settings-panel';
 import { Button } from '../components/ui/button';
 import { ProgressBar } from '../components/ui/progress-bar';
+import { Select } from '../components/ui/select';
 import { Spinner } from '../components/ui/spinner';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { describeDaemonError } from '../daemon-api';
@@ -133,12 +136,47 @@ function confirmOf(option: StorageCleanOption): {
   }
   return {
     question: `${cleanLabel(option)}?`,
-    description:
-      option.target === StorageCleanTarget.ArchivedChats
-        ? 'The archived chats and everything they hold are deleted for good. This cannot be undone.'
-        : 'They are deleted for good. This cannot be undone.',
+    description: 'They are deleted for good. This cannot be undone.',
     confirmLabel: 'Delete',
     busyLabel: 'Deleting…',
+  };
+}
+
+const ALL_ARCHIVED = 'all';
+const DEFAULT_ARCHIVED_PERIOD = '30';
+
+function periodKey(period: StorageArchivedPeriod): string {
+  return period.days === null ? ALL_ARCHIVED : String(period.days);
+}
+
+function periodLabel(period: StorageArchivedPeriod): string {
+  return period.days === null
+    ? 'All archived'
+    : `Archived in the last ${period.days} days`;
+}
+
+function chatCount(count: number): string {
+  return `${count} chat${count === 1 ? '' : 's'}`;
+}
+
+/** What deleting a period's chats takes, and what it leaves. */
+function archivedConfirmOf(period: StorageArchivedPeriod): {
+  question: string;
+  description: string;
+} {
+  if (period.window.from === null) {
+    return {
+      question: `Delete all ${chatCount(period.count)} in the archive?`,
+      description:
+        'Every archived chat and everything it holds are deleted for good. Chats that are not archived stay. This cannot be undone.',
+    };
+  }
+  const since = new Date(period.window.from).toLocaleDateString('en-US', {
+    dateStyle: 'medium',
+  });
+  return {
+    question: `Delete ${chatCount(period.count)} archived in the last ${period.days} days?`,
+    description: `Only chats you archived since ${since} are deleted, with everything they hold. Chats archived before then, and chats that are not archived, stay. This cannot be undone.`,
   };
 }
 
@@ -175,12 +213,32 @@ function sum(entries: readonly { bytes: number }[]): number {
   return entries.reduce((total, entry) => total + entry.bytes, 0);
 }
 
-function entryLine(
-  entries: readonly { name: string; bytes: number }[],
-): string {
-  return entries
-    .map((entry) => `${entry.name} ${formatBytes(entry.bytes) ?? ''}`.trim())
-    .join(' · ');
+/** What a row keeps folded: what it is, then each thing it counts. */
+function StorageDetails({
+  about,
+  note,
+  entries,
+}: {
+  about: React.ReactNode;
+  note?: React.ReactNode;
+  entries?: readonly { name: string; bytes: number }[];
+}): React.JSX.Element {
+  return (
+    <>
+      <p>{about}</p>
+      {note === undefined ? null : <p>{note}</p>}
+      {entries === undefined ? null : (
+        <ul className="flex flex-col gap-0.5">
+          {entries.map((entry) => (
+            <li key={entry.name} className="flex justify-between gap-3">
+              <span className="min-w-0 break-all">{entry.name}</span>
+              <span className="shrink-0">{formatBytes(entry.bytes)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
 }
 
 /**
@@ -311,7 +369,10 @@ export function Storage({
     );
   }
 
-  const clean = async (target: StorageCleanTarget): Promise<void> => {
+  const clean = async (
+    target: StorageCleanTarget,
+    archivedWindow?: StorageArchivedWindow,
+  ): Promise<void> => {
     if (api === null) {
       return;
     }
@@ -319,7 +380,7 @@ export function Storage({
     setNotice(null);
     try {
       const started = await api.cleanStorage({
-        storageCleanDto: { target },
+        storageCleanDto: { target, archivedWindow },
       });
       setReading((current) =>
         current === null
@@ -421,7 +482,7 @@ export function Storage({
       </ConfirmActionButton>
     ));
 
-  const groupRow = (id: StorageGroupIdEnum, extra?: React.ReactNode) => {
+  const groupRow = (id: StorageGroupIdEnum, note?: React.ReactNode) => {
     const group = groupOf(id);
     if (group === undefined) {
       return null;
@@ -431,18 +492,14 @@ export function Storage({
       <SettingsPanelRow
         key={id}
         label={`${text.title} — ${formatBytes(group.bytes)}`}
-        description={
-          <>
-            {text.about}
-            {extra}
-            <span
-              className="mt-0.5 block truncate"
-              title={entryLine(group.entries)}>
-              {entryLine(group.entries)}
-            </span>
-          </>
+        details={
+          <StorageDetails
+            about={text.about}
+            note={note}
+            entries={group.entries}
+          />
         }>
-        {cleanButtons(group.clean)}
+        {group.clean.length === 0 ? null : cleanButtons(group.clean)}
       </SettingsPanelRow>
     );
   };
@@ -461,11 +518,9 @@ export function Storage({
       <SettingsPanel>
         <SettingsPanelRow
           label={`In use — ${formatBytes(total)}`}
-          description={
+          details={
             <span className="flex items-center gap-1">
-              <span className="truncate" title={daemon.root}>
-                {daemon.root}
-              </span>
+              <span className="min-w-0 break-all">{daemon.root}</span>
               <CopyButton text={daemon.root} label="Copy the folder path" />
             </span>
           }>
@@ -491,9 +546,17 @@ export function Storage({
       <SettingsPanel>
         {groupRow(
           StorageGroupIdEnum.Database,
-          <span className="mt-0.5 block">
-            {daemon.chats.active} chats, {daemon.chats.archived} archived.
-          </span>,
+          `${daemon.chats.active} chats, ${daemon.chats.archived} archived.`,
+        )}
+        {daemon.chats.archived === 0 ? null : (
+          <ArchivedChatsRow
+            total={daemon.chats.archived}
+            periods={daemon.chats.archivedPeriods}
+            disabled={busy}
+            onDelete={(window) =>
+              clean(StorageCleanTarget.ArchivedChats, window)
+            }
+          />
         )}
         {groupRow(StorageGroupIdEnum.AgentSessions)}
         {groupRow(StorageGroupIdEnum.ChatFiles)}
@@ -504,19 +567,26 @@ export function Storage({
         <SettingsPanel>
           <SettingsPanelRow
             label={`Task worktrees — ${formatBytes(sum(worktrees))}`}
-            description="Checkouts the board's cards worked in. Removing one keeps its branch; one holding unsaved work, or whose card is still open, is kept."
-            layout="block">
-            <ul className="flex flex-col divide-y divide-border">
-              {worktrees.map((worktree) => (
-                <WorktreeItem
-                  key={worktree.name}
-                  worktree={worktree}
-                  note={worktreeNotes[worktree.name] ?? null}
-                  onRemove={() => removeWorktree(worktree.name)}
-                />
-              ))}
-            </ul>
-          </SettingsPanelRow>
+            details={
+              <>
+                <p>
+                  Checkouts the board&apos;s cards worked in. Removing one keeps
+                  its branch; one holding unsaved work, or whose card is still
+                  open, is kept.
+                </p>
+                <ul className="flex flex-col divide-y divide-border text-foreground">
+                  {worktrees.map((worktree) => (
+                    <WorktreeItem
+                      key={worktree.name}
+                      worktree={worktree}
+                      note={worktreeNotes[worktree.name] ?? null}
+                      onRemove={() => removeWorktree(worktree.name)}
+                    />
+                  ))}
+                </ul>
+              </>
+            }
+          />
         </SettingsPanel>
       )}
 
@@ -535,14 +605,11 @@ export function Storage({
           {browserCache.length === 0 ? null : (
             <SettingsPanelRow
               label={`Window cache — ${formatBytes(sum(browserCache))}`}
-              description={
-                <>
-                  What the app window caches to load faster. Clearing empties
-                  its web and script caches; they refill as you work.
-                  <span className="mt-0.5 block truncate">
-                    {entryLine(browserCache)}
-                  </span>
-                </>
+              details={
+                <StorageDetails
+                  about="What the app window caches to load faster. Clearing empties its web and script caches; they refill as you work."
+                  entries={browserCache}
+                />
               }>
               <ConfirmActionButton
                 question="Clear the window cache?"
@@ -558,22 +625,79 @@ export function Storage({
           {appData.length === 0 ? null : (
             <SettingsPanelRow
               label={`Window data — ${formatBytes(sum(appData))}`}
-              description={
-                <>
-                  The window’s own storage, settings and pairings. Kept.
-                  <span
-                    className="mt-0.5 block truncate"
-                    title={entryLine(appData)}>
-                    {entryLine(appData)}
-                  </span>
-                </>
-              }>
-              {null}
-            </SettingsPanelRow>
+              details={
+                <StorageDetails
+                  about="The window’s own storage, settings and pairings. Kept."
+                  entries={appData}
+                />
+              }
+            />
           )}
         </SettingsPanel>
       )}
     </div>
+  );
+}
+
+/**
+ * The archive's one delete: pick a period, read how many chats it holds, press.
+ * Each period carries the window the daemon counted, posted back as it came, so
+ * what is deleted is what was counted, whatever is archived after this reading.
+ */
+function ArchivedChatsRow({
+  total,
+  periods,
+  disabled,
+  onDelete,
+}: {
+  total: number;
+  periods: readonly StorageArchivedPeriod[];
+  disabled: boolean;
+  onDelete: (window: StorageArchivedWindow) => Promise<void>;
+}): React.JSX.Element | null {
+  const [chosen, setChosen] = useState(DEFAULT_ARCHIVED_PERIOD);
+  const period =
+    periods.find((candidate) => periodKey(candidate) === chosen) ?? periods[0];
+  if (period === undefined) {
+    return null;
+  }
+  return (
+    <SettingsPanelRow
+      label={`Archived chats — ${total}`}
+      details={
+        <StorageDetails about="A chat deleted here loses its transcript, its files and its agent conversation for good. Periods count from when a chat was archived, not when it was last used. Compact the database afterwards to give the space back to the disk." />
+      }>
+      <div className="w-60 shrink-0">
+        <Select
+          aria-label="Which archived chats to delete"
+          value={chosen}
+          triggerLabel={periodLabel(period)}
+          disabled={disabled}
+          groups={[
+            {
+              label: 'Delete chats',
+              items: periods.map((candidate) => ({
+                value: periodKey(candidate),
+                label: `${periodLabel(candidate)} · ${candidate.count}`,
+              })),
+            },
+          ]}
+          onValueChange={setChosen}
+        />
+      </div>
+      <ConfirmActionButton
+        disabled={disabled || period.count === 0}
+        {...archivedConfirmOf(period)}
+        confirmLabel="Delete"
+        busyLabel="Deleting…"
+        onConfirm={() => onDelete(period.window)}>
+        {cleanLabel({
+          target: StorageCleanTarget.ArchivedChats,
+          count: period.count,
+          bytes: null,
+        })}
+      </ConfirmActionButton>
+    </SettingsPanelRow>
   );
 }
 

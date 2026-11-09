@@ -29,6 +29,57 @@ afterEach(() => {
 });
 
 describe('SettingsPanelRow', () => {
+  it('keeps its details folded until the label is pressed, with its control usable either way', () => {
+    const onAction = vi.fn();
+    act(() => {
+      root.render(
+        <SettingsPanel>
+          <SettingsPanelRow label="Database" details={<p>What it holds.</p>}>
+            <button type="button" onClick={onAction}>
+              Compact
+            </button>
+          </SettingsPanelRow>
+        </SettingsPanel>,
+      );
+    });
+    const toggle = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Database',
+    );
+    const action = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Compact',
+    );
+
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+    expect(container.textContent).not.toContain('What it holds.');
+    act(() => action?.click());
+    expect(onAction).toHaveBeenCalledTimes(1);
+
+    act(() => toggle?.click());
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true');
+    expect(container.textContent).toContain('What it holds.');
+    expect(
+      container.querySelector(`[id="${toggle?.getAttribute('aria-controls')}"]`)
+        ?.textContent,
+    ).toBe('What it holds.');
+
+    act(() => toggle?.click());
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+    expect(container.textContent).not.toContain('What it holds.');
+  });
+
+  it('draws no control slot for a row with nothing to control', () => {
+    act(() => {
+      root.render(
+        <SettingsPanel>
+          <SettingsPanelRow label="Window data" details={<p>Kept.</p>} />
+        </SettingsPanel>,
+      );
+    });
+
+    const row = container.querySelector('[data-slot="settings-panel-row"]');
+    expect(row?.firstElementChild?.children).toHaveLength(1);
+  });
+
   it('makes the label press the control it names', () => {
     const onCheckedChange = vi.fn();
     act(() => {

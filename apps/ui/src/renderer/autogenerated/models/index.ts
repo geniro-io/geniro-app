@@ -12693,6 +12693,50 @@ export interface StoppedDetachedProcessesDto {
 /**
  * 
  * @export
+ * @interface StorageArchivedPeriod
+ */
+export interface StorageArchivedPeriod {
+    /**
+     * 
+     * @type {number}
+     * @memberof StorageArchivedPeriod
+     */
+    days: number | null;
+    /**
+     * How many chats its window holds
+     * @type {number}
+     * @memberof StorageArchivedPeriod
+     */
+    count: number;
+    /**
+     * Posted back to delete exactly what was counted
+     * @type {StorageArchivedWindow}
+     * @memberof StorageArchivedPeriod
+     */
+    window: StorageArchivedWindow;
+}
+/**
+ * 
+ * @export
+ * @interface StorageArchivedWindow
+ */
+export interface StorageArchivedWindow {
+    /**
+     * 
+     * @type {string}
+     * @memberof StorageArchivedWindow
+     */
+    from: string | null;
+    /**
+     * Archived at or before this instant
+     * @type {string}
+     * @memberof StorageArchivedWindow
+     */
+    to: string;
+}
+/**
+ * 
+ * @export
  * @interface StorageCleanDto
  */
 export interface StorageCleanDto {
@@ -12702,6 +12746,12 @@ export interface StorageCleanDto {
      * @memberof StorageCleanDto
      */
     target: StorageCleanTarget;
+    /**
+     * Required for archivedChats: which of them to delete
+     * @type {StorageArchivedWindow}
+     * @memberof StorageCleanDto
+     */
+    archivedWindow?: StorageArchivedWindow;
 }
 
 
@@ -12955,6 +13005,12 @@ export interface StorageUsageDtoChats {
      * @memberof StorageUsageDtoChats
      */
     archived: number;
+    /**
+     * 
+     * @type {Array<StorageArchivedPeriod>}
+     * @memberof StorageUsageDtoChats
+     */
+    archivedPeriods: Array<StorageArchivedPeriod>;
 }
 /**
  * 

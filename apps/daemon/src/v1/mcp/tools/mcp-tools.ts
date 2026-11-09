@@ -176,8 +176,6 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new KnowledgeSaveTool(deps.knowledge),
     new ReadTeamsTool(
       deps.teamGate,
-      deps.teamBuilders,
-      deps.projectChats,
       deps.teamStore,
       deps.teamOverlays,
       deps.teamProposals,
@@ -186,6 +184,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
       deps.teamGate,
       deps.teamBuilders,
       deps.projectChats,
+      deps.analysis,
       deps.teamProposals,
     ),
     new ReadAnalyzedThreadTool(

@@ -30,7 +30,7 @@ export function ProjectChatPanel({
 }: {
   projectId: string;
   projectName: string;
-  /** Whether the project defaults to a team, whose overlay the chat may change. */
+  /** Whether the project defaults to a team, which the empty chat then offers to change here. */
   runsTeam: boolean;
   apis: DaemonApis;
   handle: DaemonHandle;
@@ -70,8 +70,8 @@ export function ProjectChatPanel({
         discard,
         queueScope: `project-chat:${projectId}`,
         emptyText: runsTeam
-          ? `Ask for a change to ${projectName}’s instructions, or to how its team works here — a member’s model, effort or profile, its fallback agents, extra instructions. The agent puts it on a card; nothing changes until you approve.`
-          : `Ask for a change to ${projectName}’s instructions. The agent puts it on a card; nothing changes until you approve.`,
+          ? `Ask for a change to ${projectName}’s instructions, or to how its team works here — a member’s model, effort or profile, its fallback agents, extra instructions. Other projects and any team are in reach too. The agent puts each change on a card; nothing changes until you approve.`
+          : `Ask for a change to ${projectName}’s instructions. Other projects and any team are in reach too. The agent puts each change on a card; nothing changes until you approve.`,
         composerLabel: 'Ask for a project change',
         composerPlaceholder: 'Describe the change…',
         onBeforeSend,

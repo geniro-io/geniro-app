@@ -281,17 +281,7 @@ describe('reading a large team', () => {
     expect(teamOverlaysText(wire, [], 0)).toContain(
       'No project has an overlay',
     );
-    expect(text).toContain('2 project overlays, read-only here');
-  });
-
-  it('does not call overlays read-only where the chat can propose a change to one', () => {
-    const text = teamOverlaysText(
-      wire,
-      [{ projectId: 'p1', projectName: 'Billing', active: true, source: '' }],
-      0,
-      false,
-    );
-    expect(text).toContain('1 project overlays.');
+    expect(text).toContain('2 project overlays.');
     expect(text).not.toContain('read-only');
   });
 });

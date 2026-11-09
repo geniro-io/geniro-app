@@ -297,7 +297,7 @@ export const PROJECT_INSTRUCTION_FIELDS = [
 export type ProjectInstructionField =
   (typeof PROJECT_INSTRUCTION_FIELDS)[number];
 
-/** Who changed a project's texts: the user, an analysis applying `P-` items, or the project's own chat. */
+/** Who changed a project's texts: the user, an analysis applying `P-` items, or a chat the user asked. */
 export type ProjectInstructionChangeSource = 'user' | 'analysis' | 'chat';
 
 /** Consecutive user edits of one field this close together are logged as one change. */

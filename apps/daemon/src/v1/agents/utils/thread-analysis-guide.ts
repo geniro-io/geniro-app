@@ -12,6 +12,7 @@ import {
   HOST_TEAM_CHANGE_TOOL,
   MAX_RECOMMENDATIONS_PER_TARGET,
 } from '../chat.types';
+import { ANY_TEAM_OR_PROJECT } from './any-team-or-project';
 
 /** Which kind a run is, as an analysis reads it. */
 export function analysedThreadKindOf(run: {
@@ -131,7 +132,7 @@ const SAVE_TEAM_ITEMS = `- Team items: read view=team, then save only your edits
 - Overlay items: read view=team, then call \`${HOST_TEAM_CHANGE_TOOL}\` with \`overlay\`: the project's WHOLE overlay document as it should stand with the selected O- items made in it, \`overlayProjectId\`, \`overlayHash\` as view=team's \`overlayNow.hash\` (null when it has none) and those items' ids, in a call of its own (one call carries either team edits or an overlay).`;
 
 /** How a builder chat writes a selected team item: on its proposal card. */
-const PROPOSE_TEAM_ITEMS = `- Team items, and overlay items of the project this chat is bound to (as \`overlay\`, the whole document): put every selected one on ONE \`${HOST_PROPOSE_TEAM_TOOL}\` card, its \`reason\` naming the item ids, and end your turn once the rest is applied. When its verdict arrives, mark each of them: applied when the change was saved, skipped with the user's note when they declined it, failed with the cause when it was not saved.`;
+const PROPOSE_TEAM_ITEMS = `- Team items, and overlay items (as \`overlay\`, the project's whole document, with \`overlayProjectId\`): put every selected one on ONE \`${HOST_PROPOSE_TEAM_TOOL}\` card — another project's overlay items on a card of their own, after that verdict — its \`reason\` naming the item ids, and end your turn once the rest is applied. When its verdict arrives, mark each of them: applied when the change was saved, skipped with the user's note when they declined it, failed with the cause when it was not saved.`;
 
 function whenTheUserApplies(
   teamItems: string | null,
@@ -147,6 +148,13 @@ ${teamItems === null ? '' : `${teamItems}\n`}- Repo items: edit the files in ${f
 ${memory ? MEMORY_APPLY : ''}- Then call \`${HOST_RECOMMENDATION_MARKS_TOOL}\` with the card's seq and an outcome for every selected item but the project items${proposed ? ' and the team items, marked once their verdict arrives' : ''}: applied${proposed ? '' : ' (with the backup name for a team save)'}, failed (with the reason), or skipped (with the reason).
 ${PROJECT_APPLY}`;
 }
+
+/** What an analysis chat can do beyond its card, when the user asks for it in words. */
+const BEYOND_THE_CARD = `## Beyond the card
+
+Your own findings go on the card and change nothing until the user applies them. A change the user asks for in their own words, about this thread's team or project or any other, is not one of them: it goes straight on a card of its own, and needs no Apply.
+
+${ANY_TEAM_OR_PROJECT}`;
 
 /** The sections joined, with the user's focus as its own last section. */
 function withFocus(parts: readonly string[], focus: string | null): string {
@@ -234,6 +242,7 @@ Use view=spans with kinds=["tool"] and minMs to find slow tools, view=items with
         'your working folder',
         memory,
       ),
+      BEYOND_THE_CARD,
     ],
     focus,
   );
@@ -325,6 +334,7 @@ You are analysing a TEAM of this app across its most recent runs: to explain to 
         'The report above, whole, in your reply, citing runs and seqs.',
       ),
       whenTheUserApplies(SAVE_TEAM_ITEMS, 'your working folder', memory),
+      BEYOND_THE_CARD,
     ],
     focus,
   );

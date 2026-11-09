@@ -272,6 +272,38 @@ describe('save_project_instructions (in-memory sqlite)', () => {
     };
   };
 
+  it('takes a change the user asked for in words, with no ids, for a project no analysed run belongs to', async () => {
+    const other = await projects.create({
+      name: 'Docs',
+      folder: mkdtempSync(join(folder, 'docs-')),
+      ...asBlock('Write short pages.'),
+    });
+
+    const saved = await call({
+      projectId: other.id,
+      blocks: [{ id: 'b1', title: '', text: 'Write shorter pages.' }],
+      baseRevision: 0,
+    });
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      projectId: other.id,
+      ids: [],
+      cardSeq: null,
+    });
+    expect(saved).toMatchObject({
+      isError: false,
+      answer: { saved: true, projectId: other.id },
+    });
+    const [newest] = await changeDao.recentFor(other.id, 20);
+    expect(newest).toMatchObject({
+      source: 'chat',
+      recommendationIds: [],
+      chatRunId: 'analysis',
+      cardSeq: null,
+    });
+  });
+
   it('refuses ids not in the latest Apply and items filed about another project, writing nothing', async () => {
     const unselected = await call({
       projectId,
@@ -566,10 +598,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
 
     beforeEach(() => {
       const projectChats = new ProjectChatBroker();
-      projectChats.register('project-chat', 'agent', {
-        projectId,
-        teamSlug: null,
-      });
+      projectChats.register('project-chat', 'agent', { projectId });
       const broker = new ProjectInstructionsBroker();
       broker.register('project-chat', 'agent', (change) => {
         cards.push(change);
@@ -598,14 +627,20 @@ describe('save_project_instructions (in-memory sqlite)', () => {
       };
     };
 
-    it('lists the chat’s own form: no project id and no item ids', () => {
+    it('lists a project it may leave out for its own, and no item ids', () => {
       const [listed] = chatTool.list(chatContext);
-      const properties = Object.keys(
-        (listed?.inputSchema as { properties: Record<string, unknown> })
-          .properties,
-      );
-      expect(properties).toEqual(['blocks', 'baseRevision']);
+      const schema = listed?.inputSchema as {
+        properties: Record<string, unknown>;
+        required: string[];
+      };
+      expect(Object.keys(schema.properties)).toEqual([
+        'projectId',
+        'blocks',
+        'baseRevision',
+      ]);
+      expect(schema.required).not.toContain('projectId');
       expect(listed?.description).toContain('your brief');
+      expect(listed?.description).toContain('list_projects');
     });
 
     it('writes its own project behind the card and logs the chat as the source', async () => {
@@ -682,11 +717,49 @@ describe('save_project_instructions (in-memory sqlite)', () => {
       expect(cards).toEqual([]);
     });
 
-    it('refuses an item id or a project id: the project is the chat’s', async () => {
+    it('writes another project it names behind the card, and answers one that does not exist', async () => {
+      const other = await projects.create({
+        name: 'Docs',
+        folder: mkdtempSync(join(folder, 'docs-')),
+        ...asBlock('Write short pages.'),
+      });
+
+      const saved = await chatCall({
+        projectId: other.id,
+        blocks: [{ id: 'b1', title: '', text: 'Write shorter pages.' }],
+        baseRevision: 0,
+      });
+      const gone = await chatCall({
+        projectId: 'p-nowhere',
+        blocks: [{ id: 'b1', title: '', text: 'x' }],
+        baseRevision: 0,
+      });
+
+      expect(cards).toHaveLength(1);
+      expect(cards[0]).toMatchObject({
+        projectId: other.id,
+        project: 'Docs',
+        ids: [],
+        cardSeq: null,
+      });
+      expect(saved).toMatchObject({
+        isError: false,
+        answer: { saved: true, projectId: other.id },
+      });
+      expect((await projects.get(other.id)).instructions).toBe(
+        'Write shorter pages.',
+      );
+      expect((await projects.get(projectId)).instructions).toBe('Use pnpm.');
+      expect(gone).toMatchObject({
+        isError: true,
+        answer: { error: 'PROJECT_GONE' },
+      });
+    });
+
+    it('refuses an item id: only an analysis carries out items', async () => {
       const refused = await chatTool.call(
         HOST_PROJECT_INSTRUCTIONS_TOOL,
         {
-          projectId: 'p-elsewhere',
           blocks: [{ id: 'b1', title: '', text: 'x' }],
           baseRevision: 0,
           ids: ['P-1'],
@@ -695,7 +768,7 @@ describe('save_project_instructions (in-memory sqlite)', () => {
       );
 
       expect(refused.isError).toBe(true);
-      expect(refused.content[0]?.text).toContain('projectId');
+      expect(refused.content[0]?.text).toContain('ids');
       expect(cards).toEqual([]);
       expect((await projects.get(projectId)).instructions).toBe('Use pnpm.');
     });

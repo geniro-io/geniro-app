@@ -5,8 +5,9 @@ import {
   type ProposalOutcome,
   TEAM_REASON_MAX,
   TEAM_SUMMARY_MAX,
-  type TeamChangeProposalRequest,
+  type TeamProposal,
 } from '../../../teams/teams.types';
+import type { TeamEdit } from '../../../teams/utils/team-edits';
 import type { ToolArgs } from '../../mcp.types';
 import { blocksField } from '../project-block-args';
 import { editsField } from '../team-edit-args';
@@ -31,161 +32,176 @@ const reasonField = z
     'reason must be visible text',
   );
 
-/**
- * Strict on the names, so a misspelt `replace` cannot quietly turn a
- * replacement into a second team. The team itself is read whole and
- * checked by the service against the library's own schema.
- */
-const WholeTeamArgsSchema = z
-  .object({
-    team: z.record(z.string(), z.unknown()),
-    replaces: z.string().min(1).optional(),
-    summary: summaryField.optional(),
-    reason: reasonField.optional(),
-  })
-  .strict();
-
 export const TEAM_EDITS_READ_COPY =
   'the team as read_teams answers it — copy a `find` from the text between a field’s `===` markers';
 
-const TeamEditsArgsSchema = z
+/** A change to the instructions of a project that runs the team, on the team's card. */
+export const ProjectHalfSchema = z
   .object({
-    replaces: z.string().min(1),
-    edits: editsField(TEAM_EDITS_READ_COPY),
-    summary: summaryField,
-    reason: reasonField,
+    projectId: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe(
+        'A project that runs this team by default — read_teams with `projects` names each',
+      ),
+    blocks: blocksField('read_teams with `projects`'),
+    baseRevision: z
+      .number()
+      .int()
+      .min(0)
+      .describe('The `instructionsRevision` read_teams named for it'),
   })
   .strict();
 
 /**
- * An ordinary chat's change to one project's overlay: the project is named,
- * and the team is the one that project runs by default, never the model's.
+ * One form in every chat. Strict on the names, so a misspelt `replace` cannot
+ * quietly turn a replacement into a second team. The team itself is read whole
+ * and checked by the service against the library's own schema.
  */
-export const ChatOverlayArgsSchema = z
+const ProposeTeamArgsSchema = z
   .object({
+    team: z.record(z.string(), z.unknown()).optional(),
+    replaces: z.string().min(1).optional(),
+    edits: editsField(TEAM_EDITS_READ_COPY).optional(),
     overlay: z
       .record(z.string(), z.unknown())
+      .optional()
       .describe("The project's WHOLE overlay document as it should stand"),
     overlayProjectId: z
       .string()
       .min(1)
       .max(200)
+      .optional()
       .describe("The project's `id` list_projects names"),
-    summary: summaryField,
-    reason: reasonField,
+    project: ProjectHalfSchema.optional(),
+    summary: summaryField.optional(),
+    reason: reasonField.optional(),
   })
   .strict();
 
-export type ChatTeamProposal =
-  | z.infer<typeof WholeTeamArgsSchema>
-  | z.infer<typeof TeamEditsArgsSchema>
-  | z.infer<typeof ChatOverlayArgsSchema>;
-
-/**
- * A team builder chat's proposal: edits to its own team, never the
- * whole of it, and no target — the slug is the chat's. `team` and
- * `replaces` are refused as unknown. What it changes and why are required:
- * they are the card's account of a change the user did not draw themselves.
- */
-export const ProposeTeamChangeArgsSchema = z
-  .object({
-    edits: editsField('the team file as it stands').optional(),
-    overlay: z
-      .record(z.string(), z.unknown())
-      .optional()
-      .describe(
-        "The bound project's WHOLE overlay document — only in a chat bound to a project",
-      ),
-    project: z
-      .object({
-        projectId: z
-          .string()
-          .min(1)
-          .max(200)
-          .describe(
-            'A project that runs this team by default — read_teams with `projects` names each',
-          ),
-        blocks: blocksField('read_teams with `projects`'),
-        baseRevision: z
-          .number()
-          .int()
-          .min(0)
-          .describe('The `instructionsRevision` read_teams named for it'),
-      })
-      .strict()
-      .optional()
-      .describe(
-        "A change to that project's own instruction blocks, written by the same approval as the edits — how text moves between the team and the project in one change",
-      ),
-    summary: summaryField,
-    reason: reasonField,
-  })
-  .strict()
-  .refine(
-    (args) =>
-      args.edits !== undefined ||
-      args.overlay !== undefined ||
-      args.project !== undefined,
-    { message: 'send `edits`, `overlay`, `project`, or several' },
-  );
-
-/**
- * A project chat's proposal: the project's whole overlay of its default team,
- * never the team itself, which is changed on its own page.
- */
-export const ProposeProjectOverlayArgsSchema = z
-  .object({
-    overlay: z
-      .record(z.string(), z.unknown())
-      .describe("The project's WHOLE overlay document as it should stand"),
-    summary: summaryField,
-    reason: reasonField,
-  })
-  .strict();
-
-/** A project chat's call arguments, or what is wrong with them. Never throws. */
-export function readProposeProjectOverlayArgs(
-  args: Record<string, unknown>,
-): ToolArgs<z.infer<typeof ProposeProjectOverlayArgsSchema>> {
-  return readToolArgs(ProposeProjectOverlayArgsSchema, args);
+/** A whole team: a new one, or a replacement of the slug named. */
+export interface WholeTeamProposal {
+  team: Record<string, unknown>;
+  replaces?: string;
+  summary?: string;
+  reason?: string;
 }
+
+/** A change to what the library or a project holds, with the card's account of it. */
+export interface TeamChangeProposal {
+  replaces?: string;
+  edits: TeamEdit[];
+  overlay?: Record<string, unknown>;
+  overlayProjectId?: string;
+  project?: z.infer<typeof ProjectHalfSchema>;
+  summary: string;
+  reason: string;
+}
+
+export type ChatTeamProposal = WholeTeamProposal | TeamChangeProposal;
 
 /** The call's arguments, or what is wrong with them. Never throws. */
 export function readProposeTeamArgs(
   args: Record<string, unknown>,
 ): ToolArgs<ChatTeamProposal> {
-  const given = Object.fromEntries(
-    Object.entries(args).filter(([, value]) => value !== null),
-  );
-  if ('edits' in given && 'team' in given) {
+  const read = readToolArgs(ProposeTeamArgsSchema, args);
+  if (!read.ok) {
+    return read;
+  }
+  const { team, replaces, edits, overlay, overlayProjectId, project } =
+    read.query;
+  const { summary, reason } = read.query;
+  if (team !== undefined) {
+    if (
+      edits !== undefined ||
+      overlay !== undefined ||
+      overlayProjectId !== undefined ||
+      project !== undefined
+    ) {
+      return {
+        ok: false,
+        error:
+          'send `team` for a new team, or `edits`, `overlay` or `project` for a change — never both',
+      };
+    }
+    return {
+      ok: true,
+      query: {
+        team,
+        ...(replaces === undefined ? {} : { replaces }),
+        ...(summary === undefined ? {} : { summary }),
+        ...(reason === undefined ? {} : { reason }),
+      },
+    };
+  }
+  if (edits === undefined && overlay === undefined && project === undefined) {
     return {
       ok: false,
       error:
-        'send `team` for a new team, or `edits` with `replaces` for a change to one — never both',
+        "send `team` for a new team, `edits` for a change to one, `overlay` for a project's overlay, or `project` beside `replaces`",
     };
   }
-  if ('overlay' in given) {
-    return 'team' in given || 'edits' in given || 'replaces' in given
-      ? {
-          ok: false,
-          error:
-            'send `overlay` with `overlayProjectId` alone — a change to a team goes on its own card',
-        }
-      : readToolArgs(ChatOverlayArgsSchema, args);
+  if (overlayProjectId !== undefined && overlay === undefined) {
+    return {
+      ok: false,
+      error: '`overlayProjectId` names whose `overlay` it is — send both',
+    };
   }
-  return 'edits' in given
-    ? readToolArgs(TeamEditsArgsSchema, args)
-    : readToolArgs(WholeTeamArgsSchema, args);
+  if (summary === undefined || reason === undefined) {
+    return {
+      ok: false,
+      error:
+        'a change carries a one-line `summary` of what it does and a `reason` why: the card shows both',
+    };
+  }
+  return {
+    ok: true,
+    query: {
+      edits: edits ?? [],
+      summary,
+      reason,
+      ...(replaces === undefined ? {} : { replaces }),
+      ...(overlay === undefined ? {} : { overlay }),
+      ...(overlayProjectId === undefined ? {} : { overlayProjectId }),
+      ...(project === undefined ? {} : { project }),
+    },
+  };
 }
 
-/** A builder chat's call arguments, or what is wrong with them. Never throws. */
-export function readProposeTeamChangeArgs(
-  args: Record<string, unknown>,
-): ToolArgs<Omit<TeamChangeProposalRequest, 'slug' | 'projectId'>> {
-  const read = readToolArgs(ProposeTeamChangeArgsSchema, args);
-  return read.ok
-    ? { ok: true, query: { ...read.query, edits: read.query.edits ?? [] } }
-    : read;
+/** What one change is written to: a team and what goes beside it, or an overlay alone. */
+export type ProposalTarget =
+  | { kind: 'team'; slug: string; projectId: string | null }
+  | { kind: 'overlay'; projectId: string; overlay: Record<string, unknown> };
+
+/**
+ * Where a change lands, or what it must name: what it leaves unnamed is the
+ * chat's own team or project, where it has one. An overlay naming its project,
+ * with nothing else changing, is that project's default team's whatever team
+ * this chat edits.
+ */
+export function proposalTargetOf(
+  change: TeamChangeProposal,
+  own: { team: string | null; project: string | null },
+): ProposalTarget | string {
+  const projectId =
+    change.overlay === undefined
+      ? null
+      : (change.overlayProjectId ?? own.project);
+  if (change.overlay !== undefined && projectId === null) {
+    return 'name the project this overlay belongs to in `overlayProjectId` — list_projects names them';
+  }
+  const changesTeam = change.edits.length > 0 || change.project !== undefined;
+  const slug =
+    change.replaces ??
+    (changesTeam || change.overlayProjectId === undefined ? own.team : null);
+  if (slug !== null) {
+    return { kind: 'team', slug, projectId };
+  }
+  if (changesTeam || change.overlay === undefined || projectId === null) {
+    return 'name the team this changes in `replaces` — read_teams lists them';
+  }
+  return { kind: 'overlay', projectId, overlay: change.overlay };
 }
 
 /** What the agent is told once the call is answered. */
@@ -193,10 +209,25 @@ export function proposeTeamResultText(outcome: ProposalOutcome): string {
   if (outcome.status === 'refused') {
     return `Not proposed — ${outcome.code}: ${outcome.message}. No card was shown.`;
   }
-  const { proposal } = outcome;
-  const what =
-    proposal.mode === 'create'
-      ? `a new team, to be saved as '${proposal.slug}'`
-      : `a replacement of '${proposal.slug}' (${proposal.replacesName})`;
-  return `Shown to the user on a card: ${what}. Nothing is saved until they approve. End your turn now — their verdict arrives as your next message.`;
+  return `Shown to the user on a card: ${whatTheCardWrites(outcome.proposal)}. Nothing is saved until they approve. End your turn now — their verdict arrives as your next message.`;
+}
+
+/** What one approval of the card writes, in the card's own order. */
+function whatTheCardWrites(proposal: TeamProposal): string {
+  if (proposal.mode === 'create') {
+    return `a new team, to be saved as '${proposal.slug}'`;
+  }
+  return [
+    proposal.diff.identical
+      ? null
+      : `a replacement of '${proposal.slug}' (${proposal.replacesName})`,
+    proposal.overlay === undefined
+      ? null
+      : `the overlay of ${proposal.overlay.projectName}`,
+    proposal.project === undefined
+      ? null
+      : `the instructions of ${proposal.project.projectName}`,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(' and ');
 }

@@ -168,7 +168,7 @@ describe('composeTeamChatInstructions', () => {
   it('applies a selected team item on a proposal card, never a save', () => {
     const analysis = BRIEF.slice(BRIEF.indexOf('<team-analysis>'));
     expect(analysis).toContain(
-      `- Team items, and overlay items of the project this chat is bound to (as \`overlay\`, the whole document): put every selected one on ONE \`${HOST_PROPOSE_TEAM_TOOL}\` card`,
+      `- Team items, and overlay items (as \`overlay\`, the project's whole document, with \`overlayProjectId\`): put every selected one on ONE \`${HOST_PROPOSE_TEAM_TOOL}\` card`,
     );
     expect(analysis).not.toContain(HOST_TEAM_CHANGE_TOOL);
   });
@@ -179,6 +179,34 @@ describe('composeTeamChatInstructions', () => {
       "edit the files in the repository the runs worked in (each run's `cwd` in view=overview)",
     );
     expect(analysis).not.toContain('working folder');
+  });
+
+  it('tells the agent any team or project is within reach, whether or not the chat is bound to one', () => {
+    const other = {
+      projectId: 'p2',
+      projectName: 'Billing',
+      path: `${LIBRARY}/overlays/dev-team/p2.overlay.yaml`,
+      active: true,
+    };
+    const shared = composeTeamChatInstructions({
+      path: `${LIBRARY}/dev-team.team.yaml`,
+      slug: 'dev-team',
+      name: 'Dev Team',
+      schemaPath: `${LIBRARY}/.team.schema.json`,
+      memory: true,
+      inLibrary: true,
+      otherOverlays: [other],
+    });
+
+    for (const brief of [BRIEF, shared]) {
+      const editing = brief.slice(0, brief.indexOf('<team-analysis>'));
+      expect(editing).toContain('CHANGING ANY TEAM OR PROJECT');
+      expect(editing).toContain('`replaces` (its slug)');
+      expect(editing).toContain('`overlayProjectId`');
+      expect(editing).not.toContain('This chat changes only this');
+      expect(editing).not.toContain('never edit them here');
+    }
+    expect(shared).toContain('- Billing');
   });
 
   it('names the memory target only while the shared memory is on', () => {

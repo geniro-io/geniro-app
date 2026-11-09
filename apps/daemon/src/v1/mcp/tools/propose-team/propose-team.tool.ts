@@ -1,8 +1,10 @@
 import { HOST_PROPOSE_TEAM_TOOL } from '../../../agents/chat.types';
+import type { AnalysisBroker } from '../../../agents/services/analysis.broker';
 import type { ProjectChatBroker } from '../../../agents/services/project-chat.broker';
 import type { TeamBuilderBroker } from '../../../agents/services/team-builder.broker';
 import type { TeamProposalBroker } from '../../../agents/services/team-proposal.broker';
 import type { TeamProposalService } from '../../../teams/services/team-proposal.service';
+import type { ProposalOutcome } from '../../../teams/teams.types';
 import type {
   McpCallContext,
   McpListContext,
@@ -11,10 +13,9 @@ import type {
 import { BaseMcpTool } from '../base-mcp-tool';
 import { proposeTeamInstructions } from './propose-team.instructions';
 import {
+  proposalTargetOf,
   proposeTeamResultText,
-  readProposeProjectOverlayArgs,
   readProposeTeamArgs,
-  readProposeTeamChangeArgs,
 } from './propose-team.reader';
 import {
   type ProposeTeamAudience,
@@ -22,9 +23,10 @@ import {
 } from './propose-team.schema';
 
 /**
- * `propose_team` — a team on a card the user approves: a new one or edits to
- * a library team from an ordinary chat, edits to its own from a team's builder chat, or a
- * project's overlay of its default team from that project's own chat.
+ * `propose_team` — a team on a card the user approves, from any chat: a new
+ * one, edits to any library team, any project's overlay of its default team,
+ * or edits with what moves to a project beside them. A builder chat's and a
+ * project chat's own team and project are only what a call naming none means.
  * It does NOT wait for the answer: the card outlives the turn and the verdict
  * arrives as the run's next message (`TeamProposalService`), so no CLI's
  * tool-call deadline can expire it.
@@ -36,26 +38,24 @@ export class ProposeTeamTool extends BaseMcpTool {
     private readonly gate: TeamProposalBroker,
     private readonly builders: TeamBuilderBroker,
     private readonly projectChats: ProjectChatBroker,
+    private readonly analysis: AnalysisBroker,
     private readonly proposals: TeamProposalService,
   ) {
     super();
   }
 
   protected isOffered({ runId, memberId }: McpListContext): boolean {
-    return (
-      this.gate.canPropose(runId, memberId) ||
-      this.builders.canEdit(runId, memberId) ||
-      this.projectChats.canProposeOverlay(runId, memberId)
-    );
+    return this.gate.canPropose(runId, memberId);
   }
 
   private audienceOf(runId: string, memberId: string): ProposeTeamAudience {
     if (this.builders.canEdit(runId, memberId)) {
       return 'builder';
     }
-    return this.projectChats.canProposeOverlay(runId, memberId)
-      ? 'project'
-      : 'chat';
+    if (this.projectChats.canEdit(runId, memberId)) {
+      return 'project';
+    }
+    return this.analysis.canAnalyse(runId, memberId) ? 'analysis' : 'chat';
   }
 
   protected instructions({ runId, memberId }: McpListContext): string {
@@ -75,97 +75,66 @@ export class ProposeTeamTool extends BaseMcpTool {
   ): Promise<McpToolResult> {
     const { runId, memberId } = context;
     // A call is not checked against the listing, so the gate is asked again.
-    if (this.builders.canEdit(runId, memberId)) {
-      return this.proposeChange(args, runId, memberId);
-    }
-    const projectChat = this.projectChats.projectOf(runId, memberId);
-    if (projectChat?.teamSlug != null) {
-      return this.proposeOverlay(
-        args,
-        runId,
-        projectChat.teamSlug,
-        projectChat.projectId,
+    if (!this.gate.canPropose(runId, memberId)) {
+      return this.text(
+        'Not proposed: teams are proposed from a chat, never by a member of a running team.',
+        true,
       );
     }
     const read = readProposeTeamArgs(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
-    if (!this.gate.canPropose(runId, memberId)) {
-      return this.text(
-        "Not proposed: teams are proposed from ordinary chats and a team's own builder chat only.",
-        true,
-      );
-    }
     const query = read.query;
-    const outcome =
-      'overlay' in query
-        ? await this.proposals.proposeOverlay(runId, {
-            projectId: query.overlayProjectId,
-            overlay: query.overlay,
-            summary: query.summary,
-            reason: query.reason,
-          })
-        : 'edits' in query
-          ? await this.proposals.proposeEdits(runId, {
-              slug: query.replaces,
-              edits: query.edits,
-              summary: query.summary,
-              reason: query.reason,
-            })
-          : await this.proposals.propose(runId, query);
-    return this.text(
-      proposeTeamResultText(outcome),
-      outcome.status === 'refused',
-    );
-  }
-
-  private async proposeChange(
-    args: Record<string, unknown>,
-    runId: string,
-    memberId: string,
-  ): Promise<McpToolResult> {
-    const read = readProposeTeamChangeArgs(args);
-    if (!read.ok) {
-      return this.invalidArgs(read.error);
+    if ('team' in query) {
+      return this.answer(await this.proposals.propose(runId, query));
     }
-    const turn = await this.builders.teamOf(runId, memberId);
-    if ('status' in turn) {
-      return this.text(`Not proposed: ${turn.reason}.`, true);
+    let ownTeam: string | null = null;
+    let ownProject =
+      this.projectChats.projectOf(runId, memberId)?.projectId ?? null;
+    if (this.builders.canEdit(runId, memberId)) {
+      const turn = await this.builders.teamOf(runId, memberId);
+      if ('status' in turn) {
+        return this.text(`Not proposed: ${turn.reason}.`, true);
+      }
+      ownTeam = turn.slug;
+      ownProject = turn.projectId;
     }
-    if (read.query.overlay !== undefined && turn.projectId === null) {
-      return this.text(
-        'Not proposed: this chat edits the shared team only — an overlay is proposed from a chat opened in a project scope.',
-        true,
+    const target = proposalTargetOf(query, {
+      team: ownTeam,
+      project: ownProject,
+    });
+    if (typeof target === 'string') {
+      return this.invalidArgs(target);
+    }
+    const { summary, reason } = query;
+    if (target.kind === 'overlay') {
+      return this.answer(
+        await this.proposals.proposeOverlay(runId, {
+          projectId: target.projectId,
+          overlay: target.overlay,
+          summary,
+          reason,
+        }),
       );
     }
-    const outcome = await this.proposals.proposeChange(runId, {
-      ...read.query,
-      slug: turn.slug,
-      projectId: turn.projectId,
-    });
-    return this.text(
-      proposeTeamResultText(outcome),
-      outcome.status === 'refused',
+    const change = {
+      slug: target.slug,
+      edits: query.edits,
+      projectId: target.projectId,
+      summary,
+      reason,
+      ...(query.overlay === undefined ? {} : { overlay: query.overlay }),
+      ...(query.project === undefined ? {} : { project: query.project }),
+    };
+    return this.answer(
+      target.slug === ownTeam
+        ? await this.proposals.proposeChange(runId, change)
+        : await this.proposals.proposeEdits(runId, change),
     );
   }
 
-  private async proposeOverlay(
-    args: Record<string, unknown>,
-    runId: string,
-    slug: string,
-    projectId: string,
-  ): Promise<McpToolResult> {
-    const read = readProposeProjectOverlayArgs(args);
-    if (!read.ok) {
-      return this.invalidArgs(read.error);
-    }
-    const outcome = await this.proposals.proposeChange(runId, {
-      ...read.query,
-      edits: [],
-      slug,
-      projectId,
-    });
+  private answer(outcome: ProposalOutcome): McpToolResult {
     return this.text(
       proposeTeamResultText(outcome),
       outcome.status === 'refused',

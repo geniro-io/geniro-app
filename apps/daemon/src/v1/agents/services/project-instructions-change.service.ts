@@ -46,13 +46,13 @@ export interface ProjectInstructionsChange {
   ids: readonly string[];
 }
 
-/** What a project's own chat asks `save_project_instructions` to write. */
+/** What a chat asks `save_project_instructions` to write, carrying out no applied item. */
 export interface ProjectChatInstructionsChange {
   chatRunId: string;
   projectId: string;
   /** Every block as it should read after the change, in order (an id alone keeps that block); none clears them. */
   blocks: ProjectBlockInput[];
-  /** The revision the chat's brief was written at. */
+  /** The revision the chat read the blocks at. */
   baseRevision: number;
 }
 
@@ -180,10 +180,10 @@ export class ProjectInstructionsChangeService {
   }
 
   /**
-   * A project chat's change to its own project's blocks: checked against the
-   * revision its brief was written at, then put on the same card. A drift is
-   * answered with the blocks as they stand, since the brief is not written
-   * again until the next turn.
+   * A chat's change to any project's blocks: checked against the revision it
+   * read them at, then put on the same card. A drift is answered with the blocks
+   * as they stand, since a project chat's brief is not written again until the
+   * next turn.
    */
   async saveForChat(
     change: ProjectChatInstructionsChange,

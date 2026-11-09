@@ -44,11 +44,12 @@ export function isHostBuilderTeamCall(
 }
 
 /**
- * Whether a project chat's call reads its project's team — asked only on a
- * project chat's turn, where `read_teams` answers that one team and nothing
- * else of the library: the team the user opened this chat beside.
+ * Whether a project chat's or an analysis's call reads the team library —
+ * asked only on such a turn. The user opened these chats to change their teams
+ * and projects, and an analysis works unwatched in its popup; `configDir`s read
+ * as tokens, and an ordinary chat's read stays the user's to allow.
  */
-export function isHostProjectTeamReadCall(
+export function isHostLibraryReadCall(
   serverName: string | null,
   toolName: string,
 ): boolean {

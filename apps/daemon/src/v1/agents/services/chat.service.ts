@@ -174,7 +174,7 @@ import {
 } from '../utils/host-question';
 import {
   isHostBuilderTeamCall,
-  isHostProjectTeamReadCall,
+  isHostLibraryReadCall,
   isHostTeamProposalCall,
   standingProposalCardId,
 } from '../utils/host-teams';
@@ -3117,9 +3117,9 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /**
-   * Install what a project's own chat is briefed from and which team it may
-   * change — installed rather than injected because `TeamsModule`, which
-   * knows overlays, depends on this module.
+   * Install what a project's own chat is briefed from — installed rather than
+   * injected because `TeamsModule`, which knows overlays, depends on this
+   * module.
    */
   useProjectChat(source: ProjectChatSource): void {
     this.projectChatSource = source;
@@ -3185,24 +3185,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       this.logger.warn(
         `project chat ${runId} keeps its brief: ${err instanceof Error ? err.message : String(err)}`,
       );
-    }
-  }
-
-  /** The team whose overlay a project chat's turn may change; null for an agent default or a failed read. */
-  private async projectChatTeamOf(
-    runId: string,
-    projectId: string,
-  ): Promise<string | null> {
-    if (this.projectChatSource === null) {
-      return null;
-    }
-    try {
-      return await this.projectChatSource.teamOf(projectId);
-    } catch (err) {
-      this.logger.warn(
-        `project chat ${runId} goes without its team's overlay: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return null;
     }
   }
 
@@ -5972,15 +5954,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         isHostActionCall(hostServerName, toolName) ||
         // A team proposal only raises its card — the file is written behind
         // that card's Approve, never by the call. An ordinary chat's
-        // `read_teams` is NOT here: like the history tools, a read of the
-        // user's data outside this chat is the user's to allow.
+        // `read_teams` is NOT here, nor below: like the history tools, a read of
+        // the user's data outside this chat is the user's to allow.
         isHostTeamProposalCall(hostServerName, toolName) ||
         // A builder chat's own read, backup and check — see
         // `isHostBuilderTeamCall`.
         (run.editsTeamSlug !== null &&
           isHostBuilderTeamCall(hostServerName, toolName)) ||
-        (isProjectChat(run) &&
-          isHostProjectTeamReadCall(hostServerName, toolName)) ||
+        ((isProjectChat(run) || isAnalysisRun(run)) &&
+          isHostLibraryReadCall(hostServerName, toolName)) ||
         // The board tools: a card filed or changed is on the board in front of
         // the user and one click to undo. The writes that would hand an
         // agent's text to unattended work — a card landing in, or edited
@@ -6968,10 +6950,6 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         this.runtime.port !== null && run.editsTeamSlug !== null
           ? await this.builderAnalysisTurn(runId, run.editsTeamSlug)
           : null;
-      const projectChatTeam =
-        this.runtime.port !== null && isProjectChat(run)
-          ? await this.projectChatTeamOf(runId, run.editsProjectId)
-          : null;
       const questionServer = hostQuestionServer();
       // Only where there is a port to reach: a token nobody can present is a
       // credential registered as a redaction secret and held to run teardown
@@ -7029,20 +7007,14 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       if (disposeMonitors !== null && !monitorsDieWithTurn) {
         this.keptHostTools.get(runId)?.push(disposeMonitors);
       }
-      // Only an ORDINARY chat proposes whole teams: a builder chat
-      // proposes changes to its own through the `TeamBuilderBroker` sink
-      // below, and an analysis saves the analysed one through
-      // `save_team_change` — see `TeamProposalBroker`.
-      const ordinaryChat =
-        run.editsTeamSlug === null &&
-        !isProjectChat(run) &&
-        !isAnalysisRun(run);
-      const disposeTeamProposals =
-        mcpEndpoint && ordinaryChat
-          ? this.teamProposals.register(runId, SINGLE_AGENT_NODE, {
-              runId,
-            })
-          : null;
+      // Every chat reads the library and proposes, whatever it was opened on:
+      // the gate is the card, and a builder chat's or project chat's sink below
+      // only says what a call that names no target means. Never a team member.
+      const disposeTeamProposals = mcpEndpoint
+        ? this.teamProposals.register(runId, SINGLE_AGENT_NODE, {
+            runId,
+          })
+        : null;
       const editsTeamSlug = run.editsTeamSlug;
       const disposeTeamBuilder =
         mcpEndpoint && editsTeamSlug !== null
@@ -7080,13 +7052,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         mcpEndpoint && isProjectChat(run) && this.projectChats !== undefined
           ? this.projectChats.register(runId, SINGLE_AGENT_NODE, {
               projectId: run.editsProjectId,
-              teamSlug: projectChatTeam,
             })
           : null;
       const disposeProjectCards =
-        mcpEndpoint &&
-        (analysisTurn !== null || isProjectChat(run) || ordinaryChat) &&
-        this.projectInstructionCards !== undefined
+        mcpEndpoint && this.projectInstructionCards !== undefined
           ? this.projectInstructionCards.register(
               runId,
               SINGLE_AGENT_NODE,

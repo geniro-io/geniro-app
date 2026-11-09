@@ -7,7 +7,7 @@ import {
 
 export type ProjectInstructionsAudience = 'analysis' | 'project' | 'chat';
 
-/** `save_project_instructions`' arguments — generated from the schema they are parsed with, an analysis's, a project chat's or an ordinary chat's. */
+/** `save_project_instructions`' arguments — generated from the schema they are parsed with: an analysis may carry `ids`, a project chat may leave out its own project. */
 export function saveProjectInstructionsSchema(
   audience: ProjectInstructionsAudience,
 ): Record<string, unknown> {

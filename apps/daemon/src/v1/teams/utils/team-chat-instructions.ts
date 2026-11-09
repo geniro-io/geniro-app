@@ -8,6 +8,7 @@ import {
   HOST_RECOMMENDATIONS_TOOL,
   HOST_TEAM_CHANGE_TOOL,
 } from '../../agents/chat.types';
+import { ANY_TEAM_OR_PROJECT } from '../../agents/utils/any-team-or-project';
 import { builderChatAnalysisGuide } from '../../agents/utils/thread-analysis-guide';
 import {
   type ApprovalMode,
@@ -91,7 +92,7 @@ function overlaySection(
       : `
 Other projects' overlays of this team — read them with ${HOST_READ_TEAMS_TOOL}
 (\`overlays: true\`) before a shared change, so the change does not break
-them, and never edit them here:
+them:
 ${others.map((o) => `  - ${o.projectName}${o.active ? '' : ' (inactive)'}`).join('\n')}
 `;
   if (overlay === undefined) {
@@ -100,7 +101,8 @@ ${others.map((o) => `  - ${o.projectName}${o.active ? '' : ' (inactive)'}`).join
       : `
 PROJECT OVERLAYS
 This chat edits the SHARED team, which every project uses. A project whose
-default team this is may add its own overlay on top.
+default team this is may add its own overlay on top; what only that project
+needs goes there.
 ${listed}`;
   }
   return `
@@ -126,8 +128,8 @@ team with edits and add it to the overlay on the same card.
 
 Propose an overlay change with ${HOST_PROPOSE_TEAM_TOOL} too: pass the WHOLE
 overlay document as \`overlay\` (read the file first; a missing file is an
-empty overlay), alone or beside team edits. One card shows both diffs and one
-approval writes both.
+empty overlay), alone or beside team edits. Without \`overlayProjectId\` it is
+this project's. One card shows both diffs and one approval writes both.
 ${listed}`;
 }
 
@@ -147,9 +149,9 @@ export function composeTeamChatInstructions(input: {
    * library moved keeps the folder it was created in.
    */
   inLibrary: boolean;
-  /** The project overlay this chat edits beside the shared team; absent in shared scope. */
+  /** The project overlay an `overlay` naming no project means here; absent in shared scope. */
   overlay?: BuilderOverlayRef;
-  /** Every other overlay of this team, read-only for this chat. */
+  /** Every other overlay of this team. */
   otherOverlays?: readonly BuilderOverlayRef[];
 }): string {
   return `<team-editing>
@@ -166,8 +168,8 @@ ${HOST_READ_TEAMS_TOOL}, never with your own file tools. ${
       ? 'Its directory is\nyour working directory and holds'
       : 'Its directory,\n' + dirname(input.path) + ', holds'
   } the user's other teams: read them as
-examples (${HOST_READ_TEAMS_TOOL} lists them). This chat changes only this
-one.
+examples (${HOST_READ_TEAMS_TOOL} lists them). This team is what the chat is
+about; CHANGING ANY TEAM OR PROJECT below says how to reach the others.
 
 The file's structure — every field, its type, its limits and its allowed
 values — is defined by this JSON Schema, generated from the validator geniro
@@ -243,6 +245,9 @@ ${ApprovalModeSchema.options.map((mode) => `  - ${mode}: ${APPROVAL_MEANING[mode
 - \`instructionBlocks\`: text added to the instructions of its \`audience\` —
   \`everyone\`, or a list of member ids. A block runs nothing.
 ${overlaySection(input.overlay, input.otherOverlays ?? [])}
+CHANGING ANY TEAM OR PROJECT
+${ANY_TEAM_OR_PROJECT}
+
 On each turn a member receives, most general first: the user's own standing
 instructions, the blocks addressed to it, its own \`instructions\`, its
 \`character\`, and every other member's name and \`role\`. A later part

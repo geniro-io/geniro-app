@@ -31,11 +31,11 @@ export function saveTeamChangeInstructions(forBuilder: boolean): string {
     );
   }
   return (
-    "Save a change to the analysed thread's team — the ONLY way to change it; never write the team file yourself. " +
+    "Save a recommendation the user applied to the analysed thread's team; never write the team file yourself. " +
     `Use it when the user has applied team recommendations: read ${HOST_ANALYZED_THREAD_TOOL} view="team", then pass only the EDITS with the \`hash\` you read and the ids of the recommendations they carry out — never the whole team. ` +
     EDIT_SHAPES +
     'It refuses an id the user did not select in the latest Apply, a hash that changed since you read it (read again and re-apply), an edit that does not apply, a deleted team, and an invalid team. ' +
     SAVE_OUTCOME +
-    `Do NOT use it for anything the user did not apply, nor for a project's instructions (${HOST_PROJECT_INSTRUCTIONS_TOOL}); afterwards record the outcome with ${HOST_RECOMMENDATION_MARKS_TOOL}.`
+    `Do NOT use it for anything the user did not apply — a change they ask for in their own words goes on ${HOST_PROPOSE_TEAM_TOOL} — nor for a project's instructions (${HOST_PROJECT_INSTRUCTIONS_TOOL}); afterwards record the outcome with ${HOST_RECOMMENDATION_MARKS_TOOL}.`
   );
 }

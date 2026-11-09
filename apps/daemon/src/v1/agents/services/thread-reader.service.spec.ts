@@ -34,6 +34,7 @@ import { TeamSchema } from '../../teams/teams.types';
 import { teamVersionOf } from '../../teams/utils/team-version';
 import { kindRowsPassthrough } from '../__tests__/kind-rows-passthrough';
 import { claudeToolCallMetric } from '../adapters/claude/utils/claude-mcp-tool-name.utils';
+import type { RecommendationsTeamPopulation } from '../chat.types';
 import { GoalDao } from '../dao/goal.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -1437,6 +1438,41 @@ describe('ThreadReaderService (in-memory sqlite)', () => {
             }),
           ]),
         );
+      });
+
+      it("answers the team's whole population beside the runs read, from the reader handed in", async () => {
+        const population: RecommendationsTeamPopulation = {
+          runs: 9,
+          perRun: {
+            costUsd: 1.5,
+            pricedRuns: 9,
+            workedMs: 600_000,
+            timedRuns: 9,
+            turns: 3,
+          },
+        };
+        const asked: string[] = [];
+
+        const answer = await reader.read(
+          scope,
+          { view: 'runs' },
+          null,
+          (slug) => {
+            asked.push(slug);
+            return Promise.resolve(population);
+          },
+        );
+
+        expect(asked).toEqual(['team']);
+        expect(answer).toMatchObject({ runsRead: 3, population });
+      });
+
+      it('answers no population when its reader fails', async () => {
+        const answer = await reader.read(scope, { view: 'runs' }, null, () =>
+          Promise.reject(new Error('SQLITE_BUSY')),
+        );
+
+        expect(answer).toMatchObject({ runsRead: 3, population: null });
       });
     });
 

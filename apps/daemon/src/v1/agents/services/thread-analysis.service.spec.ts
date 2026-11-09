@@ -667,4 +667,55 @@ describe('ThreadAnalysisService.startTeam', () => {
     expect(remove).toHaveBeenCalledWith('analysis');
     expect(remove).not.toHaveBeenCalledWith('old');
   });
+
+  it('samples an archived run among the newest, as a run that is still there', async () => {
+    const { service, createChat } = build(
+      [{ id: 'r2', archivedAt: new Date(5_000) }, { id: 'r1' }],
+      { r2: 9, r1: 4 },
+    );
+
+    await service.startTeam(TARGET, { agentKind: 'claude', runs: 2 });
+
+    expect(createChat.mock.calls[0]![0].analysisTeam).toEqual({
+      slug: 'team',
+      runs: [
+        { runId: 'r2', snapshotSeq: 9, working: false },
+        { runId: 'r1', snapshotSeq: 4, working: false },
+      ],
+    });
+  });
+
+  it("runs in the newest sampled run's folder when that folder is gone, and in the next one that exists", async () => {
+    const own = realpathSync(mkdtempSync(join(tmpdir(), 'wf-older-')));
+    try {
+      const { service, createChat } = build(
+        [
+          { id: 'r2', cwd: join(own, 'gone') },
+          { id: 'r1', cwd: own },
+        ],
+        { r2: 9, r1: 4 },
+      );
+
+      await service.startTeam(TARGET, { agentKind: 'claude', runs: 2 });
+
+      expect(createChat.mock.calls[0]![0].cwd).toBe(own);
+    } finally {
+      rmSync(own, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses ANALYSIS_FOLDER_GONE when no sampled run has a folder that is still there', async () => {
+    const { service, createChat } = build(
+      [
+        { id: 'r2', cwd: join(folder, 'gone-2') },
+        { id: 'r1', cwd: join(folder, 'gone-1') },
+      ],
+      { r2: 9, r1: 4 },
+    );
+
+    await expect(
+      service.startTeam(TARGET, { agentKind: 'claude', runs: 2 }),
+    ).rejects.toMatchObject({ errorCode: 'ANALYSIS_FOLDER_GONE' });
+    expect(createChat).not.toHaveBeenCalled();
+  });
 });

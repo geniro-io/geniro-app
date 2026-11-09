@@ -1111,4 +1111,40 @@ describe('TeamStatsService (in-memory sqlite)', () => {
       });
     });
   });
+
+  describe('population', () => {
+    it('counts every run the team has, one whose chat is gone and one outside any sample included', async () => {
+      await teamRun('old-run', 'dev-team', new Date(2025, 0, 1));
+      await turn('old-run', { costUsd: 6, durationMs: 3000 });
+      await teamRun('dev-1');
+      await turn('dev-1', { costUsd: 2, durationMs: 500 });
+      await teamRun('quiet');
+      await teamRun('ops-1', 'ops-team');
+      await turn('ops-1', { costUsd: 50 });
+
+      expect(await service.population('dev-team')).toEqual({
+        runs: 3,
+        perRun: {
+          costUsd: 4,
+          pricedRuns: 2,
+          workedMs: 1750,
+          timedRuns: 2,
+          turns: 0.7,
+        },
+      });
+    });
+
+    it('reads a team with no runs as zeros and nulls', async () => {
+      expect(await service.population('nobody')).toEqual({
+        runs: 0,
+        perRun: {
+          costUsd: null,
+          pricedRuns: 0,
+          workedMs: null,
+          timedRuns: 0,
+          turns: 0,
+        },
+      });
+    });
+  });
 });

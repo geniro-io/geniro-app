@@ -71,6 +71,7 @@ function setup(
   knowledge: Pick<KnowledgeService, 'agentsMayWrite'> &
     Partial<Pick<KnowledgeService, 'checkRecommended'>> = {
     agentsMayWrite: false,
+    checkRecommended: () => Promise.resolve(null),
   },
 ) {
   const memory = { enabled: memoryOn } as MemoryService;
@@ -135,6 +136,17 @@ function setup(
     {
       versionIndex: () =>
         Promise.resolve({ current: null, numbers: new Map() }),
+      population: () =>
+        Promise.resolve({
+          runs: 0,
+          perRun: {
+            costUsd: null,
+            pricedRuns: 0,
+            workedMs: null,
+            timedRuns: 0,
+            turns: 0,
+          },
+        }),
     },
     knowledge,
   );
@@ -320,7 +332,10 @@ describe('ReportRecommendationsTool', () => {
     const filed = await report({ items: [item('W-1')], members: [reviewer] });
 
     expect(missing.content[0]!.text).toContain('assess the members');
-    expect(unknownVerdict.content[0]!.text).toMatch(/^INVALID_ARGS/);
+    expect(unknownVerdict.content[0]!.text).toMatch(
+      /^Not recorded: members\.0\.verdict: /,
+    );
+    expect(unknownVerdict.isError).toBe(true);
     expect(filed.isError).toBe(false);
     expect(filed.content[0]!.text).toContain(
       'with 1 recommendation and 1 member assessment',
@@ -392,7 +407,7 @@ describe('ReportRecommendationsTool', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain(
-      'only repo, user, memory and project recommendations',
+      'only repo, user, memory, project and external recommendations apply',
     );
     expect(written).toEqual([]);
   });
@@ -530,7 +545,19 @@ describe('ReportRecommendationsTool', () => {
 
     expect((await report({ items: [] })).isError).toBe(false);
     const malformed = await report({ items: [{ id: 'W-1' }] });
-    expect(malformed.content[0]!.text).toMatch(/^INVALID_ARGS/);
+    expect(malformed.isError).toBe(true);
+    expect(malformed.content[0]!.text).toMatch(/^Not recorded: /);
+    expect(malformed.content[0]!.text).toContain('items.0.target');
+    expect(written).toHaveLength(1);
+  });
+
+  it('answers a patch that cannot be read as INVALID_ARGS, before any card is touched', async () => {
+    const { report, written } = setup('dev-team');
+
+    await report({ items: [] });
+    const unreadable = await report({ patch: { items: [{ title: 'no id' }] } });
+
+    expect(unreadable.content[0]!.text).toMatch(/^INVALID_ARGS/);
     expect(written).toHaveLength(1);
   });
 

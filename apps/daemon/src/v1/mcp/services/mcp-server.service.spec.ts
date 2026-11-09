@@ -4508,7 +4508,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(described(HOST_PROPOSE_TEAM_TOOL)).toMatch(
       /the team this chat edits/,
     );
-    expect(described(HOST_PROPOSE_TEAM_TOOL)).toContain(HOST_TEAM_CHANGE_TOOL);
+    expect(described(HOST_PROPOSE_TEAM_TOOL)).toContain('recommendation_ids');
     expect(described(HOST_TEAM_CHANGE_TOOL)).toContain(HOST_PROPOSE_TEAM_TOOL);
     expect(described(HOST_BACKUP_TEAM_TOOL)).toContain(HOST_PROPOSE_TEAM_TOOL);
     expect(described(HOST_BACKUP_TEAM_TOOL)).toMatch(/Do NOT use it/);
@@ -4517,7 +4517,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(described(HOST_PROPOSE_TEAM_TOOL)).toMatch(/Do not use it/);
     for (const name of teamTools) {
       expect(described(name), `${name} never says when`).toMatch(
-        /Use it (when|whenever)/,
+        /Use it (when|whenever|only)/,
       );
     }
     expect(described(HOST_TEAM_CHANGE_TOOL)).toMatch(/Do NOT use it/);
@@ -4620,6 +4620,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       'overlay',
       'overlayProjectId',
       'project',
+      'recommendation_ids',
       'summary',
       'reason',
     ]);

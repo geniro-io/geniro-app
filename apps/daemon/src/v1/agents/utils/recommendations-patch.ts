@@ -18,7 +18,7 @@ function patchedList(
   if (changes === undefined && removals === undefined) {
     return held;
   }
-  let list: unknown[] = Array.isArray(held) ? [...held] : [];
+  let list: unknown[] = Array.isArray(held) ? [...(held as unknown[])] : [];
   const named = (entry: unknown, name: unknown): boolean =>
     isEntry(entry) && entry[key] === name;
   for (const name of removals ?? []) {

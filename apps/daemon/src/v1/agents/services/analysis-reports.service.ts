@@ -22,7 +22,6 @@ import {
   RECOMMENDATION_TARGETS,
   type RecommendationItem,
   type RecommendationMarks,
-  type RecommendationsCall,
   type RecommendationsPayload,
   type RecommendationsReport,
   RecommendationsReportSchema,

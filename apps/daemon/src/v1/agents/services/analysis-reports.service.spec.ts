@@ -366,7 +366,7 @@ describe('checkItems — external items', () => {
         folderThere,
       ),
     ).toContainEqual(
-      expect.stringContaining('location must be the absolute folder'),
+      expect.stringContaining('location must be the absolute root folder'),
     );
     expect(
       checkItems(
@@ -379,7 +379,7 @@ describe('checkItems — external items', () => {
         () => false,
       ),
     ).toContainEqual(
-      expect.stringContaining('location must be the absolute folder'),
+      expect.stringContaining('location must be the absolute root folder'),
     );
   });
 

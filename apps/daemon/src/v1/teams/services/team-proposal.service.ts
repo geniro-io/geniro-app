@@ -21,15 +21,15 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { instructionsDiff } from '../../agents/utils/host-project-instructions';
 import {
+  standingProposalCardId,
+  teamVerdictMessage,
+} from '../../agents/utils/host-teams';
+import {
   appliesOf,
   moveOrderRefusal,
   readCard,
   unappliedRefusal,
 } from '../../agents/utils/recommendations-card';
-import {
-  standingProposalCardId,
-  teamVerdictMessage,
-} from '../../agents/utils/host-teams';
 import type { ProjectWire } from '../../projects/projects.types';
 import { ProjectsService } from '../../projects/services/projects.service';
 import {

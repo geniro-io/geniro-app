@@ -8,6 +8,7 @@ export function goalsInstructions(): string {
     "When the task changes, `add`, `update` or `remove` open goals; `list` reads them, the user's edits included. " +
     'Before you finish, `complete` every goal: achieved, not_achieved or dropped, always with `evidence` — the test run, command, link or file that shows it, or why it was dropped. ' +
     'An unclosed goal counts as not achieved. ' +
+    'When later work changes how a closed goal ended — a retry met one you closed as not_achieved — `reopen` it and `complete` it again; never `add` a copy, which counts the same goal twice. ' +
     `Do not use it for your own step-by-step todo list (keep that in your CLI's own task list), and do not use it to report how the whole thread ended — that is ${HOST_RECORD_OUTCOME_TOOL}.`
   );
 }

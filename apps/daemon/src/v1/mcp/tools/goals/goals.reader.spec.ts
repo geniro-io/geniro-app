@@ -29,6 +29,10 @@ describe('readGoals', () => {
       status: 'not_achieved',
       evidence: 'tests red',
     });
+    expect(readGoals({ action: 'reopen', id: 'g1' })).toEqual({
+      action: 'reopen',
+      id: 'g1',
+    });
   });
 
   it('refuses what an action lacks, a blank evidence and unknown arguments', () => {
@@ -41,6 +45,7 @@ describe('readGoals', () => {
     };
     expect(error({ action: 'set' })).toContain('set needs "goals"');
     expect(error({ action: 'remove' })).toContain('remove needs "id"');
+    expect(error({ action: 'reopen' })).toContain('reopen needs "id"');
     expect(error({ action: 'update', id: 'g1' })).toContain('update needs');
     expect(
       error({

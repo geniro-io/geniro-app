@@ -90,6 +90,8 @@ export class GoalsTool extends BaseMcpTool {
           call.status,
           call.evidence,
         );
+      case 'reopen':
+        return this.goals.reopen(runId, actor, call.id);
     }
   }
 }

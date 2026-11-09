@@ -8,19 +8,27 @@ import type { ToolArgs } from '../../mcp.types';
 import { blocksField } from '../project-block-args';
 import { readToolArgs } from '../tool-args';
 
-/** An analysis's write of a project's instructions, and the applied items it carries out. */
+/**
+ * An analysis's write of a project's instructions: with `ids`, the applied items
+ * it carries out, of a project it read through view="project"; without, a change
+ * the user asked for in their own words to any project.
+ */
 export const SaveProjectInstructionsArgsSchema = z.object({
   projectId: z
     .string()
     .min(1)
     .max(200)
-    .describe('The projectId view="project" named'),
-  blocks: blocksField('view="project"'),
+    .describe(
+      'The projectId view="project" named, or the `id` list_projects names',
+    ),
+  blocks: blocksField('view="project" or list_projects with `project`'),
   baseRevision: z
     .number()
     .int()
     .min(0)
-    .describe('The `instructionsRevision` view="project" returned'),
+    .describe(
+      'The `instructionsRevision` view="project" or list_projects with `project` returned',
+    ),
   ids: z
     .array(
       RecommendationIdSchema.regex(
@@ -30,20 +38,33 @@ export const SaveProjectInstructionsArgsSchema = z.object({
     )
     .min(1)
     .max(MAX_RECOMMENDATIONS_PER_TARGET)
-    .describe('The P-n ids this change carries out'),
+    .optional()
+    .describe(
+      'The P-n ids this change carries out; leave it out for a change the user asked for in their own words',
+    ),
 });
 export type SaveProjectInstructionsArgs = z.infer<
   typeof SaveProjectInstructionsArgsSchema
 >;
 
-/** A project chat's write of its own project's instructions: the project is the chat's. */
+/** A project chat's write: its own project's instructions, unless it names another. */
 export const ProjectChatInstructionsArgsSchema = z.object({
-  blocks: blocksField('your brief'),
+  projectId: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "Another project's `id` list_projects names; leave it out for this chat's own",
+    ),
+  blocks: blocksField('your brief, or list_projects with `project`'),
   baseRevision: z
     .number()
     .int()
     .min(0)
-    .describe('The instructions revision your brief names'),
+    .describe(
+      'The instructions revision your brief names, or the `instructionsRevision` list_projects with `project` named',
+    ),
 });
 export type ProjectChatInstructionsArgs = z.infer<
   typeof ProjectChatInstructionsArgsSchema

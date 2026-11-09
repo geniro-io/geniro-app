@@ -598,6 +598,84 @@ describe('TeamProposalService', () => {
     });
   });
 
+  describe("a chat's edits with what moves beside them", () => {
+    const CODER_AUTO = {
+      members: { coder: { settings: { approval: 'auto' as const } } },
+    };
+    const request = {
+      slug: 'team',
+      edits: [{ path: 'members/reviewer/model', value: 'sonnet' }],
+      summary: 'Reviewer on sonnet here',
+      reason: 'The user asked.',
+    };
+
+    it('puts a project’s overlay on the team’s card, and one Approve writes both', async () => {
+      await store.create(TEAM, 'team');
+
+      const outcome = await service.proposeEdits('run-1', {
+        ...request,
+        overlay: CODER_AUTO,
+        projectId: 'p1',
+      });
+
+      expect(outcome).toMatchObject({
+        status: 'shown',
+        proposal: {
+          slug: 'team',
+          team: FASTER,
+          diff: { identical: false },
+          overlay: { projectId: 'p1', projectName: 'Geniro' },
+        },
+      });
+      await expect(overlayStore.get('team', 'p1')).resolves.toBeNull();
+      expect((await store.get('team')).team).toEqual(TEAM);
+
+      approvals.resolve('run-1', standingCard('run-1'), true);
+      const { outcome: verdict } = await verdictAfterPress();
+
+      expect(verdict).toMatchObject({ kind: 'saved', slug: 'team' });
+      expect((await store.get('team')).team).toEqual(FASTER);
+      expect((await overlayStore.get('team', 'p1'))?.overlay).toEqual(
+        CODER_AUTO,
+      );
+    });
+
+    it('refuses an overlay of a project that runs another team, showing no card', async () => {
+      await store.create(TEAM, 'team');
+
+      await expect(
+        service.proposeEdits('run-1', {
+          ...request,
+          overlay: CODER_AUTO,
+          projectId: 'p2',
+        }),
+      ).resolves.toMatchObject({
+        status: 'refused',
+        code: 'OVERLAY_INACTIVE',
+      });
+    });
+
+    it('puts a project’s instructions on the team’s card, and holds the team to what a run start needs', async () => {
+      await store.create(TEAM, 'team');
+      const project = {
+        projectId: 'p1',
+        blocks: [{ id: 'b9', title: 'Stand', text: 'Start the stand.' }],
+        baseRevision: projectRows.get('p1')!.instructionsRevision,
+      };
+
+      const prepared = await service.prepareEdits({ ...request, project });
+
+      expect(prepared).toMatchObject({
+        ok: true,
+        proposal: {
+          team: FASTER,
+          project: { projectId: 'p1', projectName: 'Geniro' },
+        },
+      });
+      expect(assertRunnable).toHaveBeenCalledWith(FASTER);
+    });
+  });
+
   describe("an ordinary chat's overlay of a project", () => {
     const CODER_AUTO = {
       members: { coder: { settings: { approval: 'auto' as const } } },

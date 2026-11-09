@@ -208,10 +208,7 @@ describe('MessageThreadTool', () => {
       acceptsAnyVersion: false,
     });
     const projectChats = new ProjectChatBroker();
-    projectChats.register('run-1', 'agent', {
-      projectId: 'p1',
-      teamSlug: null,
-    });
+    projectChats.register('run-1', 'agent', { projectId: 'p1' });
 
     expect(tool({}, { analysis }).list(LISTING)).toEqual([]);
     expect(tool({}, { teamBuilders }).list(LISTING)).toEqual([]);

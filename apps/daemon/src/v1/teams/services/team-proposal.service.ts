@@ -144,9 +144,9 @@ export class TeamProposalService {
   }
 
   /**
-   * A team builder chat's change to its own team, on the same card:
-   * the edits are carried out on the file as it stands now, and the card
-   * shows what that does to it and writes exactly that on Approve.
+   * A team builder chat's change to the team it edits, on the same card: the
+   * edits are carried out on the file as it stands now, and the card shows what
+   * that does to it and writes exactly that on Approve.
    */
   proposeChange(
     runId: string,
@@ -608,7 +608,7 @@ export class TeamProposalService {
     } catch (error) {
       return refusalOf(error, 'TEAM_NOT_FOUND', (message) => message);
     }
-    const prepared = await this.prepareChange({ ...request, projectId: null });
+    const prepared = await this.prepareChange(request);
     if (!prepared.ok) {
       return prepared.code === 'TEAM_GONE'
         ? {
@@ -622,8 +622,8 @@ export class TeamProposalService {
   }
 
   /**
-   * An ordinary chat's change to a project's overlay, on the card a project's
-   * own chat raises: the team is the one the project runs by default now.
+   * A chat's change to a project's overlay alone: the team is the one the
+   * project runs by default now.
    */
   async prepareOverlay(
     request: TeamOverlayProposalRequest,
@@ -682,7 +682,7 @@ export class TeamProposalService {
     }
   }
 
-  /** The projects that run `slug` by default — whose instructions a builder card may change beside the team. */
+  /** The projects that run `slug` by default — whose instructions a card may change beside the team. */
   async projectsRunning(slug: string): Promise<ProjectWire[]> {
     return (await this.projects.list()).filter(
       (project) => project.teamSlug === slug,
@@ -690,7 +690,7 @@ export class TeamProposalService {
   }
 
   /**
-   * The project half of a builder card: a project that runs this team by
+   * The project half of a team's card: a project that runs this team by
    * default, its blocks filled in and checked as its own write would check
    * them, pinned to the revision the agent read. Null when the agent sent
    * none or it changes nothing.
@@ -717,7 +717,7 @@ export class TeamProposalService {
     if (project.teamSlug !== request.slug) {
       return {
         code: 'PROJECT_NOT_THIS_TEAMS',
-        message: `the project ${project.name} does not run '${request.slug}' by default, so this chat does not change its instructions`,
+        message: `the project ${project.name} does not run '${request.slug}' by default, so its instructions do not go on this team's card — change them alone with save_project_instructions`,
       };
     }
     if (project.instructionsRevision !== asked.baseRevision) {
@@ -755,7 +755,7 @@ export class TeamProposalService {
   }
 
   /**
-   * The overlay half of a builder card, pinned to the overlay file's version:
+   * The overlay half of a team's card, pinned to the overlay file's version:
    * null when the agent sent none or it changes nothing. `effective` is the
    * team the card's auto list is worked out on.
    */
@@ -786,10 +786,7 @@ export class TeamProposalService {
     if (!prepared.ok) {
       return {
         code: prepared.code,
-        message:
-          prepared.code === 'OVERLAY_INACTIVE'
-            ? `the project no longer defaults to team '${request.slug}', so its runs would not use the overlay`
-            : prepared.message,
+        message: prepared.message,
       };
     }
     const { overlay: next, current, effective, diffText } = prepared;

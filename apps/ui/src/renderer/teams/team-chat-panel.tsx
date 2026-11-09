@@ -90,7 +90,7 @@ export function TeamChatPanel({
         discard,
         queueScope: `team-chat:${slug}`,
         emptyText:
-          'Ask for a change — members, instruction blocks or the stages every run walks — or for an analysis of its latest runs. The agent edits this team’s file and the editor reloads when it is done.',
+          'Ask for a change — members, instruction blocks or the stages every run walks — or for an analysis of its latest runs. Other teams and any project are in reach too. The agent puts each change on a card; nothing changes until you approve, and the editor reloads when it is done.',
         composerLabel: 'Ask for a team change',
         composerPlaceholder:
           'Describe the change, or ask what its latest runs suggest…',

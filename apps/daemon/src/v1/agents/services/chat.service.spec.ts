@@ -2920,12 +2920,15 @@ describe('ChatService', () => {
       expect(actionSinks.canPublish(run.id, SINGLE_AGENT_NODE)).toBe(true);
     });
 
-    it('offers the team tools to an ordinary chat turn only', async () => {
+    it('offers the team tools to every kind of chat, and only while its turn runs', async () => {
       const { service, claude, runDao, teamProposals, teamBuilders } = setup();
       const ordinary = await service.createChat({
         agentKind: 'claude',
         cwd: dir,
       });
+      expect(teamProposals.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
+        false,
+      );
       await service.sendMessage(ordinary.id, 'hello');
       expect(teamProposals.canPropose(ordinary.id, SINGLE_AGENT_NODE)).toBe(
         true,
@@ -2943,8 +2946,9 @@ describe('ChatService', () => {
       runDao.runs.get(builder.id)!.editsTeamSlug = 'team';
       await service.sendMessage(builder.id, 'hello');
       expect(teamProposals.canPropose(builder.id, SINGLE_AGENT_NODE)).toBe(
-        false,
+        true,
       );
+      expect(teamBuilders.canEdit(builder.id, SINGLE_AGENT_NODE)).toBe(true);
       await settle(claude);
 
       const analysis = await service.createChat({
@@ -2957,7 +2961,7 @@ describe('ChatService', () => {
       });
       await service.sendMessage(analysis.id, 'hello');
       expect(teamProposals.canPropose(analysis.id, SINGLE_AGENT_NODE)).toBe(
-        false,
+        true,
       );
       expect(teamBuilders.canEdit(analysis.id, SINGLE_AGENT_NODE)).toBe(false);
       await settle(claude);
@@ -2972,12 +2976,12 @@ describe('ChatService', () => {
       });
       await service.sendMessage(teamAnalysis.id, 'hello');
       expect(teamProposals.canPropose(teamAnalysis.id, SINGLE_AGENT_NODE)).toBe(
-        false,
+        true,
       );
       await settle(claude);
     });
 
-    it('offers the project-instructions card to an ordinary chat turn, and not to a builder chat with no runs', async () => {
+    it('offers the project-instructions card to every kind of chat, a builder chat with no runs included', async () => {
       const { service, claude, runDao, projectCards } = setup();
       const ordinary = await service.createChat({
         agentKind: 'claude',
@@ -3001,9 +3005,7 @@ describe('ChatService', () => {
       });
       runDao.runs.get(builder.id)!.editsTeamSlug = 'team';
       await service.sendMessage(builder.id, 'hello');
-      expect(projectCards.canPropose(builder.id, SINGLE_AGENT_NODE)).toBe(
-        false,
-      );
+      expect(projectCards.canPropose(builder.id, SINGLE_AGENT_NODE)).toBe(true);
       await settle(claude);
     });
 
@@ -3047,8 +3049,6 @@ describe('ChatService', () => {
           briefs.push(`${projectId}@${cwd}`);
           return Promise.resolve(`brief of ${projectId}`);
         },
-        teamOf: (projectId) =>
-          Promise.resolve(projectId === 'p1' ? 'dev' : null),
       });
       const chat = await service.createChat({
         agentKind: 'claude',
@@ -3061,19 +3061,16 @@ describe('ChatService', () => {
 
       expect(projectChats.projectOf(chat.id, SINGLE_AGENT_NODE)).toEqual({
         projectId: 'p1',
-        teamSlug: 'dev',
       });
-      expect(projectChats.canProposeOverlay(chat.id, SINGLE_AGENT_NODE)).toBe(
-        true,
-      );
       expect(projectCards.canPropose(chat.id, SINGLE_AGENT_NODE)).toBe(true);
-      expect(teamProposals.canPropose(chat.id, SINGLE_AGENT_NODE)).toBe(false);
+      expect(teamProposals.canPropose(chat.id, SINGLE_AGENT_NODE)).toBe(true);
       expect(briefs).toEqual([`p1@${realpathSync(dir)}`]);
       expect(runDao.runs.get(chat.id)!.teamInstructions).toBe('brief of p1');
 
       await settle(claude);
       expect(projectChats.canEdit(chat.id, SINGLE_AGENT_NODE)).toBe(false);
       expect(projectCards.canPropose(chat.id, SINGLE_AGENT_NODE)).toBe(false);
+      expect(teamProposals.canPropose(chat.id, SINGLE_AGENT_NODE)).toBe(false);
     });
 
     it('puts a patch on the SAME card machinery, flagged as a gate not a question', async () => {
@@ -11819,32 +11816,38 @@ describe('ChatService — approval modes (parity M1)', () => {
     }
   });
 
-  it("approves a project chat's read of its team in an `ask` chat, and no builder tool", async () => {
-    const { service, claude, runDao } = setup();
-    const run = await service.createChat({
-      agentKind: 'claude',
-      cwd: dir,
-      approval: 'ask',
-    });
-    runDao.runs.get(run.id)!.editsProjectId = 'p1';
-    await service.sendMessage(run.id, 'hi');
-    const handle = claude.handles[0]!;
-    for (const tool of [HOST_READ_TEAMS_TOOL, HOST_TEAM_CHANGE_TOOL]) {
-      claude.emit({
-        type: 'approval_request',
-        id: `p-${tool}`,
-        toolName: `mcp__${hostMcpServerName(run.id)}__${tool}`,
-        input: {},
+  it.each([
+    ['a project chat', { editsProjectId: 'p1' }],
+    ['an analysis', { analysisSourceRunId: 'source', analysisSourceSeq: 0 }],
+  ])(
+    "approves %s's read of the library in an `ask` chat, and no builder tool",
+    async (_kind, fields) => {
+      const { service, claude, runDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        approval: 'ask',
       });
-    }
-    await drain();
+      Object.assign(runDao.runs.get(run.id)!, fields);
+      await service.sendMessage(run.id, 'hi');
+      const handle = claude.handles[0]!;
+      for (const tool of [HOST_READ_TEAMS_TOOL, HOST_TEAM_CHANGE_TOOL]) {
+        claude.emit({
+          type: 'approval_request',
+          id: `p-${tool}`,
+          toolName: `mcp__${hostMcpServerName(run.id)}__${tool}`,
+          input: {},
+        });
+      }
+      await drain();
 
-    expect(
-      handle.respondApproval.mock.calls
-        .filter(([, allowed]) => allowed === true)
-        .map(([id]) => id as string),
-    ).toEqual([`p-${HOST_READ_TEAMS_TOOL}`]);
-  });
+      expect(
+        handle.respondApproval.mock.calls
+          .filter(([, allowed]) => allowed === true)
+          .map(([id]) => id as string),
+      ).toEqual([`p-${HOST_READ_TEAMS_TOOL}`]);
+    },
+  );
 
   it('auto-approves the show_comparison CALL, like every drawing tool', async () => {
     const { service, claude, approvals, itemDao } = setup();

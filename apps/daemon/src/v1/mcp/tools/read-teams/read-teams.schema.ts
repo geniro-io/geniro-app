@@ -1,10 +1,7 @@
 import { toolInputSchema } from '../tool-args';
-import type { ReadTeamsAudience } from './read-teams.instructions';
-import { readTeamsArgsSchema } from './read-teams.reader';
+import { ReadTeamsArgsSchema } from './read-teams.reader';
 
-/** `read_teams`'s arguments, generated from the schema each audience is read with: a project's chat names no slug. */
-export function readTeamsSchema(
-  audience: ReadTeamsAudience,
-): Record<string, unknown> {
-  return toolInputSchema(readTeamsArgsSchema(audience));
+/** `read_teams`'s arguments, generated from the schema they are read with. */
+export function readTeamsSchema(): Record<string, unknown> {
+  return toolInputSchema(ReadTeamsArgsSchema);
 }

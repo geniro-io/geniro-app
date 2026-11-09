@@ -8,6 +8,7 @@ import {
 } from '../chat.types';
 import {
   isHostBuilderTeamCall,
+  isHostLibraryReadCall,
   isHostTeamProposalCall,
   teamVerdictMessage,
 } from './host-teams';
@@ -57,6 +58,26 @@ describe('isHostBuilderTeamCall', () => {
     );
     expect(
       isHostBuilderTeamCall(SERVER, `mcp__acme__${HOST_TEAM_CHANGE_TOOL}`),
+    ).toBe(false);
+  });
+});
+
+describe('isHostLibraryReadCall', () => {
+  const call = (tool: string) => `mcp__${SERVER}__${tool}`;
+
+  it('passes the read alone, on geniro’s own server', () => {
+    expect(isHostLibraryReadCall(SERVER, call(HOST_READ_TEAMS_TOOL))).toBe(
+      true,
+    );
+    for (const tool of [
+      HOST_PROPOSE_TEAM_TOOL,
+      HOST_BACKUP_TEAM_TOOL,
+      HOST_TEAM_CHANGE_TOOL,
+    ]) {
+      expect(isHostLibraryReadCall(SERVER, call(tool))).toBe(false);
+    }
+    expect(
+      isHostLibraryReadCall(SERVER, `mcp__acme__${HOST_READ_TEAMS_TOOL}`),
     ).toBe(false);
   });
 });

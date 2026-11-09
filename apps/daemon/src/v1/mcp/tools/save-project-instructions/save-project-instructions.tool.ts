@@ -29,13 +29,11 @@ import {
 } from './save-project-instructions.schema';
 
 /**
- * `save_project_instructions` — an analysis's one write to a project, for the
- * `P-` items the user applied, a project chat's write to its own project, and
- * an ordinary chat's write to the project it names, all through
- * `ProjectInstructionsChangeService`. Offered wherever
- * `report_recommendations` is, in a project's chat and in an ordinary chat. It parks on a card
- * showing the old and new text in every approval mode, and only that card's
- * Apply writes.
+ * `save_project_instructions` — any chat's write to any project, through
+ * `ProjectInstructionsChangeService`: a project chat's own project when it names
+ * none, and an analysis's write of the `P-` items the user applied when it names
+ * those. It parks on a card showing the old and new text in every approval mode,
+ * and only that card's Apply writes.
  */
 export class SaveProjectInstructionsTool extends BaseMcpTool {
   readonly name = HOST_PROJECT_INSTRUCTIONS_TOOL;
@@ -100,8 +98,8 @@ export class SaveProjectInstructionsTool extends BaseMcpTool {
       const read = readProjectChatInstructionsArgs(args);
       return read.ok
         ? this.saveForChat(context, {
-            projectId: projectChat.projectId,
             ...read.query,
+            projectId: read.query.projectId ?? projectChat.projectId,
           })
         : this.invalidArgs(read.error);
     }
@@ -115,14 +113,18 @@ export class SaveProjectInstructionsTool extends BaseMcpTool {
     if (!read.ok) {
       return this.invalidArgs(read.error);
     }
+    const { ids, ...change } = read.query;
+    if (ids === undefined) {
+      return this.saveForChat(context, change);
+    }
     const turn = await this.analysis.turnOf(runId, memberId);
     if ('status' in turn) {
       return this.text(`Nothing saved: ${turn.reason}.`, true);
     }
     try {
       const answer = await context.whileCancellable((signal) =>
-        this.changes.save({ turn, ...read.query }, (change) =>
-          this.cards.propose(runId, memberId, change, signal),
+        this.changes.save({ turn, ...change, ids }, (card) =>
+          this.cards.propose(runId, memberId, card, signal),
         ),
       );
       const result = projectInstructionsResultText(answer);

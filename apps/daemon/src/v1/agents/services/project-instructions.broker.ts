@@ -6,7 +6,7 @@ import type {
 } from '../chat.types';
 import { HostSinkBroker } from './host-sink.broker';
 
-/** Puts an analysis's change to a project's instructions on a card and resolves with the user's answer. */
+/** Puts a chat's change to a project's instructions on a card and resolves with the user's answer. */
 export type ProjectInstructionsProposer = (
   change: HostProjectInstructions,
   signal?: AbortSignal,

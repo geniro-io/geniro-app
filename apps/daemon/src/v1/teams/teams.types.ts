@@ -1018,16 +1018,15 @@ export interface TeamProposalRequest {
 }
 
 /**
- * What a team's builder chat sends `propose_team`: edits to the file
- * as it stands, never the whole team. The slug is the chat's own, never
- * the model's.
+ * A chat's change to a library team on `propose_team`: edits to the file as it
+ * stands, never the whole team, with what the same approval writes beside it.
  */
 export interface TeamChangeProposalRequest {
   slug: string;
   edits: TeamEdit[];
-  /** The bound project's whole overlay document, as the agent sends it. */
+  /** The whole overlay document of `projectId`, as the agent sends it. */
   overlay?: unknown;
-  /** The project the chat is bound to (`Run.editsProjectId`); never the model's. */
+  /** The project `overlay` belongs to, which must default to this team. */
   projectId?: string | null;
   /** A change to the instructions of a project that runs this team by default. */
   project?: {
@@ -1039,12 +1038,12 @@ export interface TeamChangeProposalRequest {
   reason?: string;
 }
 
-export type TeamEditsProposalRequest = Pick<
-  TeamChangeProposalRequest,
-  'slug' | 'edits'
-> & { summary: string; reason: string };
+export type TeamEditsProposalRequest = TeamChangeProposalRequest & {
+  summary: string;
+  reason: string;
+};
 
-/** An ordinary chat's change to one project's overlay of its default team. */
+/** A chat's change to one project's overlay of its default team, whichever team that is. */
 export interface TeamOverlayProposalRequest {
   projectId: string;
   overlay: unknown;

@@ -5,6 +5,7 @@ import {
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
 } from '../../agents/chat.types';
+import { ANY_TEAM_OR_PROJECT } from '../../agents/utils/any-team-or-project';
 import {
   PROJECT_INSTRUCTIONS_MAX,
   type ProjectInstructionBlock,
@@ -88,8 +89,8 @@ ${instructionsLength(project.blocks)} of the ${PROJECT_INSTRUCTIONS_MAX} charact
 
 ${blocks}
 
-Change them only with ${HOST_PROJECT_INSTRUCTIONS_TOOL}: every block as it
-should read — one you keep unchanged as its id alone — with
+Change them only with ${HOST_PROJECT_INSTRUCTIONS_TOOL}, naming no project:
+every block as it should read — one you keep unchanged as its id alone — with
 ${project.revision} as baseRevision. Keep each block about
 one subject, and keep a sentence only if an agent working in this project
 would act differently without it. The description below is the user's to
@@ -116,13 +117,14 @@ section; you cannot change it.`;
   }
   return `ITS TEAM
 The project's runs are run by the team "${target.team.name}" (slug
-\`${target.slug}\`). The team is shared by every project that uses it, and is
-changed on its own page, never here; you cannot change it. Read it — its
-members' roles and instructions, its stages, trigger, mode and blocks —
-with ${HOST_READ_TEAMS_TOOL} whenever the user asks about it or a change needs
-to know it: with no arguments it answers the whole team while it fits one
-answer, else its outline; then read the members, blocks or stages a change
-touches, or \`search\` for the words it names.
+\`${target.slug}\`). The team is shared by every project that uses it, so a
+change to it reaches them all: what only this project needs goes in the
+overlay below, and the team itself changes only when the user asks for that.
+Read it — its members' roles and instructions, its stages, trigger, mode and
+blocks — with ${HOST_READ_TEAMS_TOOL} whenever the user asks about it or a
+change needs to know it: with that slug alone it answers the whole team while
+it fits one answer, else its outline; then read the members, blocks or stages
+a change touches, or \`search\` for the words it names.
 
 What it holds for each member's Model group and pool:
 
@@ -148,8 +150,10 @@ ${target.overlayYaml.trimEnd()}
 ${OVERLAY_FORMAT}
 
 Change the overlay only with ${HOST_PROPOSE_TEAM_TOOL}: pass the WHOLE overlay
-document as it should stand as \`overlay\`, with a one-line \`summary\` and a
-\`reason\`. Never write the overlay or the team file yourself. Leave a Model
+document as it should stand as \`overlay\`, naming no project, with a one-line
+\`summary\` and a \`reason\`. To move text between the team and it, send the
+team's \`edits\` with \`replaces\` set to that slug on the same card. Never
+write the overlay or the team file yourself. Leave a Model
 setting unset unless the user names a value: a value the CLI does not know
 fails the member at run time.`;
 }
@@ -183,5 +187,8 @@ HOW TO WORK
 ${instructionsSection(project)}
 
 ${targetSection(project, target)}
+
+CHANGING ANY TEAM OR PROJECT
+${ANY_TEAM_OR_PROJECT}
 </project-editing>`;
 }

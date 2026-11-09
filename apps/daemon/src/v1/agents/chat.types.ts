@@ -402,10 +402,9 @@ export const HOST_PROJECT_INSTRUCTIONS_TOOL = 'save_project_instructions';
 export const HOST_BACKUP_TEAM_TOOL = 'backup_team';
 
 /**
- * The team tools of an ordinary chat: read the library, and propose a whole
- * team on a card the user approves. The daemon writes the file, never the
- * agent. A team builder chat is offered the read too, ahead of its
- * `save_team_change`.
+ * The team tools of every chat: read the library, and propose a team or a
+ * change to one on a card the user approves. The daemon writes the file, never
+ * the agent.
  */
 export const HOST_READ_TEAMS_TOOL = 'read_teams';
 export const HOST_PROPOSE_TEAM_TOOL = 'propose_team';
@@ -2184,12 +2183,11 @@ export interface HostProjectInstructions {
 }
 
 /**
- * Where a project's own chat is briefed from, and which team's overlay its turn
- * may change — installed by the teams module (`ProjectChatService`).
+ * Where a project's own chat is briefed from — installed by the teams module
+ * (`ProjectChatService`).
  */
 export interface ProjectChatSource {
   brief(projectId: string, cwd: string): Promise<string>;
-  teamOf(projectId: string): Promise<string | null>;
 }
 
 /** What a project-instructions card resolves to; the arms mean what {@link HostPatchOutcome}'s do. */

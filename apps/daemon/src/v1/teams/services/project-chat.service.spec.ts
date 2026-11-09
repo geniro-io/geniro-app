@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { NotFoundException } from '@packages/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProjectChatSource, RunWire } from '../../agents/chat.types';
+import type { RunWire } from '../../agents/chat.types';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { ProjectDao } from '../../projects/dao/project.dao';
 import type { ProjectWire } from '../../projects/projects.types';
@@ -34,7 +34,6 @@ describe('ProjectChatService', () => {
   let overlays: TeamOverlayStoreService;
   let project: ProjectWire | null;
   let events: ProjectEventBus;
-  let source: ProjectChatSource | null;
   let chats: {
     findProjectChat: ReturnType<typeof vi.fn>;
     createChat: ReturnType<typeof vi.fn>;
@@ -69,7 +68,6 @@ describe('ProjectChatService', () => {
       teamSlug: null,
     } as unknown as ProjectWire;
     events = new ProjectEventBus();
-    source = null;
     chats = {
       findProjectChat: vi.fn().mockResolvedValue(null),
       createChat: vi.fn().mockResolvedValue(runWire('new-run')),
@@ -79,9 +77,7 @@ describe('ProjectChatService', () => {
       offeredApproval: vi.fn(
         (_kind: string, approval: string | undefined) => approval,
       ),
-      useProjectChat: vi.fn((installed: ProjectChatSource) => {
-        source = installed;
-      }),
+      useProjectChat: vi.fn(),
     };
     const projects = {
       get: async (id: string) => {
@@ -139,7 +135,7 @@ describe('ProjectChatService', () => {
     expect(brief()).not.toContain('ITS TEAM');
   });
 
-  it('briefs a team-run project on its team’s members and its overlay, and says which team the turn may change', async () => {
+  it('briefs a team-run project on its team’s members and its overlay', async () => {
     const { slug } = await store.create(
       teamOf(
         [
@@ -164,13 +160,29 @@ describe('ProjectChatService', () => {
     expect(brief()).toContain(overlays.pathOf(slug, 'p1'));
     expect(brief()).toContain('effort: max');
     expect(brief()).toMatch(/model: gpt-5/);
-    await expect(source?.teamOf('p1')).resolves.toBe(slug);
   });
 
-  it('answers no team for a project that defaults to an agent or to a team the library lost', async () => {
-    await expect(source?.teamOf('p1')).resolves.toBeNull();
-    project = { ...project!, teamSlug: 'gone' };
-    await expect(source?.teamOf('p1')).resolves.toBeNull();
+  it('tells a project that defaults to an agent that any team or project is within reach', async () => {
+    await service.open('p1', CHIPS);
+
+    expect(brief()).toContain('CHANGING ANY TEAM OR PROJECT');
+    expect(brief()).toContain('`replaces` (its slug)');
+    expect(brief()).toContain('`overlayProjectId`');
+    expect(brief()).toContain('`projectId`');
+  });
+
+  it('tells a team-run project how to change its team, and never that the team is out of reach', async () => {
+    const { slug } = await store.create(
+      teamOf([member('lead')], { name: 'Dev Team' }),
+    );
+    project = { ...project!, teamSlug: slug };
+
+    await service.open('p1', CHIPS);
+
+    expect(brief()).toContain('CHANGING ANY TEAM OR PROJECT');
+    expect(brief()).toContain('`replaces` set to that slug');
+    expect(brief()).not.toContain('you cannot change it. Read it');
+    expect(brief()).not.toContain('never here');
   });
 
   it('re-briefs the open chat instead of starting a second one', async () => {

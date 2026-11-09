@@ -7,6 +7,7 @@ import {
   HOST_MEMORY_SAVE_TOOL,
   HOST_METRICS_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
+  HOST_PROPOSE_TEAM_TOOL,
   HOST_RECOMMENDATIONS_TOOL,
   HOST_TEAM_CHANGE_TOOL,
 } from '../chat.types';
@@ -51,6 +52,20 @@ describe('threadAnalysisGuide', () => {
     expect(chat).not.toContain('Member performance');
     expect(chat).not.toContain('`members`');
     expect(chat).toContain('14. Cluster by root cause');
+  });
+
+  it('tells both analyses a change the user asks for in words goes on its own card, to any team or project', () => {
+    for (const guide of [
+      threadAnalysisGuide('chat', null, true),
+      threadAnalysisGuide('team', null, true),
+      teamAnalysisGuide(null, true),
+    ]) {
+      const section = guide.slice(guide.indexOf('## Beyond the card'));
+      expect(section).toContain('## Beyond the card');
+      expect(section).toContain(HOST_PROPOSE_TEAM_TOOL);
+      expect(section).toContain(HOST_PROJECT_INSTRUCTIONS_TOOL);
+      expect(section).toContain('needs no Apply');
+    }
   });
 
   it('keeps a plain chat to repo and user changes and never names the team save', () => {

@@ -66,8 +66,6 @@ export class ProjectChatService
   onModuleInit(): void {
     this.chats.useProjectChat({
       brief: (projectId, cwd) => this.briefFor(projectId, cwd),
-      teamOf: async (projectId) =>
-        this.defaultTeamOf(await this.projects.get(projectId)),
     });
     this.subscription = this.projectEvents
       .allChanges()

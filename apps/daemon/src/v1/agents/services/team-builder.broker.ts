@@ -3,9 +3,9 @@ import { Injectable } from '@nestjs/common';
 import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 
 /**
- * One builder-chat turn's standing to change its own team. The slug comes
- * from the run (`Run.editsTeamSlug`), never from the model, so the turn can
- * write to that one library file and no other.
+ * Which team one builder-chat turn edits. The slug comes from the run
+ * (`Run.editsTeamSlug`), never from the model: `save_team_change` and
+ * `backup_team` act on that one file, and `propose_team` edits naming no other.
  */
 export interface TeamBuilderSink {
   slug: string;
@@ -30,9 +30,9 @@ export interface TeamBuilderSink {
 }
 
 /**
- * Gates `propose_team`, `save_team_change`, `backup_team` and
- * `read_teams` for a team's own builder chat — the chat docked under
- * the team editor. A change is written by `TeamProposalService` behind the
+ * Gates `save_team_change` and `backup_team` to a team's own builder chat — the
+ * chat docked under the team editor — and says what a `propose_team` naming no
+ * team means there. A change is written by `TeamProposalService` behind the
  * proposal's card; the check is `TeamChangeService`'s, under its builder
  * authority.
  */

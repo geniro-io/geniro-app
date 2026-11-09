@@ -2,8 +2,6 @@ import { Logger } from '@nestjs/common';
 import { BaseException } from '@packages/common';
 
 import { HOST_READ_TEAMS_TOOL } from '../../../agents/chat.types';
-import type { ProjectChatBroker } from '../../../agents/services/project-chat.broker';
-import type { TeamBuilderBroker } from '../../../agents/services/team-builder.broker';
 import type { TeamProposalBroker } from '../../../agents/services/team-proposal.broker';
 import type { TeamOverlayService } from '../../../teams/services/team-overlay.service';
 import type { TeamProposalService } from '../../../teams/services/team-proposal.service';
@@ -15,10 +13,7 @@ import type {
   McpToolResult,
 } from '../../mcp.types';
 import { BaseMcpTool } from '../base-mcp-tool';
-import {
-  type ReadTeamsAudience,
-  readTeamsInstructions,
-} from './read-teams.instructions';
+import { readTeamsInstructions } from './read-teams.instructions';
 import {
   readReadTeamsArgs,
   teamListText,
@@ -31,10 +26,8 @@ import {
 import { readTeamsSchema } from './read-teams.schema';
 
 /**
- * `read_teams` — the team library, read by an ordinary chat (ahead of
- * `propose_team`) or by a team's builder chat (ahead of
- * `save_team_change`); in a project's own chat, the one team its project
- * runs with, which that chat may not change.
+ * `read_teams` — the team library, read by any chat, ahead of `propose_team`
+ * or to bring text from one team to another. Never a team member.
  */
 export class ReadTeamsTool extends BaseMcpTool {
   readonly name = HOST_READ_TEAMS_TOOL;
@@ -42,8 +35,6 @@ export class ReadTeamsTool extends BaseMcpTool {
 
   constructor(
     private readonly gate: TeamProposalBroker,
-    private readonly builders: TeamBuilderBroker,
-    private readonly projectChats: ProjectChatBroker,
     private readonly store: TeamStoreService,
     private readonly overlays: TeamOverlayService,
     private readonly proposals: TeamProposalService,
@@ -51,41 +42,23 @@ export class ReadTeamsTool extends BaseMcpTool {
     super();
   }
 
-  private projectTeamOf(runId: string, memberId: string): string | null {
-    return this.projectChats.projectOf(runId, memberId)?.teamSlug ?? null;
-  }
-
-  private audienceOf(runId: string, memberId: string): ReadTeamsAudience {
-    if (this.builders.canEdit(runId, memberId)) {
-      return 'builder';
-    }
-    return this.projectTeamOf(runId, memberId) === null ? 'chat' : 'project';
-  }
-
   protected isOffered({ runId, memberId }: McpListContext): boolean {
-    return (
-      this.gate.canPropose(runId, memberId) ||
-      this.builders.canEdit(runId, memberId) ||
-      this.projectTeamOf(runId, memberId) !== null
-    );
+    return this.gate.canPropose(runId, memberId);
   }
 
-  protected instructions({ runId, memberId }: McpListContext): string {
-    return readTeamsInstructions(this.audienceOf(runId, memberId));
+  protected instructions(): string {
+    return readTeamsInstructions();
   }
 
-  protected inputSchema({
-    runId,
-    memberId,
-  }: McpListContext): Record<string, unknown> {
-    return readTeamsSchema(this.audienceOf(runId, memberId));
+  protected inputSchema(): Record<string, unknown> {
+    return readTeamsSchema();
   }
 
   protected async run(
     args: Record<string, unknown>,
     context: McpCallContext,
   ): Promise<McpToolResult> {
-    const { runId, memberId } = context;
+    const { runId } = context;
     const read = readReadTeamsArgs(args);
     if (!read.ok) {
       return this.invalidArgs(read.error);
@@ -93,25 +66,11 @@ export class ReadTeamsTool extends BaseMcpTool {
     // A call is not checked against the listing, so the gate is asked again.
     if (!this.isOffered(context)) {
       return this.text(
-        "Not read: the team library is offered to ordinary chats, a team's builder chat and the chat of a project a team runs.",
+        'Not read: the team library is offered to chats, never to a member of a running team.',
         true,
       );
     }
-    const projectTeam =
-      this.audienceOf(runId, memberId) === 'project'
-        ? this.projectTeamOf(runId, memberId)
-        : null;
-    if (
-      projectTeam !== null &&
-      read.query.slug !== undefined &&
-      read.query.slug !== projectTeam
-    ) {
-      return this.text(
-        `Not read: this chat reads only its project's team, \`${projectTeam}\`. Call it with no arguments.`,
-        true,
-      );
-    }
-    const slug = projectTeam ?? read.query.slug;
+    const slug = read.query.slug;
     const teamRead = teamReadOf(read.query);
     if (typeof teamRead === 'string') {
       return this.text(teamRead, true);
@@ -121,25 +80,6 @@ export class ReadTeamsTool extends BaseMcpTool {
         'Not read: name the team with `slug` — the listing (no arguments) names every one.',
         true,
       );
-    }
-    const audience = this.audienceOf(runId, memberId);
-    if (
-      teamRead.kind === 'projects' ||
-      (teamRead.kind === 'overlays' && audience !== 'chat')
-    ) {
-      const own = await this.builders.teamOf(runId, memberId);
-      if ('status' in own) {
-        return this.text(
-          `Not read: a team's ${teamRead.kind} are read in that team's builder chat.`,
-          true,
-        );
-      }
-      if (own.slug !== slug) {
-        return this.text(
-          `Not read: this chat reads the ${teamRead.kind} of the team it edits, \`${own.slug}\`.`,
-          true,
-        );
-      }
     }
     try {
       if (slug === undefined) {
@@ -155,7 +95,6 @@ export class ReadTeamsTool extends BaseMcpTool {
               wire,
               await this.overlays.overlaySources(slug),
               teamRead.offset,
-              audience !== 'chat',
             ),
           );
         case 'projects':

@@ -8,7 +8,12 @@ import { Button } from '../components/ui/button';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
-import { currentOf } from '../knowledge/knowledge-text';
+import {
+  currentOf,
+  GLOBAL_PLACE,
+  projectPlace,
+  teamPlace,
+} from '../knowledge/knowledge-text';
 import type { BlockStatus } from './block-shell';
 import { type GeniroKnowledgeTool, geniroKnowledgeToolOf } from './geniro-tool';
 import {
@@ -33,13 +38,43 @@ export const KnowledgeOpenContext = createContext<
   ((target: KnowledgeOpenTarget) => void) | null
 >(null);
 
+/** Another place a call named with `project` or `team`, instead of the run's own. */
+export interface KnowledgeNamedPlace {
+  project: string | null;
+  team: string | null;
+}
+
 /**
- * What a row asks of the run's own places: the documents under a handle, nearest
- * first, or what `knowledge_search` finds now. A null search lists what the run
- * sees. The second is for a call whose result carries no text, which is every
- * successful call on a CLI that reports an MCP result as a bare success.
+ * What a row asks of the run's own places, or of the place its call named: the
+ * documents under a handle, nearest first, or what `knowledge_search` finds now.
+ * A null search lists what the run sees. The second is for a call whose result
+ * carries no text, which is every successful call on a CLI that reports an MCP
+ * result as a bare success.
  */
-export type KnowledgeLookup = { handle: string } | { search: string | null };
+export type KnowledgeLookup = (
+  { handle: string } | { search: string | null }
+) & {
+  elsewhere?: KnowledgeNamedPlace;
+};
+
+/**
+ * Of `heads`, what a call in the named place sees, nearest first.
+ *
+ * TWIN PARSER: `placeKeysOf` in `apps/daemon/src/v1/knowledge/utils/knowledge-text.ts`.
+ */
+export function headsInNamedPlace(
+  heads: readonly KnowledgeHead[],
+  { project, team }: KnowledgeNamedPlace,
+): KnowledgeHead[] {
+  const keys = [
+    ...(project === null ? [] : [projectPlace(project)]),
+    ...(team === null ? [] : [teamPlace(team)]),
+    GLOBAL_PLACE,
+  ];
+  return heads
+    .filter((head) => keys.includes(head.place))
+    .toSorted((a, b) => keys.indexOf(a.place) - keys.indexOf(b.place));
+}
 
 export type KnowledgeLoader = (
   lookup: KnowledgeLookup,
@@ -77,7 +112,7 @@ export interface KnowledgeDocLine {
 type SaveOutcome = 'saved' | 'proposed' | 'stale' | 'refused';
 
 /** What a knowledge tool call said and got back, read off its untyped payloads. */
-export type KnowledgeToolEntry =
+export type KnowledgeToolEntry = (
   | {
       tool: 'knowledge_search';
       query: string | null;
@@ -103,7 +138,11 @@ export type KnowledgeToolEntry =
       created: boolean;
       note: string | null;
       documents: KnowledgeDocLine[];
-    };
+    }
+) & {
+  /** The place the call named; absent for the run's own. */
+  elsewhere?: KnowledgeNamedPlace;
+};
 
 type SaveEntry = Extract<KnowledgeToolEntry, { tool: 'knowledge_save' }>;
 
@@ -314,7 +353,26 @@ function saveEntry(
   };
 }
 
+function namedPlaceOf(
+  args: Record<string, unknown>,
+): KnowledgeNamedPlace | null {
+  const project = textArg(args, 'project');
+  const team = textArg(args, 'team');
+  return project === null && team === null ? null : { project, team };
+}
+
 function entryOf(
+  tool: GeniroKnowledgeTool,
+  args: Record<string, unknown>,
+  text: string | null,
+  failed: boolean,
+): KnowledgeToolEntry | null {
+  const entry = ownEntryOf(tool, args, text, failed);
+  const elsewhere = namedPlaceOf(args);
+  return entry === null || elsewhere === null ? entry : { ...entry, elsewhere };
+}
+
+function ownEntryOf(
   tool: GeniroKnowledgeTool,
   args: Record<string, unknown>,
   text: string | null,
@@ -643,13 +701,15 @@ export function KnowledgeToolRow({
       if (!open || loadKnowledge === null) {
         return;
       }
+      const elsewhere =
+        entry.elsewhere === undefined ? {} : { elsewhere: entry.elsewhere };
       if (searchesItself && entry.tool === 'knowledge_search') {
         if (searching.current) {
           return;
         }
         searching.current = true;
         setOwnSearch('loading');
-        loadKnowledge({ search: entry.query })
+        loadKnowledge({ search: entry.query, ...elsewhere })
           .then(
             (heads) => {
               setFresh(new Map(heads.map((head) => [head.handle, head])));
@@ -664,7 +724,7 @@ export function KnowledgeToolRow({
         return;
       }
       for (const doc of entry.documents) {
-        loadKnowledge({ handle: doc.handle }).then(
+        loadKnowledge({ handle: doc.handle, ...elsewhere }).then(
           (heads) =>
             setFresh((current) =>
               new Map(current).set(

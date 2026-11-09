@@ -203,6 +203,7 @@ describe('composeTeamChatInstructions', () => {
       expect(editing).toContain('CHANGING ANY TEAM OR PROJECT');
       expect(editing).toContain('`replaces` (its slug)');
       expect(editing).toContain('`overlayProjectId`');
+      expect(editing).toContain('`project` (its id) or `team` (its slug)');
       expect(editing).not.toContain('This chat changes only this');
       expect(editing).not.toContain('never edit them here');
     }

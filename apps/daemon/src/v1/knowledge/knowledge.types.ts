@@ -128,11 +128,16 @@ export interface KnowledgeHead {
   updatedAt: Date;
 }
 
-/** Where a knowledge call stands: the run's place and who is calling. */
+/** Where a knowledge call stands: the place it acts in and who is calling. */
 export interface KnowledgeCallScope {
   place: RunPlace;
   actor: KnowledgeActor;
+  /** The call named another place than the run's own. */
+  elsewhere?: true;
 }
+
+/** The longest project id or team slug a knowledge call may name. */
+export const KNOWLEDGE_PLACE_NAME_MAX_CHARS = 200;
 
 const KnowledgeSourceSchema = z.object({
   actor: z.enum(KNOWLEDGE_ACTOR_KINDS),

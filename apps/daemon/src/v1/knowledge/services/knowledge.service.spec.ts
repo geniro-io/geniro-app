@@ -1391,6 +1391,88 @@ describe('KnowledgeService', () => {
     });
   });
 
+  describe('a place a chat names', () => {
+    const OTHER = { projectId: 'p2', teamSlug: null };
+    const ACTOR = {
+      kind: 'agent' as const,
+      runId: 'r',
+      memberId: 'm',
+      agentKind: null,
+      model: null,
+    };
+
+    beforeEach(async () => {
+      const em = orm.em.fork();
+      em.persist(make(Project, { id: 'p2', name: 'Docs', folder: '/docs' }));
+      await em.flush();
+      service.setConfig({ enabled: true, agentWrites: 'direct' });
+    });
+
+    it('answers the place, or why there is no such place', async () => {
+      await expect(service.placeNamed(OTHER)).resolves.toEqual(OTHER);
+      await expect(
+        service.placeNamed({ projectId: 'ghost', teamSlug: null }),
+      ).resolves.toMatchObject({ kind: 'refused', code: 'NO_PROJECT' });
+      service.useTeamLookup(async () => false);
+      await expect(
+        service.placeNamed({ projectId: null, teamSlug: 'ghost' }),
+      ).resolves.toMatchObject({ kind: 'refused', code: 'NO_TEAM' });
+    });
+
+    it('files, finds, reads and edits a document there, out of reach of the run’s own place', async () => {
+      const IN_P1 = { projectId: 'p1', teamSlug: null };
+      const created = applied(
+        await service.save(
+          ACTOR,
+          {
+            title: 'Stand',
+            whenToRead: 'Starting the stand.',
+            body: 'Start it first.',
+            reason: 'r',
+          },
+          OTHER,
+        ),
+      );
+
+      expect(created.place).toBe('project:p2');
+      expect((await service.search(IN_P1, 'stand')).total).toBe(0);
+      expect((await service.search(OTHER, 'stand')).total).toBe(1);
+      expect(await service.read(IN_P1, created.handle)).toMatchObject({
+        kind: 'missing',
+      });
+      expect(await service.read(OTHER, created.handle)).toMatchObject({
+        kind: 'found',
+      });
+      expect(
+        refusalOf(
+          await service.save(
+            ACTOR,
+            {
+              handle: created.handle,
+              rev: created.rev,
+              edits: [{ find: 'first', replace: 'last' }],
+              reason: 'r',
+            },
+            IN_P1,
+          ),
+        ),
+      ).toBe('NOT_FOUND');
+      const edited = applied(
+        await service.save(
+          ACTOR,
+          {
+            handle: created.handle,
+            rev: created.rev,
+            edits: [{ find: 'first', replace: 'last' }],
+            reason: 'r',
+          },
+          OTHER,
+        ),
+      );
+      expect(edited.body).toBe('Start it last.');
+    });
+  });
+
   describe('the run index', () => {
     const facts = { taskId: null, cwd: null, projectId: 'p1' };
 

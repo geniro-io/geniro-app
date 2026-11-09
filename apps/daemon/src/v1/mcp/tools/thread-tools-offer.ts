@@ -10,14 +10,22 @@ export interface ThreadToolGates {
   projectChats: ProjectChatBroker;
 }
 
-/** Whether a turn is offered the tools that reach other threads. */
-export function offersThreadTools(
+/** Whether a turn belongs to the app's own analysis, builder or project chat. */
+export function isAppOwnChat(
   gates: ThreadToolGates,
   { runId, memberId }: McpListContext,
 ): boolean {
   return (
-    !gates.analysis.canAnalyse(runId, memberId) &&
-    !gates.teamBuilders.canEdit(runId, memberId) &&
-    !gates.projectChats.canEdit(runId, memberId)
+    gates.analysis.canAnalyse(runId, memberId) ||
+    gates.teamBuilders.canEdit(runId, memberId) ||
+    gates.projectChats.canEdit(runId, memberId)
   );
+}
+
+/** Whether a turn is offered the tools that reach other threads. */
+export function offersThreadTools(
+  gates: ThreadToolGates,
+  context: McpListContext,
+): boolean {
+  return !isAppOwnChat(gates, context);
 }

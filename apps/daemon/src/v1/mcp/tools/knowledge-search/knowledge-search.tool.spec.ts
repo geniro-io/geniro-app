@@ -7,7 +7,11 @@ import {
 import type { KnowledgeSearchResult } from '../../../knowledge/knowledge.types';
 import type { KnowledgeService } from '../../../knowledge/services/knowledge.service';
 import type { RunPlace } from '../../../projects/projects.types';
-import { AGENT_SCOPE, CALL } from '../__tests__/knowledge-tool-fixtures';
+import {
+  AGENT_SCOPE,
+  CALL,
+  ordinaryChat,
+} from '../__tests__/knowledge-tool-fixtures';
 import { KnowledgeSearchTool } from './knowledge-search.tool';
 
 const SECRET = 'geniro-test-token-9f3a2b7c';
@@ -53,7 +57,7 @@ describe('KnowledgeSearchTool', () => {
       hits: [RELEASE_HIT],
       total: 1,
     });
-    const result = await new KnowledgeSearchTool(service).call(
+    const result = await new KnowledgeSearchTool(service, ordinaryChat()).call(
       'knowledge_search',
       { query: 'release' },
       CALL,
@@ -75,7 +79,7 @@ describe('KnowledgeSearchTool', () => {
 
   it('says so when no document the run sees matches the query', async () => {
     const { service } = fakeKnowledge({ hits: [], total: 0 });
-    const result = await new KnowledgeSearchTool(service).call(
+    const result = await new KnowledgeSearchTool(service, ordinaryChat()).call(
       'knowledge_search',
       { query: 'release' },
       CALL,
@@ -93,7 +97,7 @@ describe('KnowledgeSearchTool', () => {
       { hits: [RELEASE_HIT], total: 1 },
       false,
     );
-    const result = await new KnowledgeSearchTool(service).call(
+    const result = await new KnowledgeSearchTool(service, ordinaryChat()).call(
       'knowledge_search',
       { query: 'release' },
       CALL,
@@ -116,11 +120,10 @@ describe('KnowledgeSearchTool', () => {
         hits: [{ ...RELEASE_HIT, title: `Key ${SECRET}` }],
         total: 1,
       });
-      const result = await new KnowledgeSearchTool(service).call(
-        'knowledge_search',
-        { query: 'key' },
-        CALL,
-      );
+      const result = await new KnowledgeSearchTool(
+        service,
+        ordinaryChat(),
+      ).call('knowledge_search', { query: 'key' }, CALL);
       const text = result.content[0];
       expect(text?.type === 'text' && text.text).toContain(
         '‹test key redacted›',

@@ -1,4 +1,7 @@
 import {
+  HOST_KNOWLEDGE_READ_TOOL,
+  HOST_KNOWLEDGE_SAVE_TOOL,
+  HOST_KNOWLEDGE_SEARCH_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
@@ -14,5 +17,6 @@ export const ANY_TEAM_OR_PROJECT = `Nothing limits you to what this chat was ope
 - A library team: \`${HOST_PROPOSE_TEAM_TOOL}\` with \`replaces\` (its slug), \`edits\`, \`summary\` and \`reason\`; a new team goes whole in \`team\`.
 - A project's overlay of its default team: \`${HOST_PROPOSE_TEAM_TOOL}\` with \`overlay\` (the WHOLE document as it should stand), \`overlayProjectId\`, \`summary\` and \`reason\`.
 - A project's instructions: \`${HOST_PROJECT_INSTRUCTIONS_TOOL}\` with \`projectId\`, every block as it should read and that revision as \`baseRevision\`.
+- A project's or a team's knowledge: \`${HOST_KNOWLEDGE_SEARCH_TOOL}\`, \`${HOST_KNOWLEDGE_READ_TOOL}\` and \`${HOST_KNOWLEDGE_SAVE_TOOL}\` with \`project\` (its id) or \`team\` (its slug). A team's own knowledge is reached this way from its chat and its analyses too. A change waits on the Knowledge page while the user reviews agent writes.
 - Text moving between a team and a project that runs it: the team's \`edits\` with \`overlay\` and \`overlayProjectId\`, or with \`project\`, on ONE \`${HOST_PROPOSE_TEAM_TOOL}\` card, so one approval writes both.
 Each change waits on a card the user answers, and a new proposal replaces the one standing, so send the next target only after the verdict on the last. Change only what the user asked for.`;

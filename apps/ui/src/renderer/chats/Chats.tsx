@@ -214,9 +214,10 @@ import type { HostedThread } from './hosted-thread';
 import { foldsHolding } from './jump-folds';
 import { jumpAnchorProps } from './jump-target';
 import { JumpToLatest } from './jump-to-latest';
-import type {
-  KnowledgeLookup,
-  KnowledgeOpenTarget,
+import {
+  headsInNamedPlace,
+  type KnowledgeLookup,
+  type KnowledgeOpenTarget,
 } from './knowledge-tool-row';
 import { CHAT_LIVE_KEY, liveTextKey, partialOwnerKey } from './live-text';
 import {
@@ -3770,12 +3771,22 @@ export function Chats({
   const loadKnowledge = useLatestCallback(
     async (lookup: KnowledgeLookup) => {
       const runId = activeRunId ?? undefined;
+      const { elsewhere } = lookup;
       if ('handle' in lookup) {
+        const { documents } = await apis.knowledge.listKnowledge(
+          elsewhere === undefined
+            ? { handle: lookup.handle, runId }
+            : { handle: lookup.handle },
+        );
+        return elsewhere === undefined
+          ? documents
+          : headsInNamedPlace(documents, elsewhere);
+      }
+      if (elsewhere !== undefined) {
         const { documents } = await apis.knowledge.listKnowledge({
-          handle: lookup.handle,
-          runId,
+          q: lookup.search ?? undefined,
         });
-        return documents;
+        return headsInNamedPlace(documents, elsewhere);
       }
       if (runId === undefined) {
         throw new Error('no run to search for');

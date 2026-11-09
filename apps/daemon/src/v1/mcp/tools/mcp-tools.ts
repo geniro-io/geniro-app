@@ -171,9 +171,9 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new MemoryReadTool(deps.memory),
     new MemorySaveTool(deps.memory),
     new MemoryForgetTool(deps.memory),
-    new KnowledgeSearchTool(deps.knowledge),
-    new KnowledgeReadTool(deps.knowledge),
-    new KnowledgeSaveTool(deps.knowledge),
+    new KnowledgeSearchTool(deps.knowledge, deps),
+    new KnowledgeReadTool(deps.knowledge, deps),
+    new KnowledgeSaveTool(deps.knowledge, deps),
     new ReadTeamsTool(
       deps.teamGate,
       deps.teamStore,

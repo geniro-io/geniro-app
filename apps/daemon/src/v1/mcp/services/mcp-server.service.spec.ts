@@ -29,9 +29,11 @@ import {
   HOST_KNOWLEDGE_SEARCH_TOOL,
   HOST_KNOWLEDGE_TOOLS,
   HOST_LIST_MONITORS_TOOL,
+  HOST_LIST_THREADS_TOOL,
   HOST_MEMORY_SAVE_TOOL,
   HOST_MEMORY_SEARCH_TOOL,
   HOST_MEMORY_TOOLS,
+  HOST_MESSAGE_THREAD_TOOL,
   HOST_METRICS_TOOL,
   HOST_MOVE_STAGE_TOOL,
   HOST_NOTIFY_TOOL,
@@ -123,6 +125,7 @@ import type { TeamChangeService } from '../../teams/services/team-change.service
 import type { TeamOverlayService } from '../../teams/services/team-overlay.service';
 import type { TeamProposalService } from '../../teams/services/team-proposal.service';
 import type { TeamStoreService } from '../../teams/services/team-store.service';
+import type { ThreadDeliveryService } from '../../teams/services/thread-delivery.service';
 import {
   ALWAYS_LOADED_TOOL_META,
   DEFAULT_AWAIT_TIMEOUT_MS,
@@ -237,6 +240,7 @@ function service(
 ): McpServerService {
   return new McpServerService(
     createMcpTools({
+      threadDelivery: {} as ThreadDeliveryService,
       calls: callBroker,
       questions,
       findings,
@@ -795,13 +799,13 @@ describe('McpServerService', () => {
       };
 
       const on = await names(fakeMemory(true).service);
+      const afterHistory = on.indexOf(HOST_READ_CHAT_CONTEXT_TOOL) + 1;
+      expect(on.slice(afterHistory, afterHistory + 2)).toEqual([
+        HOST_LIST_THREADS_TOOL,
+        HOST_MESSAGE_THREAD_TOOL,
+      ]);
       expect(
-        on.slice(
-          on.indexOf(HOST_READ_CHAT_CONTEXT_TOOL) + 1,
-          on.indexOf(HOST_READ_CHAT_CONTEXT_TOOL) +
-            1 +
-            HOST_MEMORY_TOOLS.length,
-        ),
+        on.slice(afterHistory + 2, afterHistory + 2 + HOST_MEMORY_TOOLS.length),
       ).toEqual([...HOST_MEMORY_TOOLS]);
       expect(await names(fakeMemory(false).service)).not.toEqual(
         expect.arrayContaining([HOST_MEMORY_SEARCH_TOOL]),
@@ -911,6 +915,8 @@ describe('McpServerService', () => {
       HOST_GOALS_TOOL,
       HOST_SEARCH_CHATS_TOOL,
       HOST_READ_CHAT_CONTEXT_TOOL,
+      HOST_LIST_THREADS_TOOL,
+      HOST_MESSAGE_THREAD_TOOL,
     ]);
     expect(tools[0]!.description).toContain('Helper');
     // Each callee's own description is the caller's routing signal — the
@@ -1294,6 +1300,8 @@ describe('McpServerService', () => {
       HOST_QUESTION_TOOL,
       HOST_SEARCH_CHATS_TOOL,
       HOST_READ_CHAT_CONTEXT_TOOL,
+      HOST_LIST_THREADS_TOOL,
+      HOST_MESSAGE_THREAD_TOOL,
     ]);
   });
 
@@ -3686,6 +3694,65 @@ describe('McpServerService — what the descriptions tell a model', () => {
     expect(find(tools, 'list_projects')).toMatch(/ARMED/);
   });
 
+  it('lists list_threads and message_thread without a read-only hint, so no CLI skips the card', async () => {
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as {
+        tools: { name: string; annotations?: { readOnlyHint?: boolean } }[];
+      }
+    ).tools.filter((tool) =>
+      [HOST_LIST_THREADS_TOOL, HOST_MESSAGE_THREAD_TOOL].includes(tool.name),
+    );
+
+    expect(tools.map((tool) => tool.name)).toEqual([
+      HOST_LIST_THREADS_TOOL,
+      HOST_MESSAGE_THREAD_TOOL,
+    ]);
+    for (const tool of tools) {
+      expect(tool.annotations?.readOnlyHint, tool.name).toBeUndefined();
+    }
+  });
+
+  it('keeps each thread tool apart from the tool it overlaps', async () => {
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: ToolListing[] }).tools;
+    const threads = find(tools, HOST_LIST_THREADS_TOOL);
+    const message = find(tools, HOST_MESSAGE_THREAD_TOOL);
+
+    expect(threads).toContain(
+      "archived threads and the app's own builder, project and analysis chats are not listed",
+    );
+    expect(find(tools, HOST_SEARCH_CHATS_TOOL)).toMatch(/archived/);
+    expect(threads).not.toContain('call_agent');
+    expect(threads).toContain('list_agent_threads');
+    expect(message).toContain(HOST_LIST_THREADS_TOOL);
+    expect(message).toContain('message_agent');
+    expect(find(tools, 'list_agent_threads')).toContain(HOST_LIST_THREADS_TOOL);
+    expect(find(tools, 'message_agent')).toContain(HOST_MESSAGE_THREAD_TOOL);
+  });
+
+  it('says await_agent can return for a message from another thread, not only from the user', async () => {
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: ToolListing[] }).tools;
+
+    expect(find(tools, 'await_agent')).toContain('from another thread');
+  });
+
   it('tells the asker a timed-out question is still on screen, and how to keep waiting', async () => {
     // The runtime DEPENDS on this sentence: the card outlives the call, and a
     // retry only re-attaches to it when the words are identical. Drop the
@@ -4368,6 +4435,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       acceptsAnyVersion: false,
     });
     const tools = createMcpTools({
+      threadDelivery: {} as ThreadDeliveryService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
       findings: new FindingsReportBroker(),
@@ -4455,6 +4523,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       Promise.resolve({ status: 'declined' }),
     );
     return createMcpTools({
+      threadDelivery: {} as ThreadDeliveryService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
       findings: new FindingsReportBroker(),
@@ -4660,6 +4729,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         }),
     } as unknown as TeamStoreService;
     const tool = createMcpTools({
+      threadDelivery: {} as ThreadDeliveryService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
       findings: new FindingsReportBroker(),
@@ -4785,6 +4855,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       }),
     );
     const tool = createMcpTools({
+      threadDelivery: {} as ThreadDeliveryService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
       findings: new FindingsReportBroker(),
@@ -4866,6 +4937,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
     );
     const team = teamOf([member('lead')], { name: 'x' });
     const tools = createMcpTools({
+      threadDelivery: {} as ThreadDeliveryService,
       calls: new CallBroker(),
       questions: new UserQuestionBroker(),
       findings: new FindingsReportBroker(),
@@ -4927,6 +4999,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamProposals: unknown,
     ): ReturnType<typeof createMcpTools> =>
       createMcpTools({
+        threadDelivery: {} as ThreadDeliveryService,
         calls: new CallBroker(),
         questions: new UserQuestionBroker(),
         findings: new FindingsReportBroker(),

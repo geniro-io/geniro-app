@@ -41,6 +41,7 @@ import { ProcessRegistry } from './process-registry';
 import type { RunProcessReaper } from './run-process-reaper.service';
 import { RunTeardownService } from './run-teardown.service';
 import { SessionTranscriptsService } from './session-transcripts.service';
+import { ThreadInboxService } from './thread-inbox.service';
 
 /**
  * The teardown's own spec, over REAL DAOs on a real in-memory schema.
@@ -63,6 +64,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let removedArtifactRuns: string[];
   /** The run's CLIs closing and its detached processes being reaped, in order. */
   let processEnds: string[];
+  let inboxCancels: { runId: string; why: string; runStillThere: boolean }[];
   let commands: ActionCommandRegistry;
   let monitors: MonitorRegistry;
   /** Every CLI transcript the teardown asked an adapter to delete. */
@@ -113,6 +115,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     await orm.schema.clear();
     removedArtifactRuns = [];
     processEnds = [];
+    inboxCancels = [];
     commands = new ActionCommandRegistry();
     monitors = new MonitorRegistry(new ProcessRegistry());
     referencedTexts = [];
@@ -123,6 +126,15 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     nodeStateDao = new NodeStateDao(em);
     callContextDao = new CallContextDao(em);
     wallTurnDao = new WallTurnDao(em);
+    const threadInbox = {
+      cancelFor: async (runId: string, why: string) => {
+        inboxCancels.push({
+          runId,
+          why,
+          runStillThere: (await runDao.getById(runId, orm.em.fork())) !== null,
+        });
+      },
+    } as unknown as ThreadInboxService;
     teardown = new RunTeardownService(
       itemDao,
       nodeStateDao,
@@ -174,6 +186,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       } as unknown as RunProcessReaper,
       wallTurnDao,
       commands,
+      threadInbox,
       monitors,
     );
   });
@@ -199,6 +212,16 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     await teardown.purge(orm.em.fork(), 'run-a', undefined);
 
     expect(processEnds).toEqual(['closeRun run-a', 'reap run-a']);
+  });
+
+  it('cancels what waits for the thread before its rows go', async () => {
+    await seedRun('run-a');
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(inboxCancels).toEqual([
+      { runId: 'run-a', why: 'deleted', runStillThere: true },
+    ]);
   });
 
   it('ends the command actions the run has running — that run’s only', () => {

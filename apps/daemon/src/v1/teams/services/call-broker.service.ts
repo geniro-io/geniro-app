@@ -174,7 +174,7 @@ function syncOutlastedNote(callId: string): string {
 
 /** What a caller released by {@link INTERRUPTED} is told to do next. */
 const USER_MESSAGE_NOTE =
-  'The user sent you a message while you were waiting — it is delivered right after this result. ' +
+  'A message reached you while you were waiting, from the user or from another thread, and it says which — it is delivered right after this result. ' +
   'Read it and respond to it first. Your calls are untouched and still running: collect them with await_agent afterwards ' +
   '(if you have already answered that message, simply wait again).';
 

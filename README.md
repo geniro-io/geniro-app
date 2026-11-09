@@ -318,6 +318,17 @@ Every chat and team run can say what it set out to do and whether it did it.
 - **Outcome.** An agent records how the whole thread ended — success, partial, failed or abandoned — with `record_outcome`, beside its pull-request outcomes. Without one, the goals decide once all are closed: all achieved is a success, some is partial, none is failed.
 - **Counted for good.** Goals, outcomes, every tool and MCP-server call, every stage move and every call between team members are written to ledgers that outlive the chat, so the Stats page and a team's Statistics tab keep counting them after a thread is deleted. An analysis reads the goals with their evidence, the outcome, each MCP server's calls and failures, the stage moves and the calls between members.
 
+## ✉️ Messages between threads
+
+An agent in one thread can tell another thread something while it works: a finding, a decision, a warning. It looks the thread up with `list_threads` and writes with `message_thread`, on claude, cursor-agent and codex alike, in chats and team runs; a team's lead receives what is sent to its run.
+
+- **It works like any other tool.** It follows the sending chat's approval mode: in `auto` it goes out with no question, and otherwise you approve it on a card that shows the target thread and the whole text, unless the mode refuses tools outright, as claude's `plan` does. The receiving thread's mode does not matter: its agent reads an ordinary message, marked as coming from another agent, and it gives no permission to anything.
+- **It finds its way in.** A working agent reads it at its next step, without stopping what is running; cursor-agent gets it when its turn ends. An idle thread opens a turn for it. A stopped or failed thread, or one with a question for you, starts nothing, and the message goes out with its next turn.
+- **It has brakes.** The sender can leave a thread asleep with `wake: false`, a large idle thread whose cache has gone cold is not woken, and a thread is woken at most six times an hour and takes at most 30 messages an hour into a running turn. A message that has to wait says why, in the sender's chat and in a chip above the receiver's composer, where you can read it and press **Remove**. A removed message never reaches the agent and the sender is told.
+- **Any thread on this Mac**, except archived ones and the app's own team-builder, project and analysis chats. A message survives a restart of the app.
+
+Claude Code's own messaging between sessions stays closed on Geniro's turns: a terminal `claude` session cannot write into a Geniro thread, and `SendMessage` keeps its other job of resuming background sub-agents.
+
 ## 🔬 Thread analyzer
 
 Finished a long run and wondering why it took 40 minutes? Press **Analyze thread**.

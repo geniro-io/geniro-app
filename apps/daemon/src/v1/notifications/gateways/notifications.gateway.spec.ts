@@ -556,6 +556,39 @@ describe('NotificationsGateway', () => {
     expect(emit).toHaveBeenCalledTimes(2);
   });
 
+  it('broadcasts a thread message change to every client, phone included, until destroyed', () => {
+    const bus = new AgentEventBus();
+    const gw = new NotificationsGateway(
+      runtime,
+      bus,
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+      subagents(),
+      new ShareEventBus(),
+      new MemoryEventBus(),
+      new ProjectEventBus(),
+      new KnowledgeEventBus(),
+    );
+    const emit = vi.fn();
+    const to = vi.fn(() => ({ emit: vi.fn() }));
+    gw.afterInit({ emit, to } as unknown as Server);
+
+    bus.publishThreadMessagesChanged('r1');
+
+    expect(emit).toHaveBeenCalledWith('thread_messages_changed', {
+      runId: 'r1',
+    });
+    expect(to).not.toHaveBeenCalled();
+
+    gw.onModuleDestroy();
+    bus.publishThreadMessagesChanged('r2');
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
   it('broadcasts a project write to every client, phone included, until destroyed', () => {
     const projects = new ProjectEventBus();
     const gw = new NotificationsGateway(

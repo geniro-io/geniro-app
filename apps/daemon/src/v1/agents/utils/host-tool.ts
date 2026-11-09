@@ -1,3 +1,5 @@
+import { asRecord } from './json-util';
+
 /**
  * Whether a permission request names one of geniro's OWN tools on geniro's own
  * MCP server.
@@ -40,4 +42,19 @@ export function isHostToolCall(
     toolName === `mcp__${serverName}__${hostToolName}` ||
     toolName === `${serverName}-${hostToolName}: ${hostToolName}`
   );
+}
+
+/**
+ * The arguments of a call {@link isHostToolCall} matched. cursor's permission
+ * request wraps them as `{providerIdentifier, toolName, args}`, measured on
+ * cursor-agent 2026.11.05-86047df; claude and codex send them bare.
+ */
+export function hostToolArguments(
+  input: unknown,
+  hostToolName: string,
+): unknown {
+  const envelope = asRecord(input);
+  return envelope?.toolName === hostToolName && asRecord(envelope.args) !== null
+    ? envelope.args
+    : input;
 }

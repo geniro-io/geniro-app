@@ -178,6 +178,7 @@ import {
   isHostTeamProposalCall,
   standingProposalCardId,
 } from '../utils/host-teams';
+import { threadCardFields } from '../utils/host-thread-message';
 import { itemToWire } from '../utils/item-wire';
 import { asArray, asRecord, asString } from '../utils/json-util';
 import {
@@ -211,8 +212,14 @@ import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
 import { teamRunSnapshots } from '../utils/run-snapshots';
 import { type RunStatusAnnounce, writeRunStatus } from '../utils/run-status';
+import { isSlashCommand } from '../utils/session-replacement-notes';
 import { createSessionIdSaver } from '../utils/session-saver';
 import { StandingQuestions } from '../utils/standing-questions';
+import {
+  threadMessageReturnedRow,
+  threadMessagesPrompt,
+  threadMessagesRow,
+} from '../utils/thread-message-text';
 import {
   ANSWERABILITY_KINDS,
   unanswerablePayload,
@@ -263,6 +270,7 @@ import { RunWriteQueue } from './run-write.queue';
 import { SkillHarvestStore } from './skill-harvest.store';
 import { TeamBuilderBroker } from './team-builder.broker';
 import { TeamProposalBroker } from './team-proposal.broker';
+import { ThreadInboxService } from './thread-inbox.service';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
 
@@ -904,6 +912,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     private readonly projectInstructionWrites?: ProjectInstructionsChangeService,
     /** A project chat's standing to change its project, installed per turn. Optional for the positional specs. */
     @Optional() private readonly projectChats?: ProjectChatBroker,
+    /** Messages from other threads, drained at a turn's start. Optional for the positional specs. */
+    @Optional() private readonly threadInbox?: ThreadInboxService,
   ) {}
 
   /**
@@ -1693,7 +1703,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
   }
 
   /** Whether a card stands that a new turn would retire unanswered. */
-  private awaitsCardAnswer(runId: string): boolean {
+  awaitsCardAnswer(runId: string): boolean {
     return this.approvals
       .listByRun(runId)
       .some((entry) => entry.deferred === true && !isStandingCard(entry));
@@ -3595,6 +3605,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       await this.runWrites.run(runId, () =>
         this.runDao.updateWithoutActivity(runId, { archivedAt }, em),
       );
+      await this.threadInbox?.cancelFor(runId, 'archived');
       // Re-read rather than patch the entity in hand: the cancel above settles
       // this run through the turn's own finalizer, on a DIFFERENT fork, so the
       // row loaded before it still says `running` — and answering the archive
@@ -4037,7 +4048,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           await this.seqs.reserve(runId),
           mapped.kind,
           mapped.role,
-          { ...mapped.payload, id: cardId },
+          {
+            ...mapped.payload,
+            id: cardId,
+            ...(await threadCardFields(
+              this.runDao,
+              em,
+              hostMcpServerName(runId),
+              event.toolName,
+              event.input,
+            )),
+          },
         );
       } catch (err) {
         this.abandonRaising(cardId);
@@ -4353,7 +4374,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // so a launch recorded below this line would be dropped and the count would
     // only ever go down.
     this.recordShellBracket(runId, event);
-    const mapped = mapEventToItem(event);
+    const kept =
+      event.type === 'follow_up_dropped'
+        ? await this.withoutReturnedMessages(runId, event)
+        : event;
+    const mapped = kept === null ? null : mapEventToItem(kept);
     // Taken synchronously, before any await, so the pairing follows the order
     // events ARRIVED in rather than the order their writes finish.
     const compactions =
@@ -5600,10 +5625,26 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       hostRow?: HostRowWire;
       /** Told once `hostRow` is written — a send can still fail after it. */
       onHostRowWritten?: () => void;
+      /**
+       * Join the running turn or start nothing: `text` goes in as a follow-up
+       * under `deliveryId`, its row is `hostRow`, and the user's activity is
+       * not touched. With no turn running it is refused `RUN_NOT_RUNNING`; a
+       * turn on its way out stays `RUN_BUSY`.
+       */
+      joinOnly?: boolean;
+      deliveryId?: string;
     } = {},
   ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    // `MessageSendService` acknowledges only a user row, and a joined row is a
+    // system row.
+    if (options.joinOnly === true && options.clientMessageId !== undefined) {
+      throw new BadRequestException(
+        'JOIN_WITH_CLIENT_ID',
+        'a joined message carries no client message id',
+      );
+    }
     // An ARCHIVED chat is inert: shelving one cancels the turn it had, and
     // without this the very next message would start another on a row the desk
     // never shows — the thing archiving a running chat exists to prevent,
@@ -5657,6 +5698,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       waitForAnswer?: boolean;
       hostRow?: HostRowWire;
       onHostRowWritten?: () => void;
+      joinOnly?: boolean;
+      deliveryId?: string;
     },
   ): Promise<ItemWire> {
     const runId = run.id;
@@ -5746,12 +5789,28 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       if (options.ownTurn === true) {
         throw new ConflictException('RUN_BUSY', 'a turn is running');
       }
+      if (options.joinOnly === true && options.hostRow !== undefined) {
+        return await this.deliverIntoRunningTurn(
+          runId,
+          text,
+          images,
+          undefined,
+          {
+            row: options.hostRow,
+            deliveryId: options.deliveryId ?? randomUUID(),
+          },
+        );
+      }
       return await this.deliverIntoRunningTurn(
         runId,
         text,
         images,
         options.backgroundWork,
       );
+    }
+    if (options.joinOnly === true) {
+      this.registry.release(runId);
+      throw new ConflictException('RUN_NOT_RUNNING', 'no turn is running');
     }
     // The claim is ours, so a turn is about to start — and a turn supersedes a
     // standing question card. AFTER the claim rather than before it: the check
@@ -6078,16 +6137,23 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       }
       approvalMode = resolved.mode;
 
+      const threadMessages =
+        options.resumeOnly === true ||
+        geniroCommand !== null ||
+        isSlashCommand(text)
+          ? []
+          : ((await this.threadInbox?.takeForTurn(runId, em)) ?? []);
       /**
        * What the CLI is actually asked this turn.
        *
-       * Two rewrites, in this order. A geniro command REPLACES the text with
+       * Three rewrites, in this order. A geniro command REPLACES the text with
        * what its adapter says this CLI needs — the transcript still records the
        * `/compact` the user typed, because the rewrite is what the agent is
        * asked, not what the conversation says was asked. And a run owed a
        * carried summary gets it prepended, once: a geniro compaction drops the
        * agent's session, so without this the next turn opens on an agent that
-       * has forgotten the conversation it just summarised.
+       * has forgotten the conversation it just summarised. What other threads
+       * left waiting follows the text.
        *
        * The take is read-and-clear, so the column cannot ride a second prompt —
        * including this one's own retry.
@@ -6102,7 +6168,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             ''
           : withCarriedContext(
               await this.runDao.takePendingContext(runId, em),
-              geniroCommand ? geniroCommand.prompt : text,
+              threadMessages.length === 0
+                ? geniroCommand
+                  ? geniroCommand.prompt
+                  : text
+                : `${text}\n\n${threadMessagesPrompt(threadMessages)}`,
             );
 
       const node = await this.nodeStateDao.getByRunNode(
@@ -7469,7 +7539,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             // whole life fits inside its turn is bracketed only here.
             this.recordDelegateBracket(runId, event);
             this.recordShellBracket(runId, event);
-            const mapped = mapEventToItem(event);
+            const kept = await this.withoutReturnedMessages(runId, event);
+            const mapped = kept === null ? null : mapEventToItem(kept);
             if (!mapped) {
               return;
             }
@@ -7614,7 +7685,17 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
                   await this.seqs.reserve(runId),
                   mapped.kind,
                   mapped.role,
-                  { ...mapped.payload, id: cardId },
+                  {
+                    ...mapped.payload,
+                    id: cardId,
+                    ...(await threadCardFields(
+                      this.runDao,
+                      em,
+                      hostServerName,
+                      event.toolName,
+                      event.input,
+                    )),
+                  },
                 );
               } catch (err) {
                 this.abandonRaising(cardId);
@@ -7882,6 +7963,24 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // retire its process as well so delegates cannot restart it afterwards.
       if (this.stopsRequested.has(runId)) {
         this.closeStoppedSession(runId);
+      }
+      // Only a session that came up has an agent to read them: after a failed
+      // spawn they stay waiting for the next turn.
+      if (threadMessages.length > 0 && owningSession !== null) {
+        enqueue(async () => {
+          await this.threadInbox?.markDelivered(
+            runId,
+            threadMessages.map((message) => message.id),
+          );
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'system',
+            null,
+            threadMessagesRow(threadMessages),
+          );
+        });
       }
       // How a mid-turn approval change reaches THIS turn's own seam. The
       // closure variable above is what the auto-approve branch reads on every
@@ -8406,6 +8505,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     text: string,
     images: SendMessageImage[],
     backgroundWork?: FollowUpBackgroundWork,
+    joined?: { row: HostRowWire; deliveryId: string },
   ): Promise<ItemWire> {
     const busy = new ConflictException(
       'RUN_BUSY',
@@ -8433,7 +8533,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     // renderer pairs that report back to the row through the same key.
     // TWIN PARSER: `apps/ui/src/renderer/chats/not-sent-messages.ts` reads the
     // row's `deliveryId`; rename it on both sides.
-    const deliveryId = randomUUID();
+    const deliveryId = joined?.deliveryId ?? randomUUID();
     const delivered = handle.sendUserMessage({
       text,
       images: attachments.map((attachment) => ({
@@ -8445,6 +8545,16 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     });
     if (!delivered) {
       throw busy;
+    }
+    if (joined !== undefined) {
+      return this.persist(
+        this.em.fork(),
+        runId,
+        await this.seqs.reserve(runId),
+        'system',
+        null,
+        joined.row,
+      );
     }
     // The other write that changes no status: a follow-up joins a turn that is
     // already `running`, so without this the row keeps the timestamp of when
@@ -8789,6 +8899,36 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
             }),
           ]),
     ]);
+  }
+
+  /**
+   * A dropped follow-up that was a message from another thread goes back to
+   * the mailbox under one info row, and leaves the event what the user wrote
+   * themselves: null when nothing is left to report as not sent.
+   */
+  private async withoutReturnedMessages(
+    runId: string,
+    event: AgentEvent,
+  ): Promise<AgentEvent | null> {
+    if (event.type !== 'follow_up_dropped' || !this.threadInbox) {
+      return event;
+    }
+    const returned = await this.threadInbox.returnDropped(event.deliveryIds);
+    if (returned.deliveryIds.length === 0) {
+      return event;
+    }
+    await this.persist(
+      this.em.fork(),
+      runId,
+      await this.seqs.reserve(runId),
+      'system',
+      null,
+      threadMessageReturnedRow(returned.titles),
+    );
+    const left = event.deliveryIds.filter(
+      (id) => !returned.deliveryIds.includes(id),
+    );
+    return left.length === 0 ? null : { ...event, deliveryIds: left };
   }
 
   /**

@@ -37,6 +37,7 @@ import { TeamOverlayService } from './services/team-overlay.service';
 import { TeamOverlayStoreService } from './services/team-overlay-store.service';
 import { TeamProposalService } from './services/team-proposal.service';
 import { TeamStoreService } from './services/team-store.service';
+import { ThreadDeliveryService } from './services/thread-delivery.service';
 
 /**
  * Teams: the YAML team library, its validation in `utils/`, and the executor
@@ -79,6 +80,7 @@ import { TeamStoreService } from './services/team-store.service';
     ProjectInstructionSizesService,
     MonitorGraphDelivery,
     HostWakeGraphDelivery,
+    ThreadDeliveryService,
     TeamLiveWorkSources,
     {
       // One record for the daemon: a limit belongs to an account, whichever
@@ -122,6 +124,7 @@ import { TeamStoreService } from './services/team-store.service';
   // `TeamChangeLogService` is exported for the stats module's version
   // restore, which writes the library too, and for its team history read.
   exports: [
+    ThreadDeliveryService,
     TeamStoreService,
     TeamOverlayStoreService,
     TeamOverlayService,

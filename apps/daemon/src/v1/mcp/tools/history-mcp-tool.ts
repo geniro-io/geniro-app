@@ -52,7 +52,10 @@ export abstract class HistoryMcpTool<TQuery> extends BaseMcpTool {
   }
 }
 
-/** A history answer as the agent reads it: the data line, then the JSON. */
-export function historyResultText(result: unknown): string {
-  return `${HISTORY_RESULT_PREFACE}\n${JSON.stringify(result)}`;
+/** A read of chat data as the agent reads it: the data line, then the JSON. */
+export function historyResultText(
+  result: unknown,
+  preface: string = HISTORY_RESULT_PREFACE,
+): string {
+  return `${preface}\n${JSON.stringify(result)}`;
 }

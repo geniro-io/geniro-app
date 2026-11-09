@@ -64,6 +64,7 @@ import { StorageService } from './v1/storage/services/storage.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
 import { TeamExecutorService } from './v1/teams/services/team-executor.service';
 import { TeamProposalService } from './v1/teams/services/team-proposal.service';
+import { ThreadDeliveryService } from './v1/teams/services/thread-delivery.service';
 
 /**
  * The one method of better-sqlite3's `Database` this file calls. No type
@@ -137,6 +138,7 @@ let callIndex: ItemCallIndexService | null = null;
 let monitorChats: MonitorChatDelivery | null = null;
 let hostWakeChats: HostWakeChatDelivery | null = null;
 let shares: ShareService | null = null;
+let threadDelivery: ThreadDeliveryService | null = null;
 let wallWork: WallWorkService | null = null;
 let payloadRefs: PayloadRefsSweepService | null = null;
 let pullRequests: PullRequestCaptureService | null = null;
@@ -204,6 +206,7 @@ bootstrapper.addExtension(
         // waited on the user's sign-in is woken again, once per boot.
         hostWakeChats?.startDelivering();
         void shares?.republishOwedWakes();
+        void threadDelivery?.republishOwed();
         // Off the boot path too: it folds every agent of every run settled
         // before the wall ledger existed, and the ledger's per-turn key makes
         // it safe beside the live catch-up.
@@ -339,6 +342,7 @@ bootstrapper.addExtension(
       monitorChats = app.get(MonitorChatDelivery);
       hostWakeChats = app.get(HostWakeChatDelivery);
       shares = app.get(ShareService);
+      threadDelivery = app.get(ThreadDeliveryService);
       wallWork = app.get(WallWorkService);
       payloadRefs = app.get(PayloadRefsSweepService);
       pullRequests = app.get(PullRequestCaptureService);

@@ -89,6 +89,22 @@ export const ProjectInstructionsChange: Story = {
   },
 };
 
+/** A message to another thread, drawn whole under the title of the thread it reaches. */
+export const MessageToThread: Story = {
+  args: {
+    toolName: 'message_thread',
+    input: {
+      thread: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+      message:
+        'The migration is in. Two open questions:\n1. Keep the old column until the next release?\n2. Backfill in one batch or by day?',
+      wake: true,
+    },
+    threadTitle: 'Pelican',
+    threadText:
+      'The migration is in. Two open questions:\n1. Keep the old column until the next release?\n2. Backfill in one batch or by day?',
+  },
+};
+
 /** An Apply that could not be written reads as not saved. */
 export const ProjectInstructionsNotSaved: Story = {
   args: {

@@ -2,7 +2,7 @@ import { ArrowRight } from 'lucide-react';
 
 import { type AvatarLook, MemberAvatar } from '../components/member-avatar';
 
-/** Caller → callee faces, as a call card's header and the working-agents card's rows draw them. */
+/** Caller → callee faces, as a call card's header draws them. */
 export function AvatarPair({
   caller,
   callerKey,

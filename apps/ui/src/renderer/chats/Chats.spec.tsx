@@ -5261,7 +5261,7 @@ describe('Chats team runs', () => {
 
     await act(async () => {
       container
-        .querySelector('[data-slot="working-agents-toggle"]')!
+        .querySelector('[data-slot="working-agents-toggle"] button')!
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(
@@ -5282,14 +5282,11 @@ describe('Chats team runs', () => {
     ).not.toBeNull();
     expect(container.querySelector('[data-slot="running-calls"]')).toBeNull();
 
-    // A press reads that conversation's newest messages and nothing else of it.
-    await act(async () => {
-      row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    // Opening the card reads that conversation's newest messages and nothing else of it.
     expect(api.listCallMessages).toHaveBeenCalledWith({
       runId: 'w1',
       callId: 'call-5',
-      limit: 5,
+      limit: 3,
     });
 
     // Show in chat takes the reader to that call's card, opened and MARKED.
@@ -5414,9 +5411,10 @@ describe('Chats team runs', () => {
     await clickRun(container, 'Review team');
 
     expect(
-      container.querySelector('[data-slot="working-agents-summary"]')
-        ?.textContent,
-    ).toBe('1 finished');
+      container
+        .querySelector('[data-slot="working-agents-toggle"] button')
+        ?.getAttribute('aria-label'),
+    ).toBe('Unfold the agents card · 1 finished');
   });
 
   it("opens the card of the call a search hit was written in, reads that call's conversation back to it, and marks the hit there", async () => {
@@ -5564,7 +5562,7 @@ describe('Chats team runs', () => {
 
     await act(async () => {
       container
-        .querySelector('[data-slot="working-agents-toggle"]')!
+        .querySelector('[data-slot="working-agents-toggle"] button')!
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(
@@ -5577,9 +5575,6 @@ describe('Chats team runs', () => {
     expect(row?.dataset.conversation).toBe('call-9');
     expect(row?.textContent).toContain('10m');
 
-    await act(async () => {
-      row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
     await act(async () => {
       container
         .querySelector('[data-slot="working-agent-show-in-chat"]')!
@@ -5616,9 +5611,10 @@ describe('Chats team runs', () => {
     await clickRun(container, 'Review team');
 
     expect(
-      container.querySelector('[data-slot="working-agents-summary"]')
-        ?.textContent,
-    ).toBe('1 finished');
+      container
+        .querySelector('[data-slot="working-agents-toggle"] button')
+        ?.getAttribute('aria-label'),
+    ).toBe('Unfold the agents card · 1 finished');
   });
 
   it('gives a call OLDER than the loaded window its own instance, from the durable call row', async () => {

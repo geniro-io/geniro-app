@@ -439,7 +439,7 @@ export interface SpendFigures {
   cacheReadUsd: number | null;
   cacheWriteUsd: number | null;
   outputUsd: number | null;
-  /** Polled money and turns of a model with no list price; the five parts sum to `costUsd`, to the cent. */
+  /** Polled money and turns of a model with no list price; the five parts sum to `costUsd` before each is rounded to the cent. */
   notSplitUsd: number | null;
   inputTokens: number | null;
   cacheReadTokens: number | null;

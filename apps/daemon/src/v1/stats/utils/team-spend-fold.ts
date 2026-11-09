@@ -282,7 +282,7 @@ export function foldTeamSpend(input: TeamSpendInput): TeamSpend {
     team: input.slug,
     asOf,
     method:
-      "Costs are what each CLI reported or the account poll billed. The classes apportion each turn's bill by its tokens at the model's list rates, so a turn's parts sum to its bill, each rounded to the cent; notSplitUsd is polled money and turns of a model with no list price. A cache miss is a turn that wrote at least 100000 tokens and wrote more than it read; a heavy write is a turn that wrote at least that much.",
+      "Costs are what each CLI reported or the account poll billed. The classes apportion each turn's bill by its tokens at the model's list rates, so a turn's parts sum to its bill, before each figure is rounded to the cent; notSplitUsd is polled money and turns of a model with no list price. A cache miss is a turn that wrote at least 100000 tokens and wrote more than it read; a heavy write is a turn that wrote at least that much.",
     population: {
       covers:
         'Every run the ledgers hold stamped with this team: live, archived and deleted.',

@@ -197,6 +197,19 @@ export function HoverPopover({
           event.currentTarget.querySelector(POPOVER_PANEL_SELECTOR),
           () => setHovered(false),
         );
+      }}
+      // A press inside a hover-opened panel pins it: the press moves focus off
+      // the trigger, and its blur would otherwise unmount the row before the
+      // click lands.
+      onMouseDownCapture={(event) => {
+        if (
+          hoverOpens &&
+          open &&
+          event.target instanceof Element &&
+          event.target.closest(POPOVER_PANEL_SELECTOR) !== null
+        ) {
+          setPinned(true);
+        }
       }}>
       <button
         ref={triggerRef}

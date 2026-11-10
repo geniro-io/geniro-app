@@ -5243,7 +5243,6 @@ describe('Chats team runs', () => {
     await clickRun(container, 'Review team');
     await act(async () => {
       emitItem({
-        // Its own row id: Show in chat leaves this card open in the thread's memory.
         ...wfItem(55, 'call_started', 'orch'),
         payload: {
           callId: 'call-5',
@@ -5265,11 +5264,11 @@ describe('Chats team runs', () => {
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(
-      container.querySelector('[data-slot="working-agents-summary"]')
+      container.querySelector('[data-slot="working-agents-panel-summary"]')
         ?.textContent,
     ).toBe('1 working');
-    const row = container.querySelector<HTMLButtonElement>(
-      '[data-slot="working-agent-row"]',
+    const row = container.querySelector<HTMLElement>(
+      '[data-slot="working-agents-current-run"]',
     );
     expect(row?.dataset.conversation).toBe('call-5');
     expect(row?.textContent).toContain('5m');
@@ -5282,14 +5281,14 @@ describe('Chats team runs', () => {
     ).not.toBeNull();
     expect(container.querySelector('[data-slot="running-calls"]')).toBeNull();
 
-    // Opening the card reads that conversation's newest messages and nothing else of it.
+    // Opening the panel reads that conversation's newest messages and nothing else of it.
     expect(api.listCallMessages).toHaveBeenCalledWith({
       runId: 'w1',
       callId: 'call-5',
       limit: 3,
     });
 
-    // Show in chat takes the reader to that call's card, opened and MARKED.
+    // Show in chat, from the conversation popup, takes the reader to that call's card, opened and MARKED.
     const card = container.querySelector<HTMLElement>(
       '[data-role="call-block"]',
     );
@@ -5300,7 +5299,12 @@ describe('Chats team runs', () => {
     try {
       await act(async () => {
         container
-          .querySelector('[data-slot="working-agent-show-in-chat"]')!
+          .querySelector('[data-slot="working-agents-open-run"]')!
+          .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+      await act(async () => {
+        document
+          .querySelector('[data-slot="call-conversation-show-in-chat"]')!
           .dispatchEvent(new MouseEvent('click', { bubbles: true }));
       });
     } finally {
@@ -5313,10 +5317,10 @@ describe('Chats team runs', () => {
     expect(
       revealed?.querySelector('[aria-expanded]')?.getAttribute('aria-expanded'),
     ).toBe('true');
+    expect(container.querySelector('[data-slot="popover-panel"]')).toBeNull();
     expect(
-      container.querySelector<HTMLElement>('[data-slot="working-agents-card"]')
-        ?.dataset.folded,
-    ).toBe('true');
+      document.querySelector('[data-slot="call-conversation-dialog"]'),
+    ).toBeNull();
 
     await act(async () => {
       emitRunStatus({ runId: 'w1', status: 'completed' });
@@ -5327,7 +5331,7 @@ describe('Chats team runs', () => {
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(
-      container.querySelector('[data-slot="working-agents-finished-toggle"]')
+      container.querySelector('[data-slot="working-agents-panel-settled"]')
         ?.textContent,
     ).toBe('1 finished');
   });
@@ -5423,7 +5427,7 @@ describe('Chats team runs', () => {
       container
         .querySelector('[data-slot="working-agents-toggle"] button')
         ?.getAttribute('aria-label'),
-    ).toBe('Unfold the agents card · 1 finished');
+    ).toBe('Agents · 1 finished');
   });
 
   it("opens the card of the call a search hit was written in, reads that call's conversation back to it, and marks the hit there", async () => {
@@ -5575,18 +5579,23 @@ describe('Chats team runs', () => {
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(
-      container.querySelector('[data-slot="working-agents-summary"]')
+      container.querySelector('[data-slot="working-agents-panel-summary"]')
         ?.textContent,
     ).toBe('1 working');
-    const row = container.querySelector<HTMLButtonElement>(
-      '[data-slot="working-agent-row"]',
+    const row = container.querySelector<HTMLElement>(
+      '[data-slot="working-agents-current-run"]',
     );
     expect(row?.dataset.conversation).toBe('call-9');
     expect(row?.textContent).toContain('10m');
 
     await act(async () => {
       container
-        .querySelector('[data-slot="working-agent-show-in-chat"]')!
+        .querySelector('[data-slot="working-agents-open-run"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      document
+        .querySelector('[data-slot="call-conversation-show-in-chat"]')!
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     // The window moves to the call's own start row.
@@ -5623,7 +5632,7 @@ describe('Chats team runs', () => {
       container
         .querySelector('[data-slot="working-agents-toggle"] button')
         ?.getAttribute('aria-label'),
-    ).toBe('Unfold the agents card · 1 finished');
+    ).toBe('Agents · 1 finished');
   });
 
   it('gives a call OLDER than the loaded window its own instance, from the durable call row', async () => {

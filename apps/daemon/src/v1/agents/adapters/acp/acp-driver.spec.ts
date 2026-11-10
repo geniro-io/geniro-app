@@ -2635,6 +2635,7 @@ describe('AcpSession turn completion', () => {
       '\n\nError: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)';
     const resumable = (
       delaysMs: readonly number[] = [0, 0],
+      maxPerTurn = 10,
     ): Partial<AcpDriverOptions> => ({
       agentFailure: {
         read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
@@ -2642,6 +2643,7 @@ describe('AcpSession turn completion', () => {
           isTransient: (message) => message.includes('[canceled]'),
           prompt: () => 'continue where you left off',
           delaysMs,
+          maxPerTurn,
         },
       },
     });
@@ -2712,6 +2714,99 @@ describe('AcpSession turn completion', () => {
         h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } }),
       ).toEqual([{ type: 'error', message: DROP.trim() }]);
       expect(h.sentAll('session/prompt')).toHaveLength(2);
+    });
+
+    it('still stops consecutive failures with no progress between them', () => {
+      const h = primed(resumable([0, 0]));
+      h.feed(chunk('agent_message_chunk', DROP));
+      h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+      h.feed(chunk('agent_message_chunk', DROP));
+      h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } });
+
+      h.feed(chunk('agent_message_chunk', DROP));
+      expect(
+        h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } }),
+      ).toEqual([{ type: 'error', message: DROP.trim() }]);
+      expect(h.sentAll('session/prompt')).toHaveLength(3);
+    });
+
+    it('gives a failure after progress a fresh budget', () => {
+      const h = primed(resumable([0]));
+      h.feed(chunk('agent_message_chunk', DROP));
+      h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+      h.feed(chunk('agent_message_chunk', 'Ran the second step.'));
+      h.feed(chunk('agent_message_chunk', DROP));
+      const events = h.feed({
+        id: lastPromptId(h),
+        result: { stopReason: 'end_turn' },
+      });
+
+      expect(h.sentAll('session/prompt')).toHaveLength(3);
+      expect(h.sentAll('session/prompt').at(-1)!.params).toEqual({
+        sessionId: 's',
+        prompt: [{ type: 'text', text: 'continue where you left off' }],
+      });
+      expect(events).toEqual([
+        { type: 'text', text: 'Ran the second step.' },
+        expect.objectContaining({
+          type: 'notice',
+          message: expect.stringContaining('attempt 1 of 1'),
+        }),
+      ]);
+    });
+
+    it('stops at the per-turn ceiling however much progress came between', () => {
+      const h = primed(resumable([0], 2));
+      h.feed(chunk('agent_message_chunk', 'First step.'));
+      h.feed(chunk('agent_message_chunk', DROP));
+      h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+      h.feed(chunk('agent_message_chunk', 'Second step.'));
+      h.feed(chunk('agent_message_chunk', DROP));
+      h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } });
+      expect(h.sentAll('session/prompt')).toHaveLength(3);
+
+      h.feed(chunk('agent_message_chunk', 'Third step.'));
+      h.feed(chunk('agent_message_chunk', DROP));
+      expect(
+        h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } }),
+      ).toEqual([
+        { type: 'text', text: 'Third step.' },
+        { type: 'error', message: DROP.trim() },
+      ]);
+      expect(h.sentAll('session/prompt')).toHaveLength(3);
+    });
+
+    it('restarts the pause from its first entry after progress', () => {
+      vi.useFakeTimers();
+      try {
+        const h = primed(resumable([15_000, 60_000]));
+        h.feed(chunk('agent_message_chunk', DROP));
+        h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+        vi.advanceTimersByTime(15_000);
+        expect(h.sentAll('session/prompt')).toHaveLength(2);
+
+        h.feed(chunk('agent_message_chunk', 'Ran the second step.'));
+        h.feed(chunk('agent_message_chunk', DROP));
+        expect(
+          h.feed({ id: lastPromptId(h), result: { stopReason: 'end_turn' } }),
+        ).toEqual([
+          { type: 'text', text: 'Ran the second step.' },
+          expect.objectContaining({
+            type: 'notice',
+            severity: 'info',
+            message: expect.stringContaining(
+              'trying again in 15s (attempt 1 of 2)',
+            ),
+          }),
+        ]);
+        vi.advanceTimersByTime(15_000);
+        expect(h.sentAll('session/prompt')).toHaveLength(3);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('waits its pause before resuming, and says when it will try again', () => {
@@ -2996,6 +3091,7 @@ describe('AcpSession turn completion', () => {
             isTransient: (message) => message.includes('[canceled]'),
             prompt,
             delaysMs: [0],
+            maxPerTurn: 10,
           },
         },
       });
@@ -5775,6 +5871,7 @@ describe('AcpSession stop', () => {
           isTransient: () => true,
           prompt: () => 'continue',
           delaysMs: [0, 0, 0],
+          maxPerTurn: 10,
         },
       },
     });

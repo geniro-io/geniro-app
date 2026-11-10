@@ -1380,12 +1380,12 @@ export const CURSOR_AGENT_FAILURE_UNAUTHENTICATED = '[unauthenticated]';
  * - **`[resource_exhausted]`** — HTTP 429 (its own status map: `429:
  *   "resource_exhausted"`), and NOT the spent account window it reads like. The
  *   CLI's own policy retries a server error three times, which is not what a
- *   vendor does to a quota that is gone until tomorrow; the one observed
- *   instance followed geniro's own fan-out of seventeen concurrent reviewer
- *   sub-agents inside one process, where the resume is a single request. It is
- *   deliberately NOT routed to `AgentFailureClass.rate_limited`, whose contract
- *   is "wait, never retry" and whose `resetsAt` this message never carries — a
- *   caller told to wait for a reset nobody named waits forever. Should the
+ *   vendor does to a quota that is gone until tomorrow. It is the Cursor backend
+ *   failing to reach the model provider, seen every few minutes on gemini-4-argon
+ *   with only the parent request open. It is deliberately NOT routed to
+ *   `AgentFailureClass.rate_limited`, whose contract is "wait, never retry"
+ *   and whose `resetsAt` this message never carries — a caller told to wait for
+ *   a reset nobody named waits forever. Should the
  *   resume budget run out it falls through to `crashed`, whose arm is "retry
  *   once, then report", which is the honest answer for a capacity error.
  *
@@ -1460,8 +1460,8 @@ export const CURSOR_TRANSIENT_RESUME_PROMPT =
   'Your last response was cut off before it finished — the model service interrupted the request. Continue exactly where you left off. Do not repeat steps that already completed; re-run a step only if its result never came back. If you cannot see the request you were working on, say so and end your turn — never look for it in other conversations, their transcripts or their files.';
 
 /**
- * The pause before each resume of one turn — three attempts, and then the
- * failure is reported as the turn's own.
+ * The pause before each resume — three attempts per run of failures with no
+ * progress between them, and then the failure is reported as the turn's own.
  *
  * Paced to outlast an outage rather than a blip. An attempt that meets the
  * same outage dies on the CLI's own 30s stall threshold (`Connection
@@ -1476,6 +1476,14 @@ export const CURSOR_TRANSIENT_RESUME_PROMPT =
 export const CURSOR_TRANSIENT_RESUME_DELAYS_MS: readonly number[] = [
   15_000, 60_000, 180_000,
 ];
+
+/**
+ * The most resumes one turn gets in all, whatever progress came between them.
+ * A long review meets this outage every few minutes, so each run of failures
+ * gets the pauses above; the ceiling stops a provider that stays down from
+ * looping the turn.
+ */
+export const CURSOR_TRANSIENT_RESUME_MAX_PER_TURN = 10;
 
 export const CURSOR_AGENT_FAILURE_ACTION_SENTENCES: readonly string[] = [
   'Please sign in to continue',

@@ -31,7 +31,7 @@ import {
   ownerOfKey,
 } from './live-text';
 import { type MetricsSpec, readMetrics } from './metrics-payload';
-import { readMonitorNotice } from './monitor-payload';
+import { drawnMonitorEntries, readMonitorNotice } from './monitor-payload';
 import {
   type PublishedArtifact,
   readPublishedArtifact,
@@ -2890,7 +2890,8 @@ export function groupTranscript(
       item.kind === 'shell_info' ||
       item.kind === 'workflow_info' ||
       item.kind === 'subagent_info' ||
-      isHeldCountUpdate(item)
+      isHeldCountUpdate(item) ||
+      isUndrawnMonitorNotice(item)
     ) {
       // Bookkeeping, not narrative: the first two are the open and the close of
       // a detached command (`shell-activity.ts` is their only reader), the third
@@ -3969,6 +3970,15 @@ function isHeldCountUpdate(item: ChatItem): boolean {
     heldCallWaitingOn(item.payload) !== null &&
     payloadString(item.payload, 'message') === null
   );
+}
+
+/** A monitor notice `MonitorNoticeRow` draws nothing for: only starts. */
+function isUndrawnMonitorNotice(item: ChatItem): boolean {
+  if (item.kind !== 'system') {
+    return false;
+  }
+  const notice = readMonitorNotice(item.payload);
+  return notice !== null && drawnMonitorEntries(notice).length === 0;
 }
 
 /**

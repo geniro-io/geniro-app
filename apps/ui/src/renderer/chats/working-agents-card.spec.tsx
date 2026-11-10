@@ -87,7 +87,7 @@ function mount(element: React.ReactElement): HTMLElement {
   return container;
 }
 
-function renderFolded(
+function renderSquare(
   rows: readonly WorkingAgentRow[],
   onShowInChat: (callId: string) => void = () => undefined,
 ) {
@@ -104,42 +104,19 @@ function renderFolded(
   return { el, ...spies };
 }
 
-/** The card as a reader sees it once they have pressed it open. */
-function renderCard(
-  rows: readonly WorkingAgentRow[],
-  onShowInChat: (callId: string) => void = () => undefined,
-) {
-  const rendered = renderFolded(rows, onShowInChat);
-  const toggle = rendered.el.querySelector(
-    '[data-slot="working-agents-toggle"] button',
-  );
-  if (toggle !== null) {
-    act(() => {
-      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-  }
-  return rendered;
-}
-
 const settle = (): Promise<void> => act(async () => {});
 
 type ReadMessages = ReturnType<typeof doubles>['listCallMessages'];
 
-/** The open card once its live rows have had the replies `prepare` lines up. */
-async function renderCardReading(
-  rows: readonly WorkingAgentRow[],
-  prepare: (read: ReadMessages) => void = () => undefined,
-) {
-  const rendered = renderFolded(rows);
-  prepare(rendered.listCallMessages);
-  await press(toggleOf(rendered.el));
-  await settle();
-  return rendered;
-}
-
 async function press(target: Element): Promise<void> {
   await act(async () => {
     target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
+async function pressOutside(): Promise<void> {
+  await act(async () => {
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
   });
 }
 
@@ -149,8 +126,37 @@ const slot = (el: Element, name: string): HTMLElement | null =>
 const toggleOf = (el: Element): HTMLElement =>
   el.querySelector<HTMLElement>('[data-slot="working-agents-toggle"] button')!;
 
-const rowsOf = (el: HTMLElement): HTMLElement[] => [
-  ...el.querySelectorAll<HTMLElement>('[data-slot="working-agent-row"]'),
+const panelOf = (el: Element): HTMLElement | null => slot(el, 'popover-panel');
+
+/** The square with its panel pinned open by a press, once the replies `prepare` lines up have landed. */
+async function renderPinned(
+  rows: readonly WorkingAgentRow[],
+  prepare: (read: ReadMessages) => void = () => undefined,
+  onShowInChat: (callId: string) => void = () => undefined,
+) {
+  const rendered = renderSquare(rows, onShowInChat);
+  prepare(rendered.listCallMessages);
+  await press(toggleOf(rendered.el));
+  await settle();
+  return rendered;
+}
+
+const currentRuns = (el: Element): HTMLElement[] => [
+  ...el.querySelectorAll<HTMLElement>(
+    '[data-slot="working-agents-current-run"]',
+  ),
+];
+
+const settledRuns = (el: Element): HTMLElement[] => [
+  ...el.querySelectorAll<HTMLElement>(
+    '[data-slot="working-agents-settled-run"]',
+  ),
+];
+
+const currentAgents = (el: Element): HTMLElement[] => [
+  ...el.querySelectorAll<HTMLElement>(
+    '[data-slot="working-agents-current-agent"]',
+  ),
 ];
 
 const drawnMessages = (el: Element): string[] =>
@@ -162,6 +168,9 @@ const faces = (el: Element): (string | null)[] =>
   [...el.querySelectorAll('[data-slot="avatar"]')].map((face) =>
     face.getAttribute('title'),
   );
+
+const dialog = (): Element | null =>
+  document.querySelector('[data-slot="call-conversation-dialog"]');
 
 const clock = (over: Partial<CallClock> = {}): CallClock => ({
   closedMs: 0,
@@ -187,6 +196,20 @@ const row = (over: Partial<WorkingAgentRow> = {}): WorkingAgentRow => ({
   clocks: [],
   ...over,
 });
+
+const named = (
+  id: string,
+  callee: string,
+  state: WorkingAgentRow['state'],
+): WorkingAgentRow =>
+  row({
+    conversationId: id,
+    callId: id,
+    callIds: [id],
+    callee,
+    calleeKey: callee.toLowerCase(),
+    state,
+  });
 
 const chained = (over: Partial<WorkingAgentRow> = {}): WorkingAgentRow =>
   row({
@@ -220,377 +243,45 @@ const threeWords = [
   message(12, 'three'),
 ];
 
+const callStart = (seq: number, payload: Record<string, unknown>): ItemDto => ({
+  id: `start-${seq}`,
+  runId: 'run-1',
+  memberId: 'manager',
+  seq,
+  kind: 'call_started',
+  role: null,
+  payload: {
+    callerNodeId: 'manager',
+    calleeNodeId: 'engineer',
+    message: 'Fix the parser',
+    ...payload,
+  },
+  createdAt: '2026-11-08T12:00:00.000Z',
+  inCall: null,
+});
+
+/** What the daemon anchors a page of the chain `chained()` names with. */
+const chainStarts = [
+  callStart(1, { callId: 'call-1' }),
+  callStart(2, { callId: 'call-3', thread: 'call-1' }),
+];
+
 describe('WorkingAgentsCard', () => {
-  it('names a row by its callee, state word, elapsed time, caller and title', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-11-08T12:00:00.000Z'));
-    const now = Date.now();
-    const { el } = renderCard([
-      row({
-        startedAt: now - 125_000,
-        clocks: [clock({ runningSince: now - 125_000, throughSeq: 3 })],
-      }),
-    ]);
+  it('draws nothing with no agent to list', () => {
+    const { el } = renderSquare([]);
 
-    const first = rowsOf(el)[0]!;
-    expect(slot(first, 'working-agent-state')?.textContent).toBe('working');
-    expect(slot(first, 'working-agent-elapsed')?.textContent).toBe('2m 5s');
-    expect(slot(first, 'working-agent-title')?.textContent).toBe(
-      'Fix the drop zone',
-    );
-    expect(first.textContent).toContain('Engineer');
-    expect(first.textContent).toContain('from Manager');
+    expect(slot(el, 'working-agents-card')).toBeNull();
   });
 
-  it('leads a row with the callee’s face, and names the caller in words', () => {
-    const { el } = renderCard([
-      row(),
-      row({
-        conversationId: 'call-4',
-        callId: 'call-4',
-        callIds: ['call-4'],
-        callee: 'Researcher',
-        calleeKey: 'researcher',
-        caller: null,
-        callerKey: null,
-      }),
-    ]);
-    const [called, alone] = rowsOf(el);
+  it('anchors to the bottom right corner', () => {
+    const { el } = renderSquare([row()]);
+    const card = slot(el, 'working-agents-card')!;
 
-    expect(faces(called!)).toEqual(['Engineer']);
-    expect(called!.textContent).toContain('from Manager');
-    expect(faces(alone!)).toEqual(['Researcher']);
-    expect(alone!.textContent).not.toContain('from');
+    expect(card.className).toContain('right-4');
+    expect(card.className).toContain('-bottom-2');
   });
 
-  it('starts the task at the row’s edge, under the face and not beside it', () => {
-    const { el } = renderCard([row()]);
-    const first = rowsOf(el)[0]!;
-
-    expect(slot(first, 'working-agent-title')?.parentElement).toBe(first);
-    expect(slot(first, 'working-agent-head')?.parentElement).toBe(first);
-    expect(first.className).toContain('flex-col');
-  });
-
-  it.each<[WorkingAgentRow['state'], string, string]>([
-    ['working', 'text-success', 'border-success'],
-    ['quiet', 'text-warning', 'border-warning'],
-    ['failed', 'text-destructive', 'border-destructive'],
-  ])(
-    'colours a %s row’s state and the line its messages hang on',
-    async (state, text, rail) => {
-      const rendered = renderFolded([row({ state })]);
-      await press(toggleOf(rendered.el));
-      if (state === 'failed') {
-        await press(slot(rendered.el, 'working-agents-finished-toggle')!);
-        await press(rowsOf(rendered.el)[0]!);
-      }
-      await settle();
-
-      expect(
-        slot(rendered.el, 'working-agent-state-pill')?.className,
-      ).toContain(text);
-      expect(slot(rendered.el, 'working-agent-thread')?.className).toContain(
-        rail,
-      );
-    },
-  );
-  it('says a queued call is queued and a call gone silent is gone quiet', () => {
-    const { el } = renderCard([
-      row({
-        conversationId: 'call-2',
-        callId: 'call-2',
-        callIds: ['call-2'],
-        state: 'queued',
-      }),
-      row({
-        conversationId: 'call-5',
-        callId: 'call-5',
-        callIds: ['call-5'],
-        callee: 'Researcher',
-        calleeKey: 'researcher',
-        state: 'quiet',
-      }),
-    ]);
-
-    expect(
-      rowsOf(el).map((item) => slot(item, 'working-agent-state')?.textContent),
-    ).toEqual(['queued', 'gone quiet']);
-  });
-
-  it('tints every control with the menu row’s colour, which shows on this surface in the dark theme', async () => {
-    const { el } = renderCard([
-      row({ state: 'working' }),
-      row({
-        conversationId: 'call-2',
-        callId: 'call-2',
-        callIds: ['call-2'],
-        state: 'finished',
-      }),
-    ]);
-
-    for (const control of [
-      slot(el, 'working-agent-row')!,
-      slot(el, 'working-agents-finished-toggle')!,
-      toggleOf(el),
-    ]) {
-      expect(control.className).toContain('hover:bg-accent');
-      expect(control.className).not.toContain('hover:bg-muted');
-    }
-  });
-
-  it('lists live rows first and holds the finished ones behind a toggle that counts them', async () => {
-    const { el } = renderCard([
-      row({
-        conversationId: 'call-2',
-        callId: 'call-2',
-        callIds: ['call-2'],
-        callee: 'Reviewer',
-        calleeKey: 'reviewer',
-        state: 'finished',
-      }),
-      row({
-        conversationId: 'call-1',
-        callId: 'call-1',
-        callIds: ['call-1'],
-        state: 'working',
-      }),
-      row({
-        conversationId: 'call-5',
-        callId: 'call-5',
-        callIds: ['call-5'],
-        callee: 'Tester',
-        calleeKey: 'tester',
-        state: 'finished',
-      }),
-    ]);
-    const toggle = slot(el, 'working-agents-finished-toggle')!;
-
-    expect(rowsOf(el).map((item) => item.dataset.conversation)).toEqual([
-      'call-1',
-    ]);
-    expect(toggle.textContent).toContain('2 finished');
-
-    await press(toggle);
-
-    const ids = rowsOf(el).map((item) => item.dataset.conversation);
-    expect(ids[0]).toBe('call-1');
-    expect(ids.slice(1).sort()).toEqual(['call-2', 'call-5']);
-  });
-
-  describe('its counter', () => {
-    const longSet = (): WorkingAgentRow[] =>
-      (
-        [
-          'working',
-          'quiet',
-          'queued',
-          'finished',
-          'finished',
-          'finished',
-          'finished',
-          'failed',
-        ] as const
-      ).map((state, index) =>
-        row({
-          conversationId: `call-${index}`,
-          callId: `call-${index}`,
-          callIds: [`call-${index}`],
-          state,
-        }),
-      );
-
-    it('names only what is live in the open header, and leaves the rest on the toggle under the rows', () => {
-      const { el } = renderCard(longSet());
-
-      expect(slot(el, 'working-agents-summary')?.textContent).toBe(
-        '2 working · 1 queued',
-      );
-      expect(slot(el, 'working-agents-finished-toggle')?.textContent).toBe(
-        '4 finished · 1 failed',
-      );
-    });
-
-    it('keeps every count in the folded card’s accessible name, with no tooltip over its panel', () => {
-      const { el } = renderFolded(longSet());
-
-      expect(toggleOf(el).getAttribute('aria-label')).toBe(
-        'Unfold the agents card · 2 working · 1 queued · 4 finished · 1 failed',
-      );
-      expect(toggleOf(el).hasAttribute('title')).toBe(false);
-    });
-
-    it('keeps every count in the open card’s tooltip', () => {
-      const { el } = renderCard(longSet());
-
-      expect(toggleOf(el).title).toBe(
-        'Agents · 2 working · 1 queued · 4 finished · 1 failed',
-      );
-    });
-
-    it('counts failed and stopped apart from finished once a settled set is opened', () => {
-      const { el } = renderCard([
-        row({ state: 'finished' }),
-        row({
-          conversationId: 'call-2',
-          callId: 'call-2',
-          callIds: ['call-2'],
-          state: 'failed',
-        }),
-        row({
-          conversationId: 'call-3',
-          callId: 'call-3',
-          callIds: ['call-3'],
-          state: 'stopped',
-        }),
-      ]);
-
-      expect(slot(el, 'working-agents-summary')?.textContent).toBe('');
-      expect(slot(el, 'working-agents-finished-toggle')?.textContent).toBe(
-        '1 finished · 1 failed · 1 stopped',
-      );
-    });
-  });
-
-  it('starts as the square when no row is live', () => {
-    const { el } = renderFolded([row({ state: 'finished' })]);
-
-    expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('true');
-    expect(rowsOf(el)).toHaveLength(0);
-  });
-
-  it('starts as the square while an agent works, on a wide window too', () => {
-    const { el } = renderFolded([row()]);
-
-    expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('true');
-    expect(rowsOf(el)).toHaveLength(0);
-  });
-
-  it('opens on a press of its toggle, and folds its rows away on the next', async () => {
-    const { el } = renderFolded([row()]);
-
-    await press(toggleOf(el));
-    expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('false');
-    expect(rowsOf(el)).toHaveLength(1);
-
-    await press(toggleOf(el));
-    expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('true');
-    expect(rowsOf(el)).toHaveLength(0);
-  });
-
-  describe('where it stands', () => {
-    const inPane = (
-      rows: readonly WorkingAgentRow[],
-      pane: { width: number; height: number },
-    ): HTMLElement => {
-      vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(
-        pane.width,
-      );
-      vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(
-        pane.height,
-      );
-      const spies = doubles();
-      return mount(
-        <>
-          <div data-slot="pane" />
-          <WorkingAgentsCard
-            rows={rows}
-            runId="run-1"
-            api={spies.api}
-            client={spies.client}
-            onShowInChat={() => undefined}
-          />
-        </>,
-      );
-    };
-    afterEach(() => {
-      vi.restoreAllMocks();
-    });
-
-    it('anchors to the bottom right corner, closed and open', async () => {
-      const { el } = renderFolded([row()]);
-      const card = slot(el, 'working-agents-card')!;
-
-      expect(card.className).toContain('right-4');
-      expect(card.className).toContain('-bottom-2');
-
-      await press(toggleOf(el));
-
-      expect(card.className).toContain('right-4');
-      expect(card.className).toContain('-bottom-2');
-    });
-
-    it('keeps the toggle under the rows, so an open card grows upward from it', () => {
-      const { el } = renderCard([row()]);
-      const toggle = slot(el, 'working-agents-toggle')!;
-
-      expect(toggle.nextElementSibling).toBeNull();
-      expect(toggle.previousElementSibling?.contains(rowsOf(el)[0]!)).toBe(
-        true,
-      );
-    });
-
-    it('stays inside its pane, and lifts over Latest on a pane too narrow to share the line', async () => {
-      const wide = inPane([row()], { width: 926, height: 673 });
-      await press(toggleOf(wide));
-      expect(slot(wide, 'working-agents-card')?.className).toContain(
-        '-bottom-2',
-      );
-      expect(slot(wide, 'working-agents-card')?.style.maxHeight).toBe('673px');
-      act(() => root.unmount());
-      container.remove();
-
-      const narrow = inPane([row()], { width: 390, height: 400 });
-      await press(toggleOf(narrow));
-
-      expect(slot(narrow, 'working-agents-card')?.className).toContain(
-        'bottom-12',
-      );
-      expect(slot(narrow, 'working-agents-card')?.style.maxHeight).toBe(
-        '344px',
-      );
-    });
-  });
-
-  describe('the folded square', () => {
-    const named = (
-      id: string,
-      callee: string,
-      state: WorkingAgentRow['state'],
-    ): WorkingAgentRow =>
-      row({
-        conversationId: id,
-        callId: id,
-        callIds: [id],
-        callee,
-        calleeKey: callee.toLowerCase(),
-        state,
-      });
-    const tile = (el: Element): HTMLElement => slot(el, 'working-agents-tile')!;
-    const ring = (el: Element): HTMLElement | null =>
-      slot(el, 'working-agents-tile-ring');
-    const dot = (el: Element): Element | null =>
-      toggleOf(el).querySelector(
-        ':scope > [data-slot="status-dot"][data-tone="bad"]',
-      );
-    const remembered = (
-      rows: readonly WorkingAgentRow[],
-      runId = 'run-1',
-    ): React.JSX.Element => {
-      const spies = doubles();
-      return (
-        <ThreadUiMemoryContext.Provider value={runId}>
-          <WorkingAgentsCard
-            rows={rows}
-            runId={runId}
-            api={spies.api}
-            client={spies.client}
-            onShowInChat={() => undefined}
-          />
-        </ThreadUiMemoryContext.Provider>
-      );
-    };
-
+  describe('its panel', () => {
     const hover = async (el: Element): Promise<void> => {
       act(() => {
         slot(el, 'working-agents-toggle')!.dispatchEvent(
@@ -602,24 +293,70 @@ describe('WorkingAgentsCard', () => {
       });
       await settle();
     };
-    const currentAgents = (el: Element): HTMLElement[] => [
-      ...el.querySelectorAll<HTMLElement>(
-        '[data-slot="working-agents-current-agent"]',
-      ),
-    ];
 
-    it('files each agent’s current runs under it on hover, with their counts', async () => {
+    it('opens on hover', async () => {
       vi.useFakeTimers();
-      const { el } = renderFolded([
+      const { el } = renderSquare([row()]);
+      expect(panelOf(el)).toBeNull();
+
+      await hover(el);
+
+      expect(currentAgents(panelOf(el)!)).toHaveLength(1);
+    });
+
+    it('pins the same panel on a press, and a press outside closes it', async () => {
+      const { el } = await renderPinned([row()]);
+
+      expect(currentAgents(panelOf(el)!)).toHaveLength(1);
+      expect(toggleOf(el).getAttribute('aria-expanded')).toBe('true');
+
+      await pressOutside();
+
+      expect(panelOf(el)).toBeNull();
+    });
+
+    it('stays open when a press inside the hover-opened panel takes the focus off the square', async () => {
+      vi.useFakeTimers();
+      const { el } = renderSquare([row()]);
+      toggleOf(el).focus();
+      await hover(el);
+
+      act(() => {
+        currentRuns(el)[0]!.dispatchEvent(
+          new MouseEvent('mousedown', { bubbles: true }),
+        );
+        toggleOf(el).blur();
+      });
+
+      expect(panelOf(el)).not.toBeNull();
+    });
+
+    it('closes on a second press of the square', async () => {
+      const { el } = await renderPinned([row()]);
+
+      await press(toggleOf(el));
+
+      expect(panelOf(el)).toBeNull();
+    });
+
+    it('keeps the focus on the square across a press', async () => {
+      const { el } = renderSquare([row()]);
+      toggleOf(el).focus();
+
+      await press(toggleOf(el));
+
+      expect(panelOf(el)).not.toBeNull();
+      expect(document.activeElement).toBe(toggleOf(el));
+    });
+
+    it('files each agent’s current runs under it, with their counts', async () => {
+      const { el } = await renderPinned([
         named('call-1', 'Engineer', 'working'),
         named('call-2', 'QA', 'queued'),
         named('call-3', 'Engineer', 'quiet'),
         named('call-4', 'Researcher', 'finished'),
         named('call-5', 'Reviewer', 'failed'),
       ]);
-      expect(currentAgents(el)).toEqual([]);
-
-      await hover(el);
 
       expect(
         currentAgents(el).map((agent) => [
@@ -636,9 +373,13 @@ describe('WorkingAgentsCard', () => {
     it('says of each current run where it stands, for how long, who asked and what for', async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date('2026-11-08T12:00:00.000Z'));
-      const { el } = renderFolded([row({ startedAt: Date.now() - 125_000 })]);
-
-      await hover(el);
+      const now = Date.now();
+      const { el } = await renderPinned([
+        row({
+          startedAt: now - 3_600_000,
+          clocks: [clock({ runningSince: now - 125_000, throughSeq: 3 })],
+        }),
+      ]);
 
       const run = slot(el, 'working-agent-run')!;
       expect(slot(run, 'working-agent-state')?.textContent).toBe('working');
@@ -650,75 +391,128 @@ describe('WorkingAgentsCard', () => {
     });
 
     it('draws a run nobody titled without a title line', async () => {
-      vi.useFakeTimers();
-      const { el } = renderFolded([row({ title: null })]);
-
-      await hover(el);
+      const { el } = await renderPinned([row({ title: null })]);
 
       expect(slot(el, 'working-agent-run')).not.toBeNull();
       expect(slot(el, 'working-agent-run-title')).toBeNull();
     });
 
-    it('sums what is live at the top of the panel and what has settled at its foot', async () => {
-      vi.useFakeTimers();
-      const { el } = renderFolded([
+    it('says a queued call is queued and a call gone silent is gone quiet', async () => {
+      const { el } = await renderPinned([
+        named('call-2', 'Engineer', 'queued'),
+        named('call-5', 'Researcher', 'quiet'),
+      ]);
+
+      expect(
+        currentRuns(el).map(
+          (run) => slot(run, 'working-agent-state')?.textContent,
+        ),
+      ).toEqual(['queued', 'gone quiet']);
+    });
+
+    it.each<[WorkingAgentRow['state'], string, string]>([
+      ['working', 'text-success', 'border-success'],
+      ['quiet', 'text-warning', 'border-warning'],
+    ])(
+      'colours a %s run’s state and the line its messages hang on',
+      async (state, text, rail) => {
+        const { el } = await renderPinned([row({ state })]);
+        const run = currentRuns(el)[0]!;
+
+        expect(slot(run, 'working-agent-state-pill')?.className).toContain(
+          text,
+        );
+        expect(
+          slot(run, 'working-agent-messages')?.parentElement?.className,
+        ).toContain(rail);
+      },
+    );
+
+    it('sums what is live at its top and holds what has settled behind a fold that counts it', async () => {
+      const { el } = await renderPinned([
         named('call-1', 'Engineer', 'working'),
         named('call-2', 'QA', 'queued'),
         named('call-3', 'Researcher', 'finished'),
         named('call-4', 'Reviewer', 'failed'),
+        named('call-5', 'Tester', 'stopped'),
       ]);
-
-      await hover(el);
+      const fold = slot(el, 'working-agents-panel-settled')!;
 
       expect(slot(el, 'working-agents-panel-summary')?.textContent).toBe(
         '1 working · 1 queued',
       );
-      expect(slot(el, 'working-agents-panel-settled')?.textContent).toBe(
-        '1 finished · 1 failed',
-      );
+      expect(fold.textContent).toBe('1 finished · 1 failed · 1 stopped');
+      expect(fold.getAttribute('aria-expanded')).toBe('false');
+      expect(settledRuns(el)).toEqual([]);
+
+      await press(fold);
+
+      expect(fold.getAttribute('aria-expanded')).toBe('true');
+      expect(settledRuns(el).map((run) => run.dataset.conversation)).toEqual([
+        'call-3',
+        'call-4',
+        'call-5',
+      ]);
+      expect(panelOf(el)).not.toBeNull();
     });
 
-    it('shows each current run’s newest messages, whole, with no press', async () => {
-      vi.useFakeTimers();
-      const { el, listCallMessages } = renderFolded([
-        named('call-1', 'Engineer', 'working'),
-        named('call-4', 'Researcher', 'finished'),
+    it('colours a failed run’s state in the fold, and reads none of its messages', async () => {
+      const { el, listCallMessages } = await renderPinned([
+        named('call-1', 'Engineer', 'failed'),
       ]);
-      listCallMessages.mockResolvedValueOnce({
-        messages: [message(10, 'first'), message(11, 'second')],
-        hasOlder: true,
-      });
+
+      await press(slot(el, 'working-agents-panel-settled')!);
+
+      expect(
+        slot(settledRuns(el)[0]!, 'working-agent-state-pill')?.className,
+      ).toContain('text-destructive');
       expect(listCallMessages).not.toHaveBeenCalled();
-
-      await hover(el);
-
-      expect(listCallMessages).toHaveBeenCalledExactlyOnceWith({
-        runId: 'run-1',
-        callId: 'call-1',
-        limit: 3,
-      });
-      const run = slot(el, 'working-agents-current-run')!;
-      expect(drawnMessages(run)).toEqual([
-        expect.stringContaining('first'),
-        expect.stringContaining('second'),
-      ]);
-      expect(slot(run, 'working-agent-older')).toBeNull();
     });
 
-    it('draws no foot while nothing has settled', async () => {
-      vi.useFakeTimers();
-      const { el } = renderFolded([named('call-1', 'Engineer', 'working')]);
+    it('remembers the fold per thread', async () => {
+      const card = (runId: string): React.JSX.Element => {
+        const spies = doubles();
+        return (
+          <ThreadUiMemoryContext.Provider value={runId}>
+            <WorkingAgentsCard
+              rows={[named('call-1', 'Engineer', 'finished')]}
+              runId={runId}
+              api={spies.api}
+              client={spies.client}
+              onShowInChat={() => undefined}
+            />
+          </ThreadUiMemoryContext.Provider>
+        );
+      };
+      const el = mount(card('run-1'));
+      await press(toggleOf(el));
+      await press(slot(el, 'working-agents-panel-settled')!);
+      act(() => root.unmount());
+      container.remove();
 
-      await hover(el);
+      const same = mount(card('run-1'));
+      await press(toggleOf(same));
+      expect(settledRuns(same)).toHaveLength(1);
+      act(() => root.unmount());
+      container.remove();
+
+      const other = mount(card('run-2'));
+      await press(toggleOf(other));
+      expect(settledRuns(other)).toHaveLength(0);
+    });
+
+    it('draws no fold while nothing has settled', async () => {
+      const { el } = await renderPinned([
+        named('call-1', 'Engineer', 'working'),
+      ]);
 
       expect(slot(el, 'working-agents-panel-settled')).toBeNull();
     });
 
-    it('says so on hover when nothing is running, and still counts what settled', async () => {
-      vi.useFakeTimers();
-      const { el } = renderFolded([named('call-1', 'Engineer', 'finished')]);
-
-      await hover(el);
+    it('says so when nothing is running, and still counts what settled', async () => {
+      const { el } = await renderPinned([
+        named('call-1', 'Engineer', 'finished'),
+      ]);
 
       expect(slot(el, 'working-agents-panel-summary')?.textContent).toBe(
         'No current runs',
@@ -729,755 +523,274 @@ describe('WorkingAgentsCard', () => {
       );
     });
 
-    it('stays the square on hover, with no agent or failure drawn beside it', async () => {
-      vi.useFakeTimers();
-      const { el } = renderFolded([
+    it('tints every control with the menu row’s colour, which shows on this surface in the dark theme', async () => {
+      const { el } = await renderPinned([
         named('call-1', 'Engineer', 'working'),
-        named('call-2', 'QA', 'failed'),
+        named('call-2', 'QA', 'finished'),
       ]);
 
-      await hover(el);
-
-      expect(faces(toggleOf(el))).toEqual(['QA']);
-      expect(toggleOf(el).textContent).not.toContain('working');
-      expect(toggleOf(el).querySelector('svg')).toBeNull();
+      for (const control of [
+        currentRuns(el)[0]!,
+        slot(el, 'working-agents-panel-settled')!,
+        toggleOf(el),
+      ]) {
+        expect(control.className).toContain('hover:bg-accent');
+        expect(control.className).not.toContain('hover:bg-muted');
+      }
     });
+  });
 
-    it('gives way to the open card on a press, and draws no panel over it', async () => {
-      vi.useFakeTimers();
-      const { el } = renderFolded([named('call-1', 'Engineer', 'working')]);
-      await hover(el);
-      expect(currentAgents(el)).toHaveLength(1);
-
-      await press(toggleOf(el));
-      expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('false');
-      expect(el.querySelector('[data-slot="popover-panel"]')).toBeNull();
-
-      await hover(el);
-      expect(el.querySelector('[data-slot="popover-panel"]')).toBeNull();
-    });
-
-    it('keeps one focused control across a press, so the keyboard stays on it', async () => {
-      const { el } = renderFolded([named('call-1', 'Engineer', 'working')]);
-      toggleOf(el).focus();
-
-      await press(toggleOf(el));
-
-      expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('false');
-      expect(document.activeElement).toBe(toggleOf(el));
-    });
-
-    it('leads with the unseen failure, over someone working', () => {
-      const { el } = renderFolded([
-        named('call-1', 'Engineer', 'working'),
-        named('call-2', 'QA', 'failed'),
-      ]);
-
-      expect(faces(tile(el))).toEqual(['QA']);
-    });
-
-    it('leads with whoever works once the failure is seen', async () => {
-      const { el } = renderFolded([
-        named('call-2', 'QA', 'failed'),
-        named('call-1', 'Engineer', 'working'),
-      ]);
-      await press(toggleOf(el));
-      await press(toggleOf(el));
-
-      expect(faces(tile(el))).toEqual(['Engineer']);
-    });
-
-    it('counts the other live agents, once each', () => {
-      const { el } = renderFolded([
-        named('call-1', 'Engineer', 'working'),
-        named('call-2', 'QA', 'queued'),
-        named('call-3', 'QA', 'quiet'),
+  describe('a run’s messages', () => {
+    it('reads nothing while the panel is shut, and each current run’s newest three as it opens, never the run’s items', async () => {
+      const { el, listCallMessages, listRunItems } = renderSquare([
+        chained(),
         named('call-4', 'Researcher', 'finished'),
       ]);
-
-      expect(slot(el, 'working-agents-tile-more')?.textContent).toBe('+1');
-    });
-
-    it('counts the run’s other agents when nobody is live', () => {
-      const { el } = renderFolded([
-        named('call-1', 'Engineer', 'finished'),
-        named('call-2', 'QA', 'finished'),
-        named('call-3', 'Researcher', 'stopped'),
-      ]);
-
-      expect(slot(el, 'working-agents-tile-more')?.textContent).toBe('+2');
-    });
-
-    it('shows no count with nobody else', () => {
-      const { el } = renderFolded([named('call-1', 'Engineer', 'working')]);
-
-      expect(slot(el, 'working-agents-tile-more')).toBeNull();
-    });
-
-    it('spins its ring while someone works, unless the reader asked for less motion', () => {
-      const { el } = renderFolded([
-        named('call-1', 'Engineer', 'working'),
-        named('call-2', 'QA', 'queued'),
-      ]);
-
-      expect(tile(el).dataset.activity).toBe('working');
-      expect(ring(el)?.className).toContain('animate-spin');
-      expect(ring(el)?.className).toContain('motion-reduce:animate-none');
-    });
-
-    it.each<[readonly WorkingAgentRow['state'][]]>([
-      [['queued']],
-      [['quiet']],
-      [['queued', 'quiet']],
-    ])('holds its ring still while the live ones are only %j', (states) => {
-      const { el } = renderFolded(
-        states.map((state, index) =>
-          named(`call-${index}`, `A${index}`, state),
-        ),
-      );
-
-      expect(tile(el).dataset.activity).toBe('waiting');
-      expect(ring(el)).not.toBeNull();
-      expect(ring(el)?.className).not.toContain('animate-spin');
-    });
-
-    it('draws no ring once everyone has finished', () => {
-      const { el } = renderFolded([named('call-1', 'Engineer', 'finished')]);
-
-      expect(tile(el).dataset.activity).toBe('idle');
-      expect(ring(el)).toBeNull();
-    });
-
-    it('fades once everyone has finished, and not while anyone is live', () => {
-      const settled = renderFolded([named('call-1', 'Engineer', 'finished')]);
-      expect(slot(settled.el, 'working-agents-card')?.className).toContain(
-        'opacity-60',
-      );
-      act(() => root.unmount());
-      container.remove();
-
-      const live = renderFolded([named('call-1', 'Engineer', 'queued')]);
-      expect(slot(live.el, 'working-agents-card')?.className).not.toContain(
-        'opacity-60',
-      );
-    });
-
-    it('does not fade over an unseen failure, and fades once it is seen', async () => {
-      const { el } = renderFolded([named('call-1', 'Engineer', 'failed')]);
-      expect(slot(el, 'working-agents-card')?.className).not.toContain(
-        'opacity-60',
-      );
+      expect(listCallMessages).not.toHaveBeenCalled();
 
       await press(toggleOf(el));
-      await press(toggleOf(el));
 
-      expect(slot(el, 'working-agents-card')?.className).toContain(
-        'opacity-60',
-      );
-    });
-
-    it('lights the dot for a failure not yet seen, and puts it out when the card opens', async () => {
-      const { el } = renderFolded([
-        named('call-1', 'Engineer', 'working'),
-        named('call-2', 'QA', 'failed'),
-      ]);
-      expect(dot(el)).not.toBeNull();
-
-      await press(toggleOf(el));
-      await press(toggleOf(el));
-
-      expect(dot(el)).toBeNull();
-    });
-
-    it('lights the dot again for a later failure', async () => {
-      const first = named('call-2', 'QA', 'failed');
-      const el = mount(remembered([first]));
-      await press(toggleOf(el));
-      await press(toggleOf(el));
-      expect(dot(el)).toBeNull();
-
-      act(() =>
-        root.render(
-          remembered([first, named('call-3', 'Researcher', 'failed')]),
-        ),
-      );
-
-      expect(dot(el)).not.toBeNull();
-    });
-
-    it('counts a failure that lands while the card is open as seen', async () => {
-      const el = mount(remembered([named('call-1', 'Engineer', 'working')]));
-      await press(toggleOf(el));
-
-      const failing = [named('call-1', 'Engineer', 'failed')];
-      act(() => root.render(remembered(failing)));
-      await press(toggleOf(el));
-
-      expect(dot(el)).toBeNull();
-    });
-
-    it('remembers a seen failure per thread', async () => {
-      const failure = [named('call-2', 'QA', 'failed')];
-      const el = mount(remembered(failure));
-      await press(toggleOf(el));
-      await press(toggleOf(el));
-      act(() => root.unmount());
-      container.remove();
-
-      const same = mount(remembered(failure));
-      expect(dot(same)).toBeNull();
-      act(() => root.unmount());
-      container.remove();
-
-      const other = mount(remembered(failure, 'run-2'));
-      expect(dot(other)).not.toBeNull();
-    });
-
-    it('remembers the press that opened it per thread', async () => {
-      const el = mount(remembered([row()]));
-      await press(toggleOf(el));
-      act(() => root.unmount());
-      container.remove();
-
-      const same = mount(remembered([row()]));
-      expect(slot(same, 'working-agents-card')?.dataset.folded).toBe('false');
-      act(() => root.unmount());
-      container.remove();
-
-      const other = mount(remembered([row()], 'run-2'));
-      expect(slot(other, 'working-agents-card')?.dataset.folded).toBe('true');
-    });
-  });
-
-  it('reads nothing while folded, and a live row’s messages as the card opens', async () => {
-    const { el, listCallMessages, listRunItems } = renderFolded([row()]);
-
-    expect(listCallMessages).not.toHaveBeenCalled();
-
-    await press(toggleOf(el));
-
-    expect(listCallMessages).toHaveBeenCalledTimes(1);
-    expect(listRunItems).not.toHaveBeenCalled();
-  });
-
-  it('shows every live agent’s messages with no press, and leaves a finished one shut and unread', async () => {
-    const { el, listCallMessages } = await renderCardReading(
-      [
-        row(),
-        row({
-          conversationId: 'call-4',
-          callId: 'call-4',
-          callIds: ['call-4'],
-          callee: 'Researcher',
-          calleeKey: 'researcher',
-          state: 'queued',
-        }),
-        row({
-          conversationId: 'call-5',
-          callId: 'call-5',
-          callIds: ['call-5'],
-          state: 'finished',
-        }),
-      ],
-      (read) =>
-        read.mockResolvedValue({
-          messages: [message(10, 'latest words')],
-          hasOlder: false,
-        }),
-    );
-
-    expect(
-      rowsOf(el).map((item) => item.getAttribute('aria-expanded')),
-    ).toEqual(['true', 'true']);
-    expect(drawnMessages(el)).toHaveLength(2);
-    expect(listCallMessages).toHaveBeenCalledTimes(2);
-
-    await press(slot(el, 'working-agents-finished-toggle')!);
-
-    expect(rowsOf(el)[2]?.getAttribute('aria-expanded')).toBe('false');
-    expect(listCallMessages).toHaveBeenCalledTimes(2);
-  });
-  it('asks for a live row’s newest three messages, and never the run’s items', async () => {
-    const { listCallMessages, listRunItems } = await renderCardReading([
-      chained(),
-    ]);
-
-    expect(listCallMessages).toHaveBeenCalledWith({
-      runId: 'run-1',
-      callId: 'call-3',
-      limit: 3,
-    });
-    expect(listRunItems).not.toHaveBeenCalled();
-  });
-  it('draws the messages as plain text, with the markdown stripped', async () => {
-    const { el } = await renderCardReading([chained()], (read) =>
-      read.mockResolvedValueOnce({
-        messages: [message(10, '**ship** the `fix` now')],
-        hasOlder: false,
-      }),
-    );
-
-    const [drawn] = drawnMessages(el);
-    expect(drawn).toContain('ship the fix now');
-    expect(drawn).not.toContain('**');
-    expect(drawn).not.toContain('`');
-    expect(el.querySelector('strong')).toBeNull();
-  });
-  it('draws a message whole, its line breaks kept, past any length', async () => {
-    const long = `first line\n${'word '.repeat(400)}last words`;
-    const { el } = await renderCardReading([chained()], (read) =>
-      read.mockResolvedValueOnce({
-        messages: [message(10, long)],
-        hasOlder: false,
-      }),
-    );
-
-    const text = slot(el, 'working-agent-message')!.querySelector('p')!;
-    expect(text.textContent).toBe(long);
-    expect(text.className).toContain('whitespace-pre-wrap');
-    expect(text.className).not.toContain('line-clamp');
-  });
-
-  it('lifts the newest message over the older ones, and the live newest stays the newest', async () => {
-    const { el, emit } = await renderCardReading([chained()], (read) =>
-      read.mockResolvedValueOnce({ messages: threeWords, hasOlder: false }),
-    );
-    const drawn = (): [string | undefined, string][] =>
-      [
-        ...el.querySelectorAll<HTMLElement>(
-          '[data-slot="working-agent-message"]',
-        ),
-      ].map((item) => [
-        item.dataset.latest,
-        item.querySelector('p')!.className.includes('text-muted-foreground')
-          ? 'muted'
-          : 'bright',
-      ]);
-
-    expect(drawn()).toEqual([
-      [undefined, 'muted'],
-      [undefined, 'muted'],
-      ['true', 'bright'],
-    ]);
-
-    emit(message(15, 'four'));
-
-    expect(drawn()[2]).toEqual(['true', 'bright']);
-    expect(slot(el, 'working-agent-message')?.dataset.latest).toBeUndefined();
-    expect(el.querySelector('[data-latest="true"]')?.textContent).toContain(
-      'four',
-    );
-  });
-  it('hangs the messages and their actions off the agent on a line down the left', async () => {
-    const { el } = await renderCardReading([chained()]);
-
-    const thread = slot(el, 'working-agent-thread')!;
-    expect(thread.className).toContain('border-l-2');
-    expect(slot(thread, 'working-agent-messages')).not.toBeNull();
-    expect(slot(thread, 'working-agent-show-all')).not.toBeNull();
-    expect(slot(thread, 'working-agent-show-in-chat')).not.toBeNull();
-  });
-  it('shows the older marker only when the reply says more of the conversation exists', async () => {
-    const { el } = await renderCardReading(
-      [
-        chained(),
-        row({
-          conversationId: 'call-4',
-          callId: 'call-4',
-          callIds: ['call-4'],
-          callee: 'Researcher',
-          calleeKey: 'researcher',
-        }),
-      ],
-      (read) => {
-        read.mockResolvedValueOnce({
-          messages: [message(10, 'older words')],
-          hasOlder: true,
-        });
-        read.mockResolvedValueOnce({
-          messages: [message(11, 'whole words', 'call-4')],
-          hasOlder: false,
-        });
-      },
-    );
-
-    const threads = [
-      ...el.querySelectorAll('[data-slot="working-agent-thread"]'),
-    ];
-    expect(slot(threads[0]!, 'working-agent-older')).not.toBeNull();
-    expect(slot(threads[1]!, 'working-agent-older')).toBeNull();
-  });
-  it('folds one live row on a press and opens it on the next, leaving the others open', async () => {
-    const { el, listCallMessages } = await renderCardReading([
-      chained(),
-      row({
-        conversationId: 'call-4',
-        callId: 'call-4',
-        callIds: ['call-4'],
-        callee: 'Researcher',
-        calleeKey: 'researcher',
-      }),
-    ]);
-    const [first, second] = rowsOf(el);
-    const threads = (): number =>
-      el.querySelectorAll('[data-slot="working-agent-thread"]').length;
-    listCallMessages.mockClear();
-
-    await press(first!);
-    expect(first!.getAttribute('aria-expanded')).toBe('false');
-    expect(second!.getAttribute('aria-expanded')).toBe('true');
-    expect(threads()).toBe(1);
-
-    await press(first!);
-    expect(first!.getAttribute('aria-expanded')).toBe('true');
-    expect(threads()).toBe(2);
-    expect(listCallMessages).toHaveBeenCalledExactlyOnceWith({
-      runId: 'run-1',
-      callId: 'call-3',
-      limit: 3,
-    });
-  });
-  it('hands the row’s newest call to show-in-chat', async () => {
-    const onShowInChat = vi.fn();
-    const { el } = renderCard([chained()], onShowInChat);
-
-    await press(slot(el, 'working-agent-show-in-chat')!);
-
-    expect(onShowInChat).toHaveBeenCalledExactlyOnceWith('call-3');
-  });
-  it('opens the whole conversation only on its own press, and asks the run for its items only then', async () => {
-    const { el, listRunItems } = await renderCardReading([chained()]);
-
-    expect(listRunItems).not.toHaveBeenCalled();
-    expect(
-      document.querySelector('[data-slot="call-conversation-dialog"]'),
-    ).toBeNull();
-
-    await press(slot(el, 'working-agent-show-all')!);
-
-    expect(
-      document.querySelector('[data-slot="call-conversation-dialog"]'),
-    ).not.toBeNull();
-    expect(listRunItems).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
+      expect(listCallMessages).toHaveBeenCalledExactlyOnceWith({
         runId: 'run-1',
-        call: 'call-1',
-        limit: 200,
-      }),
-    );
-  });
-  it('draws the conversation in the popup from its own read, and takes live rows', async () => {
-    const { el, listRunItems, emit } = renderCard([chained()]);
-    listRunItems.mockResolvedValueOnce({
-      items: [message(40, 'read from the page')],
-      anchors: [
-        {
-          id: 'start',
-          runId: 'run-1',
-          memberId: 'manager',
-          seq: 2,
-          kind: 'call_started',
-          role: null,
-          payload: {
-            callId: 'call-3',
-            callerNodeId: 'manager',
-            calleeNodeId: 'engineer',
-            message: 'Fix the parser',
-          },
-          createdAt: new Date(0).toISOString(),
-          inCall: null,
-        },
-      ],
+        callId: 'call-3',
+        limit: 3,
+      });
+      expect(listRunItems).not.toHaveBeenCalled();
     });
-    await press(slot(el, 'working-agent-show-all')!);
-    const dialog = (): Element =>
-      document.querySelector('[data-slot="call-conversation-dialog"]')!;
 
-    expect(dialog().textContent).toContain('read from the page');
-    expect(dialog().textContent).toContain('Fix the parser');
+    it('draws the messages as plain text, with the markdown stripped', async () => {
+      const { el } = await renderPinned([chained()], (read) =>
+        read.mockResolvedValueOnce({
+          messages: [message(10, '**ship** the `fix` now')],
+          hasOlder: false,
+        }),
+      );
 
-    emit(message(41, 'arrived while open'));
-    expect(dialog().textContent).toContain('arrived while open');
-  });
+      const [drawn] = drawnMessages(el);
+      expect(drawn).toContain('ship the fix now');
+      expect(drawn).not.toContain('**');
+      expect(drawn).not.toContain('`');
+      expect(el.querySelector('strong')).toBeNull();
+    });
 
-  it('draws a live message of its conversation with no second press, and keeps the list at three', async () => {
-    const { el, emit } = await renderCardReading([chained()], (read) =>
-      read.mockResolvedValueOnce({ messages: threeWords, hasOlder: false }),
-    );
+    it('draws a message whole, its line breaks kept, past any length', async () => {
+      const long = `first line\n${'word '.repeat(400)}last words`;
+      const { el } = await renderPinned([chained()], (read) =>
+        read.mockResolvedValueOnce({
+          messages: [message(10, long)],
+          hasOlder: false,
+        }),
+      );
 
-    emit(message(15, 'four'));
+      const text = slot(el, 'working-agent-message')!.querySelector('p')!;
+      expect(text.textContent).toBe(long);
+      expect(text.className).toContain('whitespace-pre-wrap');
+      expect(text.className).not.toContain('line-clamp');
+    });
 
-    expect(drawnMessages(el)).toEqual([
-      expect.stringContaining('two'),
-      expect.stringContaining('three'),
-      expect.stringContaining('four'),
-    ]);
-  });
-  it('keeps another call’s words, the user’s and a delegate’s out of its conversation', async () => {
-    const { el, emit } = await renderCardReading([chained()], (read) =>
-      read.mockResolvedValueOnce({ messages: threeWords, hasOlder: false }),
-    );
+    it('lifts the newest message over the older ones, and the live newest stays the newest', async () => {
+      const { el, emit } = await renderPinned([chained()], (read) =>
+        read.mockResolvedValueOnce({ messages: threeWords, hasOlder: false }),
+      );
+      const drawn = (): [string | undefined, string][] =>
+        [
+          ...el.querySelectorAll<HTMLElement>(
+            '[data-slot="working-agent-message"]',
+          ),
+        ].map((item) => [
+          item.dataset.latest,
+          item.querySelector('p')!.className.includes('text-muted-foreground')
+            ? 'muted'
+            : 'bright',
+        ]);
 
-    emit(message(15, 'elsewhere', 'call-9'));
-    emit(message(16, 'user words', 'call-3', { role: 'user' }));
-    emit(
-      message(17, 'delegate words', 'call-3', {
-        payload: {
-          text: 'delegate words',
-          callId: 'call-3',
-          parentToolUseId: 'task-1',
-        },
-      }),
-    );
+      expect(drawn()).toEqual([
+        [undefined, 'muted'],
+        [undefined, 'muted'],
+        ['true', 'bright'],
+      ]);
 
-    expect(drawnMessages(el)).toEqual([
-      expect.stringContaining('one'),
-      expect.stringContaining('two'),
-      expect.stringContaining('three'),
-    ]);
-  });
+      emit(message(15, 'four'));
 
-  const narrowViewport = (): void => {
-    vi.stubGlobal('matchMedia', (query: string) => ({
-      matches: query.includes('max-width'),
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-    }));
-  };
-
-  const dialog = (): Element | null =>
-    document.querySelector('[data-slot="call-conversation-dialog"]');
-
-  const callStart = (
-    seq: number,
-    payload: Record<string, unknown>,
-  ): ItemDto => ({
-    id: `start-${seq}`,
-    runId: 'run-1',
-    memberId: 'manager',
-    seq,
-    kind: 'call_started',
-    role: null,
-    payload: {
-      callerNodeId: 'manager',
-      calleeNodeId: 'engineer',
-      message: 'Fix the parser',
-      ...payload,
-    },
-    createdAt: '2026-11-08T12:00:00.000Z',
-    inCall: null,
-  });
-
-  /** What the daemon anchors a page of the chain `chained()` names with. */
-  const chainStarts = [
-    callStart(1, { callId: 'call-1' }),
-    callStart(2, { callId: 'call-3', thread: 'call-1' }),
-  ];
-
-  it('draws nothing with no agent to list', () => {
-    const { el } = renderCard([]);
-
-    expect(slot(el, 'working-agents-card')).toBeNull();
-  });
-
-  it('starts folded at phone width, a live agent or not', () => {
-    narrowViewport();
-    try {
-      const { el } = renderFolded([row()]);
-
-      expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('true');
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it('keeps the press that folded it again when the thread is opened again', async () => {
-    const card = (spies: ReturnType<typeof doubles>): React.JSX.Element => (
-      <ThreadUiMemoryContext.Provider value="run-1">
-        <WorkingAgentsCard
-          rows={[row()]}
-          runId="run-1"
-          api={spies.api}
-          client={spies.client}
-          onShowInChat={() => undefined}
-        />
-      </ThreadUiMemoryContext.Provider>
-    );
-    const el = mount(card(doubles()));
-    await press(toggleOf(el));
-    await press(toggleOf(el));
-    act(() => root.unmount());
-    container.remove();
-
-    const again = mount(card(doubles()));
-
-    expect(slot(again, 'working-agents-card')?.dataset.folded).toBe('true');
-  });
-
-  it('tints the glyph while somebody works, and not while every call is queued', async () => {
-    const glyph = (el: HTMLElement): string =>
-      toggleOf(el).querySelector('svg')!.getAttribute('class') ?? '';
-    const queued = renderCard([row({ state: 'queued' })]);
-    expect(glyph(queued.el)).not.toContain('text-primary');
-    act(() => root.unmount());
-    container.remove();
-
-    const working = renderCard([row()]);
-
-    expect(glyph(working.el)).toContain('text-primary');
-  });
-
-  it('takes the daemon’s clock over the call’s start, and times no finished call without one', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-11-08T12:00:00.000Z'));
-    const now = Date.now();
-    const { el } = renderCard([
-      row({
-        startedAt: now - 3_600_000,
-        clocks: [clock({ runningSince: now - 10_000 })],
-      }),
-      row({
-        conversationId: 'call-2',
-        callId: 'call-2',
-        startedAt: now - 3_600_000,
-        state: 'finished',
-      }),
-    ]);
-    act(() => {
-      slot(el, 'working-agents-finished-toggle')!.dispatchEvent(
-        new MouseEvent('click', { bubbles: true }),
+      expect(drawn()[2]).toEqual(['true', 'bright']);
+      expect(el.querySelector('[data-latest="true"]')?.textContent).toContain(
+        'four',
       );
     });
 
-    const [live, finished] = rowsOf(el);
-    expect(slot(live!, 'working-agent-elapsed')?.textContent).toBe('10s');
-    expect(slot(finished!, 'working-agent-elapsed')).toBeNull();
+    it('draws a live message with no second press, and keeps the list at three', async () => {
+      const { el, emit } = await renderPinned([chained()], (read) =>
+        read.mockResolvedValueOnce({ messages: threeWords, hasOlder: false }),
+      );
+
+      emit(message(15, 'four'));
+
+      expect(drawnMessages(el)).toEqual([
+        expect.stringContaining('two'),
+        expect.stringContaining('three'),
+        expect.stringContaining('four'),
+      ]);
+    });
+
+    it('keeps another call’s words, the user’s and a delegate’s out of its conversation', async () => {
+      const { el, emit } = await renderPinned([chained()], (read) =>
+        read.mockResolvedValueOnce({ messages: threeWords, hasOlder: false }),
+      );
+
+      emit(message(15, 'elsewhere', 'call-9'));
+      emit(message(16, 'user words', 'call-3', { role: 'user' }));
+      emit(
+        message(17, 'delegate words', 'call-3', {
+          payload: {
+            text: 'delegate words',
+            callId: 'call-3',
+            parentToolUseId: 'task-1',
+          },
+        }),
+      );
+
+      expect(drawnMessages(el)).toEqual([
+        expect.stringContaining('one'),
+        expect.stringContaining('two'),
+        expect.stringContaining('three'),
+      ]);
+    });
+
+    it('leaves out another run’s row with the same call id, a tool row and a blank message', async () => {
+      const { el, emit } = await renderPinned([chained()]);
+
+      emit(message(15, 'elsewhere', 'call-3', { runId: 'run-2' }));
+      emit(message(16, 'a tool', 'call-3', { kind: 'tool_call' }));
+      emit(message(17, '   '));
+
+      expect(drawnMessages(el)).toEqual([]);
+    });
+
+    it('draws a failed read with a Retry that reads again, and opens no conversation', async () => {
+      const { el, listCallMessages } = await renderPinned(
+        [chained()],
+        (read) => {
+          read.mockRejectedValueOnce(new Error('daemon gone'));
+          read.mockResolvedValueOnce({
+            messages: [message(10, 'back')],
+            hasOlder: false,
+          });
+        },
+      );
+      const failed = slot(el, 'working-agent-messages-failed');
+      expect(failed?.textContent).toContain('Couldn’t load');
+
+      await press(failed!.querySelector('button')!);
+
+      expect(listCallMessages).toHaveBeenCalledTimes(2);
+      expect(drawnMessages(el)).toEqual([expect.stringContaining('back')]);
+      expect(dialog()).toBeNull();
+    });
+
+    it('reads again on a reconnect, and stops listening once the panel is shut', async () => {
+      const { el, listCallMessages, reconnect } = await renderPinned([
+        chained(),
+      ]);
+      await reconnect();
+      expect(listCallMessages).toHaveBeenCalledTimes(2);
+
+      await press(toggleOf(el));
+      await reconnect();
+
+      expect(listCallMessages).toHaveBeenCalledTimes(2);
+    });
   });
 
-  it('keeps a row pressed open where it is when its agent finishes', async () => {
-    const spies = doubles();
-    const card = (state: WorkingAgentRow['state']): React.JSX.Element => (
-      <WorkingAgentsCard
-        rows={[row({ state })]}
-        runId="run-1"
-        api={spies.api}
-        client={spies.client}
-        onShowInChat={() => undefined}
-      />
-    );
-    const el = mount(card('working'));
-    await press(toggleOf(el));
-    await press(rowsOf(el)[0]!);
-    await press(rowsOf(el)[0]!);
+  describe('the conversation popup', () => {
+    it('opens on a press of a current run, closing the panel, and only then asks the run for its items', async () => {
+      const { el, listRunItems } = await renderPinned([chained()]);
+      expect(listRunItems).not.toHaveBeenCalled();
+      expect(dialog()).toBeNull();
 
-    act(() => root.render(card('finished')));
+      await press(slot(el, 'working-agents-open-run')!);
 
-    expect(rowsOf(el)).toHaveLength(1);
-    expect(rowsOf(el)[0]?.getAttribute('aria-expanded')).toBe('true');
-    expect(slot(el, 'working-agents-finished-toggle')).toBeNull();
-  });
+      expect(dialog()).not.toBeNull();
+      expect(panelOf(el)).toBeNull();
+      expect(listRunItems).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          runId: 'run-1',
+          call: 'call-1',
+          limit: 200,
+        }),
+      );
+    });
 
-  it('drops a row nobody pressed into the fold when its agent finishes', async () => {
-    const spies = doubles();
-    const card = (state: WorkingAgentRow['state']): React.JSX.Element => (
-      <WorkingAgentsCard
-        rows={[row({ state })]}
-        runId="run-1"
-        api={spies.api}
-        client={spies.client}
-        onShowInChat={() => undefined}
-      />
-    );
-    const el = mount(card('working'));
-    await press(toggleOf(el));
-    expect(rowsOf(el)).toHaveLength(1);
+    it('opens on a press of the run’s messages too', async () => {
+      const { el } = await renderPinned([chained()], (read) =>
+        read.mockResolvedValueOnce({ messages: threeWords, hasOlder: false }),
+      );
 
-    act(() => root.render(card('finished')));
+      await press(slot(el, 'working-agent-message')!);
 
-    expect(rowsOf(el)).toHaveLength(0);
-    expect(slot(el, 'working-agents-finished-toggle')).not.toBeNull();
-  });
-  it('marks older messages once a live one pushes the oldest off', async () => {
-    const { el, emit } = await renderCardReading([chained()], (read) =>
-      read.mockResolvedValueOnce({ messages: threeWords, hasOlder: false }),
-    );
-    expect(slot(el, 'working-agent-older')).toBeNull();
+      expect(dialog()).not.toBeNull();
+    });
 
-    emit(message(15, 'six'));
+    it('opens the run pressed, of an agent with several', async () => {
+      const { el, listRunItems } = await renderPinned([
+        named('call-1', 'Engineer', 'working'),
+        named('call-2', 'Engineer', 'working'),
+      ]);
 
-    expect(slot(el, 'working-agent-older')).not.toBeNull();
-  });
-  it('leaves out another run’s row with the same call id, a tool row and a blank message', async () => {
-    const { el, emit } = await renderCardReading([chained()]);
+      await press(
+        currentRuns(el)[1]!.querySelector(
+          '[data-slot="working-agents-open-run"]',
+        )!,
+      );
 
-    emit(message(15, 'elsewhere', 'call-3', { runId: 'run-2' }));
-    emit(message(16, 'a tool', 'call-3', { kind: 'tool_call' }));
-    emit(message(17, '   '));
+      expect(listRunItems).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ call: 'call-2' }),
+      );
+    });
 
-    expect(drawnMessages(el)).toEqual([]);
-  });
-  it('draws a failed read with a Retry that reads again', async () => {
-    const { el, listCallMessages } = await renderCardReading(
-      [chained()],
-      (read) => {
-        read.mockRejectedValueOnce(new Error('daemon gone'));
-        read.mockResolvedValueOnce({
-          messages: [message(10, 'back')],
-          hasOlder: false,
-        });
-      },
-    );
-    const failed = slot(el, 'working-agent-messages-failed');
-    expect(failed?.textContent).toContain('Couldn’t load');
+    it('opens a settled run from the fold', async () => {
+      const { el, listRunItems } = await renderPinned([
+        named('call-1', 'Engineer', 'working'),
+        named('call-7', 'QA', 'finished'),
+      ]);
+      await press(slot(el, 'working-agents-panel-settled')!);
 
-    await press(failed!.querySelector('button')!);
+      await press(settledRuns(el)[0]!);
 
-    expect(listCallMessages).toHaveBeenCalledTimes(2);
-    expect(drawnMessages(el)).toEqual([expect.stringContaining('back')]);
-  });
-  it('reads the open row again on a reconnect, and stops listening once it is shut', async () => {
-    const { el, listCallMessages, reconnect, emit } = await renderCardReading([
-      chained(),
-    ]);
-    await reconnect();
-    expect(listCallMessages).toHaveBeenCalledTimes(2);
+      expect(dialog()?.textContent).toContain('QA');
+      expect(listRunItems).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ call: 'call-7' }),
+      );
+    });
 
-    await press(rowsOf(el)[0]!);
-    await reconnect();
-    emit(message(15, 'after it shut'));
+    it('draws the conversation from its own read, and takes live rows', async () => {
+      const { el, listRunItems, emit } = await renderPinned([chained()]);
+      listRunItems.mockResolvedValueOnce({
+        items: [message(40, 'read from the page')],
+        anchors: [callStart(2, { callId: 'call-3' })],
+      });
+      await press(slot(el, 'working-agents-open-run')!);
 
-    expect(listCallMessages).toHaveBeenCalledTimes(2);
-  });
-  it('folds the card that sent the reader to the chat, so it stands over nothing it revealed', async () => {
-    const { el } = renderCard([
-      chained(),
-      row({ conversationId: 'call-7', callId: 'call-7', callIds: ['call-7'] }),
-    ]);
-    await press(slot(el, 'working-agent-show-in-chat')!);
+      expect(dialog()?.textContent).toContain('read from the page');
+      expect(dialog()?.textContent).toContain('Fix the parser');
 
-    expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('true');
-    await press(toggleOf(el));
-    expect(rowsOf(el).map((r) => r.getAttribute('aria-expanded'))).toEqual([
-      'false',
-      'true',
-    ]);
-  });
-
-  describe('the Show all popup', () => {
-    const open = async (el: HTMLElement): Promise<void> => {
-      await press(slot(el, 'working-agent-show-all')!);
-    };
+      emit(message(41, 'arrived while open'));
+      expect(dialog()?.textContent).toContain('arrived while open');
+    });
 
     it('pages older rows from the oldest it holds, without showing anything in the chat', async () => {
       const onShowInChat = vi.fn();
-      const { el, listRunItems } = renderCard([chained()], onShowInChat);
+      const { el, listRunItems } = await renderPinned(
+        [chained()],
+        undefined,
+        onShowInChat,
+      );
       listRunItems.mockResolvedValueOnce({
         items: Array.from({ length: 200 }, (_, index) =>
           message(100 + index, `row ${index}`),
         ),
         anchors: chainStarts,
       });
-      await open(el);
+      await press(slot(el, 'working-agents-open-run')!);
       listRunItems.mockResolvedValueOnce({
         items: [message(50, 'from the older page')],
         anchors: [],
@@ -1495,7 +808,7 @@ describe('WorkingAgentsCard', () => {
     });
 
     it('takes a live result of its call, and no other run’s row', async () => {
-      const { el, listRunItems, emit } = renderCard([chained()]);
+      const { el, listRunItems, emit } = await renderPinned([chained()]);
       listRunItems.mockResolvedValueOnce({
         items: [
           {
@@ -1507,7 +820,7 @@ describe('WorkingAgentsCard', () => {
         ],
         anchors: chainStarts,
       });
-      await open(el);
+      await press(slot(el, 'working-agents-open-run')!);
 
       emit(message(41, 'elsewhere', 'call-3', { runId: 'run-2' }));
       emit({
@@ -1527,14 +840,14 @@ describe('WorkingAgentsCard', () => {
     });
 
     it('takes the start of a call continuing this conversation, whose rows the card then folds', async () => {
-      const { el, listRunItems, emit } = renderCard([
+      const { el, listRunItems, emit } = await renderPinned([
         row({ callIds: ['call-1'] }),
       ]);
       listRunItems.mockResolvedValueOnce({
         items: [message(40, 'first answer', 'call-1')],
         anchors: [callStart(2, { callId: 'call-1' })],
       });
-      await open(el);
+      await press(slot(el, 'working-agents-open-run')!);
 
       emit(callStart(50, { callId: 'call-3', thread: 'call-1' }));
       emit(message(51, 'second answer', 'call-3'));
@@ -1543,17 +856,17 @@ describe('WorkingAgentsCard', () => {
     });
 
     it('says the read failed, and not that the agent has written nothing', async () => {
-      const { el, listRunItems } = renderCard([chained()]);
+      const { el, listRunItems } = await renderPinned([chained()]);
       listRunItems.mockRejectedValueOnce(new Error('daemon gone'));
-      await open(el);
+      await press(slot(el, 'working-agents-open-run')!);
 
       expect(dialog()?.textContent).toContain('Couldn’t load');
       expect(dialog()?.textContent).not.toContain('No messages yet.');
     });
 
     it('reads the page again once a live row lands in a conversation that had none', async () => {
-      const { el, listRunItems, emit } = renderCard([chained()]);
-      await open(el);
+      const { el, listRunItems, emit } = await renderPinned([chained()]);
+      await press(slot(el, 'working-agents-open-run')!);
       expect(dialog()?.textContent).toContain('No messages yet.');
       listRunItems.mockResolvedValueOnce({
         items: [message(40, 'first words')],
@@ -1571,8 +884,8 @@ describe('WorkingAgentsCard', () => {
 
     it('shows the agent in the chat from the popup, closing the popup on the newest call', async () => {
       const onShowInChat = vi.fn();
-      const { el } = renderCard([chained()], onShowInChat);
-      await open(el);
+      const { el } = await renderPinned([chained()], undefined, onShowInChat);
+      await press(slot(el, 'working-agents-open-run')!);
 
       await press(
         document.querySelector('[data-slot="call-conversation-show-in-chat"]')!,
@@ -1580,7 +893,7 @@ describe('WorkingAgentsCard', () => {
 
       expect(onShowInChat).toHaveBeenCalledExactlyOnceWith('call-3');
       expect(dialog()).toBeNull();
-      expect(slot(el, 'working-agents-card')?.dataset.folded).toBe('true');
+      expect(panelOf(el)).toBeNull();
     });
 
     describe('its footer', () => {
@@ -1633,7 +946,7 @@ describe('WorkingAgentsCard', () => {
         const el = mount(<Channelled send={send} spies={spies} />);
         await press(toggleOf(el));
         await settle();
-        await open(el);
+        await press(slot(el, 'working-agents-open-run')!);
         return el;
       }
 
@@ -1684,18 +997,244 @@ describe('WorkingAgentsCard', () => {
       });
 
       it('offers no message to a call with no channel to it', async () => {
-        const { el, listRunItems } = renderCard([chained()]);
+        const { el, listRunItems } = await renderPinned([chained()]);
         listRunItems.mockResolvedValueOnce({
           items: [running, message(40, 'working on it')],
           anchors: chainStarts,
         });
-        await open(el);
+        await press(slot(el, 'working-agents-open-run')!);
 
         expect(footer()).not.toBeNull();
         expect(
           footer()!.querySelector('[data-slot="call-message-open"]'),
         ).toBeNull();
       });
+    });
+  });
+
+  describe('the square', () => {
+    const tile = (el: Element): HTMLElement => slot(el, 'working-agents-tile')!;
+    const ring = (el: Element): HTMLElement | null =>
+      slot(el, 'working-agents-tile-ring');
+    const dot = (el: Element): Element | null =>
+      toggleOf(el).querySelector(
+        ':scope > [data-slot="status-dot"][data-tone="bad"]',
+      );
+    const remembered = (
+      rows: readonly WorkingAgentRow[],
+      runId = 'run-1',
+    ): React.JSX.Element => {
+      const spies = doubles();
+      return (
+        <ThreadUiMemoryContext.Provider value={runId}>
+          <WorkingAgentsCard
+            rows={rows}
+            runId={runId}
+            api={spies.api}
+            client={spies.client}
+            onShowInChat={() => undefined}
+          />
+        </ThreadUiMemoryContext.Provider>
+      );
+    };
+    const openAndShut = async (el: Element): Promise<void> => {
+      await press(toggleOf(el));
+      await press(toggleOf(el));
+    };
+
+    it('keeps every count in its accessible name, with no tooltip over its panel', () => {
+      const { el } = renderSquare(
+        (
+          [
+            'working',
+            'quiet',
+            'queued',
+            'finished',
+            'finished',
+            'finished',
+            'finished',
+            'failed',
+          ] as const
+        ).map((state, index) => named(`call-${index}`, `A${index}`, state)),
+      );
+
+      expect(toggleOf(el).getAttribute('aria-label')).toBe(
+        'Agents · 2 working · 1 queued · 4 finished · 1 failed',
+      );
+      expect(toggleOf(el).hasAttribute('title')).toBe(false);
+    });
+
+    it('stays the square while its panel is open, one face and no words beside it', async () => {
+      const { el } = await renderPinned([
+        named('call-1', 'Engineer', 'working'),
+        named('call-2', 'QA', 'failed'),
+      ]);
+
+      expect(faces(toggleOf(el))).toEqual(['Engineer']);
+      expect(toggleOf(el).textContent).not.toContain('working');
+      expect(toggleOf(el).querySelector('svg')).toBeNull();
+    });
+
+    it('leads with the unseen failure, over someone working', () => {
+      const { el } = renderSquare([
+        named('call-1', 'Engineer', 'working'),
+        named('call-2', 'QA', 'failed'),
+      ]);
+
+      expect(faces(tile(el))).toEqual(['QA']);
+    });
+
+    it('leads with whoever works once the failure is seen', async () => {
+      const { el } = renderSquare([
+        named('call-2', 'QA', 'failed'),
+        named('call-1', 'Engineer', 'working'),
+      ]);
+      await openAndShut(el);
+
+      expect(faces(tile(el))).toEqual(['Engineer']);
+    });
+
+    it('counts the other live agents, once each', () => {
+      const { el } = renderSquare([
+        named('call-1', 'Engineer', 'working'),
+        named('call-2', 'QA', 'queued'),
+        named('call-3', 'QA', 'quiet'),
+        named('call-4', 'Researcher', 'finished'),
+      ]);
+
+      expect(slot(el, 'working-agents-tile-more')?.textContent).toBe('+1');
+    });
+
+    it('counts the run’s other agents when nobody is live', () => {
+      const { el } = renderSquare([
+        named('call-1', 'Engineer', 'finished'),
+        named('call-2', 'QA', 'finished'),
+        named('call-3', 'Researcher', 'stopped'),
+      ]);
+
+      expect(slot(el, 'working-agents-tile-more')?.textContent).toBe('+2');
+    });
+
+    it('shows no count with nobody else', () => {
+      const { el } = renderSquare([named('call-1', 'Engineer', 'working')]);
+
+      expect(slot(el, 'working-agents-tile-more')).toBeNull();
+    });
+
+    it('spins its ring while someone works, unless the reader asked for less motion', () => {
+      const { el } = renderSquare([
+        named('call-1', 'Engineer', 'working'),
+        named('call-2', 'QA', 'queued'),
+      ]);
+
+      expect(tile(el).dataset.activity).toBe('working');
+      expect(ring(el)?.className).toContain('animate-spin');
+      expect(ring(el)?.className).toContain('motion-reduce:animate-none');
+    });
+
+    it.each<[readonly WorkingAgentRow['state'][]]>([
+      [['queued']],
+      [['quiet']],
+      [['queued', 'quiet']],
+    ])('holds its ring still while the live ones are only %j', (states) => {
+      const { el } = renderSquare(
+        states.map((state, index) =>
+          named(`call-${index}`, `A${index}`, state),
+        ),
+      );
+
+      expect(tile(el).dataset.activity).toBe('waiting');
+      expect(ring(el)).not.toBeNull();
+      expect(ring(el)?.className).not.toContain('animate-spin');
+    });
+
+    it('draws no ring once everyone has finished', () => {
+      const { el } = renderSquare([named('call-1', 'Engineer', 'finished')]);
+
+      expect(tile(el).dataset.activity).toBe('idle');
+      expect(ring(el)).toBeNull();
+    });
+
+    it('fades once everyone has finished, and not while anyone is live', () => {
+      const settled = renderSquare([named('call-1', 'Engineer', 'finished')]);
+      expect(slot(settled.el, 'working-agents-card')?.className).toContain(
+        'opacity-60',
+      );
+      act(() => root.unmount());
+      container.remove();
+
+      const live = renderSquare([named('call-1', 'Engineer', 'queued')]);
+      expect(slot(live.el, 'working-agents-card')?.className).not.toContain(
+        'opacity-60',
+      );
+    });
+
+    it('does not fade over an unseen failure, and fades once it is seen', async () => {
+      const { el } = renderSquare([named('call-1', 'Engineer', 'failed')]);
+      expect(slot(el, 'working-agents-card')?.className).not.toContain(
+        'opacity-60',
+      );
+
+      await openAndShut(el);
+
+      expect(slot(el, 'working-agents-card')?.className).toContain(
+        'opacity-60',
+      );
+    });
+
+    it('lights the dot for a failure not yet seen, and puts it out once the panel has opened', async () => {
+      const { el } = renderSquare([
+        named('call-1', 'Engineer', 'working'),
+        named('call-2', 'QA', 'failed'),
+      ]);
+      expect(dot(el)).not.toBeNull();
+
+      await openAndShut(el);
+
+      expect(dot(el)).toBeNull();
+    });
+
+    it('lights the dot again for a later failure', async () => {
+      const first = named('call-2', 'QA', 'failed');
+      const el = mount(remembered([first]));
+      await openAndShut(el);
+      expect(dot(el)).toBeNull();
+
+      act(() =>
+        root.render(
+          remembered([first, named('call-3', 'Researcher', 'failed')]),
+        ),
+      );
+
+      expect(dot(el)).not.toBeNull();
+    });
+
+    it('counts a failure that lands while the panel is open as seen', async () => {
+      const el = mount(remembered([named('call-1', 'Engineer', 'working')]));
+      await press(toggleOf(el));
+
+      act(() =>
+        root.render(remembered([named('call-1', 'Engineer', 'failed')])),
+      );
+      await press(toggleOf(el));
+
+      expect(dot(el)).toBeNull();
+    });
+
+    it('remembers a seen failure per thread', async () => {
+      const failure = [named('call-2', 'QA', 'failed')];
+      const el = mount(remembered(failure));
+      await openAndShut(el);
+      act(() => root.unmount());
+      container.remove();
+
+      const same = mount(remembered(failure));
+      expect(dot(same)).toBeNull();
+      act(() => root.unmount());
+      container.remove();
+
+      const other = mount(remembered(failure, 'run-2'));
+      expect(dot(other)).not.toBeNull();
     });
   });
 });

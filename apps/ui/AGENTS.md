@@ -132,6 +132,7 @@ One home for each concern:
 
 - `RunStatusKind` and `RUN_STATUS_META` (`chats/run-status.tsx`) are the one vocabulary for every surface.
 - `held` and `needs-input` are derived in the renderer and never stored. There is no `idle`.
+- A `running` team run whose leads have all ended their turns or wait in `await_agent` (`rootsIdle`, `awaitingCalls`) reads `held`, as a chat's hold does (`teamLeadsWaiting`).
 - `displayRunStatus` applies a fixed rank order. Rank 6 (background work over `completed` → `held`) is withheld from `agentRunStatus`, the reading the notification rules watch.
 - `BlockStatus` is never printed verbatim. Translate it through `RUN_STATUS_OF`.
 - `settled-status.ts`: only a live terminal item mirrors its status onto the run row. A replay takes one reading from its last item (`reconcileFromTail`).

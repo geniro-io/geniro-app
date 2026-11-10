@@ -11968,6 +11968,76 @@ describe('Chats queued messages — a team run', () => {
     });
     expect(teamApi.sendTeamRunMessage).toHaveBeenCalledTimes(3);
   });
+
+  it('badges a team run whose Manager only waits on its calls as working, not running', async () => {
+    teamApi.listTeamRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'running',
+        rootsWorking: 0,
+        awaitingCalls: 0,
+        awaiting: null,
+        title: null,
+        agentKind: null,
+        teamId: 'review-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    teamApi.getTeam.mockResolvedValue({
+      slug: 'review-team',
+      team: {
+        name: 'Review team',
+        mode: 'lead',
+        members: [
+          { id: 'manager', name: 'manager', agent: 'claude', approval: 'auto' },
+        ],
+        triggers: [{ kind: 'first-message', member: 'manager' }],
+        instructionBlocks: [],
+      },
+    });
+    teamApi.listTeams.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        memberCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    const row = (): string =>
+      [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].find(
+        (el) => el.textContent?.includes('Review team'),
+      )?.textContent ?? '';
+
+    expect(row()).toContain('working');
+    expect(row()).not.toContain('running');
+
+    await clickRun(container, 'Review team');
+    expect(row()).toContain('working');
+    expect(row()).not.toContain('running');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'w1', status: null, rootsWorking: 1 });
+    });
+    expect(row()).toContain('running');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'w1', status: null, awaitingCalls: 1 });
+    });
+    expect(row()).toContain('working');
+    expect(row()).not.toContain('running');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'w1', status: null, awaitingCalls: 0 });
+    });
+    expect(row()).toContain('running');
+  });
 });
 
 describe('Chats sidebar list', () => {

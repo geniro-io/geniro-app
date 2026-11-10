@@ -160,6 +160,7 @@ export function displayRunStatus({
   awaitingAnswer,
   subagentRunning = false,
   heldForBackgroundWork = false,
+  teamLeadsWaiting = false,
   shellsRunning = false,
   subagentsOut = false,
   monitorsRunning = false,
@@ -239,6 +240,12 @@ export function displayRunStatus({
    */
   heldForBackgroundWork?: boolean;
   /**
+   * A TEAM run's leads have all ended their turns or wait in `await_agent`, so
+   * only the calls and sub-agents they started run on. The team twin of
+   * {@link heldForBackgroundWork}, read only over a `running` row.
+   */
+  teamLeadsWaiting?: boolean;
+  /**
    * At least one sub-agent of this run is DECLARED still out while producing
    * nothing — the CLI said it was working in the background and has not said
    * another word about it.
@@ -293,7 +300,7 @@ export function displayRunStatus({
   // was written for — a delegating turn with nothing streaming, reading as its
   // stale `completed` row — is a turn that is NOT held, so it still falls
   // through to `subagentRunning` below.
-  if (heldForBackgroundWork) {
+  if (heldForBackgroundWork || (teamLeadsWaiting && status === 'running')) {
     return 'held';
   }
   // A delegate still producing rows is WORK, whatever the run row says.

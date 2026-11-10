@@ -6499,9 +6499,19 @@ export function Chats({
               awaitingAnswer.size > 0 || activeRun.awaiting != null,
             subagentRunning,
             heldForBackgroundWork: holding.has(activeRun.id),
+            teamLeadsWaiting:
+              rootsIdle.has(activeRun.id) || awaitingCalls.has(activeRun.id),
           })
         : 'pending',
-    [activeRun, streaming, awaitingAnswer, subagentRunning, holding],
+    [
+      activeRun,
+      streaming,
+      awaitingAnswer,
+      subagentRunning,
+      holding,
+      rootsIdle,
+      awaitingCalls,
+    ],
   );
   const activeRunStatus = useMemo(
     () =>
@@ -6513,6 +6523,8 @@ export function Chats({
               awaitingAnswer.size > 0 || activeRun.awaiting != null,
             subagentRunning,
             heldForBackgroundWork: holding.has(activeRun.id),
+            teamLeadsWaiting:
+              rootsIdle.has(activeRun.id) || awaitingCalls.has(activeRun.id),
             // The RUN ROW's count, not this thread's transcript — the same
             // fact the unfocused rows read, which is the whole of the
             // blinking fix. See {@link rowRunStatus}.
@@ -6531,6 +6543,8 @@ export function Chats({
       awaitingAnswer,
       subagentRunning,
       holding,
+      rootsIdle,
+      awaitingCalls,
       shellsOut,
       delegatesOut,
     ],
@@ -8958,11 +8972,12 @@ export function Chats({
         // what stops a chat sitting on an unanswered question from showing a
         // spinner for as long as the user is looking elsewhere.
         heldForBackgroundWork: holding.has(run.id),
+        teamLeadsWaiting: rootsIdle.has(run.id) || awaitingCalls.has(run.id),
       }),
     // `delegatesOut` too: a turn that settles with sub-agents still out moves
     // only that set, and without it every thread the user was not looking at
     // kept the old reading — `completed` over a hold, `held` after it ended.
-    [holding, shellsOut, delegatesOut],
+    [holding, rootsIdle, awaitingCalls, shellsOut, delegatesOut],
   );
   /**
    * That same reading taken WITHOUT the live plane — what the row would say if
@@ -9014,8 +9029,9 @@ export function Chats({
         // is genuinely unfinished, and announcing it as done is the defect this
         // whole vocabulary was built to prevent.
         heldForBackgroundWork: holding.has(run.id),
+        teamLeadsWaiting: rootsIdle.has(run.id) || awaitingCalls.has(run.id),
       }),
-    [holding],
+    [holding, rootsIdle, awaitingCalls],
   );
   /**
    * The same per-run reading for the two consumers that ask "has this thread

@@ -217,6 +217,47 @@ describe('displayRunStatus', () => {
     ).toBe('failed');
   });
 
+  it('reads a team run whose leads only wait on their calls as held', () => {
+    expect(
+      displayRunStatus({
+        status: 'running',
+        streaming: true,
+        awaitingAnswer: false,
+        subagentRunning: true,
+        teamLeadsWaiting: true,
+      }),
+    ).toBe('held');
+    expect(
+      displayRunStatus({
+        status: 'running',
+        streaming: true,
+        awaitingAnswer: false,
+        teamLeadsWaiting: false,
+      }),
+    ).toBe('running');
+  });
+
+  it('reads waiting team leads only over a running row', () => {
+    for (const status of ['completed', 'failed', 'cancelled'] as const) {
+      expect(
+        displayRunStatus({
+          status,
+          streaming: false,
+          awaitingAnswer: false,
+          teamLeadsWaiting: true,
+        }),
+      ).toBe(status);
+    }
+    expect(
+      displayRunStatus({
+        status: 'running',
+        streaming: false,
+        awaitingAnswer: true,
+        teamLeadsWaiting: true,
+      }),
+    ).toBe('needs-input');
+  });
+
   it('leaves a held run UNSETTLED — its late rows still land', () => {
     // The reason the badge is `idle` and not `completed`: the turn is genuinely
     // still open, and everything downstream that asks "has this stopped for

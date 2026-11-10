@@ -476,10 +476,12 @@ export interface AcpAgentFailureProtocol {
    *
    * Absent means every reported failure ends the turn. Present, a failure
    * `isTransient` accepts is answered with `prompt` on the same session instead
-   * of settling the turn — once per entry of `delaysMs`, with a notice each
-   * time, after which the failure ends the turn as before. See the cursor
-   * adapter for the measurement that makes this the agent's own recovery rather
-   * than an invention: its interactive client resumes exactly this way.
+   * of settling the turn — once per entry of `delaysMs` for each run of failures
+   * with no progress between them, and at most `maxPerTurn` times in all, with
+   * a notice each time, after which the failure ends the turn as before. See
+   * the cursor adapter for the measurement that makes this the agent's own
+   * recovery rather than an invention: its interactive client resumes exactly
+   * this way.
    *
    * WHICH failures qualify is entirely the adapter's, and is broader than the
    * dropped connection this was built for — cursor's list also carries a stall
@@ -500,11 +502,14 @@ export interface AcpAgentFailureProtocol {
     prompt: (context: AcpResumeContext) => string;
     /**
      * The pause before each attempt, one entry per attempt — so its length is
-     * the attempt budget. A pause is what lets the budget outlast an outage:
-     * an attempt that meets the same outage dies on the CLI's own stall
-     * threshold, so attempts sent back to back all fall inside one short one.
+     * the attempt budget of one run of failures with no progress between them.
+     * A pause is what lets the budget outlast an outage: an attempt that meets
+     * the same outage dies on the CLI's own stall threshold, so attempts sent
+     * back to back all fall inside one short one.
      */
     delaysMs: readonly number[];
+    /** The most resumes one turn gets in all, whatever progress came between them. */
+    maxPerTurn: number;
   };
 }
 
@@ -1386,8 +1391,12 @@ export class AcpTurnDriver {
    * it. See {@link AcpAgentFailureProtocol}.
    */
   private agentFailure: string | null = null;
-  /** How many times this turn has been resumed after a dropped connection. */
+  /** Resumes since the agent last progressed — indexes `resume.delaysMs`. */
   private transientResumes = 0;
+  /** Resumes this turn has made in all — checked against `resume.maxPerTurn`. */
+  private transientResumesThisTurn = 0;
+  /** Set by progress, cleared by a resume: the next failure starts a fresh run. */
+  private progressedSinceResume = false;
   /**
    * Whether this turn has produced anything of the agent's own — a message, a
    * thought or a tool call — which is what tells a resume whether the prompt
@@ -3536,7 +3545,9 @@ export class AcpTurnDriver {
    * when a continuation went out, or is scheduled, and the turn is therefore
    * not over.
    *
-   * Each attempt waits its own pause (`resume.delaysMs`) first. Sent back to
+   * Each attempt waits its own pause (`resume.delaysMs`) first. A run of failures
+   * with no progress between them spends that budget; progress starts a new run,
+   * and the turn's `resume.maxPerTurn` caps the total. Sent back to
    * back, every attempt that meets the same outage dies on the CLI's own 30s
    * stall threshold, so three attempts spanned 90 seconds and were all spent
    * inside one two-minute Cursor outage (run `f1fa241c`, measured from the
@@ -3563,13 +3574,22 @@ export class AcpTurnDriver {
       // Stop outranks a resume: the failure may be the cancel itself, and
       // either way the user has asked for this turn to end.
       this.stopRequested ||
-      this.transientResumes >= resume.delaysMs.length ||
       this.session.sessionId === null ||
       !resume.isTransient(message)
     ) {
       return false;
     }
+    if (this.progressedSinceResume) {
+      this.transientResumes = 0;
+    }
+    if (
+      this.transientResumes >= resume.delaysMs.length ||
+      this.transientResumesThisTurn >= resume.maxPerTurn
+    ) {
+      return false;
+    }
     const attempts = resume.delaysMs.length;
+    const ceiling = resume.maxPerTurn;
     const delayMs = resume.delaysMs[this.transientResumes] ?? 0;
     const running = stillRunning.map((id) => ({
       label: this.session.delegateLabel(id),
@@ -3584,10 +3604,10 @@ export class AcpTurnDriver {
       if (!this.sendResume(compose([]), events)) {
         return false;
       }
-      this.announceResume(message, attempts, 0, events);
+      this.announceResume(message, attempts, ceiling, 0, events);
       return true;
     }
-    this.announceResume(message, attempts, delayMs, events);
+    this.announceResume(message, attempts, ceiling, delayMs, events);
     this.scheduleResume(compose, finishedIds, delayMs);
     return true;
   }
@@ -3776,14 +3796,17 @@ export class AcpTurnDriver {
   private announceResume(
     message: string,
     attempts: number,
+    ceiling: number,
     delayMs: number,
     events: AgentEvent[],
   ): void {
     this.transientResumes += 1;
+    this.transientResumesThisTurn += 1;
+    this.progressedSinceResume = false;
     // The raw sentence goes to the log, where it is a diagnosis; the transcript
     // gets one quiet line, since the turn carries on and nothing needs the user.
     this.session.options.logger?.warn(
-      `acp: resuming after a transient failure in ${delayMs}ms (attempt ${this.transientResumes}/${attempts}): ${message}`,
+      `acp: resuming after a transient failure in ${delayMs}ms (attempt ${this.transientResumes}/${attempts}, ${this.transientResumesThisTurn} of ${ceiling} this turn): ${message}`,
     );
     events.push({
       type: 'notice',
@@ -4863,6 +4886,7 @@ export class AcpTurnDriver {
         this.forgetOutlivedFailure();
         this.textChunks.push(text);
         this.requestProgressed = true;
+        this.progressedSinceResume = true;
         // A new step, generated from every result before it.
         this.unconsumedDelegates.clear();
         // The chunk streams as an EPHEMERAL delta; the row is written when the
@@ -4889,6 +4913,7 @@ export class AcpTurnDriver {
         // thought chunks at 16.8–20.0s and again at 32.1–34.4s, none of it on
         // screen until the block closed.
         this.requestProgressed = true;
+        this.progressedSinceResume = true;
         this.unconsumedDelegates.clear();
         return [
           ...this.appendPending('reasoning', text),
@@ -4900,6 +4925,7 @@ export class AcpTurnDriver {
           return [];
         }
         this.requestProgressed = true;
+        this.progressedSinceResume = true;
         const toolCall = readToolCall(update);
         this.session.toolNames.set(toolCall.toolCallId, toolCall.name);
         if (toolCall.rawInput !== null) {

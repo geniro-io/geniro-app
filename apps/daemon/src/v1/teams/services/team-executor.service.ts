@@ -1481,6 +1481,7 @@ export class TeamExecutorService
       for (const member of input.team.members) {
         await this.nodeStateDao.createPending(run.id, member.id, em);
       }
+      await this.setRunStatus(em, run.id, 'running');
     } catch (err) {
       // Failed before drive() registered the aggregate handle — drop the claim
       // and any call tokens, and close the run so it is not wedged as

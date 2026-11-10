@@ -136,7 +136,7 @@ function WorkingAgentStateLine({
   );
 }
 
-/** One current run under its agent: where it stands, for how long, and what for. */
+/** One current run under its agent's name: where it stands, for how long, and what for. */
 export function WorkingAgentRunFacts({
   row,
 }: {

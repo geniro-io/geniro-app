@@ -31,7 +31,6 @@ import {
   WorkingAgentTitle,
 } from './working-agent-row';
 import {
-  currentRunsPerAgent,
   isWorkingAgentBusy,
   isWorkingAgentLive,
   leadWorkingAgent,
@@ -147,7 +146,7 @@ function AgentsPanel({
   client: Pick<DaemonClient, 'onItem' | 'onReconnect'>;
   onOpen: (row: WorkingAgentRow) => void;
 }): React.JSX.Element {
-  const agents = currentRunsPerAgent(rows);
+  const current = rows.filter(isWorkingAgentLive);
   const busy = rows.some(isWorkingAgentBusy);
   const settled = rows.filter((row) => !isWorkingAgentLive(row));
   const [settledOpen, setSettledOpen] = useThreadFlag(
@@ -167,70 +166,60 @@ function AgentsPanel({
         <span
           data-slot="working-agents-panel-summary"
           className="min-w-0 truncate text-xs text-muted-foreground">
-          {agents.length === 0
+          {current.length === 0
             ? 'No current runs'
-            : workingAgentsSummary(rows.filter(isWorkingAgentLive))}
+            : workingAgentsSummary(current)}
         </span>
       </div>
-      {agents.length === 0 ? null : (
+      {current.length === 0 ? null : (
         <div className="flex flex-col gap-1.5 border-t border-border/60 p-1.5">
-          {agents.map((agent) => (
+          {current.map((run) => (
             <div
-              key={agent.key}
-              data-slot="working-agents-current-agent"
-              className="flex min-w-0 flex-col gap-1 rounded-lg bg-accent/40 p-1">
-              <div className="flex min-w-0 items-center gap-2 px-1.5 pt-1.5">
-                <MemberAvatar
-                  size={24}
-                  name={agent.name}
-                  colorKey={agent.key}
-                  avatar={agent.avatar}
+              key={run.conversationId}
+              data-slot="working-agents-current-run"
+              data-conversation={run.conversationId}
+              onClick={(event) => {
+                if (!pressedOwnControl(event)) {
+                  onOpen(run);
+                }
+              }}
+              className={cn(
+                'flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg bg-accent/40 p-2.5',
+                CONTROL_HOVER,
+              )}>
+              <button
+                type="button"
+                data-slot="working-agents-open-run"
+                title={`Open ${run.callee}’s conversation`}
+                onClick={() => onOpen(run)}
+                className="flex w-full min-w-0 flex-col gap-2 rounded-sm text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <span className="flex min-w-0 items-center gap-2">
+                  <MemberAvatar
+                    size={24}
+                    name={run.callee}
+                    colorKey={run.calleeKey}
+                    avatar={run.calleeAvatar}
+                  />
+                  <span
+                    data-slot="working-agents-current-run-callee"
+                    className="min-w-0 truncate text-[13px] font-semibold text-foreground">
+                    {run.callee}
+                  </span>
+                </span>
+                <WorkingAgentRunFacts row={run} />
+              </button>
+              <div
+                className={cn(
+                  'border-l-2 pl-3',
+                  workingAgentRailClass(run.state),
+                )}>
+                <RecentMessages
+                  row={run}
+                  runId={runId}
+                  api={api}
+                  client={client}
                 />
-                <span className="min-w-0 truncate text-[13px] font-semibold text-foreground">
-                  {agent.name}
-                </span>
-                <span
-                  data-slot="working-agents-current-agent-runs"
-                  className="ml-auto shrink-0 rounded-full bg-accent px-1.5 py-px text-[10px] text-muted-foreground tabular-nums">
-                  {agent.runs.length} {agent.runs.length === 1 ? 'run' : 'runs'}
-                </span>
               </div>
-              {agent.runs.map((run) => (
-                <div
-                  key={run.conversationId}
-                  data-slot="working-agents-current-run"
-                  data-conversation={run.conversationId}
-                  onClick={(event) => {
-                    if (!pressedOwnControl(event)) {
-                      onOpen(run);
-                    }
-                  }}
-                  className={cn(
-                    'flex min-w-0 cursor-pointer flex-col gap-2 rounded-md p-1.5',
-                    CONTROL_HOVER,
-                  )}>
-                  <button
-                    type="button"
-                    data-slot="working-agents-open-run"
-                    title={`Open ${run.callee}’s conversation`}
-                    onClick={() => onOpen(run)}
-                    className="w-full min-w-0 rounded-sm text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                    <WorkingAgentRunFacts row={run} />
-                  </button>
-                  <div
-                    className={cn(
-                      'border-l-2 pl-3',
-                      workingAgentRailClass(run.state),
-                    )}>
-                    <RecentMessages
-                      row={run}
-                      runId={runId}
-                      api={api}
-                      client={client}
-                    />
-                  </div>
-                </div>
-              ))}
             </div>
           ))}
         </div>

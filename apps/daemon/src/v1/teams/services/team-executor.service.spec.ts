@@ -1764,6 +1764,26 @@ describe('TeamExecutorService', () => {
     expect(createdRuns[0]?.row).toBe(row);
   });
 
+  it('announces a started run as running before its lead says anything', async () => {
+    // A window that never listed the run adopts it only from an announce
+    // carrying a status or an activity; the row is created `running`, so no
+    // transition announced it and a run the autopilot started stayed missing
+    // from the sidebar until the next full listing.
+    const { service, claude, statusEvents } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      team: teamOf([member('a')], { name: 'one' }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(statusEvents).toEqual([{ runId: run.id, status: 'running' }]);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
   it('still announces a run whose launch was refused after its row was written', async () => {
     // A registry that is shutting down refuses the claim after the row is
     // written, so the announce cannot wait for the claim to succeed.

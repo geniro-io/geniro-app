@@ -153,12 +153,6 @@ const settledRuns = (el: Element): HTMLElement[] => [
   ),
 ];
 
-const currentAgents = (el: Element): HTMLElement[] => [
-  ...el.querySelectorAll<HTMLElement>(
-    '[data-slot="working-agents-current-agent"]',
-  ),
-];
-
 const drawnMessages = (el: Element): string[] =>
   [
     ...el.querySelectorAll<HTMLElement>('[data-slot="working-agent-message"]'),
@@ -301,13 +295,13 @@ describe('WorkingAgentsCard', () => {
 
       await hover(el);
 
-      expect(currentAgents(panelOf(el)!)).toHaveLength(1);
+      expect(currentRuns(panelOf(el)!)).toHaveLength(1);
     });
 
     it('pins the same panel on a press, and a press outside closes it', async () => {
       const { el } = await renderPinned([row()]);
 
-      expect(currentAgents(panelOf(el)!)).toHaveLength(1);
+      expect(currentRuns(panelOf(el)!)).toHaveLength(1);
       expect(toggleOf(el).getAttribute('aria-expanded')).toBe('true');
 
       await pressOutside();
@@ -349,7 +343,7 @@ describe('WorkingAgentsCard', () => {
       expect(document.activeElement).toBe(toggleOf(el));
     });
 
-    it('files each agent’s current runs under it, with their counts', async () => {
+    it('draws each current run as a card of its own under its agent’s face, two of one agent as two', async () => {
       const { el } = await renderPinned([
         named('call-1', 'Engineer', 'working'),
         named('call-2', 'QA', 'queued'),
@@ -359,14 +353,16 @@ describe('WorkingAgentsCard', () => {
       ]);
 
       expect(
-        currentAgents(el).map((agent) => [
-          faces(agent)[0],
-          slot(agent, 'working-agents-current-agent-runs')?.textContent,
-          agent.querySelectorAll('[data-slot="working-agent-run"]').length,
+        currentRuns(el).map((run) => [
+          run.dataset.conversation,
+          faces(run)[0],
+          slot(run, 'working-agents-current-run-callee')?.textContent,
+          run.querySelectorAll('[data-slot="working-agent-run"]').length,
         ]),
       ).toEqual([
-        ['Engineer', '2 runs', 2],
-        ['QA', '1 run', 1],
+        ['call-1', 'Engineer', 'Engineer', 1],
+        ['call-2', 'QA', 'QA', 1],
+        ['call-3', 'Engineer', 'Engineer', 1],
       ]);
     });
 
@@ -517,7 +513,7 @@ describe('WorkingAgentsCard', () => {
       expect(slot(el, 'working-agents-panel-summary')?.textContent).toBe(
         'No current runs',
       );
-      expect(currentAgents(el)).toEqual([]);
+      expect(currentRuns(el)).toEqual([]);
       expect(slot(el, 'working-agents-panel-settled')?.textContent).toBe(
         '1 finished',
       );
@@ -1094,7 +1090,7 @@ describe('WorkingAgentsCard', () => {
       expect(faces(tile(el))).toEqual(['Engineer']);
     });
 
-    it('counts the other live agents, once each', () => {
+    it('counts every other live run, two of one agent as two', () => {
       const { el } = renderSquare([
         named('call-1', 'Engineer', 'working'),
         named('call-2', 'QA', 'queued'),
@@ -1102,10 +1098,10 @@ describe('WorkingAgentsCard', () => {
         named('call-4', 'Researcher', 'finished'),
       ]);
 
-      expect(slot(el, 'working-agents-tile-more')?.textContent).toBe('+1');
+      expect(slot(el, 'working-agents-tile-more')?.textContent).toBe('+2');
     });
 
-    it('counts the run’s other agents when nobody is live', () => {
+    it('counts the run’s other runs when nobody is live', () => {
       const { el } = renderSquare([
         named('call-1', 'Engineer', 'finished'),
         named('call-2', 'QA', 'finished'),

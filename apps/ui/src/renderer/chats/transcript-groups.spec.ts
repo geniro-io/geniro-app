@@ -379,6 +379,59 @@ describe('groupTranscript', () => {
     expect((entries[0] as ToolGroupEntry).pairs).toHaveLength(2);
   });
 
+  it('a monitor STARTING does not split a run of MCP calls into one-call groups', () => {
+    const started = (id: string): ChatItem =>
+      item('system', {
+        severity: 'info',
+        message: `Started PR #${id} · monitor ${id}.`,
+        monitors: [
+          {
+            id,
+            description: `PR #${id}`,
+            event: 'start',
+            lines: [],
+            omitted: 0,
+          },
+        ],
+      });
+    const entries = groupTranscript([
+      call('mcp__other__monitor', 't1'),
+      started('m1'),
+      result('t1'),
+      call('mcp__other__monitor', 't2'),
+      started('m2'),
+      result('t2'),
+      call('mcp__other__monitor', 't3'),
+      started('m3'),
+      result('t3'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    expect((entries[0] as ToolGroupEntry).pairs).toHaveLength(3);
+  });
+
+  it('a monitor notice carrying output still closes the group, since it draws a row', () => {
+    const entries = groupTranscript([
+      call('mcp__other__monitor', 't1'),
+      item('system', {
+        severity: 'info',
+        message: 'PR #1 · monitor m1.',
+        monitors: [
+          {
+            id: 'm1',
+            description: 'PR #1',
+            event: 'batch',
+            lines: ['checks green'],
+            omitted: 0,
+          },
+        ],
+      }),
+      call('mcp__other__monitor', 't2'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools', 'item', 'tools']);
+  });
+
   it("another node's interleaved rows do NOT shred a node's tool run", () => {
     // A parallel branch (a callee's status/message) lands between the
     // caller's tool calls — the caller's group must keep accumulating.

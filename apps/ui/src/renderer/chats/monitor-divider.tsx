@@ -1,10 +1,11 @@
 import { AnsiText } from '../components/ui/ansi-text';
 import { Button } from '../components/ui/button';
 import { cn } from '../components/ui/utils';
-import type {
-  MonitorEnd,
-  MonitorEntry,
-  MonitorNotice,
+import {
+  drawnMonitorEntries,
+  type MonitorEnd,
+  type MonitorEntry,
+  type MonitorNotice,
 } from './monitor-payload';
 import { useThreadFlag } from './thread-ui-memory';
 import { AgentName, PickedBackUpLine } from './wake-divider';
@@ -141,7 +142,7 @@ export function MonitorNoticeRow({
   /** Prefix the folds of this row are remembered under. */
   memoryKey: string;
 }): React.JSX.Element | null {
-  const shown = notice.monitors.filter((entry) => entry.event !== 'start');
+  const shown = drawnMonitorEntries(notice);
   if (shown.length === 0) {
     return null;
   }

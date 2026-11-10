@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { readMonitorNotice } from './monitor-payload';
+import { drawnMonitorEntries, readMonitorNotice } from './monitor-payload';
 
 const entry = (
   over: Record<string, unknown> = {},
@@ -93,5 +93,32 @@ describe('readMonitorNotice', () => {
     expect(readMonitorNotice(notice('m1'))).toBeNull();
     expect(readMonitorNotice(notice([]))).toBeNull();
     expect(readMonitorNotice(notice([entry({ event: 'tick' })]))).toBeNull();
+  });
+});
+
+describe('drawnMonitorEntries', () => {
+  it('leaves out the monitors that only started', () => {
+    const read = readMonitorNotice(
+      notice([
+        entry({ id: 'm1', event: 'start', lines: [] }),
+        entry({ id: 'm2', event: 'batch' }),
+        entry({
+          id: 'm3',
+          event: 'end',
+          lines: [],
+          end: { kind: 'exit', code: 0 },
+        }),
+      ]),
+    );
+    expect(read).not.toBeNull();
+    expect(drawnMonitorEntries(read!).map((e) => e.id)).toEqual(['m2', 'm3']);
+  });
+
+  it('draws nothing for a notice of starts alone', () => {
+    const read = readMonitorNotice(
+      notice([entry({ event: 'start', lines: [] })], false),
+    );
+    expect(read).not.toBeNull();
+    expect(drawnMonitorEntries(read!)).toEqual([]);
   });
 });

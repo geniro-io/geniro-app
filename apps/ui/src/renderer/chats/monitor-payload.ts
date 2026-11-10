@@ -126,3 +126,8 @@ export function readMonitorNotice(payload: unknown): MonitorNotice | null {
     ? null
     : { woke: woke === true, monitors: entries };
 }
+
+/** The monitors of a notice the transcript draws: a start says nothing yet. */
+export function drawnMonitorEntries(notice: MonitorNotice): MonitorEntry[] {
+  return notice.monitors.filter((entry) => entry.event !== 'start');
+}

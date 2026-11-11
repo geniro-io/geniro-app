@@ -36,13 +36,18 @@ export interface BrowserSink {
   approvesEveryHost(): boolean;
   /**
    * Raise the deferred new-host card. `asked` means it is on screen and the
-   * agent will be woken with the verdict.
+   * agent will be woken with the verdict; `standing` that a card for that host
+   * already waits, which holds only its own operation, not this one.
    */
   askHost(ask: {
     host: string;
     url: string;
     op: BrowserOp;
-  }): Promise<{ status: 'asked' } | { status: 'unavailable'; reason: string }>;
+  }): Promise<
+    | { status: 'asked' }
+    | { status: 'standing' }
+    | { status: 'unavailable'; reason: string }
+  >;
 }
 
 /** A new-host card as the owner that raised it remembers it. */
@@ -112,6 +117,12 @@ export class BrowserBroker extends HostSinkBroker<BrowserSink> {
               url: op.url,
               op,
             });
+            if (asked.status === 'standing') {
+              return {
+                status: 'failed',
+                reason: `This call did not run: the user has not answered the card for ${target.host} yet, and that card holds only the call that raised it. When you are woken with its answer, make this call again.`,
+              };
+            }
             return asked.status === 'asked'
               ? { status: 'awaiting_approval', host: target.host }
               : asked;

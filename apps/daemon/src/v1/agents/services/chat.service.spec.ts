@@ -5020,6 +5020,25 @@ describe('ChatService', () => {
       ]);
     });
 
+    it('tells a second call to a host whose card still waits that it did not run, and raises no second card', async () => {
+      const { service, browser, bridge, approvals } = browserSetup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      await browser.run(run.id, SINGLE_AGENT_NODE, OPEN);
+
+      const second = await browser.run(run.id, SINGLE_AGENT_NODE, {
+        kind: 'open',
+        url: 'https://example.com/next',
+      });
+
+      expect(second).toMatchObject({ status: 'failed' });
+      expect(second.status === 'failed' ? second.reason : '').toMatch(
+        /^This call did not run: the user has not answered the card for example\.com yet/,
+      );
+      expect(approvals.listByRun(run.id)).toHaveLength(1);
+      expect(bridge.request).not.toHaveBeenCalled();
+    });
+
     it('wakes the agent with the denial and keeps the host closed', async () => {
       const {
         service,

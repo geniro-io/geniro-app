@@ -2497,7 +2497,7 @@ export class TeamExecutorService
           (entry.input as BrowserHostCardInput).host === ask.host,
       );
     if (standing) {
-      return { status: 'asked' };
+      return { status: 'standing' };
     }
     const found = await this.runDao.getById(runId, this.em.fork());
     if (found === null || found.archivedAt !== null) {

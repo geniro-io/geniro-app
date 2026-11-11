@@ -1681,7 +1681,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
               (entry.input as BrowserHostCardInput).host === ask.host,
           );
         if (standing) {
-          return { status: 'asked' };
+          return { status: 'standing' };
         }
         const requestId = this.approvals.mintCardId('browser-host');
         const input: BrowserHostCardInput = {

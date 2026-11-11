@@ -6,14 +6,12 @@ import {
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
-import {
-  MemoryReviewFindingDao,
-  pairKey,
-} from '../../memory/dao/memory-review-finding.dao';
+import { MemoryReviewFindingDao } from '../../memory/dao/memory-review-finding.dao';
 import { MemoryUsageDao } from '../../memory/dao/memory-usage.dao';
 import { MemoryReviewFinding } from '../../memory/entity/memory-review-finding.entity';
 import { MemoryUsageBackfill } from '../../memory/entity/memory-usage-backfill.entity';
 import { MemoryUsageDay } from '../../memory/entity/memory-usage-day.entity';
+import { pairKey } from '../../memory/utils/memory-pairs';
 import { CallContext } from '../../runs/entity/call-context.entity';
 import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';

@@ -12,6 +12,7 @@ import type {
 } from '../components/memory-import-dialog';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { describeDaemonError, MEMORY_TRIAGE_TIMEOUT_MS } from '../daemon-api';
+import { triageRequestSettings } from './memory-triage-settings';
 
 /** TWIN: `MEMORY_TRIAGE_NOTES_MAX` in `apps/daemon/src/v1/memory/memory.types.ts`. */
 export const TRIAGE_BATCH = 100;
@@ -50,18 +51,7 @@ export function useMemoryTriage(
       if (api === null || choice === null || controllerRef.current !== null) {
         return;
       }
-      const settings = {
-        agentKind: choice.agent,
-        ...(choice.model === null ? {} : { model: choice.model }),
-        ...(choice.effort === null ? {} : { effort: choice.effort }),
-        ...(choice.contextWindow === null
-          ? {}
-          : { contextWindow: choice.contextWindow }),
-        ...(Object.keys(choice.modelParameters).length === 0
-          ? {}
-          : { modelParameters: choice.modelParameters }),
-        ...(choice.configDir === null ? {} : { configDir: choice.configDir }),
-      };
+      const settings = triageRequestSettings(choice);
       const notes: MemoryImportTriageRequestDtoNotesInner[] = rows
         .filter((row) => !verdictsRef.current.has(row.key))
         .map((row) => ({

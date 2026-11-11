@@ -39,8 +39,9 @@ import {
   type MemoryKeepResult,
   type MemoryList,
   type MemoryListQuery,
+  type MemoryMergeOutcome,
+  type MemoryMergeRefusal,
   type MemoryMergeRequest,
-  type MemoryMergeResult,
   type MemoryPatch,
   type MemoryRefusalCode,
   type MemoryRestoreBatchResult,
@@ -74,19 +75,12 @@ const DUPLICATE_CANDIDATES = 20;
 
 type Refusal = Extract<MemorySaveOutcome, { kind: 'refused' }>;
 
-/** A merge's result, or why it wrote nothing. */
-export type MemoryMergeOutcome =
-  | { kind: 'merged'; result: MemoryMergeResult }
-  | Exclude<MemorySaveOutcome, { kind: 'created' | 'updated' }>;
+const MERGE_SOURCE_GONE =
+  'an entry to merge was forgotten or removed meanwhile';
 
 /** Rolls a merge's transaction back with the outcome to answer. */
 class MergeRefused extends Error {
-  constructor(
-    readonly outcome: Exclude<
-      MemorySaveOutcome,
-      { kind: 'created' | 'updated' }
-    >,
-  ) {
+  constructor(readonly outcome: MemoryMergeRefusal) {
     super(outcome.kind);
   }
 }
@@ -666,10 +660,7 @@ export class MemoryService {
         (row) => row.status === 'active' || row.status === 'pending',
       );
       if (sources.length !== sourceIds.length) {
-        return refused(
-          'NOT_FOUND',
-          'an entry to merge was forgotten or removed meanwhile',
-        );
+        return refused('NOT_FOUND', MERGE_SOURCE_GONE);
       }
       const unknown =
         (await this.refuseUnknownProject(input.projectId, em)) ??
@@ -711,12 +702,7 @@ export class MemoryService {
             outcome.entry.id,
           );
           if (taken.length !== sourceIds.length) {
-            throw new MergeRefused(
-              refused(
-                'NOT_FOUND',
-                'an entry to merge was forgotten or removed meanwhile',
-              ),
-            );
+            throw new MergeRefused(refused('NOT_FOUND', MERGE_SOURCE_GONE));
           }
           const row = await this.memories.getById(outcome.entry.id, tx);
           if (!row) {

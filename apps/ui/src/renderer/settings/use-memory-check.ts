@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { MemoryTriageConfig } from '../../shared/contracts';
 import type {
   MemoriesApi,
+  MemoryEntry,
   MemoryFinding,
   MemoryPair,
   MemoryReviewPairsDto,
@@ -11,9 +12,10 @@ import type { MemoryCleanupNotice } from '../components/memory-cleanup-dialog';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { describeDaemonError, MEMORY_TRIAGE_TIMEOUT_MS } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import { triageRequestSettings } from './memory-triage-settings';
 
 /** TWIN: `MEMORY_CHECK_PAIRS_MAX` in `apps/daemon/src/v1/memory/memory.types.ts`. */
-export const CHECK_BATCH = 20;
+const CHECK_BATCH = 20;
 const REFRESH_DELAY_MS = 250;
 
 export type CheckClient = Pick<
@@ -26,25 +28,13 @@ export type CheckClient = Pick<
   | 'forgetMemoryBatch'
 >;
 
-/** The text a merge saves, as the user edited it. */
+/** What a merge saves, as the user left it in the form. */
 export interface MemoryMergeText {
   title: string;
   body: string;
-}
-
-function choiceSettings(choice: MemoryTriageConfig) {
-  return {
-    agentKind: choice.agent,
-    ...(choice.model === null ? {} : { model: choice.model }),
-    ...(choice.effort === null ? {} : { effort: choice.effort }),
-    ...(choice.contextWindow === null
-      ? {}
-      : { contextWindow: choice.contextWindow }),
-    ...(Object.keys(choice.modelParameters).length === 0
-      ? {}
-      : { modelParameters: choice.modelParameters }),
-    ...(choice.configDir === null ? {} : { configDir: choice.configDir }),
-  };
+  type: MemoryEntry['type'];
+  projectId: string | null;
+  teamSlug: string | null;
 }
 
 /**
@@ -170,7 +160,7 @@ export function useMemoryCheck(
     for (let at = 0; at < pairs.pairs.length; at += CHECK_BATCH) {
       queue.push(pairs.pairs.slice(at, at + CHECK_BATCH));
     }
-    const settings = choiceSettings(choice);
+    const settings = triageRequestSettings(choice);
     runningRef.current = true;
     stopRef.current = false;
     setRunning(true);
@@ -278,9 +268,9 @@ export function useMemoryCheck(
           sourceIds: [finding.a.id, finding.b.id],
           title: text.title,
           body: text.body,
-          type: finding.a.type,
-          projectId: finding.a.projectId,
-          teamSlug: finding.a.teamSlug,
+          type: text.type,
+          projectId: text.projectId,
+          teamSlug: text.teamSlug,
         },
       });
       return {

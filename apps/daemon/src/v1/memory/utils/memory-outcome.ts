@@ -7,11 +7,11 @@ import {
 
 import type {
   MemoryEntry,
+  MemoryMergeOutcome,
   MemoryMergeResult,
   MemorySaveOutcome,
   MemoryStatusOutcome,
 } from '../memory.types';
-import type { MemoryMergeOutcome } from '../services/memory.service';
 
 /** A merge's result, or the HTTP error its refusal is, as {@link savedEntryOrThrow} words it. */
 export function mergedOrThrow(outcome: MemoryMergeOutcome): MemoryMergeResult {

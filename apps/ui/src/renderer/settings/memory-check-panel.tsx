@@ -13,6 +13,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { ProgressBar } from '../components/ui/progress-bar';
+import { Select } from '../components/ui/select';
 import { Spinner } from '../components/ui/spinner';
 import { Textarea } from '../components/ui/textarea';
 import type { MemoryCheck, MemoryMergeText } from './use-memory-check';
@@ -44,8 +45,36 @@ function tokens(n: number): string {
     : `about ${n.toLocaleString('en-US')} tokens in`;
 }
 
-/** What checking every pair would cost, as the daemon estimates it. */
-export function checkEstimate(estimate: {
+const TYPE_LABEL: Record<MemoryEntry['type'], string> = {
+  project: 'Project',
+  reference: 'Reference',
+  feedback: 'Feedback',
+  user: 'User',
+};
+
+type Scope = Pick<MemoryEntry, 'projectId' | 'teamSlug'>;
+
+function scopeKey(scope: Scope): string {
+  return scope.teamSlug !== null
+    ? `team:${scope.teamSlug}`
+    : scope.projectId !== null
+      ? `project:${scope.projectId}`
+      : 'global';
+}
+
+function isGlobal(scope: Scope): boolean {
+  return scope.projectId === null && scope.teamSlug === null;
+}
+
+/**
+ * The source a merge files its entry like by default: the one of narrower
+ * scope, so a project's facts never become global unasked.
+ */
+function mergeDefaultSource(finding: MemoryFinding): MemoryEntry {
+  return isGlobal(finding.a) && !isGlobal(finding.b) ? finding.b : finding.a;
+}
+
+function checkEstimate(estimate: {
   pairs: readonly unknown[];
   inputTokens: number;
   requests: number;
@@ -74,18 +103,51 @@ function MergeForm({
   busy,
   onSave,
   onCancel,
+  projectName,
+  teamName,
 }: {
   finding: MemoryFinding;
   busy: boolean;
   onSave: (text: MemoryMergeText) => Promise<string | null>;
   onCancel: () => void;
+  projectName: (projectId: string | null) => string | null;
+  teamName: (slug: string | null) => string | null;
 }): React.JSX.Element {
+  const preferred = mergeDefaultSource(finding);
   const [title, setTitle] = useState(finding.a.title);
   const [body, setBody] = useState(`${finding.a.body}\n\n${finding.b.body}`);
+  const [scope, setScope] = useState(scopeKey(preferred));
+  const [type, setType] = useState<MemoryEntry['type']>(preferred.type);
   const [error, setError] = useState<string | null>(null);
+  const sources = [finding.a, finding.b];
+  const scopeLabel = (entry: MemoryEntry): string =>
+    entry.teamSlug !== null
+      ? `Team: ${teamName(entry.teamSlug) ?? entry.teamSlug}`
+      : entry.projectId !== null
+        ? `Project: ${projectName(entry.projectId) ?? entry.projectId}`
+        : 'Global';
+  const scopeItems = [
+    ...new Map(
+      sources.map((entry) => [
+        scopeKey(entry),
+        { value: scopeKey(entry), label: scopeLabel(entry) },
+      ]),
+    ).values(),
+  ];
+  const typeItems = [...new Set(sources.map((entry) => entry.type))].map(
+    (value) => ({ value, label: TYPE_LABEL[value] }),
+  );
   const save = async (): Promise<void> => {
     setError(null);
-    const failure = await onSave({ title, body });
+    const filed =
+      sources.find((entry) => scopeKey(entry) === scope) ?? preferred;
+    const failure = await onSave({
+      title,
+      body,
+      type,
+      projectId: filed.projectId,
+      teamSlug: filed.teamSlug,
+    });
     if (failure !== null) {
       setError(failure);
     } else {
@@ -118,6 +180,31 @@ function MergeForm({
           onChange={(event) => setBody(event.target.value)}
         />
       </Label>
+      <div
+        data-slot="memory-finding-merge-filing"
+        className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-muted-foreground">
+        Saved as
+        <Select
+          variant="ghost"
+          aria-label="Merged entry type"
+          groups={[{ items: typeItems }]}
+          value={type}
+          onValueChange={(next) =>
+            setType(
+              typeItems.find((item) => item.value === next)?.value ?? type,
+            )
+          }
+        />
+        in
+        <Select
+          variant="ghost"
+          flexible
+          aria-label="Merged entry scope"
+          groups={[{ items: scopeItems }]}
+          value={scope}
+          onValueChange={setScope}
+        />
+      </div>
       {error === null ? null : <ErrorText>{error}</ErrorText>}
       <div className="flex flex-wrap gap-2">
         <Button
@@ -199,6 +286,8 @@ function FindingCard({
           busy={busy}
           onSave={(text) => check.merge(finding, text)}
           onCancel={onMergeClose}
+          projectName={projectName}
+          teamName={teamName}
         />
       ) : (
         <div className="flex flex-wrap gap-2">

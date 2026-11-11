@@ -291,7 +291,6 @@ export function MemoryCleanupDialog({
   busyId: string | null;
   projectName: (projectId: string | null) => string | null;
   teamName: (slug: string | null) => string | null;
-  /** The Duplicates & contradictions tab's content. */
   checkPanel?: React.ReactNode;
 }): React.JSX.Element {
   const tabLabel = (label: string, n: number | null) =>

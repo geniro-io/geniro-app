@@ -380,6 +380,18 @@ export function Memory({
   const triageChoice = triageChoiceFor(triageAgents, triagePick);
   const triage = useMemoryTriage(api, triageChoice);
   const cleanup = useMemoryCleanup(api, client);
+  const adoptTriageSettings = (
+    settings: Pick<
+      AppSettings,
+      'recentConfigDirs' | 'configProfiles' | 'lastMemoryTriage'
+    >,
+  ): void => {
+    setTriageProfiles({
+      recentConfigDirs: settings.recentConfigDirs,
+      configProfiles: settings.configProfiles,
+    });
+    setTriagePick((current) => current ?? settings.lastMemoryTriage);
+  };
   const [checkAgents, setCheckAgents] =
     useState<readonly AgentKind[]>(NO_TRIAGE_AGENTS);
   const checkChoice = triageChoiceFor(checkAgents, triagePick);
@@ -405,14 +417,9 @@ export function Memory({
     void window.geniro
       .getSettings()
       .then((settings) => {
-        if (cancelled) {
-          return;
+        if (!cancelled) {
+          adoptTriageSettings(settings);
         }
-        setTriageProfiles({
-          recentConfigDirs: settings.recentConfigDirs,
-          configProfiles: settings.configProfiles,
-        });
-        setTriagePick((current) => current ?? settings.lastMemoryTriage);
       })
       .catch(() => undefined);
     return () => {
@@ -616,11 +623,7 @@ export function Memory({
       .then(([settings, library]) => {
         const found = importProfiles(settings, library);
         setProfiles(found);
-        setTriageProfiles({
-          recentConfigDirs: settings.recentConfigDirs,
-          configProfiles: settings.configProfiles,
-        });
-        setTriagePick((current) => current ?? settings.lastMemoryTriage);
+        adoptTriageSettings(settings);
         return api.previewMemoryImport({
           memoryImportPreviewRequestDto: { profiles: found },
         });

@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
 
-import type { MemoryCheckRecord } from '../../memory/dao/memory-review-finding.dao';
 import {
   MEMORY_CHECK_PAIRS_MAX,
+  type MemoryCheckRecord,
   type MemoryReviewCheckRequest,
   type MemoryReviewCheckResult,
   type MemoryReviewPairs,

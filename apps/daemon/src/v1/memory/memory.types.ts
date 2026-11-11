@@ -811,6 +811,29 @@ export type MemoryStatusOutcome =
   | { kind: 'changed'; entry: MemoryEntry }
   | { kind: 'refused'; code: MemoryRefusalCode; reason: string };
 
+/** Why a merge wrote nothing: every save outcome but a write. */
+export type MemoryMergeRefusal = Exclude<
+  MemorySaveOutcome,
+  { kind: 'created' | 'updated' }
+>;
+
+export type MemoryMergeOutcome =
+  { kind: 'merged'; result: MemoryMergeResult } | MemoryMergeRefusal;
+
+/** One check of a pair, as it is stored; `memoryAId` < `memoryBId`. */
+export interface MemoryCheckRecord {
+  memoryAId: string;
+  memoryBId: string;
+  hashA: string;
+  hashB: string;
+  outcome: MemoryCheckOutcome;
+  quoteA: string | null;
+  quoteB: string | null;
+  reason: string | null;
+  agentKind: AgentKind;
+  model: string | null;
+}
+
 export type MemoryForgetOutcome =
   | { kind: 'forgotten'; entry: MemoryEntry }
   | { kind: 'refused'; code: MemoryRefusalCode; reason: string };

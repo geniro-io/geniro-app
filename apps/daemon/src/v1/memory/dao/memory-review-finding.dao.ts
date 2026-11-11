@@ -7,25 +7,12 @@ import { BaseDao } from '@packages/mikroorm';
 import type { AgentKind } from '../../runs/runs.types';
 import { MemoryReviewFinding } from '../entity/memory-review-finding.entity';
 import type {
-  MemoryCheckOutcome,
+  MemoryCheckRecord,
   MemoryFindingKind,
   MemoryTextDatabase,
 } from '../memory.types';
 import { MEMORY_FINDING_KINDS } from '../memory.types';
-
-/** One check of a pair, as it is stored; `memoryAId` < `memoryBId`. */
-export interface MemoryCheckRecord {
-  memoryAId: string;
-  memoryBId: string;
-  hashA: string;
-  hashB: string;
-  outcome: MemoryCheckOutcome;
-  quoteA: string | null;
-  quoteB: string | null;
-  reason: string | null;
-  agentKind: AgentKind;
-  model: string | null;
-}
+import { pairKey, textsKey } from '../utils/memory-pairs';
 
 /** A stored finding whose entries are both active at the texts it judged. */
 export interface MemoryOpenFindingRow {
@@ -112,7 +99,7 @@ export class MemoryReviewFindingDao extends BaseDao<MemoryReviewFinding> {
     return new Map(
       rows.map((row) => [
         pairKey(row.memory_a_id, row.memory_b_id),
-        `${row.hash_a}\n${row.hash_b}`,
+        textsKey(row.hash_a, row.hash_b),
       ]),
     );
   }
@@ -201,11 +188,6 @@ export class MemoryReviewFindingDao extends BaseDao<MemoryReviewFinding> {
   private database(em = this.em) {
     return em.getKysely<MemoryTextDatabase>({ convertValues: false });
   }
-}
-
-/** A pair's key, its ids in stored order. */
-export function pairKey(aId: string, bId: string): string {
-  return `${aId}\n${bId}`;
 }
 
 function isFindingKind(outcome: string): outcome is MemoryFindingKind {

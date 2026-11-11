@@ -66,7 +66,15 @@ export function seenTogether(a: Scoped, b: Scoped): boolean {
   return a.projectId === b.projectId;
 }
 
-/** A pair in stored order: the lower id first. */
 export function orderedPair(x: string, y: string): [string, string] {
   return x < y ? [x, y] : [y, x];
+}
+
+export function pairKey(aId: string, bId: string): string {
+  return `${aId}\n${bId}`;
+}
+
+/** What a stored check is compared by: the hashes of the two texts it judged, in pair order. */
+export function textsKey(hashA: string, hashB: string): string {
+  return `${hashA}\n${hashB}`;
 }

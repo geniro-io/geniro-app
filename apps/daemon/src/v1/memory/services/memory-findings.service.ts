@@ -4,24 +4,23 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
 import { type MemoryActiveText, MemoryDao } from '../dao/memory.dao';
-import {
-  type MemoryCheckRecord,
-  MemoryReviewFindingDao,
-  pairKey,
-} from '../dao/memory-review-finding.dao';
+import { MemoryReviewFindingDao } from '../dao/memory-review-finding.dao';
 import type { Memory } from '../entity/memory.entity';
 import {
   MEMORY_CHECK_PAIRS_LISTED_MAX,
   MEMORY_CHECK_PARTNERS,
+  type MemoryCheckRecord,
   type MemoryFinding,
   type MemoryPair,
 } from '../memory.types';
 import {
   memoryTextHash,
   orderedPair,
+  pairKey,
   rareTermsQuery,
   seenTogether,
   termsOf,
+  textsKey,
 } from '../utils/memory-pairs';
 import { toEntry } from './memory.service';
 
@@ -105,7 +104,7 @@ export class MemoryFindingsService {
           continue;
         }
         seen.add(key);
-        if (checked.get(key) === `${hashes.get(aId)}\n${hashes.get(bId)}`) {
+        if (checked.get(key) === textsKey(hashes.get(aId)!, hashes.get(bId)!)) {
           continue;
         }
         pairs.push({
@@ -155,7 +154,7 @@ export class MemoryFindingsService {
       seen.add(key);
       const hashA = memoryTextHash(a.title, a.body);
       const hashB = memoryTextHash(b.title, b.body);
-      if (checked.get(key) === `${hashA}\n${hashB}`) {
+      if (checked.get(key) === textsKey(hashA, hashB)) {
         continue;
       }
       result.push({ a, b, hashA, hashB });

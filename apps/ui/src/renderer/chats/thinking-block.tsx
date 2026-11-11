@@ -158,6 +158,7 @@ export function ThinkingScroller({
           following.current,
           box,
           lastTop.current,
+          true,
         );
         lastTop.current = box.scrollTop;
       }}

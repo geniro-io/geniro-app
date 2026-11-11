@@ -1,7 +1,8 @@
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { tempDir } from '../../agents/__tests__/temp-dir';
 import { ProjectDao } from '../../projects/dao/project.dao';
@@ -25,6 +26,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const NOW = new Date(Date.now() + 100 * DAY);
 const daysBefore = (days: number) =>
   usageDay(new Date(NOW.getTime() - days * DAY));
+const ago = (days: number) => new Date(Date.now() - days * DAY);
 
 const NONE: RunPlace = { projectId: null, teamSlug: null };
 const inProject = (projectId: string): RunPlace => ({
@@ -100,6 +102,14 @@ describe('MemoryReviewService', () => {
     await db.usageDao.add([
       { memoryId, day, reads, searchHits: 0, indexShows: 0 },
     ]);
+  }
+
+  async function stamp(id: string, at: Date) {
+    await new MemoryDao(db.em).touch([id], at);
+  }
+
+  async function setCreatedAt(id: string, at: Date) {
+    await db.em.fork().nativeUpdate(Memory, { id }, { createdAt: at });
   }
 
   it('sorts and counts over every row, past the page', async () => {
@@ -376,5 +386,181 @@ describe('MemoryReviewService', () => {
     });
     await db.usage.markBackfilled();
     expect((await review.summary(NOW)).counting).toBe(false);
+  });
+
+  it.each(['oldestSaved', 'largest', 'longestSinceRead'] as const)(
+    'orders cold rows by %s over every row',
+    async (sort) => {
+      const ledgerOnly = await save(AGENT, {
+        title: 'Pnpm workspace',
+        body: 'x'.repeat(50),
+      });
+      const never = await save(AGENT, {
+        title: 'Loopback binding',
+        body: 'x'.repeat(10),
+      });
+      const stampOnly = await save(AGENT, {
+        title: 'Colima restarts',
+        body: 'x'.repeat(300),
+      });
+      await setCreatedAt(never.id, new Date(Date.UTC(2020, 0, 1)));
+      await setCreatedAt(ledgerOnly.id, new Date(Date.UTC(2020, 0, 2)));
+      await setCreatedAt(stampOnly.id, new Date(Date.UTC(2020, 0, 3)));
+      await use(ledgerOnly.id, daysBefore(100), 1);
+      await stamp(stampOnly.id, new Date(NOW.getTime() - 120 * DAY));
+      const expected = {
+        oldestSaved: [never.id, ledgerOnly.id, stampOnly.id],
+        largest: [stampOnly.id, ledgerOnly.id, never.id],
+        longestSinceRead: [never.id, stampOnly.id, ledgerOnly.id],
+      }[sort];
+
+      const page = await review.page({ sort }, NOW);
+
+      expect(page.rows.map((row) => row.entry.id)).toEqual(expected);
+    },
+  );
+
+  it('a read stamped inside the window keeps an entry out of Least used', async () => {
+    const recent = await save(AGENT, { title: 'Pnpm workspace', body: 'x' });
+    const old = await save(AGENT, { title: 'Loopback binding', body: 'x' });
+    await stamp(recent.id, new Date(NOW.getTime() - 10 * DAY));
+    await stamp(old.id, new Date(NOW.getTime() - 100 * DAY));
+
+    const page = await review.page({ sort: 'leastUsed' }, NOW);
+
+    expect(page.rows.map((row) => row.entry.id)).toEqual([old.id]);
+    expect(page.rows[0]?.usage.lastReadAt).toBe(daysBefore(100));
+  });
+
+  it('lastReadAt is the later of the ledger day and the stamp', async () => {
+    const ledgerNewer = await save(AGENT, {
+      title: 'Pnpm workspace',
+      body: 'x',
+    });
+    const stampNewer = await save(AGENT, {
+      title: 'Loopback binding',
+      body: 'x',
+    });
+    const unread = await save(AGENT, { title: 'Colima restarts', body: 'x' });
+    await use(ledgerNewer.id, daysBefore(20), 1);
+    await stamp(ledgerNewer.id, new Date(NOW.getTime() - 50 * DAY));
+    await use(stampNewer.id, daysBefore(60), 1);
+    await stamp(stampNewer.id, new Date(NOW.getTime() - 30 * DAY));
+    for (const entry of [ledgerNewer, stampNewer, unread]) {
+      await db.service.setKept(entry.id, true);
+    }
+
+    const page = await review.page({ tab: 'kept' }, NOW);
+
+    expect(
+      Object.fromEntries(
+        page.rows.map((row) => [row.entry.title, row.usage.lastReadAt]),
+      ),
+    ).toEqual({
+      'Pnpm workspace': daysBefore(20),
+      'Loopback binding': daysBefore(30),
+      'Colima restarts': null,
+    });
+  });
+
+  it('the Forgotten tab lists newest forgotten first, an old row without forgottenAt by its edit time', async () => {
+    const forgotten = await save(USER, { title: 'Pnpm workspace', body: 'x' });
+    const legacy = await save(USER, { title: 'Loopback binding', body: 'x' });
+    const batch = await db.service.forgetBatch([forgotten.id]);
+    const forgottenAt = ago(5);
+    const editedAt = ago(2);
+    const em = db.em.fork();
+    await em.nativeUpdate(Memory, { id: forgotten.id }, { forgottenAt });
+    await em.nativeUpdate(
+      Memory,
+      { id: legacy.id },
+      { status: 'forgotten', forgottenAt: null, updatedAt: editedAt },
+    );
+
+    const page = await review.page({ tab: 'forgotten' }, NOW);
+
+    expect(
+      page.rows.map((row) => [
+        row.entry.title,
+        row.forgottenAt,
+        row.forgetBatchId,
+      ]),
+    ).toEqual([
+      ['Loopback binding', editedAt.toISOString(), null],
+      ['Pnpm workspace', forgottenAt.toISOString(), batch.batchId],
+    ]);
+  });
+
+  it('a reference check does not overwrite an entry edited meanwhile', async () => {
+    const root = tempDir('memory-review-stale-');
+    await addProject('p5', root);
+    const entry = await save(
+      AGENT,
+      { title: 'Build entry', body: 'Build runs from apps/gone/build.ts.' },
+      inProject('p5'),
+    );
+    const edited = entryOf(
+      await db.service.edit(entry.id, {
+        rev: entry.rev,
+        title: 'Build entry',
+        body: 'Build runs from apps/gone/build.ts, now from elsewhere.',
+        type: 'project',
+        projectId: 'p5',
+        teamSlug: null,
+      }),
+    );
+    const dao = new MemoryDao(db.em);
+
+    await dao.setReferencesGone(
+      { id: entry.id, rev: entry.rev },
+      '["apps/gone/build.ts"]',
+      NOW,
+    );
+
+    const stale = await db.em.fork().findOneOrFail(Memory, { id: entry.id });
+    expect([stale.referencesGone, stale.referencesCheckedAt]).toEqual([
+      null,
+      null,
+    ]);
+
+    await dao.setReferencesGone(
+      { id: entry.id, rev: edited.rev },
+      '["apps/gone/build.ts"]',
+      NOW,
+    );
+
+    const current = await db.em.fork().findOneOrFail(Memory, { id: entry.id });
+    expect(current.referencesGone).toBe('["apps/gone/build.ts"]');
+  });
+
+  it('a failing reference check still answers the page', async () => {
+    const root = tempDir('memory-review-down-');
+    await addProject('p6', root);
+    await save(
+      AGENT,
+      { title: 'Build entry', body: 'Build runs from apps/gone/build.ts.' },
+      inProject('p6'),
+    );
+    const warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    const down = new MemoryReviewService(
+      db.em,
+      new MemoryDao(db.em),
+      {
+        getAll: () => Promise.reject(new Error('down')),
+      } as unknown as ProjectDao,
+      db.usage,
+    );
+
+    try {
+      const page = await down.page({}, NOW);
+
+      expect(titlesOf(page)).toEqual(['Build entry']);
+      expect(rowTitled(page, 'Build entry').referencesGone).toEqual([]);
+      expect(warn).toHaveBeenCalledWith('memory reference check failed: down');
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

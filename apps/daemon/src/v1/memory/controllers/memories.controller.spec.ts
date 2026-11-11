@@ -1,4 +1,4 @@
-import { GUARDS_METADATA } from '@nestjs/common/constants';
+import { GUARDS_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DesktopOnlyGuard } from '../../../auth/desktop-only.guard';
@@ -327,5 +327,36 @@ describe('MemoriesController', () => {
       (Reflect.getMetadata(GUARDS_METADATA, MemoriesController) as unknown[]) ??
         [],
     ).not.toContain(DesktopOnlyGuard);
+  });
+
+  it('declares the literal cleanup routes before :memoryId', () => {
+    const handlers = MemoriesController.prototype as unknown as Record<
+      string,
+      object
+    >;
+    const declared = Object.getOwnPropertyNames(MemoriesController.prototype)
+      .filter((name) => name !== 'constructor')
+      .flatMap((name) => {
+        const path = Reflect.getMetadata(PATH_METADATA, handlers[name]!) as
+          string | undefined;
+        return path === undefined ? [] : [path];
+      });
+    const firstParam = declared.findIndex((path) =>
+      path.startsWith(':memoryId'),
+    );
+
+    expect(firstParam).toBeGreaterThan(0);
+    for (const literal of [
+      'review/summary',
+      'review',
+      'review/ids',
+      'batches',
+      'forget-batch',
+      'batches/:batchId/restore',
+    ]) {
+      const at = declared.indexOf(literal);
+      expect(at, literal).toBeGreaterThanOrEqual(0);
+      expect(at, literal).toBeLessThan(firstParam);
+    }
   });
 });

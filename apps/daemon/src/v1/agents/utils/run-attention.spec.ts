@@ -86,6 +86,34 @@ describe('readAttention', () => {
     ).toEqual([false, true, false, false, false, true]);
   });
 
+  it('marks a team run whose leads ended their turns while its calls run on', () => {
+    expect(
+      marks([
+        event({ status: 'running', rootsWorking: 1 }),
+        event({ status: null, rootsWorking: 0 }),
+        event({ status: null, rootsWorking: 0 }),
+        event({ status: null, rootsWorking: 1 }),
+        event({ status: null, rootsWorking: 0 }),
+      ]),
+    ).toEqual([false, true, false, false, true]);
+  });
+
+  it('does not mark leads going idle over a settled run or with no reading before', () => {
+    expect(
+      marks([
+        event({ status: 'running', rootsWorking: 1 }),
+        event({ status: 'completed' }),
+        event({ status: null, rootsWorking: 0 }),
+      ]),
+    ).toEqual([false, true, false]);
+    expect(
+      marks([
+        event({ status: 'running' }),
+        event({ status: null, rootsWorking: 0 }),
+      ]),
+    ).toEqual([false, false]);
+  });
+
   it('never marks off its own announcements', () => {
     expect(
       marks([

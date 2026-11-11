@@ -3926,10 +3926,6 @@ export class TeamExecutorService
         return;
       }
       runFinished = true;
-      // A root the pass never got to launch (cancelled while queued) is idle.
-      for (const memberId of leadIds) {
-        markRootWorking(memberId, false);
-      }
       // Captured BEFORE the body: from here on a call can wake the run, and a
       // wake re-assigns `resolveAllDone` to the handle IT registered.
       const settlePass = resolveAllDone;
@@ -4038,6 +4034,11 @@ export class TeamExecutorService
         // being closed.
         if (liveControl !== null && this.liveRuns.get(runId) === liveControl) {
           this.liveRuns.delete(runId);
+        }
+        // After the status: leads going idle under a run still `running` is
+        // the Manager replying with calls out, which marks the thread unread.
+        for (const memberId of leadIds) {
+          markRootWorking(memberId, false);
         }
         // The aggregate handle MUST settle even if the final writes fail, or
         // the ProcessRegistry entry leaks and the run can never be re-driven.
@@ -6401,7 +6402,7 @@ export class TeamExecutorService
             // after `settled`, so a message arriving on a real idle announce
             // finds the root settled, not "still starting".
             schedule();
-            markRootWorking(node.id, false);
+            enqueue(() => markRootWorking(node.id, false));
           }
         });
       });
@@ -7352,9 +7353,12 @@ export class TeamExecutorService
             );
           } finally {
             compactingNodes.delete(node.id);
-            markRootWorking(node.id, false);
             liveSubTurns -= 1;
-            await finishRunIfSettled();
+            try {
+              await finishRunIfSettled();
+            } finally {
+              markRootWorking(node.id, false);
+            }
           }
         });
       });

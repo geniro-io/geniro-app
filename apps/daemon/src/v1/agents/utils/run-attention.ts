@@ -8,11 +8,13 @@ import { type RunStatusEvent } from '../chat.types';
 export interface AttentionMemory {
   status: RunStatus | undefined;
   awaiting: boolean;
+  rootsWorking: number | undefined;
 }
 
 export const NO_ATTENTION_MEMORY: AttentionMemory = {
   status: undefined,
   awaiting: false,
+  rootsWorking: undefined,
 };
 
 /** The two statuses a turn can END in that are news to the user. */
@@ -35,7 +37,10 @@ const NEWSWORTHY_SETTLES: ReadonlySet<RunStatus> = new Set<RunStatus>([
  *   news however many later announces restate it;
  * - a compaction-only turn (`housekeeping`) and a status merely HANDED BACK
  *   (`restored`, the delegate lease expiring) are not news — both are the
- *   reasons those flags exist.
+ *   reasons those flags exist;
+ * - a TEAM run's leads all ending their turns while the run stays `running`
+ *   (`rootsWorking` dropping to 0) is news: the Manager has replied, and the
+ *   calls it left out keep the run's own status from settling.
  *
  * Only a TRANSITION counts: the same terminal status announced twice, or an
  * open card re-stated on every activity announce, would otherwise re-mark a
@@ -51,13 +56,19 @@ export function readAttention(
     status: event.status ?? before.status,
     awaiting:
       event.awaiting === undefined ? before.awaiting : event.awaiting !== null,
+    rootsWorking: event.rootsWorking ?? before.rootsWorking,
   };
   const asked = !before.awaiting && after.awaiting;
+  const leadsReplied =
+    event.rootsWorking === 0 &&
+    before.rootsWorking !== undefined &&
+    before.rootsWorking > 0 &&
+    after.status === 'running';
   const settled =
     event.status !== null &&
     NEWSWORTHY_SETTLES.has(event.status) &&
     event.status !== before.status &&
     event.housekeeping !== true &&
     event.restored !== true;
-  return { earns: asked || settled, after };
+  return { earns: asked || settled || leadsReplied, after };
 }

@@ -217,34 +217,34 @@ describe('displayRunStatus', () => {
     ).toBe('failed');
   });
 
-  it('reads a team run whose leads only wait on their calls as held', () => {
+  it('reads a team run whose leads ended their turns as completed', () => {
     expect(
       displayRunStatus({
         status: 'running',
         streaming: true,
         awaitingAnswer: false,
         subagentRunning: true,
-        teamLeadsWaiting: true,
+        teamLeadsDone: true,
       }),
-    ).toBe('held');
+    ).toBe('completed');
     expect(
       displayRunStatus({
         status: 'running',
         streaming: true,
         awaitingAnswer: false,
-        teamLeadsWaiting: false,
+        teamLeadsDone: false,
       }),
     ).toBe('running');
   });
 
-  it('reads waiting team leads only over a running row', () => {
+  it('reads done team leads only over a running row', () => {
     for (const status of ['completed', 'failed', 'cancelled'] as const) {
       expect(
         displayRunStatus({
           status,
           streaming: false,
           awaitingAnswer: false,
-          teamLeadsWaiting: true,
+          teamLeadsDone: true,
         }),
       ).toBe(status);
     }
@@ -253,7 +253,7 @@ describe('displayRunStatus', () => {
         status: 'running',
         streaming: false,
         awaitingAnswer: true,
-        teamLeadsWaiting: true,
+        teamLeadsDone: true,
       }),
     ).toBe('needs-input');
   });

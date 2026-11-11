@@ -446,6 +446,7 @@ import { useUnseenRuns, useWindowWatched } from './use-unseen-runs';
 import { useWaitingMessages } from './use-waiting-messages';
 import { useWorktreeOrigin } from './use-worktree-origin';
 import { type WaitReading, waitReadings, waitsOnUser } from './waiting';
+import { WaitingMessagesStrip } from './waiting-messages-strip';
 import { type WorkingAgentRow, workingAgentRows } from './working-agents';
 import {
   type ConversationWorkSource,
@@ -10935,6 +10936,11 @@ export function Chats({
                         boundary of anything. The transcript's own scroll and
                         the card's elevation are what separate the two. */}
                     <div className="flex flex-col gap-2 p-3">
+                      <WaitingMessagesStrip
+                        messages={waitingMessages.messages}
+                        onDeliver={waitingMessages.deliver}
+                        onRemove={waitingMessages.remove}
+                      />
                       {/* The queue and the shelf share ONE reserved line. The
                           shelf keeps its row's height even when it holds no
                           chip (so a chip coming or going never moves the

@@ -266,6 +266,26 @@ export class ThreadInboxService {
     }));
   }
 
+  /**
+   * The user asked for a waiting message now: from here on it may open a turn,
+   * whatever its sender asked. Answers the row as it now stands.
+   */
+  async requestWake(runId: string, messageId: string): Promise<ThreadMessage> {
+    const em = this.em.fork();
+    const row = await this.messages.getById(messageId, em);
+    if (row === null || row.toRunId !== runId || row.status !== 'waiting') {
+      throw new NotFoundException(
+        'THREAD_MESSAGE_NOT_FOUND',
+        `no message ${messageId} waits in ${runId}`,
+      );
+    }
+    if (!row.wake) {
+      await this.messages.markWake(row.id, em);
+      row.wake = true;
+    }
+    return row;
+  }
+
   /** The user took a waiting message out: its agent never reads it. */
   async remove(runId: string, messageId: string): Promise<void> {
     const em = this.em.fork();

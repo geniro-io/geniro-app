@@ -10,6 +10,7 @@ import { CapabilitiesController } from './controllers/capabilities.controller';
 import { ProjectChatController } from './controllers/project-chat.controller';
 import { ProjectInstructionSizesController } from './controllers/project-instruction-sizes.controller';
 import { TeamsController } from './controllers/teams.controller';
+import { ThreadMessageDeliveryController } from './controllers/thread-message-delivery.controller';
 import { TeamChangeLogDao } from './dao/team-change-log.dao';
 import { AnalysisJudgeService } from './services/analysis-judge.service';
 import { AvatarStoreService } from './services/avatar-store.service';
@@ -57,6 +58,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
     CapabilitiesController,
     ProjectInstructionSizesController,
     ProjectChatController,
+    ThreadMessageDeliveryController,
   ],
   providers: [
     {

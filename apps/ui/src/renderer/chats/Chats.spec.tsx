@@ -80,6 +80,7 @@ const api = vi.hoisted(() => ({
   readRunTeamNotes: vi.fn(),
   readRunOutcomes: vi.fn(),
   listWaitingMessages: vi.fn(),
+  deliverWaitingMessage: vi.fn(),
   removeWaitingMessage: vi.fn(),
   readRunWaterfall: vi.fn(),
   readRunProcesses: vi.fn(),
@@ -9567,6 +9568,44 @@ describe('Chats queued messages', () => {
     ).toBeNull();
     expect(shelves()).toHaveLength(1);
     expect(shelves()[0]!.closest('[data-slot="queued-header"]')).toBeNull();
+  });
+
+  it('shows a message waiting from another thread above the composer, and delivers it on a press', async () => {
+    api.listWaitingMessages.mockResolvedValue([
+      {
+        id: 'w1',
+        fromRunId: 'r-pelican',
+        fromTitle: 'Pelican',
+        fromMember: 'Nick · Manager',
+        text: 'the findings, part one',
+        reason: 'sender_opted_out',
+        createdAt: '2026-11-11T10:00:00Z',
+      },
+    ]);
+    api.deliverWaitingMessage.mockResolvedValue({
+      outcome: 'woken',
+      reason: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const strip = container.querySelector(
+      '[aria-label="Messages from other threads"]',
+    );
+    expect(strip?.textContent).toContain('Pelican');
+    expect(strip?.textContent).toContain('the findings, part one');
+    expect(strip?.textContent).toContain('the sender did not wake this thread');
+
+    const deliver = [...strip!.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Deliver now',
+    );
+    await act(async () => deliver!.click());
+
+    expect(api.deliverWaitingMessage).toHaveBeenCalledWith({
+      runId: run1.id,
+      messageId: 'w1',
+    });
   });
 
   it('does not surface a DRAIN’s RUN_BUSY as an error — it is retried', async () => {

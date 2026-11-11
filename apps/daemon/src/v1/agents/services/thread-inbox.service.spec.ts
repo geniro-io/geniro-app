@@ -676,3 +676,43 @@ describe('ThreadInboxService.remove', () => {
     expect(h.notes).toEqual([]);
   });
 });
+
+describe('ThreadInboxService.requestWake', () => {
+  it('makes a message sent without a wake one a wake may open a turn for', async () => {
+    const h = await threadInboxDb();
+    await h.seedRun(TARGET);
+    const message = await h.seedMessage({
+      wake: false,
+      reason: 'sender_opted_out',
+    });
+    expect(await h.service.listOwed(TARGET)).toEqual([]);
+
+    const row = await h.service.requestWake(TARGET, message.id);
+
+    expect(row.wake).toBe(true);
+    expect((await h.service.listOwed(TARGET)).map((owed) => owed.id)).toEqual(
+      [],
+    );
+    await h.service.setReason(TARGET, [message.id], null);
+    expect((await h.service.listOwed(TARGET)).map((owed) => owed.id)).toEqual([
+      message.id,
+    ]);
+  });
+
+  it('refuses a message that is not waiting in that thread', async () => {
+    const h = await threadInboxDb();
+    await h.seedRun(TARGET);
+    const delivered = await h.seedMessage({
+      status: 'delivered',
+      deliveryId: 'turn-1',
+    });
+    const elsewhere = await h.seedMessage({ toRunId: 'elsewhere' });
+
+    await expect(
+      h.service.requestWake(TARGET, delivered.id),
+    ).rejects.toMatchObject({ errorCode: 'THREAD_MESSAGE_NOT_FOUND' });
+    await expect(
+      h.service.requestWake(TARGET, elsewhere.id),
+    ).rejects.toMatchObject({ errorCode: 'THREAD_MESSAGE_NOT_FOUND' });
+  });
+});

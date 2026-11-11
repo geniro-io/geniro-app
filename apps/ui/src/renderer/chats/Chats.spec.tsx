@@ -11969,7 +11969,7 @@ describe('Chats queued messages — a team run', () => {
     expect(teamApi.sendTeamRunMessage).toHaveBeenCalledTimes(3);
   });
 
-  it('badges a team run whose Manager only waits on its calls as working, not running', async () => {
+  it('keeps a team run running while its calls work, and announces the reply of its Manager', async () => {
     teamApi.listTeamRuns.mockResolvedValue([
       {
         id: 'w1',
@@ -11977,6 +11977,8 @@ describe('Chats queued messages — a team run', () => {
         rootsWorking: 0,
         awaitingCalls: 0,
         awaiting: null,
+        attentionAt: null,
+        seenAt: null,
         title: null,
         agentKind: null,
         teamId: 'review-team',
@@ -12009,34 +12011,57 @@ describe('Chats queued messages — a team run', () => {
       },
     ]);
     const { client, emitRunStatus } = makeClient();
-    const container = await mount(client);
+    const reports: (readonly WaitReading[])[] = [];
+    const container = await mount(client, undefined, {
+      onWaitingChange: (readings) => {
+        reports.push(readings);
+      },
+    });
+    const waitOfRun = (): string | undefined =>
+      reports.at(-1)?.find((reading) => reading.runId === 'w1')?.state;
     const row = (): string =>
       [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].find(
         (el) => el.textContent?.includes('Review team'),
       )?.textContent ?? '';
 
-    expect(row()).toContain('working');
-    expect(row()).not.toContain('running');
-
-    await clickRun(container, 'Review team');
-    expect(row()).toContain('working');
-    expect(row()).not.toContain('running');
+    expect(row()).toContain('running');
+    expect(row()).not.toContain('working');
 
     await act(async () => {
-      emitRunStatus({ runId: 'w1', status: null, rootsWorking: 1 });
+      emitRunStatus({ runId: 'w1', status: 'running', rootsWorking: 1 });
     });
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({ runId: 'w1', status: null, rootsWorking: 0 });
+    });
+    expect(row()).toContain('running');
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'turn-end', runId: 'w1' }),
+    );
+    expect(waitOfRun()).toBe('working');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'w1',
+        status: null,
+        attentionAt: '2026-11-11T09:02:22.826Z',
+      });
+    });
+    expect(waitOfRun()).toBe('unseen');
     expect(row()).toContain('running');
 
     await act(async () => {
       emitRunStatus({ runId: 'w1', status: null, awaitingCalls: 1 });
     });
-    expect(row()).toContain('working');
-    expect(row()).not.toContain('running');
-
-    await act(async () => {
-      emitRunStatus({ runId: 'w1', status: null, awaitingCalls: 0 });
-    });
     expect(row()).toContain('running');
+    expect(row()).not.toContain('working');
+
+    notify.mockClear();
+    await act(async () => {
+      emitRunStatus({ runId: 'w1', status: 'completed' });
+    });
+    expect(notify).not.toHaveBeenCalled();
   });
 });
 

@@ -132,7 +132,7 @@ One home for each concern:
 
 - `RunStatusKind` and `RUN_STATUS_META` (`chats/run-status.tsx`) are the one vocabulary for every surface.
 - `held` and `needs-input` are derived in the renderer and never stored. There is no `idle`.
-- A `running` team run whose leads have all ended their turns or wait in `await_agent` (`rootsIdle`, `awaitingCalls`) reads `held`, as a chat's hold does (`teamLeadsWaiting`).
+- A team run's badge stays `running` while any call it started works, its leads idle or not. The readings the notification rules watch read a `running` team run whose leads have all ended their turns (`rootsIdle`) as `completed` (`teamLeadsDone`), and that run's ending is not held for a settle (`notificationSettling`): the Manager's reply is announced while its calls run on. The daemon marks it unread on the same transition (`readAttention`, `rootsWorking` dropping to 0 over a `running` run), and announces a pass's terminal status before its leads go idle, so a pass ending is never read as a reply.
 - `displayRunStatus` applies a fixed rank order. Rank 6 (background work over `completed` → `held`) is withheld from `agentRunStatus`, the reading the notification rules watch.
 - `BlockStatus` is never printed verbatim. Translate it through `RUN_STATUS_OF`.
 - `settled-status.ts`: only a live terminal item mirrors its status onto the run row. A replay takes one reading from its last item (`reconcileFromTail`).
@@ -455,7 +455,7 @@ Appearance:
 
 - The unread mark is the daemon's: `attentionAt` later than `seenAt`. Both timestamps only move forward. Never compute it per window.
 - Report "seen" only while the thread is actually watched (`useWindowWatched`).
-- What a thread waits on the user for (`chats/waiting.ts`: asking > failed > unread > working, longest wait first) is read from the unfocused status and `useUnseenRuns`. It drives ⌘J, the title-bar count, board-card marks and the agents panel's card order, and never the sidebar order: a waiting thread does not move itself (user decision). ⌘J continues from the reading it last opened, because opening an unread thread drops it from the queue.
+- What a thread waits on the user for (`chats/waiting.ts`: asking > failed > unread > working, longest wait first) is read from the unfocused status and `useUnseenRuns`. An unread team run whose leads ended their turns (`rootsIdle`) is read with the agent-stopped status, so the Manager's reply counts as unread while its calls work on. It drives ⌘J, the title-bar count, board-card marks and the agents panel's card order, and never the sidebar order: a waiting thread does not move itself (user decision). ⌘J continues from the reading it last opened, because opening an unread thread drops it from the queue.
 - Drafts, the queue and turn-end banners stay per device.
 - Archive is the row action. Permanent delete exists only inside the archive. Team rows archive too.
 - `refreshRuns` drops a stale generation, and runs one listing per scope at a time plus one queued; only a scope switch supersedes one in flight.

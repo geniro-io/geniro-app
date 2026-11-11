@@ -106,6 +106,11 @@ import {
 } from '../../agents/utils/call-membership';
 import { hostMcpServerName } from '../../agents/utils/host-question';
 import type { ModelPriceLookup } from '../../agents/utils/model-prices';
+import {
+  type AttentionMemory,
+  NO_ATTENTION_MEMORY,
+  readAttention,
+} from '../../agents/utils/run-attention';
 import type { SpawnFn } from '../../agents/utils/spawn-cli';
 import { readRunStageProgress } from '../../agents/utils/stage-progress';
 import {
@@ -1189,6 +1194,7 @@ function setup(
   skillHarvest: SkillHarvestStore;
   mcpHarvest: McpHarvestStore;
   storeGet: ReturnType<typeof vi.fn>;
+  bus: AgentEventBus;
   /** Every run-status announcement the real bus carried, in order. */
   statusEvents: { runId: string; status: string | null }[];
   /** Runs whose settle announced that no terminal row stands behind it. */
@@ -1646,6 +1652,7 @@ function setup(
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
   return {
+    bus,
     hostTurnSettles,
     deltas,
     partials,
@@ -6738,6 +6745,53 @@ describe('TeamExecutorService — agent calls', () => {
     expect(ofRun()).toEqual([1, 0, 1, 0]);
     completeTurn(claude.starts[1]!, 'the work, done');
     await drain();
+  });
+
+  it('marks a thread unread once when its pass ends, and when the Manager replies with a call still out', async () => {
+    const { service, claude, callBroker, bus } = setup();
+    const marked: string[] = [];
+    let memory: AttentionMemory = NO_ATTENTION_MEMORY;
+    bus.allStatuses().subscribe((event) => {
+      const { earns, after } = readAttention(event, memory);
+      memory = after;
+      if (earns) {
+        marked.push(event.status ?? `roots:${event.rootsWorking}`);
+      }
+    });
+
+    const plain = await service.startRun({
+      slug: 'c',
+      team: CALL_WF,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'all done');
+    await drain();
+    expect(marked).toEqual(['completed']);
+
+    memory = NO_ATTENTION_MEMORY;
+    marked.length = 0;
+    const withCall = await service.startRun({
+      slug: 'c',
+      team: CALL_WF,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(withCall.id, 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'do the work',
+      mode: 'async',
+    });
+    await drain();
+    completeTurn(claude.starts[1]!, 'I will report back');
+    await drain();
+    expect(marked).toEqual(['roots:0']);
+    completeTurn(claude.starts[2]!, 'the work, done');
+    await drain();
+    expect(plain.id).not.toBe(withCall.id);
   });
 
   it('reports a root idle while its turn is HELD for background sub-agents, and working again once the hold ends', async () => {

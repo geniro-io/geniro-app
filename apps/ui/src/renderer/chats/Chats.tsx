@@ -6499,19 +6499,10 @@ export function Chats({
               awaitingAnswer.size > 0 || activeRun.awaiting != null,
             subagentRunning,
             heldForBackgroundWork: holding.has(activeRun.id),
-            teamLeadsWaiting:
-              rootsIdle.has(activeRun.id) || awaitingCalls.has(activeRun.id),
+            teamLeadsDone: rootsIdle.has(activeRun.id),
           })
         : 'pending',
-    [
-      activeRun,
-      streaming,
-      awaitingAnswer,
-      subagentRunning,
-      holding,
-      rootsIdle,
-      awaitingCalls,
-    ],
+    [activeRun, streaming, awaitingAnswer, subagentRunning, holding, rootsIdle],
   );
   const activeRunStatus = useMemo(
     () =>
@@ -6523,8 +6514,6 @@ export function Chats({
               awaitingAnswer.size > 0 || activeRun.awaiting != null,
             subagentRunning,
             heldForBackgroundWork: holding.has(activeRun.id),
-            teamLeadsWaiting:
-              rootsIdle.has(activeRun.id) || awaitingCalls.has(activeRun.id),
             // The RUN ROW's count, not this thread's transcript — the same
             // fact the unfocused rows read, which is the whole of the
             // blinking fix. See {@link rowRunStatus}.
@@ -6543,8 +6532,6 @@ export function Chats({
       awaitingAnswer,
       subagentRunning,
       holding,
-      rootsIdle,
-      awaitingCalls,
       shellsOut,
       delegatesOut,
     ],
@@ -8972,12 +8959,11 @@ export function Chats({
         // what stops a chat sitting on an unanswered question from showing a
         // spinner for as long as the user is looking elsewhere.
         heldForBackgroundWork: holding.has(run.id),
-        teamLeadsWaiting: rootsIdle.has(run.id) || awaitingCalls.has(run.id),
       }),
     // `delegatesOut` too: a turn that settles with sub-agents still out moves
     // only that set, and without it every thread the user was not looking at
     // kept the old reading — `completed` over a hold, `held` after it ended.
-    [holding, rootsIdle, awaitingCalls, shellsOut, delegatesOut],
+    [holding, shellsOut, delegatesOut],
   );
   /**
    * That same reading taken WITHOUT the live plane — what the row would say if
@@ -9029,9 +9015,9 @@ export function Chats({
         // is genuinely unfinished, and announcing it as done is the defect this
         // whole vocabulary was built to prevent.
         heldForBackgroundWork: holding.has(run.id),
-        teamLeadsWaiting: rootsIdle.has(run.id) || awaitingCalls.has(run.id),
+        teamLeadsDone: rootsIdle.has(run.id),
       }),
-    [holding, rootsIdle, awaitingCalls],
+    [holding, rootsIdle],
   );
   /**
    * The same per-run reading for the two consumers that ask "has this thread
@@ -9096,6 +9082,13 @@ export function Chats({
     [runs, offScopeRuns, isHosted],
   );
 
+  const notificationSettling = useMemo(
+    () =>
+      rootsIdle.size === 0
+        ? settleOwed
+        : new Set([...settleOwed].filter((runId) => !rootsIdle.has(runId))),
+    [settleOwed, rootsIdle],
+  );
   /**
    * Tell the user, outside the app, when a thread stops to ask something or
    * ends — reading the SAME status the sidebar badge shows, so a banner and the
@@ -9111,7 +9104,9 @@ export function Chats({
     quiet: quietSettles,
     // The open thread's ending lands on its terminal ITEM, ahead of the settle
     // announce that says whether it was housekeeping — so it waits for that.
-    settling: settleOwed,
+    // A team run whose leads ended their turns has no settle coming while its
+    // calls run, so the Manager's reply is announced as it lands.
+    settling: notificationSettling,
     // A thread with a command still out may not be finished at all: the agent
     // routinely ENDS ITS TURN waiting on one and resumes the moment it reports.
     // Its ending is announced provisionally and withdrawn if the run resumes.
@@ -9153,14 +9148,28 @@ export function Chats({
   });
   // Read with the UNFOCUSED status for every run, the open one included, so
   // focusing a thread cannot change its status reading — the sidebar order's
-  // rule. (Opening an unread one still sees it, which is the point.)
+  // rule. (Opening an unread one still sees it, which is the point.) An unread
+  // team run whose leads ended their turns is read as stopped: the reply is
+  // the Manager's, owed to the user while its calls work on.
   const waiting = useMemo(
     () =>
       waitReadings(
         notifiedRuns.filter((run) => run.archivedAt == null),
-        { statusOf: unfocusedRunStatus, unseen },
+        {
+          statusOf: (run) =>
+            rootsIdle.has(run.id) && unseen.has(run.id)
+              ? unfocusedAgentStoppedStatus(run)
+              : unfocusedRunStatus(run),
+          unseen,
+        },
       ),
-    [notifiedRuns, unfocusedRunStatus, unseen],
+    [
+      notifiedRuns,
+      unfocusedRunStatus,
+      unfocusedAgentStoppedStatus,
+      rootsIdle,
+      unseen,
+    ],
   );
   // Reported only when a wait actually changed: the rows are rewritten on
   // every announce, and each report re-renders the whole shell. A working

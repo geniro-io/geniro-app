@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 import {
   defineConfig,
   MikroORM,
@@ -5,21 +7,30 @@ import {
 } from '@mikro-orm/sqlite';
 
 import mikroOrmConfig from '../../../db/mikro-orm.config';
+import { tempDir } from '../../agents/__tests__/temp-dir';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import type { ProjectRootsService } from '../../projects/services/project-roots.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
+import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import { Task } from '../../tasks/entity/task.entity';
 import { MemoryDao } from '../dao/memory.dao';
+import { MemoryUsageDao } from '../dao/memory-usage.dao';
 import { Memory } from '../entity/memory.entity';
+import { MemoryUsageBackfill } from '../entity/memory-usage-backfill.entity';
+import { MemoryUsageDay } from '../entity/memory-usage-day.entity';
 import { MemoryService } from '../services/memory.service';
 import { MemoryEventBus } from '../services/memory-events.bus';
 import { MemoryTextIndexService } from '../services/memory-text-index.service';
+import {
+  MEMORY_USAGE_MARKER_FILE,
+  MemoryUsageService,
+} from '../services/memory-usage.service';
 
 /** The repository a task worktree resolves to, as `ProjectRootsService` would. */
 export const ROOTS = new Map([['/wt/task-1', '/repo/app']]);
@@ -28,7 +39,16 @@ export async function memoryDb() {
   const orm = await MikroORM.init(
     defineConfig({
       dbName: ':memory:',
-      entities: [Memory, Run, NodeState, Task, Project],
+      entities: [
+        Memory,
+        MemoryUsageDay,
+        MemoryUsageBackfill,
+        Run,
+        Item,
+        NodeState,
+        Task,
+        Project,
+      ],
       allowGlobalContext: true,
       namingStrategy: UnderscoreNamingStrategy,
       discovery: { checkDuplicateFieldNames: false },
@@ -40,6 +60,10 @@ export async function memoryDb() {
   const index = () => new MemoryTextIndexService(new MemoryDao(em.fork()));
   await index().ensure();
   const events = new MemoryEventBus();
+  const usageDao = new MemoryUsageDao(em);
+  const markerPath = join(tempDir('memory-usage-'), MEMORY_USAGE_MARKER_FILE);
+  const usage = new MemoryUsageService(usageDao, markerPath);
+  await usage.start();
   const roots = {
     rootsOf: async (cwds: Iterable<string | null>) =>
       new Map(
@@ -56,8 +80,9 @@ export async function memoryDb() {
     new ProjectDao(em),
     new ProjectScopeService(em, new TaskDao(em), new ProjectDao(em), roots),
     events,
+    usage,
   );
-  return { orm, em, service, events, index };
+  return { orm, em, service, events, index, usage, usageDao, markerPath };
 }
 
 /** An entity with its defaults, as a row the app itself would write. */

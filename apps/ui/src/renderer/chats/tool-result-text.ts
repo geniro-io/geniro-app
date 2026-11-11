@@ -4,7 +4,11 @@ export function recordOf(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/** The text of a result that arrives bare, as MCP content blocks, or wrapped. */
+/**
+ * The text of a result that arrives bare, as MCP content blocks, or wrapped.
+ *
+ * TWIN PARSER: `resultTextOf` in `apps/daemon/src/v1/memory/utils/memory-usage-history.ts`.
+ */
 export function resultTextOf(result: unknown): string | null {
   if (typeof result === 'string') {
     return result;

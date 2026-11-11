@@ -53,17 +53,18 @@ export function similarTitles(a: string, b: string): boolean {
 
 /**
  * A run's memory index: one line per entry, in the order given, cut on whole
- * lines at `MEMORY_INDEX_MAX_BYTES` with a footer counting what was left out;
- * null for no entries.
+ * lines at `MEMORY_INDEX_MAX_BYTES` with a footer counting what was left out —
+ * its text (null for no entries) and the ids of the entries that fit.
  */
-export function memoryIndexText(
+export function memoryIndexOf(
   entries: MemoryEntry[],
   now: Date,
-): string | null {
+): { text: string | null; ids: string[] } {
   if (entries.length === 0) {
-    return null;
+    return { text: null, ids: [] };
   }
   const lines = [MEMORY_INDEX_PREFACE];
+  const ids: string[] = [];
   const roomForFooter = Buffer.byteLength(`\n${moreLine(entries.length)}`);
   let bytes = Buffer.byteLength(MEMORY_INDEX_PREFACE);
   for (const entry of entries) {
@@ -74,13 +75,19 @@ export function memoryIndexText(
       break;
     }
     lines.push(line);
+    ids.push(entry.id);
     bytes = next;
   }
-  const left = entries.length - (lines.length - 1);
+  const left = entries.length - ids.length;
   if (left > 0) {
     lines.push(moreLine(left));
   }
-  return lines.join('\n');
+  return { text: lines.join('\n'), ids };
+}
+
+/** The handles a stored memory index lists, one `- m12 [type] …` line each. */
+export function indexHandlesOf(index: string): string[] {
+  return [...index.matchAll(/^- (m\d+) \[/gm)].map((match) => match[1]!);
 }
 
 function indexLine(entry: MemoryEntry, now: Date): string {

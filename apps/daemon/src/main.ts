@@ -55,6 +55,7 @@ import { registerSecret } from './v1/diagnostics/utils/redact';
 import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { KnowledgeTextIndexService } from './v1/knowledge/services/knowledge-text-index.service';
 import { MemoryTextIndexService } from './v1/memory/services/memory-text-index.service';
+import { MemoryUsageBackfillService } from './v1/memory/services/memory-usage-backfill.service';
 import { MIGRATION_FAILED_EXIT_CODE } from './v1/migrations/migrations.types';
 import { MigrationRunnerService } from './v1/migrations/services/migration-runner.service';
 import { MigrationFailedError } from './v1/migrations/utils/migration-failed-error';
@@ -141,6 +142,7 @@ let shares: ShareService | null = null;
 let threadDelivery: ThreadDeliveryService | null = null;
 let wallWork: WallWorkService | null = null;
 let payloadRefs: PayloadRefsSweepService | null = null;
+let memoryUsage: MemoryUsageBackfillService | null = null;
 let pullRequests: PullRequestCaptureService | null = null;
 bootstrapper.addExtension(
   buildHttpServerExtension(
@@ -214,7 +216,12 @@ bootstrapper.addExtension(
         // Off the boot path for the same reason: it copies the payload fields
         // lookups filter on into their columns for every row written before
         // the columns existed — a run it has not reached is read the slow way.
-        void payloadRefs?.sweepAllQuietly();
+        // The memory usage backfill follows it, since it finds a run's memory
+        // calls through those columns and passes over a run not stamped yet.
+        void (async () => {
+          await payloadRefs?.sweepAllQuietly();
+          await memoryUsage?.runQuietly();
+        })();
         // Off the boot path for the same reason: it re-reads from the start
         // every run scanned under an older pull-request rule — the one pass that
         // does, since a listing only carries a run on from its marker.
@@ -345,6 +352,7 @@ bootstrapper.addExtension(
       threadDelivery = app.get(ThreadDeliveryService);
       wallWork = app.get(WallWorkService);
       payloadRefs = app.get(PayloadRefsSweepService);
+      memoryUsage = app.get(MemoryUsageBackfillService);
       pullRequests = app.get(PullRequestCaptureService);
 
       // Sweep what a prior crash left behind — per-turn files and directories

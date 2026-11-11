@@ -5,7 +5,7 @@ import {
   MEMORY_INDEX_PREFACE,
   type MemoryEntry,
 } from '../memory.types';
-import { memoryIndexText } from './memory-text';
+import { indexHandlesOf, memoryIndexOf } from './memory-text';
 
 const NOW = new Date('2026-10-28T12:00:00Z');
 
@@ -45,9 +45,9 @@ function filling(count: number, fit: number): MemoryEntry[] {
   return Array.from({ length: count }, (_, n) => entry(10 + n, title));
 }
 
-describe('memoryIndexText', () => {
+describe('memoryIndexOf', () => {
   it('gives up a line to make room for the footer when entries are left out', () => {
-    const index = memoryIndexText(filling(15, 10), NOW) ?? '';
+    const index = memoryIndexOf(filling(15, 10), NOW).text ?? '';
     const lines = index.split('\n');
 
     expect(Buffer.byteLength(index)).toBeLessThanOrEqual(
@@ -58,7 +58,7 @@ describe('memoryIndexText', () => {
   });
 
   it('lists the last entry without a footer when every entry fits', () => {
-    const index = memoryIndexText(filling(10, 10), NOW) ?? '';
+    const index = memoryIndexOf(filling(10, 10), NOW).text ?? '';
     const lines = index.split('\n');
 
     expect(Buffer.byteLength(index)).toBeLessThanOrEqual(
@@ -74,10 +74,10 @@ describe('memoryIndexText', () => {
     );
 
     const index =
-      memoryIndexText(
+      memoryIndexOf(
         titles.map((title, n) => entry(10 + n, title)),
         NOW,
-      ) ?? '';
+      ).text ?? '';
 
     expect(Buffer.byteLength(index)).toBeLessThanOrEqual(
       MEMORY_INDEX_MAX_BYTES,
@@ -89,14 +89,14 @@ describe('memoryIndexText', () => {
 
   it('labels an entry’s scope as team, project or global', () => {
     const index =
-      memoryIndexText(
+      memoryIndexOf(
         [
           { ...entry(10, 'Team one'), teamSlug: 'a' },
           { ...entry(11, 'Project one'), projectId: 'p1' },
           entry(12, 'Global one'),
         ],
         NOW,
-      ) ?? '';
+      ).text ?? '';
 
     expect(index).toContain('- m10 [user] Team one (team)');
     expect(index).toContain('- m11 [user] Project one (project)');
@@ -104,6 +104,39 @@ describe('memoryIndexText', () => {
   });
 
   it('is null for no entries', () => {
-    expect(memoryIndexText([], NOW)).toBeNull();
+    expect(memoryIndexOf([], NOW)).toEqual({ text: null, ids: [] });
+  });
+
+  it('names exactly the entries whose lines fit, in order', () => {
+    const entries = filling(15, 10);
+
+    const index = memoryIndexOf(entries, NOW);
+
+    expect(index.ids).toEqual(entries.slice(0, 9).map((e) => e.id));
+  });
+
+  it('names every entry when all of them fit', () => {
+    const entries = filling(10, 10);
+
+    expect(memoryIndexOf(entries, NOW).ids).toHaveLength(10);
+  });
+});
+
+describe('indexHandlesOf', () => {
+  it('reads back the handles of the lines an index lists, not its footer', () => {
+    const entries = filling(15, 10);
+
+    const text = memoryIndexOf(entries, NOW).text ?? '';
+
+    expect(indexHandlesOf(text)).toEqual(
+      entries.slice(0, 9).map((e) => e.handle),
+    );
+  });
+
+  it('ignores a handle inside a title', () => {
+    const text =
+      memoryIndexOf([entry(10, 'see - m99 [user] note')], NOW).text ?? '';
+
+    expect(indexHandlesOf(text)).toEqual(['m10']);
   });
 });

@@ -28,6 +28,7 @@ import {
 
 const OP_TIMEOUT_MS = 18_000;
 const LOAD_WAIT_MS = 15_000;
+const RESIZE_SETTLE_MS = 150;
 const SETTLE_MS = 150;
 const SETTLE_LOAD_WAIT_MS = 5_000;
 const CONSOLE_LIMIT = 200;
@@ -83,6 +84,8 @@ interface Ctx {
     method: string,
     params?: Record<string, unknown>,
   ): Promise<T>;
+  /** A command sent when the operation ends, however it ends — timed out and stopped included. */
+  atEnd(method: string, params?: Record<string, unknown>): void;
 }
 
 const sleep = (ms: number): Promise<void> =>
@@ -500,6 +503,8 @@ async function tabOp(
   }
   host.attachAgentOp(tab, op);
   let attached: Promise<void> | null = null;
+  const endCommands: { method: string; params?: Record<string, unknown> }[] =
+    [];
   const ctx: Ctx = {
     host,
     runId: req.runId,
@@ -516,13 +521,24 @@ async function tabOp(
         params,
       )) as T;
     },
+    atEnd: (method, params) => {
+      endCommands.push(params === undefined ? { method } : { method, params });
+    },
   };
   try {
     const done = await guarded(op, () => work(ctx));
     return { ...done, tab: done.tab ?? tab.id };
   } finally {
-    if (op.signal.aborted && !tab.view.webContents.isDestroyed()) {
-      tab.view.webContents.stop();
+    const contents = tab.view.webContents;
+    if (!contents.isDestroyed()) {
+      for (const { method, params } of endCommands.splice(0)) {
+        await contents.debugger
+          .sendCommand(method, params)
+          .catch(() => undefined);
+      }
+    }
+    if (op.signal.aborted && !contents.isDestroyed()) {
+      contents.stop();
     }
     op.end();
   }
@@ -625,46 +641,36 @@ async function screenshot(ctx: Ctx, options: ScreenshotOptions): Promise<Done> {
   if (resized) {
     await resizeViewport(ctx, options.width, options.height);
   }
-  try {
-    const area =
-      options.fullPage || options.view || resized
-        ? captureArea(
-            await ctx.send<LayoutMetrics>('Page.getLayoutMetrics'),
-            options.fullPage,
-          )
-        : null;
-    const full = await capture(ctx, area, 1, options.fullPage);
-    let viewPng: string | undefined;
-    if (options.view && area !== null) {
-      const ratio = await devicePixelRatio(ctx);
-      viewPng =
-        ratio > 1
-          ? await capture(ctx, area, 1 / ratio, options.fullPage)
-          : full;
-    }
-    if (
-      full.length + (viewPng === full ? 0 : (viewPng?.length ?? 0)) >
-      BROWSER_SCREENSHOT_MAX_BASE64
-    ) {
-      throw new AgentError(SCREENSHOT_TOO_LARGE);
-    }
-    const contents = ctx.tab.view.webContents;
-    const size =
-      area === null
-        ? ''
-        : ` (${Math.round(area.width)}×${Math.round(area.height)} CSS px)`;
-    return {
-      text: `Screenshot of tab ${ctx.tab.id}${size} — ${contents.getURL()}`,
-      png: full,
-      ...(viewPng === undefined ? {} : { viewPng }),
-    };
-  } finally {
-    if (resized) {
-      await ctx
-        .send('Emulation.clearDeviceMetricsOverride')
-        .catch(() => undefined);
-    }
+  const area =
+    options.fullPage || options.view || resized
+      ? captureArea(
+          await ctx.send<LayoutMetrics>('Page.getLayoutMetrics'),
+          options.fullPage,
+        )
+      : null;
+  const full = await capture(ctx, area, 1, options.fullPage);
+  let viewPng: string | undefined;
+  if (options.view && area !== null) {
+    const ratio = await devicePixelRatio(ctx);
+    viewPng =
+      ratio > 1 ? await capture(ctx, area, 1 / ratio, options.fullPage) : full;
   }
+  if (
+    full.length + (viewPng === full ? 0 : (viewPng?.length ?? 0)) >
+    BROWSER_SCREENSHOT_MAX_BASE64
+  ) {
+    throw new AgentError(SCREENSHOT_TOO_LARGE);
+  }
+  const contents = ctx.tab.view.webContents;
+  const size =
+    area === null
+      ? ''
+      : ` (${Math.round(area.width)}×${Math.round(area.height)} CSS px)`;
+  return {
+    text: `Screenshot of tab ${ctx.tab.id}${size} — ${contents.getURL()}`,
+    png: full,
+    ...(viewPng === undefined ? {} : { viewPng }),
+  };
 }
 
 function captureArea(
@@ -743,18 +749,14 @@ async function resizeViewport(
   const [innerWidth, innerHeight] = Array.isArray(current.result?.value)
     ? (current.result.value as unknown[])
     : [];
+  ctx.atEnd('Emulation.clearDeviceMetricsOverride');
   await ctx.send('Emulation.setDeviceMetricsOverride', {
     width: width ?? (typeof innerWidth === 'number' ? innerWidth : 1280),
     height: height ?? (typeof innerHeight === 'number' ? innerHeight : 800),
     deviceScaleFactor: 0,
     mobile: false,
   });
-  await ctx.send('Runtime.evaluate', {
-    expression:
-      'new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))',
-    awaitPromise: true,
-    returnByValue: true,
-  });
+  await sleep(RESIZE_SETTLE_MS);
 }
 
 async function selectOption(

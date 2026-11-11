@@ -288,6 +288,44 @@ describe('runBrowserAgentRequest', () => {
     }
   });
 
+  it('gives the page its own size back when a sized screenshot runs past its time limit', async () => {
+    vi.useFakeTimers();
+    try {
+      const { host, debug, tab } = rig();
+      debug.handlers['Runtime.evaluate'] = () => ({
+        result: { type: 'object', value: [433, 763] },
+      });
+      debug.handlers['Page.getLayoutMetrics'] = () =>
+        new Promise(() => undefined);
+      const pending = runBrowserAgentRequest(
+        host,
+        request({
+          kind: 'screenshot',
+          tab: 't1',
+          fullPage: false,
+          view: false,
+          width: 1440,
+          height: 1280,
+        }),
+      );
+      await vi.waitFor(() => expect(tab.op).not.toBeNull());
+
+      await vi.advanceTimersByTimeAsync(18_001);
+
+      await expect(pending).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining('took longer than 18 s'),
+      });
+      const methods = debug.sendCommand.mock.calls.map(([method]) => method);
+      expect(
+        methods.indexOf('Emulation.clearDeviceMetricsOverride'),
+      ).toBeGreaterThan(methods.indexOf('Emulation.setDeviceMetricsOverride'));
+      expect(tab.op).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('puts a domain-only cookie in under its https address and clears only the named domain', async () => {
     const { host, cookies } = rig();
     const session = (await host.chatSession('r1')) as unknown as {

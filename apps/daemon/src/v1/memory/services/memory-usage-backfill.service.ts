@@ -65,6 +65,7 @@ export class MemoryUsageBackfillService {
       ) {
         return;
       }
+      const startedAt = Date.now();
       const cutoff = new Date(marker.cutoff);
       const em = this.em.fork();
       const counted = await this.usageDao.backfilledRunIds(em);
@@ -90,6 +91,11 @@ export class MemoryUsageBackfillService {
       }
       if (passedOver === 0) {
         await this.usage.markBackfilled();
+        this.logger.log(
+          `memory usage backfill counted ${pending.length} run(s) in ${
+            Date.now() - startedAt
+          }ms`,
+        );
       } else {
         this.logger.log(
           `memory usage backfill passed over ${passedOver} run(s); it runs again next launch`,

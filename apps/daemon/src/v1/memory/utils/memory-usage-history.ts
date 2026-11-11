@@ -4,6 +4,10 @@ import {
   type ToolCallTime,
 } from '../../agents/chat.types';
 import { hostMcpServerName } from '../../agents/utils/host-question';
+import {
+  hostToolArguments,
+  hostToolCallNames,
+} from '../../agents/utils/host-tool';
 import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { pairToolCalls } from '../../agents/utils/thread-timeline';
 import { MEMORY_READ_MAX, type MemoryUsageCount } from '../memory.types';
@@ -25,9 +29,10 @@ export interface MemoryHistoryRow {
 
 /**
  * The stored (lowercased) names a run's own memory_read and memory_search
- * calls carry: claude's `mcp__geniro-<run8>__<tool>` and cursor's
- * `geniro-<run8>: <tool>`, measured on stored rows. A name in any other
- * spelling counts nothing.
+ * calls carry: claude's `mcp__geniro-<run8>__<tool>`, cursor's
+ * `geniro-<run8>: <tool>` measured on stored rows, and the
+ * `geniro-<run8>-<tool>: <tool>` title older cursor builds gave the call. A
+ * name in any other spelling counts nothing.
  */
 export function memoryHistoryToolNames(
   runId: string,
@@ -36,8 +41,12 @@ export function memoryHistoryToolNames(
   const names = new Map<string, HistoryTool>();
   const tools: HistoryTool[] = [HOST_MEMORY_READ_TOOL, HOST_MEMORY_SEARCH_TOOL];
   for (const tool of tools) {
-    names.set(`mcp__${server}__${tool}`, tool);
-    names.set(`${server}: ${tool}`, tool);
+    for (const name of [
+      ...hostToolCallNames(server, tool),
+      `${server}: ${tool}`,
+    ]) {
+      names.set(name, tool);
+    }
   }
   return names;
 }
@@ -176,11 +185,8 @@ function searchHandles(resultPayload: string): string[] {
 
 /** The `ids` a `memory_read` call asked for, bare or in cursor's `{toolName, args}` wrap. */
 function askedHandles(callPayload: string): string[] {
-  const input = asRecord(asRecord(parseJsonColumn(callPayload))?.input);
-  const args =
-    (typeof input?.toolName === 'string' ? asRecord(input.args) : null) ??
-    input;
-  const ids = args?.ids;
+  const input = asRecord(parseJsonColumn(callPayload))?.input;
+  const ids = asRecord(hostToolArguments(input, HOST_MEMORY_READ_TOOL))?.ids;
   if (!Array.isArray(ids)) {
     return [];
   }

@@ -2,6 +2,7 @@ import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { EntityManager } from '@mikro-orm/sqlite';
+import { Logger } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { tempDir } from '../../agents/__tests__/temp-dir';
@@ -52,6 +53,7 @@ describe('MemoryUsageBackfillService', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await db.orm.close();
   });
 
@@ -243,6 +245,69 @@ describe('MemoryUsageBackfillService', () => {
       ['m2', 1],
       ['m3', 1],
     ]);
+  });
+
+  it('counts a cursor read titled the older `<server>-<tool>: <tool>` way', async () => {
+    const titled = `geniro-${RUN_B.slice(0, 8)}-memory_read: memory_read`;
+    await run(RUN_B);
+    await row(RUN_B, 'tool_call', {
+      id: 'call-3',
+      name: titled,
+      input: {
+        providerIdentifier: `geniro-${RUN_B.slice(0, 8)}`,
+        toolName: 'memory_read',
+        args: { ids: ['m1', 'm2'] },
+      },
+    });
+    await row(RUN_B, 'tool_result', {
+      id: 'call-3',
+      name: titled,
+      result: { success: true },
+      isError: false,
+    });
+
+    await backfill(marker());
+
+    expect((await figures()).map((f) => [f.handle, f.reads])).toEqual([
+      ['m1', 1],
+      ['m2', 1],
+    ]);
+  });
+
+  it('counts a memory_search titled the older cursor way from the hits its text listed', async () => {
+    const titled = `geniro-${RUN_B.slice(0, 8)}-memory_search: memory_search`;
+    await run(RUN_B);
+    await row(RUN_B, 'tool_call', {
+      id: 'call-4',
+      name: titled,
+      input: { toolName: 'memory_search', args: { query: 'pnpm' } },
+    });
+    await row(RUN_B, 'tool_result', {
+      id: 'call-4',
+      name: titled,
+      result: memorySearchResultText('pnpm', [hitOf(m3())]),
+      isError: false,
+    });
+
+    await backfill(marker());
+
+    expect((await figures()).map((f) => [f.handle, f.searchHits])).toEqual([
+      ['m3', 1],
+    ]);
+  });
+
+  it('logs how many runs a finished pass counted', async () => {
+    const log = vi.spyOn(Logger.prototype, 'log');
+    await run(RUN_A);
+    await claudeRead(RUN_A, 'toolu_a', ['m1'], [m1()]);
+
+    await backfill(marker());
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^memory usage backfill counted 1 run\(s\) in \d+ms$/,
+      ),
+    );
   });
 
   it('counts the hits a memory_search listed, and nothing for a cursor search with no text', async () => {

@@ -38,10 +38,18 @@ export function isHostToolCall(
   if (serverName === null) {
     return false;
   }
-  return (
-    toolName === `mcp__${serverName}__${hostToolName}` ||
-    toolName === `${serverName}-${hostToolName}: ${hostToolName}`
-  );
+  return hostToolCallNames(serverName, hostToolName).includes(toolName);
+}
+
+/** The two spellings {@link isHostToolCall} accepts for one tool on one server. */
+export function hostToolCallNames(
+  serverName: string,
+  hostToolName: string,
+): string[] {
+  return [
+    `mcp__${serverName}__${hostToolName}`,
+    `${serverName}-${hostToolName}: ${hostToolName}`,
+  ];
 }
 
 /**

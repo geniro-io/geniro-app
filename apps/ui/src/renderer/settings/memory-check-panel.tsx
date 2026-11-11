@@ -338,8 +338,8 @@ function FindingCard({
 }
 
 /**
- * The Duplicates & contradictions tab of the cleanup dialog: the check's setup
- * and progress on the Mac, and on every device the findings to decide on.
+ * The Conflicts tab of the cleanup dialog: the check's setup and progress on
+ * the Mac, and on every device the findings to decide on.
  */
 export function MemoryCheckPanel({
   check,
@@ -440,6 +440,7 @@ export function MemoryCheckPanel({
 
   return (
     <div data-slot="memory-check" className="flex min-w-0 flex-col gap-3">
+      <h3 className="m-0 text-sm font-medium">Duplicates & contradictions</h3>
       {setup}
       {check.error === null ? null : (
         <ErrorText>

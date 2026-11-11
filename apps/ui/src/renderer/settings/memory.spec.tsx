@@ -1536,10 +1536,10 @@ describe('Memory duplicates and contradictions', () => {
     await render({ api, ...props });
     await press(button(container, 'Review…'));
     const tab = [...inDialog().querySelectorAll('button')].find((candidate) =>
-      candidate.textContent?.startsWith('Duplicates & contradictions'),
+      candidate.textContent?.startsWith('Conflicts'),
     );
     if (!tab) {
-      throw new Error('no Duplicates & contradictions tab');
+      throw new Error('no Conflicts tab');
     }
     await press(tab);
   }
@@ -1562,6 +1562,9 @@ describe('Memory duplicates and contradictions', () => {
     const quotes = [
       ...finding().querySelectorAll('[data-slot="memory-finding-quote"]'),
     ].map((quote) => quote.textContent);
+    expect(inDialog().querySelector('h3')?.textContent).toBe(
+      'Duplicates & contradictions',
+    );
     expect(quotes).toEqual(['“run colima restart”', '“Do not restart colima”']);
     expect(finding().textContent).toContain('Contradiction');
     expect(finding().textContent).toContain(
@@ -1751,7 +1754,7 @@ describe('Memory duplicates and contradictions', () => {
     ).toHaveLength(1);
 
     const tab = [...inDialog().querySelectorAll('button')].find((candidate) =>
-      candidate.textContent?.startsWith('Duplicates & contradictions'),
+      candidate.textContent?.startsWith('Conflicts'),
     );
     await press(tab!);
 

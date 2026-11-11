@@ -294,7 +294,13 @@ export function MemoryCleanupDialog({
   checkPanel?: React.ReactNode;
 }): React.JSX.Element {
   const tabLabel = (label: string, n: number | null) =>
-    n === null ? label : `${label} (${n.toLocaleString('en-US')})`;
+    n === null ? (
+      label
+    ) : (
+      <span className="flex flex-col items-center leading-tight sm:flex-row sm:gap-1">
+        <span>{label}</span> <span>({n.toLocaleString('en-US')})</span>
+      </span>
+    );
   const set = (patch: Partial<MemoryCleanupFilters>) =>
     onFilters({ ...filters, ...patch });
   const picked = selected.size;
@@ -404,10 +410,7 @@ export function MemoryCleanupDialog({
           onSelect={onTab}
           options={[
             { id: 'cold', label: tabLabel('Least used', counts.cold) },
-            {
-              id: 'checks',
-              label: tabLabel('Duplicates & contradictions', counts.checks),
-            },
+            { id: 'checks', label: tabLabel('Conflicts', counts.checks) },
             { id: 'kept', label: tabLabel('Kept', counts.kept) },
             { id: 'forgotten', label: tabLabel('Forgotten', counts.forgotten) },
           ]}

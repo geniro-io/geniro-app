@@ -47,7 +47,7 @@ export function SegmentedControl<T extends string>({
 }: {
   ariaLabel: string;
   /** `icon` is optional — the Stats page's options are words alone. */
-  options: readonly { id: T; label: string; icon?: React.ReactNode }[];
+  options: readonly { id: T; label: React.ReactNode; icon?: React.ReactNode }[];
   value: T;
   onSelect: (id: T) => void;
   className?: string;

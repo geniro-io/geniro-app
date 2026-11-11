@@ -56,7 +56,7 @@ export function useMemoryCheck(
   }: {
     /** The cleanup dialog is open: findings are read. */
     open: boolean;
-    /** Its Duplicates & contradictions tab is shown: pairs are looked for. */
+    /** Its Conflicts tab is shown: pairs are looked for. */
     active: boolean;
     remote: boolean;
     choice: MemoryTriageConfig | null;

@@ -1149,7 +1149,7 @@ function setup(
      */
     claudeSpawn?: SpawnFn;
     /** What the shared memory hands a new run; memory off when absent. */
-    memory?: Pick<MemoryService, 'runSnapshot'>;
+    memory?: Pick<MemoryService, 'runSnapshot' | 'countIndexShows'>;
     knowledge?: Pick<KnowledgeService, 'runSnapshot'>;
     /** The mailbox between threads, when a test drives one. */
     threadInbox?: ThreadInboxService;
@@ -1596,7 +1596,12 @@ function setup(
     wallTurns as unknown as WallTurnDao,
     kindRowsPassthrough(itemDao),
     (opts.memory ?? {
-      runSnapshot: async () => ({ nativeMemoryOff: false, memoryIndex: null }),
+      runSnapshot: async () => ({
+        nativeMemoryOff: false,
+        memoryIndex: null,
+        indexIds: [],
+      }),
+      countIndexShows: async () => undefined,
     }) as unknown as MemoryService,
     (opts.knowledge ?? {
       runSnapshot: async () => ({ knowledgeIndex: null }),
@@ -7246,8 +7251,9 @@ describe('TeamExecutorService — agent calls', () => {
       memory: {
         runSnapshot: async (facts) => {
           asked.push(facts);
-          return { nativeMemoryOff: true, memoryIndex: index };
+          return { nativeMemoryOff: true, memoryIndex: index, indexIds: [] };
         },
+        countIndexShows: async () => undefined,
       },
       projectScope: {
         placeNewRun: async () => ({
@@ -7287,6 +7293,29 @@ describe('TeamExecutorService — agent calls', () => {
         nativeMemoryOff: true,
       });
     }
+  });
+
+  it('startRunBySlug counts the index’s entries as shown once the run row exists, and keeps their ids off the row', async () => {
+    const shown: { ids: readonly string[]; runRows: number }[] = [];
+    const { service, runDao, storeGet } = setup(4870, {
+      memory: {
+        runSnapshot: async () => ({
+          nativeMemoryOff: false,
+          memoryIndex: 'INDEX',
+          indexIds: ['mem-1'],
+        }),
+        countIndexShows: async (ids) => {
+          shown.push({ ids, runRows: runDao.runs.size });
+        },
+      },
+    });
+    storeGet.mockResolvedValue({ slug: 'lin', team: LINEAR });
+
+    const run = await service.startRunBySlug('lin', { cwd: dir, prompt: 'go' });
+    await drain();
+
+    expect(shown).toEqual([{ ids: ['mem-1'], runRows: 1 }]);
+    expect(runDao.runs.get(run.id)).not.toHaveProperty('indexIds');
   });
 
   it('startRunBySlug snapshots the knowledge index of the run’s place onto the run row and every member', async () => {
@@ -7651,8 +7680,9 @@ describe('TeamExecutorService — agent calls', () => {
       memory: {
         runSnapshot: async () => {
           asked += 1;
-          return { nativeMemoryOff: true, memoryIndex: index };
+          return { nativeMemoryOff: true, memoryIndex: index, indexIds: [] };
         },
+        countIndexShows: async () => undefined,
       },
     });
     storeGet.mockResolvedValue({ slug: 'lin', team: LINEAR });

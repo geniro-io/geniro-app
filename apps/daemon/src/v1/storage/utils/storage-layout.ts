@@ -14,6 +14,7 @@ import { WALL_WORK_MARKER_FILE } from '../../agents/services/wall-work.service';
 import { CHILD_JOURNAL_FILE_NAME } from '../../agents/utils/child-journal';
 import { FOLDERLESS_DIR_NAME } from '../../agents/utils/folderless-dir';
 import { DEBUG_LOG_DIR_NAME } from '../../diagnostics/utils/debug-sink';
+import { MEMORY_USAGE_MARKER_FILE } from '../../memory/services/memory-usage.service';
 import {
   MIGRATION_BACKUPS_DIR,
   MIGRATION_ERROR_FILE,
@@ -71,6 +72,7 @@ const NAMED: Readonly<Record<string, StorageGroupId>> = {
   [CHILD_JOURNAL_FILE_NAME]: 'appState',
   [CALL_MEMBERSHIP_MARKER_FILE]: 'appState',
   [WALL_WORK_MARKER_FILE]: 'appState',
+  [MEMORY_USAGE_MARKER_FILE]: 'appState',
   [COMPACTION_MARKER_FILE]: 'appState',
   [MIGRATION_ERROR_FILE]: 'appState',
   [MIGRATION_BACKUPS_DIR]: 'appState',

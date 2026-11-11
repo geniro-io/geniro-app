@@ -35,7 +35,9 @@ export function readMemoryReadArgs(
  * What the agent reads back.
  *
  * TWIN PARSER: `memoryToolEntryOf` in `apps/ui/src/renderer/chats/memory-tool-row.tsx`
- * reads this text for the transcript row; reword it there too.
+ * reads this text for the transcript row, and `readHandles` in
+ * `apps/daemon/src/v1/memory/utils/memory-usage-history.ts` reads its entry
+ * headers for the usage backfill; reword it there too.
  */
 export function memoryReadResultText(
   entries: readonly MemoryEntry[],

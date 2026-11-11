@@ -12,6 +12,7 @@ import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { Task } from '../../tasks/entity/task.entity';
 import { make, memoryDb } from '../__tests__/memory-db';
+import { MemoryDao } from '../dao/memory.dao';
 import { Memory } from '../entity/memory.entity';
 import {
   DEFAULT_MEMORY_CONFIG,
@@ -804,8 +805,16 @@ describe('MemoryService', () => {
       });
       const off = await db.service.runSnapshot(FACTS);
 
-      expect(empty).toEqual({ nativeMemoryOff: false, memoryIndex: null });
-      expect(off).toEqual({ nativeMemoryOff: false, memoryIndex: null });
+      expect(empty).toEqual({
+        nativeMemoryOff: false,
+        memoryIndex: null,
+        indexIds: [],
+      });
+      expect(off).toEqual({
+        nativeMemoryOff: false,
+        memoryIndex: null,
+        indexIds: [],
+      });
     });
 
     it('carries nothing until the user’s settings have arrived, then the index alone', async () => {
@@ -817,7 +826,11 @@ describe('MemoryService', () => {
         fresh.service.setConfig(DEFAULT_MEMORY_CONFIG);
         const after = await fresh.service.runSnapshot(FACTS);
 
-        expect(before).toEqual({ nativeMemoryOff: false, memoryIndex: null });
+        expect(before).toEqual({
+          nativeMemoryOff: false,
+          memoryIndex: null,
+          indexIds: [],
+        });
         expect(after.memoryIndex).toContain('Kept');
         expect(after.nativeMemoryOff).toBe(false);
       } finally {
@@ -935,7 +948,11 @@ describe('MemoryService', () => {
 
       const snapshot = await db.service.runSnapshot(FACTS);
 
-      expect(snapshot).toEqual({ nativeMemoryOff: true, memoryIndex: null });
+      expect(snapshot).toEqual({
+        nativeMemoryOff: true,
+        memoryIndex: null,
+        indexIds: [],
+      });
     });
 
     it('switches each CLI’s own memory off only while the shared memory is on and the user asked', async () => {
@@ -1832,6 +1849,124 @@ describe('MemoryService', () => {
       expect(markdown).toContain(
         '- Source: imported from /home/me/.claude/projects/x/memory/a.md',
       );
+    });
+  });
+
+  describe('usage', () => {
+    async function usageOf(...ids: string[]) {
+      return (await db.usageDao.daysOf(ids)).map((day) => ({
+        memoryId: day.memoryId,
+        reads: day.reads,
+        searchHits: day.searchHits,
+        indexShows: day.indexShows,
+      }));
+    }
+
+    it('counts each read once per call, on the UTC day it happened', async () => {
+      const read = created(
+        await db.service.save(USER, { title: 'Use pnpm', body: 'x' }, NONE),
+      );
+      vi.useFakeTimers({ now: Date.UTC(2026, 10, 3, 3, 0), toFake: ['Date'] });
+
+      for (let n = 0; n < 3; n += 1) {
+        await db.service.read([read.handle, read.handle], NONE);
+      }
+      vi.useRealTimers();
+
+      expect(await db.usageDao.daysOf([read.id])).toEqual([
+        {
+          memoryId: read.id,
+          day: '2026-11-03',
+          reads: 3,
+          searchHits: 0,
+          indexShows: 0,
+        },
+      ]);
+    });
+
+    it('does not count a missing handle', async () => {
+      const theirs = created(
+        await db.service.save(
+          USER,
+          { title: 'Theirs', body: 'x' },
+          inProject('p2'),
+        ),
+      );
+
+      const { entries, missing } = await db.service.read(
+        [theirs.handle, 'm999'],
+        NONE,
+      );
+
+      expect(entries).toEqual([]);
+      expect(missing).toEqual([theirs.handle, 'm999']);
+      expect(await usageOf(theirs.id)).toEqual([]);
+    });
+
+    it('a search hit does not move lastUsedAt', async () => {
+      const hit = created(
+        await db.service.save(USER, { title: 'Use pnpm', body: 'x' }, NONE),
+      );
+
+      const hits = await db.service.search('pnpm', NONE, 5);
+
+      expect(hits.map((h) => h.id)).toEqual([hit.id]);
+      expect(await usageOf(hit.id)).toEqual([
+        { memoryId: hit.id, reads: 0, searchHits: 1, indexShows: 0 },
+      ]);
+      const row = await db.em.fork().findOneOrFail(Memory, { id: hit.id });
+      expect(row.lastUsedAt).toBeNull();
+    });
+
+    it('a measured instruction size writes no usage', async () => {
+      db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+      const shown = created(
+        await db.service.save(USER, { title: 'Shown', body: 'x' }, NONE),
+      );
+
+      const snapshot = await db.service.runSnapshot({
+        taskId: null,
+        cwd: '/repo/app',
+      });
+
+      expect(snapshot.indexIds).toEqual([shown.id]);
+      expect(await usageOf(shown.id)).toEqual([]);
+
+      await db.service.countIndexShows(snapshot.indexIds);
+
+      expect(await usageOf(shown.id)).toEqual([
+        { memoryId: shown.id, reads: 0, searchHits: 0, indexShows: 1 },
+      ]);
+    });
+
+    it('a counter failure leaves the tool answer intact', async () => {
+      const read = created(
+        await db.service.save(USER, { title: 'Use pnpm', body: 'x' }, NONE),
+      );
+      vi.spyOn(db.usageDao, 'add').mockRejectedValue(new Error('disk full'));
+
+      const answer = await db.service.read([read.handle], NONE);
+      const hits = await db.service.search('pnpm', NONE, 5);
+      await db.service.countIndexShows([read.id]);
+
+      expect(answer.entries.map((e) => e.id)).toEqual([read.id]);
+      expect(hits.map((h) => h.id)).toEqual([read.id]);
+    });
+
+    it('a failed lastUsedAt stamp still answers the read and counts it', async () => {
+      const read = created(
+        await db.service.save(USER, { title: 'Use pnpm', body: 'x' }, NONE),
+      );
+      vi.spyOn(MemoryDao.prototype, 'touch').mockRejectedValueOnce(
+        new Error('locked'),
+      );
+
+      const answer = await db.service.read([read.handle], NONE);
+
+      expect(answer.entries.map((e) => e.id)).toEqual([read.id]);
+      expect(await usageOf(read.id)).toEqual([
+        { memoryId: read.id, reads: 1, searchHits: 0, indexShows: 0 },
+      ]);
     });
   });
 });

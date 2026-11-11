@@ -658,6 +658,27 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Every run created before `before`, with the fields the memory usage
+   * backfill reads: its memory index and whether its payload columns are
+   * stamped.
+   */
+  async listCreatedBefore(
+    before: Date,
+    txEm?: EntityManager,
+  ): Promise<
+    Pick<Run, 'id' | 'createdAt' | 'memoryIndex' | 'payloadRefsVersion'>[]
+  > {
+    return this.getRepo(txEm).find(
+      { createdAt: { $lt: before } },
+      {
+        fields: ['id', 'createdAt', 'memoryIndex', 'payloadRefsVersion'],
+        orderBy: { createdAt: 'asc' },
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * Every run whose rows were not all stamped with their payload columns under
    * `version`, newest first — the threads opened next are stamped soonest.
    * Archived runs included: unarchiving reads them again.

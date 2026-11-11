@@ -6,6 +6,9 @@ import {
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { MemoryUsageDao } from '../../memory/dao/memory-usage.dao';
+import { MemoryUsageBackfill } from '../../memory/entity/memory-usage-backfill.entity';
+import { MemoryUsageDay } from '../../memory/entity/memory-usage-day.entity';
 import { CallContext } from '../../runs/entity/call-context.entity';
 import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';
@@ -91,6 +94,8 @@ describe('RunTeardownService (in-memory sqlite)', () => {
           Goal,
           ToolCallEvent,
           UsageActivity,
+          MemoryUsageDay,
+          MemoryUsageBackfill,
         ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
@@ -379,6 +384,36 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     await teardown.purge(orm.em.fork(), 'run-a', undefined);
 
     expect(removedArtifactRuns).toEqual(['run-a']);
+  });
+
+  it('keeps what the run’s agents read of the shared memory, which outlives the chat', async () => {
+    await seedRun('run-a');
+    const usage = new MemoryUsageDao(orm.em.fork());
+    await usage.add([
+      {
+        memoryId: 'mem-1',
+        day: '2026-11-03',
+        reads: 2,
+        searchHits: 1,
+        indexShows: 1,
+      },
+    ]);
+    await orm.em
+      .fork()
+      .transactional((tx) => usage.markBackfilled('run-a', tx));
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(await usage.daysOf(['mem-1'])).toEqual([
+      {
+        memoryId: 'mem-1',
+        day: '2026-11-03',
+        reads: 2,
+        searchHits: 1,
+        indexShows: 1,
+      },
+    ]);
+    expect(await usage.backfilledRunIds()).toEqual(new Set(['run-a']));
   });
 
   it('keeps the run’s shared-page rows, the only way to revoke a link it handed out', async () => {

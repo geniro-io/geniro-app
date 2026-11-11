@@ -8,9 +8,11 @@ import mikroOrmConfig from '../../../db/mikro-orm.config';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { MemoryDao } from '../../memory/dao/memory.dao';
+import { MemoryUsageDao } from '../../memory/dao/memory-usage.dao';
 import { Memory } from '../../memory/entity/memory.entity';
 import { MemoryService } from '../../memory/services/memory.service';
 import { MemoryEventBus } from '../../memory/services/memory-events.bus';
+import { MemoryUsageService } from '../../memory/services/memory-usage.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { ProjectInstructionChange } from '../../projects/entity/project-instruction-change.entity';
@@ -81,6 +83,7 @@ export async function knowledgeDb(options: { configured?: boolean } = {}) {
     new ProjectDao(em),
     scope,
     new MemoryEventBus(),
+    new MemoryUsageService(new MemoryUsageDao(em)),
   );
   const service = new KnowledgeService(
     em,

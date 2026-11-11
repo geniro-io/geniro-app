@@ -49,11 +49,12 @@ import { memoryExportMarkdown } from '../utils/memory-export';
 import {
   excerptOf,
   importedText,
-  memoryIndexText,
+  memoryIndexOf,
   similarTitles,
   titleCandidatesQuery,
 } from '../utils/memory-text';
 import { MemoryEventBus } from './memory-events.bus';
+import { MemoryUsageService } from './memory-usage.service';
 
 /** Near-duplicate candidates read per write before the title comparison. */
 const DUPLICATE_CANDIDATES = 20;
@@ -97,6 +98,7 @@ export class MemoryService {
     private readonly projects: ProjectDao,
     private readonly scope: ProjectScopeService,
     private readonly events: MemoryEventBus,
+    private readonly usage: MemoryUsageService,
   ) {}
 
   /**
@@ -170,6 +172,7 @@ export class MemoryService {
     const none: MemoryRunSnapshot = {
       nativeMemoryOff: false,
       memoryIndex: null,
+      indexIds: [],
     };
     if (!this.configured || !this.enabled) {
       return none;
@@ -177,16 +180,23 @@ export class MemoryService {
     const shared = { ...none, nativeMemoryOff: this.config.nativeMemoryOff };
     try {
       const entries = await this.listVisible(await this.scopeFor(facts));
-      return {
-        ...shared,
-        memoryIndex: memoryIndexText(entries.filter(indexable), new Date()),
-      };
+      const index = memoryIndexOf(entries.filter(indexable), new Date());
+      return { ...shared, memoryIndex: index.text, indexIds: index.ids };
     } catch (error) {
       this.logger.warn(
         `memory index not read: ${error instanceof Error ? error.message : String(error)}`,
       );
       return shared;
     }
+  }
+
+  /**
+   * Count a new run's memory index as shown to it — called by the run builders
+   * once the run row exists, never from {@link runSnapshot}, which also
+   * measures instruction sizes for no run. Never throws.
+   */
+  countIndexShows(indexIds: readonly string[]): Promise<void> {
+    return this.usage.count(indexIds, 'indexShows');
   }
 
   /**
@@ -228,10 +238,14 @@ export class MemoryService {
     const rows = new Map(
       (await this.memories.getByIds(ids, em)).map((row) => [row.id, row]),
     );
-    return ids
+    const found = ids
       .map((id) => rows.get(id))
-      .filter((row): row is Memory => row !== undefined)
-      .map(toHit);
+      .filter((row): row is Memory => row !== undefined);
+    await this.usage.count(
+      found.map((row) => row.id),
+      'searchHits',
+    );
+    return found.map(toHit);
   }
 
   /**
@@ -266,10 +280,15 @@ export class MemoryService {
         missing.push(handle);
       }
     }
-    await this.memories.touch(
-      entries.map((entry) => entry.id),
-      new Date(),
-    );
+    const read = entries.map((entry) => entry.id);
+    try {
+      await this.memories.touch(read, new Date());
+    } catch (error) {
+      this.logger.warn(
+        `memory last use not stamped: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    await this.usage.count(read, 'reads');
     return { entries, missing };
   }
 

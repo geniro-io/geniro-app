@@ -155,8 +155,13 @@ import { ThreadInboxService } from './thread-inbox.service';
 import { UserQuestionBroker } from './user-question.broker';
 import { WallWorkService } from './wall-work.service';
 
-const MEMORY_OFF: Pick<MemoryService, 'runSnapshot'> = {
-  runSnapshot: async () => ({ nativeMemoryOff: false, memoryIndex: null }),
+const MEMORY_OFF: Pick<MemoryService, 'runSnapshot' | 'countIndexShows'> = {
+  runSnapshot: async () => ({
+    nativeMemoryOff: false,
+    memoryIndex: null,
+    indexIds: [],
+  }),
+  countIndexShows: async () => undefined,
 };
 
 const KNOWLEDGE_OFF: Pick<KnowledgeService, 'runSnapshot'> = {
@@ -1134,7 +1139,7 @@ function setup(
     /** The mailbox between threads, when a test drives one. */
     threadInbox?: ThreadInboxService;
     /** What the shared memory hands a new run; memory off when absent. */
-    memory?: Pick<MemoryService, 'runSnapshot'>;
+    memory?: Pick<MemoryService, 'runSnapshot' | 'countIndexShows'>;
     knowledge?: Pick<KnowledgeService, 'runSnapshot'>;
     /** What the run's project tells it; no project when absent. */
     projectScope?: Partial<
@@ -9035,8 +9040,9 @@ describe('ChatService', () => {
       memory: {
         runSnapshot: async (facts) => {
           asked.push(facts);
-          return { nativeMemoryOff: true, memoryIndex: index };
+          return { nativeMemoryOff: true, memoryIndex: index, indexIds: [] };
         },
+        countIndexShows: async () => undefined,
       },
       projectScope: {
         placeNewRun: async () => ({
@@ -9074,6 +9080,27 @@ describe('ChatService', () => {
         nativeMemoryOff: true,
       });
     }
+  });
+
+  it('counts the index’s entries as shown once the run row exists, and keeps their ids off the row', async () => {
+    const shown: { ids: readonly string[]; runRows: number }[] = [];
+    const { service, runDao } = setup({
+      memory: {
+        runSnapshot: async () => ({
+          nativeMemoryOff: false,
+          memoryIndex: 'INDEX',
+          indexIds: ['mem-1', 'mem-2'],
+        }),
+        countIndexShows: async (ids) => {
+          shown.push({ ids, runRows: runDao.runs.size });
+        },
+      },
+    });
+
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    expect(shown).toEqual([{ ids: ['mem-1', 'mem-2'], runRows: 1 }]);
+    expect(runDao.runs.get(run.id)).not.toHaveProperty('indexIds');
   });
 
   it('snapshots the knowledge index onto the run and spawns every turn with it, whatever the store holds later', async () => {

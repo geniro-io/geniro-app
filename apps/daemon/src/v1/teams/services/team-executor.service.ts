@@ -1408,7 +1408,7 @@ export class TeamExecutorService
       { ...scopeFacts, teamSlug: input.slug },
       placement,
     );
-    const memory = await this.memory.runSnapshot(placed);
+    const { indexIds, ...memory } = await this.memory.runSnapshot(placed);
     const knowledge = await this.knowledge.runSnapshot(placed);
     const em = this.em.fork();
     const run = await this.runDao.create(
@@ -1469,6 +1469,7 @@ export class TeamExecutorService
       runId: run.id,
       createdAt: run.createdAt.toISOString(),
     });
+    await this.memory.countIndexShows(indexIds);
     if (!this.registry.tryClaim(run.id)) {
       throw new ConflictException('RUN_BUSY', 'run is already executing');
     }

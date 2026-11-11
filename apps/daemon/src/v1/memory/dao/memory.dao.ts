@@ -10,10 +10,11 @@ import {
 } from '../../../db/memory-text-index.ddl';
 import type { RunPlace } from '../../projects/projects.types';
 import { Memory } from '../entity/memory.entity';
-import type {
-  MemoryStatus,
-  MemoryTextDatabase,
-  MemoryType,
+import {
+  memoryHandle,
+  type MemoryStatus,
+  type MemoryTextDatabase,
+  type MemoryType,
 } from '../memory.types';
 
 /** Which entries a read or a full-text match may return. */
@@ -51,6 +52,16 @@ export class MemoryDao extends BaseDao<Memory> {
       { orderBy: { handle: 'desc' }, fields: ['handle'], filters: false },
     );
     return (highest?.handle ?? 0) + 1;
+  }
+
+  /** Every entry's id by its handle (`m12`), forgotten and deleted ones included. */
+  async idsByHandle(em: EntityManager): Promise<Map<string, string>> {
+    const rows = await em.find(
+      Memory,
+      {},
+      { fields: ['id', 'handle'], filters: false, disableIdentityMap: true },
+    );
+    return new Map(rows.map((row) => [memoryHandle(row.handle), row.id]));
   }
 
   async getByIds(

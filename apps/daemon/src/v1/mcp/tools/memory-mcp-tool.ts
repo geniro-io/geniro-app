@@ -62,7 +62,8 @@ export abstract class MemoryMcpTool extends BaseMcpTool {
  * One line naming an entry: handle, revision, scope, type and title.
  *
  * TWIN PARSER: `memoryToolEntryOf` in `apps/ui/src/renderer/chats/memory-tool-row.tsx`
- * reads this text for the transcript row; reword it there too.
+ * reads this text for the transcript row, and `memory-usage-history.ts` in
+ * `apps/daemon/src/v1/memory/utils/` for the usage backfill; reword it there too.
  */
 export function memoryEntryLine(
   entry: Pick<
@@ -87,7 +88,12 @@ export function memoryFence(): string {
   return `memory-entry-${randomBytes(6).toString('hex')}`;
 }
 
-/** An entry in full, its body inside `fence`, as `memory_read` returns it. */
+/**
+ * An entry in full, its body inside `fence`, as `memory_read` returns it.
+ *
+ * TWIN PARSER: `readHandles` in `apps/daemon/src/v1/memory/utils/memory-usage-history.ts`
+ * finds entries by this header, `by` line and fence.
+ */
 export function memoryEntryText(entry: MemoryEntry, fence: string): string {
   const by =
     entry.source.agentKind === null

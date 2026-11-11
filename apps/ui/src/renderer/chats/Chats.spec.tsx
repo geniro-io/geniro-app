@@ -1687,11 +1687,21 @@ describe('Chats transcript auto-scroll', () => {
    */
   function setScrollPosition(
     container: HTMLElement,
-    { scrollTop, scrollHeight, clientHeight }: Record<string, number>,
+    {
+      scrollTop,
+      scrollHeight,
+      clientHeight,
+    }: { scrollTop: number; scrollHeight: number; clientHeight: number },
+    { byReader = true }: { byReader?: boolean } = {},
   ): void {
     const scroller = [...container.querySelectorAll('div')].find((el) =>
       el.className.includes('overflow-y-auto'),
     )!;
+    if (byReader && scrollTop < scroller.scrollTop) {
+      scroller.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: scrollTop - scroller.scrollTop }),
+      );
+    }
     for (const [key, value] of Object.entries({
       scrollTop,
       scrollHeight,
@@ -1736,6 +1746,65 @@ describe('Chats transcript auto-scroll', () => {
     // the effect used to scroll unconditionally.
     expect(Element.prototype.scrollTo).not.toHaveBeenCalled();
     expect(container.textContent).toContain('a long reply');
+  });
+
+  it('keeps following when the layout, not the reader, moves the viewport up', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    setScrollPosition(container, {
+      scrollTop: 3600,
+      scrollHeight: 4000,
+      clientHeight: 400,
+    });
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    await act(async () => {
+      setScrollPosition(
+        container,
+        { scrollTop: 3568, scrollHeight: 4000, clientHeight: 400 },
+        { byReader: false },
+      );
+    });
+    expect(Element.prototype.scrollTo).toHaveBeenCalledWith({
+      top: 4000,
+      behavior: 'auto',
+    });
+
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    await act(async () => {
+      emitItem(msg(1, 'assistant', 'a later reply'));
+    });
+    expect(Element.prototype.scrollTo).toHaveBeenCalled();
+  });
+
+  it('stops following when an upward scroll comes from the keyboard', async () => {
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    setScrollPosition(container, {
+      scrollTop: 3600,
+      scrollHeight: 4000,
+      clientHeight: 400,
+    });
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true }),
+    );
+    await act(async () => {
+      setScrollPosition(
+        container,
+        { scrollTop: 3200, scrollHeight: 4000, clientHeight: 400 },
+        { byReader: false },
+      );
+    });
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    await act(async () => {
+      emitItem(msg(1, 'assistant', 'a later reply'));
+    });
+    expect(Element.prototype.scrollTo).not.toHaveBeenCalled();
   });
 
   const jumpControl = (container: HTMLElement): HTMLButtonElement | null =>
@@ -9037,6 +9106,7 @@ describe('Chats queued messages', () => {
       conversation: 'root',
     });
 
+    scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -8_900 }));
     scroller.scrollTop = 100;
     await act(async () => {
       scroller.dispatchEvent(new Event('scroll'));

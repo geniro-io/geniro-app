@@ -291,6 +291,7 @@ import {
 } from './run-status';
 import {
   createTouchScrollGuard,
+  createUpwardScrollIntent,
   isScrolledToBottom,
   nextFollowState,
   shouldLoadNewer,
@@ -1216,6 +1217,7 @@ export function Chats({
    * numbers read from listeners, and nothing re-renders on it.
    */
   const touchGuardRef = useRef(createTouchScrollGuard());
+  const upwardIntentRef = useRef(createUpwardScrollIntent());
   /**
    * `loadOlder`, or null when this thread has nothing older to load.
    *
@@ -2941,12 +2943,25 @@ export function Chats({
       // ref itself to the second reader hands it `scrollTop === previous`,
       // which reads as "did not move" and silently disables the guard.
       const previousScrollTop = lastScrollTopRef.current;
-      touchGuardRef.current.scrolled(Date.now());
+      const now = Date.now();
+      touchGuardRef.current.scrolled(now);
+      const readerScrollingUp =
+        upwardIntentRef.current.active(now) ||
+        touchGuardRef.current.active(now);
       followingRef.current = nextFollowState(
         followingRef.current,
         scroller,
         previousScrollTop,
+        readerScrollingUp,
       );
+      if (
+        followingRef.current &&
+        !readerScrollingUp &&
+        scroller.scrollTop < previousScrollTop &&
+        !isScrolledToBottom(scroller)
+      ) {
+        followTail(scroller);
+      }
       lastScrollTopRef.current = scroller.scrollTop;
       // Deliberately NOT `!followingRef.current`: the follow is sticky through
       // content that grows under a reader who never moved, which is exactly
@@ -2981,6 +2996,19 @@ export function Chats({
     const guard = touchGuardRef.current;
     const onTouchStart = (): void => guard.touchStart(Date.now());
     const onTouchEnd = (): void => guard.touchEnd(Date.now());
+    const intent = upwardIntentRef.current;
+    const onWheel = (event: WheelEvent): void =>
+      intent.wheel(event.deltaY, Date.now());
+    const onPointerDown = (): void => intent.press();
+    const onPointerUp = (): void => intent.release(Date.now());
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (
+        event.target === document.body ||
+        (event.target instanceof Node && scroller.contains(event.target))
+      ) {
+        intent.key(event.key, event.shiftKey, Date.now());
+      }
+    };
     // The END is heard on the WINDOW, not the scroller: a touch that began on
     // the live row keeps its target when that row is replaced by its durable
     // one, and the detached node's `touchend` never reaches the scroller — the
@@ -2996,11 +3024,23 @@ export function Chats({
       passive: true,
       capture: true,
     });
+    scroller.addEventListener('wheel', onWheel, { passive: true });
+    scroller.addEventListener('pointerdown', onPointerDown, { passive: true });
+    window.addEventListener('pointerup', onPointerUp, { capture: true });
+    window.addEventListener('pointercancel', onPointerUp, { capture: true });
+    window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => {
       scroller.removeEventListener('scroll', onScroll);
       scroller.removeEventListener('touchstart', onTouchStart);
       window.removeEventListener('touchend', onTouchEnd, { capture: true });
       window.removeEventListener('touchcancel', onTouchEnd, { capture: true });
+      scroller.removeEventListener('wheel', onWheel);
+      scroller.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointerup', onPointerUp, { capture: true });
+      window.removeEventListener('pointercancel', onPointerUp, {
+        capture: true,
+      });
+      window.removeEventListener('keydown', onKeyDown, { capture: true });
     };
     // Its OWN effect, keyed on the run alone. The listener is on the scroller,
     // which does not change as rows arrive — re-adding it per transcript change

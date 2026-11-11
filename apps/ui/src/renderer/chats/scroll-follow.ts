@@ -43,22 +43,75 @@ export function isScrolledToBottom(scroller: {
  *   while the distance to the bottom jumps — again "not at the bottom", through
  *   no act of the user.
  *
- * So only a scroll that moved the viewport UP stops the follow: that is the one
- * unambiguous statement of intent ("I am reading something back there"). Reaching
- * the bottom re-arms it, and anything else leaves the decision as it was.
+ * So only a scroll that moved the viewport UP stops the follow, and only when
+ * the reader moved it (`readerScrollingUp`, see {@link createUpwardScrollIntent}):
+ * the browser moves `scrollTop` up on its own whenever it clamps an offset past
+ * a shrunken bottom, and a clamp whose `scroll` event is delivered after the
+ * content has grown back reads exactly like the reader leaving. Reaching the
+ * bottom re-arms it, and anything else leaves the decision as it was.
  */
 export function nextFollowState(
   following: boolean,
   scroller: { scrollTop: number; scrollHeight: number; clientHeight: number },
   previousScrollTop: number,
+  readerScrollingUp: boolean,
 ): boolean {
   if (isScrolledToBottom(scroller)) {
     return true;
   }
-  if (scroller.scrollTop < previousScrollTop) {
+  if (scroller.scrollTop < previousScrollTop && readerScrollingUp) {
     return false;
   }
   return following;
+}
+
+/** How long after the reader's last upward input a scroll up is still theirs. */
+export const UPWARD_INTENT_MS = 400;
+
+const UPWARD_KEYS = new Set(['ArrowUp', 'PageUp', 'Home']);
+
+/**
+ * Whether the READER is moving the transcript up right now: a wheel turned up,
+ * an upward scrolling key, a finger, or a pointer held on the scroller (its
+ * scrollbar, or a selection dragged past its top edge). Anything else that
+ * moves `scrollTop` up is the layout, and must not stop the tail.
+ */
+export function createUpwardScrollIntent(): {
+  wheel(deltaY: number, now: number): void;
+  key(key: string, shiftKey: boolean, now: number): void;
+  press(): void;
+  release(now: number): void;
+  active(now: number): boolean;
+} {
+  let until = 0;
+  let pressed = false;
+  const extend = (now: number): void => {
+    until = Math.max(until, now + UPWARD_INTENT_MS);
+  };
+  return {
+    wheel(deltaY: number, now: number): void {
+      if (deltaY < 0) {
+        extend(now);
+      }
+    },
+    key(key: string, shiftKey: boolean, now: number): void {
+      if (UPWARD_KEYS.has(key) || (key === ' ' && shiftKey)) {
+        extend(now);
+      }
+    },
+    press(): void {
+      pressed = true;
+    },
+    release(now: number): void {
+      if (pressed) {
+        pressed = false;
+        extend(now);
+      }
+    },
+    active(now: number): boolean {
+      return pressed || now < until;
+    },
+  };
 }
 
 /**

@@ -131,6 +131,7 @@ export class BrowserBridgeService {
         status: 'done',
         text: reply.text,
         ...(reply.png === undefined ? {} : { png: reply.png }),
+        ...(reply.viewPng === undefined ? {} : { viewPng: reply.viewPng }),
         ...(reply.tab === undefined ? {} : { tab: reply.tab }),
       });
     } else {

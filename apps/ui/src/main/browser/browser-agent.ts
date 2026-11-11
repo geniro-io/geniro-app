@@ -62,6 +62,7 @@ class AgentError extends Error {}
 interface Done {
   text: string;
   png?: string;
+  viewPng?: string;
   tab?: string;
 }
 
@@ -527,35 +528,44 @@ async function tabOp(
   }
 }
 
-async function snapshot(ctx: Ctx): Promise<Done> {
+async function snapshot(
+  ctx: Ctx,
+  options: { interactive: boolean; text: boolean },
+): Promise<Done> {
   const { nodes } = await ctx.send<{ nodes: AxNode[] }>(
     'Accessibility.getFullAXTree',
   );
   ctx.tab.refs.clear();
   let counter = 0;
-  const tree = formatAxTree(nodes, (backendId) => {
-    counter += 1;
-    const ref = `e${counter}`;
-    ctx.tab.refs.set(ref, backendId);
-    return ref;
-  });
-  const evaluated = await ctx.send<{ result?: RemoteObject }>(
-    'Runtime.evaluate',
-    {
-      expression: 'document.body ? document.body.innerText : ""',
-      returnByValue: true,
+  const tree = formatAxTree(
+    nodes,
+    (backendId) => {
+      counter += 1;
+      const ref = `e${counter}`;
+      ctx.tab.refs.set(ref, backendId);
+      return ref;
     },
+    { interactiveOnly: options.interactive },
   );
+  let pageText: string | null = null;
+  if (options.text) {
+    const evaluated = await ctx.send<{ result?: RemoteObject }>(
+      'Runtime.evaluate',
+      {
+        expression: 'document.body ? document.body.innerText : ""',
+        returnByValue: true,
+      },
+    );
+    pageText =
+      typeof evaluated.result?.value === 'string' ? evaluated.result.value : '';
+  }
   const contents = ctx.tab.view.webContents;
   return {
     text: composeSnapshot({
       url: contents.getURL(),
       title: contents.getTitle(),
       tree,
-      pageText:
-        typeof evaluated.result?.value === 'string'
-          ? evaluated.result.value
-          : '',
+      pageText,
     }),
   };
 }
@@ -592,26 +602,111 @@ async function evaluate(ctx: Ctx, expression: string): Promise<Done> {
   return { text: rendered };
 }
 
-async function screenshot(ctx: Ctx, fullPage: boolean): Promise<Done> {
-  let params: Record<string, unknown> = { format: 'png' };
+interface ScreenshotOptions {
+  fullPage: boolean;
+  view: boolean;
+  width?: number;
+  height?: number;
+}
+
+interface LayoutMetrics {
+  cssContentSize?: { width: number; height: number };
+  contentSize: { width: number; height: number };
+  cssVisualViewport?: {
+    pageX: number;
+    pageY: number;
+    clientWidth: number;
+    clientHeight: number;
+  };
+}
+
+async function screenshot(ctx: Ctx, options: ScreenshotOptions): Promise<Done> {
+  const resized = options.width !== undefined || options.height !== undefined;
+  if (resized) {
+    await resizeViewport(ctx, options.width, options.height);
+  }
+  try {
+    const area =
+      options.fullPage || options.view || resized
+        ? captureArea(
+            await ctx.send<LayoutMetrics>('Page.getLayoutMetrics'),
+            options.fullPage,
+          )
+        : null;
+    const full = await capture(ctx, area, 1, options.fullPage);
+    let viewPng: string | undefined;
+    if (options.view && area !== null) {
+      const ratio = await devicePixelRatio(ctx);
+      viewPng =
+        ratio > 1
+          ? await capture(ctx, area, 1 / ratio, options.fullPage)
+          : full;
+    }
+    if (
+      full.length + (viewPng === full ? 0 : (viewPng?.length ?? 0)) >
+      BROWSER_SCREENSHOT_MAX_BASE64
+    ) {
+      throw new AgentError(SCREENSHOT_TOO_LARGE);
+    }
+    const contents = ctx.tab.view.webContents;
+    const size =
+      area === null
+        ? ''
+        : ` (${Math.round(area.width)}×${Math.round(area.height)} CSS px)`;
+    return {
+      text: `Screenshot of tab ${ctx.tab.id}${size} — ${contents.getURL()}`,
+      png: full,
+      ...(viewPng === undefined ? {} : { viewPng }),
+    };
+  } finally {
+    if (resized) {
+      await ctx
+        .send('Emulation.clearDeviceMetricsOverride')
+        .catch(() => undefined);
+    }
+  }
+}
+
+function captureArea(
+  metrics: LayoutMetrics,
+  fullPage: boolean,
+): { x: number; y: number; width: number; height: number } {
   if (fullPage) {
-    const metrics = await ctx.send<{
-      cssContentSize?: { width: number; height: number };
-      contentSize: { width: number; height: number };
-    }>('Page.getLayoutMetrics');
     const size = metrics.cssContentSize ?? metrics.contentSize;
-    params = {
-      format: 'png',
-      captureBeyondViewport: true,
-      clip: {
-        x: 0,
-        y: 0,
-        width: size.width,
-        height: Math.min(size.height, FULL_PAGE_MAX_HEIGHT),
-        scale: 1,
-      },
+    return {
+      x: 0,
+      y: 0,
+      width: size.width,
+      height: Math.min(size.height, FULL_PAGE_MAX_HEIGHT),
     };
   }
+  const viewport = metrics.cssVisualViewport;
+  if (viewport === undefined) {
+    const size = metrics.cssContentSize ?? metrics.contentSize;
+    return { x: 0, y: 0, width: size.width, height: size.height };
+  }
+  return {
+    x: viewport.pageX,
+    y: viewport.pageY,
+    width: viewport.clientWidth,
+    height: viewport.clientHeight,
+  };
+}
+
+async function capture(
+  ctx: Ctx,
+  area: { x: number; y: number; width: number; height: number } | null,
+  scale: number,
+  fullPage: boolean,
+): Promise<string> {
+  const params =
+    area === null || (!fullPage && scale === 1)
+      ? { format: 'png' }
+      : {
+          format: 'png',
+          captureBeyondViewport: fullPage,
+          clip: { ...area, scale },
+        };
   const { data } = await ctx.send<{ data: string }>(
     'Page.captureScreenshot',
     params,
@@ -619,11 +714,47 @@ async function screenshot(ctx: Ctx, fullPage: boolean): Promise<Done> {
   if (data.length > BROWSER_SCREENSHOT_MAX_BASE64) {
     throw new AgentError(SCREENSHOT_TOO_LARGE);
   }
-  const contents = ctx.tab.view.webContents;
-  return {
-    text: `Screenshot of tab ${ctx.tab.id} — ${contents.getURL()}`,
-    png: data,
-  };
+  return data;
+}
+
+async function devicePixelRatio(ctx: Ctx): Promise<number> {
+  const answer = await ctx.send<{ result?: RemoteObject }>('Runtime.evaluate', {
+    expression: 'devicePixelRatio',
+    returnByValue: true,
+  });
+  const ratio = answer.result?.value;
+  return typeof ratio === 'number' && Number.isFinite(ratio) && ratio > 0
+    ? ratio
+    : 1;
+}
+
+async function resizeViewport(
+  ctx: Ctx,
+  width: number | undefined,
+  height: number | undefined,
+): Promise<void> {
+  const current = await ctx.send<{ result?: RemoteObject }>(
+    'Runtime.evaluate',
+    {
+      expression: '[innerWidth, innerHeight]',
+      returnByValue: true,
+    },
+  );
+  const [innerWidth, innerHeight] = Array.isArray(current.result?.value)
+    ? (current.result.value as unknown[])
+    : [];
+  await ctx.send('Emulation.setDeviceMetricsOverride', {
+    width: width ?? (typeof innerWidth === 'number' ? innerWidth : 1280),
+    height: height ?? (typeof innerHeight === 'number' ? innerHeight : 800),
+    deviceScaleFactor: 0,
+    mobile: false,
+  });
+  await ctx.send('Runtime.evaluate', {
+    expression:
+      'new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))',
+    awaitPromise: true,
+    returnByValue: true,
+  });
 }
 
 async function selectOption(
@@ -781,7 +912,9 @@ async function execute(
       );
     }
     case 'snapshot':
-      return tabOp(host, req, op.tab, [], snapshot);
+      return tabOp(host, req, op.tab, [], (ctx) =>
+        snapshot(ctx, { interactive: op.interactive, text: op.text }),
+      );
     case 'click':
       return tabOp(host, req, op.tab, [], async (ctx) => {
         const point = await centreOf(ctx, backendIdOf(ctx.tab, op.ref), op.ref);
@@ -820,7 +953,12 @@ async function execute(
       return tabOp(host, req, op.tab, [], (ctx) => scroll(ctx, op.ref, op.dy));
     case 'screenshot':
       return tabOp(host, req, op.tab, [], (ctx) =>
-        screenshot(ctx, op.fullPage),
+        screenshot(ctx, {
+          fullPage: op.fullPage,
+          view: op.view,
+          ...(op.width === undefined ? {} : { width: op.width }),
+          ...(op.height === undefined ? {} : { height: op.height }),
+        }),
       );
     case 'console':
       return tabOp(host, req, op.tab, [], async (ctx) => {

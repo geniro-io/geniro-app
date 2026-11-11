@@ -6498,7 +6498,7 @@ describe('McpServerService — the in-app browser tools', () => {
     ]);
   });
 
-  it('returns a screenshot as an image part and a saved path', async () => {
+  it('returns only the saved path of a screenshot, and no picture, unless asked to view it', async () => {
     const bytes = Buffer.from('not-really-a-png');
     const { subject, runs, saved } = browserService({
       status: 'done',
@@ -6517,13 +6517,51 @@ describe('McpServerService — the in-app browser tools', () => {
         type: 'text',
         text: `Saved screenshot: ${SAVED_PATH}\nScreenshot of Sign in\nTab: t1`,
       },
-      { type: 'image', data: bytes.toString('base64'), mimeType: 'image/png' },
     ]);
     expect(saved).toEqual([{ runId: 'run-1', mediaType: 'image/png', bytes }]);
     expect(runs[0]?.op).toEqual({
       kind: 'screenshot',
       tab: 't1',
       fullPage: false,
+      view: false,
+    });
+  });
+
+  it('saves the full-resolution picture and shows the CSS-pixel one when asked to view it', async () => {
+    const full = Buffer.from('full-resolution-png');
+    const view = Buffer.from('css-pixel-png');
+    const { subject, runs, saved } = browserService({
+      status: 'done',
+      text: 'Screenshot of Sign in',
+      png: full.toString('base64'),
+      viewPng: view.toString('base64'),
+      tab: 't1',
+    });
+
+    const answer = await callTool(subject, HOST_BROWSER_SCREENSHOT_TOOL, {
+      tab: 't1',
+      view: true,
+      width: 1440,
+      height: 1280,
+    });
+
+    expect(answer.content).toEqual([
+      {
+        type: 'text',
+        text: `Saved screenshot: ${SAVED_PATH}\nScreenshot of Sign in\nTab: t1`,
+      },
+      { type: 'image', data: view.toString('base64'), mimeType: 'image/png' },
+    ]);
+    expect(saved).toEqual([
+      { runId: 'run-1', mediaType: 'image/png', bytes: full },
+    ]);
+    expect(runs[0]?.op).toEqual({
+      kind: 'screenshot',
+      tab: 't1',
+      fullPage: false,
+      view: true,
+      width: 1440,
+      height: 1280,
     });
   });
 
@@ -6716,6 +6754,14 @@ describe('McpServerService — the in-app browser tools', () => {
         /never shown back/,
       );
       expect(describes(HOST_BROWSER_SCREENSHOT_TOOL)).toMatch(/saved to disk/);
+      expect(describes(HOST_BROWSER_SCREENSHOT_TOOL)).toContain('view: true');
+      expect(describes(HOST_BROWSER_SCREENSHOT_TOOL)).not.toMatch(
+        /the picture itself is shown to you/,
+      );
+      expect(describes(HOST_BROWSER_SNAPSHOT_TOOL)).toContain(
+        'interactive: true',
+      );
+      expect(describes(HOST_BROWSER_SNAPSHOT_TOOL)).toContain('text: true');
     });
   });
 });

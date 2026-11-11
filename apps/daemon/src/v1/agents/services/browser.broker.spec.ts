@@ -114,12 +114,17 @@ describe('BrowserBroker', () => {
     approvals.approve(RUN, 'cdn.example.com');
 
     await broker.run(RUN, MEMBER, OPEN);
-    await broker.run(RUN, MEMBER, { kind: 'snapshot', tab: 't1' });
+    await broker.run(RUN, MEMBER, {
+      kind: 'snapshot',
+      tab: 't1',
+      interactive: false,
+      text: false,
+    });
 
     expect(requests).toMatchObject([
       { op: OPEN, allowedHosts: ['example.com', 'cdn.example.com'] },
       {
-        op: { kind: 'snapshot', tab: 't1' },
+        op: { kind: 'snapshot', tab: 't1', interactive: false, text: false },
         allowedHosts: ['example.com', 'cdn.example.com'],
       },
     ]);

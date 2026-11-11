@@ -21,6 +21,11 @@ const cookieSchema = z.strictObject({
   expires: z.number().finite().optional(),
 });
 
+/** The viewport a screenshot may ask for, CSS pixels. TWIN: the same names in `apps/daemon/src/v1/browser/browser.types.ts`. */
+export const BROWSER_VIEWPORT_MIN = 200;
+export const BROWSER_VIEWPORT_MAX_WIDTH = 3840;
+export const BROWSER_VIEWPORT_MAX_HEIGHT = 4320;
+
 const tab = z.string().min(1).max(128);
 const ref = z.string().min(1).max(32);
 
@@ -40,7 +45,12 @@ export const browserOpSchema = z.discriminatedUnion('kind', [
     tab,
     url: z.string().min(1).max(8192),
   }),
-  z.strictObject({ kind: z.literal('snapshot'), tab }),
+  z.strictObject({
+    kind: z.literal('snapshot'),
+    tab,
+    interactive: z.boolean(),
+    text: z.boolean(),
+  }),
   z.strictObject({ kind: z.literal('click'), tab, ref }),
   z.strictObject({
     kind: z.literal('type'),
@@ -66,7 +76,24 @@ export const browserOpSchema = z.discriminatedUnion('kind', [
     ref: ref.optional(),
     dy: z.number().finite().optional(),
   }),
-  z.strictObject({ kind: z.literal('screenshot'), tab, fullPage: z.boolean() }),
+  z.strictObject({
+    kind: z.literal('screenshot'),
+    tab,
+    fullPage: z.boolean(),
+    view: z.boolean(),
+    width: z
+      .number()
+      .int()
+      .min(BROWSER_VIEWPORT_MIN)
+      .max(BROWSER_VIEWPORT_MAX_WIDTH)
+      .optional(),
+    height: z
+      .number()
+      .int()
+      .min(BROWSER_VIEWPORT_MIN)
+      .max(BROWSER_VIEWPORT_MAX_HEIGHT)
+      .optional(),
+  }),
   z.strictObject({ kind: z.literal('console'), tab }),
   z.strictObject({
     kind: z.literal('evaluate'),
@@ -106,7 +133,14 @@ export const browserRequestSchema = z.strictObject({
 export type BrowserRequest = z.infer<typeof browserRequestSchema>;
 
 export type BrowserReply =
-  | { id: string; ok: true; text: string; png?: string; tab?: string }
+  | {
+      id: string;
+      ok: true;
+      text: string;
+      png?: string;
+      viewPng?: string;
+      tab?: string;
+    }
   | { id: string; ok: false; error: string };
 
 /**

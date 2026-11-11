@@ -10,6 +10,11 @@ export const BROWSER_REQUEST_TIMEOUT_MS = 20_000;
  */
 export const BROWSER_REPLY_MAX_BYTES = 16 * 1024 * 1024;
 
+/** The viewport a screenshot may ask for, CSS pixels. TWIN: the same names in `apps/ui/src/main/browser/browser-agent-wire.ts`. */
+export const BROWSER_VIEWPORT_MIN = 200;
+export const BROWSER_VIEWPORT_MAX_WIDTH = 3840;
+export const BROWSER_VIEWPORT_MAX_HEIGHT = 4320;
+
 /** One cookie an agent puts into a browser jar. */
 export interface BrowserCookieInput {
   name: string;
@@ -35,13 +40,20 @@ export type BrowserOp =
       ownCookies?: { label: string; cookies: BrowserCookieInput[] };
     }
   | { kind: 'navigate'; tab: string; url: string }
-  | { kind: 'snapshot'; tab: string }
+  | { kind: 'snapshot'; tab: string; interactive: boolean; text: boolean }
   | { kind: 'click'; tab: string; ref: string }
   | { kind: 'type'; tab: string; ref: string; text: string; submit: boolean }
   | { kind: 'press'; tab: string; key: string }
   | { kind: 'select'; tab: string; ref: string; values: string[] }
   | { kind: 'scroll'; tab: string; ref?: string; dy?: number }
-  | { kind: 'screenshot'; tab: string; fullPage: boolean }
+  | {
+      kind: 'screenshot';
+      tab: string;
+      fullPage: boolean;
+      view: boolean;
+      width?: number;
+      height?: number;
+    }
   | { kind: 'console'; tab: string }
   | { kind: 'evaluate'; tab: string; expression: string }
   | { kind: 'tabs' }
@@ -74,6 +86,7 @@ export const BrowserReplySchema = z.union([
     ok: z.literal(true),
     text: z.string(),
     png: z.string().optional(),
+    viewPng: z.string().optional(),
     tab: z.string().optional(),
   }),
   z.strictObject({
@@ -88,5 +101,11 @@ export type BrowserReply = z.infer<typeof BrowserReplySchema>;
 
 /** What a bridge request ended as, for the tool to word. */
 export type BrowserOutcome =
-  | { status: 'done'; text: string; png?: string; tab?: string }
+  | {
+      status: 'done';
+      text: string;
+      png?: string;
+      viewPng?: string;
+      tab?: string;
+    }
   | { status: 'failed'; reason: string };

@@ -12,7 +12,7 @@ import { browserScreenshotInstructions } from './browser-screenshot.instructions
 import { readBrowserScreenshot } from './browser-screenshot.reader';
 import { browserScreenshotSchema } from './browser-screenshot.schema';
 
-/** `browser_screenshot` — a tab as a picture, saved and shown. */
+/** `browser_screenshot` — a tab as a picture, saved; put into the result only when asked to `view` it. */
 export class BrowserScreenshotTool extends BrowserTool {
   readonly name = HOST_BROWSER_SCREENSHOT_TOOL;
 
@@ -64,8 +64,10 @@ export class BrowserScreenshotTool extends BrowserTool {
         : `Saved screenshot: ${path}\n${outcome.text}`,
       outcome.tab,
     );
-    return this.withImages(this.text(text), [
-      { data: outcome.png, mimeType: 'image/png' },
-    ]);
+    return outcome.viewPng === undefined
+      ? this.text(text)
+      : this.withImages(this.text(text), [
+          { data: outcome.viewPng, mimeType: 'image/png' },
+        ]);
   }
 }

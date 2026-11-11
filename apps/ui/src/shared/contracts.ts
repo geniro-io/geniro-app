@@ -1665,6 +1665,69 @@ export interface FileSaveResult {
 // IPC contract (window.geniro — exposed by the preload via contextBridge)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Why a browser tab's last load did not finish. */
+export interface BrowserTabError {
+  code: number;
+  description: string;
+  url: string;
+  /** A certificate error, which the user alone may continue past for its host. */
+  certificate: boolean;
+}
+
+/** A page's basic-auth challenge, waiting for the user's answer. */
+export interface BrowserAuthRequest {
+  host: string;
+  realm: string;
+}
+
+/** One tab of a chat's in-app browser, as main reports it. */
+export interface BrowserTabState {
+  id: string;
+  url: string;
+  title: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  error: BrowserTabError | null;
+  /** The agent or member that opened the tab, or null for the user. */
+  openedBy: string | null;
+  /** The label of an own-cookie tab, or null when it uses the chat's cookies. */
+  ownCookiesLabel: string | null;
+  /** The agent or member running an operation on the tab right now. */
+  drivenBy: string | null;
+  authRequest: BrowserAuthRequest | null;
+}
+
+/** One chat's in-app browser: its tabs, which one shows, and where it is drawn. */
+export interface BrowserRunState {
+  runId: string;
+  tabs: BrowserTabState[];
+  activeTabId: string | null;
+  poppedOut: boolean;
+  /** Addresses opened in this chat since launch, newest first. */
+  recent: string[];
+}
+
+/** A change to one chat's browser, pushed by main. */
+export interface BrowserStateEvent {
+  state: BrowserRunState;
+  /** Set when an agent has just opened this tab: the pane opens for it once. */
+  agentOpenedTabId: string | null;
+}
+
+/** Where the pane's placeholder sits in the window, in CSS pixels. */
+export interface BrowserBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type BrowserHistoryAction = 'back' | 'forward' | 'reload' | 'stop';
+
+export type BrowserTabAction =
+  'devtools' | 'clearCookies' | 'openExternal' | 'copyUrl';
+
 /** Input captured by the onboarding flow and committed in one IPC call. */
 export interface OnboardingInput {
   lastChatTarget?: CliKind;
@@ -2152,6 +2215,47 @@ export interface GeniroApi {
   startRemoteTunnel(): Promise<RemoteAccessState>;
   /** Close the public address. The LAN listener is left alone. */
   stopRemoteTunnel(): Promise<RemoteAccessState>;
+  /** One chat's in-app browser as it stands. */
+  browserState(runId: string): Promise<BrowserRunState>;
+  /** Open a tab in a chat's browser, on an address or on the new-tab page; answers its id. */
+  browserOpenTab(runId: string, url: string | null): Promise<string>;
+  /** Load what the user typed in a tab's address bar (an address or words to search). */
+  browserNavigate(runId: string, tabId: string, input: string): Promise<void>;
+  browserHistory(
+    runId: string,
+    tabId: string,
+    action: BrowserHistoryAction,
+  ): Promise<void>;
+  browserCloseTab(runId: string, tabId: string): Promise<void>;
+  browserSelectTab(runId: string, tabId: string): Promise<void>;
+  /** Place the chat's active tab over the pane, or hide it with null. */
+  browserSetBounds(runId: string, bounds: BrowserBounds | null): Promise<void>;
+  /** Move the chat's tabs into a window of their own, without reloading them. */
+  browserPopOut(runId: string, title: string): Promise<void>;
+  /** Move the chat's tabs back beside the chat. */
+  browserDock(runId: string): Promise<void>;
+  browserTabAction(
+    runId: string,
+    tabId: string,
+    action: BrowserTabAction,
+  ): Promise<void>;
+  /** The user's "Continue anyway" past a certificate error, for that tab's host. */
+  browserContinueInsecure(runId: string, tabId: string): Promise<void>;
+  /** Answer a basic-auth challenge; null cancels it. */
+  browserAnswerAuth(
+    runId: string,
+    tabId: string,
+    credentials: { username: string; password: string } | null,
+  ): Promise<void>;
+  /** A still of the chat's active tab as a data URL, shown while an overlay covers the pane. */
+  browserCapture(runId: string): Promise<string | null>;
+  /** Close a deleted or archived chat's tabs and clear its cookies. */
+  browserForgetRun(runId: string): Promise<void>;
+  /** Stop the agent operation running on a tab. */
+  browserStopAgent(runId: string, tabId: string): Promise<void>;
+  /** Run one agent operation the daemon relayed (`browser_request`); answers its `browser_reply`. */
+  browserAgentRequest(request: unknown): Promise<unknown>;
+  onBrowserState(listener: (event: BrowserStateEvent) => void): () => void;
   /**
    * The absolute path of a file the OS handed the renderer — a paste, a drop.
    *
@@ -2303,6 +2407,23 @@ export const IPC = {
   revokeRemoteDevice: 'geniro:revokeRemoteDevice',
   startRemoteTunnel: 'geniro:startRemoteTunnel',
   stopRemoteTunnel: 'geniro:stopRemoteTunnel',
+  browserState: 'geniro:browserState',
+  browserOpenTab: 'geniro:browserOpenTab',
+  browserNavigate: 'geniro:browserNavigate',
+  browserHistory: 'geniro:browserHistory',
+  browserCloseTab: 'geniro:browserCloseTab',
+  browserSelectTab: 'geniro:browserSelectTab',
+  browserSetBounds: 'geniro:browserSetBounds',
+  browserPopOut: 'geniro:browserPopOut',
+  browserDock: 'geniro:browserDock',
+  browserTabAction: 'geniro:browserTabAction',
+  browserContinueInsecure: 'geniro:browserContinueInsecure',
+  browserAnswerAuth: 'geniro:browserAnswerAuth',
+  browserCapture: 'geniro:browserCapture',
+  browserForgetRun: 'geniro:browserForgetRun',
+  browserStopAgent: 'geniro:browserStopAgent',
+  browserAgentRequest: 'geniro:browserAgentRequest',
+  onBrowserState: 'geniro:onBrowserState',
 } as const satisfies Record<
   Exclude<keyof GeniroApi, PreloadLocalMethod>,
   string

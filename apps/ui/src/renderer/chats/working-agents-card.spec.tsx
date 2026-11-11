@@ -9,13 +9,21 @@ import {
   type CallMessageChannel,
   CallMessageChannelContext,
 } from './call-message-box';
+import {
+  type ConversationWork,
+  NO_CONVERSATION_WORK,
+} from './conversation-work';
+import type { ShellRun } from './shell-activity';
 import { ThreadUiMemoryContext } from './thread-ui-memory';
 import {
   type CallMessageSend,
   useCallMessageQueues,
 } from './use-call-message-queues';
 import type { WorkingAgentRow } from './working-agents';
-import { WorkingAgentsCard } from './working-agents-card';
+import {
+  type ConversationWorkSource,
+  WorkingAgentsCard,
+} from './working-agents-card';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -533,6 +541,133 @@ describe('WorkingAgentsCard', () => {
         expect(control.className).toContain('hover:bg-accent');
         expect(control.className).not.toContain('hover:bg-muted');
       }
+    });
+  });
+
+  describe('a run’s own work', () => {
+    const work = (
+      byConversation: Record<string, ConversationWork>,
+      onOpenShell: (shell: ShellRun) => void = () => undefined,
+    ): ConversationWorkSource => ({
+      of: (callIds) => byConversation[callIds[0]!] ?? NO_CONVERSATION_WORK,
+      onOpenShell,
+    });
+
+    const shellRun = (id: string, callId: string): ShellRun => ({
+      id,
+      command: `pnpm ${id}`,
+      description: null,
+      background: true,
+      handle: null,
+      status: 'running',
+      exitCode: null,
+      startedAt: new Date().toISOString(),
+      launchSeq: 1,
+      trackedSeq: null,
+      agentId: 'engineer',
+      callId,
+    });
+
+    async function renderWithWork(
+      rows: readonly WorkingAgentRow[],
+      source: ConversationWorkSource,
+    ) {
+      const spies = doubles();
+      const el = mount(
+        <WorkingAgentsCard
+          rows={rows}
+          runId="run-1"
+          api={spies.api}
+          client={spies.client}
+          onShowInChat={() => undefined}
+          work={source}
+        />,
+      );
+      await press(toggleOf(el));
+      await settle();
+      return el;
+    }
+
+    it('counts on each current run only the commands, monitors, delegates and tasks its own conversation has', async () => {
+      const el = await renderWithWork(
+        [
+          named('call-1', 'Engineer', 'working'),
+          named('call-2', 'QA', 'working'),
+        ],
+        work({
+          'call-1': {
+            shells: [shellRun('dev', 'call-1'), shellRun('test', 'call-1')],
+            monitors: [],
+            subagents: [],
+            tasks: [
+              { id: '1', title: 'a', status: 'completed', activeForm: null },
+              { id: '2', title: 'b', status: 'pending', activeForm: null },
+            ],
+          },
+          'call-2': {
+            shells: [],
+            monitors: [
+              {
+                id: 'm1',
+                description: 'watch',
+                command: 'tail -f log',
+                memberId: 'qa',
+                callId: 'call-2',
+                startedAt: new Date().toISOString(),
+                endsAt: new Date(Date.now() + 60_000).toISOString(),
+              },
+            ],
+            subagents: [],
+            tasks: [],
+          },
+        }),
+      );
+      const [engineer, qa] = currentRuns(panelOf(el)!);
+
+      expect(slot(engineer!, 'running-shells')?.textContent).toBe('2');
+      expect(slot(engineer!, 'open-tasks')?.textContent).toBe('1/2');
+      expect(slot(engineer!, 'running-monitors')).toBeNull();
+      expect(slot(qa!, 'running-monitors')?.textContent).toBe('1');
+      expect(slot(qa!, 'running-shells')).toBeNull();
+    });
+
+    it('draws no counters for a run with nothing of its own', async () => {
+      const el = await renderWithWork(
+        [named('call-1', 'Engineer', 'working')],
+        work({}),
+      );
+
+      expect(slot(panelOf(el)!, 'working-agent-work')).toBeNull();
+    });
+
+    it('opens a counter’s list without opening the conversation, and a row of it closes the panel', async () => {
+      const opened: string[] = [];
+      const el = await renderWithWork(
+        [named('call-1', 'Engineer', 'working')],
+        work(
+          {
+            'call-1': {
+              shells: [shellRun('dev', 'call-1')],
+              monitors: [],
+              subagents: [],
+              tasks: [],
+            },
+          },
+          (shell) => opened.push(shell.id),
+        ),
+      );
+      const chip = slot(panelOf(el)!, 'running-shells')!;
+
+      await press(chip.querySelector('button')!);
+
+      const list = chip.querySelector('[data-slot="popover-panel"]')!;
+      await press(list);
+      expect(dialog()).toBeNull();
+      await press(list.querySelector('button')!);
+
+      expect(opened).toEqual(['dev']);
+      expect(panelOf(el)).toBeNull();
+      expect(dialog()).toBeNull();
     });
   });
 

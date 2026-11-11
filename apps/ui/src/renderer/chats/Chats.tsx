@@ -193,6 +193,10 @@ import {
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
 import { useContextReadings } from './context-reading';
+import {
+  conversationWorkByCall,
+  conversationWorkOf,
+} from './conversation-work';
 import { anySubagentRunning, useDurableTranscript } from './durable-transcript';
 import { FastActionBar } from './fast-action-bar';
 import { FolderSelect } from './folder-select';
@@ -442,7 +446,10 @@ import { useWaitingMessages } from './use-waiting-messages';
 import { useWorktreeOrigin } from './use-worktree-origin';
 import { type WaitReading, waitReadings, waitsOnUser } from './waiting';
 import { type WorkingAgentRow, workingAgentRows } from './working-agents';
-import { WorkingAgentsCard } from './working-agents-card';
+import {
+  type ConversationWorkSource,
+  WorkingAgentsCard,
+} from './working-agents-card';
 
 /**
  * A follow-up typed while the agent was still working. It carries its images
@@ -8407,6 +8414,30 @@ export function Chats({
     [durableEntries, runState.delegates, jumpToSeq],
   );
 
+  const startedAgentsWork = useMemo((): ConversationWorkSource => {
+    const byCall = conversationWorkByCall({
+      agents,
+      shellsByAgent,
+      monitors: runState.monitors,
+      tasksByAgent,
+    });
+    return {
+      of: (callIds) => conversationWorkOf(byCall, callIds),
+      onOpenShell: setOpenShell,
+      onKillShell: handleKillShell,
+      onStopMonitor: handleStopMonitor,
+      onOpenSubagent: openSubagentById,
+    };
+  }, [
+    agents,
+    shellsByAgent,
+    runState.monitors,
+    tasksByAgent,
+    handleKillShell,
+    handleStopMonitor,
+    openSubagentById,
+  ]);
+
   /**
    * Where this thread can be picked up by hand: the CLI invocation that reopens
    * its session, or the reason there is none. Shared by the button's action and
@@ -10731,6 +10762,7 @@ export function Chats({
                           chatAgentName={activeRun.agentKind}
                           delegateState={runState}
                           collapseToolSteps={collapseToolSteps}
+                          work={startedAgentsWork}
                         />
                       )}
                     </TranscriptContexts>

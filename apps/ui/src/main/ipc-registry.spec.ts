@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => {
     sidebarCollapsed: false,
     notificationsEnabled: true,
     archiveRetentionDays: null,
+    memoryAutoForgetAfterDays: null,
     historyPageSize: 1000,
     keptSessionIdleMinutes: 60,
     preventSleepWhileWorking: true,

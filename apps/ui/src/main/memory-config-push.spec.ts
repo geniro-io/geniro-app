@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { DaemonHandle } from '../shared/contracts';
-import { MemoryConfigPush } from './memory-config-push';
+import { type DaemonHandle, DEFAULT_SETTINGS } from '../shared/contracts';
+import { memoryConfigOf, MemoryConfigPush } from './memory-config-push';
 
 const HANDLE: DaemonHandle = {
   host: '127.0.0.1',
@@ -27,6 +27,7 @@ describe('MemoryConfigPush', () => {
       enabled: false,
       agentWrites: 'pending',
       nativeMemoryOff: false,
+      autoForgetAfterDays: 30,
     });
 
     expect(http.calls).toHaveLength(1);
@@ -40,6 +41,41 @@ describe('MemoryConfigPush', () => {
       enabled: false,
       agentWrites: 'pending',
       nativeMemoryOff: false,
+      autoForgetAfterDays: 30,
+    });
+  });
+
+  it('pushes the auto-forget window beside the memory settings, as autoForgetAfterDays', () => {
+    expect(
+      memoryConfigOf({
+        memory: { enabled: true, agentWrites: 'active', nativeMemoryOff: true },
+        memoryAutoForgetAfterDays: 14,
+      }),
+    ).toEqual({
+      enabled: true,
+      agentWrites: 'active',
+      nativeMemoryOff: true,
+      autoForgetAfterDays: 14,
+    });
+    expect(memoryConfigOf(DEFAULT_SETTINGS).autoForgetAfterDays).toBeNull();
+  });
+
+  it('pushes again when only the auto-forget window changes, and not for an unrelated write', async () => {
+    const http = recordingFetch();
+    const push = new MemoryConfigPush(() => undefined, http.fetchImpl);
+    const before = memoryConfigOf(DEFAULT_SETTINGS);
+
+    await push.pushIfChanged(HANDLE, before);
+    await push.pushIfChanged(HANDLE, { ...before });
+    expect(http.calls).toHaveLength(1);
+
+    await push.pushIfChanged(
+      HANDLE,
+      memoryConfigOf({ ...DEFAULT_SETTINGS, memoryAutoForgetAfterDays: 14 }),
+    );
+    expect(http.calls).toHaveLength(2);
+    expect(JSON.parse(String(http.calls[1]?.init.body))).toMatchObject({
+      autoForgetAfterDays: 14,
     });
   });
 
@@ -50,17 +86,15 @@ describe('MemoryConfigPush', () => {
       (m) => reports.push(m),
       refusing.fetchImpl,
     );
+    const config = {
+      enabled: true,
+      agentWrites: 'active' as const,
+      nativeMemoryOff: false,
+      autoForgetAfterDays: null,
+    };
 
-    await push.push(HANDLE, {
-      enabled: true,
-      agentWrites: 'active',
-      nativeMemoryOff: false,
-    });
-    await push.pushIfChanged(HANDLE, {
-      enabled: true,
-      agentWrites: 'active',
-      nativeMemoryOff: false,
-    });
+    await push.push(HANDLE, config);
+    await push.pushIfChanged(HANDLE, config);
 
     expect(reports[0]).toContain(
       'the daemon refused the memory settings (400)',

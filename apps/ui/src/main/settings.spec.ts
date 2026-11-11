@@ -719,6 +719,24 @@ describe('sharing settings', () => {
 });
 
 describe('memory settings', () => {
+  it('settings salvage keeps the key and a corrupt value reads as null', () => {
+    expect(readSettings().memoryAutoForgetAfterDays).toBeNull();
+
+    writeRaw({ memoryAutoForgetAfterDays: 30, onboardingComplete: true });
+    expect(readSettings().memoryAutoForgetAfterDays).toBe(30);
+
+    for (const memoryAutoForgetAfterDays of ['x', 0, 5000]) {
+      writeRaw({ memoryAutoForgetAfterDays, onboardingComplete: true });
+
+      const settings = readSettings();
+      expect(settings.memoryAutoForgetAfterDays).toBeNull();
+      expect(settings.onboardingComplete).toBe(true);
+    }
+
+    writeRaw({ onboardingComplete: true });
+    expect(readSettings().memoryAutoForgetAfterDays).toBeNull();
+  });
+
   it('a half-valid memory object keeps its valid field and defaults the other', () => {
     writeRaw({ memory: { enabled: false, agentWrites: 'bogus' } });
 

@@ -61,7 +61,7 @@ function entries(n: number): string {
 
 /** The review query a tab and its filters ask the daemon for. */
 export function reviewRequest(
-  tab: MemoryCleanupTab,
+  tab: Exclude<MemoryCleanupTab, 'checks'>,
   filters: MemoryCleanupFilters,
 ): MemoriesApiListMemoryReviewRequest {
   if (tab !== 'cold') {
@@ -128,9 +128,10 @@ export function useMemoryCleanup(
   }, [api]);
 
   const readPage = useLatestCallback(() => {
-    if (api === null || !open) {
+    if (api === null || !open || tab === 'checks') {
       return;
     }
+    const listed = tab;
     const mine = ++generation.current;
     const limit = Math.min(
       Math.max(depth.current, CLEANUP_PAGE),
@@ -138,8 +139,8 @@ export function useMemoryCleanup(
     );
     setLoading(true);
     void Promise.all([
-      api.listMemoryReview({ ...reviewRequest(tab, filters), limit }),
-      tab === 'forgotten' ? api.listMemoryBatches() : Promise.resolve(null),
+      api.listMemoryReview({ ...reviewRequest(listed, filters), limit }),
+      listed === 'forgotten' ? api.listMemoryBatches() : Promise.resolve(null),
     ])
       .then(([page, recent]) => {
         if (mine !== generation.current) {
@@ -234,7 +235,7 @@ export function useMemoryCleanup(
   };
 
   const loadMore = (): void => {
-    if (api === null || next === null) {
+    if (api === null || next === null || tab === 'checks') {
       return;
     }
     const mine = generation.current;
@@ -285,7 +286,7 @@ export function useMemoryCleanup(
   };
 
   const tickShown = (): void => {
-    if (api === null) {
+    if (api === null || tab === 'checks') {
       return;
     }
     setTicking(true);
@@ -437,6 +438,7 @@ export function useMemoryCleanup(
     loadMore,
     batches,
     notice,
+    announce: setNotice,
     busyId,
   };
 }

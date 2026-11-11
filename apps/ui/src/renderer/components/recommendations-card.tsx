@@ -117,8 +117,8 @@ export interface RecommendationOutcomeView {
   backup: string | null;
 }
 
-/** An agent's clause, closed once: it may or may not end its own sentence. */
-function sentence(text: string): string {
+/** A clause closed once: it may or may not end its own sentence. */
+export function sentence(text: string): string {
   const trimmed = text.trimEnd();
   return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }

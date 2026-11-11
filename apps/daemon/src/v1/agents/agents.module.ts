@@ -22,6 +22,7 @@ import { ChatSearchController } from './controllers/chat-search.controller';
 import { GoalsController } from './controllers/goals.controller';
 import { KeptSessionsController } from './controllers/kept-sessions.controller';
 import { McpController } from './controllers/mcp.controller';
+import { MemoryCheckController } from './controllers/memory-check.controller';
 import { MemoryImportController } from './controllers/memory-import.controller';
 import { RunGroupsController } from './controllers/run-groups.controller';
 import { SkillsController } from './controllers/skills.controller';
@@ -94,6 +95,7 @@ import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { KnowledgeItemsService } from './services/knowledge-items.service';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
+import { MemoryCheckService } from './services/memory-check.service';
 import { MemoryImportService } from './services/memory-import.service';
 import { MessageSendService } from './services/message-send.service';
 import { MetricsBroker } from './services/metrics.broker';
@@ -109,6 +111,7 @@ import { MonitorOutcomeSweep } from './services/monitor-outcome-sweep.service';
 import { MonitorRowWriter } from './services/monitor-row.writer';
 import { NotifyBroker } from './services/notify.broker';
 import { OllamaService } from './services/ollama.service';
+import { OneShotAskService } from './services/one-shot-ask.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { PatchBroker } from './services/patch.broker';
 import { PayloadRefsSweepService } from './services/payload-refs-sweep.service';
@@ -189,6 +192,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatSearchController,
     KeptSessionsController,
     McpController,
+    MemoryCheckController,
     MemoryImportController,
     RunGroupsController,
     SkillsController,
@@ -540,6 +544,8 @@ import { defaultSpawn } from './utils/spawn-cli';
     RunGroupDao,
     ProjectDao,
     MemoryImportService,
+    MemoryCheckService,
+    OneShotAskService,
     {
       // Every CLI the daemon drives, each built by its own `forDaemon` — which
       // is where that CLI decides its directories, its stores and its probes.

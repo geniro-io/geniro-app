@@ -7,9 +7,20 @@ import {
 
 import type {
   MemoryEntry,
+  MemoryMergeOutcome,
+  MemoryMergeResult,
   MemorySaveOutcome,
   MemoryStatusOutcome,
 } from '../memory.types';
+
+/** A merge's result, or the HTTP error its refusal is, as {@link savedEntryOrThrow} words it. */
+export function mergedOrThrow(outcome: MemoryMergeOutcome): MemoryMergeResult {
+  if (outcome.kind === 'merged') {
+    return outcome.result;
+  }
+  savedEntryOrThrow(outcome);
+  throw new ConflictException('MEMORY_MERGE_FAILED', 'the merge wrote nothing');
+}
 
 /**
  * How a near-duplicate refusal's message starts; the handles follow, comma

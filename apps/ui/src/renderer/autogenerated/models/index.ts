@@ -7395,6 +7395,99 @@ export interface MemoryExportDto {
 /**
  * 
  * @export
+ * @interface MemoryFinding
+ */
+export interface MemoryFinding {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryFinding
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryFinding
+     */
+    kind: MemoryFindingKindEnum;
+    /**
+     * 
+     * @type {MemoryEntry}
+     * @memberof MemoryFinding
+     */
+    a: MemoryEntry;
+    /**
+     * 
+     * @type {MemoryEntry}
+     * @memberof MemoryFinding
+     */
+    b: MemoryEntry;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryFinding
+     */
+    quoteA: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryFinding
+     */
+    quoteB: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryFinding
+     */
+    reason: string;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof MemoryFinding
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryFinding
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryFinding
+     */
+    checkedAt: string;
+}
+
+
+/**
+ * @export
+ */
+export const MemoryFindingKindEnum = {
+    Duplicate: 'duplicate',
+    Supersedes: 'supersedes',
+    Contradicts: 'contradicts',
+    Conditional: 'conditional'
+} as const;
+export type MemoryFindingKindEnum = typeof MemoryFindingKindEnum[keyof typeof MemoryFindingKindEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemoryFindingListDto
+ */
+export interface MemoryFindingListDto {
+    /**
+     * 
+     * @type {Array<MemoryFinding>}
+     * @memberof MemoryFindingListDto
+     */
+    findings: Array<MemoryFinding>;
+}
+/**
+ * 
+ * @export
  * @interface MemoryForgetBatch
  */
 export interface MemoryForgetBatch {
@@ -7941,6 +8034,50 @@ export interface MemoryListDtoNext {
 /**
  * 
  * @export
+ * @interface MemoryMergeResultDto
+ */
+export interface MemoryMergeResultDto {
+    /**
+     * 
+     * @type {MemoryEntry}
+     * @memberof MemoryMergeResultDto
+     */
+    entry: MemoryEntry;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryMergeResultDto
+     */
+    batchId: string;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof MemoryMergeResultDto
+     */
+    forgotten: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryPair
+ */
+export interface MemoryPair {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryPair
+     */
+    aId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryPair
+     */
+    bId: string;
+}
+/**
+ * 
+ * @export
  * @interface MemoryRestoreBatchResultDto
  */
 export interface MemoryRestoreBatchResultDto {
@@ -7950,6 +8087,82 @@ export interface MemoryRestoreBatchResultDto {
      * @memberof MemoryRestoreBatchResultDto
      */
     restored: number;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryReviewCheckRequestDto
+ */
+export interface MemoryReviewCheckRequestDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof MemoryReviewCheckRequestDto
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryReviewCheckRequestDto
+     */
+    model?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryReviewCheckRequestDto
+     */
+    effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryReviewCheckRequestDto
+     */
+    contextWindow?: string;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof MemoryReviewCheckRequestDto
+     */
+    modelParameters?: { [key: string]: string; };
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryReviewCheckRequestDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {Array<MemoryPair>}
+     * @memberof MemoryReviewCheckRequestDto
+     */
+    pairs: Array<MemoryPair>;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface MemoryReviewCheckResultDto
+ */
+export interface MemoryReviewCheckResultDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewCheckResultDto
+     */
+    checked: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewCheckResultDto
+     */
+    skipped: number;
+    /**
+     * 
+     * @type {Array<MemoryFinding>}
+     * @memberof MemoryReviewCheckResultDto
+     */
+    findings: Array<MemoryFinding>;
 }
 /**
  * 
@@ -8000,6 +8213,43 @@ export interface MemoryReviewPageDto {
      * @memberof MemoryReviewPageDto
      */
     next: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryReviewPairsDto
+ */
+export interface MemoryReviewPairsDto {
+    /**
+     * 
+     * @type {Array<MemoryPair>}
+     * @memberof MemoryReviewPairsDto
+     */
+    pairs: Array<MemoryPair>;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewPairsDto
+     */
+    inputTokens: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewPairsDto
+     */
+    requests: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewPairsDto
+     */
+    costUsd: number | null;
+    /**
+     * 
+     * @type {Array<AgentKind>}
+     * @memberof MemoryReviewPairsDto
+     */
+    checkAgents: Array<AgentKind>;
 }
 /**
  * 
@@ -8186,6 +8436,62 @@ export interface MemoryReviewSummaryDto {
      */
     lastBatch: MemoryForgetBatch | null;
 }
+/**
+ * 
+ * @export
+ * @interface MergeMemoriesDto
+ */
+export interface MergeMemoriesDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof MergeMemoriesDto
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MergeMemoriesDto
+     */
+    body: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MergeMemoriesDto
+     */
+    type: MergeMemoriesDtoTypeEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof MergeMemoriesDto
+     */
+    projectId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MergeMemoriesDto
+     */
+    teamSlug?: string | null;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof MergeMemoriesDto
+     */
+    sourceIds: Array<string>;
+}
+
+
+/**
+ * @export
+ */
+export const MergeMemoriesDtoTypeEnum = {
+    User: 'user',
+    Feedback: 'feedback',
+    Project: 'project',
+    Reference: 'reference'
+} as const;
+export type MergeMemoriesDtoTypeEnum = typeof MergeMemoriesDtoTypeEnum[keyof typeof MergeMemoriesDtoTypeEnum];
+
 /**
  * 
  * @export

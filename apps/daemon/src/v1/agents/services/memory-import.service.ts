@@ -25,10 +25,8 @@ import { ProjectDao } from '../../projects/dao/project.dao';
 import type { AgentKind } from '../../runs/runs.types';
 import type { NativeMemoryNote } from '../adapters/adapter.types';
 import { readTriageAnswer, triagePrompt } from '../utils/memory-triage';
-import { sanitizeModelParameters } from '../utils/model-parameters';
-import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
-import { EffortsService } from './efforts.service';
+import { OneShotAskService } from './one-shot-ask.service';
 
 /** Notes checked against the stored entries between two yields of the loop. */
 const PREVIEW_WINDOW = 20;
@@ -56,7 +54,7 @@ export class MemoryImportService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly memory: MemoryService,
     private readonly projects: ProjectDao,
-    private readonly efforts: EffortsService,
+    private readonly asks: OneShotAskService,
   ) {}
 
   async preview(
@@ -113,7 +111,7 @@ export class MemoryImportService {
         problem: this.memory.problemOf(note),
       });
     }
-    return { rows, sources, triageAgents: this.triageAgents() };
+    return { rows, sources, triageAgents: this.asks.agents() };
   }
 
   /**
@@ -123,38 +121,9 @@ export class MemoryImportService {
   async triage(
     request: MemoryImportTriageRequest,
   ): Promise<MemoryImportTriage> {
-    if (!this.triageAgents().includes(request.agentKind)) {
-      throw new BadRequestException(
-        'MEMORY_TRIAGE_UNAVAILABLE',
-        `${request.agentKind} cannot sort notes`,
-      );
-    }
-    const adapter = this.adapters.for(request.agentKind);
-    const model = request.model ?? null;
-    let configDir: string | null = null;
-    if (request.configDir !== undefined) {
-      const reason = adapter.getConfig().configDir.unavailableReason;
-      if (reason !== null) {
-        throw new BadRequestException('CONFIG_DIR_UNSUPPORTED', reason);
-      }
-      configDir = resolveValidConfigDir(request.configDir);
-    }
-    if (
-      request.effort !== undefined &&
-      !this.efforts.accepts(request.agentKind, request.effort, model, configDir)
-    ) {
-      throw new BadRequestException(
-        'EFFORT_UNSUPPORTED',
-        `${request.agentKind} does not accept the reasoning effort '${request.effort}'`,
-      );
-    }
-    const answer = await adapter.askOnce({
-      prompt: triagePrompt(request.notes),
-      model,
-      configDir,
-      effort: request.effort ?? null,
-      contextWindow: request.contextWindow ?? null,
-      modelParameters: sanitizeModelParameters(request.modelParameters),
+    const answer = await this.asks.ask(request, triagePrompt(request.notes), {
+      code: 'MEMORY_TRIAGE_UNAVAILABLE',
+      task: 'sort notes',
     });
     const verdicts =
       answer === null ? null : readTriageAnswer(answer, request.notes);
@@ -167,15 +136,6 @@ export class MemoryImportService {
       );
     }
     return { verdicts };
-  }
-
-  private triageAgents(): AgentKind[] {
-    return [...this.adapters.all()]
-      .filter(
-        ([, adapter]) =>
-          adapter.getConfig().oneShotAskUnavailableReason === null,
-      )
-      .map(([agentKind]) => agentKind);
   }
 
   /**

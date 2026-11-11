@@ -53,10 +53,12 @@ import {
 import { type DaemonApis, describeDaemonError } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { isRemoteRuntime } from '../remote/remote-session';
+import { MemoryCheckPanel } from './memory-check-panel';
 import {
   MemoryTriageSettings,
   triageChoiceFor,
 } from './memory-triage-settings';
+import { type CheckClient, useMemoryCheck } from './use-memory-check';
 import { type CleanupClient, useMemoryCleanup } from './use-memory-cleanup';
 import { useMemoryTriage } from './use-memory-triage';
 
@@ -71,7 +73,8 @@ type MemoriesClient = Pick<
   | 'importMemories'
   | 'triageMemoryImport'
 > &
-  CleanupClient;
+  CleanupClient &
+  CheckClient;
 
 type TeamsClient = Pick<TeamsApi, 'listTeams' | 'getTeam'>;
 
@@ -377,6 +380,52 @@ export function Memory({
   const triageChoice = triageChoiceFor(triageAgents, triagePick);
   const triage = useMemoryTriage(api, triageChoice);
   const cleanup = useMemoryCleanup(api, client);
+  const adoptTriageSettings = (
+    settings: Pick<
+      AppSettings,
+      'recentConfigDirs' | 'configProfiles' | 'lastMemoryTriage'
+    >,
+  ): void => {
+    setTriageProfiles({
+      recentConfigDirs: settings.recentConfigDirs,
+      configProfiles: settings.configProfiles,
+    });
+    setTriagePick((current) => current ?? settings.lastMemoryTriage);
+  };
+  const [checkAgents, setCheckAgents] =
+    useState<readonly AgentKind[]>(NO_TRIAGE_AGENTS);
+  const checkChoice = triageChoiceFor(checkAgents, triagePick);
+  const check = useMemoryCheck(api, client, {
+    open: cleanup.open,
+    active: cleanup.open && cleanup.tab === 'checks',
+    remote,
+    choice: checkChoice,
+    onNotice: cleanup.announce,
+  });
+  const listedCheckAgents = check.pairs?.checkAgents;
+  useEffect(() => {
+    if (listedCheckAgents !== undefined) {
+      setCheckAgents(listedCheckAgents);
+    }
+  }, [listedCheckAgents]);
+  const cleanupOpen = cleanup.open;
+  useEffect(() => {
+    if (!cleanupOpen || remote) {
+      return;
+    }
+    let cancelled = false;
+    void window.geniro
+      .getSettings()
+      .then((settings) => {
+        if (!cancelled) {
+          adoptTriageSettings(settings);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [cleanupOpen, remote]);
 
   const projectName = useLatestCallback(
     (projectId: string | null) =>
@@ -574,11 +623,7 @@ export function Memory({
       .then(([settings, library]) => {
         const found = importProfiles(settings, library);
         setProfiles(found);
-        setTriageProfiles({
-          recentConfigDirs: settings.recentConfigDirs,
-          configProfiles: settings.configProfiles,
-        });
-        setTriagePick((current) => current ?? settings.lastMemoryTriage);
+        adoptTriageSettings(settings);
         return api.previewMemoryImport({
           memoryImportPreviewRequestDto: { profiles: found },
         });
@@ -1036,6 +1081,7 @@ export function Memory({
             cleanup.tab === 'cold' && !cleanup.loading
               ? cleanup.total
               : (cleanup.summary?.proposed ?? null),
+          checks: check.total,
           kept: cleanup.summary?.kept ?? null,
           forgotten: cleanup.summary?.forgotten ?? null,
         }}
@@ -1068,6 +1114,29 @@ export function Memory({
         busyId={cleanup.busyId}
         projectName={projectName}
         teamName={teamName}
+        checkPanel={
+          <MemoryCheckPanel
+            check={check}
+            remote={remote}
+            settings={
+              checkChoice === null ? null : (
+                <MemoryTriageSettings
+                  agents={checkAgents}
+                  value={checkChoice}
+                  onChange={pickTriage}
+                  agentLabel="Agent that checks"
+                  agentsApi={agentsApi}
+                  capabilities={capabilities}
+                  capabilitiesLoading={capabilitiesLoading}
+                  recentConfigDirs={triageProfiles.recentConfigDirs}
+                  configProfiles={triageProfiles.configProfiles}
+                />
+              )
+            }
+            projectName={projectName}
+            teamName={teamName}
+          />
+        }
       />
 
       {remote ? null : (

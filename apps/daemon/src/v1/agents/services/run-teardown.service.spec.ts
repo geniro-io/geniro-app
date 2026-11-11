@@ -6,15 +6,19 @@ import {
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { MemoryReviewFindingDao } from '../../memory/dao/memory-review-finding.dao';
 import { MemoryUsageDao } from '../../memory/dao/memory-usage.dao';
+import { MemoryReviewFinding } from '../../memory/entity/memory-review-finding.entity';
 import { MemoryUsageBackfill } from '../../memory/entity/memory-usage-backfill.entity';
 import { MemoryUsageDay } from '../../memory/entity/memory-usage-day.entity';
+import { pairKey } from '../../memory/utils/memory-pairs';
 import { CallContext } from '../../runs/entity/call-context.entity';
 import { Goal } from '../../runs/entity/goal.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { WallTurn } from '../../runs/entity/wall-turn.entity';
+import { AgentKind } from '../../runs/runs.types';
 import { ArtifactShareDao } from '../../shares/dao/artifact-share.dao';
 import { ArtifactShare } from '../../shares/entity/artifact-share.entity';
 import { MetricLedgerDao } from '../../stats/dao/metric-ledger.dao';
@@ -96,6 +100,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
           UsageActivity,
           MemoryUsageDay,
           MemoryUsageBackfill,
+          MemoryReviewFinding,
         ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
@@ -414,6 +419,34 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       },
     ]);
     expect(await usage.backfilledRunIds()).toEqual(new Set(['run-a']));
+  });
+
+  it('keeps the memory check findings the run’s reads led to, which outlive the chat', async () => {
+    await seedRun('run-a');
+    const findings = new MemoryReviewFindingDao(orm.em.fork());
+    await findings.record(
+      [
+        {
+          memoryAId: 'mem-1',
+          memoryBId: 'mem-2',
+          hashA: 'hash-1',
+          hashB: 'hash-2',
+          outcome: 'contradicts',
+          quoteA: 'Always run pnpm',
+          quoteB: 'Never run pnpm',
+          reason: 'opposed',
+          agentKind: AgentKind.Claude,
+          model: null,
+        },
+      ],
+      new Date(),
+    );
+
+    await teardown.purge(orm.em.fork(), 'run-a', undefined);
+
+    expect(await findings.checkedTexts()).toEqual(
+      new Map([[pairKey('mem-1', 'mem-2'), 'hash-1\nhash-2']]),
+    );
   });
 
   it('keeps the run’s shared-page rows, the only way to revoke a link it handed out', async () => {

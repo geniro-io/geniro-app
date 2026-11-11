@@ -9,9 +9,17 @@ export function forgottenStamp(at: Date, batchId: string | null) {
   return { forgottenAt: at, forgetBatchId: batchId };
 }
 
-/** What restoring writes besides the status, on every restore path. */
+/**
+ * What restoring writes besides the status, on every restore path. A restored
+ * source of a merge stops counting towards the merged entry.
+ */
 export function restoredStamp(at: Date) {
-  return { forgottenAt: null, forgetBatchId: null, restoredAt: at };
+  return {
+    forgottenAt: null,
+    forgetBatchId: null,
+    restoredAt: at,
+    mergedIntoId: null,
+  };
 }
 
 /** {@link forgottenStamp} as the stored columns, for a statement outside the entity. */
@@ -25,6 +33,7 @@ export function restoredColumns(at: Date) {
     forgotten_at: null,
     forget_batch_id: null,
     restored_at: at.getTime(),
+    merged_into_id: null,
   };
 }
 

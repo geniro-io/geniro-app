@@ -175,6 +175,7 @@ const FORGOTTEN: MemoryReviewRow[] = [
 
 const ROWS: Record<MemoryCleanupTab, MemoryReviewRow[]> = {
   cold: COLD,
+  checks: [],
   kept: KEPT,
   forgotten: FORGOTTEN,
 };
@@ -196,6 +197,7 @@ const meta = {
     onTab: () => undefined,
     counts: {
       cold: COLD.length,
+      checks: 2,
       kept: KEPT.length,
       forgotten: FORGOTTEN.length,
     },

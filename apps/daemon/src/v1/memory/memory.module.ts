@@ -8,9 +8,11 @@ import { ProjectsModule } from '../projects/projects.module';
 import { MemoriesController } from './controllers/memories.controller';
 import { MemoryConfigController } from './controllers/memory-config.controller';
 import { MemoryDao } from './dao/memory.dao';
+import { MemoryReviewFindingDao } from './dao/memory-review-finding.dao';
 import { MemoryUsageDao } from './dao/memory-usage.dao';
 import { MemoryService } from './services/memory.service';
 import { MemoryEventBus } from './services/memory-events.bus';
+import { MemoryFindingsService } from './services/memory-findings.service';
 import { MemoryReviewService } from './services/memory-review.service';
 import { MemoryTextIndexService } from './services/memory-text-index.service';
 import { MemoryUsageService } from './services/memory-usage.service';
@@ -33,11 +35,13 @@ import { MemoryUsageBackfillService } from './services/memory-usage-backfill.ser
     DesktopOnlyGuard,
     MemoryDao,
     MemoryUsageDao,
+    MemoryReviewFindingDao,
     RunDao,
     NodeStateDao,
     ItemDao,
     MemoryService,
     MemoryEventBus,
+    MemoryFindingsService,
     MemoryReviewService,
     MemoryTextIndexService,
     MemoryUsageService,
@@ -46,6 +50,7 @@ import { MemoryUsageBackfillService } from './services/memory-usage-backfill.ser
   exports: [
     MemoryService,
     MemoryEventBus,
+    MemoryFindingsService,
     MemoryReviewService,
     MemoryTextIndexService,
     MemoryUsageBackfillService,

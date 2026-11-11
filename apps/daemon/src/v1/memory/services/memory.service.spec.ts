@@ -6,6 +6,7 @@ import {
   retiredMemoryTriggerDrops,
 } from '../../../db/memory-text-index.ddl';
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
+import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import type { RunPlace } from '../../projects/projects.types';
 import { NodeState } from '../../runs/entity/node-state.entity';
@@ -19,11 +20,13 @@ import {
   MEMORY_INDEX_PREFACE,
   type MemoryActor,
   type MemoryChangedEvent,
+  type MemoryMergeRequest,
   type MemorySaveOutcome,
   type MemoryStatusOutcome,
   type MemoryTextDatabase,
 } from '../memory.types';
 import type { MemoryService } from './memory.service';
+import { MemoryReviewService } from './memory-review.service';
 
 const NONE: RunPlace = { projectId: null, teamSlug: null };
 
@@ -2151,6 +2154,210 @@ describe('MemoryService', () => {
         [true, ['apps/daemon/src/main.ts', 'docs/a.md']],
         [false, null],
       ]);
+    });
+  });
+
+  describe('merge', () => {
+    beforeEach(() => {
+      db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+    });
+
+    async function seed(title: string) {
+      return created(await db.service.save(USER, { title, body: 'x' }, NONE));
+    }
+
+    async function rowOf(id: string) {
+      return db.em.fork().findOneOrFail(Memory, { id });
+    }
+
+    function mergeOf(sourceIds: string[]): MemoryMergeRequest {
+      return {
+        sourceIds,
+        title: 'Pnpm workspace rule',
+        body: 'Use pnpm in the workspace.',
+        type: 'project',
+        projectId: null,
+        teamSlug: null,
+      };
+    }
+
+    it('merge is atomic: refused for a third near-duplicate, it forgets nothing', async () => {
+      const first = await seed('Pnpm workspace install');
+      const second = await seed('Pnpm workspace layout');
+      await seed('Pnpm workspace rule');
+      const published: MemoryChangedEvent[] = [];
+      db.events.allChanges().subscribe((event) => published.push(event));
+
+      const outcome = await db.service.merge(mergeOf([first.id, second.id]));
+
+      expect(outcome).toMatchObject({ kind: 'near_duplicate' });
+      expect((await rowOf(first.id)).status).toBe('active');
+      expect((await rowOf(second.id)).status).toBe('active');
+      expect(await db.em.fork().count(Memory)).toBe(3);
+      expect(published).toEqual([]);
+    });
+
+    it('publishes the new entry and the batch only after the commit, and restoring the batch publishes the merged entry forgotten', async () => {
+      const first = await seed('Pnpm workspace install');
+      const second = await seed('Pnpm workspace layout');
+      const published: MemoryChangedEvent[] = [];
+      db.events.allChanges().subscribe((event) => published.push(event));
+
+      const outcome = await db.service.merge(mergeOf([first.id, second.id]));
+      if (outcome.kind !== 'merged') {
+        throw new Error(`expected a merge, got ${outcome.kind}`);
+      }
+      const { entry, batchId } = outcome.result;
+
+      expect(published).toEqual([
+        expect.objectContaining({
+          memoryId: entry.id,
+          change: 'created',
+          status: 'active',
+        }),
+        expect.objectContaining({
+          memoryId: null,
+          change: 'bulk',
+          status: 'forgotten',
+          batchId,
+        }),
+      ]);
+
+      published.splice(0);
+      await db.service.restoreBatch(batchId);
+
+      expect(published).toContainEqual(
+        expect.objectContaining({
+          memoryId: entry.id,
+          change: 'forgotten',
+          status: 'forgotten',
+        }),
+      );
+    });
+
+    it('publishes nothing for a refused merge', async () => {
+      const first = await seed('Pnpm workspace install');
+      const published: MemoryChangedEvent[] = [];
+      db.events.allChanges().subscribe((event) => published.push(event));
+
+      expect(
+        await db.service.merge(mergeOf([first.id, first.id])),
+      ).toMatchObject({ kind: 'refused', code: 'INVALID_ENTRY' });
+      expect(published).toEqual([]);
+    });
+
+    it('rolls the new entry back when a source is not taken in the same transaction', async () => {
+      const first = await seed('Pnpm workspace install');
+      const second = await seed('Pnpm workspace layout');
+      const taken = vi
+        .spyOn(MemoryDao.prototype, 'forgetBatch')
+        .mockResolvedValueOnce([first.id]);
+      const published: MemoryChangedEvent[] = [];
+      db.events.allChanges().subscribe((event) => published.push(event));
+
+      const outcome = await db.service.merge(mergeOf([first.id, second.id]));
+      taken.mockRestore();
+
+      expect(outcome).toMatchObject({ kind: 'refused', code: 'NOT_FOUND' });
+      expect((await rowOf(first.id)).status).toBe('active');
+      expect((await rowOf(second.id)).status).toBe('active');
+      expect(await db.em.fork().count(Memory)).toBe(2);
+      expect(published).toEqual([]);
+    });
+
+    it('restoring its batch returns both sources and removes the new entry', async () => {
+      const first = await seed('Pnpm workspace install');
+      const second = await seed('Pnpm workspace layout');
+
+      const outcome = await db.service.merge(mergeOf([first.id, second.id]));
+
+      if (outcome.kind !== 'merged') {
+        throw new Error(`expected a merge, got ${outcome.kind}`);
+      }
+      const { entry, batchId, forgotten } = outcome.result;
+      expect(entry).toMatchObject({
+        status: 'active',
+        source: { actor: 'user' },
+      });
+      expect([...forgotten].sort()).toEqual(
+        [first.handle, second.handle].sort(),
+      );
+      for (const source of [first, second]) {
+        expect(await rowOf(source.id)).toMatchObject({
+          status: 'forgotten',
+          mergedIntoId: entry.id,
+          forgetBatchId: batchId,
+        });
+      }
+
+      expect(await db.service.restoreBatch(batchId)).toEqual({ restored: 2 });
+
+      for (const source of [first, second]) {
+        expect(await rowOf(source.id)).toMatchObject({
+          status: 'active',
+          mergedIntoId: null,
+        });
+      }
+      expect((await rowOf(entry.id)).status).toBe('forgotten');
+    });
+
+    it('a merged entry shows the read total of its sources, and a source restored by hand drops out of it', async () => {
+      const first = await seed('Pnpm workspace install');
+      const second = await seed('Pnpm workspace layout');
+      await db.usageDao.add([
+        {
+          memoryId: first.id,
+          day: '2025-01-01',
+          reads: 3,
+          searchHits: 0,
+          indexShows: 0,
+        },
+        {
+          memoryId: second.id,
+          day: '2025-01-01',
+          reads: 2,
+          searchHits: 0,
+          indexShows: 0,
+        },
+      ]);
+      const outcome = await db.service.merge(mergeOf([first.id, second.id]));
+      if (outcome.kind !== 'merged') {
+        throw new Error(`expected a merge, got ${outcome.kind}`);
+      }
+      const review = new MemoryReviewService(
+        db.em,
+        new MemoryDao(db.em),
+        new ProjectDao(db.em),
+        db.usage,
+      );
+      const readsOfMerged = async () =>
+        (await review.page({ tab: 'cold', minAgeDays: 0 })).rows.find(
+          (row) => row.entry.id === outcome.result.entry.id,
+        )?.usage.reads;
+
+      expect(await readsOfMerged()).toBe(5);
+
+      await db.service.change(first.id, { status: 'active' });
+
+      expect(await readsOfMerged()).toBe(2);
+    });
+
+    it('refuses fewer than two distinct sources, and a source already forgotten, forgetting nothing', async () => {
+      const first = await seed('Pnpm workspace install');
+      const second = await seed('Pnpm workspace layout');
+
+      expect(
+        await db.service.merge(mergeOf([first.id, first.id])),
+      ).toMatchObject({ kind: 'refused', code: 'INVALID_ENTRY' });
+
+      await db.service.setStatus(USER, second.id, 'forgotten');
+
+      expect(
+        await db.service.merge(mergeOf([first.id, second.id])),
+      ).toMatchObject({ kind: 'refused', code: 'NOT_FOUND' });
+      expect((await rowOf(first.id)).status).toBe('active');
+      expect((await rowOf(second.id)).status).toBe('forgotten');
+      expect(await db.em.fork().count(Memory)).toBe(2);
     });
   });
 });

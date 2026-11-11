@@ -1,20 +1,31 @@
+import type { ExecutionContext } from '@nestjs/common';
 import { GUARDS_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DesktopOnlyGuard } from '../../../auth/desktop-only.guard';
+import {
+  REMOTE_VIA_HEADER,
+  REMOTE_VIA_VALUE,
+} from '../../../auth/remote-marker';
+import { MemoryCheckController } from '../../agents/controllers/memory-check.controller';
 import { MemoryImportController } from '../../agents/controllers/memory-import.controller';
+import { AgentKind } from '../../runs/runs.types';
 import {
   MemoryCreateSchema,
   type MemoryEntry,
+  type MemoryFinding,
   type MemoryForgetBatchList,
   type MemoryForgetBatchResult,
   MemoryListQuerySchema,
+  type MemoryMergeRequest,
+  type MemoryMergeResult,
   MemoryPatchSchema,
   type MemoryReviewIds,
   type MemoryReviewPage,
   type MemoryReviewSummary,
 } from '../memory.types';
 import type { MemoryService } from '../services/memory.service';
+import type { MemoryFindingsService } from '../services/memory-findings.service';
 import type { MemoryReviewService } from '../services/memory-review.service';
 import { MemoriesController } from './memories.controller';
 import { MemoryConfigController } from './memory-config.controller';
@@ -74,13 +85,39 @@ const BATCH_RESULT: MemoryForgetBatchResult = {
   skipped: [],
 };
 
+const OTHER: MemoryEntry = { ...ENTRY, id: 'e2', handle: 'm2' };
+
+const FINDING: MemoryFinding = {
+  id: 'f1',
+  kind: 'contradicts',
+  a: ENTRY,
+  b: OTHER,
+  quoteA: 'Use pnpm',
+  quoteB: 'Use npm',
+  reason: 'opposed',
+  agentKind: AgentKind.Claude,
+  model: null,
+  checkedAt: '2026-11-11T00:00:00.000Z',
+};
+
+const MERGE: MemoryMergeRequest = {
+  sourceIds: ['e1', 'e2'],
+  title: 'Use pnpm',
+  body: 'Never npm.',
+  type: 'project',
+  projectId: null,
+  teamSlug: null,
+};
+
 function controllerOver(
   service: Partial<MemoryService>,
   review: Partial<MemoryReviewService> = {},
+  findings: Partial<MemoryFindingsService> = {},
 ) {
   return new MemoriesController(
     service as MemoryService,
     review as MemoryReviewService,
+    findings as MemoryFindingsService,
   );
 }
 
@@ -353,10 +390,99 @@ describe('MemoriesController', () => {
       'batches',
       'forget-batch',
       'batches/:batchId/restore',
+      'review/findings',
+      'review/findings/:findingId/dismiss',
+      'merge',
     ]) {
       const at = declared.indexOf(literal);
       expect(at, literal).toBeGreaterThanOrEqual(0);
       expect(at, literal).toBeLessThan(firstParam);
     }
+  });
+
+  it('leaves the findings, dismiss and merge routes open to paired devices', () => {
+    for (const route of ['listFindings', 'dismissFinding', 'merge'] as const) {
+      expect(
+        Reflect.getMetadata(
+          GUARDS_METADATA,
+          MemoriesController.prototype[route],
+        ),
+      ).toBeUndefined();
+    }
+  });
+
+  it('refuses the duplicate check from a paired device, and runs it on the Mac', () => {
+    expect(
+      (Reflect.getMetadata(
+        GUARDS_METADATA,
+        MemoryCheckController,
+      ) as unknown[]) ?? [],
+    ).toContain(DesktopOnlyGuard);
+
+    const guard = new DesktopOnlyGuard();
+    const requestWith = (headers: Record<string, string>) =>
+      ({
+        switchToHttp: () => ({ getRequest: () => ({ headers }) }),
+      }) as unknown as ExecutionContext;
+    const thrownBy = (run: () => unknown) => {
+      try {
+        run();
+      } catch (error) {
+        return error as { errorCode?: string };
+      }
+      throw new Error('expected the guard to refuse');
+    };
+
+    expect(
+      thrownBy(() =>
+        guard.canActivate(
+          requestWith({ [REMOTE_VIA_HEADER]: REMOTE_VIA_VALUE }),
+        ),
+      ),
+    ).toMatchObject({ errorCode: 'DESKTOP_ONLY' });
+    expect(guard.canActivate(requestWith({}))).toBe(true);
+  });
+
+  it('answers a merge with its result, or 409 MEMORY_NEAR_DUPLICATE naming the matches', async () => {
+    const result: MemoryMergeResult = {
+      entry: ENTRY,
+      batchId: 'b2',
+      forgotten: ['m1', 'm2'],
+    };
+    const merged = controllerOver({
+      merge: async () => ({ kind: 'merged', result }),
+    });
+    const duplicate = controllerOver({
+      merge: async () => ({
+        kind: 'near_duplicate',
+        candidates: [{ ...ENTRY, excerpt: 'Never npm.' }],
+        pending: ['m7'],
+        updatable: true,
+      }),
+    });
+
+    expect(await merged.merge(MERGE)).toBe(result);
+    expect(await errorOf(duplicate.merge(MERGE))).toMatchObject({
+      statusCode: 409,
+      errorCode: 'MEMORY_NEAR_DUPLICATE',
+      data: { description: 'similar entries exist: m1, m7' },
+    });
+  });
+
+  it('lists the open findings, and answers a dismissal with those still open or 404 for an unknown one', async () => {
+    const open = vi.fn(async () => [FINDING]);
+    const unknown = controllerOver(
+      {},
+      {},
+      { dismiss: async () => false, open },
+    );
+    const known = controllerOver({}, {}, { dismiss: async () => true, open });
+
+    expect(await known.listFindings()).toEqual({ findings: [FINDING] });
+    expect(await known.dismissFinding('f1')).toEqual({ findings: [FINDING] });
+    expect(await errorOf(unknown.dismissFinding('nope'))).toMatchObject({
+      statusCode: 404,
+      errorCode: 'MEMORY_FINDING_NOT_FOUND',
+    });
   });
 });

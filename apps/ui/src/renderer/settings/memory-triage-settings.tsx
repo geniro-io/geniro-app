@@ -30,6 +30,22 @@ export function blankTriageChoice(agentKind: AgentKind): MemoryTriageConfig {
   };
 }
 
+/** A choice as the request fields of a one-shot memory question; unset ones are left out. */
+export function triageRequestSettings(choice: MemoryTriageConfig) {
+  return {
+    agentKind: choice.agent,
+    ...(choice.model === null ? {} : { model: choice.model }),
+    ...(choice.effort === null ? {} : { effort: choice.effort }),
+    ...(choice.contextWindow === null
+      ? {}
+      : { contextWindow: choice.contextWindow }),
+    ...(Object.keys(choice.modelParameters).length === 0
+      ? {}
+      : { modelParameters: choice.modelParameters }),
+    ...(choice.configDir === null ? {} : { configDir: choice.configDir }),
+  };
+}
+
 /** The choice to run with: the one made, unless its agent cannot sort. */
 export function triageChoiceFor(
   agents: readonly AgentKind[],
@@ -50,6 +66,7 @@ export function MemoryTriageSettings({
   capabilitiesLoading,
   recentConfigDirs,
   configProfiles,
+  agentLabel = 'Agent that sorts',
 }: {
   agents: readonly AgentKind[];
   value: MemoryTriageConfig;
@@ -59,6 +76,7 @@ export function MemoryTriageSettings({
   capabilitiesLoading: boolean;
   recentConfigDirs: Partial<Record<CliKind, readonly string[]>>;
   configProfiles: readonly ConfigProfile[];
+  agentLabel?: string;
 }): React.JSX.Element {
   const identities = useContext(AgentIdentityContext);
   const { agent: agentKind, model, configDir } = value;
@@ -96,7 +114,7 @@ export function MemoryTriageSettings({
       {agents.length > 1 ? (
         <Select
           variant="ghost"
-          aria-label="Agent that sorts"
+          aria-label={agentLabel}
           groups={[
             {
               items: agents.map((kind) => ({

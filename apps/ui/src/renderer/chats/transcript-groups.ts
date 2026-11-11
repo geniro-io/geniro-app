@@ -4026,6 +4026,9 @@ function calleeTurnIn(rows: readonly ChatItem[]): {
       if (notice?.woke === true || endsHeldWait(item)) {
         resume();
       }
+      if (isPoolHandOff(item)) {
+        turnEnded = false;
+      }
       continue;
     }
     if (WAIT_NEUTRAL_KINDS.has(item.kind) || subagentIdOf(item) !== null) {

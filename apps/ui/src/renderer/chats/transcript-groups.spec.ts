@@ -1188,6 +1188,32 @@ describe('groupTranscript', () => {
       expect(block.waiting).toEqual({ monitors: [] });
     });
 
+    it('keeps a call handed to the next pool member running, not waiting', () => {
+      const message =
+        'Poet: pool member 1 hit a usage limit — handing the call to member 2.';
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count them.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'error',
+          { message: 'You’ve hit your weekly limit', callId: 'call-1' },
+          'poet',
+        ),
+        item('system', { callId: 'call-1', member: 2, message }, 'poet'),
+      ]);
+
+      expect(block.waiting).toBeUndefined();
+      expect(callBlockSummary(block)).toBe(message);
+    });
+
     it('is the RESULT once there is one — it lands after every row', () => {
       const block = callBlockOf([
         item('call_started', {

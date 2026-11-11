@@ -1,6 +1,11 @@
 import type { ItemKind, RunStatus } from '../../runs/runs.types';
 import type { AgentEvent, ApprovalOption } from '../adapters/adapter.types';
-import { carriesBrowserCookies, maskBrowserCookies } from './host-browser';
+import {
+  carriesBrowserCookies,
+  maskBrowserCookies,
+  maskBrowserResult,
+  mayEchoBrowserCookies,
+} from './host-browser';
 
 /**
  * Shared event→transcript mapping used by both the single-agent chat turn and
@@ -220,7 +225,9 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
         payload: {
           id: event.id,
           name: event.name,
-          result: event.result,
+          result: mayEchoBrowserCookies(event.name)
+            ? maskBrowserResult(event.result)
+            : event.result,
           isError: event.isError,
         },
       };

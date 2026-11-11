@@ -642,27 +642,30 @@ async function selectOption(
       {
         objectId: object.objectId,
         functionDeclaration: `function (values) {
-        if (this.tagName !== 'SELECT') { return -1; }
+        if (this.tagName !== 'SELECT') { return null; }
         const wanted = new Set(values);
-        let count = 0;
         for (const option of this.options) {
           option.selected = wanted.has(option.value) || wanted.has(option.label) || wanted.has(option.text.trim());
-          if (option.selected) { count += 1; }
         }
         this.dispatchEvent(new Event('input', { bubbles: true }));
         this.dispatchEvent(new Event('change', { bubbles: true }));
-        return count;
+        return Array.from(this.selectedOptions, (option) => option.text.trim());
       }`,
         arguments: [{ value: values }],
         returnByValue: true,
       },
     );
-    const count = response.result?.value as number | undefined;
-    if (count === -1) {
+    const selected = response.result?.value;
+    if (!Array.isArray(selected)) {
       throw new AgentError(`ref ${ref} is not a select element`);
     }
     await settle(ctx);
-    return { text: `Selected ${count ?? 0} option(s)` };
+    return {
+      text:
+        selected.length === 0
+          ? 'No option matched; nothing is selected'
+          : `Selected: ${selected.map(String).join(', ')}`,
+    };
   } catch (error) {
     throw nodeError(error, ref);
   }
@@ -711,23 +714,22 @@ async function scroll(
     await settle(ctx);
     return { text: `Scrolled ${ref} into view` };
   }
-  const viewport = await ctx.send<{
-    result?: { value?: { width: number; height: number } };
-  }>('Runtime.evaluate', {
-    expression: '({ width: innerWidth, height: innerHeight })',
-    returnByValue: true,
-  });
-  const size = viewport.result?.value ?? { width: 800, height: 600 };
   const amount = dy ?? DEFAULT_SCROLL;
-  await ctx.send('Input.dispatchMouseEvent', {
-    type: 'mouseWheel',
-    x: size.width / 2,
-    y: size.height / 2,
-    deltaX: 0,
-    deltaY: amount,
-  });
+  const moved = await ctx.send<{ result?: { value?: unknown } }>(
+    'Runtime.evaluate',
+    {
+      expression: `(() => { const before = scrollY; scrollBy({ top: ${amount}, behavior: 'instant' }); return scrollY - before; })()`,
+      returnByValue: true,
+    },
+  );
   await settle(ctx);
-  return { text: `Scrolled by ${amount} px` };
+  const by = moved.result?.value;
+  return {
+    text:
+      typeof by === 'number'
+        ? `Scrolled by ${by} px (asked for ${amount})`
+        : `Scrolled by ${amount} px`,
+  };
 }
 
 async function cookieSession(

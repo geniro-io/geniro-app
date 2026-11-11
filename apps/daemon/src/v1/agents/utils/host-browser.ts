@@ -46,19 +46,41 @@ const COOKIE_CARRIERS = [
  * of somebody else's server costs nothing.
  */
 export function carriesBrowserCookies(toolName: string): boolean {
-  return COOKIE_CARRIERS.some(
-    (tool) =>
-      toolName === tool ||
-      toolName.endsWith(`__${tool}`) ||
-      toolName.endsWith(`: ${tool}`),
+  return COOKIE_CARRIERS.some((tool) => namesTool(toolName, tool));
+}
+
+/** Whether a tool call's name is any of the browser tools, in any CLI's spelling. */
+export function namesBrowserTool(toolName: string): boolean {
+  return HOST_BROWSER_TOOLS.some((tool) => namesTool(toolName, tool));
+}
+
+function namesTool(toolName: string, tool: string): boolean {
+  return (
+    toolName === tool ||
+    toolName.endsWith(`__${tool}`) ||
+    toolName.endsWith(`: ${tool}`)
   );
 }
 
+const COOKIE_FIELDS_KEPT: ReadonlySet<string> = new Set([
+  'name',
+  'url',
+  'domain',
+  'path',
+  'secure',
+  'httpOnly',
+  'sameSite',
+  'expirationDate',
+  'expires',
+]);
+
 /**
- * A copy of a cookie-carrying call's arguments with every cookie `value`
+ * A copy of a cookie-carrying call's arguments with every cookie value
  * replaced by {@link BROWSER_COOKIE_MASK}, after registering each original so
- * the debug log scrubs it too. The arguments arrive in each CLI's own wrapping,
- * so every `cookies` array is masked wherever it sits.
+ * the debug log scrubs it too. The arguments arrive in each CLI's own wrapping
+ * and, from a model, in any shape — a call the tool will refuse is persisted
+ * all the same — so whatever sits under a `cookies` key is masked down to the
+ * fields that name a cookie rather than carry it.
  */
 export function maskBrowserCookies(input: unknown): unknown {
   if (typeof input === 'string') {
@@ -80,27 +102,105 @@ function maskNode(node: unknown): unknown {
   }
   const copy: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(node)) {
-    copy[key] =
-      key === 'cookies' && Array.isArray(value)
-        ? value.map(maskCookie)
-        : maskNode(value);
+    copy[key] = key === 'cookies' ? maskCookies(value) : maskNode(value);
   }
   return copy;
 }
 
-function maskCookie(cookie: unknown): unknown {
-  if (typeof cookie !== 'object' || cookie === null || Array.isArray(cookie)) {
-    return maskNode(cookie);
+function maskCookies(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return maskValue(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(maskCookies);
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
   }
   const copy: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(cookie)) {
-    if (key === 'value' && typeof value === 'string') {
-      registerSecret(value, COOKIE_SECRET_LABEL);
-      registerSecret(JSON.stringify(value).slice(1, -1), COOKIE_SECRET_LABEL);
-      copy[key] = BROWSER_COOKIE_MASK;
-    } else {
-      copy[key] = maskNode(value);
-    }
+  for (const [key, field] of Object.entries(value)) {
+    copy[key] = COOKIE_FIELDS_KEPT.has(key) ? field : maskCookies(field);
   }
   return copy;
+}
+
+const MIN_RESULT_MASK_LENGTH = 8;
+
+const MAX_MASKED_COOKIE_VALUES = 1000;
+
+const maskedCookieValues = new Set<string>();
+
+function maskValue(value: string): string {
+  if (value === '') {
+    return value;
+  }
+  registerSecret(value, COOKIE_SECRET_LABEL);
+  registerSecret(JSON.stringify(value).slice(1, -1), COOKIE_SECRET_LABEL);
+  rememberMaskedValue(value.trim());
+  return BROWSER_COOKIE_MASK;
+}
+
+function rememberMaskedValue(value: string): void {
+  if (value.length < MIN_RESULT_MASK_LENGTH) {
+    return;
+  }
+  maskedCookieValues.delete(value);
+  maskedCookieValues.add(value);
+  if (maskedCookieValues.size > MAX_MASKED_COOKIE_VALUES) {
+    const oldest = maskedCookieValues.values().next().value;
+    if (oldest !== undefined) {
+      maskedCookieValues.delete(oldest);
+    }
+  }
+}
+
+/** Forget every cookie value masked so far — test hygiene. */
+export function forgetMaskedCookieValues(): void {
+  maskedCookieValues.clear();
+}
+
+/**
+ * Whether a tool result is one a cookie value an agent set may come back in:
+ * a browser tool's, or one whose CLI names no tool on its results (claude),
+ * since a page an agent reads can print the cookie it was given.
+ */
+export function mayEchoBrowserCookies(toolName: string | null): boolean {
+  return (
+    maskedCookieValues.size > 0 &&
+    (toolName === null || namesBrowserTool(toolName))
+  );
+}
+
+/**
+ * A tool result with every cookie value an agent set masked in its text. Image
+ * blocks are passed through untouched.
+ */
+export function maskBrowserResult(result: unknown): unknown {
+  if (typeof result === 'string') {
+    return maskCookieValuesIn(result);
+  }
+  if (Array.isArray(result)) {
+    return result.map(maskBrowserResult);
+  }
+  if (typeof result !== 'object' || result === null) {
+    return result;
+  }
+  if ((result as { type?: unknown }).type === 'image') {
+    return result;
+  }
+  const copy: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(result)) {
+    copy[key] = maskBrowserResult(value);
+  }
+  return copy;
+}
+
+function maskCookieValuesIn(text: string): string {
+  let out = text;
+  for (const value of maskedCookieValues) {
+    if (out.includes(value)) {
+      out = out.split(value).join(BROWSER_COOKIE_MASK);
+    }
+  }
+  return out;
 }

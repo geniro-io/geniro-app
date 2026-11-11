@@ -382,6 +382,67 @@ describe('runBrowserAgentRequest', () => {
     expect(text).toContain('result cut at 20 KB');
   });
 
+  it('scrolls the page in script, never through a wheel event that waits on an input ack', async () => {
+    const { host, debug } = rig();
+    const scrolled: string[] = [];
+    debug.handlers['Runtime.evaluate'] = (params) => {
+      const expression = String(params?.expression ?? '');
+      if (expression.includes('scrollBy')) {
+        scrolled.push(expression);
+        return { result: { type: 'number', value: 800 } };
+      }
+      return {};
+    };
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'scroll', tab: 't1', dy: 800 }),
+    );
+
+    expect(reply).toMatchObject({
+      ok: true,
+      text: 'Scrolled by 800 px (asked for 800)',
+    });
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]).toContain('top: 800');
+    expect(
+      debug.sendCommand.mock.calls.some(
+        ([method]) => method === 'Input.dispatchMouseEvent',
+      ),
+    ).toBe(false);
+  });
+
+  it('names the options a select holds after the choice, and refuses a non-select', async () => {
+    const { host, tab, debug } = rig();
+    tab.refs.set('e3', 30);
+    debug.handlers['DOM.resolveNode'] = () => ({ object: { objectId: 'o1' } });
+    let answer: unknown = ['Gamma'];
+    debug.handlers['Runtime.callFunctionOn'] = () => ({
+      result: { type: 'object', value: answer },
+    });
+
+    const chosen = await runBrowserAgentRequest(
+      host,
+      request({
+        kind: 'select',
+        tab: 't1',
+        ref: 'e3',
+        values: ['Beta', 'Gamma'],
+      }),
+    );
+    answer = null;
+    const refused = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'select', tab: 't1', ref: 'e3', values: ['Gamma'] }),
+    );
+
+    expect(chosen).toMatchObject({ ok: true, text: 'Selected: Gamma' });
+    expect(refused).toMatchObject({
+      ok: false,
+      error: 'ref e3 is not a select element',
+    });
+  });
+
   it('replies the Stop sentence when the user stops the op', async () => {
     const { host, debug, tab } = rig();
     debug.handlers['Runtime.evaluate'] = () => new Promise(() => undefined);

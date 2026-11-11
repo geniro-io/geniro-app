@@ -55,6 +55,7 @@ import { registerSecret } from './v1/diagnostics/utils/redact';
 import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { KnowledgeTextIndexService } from './v1/knowledge/services/knowledge-text-index.service';
 import { MemoryTextIndexService } from './v1/memory/services/memory-text-index.service';
+import { MemoryReviewService } from './v1/memory/services/memory-review.service';
 import { MemoryUsageBackfillService } from './v1/memory/services/memory-usage-backfill.service';
 import { MIGRATION_FAILED_EXIT_CODE } from './v1/migrations/migrations.types';
 import { MigrationRunnerService } from './v1/migrations/services/migration-runner.service';
@@ -143,6 +144,7 @@ let threadDelivery: ThreadDeliveryService | null = null;
 let wallWork: WallWorkService | null = null;
 let payloadRefs: PayloadRefsSweepService | null = null;
 let memoryUsage: MemoryUsageBackfillService | null = null;
+let memoryMarks: MemoryReviewService | null = null;
 let pullRequests: PullRequestCaptureService | null = null;
 bootstrapper.addExtension(
   buildHttpServerExtension(
@@ -221,6 +223,7 @@ bootstrapper.addExtension(
         void (async () => {
           await payloadRefs?.sweepAllQuietly();
           await memoryUsage?.runQuietly();
+          await memoryMarks?.sweepQuietly();
         })();
         // Off the boot path for the same reason: it re-reads from the start
         // every run scanned under an older pull-request rule — the one pass that
@@ -353,6 +356,7 @@ bootstrapper.addExtension(
       wallWork = app.get(WallWorkService);
       payloadRefs = app.get(PayloadRefsSweepService);
       memoryUsage = app.get(MemoryUsageBackfillService);
+      memoryMarks = app.get(MemoryReviewService);
       pullRequests = app.get(PullRequestCaptureService);
 
       // Sweep what a prior crash left behind — per-turn files and directories

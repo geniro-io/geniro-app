@@ -10,6 +10,7 @@ import {
   MemoryPatchSchema,
 } from '../memory.types';
 import type { MemoryService } from '../services/memory.service';
+import type { MemoryReviewService } from '../services/memory-review.service';
 import { MemoriesController } from './memories.controller';
 import { MemoryConfigController } from './memory-config.controller';
 
@@ -36,8 +37,14 @@ const ENTRY: MemoryEntry = {
   approvedAt: null,
 };
 
-function controllerOver(service: Partial<MemoryService>) {
-  return new MemoriesController(service as MemoryService);
+function controllerOver(
+  service: Partial<MemoryService>,
+  review: Partial<MemoryReviewService> = {},
+) {
+  return new MemoriesController(
+    service as MemoryService,
+    review as MemoryReviewService,
+  );
 }
 
 async function errorOf(promise: Promise<unknown>) {

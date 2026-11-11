@@ -6,15 +6,24 @@ import {
   MemoryEntrySchema,
   MemoryExportSchema,
   MemoryForgetAllSchema,
+  MemoryForgetBatchListSchema,
+  MemoryForgetBatchRequestSchema,
+  MemoryForgetBatchResultSchema,
   MemoryImportPreviewRequestSchema,
   MemoryImportPreviewSchema,
   MemoryImportRequestSchema,
   MemoryImportResultSchema,
   MemoryImportTriageRequestSchema,
   MemoryImportTriageSchema,
+  MemoryKeepResultSchema,
   MemoryListQuerySchema,
   MemoryListSchema,
   MemoryPatchSchema,
+  MemoryRestoreBatchResultSchema,
+  MemoryReviewIdsSchema,
+  MemoryReviewPageSchema,
+  MemoryReviewQuerySchema,
+  MemoryReviewSummarySchema,
 } from '../memory.types';
 
 export class MemoryListQueryDto extends createZodDto(MemoryListQuerySchema) {}
@@ -34,6 +43,36 @@ export class MemoryEntryDto extends createZodDto(
 export class ForgetAllMemoriesDto extends createZodDto(MemoryForgetAllSchema) {}
 
 export class MemoryExportDto extends createZodDto(MemoryExportSchema) {}
+
+export class MemoryReviewQueryDto extends createZodDto(
+  MemoryReviewQuerySchema,
+) {}
+
+export class MemoryReviewPageDto extends createZodDto(MemoryReviewPageSchema) {}
+
+export class MemoryReviewIdsDto extends createZodDto(MemoryReviewIdsSchema) {}
+
+export class MemoryReviewSummaryDto extends createZodDto(
+  MemoryReviewSummarySchema,
+) {}
+
+export class ForgetMemoryBatchDto extends createZodDto(
+  MemoryForgetBatchRequestSchema,
+) {}
+
+export class MemoryForgetBatchResultDto extends createZodDto(
+  MemoryForgetBatchResultSchema,
+) {}
+
+export class MemoryForgetBatchListDto extends createZodDto(
+  MemoryForgetBatchListSchema,
+) {}
+
+export class MemoryRestoreBatchResultDto extends createZodDto(
+  MemoryRestoreBatchResultSchema,
+) {}
+
+export class MemoryKeepResultDto extends createZodDto(MemoryKeepResultSchema) {}
 
 export class MemoryImportPreviewRequestDto extends createZodDto(
   MemoryImportPreviewRequestSchema,

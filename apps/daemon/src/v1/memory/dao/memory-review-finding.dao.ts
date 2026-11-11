@@ -101,7 +101,9 @@ export class MemoryReviewFindingDao extends BaseDao<MemoryReviewFinding> {
   }
 
   /** Every stored check's pair and the texts it judged, as `a\nb` → `hashA\nhashB`. */
-  async checkedTexts(em: EntityManager = this.em): Promise<Map<string, string>> {
+  async checkedTexts(
+    em: EntityManager = this.em,
+  ): Promise<Map<string, string>> {
     const rows = await this.database(em)
       .selectFrom('memory_review_findings')
       .select(['memory_a_id', 'memory_b_id', 'hash_a', 'hash_b'])
@@ -160,9 +162,7 @@ export class MemoryReviewFindingDao extends BaseDao<MemoryReviewFinding> {
       .orderBy('f.id')
       .execute();
     return rows.flatMap((row) =>
-      isFindingKind(row.outcome) &&
-      row.quote_a !== null &&
-      row.quote_b !== null
+      isFindingKind(row.outcome) && row.quote_a !== null && row.quote_b !== null
         ? [
             {
               id: row.id,

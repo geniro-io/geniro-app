@@ -82,7 +82,10 @@ export type MemoryMergeOutcome =
 /** Rolls a merge's transaction back with the outcome to answer. */
 class MergeRefused extends Error {
   constructor(
-    readonly outcome: Exclude<MemorySaveOutcome, { kind: 'created' | 'updated' }>,
+    readonly outcome: Exclude<
+      MemorySaveOutcome,
+      { kind: 'created' | 'updated' }
+    >,
   ) {
     super(outcome.kind);
   }

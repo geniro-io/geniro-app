@@ -3,12 +3,12 @@ import { setImmediate } from 'node:timers/promises';
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
+import { type MemoryActiveText, MemoryDao } from '../dao/memory.dao';
 import {
   type MemoryCheckRecord,
   MemoryReviewFindingDao,
   pairKey,
 } from '../dao/memory-review-finding.dao';
-import { type MemoryActiveText, MemoryDao } from '../dao/memory.dao';
 import type { Memory } from '../entity/memory.entity';
 import {
   MEMORY_CHECK_PAIRS_LISTED_MAX,
@@ -71,7 +71,10 @@ export class MemoryFindingsService {
     }
     const checked = await this.findings.checkedTexts(em);
     const hashes = new Map(
-      entries.map((entry) => [entry.id, memoryTextHash(entry.title, entry.body)]),
+      entries.map((entry) => [
+        entry.id,
+        memoryTextHash(entry.title, entry.body),
+      ]),
     );
     const seen = new Set<string>();
     const pairs: MemoryCandidatePair[] = [];
@@ -129,10 +132,7 @@ export class MemoryFindingsService {
   async checkable(pairs: readonly MemoryPair[]): Promise<MemoryCheckPair[]> {
     const em = this.em.fork();
     const ordered = pairs.map(({ aId, bId }) => orderedPair(aId, bId));
-    const rows = await this.memories.getByIds(
-      [...new Set(ordered.flat())],
-      em,
-    );
+    const rows = await this.memories.getByIds([...new Set(ordered.flat())], em);
     const byId = new Map(rows.map((row) => [row.id, row]));
     const checked = await this.findings.checkedTexts(em);
     const seen = new Set<string>();

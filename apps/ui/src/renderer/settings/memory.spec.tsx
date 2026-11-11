@@ -19,12 +19,15 @@ import { confirmInDialog } from '../__tests__/confirm-in-dialog';
 import type {
   MemoriesApiListMemoryReviewRequest,
   MemoryEntry,
+  MemoryFinding,
   MemoryForgetBatchListDto,
   MemoryImportPreviewDto,
   MemoryImportResultDto,
   MemoryImportTriageDto,
   MemoryListDto,
+  MemoryReviewCheckResultDto,
   MemoryReviewPageDto,
+  MemoryReviewPairsDto,
   MemoryReviewRow,
   MemoryReviewSummaryDto,
   Team,
@@ -143,6 +146,52 @@ const COLD_RULE = reviewRow(
   { warning: 'feedback' },
 );
 
+const NO_PAIRS: MemoryReviewPairsDto = {
+  pairs: [],
+  inputTokens: 0,
+  requests: 0,
+  costUsd: null,
+  checkAgents: ['claude', 'codex'],
+};
+
+function pairsOf(n: number): MemoryReviewPairsDto {
+  return {
+    pairs: Array.from({ length: n }, (_, i) => ({
+      aId: `a${i}`,
+      bId: `b${i}`,
+    })),
+    inputTokens: 390_000,
+    requests: Math.ceil(n / 20),
+    costUsd: null,
+    checkAgents: ['claude', 'codex'],
+  };
+}
+
+const FINDING: MemoryFinding = {
+  id: 'f1',
+  kind: 'contradicts',
+  a: memoryEntry({
+    id: 'p1',
+    handle: 'm31',
+    title: 'Restart colima when Docker hangs',
+    body: 'If Docker stops answering, run colima restart.',
+    type: 'reference',
+    projectId: 'project-website',
+  }),
+  b: memoryEntry({
+    id: 'p2',
+    handle: 'm32',
+    title: 'Never restart colima',
+    body: 'Do not restart colima: it kills every session’s containers.',
+  }),
+  quoteA: 'run colima restart',
+  quoteB: 'Do not restart colima',
+  reason: 'One says to restart colima, the other forbids it.',
+  agentKind: 'claude',
+  model: 'haiku',
+  checkedAt: '2026-11-11T09:00:00.000Z',
+};
+
 function fakeApi(
   listed: MemoryEntry[] = [ACTIVE, WAITING],
   review: (
@@ -154,7 +203,9 @@ function fakeApi(
     next: null,
   }),
   summary: MemoryReviewSummaryDto = SUMMARY,
+  checks: { pairs?: MemoryReviewPairsDto; findings?: MemoryFinding[] } = {},
 ) {
+  let findings = checks.findings ?? [];
   return {
     listMemories: vi.fn((request: { status?: string } = {}) =>
       Promise.resolve<MemoryListDto>({
@@ -215,6 +266,34 @@ function fakeApi(
     ),
     unkeepMemory: vi.fn((request: { memoryId: string }) =>
       Promise.resolve({ id: request.memoryId, keptAt: null }),
+    ),
+    listMemoryReviewPairs: vi.fn((_request?: unknown) =>
+      Promise.resolve<MemoryReviewPairsDto>(checks.pairs ?? NO_PAIRS),
+    ),
+    checkMemoryReviewPairs: vi.fn(
+      (
+        request: {
+          memoryReviewCheckRequestDto: { pairs: unknown[] };
+        },
+        _init?: unknown,
+      ) =>
+        Promise.resolve<MemoryReviewCheckResultDto>({
+          checked: request.memoryReviewCheckRequestDto.pairs.length,
+          skipped: 0,
+          findings: [],
+        }),
+    ),
+    listMemoryFindings: vi.fn(() => Promise.resolve({ findings })),
+    dismissMemoryFinding: vi.fn((request: { findingId: string }) => {
+      findings = findings.filter((found) => found.id !== request.findingId);
+      return Promise.resolve({ findings });
+    }),
+    mergeMemories: vi.fn((_request: unknown) =>
+      Promise.resolve({
+        entry: memoryEntry({ id: 'merged', handle: 'm90' }),
+        batchId: 'batch-merge',
+        forgotten: ['m31', 'm32'],
+      }),
     ),
   };
 }
@@ -1432,5 +1511,224 @@ describe('Memory clean up', () => {
       inDialog().querySelector('[data-slot="memory-cleanup-picked"]')
         ?.textContent,
     ).toBe('0 selected');
+  });
+});
+
+describe('Memory duplicates and contradictions', () => {
+  function inDialog(): HTMLElement {
+    const dialog = document.querySelector<HTMLElement>(
+      '[data-slot="memory-cleanup"]',
+    );
+    if (!dialog) {
+      throw new Error('the cleanup dialog is not open');
+    }
+    return dialog;
+  }
+
+  async function openChecks(
+    api: ReturnType<typeof fakeApi>,
+    props: Partial<React.ComponentProps<typeof Memory>> = {},
+  ): Promise<void> {
+    await render({ api, ...props });
+    await press(button(container, 'Review…'));
+    const tab = [...inDialog().querySelectorAll('button')].find((candidate) =>
+      candidate.textContent?.startsWith('Duplicates & contradictions'),
+    );
+    if (!tab) {
+      throw new Error('no Duplicates & contradictions tab');
+    }
+    await press(tab);
+  }
+
+  function finding(): HTMLElement {
+    const found = inDialog().querySelector<HTMLElement>(
+      '[data-slot="memory-finding"]',
+    );
+    if (!found) {
+      throw new Error('no finding shown');
+    }
+    return found;
+  }
+
+  it('shows both entries side by side with the quote of each', async () => {
+    await openChecks(
+      fakeApi(undefined, undefined, undefined, { findings: [FINDING] }),
+    );
+
+    const quotes = [
+      ...finding().querySelectorAll('[data-slot="memory-finding-quote"]'),
+    ].map((quote) => quote.textContent);
+    expect(quotes).toEqual(['“run colima restart”', '“Do not restart colima”']);
+    expect(finding().textContent).toContain('Contradiction');
+    expect(finding().textContent).toContain(
+      'claude · haiku: One says to restart colima, the other forbids it.',
+    );
+  });
+
+  it('the check is refused from a paired device', async () => {
+    const api = fakeApi(undefined, undefined, undefined, {
+      pairs: pairsOf(3),
+      findings: [FINDING],
+    });
+    await openChecks(api, { remote: true });
+
+    expect(inDialog().textContent).toContain('Start the check from your Mac.');
+    expect(
+      [...inDialog().querySelectorAll('button')].some((candidate) =>
+        candidate.textContent?.startsWith('Check '),
+      ),
+    ).toBe(false);
+    expect(api.listMemoryReviewPairs).not.toHaveBeenCalled();
+    expect(button(finding(), 'Both are true')).toBeTruthy();
+  });
+
+  it('cursor is not offered: the picker lists only the agents the daemon names', async () => {
+    const api = fakeApi(undefined, undefined, undefined, {
+      pairs: { ...pairsOf(2), checkAgents: ['claude', 'codex'] },
+    });
+    await openChecks(api);
+
+    const trigger = inDialog().querySelector<HTMLElement>(
+      '[data-menu-trigger][aria-label="Agent that checks"]',
+    );
+    expect(trigger).not.toBeNull();
+    await press(trigger as HTMLElement);
+    const options = [...document.querySelectorAll('[role="option"]')].map(
+      (option) => option.textContent?.trim().toLowerCase(),
+    );
+    expect(options).toHaveLength(2);
+    expect(options.some((option) => option?.includes('cursor'))).toBe(false);
+  });
+
+  it('asks in batches of 20, and Stop lets the batch in flight finish but asks no more', async () => {
+    let answer: (value: MemoryReviewCheckResultDto) => void = () => undefined;
+    const api = fakeApi(undefined, undefined, undefined, {
+      pairs: pairsOf(45),
+    });
+    api.checkMemoryReviewPairs.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await openChecks(api);
+
+    expect(inDialog().textContent).toContain(
+      '45 pairs · about 390k tokens in · 3 requests · cost not measured for this model',
+    );
+    await press(button(inDialog(), 'Check 45 pairs'));
+    expect(api.checkMemoryReviewPairs).toHaveBeenCalledTimes(1);
+    const first = api.checkMemoryReviewPairs.mock.calls[0]![0];
+    expect(first.memoryReviewCheckRequestDto.pairs).toHaveLength(20);
+    expect(inDialog().textContent).toContain(
+      'the batch already asked still finishes and is billed',
+    );
+
+    await press(button(inDialog(), 'Stop'));
+    expect(button(inDialog(), 'Stopping after this batch…').disabled).toBe(
+      true,
+    );
+    api.listMemoryFindings.mockResolvedValue({ findings: [FINDING] });
+    await act(async () => {
+      answer({ checked: 20, skipped: 0, findings: [FINDING] });
+    });
+    await settle();
+
+    expect(api.checkMemoryReviewPairs).toHaveBeenCalledTimes(1);
+    expect(finding().textContent).toContain('Never restart colima');
+  });
+
+  it('Keep A forgets B as a cleanup batch the notice can undo', async () => {
+    const api = fakeApi(undefined, undefined, undefined, {
+      findings: [FINDING],
+    });
+    await openChecks(api);
+
+    await press(button(finding(), 'Keep A, forget B'));
+
+    expect(api.forgetMemoryBatch).toHaveBeenCalledWith({
+      forgetMemoryBatchDto: { ids: ['p2'] },
+    });
+    const notice = inDialog().querySelector(
+      '[data-slot="memory-cleanup-notice"]',
+    );
+    expect(notice?.textContent).toContain('Kept m31 and forgot m32.');
+    await press(button(notice as HTMLElement, 'Undo'));
+    expect(api.restoreMemoryBatch).toHaveBeenCalledWith({
+      batchId: 'batch-1',
+    });
+  });
+
+  it('Merge saves the text the user edited as a new entry of the first one’s scope', async () => {
+    const api = fakeApi(undefined, undefined, undefined, {
+      findings: [FINDING],
+    });
+    await openChecks(api);
+
+    await press(button(finding(), 'Merge…'));
+    const title = finding().querySelector<HTMLInputElement>(
+      '[data-slot="memory-finding-merge"] input',
+    );
+    await type(title as HTMLInputElement, 'Restarting colima');
+    await press(button(finding(), 'Save merged entry'));
+
+    expect(api.mergeMemories).toHaveBeenCalledWith({
+      mergeMemoriesDto: {
+        sourceIds: ['p1', 'p2'],
+        title: 'Restarting colima',
+        body: `${FINDING.a.body}\n\n${FINDING.b.body}`,
+        type: 'reference',
+        projectId: 'project-website',
+        teamSlug: null,
+      },
+    });
+    const notice = inDialog().querySelector(
+      '[data-slot="memory-cleanup-notice"]',
+    );
+    expect(notice?.textContent).toContain('Saved m90 and forgot m31 and m32.');
+    expect(button(notice as HTMLElement, 'Undo')).toBeTruthy();
+  });
+
+  it('a refused merge keeps the form open and says why', async () => {
+    const api = fakeApi(undefined, undefined, undefined, {
+      findings: [FINDING],
+    });
+    api.mergeMemories.mockRejectedValueOnce(
+      new Error(
+        'daemon POST /v1/memories/merge failed (409): similar entries exist: m7',
+      ),
+    );
+    await openChecks(api);
+
+    await press(button(finding(), 'Merge…'));
+    await press(button(finding(), 'Save merged entry'));
+
+    expect(
+      finding().querySelector('[data-slot="memory-finding-merge"]')
+        ?.textContent,
+    ).toContain('similar entries exist: m7');
+  });
+
+  it('Both are true dismisses the finding, and Decide later only sets it aside', async () => {
+    const second: MemoryFinding = { ...FINDING, id: 'f2', kind: 'duplicate' };
+    const api = fakeApi(undefined, undefined, undefined, {
+      findings: [FINDING, second],
+    });
+    await openChecks(api);
+
+    await press(button(finding(), 'Both are true'));
+    expect(api.dismissMemoryFinding).toHaveBeenCalledWith({ findingId: 'f1' });
+    expect(
+      inDialog().querySelectorAll('[data-slot="memory-finding"]'),
+    ).toHaveLength(1);
+
+    await press(button(finding(), 'Decide later'));
+    expect(api.dismissMemoryFinding).toHaveBeenCalledTimes(1);
+    expect(
+      inDialog().querySelectorAll('[data-slot="memory-finding"]'),
+    ).toHaveLength(0);
+    await press(button(inDialog(), 'Show 1 set aside'));
+    expect(
+      inDialog().querySelectorAll('[data-slot="memory-finding"]'),
+    ).toHaveLength(1);
   });
 });

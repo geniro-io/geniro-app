@@ -47,7 +47,10 @@ export class MemoryCheckService {
     const requests = Math.ceil(candidates.length / MEMORY_CHECK_PAIRS_MAX);
     const chars =
       requests * checkPrompt([]).length +
-      candidates.reduce((sum, pair) => sum + pair.chars + PAIR_OVERHEAD_CHARS, 0);
+      candidates.reduce(
+        (sum, pair) => sum + pair.chars + PAIR_OVERHEAD_CHARS,
+        0,
+      );
     const inputTokens = approxInstructionTokens(chars);
     return {
       pairs: candidates.map(({ aId, bId }) => ({ aId, bId })),

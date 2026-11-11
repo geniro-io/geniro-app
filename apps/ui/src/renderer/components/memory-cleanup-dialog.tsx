@@ -17,7 +17,7 @@ import { SegmentedControl } from './ui/segmented-control';
 import { Select, type SelectGroup } from './ui/select';
 import { Spinner } from './ui/spinner';
 
-export type MemoryCleanupTab = 'cold' | 'kept' | 'forgotten';
+export type MemoryCleanupTab = 'cold' | 'checks' | 'kept' | 'forgotten';
 
 export const MEMORY_CLEANUP_SORTS = [
   'leastUsed',
@@ -211,9 +211,10 @@ function Reasons({
 
 /**
  * The cleanup list over the shared memory: the least used entries to forget
- * in batches, the kept ones, and the forgotten ones with their recent
- * cleanups and Undo. Every list, figure and filter comes from the daemon,
- * counted over every row; the dialog only draws and reports presses.
+ * in batches, the duplicates and contradictions a check found, the kept ones,
+ * and the forgotten ones with their recent cleanups and Undo. Every list,
+ * figure and filter comes from the daemon, counted over every row; the dialog
+ * only draws and reports presses.
  */
 export function MemoryCleanupDialog({
   open,
@@ -250,6 +251,7 @@ export function MemoryCleanupDialog({
   busyId,
   projectName,
   teamName,
+  checkPanel = null,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -289,6 +291,8 @@ export function MemoryCleanupDialog({
   busyId: string | null;
   projectName: (projectId: string | null) => string | null;
   teamName: (slug: string | null) => string | null;
+  /** The Duplicates & contradictions tab's content. */
+  checkPanel?: React.ReactNode;
 }): React.JSX.Element {
   const tabLabel = (label: string, n: number | null) =>
     n === null ? label : `${label} (${n.toLocaleString('en-US')})`;
@@ -401,6 +405,10 @@ export function MemoryCleanupDialog({
           onSelect={onTab}
           options={[
             { id: 'cold', label: tabLabel('Least used', counts.cold) },
+            {
+              id: 'checks',
+              label: tabLabel('Duplicates & contradictions', counts.checks),
+            },
             { id: 'kept', label: tabLabel('Kept', counts.kept) },
             { id: 'forgotten', label: tabLabel('Forgotten', counts.forgotten) },
           ]}
@@ -512,7 +520,10 @@ export function MemoryCleanupDialog({
             </ul>
           </section>
         ) : null}
-        {error === null ? null : <ErrorText>{error}</ErrorText>}
+        {tab === 'checks' ? checkPanel : null}
+        {error === null || tab === 'checks' ? null : (
+          <ErrorText>{error}</ErrorText>
+        )}
         {tab === 'cold' && countedSince !== null ? (
           <p className="m-0 text-xs text-muted-foreground">
             Counted over every entry; reads counted since{' '}
@@ -520,7 +531,7 @@ export function MemoryCleanupDialog({
             {counting ? ', earlier chats still being counted' : ''}.
           </p>
         ) : null}
-        {loading && rows.length === 0 ? (
+        {tab === 'checks' ? null : loading && rows.length === 0 ? (
           <p
             role="status"
             className="m-0 flex items-center gap-2 text-sm text-muted-foreground">

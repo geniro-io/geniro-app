@@ -50,6 +50,7 @@ export function MemoryTriageSettings({
   capabilitiesLoading,
   recentConfigDirs,
   configProfiles,
+  agentLabel = 'Agent that sorts',
 }: {
   agents: readonly AgentKind[];
   value: MemoryTriageConfig;
@@ -59,6 +60,8 @@ export function MemoryTriageSettings({
   capabilitiesLoading: boolean;
   recentConfigDirs: Partial<Record<CliKind, readonly string[]>>;
   configProfiles: readonly ConfigProfile[];
+  /** The agent picker's accessible name. */
+  agentLabel?: string;
 }): React.JSX.Element {
   const identities = useContext(AgentIdentityContext);
   const { agent: agentKind, model, configDir } = value;
@@ -96,7 +99,7 @@ export function MemoryTriageSettings({
       {agents.length > 1 ? (
         <Select
           variant="ghost"
-          aria-label="Agent that sorts"
+          aria-label={agentLabel}
           groups={[
             {
               items: agents.map((kind) => ({

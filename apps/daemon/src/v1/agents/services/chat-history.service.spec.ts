@@ -617,7 +617,7 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       ).toEqual([31]);
     });
 
-    it("anchors none of a call's rows to a page of that call's own conversation", async () => {
+    it("anchors only the starts to a page holding its call's whole conversation", async () => {
       await teamRun();
 
       const { anchors } = await readingService().read(
@@ -628,6 +628,28 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       );
 
       expect(anchors.map((item) => item.seq)).toEqual([2, 7]);
+    });
+
+    it("anchors a long turn's status above a page of its own conversation — without it the call reads as never started", async () => {
+      await teamRun();
+      await row(9, 'status', 'qa', { callId: 'call-2', status: 'running' });
+      for (let seq = 10; seq < 30; seq += 1) {
+        await row(seq, 'tool_call', 'qa', { id: `t${seq}`, callId: 'call-2' });
+      }
+
+      const { items, anchors } = await readingService().read(
+        'run-a',
+        -1,
+        { limit: 5 },
+        { call: 'call-2' },
+      );
+
+      expect(items.map((item) => item.seq)).toEqual([25, 26, 27, 28, 29]);
+      expect(
+        anchors
+          .filter((item) => item.kind === 'status')
+          .map((item) => item.seq),
+      ).toEqual([9]);
     });
 
     it("reads every row of a chat for its own flow — a chat's agent calls no one", async () => {

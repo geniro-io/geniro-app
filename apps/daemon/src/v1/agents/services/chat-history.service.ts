@@ -205,11 +205,7 @@ export class ChatHistoryService {
       inCalls !== undefined,
       callRows,
     );
-    if (
-      inCalls === undefined ||
-      conversation === undefined ||
-      !('root' in conversation)
-    ) {
+    if (inCalls === undefined || conversation === undefined) {
       return { items, anchors };
     }
     const byId = new Map(anchors.map((row) => [row.id, row] as const));
@@ -221,9 +217,13 @@ export class ChatHistoryService {
         }
       }
     };
-    add(await this.callsAcross(runId, kept, callRows));
-    add(await this.cardRowsFor(runId, [...kept, ...byId.values()]));
-    add(await this.deadCardsOf(runId, kept));
+    if ('root' in conversation) {
+      add(await this.callsAcross(runId, kept, callRows));
+      add(await this.cardRowsFor(runId, [...kept, ...byId.values()]));
+      add(await this.deadCardsOf(runId, kept));
+    } else {
+      add(await this.cardRowsOfCalls(runId, inCalls));
+    }
     return {
       items,
       anchors: [...byId.values()].sort((a, b) => a.seq - b.seq),
@@ -307,14 +307,25 @@ export class ChatHistoryService {
     runId: string,
     held: readonly ItemWire[],
   ): Promise<ItemWire[]> {
-    const callIds = [
+    return this.cardRowsOfCalls(runId, [
       ...new Set(
         held
           .map(callStartOf)
           .filter((start) => start !== null)
           .map((start) => start.callId),
       ),
-    ];
+    ]);
+  }
+
+  /**
+   * {@link cardRowsFor} over calls named outright — a page of one call's
+   * conversation, whose newest rows hold no status row of a long turn, so the
+   * card drawn from it would read as never started.
+   */
+  private async cardRowsOfCalls(
+    runId: string,
+    callIds: readonly string[],
+  ): Promise<ItemWire[]> {
     if (callIds.length === 0) {
       return [];
     }

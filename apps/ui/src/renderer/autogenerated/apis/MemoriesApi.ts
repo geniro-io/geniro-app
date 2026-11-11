@@ -15,6 +15,7 @@
 
 import * as runtime from '../runtime';
 import type {
+  AgentKind,
   CreateMemoryDto,
   ForgetAllMemoriesDto,
   ForgetMemoryBatchDto,
@@ -23,6 +24,7 @@ import type {
   MemoryConfigDto,
   MemoryEntry,
   MemoryExportDto,
+  MemoryFindingListDto,
   MemoryForgetBatchListDto,
   MemoryForgetBatchResultDto,
   MemoryImportPreviewDto,
@@ -32,15 +34,28 @@ import type {
   MemoryImportTriageRequestDto,
   MemoryKeepResultDto,
   MemoryListDto,
+  MemoryMergeResultDto,
   MemoryRestoreBatchResultDto,
+  MemoryReviewCheckRequestDto,
+  MemoryReviewCheckResultDto,
   MemoryReviewIdsDto,
   MemoryReviewPageDto,
+  MemoryReviewPairsDto,
   MemoryReviewSummaryDto,
+  MergeMemoriesDto,
   UpdateMemoryDto,
 } from '../models/index';
 
+export interface MemoriesApiCheckMemoryReviewPairsRequest {
+    memoryReviewCheckRequestDto: MemoryReviewCheckRequestDto;
+}
+
 export interface MemoriesApiCreateMemoryRequest {
     createMemoryDto: CreateMemoryDto;
+}
+
+export interface MemoriesApiDismissMemoryFindingRequest {
+    findingId: string;
 }
 
 export interface MemoriesApiForgetMemoryBatchRequest {
@@ -96,6 +111,15 @@ export interface MemoriesApiListMemoryReviewIdsRequest {
     cursor?: string;
 }
 
+export interface MemoriesApiListMemoryReviewPairsRequest {
+    agentKind?: AgentKind;
+    model?: string;
+}
+
+export interface MemoriesApiMergeMemoriesRequest {
+    mergeMemoriesDto: MergeMemoriesDto;
+}
+
 export interface MemoriesApiPreviewMemoryImportRequest {
     memoryImportPreviewRequestDto: MemoryImportPreviewRequestDto;
 }
@@ -129,6 +153,53 @@ export interface MemoriesApiUpdateMemoryRequest {
  * 
  */
 export class MemoriesApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async checkMemoryReviewPairsRaw(requestParameters: MemoriesApiCheckMemoryReviewPairsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryReviewCheckResultDto>> {
+        if (requestParameters['memoryReviewCheckRequestDto'] == null) {
+            throw new runtime.RequiredError(
+                'memoryReviewCheckRequestDto',
+                'Required parameter "memoryReviewCheckRequestDto" was null or undefined when calling checkMemoryReviewPairs().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/review/check`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['memoryReviewCheckRequestDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async checkMemoryReviewPairs(requestParameters: MemoriesApiCheckMemoryReviewPairsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryReviewCheckResultDto> {
+        const response = await this.checkMemoryReviewPairsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -174,6 +245,51 @@ export class MemoriesApi extends runtime.BaseAPI {
      */
     async createMemory(requestParameters: MemoriesApiCreateMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryEntry> {
         const response = await this.createMemoryRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async dismissMemoryFindingRaw(requestParameters: MemoriesApiDismissMemoryFindingRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryFindingListDto>> {
+        if (requestParameters['findingId'] == null) {
+            throw new runtime.RequiredError(
+                'findingId',
+                'Required parameter "findingId" was null or undefined when calling dismissMemoryFinding().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/review/findings/{findingId}/dismiss`;
+        urlPath = urlPath.replace(`{${"findingId"}}`, encodeURIComponent(String(requestParameters['findingId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async dismissMemoryFinding(requestParameters: MemoriesApiDismissMemoryFindingRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryFindingListDto> {
+        const response = await this.dismissMemoryFindingRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -507,6 +623,43 @@ export class MemoriesApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async listMemoryFindingsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryFindingListDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/review/findings`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listMemoryFindings(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryFindingListDto> {
+        const response = await this.listMemoryFindingsRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async listMemoryReviewRaw(requestParameters: MemoriesApiListMemoryReviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryReviewPageDto>> {
         const queryParameters: any = {};
 
@@ -669,6 +822,51 @@ export class MemoriesApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async listMemoryReviewPairsRaw(requestParameters: MemoriesApiListMemoryReviewPairsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryReviewPairsDto>> {
+        const queryParameters: any = {};
+
+        if (requestParameters['agentKind'] != null) {
+            queryParameters['agentKind'] = requestParameters['agentKind'];
+        }
+
+        if (requestParameters['model'] != null) {
+            queryParameters['model'] = requestParameters['model'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/review/pairs`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listMemoryReviewPairs(requestParameters: MemoriesApiListMemoryReviewPairsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryReviewPairsDto> {
+        const response = await this.listMemoryReviewPairsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async memoryReviewSummaryRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryReviewSummaryDto>> {
         const queryParameters: any = {};
 
@@ -700,6 +898,53 @@ export class MemoriesApi extends runtime.BaseAPI {
      */
     async memoryReviewSummary(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryReviewSummaryDto> {
         const response = await this.memoryReviewSummaryRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async mergeMemoriesRaw(requestParameters: MemoriesApiMergeMemoriesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryMergeResultDto>> {
+        if (requestParameters['mergeMemoriesDto'] == null) {
+            throw new runtime.RequiredError(
+                'mergeMemoriesDto',
+                'Required parameter "mergeMemoriesDto" was null or undefined when calling mergeMemories().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/merge`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['mergeMemoriesDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async mergeMemories(requestParameters: MemoriesApiMergeMemoriesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryMergeResultDto> {
+        const response = await this.mergeMemoriesRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

@@ -26,10 +26,10 @@ export class MemoryReviewFinding extends TimestampsEntity {
   @PrimaryKey({ type: 'string' })
   id: string = randomUUID();
 
-  @Property({ type: 'string' })
+  @Property({ type: 'string', fieldName: 'memory_a_id' })
   memoryAId!: string;
 
-  @Property({ type: 'string' })
+  @Property({ type: 'string', fieldName: 'memory_b_id' })
   memoryBId!: string;
 
   @Property({ type: 'string' })

@@ -374,7 +374,7 @@ export function TeamProposalCard({
   /** Open the project a card saved without touching the team; absent, nothing offers to. */
   onOpenProject?: (projectId: string) => void;
 }): React.JSX.Element {
-  const { team, autoAgents, diff, overlay, project } = proposal;
+  const { team, diff, overlay, project } = proposal;
   const savedProject = diff?.identical === true ? (overlay ?? project) : null;
   const stages = team.stages ?? [];
   const { sending, respond } = useOneShotVerdict(verdict, expired, onRespond);
@@ -499,18 +499,6 @@ export function TeamProposalCard({
               />
             </div>
           ) : null}
-        </div>
-      ) : null}
-      {autoAgents.length > 0 ? (
-        <div
-          role="note"
-          data-slot="team-auto-strip"
-          className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-2 text-xs text-warning">
-          <ShieldAlert aria-hidden="true" className="mt-px size-3.5 shrink-0" />
-          <span className="break-words">
-            {plural(autoAgents.length, 'agent runs', 'agents run')} without
-            asking permission: {autoAgents.join(', ')}
-          </span>
         </div>
       ) : null}
       <HazardWarning hazards={gate.hazards} subject="this proposal" />

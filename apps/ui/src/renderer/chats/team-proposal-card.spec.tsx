@@ -153,14 +153,8 @@ describe('TeamProposalCard', () => {
     expect(coder).not.toContain('Implement the change the trigger describes');
   });
 
-  it('names every auto agent in the strip and marks its roster row', () => {
+  it('marks every auto agent in its roster row', () => {
     const el = render(card());
-    const strip = el.querySelector('[data-slot="team-auto-strip"]');
-    expect(strip?.getAttribute('role')).toBe('note');
-    expect(strip?.textContent).toContain('2 agents run without asking');
-    expect(strip?.textContent).toContain('Coder (coder)');
-    expect(strip?.textContent).toContain('Tester (tester) — pool member 2');
-
     openAgents(el);
     expect(rosterRow(el, 'coder').textContent).toContain('Runs without asking');
     // The tester asks by its own setting; its second member does not.
@@ -170,11 +164,6 @@ describe('TeamProposalCard', () => {
     expect(rosterRow(el, 'reviewer').textContent).not.toContain(
       'Runs without asking',
     );
-  });
-
-  it('draws no strip when every agent asks', () => {
-    const el = render(card({ input: RECORDED_REPLACE_PROPOSAL }));
-    expect(el.querySelector('[data-slot="team-auto-strip"]')).toBeNull();
   });
 
   it('lists approval → auto changes first in the diff', () => {

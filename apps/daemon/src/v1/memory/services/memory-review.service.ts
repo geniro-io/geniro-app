@@ -14,6 +14,7 @@ import {
 } from '../dao/memory.dao';
 import type { Memory } from '../entity/memory.entity';
 import {
+  MEMORY_AUTO_BATCH_PREFIX,
   MEMORY_BATCHES_LIMIT,
   MEMORY_REVIEW_IDS_MAX,
   MEMORY_REVIEW_LIMIT_DEFAULT,
@@ -288,6 +289,7 @@ export class MemoryReviewService {
       batchId: batch.batchId,
       count: batch.count,
       forgottenAt: new Date(batch.forgottenAt).toISOString(),
+      automatic: batch.batchId.startsWith(MEMORY_AUTO_BATCH_PREFIX),
     }));
   }
 }

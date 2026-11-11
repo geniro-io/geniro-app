@@ -6,15 +6,18 @@ import {
   MEMORY_TEXT_VERSION,
   retiredMemoryTriggerDrops,
 } from '../../../db/memory-text-index.ddl';
+import { RunDao } from '../../agents/dao/run.dao';
 import { clearSecrets, registerSecret } from '../../diagnostics/utils/redact';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import type { RunPlace } from '../../projects/projects.types';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { AgentKind } from '../../runs/runs.types';
 import { Task } from '../../tasks/entity/task.entity';
 import { make, memoryDb } from '../__tests__/memory-db';
 import { MemoryDao } from '../dao/memory.dao';
+import { MemoryReviewFindingDao } from '../dao/memory-review-finding.dao';
 import { Memory } from '../entity/memory.entity';
 import {
   DEFAULT_MEMORY_CONFIG,
@@ -2343,6 +2346,7 @@ describe('MemoryService', () => {
         new MemoryDao(db.em),
         new ProjectDao(db.em),
         db.usage,
+        new RunDao(db.em),
       );
       const readsOfMerged = async () =>
         (await review.page({ tab: 'cold', minAgeDays: 0 })).rows.find(
@@ -2530,6 +2534,29 @@ describe('MemoryService', () => {
       }
 
       expect(await statusOf(entry.id)).toBe('active');
+    });
+
+    it('lists its batch as automatic, beside a hand-made one that is not', async () => {
+      const cold = await seedAgent('Cold global');
+      const mine = await seedAgent('Picked by hand');
+      const byHand = await db.service.forgetBatch([mine.id]);
+      const swept = await db.service.sweepCold(NOW);
+      const review = new MemoryReviewService(
+        db.em,
+        new MemoryDao(db.em),
+        new ProjectDao(db.em),
+        db.usage,
+        new RunDao(db.em),
+      );
+
+      const { batches } = await review.batches();
+
+      expect(await statusOf(cold.id)).toBe('forgotten');
+      expect(
+        Object.fromEntries(
+          batches.map((batch) => [batch.batchId, batch.automatic]),
+        ),
+      ).toEqual({ [byHand.batchId!]: false, [swept!.batchId!]: true });
     });
 
     it('is off by default', async () => {
@@ -2753,7 +2780,7 @@ describe('MemoryService', () => {
       ).toEqual([1]);
     });
 
-    it('a purge clears the reason and the findings', async () => {
+    it('a purge clears the reason', async () => {
       const entry = created(
         await db.service.save(AGENT, { title: 'Stale entry', body: 'x' }, NONE),
       );
@@ -2763,17 +2790,47 @@ describe('MemoryService', () => {
         'Stale entry is wrong',
         NONE,
       );
-      const dropped: string[] = [];
-      db.service.usePurgeFindings(async (memoryId, em) => {
-        expect(em.isInTransaction()).toBe(true);
-        dropped.push(memoryId);
-      });
 
       await db.service.purge(entry.id);
 
       const row = await tombstone(entry.id);
       expect([row.forget_reason, row.forget_batch_id]).toEqual([null, null]);
-      expect(dropped).toEqual([entry.id]);
+    });
+
+    it('a purge erases every finding that quotes the entry, on either side', async () => {
+      const save = async (title: string) =>
+        created(await db.service.save(USER, { title, body: 'x' }, NONE));
+      const gone = await save('Purged entry');
+      const left = await save('Left entry');
+      const right = await save('Right entry');
+      const finding = (aId: string, bId: string) => ({
+        memoryAId: aId,
+        memoryBId: bId,
+        hashA: 'hash-a',
+        hashB: 'hash-b',
+        outcome: 'contradicts' as const,
+        quoteA: 'Purged entry',
+        quoteB: 'Left entry',
+        reason: 'they disagree',
+        agentKind: AgentKind.Claude,
+        model: null,
+      });
+      await db.findings.record([
+        finding(gone.id, left.id),
+        finding(right.id, gone.id),
+        finding(left.id, right.id),
+      ]);
+      await db.service.setStatus(USER, gone.id, 'forgotten');
+
+      await db.service.purge(gone.id);
+
+      const stored = await db.em
+        .fork()
+        .getKysely<MemoryTextDatabase>()
+        .selectFrom('memory_review_findings')
+        .select(['memory_a_id', 'memory_b_id'])
+        .execute();
+      expect(stored).toEqual([{ memory_a_id: left.id, memory_b_id: right.id }]);
     });
 
     it('empties a batch-forgotten entry without moving its edit time, and announces it once', async () => {
@@ -2836,7 +2893,10 @@ describe('MemoryService', () => {
         await db.service.save(USER, { title: 'Stale entry', body: 'x' }, NONE),
       );
       const batch = await db.service.forgetBatch([entry.id]);
-      db.service.usePurgeFindings(() => Promise.reject(new Error('locked')));
+      vi.spyOn(
+        MemoryReviewFindingDao.prototype,
+        'deleteNaming',
+      ).mockRejectedValueOnce(new Error('locked'));
 
       await expect(db.service.purge(entry.id)).rejects.toThrow('locked');
 

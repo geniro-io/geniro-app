@@ -340,11 +340,7 @@ describe('MemoryCheckService', () => {
     const judged = await seedPair();
     const forgotten = await seed('Colima restarts', 'Restart colima daily.');
     await db.service.setStatus(USER, forgotten.id, 'forgotten');
-    db.service.setConfig({
-      enabled: true,
-      agentWrites: 'pending',
-      nativeMemoryOff: false,
-    });
+    db.service.setConfig({ ...DEFAULT_MEMORY_CONFIG, agentWrites: 'pending' });
     const pending = await seed(
       'Changelog format',
       'Keep one line per change.',

@@ -17,9 +17,11 @@ import { ProjectDao } from '../../projects/dao/project.dao';
 import type { RunPlace, RunPlaceFacts } from '../../projects/projects.types';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { MemoryDao } from '../dao/memory.dao';
+import { MemoryReviewFindingDao } from '../dao/memory-review-finding.dao';
 import { Memory } from '../entity/memory.entity';
 import {
   DEFAULT_MEMORY_CONFIG,
+  MEMORY_AUTO_BATCH_PREFIX,
   MEMORY_BODY_MAX_BYTES,
   MEMORY_FORGET_BATCH_MAX,
   MEMORY_FORGET_REASON_MAX_CHARS,
@@ -127,8 +129,6 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(MemoryService.name);
   private config: MemoryConfig = DEFAULT_MEMORY_CONFIG;
   private teamExists: ((slug: string) => Promise<boolean>) | null = null;
-  private purgeFindings:
-    ((memoryId: string, em: EntityManager) => Promise<void>) | null = null;
   private configured = false;
   private writes: Promise<unknown> = Promise.resolve();
   private sweepFirst: ReturnType<typeof setTimeout> | null = null;
@@ -143,6 +143,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     private readonly scope: ProjectScopeService,
     private readonly events: MemoryEventBus,
     private readonly usage: MemoryUsageService,
+    private readonly findings: MemoryReviewFindingDao,
   ) {}
 
   /**
@@ -151,16 +152,6 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
    */
   useTeamLookup(lookup: (slug: string) => Promise<boolean>): void {
     this.teamExists = lookup;
-  }
-
-  /**
-   * How a purge drops the review findings that quote the entry, inside the
-   * purge's own transaction; registered by whoever owns the findings.
-   */
-  usePurgeFindings(
-    drop: (memoryId: string, em: EntityManager) => Promise<void>,
-  ): void {
-    this.purgeFindings = drop;
   }
 
   /**
@@ -216,7 +207,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
         MEMORY_FORGET_BATCH_MAX,
         em,
       );
-      return this.forgetAsBatch(ids, now, em);
+      return this.forgetAsBatch(ids, now, em, MEMORY_AUTO_BATCH_PREFIX);
     });
   }
 
@@ -240,7 +231,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
         if (!(await this.memories.purge(id, hash, new Date(), tx))) {
           return false;
         }
-        await this.purgeFindings?.(id, tx);
+        await this.findings.deleteNaming(id, tx);
         return true;
       });
       if (!purged) {
@@ -1261,9 +1252,10 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     ids: readonly string[],
     at: Date,
     em: EntityManager,
+    batchPrefix = '',
   ): Promise<MemoryForgetBatchResult> {
     const wanted = [...new Set(ids)];
-    const batchId = randomUUID();
+    const batchId = `${batchPrefix}${randomUUID()}`;
     const taken = new Set(
       await this.memories.forgetBatch(wanted, batchId, at, em),
     );

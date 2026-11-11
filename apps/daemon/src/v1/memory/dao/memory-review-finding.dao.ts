@@ -185,6 +185,22 @@ export class MemoryReviewFindingDao extends BaseDao<MemoryReviewFinding> {
     return Number(result.numUpdatedRows) > 0;
   }
 
+  /** Erase every finding that names the entry, on either side of its pair. */
+  async deleteNaming(
+    memoryId: string,
+    em: EntityManager = this.em,
+  ): Promise<void> {
+    await this.database(em)
+      .deleteFrom('memory_review_findings')
+      .where((where) =>
+        where.or([
+          where('memory_a_id', '=', memoryId),
+          where('memory_b_id', '=', memoryId),
+        ]),
+      )
+      .execute();
+  }
+
   private database(em = this.em) {
     return em.getKysely<MemoryTextDatabase>({ convertValues: false });
   }

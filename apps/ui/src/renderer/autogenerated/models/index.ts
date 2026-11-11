@@ -7521,6 +7521,12 @@ export interface MemoryForgetBatch {
      * @memberof MemoryForgetBatch
      */
     forgottenAt: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof MemoryForgetBatch
+     */
+    automatic: boolean;
 }
 /**
  * 
@@ -8086,6 +8092,10 @@ export interface MemoryPair {
      * @memberof MemoryPair
      */
     bId: string;
+}
+/**
+ * 
+ * @export
  * @interface MemoryPurgeResultDto
  */
 export interface MemoryPurgeResultDto {

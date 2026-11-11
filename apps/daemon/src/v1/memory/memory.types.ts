@@ -309,6 +309,8 @@ export const MEMORY_REVIEW_LIMIT_MAX = 100;
 export const MEMORY_REVIEW_LIMIT_DEFAULT = 30;
 /** Recent cleanups listed by `GET /v1/memories/batches`. */
 export const MEMORY_BATCHES_LIMIT = 10;
+/** Opens the batch id of a cleanup the daily automatic pass made. */
+export const MEMORY_AUTO_BATCH_PREFIX = 'auto-';
 
 export const MEMORY_REVIEW_TABS = ['cold', 'kept', 'forgotten'] as const;
 export type MemoryReviewTab = (typeof MEMORY_REVIEW_TABS)[number];
@@ -425,6 +427,8 @@ export const MemoryForgetBatchSchema = z
     batchId: z.string(),
     count: z.number().int(),
     forgottenAt: z.string(),
+    /** Made by the daily automatic pass, not by the user. */
+    automatic: z.boolean(),
   })
   .meta({ id: 'MemoryForgetBatch' });
 export type MemoryForgetBatch = z.infer<typeof MemoryForgetBatchSchema>;

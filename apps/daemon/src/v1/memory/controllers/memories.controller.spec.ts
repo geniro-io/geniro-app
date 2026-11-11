@@ -77,7 +77,12 @@ const SUMMARY: MemoryReviewSummary = {
 
 const BATCHES: MemoryForgetBatchList = {
   batches: [
-    { batchId: 'b1', count: 2, forgottenAt: '2026-11-11T00:00:00.000Z' },
+    {
+      batchId: 'b1',
+      count: 2,
+      forgottenAt: '2026-11-11T00:00:00.000Z',
+      automatic: false,
+    },
   ],
 };
 

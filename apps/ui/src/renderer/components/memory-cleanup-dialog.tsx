@@ -110,7 +110,8 @@ function dayLabel(day: string): string {
 
 /** A cleanup batch in one line: how many it forgot and when. */
 export function batchLabel(batch: MemoryForgetBatch): string {
-  return `Forgot ${entries(batch.count)} · ${since(batch.forgottenAt)}`;
+  const forgot = `Forgot ${entries(batch.count)} · ${since(batch.forgottenAt)}`;
+  return batch.automatic ? `Automatic cleanup · ${forgot}` : forgot;
 }
 
 /** The Forget question's text: what happens, and how many look like a rule. */

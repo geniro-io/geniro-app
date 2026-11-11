@@ -1357,11 +1357,14 @@ describe('Memory clean up', () => {
           batchId: 'batch-9',
           count: 4,
           forgottenAt: new Date().toISOString(),
+          automatic: true,
         },
       }),
     });
 
-    expect(container.textContent).toContain('Forgot 4 entries');
+    expect(container.textContent).toContain(
+      'Automatic cleanup · Forgot 4 entries',
+    );
     await press(button(container, 'Undo'));
 
     expect(api.restoreMemoryBatch).toHaveBeenCalledWith({ batchId: 'batch-9' });
@@ -1388,6 +1391,7 @@ describe('Memory clean up', () => {
           batchId: 'batch-7',
           count: 3,
           forgottenAt: new Date().toISOString(),
+          automatic: false,
         },
       ],
     });
@@ -1403,6 +1407,7 @@ describe('Memory clean up', () => {
       '[data-slot="memory-cleanup-batches"]',
     );
     expect(recent?.textContent).toContain('Forgot 3 entries');
+    expect(recent?.textContent).not.toContain('Automatic cleanup');
     await press(button(recent as HTMLElement, 'Undo'));
 
     expect(api.restoreMemoryBatch).toHaveBeenCalledWith({ batchId: 'batch-7' });

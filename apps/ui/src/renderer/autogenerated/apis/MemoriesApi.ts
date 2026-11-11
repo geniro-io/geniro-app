@@ -117,10 +117,12 @@ export interface MemoriesApiListMemoryReviewPairsRequest {
     model?: string;
 }
 
-export interface MemoriesApiMergeMemoriesRequest {
-    mergeMemoriesDto: MergeMemoriesDto;
 export interface MemoriesApiMemoryReviewSummaryRequest {
     autoForgetDays?: number;
+}
+
+export interface MemoriesApiMergeMemoriesRequest {
+    mergeMemoriesDto: MergeMemoriesDto;
 }
 
 export interface MemoriesApiPreviewMemoryImportRequest {
@@ -874,7 +876,6 @@ export class MemoriesApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async memoryReviewSummaryRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryReviewSummaryDto>> {
     async memoryReviewSummaryRaw(requestParameters: MemoriesApiMemoryReviewSummaryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryReviewSummaryDto>> {
         const queryParameters: any = {};
 

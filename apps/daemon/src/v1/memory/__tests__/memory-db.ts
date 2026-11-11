@@ -85,6 +85,7 @@ export async function memoryDb() {
     new ProjectScopeService(em, new TaskDao(em), new ProjectDao(em), roots),
     events,
     usage,
+    new MemoryReviewFindingDao(em),
   );
   const findings = new MemoryFindingsService(
     em,

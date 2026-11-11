@@ -242,6 +242,13 @@ const meta = {
         batchId: 'batch-1',
         count: 3,
         forgottenAt: '2026-11-11T08:00:00.000Z',
+        automatic: false,
+      },
+      {
+        batchId: 'auto-batch-2',
+        count: 12,
+        forgottenAt: '2026-11-10T08:00:00.000Z',
+        automatic: true,
       },
     ],
     notice: null,

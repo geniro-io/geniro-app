@@ -53,8 +53,8 @@ import {
 import { type DaemonApis, describeDaemonError } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { isRemoteRuntime } from '../remote/remote-session';
-import { MemoryCheckPanel } from './memory-check-panel';
 import { MemoryAutoForgetRow } from './memory-auto-forget';
+import { MemoryCheckPanel } from './memory-check-panel';
 import {
   MemoryTriageSettings,
   triageChoiceFor,

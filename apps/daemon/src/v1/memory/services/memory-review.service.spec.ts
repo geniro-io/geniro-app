@@ -386,6 +386,7 @@ describe('MemoryReviewService', () => {
         batchId: batch.batchId,
         count: 1,
         forgottenAt: expect.any(String),
+        automatic: false,
       },
       autoForget: null,
     });

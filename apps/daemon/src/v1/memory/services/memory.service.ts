@@ -39,6 +39,8 @@ import {
   type MemoryKeepResult,
   type MemoryList,
   type MemoryListQuery,
+  type MemoryMergeRequest,
+  type MemoryMergeResult,
   type MemoryPatch,
   type MemoryRefusalCode,
   type MemoryRestoreBatchResult,
@@ -71,6 +73,20 @@ import { MemoryUsageService } from './memory-usage.service';
 const DUPLICATE_CANDIDATES = 20;
 
 type Refusal = Extract<MemorySaveOutcome, { kind: 'refused' }>;
+
+/** A merge's result, or why it wrote nothing. */
+export type MemoryMergeOutcome =
+  | { kind: 'merged'; result: MemoryMergeResult }
+  | Exclude<MemorySaveOutcome, { kind: 'created' | 'updated' }>;
+
+/** Rolls a merge's transaction back with the outcome to answer. */
+class MergeRefused extends Error {
+  constructor(
+    readonly outcome: Exclude<MemorySaveOutcome, { kind: 'created' | 'updated' }>,
+  ) {
+    super(outcome.kind);
+  }
+}
 
 /** What a write stores, whoever writes it. */
 type MemoryText = Pick<
@@ -582,14 +598,32 @@ export class MemoryService {
     });
   }
 
-  /** Undo a cleanup: every entry still forgotten by it returns to its own status. */
+  /**
+   * Undo a cleanup: every entry still forgotten by it returns to its own
+   * status. Undoing a merge also forgets the entry it wrote, found through the
+   * sources it still holds.
+   */
   restoreBatch(batchId: string): Promise<MemoryRestoreBatchResult> {
     return this.serialize(async () => {
-      const restored = await this.memories.restoreBatch(
-        batchId,
-        new Date(),
-        this.em.fork(),
-      );
+      const now = new Date();
+      const undone: Memory[] = [];
+      const restored = await this.em.fork().transactional(async (tx) => {
+        const merged = await this.memories.mergedInto(batchId, tx);
+        const count = await this.memories.restoreBatch(batchId, now, tx);
+        const writtenByMerge =
+          merged.length === 0 ? [] : await this.memories.getByIds(merged, tx);
+        for (const row of writtenByMerge) {
+          if (applyStatus(row, 'forgotten', now) !== null) {
+            row.rev += 1;
+            undone.push(row);
+          }
+        }
+        await tx.flush();
+        return count;
+      });
+      for (const row of undone) {
+        this.publish(row, 'forgotten');
+      }
       if (restored > 0) {
         this.events.publish({
           memoryId: null,
@@ -601,6 +635,117 @@ export class MemoryService {
         });
       }
       return { restored };
+    });
+  }
+
+  /**
+   * Write one new entry of the user's in place of several and forget those as
+   * one cleanup batch, each linked to the new one. All or nothing: a refusal
+   * of the new entry — a near-duplicate of a third entry included — forgets
+   * nothing. The user saw and edited the whole text, so the new entry is the
+   * user's own and reaches every run's index.
+   */
+  merge(input: MemoryMergeRequest): Promise<MemoryMergeOutcome> {
+    return this.serialize(async () => {
+      const invalid = this.refuseInvalid(USER, input);
+      if (invalid) {
+        return invalid;
+      }
+      const sourceIds = [...new Set(input.sourceIds)];
+      if (sourceIds.length < 2) {
+        return refused(
+          'INVALID_ENTRY',
+          'a merge takes at least two different entries',
+        );
+      }
+      const em = this.em.fork();
+      const sources = (await this.memories.getByIds(sourceIds, em)).filter(
+        (row) => row.status === 'active' || row.status === 'pending',
+      );
+      if (sources.length !== sourceIds.length) {
+        return refused(
+          'NOT_FOUND',
+          'an entry to merge was forgotten or removed meanwhile',
+        );
+      }
+      const unknown =
+        (await this.refuseUnknownProject(input.projectId, em)) ??
+        (await this.refuseUnknownTeam(input.teamSlug ?? null, null));
+      if (unknown) {
+        return unknown;
+      }
+      const batchId = randomUUID();
+      const text: MemoryText = {
+        title: input.title,
+        body: input.body,
+        type: input.type,
+        notDuplicateOf: sources.map((row) => memoryHandle(row.handle)),
+      };
+      let written: Memory;
+      try {
+        written = await em.transactional(async (tx) => {
+          const outcome = await this.writeRow(
+            USER,
+            text,
+            placeOfInput(input),
+            null,
+            tx,
+            false,
+          );
+          if (outcome.kind === 'updated') {
+            throw new MergeRefused(
+              refused('INVALID_ENTRY', 'a merge writes a new entry'),
+            );
+          }
+          if (outcome.kind !== 'created') {
+            throw new MergeRefused(outcome);
+          }
+          const taken = await this.memories.forgetBatch(
+            sourceIds,
+            batchId,
+            new Date(),
+            tx,
+            outcome.entry.id,
+          );
+          if (taken.length !== sourceIds.length) {
+            throw new MergeRefused(
+              refused(
+                'NOT_FOUND',
+                'an entry to merge was forgotten or removed meanwhile',
+              ),
+            );
+          }
+          const row = await this.memories.getById(outcome.entry.id, tx);
+          if (!row) {
+            throw new MergeRefused(
+              refused('NOT_FOUND', 'the merged entry was not written'),
+            );
+          }
+          return row;
+        });
+      } catch (err) {
+        if (err instanceof MergeRefused) {
+          return err.outcome;
+        }
+        throw err;
+      }
+      this.publish(written, 'created');
+      this.events.publish({
+        memoryId: null,
+        change: 'bulk',
+        status: 'forgotten',
+        projectId: null,
+        teamSlug: null,
+        batchId,
+      });
+      return {
+        kind: 'merged',
+        result: {
+          entry: toEntry(written),
+          batchId,
+          forgotten: sources.map((row) => memoryHandle(row.handle)),
+        },
+      };
     });
   }
 
@@ -829,6 +974,7 @@ export class MemoryService {
     target: RunPlace,
     existing: Memory | null,
     em: EntityManager,
+    announce = true,
   ): Promise<MemorySaveOutcome> {
     const duplicates = await this.nearDuplicates(input, target, existing, em);
     const live = duplicates.filter((row) => row.status === 'active');
@@ -861,7 +1007,9 @@ export class MemoryService {
     stampSource(row, actor);
     em.persist(row);
     await em.flush();
-    this.publish(row, existing ? 'updated' : 'created');
+    if (announce) {
+      this.publish(row, existing ? 'updated' : 'created');
+    }
     return { kind: existing ? 'updated' : 'created', entry: toEntry(row) };
   }
 

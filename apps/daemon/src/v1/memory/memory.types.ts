@@ -644,6 +644,136 @@ export const MemoryImportTriageSchema = z.object({
 });
 export type MemoryImportTriage = z.infer<typeof MemoryImportTriageSchema>;
 
+/** TWIN: `CHECK_BATCH` in `apps/ui/src/renderer/settings/use-memory-check.ts`. */
+export const MEMORY_CHECK_PAIRS_MAX = 20;
+/** How many likely partners each active entry is paired with. */
+export const MEMORY_CHECK_PARTNERS = 5;
+/** The most pairs one listing offers. */
+export const MEMORY_CHECK_PAIRS_LISTED_MAX = 5000;
+export const MEMORY_MERGE_SOURCES_MAX = 10;
+
+/** What one-shot model check found a pair of entries to be. */
+export const MEMORY_CHECK_VERDICTS = [
+  'duplicate',
+  'supersedes',
+  'contradicts',
+  'conditional',
+  'unrelated',
+] as const;
+export type MemoryCheckVerdict = (typeof MEMORY_CHECK_VERDICTS)[number];
+
+/** The verdicts shown to the user; `unrelated` only marks the pair checked. */
+export const MEMORY_FINDING_KINDS = [
+  'duplicate',
+  'supersedes',
+  'contradicts',
+  'conditional',
+] as const;
+export type MemoryFindingKind = (typeof MEMORY_FINDING_KINDS)[number];
+
+/** What a stored check holds: a verdict, or a finding dropped for want of quotes. */
+export type MemoryCheckOutcome = MemoryCheckVerdict | 'unquoted';
+
+/** Two entries, by id, that one check asks about together. */
+export const MemoryPairSchema = z
+  .object({
+    aId: z.string().min(1).max(200),
+    bId: z.string().min(1).max(200),
+  })
+  .meta({ id: 'MemoryPair' });
+export type MemoryPair = z.infer<typeof MemoryPairSchema>;
+
+/** The model whose price the pair listing estimates; both or neither. */
+export const MemoryReviewPairsQuerySchema = z.object({
+  agentKind: AgentKindSchema.optional(),
+  model: z.string().min(1).max(200).optional(),
+});
+export type MemoryReviewPairsQuery = z.infer<
+  typeof MemoryReviewPairsQuerySchema
+>;
+
+export const MemoryReviewPairsSchema = z.object({
+  /** Likely pairs not checked yet at their current texts. */
+  pairs: z.array(MemoryPairSchema),
+  /** Roughly how many prompt tokens asking about every pair takes. */
+  inputTokens: z.number().int(),
+  requests: z.number().int(),
+  /** At the named model's list price; null when the catalog does not list it. */
+  costUsd: z.number().nullable(),
+  /** The CLIs that can answer a one-shot check. */
+  checkAgents: z.array(AgentKindSchema),
+});
+export type MemoryReviewPairs = z.infer<typeof MemoryReviewPairsSchema>;
+
+/** One batch of pairs for one CLI to judge; the model settings are triage's. */
+export const MemoryReviewCheckRequestSchema = z.object({
+  agentKind: AgentKindSchema,
+  model: z.string().min(1).optional(),
+  effort: z.string().min(1).optional(),
+  contextWindow: z.string().min(1).optional(),
+  modelParameters: z.record(z.string(), z.string()).optional(),
+  configDir: z.string().min(1).optional(),
+  pairs: z.array(MemoryPairSchema).min(1).max(MEMORY_CHECK_PAIRS_MAX),
+});
+export type MemoryReviewCheckRequest = z.infer<
+  typeof MemoryReviewCheckRequestSchema
+>;
+
+/** A verdict on two entries, with the words of each that show it. */
+export const MemoryFindingSchema = z
+  .object({
+    id: z.string(),
+    kind: z.enum(MEMORY_FINDING_KINDS),
+    a: MemoryEntrySchema,
+    b: MemoryEntrySchema,
+    quoteA: z.string(),
+    quoteB: z.string(),
+    reason: z.string(),
+    agentKind: AgentKindSchema,
+    model: z.string().nullable(),
+    checkedAt: z.string(),
+  })
+  .meta({ id: 'MemoryFinding' });
+export type MemoryFinding = z.infer<typeof MemoryFindingSchema>;
+
+export const MemoryReviewCheckResultSchema = z.object({
+  /** Pairs the answer judged, findings and unrelated ones alike. */
+  checked: z.number().int(),
+  /** Pairs left unjudged: changed or gone meanwhile, or skipped by the answer. */
+  skipped: z.number().int(),
+  findings: z.array(MemoryFindingSchema),
+});
+export type MemoryReviewCheckResult = z.infer<
+  typeof MemoryReviewCheckResultSchema
+>;
+
+export const MemoryFindingListSchema = z.object({
+  findings: z.array(MemoryFindingSchema),
+});
+export type MemoryFindingList = z.infer<typeof MemoryFindingListSchema>;
+
+/** Entries to merge into one new entry of the user's, with its text as the user saved it. */
+export const MemoryMergeRequestSchema = MemoryTextFieldsSchema.omit({
+  notDuplicateOf: true,
+})
+  .extend({
+    sourceIds: z
+      .array(z.string().min(1).max(200))
+      .min(2)
+      .max(MEMORY_MERGE_SOURCES_MAX),
+  })
+  .refine(notBothScopes, NOT_BOTH_SCOPES);
+export type MemoryMergeRequest = z.infer<typeof MemoryMergeRequestSchema>;
+
+export const MemoryMergeResultSchema = z.object({
+  entry: MemoryEntrySchema,
+  /** The cleanup batch that forgot the sources; restoring it undoes the merge. */
+  batchId: z.string(),
+  /** Handles of the sources forgotten. */
+  forgotten: z.array(z.string()),
+});
+export type MemoryMergeResult = z.infer<typeof MemoryMergeResultSchema>;
+
 export const MemoryExportSchema = z.object({
   markdown: z.string(),
   count: z.number().int(),
@@ -740,6 +870,25 @@ export interface MemoryTextDatabase {
     referenced_paths: string | null;
     references_gone: string | null;
     references_checked_at: number | null;
+    merged_into_id: string | null;
+  };
+  memory_review_findings: {
+    id: string;
+    memory_a_id: string;
+    memory_b_id: string;
+    hash_a: string;
+    hash_b: string;
+    outcome: MemoryCheckOutcome;
+    quote_a: string | null;
+    quote_b: string | null;
+    reason: string | null;
+    agent_kind: AgentKind;
+    model: string | null;
+    checked_at: number;
+    dismissed_at: number | null;
+    created_at: number;
+    updated_at: number;
+    deleted_at: number | null;
   };
   memory_usage_days: {
     memory_id: string;

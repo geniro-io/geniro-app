@@ -15,6 +15,7 @@ import {
   type MemoryReviewSummary,
 } from '../memory.types';
 import type { MemoryService } from '../services/memory.service';
+import type { MemoryFindingsService } from '../services/memory-findings.service';
 import type { MemoryReviewService } from '../services/memory-review.service';
 import { MemoriesController } from './memories.controller';
 import { MemoryConfigController } from './memory-config.controller';
@@ -77,10 +78,12 @@ const BATCH_RESULT: MemoryForgetBatchResult = {
 function controllerOver(
   service: Partial<MemoryService>,
   review: Partial<MemoryReviewService> = {},
+  findings: Partial<MemoryFindingsService> = {},
 ) {
   return new MemoriesController(
     service as MemoryService,
     review as MemoryReviewService,
+    findings as MemoryFindingsService,
   );
 }
 

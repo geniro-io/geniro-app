@@ -20,12 +20,15 @@ import { Run } from '../../runs/entity/run.entity';
 import { TaskDao } from '../../tasks/dao/task.dao';
 import { Task } from '../../tasks/entity/task.entity';
 import { MemoryDao } from '../dao/memory.dao';
+import { MemoryReviewFindingDao } from '../dao/memory-review-finding.dao';
 import { MemoryUsageDao } from '../dao/memory-usage.dao';
 import { Memory } from '../entity/memory.entity';
+import { MemoryReviewFinding } from '../entity/memory-review-finding.entity';
 import { MemoryUsageBackfill } from '../entity/memory-usage-backfill.entity';
 import { MemoryUsageDay } from '../entity/memory-usage-day.entity';
 import { MemoryService } from '../services/memory.service';
 import { MemoryEventBus } from '../services/memory-events.bus';
+import { MemoryFindingsService } from '../services/memory-findings.service';
 import { MemoryTextIndexService } from '../services/memory-text-index.service';
 import {
   MEMORY_USAGE_MARKER_FILE,
@@ -43,6 +46,7 @@ export async function memoryDb() {
         Memory,
         MemoryUsageDay,
         MemoryUsageBackfill,
+        MemoryReviewFinding,
         Run,
         Item,
         NodeState,
@@ -82,7 +86,22 @@ export async function memoryDb() {
     events,
     usage,
   );
-  return { orm, em, service, events, index, usage, usageDao, markerPath };
+  const findings = new MemoryFindingsService(
+    em,
+    new MemoryDao(em),
+    new MemoryReviewFindingDao(em),
+  );
+  return {
+    orm,
+    em,
+    service,
+    findings,
+    events,
+    index,
+    usage,
+    usageDao,
+    markerPath,
+  };
 }
 
 /** An entity with its defaults, as a row the app itself would write. */

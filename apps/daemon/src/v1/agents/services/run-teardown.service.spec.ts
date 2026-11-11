@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { MemoryUsageDao } from '../../memory/dao/memory-usage.dao';
+import { MemoryReviewFinding } from '../../memory/entity/memory-review-finding.entity';
 import { MemoryUsageBackfill } from '../../memory/entity/memory-usage-backfill.entity';
 import { MemoryUsageDay } from '../../memory/entity/memory-usage-day.entity';
 import { CallContext } from '../../runs/entity/call-context.entity';
@@ -96,6 +97,7 @@ describe('RunTeardownService (in-memory sqlite)', () => {
           UsageActivity,
           MemoryUsageDay,
           MemoryUsageBackfill,
+          MemoryReviewFinding,
         ],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,

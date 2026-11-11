@@ -8,6 +8,7 @@ import {
   MemoryForgetAllSchema,
   MemoryForgetBatchListSchema,
   MemoryForgetBatchRequestSchema,
+  MemoryFindingListSchema,
   MemoryForgetBatchResultSchema,
   MemoryImportPreviewRequestSchema,
   MemoryImportPreviewSchema,
@@ -18,10 +19,16 @@ import {
   MemoryKeepResultSchema,
   MemoryListQuerySchema,
   MemoryListSchema,
+  MemoryMergeRequestSchema,
+  MemoryMergeResultSchema,
   MemoryPatchSchema,
   MemoryRestoreBatchResultSchema,
+  MemoryReviewCheckRequestSchema,
+  MemoryReviewCheckResultSchema,
   MemoryReviewIdsSchema,
   MemoryReviewPageSchema,
+  MemoryReviewPairsQuerySchema,
+  MemoryReviewPairsSchema,
   MemoryReviewQuerySchema,
   MemoryReviewSummarySchema,
 } from '../memory.types';
@@ -96,4 +103,30 @@ export class MemoryImportTriageRequestDto extends createZodDto(
 
 export class MemoryImportTriageDto extends createZodDto(
   MemoryImportTriageSchema,
+) {}
+
+export class MemoryReviewPairsQueryDto extends createZodDto(
+  MemoryReviewPairsQuerySchema,
+) {}
+
+export class MemoryReviewPairsDto extends createZodDto(
+  MemoryReviewPairsSchema,
+) {}
+
+export class MemoryReviewCheckRequestDto extends createZodDto(
+  MemoryReviewCheckRequestSchema,
+) {}
+
+export class MemoryReviewCheckResultDto extends createZodDto(
+  MemoryReviewCheckResultSchema,
+) {}
+
+export class MemoryFindingListDto extends createZodDto(
+  MemoryFindingListSchema,
+) {}
+
+export class MergeMemoriesDto extends createZodDto(MemoryMergeRequestSchema) {}
+
+export class MemoryMergeResultDto extends createZodDto(
+  MemoryMergeResultSchema,
 ) {}

@@ -63,6 +63,16 @@ export interface MemoryUnmarkedRow {
   body: string;
 }
 
+/** An active entry's text and scope, as the pair search reads it. */
+export interface MemoryActiveText {
+  id: string;
+  handle: number;
+  title: string;
+  body: string;
+  projectId: string | null;
+  teamSlug: string | null;
+}
+
 /** A project entry whose referenced paths are due a check. */
 export interface MemoryReferenceRow {
   id: string;
@@ -424,6 +434,7 @@ export class MemoryDao extends BaseDao<Memory> {
     batchId: string,
     at: Date,
     em: EntityManager = this.em,
+    mergedIntoId: string | null = null,
   ): Promise<string[]> {
     if (ids.length === 0) {
       return [];
@@ -435,6 +446,7 @@ export class MemoryDao extends BaseDao<Memory> {
         status: 'forgotten',
         forget_reason: null,
         rev: eb('rev', '+', 1),
+        merged_into_id: mergedIntoId,
         ...forgottenColumns(at, batchId),
       }))
       .where('id', 'in', [...ids])
@@ -471,6 +483,50 @@ export class MemoryDao extends BaseDao<Memory> {
       .where('forget_batch_id', '=', batchId)
       .executeTakeFirst();
     return Number(result.numUpdatedRows);
+  }
+
+  /** The entries a merge wrote for the rows a batch still holds forgotten. */
+  async mergedInto(
+    batchId: string,
+    em: EntityManager = this.em,
+  ): Promise<string[]> {
+    const rows = await this.database(em)
+      .selectFrom('memories')
+      .select('merged_into_id')
+      .distinct()
+      .where('deleted_at', 'is', null)
+      .where('status', '=', 'forgotten')
+      .where('forget_batch_id', '=', batchId)
+      .where('merged_into_id', 'is not', null)
+      .execute();
+    return rows.flatMap((row) =>
+      row.merged_into_id === null ? [] : [row.merged_into_id],
+    );
+  }
+
+  /** Live active entries past a handle, oldest handle first: one window of a full read. */
+  async activeTexts(
+    afterHandle: number,
+    limit: number,
+    em: EntityManager = this.em,
+  ): Promise<MemoryActiveText[]> {
+    const rows = await this.database(em)
+      .selectFrom('memories')
+      .select(['id', 'handle', 'title', 'body', 'project_id', 'team_slug'])
+      .where('deleted_at', 'is', null)
+      .where('status', '=', 'active')
+      .where('handle', '>', afterHandle)
+      .orderBy('handle')
+      .limit(limit)
+      .execute();
+    return rows.map((row) => ({
+      id: row.id,
+      handle: row.handle,
+      title: row.title,
+      body: row.body,
+      projectId: row.project_id,
+      teamSlug: row.team_slug,
+    }));
   }
 
   /** The newest cleanups whose entries are still forgotten. */
@@ -604,42 +660,67 @@ export class MemoryDao extends BaseDao<Memory> {
       .execute();
   }
 
-  /** The cleanup rows of a tab with its filters, joined to their summed usage. */
+  /**
+   * The cleanup rows of a tab with its filters, joined to their summed usage.
+   * A merged entry is credited with the usage of every source still forgotten
+   * into it, and each source keeps its own.
+   */
   private review(filter: MemoryReviewFilter, em: EntityManager) {
     const { tab, places, type, warnings, referenceGone, now } = filter;
     const recentDay = usageDay(
       new Date(now.getTime() - MEMORY_COLD_DAYS * DAY_MS),
     );
     const db = this.database(em);
+    const credited = db
+      .selectFrom('memory_usage_days as d')
+      .where('d.deleted_at', 'is', null)
+      .select([
+        'd.memory_id as owner',
+        'd.day',
+        'd.reads',
+        'd.search_hits',
+        'd.index_shows',
+      ])
+      .unionAll(
+        db
+          .selectFrom('memory_usage_days as d')
+          .innerJoin('memories as src', 'src.id', 'd.memory_id')
+          .where('d.deleted_at', 'is', null)
+          .where('src.deleted_at', 'is', null)
+          .where('src.status', '=', 'forgotten')
+          .where('src.merged_into_id', 'is not', null)
+          .select([
+            'src.merged_into_id as owner',
+            'd.day',
+            'd.reads',
+            'd.search_hits',
+            'd.index_shows',
+          ])
+          .$narrowType<{ owner: string }>(),
+      )
+      .as('c');
     const usage = db
-      .selectFrom('memory_usage_days')
-      .where('memory_usage_days.deleted_at', 'is', null)
+      .selectFrom(credited)
       .select((eb) => [
-        'memory_usage_days.memory_id',
-        eb.fn.sum<number>('memory_usage_days.reads').as('reads'),
-        eb.fn.sum<number>('memory_usage_days.search_hits').as('search_hits'),
-        eb.fn.sum<number>('memory_usage_days.index_shows').as('index_shows'),
+        'c.owner',
+        eb.fn.sum<number>('c.reads').as('reads'),
+        eb.fn.sum<number>('c.search_hits').as('search_hits'),
+        eb.fn.sum<number>('c.index_shows').as('index_shows'),
         eb.fn
           .sum<number>(
             eb
               .case()
-              .when('memory_usage_days.day', '>=', recentDay)
-              .then(eb.ref('memory_usage_days.reads'))
+              .when('c.day', '>=', recentDay)
+              .then(eb.ref('c.reads'))
               .else(0)
               .end(),
           )
           .as('recent_reads'),
         eb.fn
-          .max(
-            eb
-              .case()
-              .when('memory_usage_days.reads', '>', 0)
-              .then(eb.ref('memory_usage_days.day'))
-              .end(),
-          )
+          .max(eb.case().when('c.reads', '>', 0).then(eb.ref('c.day')).end())
           .as('last_read_day'),
       ])
-      .groupBy('memory_usage_days.memory_id')
+      .groupBy('c.owner')
       .as('u');
     let query = this.scoped(
       {
@@ -647,7 +728,7 @@ export class MemoryDao extends BaseDao<Memory> {
         places,
       },
       em,
-    ).leftJoin(usage, (join) => join.onRef('u.memory_id', '=', 'm.id'));
+    ).leftJoin(usage, (join) => join.onRef('u.owner', '=', 'm.id'));
     if (tab === 'kept') {
       query = query.where('m.kept_at', 'is not', null);
     }

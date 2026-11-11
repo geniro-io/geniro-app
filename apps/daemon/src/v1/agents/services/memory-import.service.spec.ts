@@ -30,6 +30,7 @@ import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentVersionService } from './agent-version.service';
 import { EffortsService } from './efforts.service';
 import { MemoryImportService } from './memory-import.service';
+import { OneShotAskService } from './one-shot-ask.service';
 import type { ProcessRegistry } from './process-registry';
 
 describe('MemoryImportService', () => {
@@ -55,10 +56,13 @@ describe('MemoryImportService', () => {
       registry,
       db.service,
       new ProjectDao(db.em),
-      new EffortsService(
+      new OneShotAskService(
         registry,
-        {} as ProcessRegistry,
-        {} as AgentVersionService,
+        new EffortsService(
+          registry,
+          {} as ProcessRegistry,
+          {} as AgentVersionService,
+        ),
       ),
     );
     const em = db.em.fork();

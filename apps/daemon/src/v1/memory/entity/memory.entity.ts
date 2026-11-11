@@ -124,4 +124,8 @@ export class Memory extends TimestampsEntity {
 
   @Property({ type: DateTimeType, nullable: true })
   referencesCheckedAt: Date | null = null;
+
+  /** The entry a merge wrote in this one's place, while this one stays forgotten by it. */
+  @Property({ type: 'string', nullable: true })
+  mergedIntoId: string | null = null;
 }

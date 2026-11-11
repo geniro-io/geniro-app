@@ -22,6 +22,7 @@ import {
   MemoryMergeRequestSchema,
   MemoryMergeResultSchema,
   MemoryPatchSchema,
+  MemoryPurgeResultSchema,
   MemoryRestoreBatchResultSchema,
   MemoryReviewCheckRequestSchema,
   MemoryReviewCheckResultSchema,
@@ -30,8 +31,17 @@ import {
   MemoryReviewPairsQuerySchema,
   MemoryReviewPairsSchema,
   MemoryReviewQuerySchema,
+  MemoryReviewSummaryQuerySchema,
   MemoryReviewSummarySchema,
 } from '../memory.types';
+
+export class MemoryReviewSummaryQueryDto extends createZodDto(
+  MemoryReviewSummaryQuerySchema,
+) {}
+
+export class MemoryPurgeResultDto extends createZodDto(
+  MemoryPurgeResultSchema,
+) {}
 
 export class MemoryListQueryDto extends createZodDto(MemoryListQuerySchema) {}
 

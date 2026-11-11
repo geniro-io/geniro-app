@@ -29,6 +29,7 @@ import {
   MemoryReviewPageDto,
   MemoryReviewQueryDto,
   MemoryReviewSummaryDto,
+  MemoryReviewSummaryQueryDto,
   MergeMemoriesDto,
   UpdateMemoryDto,
 } from '../dto/memories.dto';
@@ -56,8 +57,8 @@ import { mergedOrThrow, savedEntryOrThrow } from '../utils/memory-outcome';
  * The user's own view of the shared memory: list, edit, forget, restore,
  * approve, export and clean up, and decide on what a model check found.
  * Open to paired devices: the user reads and edits memory from the phone
- * too. Every write is the user's. The check itself is desktop only, in
- * `MemoryCheckController`.
+ * too — except a purge (`MemoryPurgeController`). Every write is the
+ * user's. The check itself is desktop only, in `MemoryCheckController`.
  */
 @Controller('v1/memories')
 @ApiTags('memories')
@@ -100,8 +101,10 @@ export class MemoriesController {
   @Get('review/summary')
   @ApiOperation({ operationId: 'memoryReviewSummary' })
   @ZodResponse({ status: 200, type: MemoryReviewSummaryDto })
-  reviewSummary(): Promise<MemoryReviewSummary> {
-    return this.review.summary();
+  reviewSummary(
+    @Query() query: MemoryReviewSummaryQueryDto,
+  ): Promise<MemoryReviewSummary> {
+    return this.review.summary(new Date(), query.autoForgetDays);
   }
 
   @Get('review')

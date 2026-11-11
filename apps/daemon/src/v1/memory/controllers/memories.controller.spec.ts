@@ -29,6 +29,7 @@ import type { MemoryFindingsService } from '../services/memory-findings.service'
 import type { MemoryReviewService } from '../services/memory-review.service';
 import { MemoriesController } from './memories.controller';
 import { MemoryConfigController } from './memory-config.controller';
+import { MemoryPurgeController } from './memory-purge.controller';
 
 const ENTRY: MemoryEntry = {
   id: 'e1',
@@ -71,11 +72,17 @@ const SUMMARY: MemoryReviewSummary = {
   countedSince: '2026-11-01',
   counting: false,
   lastBatch: null,
+  autoForget: null,
 };
 
 const BATCHES: MemoryForgetBatchList = {
   batches: [
-    { batchId: 'b1', count: 2, forgottenAt: '2026-11-11T00:00:00.000Z' },
+    {
+      batchId: 'b1',
+      count: 2,
+      forgottenAt: '2026-11-11T00:00:00.000Z',
+      automatic: false,
+    },
   ],
 };
 
@@ -138,6 +145,53 @@ describe('MemoriesController', () => {
     expect(guardsOf(MemoriesController)).not.toContain(DesktopOnlyGuard);
     expect(guardsOf(MemoryConfigController)).toContain(DesktopOnlyGuard);
     expect(guardsOf(MemoryImportController)).toContain(DesktopOnlyGuard);
+  });
+
+  it('keeps a purge desktop only, in a controller of its own', () => {
+    const guardsOf = (target: object) =>
+      (Reflect.getMetadata(GUARDS_METADATA, target) as unknown[]) ?? [];
+
+    expect(guardsOf(MemoryPurgeController)).toContain(DesktopOnlyGuard);
+    expect(
+      Reflect.getMetadata(PATH_METADATA, MemoryPurgeController.prototype.purge),
+    ).toBe(':memoryId/purge');
+    expect(
+      Object.getOwnPropertyNames(MemoriesController.prototype),
+    ).not.toContain('purge');
+  });
+
+  it('purges a forgotten entry and turns a refusal into its HTTP error', async () => {
+    const purge = vi.fn(async (id: string) =>
+      id === 'gone'
+        ? ('missing' as const)
+        : id === 'live'
+          ? ('not-forgotten' as const)
+          : { id, handle: 'm7' },
+    );
+    const controller = new MemoryPurgeController({
+      purge,
+    } as unknown as MemoryService);
+
+    expect(await controller.purge('e7')).toEqual({ id: 'e7', handle: 'm7' });
+    expect(await errorOf(controller.purge('gone'))).toMatchObject({
+      statusCode: 404,
+      errorCode: 'MEMORY_NOT_FOUND',
+    });
+    expect(await errorOf(controller.purge('live'))).toMatchObject({
+      statusCode: 400,
+      errorCode: 'MEMORY_NOT_FORGOTTEN',
+    });
+  });
+
+  it('passes the asked auto-forget window to the summary', async () => {
+    const summary = vi.fn(async () => SUMMARY);
+    const controller = controllerOver({}, { summary });
+
+    await controller.reviewSummary({ autoForgetDays: 30 });
+    await controller.reviewSummary({});
+
+    expect(summary).toHaveBeenNthCalledWith(1, expect.any(Date), 30);
+    expect(summary).toHaveBeenNthCalledWith(2, expect.any(Date), undefined);
   });
 
   it('answers a saved entry, and turns a refusal into its HTTP error', async () => {
@@ -288,7 +342,7 @@ describe('MemoriesController', () => {
     );
     const query = { tab: 'kept' as const, limit: 5 };
 
-    expect(await controller.reviewSummary()).toBe(SUMMARY);
+    expect(await controller.reviewSummary({})).toBe(SUMMARY);
     expect(await controller.reviewPage(query)).toBe(PAGE);
     expect(await controller.reviewIds(query)).toBe(IDS);
     expect(await controller.batches()).toBe(BATCHES);

@@ -128,4 +128,11 @@ export class Memory extends TimestampsEntity {
   /** The entry a merge wrote in this one's place, while this one stays forgotten by it. */
   @Property({ type: 'string', nullable: true })
   mergedIntoId: string | null = null;
+  /**
+   * Set when the user deleted an imported entry for good: the row stays,
+   * emptied, so its handle is never handed out again, and this hash of its
+   * `importedText` lets a later import preview leave the same note unticked.
+   */
+  @Property({ type: 'string', nullable: true })
+  purgedTextHash: string | null = null;
 }

@@ -25,9 +25,7 @@ import {
   forgottenColumns,
   restoredColumns,
 } from '../utils/memory-forget-stamp';
-import { usageDay } from '../utils/memory-usage-day';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
+import { DAY_MS, usageDay } from '../utils/memory-usage-day';
 
 /** Which rows a cleanup read takes, counted over every row before any page. */
 export interface MemoryReviewFilter {
@@ -42,6 +40,19 @@ export interface MemoryReviewFilter {
   warnings: MemoryReviewWarnings;
   referenceGone: boolean;
   now: Date;
+}
+
+/** What the automatic sweep takes: rows quiet since `before`, in a live scope. */
+export interface MemoryAutoForgetFilter {
+  before: Date;
+  liveScopes: MemoryLiveScopes;
+}
+
+/** The places a new run was filed in lately; entries filed elsewhere are dormant. */
+export interface MemoryLiveScopes {
+  global: boolean;
+  projectIds: readonly string[];
+  teamSlugs: readonly string[];
 }
 
 /** One cleanup row's id and its usage, summed over the ledger. */
@@ -577,6 +588,94 @@ export class MemoryDao extends BaseDao<Memory> {
     return Number(result.numUpdatedRows) > 0;
   }
 
+  /**
+   * Empty a forgotten row for good and mark it deleted, outside the entity so
+   * its edit time stays; false when there is no forgotten row to empty. The
+   * row keeps its handle, its provenance and its usage figures.
+   */
+  async purge(
+    id: string,
+    textHash: string | null,
+    at: Date,
+    em: EntityManager = this.em,
+  ): Promise<boolean> {
+    const result = await this.database(em)
+      .updateTable('memories')
+      .set({
+        title: '',
+        body: '',
+        forget_reason: null,
+        forget_batch_id: null,
+        purged_text_hash: textHash,
+        deleted_at: at.getTime(),
+      })
+      .where('id', '=', id)
+      .where('deleted_at', 'is', null)
+      .where('status', '=', 'forgotten')
+      .executeTakeFirst();
+    return Number(result.numUpdatedRows) > 0;
+  }
+
+  /** The text hashes of purged imported rows, read past the soft-delete filter. */
+  async purgedImportedHashes(em: EntityManager = this.em): Promise<string[]> {
+    const rows = await this.database(em)
+      .selectFrom('memories')
+      .select('purged_text_hash')
+      .where('deleted_at', 'is not', null)
+      .where('source_actor', '=', 'import')
+      .where('purged_text_hash', 'is not', null)
+      .execute();
+    return rows.flatMap((row) =>
+      row.purged_text_hash === null ? [] : [row.purged_text_hash],
+    );
+  }
+
+  /**
+   * The ids the automatic sweep would forget, oldest handle first: every row
+   * its filter takes except those carrying a warning.
+   */
+  async autoForgetIds(
+    filter: MemoryAutoForgetFilter,
+    max: number,
+    em: EntityManager = this.em,
+  ): Promise<string[]> {
+    const query = this.autoForget(filter, em);
+    if (query === null) {
+      return [];
+    }
+    const rows = await query
+      .where((eb) => eb.not(warnedExpression(eb)))
+      .select('m.id')
+      .orderBy('m.handle')
+      .limit(max)
+      .execute();
+    return rows.map((row) => row.id);
+  }
+
+  /** How many rows the sweep would forget now, and how many it leaves for their warning. */
+  async autoForgetCounts(
+    filter: MemoryAutoForgetFilter,
+    em: EntityManager = this.em,
+  ): Promise<{ forget: number; warned: number }> {
+    const query = this.autoForget(filter, em);
+    if (query === null) {
+      return { forget: 0, warned: 0 };
+    }
+    const row = await query
+      .select((eb) => [
+        eb.fn.countAll<number>().as('n'),
+        eb.fn
+          .sum<number>(
+            eb.case().when(warnedExpression(eb)).then(1).else(0).end(),
+          )
+          .as('warned'),
+      ])
+      .executeTakeFirst();
+    const total = Number(row?.n ?? 0);
+    const warned = Number(row?.warned ?? 0);
+    return { forget: total - warned, warned };
+  }
+
   /** Live rows the sweep has not read for a rule or paths yet, oldest handle first. */
   async unmarked(
     limit: number,
@@ -764,6 +863,75 @@ export class MemoryDao extends BaseDao<Memory> {
       query = query.where('m.references_gone', 'is not', null);
     }
     return query;
+  }
+
+  /**
+   * Active rows nobody kept, created, edited, approved, restored and read
+   * before the window, filed in a scope that is not dormant; null when every
+   * scope is.
+   */
+  private autoForget(filter: MemoryAutoForgetFilter, em: EntityManager) {
+    const { before, liveScopes } = filter;
+    const at = before.getTime();
+    const db = this.database(em);
+    const lastRead = db
+      .selectFrom('memory_usage_days')
+      .where('memory_usage_days.deleted_at', 'is', null)
+      .where('memory_usage_days.reads', '>', 0)
+      .select((eb) => [
+        'memory_usage_days.memory_id',
+        eb.fn.max('memory_usage_days.day').as('last_read_day'),
+      ])
+      .groupBy('memory_usage_days.memory_id')
+      .as('r');
+    const anyScope =
+      liveScopes.global ||
+      liveScopes.projectIds.length > 0 ||
+      liveScopes.teamSlugs.length > 0;
+    if (!anyScope) {
+      return null;
+    }
+    return this.scoped({ statuses: ['active'], places: { any: true } }, em)
+      .leftJoin(lastRead, (join) => join.onRef('r.memory_id', '=', 'm.id'))
+      .where('m.kept_at', 'is', null)
+      .where('m.created_at', '<', at)
+      .where('m.updated_at', '<', at)
+      .where((eb) =>
+        eb.and(
+          (['m.approved_at', 'm.restored_at', 'm.last_used_at'] as const).map(
+            (column) => eb.or([eb(column, 'is', null), eb(column, '<', at)]),
+          ),
+        ),
+      )
+      .where((eb) =>
+        eb.or([
+          eb('r.last_read_day', 'is', null),
+          eb('r.last_read_day', '<', usageDay(before)),
+        ]),
+      )
+      .where((eb) =>
+        eb.or([
+          ...(liveScopes.global
+            ? [
+                eb.and([
+                  eb('m.project_id', 'is', null),
+                  eb('m.team_slug', 'is', null),
+                ]),
+              ]
+            : []),
+          ...(liveScopes.projectIds.length > 0
+            ? [
+                eb.and([
+                  eb('m.project_id', 'in', [...liveScopes.projectIds]),
+                  eb('m.team_slug', 'is', null),
+                ]),
+              ]
+            : []),
+          ...(liveScopes.teamSlugs.length > 0
+            ? [eb('m.team_slug', 'in', [...liveScopes.teamSlugs])]
+            : []),
+        ]),
+      );
   }
 
   private sorted(

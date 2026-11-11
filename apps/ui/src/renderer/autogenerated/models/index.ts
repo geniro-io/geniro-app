@@ -7161,6 +7161,12 @@ export interface MemoryConfigAckDto {
      * @memberof MemoryConfigAckDto
      */
     nativeMemoryOff: boolean;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryConfigAckDto
+     */
+    autoForgetAfterDays: number | null;
 }
 
 
@@ -7197,6 +7203,12 @@ export interface MemoryConfigDto {
      * @memberof MemoryConfigDto
      */
     nativeMemoryOff: boolean;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryConfigDto
+     */
+    autoForgetAfterDays: number | null;
 }
 
 
@@ -7509,6 +7521,12 @@ export interface MemoryForgetBatch {
      * @memberof MemoryForgetBatch
      */
     forgottenAt: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof MemoryForgetBatch
+     */
+    automatic: boolean;
 }
 /**
  * 
@@ -8078,6 +8096,25 @@ export interface MemoryPair {
 /**
  * 
  * @export
+ * @interface MemoryPurgeResultDto
+ */
+export interface MemoryPurgeResultDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryPurgeResultDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryPurgeResultDto
+     */
+    handle: string;
+}
+/**
+ * 
+ * @export
  * @interface MemoryRestoreBatchResultDto
  */
 export interface MemoryRestoreBatchResultDto {
@@ -8435,6 +8472,37 @@ export interface MemoryReviewSummaryDto {
      * @memberof MemoryReviewSummaryDto
      */
     lastBatch: MemoryForgetBatch | null;
+    /**
+     * 
+     * @type {MemoryReviewSummaryDtoAutoForget}
+     * @memberof MemoryReviewSummaryDto
+     */
+    autoForget: MemoryReviewSummaryDtoAutoForget | null;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryReviewSummaryDtoAutoForget
+ */
+export interface MemoryReviewSummaryDtoAutoForget {
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDtoAutoForget
+     */
+    days: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDtoAutoForget
+     */
+    forget: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDtoAutoForget
+     */
+    warned: number;
 }
 /**
  * 

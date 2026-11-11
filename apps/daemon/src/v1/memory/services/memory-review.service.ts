@@ -5,6 +5,7 @@ import { setImmediate, setTimeout } from 'node:timers/promises';
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 
+import { RunDao } from '../../agents/dao/run.dao';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import {
   MemoryDao,
@@ -13,6 +14,7 @@ import {
 } from '../dao/memory.dao';
 import type { Memory } from '../entity/memory.entity';
 import {
+  MEMORY_AUTO_BATCH_PREFIX,
   MEMORY_BATCHES_LIMIT,
   MEMORY_REVIEW_IDS_MAX,
   MEMORY_REVIEW_LIMIT_DEFAULT,
@@ -26,6 +28,7 @@ import {
   type MemoryReviewSummary,
   type MemoryReviewWarningKind,
 } from '../memory.types';
+import { autoForgetFilterOf } from '../utils/memory-auto-forget';
 import {
   confinedPath,
   pathsOf,
@@ -67,6 +70,7 @@ export class MemoryReviewService {
     private readonly memories: MemoryDao,
     private readonly projects: ProjectDao,
     private readonly usage: MemoryUsageService,
+    private readonly runs: RunDao,
   ) {}
 
   /** One page of a tab; the first page refreshes reference checks gone stale. */
@@ -130,8 +134,14 @@ export class MemoryReviewService {
     );
   }
 
-  /** The Clean up panel's figures, each counted over every row. */
-  async summary(now = new Date()): Promise<MemoryReviewSummary> {
+  /**
+   * The Clean up panel's figures, each counted over every row, and with
+   * `autoForgetDays` what the automatic sweep with that window would take now.
+   */
+  async summary(
+    now = new Date(),
+    autoForgetDays?: number,
+  ): Promise<MemoryReviewSummary> {
     const em = this.em.fork();
     const totals = await this.memories.reviewTotals(em);
     const cold = filterOf({}, now);
@@ -161,6 +171,16 @@ export class MemoryReviewService {
       counting:
         marker !== null && marker.doneVersion !== MEMORY_USAGE_BACKFILL_VERSION,
       lastBatch: lastBatch ?? null,
+      autoForget:
+        autoForgetDays === undefined
+          ? null
+          : {
+              days: autoForgetDays,
+              ...(await this.memories.autoForgetCounts(
+                await autoForgetFilterOf(autoForgetDays, now, this.runs, em),
+                em,
+              )),
+            },
     };
   }
 
@@ -269,6 +289,7 @@ export class MemoryReviewService {
       batchId: batch.batchId,
       count: batch.count,
       forgottenAt: new Date(batch.forgottenAt).toISOString(),
+      automatic: batch.batchId.startsWith(MEMORY_AUTO_BATCH_PREFIX),
     }));
   }
 }

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { HOST_MEMORY_SEARCH_TOOL } from '../../agents/chat.types';
 import {
   chatTextMatchQuery,
@@ -124,4 +126,9 @@ export function excerptOf(body: string): string {
 /** A note's text as the import compares it: trimmed title and body. */
 export function importedText(title: string, body: string): string {
   return `${title.trim()}\0${body.trim()}`;
+}
+
+/** {@link importedText} as a hash, which outlives the text of a purged entry. */
+export function importedTextHash(title: string, body: string): string {
+  return createHash('sha256').update(importedText(title, body)).digest('hex');
 }

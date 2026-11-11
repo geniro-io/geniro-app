@@ -268,14 +268,25 @@ export const sharingSchema = z.strictObject({
 });
 
 /**
- * TWIN PARSER: `MemoryConfigSchema` in `apps/daemon/src/v1/memory/memory.types.ts`,
- * which `memory-config-push.ts` pushes this to.
+ * TWIN PARSER: `MemoryConfigSchema` in `apps/daemon/src/v1/memory/memory.types.ts`
+ * is this plus the top-level `memoryAutoForgetAfterDays`, pushed as
+ * `autoForgetAfterDays`. `memory-config-push.ts` pushes both together.
  */
 export const memorySchema = z.strictObject({
   enabled: z.boolean(),
   agentWrites: z.enum(['active', 'pending']),
   nativeMemoryOff: z.boolean(),
 });
+
+/** Twin of the day bound in `MemoryConfigSchema` (`apps/daemon/src/v1/memory/memory.types.ts`). */
+const MAX_AUTO_FORGET_DAYS = 3650;
+
+const autoForgetAfterDaysSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(MAX_AUTO_FORGET_DAYS)
+  .nullable();
 
 /**
  * TWIN PARSER: `KnowledgeConfigSchema` in `apps/daemon/src/v1/knowledge/knowledge.types.ts`,
@@ -413,6 +424,9 @@ export const settingsPatchSchema = z.strictObject({
   // absent means "this patch does not mention it" while null is the user
   // switching the sweep off, and those must not be the same write.
   archiveRetentionDays: z.number().int().min(1).max(3650).nullable().optional(),
+  // The auto-forget window, bounded and nullable like the retention window
+  // above: null switches the daemon's sweep off, absent leaves it as it is.
+  memoryAutoForgetAfterDays: autoForgetAfterDaysSchema.optional(),
   // ENUMERATED, like `theme`: a size outside the list is one the screen never
   // offered, and a file written by another build falls back to the default.
   historyPageSize: z.literal(HISTORY_PAGE_SIZES).optional(),

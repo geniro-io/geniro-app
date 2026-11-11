@@ -8,6 +8,7 @@ import mikroOrmConfig from '../../../db/mikro-orm.config';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { MemoryDao } from '../../memory/dao/memory.dao';
+import { MemoryReviewFindingDao } from '../../memory/dao/memory-review-finding.dao';
 import { MemoryUsageDao } from '../../memory/dao/memory-usage.dao';
 import { Memory } from '../../memory/entity/memory.entity';
 import { MemoryService } from '../../memory/services/memory.service';
@@ -84,6 +85,7 @@ export async function knowledgeDb(options: { configured?: boolean } = {}) {
     scope,
     new MemoryEventBus(),
     new MemoryUsageService(new MemoryUsageDao(em)),
+    new MemoryReviewFindingDao(em),
   );
   const service = new KnowledgeService(
     em,

@@ -599,6 +599,15 @@ export interface Settings {
    */
   archiveRetentionDays: number | null;
   /**
+   * Forget a memory entry that has gone cold for this many days, or `null` to
+   * never forget on its own. Pushed to the daemon beside `memory` (as
+   * `autoForgetAfterDays`), which runs the sweep daily; the sweep only forgets
+   * and never purges.
+   *
+   * `null` is the default: forgetting what agents remember is the user's call.
+   */
+  memoryAutoForgetAfterDays: number | null;
+  /**
    * How many transcript items one fetch of a chat brings back — the WINDOW a
    * thread opens on and pages through. Only the transcript's own rows depend on
    * it: every readout beside them is read from the daemon over the whole run.
@@ -832,6 +841,7 @@ export const DEFAULT_SETTINGS: Settings = {
   memory: DEFAULT_MEMORY,
   knowledge: DEFAULT_KNOWLEDGE,
   archiveRetentionDays: null,
+  memoryAutoForgetAfterDays: null,
   historyPageSize: DEFAULT_HISTORY_PAGE_SIZE,
   keptSessionIdleMinutes: DEFAULT_KEPT_SESSION_IDLE_MINUTES,
   preventSleepWhileWorking: true,

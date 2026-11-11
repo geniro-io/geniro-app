@@ -7,6 +7,7 @@ import { RunDao } from '../agents/dao/run.dao';
 import { ProjectsModule } from '../projects/projects.module';
 import { MemoriesController } from './controllers/memories.controller';
 import { MemoryConfigController } from './controllers/memory-config.controller';
+import { MemoryPurgeController } from './controllers/memory-purge.controller';
 import { MemoryDao } from './dao/memory.dao';
 import { MemoryReviewFindingDao } from './dao/memory-review-finding.dao';
 import { MemoryUsageDao } from './dao/memory-usage.dao';
@@ -30,7 +31,11 @@ import { MemoryUsageBackfillService } from './services/memory-usage-backfill.ser
  */
 @Module({
   imports: [ProjectsModule],
-  controllers: [MemoryConfigController, MemoriesController],
+  controllers: [
+    MemoryConfigController,
+    MemoryPurgeController,
+    MemoriesController,
+  ],
   providers: [
     DesktopOnlyGuard,
     MemoryDao,

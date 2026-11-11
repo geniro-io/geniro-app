@@ -61,6 +61,7 @@ const mocks = vi.hoisted(() => {
     memory: { enabled: true, agentWrites: 'active', nativeMemoryOff: false },
     knowledge: { enabled: true, agentWrites: 'review' },
     archiveRetentionDays: null,
+    memoryAutoForgetAfterDays: null,
     historyPageSize: 1000,
     keptSessionIdleMinutes: 60,
     preventSleepWhileWorking: true,
@@ -649,6 +650,19 @@ describe('registerIpc remote-access channels', () => {
     expect(
       entry.policy.refuseRemoteArgs?.([{ sidebarCollapsed: true }]),
     ).toBeFalsy();
+  });
+
+  it('a paired device cannot arm the sweep', () => {
+    const entry = registry.get(IPC.updateSettings);
+    if (!entry || entry.policy.remote !== 'allow') {
+      throw new Error('updateSettings is not remotely callable');
+    }
+    expect(
+      entry.policy.refuseRemoteArgs?.([{ memoryAutoForgetAfterDays: 30 }]),
+    ).toContain('memoryAutoForgetAfterDays');
+    expect(
+      entry.policy.refuseRemoteArgs?.([{ memoryAutoForgetAfterDays: null }]),
+    ).toContain('memoryAutoForgetAfterDays');
   });
 });
 

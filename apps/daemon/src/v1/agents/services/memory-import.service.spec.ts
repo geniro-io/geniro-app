@@ -637,4 +637,45 @@ describe('MemoryImportService', () => {
         .then((rows) => rows.map((memory) => memory.sourceActor)),
     ).toEqual(['import']);
   });
+
+  it('a purged imported note is unticked at the next import', async () => {
+    claudeNote(defaultProfile(), '-r', 'n.md', '---\nname: back\n---\nx');
+    claudeNote(defaultProfile(), '-r', 'o.md', '---\nname: other\n---\ny');
+    const rows = (await preview()).rows;
+    await imports.apply({
+      profiles: [],
+      rows: rows.map((row) => ({
+        key: row.key,
+        type: 'project' as const,
+        projectId: null,
+      })),
+    });
+    const back = await db.em
+      .fork()
+      .findOneOrFail(Memory, { title: 'back', status: 'active' });
+    await db.service.forgetAll();
+
+    expect(await db.service.purge(back.id)).toMatchObject({ id: back.id });
+
+    const again = await preview();
+    expect(again.rows.map((row) => [row.title, row.forgottenEarlier])).toEqual(
+      expect.arrayContaining([
+        ['back', true],
+        ['other', true],
+      ]),
+    );
+    await db.service.setStatus(
+      { kind: 'user' },
+      (await db.em.fork().findOneOrFail(Memory, { title: 'other' })).id,
+      'active',
+    );
+    expect(
+      (await preview()).rows.map((row) => [row.title, row.forgottenEarlier]),
+    ).toEqual(
+      expect.arrayContaining([
+        ['back', true],
+        ['other', false],
+      ]),
+    );
+  });
 });

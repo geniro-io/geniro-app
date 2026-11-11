@@ -1,14 +1,29 @@
-import type { MemorySettings } from '../shared/contracts';
+import type { MemorySettings, Settings } from '../shared/contracts';
 import { DaemonConfigPush } from './daemon-config-push';
+
+/** The body of `PUT /v1/memories/config`. */
+export interface MemoryConfig extends MemorySettings {
+  autoForgetAfterDays: number | null;
+}
+
+/** The memory settings and the top-level auto-forget window, as the daemon takes them. */
+export function memoryConfigOf(
+  settings: Pick<Settings, 'memory' | 'memoryAutoForgetAfterDays'>,
+): MemoryConfig {
+  return {
+    ...settings.memory,
+    autoForgetAfterDays: settings.memoryAutoForgetAfterDays,
+  };
+}
 
 /**
  * Hands the daemon the user's memory settings (`PUT /v1/memories/config`) — see
  * {@link DaemonConfigPush}. Until the first push lands the daemon keeps memory
- * on with agent writes active.
+ * on with agent writes active and no auto-forget.
  *
  * TWIN PARSER: `MemoryConfigSchema` in `apps/daemon/src/v1/memory/memory.types.ts`.
  */
-export class MemoryConfigPush extends DaemonConfigPush<MemorySettings> {
+export class MemoryConfigPush extends DaemonConfigPush<MemoryConfig> {
   constructor(
     report: (message: string) => void,
     fetchImpl: typeof fetch = fetch,

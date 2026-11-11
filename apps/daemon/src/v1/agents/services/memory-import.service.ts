@@ -20,7 +20,7 @@ import {
   type MemoryType,
 } from '../../memory/memory.types';
 import { MemoryService } from '../../memory/services/memory.service';
-import { importedText } from '../../memory/utils/memory-text';
+import { importedText, importedTextHash } from '../../memory/utils/memory-text';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { AgentKind } from '../../runs/runs.types';
 import type { NativeMemoryNote } from '../adapters/adapter.types';
@@ -63,7 +63,7 @@ export class MemoryImportService {
     const { notes, sources } = await this.read(request.profiles);
     const projectsOf = await this.projectsByKey();
     const imported = await this.memory.importedTexts();
-    const forgotten = await this.memory.forgottenImportedTexts();
+    const forgotten = await this.memory.forgottenImportedHashes();
     const firstWithText = new Map<string, string>();
     const rows: MemoryImportRow[] = [];
     for (const [n, note] of notes.entries()) {
@@ -107,7 +107,9 @@ export class MemoryImportService {
         })),
         sameAs,
         alreadyImported: imported.has(importedText(note.title, note.body)),
-        forgottenEarlier: forgotten.has(importedText(note.title, note.body)),
+        forgottenEarlier: forgotten.has(
+          importedTextHash(note.title, note.body),
+        ),
         problem: this.memory.problemOf(note),
       });
     }

@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnApplicationShutdown,
+  type OnModuleInit,
+} from '@nestjs/common';
 
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -12,10 +17,13 @@ import { ProjectDao } from '../../projects/dao/project.dao';
 import type { RunPlace, RunPlaceFacts } from '../../projects/projects.types';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { MemoryDao } from '../dao/memory.dao';
+import { MemoryReviewFindingDao } from '../dao/memory-review-finding.dao';
 import { Memory } from '../entity/memory.entity';
 import {
   DEFAULT_MEMORY_CONFIG,
+  MEMORY_AUTO_BATCH_PREFIX,
   MEMORY_BODY_MAX_BYTES,
+  MEMORY_FORGET_BATCH_MAX,
   MEMORY_FORGET_REASON_MAX_CHARS,
   MEMORY_LIST_LIMIT_DEFAULT,
   MEMORY_READ_MAX,
@@ -43,6 +51,7 @@ import {
   type MemoryMergeRefusal,
   type MemoryMergeRequest,
   type MemoryPatch,
+  type MemoryPurgeResult,
   type MemoryRefusalCode,
   type MemoryRestoreBatchResult,
   type MemoryRunSnapshot,
@@ -53,6 +62,7 @@ import {
   parseMemoryHandle,
   type TeamMemoryFate,
 } from '../memory.types';
+import { autoForgetFilterOf } from '../utils/memory-auto-forget';
 import { memoryExportMarkdown } from '../utils/memory-export';
 import { markForgotten, markRestored } from '../utils/memory-forget-stamp';
 import {
@@ -63,15 +73,23 @@ import {
 import {
   excerptOf,
   importedText,
+  importedTextHash,
   memoryIndexOf,
   similarTitles,
   titleCandidatesQuery,
 } from '../utils/memory-text';
+import { DAY_MS } from '../utils/memory-usage-day';
 import { MemoryEventBus } from './memory-events.bus';
-import { MemoryUsageService } from './memory-usage.service';
+import {
+  MEMORY_USAGE_BACKFILL_VERSION,
+  MemoryUsageService,
+} from './memory-usage.service';
 
 /** Near-duplicate candidates read per write before the title comparison. */
 const DUPLICATE_CANDIDATES = 20;
+
+const AUTO_FORGET_FIRST_RUN_MS = 5 * 60 * 1000;
+const AUTO_FORGET_EVERY_MS = DAY_MS;
 
 type Refusal = Extract<MemorySaveOutcome, { kind: 'refused' }>;
 
@@ -107,12 +125,14 @@ const IMPORT_CHECK: MemoryActor = { kind: 'import', importedFrom: '' };
  * against a table no other write is changing.
  */
 @Injectable()
-export class MemoryService {
+export class MemoryService implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(MemoryService.name);
   private config: MemoryConfig = DEFAULT_MEMORY_CONFIG;
   private teamExists: ((slug: string) => Promise<boolean>) | null = null;
   private configured = false;
   private writes: Promise<unknown> = Promise.resolve();
+  private sweepFirst: ReturnType<typeof setTimeout> | null = null;
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly em: EntityManager,
@@ -123,6 +143,7 @@ export class MemoryService {
     private readonly scope: ProjectScopeService,
     private readonly events: MemoryEventBus,
     private readonly usage: MemoryUsageService,
+    private readonly findings: MemoryReviewFindingDao,
   ) {}
 
   /**
@@ -131,6 +152,100 @@ export class MemoryService {
    */
   useTeamLookup(lookup: (slug: string) => Promise<boolean>): void {
     this.teamExists = lookup;
+  }
+
+  /**
+   * A while after the start, so a Mac that slept through a day still sweeps,
+   * then once a day. Never on a settings push: arming the sweep forgets
+   * nothing in the same gesture.
+   */
+  onModuleInit(): void {
+    this.sweepFirst = setTimeout(() => {
+      void this.sweepColdQuietly();
+    }, AUTO_FORGET_FIRST_RUN_MS);
+    this.sweepFirst.unref?.();
+    this.sweepTimer = setInterval(() => {
+      void this.sweepColdQuietly();
+    }, AUTO_FORGET_EVERY_MS);
+    this.sweepTimer.unref?.();
+  }
+
+  onApplicationShutdown(): void {
+    if (this.sweepFirst !== null) {
+      clearTimeout(this.sweepFirst);
+      this.sweepFirst = null;
+    }
+    if (this.sweepTimer !== null) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
+  }
+
+  /**
+   * Forget, as one batch, every cold entry the user's window takes — never a
+   * kept, warned or waiting one, nor one filed in a dormant scope. Null when
+   * the sweep may not run: memory off, no window armed, the settings not
+   * pushed yet, or the usage history still being counted, which would make
+   * every entry look unread.
+   */
+  sweepCold(now = new Date()): Promise<MemoryForgetBatchResult | null> {
+    const days = this.config.autoForgetAfterDays;
+    const marker = this.usage.backfillMarker;
+    if (
+      !this.configured ||
+      !this.enabled ||
+      days === null ||
+      marker?.doneVersion !== MEMORY_USAGE_BACKFILL_VERSION
+    ) {
+      return Promise.resolve(null);
+    }
+    return this.serialize(async () => {
+      const em = this.em.fork();
+      const filter = await autoForgetFilterOf(days, now, this.runs, em);
+      const ids = await this.memories.autoForgetIds(
+        filter,
+        MEMORY_FORGET_BATCH_MAX,
+        em,
+      );
+      return this.forgetAsBatch(ids, now, em, MEMORY_AUTO_BATCH_PREFIX);
+    });
+  }
+
+  /**
+   * Delete a forgotten entry for good. Its text, its forget reason and the
+   * findings quoting it are erased; the row stays as an empty tombstone, so
+   * its handle is never handed out again, and its usage figures stay.
+   */
+  purge(id: string): Promise<MemoryPurgeResult | 'missing' | 'not-forgotten'> {
+    return this.serialize(async () => {
+      const em = this.em.fork();
+      const row = await this.memories.getById(id, em);
+      if (!row) {
+        return 'missing';
+      }
+      const hash =
+        row.sourceActor === 'import'
+          ? importedTextHash(row.title, row.body)
+          : null;
+      const purged = await em.transactional(async (tx) => {
+        if (!(await this.memories.purge(id, hash, new Date(), tx))) {
+          return false;
+        }
+        await this.findings.deleteNaming(id, tx);
+        return true;
+      });
+      if (!purged) {
+        return 'not-forgotten';
+      }
+      this.events.publish({
+        memoryId: null,
+        change: 'bulk',
+        status: 'forgotten',
+        projectId: row.projectId,
+        teamSlug: row.teamSlug,
+      });
+      return { id, handle: memoryHandle(row.handle) };
+    });
   }
 
   /** Apply what the user chose for a deleted team's entries. */
@@ -561,38 +676,9 @@ export class MemoryService {
    * named.
    */
   forgetBatch(ids: readonly string[]): Promise<MemoryForgetBatchResult> {
-    return this.serialize(async () => {
-      const em = this.em.fork();
-      const wanted = [...new Set(ids)];
-      const batchId = randomUUID();
-      const taken = new Set(
-        await this.memories.forgetBatch(wanted, batchId, new Date(), em),
-      );
-      const left = wanted.filter((id) => !taken.has(id));
-      const known = new Map(
-        (await this.memories.getByIds(left, em)).map((row) => [row.id, row]),
-      );
-      const skipped = left.map((id) => {
-        const row = known.get(id);
-        return {
-          id,
-          handle: row ? memoryHandle(row.handle) : null,
-          reason: row ? `already ${row.status}` : 'no such entry',
-        };
-      });
-      if (taken.size === 0) {
-        return { batchId: null, forgotten: 0, skipped };
-      }
-      this.events.publish({
-        memoryId: null,
-        change: 'bulk',
-        status: 'forgotten',
-        projectId: null,
-        teamSlug: null,
-        batchId,
-      });
-      return { batchId, forgotten: taken.size, skipped };
-    });
+    return this.serialize(() =>
+      this.forgetAsBatch(ids, new Date(), this.em.fork()),
+    );
   }
 
   /**
@@ -805,10 +891,11 @@ export class MemoryService {
   }
 
   /**
-   * What the forgotten imported entries say, each as `importedText` — the
-   * preview's mark only: an import still writes a ticked note again.
+   * What the forgotten and the purged imported entries said, each as
+   * `importedTextHash` — the preview's mark only: an import still writes a
+   * ticked note again.
    */
-  async forgottenImportedTexts(
+  async forgottenImportedHashes(
     em: EntityManager = this.em.fork(),
   ): Promise<Set<string>> {
     const rows = await this.memories.getAll(
@@ -816,7 +903,10 @@ export class MemoryService {
       { fields: ['title', 'body'] },
       em,
     );
-    return new Set(rows.map((row) => importedText(row.title, row.body)));
+    return new Set([
+      ...rows.map((row) => importedTextHash(row.title, row.body)),
+      ...(await this.memories.purgedImportedHashes(em)),
+    ]);
   }
 
   /**
@@ -1156,6 +1246,58 @@ export class MemoryService {
         !vouched.has(row.handle) &&
         similarTitles(row.title, input.title),
     );
+  }
+
+  private async forgetAsBatch(
+    ids: readonly string[],
+    at: Date,
+    em: EntityManager,
+    batchPrefix = '',
+  ): Promise<MemoryForgetBatchResult> {
+    const wanted = [...new Set(ids)];
+    const batchId = `${batchPrefix}${randomUUID()}`;
+    const taken = new Set(
+      await this.memories.forgetBatch(wanted, batchId, at, em),
+    );
+    const left = wanted.filter((id) => !taken.has(id));
+    const known = new Map(
+      (await this.memories.getByIds(left, em)).map((row) => [row.id, row]),
+    );
+    const skipped = left.map((id) => {
+      const row = known.get(id);
+      return {
+        id,
+        handle: row ? memoryHandle(row.handle) : null,
+        reason: row ? `already ${row.status}` : 'no such entry',
+      };
+    });
+    if (taken.size === 0) {
+      return { batchId: null, forgotten: 0, skipped };
+    }
+    this.events.publish({
+      memoryId: null,
+      change: 'bulk',
+      status: 'forgotten',
+      projectId: null,
+      teamSlug: null,
+      batchId,
+    });
+    return { batchId, forgotten: taken.size, skipped };
+  }
+
+  private async sweepColdQuietly(): Promise<void> {
+    try {
+      const result = await this.sweepCold();
+      if (result !== null && result.forgotten > 0) {
+        this.logger.log(
+          `auto-forgot ${result.forgotten} cold memory entr${result.forgotten === 1 ? 'y' : 'ies'}`,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `memory auto-forget failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   private serialize<T>(work: () => Promise<T>): Promise<T> {

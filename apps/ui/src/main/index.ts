@@ -32,7 +32,7 @@ import { KeepAwake } from './keep-awake';
 import { KeptSessionConfigPush } from './kept-session-config-push';
 import { KnowledgeConfigPush } from './knowledge-config-push';
 import { flushWindowsThen } from './line-measurement-flush';
-import { MemoryConfigPush } from './memory-config-push';
+import { memoryConfigOf, MemoryConfigPush } from './memory-config-push';
 import {
   applyTheme,
   resolvedTheme,
@@ -201,7 +201,10 @@ onSettingsWritten((settings) => {
   void keptSessionConfigPush.pushIfChanged(supervisor.getHandle(), {
     idleMinutes: settings.keptSessionIdleMinutes,
   });
-  void memoryConfigPush.pushIfChanged(supervisor.getHandle(), settings.memory);
+  void memoryConfigPush.pushIfChanged(
+    supervisor.getHandle(),
+    memoryConfigOf(settings),
+  );
   void knowledgeConfigPush.pushIfChanged(
     supervisor.getHandle(),
     settings.knowledge,
@@ -651,7 +654,7 @@ function pushDaemonConfig(handle: DaemonHandle): void {
   void keptSessionConfigPush.push(handle, {
     idleMinutes: settings.keptSessionIdleMinutes,
   });
-  void memoryConfigPush.push(handle, settings.memory);
+  void memoryConfigPush.push(handle, memoryConfigOf(settings));
   void knowledgeConfigPush.push(handle, settings.knowledge);
 }
 

@@ -108,6 +108,7 @@ const SUMMARY: MemoryReviewSummaryDto = {
   countedSince: '2026-10-29',
   counting: false,
   lastBatch: null,
+  autoForget: null,
 };
 
 function reviewRow(
@@ -235,7 +236,15 @@ function fakeApi(
     triageMemoryImport: vi.fn((_request: unknown, _init?: unknown) =>
       Promise.resolve<MemoryImportTriageDto>({ verdicts: [] }),
     ),
-    memoryReviewSummary: vi.fn(() => Promise.resolve(summary)),
+    memoryReviewSummary: vi.fn((request: { autoForgetDays?: number } = {}) =>
+      Promise.resolve<MemoryReviewSummaryDto>({
+        ...summary,
+        autoForget:
+          request.autoForgetDays === undefined
+            ? null
+            : { days: request.autoForgetDays, forget: 5, warned: 2 },
+      }),
+    ),
     listMemoryReview: vi.fn(
       (request: MemoriesApiListMemoryReviewRequest = {}) =>
         Promise.resolve(review(request)),
@@ -294,6 +303,9 @@ function fakeApi(
         batchId: 'batch-merge',
         forgotten: ['m31', 'm32'],
       }),
+    ),
+    purgeMemory: vi.fn((request: { memoryId: string }) =>
+      Promise.resolve({ id: request.memoryId, handle: 'm3' }),
     ),
   };
 }
@@ -1345,11 +1357,14 @@ describe('Memory clean up', () => {
           batchId: 'batch-9',
           count: 4,
           forgottenAt: new Date().toISOString(),
+          automatic: true,
         },
       }),
     });
 
-    expect(container.textContent).toContain('Forgot 4 entries');
+    expect(container.textContent).toContain(
+      'Automatic cleanup · Forgot 4 entries',
+    );
     await press(button(container, 'Undo'));
 
     expect(api.restoreMemoryBatch).toHaveBeenCalledWith({ batchId: 'batch-9' });
@@ -1376,6 +1391,7 @@ describe('Memory clean up', () => {
           batchId: 'batch-7',
           count: 3,
           forgottenAt: new Date().toISOString(),
+          automatic: false,
         },
       ],
     });
@@ -1391,6 +1407,7 @@ describe('Memory clean up', () => {
       '[data-slot="memory-cleanup-batches"]',
     );
     expect(recent?.textContent).toContain('Forgot 3 entries');
+    expect(recent?.textContent).not.toContain('Automatic cleanup');
     await press(button(recent as HTMLElement, 'Undo'));
 
     expect(api.restoreMemoryBatch).toHaveBeenCalledWith({ batchId: 'batch-7' });
@@ -1515,6 +1532,144 @@ describe('Memory clean up', () => {
       inDialog().querySelector('[data-slot="memory-cleanup-picked"]')
         ?.textContent,
     ).toBe('0 selected');
+  });
+
+  function lastQuestion(): Element | undefined {
+    return [
+      ...document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
+    ].at(-1);
+  }
+
+  const FORGOTTEN_ONLY = () => ({
+    rows: [reviewRow(GONE, { forgottenAt: '2026-11-01T00:00:00.000Z' })],
+    total: 1,
+    younger: null,
+    next: null,
+  });
+
+  it('deletes a forgotten entry permanently, only after a confirm that says it cannot be undone', async () => {
+    const api = await render({ api: fakeApi(undefined, FORGOTTEN_ONLY) });
+    await press(button(container, 'Review…'));
+    await press(button(inDialog(), 'Forgotten (3)'));
+
+    await press(button(inDialog(), 'Delete permanently…'));
+    expect(lastQuestion()?.textContent).toContain('Delete m3 permanently?');
+    expect(lastQuestion()?.textContent).toContain('This cannot be undone.');
+    expect(lastQuestion()?.textContent).toContain(
+      'Past chats keep what they showed.',
+    );
+    expect(api.purgeMemory).not.toHaveBeenCalled();
+    await press(confirmInDialog('Delete permanently'));
+
+    expect(api.purgeMemory).toHaveBeenCalledWith({ memoryId: 'e3' });
+    expect(
+      inDialog().querySelector('[data-slot="memory-cleanup-notice"]')
+        ?.textContent,
+    ).toContain('Deleted m3 permanently.');
+  });
+
+  it('keeps a refused purge in its confirm, with the reason', async () => {
+    const api = fakeApi(undefined, FORGOTTEN_ONLY);
+    api.purgeMemory.mockRejectedValue(new Error('only a forgotten memory'));
+    await render({ api });
+    await press(button(container, 'Review…'));
+    await press(button(inDialog(), 'Forgotten (3)'));
+
+    await press(button(inDialog(), 'Delete permanently…'));
+    await press(confirmInDialog('Delete permanently'));
+
+    expect(lastQuestion()?.textContent).toContain('only a forgotten memory');
+  });
+
+  it('offers neither the permanent delete nor the automatic sweep on a paired device', async () => {
+    await render({
+      api: fakeApi(undefined, FORGOTTEN_ONLY),
+      remote: true,
+    });
+
+    expect(container.textContent).not.toContain(
+      'Forget cold entries automatically',
+    );
+    await press(button(container, 'Review…'));
+    await press(button(inDialog(), 'Forgotten (3)'));
+
+    expect(inDialog().textContent).toContain('Old rule');
+    expect(inDialog().textContent).not.toContain('Delete permanently');
+  });
+
+  it('arms the automatic sweep only after a confirm naming what it would forget now', async () => {
+    const api = await render();
+    expect(container.textContent).toContain(
+      'Never deletes, never asks a model, never touches kept entries or entries with a warning.',
+    );
+
+    await choose('Forget cold entries automatically', 'After 30 days');
+
+    expect(api.memoryReviewSummary).toHaveBeenLastCalledWith({
+      autoForgetDays: 30,
+    });
+    expect(lastQuestion()?.textContent).toContain(
+      'Right now this would forget 5 entries that nobody has read, edited or restored for 30 days',
+    );
+    expect(lastQuestion()?.textContent).toContain(
+      '2 entries with a warning are left alone.',
+    );
+    await press(button(lastQuestion() as HTMLElement, 'Cancel'));
+    expect(writes).toEqual([]);
+
+    await choose('Forget cold entries automatically', 'After 30 days');
+    await press(confirmInDialog('Turn on'));
+
+    expect(writes).toEqual([{ memoryAutoForgetAfterDays: 30 }]);
+    expect(container.textContent).toContain(
+      'Runs once a day and moves them to Forgotten, with Undo. Would forget 5 entries now.',
+    );
+
+    await choose('Forget cold entries automatically', 'Off');
+    expect(writes).toEqual([
+      { memoryAutoForgetAfterDays: 30 },
+      { memoryAutoForgetAfterDays: null },
+    ]);
+  });
+
+  it('names the window it was asked about, whatever answer comes back late', async () => {
+    const api = await render();
+    let late: (summary: MemoryReviewSummaryDto) => void = () => undefined;
+    api.memoryReviewSummary.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          late = resolve;
+        }),
+    );
+
+    await choose('Forget cold entries automatically', 'After 90 days');
+    const answer90 = late;
+    await press(button(lastQuestion() as HTMLElement, 'Cancel'));
+    await choose('Forget cold entries automatically', 'After 30 days');
+    await act(async () => {
+      answer90({
+        ...SUMMARY,
+        autoForget: { days: 90, forget: 99, warned: 0 },
+      });
+    });
+    await settle();
+
+    expect(lastQuestion()?.textContent).toContain(
+      'would forget 5 entries that nobody has read, edited or restored for 30 days',
+    );
+    expect(lastQuestion()?.textContent).not.toContain('99');
+  });
+
+  it('says the figure may be high while earlier chats are still counted', async () => {
+    await render({
+      api: fakeApi(undefined, undefined, { ...SUMMARY, counting: true }),
+    });
+
+    await choose('Forget cold entries automatically', 'After 30 days');
+
+    expect(lastQuestion()?.textContent).toContain(
+      'Earlier chats are still being counted, so the first run waits for that and may forget fewer.',
+    );
   });
 });
 

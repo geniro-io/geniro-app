@@ -287,8 +287,10 @@ export const MemoryForgetAllSchema = z.object({ forgotten: z.number().int() });
 export const MEMORY_COLD_DAYS = 90;
 /** How old an entry must be before the cleanup list proposes it, by default. */
 export const MEMORY_REVIEW_MIN_AGE_DAYS = 14;
-/** The most ids `GET /v1/memories/review/ids` answers, and a batch forgets. */
+/** The most ids `GET /v1/memories/review/ids` answers. */
 export const MEMORY_REVIEW_IDS_MAX = 1000;
+/** The most entries one cleanup batch forgets: a Tick shown plus rows ticked by hand. */
+export const MEMORY_FORGET_BATCH_MAX = 5000;
 export const MEMORY_REVIEW_LIMIT_MAX = 100;
 export const MEMORY_REVIEW_LIMIT_DEFAULT = 30;
 /** Recent cleanups listed by `GET /v1/memories/batches`. */
@@ -440,7 +442,7 @@ export const MemoryReviewSummarySchema = z.object({
 export type MemoryReviewSummary = z.infer<typeof MemoryReviewSummarySchema>;
 
 export const MemoryForgetBatchRequestSchema = z.object({
-  ids: z.array(z.string().min(1).max(200)).min(1).max(MEMORY_REVIEW_IDS_MAX),
+  ids: z.array(z.string().min(1).max(200)).min(1).max(MEMORY_FORGET_BATCH_MAX),
 });
 export type MemoryForgetBatchRequest = z.infer<
   typeof MemoryForgetBatchRequestSchema

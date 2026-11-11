@@ -66,6 +66,7 @@ export interface MemoryUnmarkedRow {
 /** A project entry whose referenced paths are due a check. */
 export interface MemoryReferenceRow {
   id: string;
+  rev: number;
   projectId: string;
   referencedPaths: string;
 }
@@ -291,12 +292,11 @@ export class MemoryDao extends BaseDao<Memory> {
     const rows = await this.sorted(base, filter)
       .select((eb) => [
         'm.id',
-        'm.last_used_at',
+        lastReadDayExpression(eb).as('last_read'),
         eb.fn.coalesce('u.recent_reads', eb.lit(0)).as('recent_reads'),
         eb.fn.coalesce('u.reads', eb.lit(0)).as('reads'),
         eb.fn.coalesce('u.search_hits', eb.lit(0)).as('search_hits'),
         eb.fn.coalesce('u.index_shows', eb.lit(0)).as('index_shows'),
-        'u.last_read_day',
         warnedExpression(eb).as('warned'),
       ])
       .limit(limit)
@@ -310,7 +310,7 @@ export class MemoryDao extends BaseDao<Memory> {
         reads: Number(row.reads),
         searchHits: Number(row.search_hits),
         indexShows: Number(row.index_shows),
-        lastReadDay: latestDay(row.last_read_day, row.last_used_at),
+        lastReadDay: row.last_read ?? null,
         warned: Boolean(row.warned),
       })),
     };
@@ -560,7 +560,7 @@ export class MemoryDao extends BaseDao<Memory> {
   ): Promise<MemoryReferenceRow[]> {
     const rows = await this.database(em)
       .selectFrom('memories')
-      .select(['id', 'project_id', 'referenced_paths'])
+      .select(['id', 'rev', 'project_id', 'referenced_paths'])
       .where('deleted_at', 'is', null)
       .where('status', 'in', ['active', 'pending'])
       .where('project_id', 'is not', null)
@@ -578,6 +578,7 @@ export class MemoryDao extends BaseDao<Memory> {
         : [
             {
               id: row.id,
+              rev: row.rev,
               projectId: row.project_id,
               referencedPaths: row.referenced_paths,
             },
@@ -585,9 +586,12 @@ export class MemoryDao extends BaseDao<Memory> {
     );
   }
 
-  /** Store a reference check's result without moving the entry's edit time. */
+  /**
+   * Store a reference check's result without moving the entry's edit time,
+   * unless the entry was written since the check read its paths.
+   */
   async setReferencesGone(
-    id: string,
+    row: Pick<MemoryReferenceRow, 'id' | 'rev'>,
     gone: string | null,
     at: Date,
     em: EntityManager = this.em,
@@ -595,7 +599,8 @@ export class MemoryDao extends BaseDao<Memory> {
     await this.database(em)
       .updateTable('memories')
       .set({ references_gone: gone, references_checked_at: at.getTime() })
-      .where('id', '=', id)
+      .where('id', '=', row.id)
+      .where('rev', '=', row.rev)
       .execute();
   }
 
@@ -701,15 +706,14 @@ export class MemoryDao extends BaseDao<Memory> {
           .orderBy('m.id');
       case 'longestSinceRead':
         return query
-          .orderBy('m.last_used_at')
-          .orderBy('u.last_read_day')
+          .orderBy((eb) => lastReadDayExpression(eb))
           .orderBy('m.created_at')
           .orderBy('m.id');
       case 'leastUsed':
         return query
           .orderBy((eb) => eb.fn.coalesce('u.recent_reads', eb.lit(0)))
           .orderBy((eb) => eb.fn.coalesce('u.reads', eb.lit(0)))
-          .orderBy('u.last_read_day')
+          .orderBy((eb) => lastReadDayExpression(eb))
           .orderBy('m.created_at')
           .orderBy('m.id');
     }
@@ -837,14 +841,23 @@ function warnedExpression<DB extends { m: MemoryRow }>(
   ]);
 }
 
-/** The later of the ledger's last read day and the last read stamp's day. */
-function latestDay(
-  ledger: string | null,
-  stamped: number | null,
-): string | null {
-  const fromStamp = stamped === null ? null : usageDay(new Date(stamped));
-  if (ledger === null) {
-    return fromStamp;
-  }
-  return fromStamp !== null && fromStamp > ledger ? fromStamp : ledger;
+type ReviewRefs = { m: MemoryRow; u: { last_read_day: string | null } };
+
+/**
+ * The UTC day an entry was last read: the later of the ledger's last read
+ * day and the last read stamp's day, null when it was never read.
+ */
+function lastReadDayExpression<DB extends ReviewRefs>(
+  eb: ExpressionBuilder<DB, 'm' | 'u'>,
+): ExpressionWrapper<ReviewRefs, 'm' | 'u', string | null> {
+  const ref = eb as unknown as ExpressionBuilder<ReviewRefs, 'm' | 'u'>;
+  const stamped = ref.fn<string | null>('strftime', [
+    ref.val('%Y-%m-%d'),
+    ref('m.last_used_at', '/', 1000),
+    ref.val('unixepoch'),
+  ]);
+  return ref.fn<string | null>('max', [
+    ref.fn.coalesce('u.last_read_day', stamped),
+    ref.fn.coalesce(stamped, 'u.last_read_day'),
+  ]);
 }

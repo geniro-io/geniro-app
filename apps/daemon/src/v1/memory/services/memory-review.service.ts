@@ -43,6 +43,9 @@ import {
 /** A reference check older than this is run again when the list is opened. */
 export const REFERENCE_CHECK_TTL_MS = 60 * 60 * 1000;
 
+/** How long the first page waits on a reference check before drawing without it. */
+const REFERENCE_CHECK_WAIT_MS = 2000;
+
 /** Rows the sweep reads per breath; better-sqlite3 holds the loop meanwhile. */
 const SWEEP_BATCH = 200;
 const SWEEP_PAUSE_MS = 10;
@@ -72,7 +75,14 @@ export class MemoryReviewService {
     now = new Date(),
   ): Promise<MemoryReviewPage> {
     if (query.cursor === undefined) {
-      await this.refreshReferences(now);
+      await Promise.race([
+        this.refreshReferences(now).catch((err: unknown) =>
+          this.logger.warn(
+            `memory reference check failed: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        ),
+        setTimeout(REFERENCE_CHECK_WAIT_MS),
+      ]);
     }
     const filter = filterOf(query, now);
     const offset = Number(query.cursor ?? 0);
@@ -247,7 +257,7 @@ export class MemoryReviewService {
           }
         }
       }
-      await this.memories.setReferencesGone(row.id, storedPaths(gone), now, em);
+      await this.memories.setReferencesGone(row, storedPaths(gone), now, em);
     }
   }
 

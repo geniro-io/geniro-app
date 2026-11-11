@@ -131,6 +131,21 @@ describe('MemoryFindingsService', () => {
     expect(await db.findings.candidatePairs()).toEqual([]);
   });
 
+  it('a team entry and a project entry with the same text are never paired', async () => {
+    await addProject('p1');
+    await save('Pnpm workspace rule', inTeam('t1'));
+    await save('Pnpm workspace rule', inProject('p1'));
+
+    expect(await db.findings.candidatePairs()).toEqual([]);
+  });
+
+  it('a team entry and a global entry with the same text are paired', async () => {
+    const global = await save('Pnpm workspace rule', NONE);
+    const team = await save('Pnpm workspace rule', inTeam('t1'));
+
+    expectOnePairOf(await db.findings.candidatePairs(), global, team);
+  });
+
   it('Undo leaves a dismissed pair dismissed, and brings back a pair it had only hidden', async () => {
     const dismissedA = await save('Pnpm workspace rule', NONE);
     const dismissedB = await save(

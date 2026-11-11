@@ -373,8 +373,12 @@ async function type(input: HTMLInputElement, value: string): Promise<void> {
   });
 }
 
-async function choose(label: string, option: string): Promise<void> {
-  const trigger = container.querySelector<HTMLElement>(
+async function choose(
+  label: string,
+  option: string,
+  scope: ParentNode = container,
+): Promise<void> {
+  const trigger = scope.querySelector<HTMLElement>(
     `[data-menu-trigger][aria-label="${label}"]`,
   );
   if (!trigger) {
@@ -1730,5 +1734,122 @@ describe('Memory duplicates and contradictions', () => {
     expect(
       inDialog().querySelectorAll('[data-slot="memory-finding"]'),
     ).toHaveLength(1);
+  });
+
+  it('switching to the checks tab asks the daemon for no more rows and leaves the cold rows out', async () => {
+    const api = fakeApi(
+      undefined,
+      () => ({ rows: [COLD], total: 1, younger: 0, next: null }),
+      undefined,
+      { findings: [] },
+    );
+    await render({ api });
+    await press(button(container, 'Review…'));
+    const cold = api.listMemoryReview.mock.calls.length;
+    expect(
+      inDialog().querySelectorAll('[data-slot="memory-cleanup-row"]'),
+    ).toHaveLength(1);
+
+    const tab = [...inDialog().querySelectorAll('button')].find((candidate) =>
+      candidate.textContent?.startsWith('Duplicates & contradictions'),
+    );
+    await press(tab!);
+
+    expect(api.listMemoryReview.mock.calls.length).toBe(cold);
+    expect(
+      inDialog().querySelectorAll('[data-slot="memory-cleanup-row"]'),
+    ).toHaveLength(0);
+  });
+
+  it('Keep B forgets A as a cleanup batch, and the notice names both', async () => {
+    const api = fakeApi(undefined, undefined, undefined, {
+      findings: [FINDING],
+    });
+    await openChecks(api);
+
+    await press(button(finding(), 'Keep B, forget A'));
+
+    expect(api.forgetMemoryBatch).toHaveBeenCalledWith({
+      forgetMemoryBatchDto: { ids: ['p1'] },
+    });
+    const notice = inDialog().querySelector(
+      '[data-slot="memory-cleanup-notice"]',
+    );
+    expect(notice?.textContent).toContain('Kept m32 and forgot m31.');
+  });
+
+  it('a batch the CLI fails stops the check and says how many pairs were checked', async () => {
+    const api = fakeApi(undefined, undefined, undefined, {
+      pairs: pairsOf(3),
+    });
+    api.checkMemoryReviewPairs.mockRejectedValueOnce(
+      new Error(
+        'daemon POST /v1/memories/review/check failed (503): the CLI did not answer',
+      ),
+    );
+    await openChecks(api);
+
+    await press(button(inDialog(), 'Check 3 pairs'));
+
+    const text = inDialog().textContent ?? '';
+    const stopped = text.slice(text.indexOf('The check stopped:'));
+    expect(stopped.startsWith('The check stopped: ')).toBe(true);
+    expect(stopped).toContain('0 of 3 pairs were checked and are kept');
+  });
+
+  it('a merge defaults to the project of the first entry, and the scope and type it saves as can be picked', async () => {
+    const api = fakeApi(undefined, undefined, undefined, {
+      findings: [FINDING],
+    });
+    await openChecks(api);
+
+    await press(button(finding(), 'Merge…'));
+    const filing = finding().querySelector<HTMLElement>(
+      '[data-slot="memory-finding-merge-filing"]',
+    );
+    expect(
+      filing?.querySelector('[aria-label="Merged entry scope"]')?.textContent,
+    ).toContain('Project: ');
+    expect(
+      filing?.querySelector('[aria-label="Merged entry type"]')?.textContent,
+    ).toContain('Reference');
+
+    await choose('Merged entry scope', 'Global', finding());
+    await choose('Merged entry type', 'Feedback', finding());
+    await press(button(finding(), 'Save merged entry'));
+
+    expect(api.mergeMemories).toHaveBeenCalledWith({
+      mergeMemoriesDto: {
+        sourceIds: ['p1', 'p2'],
+        title: FINDING.a.title,
+        body: `${FINDING.a.body}\n\n${FINDING.b.body}`,
+        type: 'feedback',
+        projectId: null,
+        teamSlug: null,
+      },
+    });
+  });
+
+  it('when the first entry is global and the second is in a project, a merge defaults to the second one’s project', async () => {
+    const swapped: MemoryFinding = {
+      ...FINDING,
+      a: { ...FINDING.a, projectId: null, type: 'reference' },
+      b: { ...FINDING.b, projectId: 'project-website' },
+    };
+    const api = fakeApi(undefined, undefined, undefined, {
+      findings: [swapped],
+    });
+    await openChecks(api);
+
+    await press(button(finding(), 'Merge…'));
+    await press(button(finding(), 'Save merged entry'));
+
+    expect(api.mergeMemories).toHaveBeenCalledWith({
+      mergeMemoriesDto: expect.objectContaining({
+        projectId: 'project-website',
+        teamSlug: null,
+        type: 'feedback',
+      }),
+    });
   });
 });

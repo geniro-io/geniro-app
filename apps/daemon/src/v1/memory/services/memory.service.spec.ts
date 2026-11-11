@@ -2197,6 +2197,74 @@ describe('MemoryService', () => {
       expect(published).toEqual([]);
     });
 
+    it('publishes the new entry and the batch only after the commit, and restoring the batch publishes the merged entry forgotten', async () => {
+      const first = await seed('Pnpm workspace install');
+      const second = await seed('Pnpm workspace layout');
+      const published: MemoryChangedEvent[] = [];
+      db.events.allChanges().subscribe((event) => published.push(event));
+
+      const outcome = await db.service.merge(mergeOf([first.id, second.id]));
+      if (outcome.kind !== 'merged') {
+        throw new Error(`expected a merge, got ${outcome.kind}`);
+      }
+      const { entry, batchId } = outcome.result;
+
+      expect(published).toEqual([
+        expect.objectContaining({
+          memoryId: entry.id,
+          change: 'created',
+          status: 'active',
+        }),
+        expect.objectContaining({
+          memoryId: null,
+          change: 'bulk',
+          status: 'forgotten',
+          batchId,
+        }),
+      ]);
+
+      published.splice(0);
+      await db.service.restoreBatch(batchId);
+
+      expect(published).toContainEqual(
+        expect.objectContaining({
+          memoryId: entry.id,
+          change: 'forgotten',
+          status: 'forgotten',
+        }),
+      );
+    });
+
+    it('publishes nothing for a refused merge', async () => {
+      const first = await seed('Pnpm workspace install');
+      const published: MemoryChangedEvent[] = [];
+      db.events.allChanges().subscribe((event) => published.push(event));
+
+      expect(
+        await db.service.merge(mergeOf([first.id, first.id])),
+      ).toMatchObject({ kind: 'refused', code: 'INVALID_ENTRY' });
+      expect(published).toEqual([]);
+    });
+
+    it('rolls the new entry back when a source is not taken in the same transaction', async () => {
+      const first = await seed('Pnpm workspace install');
+      const second = await seed('Pnpm workspace layout');
+      const taken = vi
+        .spyOn(MemoryDao.prototype, 'forgetBatch')
+        .mockResolvedValueOnce([first.id]);
+      const published: MemoryChangedEvent[] = [];
+      db.events.allChanges().subscribe((event) => published.push(event));
+
+      const outcome = await db.service.merge(mergeOf([first.id, second.id]));
+      taken.mockRestore();
+
+      expect(outcome).toMatchObject({ kind: 'refused', code: 'NOT_FOUND' });
+      expect((await rowOf(first.id)).status).toBe('active');
+      expect((await rowOf(second.id)).status).toBe('active');
+      expect(await db.em.fork().count(Memory)).toBe(2);
+      expect(published).toEqual([]);
+    });
+
     it('restoring its batch returns both sources and removes the new entry', async () => {
       const first = await seed('Pnpm workspace install');
       const second = await seed('Pnpm workspace layout');

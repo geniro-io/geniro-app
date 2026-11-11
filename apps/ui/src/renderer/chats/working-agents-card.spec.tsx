@@ -933,12 +933,15 @@ describe('WorkingAgentsCard', () => {
         );
       }
 
-      async function openChannelled(send: CallMessageSend) {
-        const spies = doubles();
-        spies.listRunItems.mockResolvedValueOnce({
+      async function openChannelled(
+        send: CallMessageSend,
+        page: RunItemsReply = {
           items: [running, message(40, 'working on it'), toolCall(41)],
           anchors: chainStarts,
-        });
+        },
+      ) {
+        const spies = doubles();
+        spies.listRunItems.mockResolvedValueOnce(page);
         const el = mount(<Channelled send={send} spies={spies} />);
         await press(toggleOf(el));
         await settle();
@@ -990,6 +993,22 @@ describe('WorkingAgentsCard', () => {
           [],
           expect.any(String),
         );
+      });
+
+      it('offers a message to a callee whose running status is anchored above a page of its tool calls', async () => {
+        await openChannelled(
+          vi.fn(() => Promise.resolve()),
+          {
+            items: Array.from({ length: 200 }, (_, index) =>
+              toolCall(100 + index),
+            ),
+            anchors: [...chainStarts, running],
+          },
+        );
+
+        expect(
+          footer()?.querySelector('[data-slot="call-message-open"]'),
+        ).not.toBeNull();
       });
 
       it('offers no message to a call with no channel to it', async () => {

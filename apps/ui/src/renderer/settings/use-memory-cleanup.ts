@@ -18,6 +18,7 @@ import { teamSlugOfScope } from '../components/memory-form';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { describeDaemonError } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import type { AutoForgetFigure } from './memory-auto-forget';
 
 export type CleanupClient = Pick<
   MemoriesApi,
@@ -30,6 +31,7 @@ export type CleanupClient = Pick<
   | 'keepMemory'
   | 'unkeepMemory'
   | 'updateMemory'
+  | 'purgeMemory'
 >;
 
 /** TWIN: `MEMORY_REVIEW_MIN_AGE_DAYS` in `apps/daemon/src/v1/memory/memory.types.ts`. */
@@ -55,8 +57,18 @@ const TYPES: readonly ListMemoryReviewTypeEnum[] = [
   'reference',
 ];
 
-function entries(n: number): string {
+export function entries(n: number): string {
   return `${n.toLocaleString('en-US')} ${n === 1 ? 'entry' : 'entries'}`;
+}
+
+function figureOf(summary: MemoryReviewSummaryDto): AutoForgetFigure | null {
+  return summary.autoForget === null
+    ? null
+    : {
+        forget: summary.autoForget.forget,
+        warned: summary.autoForget.warned,
+        provisional: summary.counting,
+      };
 }
 
 /** The review query a tab and its filters ask the daemon for. */
@@ -89,12 +101,14 @@ export function reviewRequest(
 /**
  * The Clean up panel's figures and the review dialog's state: which tab and
  * filters, the rows loaded so far, what is ticked, and every press — keep,
- * forget a batch, undo, restore. Figures and lists are refreshed whenever the
- * memory changes, wherever the change was made.
+ * forget a batch, undo, restore, delete for good. Figures and lists are
+ * refreshed whenever the memory changes, wherever the change was made; with
+ * an armed `autoForgetDays` the figures carry what that sweep would take now.
  */
 export function useMemoryCleanup(
   api: CleanupClient | null,
   client: Pick<DaemonClient, 'onMemoryChanged'> | null,
+  autoForgetDays: number | null = null,
 ) {
   const [summary, setSummary] = useState<MemoryReviewSummaryDto | null>(null);
   const [open, setOpen] = useState(false);
@@ -122,10 +136,10 @@ export function useMemoryCleanup(
       return;
     }
     void api
-      .memoryReviewSummary()
+      .memoryReviewSummary(autoForgetDays === null ? {} : { autoForgetDays })
       .then(setSummary)
       .catch(() => undefined);
-  }, [api]);
+  }, [api, autoForgetDays]);
 
   const readPage = useLatestCallback(() => {
     if (api === null || !open || tab === 'checks') {
@@ -407,8 +421,34 @@ export function useMemoryCleanup(
     );
   };
 
+  const purge = async (entry: MemoryEntry): Promise<void> => {
+    if (api === null) {
+      return;
+    }
+    try {
+      await api.purgeMemory({ memoryId: entry.id });
+    } catch (err: unknown) {
+      throw new Error(describeDaemonError(err), { cause: err });
+    }
+    setNotice({
+      text: `Deleted ${entry.handle} permanently.`,
+      batchId: null,
+    });
+    refresh();
+  };
+
+  const autoForgetFigure = async (
+    days: number,
+  ): Promise<AutoForgetFigure | null> => {
+    if (api === null) {
+      return null;
+    }
+    return figureOf(await api.memoryReviewSummary({ autoForgetDays: days }));
+  };
+
   return {
     summary,
+    autoForget: summary === null ? null : figureOf(summary),
     open,
     openDialog,
     closeDialog,
@@ -435,6 +475,8 @@ export function useMemoryCleanup(
     keep,
     unkeep,
     restore,
+    purge,
+    autoForgetFigure,
     loadMore,
     batches,
     notice,

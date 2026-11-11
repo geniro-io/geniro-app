@@ -658,9 +658,7 @@ describe('MemoryImportService', () => {
     expect(await db.service.purge(back.id)).toMatchObject({ id: back.id });
 
     const again = await preview();
-    expect(
-      again.rows.map((row) => [row.title, row.forgottenEarlier]),
-    ).toEqual(
+    expect(again.rows.map((row) => [row.title, row.forgottenEarlier])).toEqual(
       expect.arrayContaining([
         ['back', true],
         ['other', true],

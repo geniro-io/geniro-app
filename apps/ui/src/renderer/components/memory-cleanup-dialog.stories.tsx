@@ -310,6 +310,15 @@ export const Kept: Story = {
 };
 
 export const Forgotten: Story = {
+  args: {
+    tab: 'forgotten',
+    rows: FORGOTTEN,
+    total: FORGOTTEN.length,
+    onPurge: () => Promise.resolve(),
+  },
+};
+
+export const ForgottenOnPhone: Story = {
   args: { tab: 'forgotten', rows: FORGOTTEN, total: FORGOTTEN.length },
 };
 

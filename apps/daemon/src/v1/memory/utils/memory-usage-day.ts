@@ -1,5 +1,7 @@
 import type { MemoryUsageCount, MemoryUsageField } from '../memory.types';
 
+export const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** The UTC calendar day a use is counted on. */
 export function usageDay(at: Date): string {
   return at.toISOString().slice(0, 10);

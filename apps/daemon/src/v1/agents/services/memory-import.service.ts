@@ -20,10 +20,7 @@ import {
   type MemoryType,
 } from '../../memory/memory.types';
 import { MemoryService } from '../../memory/services/memory.service';
-import {
-  importedText,
-  importedTextHash,
-} from '../../memory/utils/memory-text';
+import { importedText, importedTextHash } from '../../memory/utils/memory-text';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import type { AgentKind } from '../../runs/runs.types';
 import type { NativeMemoryNote } from '../adapters/adapter.types';

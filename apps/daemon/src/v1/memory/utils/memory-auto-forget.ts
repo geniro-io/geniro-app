@@ -3,8 +3,7 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 import type { RunDao } from '../../agents/dao/run.dao';
 import type { MemoryAutoForgetFilter } from '../dao/memory.dao';
 import { MEMORY_DORMANT_SCOPE_DAYS } from '../memory.types';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
+import { DAY_MS } from './memory-usage-day';
 
 /**
  * What the automatic sweep with a window of `days` takes at `now` — the one

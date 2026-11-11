@@ -25,9 +25,7 @@ import {
   forgottenColumns,
   restoredColumns,
 } from '../utils/memory-forget-stamp';
-import { usageDay } from '../utils/memory-usage-day';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
+import { DAY_MS, usageDay } from '../utils/memory-usage-day';
 
 /** Which rows a cleanup read takes, counted over every row before any page. */
 export interface MemoryReviewFilter {
@@ -597,7 +595,7 @@ export class MemoryDao extends BaseDao<Memory> {
    */
   async purge(
     id: string,
-    textHash: string,
+    textHash: string | null,
     at: Date,
     em: EntityManager = this.em,
   ): Promise<boolean> {

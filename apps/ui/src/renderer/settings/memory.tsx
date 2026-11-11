@@ -54,6 +54,7 @@ import { type DaemonApis, describeDaemonError } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { isRemoteRuntime } from '../remote/remote-session';
 import { MemoryCheckPanel } from './memory-check-panel';
+import { MemoryAutoForgetRow } from './memory-auto-forget';
 import {
   MemoryTriageSettings,
   triageChoiceFor,
@@ -342,6 +343,7 @@ export function Memory({
   capabilitiesLoading?: boolean;
 }): React.JSX.Element {
   const [memory, setMemory] = useState<MemorySettings | null>(null);
+  const [autoForgetDays, setAutoForgetDays] = useState<number | null>();
   const [profiles, setProfiles] = useState<ImportProfile[]>([]);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
@@ -379,7 +381,11 @@ export function Memory({
   const triageAgents = preview?.triageAgents ?? NO_TRIAGE_AGENTS;
   const triageChoice = triageChoiceFor(triageAgents, triagePick);
   const triage = useMemoryTriage(api, triageChoice);
-  const cleanup = useMemoryCleanup(api, client);
+  const cleanup = useMemoryCleanup(
+    api,
+    client,
+    remote ? null : (autoForgetDays ?? null),
+  );
   const adoptTriageSettings = (
     settings: Pick<
       AppSettings,
@@ -533,11 +539,25 @@ export function Memory({
   useEffect(() => {
     void window.geniro
       .getSettings()
-      .then((settings) => setMemory(settings.memory))
+      .then((settings) => {
+        setMemory(settings.memory);
+        setAutoForgetDays(settings.memoryAutoForgetAfterDays);
+      })
       .catch((err: unknown) => setError(String(err)));
   }, []);
 
   const current = memory ?? DEFAULT_MEMORY;
+
+  const saveAutoForget = async (days: number | null): Promise<void> => {
+    setError(null);
+    try {
+      await window.geniro.updateSettings({ memoryAutoForgetAfterDays: days });
+      setAutoForgetDays(days);
+    } catch (err: unknown) {
+      setError(String(err));
+      throw err;
+    }
+  };
 
   const saveSettings = (nextMemory: MemorySettings): void => {
     const before = memory;
@@ -880,6 +900,14 @@ export function Memory({
             </Button>
           </SettingsPanelRow>
         ) : null}
+        {remote ? null : (
+          <MemoryAutoForgetRow
+            days={autoForgetDays}
+            figure={cleanup.autoForget}
+            preview={cleanup.autoForgetFigure}
+            onChange={saveAutoForget}
+          />
+        )}
       </SettingsPanel>
 
       {waitingShown ? (
@@ -1107,6 +1135,7 @@ export function Memory({
         onKeep={cleanup.keep}
         onUnkeep={cleanup.unkeep}
         onRestore={cleanup.restore}
+        onPurge={remote ? undefined : cleanup.purge}
         onUndo={cleanup.undo}
         onLoadMore={cleanup.loadMore}
         batches={cleanup.batches}

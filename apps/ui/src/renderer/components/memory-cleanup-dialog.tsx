@@ -244,6 +244,7 @@ export function MemoryCleanupDialog({
   onKeep,
   onUnkeep,
   onRestore,
+  onPurge,
   onUndo,
   onLoadMore,
   batches,
@@ -284,6 +285,8 @@ export function MemoryCleanupDialog({
   onKeep: (entry: MemoryEntry) => void;
   onUnkeep: (entry: MemoryEntry) => void;
   onRestore: (entry: MemoryEntry) => void;
+  /** Forgotten only: delete for good, behind a confirm; absent on a paired device. */
+  onPurge?: (entry: MemoryEntry) => Promise<void>;
   onUndo: (batchId: string) => void;
   onLoadMore: () => void;
   batches: readonly MemoryForgetBatch[];
@@ -361,6 +364,17 @@ export function MemoryCleanupDialog({
                 onClick={() => onUnkeep(entry)}>
                 Stop keeping
               </Button>
+            ) : onPurge ? (
+              <ConfirmActionButton
+                disabled={busy}
+                question={`Delete ${entry.handle} permanently?`}
+                description="Its text, its forget reason and any finding that quotes it are erased for good. This cannot be undone. Its number is not reused and its usage figures stay. Past chats keep what they showed."
+                confirmLabel="Delete permanently"
+                busyLabel="Deleting…"
+                confirmVariant="destructive"
+                onConfirm={() => onPurge(entry)}>
+                Delete permanently…
+              </ConfirmActionButton>
             ) : undefined
           }
         />

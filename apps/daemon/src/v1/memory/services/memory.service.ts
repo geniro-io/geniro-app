@@ -76,6 +76,7 @@ import {
   similarTitles,
   titleCandidatesQuery,
 } from '../utils/memory-text';
+import { DAY_MS } from '../utils/memory-usage-day';
 import { MemoryEventBus } from './memory-events.bus';
 import {
   MEMORY_USAGE_BACKFILL_VERSION,
@@ -86,7 +87,7 @@ import {
 const DUPLICATE_CANDIDATES = 20;
 
 const AUTO_FORGET_FIRST_RUN_MS = 5 * 60 * 1000;
-const AUTO_FORGET_EVERY_MS = 24 * 60 * 60 * 1000;
+const AUTO_FORGET_EVERY_MS = DAY_MS;
 
 type Refusal = Extract<MemorySaveOutcome, { kind: 'refused' }>;
 
@@ -127,8 +128,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
   private config: MemoryConfig = DEFAULT_MEMORY_CONFIG;
   private teamExists: ((slug: string) => Promise<boolean>) | null = null;
   private purgeFindings:
-    | ((memoryId: string, em: EntityManager) => Promise<void>)
-    | null = null;
+    ((memoryId: string, em: EntityManager) => Promise<void>) | null = null;
   private configured = false;
   private writes: Promise<unknown> = Promise.resolve();
   private sweepFirst: ReturnType<typeof setTimeout> | null = null;
@@ -232,7 +232,10 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
       if (!row) {
         return 'missing';
       }
-      const hash = importedTextHash(row.title, row.body);
+      const hash =
+        row.sourceActor === 'import'
+          ? importedTextHash(row.title, row.body)
+          : null;
       const purged = await em.transactional(async (tx) => {
         if (!(await this.memories.purge(id, hash, new Date(), tx))) {
           return false;

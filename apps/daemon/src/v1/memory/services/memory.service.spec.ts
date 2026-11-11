@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -25,6 +26,7 @@ import {
   type MemoryStatusOutcome,
   type MemoryTextDatabase,
 } from '../memory.types';
+import { importedTextHash } from '../utils/memory-text';
 import type { MemoryService } from './memory.service';
 import { MemoryReviewService } from './memory-review.service';
 
@@ -2416,7 +2418,10 @@ describe('MemoryService', () => {
       return (await db.em.fork().findOneOrFail(Memory, { id })).status;
     }
 
-    async function raw(id: string, set: Partial<MemoryTextDatabase['memories']>) {
+    async function raw(
+      id: string,
+      set: Partial<MemoryTextDatabase['memories']>,
+    ) {
       await db.em
         .fork()
         .getKysely<MemoryTextDatabase>()
@@ -2467,6 +2472,20 @@ describe('MemoryService', () => {
       ).toBe(result?.batchId);
     });
 
+    it('sweeps a team’s entries only while the team has a recent run', async () => {
+      const live = await seedAgent('Live team entry');
+      const quiet = await seedAgent('Quiet team entry');
+      await raw(live.id, { team_slug: 't-live' });
+      await raw(quiet.id, { team_slug: 't-quiet' });
+      await runAt('r-team-live', daysAgo(3), { teamId: 't-live' });
+      await runAt('r-team-quiet', daysAgo(40), { teamId: 't-quiet' });
+
+      await db.service.sweepCold(NOW);
+
+      expect(await statusOf(live.id)).toBe('forgotten');
+      expect(await statusOf(quiet.id)).toBe('active');
+    });
+
     it('leaves every global entry when no run was started lately', async () => {
       const fresh = await memoryDb();
       try {
@@ -2474,7 +2493,11 @@ describe('MemoryService', () => {
         await fresh.usage.markBackfilled();
         const entry = await at(daysAgo(60), async () =>
           created(
-            await fresh.service.save(AGENT, { title: 'Quiet', body: 'x' }, NONE),
+            await fresh.service.save(
+              AGENT,
+              { title: 'Quiet', body: 'x' },
+              NONE,
+            ),
           ),
         );
 
@@ -2561,6 +2584,7 @@ describe('MemoryService', () => {
       const edited = await seedAgent('Edited entry');
       const approved = await seedAgent('Approved entry');
       const read = await seedAgent('Read entry');
+      const stamped = await seedAgent('Stamped entry');
       const untouched = await seedAgent('Untouched entry');
       await at(daysAgo(2), async () =>
         db.service.save(
@@ -2577,6 +2601,7 @@ describe('MemoryService', () => {
       await raw(approved.id, { approved_at: daysAgo(2).getTime() });
       await at(daysAgo(2), () => db.service.read([read.handle], NONE));
       await raw(read.id, { last_used_at: null });
+      await raw(stamped.id, { last_used_at: daysAgo(2).getTime() });
 
       const result = await db.service.sweepCold(NOW);
 
@@ -2585,13 +2610,12 @@ describe('MemoryService', () => {
       expect(await statusOf(edited.id)).toBe('active');
       expect(await statusOf(approved.id)).toBe('active');
       expect(await statusOf(read.id)).toBe('active');
+      expect(await statusOf(stamped.id)).toBe('active');
     });
 
     it('runs a while after the start, then once a day, until shutdown', () => {
       vi.useFakeTimers();
-      const sweep = vi
-        .spyOn(db.service, 'sweepCold')
-        .mockResolvedValue(null);
+      const sweep = vi.spyOn(db.service, 'sweepCold').mockResolvedValue(null);
       try {
         db.service.onModuleInit();
 
@@ -2606,6 +2630,31 @@ describe('MemoryService', () => {
         vi.advanceTimersByTime(2 * DAY);
         expect(sweep).toHaveBeenCalledTimes(2);
       } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a failing run is logged and the next day runs again', async () => {
+      vi.useFakeTimers();
+      const warn = vi
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      const sweep = vi
+        .spyOn(db.service, 'sweepCold')
+        .mockRejectedValueOnce(new Error('database is locked'))
+        .mockResolvedValue(null);
+      try {
+        db.service.onModuleInit();
+
+        await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+        expect(warn).toHaveBeenCalledWith(
+          'memory auto-forget failed: database is locked',
+        );
+        await vi.advanceTimersByTimeAsync(DAY);
+        expect(sweep).toHaveBeenCalledTimes(2);
+      } finally {
+        db.service.onApplicationShutdown();
+        warn.mockRestore();
         vi.useRealTimers();
       }
     });
@@ -2708,7 +2757,12 @@ describe('MemoryService', () => {
       const entry = created(
         await db.service.save(AGENT, { title: 'Stale entry', body: 'x' }, NONE),
       );
-      await db.service.forget(AGENT, entry.handle, 'Stale entry is wrong', NONE);
+      await db.service.forget(
+        AGENT,
+        entry.handle,
+        'Stale entry is wrong',
+        NONE,
+      );
       const dropped: string[] = [];
       db.service.usePurgeFindings(async (memoryId, em) => {
         expect(em.isInTransaction()).toBe(true);
@@ -2720,6 +2774,61 @@ describe('MemoryService', () => {
       const row = await tombstone(entry.id);
       expect([row.forget_reason, row.forget_batch_id]).toEqual([null, null]);
       expect(dropped).toEqual([entry.id]);
+    });
+
+    it('empties a batch-forgotten entry without moving its edit time, and announces it once', async () => {
+      const entry = created(
+        await db.service.save(USER, { title: 'Batch entry', body: 'x' }, NONE),
+      );
+      await db.service.forgetBatch([entry.id]);
+      const before = await tombstone(entry.id);
+      const published: MemoryChangedEvent[] = [];
+      db.events.allChanges().subscribe((event) => published.push(event));
+
+      await db.service.purge(entry.id);
+
+      const row = await tombstone(entry.id);
+      expect([row.forget_batch_id, row.updated_at]).toEqual([
+        null,
+        before.updated_at,
+      ]);
+      expect(published).toEqual([
+        {
+          memoryId: null,
+          change: 'bulk',
+          status: 'forgotten',
+          projectId: null,
+          teamSlug: null,
+        },
+      ]);
+    });
+
+    it('keeps a text hash for an imported entry only', async () => {
+      const mine = created(
+        await db.service.save(USER, { title: 'Mine', body: 'x' }, NONE),
+      );
+      await db.service.importNotes([
+        {
+          key: 'k1',
+          title: 'Imported',
+          body: 'y',
+          type: 'project',
+          projectId: null,
+          importedFrom: '/n.md',
+        },
+      ]);
+      const imported = await db.em
+        .fork()
+        .findOneOrFail(Memory, { title: 'Imported' });
+      await db.service.forgetAll();
+
+      await db.service.purge(mine.id);
+      await db.service.purge(imported.id);
+
+      expect((await tombstone(mine.id)).purged_text_hash).toBeNull();
+      expect((await tombstone(imported.id)).purged_text_hash).toBe(
+        importedTextHash('Imported', 'y'),
+      );
     });
 
     it('rolls the purge back when the findings cannot be dropped', async () => {

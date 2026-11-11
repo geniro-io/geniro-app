@@ -889,7 +889,7 @@ export type MemoryForgetOutcome =
  * TWIN PARSER: `parseMemoryChanged` in `apps/ui/src/renderer/daemon-client.ts`.
  */
 export interface MemoryChangedEvent {
-  /** Null for a change to many entries at once (`bulk`). */
+  /** Null for a `bulk` change: many entries at once, or a purged one. */
   memoryId: string | null;
   change: MemoryChange;
   status: MemoryStatus;

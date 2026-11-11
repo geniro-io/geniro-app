@@ -27,6 +27,7 @@ import {
   type MemoryReviewSummary,
   type MemoryReviewWarningKind,
 } from '../memory.types';
+import { autoForgetFilterOf } from '../utils/memory-auto-forget';
 import {
   confinedPath,
   pathsOf,
@@ -34,7 +35,6 @@ import {
   statesRule,
   storedPaths,
 } from '../utils/memory-references';
-import { autoForgetFilterOf } from '../utils/memory-auto-forget';
 import { usageDay } from '../utils/memory-usage-day';
 import { toEntry } from './memory.service';
 import {

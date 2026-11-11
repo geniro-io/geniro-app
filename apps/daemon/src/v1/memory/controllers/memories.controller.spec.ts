@@ -29,6 +29,7 @@ import type { MemoryFindingsService } from '../services/memory-findings.service'
 import type { MemoryReviewService } from '../services/memory-review.service';
 import { MemoriesController } from './memories.controller';
 import { MemoryConfigController } from './memory-config.controller';
+import { MemoryPurgeController } from './memory-purge.controller';
 
 const ENTRY: MemoryEntry = {
   id: 'e1',
@@ -141,15 +142,17 @@ describe('MemoriesController', () => {
     expect(guardsOf(MemoryImportController)).toContain(DesktopOnlyGuard);
   });
 
-  it('keeps a purge desktop only, the one memory route a paired device may not call', () => {
-    const guardsOf = (name: keyof MemoriesController) =>
-      (Reflect.getMetadata(
-        GUARDS_METADATA,
-        MemoriesController.prototype[name],
-      ) as unknown[]) ?? [];
+  it('keeps a purge desktop only, in a controller of its own', () => {
+    const guardsOf = (target: object) =>
+      (Reflect.getMetadata(GUARDS_METADATA, target) as unknown[]) ?? [];
 
-    expect(guardsOf('purge')).toContain(DesktopOnlyGuard);
-    expect(guardsOf('forgetBatch')).not.toContain(DesktopOnlyGuard);
+    expect(guardsOf(MemoryPurgeController)).toContain(DesktopOnlyGuard);
+    expect(
+      Reflect.getMetadata(PATH_METADATA, MemoryPurgeController.prototype.purge),
+    ).toBe(':memoryId/purge');
+    expect(
+      Object.getOwnPropertyNames(MemoriesController.prototype),
+    ).not.toContain('purge');
   });
 
   it('purges a forgotten entry and turns a refusal into its HTTP error', async () => {
@@ -160,7 +163,9 @@ describe('MemoriesController', () => {
           ? ('not-forgotten' as const)
           : { id, handle: 'm7' },
     );
-    const controller = controllerOver({ purge });
+    const controller = new MemoryPurgeController({
+      purge,
+    } as unknown as MemoryService);
 
     expect(await controller.purge('e7')).toEqual({ id: 'e7', handle: 'm7' });
     expect(await errorOf(controller.purge('gone'))).toMatchObject({

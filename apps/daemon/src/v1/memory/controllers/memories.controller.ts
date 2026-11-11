@@ -6,13 +6,11 @@ import {
   Patch,
   Post,
   Query,
-  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { BadRequestException, NotFoundException } from '@packages/common';
+import { NotFoundException } from '@packages/common';
 import { ZodResponse } from 'nestjs-zod';
 
-import { DesktopOnlyGuard } from '../../../auth/desktop-only.guard';
 import {
   CreateMemoryDto,
   ForgetAllMemoriesDto,
@@ -26,7 +24,6 @@ import {
   MemoryListDto,
   MemoryListQueryDto,
   MemoryMergeResultDto,
-  MemoryPurgeResultDto,
   MemoryRestoreBatchResultDto,
   MemoryReviewIdsDto,
   MemoryReviewPageDto,
@@ -46,7 +43,6 @@ import type {
   MemoryKeepResult,
   MemoryList,
   MemoryMergeResult,
-  MemoryPurgeResult,
   MemoryRestoreBatchResult,
   MemoryReviewIds,
   MemoryReviewPage,
@@ -61,9 +57,8 @@ import { mergedOrThrow, savedEntryOrThrow } from '../utils/memory-outcome';
  * The user's own view of the shared memory: list, edit, forget, restore,
  * approve, export and clean up, and decide on what a model check found.
  * Open to paired devices: the user reads and edits memory from the phone
- * too — except a purge, the one memory write that cannot be undone. Every
- * write is the user's. The check itself is desktop only, in
- * `MemoryCheckController`.
+ * too — except a purge (`MemoryPurgeController`). Every write is the
+ * user's. The check itself is desktop only, in `MemoryCheckController`.
  */
 @Controller('v1/memories')
 @ApiTags('memories')
@@ -192,24 +187,6 @@ export class MemoriesController {
   @ZodResponse({ status: 201, type: MemoryKeepResultDto })
   unkeep(@Param('memoryId') memoryId: string): Promise<MemoryKeepResult> {
     return this.setKept(memoryId, false);
-  }
-
-  @Post(':memoryId/purge')
-  @UseGuards(DesktopOnlyGuard)
-  @ApiOperation({ operationId: 'purgeMemory' })
-  @ZodResponse({ status: 201, type: MemoryPurgeResultDto })
-  async purge(@Param('memoryId') memoryId: string): Promise<MemoryPurgeResult> {
-    const outcome = await this.memory.purge(memoryId);
-    if (outcome === 'missing') {
-      throw new NotFoundException('MEMORY_NOT_FOUND', `no memory ${memoryId}`);
-    }
-    if (outcome === 'not-forgotten') {
-      throw new BadRequestException(
-        'MEMORY_NOT_FORGOTTEN',
-        'only a forgotten memory can be deleted permanently',
-      );
-    }
-    return outcome;
   }
 
   @Get(':memoryId')

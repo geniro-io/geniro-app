@@ -35,6 +35,7 @@ import type {
   MemoryKeepResultDto,
   MemoryListDto,
   MemoryMergeResultDto,
+  MemoryPurgeResultDto,
   MemoryRestoreBatchResultDto,
   MemoryReviewCheckRequestDto,
   MemoryReviewCheckResultDto,
@@ -118,10 +119,16 @@ export interface MemoriesApiListMemoryReviewPairsRequest {
 
 export interface MemoriesApiMergeMemoriesRequest {
     mergeMemoriesDto: MergeMemoriesDto;
+export interface MemoriesApiMemoryReviewSummaryRequest {
+    autoForgetDays?: number;
 }
 
 export interface MemoriesApiPreviewMemoryImportRequest {
     memoryImportPreviewRequestDto: MemoryImportPreviewRequestDto;
+}
+
+export interface MemoriesApiPurgeMemoryRequest {
+    memoryId: string;
 }
 
 export interface MemoriesApiReadMemoryRequest {
@@ -868,7 +875,12 @@ export class MemoriesApi extends runtime.BaseAPI {
      * 
      */
     async memoryReviewSummaryRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryReviewSummaryDto>> {
+    async memoryReviewSummaryRaw(requestParameters: MemoriesApiMemoryReviewSummaryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryReviewSummaryDto>> {
         const queryParameters: any = {};
+
+        if (requestParameters['autoForgetDays'] != null) {
+            queryParameters['autoForgetDays'] = requestParameters['autoForgetDays'];
+        }
 
         const headerParameters: runtime.HTTPHeaders = {};
 
@@ -896,8 +908,8 @@ export class MemoriesApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async memoryReviewSummary(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryReviewSummaryDto> {
-        const response = await this.memoryReviewSummaryRaw(initOverrides);
+    async memoryReviewSummary(requestParameters: MemoriesApiMemoryReviewSummaryRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryReviewSummaryDto> {
+        const response = await this.memoryReviewSummaryRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -992,6 +1004,51 @@ export class MemoriesApi extends runtime.BaseAPI {
      */
     async previewMemoryImport(requestParameters: MemoriesApiPreviewMemoryImportRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryImportPreviewDto> {
         const response = await this.previewMemoryImportRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async purgeMemoryRaw(requestParameters: MemoriesApiPurgeMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryPurgeResultDto>> {
+        if (requestParameters['memoryId'] == null) {
+            throw new runtime.RequiredError(
+                'memoryId',
+                'Required parameter "memoryId" was null or undefined when calling purgeMemory().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/{memoryId}/purge`;
+        urlPath = urlPath.replace(`{${"memoryId"}}`, encodeURIComponent(String(requestParameters['memoryId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async purgeMemory(requestParameters: MemoriesApiPurgeMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryPurgeResultDto> {
+        const response = await this.purgeMemoryRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

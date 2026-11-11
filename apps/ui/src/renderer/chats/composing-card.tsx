@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Camera,
   FileDiff,
   Gauge,
   Images,
@@ -53,6 +54,7 @@ const KIND_META: Record<
   metrics: { icon: Gauge, noun: 'a scorecard', label: 'Figures' },
   comparison: { icon: Table2, noun: 'a comparison', label: 'Comparison' },
   gallery: { icon: Images, noun: 'a gallery', label: 'Gallery' },
+  screenshot: { icon: Camera, noun: 'a screenshot', label: 'Screenshot' },
   findings: { icon: ScrollText, noun: 'a review', label: 'Findings' },
   recommendations: {
     icon: Sparkles,
@@ -185,6 +187,8 @@ function Skeleton({ kind }: { kind: GeniroCardKind }): React.JSX.Element {
           ))}
         </div>
       );
+    case 'screenshot':
+      return <Bar className="h-24 w-44 rounded-lg" />;
     case 'patch':
       // Alternating short/long lines with a gutter, which is what a diff looks
       // like from across the room.

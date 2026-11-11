@@ -10,6 +10,7 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ResourceAlertEventBus } from '../../agents/services/resource-alert-events.bus';
 import type { SubagentRecoveryService } from '../../agents/services/subagent-recovery.service';
+import { BrowserBridgeService } from '../../browser/services/browser-bridge.service';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { KnowledgeEventBus } from '../../knowledge/services/knowledge-events.bus';
 import { MemoryEventBus } from '../../memory/services/memory-events.bus';
@@ -102,6 +103,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       resourceAlerts,
+      new BrowserBridgeService(),
     );
     const emit = vi.fn();
     const to = vi.fn();
@@ -131,6 +133,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       knowledge,
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const emit = vi.fn();
     gw.afterInit({ emit, to: vi.fn() } as unknown as Server);
@@ -161,6 +164,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const socket = fakeSocket('wrong-token');
 
@@ -186,6 +190,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const socket = fakeSocket('good-token');
 
@@ -214,6 +219,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const socket = fakeSocket('good-token');
 
@@ -269,6 +275,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const socket = fakeSocket('good-token');
 
@@ -310,6 +317,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const socket = fakeSocket('good-token');
 
@@ -335,6 +343,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const socket = fakeSocket('good-token');
     let resolveJoin!: () => void;
@@ -376,6 +385,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const socket = fakeSocket('good-token');
 
@@ -403,6 +413,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     let calls = 0;
     const emit = vi.fn(() => {
@@ -445,6 +456,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a usage event must never take it — the Stats page
@@ -486,6 +498,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a task write must never take it — a board is not
@@ -523,6 +536,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const emit = vi.fn();
     const roomEmit = vi.fn();
@@ -567,6 +581,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -616,6 +631,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -650,6 +666,7 @@ describe('NotificationsGateway', () => {
       projects,
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -680,6 +697,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const desktop = fakeSocket('good-token');
     const phone = {
@@ -714,6 +732,7 @@ describe('NotificationsGateway', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a deletion must never take it — every OTHER
@@ -760,6 +779,7 @@ describe('runs_changed broadcast', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -814,6 +834,7 @@ describe('verdict round-trip', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
 
     const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
@@ -852,6 +873,7 @@ describe('verdict round-trip', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
 
     track('req-o');
@@ -894,6 +916,7 @@ describe('verdict round-trip', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
     expect(
       gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
@@ -933,6 +956,7 @@ describe('verdict round-trip', () => {
       new ProjectEventBus(),
       new KnowledgeEventBus(),
       new ResourceAlertEventBus(),
+      new BrowserBridgeService(),
     );
 
     track('req-a');
@@ -975,5 +999,102 @@ describe('verdict round-trip', () => {
     ).toEqual({ runId: 'r1', requestId: 'req-d', status: 'invalid' });
     expect(respond).toHaveBeenCalledTimes(1);
     expect(approvals.listByRun('r1')).toHaveLength(3);
+  });
+});
+
+describe('browser host sockets', () => {
+  function setup(): {
+    gw: NotificationsGateway;
+    bridge: BrowserBridgeService;
+    to: ReturnType<typeof vi.fn>;
+    sent: ReturnType<typeof vi.fn>;
+  } {
+    const bridge = new BrowserBridgeService();
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+      subagents(),
+      new ShareEventBus(),
+      new MemoryEventBus(),
+      new ProjectEventBus(),
+      new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
+      bridge,
+    );
+    const sent = vi.fn();
+    const to = vi.fn(() => ({ emit: sent }));
+    gw.afterInit({ emit: vi.fn(), to } as unknown as Server);
+    return { gw, bridge, to, sent };
+  }
+
+  function socket(id: string, headers: Record<string, string> = {}): Socket {
+    return { id, handshake: { headers } } as unknown as Socket;
+  }
+
+  const request = {
+    runId: 'r1',
+    memberName: 'Dev',
+    op: { kind: 'tabs' as const },
+    allowedHosts: null,
+  };
+
+  it('refuses browser_host from a remote socket', async () => {
+    const { gw, bridge, to } = setup();
+
+    gw.browserHost(socket('phone', { 'x-geniro-via': 'remote' }));
+
+    expect(bridge.hasHost()).toBe(false);
+    await expect(bridge.request(request)).resolves.toMatchObject({
+      status: 'failed',
+    });
+    expect(to).not.toHaveBeenCalled();
+  });
+
+  it('registers browser_host from a desktop socket', () => {
+    const { gw, bridge, to, sent } = setup();
+
+    gw.browserHost(socket('mac'));
+    void bridge.request(request);
+
+    expect(bridge.hasHost()).toBe(true);
+    expect(to).toHaveBeenCalledWith('mac');
+    expect(to).not.toHaveBeenCalledWith('desktop');
+    expect(sent).toHaveBeenCalledWith(
+      'browser_request',
+      expect.objectContaining({ runId: 'r1', op: { kind: 'tabs' } }),
+    );
+  });
+
+  it('ignores browser_reply from another socket', async () => {
+    const { gw, bridge, sent } = setup();
+    gw.browserHost(socket('mac'));
+    const outcome = bridge.request(request);
+    const { id } = sent.mock.calls[0]?.[1] as { id: string };
+    const settled = vi.fn();
+    void outcome.then(settled);
+
+    gw.browserReply(socket('other'), { id, ok: true, text: 'spoofed' });
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+
+    gw.browserReply(socket('mac'), { id, ok: true, text: 'real' });
+    await expect(outcome).resolves.toEqual({ status: 'done', text: 'real' });
+  });
+
+  it('fails the pending requests when the host socket disconnects', async () => {
+    const { gw, bridge } = setup();
+    gw.browserHost(socket('mac'));
+    const outcome = bridge.request(request);
+
+    gw.handleDisconnect(socket('mac'));
+
+    await expect(outcome).resolves.toMatchObject({ status: 'failed' });
+    expect(bridge.hasHost()).toBe(false);
   });
 });

@@ -266,6 +266,16 @@ A project board for agents. Write a card and hit start, or let **autopilot** pic
 
 ![The tasks board with a card open: its properties, the run configuration it will use, its description and the report the agent wrote](docs/screenshots/tasks-board.png)
 
+## 🌐 Browser
+
+A browser beside every chat, for your preview stands and any other page.
+
+- **Open it from the globe** in the chat's header: tabs, an address bar (words that are not an address are searched on DuckDuckGo), back, forward and reload, in a pane between the transcript and the agents panel. **Pop out** moves the tabs into a window of their own and **Dock back** brings them home, without reloading a page. A link an agent posts opens there on a plain click; ⌘-click still opens your system browser.
+- **Each chat has its own tabs and its own cookies**, so a login in one chat never leaks into another. Cookies are kept between launches, like Cursor's browser, and are cleared when you archive or delete the chat.
+- **Agents drive it too.** The chat's agent and every member of a team get Geniro's `browser_*` tools: open and navigate, read the page as a list of elements, click, type, press keys, pick options, scroll, read the console, run a snippet, take a screenshot at any window size (shown in the transcript; the agent looks at the picture itself only when it asks to, which keeps its context small), and set or clear cookies. An agent can open a tab with **its own cookies under a label** — sign in as `anna` in one tab and `boris` in the next — and it never reads a cookie's value back. While an agent works a tab, the pane says so and **Stop** ends it.
+- **You stay in charge.** Outside `auto`, the first time an agent opens a new site in a chat you get a card: **Approve**, **Allow for this session** or **Deny**. Your own browsing never asks. Pages get no camera, microphone, location or notifications, downloads land in `~/Downloads`, and only you can click past a certificate warning.
+- The rest of Geniro stays offline: only the browser's tabs reach the network, through a proxy of Geniro's own on your Mac. On your phone the browser stays on the Mac, but its screenshots show in the transcript.
+
 ## 🎨 Artifacts and sharing
 
 Sometimes the right answer is a page, not a paragraph. Agents call `show_artifact` to publish an interactive HTML page: a dashboard, a report or a little tool. It opens beside the chat, goes full screen, and can be saved as a file.
@@ -445,9 +455,9 @@ Geniro has **no cloud backend, no account and no telemetry**. Chats, teams and t
 
 - The daemon listens on loopback only, with a fresh credential every launch.
 - Remote access goes through a separate gateway and only works for devices you have paired.
-- Secrets live in the macOS Keychain, never in a database or a file.
+- Secrets live in the macOS Keychain, never in a database or a file. The one exception is the browser's per-chat cookies, which stay in its own store on your Mac, as in Cursor.
 - Agent-built pages run in a sandbox.
-- Geniro's own network calls are few: app updates and the public model price list. CLI installs, the optional Cursor spend lookup, tunnels and sharing happen only when you set them up or press for them.
+- Geniro's own network calls are few: app updates and the public model price list. CLI installs, the optional Cursor spend lookup, tunnels, sharing and the in-app browser reach the network only when you set them up, press for them, or an agent opens a page.
 
 ## 📸 Gallery
 

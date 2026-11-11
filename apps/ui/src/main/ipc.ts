@@ -14,6 +14,8 @@ import { z } from 'zod';
 import { type DaemonHandle, IPC } from '../shared/contracts';
 import type { RemoteAccessState } from '../shared/remote';
 import { clearBrowserCache, readAppStorage } from './app-storage';
+import { runBrowserAgentRequest } from './browser/browser-agent';
+import { type BrowserService, resolveAddress } from './browser/browser-service';
 import { detectClisCached } from './cli-detect';
 import { runCliInstall } from './cli-install';
 import { runCliUpdate } from './cli-update';
@@ -46,6 +48,15 @@ import {
 import {
   artifactSaveSchema,
   branchNameSchema,
+  browserAddressSchema,
+  browserBoundsSchema,
+  browserCredentialsSchema,
+  browserHistoryActionSchema,
+  browserOpenUrlSchema,
+  browserPopOutTitleSchema,
+  browserRunIdSchema,
+  browserTabActionSchema,
+  browserTabIdSchema,
   changesPullRequestsSchema,
   chatExportSaveSchema,
   cliKindSchema,
@@ -207,6 +218,8 @@ export function registerIpc(
   remoteAccess?: () => RemoteAccess,
   /** Told after a restart from Settings, which the supervisor's `onStarted` does not cover. */
   afterRestart?: (handle: DaemonHandle | null) => void,
+  /** The in-app browser; a getter because it exists only once the egress proxy is up. */
+  browser?: () => BrowserService,
 ): IpcRegistry {
   // One instance for the app's lifetime, reading settings through the same
   // function every other handler here does — so the toggle it consults is
@@ -905,6 +918,160 @@ export function registerIpc(
   );
   handle(IPC.stopRemoteTunnel, denyRemotely(tunnelDenial), () =>
     getRemoteAccess().stopTunnel(),
+  );
+
+  const getBrowser = (): BrowserService => {
+    if (!browser) {
+      throw new Error('the browser is not available for this launch');
+    }
+    return browser();
+  };
+  const browserDenial =
+    'drives the in-app browser, whose pages and cookies live on the computer running geniro — never for a paired device';
+  handle(
+    IPC.browserState,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown) =>
+      getBrowser().state(browserRunIdSchema.parse(runId)),
+  );
+  handle(
+    IPC.browserOpenTab,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown, url: unknown) => {
+      const address = browserOpenUrlSchema.parse(url);
+      const run = browserRunIdSchema.parse(runId);
+      const resolved = address === null ? null : resolveAddress(address);
+      if (resolved !== null) {
+        getBrowser().noteUserAddress(run, resolved);
+      }
+      return getBrowser().openTab(run, resolved, { openedBy: null });
+    },
+  );
+  handle(
+    IPC.browserNavigate,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown, tabId: unknown, input: unknown) => {
+      getBrowser().navigate(
+        browserRunIdSchema.parse(runId),
+        browserTabIdSchema.parse(tabId),
+        browserAddressSchema.parse(input),
+      );
+    },
+  );
+  handle(
+    IPC.browserHistory,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown, tabId: unknown, action: unknown) => {
+      getBrowser().history(
+        browserRunIdSchema.parse(runId),
+        browserTabIdSchema.parse(tabId),
+        browserHistoryActionSchema.parse(action),
+      );
+    },
+  );
+  handle(
+    IPC.browserCloseTab,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown, tabId: unknown) =>
+      getBrowser().closeTab(
+        browserRunIdSchema.parse(runId),
+        browserTabIdSchema.parse(tabId),
+      ),
+  );
+  handle(
+    IPC.browserSelectTab,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown, tabId: unknown) => {
+      getBrowser().selectTab(
+        browserRunIdSchema.parse(runId),
+        browserTabIdSchema.parse(tabId),
+      );
+    },
+  );
+  handle(
+    IPC.browserSetBounds,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown, bounds: unknown) => {
+      getBrowser().setBounds(
+        browserRunIdSchema.parse(runId),
+        browserBoundsSchema.parse(bounds),
+      );
+    },
+  );
+  handle(
+    IPC.browserPopOut,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown, title: unknown) => {
+      getBrowser().popOut(
+        browserRunIdSchema.parse(runId),
+        browserPopOutTitleSchema.parse(title),
+      );
+    },
+  );
+  handle(
+    IPC.browserDock,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown) => {
+      getBrowser().dock(browserRunIdSchema.parse(runId));
+    },
+  );
+  handle(
+    IPC.browserTabAction,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown, tabId: unknown, action: unknown) =>
+      getBrowser().tabAction(
+        browserRunIdSchema.parse(runId),
+        browserTabIdSchema.parse(tabId),
+        browserTabActionSchema.parse(action),
+      ),
+  );
+  handle(
+    IPC.browserContinueInsecure,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown, tabId: unknown) => {
+      getBrowser().continueInsecure(
+        browserRunIdSchema.parse(runId),
+        browserTabIdSchema.parse(tabId),
+      );
+    },
+  );
+  handle(
+    IPC.browserAnswerAuth,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown, tabId: unknown, credentials: unknown) => {
+      getBrowser().answerAuth(
+        browserRunIdSchema.parse(runId),
+        browserTabIdSchema.parse(tabId),
+        browserCredentialsSchema.parse(credentials),
+      );
+    },
+  );
+  handle(
+    IPC.browserCapture,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown) =>
+      getBrowser().capture(browserRunIdSchema.parse(runId)),
+  );
+  handle(
+    IPC.browserForgetRun,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown) =>
+      getBrowser().forgetRun(browserRunIdSchema.parse(runId)),
+  );
+  handle(
+    IPC.browserStopAgent,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown, tabId: unknown) => {
+      getBrowser().stopAgent(
+        browserRunIdSchema.parse(runId),
+        browserTabIdSchema.parse(tabId),
+      );
+    },
+  );
+  handle(
+    IPC.browserAgentRequest,
+    denyRemotely(browserDenial),
+    (_event, request: unknown) => runBrowserAgentRequest(getBrowser(), request),
   );
 
   handle(

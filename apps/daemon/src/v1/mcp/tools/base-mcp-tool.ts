@@ -2,6 +2,7 @@ import type {
   McpCallContext,
   McpListContext,
   McpTool,
+  McpToolImage,
   McpToolListing,
   McpToolResult,
 } from '../mcp.types';
@@ -76,6 +77,14 @@ export abstract class BaseMcpTool implements McpTool {
   /** A plain text answer. */
   protected text(text: string, isError = false): McpToolResult {
     return { content: [{ type: 'text', text }], isError };
+  }
+
+  /** `result` with pictures served after its text. */
+  protected withImages(
+    result: McpToolResult,
+    images: McpToolImage[],
+  ): McpToolResult {
+    return { ...result, images };
   }
 
   /** A malformed call, answered in-protocol rather than thrown. */

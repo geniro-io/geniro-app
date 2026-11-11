@@ -1,6 +1,8 @@
 import type { ActionBroker } from '../../agents/services/action.broker';
 import type { AnalysisBroker } from '../../agents/services/analysis.broker';
 import type { ArtifactBroker } from '../../agents/services/artifact.broker';
+import type { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import type { BrowserBroker } from '../../agents/services/browser.broker';
 import type { ChartBroker } from '../../agents/services/chart.broker';
 import type { ComparisonBroker } from '../../agents/services/comparison.broker';
 import type { FindingsReportBroker } from '../../agents/services/findings-report.broker';
@@ -41,6 +43,7 @@ import { AskUserQuestionTool } from './ask-user-question/ask-user-question.tool'
 import { AwaitAgentTool } from './await-agent/await-agent.tool';
 import { BackupTeamTool } from './backup-team/backup-team.tool';
 import { BoardTools } from './board/board.tools';
+import { createBrowserTools } from './browser-shared/browser-tools';
 import { CallAgentTool } from './call-agent/call-agent.tool';
 import { CancelAgentTool } from './cancel-agent/cancel-agent.tool';
 import { GoalsTool } from './goals/goals.tool';
@@ -97,6 +100,8 @@ export interface McpToolDeps {
   galleries: GalleryBroker;
   galleryImages: GalleryImageService;
   artifacts: ArtifactBroker;
+  browser: BrowserBroker;
+  attachments: AttachmentStoreService;
   actions: ActionBroker;
   monitors: MonitorBroker;
   teamNotes: TeamNoteBroker;
@@ -133,7 +138,7 @@ export interface McpToolDeps {
  *
  * The order is part of what a model reads — the descriptions are audited as a
  * SET (`mcp-server.service.spec.ts`) — so it is written once, here: the call
- * surface, the team notes, the run outcome and goals, then the question, the render family, the action buttons, the
+ * surface, the team notes, the run outcome and goals, then the question, the render family, the in-app browser, the action buttons, the
  * monitors, the board, the chat history, the team library, the analysis tools, and the
  * agent's own notification last.
  */
@@ -157,6 +162,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new ShowComparisonTool(deps.comparisons),
     new ShowGalleryTool(deps.galleries, deps.galleryImages),
     new ShowArtifactTool(deps.artifacts, deps.shares),
+    ...createBrowserTools(deps.browser, deps.attachments),
     new ProposePatchTool(deps.patches),
     new ProposePlanTool(deps.plans),
     new PublishActionTool(deps.actions),

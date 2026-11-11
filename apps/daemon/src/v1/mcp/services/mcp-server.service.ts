@@ -2,6 +2,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
+  type CallToolResult,
   CancelledNotificationSchema,
   ListToolsRequestSchema,
   type RequestId,
@@ -14,8 +15,23 @@ import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import type { CallEnvelope } from '../../teams/teams.types';
 import { callerKey } from '../../teams/utils/caller-key';
 import { closeQuietly } from '../../teams/utils/close-quietly';
-import type { McpCallContext, McpTool } from '../mcp.types';
+import type { McpCallContext, McpTool, McpToolResult } from '../mcp.types';
 import { MCP_TOOLS } from '../tools/mcp-tools';
+
+/** A tool's answer as the MCP wire carries it: its pictures become `image` parts after the text. */
+function wireResult(result: McpToolResult): CallToolResult {
+  if (result.images === undefined) {
+    return result;
+  }
+  const { images, ...answer } = result;
+  return {
+    ...answer,
+    content: [
+      ...answer.content,
+      ...images.map((image) => ({ type: 'image' as const, ...image })),
+    ],
+  };
+}
 
 /**
  * The MCP protocol host behind the per-run endpoint
@@ -301,7 +317,7 @@ export class McpServerService {
         whileCancellable: (call) =>
           this.whileCancellable(runId, caller, extra.requestId, call),
       };
-      return tool.call(name, args, context);
+      return wireResult(await tool.call(name, args, context));
     });
 
     return server;

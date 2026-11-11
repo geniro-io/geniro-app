@@ -2,6 +2,7 @@ import { memo } from 'react';
 
 import { ActionCard } from './action-card';
 import { ArtifactCard } from './artifact-block';
+import { BrowserScreenshotCard } from './browser-screenshot-card';
 import { ChartCard } from './chart-block';
 import { ComparisonCard } from './comparison-block';
 import { FindingsCard } from './findings-block';
@@ -63,6 +64,13 @@ export const EntryCard = memo(function EntryCard({
         <GalleryCard
           gallery={entry.gallery}
           memoryKey={`gallery:${entry.id}`}
+        />
+      );
+    case 'browser-screenshot':
+      return (
+        <BrowserScreenshotCard
+          pair={entry.pair}
+          memoryKey={`browser-screenshot:${entry.id}`}
         />
       );
     case 'artifact':

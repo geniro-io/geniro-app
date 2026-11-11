@@ -1,5 +1,6 @@
 import * as React from 'react';
 
+import { useReportOverlayOpen } from '../browser-occlusion';
 import { pushEscapeLayer } from './escape-layers';
 import { closeOnFrameFocus } from './frame-focus';
 import { MenuAnchorContext } from './menu-anchor';
@@ -240,6 +241,8 @@ export function Popover({
       stopFrameFocus();
     };
   }, [open, onClose, triggerRef]);
+
+  useReportOverlayOpen(open);
 
   const onCloseRef = React.useRef(onClose);
   onCloseRef.current = onClose;

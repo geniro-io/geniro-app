@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BROWSER_HOST_CARD,
+  GENIRO_BROWSER_TOOLS,
+  geniroBrowserToolOf,
   geniroCardKindOf,
   geniroKnowledgeToolOf,
   geniroMemoryToolOf,
@@ -175,4 +178,51 @@ describe('shared-knowledge tools', () => {
       expect(geniroCardKindOf(`mcp__${SERVER}__${tool}`, RUN)).toBeNull();
     },
   );
+});
+
+describe('in-app browser tools', () => {
+  it.each(GENIRO_BROWSER_TOOLS)(
+    'recognises %s in claude’s and cursor’s spellings',
+    (tool) => {
+      expect(geniroBrowserToolOf(`mcp__${SERVER}__${tool}`, RUN)).toBe(tool);
+      expect(geniroBrowserToolOf(`Geniro ${SERVER}: ${tool}`, RUN)).toBe(tool);
+    },
+  );
+
+  it('refuses another server, another run and a longer name', () => {
+    expect(
+      geniroBrowserToolOf('mcp__geniro-mine__browser_open', RUN),
+    ).toBeNull();
+    expect(
+      geniroBrowserToolOf(`mcp__${SERVER}__browser_open`, 'ffffffff-0000'),
+    ).toBeNull();
+    expect(
+      geniroBrowserToolOf(`mcp__${SERVER}__browser_opened`, RUN),
+    ).toBeNull();
+  });
+
+  it.each(GENIRO_BROWSER_TOOLS)(
+    'keeps the raw %s call visible, since its row is drawn from that pair',
+    (tool) => {
+      expect(isGeniroToolName(`mcp__${SERVER}__${tool}`, RUN)).toBe(false);
+      expect(geniroCardKindOf(`mcp__${SERVER}__${tool}`, RUN)).toBeNull();
+    },
+  );
+
+  it('draws the screenshot as a card and hides its raw call', () => {
+    expect(isGeniroToolName(`mcp__${SERVER}__browser_screenshot`, RUN)).toBe(
+      true,
+    );
+    expect(geniroCardKindOf(`mcp__${SERVER}__browser_screenshot`, RUN)).toBe(
+      'screenshot',
+    );
+    expect(isGeniroCardKind('screenshot')).toBe(true);
+    expect(geniroBrowserToolOf(`mcp__${SERVER}__browser_screenshot`, RUN)).toBe(
+      null,
+    );
+  });
+
+  it('lets the new-host card stand across turns', () => {
+    expect(standsAcrossTurns(BROWSER_HOST_CARD)).toBe(true);
+  });
 });

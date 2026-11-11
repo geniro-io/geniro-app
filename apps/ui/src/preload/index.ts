@@ -302,6 +302,83 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.stopRemoteTunnel) as ReturnType<
       GeniroApi['stopRemoteTunnel']
     >,
+  browserState: (runId) =>
+    ipcRenderer.invoke(IPC.browserState, runId) as ReturnType<
+      GeniroApi['browserState']
+    >,
+  browserOpenTab: (runId, url) =>
+    ipcRenderer.invoke(IPC.browserOpenTab, runId, url) as ReturnType<
+      GeniroApi['browserOpenTab']
+    >,
+  browserNavigate: (runId, tabId, input) =>
+    ipcRenderer.invoke(IPC.browserNavigate, runId, tabId, input) as ReturnType<
+      GeniroApi['browserNavigate']
+    >,
+  browserHistory: (runId, tabId, action) =>
+    ipcRenderer.invoke(IPC.browserHistory, runId, tabId, action) as ReturnType<
+      GeniroApi['browserHistory']
+    >,
+  browserCloseTab: (runId, tabId) =>
+    ipcRenderer.invoke(IPC.browserCloseTab, runId, tabId) as ReturnType<
+      GeniroApi['browserCloseTab']
+    >,
+  browserSelectTab: (runId, tabId) =>
+    ipcRenderer.invoke(IPC.browserSelectTab, runId, tabId) as ReturnType<
+      GeniroApi['browserSelectTab']
+    >,
+  browserSetBounds: (runId, bounds) =>
+    ipcRenderer.invoke(IPC.browserSetBounds, runId, bounds) as ReturnType<
+      GeniroApi['browserSetBounds']
+    >,
+  browserPopOut: (runId, title) =>
+    ipcRenderer.invoke(IPC.browserPopOut, runId, title) as ReturnType<
+      GeniroApi['browserPopOut']
+    >,
+  browserDock: (runId) =>
+    ipcRenderer.invoke(IPC.browserDock, runId) as ReturnType<
+      GeniroApi['browserDock']
+    >,
+  browserTabAction: (runId, tabId, action) =>
+    ipcRenderer.invoke(
+      IPC.browserTabAction,
+      runId,
+      tabId,
+      action,
+    ) as ReturnType<GeniroApi['browserTabAction']>,
+  browserContinueInsecure: (runId, tabId) =>
+    ipcRenderer.invoke(IPC.browserContinueInsecure, runId, tabId) as ReturnType<
+      GeniroApi['browserContinueInsecure']
+    >,
+  browserAnswerAuth: (runId, tabId, credentials) =>
+    ipcRenderer.invoke(
+      IPC.browserAnswerAuth,
+      runId,
+      tabId,
+      credentials,
+    ) as ReturnType<GeniroApi['browserAnswerAuth']>,
+  browserCapture: (runId) =>
+    ipcRenderer.invoke(IPC.browserCapture, runId) as ReturnType<
+      GeniroApi['browserCapture']
+    >,
+  browserForgetRun: (runId) =>
+    ipcRenderer.invoke(IPC.browserForgetRun, runId) as ReturnType<
+      GeniroApi['browserForgetRun']
+    >,
+  browserStopAgent: (runId, tabId) =>
+    ipcRenderer.invoke(IPC.browserStopAgent, runId, tabId) as ReturnType<
+      GeniroApi['browserStopAgent']
+    >,
+  browserAgentRequest: (request) =>
+    ipcRenderer.invoke(IPC.browserAgentRequest, request) as ReturnType<
+      GeniroApi['browserAgentRequest']
+    >,
+  onBrowserState: (listener) => {
+    const handler = (_event: IpcRendererEvent, event: unknown): void => {
+      listener(event as Parameters<typeof listener>[0]);
+    };
+    ipcRenderer.on(IPC.onBrowserState, handler);
+    return () => ipcRenderer.removeListener(IPC.onBrowserState, handler);
+  },
   // No `ipcRenderer.invoke` here: `webUtils` is a RENDERER-side module, and a
   // `File` could not cross to main anyway. Electron returns '' for a file with
   // no path on disk; the renderer wants that as an absence.

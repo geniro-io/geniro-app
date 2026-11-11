@@ -136,6 +136,11 @@ function noSubscription(): () => void {
   return () => undefined;
 }
 
+/** The in-app browser runs only on the Mac; a paired device never reaches it. */
+function browserOnTheMac(): Promise<never> {
+  return Promise.reject(new Error('The browser runs on your Mac'));
+}
+
 /**
  * Install `window.geniro` over HTTP when there is no preload to provide it.
  *
@@ -378,6 +383,23 @@ export function installRemoteBridge(): void {
       >,
     stopRemoteTunnel: () =>
       invoke(IPC.stopRemoteTunnel) as ReturnType<GeniroApi['stopRemoteTunnel']>,
+    browserState: () => browserOnTheMac(),
+    browserOpenTab: () => browserOnTheMac(),
+    browserNavigate: () => browserOnTheMac(),
+    browserHistory: () => browserOnTheMac(),
+    browserCloseTab: () => browserOnTheMac(),
+    browserSelectTab: () => browserOnTheMac(),
+    browserSetBounds: () => browserOnTheMac(),
+    browserPopOut: () => browserOnTheMac(),
+    browserDock: () => browserOnTheMac(),
+    browserTabAction: () => browserOnTheMac(),
+    browserContinueInsecure: () => browserOnTheMac(),
+    browserAnswerAuth: () => browserOnTheMac(),
+    browserCapture: () => browserOnTheMac(),
+    browserForgetRun: () => browserOnTheMac(),
+    browserStopAgent: () => browserOnTheMac(),
+    browserAgentRequest: () => browserOnTheMac(),
+    onBrowserState: () => noSubscription(),
     // PRELOAD-LOCAL (`PreloadLocalMethod` in contracts.ts) — the real preload
     // answers this from `webUtils.getPathForFile`, a synchronous RENDERER-side
     // Electron API with no IPC channel at all, because a `File` cannot cross

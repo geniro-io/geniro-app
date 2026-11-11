@@ -76,6 +76,7 @@ const OPENS_BLOCK = {
   metrics: true,
   comparison: true,
   gallery: true,
+  'browser-screenshot': true,
   artifact: true,
   // Never filed under a delegate — see the `action` arm of `groupTranscript`.
   action: false,
@@ -121,6 +122,7 @@ const CARD_NOUN = {
   metrics: 'a scorecard',
   comparison: 'a comparison',
   gallery: 'a gallery',
+  'browser-screenshot': 'a screenshot',
   artifact: 'a page',
   action: 'a button',
   workflow: 'a workflow',

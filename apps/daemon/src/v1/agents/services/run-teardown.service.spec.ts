@@ -6,6 +6,8 @@ import {
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { BrowserBridgeService } from '../../browser/services/browser-bridge.service';
+import { BrowserHostApprovals } from '../../browser/services/browser-host-approvals.service';
 import { MemoryReviewFindingDao } from '../../memory/dao/memory-review-finding.dao';
 import { MemoryUsageDao } from '../../memory/dao/memory-usage.dao';
 import { MemoryReviewFinding } from '../../memory/entity/memory-review-finding.entity';
@@ -74,6 +76,8 @@ describe('RunTeardownService (in-memory sqlite)', () => {
   let inboxCancels: { runId: string; why: string; runStillThere: boolean }[];
   let commands: ActionCommandRegistry;
   let monitors: MonitorRegistry;
+  let browserBridge: BrowserBridgeService;
+  let browserApprovals: BrowserHostApprovals;
   /** Every CLI transcript the teardown asked an adapter to delete. */
   let deletedTranscripts: (DeleteSessionTranscriptInput & { agent: string })[];
   /**
@@ -128,6 +132,10 @@ describe('RunTeardownService (in-memory sqlite)', () => {
     inboxCancels = [];
     commands = new ActionCommandRegistry();
     monitors = new MonitorRegistry(new ProcessRegistry());
+    browserBridge = new BrowserBridgeService();
+    browserBridge.attachEmitter(() => undefined);
+    browserBridge.register('socket-1');
+    browserApprovals = new BrowserHostApprovals();
     referencedTexts = [];
     deletedTranscripts = [];
     const em = orm.em.fork();
@@ -198,6 +206,8 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       commands,
       threadInbox,
       monitors,
+      browserBridge,
+      browserApprovals,
     );
   });
 
@@ -242,6 +252,31 @@ describe('RunTeardownService (in-memory sqlite)', () => {
 
     expect(ours.signal.aborted).toBe(true);
     expect(theirs.signal.aborted).toBe(false);
+  });
+
+  it('rejects the run’s pending browser requests', async () => {
+    const request = (runId: string) =>
+      browserBridge.request({
+        runId,
+        memberName: 'Claude',
+        op: { kind: 'tabs' },
+        allowedHosts: null,
+      });
+    const ours = request('run-a');
+    const theirs = request('run-b');
+    browserApprovals.approve('run-a', 'example.com');
+    browserApprovals.approve('run-b', 'example.com');
+
+    teardown.endProcesses('run-a');
+
+    await expect(ours).resolves.toEqual({
+      status: 'failed',
+      reason: 'The chat was archived or deleted.',
+    });
+    expect(browserApprovals.allows('run-a', 'example.com')).toBe(false);
+    expect(browserApprovals.allows('run-b', 'example.com')).toBe(true);
+    browserBridge.rejectRun('run-b', 'done');
+    await expect(theirs).resolves.toMatchObject({ status: 'failed' });
   });
 
   it('a command started right after its run was ended starts already ended', () => {

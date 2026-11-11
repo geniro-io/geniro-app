@@ -2,6 +2,7 @@ import { Check, ChevronRight } from 'lucide-react';
 import * as React from 'react';
 
 import type { ProfileColor } from '../../../shared/contracts';
+import { useReportOverlayOpen } from '../browser-occlusion';
 import { pointOf, usePointerGrace } from '../use-pointer-grace';
 import { closeOnFrameFocus } from './frame-focus';
 import { MenuAnchorContext } from './menu-anchor';
@@ -240,6 +241,7 @@ export function Menu({
    */
   className?: string;
 }): React.JSX.Element | null {
+  useReportOverlayOpen(open);
   const [query, setQuery] = React.useState('');
   const [highlight, setHighlight] = React.useState(0);
   const panelRef = React.useRef<HTMLDivElement | null>(null);

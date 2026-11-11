@@ -17,8 +17,13 @@ export type McpToolListing = {
   _meta?: Record<string, unknown>;
 };
 
+/** One picture a tool hands back beside its text: base64 png, as the MCP `image` part carries it. */
+export type McpToolImage = { data: string; mimeType: 'image/png' };
+
 /**
- * What one `tools/call` answers: the text the agent reads back.
+ * What one `tools/call` answers: the text the agent reads back, and any
+ * pictures served after it (`McpServerService` turns them into MCP `image`
+ * parts; `content` stays text-only so no other tool's answer changes).
  *
  * A type alias rather than an interface, like {@link McpToolListing}: the SDK
  * types a handler's result with an index signature, which an interface never
@@ -27,6 +32,7 @@ export type McpToolListing = {
 export type McpToolResult = {
   content: { type: 'text'; text: string }[];
   isError: boolean;
+  images?: McpToolImage[];
 };
 
 /** WHO a listing is for: one member of one run, in one of its conversations. */

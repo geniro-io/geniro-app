@@ -189,8 +189,21 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     cliAuth: cliAuthApi,
     tasks: tasksApi,
     projects: projectsApi,
+    shares: { listShares: vi.fn(() => Promise.resolve({ shares: [] })) },
   })),
 }));
+// The module reads `window.geniro` once at import, before this spec installs its
+// stub, so it answers "paired browser"; a test that needs the desktop's answer
+// sets it, and every other test keeps the real one.
+const runtimeOverride = vi.hoisted(() => ({ remote: null as boolean | null }));
+vi.mock('../remote/remote-session', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../remote/remote-session')>();
+  return {
+    ...actual,
+    isRemoteRuntime: () => runtimeOverride.remote ?? actual.isRemoteRuntime(),
+  };
+});
 // Counts the chat screen's own renders through a child it redraws on every one.
 const chatHeaderRenders = vi.hoisted(() => ({ count: 0 }));
 vi.mock('./chat-header', async (importOriginal) => {
@@ -1190,6 +1203,52 @@ describe('Chats transcript — no sideways scroll', () => {
       el.className.includes('overflow-y-auto'),
     )!;
     expect(classesOf(scroller)).toContain('overflow-x-hidden');
+  });
+});
+
+describe('Chats — the chat browser column', () => {
+  afterEach(() => {
+    runtimeOverride.remote = null;
+  });
+
+  it('puts the browser column between the transcript and the agents panel', async () => {
+    runtimeOverride.remote = false;
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client } = makeClient();
+    Object.assign(client, {
+      onUsageRecorded: () => () => undefined,
+      onSharesChanged: () => () => undefined,
+    });
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const transcript = container.querySelector('[data-slot="transcript"]')!;
+    const column = container.querySelector('[data-slot="browser-column"]');
+    const panel = container.querySelector('aside[aria-label="Run agents"]')!;
+
+    expect(column).not.toBeNull();
+    expect(
+      transcript.compareDocumentPosition(column!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      column!.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(column!.parentElement).toBe(panel.parentElement);
+    expect(
+      container.querySelector('[data-slot="browser-toggle"]'),
+    ).not.toBeNull();
+  });
+
+  it('draws no browser column or globe on a paired device', async () => {
+    runtimeOverride.remote = true;
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(container.querySelector('[data-slot="browser-column"]')).toBeNull();
+    expect(container.querySelector('[data-slot="browser-toggle"]')).toBeNull();
   });
 });
 

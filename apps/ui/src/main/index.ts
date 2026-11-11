@@ -16,6 +16,13 @@ import { themeWindowBackground } from '../shared/themes';
 import { installApplicationMenu } from './app-menu';
 import { guardArtifactFrameNavigations } from './artifact-frame-navigation';
 import { AutopilotConductor } from './autopilot-conductor';
+import { BrowserService } from './browser/browser-service';
+import {
+  chatPartitionDir,
+  runStillExists,
+  sweepOrphanedBrowserPartitions,
+} from './browser/browser-sessions';
+import { type EgressProxy, startEgressProxy } from './browser/egress-proxy';
 import { installContextMenu } from './context-menu';
 import { DaemonKeepAlive } from './daemon-keepalive';
 import type { DaemonQuitCause } from './daemon-pidfile';
@@ -363,6 +370,15 @@ let teardownDone = false;
  */
 let remoteAccess: RemoteAccess | null = null;
 
+let egressProxy: EgressProxy | null = null;
+let browser: BrowserService | null = null;
+let browserSweepStarted = false;
+let releaseBrowserReady: () => void = () => undefined;
+/** Resolves once the launch sweep of orphaned browser jars is done, so no session precedes it. */
+const browserReady = new Promise<void>((resolve) => {
+  releaseBrowserReady = resolve;
+});
+
 /** URL scheme (e.g. 'https:'), or '' when `url` doesn't parse. */
 function schemeOf(url: string): string {
   try {
@@ -678,12 +694,51 @@ function pushDaemonConfig(handle: DaemonHandle): void {
  */
 function daemonCameUp(handle: DaemonHandle): void {
   notifyDaemonReady(mainWindow, handle);
+  startBrowserSweep(handle);
   pushDaemonConfig(handle);
   // The window is opened BEFORE the first one, so whatever it already reported
   // about its own load has been waiting for an address to send it to.
   void flushMainLogs(handle);
   reapWorktrees(handle);
   keepAwake.poke();
+}
+
+/**
+ * Removes the browser jars of chats that no longer exist, once per launch and
+ * before the browser makes any session; `browserReady` opens when it is done.
+ */
+function startBrowserSweep(handle: DaemonHandle | null): void {
+  if (browserSweepStarted) {
+    return;
+  }
+  browserSweepStarted = true;
+  void (async () => {
+    try {
+      if (handle !== null) {
+        const removed = await sweepOrphanedBrowserPartitions(
+          app.getPath('userData'),
+          (runId) => runStillExists(handle, runId),
+        );
+        if (removed.length > 0) {
+          void reportMainLog(
+            supervisor.getHandle(),
+            'info',
+            `removed ${removed.length} browser jar(s) of chats that no longer exist`,
+            { source: 'browser' },
+          );
+        }
+      }
+    } catch (err) {
+      void reportMainLog(
+        supervisor.getHandle(),
+        'warn',
+        `the browser jar sweep failed: ${err instanceof Error ? err.message : String(err)}`,
+        { source: 'browser' },
+      );
+    } finally {
+      releaseBrowserReady();
+    }
+  })();
 }
 
 /**
@@ -694,6 +749,7 @@ function daemonCameUp(handle: DaemonHandle): void {
 function ensureDaemon(): void {
   supervisor.start().catch((err: unknown) => {
     console.error('[ui] daemon failed to start:', err);
+    startBrowserSweep(null);
   });
 }
 
@@ -791,6 +847,12 @@ function main(): void {
           pushDaemonConfig(handle);
         }
       },
+      () => {
+        if (browser === null) {
+          throw new Error('the browser is not available');
+        }
+        return browser;
+      },
     );
     const access = new RemoteAccess({
       ipcRegistry,
@@ -830,6 +892,28 @@ function main(): void {
         { source: 'network-lockdown' },
       );
     });
+    try {
+      egressProxy = await startEgressProxy();
+      browser = new BrowserService({
+        proxyPort: egressProxy.port,
+        ready: browserReady,
+        mainWindow: () => mainWindow,
+        hasJarOnDisk: (runId) =>
+          existsSync(chatPartitionDir(app.getPath('userData'), runId)),
+        log: (message) => {
+          void reportMainLog(supervisor.getHandle(), 'warn', message, {
+            source: 'browser',
+          });
+        },
+      });
+    } catch (err) {
+      void reportMainLog(
+        supervisor.getHandle(),
+        'error',
+        `could not start the browser's egress proxy: ${err instanceof Error ? err.message : String(err)}`,
+        { source: 'browser' },
+      );
+    }
     await loadDevToolsExtension();
 
     // Open the window FIRST and let the daemon boot in parallel: first paint
@@ -900,6 +984,8 @@ function main(): void {
         () => keepAlive.dispose(),
         () => keepAwake.dispose(),
         () => terminals.disposeAll(),
+        () => browser?.shutdown(),
+        () => egressProxy?.close(),
         // The daemon and the gateway together, not one after the other:
         // neither owns the other, and the app must not quit while either is
         // still tearing down. The daemon stops once every window has posted the

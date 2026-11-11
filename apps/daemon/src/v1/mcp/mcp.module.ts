@@ -4,6 +4,8 @@ import { AgentsModule } from '../agents/agents.module';
 import { ActionBroker } from '../agents/services/action.broker';
 import { AnalysisBroker } from '../agents/services/analysis.broker';
 import { ArtifactBroker } from '../agents/services/artifact.broker';
+import { AttachmentStoreService } from '../agents/services/attachment-store.service';
+import { BrowserBroker } from '../agents/services/browser.broker';
 import { ChartBroker } from '../agents/services/chart.broker';
 import { ComparisonBroker } from '../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../agents/services/findings-report.broker';
@@ -84,6 +86,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         galleries: GalleryBroker,
         galleryImages: GalleryImageService,
         artifacts: ArtifactBroker,
+        browser: BrowserBroker,
+        attachments: AttachmentStoreService,
         actions: ActionBroker,
         monitors: MonitorBroker,
         teamNotes: TeamNoteBroker,
@@ -123,6 +127,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           galleries,
           galleryImages,
           artifacts,
+          browser,
+          attachments,
           actions,
           monitors,
           teamNotes,
@@ -162,6 +168,8 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         GalleryBroker,
         GalleryImageService,
         ArtifactBroker,
+        BrowserBroker,
+        AttachmentStoreService,
         ActionBroker,
         MonitorBroker,
         TeamNoteBroker,

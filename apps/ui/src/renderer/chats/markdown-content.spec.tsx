@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { BrowserPaneContext } from './browser/browser-pane-context';
 import { alignClass, MarkdownContent } from './markdown-content';
 
 (
@@ -365,5 +366,65 @@ describe('alignClass — the align-PROP fallback', () => {
     expect(alignClass(undefined, 'right')).toBe('text-right');
     // Style wins when both are present — it is the current, translated form.
     expect(alignClass({ textAlign: 'right' }, 'center')).toBe('text-right');
+  });
+});
+
+describe('MarkdownContent — links and the chat browser', () => {
+  const link = (el: HTMLElement): HTMLAnchorElement => {
+    const anchor = el.querySelector('a');
+    if (anchor === null) {
+      throw new Error('no link rendered');
+    }
+    return anchor;
+  };
+  const click = (anchor: HTMLAnchorElement, init: MouseEventInit): boolean => {
+    let notPrevented = true;
+    act(() => {
+      notPrevented = anchor.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true, ...init }),
+      );
+    });
+    return notPrevented;
+  };
+  const withPane = (openUrl: (url: string) => void): HTMLAnchorElement =>
+    link(
+      render(
+        <BrowserPaneContext.Provider value={{ openPane: vi.fn(), openUrl }}>
+          <MarkdownContent content="[docs](https://example.com/a)" />
+        </BrowserPaneContext.Provider>,
+      ),
+    );
+
+  it('opens a transcript link in the pane; ⌘-click opens the system browser', () => {
+    const openUrl = vi.fn();
+    const anchor = withPane(openUrl);
+
+    expect(click(anchor, { button: 0 })).toBe(false);
+    expect(openUrl).toHaveBeenCalledExactlyOnceWith('https://example.com/a');
+
+    expect(click(anchor, { button: 0, metaKey: true })).toBe(true);
+    expect(click(anchor, { button: 0, ctrlKey: true })).toBe(true);
+    expect(openUrl).toHaveBeenCalledTimes(1);
+    expect(anchor.target).toBe('_blank');
+  });
+
+  it('leaves a link alone where the chat has no pane', () => {
+    const anchor = link(
+      render(<MarkdownContent content="[docs](https://example.com/a)" />),
+    );
+    expect(click(anchor, { button: 0 })).toBe(true);
+  });
+
+  it('leaves a non-web link to the system', () => {
+    const openUrl = vi.fn();
+    const anchor = link(
+      render(
+        <BrowserPaneContext.Provider value={{ openPane: vi.fn(), openUrl }}>
+          <MarkdownContent content="[mail](mailto:a@b.co)" />
+        </BrowserPaneContext.Provider>,
+      ),
+    );
+    click(anchor, { button: 0 });
+    expect(openUrl).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
+import { clearSecrets, redactSecrets } from '../../diagnostics/utils/redact';
 import type { AgentEvent, AgentUsage } from '../adapters/adapter.types';
 import {
   endsOffTurnStretch,
@@ -7,6 +8,7 @@ import {
   restatesRunAsWorking,
   terminalStatus,
 } from './event-to-item';
+import { forgetMaskedCookieValues } from './host-browser';
 
 // The one event→transcript projection BOTH execution paths (chat service and
 // team executor) persist through — each arm is pinned with a worked-example
@@ -156,6 +158,214 @@ describe('mapEventToItem', () => {
       kind: 'tool_call',
       role: 'assistant',
       payload: { id: 't1', name: 'Read', input: { path: '/x' } },
+    });
+  });
+
+  describe('browser cookie values', () => {
+    const SESSION = 'sess-9f8e7d6c5b4a-secret';
+    const TOKEN = 'tok-0a1b2c3d4e5f-secret';
+
+    afterEach(() => {
+      clearSecrets();
+      forgetMaskedCookieValues();
+    });
+
+    it('persists browser_set_cookies with values masked', () => {
+      const input = {
+        tab: 't1',
+        cookies: [
+          { name: 'sid', value: SESSION, domain: 'example.com' },
+          { name: 'csrf', value: TOKEN, httpOnly: true },
+        ],
+      };
+      const mapped = mapEventToItem({
+        type: 'tool_call',
+        id: 't1',
+        name: 'mcp__geniro-1a2b3c4d__browser_set_cookies',
+        input,
+      });
+      expect(mapped?.payload.input).toEqual({
+        tab: 't1',
+        cookies: [
+          { name: 'sid', value: '‹cookie›', domain: 'example.com' },
+          { name: 'csrf', value: '‹cookie›', httpOnly: true },
+        ],
+      });
+      expect(JSON.stringify(mapped)).not.toContain(SESSION);
+      expect(input.cookies).toMatchObject([{ value: SESSION }, {}]);
+    });
+
+    it('masks the cookie values of a browser call put to the user as a permission card', () => {
+      const mapped = mapEventToItem({
+        type: 'approval_request',
+        id: 'r1',
+        toolName: 'mcp__geniro-1a2b3c4d__browser_set_cookies',
+        input: { cookies: [{ name: 'sid', value: SESSION }] },
+      });
+      expect(mapped?.payload.input).toEqual({
+        cookies: [{ name: 'sid', value: '‹cookie›' }],
+      });
+      expect(JSON.stringify(mapped)).not.toContain(SESSION);
+    });
+
+    it('registers each cookie value before logging', () => {
+      mapEventToItem({
+        type: 'tool_call',
+        id: 't1',
+        name: 'geniro-1a2b3c4d-browser_set_cookies: browser_set_cookies',
+        input: {
+          cookies: [
+            { name: 'sid', value: SESSION },
+            { name: 'csrf', value: TOKEN },
+          ],
+        },
+      });
+      expect(redactSecrets(`cookie ${SESSION}`)).not.toContain(SESSION);
+      expect(redactSecrets(`cookie ${TOKEN}`)).not.toContain(TOKEN);
+    });
+
+    it('masks browser_open ownCookies values', () => {
+      const mapped = mapEventToItem({
+        type: 'tool_call',
+        id: 't1',
+        name: 'mcp__geniro-1a2b3c4d__browser_open',
+        input: {
+          url: 'https://example.com',
+          ownCookies: {
+            label: 'login',
+            cookies: [{ name: 'sid', value: SESSION }],
+          },
+        },
+      });
+      expect(mapped?.payload.input).toEqual({
+        url: 'https://example.com',
+        ownCookies: {
+          label: 'login',
+          cookies: [{ name: 'sid', value: '‹cookie›' }],
+        },
+      });
+    });
+
+    it('masks values inside the wrapping a CLI puts around the arguments', () => {
+      const mapped = mapEventToItem({
+        type: 'tool_call',
+        id: 't1',
+        name: 'mcp__geniro-1a2b3c4d__browser_set_cookies',
+        input: { args: { cookies: [{ name: 'sid', value: SESSION }] } },
+      });
+      expect(JSON.stringify(mapped)).not.toContain(SESSION);
+    });
+
+    it('masks cookie values in a call shaped the way the tool refuses', () => {
+      const shapes: Record<string, unknown>[] = [
+        {
+          url: 'http://localhost:8765',
+          ownCookies: 'true',
+          cookies: `sid=${SESSION}`,
+        },
+        { cookies: [`sid=${SESSION}`] },
+        { cookies: { sid: SESSION } },
+        {
+          ownCookies: { label: 'b', cookies: [{ name: 'sid', val: SESSION }] },
+        },
+      ];
+      for (const input of shapes) {
+        const mapped = mapEventToItem({
+          type: 'tool_call',
+          id: 't1',
+          name: 'mcp__geniro-1a2b3c4d__browser_open',
+          input,
+        });
+        expect(JSON.stringify(mapped), JSON.stringify(input)).not.toContain(
+          SESSION,
+        );
+      }
+    });
+
+    it('keeps the fields that name a cookie', () => {
+      const mapped = mapEventToItem({
+        type: 'tool_call',
+        id: 't1',
+        name: 'mcp__geniro-1a2b3c4d__browser_set_cookies',
+        input: {
+          cookies: [
+            {
+              name: 'sid',
+              value: SESSION,
+              url: 'http://localhost:1',
+              path: '/',
+            },
+          ],
+        },
+      });
+      expect(mapped?.payload.input).toEqual({
+        cookies: [
+          {
+            name: 'sid',
+            value: '‹cookie›',
+            url: 'http://localhost:1',
+            path: '/',
+          },
+        ],
+      });
+    });
+
+    it('masks a cookie value a page prints back in a browser tool result or a claude result', () => {
+      mapEventToItem({
+        type: 'tool_call',
+        id: 't1',
+        name: 'mcp__geniro-1a2b3c4d__browser_set_cookies',
+        input: { cookies: [{ name: 'sid', value: 'short-456' }] },
+      });
+      for (const name of ['mcp__geniro-1a2b3c4d__browser_snapshot', null]) {
+        const mapped = mapEventToItem({
+          type: 'tool_result',
+          id: 't2',
+          name,
+          result: [{ type: 'text', text: 'cookies: sid=short-456' }],
+          isError: false,
+        });
+        expect(mapped?.payload.result).toEqual([
+          { type: 'text', text: 'cookies: sid=‹cookie›' },
+        ]);
+      }
+    });
+
+    it('leaves another named tool’s result and an image block alone', () => {
+      mapEventToItem({
+        type: 'tool_call',
+        id: 't1',
+        name: 'mcp__geniro-1a2b3c4d__browser_set_cookies',
+        input: { cookies: [{ name: 'sid', value: SESSION }] },
+      });
+      const shell = mapEventToItem({
+        type: 'tool_result',
+        id: 't2',
+        name: 'Bash',
+        result: `echo ${SESSION}`,
+        isError: false,
+      });
+      expect(shell?.payload.result).toBe(`echo ${SESSION}`);
+      const image = { type: 'image', data: SESSION, mimeType: 'image/png' };
+      const shot = mapEventToItem({
+        type: 'tool_result',
+        id: 't3',
+        name: 'mcp__geniro-1a2b3c4d__browser_screenshot',
+        result: [image],
+        isError: false,
+      });
+      expect(shot?.payload.result).toEqual([image]);
+    });
+
+    it('leaves another tool’s input alone', () => {
+      const input = { cookies: [{ name: 'sid', value: SESSION }] };
+      const mapped = mapEventToItem({
+        type: 'tool_call',
+        id: 't1',
+        name: 'mcp__geniro-1a2b3c4d__browser_get_cookies',
+        input,
+      });
+      expect(mapped?.payload.input).toBe(input);
     });
   });
 

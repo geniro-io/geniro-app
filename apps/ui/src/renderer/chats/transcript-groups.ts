@@ -17,6 +17,7 @@ import type { FindingsReport } from './findings-payload';
 import { readFindingsReport } from './findings-payload';
 import { type GallerySpec, readGallery } from './gallery-payload';
 import {
+  BROWSER_SCREENSHOT,
   geniroCardKindOf,
   geniroToolOf,
   isGeniroToolName,
@@ -770,6 +771,26 @@ export interface GalleryEntry {
 }
 
 /**
+ * One screenshot an agent took in the chat's browser, drawn as its own card.
+ *
+ * Unlike every card above it is not a row the daemon writes: it is a tool pair
+ * whose call row is hidden from the tool group and whose result row, which
+ * names the saved file, lands on {@link pair} when it arrives. A row each, on
+ * {@link FindingsEntry}'s reasoning.
+ */
+export interface BrowserScreenshotEntry {
+  type: 'browser-screenshot';
+  id: string;
+  createdAt: string;
+  seq: number;
+  memberId: string | null;
+  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
+   * the same seam under the same one-delegate condition. */
+  parentToolUseId: string | null;
+  pair: ToolPair;
+}
+
+/**
  * One page an agent published, drawn as its own card.
  *
  * A row each, on {@link FindingsEntry}'s reasoning — and here the reasoning is
@@ -941,6 +962,7 @@ export type TranscriptEntry =
   | MetricsEntry
   | ComparisonEntry
   | GalleryEntry
+  | BrowserScreenshotEntry
   | ArtifactEntry
   | ActionEntry
   | WorkflowEntry;
@@ -976,6 +998,7 @@ export type CardEntry =
   | MetricsEntry
   | ComparisonEntry
   | GalleryEntry
+  | BrowserScreenshotEntry
   | ArtifactEntry
   | ActionEntry
   | WorkflowEntry;
@@ -989,6 +1012,7 @@ export function isCardEntry(entry: TranscriptEntry): entry is CardEntry {
     entry.type === 'metrics' ||
     entry.type === 'comparison' ||
     entry.type === 'gallery' ||
+    entry.type === 'browser-screenshot' ||
     entry.type === 'artifact' ||
     entry.type === 'action' ||
     entry.type === 'workflow'
@@ -1239,6 +1263,9 @@ export function entryEndSeq(entry: TranscriptEntry): number | null {
       return max === null ? end : Math.max(max, end);
     }, null);
   }
+  if (entry.type === 'browser-screenshot') {
+    return Math.max(entry.seq, entry.pair.result?.seq ?? entry.seq);
+  }
   if (isCardEntry(entry)) {
     return entry.seq;
   }
@@ -1263,6 +1290,10 @@ function maxSeqOf(list: readonly TranscriptEntry[]): number {
       for (const pair of entry.pairs) {
         max = Math.max(max, pair.result?.seq ?? pair.call.seq);
       }
+      continue;
+    }
+    if (entry.type === 'browser-screenshot') {
+      max = Math.max(max, entry.pair.result?.seq ?? entry.seq);
       continue;
     }
     if (isCardEntry(entry)) {
@@ -1304,6 +1335,10 @@ function lastRowAtOf(list: readonly TranscriptEntry[]): number | null {
       for (const pair of entry.pairs) {
         consider(pair.result?.createdAt ?? pair.call.createdAt);
       }
+      continue;
+    }
+    if (entry.type === 'browser-screenshot') {
+      consider(entry.pair.result?.createdAt ?? entry.createdAt);
       continue;
     }
     if (isCardEntry(entry)) {
@@ -2919,6 +2954,27 @@ export function groupTranscript(
       const name = payloadString(item.payload, 'name') ?? '';
       const callId = payloadString(item.payload, 'id');
       const tool = geniroToolOf(name, item.runId);
+      if (tool === BROWSER_SCREENSHOT) {
+        // The card is drawn from this pair, so the result must find it: the
+        // call is hidden from the tool group, never from the pairing.
+        const pair: ToolPair = { call: item, result: null };
+        if (callId) {
+          pairsByCallId.set(callId, pair);
+        }
+        // Closes both open runs, for the reason the findings card does.
+        openGroups.delete(groupKey(item));
+        openTaskCards.delete(groupKey(item));
+        entries.push({
+          type: 'browser-screenshot',
+          id: item.id,
+          createdAt: item.createdAt,
+          seq: item.seq,
+          memberId: item.memberId,
+          parentToolUseId: subagentIdOf(item),
+          pair,
+        });
+        continue;
+      }
       const refusedNote =
         callId !== null &&
         refusedCallIds.has(callId) &&
@@ -4919,6 +4975,10 @@ function lastMainThreadRowAt(
         for (const pair of entry.pairs) {
           consider(pair.result?.createdAt ?? pair.call.createdAt);
         }
+        continue;
+      }
+      if (entry.type === 'browser-screenshot') {
+        consider(entry.pair.result?.createdAt ?? entry.createdAt);
         continue;
       }
       if (isCardEntry(entry)) {

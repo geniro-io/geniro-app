@@ -26,6 +26,7 @@ import {
   groupTranscript,
   indexCallBlocks,
   isCallContinuation,
+  isCardEntry,
   type ItemEntry,
   openCallBlocks,
   pullFileChangesOutOfGroups,
@@ -1799,6 +1800,50 @@ describe('groupTranscript', () => {
       '/tmp/a.png',
       '/tmp/b.png',
     ]);
+  });
+
+  it('files browser_screenshot as a card and other browser tools as rows', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__browser_open', 'b1', {
+        url: 'https://acme.dev',
+      }),
+      result('b1', 'Opened.\nTab: t1'),
+      call('mcp__geniro-run-1__browser_screenshot', 'b2', { tab: 't1' }),
+      result('b2', 'Saved screenshot: /tmp/shot.png'),
+      call('mcp__geniro-run-1__browser_click', 'b3', { tab: 't1', ref: 'e2' }),
+      result('b3', 'Clicked.'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual([
+      'tools',
+      'browser-screenshot',
+      'tools',
+    ]);
+    const [first, card, last] = entries as [
+      ToolGroupEntry,
+      Extract<TranscriptEntry, { type: 'browser-screenshot' }>,
+      ToolGroupEntry,
+    ];
+    expect(
+      first.pairs.map((pair) => payloadString(pair.call.payload, 'id')),
+    ).toEqual(['b1']);
+    expect(
+      last.pairs.map((pair) => payloadString(pair.call.payload, 'id')),
+    ).toEqual(['b3']);
+    expect(payloadString(card.pair.call.payload, 'id')).toBe('b2');
+    expect(card.pair.result).not.toBeNull();
+    expect(isCardEntry(card)).toBe(true);
+  });
+
+  it('draws a screenshot card from the call alone while its result is out', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__browser_screenshot', 'b1', { tab: 't1' }),
+    ]);
+    expect(entries.map((e) => e.type)).toEqual(['browser-screenshot']);
+    expect(
+      (entries[0] as Extract<TranscriptEntry, { type: 'browser-screenshot' }>)
+        .pair.result,
+    ).toBeNull();
   });
 
   it('drops a show_gallery row that names no picture', () => {

@@ -108,6 +108,57 @@ describe('readAppStorage', () => {
   });
 });
 
+describe('readAppStorage — browser jars', () => {
+  it('files Partitions/geniro-browser-* as one Browser data entry, apart from any other partition', async () => {
+    write(
+      join(mocks.userData, 'Partitions', 'geniro-browser-r1', 'Cookies'),
+      40_000,
+    );
+    write(
+      join(mocks.userData, 'Partitions', 'geniro-browser-r2', 'Cookies'),
+      40_000,
+    );
+    write(join(mocks.userData, 'Partitions', 'other-thing', 'data'), 30_000);
+
+    const usage = await readAppStorage(mocks.userData, ['Partitions'], () =>
+      Promise.resolve(new Set<string>()),
+    );
+
+    expect(usage.browserCache).toEqual([]);
+    expect(usage.appData.map((entry) => entry.name)).toEqual([
+      'Partitions',
+      'Browser data',
+    ]);
+    const [others, browser] = usage.appData;
+    expect(browser!.bytes).toBeGreaterThanOrEqual(80_000);
+    expect(others!.bytes).toBeGreaterThanOrEqual(30_000);
+    expect(others!.bytes).toBeLessThan(browser!.bytes);
+  });
+
+  it('shows no Partitions entry when every partition is a browser jar', async () => {
+    write(
+      join(mocks.userData, 'Partitions', 'geniro-browser-r1', 'Cookies'),
+      20_000,
+    );
+
+    const usage = await readAppStorage(mocks.userData, ['Partitions'], () =>
+      Promise.resolve(new Set<string>()),
+    );
+
+    expect(usage.appData.map((entry) => entry.name)).toEqual(['Browser data']);
+  });
+
+  it('keeps a Partitions folder that holds nothing of the browser as it was', async () => {
+    write(join(mocks.userData, 'Partitions', 'other-thing', 'data'), 20_000);
+
+    const usage = await readAppStorage(mocks.userData, ['Partitions'], () =>
+      Promise.resolve(new Set<string>()),
+    );
+
+    expect(usage.appData.map((entry) => entry.name)).toEqual(['Partitions']);
+  });
+});
+
 describe('readAppStorage — a real worktree', () => {
   it("reads a linked worktree's checked-out branch, not the one it was made on", async () => {
     const repo = realpathSync(

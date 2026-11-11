@@ -34,6 +34,7 @@ const KINDS: GeniroCardKind[] = [
   'metrics',
   'comparison',
   'gallery',
+  'screenshot',
   'findings',
   'patch',
   'plan',

@@ -39,6 +39,7 @@ function alert(
     threadRssBytes: 9 * GIB,
     growthBytesPerMinute: null,
     freeDiskBytes: null,
+    minFreeDiskBytes: null,
     stoppable: true,
     ...overrides,
   };

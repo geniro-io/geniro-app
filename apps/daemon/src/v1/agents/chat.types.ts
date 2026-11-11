@@ -3975,7 +3975,8 @@ export type ResourceAlertCommand = z.infer<typeof ResourceAlertCommandSchema>;
 /**
  * A condition the resource watch found and still finds: a thread's processes
  * too large or growing too fast, the system short of memory, or the Data
- * volume short of space. The command is the blamed thread's heaviest process.
+ * volume short of space. The command is the blamed thread's heaviest process;
+ * low disk blames no thread, so it carries only the free space and its line.
  */
 export const ResourceAlertSchema = z
   .object({
@@ -3996,6 +3997,11 @@ export const ResourceAlertSchema = z
     threadRssBytes: z.number().int().nullable(),
     growthBytesPerMinute: z.number().int().nullable(),
     freeDiskBytes: z.number().int().nullable(),
+    minFreeDiskBytes: z
+      .number()
+      .int()
+      .nullable()
+      .describe('the free-space line a low-disk alert is judged against'),
     stoppable: z
       .boolean()
       .describe(

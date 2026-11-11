@@ -28,6 +28,7 @@ function alert(
     threadRssBytes: 9 * GIB,
     growthBytesPerMinute: null,
     freeDiskBytes: null,
+    minFreeDiskBytes: null,
     stoppable: false,
     ...overrides,
   };
@@ -98,18 +99,27 @@ describe('ResourceAlertStrip', () => {
     expect(onOpenProcesses).toHaveBeenCalledWith('r1');
   });
 
-  it('offers no processes for an alert that blames no thread', () => {
+  it('shows low disk as free space and its line alone', () => {
     render([
       alert('a1', {
         kind: 'low-disk',
         runId: null,
         title: null,
+        agentKind: null,
+        memberId: null,
         command: null,
+        threadRssBytes: null,
         freeDiskBytes: 1.5 * GIB,
+        minFreeDiskBytes: 10 * GIB,
+        stoppable: false,
       }),
     ]);
     expect(button('Open processes')).toBeUndefined();
-    expect(container.textContent).toContain('Only 1.5 GB free on the disk.');
+    expect(button('Stop command')).toBeUndefined();
+    expect(container.textContent).toContain(
+      'Only 1.5 GB free on the disk (warning below 10 GB).',
+    );
+    expect(container.textContent).not.toMatch(/CI-1033|runs|node/);
   });
 
   it('holds every Stop while one is under way', () => {

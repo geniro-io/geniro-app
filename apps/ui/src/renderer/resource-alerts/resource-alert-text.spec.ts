@@ -27,6 +27,7 @@ function alert(overrides: Partial<ResourceAlert> = {}): ResourceAlert {
     threadRssBytes: 9 * GIB,
     growthBytesPerMinute: 1.5 * GIB,
     freeDiskBytes: 1.5 * GIB,
+    minFreeDiskBytes: null,
     stoppable: true,
     ...overrides,
   };
@@ -43,6 +44,11 @@ describe('resource alert text', () => {
     expect(resourceAlertHeadline(alert({ kind: 'memory-pressure' }))).toBe(
       'This Mac is running out of memory',
     );
+    expect(
+      resourceAlertHeadline(
+        alert({ kind: 'low-disk', minFreeDiskBytes: 10 * GIB }),
+      ),
+    ).toBe('Only 1.5 GB free on the disk (warning below 10 GB)');
     expect(resourceAlertHeadline(alert({ kind: 'low-disk' }))).toBe(
       'Only 1.5 GB free on the disk',
     );
@@ -59,6 +65,13 @@ describe('resource alert text', () => {
       resourceAlertCulprit(alert({ agentKind: null, memberId: null }), name),
     ).toBe('An agent runs python3 (8.0 GB)');
     expect(resourceAlertCulprit(alert({ command: null }), name)).toBeNull();
+  });
+
+  it('names no thread, agent or command for low disk', () => {
+    expect(resourceAlertCulprit(alert({ kind: 'low-disk' }), name)).toBeNull();
+    expect(resourceAlertNotice(alert({ kind: 'low-disk' }), name).body).toBe(
+      'Only 1.5 GB free on the disk.',
+    );
   });
 
   it('keeps the command line out of the system banner', () => {
@@ -87,14 +100,25 @@ describe('resource alert text', () => {
 
   it('opens no thread from a notification that blames none', () => {
     const notice = resourceAlertNotice(
-      alert({ kind: 'low-disk', runId: null, title: null, command: null }),
+      alert({
+        kind: 'low-disk',
+        runId: null,
+        title: null,
+        agentKind: null,
+        memberId: null,
+        command: null,
+        threadRssBytes: null,
+        growthBytesPerMinute: null,
+        minFreeDiskBytes: 10 * GIB,
+        stoppable: false,
+      }),
       name,
     );
     expect(notice).toEqual({
       kind: 'resource-alert',
       runId: '',
       title: 'Geniro',
-      body: 'Only 1.5 GB free on the disk.',
+      body: 'Only 1.5 GB free on the disk (warning below 10 GB).',
     });
   });
 });

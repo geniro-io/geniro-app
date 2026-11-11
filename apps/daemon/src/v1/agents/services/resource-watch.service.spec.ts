@@ -261,13 +261,69 @@ describe('ResourceWatchService', () => {
     ]);
   });
 
-  it('raises low disk with the free bytes', async () => {
-    const t = setup({ samples: [[sample(1 * GIB)]], freeDisk: 1.5 * GIB });
+  it('raises low disk with the free bytes and its line, blaming no thread', async () => {
+    const t = setup({
+      samples: [[sample(1 * GIB)]],
+      freeDisk: 1.5 * GIB,
+      candidates: [candidate(4242, 5_000)],
+    });
 
     await t.watch.tick();
 
     expect(t.watch.list().alerts).toEqual([
-      expect.objectContaining({ kind: 'low-disk', freeDiskBytes: 1.5 * GIB }),
+      expect.objectContaining({
+        kind: 'low-disk',
+        freeDiskBytes: 1.5 * GIB,
+        minFreeDiskBytes: DEFAULT_RESOURCE_ALERT_CONFIG.minFreeDiskBytes,
+        runId: null,
+        title: null,
+        agentKind: null,
+        memberId: null,
+        command: null,
+        threadRssBytes: null,
+        growthBytesPerMinute: null,
+        stoppable: false,
+      }),
+    ]);
+    expect(t.stopCandidates).not.toHaveBeenCalled();
+  });
+
+  it('moves a held low-disk alert to the line now set, still blaming no thread', async () => {
+    const t = setup({
+      samples: [[sample(1 * GIB)], [sample(3 * GIB, { runId: 'run-2' })]],
+      freeDisk: 1.5 * GIB,
+    });
+    await t.watch.tick();
+    const raised = t.watch.list().alerts[0];
+    t.watch.setConfig({
+      ...DEFAULT_RESOURCE_ALERT_CONFIG,
+      minFreeDiskBytes: 20 * GIB,
+    });
+
+    await t.watch.tick();
+
+    expect(t.watch.list().alerts).toEqual([
+      expect.objectContaining({
+        id: raised?.id,
+        kind: 'low-disk',
+        minFreeDiskBytes: 20 * GIB,
+        runId: null,
+        command: null,
+        threadRssBytes: null,
+      }),
+    ]);
+  });
+
+  it('carries no disk line on any other kind', async () => {
+    const t = setup({ samples: [[sample(9 * GIB)]], pressure: 4 });
+
+    await t.watch.tick();
+
+    expect(
+      t.watch.list().alerts.map((a) => [a.kind, a.minFreeDiskBytes]),
+    ).toEqual([
+      ['thread-memory', null],
+      ['memory-pressure', null],
     ]);
   });
 
@@ -320,21 +376,6 @@ describe('ResourceWatchService', () => {
     expect(t.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('table changed'),
     );
-  });
-
-  it('never offers Stop for low disk, whose cause no process figure shows', async () => {
-    const t = setup({
-      samples: [[sample(1 * GIB)]],
-      freeDisk: 1.5 * GIB,
-      candidates: [candidate(4242, 5_000)],
-    });
-
-    await t.watch.tick();
-
-    expect(t.watch.list().alerts).toEqual([
-      expect.objectContaining({ kind: 'low-disk', stoppable: false }),
-    ]);
-    expect(t.stopCandidates).not.toHaveBeenCalled();
   });
 
   it('keeps the last free-disk figure through an unreadable reading', async () => {

@@ -226,7 +226,11 @@ export class ResourceWatchService
     for (const key of firing) {
       const { kind, scope } = parseConditionKey(key);
       const sample =
-        scope === SYSTEM_SCOPE ? heaviest : (byRun.get(scope) ?? null);
+        kind === 'low-disk'
+          ? null
+          : scope === SYSTEM_SCOPE
+            ? heaviest
+            : (byRun.get(scope) ?? null);
       const growth =
         sample === null ? null : (growthOf.get(sample.runId) ?? null);
       const existing = this.alerts.get(key);
@@ -238,6 +242,7 @@ export class ResourceWatchService
             scope === SYSTEM_SCOPE ? null : sample,
             growth,
             freeDiskBytes,
+            this.lineFor(kind),
           ),
         );
         continue;
@@ -251,6 +256,7 @@ export class ResourceWatchService
             threadRssBytes: sample?.rssBytes ?? null,
             growthBytesPerMinute: growth,
             freeDiskBytes,
+            minFreeDiskBytes: this.lineFor(kind),
           },
           now,
         ),
@@ -292,7 +298,10 @@ export class ResourceWatchService
     sample: ThreadResourceSample | null,
     figures: Pick<
       ResourceAlert,
-      'threadRssBytes' | 'growthBytesPerMinute' | 'freeDiskBytes'
+      | 'threadRssBytes'
+      | 'growthBytesPerMinute'
+      | 'freeDiskBytes'
+      | 'minFreeDiskBytes'
     >,
     now: number,
   ): Promise<ResourceAlert> {
@@ -300,7 +309,7 @@ export class ResourceWatchService
     const id = `ra-${this.bootId}-${this.seq}`;
     const heaviest = sample?.heaviest ?? null;
     const target =
-      sample === null || heaviest === null || kind === 'low-disk'
+      sample === null || heaviest === null
         ? null
         : await this.stopTargetFor(sample.runId, heaviest.pid);
     if (target !== null) {
@@ -349,6 +358,10 @@ export class ResourceWatchService
     }
   }
 
+  private lineFor(kind: ResourceAlertKind): number | null {
+    return kind === 'low-disk' ? this.config.minFreeDiskBytes : null;
+  }
+
   private drop(key: string): void {
     const alert = this.alerts.get(key);
     if (alert !== undefined) {
@@ -381,17 +394,19 @@ export class ResourceWatchService
 /**
  * A held alert's figures from this reading. A thread alert follows its thread;
  * a system alert keeps the thread it blamed when raised, and only its disk
- * figure moves. A figure that could not be read keeps its last value.
+ * figure and line move. A figure that could not be read keeps its last value.
  */
 function refreshed(
   alert: ResourceAlert,
   sample: ThreadResourceSample | null,
   growth: number | null,
   freeDiskBytes: number | null,
+  minFreeDiskBytes: number | null,
 ): ResourceAlert {
   const heaviest = sample?.heaviest ?? null;
   return {
     ...alert,
+    minFreeDiskBytes,
     threadRssBytes: sample?.rssBytes ?? alert.threadRssBytes,
     growthBytesPerMinute: sample === null ? alert.growthBytesPerMinute : growth,
     freeDiskBytes: freeDiskBytes ?? alert.freeDiskBytes,

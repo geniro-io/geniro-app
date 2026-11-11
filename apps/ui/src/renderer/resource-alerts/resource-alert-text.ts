@@ -24,14 +24,18 @@ export function resourceAlertHeadline(alert: ResourceAlert): string {
       return `${threadName(alert)} is growing ${formatBytes(alert.growthBytesPerMinute) ?? 'fast'}/min (${rss} now)`;
     case 'memory-pressure':
       return 'This Mac is running out of memory';
-    case 'low-disk':
-      return `Only ${formatBytes(alert.freeDiskBytes) ?? 'a little'} free on the disk`;
+    case 'low-disk': {
+      const free = `Only ${formatBytes(alert.freeDiskBytes) ?? 'a little'} free on the disk`;
+      const line = formatBytes(alert.minFreeDiskBytes);
+      return line === null ? free : `${free} (warning below ${line})`;
+    }
   }
 }
 
 /**
  * Who holds the blamed command and what it is called: `claude · middle runs
- * python3 (9.4 GB)`. Null when no command was named. The command line itself is
+ * python3 (9.4 GB)`. Null when no command was named, and always for low disk,
+ * which blames no thread. The command line itself is
  * {@link ResourceAlert.command}'s label, shown only inside the app: an argv can
  * carry a credential no one typed, and a system banner outlives the screen.
  */
@@ -40,7 +44,7 @@ export function resourceAlertCulprit(
   agentName: (kind: string) => string,
 ): string | null {
   const command = alert.command;
-  if (command === null) {
+  if (command === null || alert.kind === 'low-disk') {
     return null;
   }
   const who = [
@@ -49,9 +53,10 @@ export function resourceAlertCulprit(
   ]
     .filter((part): part is string => part !== null)
     .join(' · ');
-  const system = alert.kind === 'memory-pressure' || alert.kind === 'low-disk';
   const where =
-    system && alert.runId !== null ? `in ${threadName(alert)} ` : '';
+    alert.kind === 'memory-pressure' && alert.runId !== null
+      ? `in ${threadName(alert)} `
+      : '';
   const size = formatBytes(command.rssBytes) ?? '';
   return `${who === '' ? 'An agent' : who} ${where}runs ${command.name} (${size})`;
 }

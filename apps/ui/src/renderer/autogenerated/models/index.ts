@@ -9917,6 +9917,12 @@ export interface ResourceAlert {
      */
     freeDiskBytes: number | null;
     /**
+     * 
+     * @type {number}
+     * @memberof ResourceAlert
+     */
+    minFreeDiskBytes: number | null;
+    /**
      * whether the command was one this thread may stop when the alert was raised
      * @type {boolean}
      * @memberof ResourceAlert

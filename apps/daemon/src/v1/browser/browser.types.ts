@@ -3,6 +3,13 @@ import { z } from 'zod';
 /** How long the daemon waits on the desktop window for one browser operation. */
 export const BROWSER_REQUEST_TIMEOUT_MS = 20_000;
 
+/**
+ * The largest socket message the daemon takes, sized for a `browser_reply`
+ * carrying a screenshot; socket.io's 1 MB default would drop the connection.
+ * TWIN: `BROWSER_SCREENSHOT_MAX_BASE64` in `apps/ui/src/main/browser/browser-agent-wire.ts` stays below it.
+ */
+export const BROWSER_REPLY_MAX_BYTES = 16 * 1024 * 1024;
+
 /** One cookie an agent puts into a browser jar. */
 export interface BrowserCookieInput {
   name: string;

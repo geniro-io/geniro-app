@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import * as React from 'react';
 
+import { useReportOverlayOpen } from '../browser-occlusion';
 import { Button } from './button';
 import { pushEscapeLayer } from './escape-layers';
 import { MenuAnchorContext } from './menu-anchor';
@@ -60,6 +61,8 @@ export function Dialog({
   onCloseRef.current = onClose;
   const initialFocusRef = React.useRef(initialFocus);
   initialFocusRef.current = initialFocus;
+
+  useReportOverlayOpen(open);
 
   React.useEffect(() => {
     if (!open) {

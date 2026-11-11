@@ -10,9 +10,14 @@ import type {
   AppStorageUsage,
   StorageWorktree,
 } from '../shared/contracts';
+import { PARTITION_DIR_PREFIX } from './browser/browser-sessions';
 import { readRegistry, WORKTREES_DIR_NAME } from './worktree-service';
 
 const execFileAsync = promisify(execFile);
+
+const PARTITIONS_DIR_NAME = 'Partitions';
+
+export const BROWSER_DATA_LABEL = 'Browser data';
 
 /** A full walk of a dozen checkouts with their `node_modules` takes seconds. */
 const DU_TIMEOUT_MS = 120_000;
@@ -90,9 +95,21 @@ export async function readAppStorage(
   const worktreePaths = worktreeNames.map(
     (name) => `${WORKTREES_DIR_NAME}/${name}`,
   );
+  const partitionNames = names.includes(PARTITIONS_DIR_NAME)
+    ? readdirSafe(join(root, PARTITIONS_DIR_NAME)).filter(
+        (name) => name !== '.DS_Store',
+      )
+    : [];
+  const partitionPath = (name: string): string =>
+    `${PARTITIONS_DIR_NAME}/${name}`;
   const sizes = await measureWithDu(root, [
-    ...names.filter((name) => name !== WORKTREES_DIR_NAME),
+    ...names.filter(
+      (name) =>
+        name !== WORKTREES_DIR_NAME &&
+        (name !== PARTITIONS_DIR_NAME || partitionNames.length === 0),
+    ),
     ...worktreePaths,
+    ...partitionNames.map(partitionPath),
   ]);
 
   const registry = new Map(
@@ -120,13 +137,43 @@ export async function readAppStorage(
   const browserCache: AppStorageEntry[] = [];
   const appData: AppStorageEntry[] = [];
   for (const name of names) {
-    if (name === WORKTREES_DIR_NAME) {
+    if (
+      name === WORKTREES_DIR_NAME ||
+      (name === PARTITIONS_DIR_NAME && partitionNames.length > 0)
+    ) {
       continue;
     }
     const entry = { name, bytes: sizes.get(name) ?? 0 };
     (BROWSER_CACHE_DIRS.includes(name) ? browserCache : appData).push(entry);
   }
+  appData.push(...partitionEntries(partitionNames, partitionPath, sizes));
   return { worktrees, browserCache, appData };
+}
+
+/**
+ * The chats' browser jars (cookies, logins) are the user's data, not a cache,
+ * so they are one `Browser data` entry in the app data, apart from any other
+ * partition Electron keeps.
+ */
+function partitionEntries(
+  partitionNames: readonly string[],
+  partitionPath: (name: string) => string,
+  sizes: ReadonlyMap<string, number>,
+): AppStorageEntry[] {
+  const total = (names: readonly string[]): number =>
+    names.reduce((sum, name) => sum + (sizes.get(partitionPath(name)) ?? 0), 0);
+  const isBrowserJar = (name: string): boolean =>
+    name.startsWith(PARTITION_DIR_PREFIX);
+  const browser = partitionNames.filter(isBrowserJar);
+  const others = partitionNames.filter((name) => !isBrowserJar(name));
+  const entries: AppStorageEntry[] = [];
+  if (others.length > 0) {
+    entries.push({ name: PARTITIONS_DIR_NAME, bytes: total(others) });
+  }
+  if (browser.length > 0) {
+    entries.push({ name: BROWSER_DATA_LABEL, bytes: total(browser) });
+  }
+  return entries;
 }
 
 function readdirSafe(dir: string): string[] {

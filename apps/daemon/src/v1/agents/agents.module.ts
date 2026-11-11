@@ -6,6 +6,7 @@ import { Logger, Module } from '@nestjs/common';
 import { DesktopOnlyGuard } from '../../auth/desktop-only.guard';
 import { environment } from '../../environments';
 import { DAEMON_VERSION } from '../../utils/daemon-version';
+import { BrowserModule } from '../browser/browser.module';
 import { createTeeingSpawn } from '../diagnostics/utils/teeing-spawn';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { MemoryModule } from '../memory/memory.module';
@@ -61,6 +62,7 @@ import { ArtifactBroker } from './services/artifact.broker';
 import { ArtifactPageService } from './services/artifact-page.service';
 import { ArtifactStoreService } from './services/artifact-store.service';
 import { AttachmentStoreService } from './services/attachment-store.service';
+import { BrowserBroker } from './services/browser.broker';
 import { CacheResetService } from './services/cache-reset.service';
 import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
@@ -185,7 +187,7 @@ import { defaultSpawn } from './utils/spawn-cli';
  * consumer reaches an adapter through `AgentAdapterRegistry`.
  */
 @Module({
-  imports: [MemoryModule, KnowledgeModule, ProjectsModule],
+  imports: [BrowserModule, MemoryModule, KnowledgeModule, ProjectsModule],
   controllers: [
     AgentActivityController,
     ArtifactsController,
@@ -269,6 +271,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ComparisonBroker,
     MetricsBroker,
     GalleryBroker,
+    BrowserBroker,
     ArtifactBroker,
     ActionBroker,
     TeamProposalBroker,
@@ -644,6 +647,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ComparisonBroker,
     MetricsBroker,
     GalleryBroker,
+    BrowserBroker,
     // For show_gallery, which downloads the pictures a call names by URL.
     GalleryImageService,
     ArtifactBroker,

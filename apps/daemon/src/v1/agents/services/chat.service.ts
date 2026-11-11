@@ -22,6 +22,7 @@ import {
   type InterruptCause,
   interruptCauseClause,
 } from '../../../utils/stop-cause';
+import type { BrowserOp } from '../../browser/browser.types';
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
@@ -47,6 +48,7 @@ import {
   type AnalysedTeam,
   type AnalysisTurn,
   type AttachmentDataWire,
+  type BrowserHostCardInput,
   BUILDER_CHAT_ANALYSED_RUNS,
   CHAT_DEFAULT_APPROVAL,
   type ChatApprovalMode,
@@ -55,6 +57,7 @@ import {
   type DeferredCardResponder,
   type FollowUpBackgroundWork,
   type HistoryWindow,
+  HOST_BROWSER_HOST_CARD,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_PROJECT_INSTRUCTIONS_TOOL,
@@ -146,6 +149,7 @@ import {
 } from '../utils/host-analysis';
 import { isHostArtifactCall } from '../utils/host-artifact';
 import { isHostBoardCall } from '../utils/host-board';
+import { isHostBrowserCall } from '../utils/host-browser';
 import { isHostChartCall } from '../utils/host-chart';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
@@ -239,6 +243,12 @@ import { ApprovalRegistry, type PendingApproval } from './approval-registry';
 import { ArtifactBroker } from './artifact.broker';
 import { ArtifactStoreService } from './artifact-store.service';
 import { AttachmentStoreService } from './attachment-store.service';
+import {
+  BROWSER_SESSION_OPTION,
+  BROWSER_SESSION_VERDICT_OPTION,
+  BrowserBroker,
+  type BrowserSink,
+} from './browser.broker';
 import { ChartBroker } from './chart.broker';
 import { CliSessionsService } from './cli-sessions.service';
 import { ComparisonBroker } from './comparison.broker';
@@ -906,6 +916,8 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     @Optional() private readonly projectChats?: ProjectChatBroker,
     /** Messages from other threads, drained at a turn's start. Optional for the positional specs. */
     @Optional() private readonly threadInbox?: ThreadInboxService,
+    /** The in-app browser's tools, installed per turn. Optional for the positional specs. */
+    @Optional() private readonly browser?: BrowserBroker,
   ) {}
 
   /**
@@ -1569,9 +1581,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       question: false,
       deferred: true,
       standing: true,
-      respond: (allow, answer) => {
-        // `true` at once, for the reason `trackDeferredCard` gives.
-        respond(allow, answer);
+      respond: (allow, answer, optionId) => {
+        // `true` at once, for the reason `trackDeferredCard` gives. Arity
+        // preserved, as `ApprovalRegistry.resolve` is: only a verdict naming
+        // an option carries a third argument.
+        if (optionId === undefined) {
+          respond(allow, answer);
+        } else {
+          respond(allow, answer, optionId);
+        }
         return true;
       },
     });
@@ -1600,6 +1618,28 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     answer?: string,
     outcome?: TeamProposalOutcome,
   ): Promise<void> {
+    await this.recordOwnedCardVerdict(runId, requestId, allow, {
+      ...(answer === undefined ? {} : { answer }),
+      ...(outcome === undefined ? {} : { outcome }),
+    });
+    if (this.mustHoldVerdict(runId)) {
+      this.holdVerdict(runId, message);
+      return;
+    }
+    await this.sendOwnedVerdict(runId, message);
+  }
+
+  /**
+   * Write the `approval_verdict` row of an owned card. A failure is logged and
+   * swallowed: the row is the record of what the user chose, but it must not
+   * stop the answer reaching the agent, which is what they pressed for.
+   */
+  private async recordOwnedCardVerdict(
+    runId: string,
+    requestId: string,
+    allow: boolean,
+    fields: Record<string, unknown>,
+  ): Promise<void> {
     try {
       await this.persist(
         this.em.fork(),
@@ -1607,29 +1647,122 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         await this.seqs.reserve(runId),
         'approval_verdict',
         null,
-        {
-          id: requestId,
-          allow,
-          ...(answer === undefined ? {} : { answer }),
-          ...(outcome === undefined ? {} : { outcome }),
-        },
+        { id: requestId, allow, ...fields },
       );
       if (!this.registry.has(runId)) {
         this.announceAwaiting(runId);
       }
     } catch (err) {
-      // The verdict row is the record of what the user chose, so a failure here
-      // is worth a log — but it must not stop the answer reaching the agent,
-      // which is the thing they actually pressed for.
       this.logger.error(
         `run ${runId} owned-card verdict write failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    if (this.mustHoldVerdict(runId)) {
-      this.holdVerdict(runId, message);
-      return;
-    }
-    await this.sendOwnedVerdict(runId, message);
+  }
+
+  /**
+   * The chat's browser tools: the name its card shows, whether the run lets
+   * every host through unasked (the approval mode read live, since it can move
+   * mid-turn and between turns), and the new-host card.
+   */
+  private browserSinkOf(
+    broker: BrowserBroker,
+    runId: string,
+    agentName: string,
+  ): BrowserSink {
+    return {
+      memberName: agentName,
+      approvesEveryHost: () => this.runPosture.get(runId) === 'auto',
+      askHost: async (ask) => {
+        const standing = this.approvals
+          .listByRun(runId)
+          .some(
+            (entry) =>
+              entry.toolName === HOST_BROWSER_HOST_CARD &&
+              (entry.input as BrowserHostCardInput).host === ask.host,
+          );
+        if (standing) {
+          return { status: 'asked' };
+        }
+        const requestId = this.approvals.mintCardId('browser-host');
+        const input: BrowserHostCardInput = {
+          host: ask.host,
+          url: ask.url,
+          memberName: agentName,
+        };
+        try {
+          await this.raiseOwnedCard(
+            runId,
+            requestId,
+            { toolName: HOST_BROWSER_HOST_CARD, input },
+            (allow, _answer, optionId) => {
+              void this.settleBrowserHostCard(broker, runId, requestId, {
+                allow,
+                optionId,
+                host: ask.host,
+                memberName: agentName,
+                op: ask.op,
+              });
+            },
+          );
+        } catch (err) {
+          if (
+            err instanceof ConflictException &&
+            err.errorCode === 'RUN_ARCHIVED'
+          ) {
+            return {
+              status: 'unavailable',
+              reason: 'this chat is archived, so the user cannot be asked',
+            };
+          }
+          throw err;
+        }
+        return { status: 'asked' };
+      },
+    };
+  }
+
+  /**
+   * The user answered a new-host card: the verdict row first, then the broker
+   * approves, opens the page and wakes the agent. Nothing is sent as a user
+   * message — the wake is geniro's own, on its own hold (`HostWakeChatDelivery`).
+   */
+  private async settleBrowserHostCard(
+    broker: BrowserBroker,
+    runId: string,
+    requestId: string,
+    answered: {
+      allow: boolean;
+      optionId: string | undefined;
+      host: string;
+      memberName: string;
+      op: BrowserOp;
+    },
+  ): Promise<void> {
+    const forSession =
+      answered.allow && answered.optionId === BROWSER_SESSION_OPTION;
+    await this.recordOwnedCardVerdict(runId, requestId, answered.allow, {
+      ...(forSession
+        ? {
+            option: BROWSER_SESSION_VERDICT_OPTION,
+          }
+        : {}),
+    });
+    await broker.settleHostCard(
+      {
+        requestId,
+        owner: {
+          runId,
+          memberId: SINGLE_AGENT_NODE,
+          conversationId: null,
+          caller: SINGLE_AGENT_NODE,
+          target: 'chat',
+        },
+        memberName: answered.memberName,
+        host: answered.host,
+        op: answered.op,
+      },
+      { allow: answered.allow, optionId: answered.optionId },
+    );
   }
 
   /** Be told each time a chat's turn has ended; returns the unsubscribe. */
@@ -1816,11 +1949,19 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       const cardId = standingProposalCardId(
         (await this.runDao.getById(runId, em))?.pendingTeamProposal ?? null,
       );
-      if (cardId === null) {
-        return;
+      if (cardId !== null) {
+        await this.retireOwnedCard(runId, cardId, HOST_PROPOSE_TEAM_TOOL);
+        await this.runDao.setPendingTeamProposal(runId, null, em);
       }
-      await this.retireOwnedCard(runId, cardId, HOST_PROPOSE_TEAM_TOOL);
-      await this.runDao.setPendingTeamProposal(runId, null, em);
+      for (const entry of this.approvals.listByRun(runId)) {
+        if (entry.toolName === HOST_BROWSER_HOST_CARD) {
+          await this.retireOwnedCard(
+            runId,
+            entry.requestId,
+            HOST_BROWSER_HOST_CARD,
+          );
+        }
+      }
     } catch (err) {
       this.logger.error(
         `run ${runId} could not close its standing card on archive: ${err instanceof Error ? err.message : String(err)}`,
@@ -5977,6 +6118,10 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         isHostMemoryCall(hostServerName, toolName) ||
         // The knowledge store, on the same terms: `isHostKnowledgeCall`.
         isHostKnowledgeCall(hostServerName, toolName) ||
+        // The browser tools, in every mode: calling one is not the decision.
+        // The first open of each new host outside `auto` is put to the user on
+        // a card of its own (`BrowserBroker`).
+        isHostBrowserCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;
@@ -6985,7 +7130,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           })
         : null;
       if (mcpEndpoint) {
-        this.keepHostTools(runId);
+        this.keepHostTools(runId, adapter.getConfig().identity.displayName);
         dropKeptOnFailedStart = () => this.dropKeptHostTools(runId);
       }
       // A monitor's command runs in no sandbox of its own, so the tools are
@@ -8571,7 +8716,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * past it cannot close over anything of it: each row is written on a fork of
    * its own.
    */
-  private keepHostTools(runId: string): void {
+  private keepHostTools(runId: string, agentName: string): void {
     this.dropKeptHostTools(runId);
     /**
      * geniro's own findings channel: the tool hands over an already-parsed
@@ -8840,6 +8985,15 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       this.galleries.register(runId, SINGLE_AGENT_NODE, drawGallery),
       this.artifacts.register(runId, SINGLE_AGENT_NODE, publishArtifact),
       this.notices.register(runId, SINGLE_AGENT_NODE, notifyUser),
+      ...(this.browser === undefined
+        ? []
+        : [
+            this.browser.register(
+              runId,
+              SINGLE_AGENT_NODE,
+              this.browserSinkOf(this.browser, runId, agentName),
+            ),
+          ]),
       this.actionSinks.register(runId, SINGLE_AGENT_NODE, {
         publish: (input) => this.actionPublisher.publish(actionContext, input),
         remove: (actionId) =>

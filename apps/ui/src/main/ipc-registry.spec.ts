@@ -116,7 +116,27 @@ const invokeChannelKeys = Object.keys(IPC).filter(
 // remote HTTP call has no WebContents behind it, so neither shape can be
 // served that way. Asserted by name per the task: this is the actual
 // security-relevant fact under test, not a restatement of the registry.
+const BROWSER_CHANNEL_KEYS: (keyof typeof IPC)[] = [
+  'browserState',
+  'browserOpenTab',
+  'browserNavigate',
+  'browserHistory',
+  'browserCloseTab',
+  'browserSelectTab',
+  'browserSetBounds',
+  'browserPopOut',
+  'browserDock',
+  'browserTabAction',
+  'browserContinueInsecure',
+  'browserAnswerAuth',
+  'browserCapture',
+  'browserForgetRun',
+  'browserStopAgent',
+  'browserAgentRequest',
+];
+
 const DENIED_CHANNEL_KEYS: (keyof typeof IPC)[] = [
+  ...BROWSER_CHANNEL_KEYS,
   'getDaemonHandle',
   'pickProjectFolder',
   'pickAgentBinary',
@@ -203,6 +223,17 @@ describe('the registry registerIpc builds', () => {
       const entry = registry.get(IPC[key]);
       const expected = denied.has(IPC[key]) ? 'deny' : 'allow';
       expect(entry?.policy.remote).toBe(expected);
+    }
+  });
+
+  it('registers every browser channel denyRemotely', () => {
+    const browserKeys = invokeChannelKeys.filter((key) =>
+      key.startsWith('browser'),
+    );
+
+    expect([...browserKeys].sort()).toEqual([...BROWSER_CHANNEL_KEYS].sort());
+    for (const key of browserKeys) {
+      expect(registry.get(IPC[key])?.policy.remote).toBe('deny');
     }
   });
 

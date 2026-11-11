@@ -15,6 +15,7 @@ import { type OptionArity, OptionList } from '../components/ui/option-list';
 import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
 import { plainMarkdownText } from './brief-text';
+import { BrowserHostCard, readBrowserHostRequest } from './browser-host-card';
 import {
   DiffView,
   editDiffOf,
@@ -22,6 +23,7 @@ import {
   UnifiedDiff,
 } from './diff-view';
 import {
+  BROWSER_HOST_CARD,
   isProposedChange,
   isTeamProposalTool,
   namesGeniroGallery,
@@ -1533,6 +1535,22 @@ export function ApprovalCard({
         plan={plan}
         verdict={verdict}
         note={answer}
+        expired={expired}
+        onRespond={onRespond}
+      />
+    );
+  }
+  // An agent's first open of a new host in the browser has a card of its own;
+  // an input missing any of its three facts falls through to the permission
+  // body, which is still answerable.
+  const browserHost =
+    toolName === BROWSER_HOST_CARD ? readBrowserHostRequest(input) : null;
+  if (browserHost !== null) {
+    return (
+      <BrowserHostCard
+        request={browserHost}
+        verdict={verdict}
+        verdictOption={verdictOption}
         expired={expired}
         onRespond={onRespond}
       />

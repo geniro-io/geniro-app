@@ -30,9 +30,11 @@ import type {
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import {
   type AttachmentWire,
+  type BrowserHostCardInput,
   type ChatListScope,
   type ChatTotalsWire,
   type FollowUpBackgroundWork,
+  HOST_BROWSER_HOST_CARD,
   type HostArtifact,
   type HostArtifactOutcome,
   type HostArtifactRow,
@@ -66,6 +68,12 @@ import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { ArtifactBroker } from '../../agents/services/artifact.broker';
 import { ArtifactStoreService } from '../../agents/services/artifact-store.service';
 import { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import {
+  BROWSER_SESSION_OPTION,
+  BROWSER_SESSION_VERDICT_OPTION,
+  BrowserBroker,
+  type BrowserSink,
+} from '../../agents/services/browser.broker';
 import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
@@ -121,6 +129,7 @@ import {
 } from '../../agents/utils/event-to-item';
 import { firstTurnWindow } from '../../agents/utils/first-turn-window';
 import { subagentsWouldBeCancelled } from '../../agents/utils/follow-up-background-work';
+import { isHostBrowserCall } from '../../agents/utils/host-browser';
 import { isHostKnowledgeCall } from '../../agents/utils/host-knowledge';
 import { isHostMemoryCall } from '../../agents/utils/host-memory';
 import { hostMcpServerName } from '../../agents/utils/host-question';
@@ -844,6 +853,8 @@ export class TeamExecutorService
     @Optional() private readonly health?: TeamHealthService,
     /** Messages from other threads, drained at a lead's turn. Optional on `artifacts`' terms. */
     @Optional() private readonly threadInbox?: ThreadInboxService,
+    /** The in-app browser's tools, optional on `artifacts`' terms. */
+    @Optional() private readonly browser?: BrowserBroker,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -880,6 +891,9 @@ export class TeamExecutorService
 
   /** Each run's `record_outcome` sinks, on the same terms. */
   private readonly runOutcomeDisposers = new Map<string, (() => void)[]>();
+
+  /** Each run's browser sinks, on the same terms. */
+  private readonly browserDisposers = new Map<string, (() => void)[]>();
 
   /**
    * How a monitor's output reaches one of a run's conversations — installed by
@@ -2121,6 +2135,7 @@ export class TeamExecutorService
       this.monitorDisposers,
       this.teamNoteDisposers,
       this.runOutcomeDisposers,
+      this.browserDisposers,
     ]) {
       for (const dispose of disposers.get(runId) ?? []) {
         dispose();
@@ -2129,6 +2144,9 @@ export class TeamExecutorService
     }
     this.monitorWakers.delete(runId);
     this.wakerStopped.delete(runId);
+    // A browser card is deferred, so no member's settle retires it; the run's
+    // destruction does, with nothing written for a transcript that is gone.
+    this.approvals.sweepDeferred(runId);
     this.teamNotes?.forgetRun(runId);
     this.runOutcomes?.forgetRun(runId);
     this.stages?.forget(runId);
@@ -2405,6 +2423,156 @@ export class TeamExecutorService
     }
     this.teamNoteDisposers.set(runId, disposers);
     void broker.prime(runId);
+  }
+
+  /**
+   * Give each member of this pass the browser tools, on
+   * {@link registerArtifactPublishers}' terms. A member's tabs are the run's, so
+   * they share one cookie jar.
+   *
+   * The new-host card is raised in the shared {@link ApprovalRegistry} for that
+   * member, deferred and standing: it outlives the member's turn, the user
+   * answers it whenever, and the verdict reaches the member as a host wake
+   * (`HostWakeGraphDelivery`), never as a message of the user's.
+   */
+  private registerBrowserSinks(
+    runId: string,
+    hostToolNodes: readonly TeamMember[],
+    approvalOf: (node: TeamMember) => string,
+    persistItem: (
+      memberId: string | null,
+      kind: ItemKind,
+      role: string | null,
+      payload: unknown,
+    ) => Promise<ItemWire>,
+  ): void {
+    const broker = this.browser;
+    if (broker === undefined) {
+      return;
+    }
+    for (const dispose of this.browserDisposers.get(runId) ?? []) {
+      dispose();
+    }
+    this.browserDisposers.set(
+      runId,
+      hostToolNodes.map((node) => {
+        // A call may land on any pool member, so every one must be unattended
+        // for the member to skip the card.
+        const members = Array.from({ length: poolSize(node) }, (_, index) =>
+          index === 0 ? node : poolMemberNode(node, index + 1),
+        );
+        const sink: BrowserSink = {
+          memberName: node.name ?? node.id,
+          approvesEveryHost: () =>
+            members.every(
+              (member) => member !== null && approvalOf(member) === 'auto',
+            ),
+          askHost: (ask) =>
+            this.raiseBrowserHostCard(broker, runId, node, persistItem, ask),
+        };
+        return broker.register(runId, node.id, sink);
+      }),
+    );
+  }
+
+  private async raiseBrowserHostCard(
+    broker: BrowserBroker,
+    runId: string,
+    node: TeamMember,
+    persistItem: (
+      memberId: string | null,
+      kind: ItemKind,
+      role: string | null,
+      payload: unknown,
+    ) => Promise<ItemWire>,
+    ask: Parameters<BrowserSink['askHost']>[0],
+  ): ReturnType<BrowserSink['askHost']> {
+    const memberName = node.name ?? node.id;
+    const standing = this.approvals
+      .listByRun(runId)
+      .some(
+        (entry) =>
+          entry.toolName === HOST_BROWSER_HOST_CARD &&
+          entry.memberId === node.id &&
+          (entry.input as BrowserHostCardInput).host === ask.host,
+      );
+    if (standing) {
+      return { status: 'asked' };
+    }
+    const found = await this.runDao.getById(runId, this.em.fork());
+    if (found === null || found.archivedAt !== null) {
+      return {
+        status: 'unavailable',
+        reason: 'this thread is archived, so the user cannot be asked',
+      };
+    }
+    const requestId = this.approvals.mintCardId('browser-host');
+    const input: BrowserHostCardInput = {
+      host: ask.host,
+      url: ask.url,
+      memberName,
+    };
+    await persistItem(node.id, 'approval_request', null, {
+      id: requestId,
+      nodeId: node.id,
+      toolName: HOST_BROWSER_HOST_CARD,
+      input,
+    });
+    const answered = async (
+      allow: boolean,
+      optionId: string | undefined,
+    ): Promise<void> => {
+      const forSession = allow && optionId === BROWSER_SESSION_OPTION;
+      try {
+        await persistItem(node.id, 'approval_verdict', null, {
+          id: requestId,
+          nodeId: node.id,
+          allow,
+          ...(forSession
+            ? {
+                option: BROWSER_SESSION_VERDICT_OPTION,
+              }
+            : {}),
+        });
+      } catch (err) {
+        this.logger.error(
+          `team run ${runId} browser card verdict write failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      this.announceAwaiting(runId);
+      await broker.settleHostCard(
+        {
+          requestId,
+          owner: {
+            runId,
+            memberId: node.id,
+            conversationId: null,
+            caller: callerKey(node.id, null),
+            target: 'team',
+          },
+          memberName,
+          host: ask.host,
+          op: ask.op,
+        },
+        { allow, optionId },
+      );
+    };
+    this.approvals.track({
+      runId,
+      memberId: node.id,
+      requestId,
+      toolName: HOST_BROWSER_HOST_CARD,
+      input,
+      question: false,
+      deferred: true,
+      standing: true,
+      respond: (allow, _answer, optionId) => {
+        void answered(allow, optionId);
+        return true;
+      },
+    });
+    this.announceAwaiting(runId);
+    return { status: 'asked' };
   }
 
   /**
@@ -5198,7 +5366,8 @@ export class TeamExecutorService
             if (
               !isQuestion &&
               (isHostMemoryCall(hostMcpServerName(runId), event.toolName) ||
-                isHostKnowledgeCall(hostMcpServerName(runId), event.toolName))
+                isHostKnowledgeCall(hostMcpServerName(runId), event.toolName) ||
+                isHostBrowserCall(hostMcpServerName(runId), event.toolName))
             ) {
               // The shared memory and the knowledge store, at every approval
               // level, as in a chat: their limits live in their services — see
@@ -5556,7 +5725,8 @@ export class TeamExecutorService
             request.toolName,
           )) ||
         isHostMemoryCall(hostMcpServerName(runId), request.toolName) ||
-        isHostKnowledgeCall(hostMcpServerName(runId), request.toolName)
+        isHostKnowledgeCall(hostMcpServerName(runId), request.toolName) ||
+        isHostBrowserCall(hostMcpServerName(runId), request.toolName)
           ? true
           : null;
       // One registry key per CONVERSATION, never per member: a member
@@ -7859,6 +8029,12 @@ export class TeamExecutorService
     );
     this.registerTeamNoteSinks(runId, hostToolNodes, nodes, persistItem);
     this.registerRunOutcomeSinks(runId, hostToolNodes, persistItem);
+    this.registerBrowserSinks(
+      runId,
+      hostToolNodes,
+      (node) => resolveApproval(node).mode,
+      persistItem,
+    );
     /**
      * Open a turn of a member's OWN conversation on the write chain — what a
      * wake (`wakeNode`) and a monitor's output share: counted live from now

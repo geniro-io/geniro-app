@@ -2,6 +2,8 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { BrowserBridgeService } from '../../browser/services/browser-bridge.service';
+import { BrowserHostApprovals } from '../../browser/services/browser-host-approvals.service';
 import { CallContextDao } from '../dao/call-context.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -84,6 +86,9 @@ export class RunTeardownService {
     private readonly threadInbox: ThreadInboxService,
     /** Optional for the positional specs. */
     @Optional() private readonly monitors?: MonitorRegistry,
+    /** The run's in-app browser requests and approved hosts. Optional for the positional specs. */
+    @Optional() private readonly browserBridge?: BrowserBridgeService,
+    @Optional() private readonly browserApprovals?: BrowserHostApprovals,
   ) {}
 
   /**
@@ -94,12 +99,15 @@ export class RunTeardownService {
    * agents started to outlive a turn: a detached dev server, a watcher, a
    * browser, which closing the CLI does not reach. The second half runs in the
    * background, so the caller's route never waits out its grace period. The
-   * command actions the user ran in it, and its agents' monitors, are ended
-   * here too.
+   * command actions the user ran in it, its agents' monitors and the browser
+   * requests still waiting on the Mac's window are ended here too, and the hosts
+   * the user allowed in its browser are forgotten.
    */
   endProcesses(runId: string): void {
     this.commands.abortRun(runId);
     this.monitors?.abortRun(runId);
+    this.browserBridge?.rejectRun(runId, 'The chat was archived or deleted.');
+    this.browserApprovals?.forget(runId);
     this.sessions.closeRun(runId);
     this.reaper.reapInBackground(runId);
   }

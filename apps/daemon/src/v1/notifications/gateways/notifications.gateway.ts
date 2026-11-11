@@ -28,6 +28,8 @@ import {
   extractBooleanField,
   extractStringField,
 } from '../../agents/utils/ws-payload';
+import { BROWSER_REPLY_MAX_BYTES } from '../../browser/browser.types';
+import { BrowserBridgeService } from '../../browser/services/browser-bridge.service';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { KnowledgeEventBus } from '../../knowledge/services/knowledge-events.bus';
 import { MemoryEventBus } from '../../memory/services/memory-events.bus';
@@ -128,7 +130,11 @@ const DESKTOP_ROOM = 'desktop';
  * late replays the history over REST first, then attaches here for live items,
  * de-duplicating on `seq`.
  */
-@WebSocketGateway({ path: '/ws', cors: { origin: '*' } })
+@WebSocketGateway({
+  path: '/ws',
+  cors: { origin: '*' },
+  maxHttpBufferSize: BROWSER_REPLY_MAX_BYTES,
+})
 export class NotificationsGateway
   implements
     OnGatewayConnection,
@@ -177,9 +183,16 @@ export class NotificationsGateway
     private readonly projects: ProjectEventBus,
     private readonly knowledge: KnowledgeEventBus,
     private readonly resourceAlerts: ResourceAlertEventBus,
+    private readonly browserBridge: BrowserBridgeService,
   ) {}
 
   afterInit(server: Server): void {
+    // A browser request goes to the one socket that registered as the browser's
+    // host and never to DESKTOP_ROOM: it acts with the Mac's own browser, and a
+    // second window would run it twice.
+    this.browserBridge.attachEmitter((socketId, event, payload) => {
+      server.to(socketId).emit(event, payload);
+    });
     // Isolate per-emit failures: a single throw from `emit` (or a bus error)
     // must not terminate this subscription, or ALL live streaming would die
     // silently for the rest of the daemon's life.
@@ -521,6 +534,35 @@ export class NotificationsGateway
 
   handleDisconnect(client: Socket): void {
     this.presence.closed(client.id);
+    this.browserBridge.unregister(client.id);
+  }
+
+  /**
+   * The desktop window offers to host the in-app browser. Refused from a paired
+   * device's socket: the browser is the Mac's.
+   */
+  @SubscribeMessage('browser_host')
+  browserHost(@ConnectedSocket() client: Socket): void {
+    if (cameViaRemote(client.handshake.headers ?? {})) {
+      this.logger.debug('refused browser_host from a remote socket');
+      return;
+    }
+    this.browserBridge.register(client.id);
+  }
+
+  /**
+   * An answer to a `browser_request`.
+   *
+   * TWIN PARSER: the renderer emits this envelope from
+   * `apps/ui/src/renderer/daemon-client.ts`; the shape is `BrowserReplySchema`
+   * (`v1/browser/browser.types.ts`).
+   */
+  @SubscribeMessage('browser_reply')
+  browserReply(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: unknown,
+  ): void {
+    this.browserBridge.reply(client.id, data);
   }
 
   @SubscribeMessage('join')

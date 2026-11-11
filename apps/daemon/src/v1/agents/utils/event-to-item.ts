@@ -1,5 +1,6 @@
 import type { ItemKind, RunStatus } from '../../runs/runs.types';
 import type { AgentEvent, ApprovalOption } from '../adapters/adapter.types';
+import { carriesBrowserCookies, maskBrowserCookies } from './host-browser';
 
 /**
  * Shared event→transcript mapping used by both the single-agent chat turn and
@@ -197,7 +198,10 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
         payload: {
           id: event.id,
           name: event.name,
-          input: event.input,
+          // A cookie's value is the agent's and the user's alone: never a row.
+          input: carriesBrowserCookies(event.name)
+            ? maskBrowserCookies(event.input)
+            : event.input,
           ...(event.kind === undefined ? {} : { toolKind: event.kind }),
           // TWIN PARSER, same contract as `toolKind` above:
           // `apps/ui/src/renderer/chats/tool-render.ts`'s `toolLocations` reads
@@ -387,7 +391,9 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
         payload: {
           id: event.id,
           toolName: event.toolName,
-          input: event.input,
+          input: carriesBrowserCookies(event.toolName)
+            ? maskBrowserCookies(event.input)
+            : event.input,
           // Persisted for transcript observability (correlates with the
           // daemon's flag-only drift warning); routing keys on the tool name,
           // never on this flag.

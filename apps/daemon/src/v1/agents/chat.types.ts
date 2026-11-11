@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { BrowserOutcome } from '../browser/browser.types';
 import type { ProjectInstructionBlock } from '../projects/projects.types';
 import type { Item } from '../runs/entity/item.entity';
 import type { Run } from '../runs/entity/run.entity';
@@ -426,7 +427,11 @@ export interface DeferredCard {
  * Called once with the user's verdict on a {@link DeferredCard}; `answer` is
  * the note they typed, on either button.
  */
-export type DeferredCardResponder = (allow: boolean, answer?: string) => void;
+export type DeferredCardResponder = (
+  allow: boolean,
+  answer?: string,
+  optionId?: string,
+) => void;
 
 /**
  * How a `propose_team` card was answered, as the agent is told it; `note`
@@ -2090,6 +2095,70 @@ export interface HostGallery {
  */
 export type HostGalleryOutcome =
   | { status: 'drawn'; images: number }
+  | { status: 'unavailable'; reason: string };
+
+/**
+ * geniro's own in-app browser tools: one const per tool, so the permission gate
+ * (`isHostBrowserCall`), the cookie masking in `mapEventToItem` and the MCP
+ * tools share one spelling.
+ */
+export const HOST_BROWSER_OPEN_TOOL = 'browser_open';
+export const HOST_BROWSER_NAVIGATE_TOOL = 'browser_navigate';
+export const HOST_BROWSER_SNAPSHOT_TOOL = 'browser_snapshot';
+export const HOST_BROWSER_CLICK_TOOL = 'browser_click';
+export const HOST_BROWSER_TYPE_TOOL = 'browser_type';
+export const HOST_BROWSER_PRESS_TOOL = 'browser_press';
+export const HOST_BROWSER_SELECT_TOOL = 'browser_select';
+export const HOST_BROWSER_SCROLL_TOOL = 'browser_scroll';
+export const HOST_BROWSER_SCREENSHOT_TOOL = 'browser_screenshot';
+export const HOST_BROWSER_CONSOLE_TOOL = 'browser_console';
+export const HOST_BROWSER_EVALUATE_TOOL = 'browser_evaluate';
+export const HOST_BROWSER_TABS_TOOL = 'browser_tabs';
+export const HOST_BROWSER_CLOSE_TOOL = 'browser_close';
+export const HOST_BROWSER_SET_COOKIES_TOOL = 'browser_set_cookies';
+export const HOST_BROWSER_GET_COOKIES_TOOL = 'browser_get_cookies';
+export const HOST_BROWSER_CLEAR_COOKIES_TOOL = 'browser_clear_cookies';
+
+export const HOST_BROWSER_TOOLS = [
+  HOST_BROWSER_OPEN_TOOL,
+  HOST_BROWSER_NAVIGATE_TOOL,
+  HOST_BROWSER_SNAPSHOT_TOOL,
+  HOST_BROWSER_CLICK_TOOL,
+  HOST_BROWSER_TYPE_TOOL,
+  HOST_BROWSER_PRESS_TOOL,
+  HOST_BROWSER_SELECT_TOOL,
+  HOST_BROWSER_SCROLL_TOOL,
+  HOST_BROWSER_SCREENSHOT_TOOL,
+  HOST_BROWSER_CONSOLE_TOOL,
+  HOST_BROWSER_EVALUATE_TOOL,
+  HOST_BROWSER_TABS_TOOL,
+  HOST_BROWSER_CLOSE_TOOL,
+  HOST_BROWSER_SET_COOKIES_TOOL,
+  HOST_BROWSER_GET_COOKIES_TOOL,
+  HOST_BROWSER_CLEAR_COOKIES_TOOL,
+] as const;
+
+/**
+ * The `approval_request` row's `toolName` for the first open of a new host
+ * outside `auto` (`BrowserHostCardInput`). A deferred card that stands across
+ * turns: the tool answers at once and the verdict wakes the agent.
+ *
+ * TWIN PARSER: the renderer's `standsAcrossTurns`
+ * (`apps/ui/src/renderer/chats/geniro-tool.ts`) and its card for this tool.
+ */
+export const HOST_BROWSER_HOST_CARD = 'browser_host';
+
+/** What the new-host card's row carries as `input`. */
+export interface BrowserHostCardInput {
+  host: string;
+  url: string;
+  memberName: string;
+}
+
+/** How one browser operation ended, as a browser tool words it. */
+export type BrowserRunOutcome =
+  | BrowserOutcome
+  | { status: 'awaiting_approval'; host: string }
   | { status: 'unavailable'; reason: string };
 
 /**

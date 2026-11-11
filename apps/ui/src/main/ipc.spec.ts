@@ -773,3 +773,71 @@ describe('registerIpc listWorktrees', () => {
     expect(mocks.readLinkedWorktrees).not.toHaveBeenCalled();
   });
 });
+
+describe('registerIpc browser channels', () => {
+  const setBounds = vi.fn();
+  const openTab = vi.fn(async () => 't1');
+  const noteUserAddress = vi.fn();
+  const browser = { setBounds, openTab, noteUserAddress };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    registerIpc(
+      {} as unknown as DaemonSupervisor,
+      {} as UpdateService,
+      noTerminals,
+      undefined,
+      undefined,
+      () => browser as never,
+    );
+  });
+
+  it('refuses bounds that are negative or not finite before the service hears of them', () => {
+    expect(() =>
+      handler(IPC.browserSetBounds)({}, 'run-1', {
+        x: -1,
+        y: 0,
+        width: 10,
+        height: 10,
+      }),
+    ).toThrow(ZodError);
+    expect(() =>
+      handler(IPC.browserSetBounds)({}, 'run-1', {
+        x: 0,
+        y: 0,
+        width: Number.POSITIVE_INFINITY,
+        height: 10,
+      }),
+    ).toThrow(ZodError);
+    expect(setBounds).not.toHaveBeenCalled();
+  });
+
+  it('passes valid bounds, and null to hide, through to the service', () => {
+    const bounds = { x: 1, y: 2, width: 300, height: 200 };
+
+    handler(IPC.browserSetBounds)({}, 'run-1', bounds);
+    handler(IPC.browserSetBounds)({}, 'run-1', null);
+
+    expect(setBounds).toHaveBeenNthCalledWith(1, 'run-1', bounds);
+    expect(setBounds).toHaveBeenNthCalledWith(2, 'run-1', null);
+  });
+
+  it('opens a typed address as the user, resolving bare words and hosts', async () => {
+    await handler(IPC.browserOpenTab)({}, 'run-1', 'localhost:3000');
+
+    expect(openTab).toHaveBeenCalledWith('run-1', 'http://localhost:3000', {
+      openedBy: null,
+    });
+    expect(noteUserAddress).toHaveBeenCalledWith(
+      'run-1',
+      'http://localhost:3000',
+    );
+  });
+
+  it('refuses an address over 8192 characters', () => {
+    expect(() =>
+      handler(IPC.browserNavigate)({}, 'run-1', 't1', 'a'.repeat(8193)),
+    ).toThrow(ZodError);
+  });
+});

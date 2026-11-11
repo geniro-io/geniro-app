@@ -203,4 +203,30 @@ describe('EntryCard', () => {
       }),
     ).toContain('review-changes');
   });
+
+  it('draws a browser screenshot card', () => {
+    expect(
+      draw({
+        ...base,
+        type: 'browser-screenshot',
+        pair: {
+          call: {
+            id: 'c1',
+            runId: 'run-1',
+            memberId: null,
+            seq: 1,
+            kind: 'tool_call',
+            role: null,
+            payload: {
+              id: 't1',
+              name: 'browser_screenshot',
+              input: { tab: 't4' },
+            },
+            createdAt: base.createdAt,
+          },
+          result: null,
+        },
+      }),
+    ).toContain('Screenshot of t4');
+  });
 });

@@ -796,6 +796,35 @@ describe('Storage', () => {
     expect(container.textContent).toContain('an agent is working');
   });
 
+  it('describes the browser data entry under the window data row', async () => {
+    const api = {
+      getStorageUsage: vi.fn(() => Promise.resolve(usage())),
+      getStorageJob: vi.fn(() => Promise.resolve({ job: null })),
+      cleanStorage: vi.fn(),
+    };
+    getAppStorage.mockResolvedValue({
+      ...APP,
+      appData: [
+        { name: 'Browser data', bytes: 3 * 1024 ** 2 },
+        { name: 'Local Storage', bytes: 1024 },
+      ],
+    });
+    await act(async () => root.render(<Storage api={api} remote={false} />));
+    await flush();
+    await unfold('Window data');
+
+    const details = rowNamed('Window data').textContent ?? '';
+    expect(details).toContain('Browser data');
+    expect(details).toContain(
+      'Cookies and site data of each chat’s in-app browser, cleared when you archive or delete the chat.',
+    );
+    expect(
+      [...rowNamed('Window data').querySelectorAll('li')].find((li) =>
+        li.textContent?.startsWith('Local Storage'),
+      )?.textContent,
+    ).toBe('Local Storage1.0 KB');
+  });
+
   it('reads nothing and deletes nothing from a paired phone', async () => {
     const api = {
       getStorageUsage: vi.fn(() => Promise.resolve(usage())),

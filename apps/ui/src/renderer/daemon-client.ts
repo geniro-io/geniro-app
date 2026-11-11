@@ -27,6 +27,11 @@ import {
 } from './chats/run-outcome-payload';
 import { readStageActor } from './chats/stage-change-payload';
 import { daemonBaseUrl } from './daemon-api';
+import { isRemoteRuntime } from './remote/remote-session';
+
+/** The refusal an agent reads when Electron main could not run its browser operation. */
+const BROWSER_WINDOW_FAILED =
+  "Geniro's window could not run that browser operation";
 
 /** The three statuses a task row may carry; anything else reads as unknown. */
 const TASK_STATUSES = new Set(['pending', 'in_progress', 'completed']);
@@ -1352,6 +1357,13 @@ export class DaemonClient {
    */
   private readonly joinedRunIds = new Map<string, number>();
   private hasConnected = false;
+  /**
+   * The runs this client has already had the window forget the browser of
+   * because they were archived, so a later `runs_changed` naming the same
+   * archived row (a rename, a read) does not close its tabs again; an unarchive
+   * clears it.
+   */
+  private readonly browserForgottenRunIds = new Set<string>();
   /** Whether the debug room should be re-joined after a reconnect. */
   private debugStreaming = false;
 
@@ -1393,6 +1405,11 @@ export class DaemonClient {
       // after a daemon restart and look like "nothing is happening".
       if (this.debugStreaming) {
         socket.emit('debug_subscribe', { on: true });
+      }
+      // Every connect, because the daemon keeps one registered socket and a new
+      // one has to claim it again; a paired phone has no browser to offer.
+      if (!isRemoteRuntime()) {
+        socket.emit('browser_host');
       }
       this.events.onOpen?.();
       if (isReconnect) {
@@ -1462,11 +1479,15 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'browser_request') {
+        this.relayBrowserRequest(socket, data);
+      }
       if (event === 'run_deleted') {
         // Carries a runId and nothing else: the run is GONE, so there is no
         // shape to parse beyond the id of what to forget.
         const runId = parseDeletedRunId(data);
         if (runId) {
+          this.forgetBrowser(runId);
           for (const listener of this.runDeletedListeners) {
             listener(runId);
           }
@@ -1474,6 +1495,14 @@ export class DaemonClient {
       }
       if (event === 'runs_changed') {
         const runs = parseChangedRuns(data);
+        for (const run of runs) {
+          if (run.archivedAt === null) {
+            this.browserForgottenRunIds.delete(run.id);
+          } else if (!this.browserForgottenRunIds.has(run.id)) {
+            this.browserForgottenRunIds.add(run.id);
+            this.forgetBrowser(run.id);
+          }
+        }
         if (runs.length > 0) {
           for (const listener of this.runsChangedListeners) {
             listener(runs);
@@ -1839,6 +1868,50 @@ export class DaemonClient {
       ...(answer !== undefined ? { answer } : {}),
       ...(optionId !== undefined ? { optionId } : {}),
     });
+  }
+
+  /**
+   * Hand one `browser_request` to Electron main and answer it with a
+   * `browser_reply`; a request that cannot reach main is answered with a
+   * refusal, never left to the daemon's timeout.
+   *
+   * TWIN PARSER: the daemon's `v1/browser/browser.types.ts` declares the
+   * `BrowserRequest` it sends and the `BrowserReply` it reads, and Electron
+   * main's `browser/browser-agent-wire.ts` reads the request. The request is
+   * passed on untouched; only its `id` is read here, to name a refusal.
+   */
+  private relayBrowserRequest(socket: Socket, request: unknown): void {
+    if (isRemoteRuntime()) {
+      return;
+    }
+    const id = (request as { id?: unknown } | null)?.id;
+    void (async () => {
+      let reply: unknown;
+      try {
+        reply = await window.geniro.browserAgentRequest(request);
+      } catch {
+        reply = {
+          id: typeof id === 'string' ? id : '',
+          ok: false,
+          error: BROWSER_WINDOW_FAILED,
+        };
+      }
+      socket.emit('browser_reply', reply);
+    })();
+  }
+
+  /**
+   * Ask Electron main to close a deleted or archived run's browser tabs and
+   * clear its cookies. Desktop only. A failure is left to the launch-time sweep
+   * of orphaned browser data, which removes what this missed.
+   */
+  private forgetBrowser(runId: string): void {
+    if (isRemoteRuntime()) {
+      return;
+    }
+    void Promise.resolve()
+      .then(() => window.geniro.browserForgetRun(runId))
+      .catch(() => undefined);
   }
 
   close(): void {

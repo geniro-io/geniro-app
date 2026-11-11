@@ -131,6 +131,8 @@ import { appendDraft } from './append-draft';
 import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { BranchSelect } from './branch-select';
+import { BrowserColumn } from './browser/browser-column';
+import { BrowserGrid } from './browser/browser-grid';
 import { continueCallClocks } from './call-clock';
 import {
   type CalleeReading,
@@ -8603,6 +8605,13 @@ export function Chats({
   /** The same panel, in a right-edge drawer, at phone width. */
   const showPanelDrawer = activeRunId !== null && narrowViewport;
   /**
+   * The chat's in-app browser: its column, globe and link handling. Never on a
+   * paired device (the browser runs on the Mac) and never on a hosted screen.
+   */
+  const browserEnabled =
+    activeRunId !== null && !isHosted && !isRemoteRuntime();
+  const browserTrack = browserEnabled && !narrowViewport ? ' auto' : '';
+  /**
    * The agents panel's MCP rows. The folder is the RUN's, never the composer's
    * `folder` — the panel describes the run being viewed, and those diverge the
    * moment the user picks a different folder for their next chat.
@@ -9666,8 +9675,9 @@ export function Chats({
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
-              <div
-                className="grid h-full"
+              <BrowserGrid
+                runId={browserEnabled ? activeRunId : null}
+                className="relative grid h-full"
                 // The list's width is shared with the shell: the title bar's
                 // divider is placed from it, so the band above ends exactly on
                 // this column's border rather than near it.
@@ -9693,8 +9703,8 @@ export function Chats({
                         ? 'minmax(0,1fr) auto'
                         : 'minmax(0,1fr)'
                       : showAgentsPanel
-                        ? `${listWidth}px minmax(0,1fr) auto`
-                        : `${listWidth}px minmax(0,1fr)`,
+                        ? `${listWidth}px minmax(0,1fr)${browserTrack} auto`
+                        : `${listWidth}px minmax(0,1fr)${browserTrack}`,
                 }}>
                 {/* On a phone the list is a PAGE of its own: hidden (and its
                     scroll position kept) while a thread or the composer is on
@@ -10463,6 +10473,7 @@ export function Chats({
                     {activeRun ? (
                       <ChatHeader
                         label={runLabel(activeRun, teamNames)}
+                        browserRunId={browserEnabled ? activeRun.id : null}
                         analysisSource={analysisSourceOf(activeRun)}
                         actions={
                           hosted?.headerActions?.({
@@ -11398,6 +11409,16 @@ export function Chats({
                   </section>
                 )}
 
+                {browserEnabled ? (
+                  <BrowserColumn
+                    key={activeRunId}
+                    narrow={narrowViewport}
+                    chatTitle={
+                      activeRun ? runLabel(activeRun, teamNames) : 'Chat'
+                    }
+                  />
+                ) : null}
+
                 {showAgentsPanel || showPanelDrawer ? (
                   /* ONE panel, two hosts — a grid column at `sm` and wider,
                      a right-edge drawer below it. A second call site would
@@ -11896,7 +11917,7 @@ export function Chats({
                     onClose={closeChatChanges}
                   />
                 ) : null}
-              </div>
+              </BrowserGrid>
             </LocalImageLoaderContext.Provider>
           </ChatMetricsLoaderContext.Provider>
         </AttachmentLoaderContext.Provider>

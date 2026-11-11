@@ -15,7 +15,9 @@ const cookieSchema = z.strictObject({
   path: z.string().max(4096).optional(),
   secure: z.boolean().optional(),
   httpOnly: z.boolean().optional(),
-  sameSite: z.enum(['unspecified', 'no_restriction', 'lax', 'strict']).optional(),
+  sameSite: z
+    .enum(['unspecified', 'no_restriction', 'lax', 'strict'])
+    .optional(),
   expires: z.number().finite().optional(),
 });
 
@@ -33,7 +35,11 @@ export const browserOpSchema = z.discriminatedUnion('kind', [
       })
       .optional(),
   }),
-  z.strictObject({ kind: z.literal('navigate'), tab, url: z.string().min(1).max(8192) }),
+  z.strictObject({
+    kind: z.literal('navigate'),
+    tab,
+    url: z.string().min(1).max(8192),
+  }),
   z.strictObject({ kind: z.literal('snapshot'), tab }),
   z.strictObject({ kind: z.literal('click'), tab, ref }),
   z.strictObject({
@@ -43,7 +49,11 @@ export const browserOpSchema = z.discriminatedUnion('kind', [
     text: z.string().max(65_536),
     submit: z.boolean(),
   }),
-  z.strictObject({ kind: z.literal('press'), tab, key: z.string().min(1).max(64) }),
+  z.strictObject({
+    kind: z.literal('press'),
+    tab,
+    key: z.string().min(1).max(64),
+  }),
   z.strictObject({
     kind: z.literal('select'),
     tab,
@@ -98,3 +108,10 @@ export type BrowserRequest = z.infer<typeof browserRequestSchema>;
 export type BrowserReply =
   | { id: string; ok: true; text: string; png?: string; tab?: string }
   | { id: string; ok: false; error: string };
+
+/**
+ * The most base64 a screenshot reply may carry. TWIN: `BROWSER_REPLY_MAX_BYTES`
+ * in `apps/daemon/src/v1/browser/browser.types.ts`, the socket's message ceiling,
+ * of which this leaves headroom for the rest of the reply.
+ */
+export const BROWSER_SCREENSHOT_MAX_BASE64 = 12 * 1024 * 1024;

@@ -84,7 +84,10 @@ const APP: AppStorageUsage = {
     },
   ],
   browserCache: [{ name: 'Cache', bytes: 92 * MB }],
-  appData: [{ name: 'Local Storage', bytes: 3 * MB }],
+  appData: [
+    { name: 'Local Storage', bytes: 3 * MB },
+    { name: 'Browser data', bytes: 41 * MB },
+  ],
 };
 
 function client(usage: StorageUsageDto): StorageClient {

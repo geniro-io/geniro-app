@@ -862,3 +862,38 @@ export const openTerminalSchema = z.strictObject({
     )
     .optional(),
 });
+
+export const browserRunIdSchema = z.string().min(1).max(128);
+export const browserTabIdSchema = z.string().min(1).max(128);
+export const browserAddressSchema = z.string().max(8192);
+export const browserOpenUrlSchema = browserAddressSchema.nullable();
+export const browserHistoryActionSchema = z.enum([
+  'back',
+  'forward',
+  'reload',
+  'stop',
+]);
+export const browserTabActionSchema = z.enum([
+  'devtools',
+  'clearCookies',
+  'openExternal',
+  'copyUrl',
+]);
+export const browserPopOutTitleSchema = z.string().max(256);
+
+const browserLength = z.number().finite().min(0).max(100_000);
+export const browserBoundsSchema = z
+  .strictObject({
+    x: browserLength,
+    y: browserLength,
+    width: browserLength,
+    height: browserLength,
+  })
+  .nullable();
+
+export const browserCredentialsSchema = z
+  .strictObject({
+    username: z.string().max(1024),
+    password: z.string().max(4096),
+  })
+  .nullable();

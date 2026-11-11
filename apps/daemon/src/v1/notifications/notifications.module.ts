@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
+import { BrowserModule } from '../browser/browser.module';
 import { DiagnosticsModule } from '../diagnostics/diagnostics.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { MemoryModule } from '../memory/memory.module';
@@ -27,7 +28,8 @@ import { WsPresenceService } from './services/ws-presence.service';
   // each bus, and nothing under any of them depends on the gateway — so there
   // is still no cycle. `SharesModule` for the share bus, `MemoryModule` for the
   // memory bus and `KnowledgeModule` for the knowledge bus, likewise, and
-  // `ProjectsModule` for the project bus.
+  // `ProjectsModule` for the project bus. `BrowserModule` for the bridge to the
+  // Mac's browser window, a leaf with no dependency on this channel.
   imports: [
     AgentsModule,
     DiagnosticsModule,
@@ -37,6 +39,7 @@ import { WsPresenceService } from './services/ws-presence.service';
     MemoryModule,
     KnowledgeModule,
     ProjectsModule,
+    BrowserModule,
   ],
   providers: [NotificationsGateway, WsPresenceService],
   // Exported for the idle shutdown: "is anyone connected?" is a fact only this

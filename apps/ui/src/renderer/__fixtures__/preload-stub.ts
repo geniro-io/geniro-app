@@ -441,6 +441,78 @@ export function createPreloadStub(
       return Promise.resolve(REMOTE_ACCESS_OFF);
     },
 
+    browserState: (runId) => {
+      note('browserState');
+      return Promise.resolve({
+        runId,
+        tabs: [],
+        activeTabId: null,
+        poppedOut: false,
+        recent: [],
+      });
+    },
+    browserOpenTab: () => {
+      note('browserOpenTab');
+      return Promise.resolve('t1');
+    },
+    browserNavigate: () => {
+      note('browserNavigate');
+      return Promise.resolve();
+    },
+    browserHistory: () => {
+      note('browserHistory');
+      return Promise.resolve();
+    },
+    browserCloseTab: () => {
+      note('browserCloseTab');
+      return Promise.resolve();
+    },
+    browserSelectTab: () => {
+      note('browserSelectTab');
+      return Promise.resolve();
+    },
+    browserSetBounds: () => {
+      note('browserSetBounds');
+      return Promise.resolve();
+    },
+    browserPopOut: () => {
+      note('browserPopOut');
+      return Promise.resolve();
+    },
+    browserDock: () => {
+      note('browserDock');
+      return Promise.resolve();
+    },
+    browserTabAction: () => {
+      note('browserTabAction');
+      return Promise.resolve();
+    },
+    browserContinueInsecure: () => {
+      note('browserContinueInsecure');
+      return Promise.resolve();
+    },
+    browserAnswerAuth: () => {
+      note('browserAnswerAuth');
+      return Promise.resolve();
+    },
+    browserCapture: () => {
+      note('browserCapture');
+      return Promise.resolve(null);
+    },
+    browserForgetRun: () => {
+      note('browserForgetRun');
+      return Promise.resolve();
+    },
+    browserStopAgent: () => {
+      note('browserStopAgent');
+      return Promise.resolve();
+    },
+    browserAgentRequest: () => {
+      note('browserAgentRequest');
+      return Promise.resolve({ ok: false, error: 'Storybook has no browser.' });
+    },
+    onBrowserState: () => noSubscription('onBrowserState'),
+
     filePath: () => {
       note('filePath');
       return null;

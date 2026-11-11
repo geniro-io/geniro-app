@@ -247,6 +247,13 @@ function sum(entries: readonly { bytes: number }[]): number {
   return entries.reduce((total, entry) => total + entry.bytes, 0);
 }
 
+const BROWSER_DATA_ENTRY = 'Browser data';
+
+const ENTRY_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  [BROWSER_DATA_ENTRY]:
+    'Cookies and site data of each chat’s in-app browser, cleared when you archive or delete the chat.',
+};
+
 /** What a row keeps folded: what it is, then each thing it counts. */
 function StorageDetails({
   about,
@@ -264,11 +271,16 @@ function StorageDetails({
       {entries === undefined ? null : (
         <ul className="mt-1 flex flex-col gap-0.5">
           {entries.map((entry) => (
-            <li key={entry.name} className="flex justify-between gap-3">
-              <span className="min-w-0 break-all">{entry.name}</span>
-              <span className="shrink-0 tabular-nums">
-                {formatBytes(entry.bytes)}
+            <li key={entry.name} className="flex flex-col">
+              <span className="flex justify-between gap-3">
+                <span className="min-w-0 break-all">{entry.name}</span>
+                <span className="shrink-0 tabular-nums">
+                  {formatBytes(entry.bytes)}
+                </span>
               </span>
+              {ENTRY_DESCRIPTIONS[entry.name] === undefined ? null : (
+                <span>{ENTRY_DESCRIPTIONS[entry.name]}</span>
+              )}
             </li>
           ))}
         </ul>

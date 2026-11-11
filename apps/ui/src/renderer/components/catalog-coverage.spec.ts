@@ -46,6 +46,7 @@ const NAMESPACES: Record<string, string> = {
 
 const FEATURE_NAMESPACES = {
   chats: 'Chats/',
+  'chats/browser': 'Chats/',
   teams: 'Teams/',
   projects: 'Projects/',
   knowledge: 'Knowledge/',

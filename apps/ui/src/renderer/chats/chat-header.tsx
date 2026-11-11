@@ -19,6 +19,7 @@ import {
   formatExactUsd,
   markEstimate,
 } from './agent-activity';
+import { BrowserToggleButton } from './browser/browser-toggle-button';
 import { folderName } from './directory-select';
 import { formatRelativeTime } from './relative-time';
 import { accountConfigDir } from './run-profile';
@@ -457,6 +458,7 @@ export function ChatHeader({
   pausedSpans = EMPTY_SPANS,
   analysisSource = null,
   actions = null,
+  browserRunId = null,
 }: {
   label: string;
   /**
@@ -464,6 +466,8 @@ export function ChatHeader({
    * New conversation, an analysis popup's New analysis — at the row's end.
    */
   actions?: React.ReactNode;
+  /** The run whose in-app browser the globe toggles; null draws no globe. */
+  browserRunId?: string | null;
   /**
    * The thread this chat analyses, and how to open it — an analysis chat's
    * header chip ("Analyzing: <source> ↗"); null on every other chat.
@@ -720,6 +724,9 @@ export function ChatHeader({
           estimatedCostUsd={estimatedCostUsd}
           costedTurns={costedTurns}
         />
+        {browserRunId === null ? null : (
+          <BrowserToggleButton runId={browserRunId} />
+        )}
         {actions === null ? null : (
           <div
             data-slot="chat-header-actions"

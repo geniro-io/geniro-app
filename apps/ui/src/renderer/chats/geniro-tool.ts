@@ -38,6 +38,7 @@ export type GeniroCardKind =
   | 'metrics'
   | 'comparison'
   | 'gallery'
+  | 'screenshot'
   | 'artifact'
   | 'patch'
   | 'plan'
@@ -83,6 +84,19 @@ export const MESSAGE_THREAD = 'message_thread';
  */
 export const SAVE_PROJECT_INSTRUCTIONS = 'save_project_instructions';
 
+/**
+ * `browser_screenshot` — the one browser tool that draws a card, built from its
+ * call and its result rather than from a row of its own. TWIN: the daemon's
+ * `HOST_BROWSER_SCREENSHOT_TOOL` in `chat.types.ts`.
+ */
+export const BROWSER_SCREENSHOT = 'browser_screenshot';
+
+/**
+ * The `approval_request` row's `toolName` for the first open of a new host in
+ * a chat. TWIN: the daemon's `HOST_BROWSER_HOST_CARD` in `chat.types.ts`.
+ */
+export const BROWSER_HOST_CARD = 'browser_host';
+
 /** `propose_team`'s name before the rename, which the rows recorded then still carry. */
 export const LEGACY_PROPOSE_TEAM = 'propose_workflow';
 
@@ -98,6 +112,9 @@ const GENIRO_TOOLS: Readonly<Record<string, GeniroCardKind | null>> = {
   show_metrics: 'metrics',
   show_comparison: 'comparison',
   show_gallery: 'gallery',
+  // Its card is built from the call and its result, so the pair is not hidden
+  // the way the others' are (`transcript-groups.ts`).
+  [BROWSER_SCREENSHOT]: 'screenshot',
   show_artifact: 'artifact',
   propose_patch: 'patch',
   [SAVE_PROJECT_INSTRUCTIONS]: 'patch',
@@ -184,6 +201,45 @@ export function geniroMemoryToolOf(
 ): GeniroMemoryTool | null {
   return (
     GENIRO_MEMORY_TOOLS.find((tool) =>
+      namesToolOnRunServer(name, runId, tool),
+    ) ?? null
+  );
+}
+
+/**
+ * The in-app browser's tools but the screenshot, which tell their story as one
+ * compact row inside the tool group (`BrowserToolRow`) and so are kept OUT of
+ * {@link GENIRO_TOOLS} for the reason {@link GENIRO_MEMORY_TOOLS} is.
+ *
+ * TWIN PARSER: `HOST_BROWSER_TOOLS` in `apps/daemon/src/v1/agents/chat.types.ts`.
+ */
+export const GENIRO_BROWSER_TOOLS = [
+  'browser_open',
+  'browser_navigate',
+  'browser_snapshot',
+  'browser_click',
+  'browser_type',
+  'browser_press',
+  'browser_select',
+  'browser_scroll',
+  'browser_console',
+  'browser_evaluate',
+  'browser_tabs',
+  'browser_close',
+  'browser_set_cookies',
+  'browser_get_cookies',
+  'browser_clear_cookies',
+] as const;
+
+export type GeniroBrowserTool = (typeof GENIRO_BROWSER_TOOLS)[number];
+
+/** The browser tool a call NAMES on this run's own geniro server, else null. */
+export function geniroBrowserToolOf(
+  name: string,
+  runId: string,
+): GeniroBrowserTool | null {
+  return (
+    GENIRO_BROWSER_TOOLS.find((tool) =>
       namesToolOnRunServer(name, runId, tool),
     ) ?? null
   );
@@ -315,15 +371,15 @@ export function geniroCardKindOf(
 
 /**
  * Whether an approval card for this tool stands ACROSS turns — `propose_team`
- * alone — so it waits on the user only while no turn runs, the daemon's
- * `awaitingOf` rule.
+ * and the browser's new-host card — so it waits on the user only while no turn
+ * runs, the daemon's `awaitingOf` rule.
  *
  * TWIN PARSER: `PendingApproval.standing` in
  * `apps/daemon/src/v1/agents/services/approval-registry.ts`, set for every card
  * `ChatService.raiseOwnedCard` raises.
  */
 export function standsAcrossTurns(toolName: string | null): boolean {
-  return isTeamProposalTool(toolName);
+  return isTeamProposalTool(toolName) || toolName === BROWSER_HOST_CARD;
 }
 
 /** Whether a row's tool is `propose_team`, under either of its names. */

@@ -782,6 +782,8 @@ export function Chats({
   active = true,
   openRunId = null,
   onRunOpened,
+  processesRequest = null,
+  onProcessesOpened,
   onActiveRunChange,
   onTitleChange,
   onOpenSettings,
@@ -854,6 +856,13 @@ export function Chats({
   openRunId?: string | null;
   /** Told once the request above has been honoured, so the caller can drop it. */
   onRunOpened?: () => void;
+  /**
+   * A thread whose processes popup to open once that thread is the open one —
+   * one-shot like {@link openRunId}, and told back through
+   * {@link onProcessesOpened}.
+   */
+  processesRequest?: string | null;
+  onProcessesOpened?: () => void;
   /**
    * Which thread is open NOW — announced on every change, including the ones
    * nobody requested (a click in the sidebar, a delete closing the open row).
@@ -9274,7 +9283,11 @@ export function Chats({
     () =>
       isHosted
         ? undefined
-        : window.geniro.onNotificationActivated(handleActivateRun),
+        : window.geniro.onNotificationActivated((runId) => {
+            if (runId !== '') {
+              handleActivateRun(runId);
+            }
+          }),
     [handleActivateRun, isHosted],
   );
 
@@ -11477,6 +11490,13 @@ export function Chats({
                       waterfall={activeRun ? runWaterfall : undefined}
                       processes={activeRun ? runProcesses : undefined}
                       onPopupChange={setPanelPopup}
+                      popupRequest={
+                        processesRequest !== null &&
+                        processesRequest === activeRun?.id
+                          ? 'processes'
+                          : null
+                      }
+                      onPopupRequestHandled={onProcessesOpened}
                       notes={
                         activeRun
                           ? {

@@ -15,8 +15,10 @@ import {
   type RunProcess,
   type RunProcessesWire,
   type RunProcessTree,
+  type ThreadResourceSample,
 } from '../chat.types';
 import { RunDao } from '../dao/run.dao';
+import { maskedCommand } from '../utils/command-text';
 import {
   listProcessUsage,
   type OwnedProcess,
@@ -120,8 +122,8 @@ export class RunProcessesService {
    */
   async readAll(): Promise<AppProcessesWire> {
     const sampledAt = new Date().toISOString();
-    const [rows, tagged] = await Promise.all([this.listUsage(), this.tagged()]);
-    if (rows === null) {
+    const attributed = await this.attributeAll();
+    if (attributed === null) {
       return {
         sampledAt,
         threads: [],
@@ -131,22 +133,89 @@ export class RunProcessesService {
         unavailableReason: PS_UNREADABLE,
       };
     }
+    const { rows, claimed, byRun, runs, leftover } = attributed;
+    const threads: AppProcessThread[] = [...byRun].map(([runId, thread]) => ({
+      runId,
+      title: runs.get(runId)?.title ?? null,
+      agentKinds: [...thread.kinds],
+      agents: thread.agents,
+      detachedProcesses: thread.detached,
+      figures: figuresOf(thread.owned),
+    }));
+    threads.sort((a, b) => b.figures.rssBytes - a.figures.rssBytes);
+
+    const geniro = figuresOf(
+      processTreeOf(rows, this.appRootPid(rows)).filter(
+        (row) => !claimed.has(row.pid),
+      ),
+    );
+    const left = figuresOf(leftover);
+    const parts = [geniro, left, ...threads.map((t) => t.figures)];
+    return {
+      sampledAt,
+      threads,
+      geniro,
+      leftover: left,
+      total: {
+        processes: parts.reduce((sum, p) => sum + p.processes, 0),
+        cpuPercent: roundCpu(parts.reduce((sum, p) => sum + p.cpuPercent, 0)),
+        rssBytes: parts.reduce((sum, p) => sum + p.rssBytes, 0),
+      },
+      unavailableReason: null,
+    };
+  }
+
+  /**
+   * Every live thread's processes at one reading, with its heaviest process
+   * named — the resource watch's view of {@link readAll}, from the same single
+   * attribution. Null when the process table could not be read.
+   */
+  async sampleThreads(): Promise<ThreadResourceSample[] | null> {
+    const attributed = await this.attributeAll();
+    if (attributed === null) {
+      return null;
+    }
+    return [...attributed.byRun].map(([runId, thread]) => {
+      const heaviest = thread.owned.reduce<ProcessUsageRow | null>(
+        (top, row) => (top === null || row.rssBytes > top.rssBytes ? row : top),
+        null,
+      );
+      const owner =
+        heaviest === null ? undefined : thread.owners.get(heaviest.pid);
+      return {
+        runId,
+        title: attributed.runs.get(runId)?.title ?? null,
+        agentKinds: [...thread.kinds],
+        rssBytes: thread.owned.reduce((sum, row) => sum + row.rssBytes, 0),
+        heaviest:
+          heaviest === null
+            ? null
+            : {
+                pid: heaviest.pid,
+                name: processName(heaviest),
+                label: oneLineCommand(heaviest.args),
+                rssBytes: heaviest.rssBytes,
+                memberId: owner?.memberId ?? null,
+                agentKind: owner?.agentKind ?? null,
+              },
+      };
+    });
+  }
+
+  private async attributeAll(): Promise<Attribution | null> {
+    const [rows, tagged] = await Promise.all([this.listUsage(), this.tagged()]);
+    if (rows === null) {
+      return null;
+    }
     const claimed = new Set<number>();
-    const byRun = new Map<
-      string,
-      {
-        kinds: Set<AgentKind>;
-        agents: number;
-        owned: ProcessUsageRow[];
-        detached: number;
-      }
-    >();
-    const threadOf = (runId: string) => {
+    const byRun = new Map<string, ThreadProcesses>();
+    const threadOf = (runId: string): ThreadProcesses => {
       const thread = byRun.get(runId) ?? {
         kinds: new Set<AgentKind>(),
         agents: 0,
         owned: [],
         detached: 0,
+        owners: new Map(),
       };
       byRun.set(runId, thread);
       return thread;
@@ -164,6 +233,11 @@ export class RunProcessesService {
       if (kind.success) {
         thread.kinds.add(kind.data);
       }
+      const owner = {
+        memberId: parseSessionKey(root.key)?.memberId ?? null,
+        agentKind: kind.success ? kind.data : null,
+      };
+      owned.forEach((row) => thread.owners.set(row.pid, owner));
       thread.agents += 1;
       thread.owned.push(...owned);
     }
@@ -214,36 +288,7 @@ export class RunProcessesService {
         leftover.push(...detached);
       }
     }
-
-    const threads: AppProcessThread[] = [...byRun].map(([runId, thread]) => ({
-      runId,
-      title: runs.get(runId)?.title ?? null,
-      agentKinds: [...thread.kinds],
-      agents: thread.agents,
-      detachedProcesses: thread.detached,
-      figures: figuresOf(thread.owned),
-    }));
-    threads.sort((a, b) => b.figures.rssBytes - a.figures.rssBytes);
-
-    const geniro = figuresOf(
-      processTreeOf(rows, this.appRootPid(rows)).filter(
-        (row) => !claimed.has(row.pid),
-      ),
-    );
-    const left = figuresOf(leftover);
-    const parts = [geniro, left, ...threads.map((t) => t.figures)];
-    return {
-      sampledAt,
-      threads,
-      geniro,
-      leftover: left,
-      total: {
-        processes: parts.reduce((sum, p) => sum + p.processes, 0),
-        cpuPercent: roundCpu(parts.reduce((sum, p) => sum + p.cpuPercent, 0)),
-        rssBytes: parts.reduce((sum, p) => sum + p.rssBytes, 0),
-      },
-      unavailableReason: null,
-    };
+    return { rows, claimed, byRun, runs, leftover };
   }
 
   /**
@@ -326,6 +371,31 @@ export class RunProcessesService {
     );
     return { stoppedPids, stoppedMonitorIds };
   }
+}
+
+interface ThreadProcesses {
+  kinds: Set<AgentKind>;
+  agents: number;
+  owned: ProcessUsageRow[];
+  detached: number;
+  owners: Map<number, { memberId: string | null; agentKind: AgentKind | null }>;
+}
+
+interface Attribution {
+  rows: ProcessUsageRow[];
+  claimed: Set<number>;
+  byRun: Map<string, ThreadProcesses>;
+  runs: Map<string, { title: string | null; live: boolean }>;
+  leftover: ProcessUsageRow[];
+}
+
+const MAX_COMMAND_LABEL_CHARS = 160;
+
+function oneLineCommand(args: string): string {
+  const flat = maskedCommand(args).replace(/\s+/g, ' ').trim();
+  return flat.length > MAX_COMMAND_LABEL_CHARS
+    ? `${flat.slice(0, MAX_COMMAND_LABEL_CHARS - 1)}…`
+    : flat;
 }
 
 function figuresOf(rows: readonly ProcessUsageRow[]): ProcessFigures {

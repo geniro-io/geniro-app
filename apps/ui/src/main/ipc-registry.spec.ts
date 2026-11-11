@@ -56,6 +56,12 @@ const mocks = vi.hoisted(() => {
     },
     memory: { enabled: true, agentWrites: 'active', nativeMemoryOff: false },
     knowledge: { enabled: true, agentWrites: 'review' },
+    resourceAlerts: {
+      enabled: true,
+      threadMemoryBytes: 8 * 1024 ** 3,
+      growthBytesPerMinute: 1024 ** 3,
+      minFreeDiskBytes: 10 * 1024 ** 3,
+    },
   };
   return {
     handlers,

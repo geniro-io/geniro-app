@@ -136,7 +136,7 @@ Spend, tokens, cache hits, agent time, lines changed and pull requests, broken d
 <td valign="top">
 
 <b>🧮 CPU & RAM</b><br>
-See which thread is chewing through your Mac, down to each agent's processes, and stop the leftovers.
+See which thread is chewing through your Mac, down to each agent's processes, stop the leftovers, and get warned before a runaway command or a full disk takes the Mac down.
 
 </td>
 </tr>
@@ -384,6 +384,8 @@ The memory works from your phone as well: you can read, edit, forget, approve an
 **Where the run went.** Opens as a sequence diagram of the run: a column per agent with its turns, time running down, a numbered arrow for every call and a dashed one back for each answer its caller waited on, calls made at once framed together and long idle stretches cut short. **Lanes** switches to the waterfall of every agent's turns on one clock, with its call links, sideways scroll and zoom. Both have the critical path, cost tables and "open in chat" on any span.
 
 **CPU & RAM.** A meter in the title bar splits the app's memory or CPU across your threads, Geniro itself, and anything a deleted thread left running. Open a thread to see every process each agent started, with its CPU and memory, and **Stop** or **Stop all** the strays. Readings are taken only while you are looking.
+
+**Memory and disk warnings.** While agents are running, Geniro checks every 30 seconds whether one thread's processes have passed 8 GB or are growing by 1 GB a minute, whether macOS reports critical memory pressure, and whether the disk is down to 10 GB free. It tells you with a system notification and a strip at the top of the window. A memory warning names the thread, the agent and the command, with **Open processes** and, when Geniro may stop that command, **Stop command**; a disk warning shows only how much space is left and the line it warns below. It never stops anything on its own, and with no agents running it reads nothing. The thresholds live in `settings.json` under `resourceAlerts`.
 
 **Context and limits.** A context ring shows how full each agent's window is, auto-compaction kicks in at a percentage you choose, and plan limits sit one click away.
 

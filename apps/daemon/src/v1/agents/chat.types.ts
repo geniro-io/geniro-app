@@ -3932,6 +3932,133 @@ export const AppProcessesWireSchema = z.object({
 });
 export type AppProcessesWire = z.infer<typeof AppProcessesWireSchema>;
 
+export interface ThreadHeaviestProcess {
+  pid: number;
+  name: string;
+  label: string;
+  rssBytes: number;
+  memberId: string | null;
+  agentKind: AgentKind | null;
+}
+
+export interface ThreadResourceSample {
+  runId: string;
+  title: string | null;
+  agentKinds: AgentKind[];
+  rssBytes: number;
+  heaviest: ThreadHeaviestProcess | null;
+}
+
+export const RESOURCE_ALERT_KINDS = [
+  'thread-memory',
+  'thread-growth',
+  'memory-pressure',
+  'low-disk',
+] as const;
+export const ResourceAlertKindSchema = z
+  .enum(RESOURCE_ALERT_KINDS)
+  .meta({ id: 'ResourceAlertKind' });
+export type ResourceAlertKind = z.infer<typeof ResourceAlertKindSchema>;
+
+export const ResourceAlertCommandSchema = z
+  .object({
+    pid: z.number().int(),
+    name: z.string(),
+    label: z
+      .string()
+      .describe('its command line on one line, secrets and env values masked'),
+    rssBytes: z.number().int(),
+  })
+  .meta({ id: 'ResourceAlertCommand' });
+export type ResourceAlertCommand = z.infer<typeof ResourceAlertCommandSchema>;
+
+/**
+ * A condition the resource watch found and still finds: a thread's processes
+ * too large or growing too fast, the system short of memory, or the Data
+ * volume short of space. The command is the blamed thread's heaviest process;
+ * low disk blames no thread, so it carries only the free space and its line.
+ */
+export const ResourceAlertSchema = z
+  .object({
+    id: z.string(),
+    kind: ResourceAlertKindSchema,
+    raisedAt: z.string(),
+    runId: z
+      .string()
+      .nullable()
+      .describe('the thread it blames; null when no thread had processes'),
+    title: z.string().nullable(),
+    agentKind: AgentKindSchema.nullable(),
+    memberId: z
+      .string()
+      .nullable()
+      .describe('the team member whose agent holds the command, when known'),
+    command: ResourceAlertCommandSchema.nullable(),
+    threadRssBytes: z.number().int().nullable(),
+    growthBytesPerMinute: z.number().int().nullable(),
+    freeDiskBytes: z.number().int().nullable(),
+    minFreeDiskBytes: z
+      .number()
+      .int()
+      .nullable()
+      .describe('the free-space line a low-disk alert is judged against'),
+    stoppable: z
+      .boolean()
+      .describe(
+        'whether the command was one this thread may stop when the alert was raised',
+      ),
+  })
+  .meta({ id: 'ResourceAlert' });
+export type ResourceAlert = z.infer<typeof ResourceAlertSchema>;
+
+export const ResourceAlertsWireSchema = z.object({
+  alerts: z.array(ResourceAlertSchema).describe('oldest first'),
+});
+export type ResourceAlertsWire = z.infer<typeof ResourceAlertsWireSchema>;
+
+export const StoppedResourceAlertCommandSchema = z.object({
+  stoppedPids: z.array(z.number().int()),
+});
+export type StoppedResourceAlertCommand = z.infer<
+  typeof StoppedResourceAlertCommandSchema
+>;
+
+const MIB = 1024 ** 2;
+const GIB = 1024 ** 3;
+
+/**
+ * TWIN PARSER: `resourceAlertsSchema` in `apps/ui/src/main/ipc-schemas.ts`,
+ * which `resource-alerts-config-push.ts` pushes to `PUT /v1/resource-alerts/config`.
+ */
+export const ResourceAlertConfigSchema = z
+  .object({
+    enabled: z.boolean(),
+    threadMemoryBytes: z
+      .number()
+      .int()
+      .min(256 * MIB)
+      .max(1024 * GIB),
+    growthBytesPerMinute: z
+      .number()
+      .int()
+      .min(64 * MIB)
+      .max(1024 * GIB),
+    minFreeDiskBytes: z
+      .number()
+      .int()
+      .min(256 * MIB)
+      .max(1024 * GIB),
+  })
+  .meta({ id: 'ResourceAlertConfig' });
+export type ResourceAlertConfig = z.infer<typeof ResourceAlertConfigSchema>;
+
+export const DEFAULT_RESOURCE_ALERT_CONFIG: ResourceAlertConfig = {
+  enabled: true,
+  threadMemoryBytes: 8 * GIB,
+  growthBytesPerMinute: GIB,
+  minFreeDiskBytes: 10 * GIB,
+};
+
 /** One command a run still has running. */
 export const OpenShellSchema = z
   .object({

@@ -6,6 +6,7 @@ import {
   commitShaSchema,
   gitDirSchema,
   memoryExportSaveSchema,
+  notificationSchema,
   settingsPatchSchema,
   storageEntryNameSchema,
   taskIdSchema,
@@ -291,5 +292,34 @@ describe('storageEntryNameSchema', () => {
     ]) {
       expect(accepts(bad), JSON.stringify(bad)).toBe(false);
     }
+  });
+});
+
+describe('notificationSchema', () => {
+  const banner = {
+    kind: 'turn-end',
+    runId: 'r1',
+    title: 'Fix the parser',
+    body: 'Finished.',
+  };
+
+  it('lets only a resource alert name no thread', () => {
+    expect(
+      notificationSchema.safeParse({
+        ...banner,
+        kind: 'resource-alert',
+        runId: '',
+      }).success,
+    ).toBe(true);
+    expect(notificationSchema.safeParse({ ...banner, runId: '' }).success).toBe(
+      false,
+    );
+  });
+
+  it('bounds the run id', () => {
+    expect(
+      notificationSchema.safeParse({ ...banner, runId: 'r'.repeat(129) })
+        .success,
+    ).toBe(false);
   });
 });

@@ -13,6 +13,7 @@ import { app } from 'electron';
 import {
   DEFAULT_KNOWLEDGE,
   DEFAULT_MEMORY,
+  DEFAULT_RESOURCE_ALERTS,
   DEFAULT_SETTINGS,
   DEFAULT_SHARING,
   type KnowledgeSettings,
@@ -20,6 +21,7 @@ import {
   MAX_FAST_ACTIONS,
   MAX_RUN_CONFIGS,
   type MemorySettings,
+  type ResourceAlertSettings,
   type Settings,
   type ShareDestination,
   type SharingSettings,
@@ -29,6 +31,7 @@ import {
   knowledgeSchema,
   MAX_SHARE_DESTINATIONS,
   memorySchema,
+  resourceAlertsSchema,
   settingsPatchSchema,
   shareDestinationSchema,
   shareSignInSchema,
@@ -134,6 +137,10 @@ export function readSettings(): Settings {
       }
       if (key === 'knowledge') {
         salvaged[key] = salvageKnowledge(record[key]);
+        continue;
+      }
+      if (key === 'resourceAlerts') {
+        salvaged[key] = salvageResourceAlerts(record[key]);
         continue;
       }
       if (key === 'configProfiles') {
@@ -306,6 +313,29 @@ function salvageKnowledge(value: unknown): KnowledgeSettings {
     agentWrites: knowledgeSchema.shape.agentWrites
       .catch(DEFAULT_KNOWLEDGE.agentWrites)
       .parse(record.agentWrites),
+  };
+}
+
+/** The resource watch settings field by field: one bad value keeps the rest. */
+function salvageResourceAlerts(value: unknown): ResourceAlertSettings {
+  if (typeof value !== 'object' || value === null) {
+    return DEFAULT_RESOURCE_ALERTS;
+  }
+  const record = value as Record<string, unknown>;
+  const shape = resourceAlertsSchema.shape;
+  return {
+    enabled: shape.enabled
+      .catch(DEFAULT_RESOURCE_ALERTS.enabled)
+      .parse(record.enabled),
+    threadMemoryBytes: shape.threadMemoryBytes
+      .catch(DEFAULT_RESOURCE_ALERTS.threadMemoryBytes)
+      .parse(record.threadMemoryBytes),
+    growthBytesPerMinute: shape.growthBytesPerMinute
+      .catch(DEFAULT_RESOURCE_ALERTS.growthBytesPerMinute)
+      .parse(record.growthBytesPerMinute),
+    minFreeDiskBytes: shape.minFreeDiskBytes
+      .catch(DEFAULT_RESOURCE_ALERTS.minFreeDiskBytes)
+      .parse(record.minFreeDiskBytes),
   };
 }
 

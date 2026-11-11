@@ -5,7 +5,11 @@ import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ZodError } from 'zod';
 
-import { IPC, type Settings } from '../shared/contracts';
+import {
+  DEFAULT_RESOURCE_ALERTS,
+  IPC,
+  type Settings,
+} from '../shared/contracts';
 import { type RemoteAccessState, TUNNEL_OFF } from '../shared/remote';
 import type { DaemonSupervisor } from './daemon-supervisor';
 import { lineMeasurementFlush } from './line-measurement-flush';
@@ -60,6 +64,12 @@ const mocks = vi.hoisted(() => {
     },
     memory: { enabled: true, agentWrites: 'active', nativeMemoryOff: false },
     knowledge: { enabled: true, agentWrites: 'review' },
+    resourceAlerts: {
+      enabled: true,
+      threadMemoryBytes: 8 * 1024 ** 3,
+      growthBytesPerMinute: 1024 ** 3,
+      minFreeDiskBytes: 10 * 1024 ** 3,
+    },
     archiveRetentionDays: null,
     memoryAutoForgetAfterDays: null,
     historyPageSize: 1000,
@@ -663,6 +673,28 @@ describe('registerIpc remote-access channels', () => {
     expect(
       entry.policy.refuseRemoteArgs?.([{ memoryAutoForgetAfterDays: null }]),
     ).toContain('memoryAutoForgetAfterDays');
+  });
+
+  it('a paired device cannot change or switch off the resource alerts', () => {
+    const entry = registry.get(IPC.updateSettings);
+    if (!entry || entry.policy.remote !== 'allow') {
+      throw new Error('updateSettings is not remotely callable');
+    }
+    expect(
+      entry.policy.refuseRemoteArgs?.([
+        {
+          resourceAlerts: {
+            ...DEFAULT_RESOURCE_ALERTS,
+            enabled: false,
+          },
+        },
+      ]),
+    ).toContain('resourceAlerts');
+    expect(
+      entry.policy.refuseRemoteArgs?.([
+        { resourceAlerts: DEFAULT_RESOURCE_ALERTS, sidebarCollapsed: true },
+      ]),
+    ).toContain('resourceAlerts');
   });
 });
 

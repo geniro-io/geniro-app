@@ -48,6 +48,7 @@ import { adoptLoginShellPath } from './process-path';
 import { PullRequestMergeWatcher } from './pull-request-merge-watcher';
 import { teardownThenQuit } from './quit-teardown';
 import { RemoteAccess } from './remote/remote-access';
+import { ResourceAlertsConfigPush } from './resource-alerts-config-push';
 import { onSettingsWritten, readSettings } from './settings';
 import { notifySettingsChanged } from './settings-changed-notify';
 import { migrateSettingsFile } from './settings-migrations';
@@ -195,6 +196,11 @@ const knowledgeConfigPush = new KnowledgeConfigPush((message) => {
     source: 'knowledge-config',
   });
 });
+const resourceAlertsConfigPush = new ResourceAlertsConfigPush((message) => {
+  void reportMainLog(supervisor.getHandle(), 'warn', message, {
+    source: 'resource-alerts-config',
+  });
+});
 onSettingsWritten((settings) => {
   notifySettingsChanged(BrowserWindow.getAllWindows());
   void shareConfigPush.pushIfChanged(supervisor.getHandle(), settings.sharing);
@@ -208,6 +214,10 @@ onSettingsWritten((settings) => {
   void knowledgeConfigPush.pushIfChanged(
     supervisor.getHandle(),
     settings.knowledge,
+  );
+  void resourceAlertsConfigPush.pushIfChanged(
+    supervisor.getHandle(),
+    settings.resourceAlerts,
   );
   keepAwake.setEnabled(settings.preventSleepWhileWorking);
 });
@@ -656,6 +666,7 @@ function pushDaemonConfig(handle: DaemonHandle): void {
   });
   void memoryConfigPush.push(handle, memoryConfigOf(settings));
   void knowledgeConfigPush.push(handle, settings.knowledge);
+  void resourceAlertsConfigPush.push(handle, settings.resourceAlerts);
 }
 
 /**

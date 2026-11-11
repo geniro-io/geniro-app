@@ -377,7 +377,14 @@ export function registerIpc(
     // `sharing` names the commands an upload runs and lets agents publish
     // pages through the user's own logins: the desktop's call alone.
     // The auto-forget window arms a sweep that forgets memory on its own clock.
-    ['cliPaths', 'daemonInspect', 'memoryAutoForgetAfterDays', 'sharing'],
+    // `resourceAlerts` reaches the daemon's desktop-only config route.
+    [
+      'cliPaths',
+      'daemonInspect',
+      'memoryAutoForgetAfterDays',
+      'resourceAlerts',
+      'sharing',
+    ],
     'sets a field the desktop alone may set',
   );
   handle(

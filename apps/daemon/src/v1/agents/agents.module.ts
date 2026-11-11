@@ -24,6 +24,7 @@ import { KeptSessionsController } from './controllers/kept-sessions.controller';
 import { McpController } from './controllers/mcp.controller';
 import { MemoryCheckController } from './controllers/memory-check.controller';
 import { MemoryImportController } from './controllers/memory-import.controller';
+import { ResourceAlertsController } from './controllers/resource-alerts.controller';
 import { RunGroupsController } from './controllers/run-groups.controller';
 import { SkillsController } from './controllers/skills.controller';
 import { ThreadMessagesController } from './controllers/thread-messages.controller';
@@ -123,6 +124,8 @@ import { ProjectInstructionsBroker } from './services/project-instructions.broke
 import { ProjectInstructionsChangeService } from './services/project-instructions-change.service';
 import { PullRequestCaptureService } from './services/pull-request-capture.service';
 import { RecommendationsApplyService } from './services/recommendations-apply.service';
+import { ResourceAlertEventBus } from './services/resource-alert-events.bus';
+import { ResourceWatchService } from './services/resource-watch.service';
 import { RunAttentionService } from './services/run-attention.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
@@ -192,6 +195,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatSearchController,
     KeptSessionsController,
     McpController,
+    ResourceAlertsController,
     MemoryCheckController,
     MemoryImportController,
     RunGroupsController,
@@ -491,6 +495,25 @@ import { defaultSpawn } from './utils/spawn-cli';
         RunDao,
       ],
     },
+    ResourceAlertEventBus,
+    {
+      // Factory because the trailing readers are test seams, not DI tokens.
+      provide: ResourceWatchService,
+      useFactory: (
+        processes: RunProcessesService,
+        sessions: AgentSessionRegistry,
+        monitors: MonitorRegistry,
+        reaper: RunProcessReaper,
+        bus: ResourceAlertEventBus,
+      ) => new ResourceWatchService(processes, sessions, monitors, reaper, bus),
+      inject: [
+        RunProcessesService,
+        AgentSessionRegistry,
+        MonitorRegistry,
+        RunProcessReaper,
+        ResourceAlertEventBus,
+      ],
+    },
     {
       provide: RunProcessSweep,
       useFactory: (
@@ -591,6 +614,8 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   exports: [
     AnalysisBroker,
+    // For the notifications gateway, which broadcasts each alert-list change.
+    ResourceAlertEventBus,
     // For the teams module's team analysis ("Analyze & improve"), which
     // checks the library before starting one here.
     ThreadAnalysisService,

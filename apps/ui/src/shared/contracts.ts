@@ -395,6 +395,21 @@ export const DEFAULT_KNOWLEDGE: KnowledgeSettings = {
   agentWrites: 'review',
 };
 
+export interface ResourceAlertSettings {
+  /** Off stops the daemon reading process, memory and disk figures at all. */
+  enabled: boolean;
+  threadMemoryBytes: number;
+  growthBytesPerMinute: number;
+  minFreeDiskBytes: number;
+}
+
+export const DEFAULT_RESOURCE_ALERTS: ResourceAlertSettings = {
+  enabled: true,
+  threadMemoryBytes: 8 * 1024 ** 3,
+  growthBytesPerMinute: 1024 ** 3,
+  minFreeDiskBytes: 10 * 1024 ** 3,
+};
+
 export interface Settings {
   /**
    * The settings migration this file was last brought up to
@@ -576,6 +591,13 @@ export interface Settings {
    * daemon this app starts; the daemon keeps it in memory only.
    */
   knowledge: KnowledgeSettings;
+  /**
+   * When the daemon warns about a thread's processes eating memory, the system
+   * running short of memory, or the Data volume running short of space. Owned
+   * here (settings.json) and pushed to every daemon this app starts; the
+   * daemon keeps it in memory only.
+   */
+  resourceAlerts: ResourceAlertSettings;
   /**
    * Delete a chat this many days after it was ARCHIVED, or `null` to keep the
    * archive for ever.
@@ -840,6 +862,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sharing: DEFAULT_SHARING,
   memory: DEFAULT_MEMORY,
   knowledge: DEFAULT_KNOWLEDGE,
+  resourceAlerts: DEFAULT_RESOURCE_ALERTS,
   archiveRetentionDays: null,
   memoryAutoForgetAfterDays: null,
   historyPageSize: DEFAULT_HISTORY_PAGE_SIZE,
@@ -1051,9 +1074,11 @@ export const CHAT_LIST_WIDTH = 260;
  * effect at once instead of whenever a screen last cached its settings, and it
  * keeps the one place that can post a banner the one place that gates it.
  * `share-sign-in` is an agent's share waiting on the user signing in to the
- * place it shares to.
+ * place it shares to. `resource-alert` is the daemon's resource watch finding a
+ * thread eating memory, or the machine short of memory or disk.
  */
-export type RunNotificationKind = 'question' | 'turn-end' | 'share-sign-in';
+export type RunNotificationKind =
+  'question' | 'turn-end' | 'share-sign-in' | 'resource-alert';
 
 /** One notification the renderer asks main to post. */
 export interface RunNotification {

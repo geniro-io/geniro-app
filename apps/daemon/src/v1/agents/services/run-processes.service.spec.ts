@@ -504,3 +504,86 @@ describe('RunProcessesService — the whole app, by thread', () => {
     expect(reading.total.rssBytes).toBe(18_000);
   });
 });
+
+describe('RunProcessesService — the resource watch’s sample', () => {
+  const ROOTS: KeptProcessRoot[] = [
+    {
+      key: nodeSessionKey('run-1', 'middle'),
+      agent: 'claude',
+      cwd: '/p',
+      pid: 100,
+    },
+    { key: 'run-2', agent: 'codex', cwd: '/q', pid: 300 },
+  ];
+
+  it('names each thread’s heaviest process with the member whose agent holds it', async () => {
+    registerSecret('sk-live-1234567890', 'test key');
+    onTestFinished(() => clearSecrets());
+    const { service, listUsage } = build(ROOTS, [
+      row(20, 10, 10),
+      row(100, 20, 100, { rssBytes: 2_000 }),
+      row(101, 100, 100, {
+        rssBytes: 90_000,
+        args: 'python3   read_log.py --token sk-live-1234567890\napi.log',
+      }),
+      row(300, 20, 300, { rssBytes: 4_000 }),
+    ]);
+
+    const samples = await service.sampleThreads();
+
+    expect(listUsage).toHaveBeenCalledTimes(1);
+    expect(samples).toEqual([
+      {
+        runId: 'run-1',
+        title: 'Fix the parser',
+        agentKinds: ['claude'],
+        rssBytes: 92_000,
+        heaviest: {
+          pid: 101,
+          name: 'read_log.py',
+          label: 'python3 read_log.py --token ‹test key redacted› api.log',
+          rssBytes: 90_000,
+          memberId: 'middle',
+          agentKind: 'claude',
+        },
+      },
+      expect.objectContaining({
+        runId: 'run-2',
+        rssBytes: 4_000,
+        heaviest: expect.objectContaining({
+          pid: 300,
+          memberId: null,
+          agentKind: 'codex',
+        }),
+      }),
+    ]);
+  });
+
+  it('counts a detached process into its thread, with no member to name', async () => {
+    const { service } = build(
+      [],
+      [row(20, 10, 10), row(500, 1, 500, { rssBytes: 7_000 })],
+      true,
+      { tags: { 500: 'run-1' } },
+    );
+
+    const samples = await service.sampleThreads();
+
+    expect(samples).toEqual([
+      expect.objectContaining({
+        runId: 'run-1',
+        rssBytes: 7_000,
+        heaviest: expect.objectContaining({
+          pid: 500,
+          memberId: null,
+          agentKind: null,
+        }),
+      }),
+    ]);
+  });
+
+  it('is null when `ps` could not be read', async () => {
+    const { service } = build(ROOTS, null);
+    expect(await service.sampleThreads()).toBeNull();
+  });
+});

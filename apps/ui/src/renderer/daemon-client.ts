@@ -1320,6 +1320,7 @@ export class DaemonClient {
   private readonly runDeletedListeners = new Set<(runId: string) => void>();
   private readonly runsChangedListeners = new Set<(runs: RunDto[]) => void>();
   private readonly groupsChangedListeners = new Set<() => void>();
+  private readonly resourceAlertsChangedListeners = new Set<() => void>();
   private readonly taskChangedListeners = new Set<
     (event: TaskChangedEvent) => void
   >();
@@ -1527,6 +1528,11 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'resource_alerts_changed') {
+        for (const listener of this.resourceAlertsChangedListeners) {
+          listener();
+        }
+      }
       if (event === 'shares_changed') {
         const share = parseSharesChanged(data);
         if (share) {
@@ -1689,6 +1695,20 @@ export class DaemonClient {
     this.sharesChangedListeners.add(listener);
     return () => {
       this.sharesChangedListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to every change of the daemon's resource alert list, client-wide:
+   * the alert names a thread the window may not have open.
+   *
+   * TWIN PARSER: `NotificationsGateway` (apps/daemon/src/v1/notifications/gateways/notifications.gateway.ts)
+   * emits `resource_alerts_changed` with no payload; the list is read over HTTP.
+   */
+  onResourceAlertsChanged(listener: () => void): () => void {
+    this.resourceAlertsChangedListeners.add(listener);
+    return () => {
+      this.resourceAlertsChangedListeners.delete(listener);
     };
   }
 

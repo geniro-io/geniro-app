@@ -44,6 +44,9 @@ import type {
   PressActionDto,
   RenameRunDto,
   ReorderPinnedDto,
+  ResourceAlertConfigAckDto,
+  ResourceAlertConfigDto,
+  ResourceAlertsDto,
   RetriedDto,
   RunArtifactsDto,
   RunDto,
@@ -63,6 +66,7 @@ import type {
   ShellOutputDto,
   StopDetachedProcessesDto,
   StoppedDetachedProcessesDto,
+  StoppedResourceAlertCommandDto,
   SweepArchivedDto,
   SweptArchivedDto,
   ThreadAnalysisDto,
@@ -287,6 +291,10 @@ export interface ChatsApiSendChatMessageRequest {
     sendMessageDto: SendMessageDto;
 }
 
+export interface ChatsApiSetResourceAlertConfigRequest {
+    resourceAlertConfigDto: ResourceAlertConfigDto;
+}
+
 export interface ChatsApiSetRunColorRequest {
     runId: string;
     setRunColorDto: SetRunColorDto;
@@ -310,6 +318,10 @@ export interface ChatsApiSetRunPinnedRequest {
 export interface ChatsApiStopDetachedProcessesRequest {
     runId: string;
     stopDetachedProcessesDto: StopDetachedProcessesDto;
+}
+
+export interface ChatsApiStopResourceAlertCommandRequest {
+    alertId: string;
 }
 
 export interface ChatsApiSweepArchivedChatsRequest {
@@ -1214,6 +1226,43 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async listChats(requestParameters: ChatsApiListChatsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<RunDto>> {
         const response = await this.listChatsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listResourceAlertsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ResourceAlertsDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/resource-alerts`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listResourceAlerts(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ResourceAlertsDto> {
+        const response = await this.listResourceAlertsRaw(initOverrides);
         return await response.value();
     }
 
@@ -2652,6 +2701,53 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async setResourceAlertConfigRaw(requestParameters: ChatsApiSetResourceAlertConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ResourceAlertConfigAckDto>> {
+        if (requestParameters['resourceAlertConfigDto'] == null) {
+            throw new runtime.RequiredError(
+                'resourceAlertConfigDto',
+                'Required parameter "resourceAlertConfigDto" was null or undefined when calling setResourceAlertConfig().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/resource-alerts/config`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PUT',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['resourceAlertConfigDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async setResourceAlertConfig(requestParameters: ChatsApiSetResourceAlertConfigRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ResourceAlertConfigAckDto> {
+        const response = await this.setResourceAlertConfigRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async setRunColorRaw(requestParameters: ChatsApiSetRunColorRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
         if (requestParameters['runId'] == null) {
             throw new runtime.RequiredError(
@@ -2921,6 +3017,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async stopDetachedProcesses(requestParameters: ChatsApiStopDetachedProcessesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<StoppedDetachedProcessesDto> {
         const response = await this.stopDetachedProcessesRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async stopResourceAlertCommandRaw(requestParameters: ChatsApiStopResourceAlertCommandRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<StoppedResourceAlertCommandDto>> {
+        if (requestParameters['alertId'] == null) {
+            throw new runtime.RequiredError(
+                'alertId',
+                'Required parameter "alertId" was null or undefined when calling stopResourceAlertCommand().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/resource-alerts/{alertId}/stop`;
+        urlPath = urlPath.replace(`{${"alertId"}}`, encodeURIComponent(String(requestParameters['alertId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async stopResourceAlertCommand(requestParameters: ChatsApiStopResourceAlertCommandRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<StoppedResourceAlertCommandDto> {
+        const response = await this.stopResourceAlertCommandRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

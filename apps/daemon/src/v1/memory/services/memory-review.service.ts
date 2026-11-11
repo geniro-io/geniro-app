@@ -81,7 +81,7 @@ export class MemoryReviewService {
             `memory reference check failed: ${err instanceof Error ? err.message : String(err)}`,
           ),
         ),
-        setTimeout(REFERENCE_CHECK_WAIT_MS),
+        setTimeout(REFERENCE_CHECK_WAIT_MS, undefined, { ref: false }),
       ]);
     }
     const filter = filterOf(query, now);

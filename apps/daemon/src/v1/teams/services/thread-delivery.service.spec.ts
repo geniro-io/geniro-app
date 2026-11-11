@@ -1,4 +1,4 @@
-import { ConflictException } from '@packages/common';
+import { ConflictException, NotFoundException } from '@packages/common';
 import { Subject } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -179,6 +179,16 @@ function harness(
         row.wokeAt = new Date();
         row.wakes += 1;
       }
+    }),
+    requestWake: vi.fn(async (_run: string, messageId: string) => {
+      const row = messages.find(
+        (message) => message.id === messageId && message.status === 'waiting',
+      );
+      if (row === undefined) {
+        throw new NotFoundException('THREAD_MESSAGE_NOT_FOUND', 'gone');
+      }
+      row.wake = true;
+      return row;
     }),
     wakesInLastHour: vi.fn(async () => opts.wakes ?? 0),
     joinsInLastHour: vi.fn(async () => opts.joins ?? 0),
@@ -368,6 +378,131 @@ describe('ThreadDeliveryService: an idle chat', () => {
     await expect(h.send()).rejects.toThrow('REFUSED');
     expect(h.published).toEqual([]);
     expect(sentRow()).toBeUndefined();
+  });
+});
+
+describe('ThreadDeliveryService: the user’s Deliver now', () => {
+  const sentQuietly = async (h: ReturnType<typeof harness>) => {
+    await h.send(false);
+    h.published.length = 0;
+    return h.messages[0]!;
+  };
+
+  it('opens a turn for a message its sender sent without waking the thread', async () => {
+    const h = harness();
+    const message = await sentQuietly(h);
+    expect(message.reason).toBe('sender_opted_out');
+
+    const answer = await h.service.deliverNow(TARGET, message.id);
+
+    expect(answer).toEqual({ outcome: 'woken', reason: null });
+    expect(h.published).toHaveLength(1);
+    expect(h.published[0]!.prompt).toBe(THREAD_WAKE_PROMPT);
+    expect(message).toMatchObject({ wake: true, reason: null });
+    expect(message.wokeAt).not.toBeNull();
+  });
+
+  it.each([
+    ['six wakes this hour', {}, { wakes: 6 }],
+    [
+      'a cold large thread',
+      {
+        promptCacheExpiresAt: new Date(Date.now() - 60_000),
+        promptCacheTtlMs: 300_000,
+        contextTokens: 900_000,
+        contextWindowTokens: 1_000_000,
+      },
+      {},
+    ],
+  ] as const)(
+    'is not held back by %s, which only limit an agent’s wake',
+    async (_label, target, opts) => {
+      const h = harness(target as Partial<Run>, opts);
+      const message = await sentQuietly(h);
+
+      await expect(h.service.deliverNow(TARGET, message.id)).resolves.toEqual({
+        outcome: 'woken',
+        reason: null,
+      });
+      expect(h.published).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ['stopped', { status: 'cancelled' }],
+    ['failed', { status: 'failed' }],
+    ['not_started', { status: 'pending' }],
+  ] as const)(
+    'starts nothing on a thread that is %s, and says why',
+    async (reason, target) => {
+      const h = harness(target as Partial<Run>);
+      const message = await sentQuietly(h);
+
+      await expect(h.service.deliverNow(TARGET, message.id)).resolves.toEqual({
+        outcome: 'waiting',
+        reason,
+      });
+      expect(h.published).toEqual([]);
+      expect(message.reason).toBe(reason);
+    },
+  );
+
+  it('starts nothing past a question waiting for the user', async () => {
+    const h = harness();
+    const message = await sentQuietly(h);
+    h.chats.awaitsCardAnswer.mockReturnValue(true);
+
+    await expect(h.service.deliverNow(TARGET, message.id)).resolves.toEqual({
+      outcome: 'waiting',
+      reason: 'question',
+    });
+    expect(h.published).toEqual([]);
+  });
+
+  it('joins a running turn, past the hour’s budget of joins', async () => {
+    const h = harness({ status: 'running' }, { running: true, joins: 30 });
+    h.messages.push({
+      id: 'quiet',
+      fromRunId: SENDER,
+      fromTitle: 'Sender',
+      fromMember: null,
+      text: 'hello',
+      wake: false,
+      wokeAt: null,
+      wakes: 0,
+      reason: 'sender_opted_out',
+      status: 'waiting',
+      deliveryId: null,
+    });
+
+    await expect(h.service.deliverNow(TARGET, 'quiet')).resolves.toEqual({
+      outcome: 'joined',
+      reason: null,
+    });
+    expect(h.chats.sendMessage).toHaveBeenCalledTimes(1);
+    expect(h.messages[0]!.status).toBe('delivered');
+  });
+
+  it('wakes a team’s idle lead', async () => {
+    const h = harness({ teamId: 'team' });
+    const message = await sentQuietly(h);
+
+    await expect(h.service.deliverNow(TARGET, message.id)).resolves.toEqual({
+      outcome: 'woken',
+      reason: null,
+    });
+    expect(h.executor.wakeLeadForThreadMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a message that no longer waits', async () => {
+    const h = harness();
+    const message = await sentQuietly(h);
+    message.status = 'cancelled';
+
+    await expect(
+      h.service.deliverNow(TARGET, message.id),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(h.published).toEqual([]);
   });
 });
 

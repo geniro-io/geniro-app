@@ -118,6 +118,14 @@ export class ThreadMessageDao extends BaseDao<ThreadMessage> {
     );
   }
 
+  async markWake(id: string, txEm?: EntityManager): Promise<void> {
+    await (txEm ?? this.em.fork()).nativeUpdate(
+      ThreadMessage,
+      { id, status: 'waiting' },
+      { wake: true },
+    );
+  }
+
   async markWoken(
     id: string,
     wakes: number,

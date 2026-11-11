@@ -4843,6 +4843,15 @@ export const WaitingMessageSchema = z.object({
 });
 export type WaitingMessageWire = z.infer<typeof WaitingMessageSchema>;
 
+/** What the user's Deliver now did with a waiting message. */
+export const DeliveredWaitingMessageSchema = z.object({
+  outcome: z.enum(['joined', 'woken', 'waiting']),
+  reason: z.enum(THREAD_MESSAGE_REASONS).nullable(),
+});
+export type DeliveredWaitingMessageWire = z.infer<
+  typeof DeliveredWaitingMessageSchema
+>;
+
 /**
  * What woke a conversation for a turn of geniro's own: a monitor's output, or
  * a host wake such as a share finished after the user signed in. Both settle

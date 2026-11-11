@@ -5,6 +5,7 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { ConflictException } from '@packages/common';
 
 import {
+  type DeliveredWaitingMessageWire,
   type HostRowWire,
   type HostWake,
   type HostWakeOwner,
@@ -58,6 +59,8 @@ interface RouteTerms {
   mayJoin: boolean;
   /** A boot sending again what a wake was already spent on. */
   resending: boolean;
+  /** The user's own press, which no cost or rate limit holds back. */
+  pressed?: boolean;
 }
 
 interface Routed {
@@ -254,6 +257,24 @@ export class ThreadDeliveryService implements OnModuleInit {
     return answer;
   }
 
+  /**
+   * The user's Deliver now: the message joins a running turn or opens one,
+   * past the limits that hold back an agent's wake, or says why it still waits.
+   */
+  async deliverNow(
+    runId: string,
+    messageId: string,
+  ): Promise<DeliveredWaitingMessageWire> {
+    return this.routing.run(runId, async () => {
+      const message = await this.inbox.requestWake(runId, messageId);
+      return this.route(runId, [message], {
+        mayJoin: true,
+        resending: false,
+        pressed: true,
+      });
+    });
+  }
+
   /** Wake whoever a daemon restart left owed. */
   async republishOwed(): Promise<void> {
     for (const runId of await this.inbox.owedRunIds()) {
@@ -310,7 +331,7 @@ export class ThreadDeliveryService implements OnModuleInit {
   private async route(
     runId: string,
     messages: readonly Routable[],
-    { mayJoin, resending }: RouteTerms,
+    { mayJoin, resending, pressed = false }: RouteTerms,
   ): Promise<Routed> {
     const run = await this.runDao.getById(runId, this.em.fork());
     const [first] = messages;
@@ -322,8 +343,8 @@ export class ThreadDeliveryService implements OnModuleInit {
         (await this.inbox.joinsInLastHour(runId)) >= THREAD_JOINS_PER_HOUR;
       const joined =
         run.teamId === null
-          ? await this.joinChat(run, messages, overBudget)
-          : await this.joinTeam(run, messages, overBudget);
+          ? await this.joinChat(run, messages, overBudget && !pressed)
+          : await this.joinTeam(run, messages, overBudget && !pressed);
       if (joined === 'joined') {
         return { outcome: 'joined', reason: null };
       }
@@ -334,7 +355,7 @@ export class ThreadDeliveryService implements OnModuleInit {
         return this.leave(runId, messages, 'wake_limit');
       }
     }
-    const reason = await this.whyNotWake(run, messages, resending);
+    const reason = await this.whyNotWake(run, messages, resending, pressed);
     if (reason !== null) {
       return this.leave(runId, messages, reason);
     }
@@ -469,6 +490,7 @@ export class ThreadDeliveryService implements OnModuleInit {
     run: Run,
     messages: readonly Routable[],
     resending: boolean,
+    pressed: boolean,
   ): Promise<ThreadMessageReason | null> {
     if (run.status === 'cancelled') {
       return 'stopped';
@@ -489,7 +511,10 @@ export class ThreadDeliveryService implements OnModuleInit {
     }
     // After a restart the wake already spent on them goes out again, uncounted.
     // Anywhere else a turn came and left them, so another turn is another wake.
-    if (resending && messages.some((message) => message.wokeAt !== null)) {
+    if (
+      pressed ||
+      (resending && messages.some((message) => message.wokeAt !== null))
+    ) {
       return null;
     }
     if (await this.isCold(run)) {

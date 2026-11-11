@@ -4028,6 +4028,52 @@ export interface DebugSettingsDto {
 /**
  * 
  * @export
+ * @interface DeliveredWaitingMessageDto
+ */
+export interface DeliveredWaitingMessageDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof DeliveredWaitingMessageDto
+     */
+    outcome: DeliveredWaitingMessageDtoOutcomeEnum;
+    /**
+     * 
+     * @type {string}
+     * @memberof DeliveredWaitingMessageDto
+     */
+    reason: DeliveredWaitingMessageDtoReasonEnum | null;
+}
+
+
+/**
+ * @export
+ */
+export const DeliveredWaitingMessageDtoOutcomeEnum = {
+    Joined: 'joined',
+    Woken: 'woken',
+    Waiting: 'waiting'
+} as const;
+export type DeliveredWaitingMessageDtoOutcomeEnum = typeof DeliveredWaitingMessageDtoOutcomeEnum[keyof typeof DeliveredWaitingMessageDtoOutcomeEnum];
+
+/**
+ * @export
+ */
+export const DeliveredWaitingMessageDtoReasonEnum = {
+    RunningTurn: 'running_turn',
+    Stopped: 'stopped',
+    Failed: 'failed',
+    NotStarted: 'not_started',
+    Question: 'question',
+    SenderOptedOut: 'sender_opted_out',
+    ColdAndLarge: 'cold_and_large',
+    WakeLimit: 'wake_limit'
+} as const;
+export type DeliveredWaitingMessageDtoReasonEnum = typeof DeliveredWaitingMessageDtoReasonEnum[keyof typeof DeliveredWaitingMessageDtoReasonEnum];
+
+/**
+ * 
+ * @export
  * @interface DiagnosticsReportDto
  */
 export interface DiagnosticsReportDto {

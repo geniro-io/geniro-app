@@ -17,7 +17,10 @@ import {
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-type Api = Pick<ChatsApi, 'listWaitingMessages' | 'removeWaitingMessage'>;
+type Api = Pick<
+  ChatsApi,
+  'listWaitingMessages' | 'removeWaitingMessage' | 'deliverWaitingMessage'
+>;
 type Events = Pick<DaemonClient, 'onThreadMessagesChanged' | 'onReconnect'>;
 
 function waiting(id: string): WaitingMessageDto {
@@ -41,6 +44,10 @@ function apiReturning(lists: WaitingMessageDto[][]): Api {
       return last;
     }),
     removeWaitingMessage: vi.fn(async () => undefined),
+    deliverWaitingMessage: vi.fn(async () => ({
+      outcome: 'woken' as const,
+      reason: null,
+    })),
   };
 }
 
@@ -156,6 +163,23 @@ describe('useWaitingMessages', () => {
       messageId: 'w1',
     });
     expect(ids()).toEqual(['w2']);
+  });
+
+  it('delivers a message now, answers what the daemon did and re-reads the list', async () => {
+    const api = apiReturning([[waiting('w1')], []]);
+    await render(api, fakeEvents().events, 'r-otter');
+
+    let answer: unknown = null;
+    await act(async () => {
+      answer = await seen!.deliver('w1');
+    });
+    expect(api.deliverWaitingMessage).toHaveBeenCalledWith({
+      runId: 'r-otter',
+      messageId: 'w1',
+    });
+    expect(answer).toEqual({ outcome: 'woken', reason: null });
+    expect(api.listWaitingMessages).toHaveBeenCalledTimes(2);
+    expect(ids()).toEqual([]);
   });
 
   it('reads nothing while no thread is open', async () => {

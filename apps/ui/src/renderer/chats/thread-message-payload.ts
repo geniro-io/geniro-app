@@ -145,7 +145,8 @@ const REASON_WORDS: Record<ThreadMessageReason, string> = {
   failed: 'waits, because the last turn there failed',
   not_started: 'waits, because that thread has not started',
   question: 'waits, because that thread has a question for the user',
-  sender_opted_out: 'waits for its next turn, as you asked',
+  sender_opted_out:
+    'waits for its next turn: it was sent without waking that thread',
   cold_and_large:
     'waits for its next turn, because waking that large idle thread would be costly',
   wake_limit:

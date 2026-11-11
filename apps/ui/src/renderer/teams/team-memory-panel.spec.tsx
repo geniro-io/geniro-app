@@ -296,6 +296,7 @@ describe('TeamMemoryPanel', () => {
       change: 'created',
       projectId: null,
       teamSlug: 'review-crew',
+      batchId: null,
     });
     await settle(300);
 

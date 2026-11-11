@@ -1120,6 +1120,7 @@ describe('parseMemoryChanged — the memory_changed twin', () => {
       change: 'forgotten',
       projectId: 'p1',
       teamSlug: null,
+      batchId: null,
     });
     expect(
       parseMemoryChanged({
@@ -1133,7 +1134,21 @@ describe('parseMemoryChanged — the memory_changed twin', () => {
       change: 'bulk',
       projectId: null,
       teamSlug: null,
+      batchId: null,
     });
+  });
+
+  it('reads the cleanup batch a bulk forget or its undo carries', () => {
+    expect(
+      parseMemoryChanged({
+        memoryId: null,
+        change: 'bulk',
+        status: 'forgotten',
+        projectId: null,
+        teamSlug: null,
+        batchId: 'batch-1',
+      }),
+    ).toMatchObject({ change: 'bulk', batchId: 'batch-1' });
   });
 
   it('reads the team a change was filed under', () => {
@@ -1150,6 +1165,7 @@ describe('parseMemoryChanged — the memory_changed twin', () => {
       change: 'created',
       projectId: null,
       teamSlug: 'alpha',
+      batchId: null,
     });
   });
 

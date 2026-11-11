@@ -65,6 +65,7 @@ export class MemoryImportService {
     const { notes, sources } = await this.read(request.profiles);
     const projectsOf = await this.projectsByKey();
     const imported = await this.memory.importedTexts();
+    const forgotten = await this.memory.forgottenImportedTexts();
     const firstWithText = new Map<string, string>();
     const rows: MemoryImportRow[] = [];
     for (const [n, note] of notes.entries()) {
@@ -108,6 +109,7 @@ export class MemoryImportService {
         })),
         sameAs,
         alreadyImported: imported.has(importedText(note.title, note.body)),
+        forgottenEarlier: forgotten.has(importedText(note.title, note.body)),
         problem: this.memory.problemOf(note),
       });
     }

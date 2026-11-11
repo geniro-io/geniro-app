@@ -18,6 +18,10 @@ export function MemoryRow({
   onForget,
   onRestore,
   onApprove,
+  forgetDescription = 'Agents no longer see it. It stays restorable under Forgotten.',
+  leading,
+  details,
+  actions,
 }: {
   entry: MemoryEntry;
   projectName: string | null;
@@ -25,9 +29,17 @@ export function MemoryRow({
   focused?: boolean;
   busy?: boolean;
   onEdit?: () => void;
-  onForget?: () => void;
+  onForget?: () => void | Promise<void>;
   onRestore?: () => void;
   onApprove?: () => void;
+  /** What the Forget question says will happen. */
+  forgetDescription?: string;
+  /** Drawn before the row, e.g. a tick for picking it. */
+  leading?: React.ReactNode;
+  /** Lines under the provenance, e.g. usage figures and why the row is listed. */
+  details?: React.ReactNode;
+  /** Buttons after the row's own. */
+  actions?: React.ReactNode;
 }): React.JSX.Element {
   const rowRef = useRef<HTMLDivElement | null>(null);
 
@@ -49,63 +61,68 @@ export function MemoryRow({
       data-memory-handle={entry.handle}
       data-focused={focused ? '' : undefined}
       className={cn(
-        'flex min-w-0 flex-col gap-1.5 rounded-md px-2 py-2 transition-shadow',
+        'flex min-w-0 gap-2 rounded-md px-2 py-2 transition-shadow',
         focused && 'bg-accent/40 ring-2 ring-ring/60',
       )}>
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <span className="min-w-0 text-sm font-medium break-words">
-          {entry.title}
-        </span>
-        <MemoryStatusBadge status={entry.status} />
-      </div>
-      <ClampedText
-        text={entry.body}
-        lines={2}
-        slot="memory-body"
-        className="text-sm"
-      />
-      <ProvenanceLine
-        entry={entry}
-        projectName={projectName}
-        teamName={teamName}
-      />
-      <div className="flex flex-wrap items-center gap-2">
-        {(isActive || isPending) && onApprove !== undefined ? (
-          <Button type="button" size="sm" disabled={busy} onClick={onApprove}>
-            Approve
-          </Button>
-        ) : null}
-        {(isActive || isPending) && onEdit !== undefined ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={onEdit}>
-            Edit
-          </Button>
-        ) : null}
-        {(isActive || isPending) && onForget !== undefined ? (
-          <ConfirmActionButton
-            disabled={busy}
-            question={`Forget ${entry.handle}?`}
-            description="Agents no longer see it. It stays restorable under Forgotten."
-            confirmLabel="Forget"
-            busyLabel="Forgetting…"
-            onConfirm={onForget}>
-            Forget
-          </ConfirmActionButton>
-        ) : null}
-        {isForgotten && onRestore !== undefined ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={onRestore}>
-            Restore
-          </Button>
-        ) : null}
+      {leading}
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="min-w-0 text-sm font-medium break-words">
+            {entry.title}
+          </span>
+          <MemoryStatusBadge status={entry.status} />
+        </div>
+        <ClampedText
+          text={entry.body}
+          lines={2}
+          slot="memory-body"
+          className="text-sm"
+        />
+        <ProvenanceLine
+          entry={entry}
+          projectName={projectName}
+          teamName={teamName}
+        />
+        {details}
+        <div className="flex flex-wrap items-center gap-2">
+          {(isActive || isPending) && onApprove !== undefined ? (
+            <Button type="button" size="sm" disabled={busy} onClick={onApprove}>
+              Approve
+            </Button>
+          ) : null}
+          {(isActive || isPending) && onEdit !== undefined ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={onEdit}>
+              Edit
+            </Button>
+          ) : null}
+          {(isActive || isPending) && onForget !== undefined ? (
+            <ConfirmActionButton
+              disabled={busy}
+              question={`Forget ${entry.handle}?`}
+              description={forgetDescription}
+              confirmLabel="Forget"
+              busyLabel="Forgetting…"
+              onConfirm={onForget}>
+              Forget
+            </ConfirmActionButton>
+          ) : null}
+          {isForgotten && onRestore !== undefined ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={onRestore}>
+              Restore
+            </Button>
+          ) : null}
+          {actions}
+        </div>
       </div>
     </div>
   );

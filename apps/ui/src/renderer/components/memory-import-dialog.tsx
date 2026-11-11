@@ -77,7 +77,8 @@ function tickedByDefault(row: MemoryImportRow): boolean {
     importable(row) &&
     row.similarTo.length === 0 &&
     row.sameAs === null &&
-    !row.alreadyImported
+    !row.alreadyImported &&
+    !row.forgottenEarlier
   );
 }
 
@@ -212,6 +213,7 @@ const ImportRow = memo(function ImportRow({
     row.similarTo.length > 0 ||
     row.sameAs !== null ||
     row.alreadyImported ||
+    row.forgottenEarlier ||
     blocked ||
     row.projectMatch === 'ambiguous';
   return (
@@ -286,6 +288,7 @@ const ImportRow = memo(function ImportRow({
               <Mark>The same note as another row here</Mark>
             ) : null}
             {row.alreadyImported ? <Mark>Already imported</Mark> : null}
+            {row.forgottenEarlier ? <Mark>Forgotten earlier</Mark> : null}
             {row.projectMatch === 'ambiguous' ? (
               <Mark>Several projects share this folder — filed as Global</Mark>
             ) : null}

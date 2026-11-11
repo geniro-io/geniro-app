@@ -283,6 +283,201 @@ export type MemoryEdit = Required<
 
 export const MemoryForgetAllSchema = z.object({ forgotten: z.number().int() });
 
+/** Days without a read before an entry counts as cold. */
+export const MEMORY_COLD_DAYS = 90;
+/** How old an entry must be before the cleanup list proposes it, by default. */
+export const MEMORY_REVIEW_MIN_AGE_DAYS = 14;
+/** The most ids `GET /v1/memories/review/ids` answers. */
+export const MEMORY_REVIEW_IDS_MAX = 1000;
+/** The most entries one cleanup batch forgets: a Tick shown plus rows ticked by hand. */
+export const MEMORY_FORGET_BATCH_MAX = 5000;
+export const MEMORY_REVIEW_LIMIT_MAX = 100;
+export const MEMORY_REVIEW_LIMIT_DEFAULT = 30;
+/** Recent cleanups listed by `GET /v1/memories/batches`. */
+export const MEMORY_BATCHES_LIMIT = 10;
+
+export const MEMORY_REVIEW_TABS = ['cold', 'kept', 'forgotten'] as const;
+export type MemoryReviewTab = (typeof MEMORY_REVIEW_TABS)[number];
+
+export const MEMORY_REVIEW_SORTS = [
+  'leastUsed',
+  'oldestSaved',
+  'largest',
+  'longestSinceRead',
+] as const;
+export type MemoryReviewSort = (typeof MEMORY_REVIEW_SORTS)[number];
+
+export const MEMORY_REVIEW_WARNINGS = ['any', 'hide', 'only'] as const;
+export type MemoryReviewWarnings = (typeof MEMORY_REVIEW_WARNINGS)[number];
+
+/**
+ * Why an entry carries the "looks like a rule" warning: its type is a
+ * correction or about the user, the user wrote it, its text states a limit,
+ * or it was not read for one yet.
+ */
+export const MEMORY_REVIEW_WARNING_KINDS = [
+  'feedback',
+  'user',
+  'writtenByYou',
+  'statesLimit',
+  'notChecked',
+] as const;
+export type MemoryReviewWarningKind =
+  (typeof MEMORY_REVIEW_WARNING_KINDS)[number];
+
+/**
+ * Which entries the cleanup list shows (`GET /v1/memories/review`). The
+ * filters apply over every row, before the page is cut.
+ */
+export const MemoryReviewQuerySchema = z
+  .object({
+    tab: z.enum(MEMORY_REVIEW_TABS).optional(),
+    sort: z.enum(MEMORY_REVIEW_SORTS).optional(),
+    scope: z.enum(['all', 'global', 'project', 'team']).optional(),
+    projectId: z.string().min(1).max(200).optional(),
+    teamSlug: z.string().min(1).max(200).regex(SLUG_RE).optional(),
+    type: z.enum(MEMORY_TYPES).optional(),
+    /** Least used only: entries younger than this many days are left out. */
+    minAgeDays: z.coerce.number().int().min(0).max(3650).optional(),
+    warnings: z.enum(MEMORY_REVIEW_WARNINGS).optional(),
+    referenceGone: z.enum(['true', 'false']).optional(),
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(MEMORY_REVIEW_LIMIT_MAX)
+      .optional(),
+    /** The `next` of the previous page. */
+    cursor: z
+      .string()
+      .regex(/^\d{1,7}$/)
+      .optional(),
+  })
+  .refine(
+    (query) => (query.scope === 'project') === (query.projectId !== undefined),
+    { message: 'projectId goes with scope: project, and only with it' },
+  )
+  .refine(
+    (query) => (query.scope === 'team') === (query.teamSlug !== undefined),
+    { message: 'teamSlug goes with scope: team, and only with it' },
+  );
+export type MemoryReviewQuery = z.infer<typeof MemoryReviewQuerySchema>;
+
+export const MemoryUsageFiguresSchema = z.object({
+  readsLast90Days: z.number().int(),
+  reads: z.number().int(),
+  searchHits: z.number().int(),
+  indexShows: z.number().int(),
+  /** The newest UTC day (`YYYY-MM-DD`) an agent read the entry, or the last stamp's. */
+  lastReadAt: z.string().nullable(),
+});
+export type MemoryUsageFigures = z.infer<typeof MemoryUsageFiguresSchema>;
+
+/** One entry of the cleanup list, with its usage and why it is there. */
+export const MemoryReviewRowSchema = z
+  .object({
+    entry: MemoryEntrySchema,
+    usage: MemoryUsageFiguresSchema,
+    warning: z.enum(MEMORY_REVIEW_WARNING_KINDS).nullable(),
+    /** Referenced repo paths missing from the project folder at the last check. */
+    referencesGone: z.array(z.string()),
+    keptAt: z.string().nullable(),
+    forgottenAt: z.string().nullable(),
+    forgetBatchId: z.string().nullable(),
+  })
+  .meta({ id: 'MemoryReviewRow' });
+export type MemoryReviewRow = z.infer<typeof MemoryReviewRowSchema>;
+
+export const MemoryReviewPageSchema = z.object({
+  rows: z.array(MemoryReviewRowSchema),
+  /** Every row matching the filters, past this page. */
+  total: z.number().int(),
+  /** Least used only: entries the age filter alone keeps out; null on other tabs. */
+  younger: z.number().int().nullable(),
+  next: z.string().nullable(),
+});
+export type MemoryReviewPage = z.infer<typeof MemoryReviewPageSchema>;
+
+export const MemoryReviewIdsSchema = z.object({
+  ids: z.array(z.string()),
+  /** Matching rows left out because they carry a warning. */
+  warnedSkipped: z.number().int(),
+});
+export type MemoryReviewIds = z.infer<typeof MemoryReviewIdsSchema>;
+
+/** One cleanup: the entries a batch forgot that are still forgotten. */
+export const MemoryForgetBatchSchema = z
+  .object({
+    batchId: z.string(),
+    count: z.number().int(),
+    forgottenAt: z.string(),
+  })
+  .meta({ id: 'MemoryForgetBatch' });
+export type MemoryForgetBatch = z.infer<typeof MemoryForgetBatchSchema>;
+
+export const MemoryForgetBatchListSchema = z.object({
+  batches: z.array(MemoryForgetBatchSchema),
+});
+export type MemoryForgetBatchList = z.infer<typeof MemoryForgetBatchListSchema>;
+
+export const MemoryReviewSummarySchema = z.object({
+  active: z.number().int(),
+  pending: z.number().int(),
+  /** Active entries an agent ever read. */
+  read: z.number().int(),
+  neverRead: z.number().int(),
+  /** What Least used proposes now at the default age. */
+  proposed: z.number().int(),
+  proposedWithWarning: z.number().int(),
+  younger: z.number().int(),
+  kept: z.number().int(),
+  forgotten: z.number().int(),
+  minAgeDays: z.number().int(),
+  /** The first UTC day usage is counted from; null before any is. */
+  countedSince: z.string().nullable(),
+  /** True while the history of earlier runs is still being counted. */
+  counting: z.boolean(),
+  lastBatch: MemoryForgetBatchSchema.nullable(),
+});
+export type MemoryReviewSummary = z.infer<typeof MemoryReviewSummarySchema>;
+
+export const MemoryForgetBatchRequestSchema = z.object({
+  ids: z.array(z.string().min(1).max(200)).min(1).max(MEMORY_FORGET_BATCH_MAX),
+});
+export type MemoryForgetBatchRequest = z.infer<
+  typeof MemoryForgetBatchRequestSchema
+>;
+
+export const MemoryForgetBatchResultSchema = z.object({
+  /** Null when nothing was forgotten. */
+  batchId: z.string().nullable(),
+  forgotten: z.number().int(),
+  /** Entries left as they were: gone, or already forgotten meanwhile. */
+  skipped: z.array(
+    z.object({
+      id: z.string(),
+      handle: z.string().nullable(),
+      reason: z.string(),
+    }),
+  ),
+});
+export type MemoryForgetBatchResult = z.infer<
+  typeof MemoryForgetBatchResultSchema
+>;
+
+export const MemoryRestoreBatchResultSchema = z.object({
+  restored: z.number().int(),
+});
+export type MemoryRestoreBatchResult = z.infer<
+  typeof MemoryRestoreBatchResultSchema
+>;
+
+export const MemoryKeepResultSchema = z.object({
+  id: z.string(),
+  keptAt: z.string().nullable(),
+});
+export type MemoryKeepResult = z.infer<typeof MemoryKeepResultSchema>;
+
 /**
  * What deleting a team does with the entries filed under it: forget them
  * (each restorable), keep them under the slug (a later team of that name
@@ -348,6 +543,8 @@ export const MemoryImportRowSchema = z
     /** The key of an earlier row holding the same title and body. */
     sameAs: z.string().nullable(),
     alreadyImported: z.boolean(),
+    /** An imported entry with this text was forgotten; importing it again adds a new one. */
+    forgottenEarlier: z.boolean(),
     problem: z.string().nullable(),
   })
   .meta({ id: 'MemoryImportRow' });
@@ -501,6 +698,8 @@ export interface MemoryChangedEvent {
   status: MemoryStatus;
   projectId: string | null;
   teamSlug: string | null;
+  /** The cleanup batch a `bulk` forget or its undo moved; absent otherwise. */
+  batchId?: string;
 }
 
 export const MEMORY_CHANGES = [
@@ -519,14 +718,35 @@ export interface MemoryTextDatabase {
     rowid: number;
     id: string;
     handle: number;
+    title: string;
+    body: string;
     project_id: string | null;
     team_slug: string | null;
     type: MemoryType;
     status: MemoryStatus;
     status_before_forget: MemoryStatus | null;
+    forget_reason: string | null;
+    source_actor: MemoryActorKind;
     rev: number;
+    created_at: number;
     updated_at: number;
     last_used_at: number | null;
+    deleted_at: number | null;
+    kept_at: number | null;
+    forgotten_at: number | null;
+    restored_at: number | null;
+    forget_batch_id: string | null;
+    states_rule: number | null;
+    referenced_paths: string | null;
+    references_gone: string | null;
+    references_checked_at: number | null;
+  };
+  memory_usage_days: {
+    memory_id: string;
+    day: string;
+    reads: number;
+    search_hits: number;
+    index_shows: number;
     deleted_at: number | null;
   };
   memories_fts: {

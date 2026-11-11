@@ -1,6 +1,7 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
+import type { ExpressionBuilder, ExpressionWrapper, SqlBool } from 'kysely';
 
 import {
   CREATE_MEMORY_TEXT_TABLE,
@@ -11,11 +12,64 @@ import {
 import type { RunPlace } from '../../projects/projects.types';
 import { Memory } from '../entity/memory.entity';
 import {
+  MEMORY_COLD_DAYS,
   memoryHandle,
+  type MemoryReviewSort,
+  type MemoryReviewTab,
+  type MemoryReviewWarnings,
   type MemoryStatus,
   type MemoryTextDatabase,
   type MemoryType,
 } from '../memory.types';
+import {
+  forgottenColumns,
+  restoredColumns,
+} from '../utils/memory-forget-stamp';
+import { usageDay } from '../utils/memory-usage-day';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Which rows a cleanup read takes, counted over every row before any page. */
+export interface MemoryReviewFilter {
+  tab: MemoryReviewTab;
+  sort: MemoryReviewSort;
+  places: MemoryMatchScope['places'];
+  type?: MemoryType;
+  /** Least used only: rows younger than this many days are left out. */
+  minAgeDays: number;
+  /** Least used only: the age filter turned around, for what it keeps out. */
+  youngerOnly?: boolean;
+  warnings: MemoryReviewWarnings;
+  referenceGone: boolean;
+  now: Date;
+}
+
+/** One cleanup row's id and its usage, summed over the ledger. */
+export interface MemoryReviewHit {
+  id: string;
+  readsLast90Days: number;
+  reads: number;
+  searchHits: number;
+  indexShows: number;
+  lastReadDay: string | null;
+  warned: boolean;
+}
+
+/** A live row the sweep has not read for a rule or paths yet. */
+export interface MemoryUnmarkedRow {
+  id: string;
+  rev: number;
+  title: string;
+  body: string;
+}
+
+/** A project entry whose referenced paths are due a check. */
+export interface MemoryReferenceRow {
+  id: string;
+  rev: number;
+  projectId: string;
+  referencedPaths: string;
+}
 
 /** Which entries a read or a full-text match may return. */
 export interface MemoryMatchScope {
@@ -175,6 +229,7 @@ export class MemoryDao extends BaseDao<Memory> {
         status: 'forgotten',
         rev: eb('rev', '+', 1),
         updated_at: at.getTime(),
+        ...forgottenColumns(at, null),
       }))
       .where('deleted_at', 'is', null)
       .where('status', 'in', ['active', 'pending'])
@@ -195,6 +250,7 @@ export class MemoryDao extends BaseDao<Memory> {
         status: 'forgotten',
         rev: eb('rev', '+', 1),
         updated_at: at.getTime(),
+        ...forgottenColumns(at, null),
       }))
       .where('deleted_at', 'is', null)
       .where('team_slug', '=', teamSlug)
@@ -220,6 +276,447 @@ export class MemoryDao extends BaseDao<Memory> {
       .where('team_slug', '=', teamSlug)
       .executeTakeFirst();
     return Number(result.numUpdatedRows);
+  }
+
+  /** One page of the cleanup list, sorted and counted over every row. */
+  async reviewPage(
+    filter: MemoryReviewFilter,
+    offset: number,
+    limit: number,
+    em: EntityManager = this.em,
+  ): Promise<{ hits: MemoryReviewHit[]; total: number }> {
+    const base = this.review(filter, em);
+    const counted = await base
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirst();
+    const rows = await this.sorted(base, filter)
+      .select((eb) => [
+        'm.id',
+        lastReadDayExpression(eb).as('last_read'),
+        eb.fn.coalesce('u.recent_reads', eb.lit(0)).as('recent_reads'),
+        eb.fn.coalesce('u.reads', eb.lit(0)).as('reads'),
+        eb.fn.coalesce('u.search_hits', eb.lit(0)).as('search_hits'),
+        eb.fn.coalesce('u.index_shows', eb.lit(0)).as('index_shows'),
+        warnedExpression(eb).as('warned'),
+      ])
+      .limit(limit)
+      .offset(offset)
+      .execute();
+    return {
+      total: Number(counted?.n ?? 0),
+      hits: rows.map((row) => ({
+        id: row.id,
+        readsLast90Days: Number(row.recent_reads),
+        reads: Number(row.reads),
+        searchHits: Number(row.search_hits),
+        indexShows: Number(row.index_shows),
+        lastReadDay: row.last_read ?? null,
+        warned: Boolean(row.warned),
+      })),
+    };
+  }
+
+  /** How many rows a cleanup filter takes, over every row. */
+  async reviewCount(
+    filter: MemoryReviewFilter,
+    em: EntityManager = this.em,
+  ): Promise<number> {
+    const row = await this.review(filter, em)
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirst();
+    return Number(row?.n ?? 0);
+  }
+
+  /**
+   * The ids a cleanup filter takes, in its order, leaving out every row that
+   * carries a warning — what "Tick shown" ticks.
+   */
+  async reviewIds(
+    filter: MemoryReviewFilter,
+    max: number,
+    em: EntityManager = this.em,
+  ): Promise<{ ids: string[]; warnedSkipped: number }> {
+    const base = this.review(filter, em);
+    const warned = await base
+      .where((eb) => warnedExpression(eb))
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .executeTakeFirst();
+    const rows = await this.sorted(base, filter)
+      .where((eb) => eb.not(warnedExpression(eb)))
+      .select('m.id')
+      .limit(max)
+      .execute();
+    return {
+      ids: rows.map((row) => row.id),
+      warnedSkipped: Number(warned?.n ?? 0),
+    };
+  }
+
+  /** Live rows per status, and how many active ones an agent ever read. */
+  async reviewTotals(em: EntityManager = this.em): Promise<{
+    active: number;
+    pending: number;
+    forgotten: number;
+    kept: number;
+    read: number;
+  }> {
+    const db = this.database(em);
+    const byStatus = await db
+      .selectFrom('memories')
+      .select((eb) => ['status', eb.fn.countAll<number>().as('n')])
+      .where('deleted_at', 'is', null)
+      .groupBy('status')
+      .execute();
+    const count = (status: MemoryStatus) =>
+      Number(byStatus.find((row) => row.status === status)?.n ?? 0);
+    const kept = await db
+      .selectFrom('memories')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .where('deleted_at', 'is', null)
+      .where('status', 'in', ['active', 'pending'])
+      .where('kept_at', 'is not', null)
+      .executeTakeFirst();
+    const read = await db
+      .selectFrom('memories as m')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .where('m.deleted_at', 'is', null)
+      .where('m.status', '=', 'active')
+      .where((eb) =>
+        eb.or([
+          eb('m.last_used_at', 'is not', null),
+          eb(
+            'm.id',
+            'in',
+            eb
+              .selectFrom('memory_usage_days')
+              .select('memory_usage_days.memory_id')
+              .where('memory_usage_days.deleted_at', 'is', null)
+              .where('memory_usage_days.reads', '>', 0),
+          ),
+        ]),
+      )
+      .executeTakeFirst();
+    return {
+      active: count('active'),
+      pending: count('pending'),
+      forgotten: count('forgotten'),
+      kept: Number(kept?.n ?? 0),
+      read: Number(read?.n ?? 0),
+    };
+  }
+
+  /** The first UTC day the usage ledger holds, or null when it holds none. */
+  async firstUsageDay(em: EntityManager = this.em): Promise<string | null> {
+    const row = await this.database(em)
+      .selectFrom('memory_usage_days')
+      .select((eb) => eb.fn.min('day').as('day'))
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst();
+    return row?.day ?? null;
+  }
+
+  /**
+   * Forget these active and pending rows as one batch, outside the entity so
+   * the list's order does not move, and name the rows it took.
+   */
+  async forgetBatch(
+    ids: readonly string[],
+    batchId: string,
+    at: Date,
+    em: EntityManager = this.em,
+  ): Promise<string[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    const rows = await this.database(em)
+      .updateTable('memories')
+      .set((eb) => ({
+        status_before_forget: eb.ref('status'),
+        status: 'forgotten',
+        forget_reason: null,
+        rev: eb('rev', '+', 1),
+        ...forgottenColumns(at, batchId),
+      }))
+      .where('id', 'in', [...ids])
+      .where('deleted_at', 'is', null)
+      .where('status', 'in', ['active', 'pending'])
+      .returning('id')
+      .execute();
+    return rows.map((row) => row.id);
+  }
+
+  /**
+   * Return every row a batch forgot to the status it had, unless it left the
+   * batch since: restored by hand, or forgotten again on its own.
+   */
+  async restoreBatch(
+    batchId: string,
+    at: Date,
+    em: EntityManager = this.em,
+  ): Promise<number> {
+    const result = await this.database(em)
+      .updateTable('memories')
+      .set((eb) => ({
+        status: eb.fn.coalesce(
+          'status_before_forget',
+          eb.val<MemoryStatus>('active'),
+        ),
+        status_before_forget: null,
+        forget_reason: null,
+        rev: eb('rev', '+', 1),
+        ...restoredColumns(at),
+      }))
+      .where('deleted_at', 'is', null)
+      .where('status', '=', 'forgotten')
+      .where('forget_batch_id', '=', batchId)
+      .executeTakeFirst();
+    return Number(result.numUpdatedRows);
+  }
+
+  /** The newest cleanups whose entries are still forgotten. */
+  async batches(
+    limit: number,
+    em: EntityManager = this.em,
+  ): Promise<{ batchId: string; count: number; forgottenAt: number }[]> {
+    const rows = await this.database(em)
+      .selectFrom('memories')
+      .select((eb) => [
+        'forget_batch_id',
+        eb.fn.countAll<number>().as('n'),
+        eb.fn.max('forgotten_at').as('at'),
+      ])
+      .where('deleted_at', 'is', null)
+      .where('status', '=', 'forgotten')
+      .where('forget_batch_id', 'is not', null)
+      .groupBy('forget_batch_id')
+      .orderBy('at', 'desc')
+      .limit(limit)
+      .execute();
+    return rows.flatMap((row) =>
+      row.forget_batch_id === null
+        ? []
+        : [
+            {
+              batchId: row.forget_batch_id,
+              count: Number(row.n),
+              forgottenAt: Number(row.at ?? 0),
+            },
+          ],
+    );
+  }
+
+  /** Keep a live row out of the cleanup list, or stop; false when there is none. */
+  async setKept(
+    id: string,
+    at: Date | null,
+    em: EntityManager = this.em,
+  ): Promise<boolean> {
+    const result = await this.database(em)
+      .updateTable('memories')
+      .set({ kept_at: at === null ? null : at.getTime() })
+      .where('id', '=', id)
+      .where('deleted_at', 'is', null)
+      .where('status', 'in', ['active', 'pending'])
+      .executeTakeFirst();
+    return Number(result.numUpdatedRows) > 0;
+  }
+
+  /** Live rows the sweep has not read for a rule or paths yet, oldest handle first. */
+  async unmarked(
+    limit: number,
+    em: EntityManager = this.em,
+  ): Promise<MemoryUnmarkedRow[]> {
+    return this.database(em)
+      .selectFrom('memories')
+      .select(['id', 'rev', 'title', 'body'])
+      .where('deleted_at', 'is', null)
+      .where('states_rule', 'is', null)
+      .orderBy('handle')
+      .limit(limit)
+      .execute();
+  }
+
+  /** Store what the sweep read, unless the row was written since it was read. */
+  async mark(
+    row: Pick<MemoryUnmarkedRow, 'id' | 'rev'>,
+    marks: { statesRule: boolean; referencedPaths: string | null },
+    em: EntityManager = this.em,
+  ): Promise<void> {
+    await this.database(em)
+      .updateTable('memories')
+      .set({
+        states_rule: marks.statesRule ? 1 : 0,
+        referenced_paths: marks.referencedPaths,
+      })
+      .where('id', '=', row.id)
+      .where('rev', '=', row.rev)
+      .execute();
+  }
+
+  /** Live project entries naming paths whose last check is older than `before`. */
+  async referencesDue(
+    before: Date,
+    em: EntityManager = this.em,
+  ): Promise<MemoryReferenceRow[]> {
+    const rows = await this.database(em)
+      .selectFrom('memories')
+      .select(['id', 'rev', 'project_id', 'referenced_paths'])
+      .where('deleted_at', 'is', null)
+      .where('status', 'in', ['active', 'pending'])
+      .where('project_id', 'is not', null)
+      .where('referenced_paths', 'is not', null)
+      .where((eb) =>
+        eb.or([
+          eb('references_checked_at', 'is', null),
+          eb('references_checked_at', '<', before.getTime()),
+        ]),
+      )
+      .execute();
+    return rows.flatMap((row) =>
+      row.project_id === null || row.referenced_paths === null
+        ? []
+        : [
+            {
+              id: row.id,
+              rev: row.rev,
+              projectId: row.project_id,
+              referencedPaths: row.referenced_paths,
+            },
+          ],
+    );
+  }
+
+  /**
+   * Store a reference check's result without moving the entry's edit time,
+   * unless the entry was written since the check read its paths.
+   */
+  async setReferencesGone(
+    row: Pick<MemoryReferenceRow, 'id' | 'rev'>,
+    gone: string | null,
+    at: Date,
+    em: EntityManager = this.em,
+  ): Promise<void> {
+    await this.database(em)
+      .updateTable('memories')
+      .set({ references_gone: gone, references_checked_at: at.getTime() })
+      .where('id', '=', row.id)
+      .where('rev', '=', row.rev)
+      .execute();
+  }
+
+  /** The cleanup rows of a tab with its filters, joined to their summed usage. */
+  private review(filter: MemoryReviewFilter, em: EntityManager) {
+    const { tab, places, type, warnings, referenceGone, now } = filter;
+    const recentDay = usageDay(
+      new Date(now.getTime() - MEMORY_COLD_DAYS * DAY_MS),
+    );
+    const db = this.database(em);
+    const usage = db
+      .selectFrom('memory_usage_days')
+      .where('memory_usage_days.deleted_at', 'is', null)
+      .select((eb) => [
+        'memory_usage_days.memory_id',
+        eb.fn.sum<number>('memory_usage_days.reads').as('reads'),
+        eb.fn.sum<number>('memory_usage_days.search_hits').as('search_hits'),
+        eb.fn.sum<number>('memory_usage_days.index_shows').as('index_shows'),
+        eb.fn
+          .sum<number>(
+            eb
+              .case()
+              .when('memory_usage_days.day', '>=', recentDay)
+              .then(eb.ref('memory_usage_days.reads'))
+              .else(0)
+              .end(),
+          )
+          .as('recent_reads'),
+        eb.fn
+          .max(
+            eb
+              .case()
+              .when('memory_usage_days.reads', '>', 0)
+              .then(eb.ref('memory_usage_days.day'))
+              .end(),
+          )
+          .as('last_read_day'),
+      ])
+      .groupBy('memory_usage_days.memory_id')
+      .as('u');
+    let query = this.scoped(
+      {
+        statuses: tab === 'forgotten' ? ['forgotten'] : ['active', 'pending'],
+        places,
+      },
+      em,
+    ).leftJoin(usage, (join) => join.onRef('u.memory_id', '=', 'm.id'));
+    if (tab === 'kept') {
+      query = query.where('m.kept_at', 'is not', null);
+    }
+    if (tab === 'cold') {
+      const coldBefore = now.getTime() - MEMORY_COLD_DAYS * DAY_MS;
+      const ageBefore = now.getTime() - filter.minAgeDays * DAY_MS;
+      query = query
+        .where('m.kept_at', 'is', null)
+        .where((eb) =>
+          eb.or([
+            eb('u.recent_reads', 'is', null),
+            eb('u.recent_reads', '=', 0),
+          ]),
+        )
+        .where((eb) =>
+          eb.or([
+            eb('m.last_used_at', 'is', null),
+            eb('m.last_used_at', '<', coldBefore),
+          ]),
+        )
+        .where('m.created_at', filter.youngerOnly ? '>' : '<=', ageBefore);
+    }
+    if (type !== undefined) {
+      query = query.where('m.type', '=', type);
+    }
+    if (warnings === 'only') {
+      query = query.where((eb) => warnedExpression(eb));
+    }
+    if (warnings === 'hide') {
+      query = query.where((eb) => eb.not(warnedExpression(eb)));
+    }
+    if (referenceGone) {
+      query = query.where('m.references_gone', 'is not', null);
+    }
+    return query;
+  }
+
+  private sorted(
+    query: ReturnType<MemoryDao['review']>,
+    filter: MemoryReviewFilter,
+  ) {
+    if (filter.tab === 'forgotten') {
+      return query
+        .orderBy(
+          (eb) => eb.fn.coalesce('m.forgotten_at', 'm.updated_at'),
+          'desc',
+        )
+        .orderBy('m.id', 'desc');
+    }
+    switch (filter.sort) {
+      case 'oldestSaved':
+        return query.orderBy('m.created_at').orderBy('m.id');
+      case 'largest':
+        return query
+          .orderBy((eb) => eb.fn('length', ['m.body']), 'desc')
+          .orderBy('m.id');
+      case 'longestSinceRead':
+        return query
+          .orderBy((eb) => lastReadDayExpression(eb))
+          .orderBy('m.created_at')
+          .orderBy('m.id');
+      case 'leastUsed':
+        return query
+          .orderBy((eb) => eb.fn.coalesce('u.recent_reads', eb.lit(0)))
+          .orderBy((eb) => eb.fn.coalesce('u.reads', eb.lit(0)))
+          .orderBy((eb) => lastReadDayExpression(eb))
+          .orderBy('m.created_at')
+          .orderBy('m.id');
+    }
   }
 
   /** Live rows of the given statuses in the given scope. */
@@ -323,4 +820,44 @@ export class MemoryDao extends BaseDao<Memory> {
   private database(em = this.em) {
     return em.getKysely<MemoryTextDatabase>({ convertValues: false });
   }
+}
+
+type MemoryRow = MemoryTextDatabase['memories'];
+
+/**
+ * Whether a row carries the "looks like a rule" warning: a correction or an
+ * entry about the user, one the user wrote, one whose text states a limit,
+ * or one the sweep has not read yet.
+ */
+function warnedExpression<DB extends { m: MemoryRow }>(
+  eb: ExpressionBuilder<DB, 'm'>,
+): ExpressionWrapper<{ m: MemoryRow }, 'm', SqlBool> {
+  const ref = eb as unknown as ExpressionBuilder<{ m: MemoryRow }, 'm'>;
+  return ref.or([
+    ref('m.type', 'in', ['feedback', 'user']),
+    ref('m.source_actor', '=', 'user'),
+    ref('m.states_rule', 'is', null),
+    ref('m.states_rule', '=', 1),
+  ]);
+}
+
+type ReviewRefs = { m: MemoryRow; u: { last_read_day: string | null } };
+
+/**
+ * The UTC day an entry was last read: the later of the ledger's last read
+ * day and the last read stamp's day, null when it was never read.
+ */
+function lastReadDayExpression<DB extends ReviewRefs>(
+  eb: ExpressionBuilder<DB, 'm' | 'u'>,
+): ExpressionWrapper<ReviewRefs, 'm' | 'u', string | null> {
+  const ref = eb as unknown as ExpressionBuilder<ReviewRefs, 'm' | 'u'>;
+  const stamped = ref.fn<string | null>('strftime', [
+    ref.val('%Y-%m-%d'),
+    ref('m.last_used_at', '/', 1000),
+    ref.val('unixepoch'),
+  ]);
+  return ref.fn<string | null>('max', [
+    ref.fn.coalesce('u.last_read_day', stamped),
+    ref.fn.coalesce(stamped, 'u.last_read_day'),
+  ]);
 }

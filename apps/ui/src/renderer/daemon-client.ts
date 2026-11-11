@@ -1144,6 +1144,8 @@ export interface MemoryChangedEvent {
   change: string;
   projectId: string | null;
   teamSlug: string | null;
+  /** The cleanup batch a bulk forget or its undo moved; null otherwise. */
+  batchId: string | null;
 }
 
 /** One write to the knowledge store — never a document's text. */
@@ -1188,7 +1190,7 @@ export function parseMemoryChanged(data: unknown): MemoryChangedEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;
   }
-  const { memoryId, change, projectId, teamSlug } = data as Record<
+  const { memoryId, change, projectId, teamSlug, batchId } = data as Record<
     string,
     unknown
   >;
@@ -1203,6 +1205,7 @@ export function parseMemoryChanged(data: unknown): MemoryChangedEvent | null {
     change,
     projectId: typeof projectId === 'string' ? projectId : null,
     teamSlug: typeof teamSlug === 'string' ? teamSlug : null,
+    batchId: typeof batchId === 'string' ? batchId : null,
   };
 }
 

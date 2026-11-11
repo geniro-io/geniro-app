@@ -11,6 +11,7 @@ import { MemoryDao } from './dao/memory.dao';
 import { MemoryUsageDao } from './dao/memory-usage.dao';
 import { MemoryService } from './services/memory.service';
 import { MemoryEventBus } from './services/memory-events.bus';
+import { MemoryReviewService } from './services/memory-review.service';
 import { MemoryTextIndexService } from './services/memory-text-index.service';
 import { MemoryUsageService } from './services/memory-usage.service';
 import { MemoryUsageBackfillService } from './services/memory-usage-backfill.service';
@@ -37,6 +38,7 @@ import { MemoryUsageBackfillService } from './services/memory-usage-backfill.ser
     ItemDao,
     MemoryService,
     MemoryEventBus,
+    MemoryReviewService,
     MemoryTextIndexService,
     MemoryUsageService,
     MemoryUsageBackfillService,
@@ -44,6 +46,7 @@ import { MemoryUsageBackfillService } from './services/memory-usage-backfill.ser
   exports: [
     MemoryService,
     MemoryEventBus,
+    MemoryReviewService,
     MemoryTextIndexService,
     MemoryUsageBackfillService,
   ],

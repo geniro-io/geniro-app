@@ -91,4 +91,37 @@ export class Memory extends TimestampsEntity {
    */
   @Property({ type: DateTimeType, nullable: true })
   approvedAt: Date | null = null;
+
+  /** Set while the user keeps the entry out of the cleanup list. */
+  @Property({ type: DateTimeType, nullable: true })
+  keptAt: Date | null = null;
+
+  /** When the entry was last forgotten; null on rows forgotten before it existed. */
+  @Property({ type: DateTimeType, nullable: true })
+  forgottenAt: Date | null = null;
+
+  @Property({ type: DateTimeType, nullable: true })
+  restoredAt: Date | null = null;
+
+  /** The cleanup that forgot it; a batch undo restores only rows still carrying it. */
+  @Property({ type: 'string', nullable: true })
+  forgetBatchId: string | null = null;
+
+  /** Whether the text opens with a stated limit; null until the sweep has read it. */
+  @Property({ type: 'boolean', nullable: true })
+  statesRule: boolean | null = null;
+
+  /** Repo-relative paths the text names, as a JSON array of strings. */
+  @Property({ type: 'text', nullable: true })
+  referencedPaths: string | null = null;
+
+  /**
+   * The referenced paths missing from the project folder at the last check,
+   * as a JSON array; null when none is missing or none could be judged.
+   */
+  @Property({ type: 'text', nullable: true })
+  referencesGone: string | null = null;
+
+  @Property({ type: DateTimeType, nullable: true })
+  referencesCheckedAt: Date | null = null;
 }

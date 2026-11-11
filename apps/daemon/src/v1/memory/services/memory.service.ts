@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 
@@ -28,15 +30,18 @@ import {
   type MemoryEntry,
   type MemoryExport,
   type MemoryForgetAll,
+  type MemoryForgetBatchResult,
   type MemoryForgetOutcome,
   memoryHandle,
   type MemoryHit,
   type MemoryImportNote,
   type MemoryImportResult,
+  type MemoryKeepResult,
   type MemoryList,
   type MemoryListQuery,
   type MemoryPatch,
   type MemoryRefusalCode,
+  type MemoryRestoreBatchResult,
   type MemoryRunSnapshot,
   type MemorySaveInput,
   type MemorySaveOutcome,
@@ -46,6 +51,12 @@ import {
   type TeamMemoryFate,
 } from '../memory.types';
 import { memoryExportMarkdown } from '../utils/memory-export';
+import { markForgotten, markRestored } from '../utils/memory-forget-stamp';
+import {
+  referencedPathsOf,
+  statesRule,
+  storedPaths,
+} from '../utils/memory-references';
 import {
   excerptOf,
   importedText,
@@ -531,6 +542,84 @@ export class MemoryService {
     });
   }
 
+  /**
+   * Forget these entries as one cleanup batch, each restorable on its own or
+   * with the batch. An entry already forgotten or gone is left as it is and
+   * named.
+   */
+  forgetBatch(ids: readonly string[]): Promise<MemoryForgetBatchResult> {
+    return this.serialize(async () => {
+      const em = this.em.fork();
+      const wanted = [...new Set(ids)];
+      const batchId = randomUUID();
+      const taken = new Set(
+        await this.memories.forgetBatch(wanted, batchId, new Date(), em),
+      );
+      const left = wanted.filter((id) => !taken.has(id));
+      const known = new Map(
+        (await this.memories.getByIds(left, em)).map((row) => [row.id, row]),
+      );
+      const skipped = left.map((id) => {
+        const row = known.get(id);
+        return {
+          id,
+          handle: row ? memoryHandle(row.handle) : null,
+          reason: row ? `already ${row.status}` : 'no such entry',
+        };
+      });
+      if (taken.size === 0) {
+        return { batchId: null, forgotten: 0, skipped };
+      }
+      this.events.publish({
+        memoryId: null,
+        change: 'bulk',
+        status: 'forgotten',
+        projectId: null,
+        teamSlug: null,
+        batchId,
+      });
+      return { batchId, forgotten: taken.size, skipped };
+    });
+  }
+
+  /** Undo a cleanup: every entry still forgotten by it returns to its own status. */
+  restoreBatch(batchId: string): Promise<MemoryRestoreBatchResult> {
+    return this.serialize(async () => {
+      const restored = await this.memories.restoreBatch(
+        batchId,
+        new Date(),
+        this.em.fork(),
+      );
+      if (restored > 0) {
+        this.events.publish({
+          memoryId: null,
+          change: 'bulk',
+          status: 'active',
+          projectId: null,
+          teamSlug: null,
+          batchId,
+        });
+      }
+      return { restored };
+    });
+  }
+
+  /** Keep an active or pending entry out of the cleanup list, or stop keeping it. */
+  setKept(id: string, kept: boolean): Promise<MemoryKeepResult | null> {
+    return this.serialize(async () => {
+      const em = this.em.fork();
+      const at = kept ? new Date() : null;
+      if (!(await this.memories.setKept(id, at, em))) {
+        return null;
+      }
+      const row = await this.memories.getById(id, em);
+      if (row) {
+        this.publish(row, 'updated');
+      }
+      return { id, keptAt: at?.toISOString() ?? null };
+    });
+  }
+
   /** Every active and pending entry as one Markdown document. */
   async exportMarkdown(now = new Date()): Promise<MemoryExport> {
     const em = this.em.fork();
@@ -582,6 +671,21 @@ export class MemoryService {
   }
 
   /**
+   * What the forgotten imported entries say, each as `importedText` — the
+   * preview's mark only: an import still writes a ticked note again.
+   */
+  async forgottenImportedTexts(
+    em: EntityManager = this.em.fork(),
+  ): Promise<Set<string>> {
+    const rows = await this.memories.getAll(
+      { sourceActor: 'import', status: 'forgotten' },
+      { fields: ['title', 'body'] },
+      em,
+    );
+    return new Set(rows.map((row) => importedText(row.title, row.body)));
+  }
+
+  /**
    * Write the notes the user ticked in the import preview. Ticking one is the
    * user's review: each lands active and approved, past the near-duplicate
    * check the preview already showed, in one write announced as one `bulk`
@@ -623,6 +727,7 @@ export class MemoryService {
         row.handle = handle++;
         row.title = note.title.trim();
         row.body = note.body.trim();
+        markText(row);
         row.type = note.type;
         row.projectId = note.projectId;
         row.status = 'active';
@@ -748,6 +853,7 @@ export class MemoryService {
     }
     row.title = input.title.trim();
     row.body = input.body.trim();
+    markText(row);
     row.type = input.type ?? existing?.type ?? 'project';
     row.projectId = target.projectId;
     row.teamSlug = target.teamSlug;
@@ -802,6 +908,7 @@ export class MemoryService {
     row.statusBeforeForget = row.status;
     row.status = 'forgotten';
     row.forgetReason = trimmed;
+    markForgotten(row, new Date());
     row.rev += 1;
     await em.flush();
     this.publish(row, 'forgotten');
@@ -952,12 +1059,14 @@ function applyStatus(
     }
     row.statusBeforeForget = row.status;
     row.status = 'forgotten';
+    markForgotten(row, now);
     return 'forgotten';
   }
   if (row.status === 'forgotten') {
     row.status = row.statusBeforeForget ?? 'active';
     row.statusBeforeForget = null;
     row.forgetReason = null;
+    markRestored(row, now);
     return 'restored';
   }
   if (row.status === 'active' && row.approvedAt !== null) {
@@ -1023,6 +1132,14 @@ function targetPlace(
     : { projectId: place.projectId, teamSlug: null };
 }
 
+/** Read the text for a stated limit and the repo paths it names. */
+function markText(row: Memory): void {
+  row.statesRule = statesRule(row.title, row.body);
+  row.referencedPaths = storedPaths(referencedPathsOf(row.title, row.body));
+  row.referencesGone = null;
+  row.referencesCheckedAt = null;
+}
+
 function stampSource(row: Memory, actor: MemoryActor): void {
   row.approvedAt = null;
   row.sourceActor = actor.kind;
@@ -1032,7 +1149,7 @@ function stampSource(row: Memory, actor: MemoryActor): void {
   row.sourceImportedFrom = actor.kind === 'import' ? actor.importedFrom : null;
 }
 
-function toEntry(row: Memory): MemoryEntry {
+export function toEntry(row: Memory): MemoryEntry {
   return {
     id: row.id,
     handle: memoryHandle(row.handle),

@@ -1969,4 +1969,188 @@ describe('MemoryService', () => {
       ]);
     });
   });
+
+  describe('cleanup batches', () => {
+    const FACTS = { taskId: null, cwd: '/repo/app' };
+
+    beforeEach(() => {
+      db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+    });
+
+    async function seed(
+      title: string,
+      actor: MemoryActor = USER,
+      place: RunPlace = NONE,
+    ) {
+      return created(await db.service.save(actor, { title, body: 'x' }, place));
+    }
+
+    async function rowOf(id: string) {
+      return db.em.fork().findOneOrFail(Memory, { id });
+    }
+
+    it('undo returns each row to its own earlier status, pending included', async () => {
+      const active = await seed('Pnpm workspace');
+      db.service.setConfig({
+        enabled: true,
+        agentWrites: 'pending',
+        nativeMemoryOff: false,
+      });
+      const pending = await seed('Loopback binding', AGENT);
+      db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+      expect(pending.status).toBe('pending');
+
+      const batch = await db.service.forgetBatch([active.id, pending.id]);
+
+      expect(batch).toMatchObject({ forgotten: 2, skipped: [] });
+      expect(await db.service.restoreBatch(batch.batchId!)).toEqual({
+        restored: 2,
+      });
+      const rows = await db.em
+        .fork()
+        .find(Memory, {}, { orderBy: { handle: 'asc' } });
+      expect(rows.map((row) => [row.title, row.status])).toEqual([
+        ['Pnpm workspace', 'active'],
+        ['Loopback binding', 'pending'],
+      ]);
+    });
+
+    it('a row restored by hand then forgotten by hand is not touched by the old batch', async () => {
+      const entry = await seed('Pnpm workspace');
+      const batch = await db.service.forgetBatch([entry.id]);
+      await db.service.setStatus(USER, entry.id, 'active');
+      await db.service.setStatus(USER, entry.id, 'forgotten');
+
+      expect(await db.service.restoreBatch(batch.batchId!)).toEqual({
+        restored: 0,
+      });
+      expect((await rowOf(entry.id)).status).toBe('forgotten');
+    });
+
+    it('forgetting a batch drops the entries from a new index and restoring returns them', async () => {
+      const entry = await seed('Pnpm workspace');
+      await seed('Loopback binding');
+      const indexed = async () =>
+        (await db.service.runSnapshot(FACTS)).memoryIndex ?? '';
+      expect(await indexed()).toContain('Pnpm workspace');
+
+      const batch = await db.service.forgetBatch([entry.id]);
+
+      expect(await indexed()).not.toContain('Pnpm workspace');
+      expect(await indexed()).toContain('Loopback binding');
+      await db.service.restoreBatch(batch.batchId!);
+      expect(await indexed()).toContain('Pnpm workspace');
+    });
+
+    it('forgetBatch skips an entry already forgotten or gone, names it, and publishes one bulk change', async () => {
+      const forgotten = await seed('Pnpm workspace');
+      const live = await seed('Loopback binding');
+      await db.service.setStatus(USER, forgotten.id, 'forgotten');
+      const published: MemoryChangedEvent[] = [];
+      db.events.allChanges().subscribe((event) => published.push(event));
+
+      const result = await db.service.forgetBatch([
+        forgotten.id,
+        live.id,
+        'no-such-id',
+      ]);
+
+      expect(result).toEqual({
+        batchId: expect.any(String),
+        forgotten: 1,
+        skipped: [
+          {
+            id: forgotten.id,
+            handle: forgotten.handle,
+            reason: 'already forgotten',
+          },
+          { id: 'no-such-id', handle: null, reason: 'no such entry' },
+        ],
+      });
+      expect(published.filter((event) => event.change === 'bulk')).toEqual([
+        {
+          memoryId: null,
+          change: 'bulk',
+          status: 'forgotten',
+          projectId: null,
+          teamSlug: null,
+          batchId: result.batchId,
+        },
+      ]);
+      expect((await rowOf(live.id)).forgetBatchId).toBe(result.batchId);
+    });
+
+    it('every forget path stamps forgottenAt and clears the batch id, and a restore stamps restoredAt', async () => {
+      const batched = await seed('Pnpm workspace');
+      const byAgent = await seed('Loopback binding', AGENT);
+      const byHand = await seed('Colima restarts');
+      const swept = await seed('Changelog format');
+      const batch = await db.service.forgetBatch([batched.id]);
+
+      await db.service.forget(AGENT, byAgent.handle, 'obsolete', NONE);
+      await db.service.setStatus(USER, byHand.id, 'forgotten');
+      await db.service.forgetAll();
+
+      const stateOf = async (id: string) => {
+        const row = await rowOf(id);
+        return {
+          status: row.status,
+          forgetBatchId: row.forgetBatchId,
+          forgotten: row.forgottenAt !== null,
+          restored: row.restoredAt !== null,
+        };
+      };
+      const forgottenByEachPath = {
+        status: 'forgotten',
+        forgetBatchId: null,
+        forgotten: true,
+        restored: false,
+      };
+      expect(await stateOf(batched.id)).toEqual({
+        ...forgottenByEachPath,
+        forgetBatchId: batch.batchId,
+      });
+      expect(await stateOf(byAgent.id)).toEqual(forgottenByEachPath);
+      expect(await stateOf(byHand.id)).toEqual(forgottenByEachPath);
+      expect(await stateOf(swept.id)).toEqual(forgottenByEachPath);
+
+      await db.service.setStatus(USER, batched.id, 'active');
+
+      expect(await stateOf(batched.id)).toEqual({
+        status: 'active',
+        forgetBatchId: null,
+        forgotten: false,
+        restored: true,
+      });
+    });
+
+    it('a save marks whether the text states a limit and which paths it names', async () => {
+      await db.service.save(
+        AGENT,
+        {
+          title: 'Build rule',
+          body: 'Never run npm. See apps/daemon/src/main.ts and docs/a.md:12.',
+        },
+        NONE,
+      );
+      await db.service.save(
+        AGENT,
+        { title: 'Colima restarts', body: 'Daemon shares colima.' },
+        NONE,
+      );
+
+      const rows = await db.em
+        .fork()
+        .find(Memory, {}, { orderBy: { handle: 'asc' } });
+      expect(
+        rows.map((row) => [
+          row.statesRule,
+          row.referencedPaths === null ? null : JSON.parse(row.referencedPaths),
+        ]),
+      ).toEqual([
+        [true, ['apps/daemon/src/main.ts', 'docs/a.md']],
+        [false, null],
+      ]);
+    });
+  });
 });

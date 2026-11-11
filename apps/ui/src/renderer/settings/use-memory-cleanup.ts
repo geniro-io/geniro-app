@@ -208,6 +208,9 @@ export function useMemoryCleanup(
   };
 
   const setTab = (nextTab: MemoryCleanupTab): void => {
+    if (nextTab === tab) {
+      return;
+    }
     setTabState(nextTab);
     setNotice(null);
     setRows([]);
@@ -420,7 +423,8 @@ export function useMemoryCleanup(
     error,
     selected,
     warnedSelected: warned.size,
-    tickSkipped,
+    tickSkipped:
+      tickSkipped === null ? null : Math.max(0, tickSkipped - warned.size),
     ticking,
     toggle,
     tickShown,

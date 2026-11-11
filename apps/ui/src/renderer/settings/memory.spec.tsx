@@ -1359,6 +1359,49 @@ describe('Memory clean up', () => {
     });
   });
 
+  it('keeps the rows when the tab that is already open is pressed again', async () => {
+    await render({
+      api: fakeApi(undefined, () => ({
+        rows: [COLD, COLD_RULE],
+        total: 2,
+        younger: 0,
+        next: null,
+      })),
+    });
+    await press(button(container, 'Review…'));
+    const leastUsed = [...inDialog().querySelectorAll('button')].find(
+      (candidate) => candidate.textContent?.startsWith('Least used'),
+    );
+
+    await press(leastUsed as HTMLButtonElement);
+
+    expect(
+      inDialog().querySelectorAll('[data-slot="memory-cleanup-row"]'),
+    ).toHaveLength(2);
+    expect(inDialog().textContent).toContain('Sprint 41 retro notes');
+    expect(inDialog().textContent).not.toContain('Nothing older than');
+  });
+
+  it('stops counting a warned row as skipped once it is ticked by hand', async () => {
+    await render({
+      api: fakeApi(undefined, () => ({
+        rows: [COLD, COLD_RULE],
+        total: 2,
+        younger: 0,
+        next: null,
+      })),
+    });
+    await press(button(container, 'Review…'));
+
+    await press(button(inDialog(), 'Tick shown'));
+    await press(pick('m22'));
+
+    expect(
+      inDialog().querySelector('[data-slot="memory-cleanup-picked"]')
+        ?.textContent,
+    ).toBe('2 selected');
+  });
+
   it('drops a Tick shown answer that lands after the filters changed', async () => {
     let answer: (value: {
       ids: string[];

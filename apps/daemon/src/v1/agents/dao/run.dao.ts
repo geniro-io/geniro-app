@@ -251,6 +251,35 @@ export class RunDao extends BaseDao<Run> {
     );
   }
 
+  /**
+   * Where the runs created since `since` were filed — any at all, their
+   * projects and their teams — archived ones included.
+   */
+  async placesWithRunsSince(
+    since: Date,
+    txEm?: EntityManager,
+  ): Promise<{ any: boolean; projectIds: string[]; teamSlugs: string[] }> {
+    const rows = await this.getRepo(txEm).find(
+      { createdAt: { $gte: since } },
+      { fields: ['projectId', 'teamId'], disableIdentityMap: true },
+    );
+    const projectIds = new Set<string>();
+    const teamSlugs = new Set<string>();
+    for (const run of rows) {
+      if (run.projectId !== null) {
+        projectIds.add(run.projectId);
+      }
+      if (run.teamId !== null) {
+        teamSlugs.add(run.teamId);
+      }
+    }
+    return {
+      any: rows.length > 0,
+      projectIds: [...projectIds],
+      teamSlugs: [...teamSlugs],
+    };
+  }
+
   /** The slugs of every team some analysis was started on. */
   async teamAnalysisSlugs(txEm?: EntityManager): Promise<string[]> {
     const rows = await this.getRepo(txEm).find(

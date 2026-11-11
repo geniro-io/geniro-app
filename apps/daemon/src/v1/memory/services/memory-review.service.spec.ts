@@ -5,9 +5,11 @@ import { Logger } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { tempDir } from '../../agents/__tests__/temp-dir';
+import { RunDao } from '../../agents/dao/run.dao';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import type { RunPlace } from '../../projects/projects.types';
+import { Run } from '../../runs/entity/run.entity';
 import { make, memoryDb } from '../__tests__/memory-db';
 import { MemoryDao } from '../dao/memory.dao';
 import { Memory } from '../entity/memory.entity';
@@ -77,6 +79,7 @@ describe('MemoryReviewService', () => {
       new MemoryDao(db.em),
       new ProjectDao(db.em),
       db.usage,
+      new RunDao(db.em),
     );
   });
 
@@ -358,6 +361,7 @@ describe('MemoryReviewService', () => {
       enabled: true,
       agentWrites: 'pending',
       nativeMemoryOff: false,
+      autoForgetAfterDays: null,
     });
     await save(AGENT, { title: 'Colima restarts', body: 'x' });
     db.service.setConfig(DEFAULT_MEMORY_CONFIG);
@@ -383,9 +387,44 @@ describe('MemoryReviewService', () => {
         count: 1,
         forgottenAt: expect.any(String),
       },
+      autoForget: null,
     });
     await db.usage.markBackfilled();
     expect((await review.summary(NOW)).counting).toBe(false);
+  });
+
+  it('the auto-forget figure is what the sweep takes now, with the warned ones beside it', async () => {
+    const em = db.em.fork();
+    em.persist(make(Run, { id: 'r-recent', status: 'completed' }));
+    await em.flush();
+    await db.em
+      .fork()
+      .nativeUpdate(Run, { id: 'r-recent' }, { createdAt: ago(-99) });
+    await save(AGENT, { title: 'Cold one', body: 'x' });
+    await save(AGENT, { title: 'Cold two', body: 'x' });
+    await save(USER, { title: 'Written by me', body: 'x' });
+    const kept = await save(AGENT, { title: 'Kept entry', body: 'x' });
+    await db.service.setKept(kept.id, true);
+    const read = await save(AGENT, { title: 'Read lately', body: 'x' });
+    await use(read.id, daysBefore(3), 1);
+
+    expect((await review.summary(NOW, 30)).autoForget).toEqual({
+      days: 30,
+      forget: 2,
+      warned: 1,
+    });
+    expect((await review.summary(NOW, 365)).autoForget).toEqual({
+      days: 365,
+      forget: 0,
+      warned: 0,
+    });
+    db.service.setConfig({ ...DEFAULT_MEMORY_CONFIG, autoForgetAfterDays: 30 });
+    await db.usage.markBackfilled();
+    expect((await db.service.sweepCold(NOW))?.forgotten).toBe(2);
+    expect((await review.summary(NOW, 30)).autoForget).toMatchObject({
+      forget: 0,
+      warned: 1,
+    });
   });
 
   it.each(['oldestSaved', 'largest', 'longestSinceRead'] as const)(
@@ -551,6 +590,7 @@ describe('MemoryReviewService', () => {
         getAll: () => Promise.reject(new Error('down')),
       } as unknown as ProjectDao,
       db.usage,
+      new RunDao(db.em),
     );
 
     try {

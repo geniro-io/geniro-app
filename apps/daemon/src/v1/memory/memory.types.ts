@@ -73,26 +73,40 @@ export interface MemoryRunSnapshot {
   indexIds: string[];
 }
 
+/** TWIN: the `memoryAutoForgetAfterDays` bound in `apps/ui/src/main/ipc-schemas.ts`. */
+export const MEMORY_AUTO_FORGET_DAYS_MAX = 3650;
+/** A scope with no new run for this long is dormant: the sweep leaves its entries. */
+export const MEMORY_DORMANT_SCOPE_DAYS = 30;
+
 /**
  * The settings Electron main pushes (`PUT /v1/memories/config`); replaces
  * whatever the daemon held.
  *
- * TWIN PARSER: `memorySchema` in `apps/ui/src/main/ipc-schemas.ts`.
+ * TWIN PARSER: `memorySchema` in `apps/ui/src/main/ipc-schemas.ts`, plus the
+ * top-level settings key `memoryAutoForgetAfterDays`, pushed here as
+ * `autoForgetAfterDays` so a paired device cannot arm the sweep.
  */
 export const MemoryConfigSchema = z
   .object({
     enabled: z.boolean(),
     agentWrites: z.enum(['active', 'pending']),
     nativeMemoryOff: z.boolean(),
+    autoForgetAfterDays: z
+      .number()
+      .int()
+      .min(1)
+      .max(MEMORY_AUTO_FORGET_DAYS_MAX)
+      .nullable(),
   })
   .meta({ id: 'MemoryConfig' });
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 
-/** Until Electron's first push: memory on, agent writes saved at once. */
+/** Until Electron's first push: memory on, agent writes saved at once, no sweep. */
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   enabled: true,
   agentWrites: 'active',
   nativeMemoryOff: false,
+  autoForgetAfterDays: null,
 };
 
 /**
@@ -438,8 +452,38 @@ export const MemoryReviewSummarySchema = z.object({
   /** True while the history of earlier runs is still being counted. */
   counting: z.boolean(),
   lastBatch: MemoryForgetBatchSchema.nullable(),
+  /**
+   * What the automatic sweep would forget now with the window asked for
+   * (`autoForgetDays`), and the entries it would leave for their warning;
+   * null when no window was asked for.
+   */
+  autoForget: z
+    .object({
+      days: z.number().int(),
+      forget: z.number().int(),
+      warned: z.number().int(),
+    })
+    .nullable(),
 });
 export type MemoryReviewSummary = z.infer<typeof MemoryReviewSummarySchema>;
+
+export const MemoryReviewSummaryQuerySchema = z.object({
+  autoForgetDays: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MEMORY_AUTO_FORGET_DAYS_MAX)
+    .optional(),
+});
+export type MemoryReviewSummaryQuery = z.infer<
+  typeof MemoryReviewSummaryQuerySchema
+>;
+
+export const MemoryPurgeResultSchema = z.object({
+  id: z.string(),
+  handle: z.string(),
+});
+export type MemoryPurgeResult = z.infer<typeof MemoryPurgeResultSchema>;
 
 export const MemoryForgetBatchRequestSchema = z.object({
   ids: z.array(z.string().min(1).max(200)).min(1).max(MEMORY_FORGET_BATCH_MAX),
@@ -884,7 +928,9 @@ export interface MemoryTextDatabase {
     created_at: number;
     updated_at: number;
     last_used_at: number | null;
+    approved_at: number | null;
     deleted_at: number | null;
+    purged_text_hash: string | null;
     kept_at: number | null;
     forgotten_at: number | null;
     restored_at: number | null;

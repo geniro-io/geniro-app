@@ -6,11 +6,13 @@ import {
   Patch,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { NotFoundException } from '@packages/common';
+import { BadRequestException, NotFoundException } from '@packages/common';
 import { ZodResponse } from 'nestjs-zod';
 
+import { DesktopOnlyGuard } from '../../../auth/desktop-only.guard';
 import {
   CreateMemoryDto,
   ForgetAllMemoriesDto,
@@ -24,12 +26,14 @@ import {
   MemoryListDto,
   MemoryListQueryDto,
   MemoryMergeResultDto,
+  MemoryPurgeResultDto,
   MemoryRestoreBatchResultDto,
   MemoryReviewIdsDto,
   MemoryReviewPageDto,
   MemoryReviewQueryDto,
   MemoryReviewSummaryDto,
   MergeMemoriesDto,
+  MemoryReviewSummaryQueryDto,
   UpdateMemoryDto,
 } from '../dto/memories.dto';
 import type {
@@ -42,6 +46,7 @@ import type {
   MemoryKeepResult,
   MemoryList,
   MemoryMergeResult,
+  MemoryPurgeResult,
   MemoryRestoreBatchResult,
   MemoryReviewIds,
   MemoryReviewPage,
@@ -56,7 +61,8 @@ import { mergedOrThrow, savedEntryOrThrow } from '../utils/memory-outcome';
  * The user's own view of the shared memory: list, edit, forget, restore,
  * approve, export and clean up, and decide on what a model check found.
  * Open to paired devices: the user reads and edits memory from the phone
- * too. Every write is the user's. The check itself is desktop only, in
+ * too — except a purge, the one memory write that cannot be undone. Every
+ * write is the user's. The check itself is desktop only, in
  * `MemoryCheckController`.
  */
 @Controller('v1/memories')
@@ -100,8 +106,10 @@ export class MemoriesController {
   @Get('review/summary')
   @ApiOperation({ operationId: 'memoryReviewSummary' })
   @ZodResponse({ status: 200, type: MemoryReviewSummaryDto })
-  reviewSummary(): Promise<MemoryReviewSummary> {
-    return this.review.summary();
+  reviewSummary(
+    @Query() query: MemoryReviewSummaryQueryDto,
+  ): Promise<MemoryReviewSummary> {
+    return this.review.summary(new Date(), query.autoForgetDays);
   }
 
   @Get('review')
@@ -184,6 +192,24 @@ export class MemoriesController {
   @ZodResponse({ status: 201, type: MemoryKeepResultDto })
   unkeep(@Param('memoryId') memoryId: string): Promise<MemoryKeepResult> {
     return this.setKept(memoryId, false);
+  }
+
+  @Post(':memoryId/purge')
+  @UseGuards(DesktopOnlyGuard)
+  @ApiOperation({ operationId: 'purgeMemory' })
+  @ZodResponse({ status: 201, type: MemoryPurgeResultDto })
+  async purge(@Param('memoryId') memoryId: string): Promise<MemoryPurgeResult> {
+    const outcome = await this.memory.purge(memoryId);
+    if (outcome === 'missing') {
+      throw new NotFoundException('MEMORY_NOT_FOUND', `no memory ${memoryId}`);
+    }
+    if (outcome === 'not-forgotten') {
+      throw new BadRequestException(
+        'MEMORY_NOT_FORGOTTEN',
+        'only a forgotten memory can be deleted permanently',
+      );
+    }
+    return outcome;
   }
 
   @Get(':memoryId')

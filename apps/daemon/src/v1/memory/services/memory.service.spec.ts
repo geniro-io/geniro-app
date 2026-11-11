@@ -249,6 +249,7 @@ describe('MemoryService', () => {
       enabled: true,
       agentWrites: 'pending',
       nativeMemoryOff: false,
+      autoForgetAfterDays: null,
     });
 
     const agentEntry = created(
@@ -272,6 +273,7 @@ describe('MemoryService', () => {
         enabled: true,
         agentWrites: 'pending',
         nativeMemoryOff: false,
+        autoForgetAfterDays: null,
       });
     });
 
@@ -378,6 +380,7 @@ describe('MemoryService', () => {
         enabled: true,
         agentWrites: 'pending',
         nativeMemoryOff: false,
+        autoForgetAfterDays: null,
       });
       const waiting = created(
         await db.service.save(
@@ -390,6 +393,7 @@ describe('MemoryService', () => {
         enabled: true,
         agentWrites: 'active',
         nativeMemoryOff: false,
+        autoForgetAfterDays: null,
       });
       return { global, p1, gone, waiting };
     }
@@ -522,6 +526,7 @@ describe('MemoryService', () => {
         enabled: true,
         agentWrites: 'pending',
         nativeMemoryOff: false,
+        autoForgetAfterDays: null,
       });
       const waiting = created(
         await db.service.save(
@@ -534,6 +539,7 @@ describe('MemoryService', () => {
         enabled: true,
         agentWrites: 'active',
         nativeMemoryOff: false,
+        autoForgetAfterDays: null,
       });
 
       for (const entry of [other, gone, waiting]) {
@@ -767,6 +773,7 @@ describe('MemoryService', () => {
         enabled: true,
         agentWrites: 'pending',
         nativeMemoryOff: false,
+        autoForgetAfterDays: null,
       });
       await db.service.save(AGENT, { title: 'Waiting', body: 'x' }, NONE);
 
@@ -805,6 +812,7 @@ describe('MemoryService', () => {
         enabled: false,
         agentWrites: 'active',
         nativeMemoryOff: false,
+        autoForgetAfterDays: null,
       });
       const off = await db.service.runSnapshot(FACTS);
 
@@ -965,6 +973,7 @@ describe('MemoryService', () => {
         enabled: false,
         agentWrites: 'active',
         nativeMemoryOff: true,
+        autoForgetAfterDays: null,
       });
       const memoryOff = await db.service.runSnapshot(FACTS);
 
@@ -978,6 +987,7 @@ describe('MemoryService', () => {
       enabled: false,
       agentWrites: 'active',
       nativeMemoryOff: false,
+      autoForgetAfterDays: null,
     });
 
     const outcome = await db.service.save(
@@ -1026,6 +1036,7 @@ describe('MemoryService', () => {
       enabled: true,
       agentWrites: 'pending',
       nativeMemoryOff: false,
+      autoForgetAfterDays: null,
     });
     await db.service.save(
       AGENT,
@@ -1998,6 +2009,7 @@ describe('MemoryService', () => {
         enabled: true,
         agentWrites: 'pending',
         nativeMemoryOff: false,
+        autoForgetAfterDays: null,
       });
       const pending = await seed('Loopback binding', AGENT);
       db.service.setConfig(DEFAULT_MEMORY_CONFIG);
@@ -2358,6 +2370,373 @@ describe('MemoryService', () => {
       expect((await rowOf(first.id)).status).toBe('active');
       expect((await rowOf(second.id)).status).toBe('forgotten');
       expect(await db.em.fork().count(Memory)).toBe(2);
+    });
+  });
+
+  describe('the automatic sweep', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const NOW = new Date(Date.UTC(2026, 10, 11, 12));
+    const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY);
+    const ARMED = { ...DEFAULT_MEMORY_CONFIG, autoForgetAfterDays: 30 };
+
+    async function at<T>(when: Date, work: () => Promise<T>): Promise<T> {
+      vi.useFakeTimers({ now: when, toFake: ['Date'] });
+      try {
+        return await work();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    async function seedAgent(
+      title: string,
+      place: RunPlace = NONE,
+      type?: 'feedback',
+    ) {
+      return at(daysAgo(60), async () =>
+        created(
+          await db.service.save(AGENT, { title, body: 'x', type }, place),
+        ),
+      );
+    }
+
+    async function runAt(
+      id: string,
+      when: Date,
+      extra: Partial<Run> = {},
+    ): Promise<void> {
+      await at(when, async () => {
+        const em = db.em.fork();
+        em.persist(make(Run, { id, status: 'completed', ...extra }));
+        await em.flush();
+      });
+    }
+
+    async function statusOf(id: string) {
+      return (await db.em.fork().findOneOrFail(Memory, { id })).status;
+    }
+
+    async function raw(id: string, set: Partial<MemoryTextDatabase['memories']>) {
+      await db.em
+        .fork()
+        .getKysely<MemoryTextDatabase>()
+        .updateTable('memories')
+        .set(set)
+        .where('id', '=', id)
+        .execute();
+    }
+
+    beforeEach(async () => {
+      db.service.setConfig(ARMED);
+      await db.usage.markBackfilled();
+      await runAt('r-recent', daysAgo(1));
+    });
+
+    it('the sweep skips kept, warned and pending entries, and a dormant project', async () => {
+      const cold = await seedAgent('Cold global');
+      const kept = await seedAgent('Kept entry');
+      await db.service.setKept(kept.id, true);
+      const correction = await seedAgent('A correction', NONE, 'feedback');
+      const mine = await at(daysAgo(60), async () =>
+        created(
+          await db.service.save(USER, { title: 'Mine', body: 'x' }, NONE),
+        ),
+      );
+      db.service.setConfig({ ...ARMED, agentWrites: 'pending' });
+      const pending = await seedAgent('Waiting entry');
+      db.service.setConfig(ARMED);
+      const live = await seedAgent('Live project', inProject('p-live'));
+      const dormant = await seedAgent('Dormant project', inProject('p-old'));
+      await runAt('r-live', daysAgo(5), { projectId: 'p-live' });
+      await runAt('r-old', daysAgo(45), { projectId: 'p-old' });
+
+      const result = await db.service.sweepCold(NOW);
+
+      expect(result).toMatchObject({ forgotten: 2, skipped: [] });
+      expect(result?.batchId).toEqual(expect.any(String));
+      expect(await statusOf(cold.id)).toBe('forgotten');
+      expect(await statusOf(live.id)).toBe('forgotten');
+      expect(await statusOf(kept.id)).toBe('active');
+      expect(await statusOf(correction.id)).toBe('active');
+      expect(await statusOf(mine.id)).toBe('active');
+      expect(await statusOf(pending.id)).toBe('pending');
+      expect(await statusOf(dormant.id)).toBe('active');
+      expect(
+        (await db.em.fork().findOneOrFail(Memory, { id: cold.id }))
+          .forgetBatchId,
+      ).toBe(result?.batchId);
+    });
+
+    it('leaves every global entry when no run was started lately', async () => {
+      const fresh = await memoryDb();
+      try {
+        fresh.service.setConfig(ARMED);
+        await fresh.usage.markBackfilled();
+        const entry = await at(daysAgo(60), async () =>
+          created(
+            await fresh.service.save(AGENT, { title: 'Quiet', body: 'x' }, NONE),
+          ),
+        );
+
+        expect(await fresh.service.sweepCold(NOW)).toMatchObject({
+          batchId: null,
+          forgotten: 0,
+        });
+        expect(
+          (await fresh.em.fork().findOneOrFail(Memory, { id: entry.id }))
+            .status,
+        ).toBe('active');
+      } finally {
+        await fresh.orm.close();
+      }
+    });
+
+    it('does nothing while memory is off or before the backfill finished', async () => {
+      const entry = await seedAgent('Cold global');
+
+      db.service.setConfig({ ...ARMED, enabled: false });
+      expect(await db.service.sweepCold(NOW)).toBeNull();
+
+      const counting = await memoryDb();
+      try {
+        counting.service.setConfig(ARMED);
+        expect(counting.usage.backfillMarker?.doneVersion).toBeNull();
+        expect(await counting.service.sweepCold(NOW)).toBeNull();
+      } finally {
+        await counting.orm.close();
+      }
+
+      expect(await statusOf(entry.id)).toBe('active');
+    });
+
+    it('is off by default', async () => {
+      const entry = await seedAgent('Cold global');
+
+      db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+      expect(DEFAULT_MEMORY_CONFIG.autoForgetAfterDays).toBeNull();
+      expect(await db.service.sweepCold(NOW)).toBeNull();
+
+      const unpushed = await memoryDb();
+      try {
+        await unpushed.usage.markBackfilled();
+        expect(await unpushed.service.sweepCold(NOW)).toBeNull();
+      } finally {
+        await unpushed.orm.close();
+      }
+
+      expect(await statusOf(entry.id)).toBe('active');
+    });
+
+    it('its batch restores whole', async () => {
+      const first = await seedAgent('Cold one');
+      const second = await seedAgent('Cold two');
+
+      const result = await db.service.sweepCold(NOW);
+
+      expect(result?.forgotten).toBe(2);
+      expect(await db.service.restoreBatch(result!.batchId!)).toEqual({
+        restored: 2,
+      });
+      expect(await statusOf(first.id)).toBe('active');
+      expect(await statusOf(second.id)).toBe('active');
+    });
+
+    it('a restored batch is not swept again inside the window', async () => {
+      const entry = await seedAgent('Cold one');
+      const swept = await at(NOW, () => db.service.sweepCold(NOW));
+      await at(NOW, () => db.service.restoreBatch(swept!.batchId!));
+
+      expect(
+        await db.service.sweepCold(new Date(NOW.getTime() + 29 * DAY)),
+      ).toMatchObject({ batchId: null, forgotten: 0 });
+      expect(await statusOf(entry.id)).toBe('active');
+      await runAt('r-later', new Date(NOW.getTime() + 30 * DAY));
+      expect(
+        (await db.service.sweepCold(new Date(NOW.getTime() + 31 * DAY)))
+          ?.forgotten,
+      ).toBe(1);
+    });
+
+    it('an entry edited, approved or read inside the window is not swept', async () => {
+      const edited = await seedAgent('Edited entry');
+      const approved = await seedAgent('Approved entry');
+      const read = await seedAgent('Read entry');
+      const untouched = await seedAgent('Untouched entry');
+      await at(daysAgo(2), async () =>
+        db.service.save(
+          AGENT,
+          {
+            handle: edited.handle,
+            rev: edited.rev,
+            title: 'Edited entry',
+            body: 'y',
+          },
+          NONE,
+        ),
+      );
+      await raw(approved.id, { approved_at: daysAgo(2).getTime() });
+      await at(daysAgo(2), () => db.service.read([read.handle], NONE));
+      await raw(read.id, { last_used_at: null });
+
+      const result = await db.service.sweepCold(NOW);
+
+      expect(result?.forgotten).toBe(1);
+      expect(await statusOf(untouched.id)).toBe('forgotten');
+      expect(await statusOf(edited.id)).toBe('active');
+      expect(await statusOf(approved.id)).toBe('active');
+      expect(await statusOf(read.id)).toBe('active');
+    });
+
+    it('runs a while after the start, then once a day, until shutdown', () => {
+      vi.useFakeTimers();
+      const sweep = vi
+        .spyOn(db.service, 'sweepCold')
+        .mockResolvedValue(null);
+      try {
+        db.service.onModuleInit();
+
+        vi.advanceTimersByTime(4 * 60 * 1000);
+        expect(sweep).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(60 * 1000);
+        expect(sweep).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(DAY);
+        expect(sweep).toHaveBeenCalledTimes(2);
+
+        db.service.onApplicationShutdown();
+        vi.advanceTimersByTime(2 * DAY);
+        expect(sweep).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('never purges: a swept entry keeps its text', async () => {
+      const entry = await seedAgent('Cold global');
+
+      await db.service.sweepCold(NOW);
+
+      const row = await db.em.fork().findOneOrFail(Memory, { id: entry.id });
+      expect([row.title, row.body, row.purgedTextHash]).toEqual([
+        'Cold global',
+        'x',
+        null,
+      ]);
+    });
+  });
+
+  describe('purge', () => {
+    beforeEach(() => {
+      db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+    });
+
+    async function tombstone(id: string) {
+      return db.em
+        .fork()
+        .getKysely<MemoryTextDatabase>()
+        .selectFrom('memories')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow();
+    }
+
+    it('a purge frees no handle and erases the text from search', async () => {
+      await db.service.save(USER, { title: 'Keep me', body: 'x' }, NONE);
+      const top = created(
+        await db.service.save(
+          USER,
+          { title: 'Pomegranate rule', body: 'Pomegranate seeds.' },
+          NONE,
+        ),
+      );
+      await db.service.setStatus(USER, top.id, 'forgotten');
+
+      expect(await db.service.purge(top.id)).toEqual({
+        id: top.id,
+        handle: 'm2',
+      });
+
+      expect(
+        await db.em
+          .fork()
+          .getKysely<MemoryTextDatabase>()
+          .selectFrom('memories_fts')
+          .select('memory_id')
+          .where('memories_fts', '=', 'pomegranate')
+          .execute(),
+      ).toEqual([]);
+      const next = created(
+        await db.service.save(USER, { title: 'After purge', body: 'x' }, NONE),
+      );
+      expect(next.handle).toBe('m3');
+      const row = await tombstone(top.id);
+      expect([row.title, row.body, row.deleted_at !== null]).toEqual([
+        '',
+        '',
+        true,
+      ]);
+      expect(await db.service.get(top.id)).toBeNull();
+    });
+
+    it('refuses an entry that is not forgotten', async () => {
+      const active = created(
+        await db.service.save(USER, { title: 'Live entry', body: 'x' }, NONE),
+      );
+
+      expect(await db.service.purge(active.id)).toBe('not-forgotten');
+      expect(await db.service.purge('no-such-id')).toBe('missing');
+      await db.service.setStatus(USER, active.id, 'forgotten');
+      await db.service.purge(active.id);
+      expect(await db.service.purge(active.id)).toBe('missing');
+      expect((await tombstone(active.id)).title).toBe('');
+    });
+
+    it('usage figures survive a purge', async () => {
+      const entry = created(
+        await db.service.save(USER, { title: 'Read me', body: 'x' }, NONE),
+      );
+      await db.service.read([entry.handle], NONE);
+      await db.service.setStatus(USER, entry.id, 'forgotten');
+
+      await db.service.purge(entry.id);
+
+      expect(
+        (await db.usageDao.daysOf([entry.id])).map((day) => day.reads),
+      ).toEqual([1]);
+    });
+
+    it('a purge clears the reason and the findings', async () => {
+      const entry = created(
+        await db.service.save(AGENT, { title: 'Stale entry', body: 'x' }, NONE),
+      );
+      await db.service.forget(AGENT, entry.handle, 'Stale entry is wrong', NONE);
+      const dropped: string[] = [];
+      db.service.usePurgeFindings(async (memoryId, em) => {
+        expect(em.isInTransaction()).toBe(true);
+        dropped.push(memoryId);
+      });
+
+      await db.service.purge(entry.id);
+
+      const row = await tombstone(entry.id);
+      expect([row.forget_reason, row.forget_batch_id]).toEqual([null, null]);
+      expect(dropped).toEqual([entry.id]);
+    });
+
+    it('rolls the purge back when the findings cannot be dropped', async () => {
+      const entry = created(
+        await db.service.save(USER, { title: 'Stale entry', body: 'x' }, NONE),
+      );
+      const batch = await db.service.forgetBatch([entry.id]);
+      db.service.usePurgeFindings(() => Promise.reject(new Error('locked')));
+
+      await expect(db.service.purge(entry.id)).rejects.toThrow('locked');
+
+      const row = await tombstone(entry.id);
+      expect([row.title, row.deleted_at, row.forget_batch_id]).toEqual([
+        'Stale entry',
+        null,
+        batch.batchId,
+      ]);
     });
   });
 });

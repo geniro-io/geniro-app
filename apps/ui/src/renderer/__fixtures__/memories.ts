@@ -57,6 +57,7 @@ export function memoryImportRow(
     similarTo: [],
     sameAs: null,
     alreadyImported: false,
+    forgottenEarlier: false,
     problem: null,
     ...over,
   };

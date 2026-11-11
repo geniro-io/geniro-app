@@ -144,6 +144,37 @@ describe('MemoryImportDialog', () => {
     );
   });
 
+  it('leaves a note forgotten earlier unticked and says so, and imports it once ticked', () => {
+    const onImport = vi.fn();
+    const el = render({
+      onImport,
+      preview: {
+        rows: [
+          memoryImportRow({ key: 'fresh', title: 'Fresh' }),
+          memoryImportRow({
+            key: 'forgotten',
+            title: 'Forgotten',
+            forgottenEarlier: true,
+          }),
+        ],
+        sources: [],
+        triageAgents: [],
+      },
+    });
+
+    expect(tickedKeys(el)).toEqual(['fresh']);
+    expect(rowOf(el, 'forgotten').textContent).toContain('Forgotten earlier');
+    expect(rowOf(el, 'fresh').textContent).not.toContain('Forgotten earlier');
+
+    act(() => tick(el, 'forgotten').click());
+    act(() => importButton(el).click());
+
+    expect(onImport.mock.calls[0]?.[0]).toEqual([
+      expect.objectContaining({ key: 'fresh' }),
+      expect.objectContaining({ key: 'forgotten' }),
+    ]);
+  });
+
   it('disables the row that has a problem and shows the reason', () => {
     const el = render();
     expect(tick(el, 'row-6').disabled).toBe(true);

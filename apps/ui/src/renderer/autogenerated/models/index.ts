@@ -4352,6 +4352,19 @@ export interface ForgetAllMemoriesDto {
 /**
  * 
  * @export
+ * @interface ForgetMemoryBatchDto
+ */
+export interface ForgetMemoryBatchDto {
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ForgetMemoryBatchDto
+     */
+    ids: Array<string>;
+}
+/**
+ * 
+ * @export
  * @interface ForgottenInstructionsDto
  */
 export interface ForgottenInstructionsDto {
@@ -7382,6 +7395,94 @@ export interface MemoryExportDto {
 /**
  * 
  * @export
+ * @interface MemoryForgetBatch
+ */
+export interface MemoryForgetBatch {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryForgetBatch
+     */
+    batchId: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryForgetBatch
+     */
+    count: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryForgetBatch
+     */
+    forgottenAt: string;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryForgetBatchListDto
+ */
+export interface MemoryForgetBatchListDto {
+    /**
+     * 
+     * @type {Array<MemoryForgetBatch>}
+     * @memberof MemoryForgetBatchListDto
+     */
+    batches: Array<MemoryForgetBatch>;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryForgetBatchResultDto
+ */
+export interface MemoryForgetBatchResultDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryForgetBatchResultDto
+     */
+    batchId: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryForgetBatchResultDto
+     */
+    forgotten: number;
+    /**
+     * 
+     * @type {Array<MemoryForgetBatchResultDtoSkippedInner>}
+     * @memberof MemoryForgetBatchResultDto
+     */
+    skipped: Array<MemoryForgetBatchResultDtoSkippedInner>;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryForgetBatchResultDtoSkippedInner
+ */
+export interface MemoryForgetBatchResultDtoSkippedInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryForgetBatchResultDtoSkippedInner
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryForgetBatchResultDtoSkippedInner
+     */
+    handle: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryForgetBatchResultDtoSkippedInner
+     */
+    reason: string;
+}
+/**
+ * 
+ * @export
  * @interface MemoryImportPreviewDto
  */
 export interface MemoryImportPreviewDto {
@@ -7589,6 +7690,12 @@ export interface MemoryImportRow {
     alreadyImported: boolean;
     /**
      * 
+     * @type {boolean}
+     * @memberof MemoryImportRow
+     */
+    forgottenEarlier: boolean;
+    /**
+     * 
      * @type {string}
      * @memberof MemoryImportRow
      */
@@ -7777,6 +7884,25 @@ export interface MemoryImportTriageRequestDtoNotesInner {
 /**
  * 
  * @export
+ * @interface MemoryKeepResultDto
+ */
+export interface MemoryKeepResultDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryKeepResultDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryKeepResultDto
+     */
+    keptAt: string | null;
+}
+/**
+ * 
+ * @export
  * @interface MemoryListDto
  */
 export interface MemoryListDto {
@@ -7811,6 +7937,254 @@ export interface MemoryListDtoNext {
      * @memberof MemoryListDtoNext
      */
     beforeId: string;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryRestoreBatchResultDto
+ */
+export interface MemoryRestoreBatchResultDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryRestoreBatchResultDto
+     */
+    restored: number;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryReviewIdsDto
+ */
+export interface MemoryReviewIdsDto {
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof MemoryReviewIdsDto
+     */
+    ids: Array<string>;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewIdsDto
+     */
+    warnedSkipped: number;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryReviewPageDto
+ */
+export interface MemoryReviewPageDto {
+    /**
+     * 
+     * @type {Array<MemoryReviewRow>}
+     * @memberof MemoryReviewPageDto
+     */
+    rows: Array<MemoryReviewRow>;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewPageDto
+     */
+    total: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewPageDto
+     */
+    younger: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryReviewPageDto
+     */
+    next: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryReviewRow
+ */
+export interface MemoryReviewRow {
+    /**
+     * 
+     * @type {MemoryEntry}
+     * @memberof MemoryReviewRow
+     */
+    entry: MemoryEntry;
+    /**
+     * 
+     * @type {MemoryReviewRowUsage}
+     * @memberof MemoryReviewRow
+     */
+    usage: MemoryReviewRowUsage;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryReviewRow
+     */
+    warning: MemoryReviewRowWarningEnum | null;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof MemoryReviewRow
+     */
+    referencesGone: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryReviewRow
+     */
+    keptAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryReviewRow
+     */
+    forgottenAt: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryReviewRow
+     */
+    forgetBatchId: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const MemoryReviewRowWarningEnum = {
+    Feedback: 'feedback',
+    User: 'user',
+    WrittenByYou: 'writtenByYou',
+    StatesLimit: 'statesLimit',
+    NotChecked: 'notChecked'
+} as const;
+export type MemoryReviewRowWarningEnum = typeof MemoryReviewRowWarningEnum[keyof typeof MemoryReviewRowWarningEnum];
+
+/**
+ * 
+ * @export
+ * @interface MemoryReviewRowUsage
+ */
+export interface MemoryReviewRowUsage {
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewRowUsage
+     */
+    readsLast90Days: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewRowUsage
+     */
+    reads: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewRowUsage
+     */
+    searchHits: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewRowUsage
+     */
+    indexShows: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryReviewRowUsage
+     */
+    lastReadAt: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface MemoryReviewSummaryDto
+ */
+export interface MemoryReviewSummaryDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDto
+     */
+    active: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDto
+     */
+    pending: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDto
+     */
+    read: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDto
+     */
+    neverRead: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDto
+     */
+    proposed: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDto
+     */
+    proposedWithWarning: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDto
+     */
+    younger: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDto
+     */
+    kept: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDto
+     */
+    forgotten: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof MemoryReviewSummaryDto
+     */
+    minAgeDays: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof MemoryReviewSummaryDto
+     */
+    countedSince: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof MemoryReviewSummaryDto
+     */
+    counting: boolean;
+    /**
+     * 
+     * @type {MemoryForgetBatch}
+     * @memberof MemoryReviewSummaryDto
+     */
+    lastBatch: MemoryForgetBatch | null;
 }
 /**
  * 

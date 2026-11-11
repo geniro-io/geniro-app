@@ -7,9 +7,9 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { ProjectDao } from '../../projects/dao/project.dao';
 import {
+  MemoryDao,
   type MemoryReviewFilter,
   type MemoryReviewHit,
-  MemoryDao,
 } from '../dao/memory.dao';
 import type { Memory } from '../entity/memory.entity';
 import {

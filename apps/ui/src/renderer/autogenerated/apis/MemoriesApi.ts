@@ -17,17 +17,25 @@ import * as runtime from '../runtime';
 import type {
   CreateMemoryDto,
   ForgetAllMemoriesDto,
+  ForgetMemoryBatchDto,
   ImportMemoriesDto,
   MemoryConfigAckDto,
   MemoryConfigDto,
   MemoryEntry,
   MemoryExportDto,
+  MemoryForgetBatchListDto,
+  MemoryForgetBatchResultDto,
   MemoryImportPreviewDto,
   MemoryImportPreviewRequestDto,
   MemoryImportResultDto,
   MemoryImportTriageDto,
   MemoryImportTriageRequestDto,
+  MemoryKeepResultDto,
   MemoryListDto,
+  MemoryRestoreBatchResultDto,
+  MemoryReviewIdsDto,
+  MemoryReviewPageDto,
+  MemoryReviewSummaryDto,
   UpdateMemoryDto,
 } from '../models/index';
 
@@ -35,8 +43,16 @@ export interface MemoriesApiCreateMemoryRequest {
     createMemoryDto: CreateMemoryDto;
 }
 
+export interface MemoriesApiForgetMemoryBatchRequest {
+    forgetMemoryBatchDto: ForgetMemoryBatchDto;
+}
+
 export interface MemoriesApiImportMemoriesRequest {
     importMemoriesDto: ImportMemoriesDto;
+}
+
+export interface MemoriesApiKeepMemoryRequest {
+    memoryId: string;
 }
 
 export interface MemoriesApiListMemoriesRequest {
@@ -52,6 +68,34 @@ export interface MemoriesApiListMemoriesRequest {
     beforeId?: string;
 }
 
+export interface MemoriesApiListMemoryReviewRequest {
+    tab?: ListMemoryReviewTabEnum;
+    sort?: ListMemoryReviewSortEnum;
+    scope?: ListMemoryReviewScopeEnum;
+    projectId?: string;
+    teamSlug?: string;
+    type?: ListMemoryReviewTypeEnum;
+    minAgeDays?: number;
+    warnings?: ListMemoryReviewWarningsEnum;
+    referenceGone?: ListMemoryReviewReferenceGoneEnum;
+    limit?: number;
+    cursor?: string;
+}
+
+export interface MemoriesApiListMemoryReviewIdsRequest {
+    tab?: ListMemoryReviewIdsTabEnum;
+    sort?: ListMemoryReviewIdsSortEnum;
+    scope?: ListMemoryReviewIdsScopeEnum;
+    projectId?: string;
+    teamSlug?: string;
+    type?: ListMemoryReviewIdsTypeEnum;
+    minAgeDays?: number;
+    warnings?: ListMemoryReviewIdsWarningsEnum;
+    referenceGone?: ListMemoryReviewIdsReferenceGoneEnum;
+    limit?: number;
+    cursor?: string;
+}
+
 export interface MemoriesApiPreviewMemoryImportRequest {
     memoryImportPreviewRequestDto: MemoryImportPreviewRequestDto;
 }
@@ -60,12 +104,20 @@ export interface MemoriesApiReadMemoryRequest {
     memoryId: string;
 }
 
+export interface MemoriesApiRestoreMemoryBatchRequest {
+    batchId: string;
+}
+
 export interface MemoriesApiSetMemoryConfigRequest {
     memoryConfigDto: MemoryConfigDto;
 }
 
 export interface MemoriesApiTriageMemoryImportRequest {
     memoryImportTriageRequestDto: MemoryImportTriageRequestDto;
+}
+
+export interface MemoriesApiUnkeepMemoryRequest {
+    memoryId: string;
 }
 
 export interface MemoriesApiUpdateMemoryRequest {
@@ -202,6 +254,53 @@ export class MemoriesApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async forgetMemoryBatchRaw(requestParameters: MemoriesApiForgetMemoryBatchRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryForgetBatchResultDto>> {
+        if (requestParameters['forgetMemoryBatchDto'] == null) {
+            throw new runtime.RequiredError(
+                'forgetMemoryBatchDto',
+                'Required parameter "forgetMemoryBatchDto" was null or undefined when calling forgetMemoryBatch().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/forget-batch`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['forgetMemoryBatchDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async forgetMemoryBatch(requestParameters: MemoriesApiForgetMemoryBatchRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryForgetBatchResultDto> {
+        const response = await this.forgetMemoryBatchRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async importMemoriesRaw(requestParameters: MemoriesApiImportMemoriesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryImportResultDto>> {
         if (requestParameters['importMemoriesDto'] == null) {
             throw new runtime.RequiredError(
@@ -243,6 +342,51 @@ export class MemoriesApi extends runtime.BaseAPI {
      */
     async importMemories(requestParameters: MemoriesApiImportMemoriesRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryImportResultDto> {
         const response = await this.importMemoriesRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async keepMemoryRaw(requestParameters: MemoriesApiKeepMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryKeepResultDto>> {
+        if (requestParameters['memoryId'] == null) {
+            throw new runtime.RequiredError(
+                'memoryId',
+                'Required parameter "memoryId" was null or undefined when calling keepMemory().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/{memoryId}/keep`;
+        urlPath = urlPath.replace(`{${"memoryId"}}`, encodeURIComponent(String(requestParameters['memoryId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async keepMemory(requestParameters: MemoriesApiKeepMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryKeepResultDto> {
+        const response = await this.keepMemoryRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -320,6 +464,242 @@ export class MemoriesApi extends runtime.BaseAPI {
      */
     async listMemories(requestParameters: MemoriesApiListMemoriesRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryListDto> {
         const response = await this.listMemoriesRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listMemoryBatchesRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryForgetBatchListDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/batches`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listMemoryBatches(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryForgetBatchListDto> {
+        const response = await this.listMemoryBatchesRaw(initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listMemoryReviewRaw(requestParameters: MemoriesApiListMemoryReviewRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryReviewPageDto>> {
+        const queryParameters: any = {};
+
+        if (requestParameters['tab'] != null) {
+            queryParameters['tab'] = requestParameters['tab'];
+        }
+
+        if (requestParameters['sort'] != null) {
+            queryParameters['sort'] = requestParameters['sort'];
+        }
+
+        if (requestParameters['scope'] != null) {
+            queryParameters['scope'] = requestParameters['scope'];
+        }
+
+        if (requestParameters['projectId'] != null) {
+            queryParameters['projectId'] = requestParameters['projectId'];
+        }
+
+        if (requestParameters['teamSlug'] != null) {
+            queryParameters['teamSlug'] = requestParameters['teamSlug'];
+        }
+
+        if (requestParameters['type'] != null) {
+            queryParameters['type'] = requestParameters['type'];
+        }
+
+        if (requestParameters['minAgeDays'] != null) {
+            queryParameters['minAgeDays'] = requestParameters['minAgeDays'];
+        }
+
+        if (requestParameters['warnings'] != null) {
+            queryParameters['warnings'] = requestParameters['warnings'];
+        }
+
+        if (requestParameters['referenceGone'] != null) {
+            queryParameters['referenceGone'] = requestParameters['referenceGone'];
+        }
+
+        if (requestParameters['limit'] != null) {
+            queryParameters['limit'] = requestParameters['limit'];
+        }
+
+        if (requestParameters['cursor'] != null) {
+            queryParameters['cursor'] = requestParameters['cursor'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/review`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listMemoryReview(requestParameters: MemoriesApiListMemoryReviewRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryReviewPageDto> {
+        const response = await this.listMemoryReviewRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listMemoryReviewIdsRaw(requestParameters: MemoriesApiListMemoryReviewIdsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryReviewIdsDto>> {
+        const queryParameters: any = {};
+
+        if (requestParameters['tab'] != null) {
+            queryParameters['tab'] = requestParameters['tab'];
+        }
+
+        if (requestParameters['sort'] != null) {
+            queryParameters['sort'] = requestParameters['sort'];
+        }
+
+        if (requestParameters['scope'] != null) {
+            queryParameters['scope'] = requestParameters['scope'];
+        }
+
+        if (requestParameters['projectId'] != null) {
+            queryParameters['projectId'] = requestParameters['projectId'];
+        }
+
+        if (requestParameters['teamSlug'] != null) {
+            queryParameters['teamSlug'] = requestParameters['teamSlug'];
+        }
+
+        if (requestParameters['type'] != null) {
+            queryParameters['type'] = requestParameters['type'];
+        }
+
+        if (requestParameters['minAgeDays'] != null) {
+            queryParameters['minAgeDays'] = requestParameters['minAgeDays'];
+        }
+
+        if (requestParameters['warnings'] != null) {
+            queryParameters['warnings'] = requestParameters['warnings'];
+        }
+
+        if (requestParameters['referenceGone'] != null) {
+            queryParameters['referenceGone'] = requestParameters['referenceGone'];
+        }
+
+        if (requestParameters['limit'] != null) {
+            queryParameters['limit'] = requestParameters['limit'];
+        }
+
+        if (requestParameters['cursor'] != null) {
+            queryParameters['cursor'] = requestParameters['cursor'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/review/ids`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listMemoryReviewIds(requestParameters: MemoriesApiListMemoryReviewIdsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryReviewIdsDto> {
+        const response = await this.listMemoryReviewIdsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async memoryReviewSummaryRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryReviewSummaryDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/review/summary`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async memoryReviewSummary(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryReviewSummaryDto> {
+        const response = await this.memoryReviewSummaryRaw(initOverrides);
         return await response.value();
     }
 
@@ -412,6 +792,51 @@ export class MemoriesApi extends runtime.BaseAPI {
      */
     async readMemory(requestParameters: MemoriesApiReadMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryEntry> {
         const response = await this.readMemoryRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async restoreMemoryBatchRaw(requestParameters: MemoriesApiRestoreMemoryBatchRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryRestoreBatchResultDto>> {
+        if (requestParameters['batchId'] == null) {
+            throw new runtime.RequiredError(
+                'batchId',
+                'Required parameter "batchId" was null or undefined when calling restoreMemoryBatch().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/batches/{batchId}/restore`;
+        urlPath = urlPath.replace(`{${"batchId"}}`, encodeURIComponent(String(requestParameters['batchId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async restoreMemoryBatch(requestParameters: MemoriesApiRestoreMemoryBatchRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryRestoreBatchResultDto> {
+        const response = await this.restoreMemoryBatchRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -512,6 +937,51 @@ export class MemoriesApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async unkeepMemoryRaw(requestParameters: MemoriesApiUnkeepMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryKeepResultDto>> {
+        if (requestParameters['memoryId'] == null) {
+            throw new runtime.RequiredError(
+                'memoryId',
+                'Required parameter "memoryId" was null or undefined when calling unkeepMemory().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/memories/{memoryId}/unkeep`;
+        urlPath = urlPath.replace(`{${"memoryId"}}`, encodeURIComponent(String(requestParameters['memoryId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async unkeepMemory(requestParameters: MemoriesApiUnkeepMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<MemoryKeepResultDto> {
+        const response = await this.unkeepMemoryRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async updateMemoryRaw(requestParameters: MemoriesApiUpdateMemoryRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<MemoryEntry>> {
         if (requestParameters['memoryId'] == null) {
             throw new runtime.RequiredError(
@@ -595,3 +1065,115 @@ export const ListMemoriesTypeEnum = {
     Reference: 'reference'
 } as const;
 export type ListMemoriesTypeEnum = typeof ListMemoriesTypeEnum[keyof typeof ListMemoriesTypeEnum];
+/**
+ * @export
+ */
+export const ListMemoryReviewTabEnum = {
+    Cold: 'cold',
+    Kept: 'kept',
+    Forgotten: 'forgotten'
+} as const;
+export type ListMemoryReviewTabEnum = typeof ListMemoryReviewTabEnum[keyof typeof ListMemoryReviewTabEnum];
+/**
+ * @export
+ */
+export const ListMemoryReviewSortEnum = {
+    LeastUsed: 'leastUsed',
+    OldestSaved: 'oldestSaved',
+    Largest: 'largest',
+    LongestSinceRead: 'longestSinceRead'
+} as const;
+export type ListMemoryReviewSortEnum = typeof ListMemoryReviewSortEnum[keyof typeof ListMemoryReviewSortEnum];
+/**
+ * @export
+ */
+export const ListMemoryReviewScopeEnum = {
+    All: 'all',
+    Global: 'global',
+    Project: 'project',
+    Team: 'team'
+} as const;
+export type ListMemoryReviewScopeEnum = typeof ListMemoryReviewScopeEnum[keyof typeof ListMemoryReviewScopeEnum];
+/**
+ * @export
+ */
+export const ListMemoryReviewTypeEnum = {
+    User: 'user',
+    Feedback: 'feedback',
+    Project: 'project',
+    Reference: 'reference'
+} as const;
+export type ListMemoryReviewTypeEnum = typeof ListMemoryReviewTypeEnum[keyof typeof ListMemoryReviewTypeEnum];
+/**
+ * @export
+ */
+export const ListMemoryReviewWarningsEnum = {
+    Any: 'any',
+    Hide: 'hide',
+    Only: 'only'
+} as const;
+export type ListMemoryReviewWarningsEnum = typeof ListMemoryReviewWarningsEnum[keyof typeof ListMemoryReviewWarningsEnum];
+/**
+ * @export
+ */
+export const ListMemoryReviewReferenceGoneEnum = {
+    True: 'true',
+    False: 'false'
+} as const;
+export type ListMemoryReviewReferenceGoneEnum = typeof ListMemoryReviewReferenceGoneEnum[keyof typeof ListMemoryReviewReferenceGoneEnum];
+/**
+ * @export
+ */
+export const ListMemoryReviewIdsTabEnum = {
+    Cold: 'cold',
+    Kept: 'kept',
+    Forgotten: 'forgotten'
+} as const;
+export type ListMemoryReviewIdsTabEnum = typeof ListMemoryReviewIdsTabEnum[keyof typeof ListMemoryReviewIdsTabEnum];
+/**
+ * @export
+ */
+export const ListMemoryReviewIdsSortEnum = {
+    LeastUsed: 'leastUsed',
+    OldestSaved: 'oldestSaved',
+    Largest: 'largest',
+    LongestSinceRead: 'longestSinceRead'
+} as const;
+export type ListMemoryReviewIdsSortEnum = typeof ListMemoryReviewIdsSortEnum[keyof typeof ListMemoryReviewIdsSortEnum];
+/**
+ * @export
+ */
+export const ListMemoryReviewIdsScopeEnum = {
+    All: 'all',
+    Global: 'global',
+    Project: 'project',
+    Team: 'team'
+} as const;
+export type ListMemoryReviewIdsScopeEnum = typeof ListMemoryReviewIdsScopeEnum[keyof typeof ListMemoryReviewIdsScopeEnum];
+/**
+ * @export
+ */
+export const ListMemoryReviewIdsTypeEnum = {
+    User: 'user',
+    Feedback: 'feedback',
+    Project: 'project',
+    Reference: 'reference'
+} as const;
+export type ListMemoryReviewIdsTypeEnum = typeof ListMemoryReviewIdsTypeEnum[keyof typeof ListMemoryReviewIdsTypeEnum];
+/**
+ * @export
+ */
+export const ListMemoryReviewIdsWarningsEnum = {
+    Any: 'any',
+    Hide: 'hide',
+    Only: 'only'
+} as const;
+export type ListMemoryReviewIdsWarningsEnum = typeof ListMemoryReviewIdsWarningsEnum[keyof typeof ListMemoryReviewIdsWarningsEnum];
+/**
+ * @export
+ */
+export const ListMemoryReviewIdsReferenceGoneEnum = {
+    True: 'true',
+    False: 'false'
+} as const;
+export type ListMemoryReviewIdsReferenceGoneEnum = typeof ListMemoryReviewIdsReferenceGoneEnum[keyof typeof ListMemoryReviewIdsReferenceGoneEnum];

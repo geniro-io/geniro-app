@@ -8,6 +8,7 @@ import type {
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { MemoryRow } from '../components/memory-row';
+import { sentence } from '../components/recommendations-card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -445,7 +446,7 @@ export function MemoryCheckPanel({
       {check.error === null ? null : (
         <ErrorText>
           {check.failed
-            ? `The check stopped: ${check.error} ${check.checked.toLocaleString('en-US')} of ${pairs(check.queued)} were checked and are kept; check again for the rest.`
+            ? `The check stopped: ${sentence(check.error)} ${check.checked.toLocaleString('en-US')} of ${pairs(check.queued)} were checked and are kept; check again for the rest.`
             : check.error}
         </ErrorText>
       )}

@@ -1797,7 +1797,9 @@ describe('Memory duplicates and contradictions', () => {
     const text = inDialog().textContent ?? '';
     const stopped = text.slice(text.indexOf('The check stopped:'));
     expect(stopped.startsWith('The check stopped: ')).toBe(true);
-    expect(stopped).toContain('0 of 3 pairs were checked and are kept');
+    expect(stopped).toContain(
+      'the CLI did not answer. 0 of 3 pairs were checked and are kept',
+    );
   });
 
   it('a merge defaults to the project of the first entry, and the scope and type it saves as can be picked', async () => {

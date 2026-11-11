@@ -120,6 +120,9 @@ export function forgetDescription(total: number, warned: number): string {
   if (warned === 0) {
     return base;
   }
+  if (total === 1) {
+    return `${base} It looks like a rule.`;
+  }
   return `${base} ${warned.toLocaleString('en-US')} of them ${warned === 1 ? 'looks' : 'look'} like a rule.`;
 }
 
@@ -153,10 +156,10 @@ function Reasons({
   if (tab === 'cold') {
     marks.push(
       <Badge key="read" variant="muted">
-        {row.usage.reads === 0 ? 'Never read' : 'Not read in 90 days'}
+        {row.usage.lastReadAt === null ? 'Never read' : 'Not read in 90 days'}
       </Badge>,
     );
-    if (row.usage.reads === 0 && row.usage.searchHits > 0) {
+    if (row.usage.lastReadAt === null && row.usage.searchHits > 0) {
       marks.push(
         <Badge key="hits" variant="muted">
           {count(row.usage.searchHits, 'search hit', 'search hits')}, not opened
@@ -325,6 +328,10 @@ export function MemoryCleanupDialog({
           onForget={
             tab === 'forgotten' ? undefined : () => onForget([entry.id])
           }
+          forgetDescription={forgetDescription(
+            1,
+            item.warning === null ? 0 : 1,
+          )}
           onRestore={tab === 'forgotten' ? () => onRestore(entry) : undefined}
           actions={
             tab === 'cold' ? (

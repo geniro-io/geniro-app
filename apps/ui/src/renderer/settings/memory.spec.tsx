@@ -19,6 +19,7 @@ import { confirmInDialog } from '../__tests__/confirm-in-dialog';
 import type {
   MemoriesApiListMemoryReviewRequest,
   MemoryEntry,
+  MemoryForgetBatchListDto,
   MemoryImportPreviewDto,
   MemoryImportResultDto,
   MemoryImportTriageDto,
@@ -200,7 +201,9 @@ function fakeApi(
           skipped: [],
         }),
     ),
-    listMemoryBatches: vi.fn(() => Promise.resolve({ batches: [] })),
+    listMemoryBatches: vi.fn(() =>
+      Promise.resolve<MemoryForgetBatchListDto>({ batches: [] }),
+    ),
     restoreMemoryBatch: vi.fn((_request: { batchId: string }) =>
       Promise.resolve({ restored: 2 }),
     ),
@@ -1122,7 +1125,9 @@ describe('Memory clean up', () => {
       })),
     });
 
-    expect(container.textContent).toContain(cleanupLine(SUMMARY));
+    expect(container.textContent).toContain(
+      '12 active · 4 read · 8 never read · 2 proposed now. Reads counted since Oct 29.',
+    );
     await press(button(container, 'Review…'));
 
     expect(api.listMemoryReview).toHaveBeenCalledWith({
@@ -1265,5 +1270,124 @@ describe('Memory clean up', () => {
     await press(button(container, 'Undo'));
 
     expect(api.restoreMemoryBatch).toHaveBeenCalledWith({ batchId: 'batch-9' });
+  });
+
+  it('says why nothing is proposed while the cold entries are all younger than the age', () => {
+    expect(
+      cleanupLine({ ...SUMMARY, proposed: 0, younger: 5, counting: true }),
+    ).toBe(
+      '12 active · 4 read · 8 never read · none proposed yet: 5 cold entries are under 14 days old. Reads counted since Oct 29, earlier chats still being counted.',
+    );
+  });
+
+  it('undoes an earlier cleanup from Recent cleanups on the Forgotten tab', async () => {
+    const api = fakeApi(undefined, () => ({
+      rows: [],
+      total: 0,
+      younger: null,
+      next: null,
+    }));
+    api.listMemoryBatches.mockResolvedValue({
+      batches: [
+        {
+          batchId: 'batch-7',
+          count: 3,
+          forgottenAt: new Date().toISOString(),
+        },
+      ],
+    });
+    await render({ api });
+    await press(button(container, 'Review…'));
+
+    await press(button(inDialog(), 'Forgotten (3)'));
+    expect(api.listMemoryReview).toHaveBeenLastCalledWith({
+      tab: 'forgotten',
+      limit: 30,
+    });
+    const recent = inDialog().querySelector<HTMLElement>(
+      '[data-slot="memory-cleanup-batches"]',
+    );
+    expect(recent?.textContent).toContain('Forgot 3 entries');
+    await press(button(recent as HTMLElement, 'Undo'));
+
+    expect(api.restoreMemoryBatch).toHaveBeenCalledWith({ batchId: 'batch-7' });
+  });
+
+  it('stops keeping an entry from the Kept tab', async () => {
+    const kept = reviewRow(
+      memoryEntry({ id: 'k1', handle: 'm31', title: 'Billing edge cases' }),
+      { keptAt: '2026-11-10T09:00:00.000Z' },
+    );
+    const api = await render({
+      api: fakeApi(undefined, (request) =>
+        request.tab === 'kept'
+          ? { rows: [kept], total: 1, younger: null, next: null }
+          : { rows: [], total: 0, younger: 0, next: null },
+      ),
+    });
+    await press(button(container, 'Review…'));
+    await press(button(inDialog(), 'Kept (1)'));
+
+    await press(button(inDialog(), 'Stop keeping'));
+
+    expect(api.unkeepMemory).toHaveBeenCalledWith({ memoryId: 'k1' });
+  });
+
+  it('asks before forgetting one entry that looks like a rule, and says so', async () => {
+    const api = await render({
+      api: fakeApi(undefined, () => ({
+        rows: [COLD, COLD_RULE],
+        total: 2,
+        younger: 0,
+        next: null,
+      })),
+    });
+    await press(button(container, 'Review…'));
+
+    const row = inDialog().querySelector<HTMLElement>(
+      '[data-memory-handle="m22"]',
+    );
+    await press(button(row as HTMLElement, 'Forget'));
+    const question = [
+      ...document.querySelectorAll('[role="dialog"][aria-modal="true"]'),
+    ].at(-1);
+    expect(question?.textContent).toContain('It looks like a rule.');
+    await press(confirmInDialog('Forget'));
+
+    expect(api.forgetMemoryBatch).toHaveBeenCalledWith({
+      forgetMemoryBatchDto: { ids: ['c2'] },
+    });
+  });
+
+  it('drops a Tick shown answer that lands after the filters changed', async () => {
+    let answer: (value: {
+      ids: string[];
+      warnedSkipped: number;
+    }) => void = () => undefined;
+    const api = fakeApi(undefined, () => ({
+      rows: [COLD, COLD_RULE],
+      total: 2,
+      younger: 0,
+      next: null,
+    }));
+    api.listMemoryReviewIds.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await render({ api });
+    await press(button(container, 'Review…'));
+
+    await press(button(inDialog(), 'Tick shown'));
+    await choose('Warnings', 'Hide warnings');
+    await act(async () => {
+      answer({ ids: ['c1'], warnedSkipped: 1 });
+    });
+    await settle();
+
+    expect(
+      inDialog().querySelector('[data-slot="memory-cleanup-picked"]')
+        ?.textContent,
+    ).toBe('0 selected');
   });
 });

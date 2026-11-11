@@ -18,6 +18,7 @@ export function MemoryRow({
   onForget,
   onRestore,
   onApprove,
+  forgetDescription = 'Agents no longer see it. It stays restorable under Forgotten.',
   leading,
   details,
   actions,
@@ -31,6 +32,8 @@ export function MemoryRow({
   onForget?: () => void | Promise<void>;
   onRestore?: () => void;
   onApprove?: () => void;
+  /** What the Forget question says will happen. */
+  forgetDescription?: string;
   /** Drawn before the row, e.g. a tick for picking it. */
   leading?: React.ReactNode;
   /** Lines under the provenance, e.g. usage figures and why the row is listed. */
@@ -101,7 +104,7 @@ export function MemoryRow({
             <ConfirmActionButton
               disabled={busy}
               question={`Forget ${entry.handle}?`}
-              description="Agents no longer see it. It stays restorable under Forgotten."
+              description={forgetDescription}
               confirmLabel="Forget"
               busyLabel="Forgetting…"
               onConfirm={onForget}>

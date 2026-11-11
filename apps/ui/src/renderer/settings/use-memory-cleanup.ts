@@ -114,6 +114,7 @@ export function useMemoryCleanup(
   const [notice, setNotice] = useState<MemoryCleanupNotice | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const generation = useRef(0);
+  const picks = useRef(0);
   const depth = useRef(0);
 
   const readSummary = useLatestCallback(() => {
@@ -200,6 +201,7 @@ export function useMemoryCleanup(
   }, [client, refresh]);
 
   const clearPicks = (): void => {
+    picks.current += 1;
     setSelected(new Set());
     setWarned(new Set());
     setTickSkipped(null);
@@ -284,9 +286,13 @@ export function useMemoryCleanup(
       return;
     }
     setTicking(true);
+    const mine = picks.current;
     void api
       .listMemoryReviewIds(reviewRequest(tab, filters))
       .then(({ ids, warnedSkipped }) => {
+        if (mine !== picks.current) {
+          return;
+        }
         setSelected((before) => new Set([...before, ...ids]));
         setTickSkipped(warnedSkipped);
       })

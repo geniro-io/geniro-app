@@ -608,4 +608,29 @@ describe('MemoryImportService', () => {
     ask.mockResolvedValueOnce('I would keep it.');
     await expect(imports.triage(request)).rejects.toThrow('could not be read');
   });
+
+  it('a forgotten imported note is unticked and still imports when ticked', async () => {
+    claudeNote(defaultProfile(), '-r', 'n.md', '---\nname: back\n---\nx');
+    const [row] = (await preview()).rows;
+    const request = {
+      profiles: [],
+      rows: [{ key: row!.key, type: 'project' as const, projectId: null }],
+    };
+    await imports.apply(request);
+    await db.service.forgetAll();
+
+    const [forgotten] = (await preview()).rows;
+
+    expect(forgotten).toMatchObject({
+      alreadyImported: false,
+      forgottenEarlier: true,
+    });
+    expect(await imports.apply(request)).toEqual({ imported: 1, skipped: [] });
+    expect(
+      await db.em
+        .fork()
+        .find(Memory, { status: 'active' })
+        .then((rows) => rows.map((memory) => memory.sourceActor)),
+    ).toEqual(['import']);
+  });
 });

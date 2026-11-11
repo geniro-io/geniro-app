@@ -22,6 +22,7 @@ import {
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
+import { ResourceAlertEventBus } from '../../agents/services/resource-alert-events.bus';
 import { SubagentRecoveryService } from '../../agents/services/subagent-recovery.service';
 import {
   extractBooleanField,
@@ -150,6 +151,7 @@ export class NotificationsGateway
   private knowledgeSubscription?: Subscription;
   private threadMessagesSubscription?: Subscription;
   private projectSubscription?: Subscription;
+  private resourceAlertSubscription?: Subscription;
   /**
    * Debug fan-out failures, counted rather than logged.
    *
@@ -174,6 +176,7 @@ export class NotificationsGateway
     private readonly memories: MemoryEventBus,
     private readonly projects: ProjectEventBus,
     private readonly knowledge: KnowledgeEventBus,
+    private readonly resourceAlerts: ResourceAlertEventBus,
   ) {}
 
   afterInit(server: Server): void {
@@ -276,6 +279,26 @@ export class NotificationsGateway
         },
         error: (err: unknown) =>
           this.logger.error(`thread message bus errored: ${String(err)}`),
+      });
+    // Goes to EVERY client, paired devices included: the phone shows the same
+    // alert strip. No payload; clients read the list over HTTP.
+    //
+    // TWIN PARSER: `DaemonClient.onResourceAlertsChanged`
+    // (apps/ui/src/renderer/daemon-client.ts) takes this event bare.
+    this.resourceAlertSubscription = this.resourceAlerts
+      .allChanges()
+      .subscribe({
+        next: () => {
+          try {
+            server.emit('resource_alerts_changed');
+          } catch (err) {
+            this.logger.error(
+              `failed to broadcast resource_alerts_changed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        },
+        error: (err: unknown) =>
+          this.logger.error(`resource alert bus errored: ${String(err)}`),
       });
     // A memory write goes to EVERY client, paired devices included: the user
     // reads and edits memory from the phone too. The event names the entry,
@@ -449,6 +472,7 @@ export class NotificationsGateway
     this.knowledgeSubscription?.unsubscribe();
     this.threadMessagesSubscription?.unsubscribe();
     this.projectSubscription?.unsubscribe();
+    this.resourceAlertSubscription?.unsubscribe();
     this.deletedSubscription?.unsubscribe();
     this.changedSubscription?.unsubscribe();
     this.groupsSubscription?.unsubscribe();

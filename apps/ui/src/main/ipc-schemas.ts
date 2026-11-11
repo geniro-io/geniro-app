@@ -297,6 +297,32 @@ export const knowledgeSchema = z.strictObject({
   agentWrites: z.enum(['review', 'direct', 'off']),
 });
 
+const MIB = 1024 ** 2;
+const GIB = 1024 ** 3;
+
+/**
+ * TWIN PARSER: `ResourceAlertConfigSchema` in `apps/daemon/src/v1/agents/chat.types.ts`,
+ * which `resource-alerts-config-push.ts` pushes this to.
+ */
+export const resourceAlertsSchema = z.strictObject({
+  enabled: z.boolean(),
+  threadMemoryBytes: z
+    .number()
+    .int()
+    .min(256 * MIB)
+    .max(1024 * GIB),
+  growthBytesPerMinute: z
+    .number()
+    .int()
+    .min(64 * MIB)
+    .max(1024 * GIB),
+  minFreeDiskBytes: z
+    .number()
+    .int()
+    .min(256 * MIB)
+    .max(1024 * GIB),
+});
+
 /**
  * A `Partial<Settings>` patch. `strictObject` rejects unknown keys, so the
  * renderer can't write arbitrary fields into settings.json.
@@ -418,6 +444,7 @@ export const settingsPatchSchema = z.strictObject({
   sharing: sharingSchema.optional(),
   memory: memorySchema.optional(),
   knowledge: knowledgeSchema.optional(),
+  resourceAlerts: resourceAlertsSchema.optional(),
   // The retention window, or null for "keep the archive". Bounded to exactly
   // what the daemon's own schema accepts, so a value this side lets through can
   // never be one that route refuses — and NULLABLE rather than absent, because
@@ -781,13 +808,19 @@ export type KnowledgeExportSave = z.infer<typeof knowledgeExportSaveSchema>;
  * centre, so nothing is lost by refusing it here, and a renderer that has been
  * tampered with cannot hand the window server a megabyte.
  */
-export const notificationSchema = z.strictObject({
-  kind: z.enum(['question', 'turn-end', 'share-sign-in']),
-  runId: z.string().min(1).max(128),
-  title: z.string().min(1).max(120),
-  body: z.string().max(240),
-  retractable: z.boolean().optional(),
-});
+export const notificationSchema = z
+  .strictObject({
+    kind: z.enum(['question', 'turn-end', 'share-sign-in', 'resource-alert']),
+    runId: z.string().max(128),
+    title: z.string().min(1).max(120),
+    body: z.string().max(240),
+    retractable: z.boolean().optional(),
+  })
+  .refine(
+    (notification) =>
+      notification.runId !== '' || notification.kind === 'resource-alert',
+    { message: 'only a resource alert may name no thread', path: ['runId'] },
+  );
 
 /** The run whose retractable banner is withdrawn — bounded like a post's. */
 export const retractNotificationSchema = z.string().min(1).max(128);

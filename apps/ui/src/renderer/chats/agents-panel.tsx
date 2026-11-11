@@ -1879,6 +1879,8 @@ export function AgentsPanel({
   waterfall,
   processes,
   onPopupChange,
+  popupRequest = null,
+  onPopupRequestHandled,
   notes,
 }: {
   agents: AgentDisplay[];
@@ -1978,6 +1980,9 @@ export function AgentsPanel({
    * run for a popup nobody opened.
    */
   onPopupChange?: (popup: AgentsPanelPopup | null) => void;
+  /** A popup another screen asked to open; told back once it is open. */
+  popupRequest?: AgentsPanelPopup | null;
+  onPopupRequestHandled?: () => void;
   /**
    * MCP servers per {@link mcpScopeKey}, fetched by the owner.
    *
@@ -2279,6 +2284,15 @@ export function AgentsPanel({
     },
     [],
   );
+  const handledPopupRequest = useRef(onPopupRequestHandled);
+  handledPopupRequest.current = onPopupRequestHandled;
+  useEffect(() => {
+    if (popupRequest === null) {
+      return;
+    }
+    setPopup(popupRequest);
+    handledPopupRequest.current?.();
+  }, [popupRequest]);
   const closePopup = (): void => setPopup(null);
   // ONE at a time, and that is a statement of fact rather than a policy:
   // `Popover` closes on any pointer press outside its own trigger, so pressing

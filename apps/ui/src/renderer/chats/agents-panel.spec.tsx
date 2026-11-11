@@ -4130,6 +4130,28 @@ describe('AgentsPanel — the run readouts open in popups', () => {
     },
   );
 
+  it('opens the processes popup another screen asked for, once, and says so', () => {
+    const onPopupChange = vi.fn();
+    const onPopupRequestHandled = vi.fn();
+    const el = renderFolded(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        processes={PROCESSES}
+        onPopupChange={onPopupChange}
+        popupRequest="processes"
+        onPopupRequestHandled={onPopupRequestHandled}
+      />,
+    );
+
+    expect(el.querySelector('[role="dialog"]')?.textContent).toContain(
+      'reading processes…',
+    );
+    expect(onPopupChange).toHaveBeenLastCalledWith('processes');
+    expect(onPopupRequestHandled).toHaveBeenCalledTimes(1);
+  });
+
   it('opens them from the folded rail too', () => {
     const onPopupChange = vi.fn();
     const el = renderFolded(

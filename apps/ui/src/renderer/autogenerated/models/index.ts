@@ -9847,6 +9847,206 @@ export interface ResetWakesCancelledDto {
 /**
  * 
  * @export
+ * @interface ResourceAlert
+ */
+export interface ResourceAlert {
+    /**
+     * 
+     * @type {string}
+     * @memberof ResourceAlert
+     */
+    id: string;
+    /**
+     * 
+     * @type {ResourceAlertKind}
+     * @memberof ResourceAlert
+     */
+    kind: ResourceAlertKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof ResourceAlert
+     */
+    raisedAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ResourceAlert
+     */
+    runId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ResourceAlert
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof ResourceAlert
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ResourceAlert
+     */
+    memberId: string | null;
+    /**
+     * 
+     * @type {ResourceAlertCommand}
+     * @memberof ResourceAlert
+     */
+    command: ResourceAlertCommand | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ResourceAlert
+     */
+    threadRssBytes: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ResourceAlert
+     */
+    growthBytesPerMinute: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ResourceAlert
+     */
+    freeDiskBytes: number | null;
+    /**
+     * whether the command was one this thread may stop when the alert was raised
+     * @type {boolean}
+     * @memberof ResourceAlert
+     */
+    stoppable: boolean;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface ResourceAlertCommand
+ */
+export interface ResourceAlertCommand {
+    /**
+     * 
+     * @type {number}
+     * @memberof ResourceAlertCommand
+     */
+    pid: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ResourceAlertCommand
+     */
+    name: string;
+    /**
+     * its command line on one line, secrets and env values masked
+     * @type {string}
+     * @memberof ResourceAlertCommand
+     */
+    label: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof ResourceAlertCommand
+     */
+    rssBytes: number;
+}
+/**
+ * 
+ * @export
+ * @interface ResourceAlertConfigAckDto
+ */
+export interface ResourceAlertConfigAckDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ResourceAlertConfigAckDto
+     */
+    enabled: boolean;
+    /**
+     * 
+     * @type {number}
+     * @memberof ResourceAlertConfigAckDto
+     */
+    threadMemoryBytes: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ResourceAlertConfigAckDto
+     */
+    growthBytesPerMinute: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ResourceAlertConfigAckDto
+     */
+    minFreeDiskBytes: number;
+}
+/**
+ * 
+ * @export
+ * @interface ResourceAlertConfigDto
+ */
+export interface ResourceAlertConfigDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ResourceAlertConfigDto
+     */
+    enabled: boolean;
+    /**
+     * 
+     * @type {number}
+     * @memberof ResourceAlertConfigDto
+     */
+    threadMemoryBytes: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ResourceAlertConfigDto
+     */
+    growthBytesPerMinute: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ResourceAlertConfigDto
+     */
+    minFreeDiskBytes: number;
+}
+
+/**
+ * 
+ * @export
+ */
+export const ResourceAlertKind = {
+    ThreadMemory: 'thread-memory',
+    ThreadGrowth: 'thread-growth',
+    MemoryPressure: 'memory-pressure',
+    LowDisk: 'low-disk'
+} as const;
+export type ResourceAlertKind = typeof ResourceAlertKind[keyof typeof ResourceAlertKind];
+
+/**
+ * 
+ * @export
+ * @interface ResourceAlertsDto
+ */
+export interface ResourceAlertsDto {
+    /**
+     * oldest first
+     * @type {Array<ResourceAlert>}
+     * @memberof ResourceAlertsDto
+     */
+    alerts: Array<ResourceAlert>;
+}
+/**
+ * 
+ * @export
  * @interface RestoreKnowledgeRevisionDto
  */
 export interface RestoreKnowledgeRevisionDto {
@@ -13437,6 +13637,19 @@ export interface StoppedDetachedProcessesDto {
      * @memberof StoppedDetachedProcessesDto
      */
     stoppedMonitorIds: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface StoppedResourceAlertCommandDto
+ */
+export interface StoppedResourceAlertCommandDto {
+    /**
+     * 
+     * @type {Array<number>}
+     * @memberof StoppedResourceAlertCommandDto
+     */
+    stoppedPids: Array<number>;
 }
 /**
  * 

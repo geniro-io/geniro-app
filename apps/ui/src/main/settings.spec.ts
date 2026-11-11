@@ -768,6 +768,39 @@ describe('knowledge settings', () => {
   });
 });
 
+describe('resource alert settings', () => {
+  const GIB = 1024 ** 3;
+
+  it('a half-valid object keeps its valid fields and defaults the rest', () => {
+    writeRaw({
+      resourceAlerts: {
+        enabled: false,
+        threadMemoryBytes: 4 * GIB,
+        growthBytesPerMinute: -1,
+        minFreeDiskBytes: 'lots',
+      },
+    });
+
+    expect(readSettings().resourceAlerts).toEqual({
+      enabled: false,
+      threadMemoryBytes: 4 * GIB,
+      growthBytesPerMinute: GIB,
+      minFreeDiskBytes: 10 * GIB,
+    });
+  });
+
+  it('a file from before the setting reads it on, at 8 GB, 1 GB/min and 10 GB free', () => {
+    writeRaw({});
+
+    expect(readSettings().resourceAlerts).toEqual({
+      enabled: true,
+      threadMemoryBytes: 8 * GIB,
+      growthBytesPerMinute: GIB,
+      minFreeDiskBytes: 10 * GIB,
+    });
+  });
+});
+
 describe('onSettingsWritten', () => {
   it('tells a listener every write, with the settings as written', () => {
     const seen: boolean[] = [];

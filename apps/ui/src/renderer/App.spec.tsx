@@ -100,6 +100,9 @@ vi.mock('./daemon-client', () => ({
     onReconnect(): () => void {
       return () => {};
     }
+    onResourceAlertsChanged(): () => void {
+      return () => {};
+    }
   },
 }));
 vi.mock('./terminal/terminal-panel', () => ({ TerminalPanel: () => null }));

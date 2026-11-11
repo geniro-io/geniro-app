@@ -8,6 +8,7 @@ import { FakeUnrecordedSpendStore } from '../../agents/services/__tests__/fake-u
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
+import { ResourceAlertEventBus } from '../../agents/services/resource-alert-events.bus';
 import type { SubagentRecoveryService } from '../../agents/services/subagent-recovery.service';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { KnowledgeEventBus } from '../../knowledge/services/knowledge-events.bus';
@@ -84,6 +85,35 @@ function wireItem(runId: string, seq: number): ItemWire {
 }
 
 describe('NotificationsGateway', () => {
+  it('broadcasts a resource alert change to every client, bare', () => {
+    const resourceAlerts = new ResourceAlertEventBus();
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      new TaskEventBus(),
+      partials(),
+      subagents(),
+      new ShareEventBus(),
+      new MemoryEventBus(),
+      new ProjectEventBus(),
+      new KnowledgeEventBus(),
+      resourceAlerts,
+    );
+    const emit = vi.fn();
+    const to = vi.fn();
+    gw.afterInit({ emit, to } as unknown as Server);
+
+    resourceAlerts.publish();
+
+    expect(emit).toHaveBeenCalledWith('resource_alerts_changed');
+    expect(to).not.toHaveBeenCalled();
+    gw.onModuleDestroy();
+  });
+
   it('broadcasts a knowledge write to every client, naming no text', () => {
     const knowledge = new KnowledgeEventBus();
     const gw = new NotificationsGateway(
@@ -100,6 +130,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       knowledge,
+      new ResourceAlertEventBus(),
     );
     const emit = vi.fn();
     gw.afterInit({ emit, to: vi.fn() } as unknown as Server);
@@ -129,6 +160,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const socket = fakeSocket('wrong-token');
 
@@ -153,6 +185,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -180,6 +213,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -234,6 +268,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -274,6 +309,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -298,6 +334,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const socket = fakeSocket('good-token');
     let resolveJoin!: () => void;
@@ -338,6 +375,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -364,6 +402,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     let calls = 0;
     const emit = vi.fn(() => {
@@ -405,6 +444,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a usage event must never take it — the Stats page
@@ -445,6 +485,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a task write must never take it — a board is not
@@ -481,6 +522,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const emit = vi.fn();
     const roomEmit = vi.fn();
@@ -524,6 +566,7 @@ describe('NotificationsGateway', () => {
       memories,
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -572,6 +615,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -605,6 +649,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       projects,
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -634,6 +679,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const desktop = fakeSocket('good-token');
     const phone = {
@@ -667,6 +713,7 @@ describe('NotificationsGateway', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a deletion must never take it — every OTHER
@@ -712,6 +759,7 @@ describe('runs_changed broadcast', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit: vi.fn() }));
@@ -765,6 +813,7 @@ describe('verdict round-trip', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
 
     const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
@@ -802,6 +851,7 @@ describe('verdict round-trip', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
 
     track('req-o');
@@ -843,6 +893,7 @@ describe('verdict round-trip', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
     expect(
       gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
@@ -881,6 +932,7 @@ describe('verdict round-trip', () => {
       new MemoryEventBus(),
       new ProjectEventBus(),
       new KnowledgeEventBus(),
+      new ResourceAlertEventBus(),
     );
 
     track('req-a');

@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { CliKind } from '../shared/contracts';
 import type { DaemonHandle, DaemonMigration } from '../shared/contracts';
-import { AgentIdentityContext } from './agent-identity';
+import { AgentIdentityContext, agentShortName } from './agent-identity';
 import { Chats } from './chats/Chats';
 import { REMOTE_HISTORY_PAGE } from './chats/use-chat-run';
 import { useNextWaitingShortcut } from './chats/use-next-waiting-shortcut';
@@ -33,6 +33,8 @@ import type { FirstLaunch, TeamLaunch } from './onboarding/first-launch';
 import { Onboarding } from './onboarding/Onboarding';
 import type { ProjectsRequest } from './projects/Projects';
 import { isRemoteRuntime } from './remote/remote-session';
+import { ResourceAlertStrip } from './resource-alerts/resource-alert-strip';
+import { useResourceAlerts } from './resource-alerts/use-resource-alerts';
 import { formatRoute, parseRoute, type Route } from './routing';
 import { answerLineFlush } from './stats/line-flush';
 import { TerminalPanel } from './terminal/terminal-panel';
@@ -175,6 +177,8 @@ export function App(): React.JSX.Element {
   const [openRunId, setOpenRunId] = useState<string | null>(() =>
     initialRoute?.view === 'chats' ? initialRoute.runId : null,
   );
+  /** Inbound and one-shot, like `threadRequest`: open this thread's processes. */
+  const [processesRequest, setProcessesRequest] = useState<string | null>(null);
   /** Inbound and one-shot, like `threadRequest`; `shownProjectId` is its outbound twin. */
   const [projectRequest, setProjectRequest] = useState<ProjectsRequest | null>(
     () =>
@@ -563,6 +567,15 @@ export function App(): React.JSX.Element {
     }
   }, [openRunId]);
   const knowledgeCounts = useKnowledgeCounts(apis, clientRef.current);
+  const agentName = useLatestCallback(
+    (kind: string): string => agentShortName(agentIdentities, kind),
+    [agentIdentities],
+  );
+  const resourceAlerts = useResourceAlerts({
+    apis,
+    client: clientRef.current,
+    agentName,
+  });
   const navCounts = useMemo(
     () => ({ knowledge: knowledgeCounts?.waiting ?? 0 }),
     [knowledgeCounts],
@@ -761,6 +774,21 @@ export function App(): React.JSX.Element {
                     onRetry={() => void connectDaemon()}
                   />
                 )}
+                {showStartup ? null : (
+                  <ResourceAlertStrip
+                    alerts={resourceAlerts.alerts}
+                    agentName={agentName}
+                    stoppingId={resourceAlerts.stoppingId}
+                    error={resourceAlerts.error}
+                    onOpenProcesses={(runId) => {
+                      setThreadRequest(runId);
+                      setProcessesRequest(runId);
+                      setView('chats');
+                    }}
+                    onStop={(alertId) => void resourceAlerts.stop(alertId)}
+                    onDismiss={resourceAlerts.dismiss}
+                  />
+                )}
                 {showStartup ? (
                   <StartupScreen
                     since={waitingSince}
@@ -835,6 +863,10 @@ export function App(): React.JSX.Element {
                       openRunId={threadRequest}
                       onRunOpened={() => {
                         setThreadRequest(null);
+                      }}
+                      processesRequest={processesRequest}
+                      onProcessesOpened={() => {
+                        setProcessesRequest(null);
                       }}
                     />
                   ) : null}

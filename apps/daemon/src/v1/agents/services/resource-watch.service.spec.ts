@@ -218,23 +218,25 @@ describe('ResourceWatchService', () => {
     expect(t.published).toHaveBeenCalledTimes(1);
   });
 
-  it('raises thread-growth once a minute of samples shows the rate', async () => {
+  it('raises thread-growth once three windows of samples show the rate', async () => {
     const t = setup({
-      samples: [[sample(2.5 * GIB)], [sample(3 * GIB)], [sample(4 * GIB)]],
+      samples: Array.from({ length: 7 }, (_, i) => [
+        sample(2 * GIB + (i * GIB) / 2),
+      ]),
     });
-    await t.watch.tick();
-    t.advance(RESOURCE_WATCH_EVERY_MS);
-    await t.watch.tick();
-    expect(t.watch.list().alerts).toEqual([]);
+    for (let tick = 0; tick < 6; tick += 1) {
+      await t.watch.tick();
+      expect(t.watch.list().alerts).toEqual([]);
+      t.advance(RESOURCE_WATCH_EVERY_MS);
+    }
 
-    t.advance(RESOURCE_WATCH_EVERY_MS);
     await t.watch.tick();
 
     expect(t.watch.list().alerts).toEqual([
       expect.objectContaining({
         kind: 'thread-growth',
         runId: 'run-1',
-        growthBytesPerMinute: 1.5 * GIB,
+        growthBytesPerMinute: GIB,
       }),
     ]);
   });
@@ -461,5 +463,182 @@ describe('ResourceWatchService', () => {
     t.watch.onApplicationShutdown();
     await vi.advanceTimersByTimeAsync(RESOURCE_WATCH_EVERY_MS);
     expect(t.sampleThreads).toHaveBeenCalledTimes(1);
+  });
+});
+
+const RAMP_LAST_TICK_S = 2010;
+
+/** One GB a minute from 2 GB, flat from 180 s to 240 s, then one GB a minute again. */
+function growingRss(seconds: number): number {
+  if (seconds <= 180) {
+    return 2 * GIB + (seconds / 60) * GIB;
+  }
+  if (seconds <= 240) {
+    return 5 * GIB;
+  }
+  return 5 * GIB + ((seconds - 240) / 60) * GIB;
+}
+
+function rampSamples(
+  lastSecond: number,
+  runs: { runId: string; rssAt: (seconds: number) => number }[],
+): ThreadResourceSample[][] {
+  const ticks: ThreadResourceSample[][] = [];
+  for (let second = 0; second <= lastSecond; second += 30) {
+    ticks.push(
+      runs.map(({ runId, rssAt }) => sample(rssAt(second), { runId })),
+    );
+  }
+  return ticks;
+}
+
+async function tickThrough(
+  t: ReturnType<typeof setup>,
+  fromSecond: number,
+  toSecond: number,
+  observe: (second: number) => void,
+): Promise<void> {
+  for (let second = fromSecond; second <= toSecond; second += 30) {
+    await t.watch.tick();
+    observe(second);
+    t.advance(RESOURCE_WATCH_EVERY_MS);
+  }
+}
+
+function growthRunIds(t: ReturnType<typeof setup>): string[] {
+  return t.watch
+    .list()
+    .alerts.filter((a) => a.kind === 'thread-growth')
+    .map((a) => a.runId ?? '');
+}
+
+describe('thread-growth quiet periods', () => {
+  it('raises growth once it is sustained, then not again for 30 minutes after it clears', async () => {
+    const t = setup({
+      samples: rampSamples(RAMP_LAST_TICK_S, [
+        { runId: 'run-1', rssAt: growingRss },
+      ]),
+    });
+    const visible: number[] = [];
+
+    await tickThrough(t, 0, RAMP_LAST_TICK_S, (second) => {
+      if (growthRunIds(t).length > 0) {
+        visible.push(second);
+      }
+    });
+
+    expect(visible.filter((second) => second < 2010)).toEqual([180]);
+    expect(visible).toContain(2010);
+  });
+
+  it('keeps one thread quiet while another that grows raises its own alert', async () => {
+    const t = setup({
+      samples: rampSamples(420, [
+        { runId: 'run-1', rssAt: growingRss },
+        {
+          runId: 'run-2',
+          rssAt: (seconds) =>
+            seconds <= 240 ? 2 * GIB : 2 * GIB + ((seconds - 240) / 60) * GIB,
+        },
+      ]),
+    });
+    const raisedAt = new Map<number, string[]>();
+
+    await tickThrough(t, 0, 420, (second) => {
+      raisedAt.set(second, growthRunIds(t));
+    });
+
+    expect(raisedAt.get(180)).toEqual(['run-1']);
+    expect(raisedAt.get(420)).toEqual(['run-2']);
+  });
+
+  it('dismissing a growth alert takes it off the daemon and starts its quiet period', async () => {
+    const t = setup({
+      samples: rampSamples(2010, [{ runId: 'run-1', rssAt: growingRss }]),
+    });
+    await tickThrough(t, 0, 150, () => undefined);
+    await t.watch.tick();
+    const [alert] = t.watch.list().alerts;
+    t.published.mockClear();
+
+    const wire = t.watch.dismiss(alert?.id ?? '');
+    t.advance(RESOURCE_WATCH_EVERY_MS);
+
+    expect(wire.alerts).toEqual([]);
+    expect(t.published).toHaveBeenCalledTimes(1);
+    const visible: number[] = [];
+    await tickThrough(t, 210, 2010, (second) => {
+      if (growthRunIds(t).length > 0) {
+        visible.push(second);
+      }
+    });
+    expect(visible[0]).toBe(1980);
+    expect(visible.every((second) => second >= 1980)).toBe(true);
+  });
+
+  it('stopping a growth alert through the reaper starts its quiet period', async () => {
+    const t = setup({
+      samples: rampSamples(2010, [{ runId: 'run-1', rssAt: growingRss }]),
+      candidates: [candidate(4242, 5_000)],
+    });
+    await tickThrough(t, 0, 150, () => undefined);
+    await t.watch.tick();
+    const [alert] = t.watch.list().alerts;
+    expect(alert?.stoppable).toBe(true);
+    await t.watch.stop(alert?.id ?? '');
+    t.advance(RESOURCE_WATCH_EVERY_MS);
+
+    const visible: number[] = [];
+    await tickThrough(t, 210, 2010, (second) => {
+      if (growthRunIds(t).length > 0) {
+        visible.push(second);
+      }
+    });
+    expect(visible[0]).toBe(1980);
+    expect(visible.every((second) => second >= 1980)).toBe(true);
+  });
+
+  it('switching the watch off clears every quiet period', async () => {
+    const t = setup({
+      samples: rampSamples(420, [{ runId: 'run-1', rssAt: growingRss }]),
+    });
+    await tickThrough(t, 0, 150, () => undefined);
+    await t.watch.tick();
+    t.watch.dismiss(t.watch.list().alerts[0]?.id ?? '');
+    t.advance(RESOURCE_WATCH_EVERY_MS);
+
+    t.watch.setConfig({ ...DEFAULT_RESOURCE_ALERT_CONFIG, enabled: false });
+    t.watch.setConfig(DEFAULT_RESOURCE_ALERT_CONFIG);
+    const visible: number[] = [];
+    await tickThrough(t, 210, 420, (second) => {
+      if (growthRunIds(t).length > 0) {
+        visible.push(second);
+      }
+    });
+
+    expect(visible).toEqual([420]);
+  });
+
+  it('answers 404 for a dismissal of an unknown alert, and 400 for a kind the daemon does not dismiss', async () => {
+    const t = setup({ samples: [[sample(9 * GIB)]] });
+    expect(() => t.watch.dismiss('ra-nope')).toThrow(NotFoundException);
+
+    await t.watch.tick();
+    const [memory] = t.watch.list().alerts;
+    expect(memory?.kind).toBe('thread-memory');
+    expect(() => t.watch.dismiss(memory?.id ?? '')).toThrow(
+      BadRequestException,
+    );
+    expect(t.watch.list().alerts).toHaveLength(1);
+  });
+
+  it('refuses to dismiss a low-disk alert on the daemon', async () => {
+    const t = setup({ samples: [[sample(1 * GIB)]], freeDisk: 1.5 * GIB });
+    await t.watch.tick();
+    const [disk] = t.watch.list().alerts;
+    expect(disk?.kind).toBe('low-disk');
+
+    expect(() => t.watch.dismiss(disk?.id ?? '')).toThrow(BadRequestException);
+    expect(t.watch.list().alerts).toHaveLength(1);
   });
 });

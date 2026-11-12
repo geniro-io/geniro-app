@@ -50,6 +50,13 @@ export class ResourceAlertsController {
     return this.watch.stop(alertId);
   }
 
+  @Post(':alertId/dismiss')
+  @ApiOperation({ operationId: 'dismissResourceAlert' })
+  @ZodResponse({ status: 200, type: ResourceAlertsDto })
+  dismiss(@Param('alertId') alertId: string): ResourceAlertsWire {
+    return this.watch.dismiss(alertId);
+  }
+
   @Put('config')
   @UseGuards(DesktopOnlyGuard)
   @ApiOperation({ operationId: 'setResourceAlertConfig' })

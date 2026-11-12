@@ -24,8 +24,9 @@ function message(
 /**
  * The app-wide strip for the daemon's resource alerts: which thread, agent
  * and command, with the thread's processes one press away and, when the
- * daemon may stop it, the command itself. An alert put away here stays away
- * in this window; it leaves by itself once the daemon clears it.
+ * daemon may stop it, the command itself. A growth alert put away here is put
+ * away on the daemon too, so it does not come back; any other alert stays
+ * away in this window only.
  */
 export function ResourceAlertStrip({
   alerts,

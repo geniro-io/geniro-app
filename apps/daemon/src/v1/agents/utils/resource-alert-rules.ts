@@ -11,6 +11,9 @@ export const GROWTH_FLOOR_BYTES = 2 * 1024 ** 3;
 /** The shortest span a growth rate is measured over. */
 export const GROWTH_WINDOW_MS = 60_000;
 
+/** Consecutive windows a growth rate must hold in before it counts as growth. */
+export const GROWTH_SUSTAINED_WINDOWS = 3;
+
 /** How far below its threshold a reading must fall before the alert can fire again. */
 export const RE_ARM_RATIO = 0.8;
 
@@ -22,6 +25,25 @@ export interface RssSample {
   rssBytes: number;
 }
 
+function newestWindowBase(
+  history: readonly RssSample[],
+  end: RssSample,
+): RssSample | null {
+  let base: RssSample | null = null;
+  for (const sample of history) {
+    if (end.at - sample.at >= GROWTH_WINDOW_MS) {
+      base = base === null || sample.at > base.at ? sample : base;
+    }
+  }
+  return base;
+}
+
+function ratePerMinute(base: RssSample, end: RssSample): number {
+  return Math.round(
+    ((end.rssBytes - base.rssBytes) * 60_000) / (end.at - base.at),
+  );
+}
+
 /**
  * Bytes per minute between the newest sample at least {@link GROWTH_WINDOW_MS}
  * old and now, or null while the history is shorter than that.
@@ -30,24 +52,40 @@ export function growthPerMinute(
   history: readonly RssSample[],
   now: RssSample,
 ): number | null {
-  let base: RssSample | null = null;
-  for (const sample of history) {
-    if (now.at - sample.at >= GROWTH_WINDOW_MS) {
-      base = base === null || sample.at > base.at ? sample : base;
+  const base = newestWindowBase(history, now);
+  return base === null ? null : ratePerMinute(base, now);
+}
+
+/**
+ * The lowest rate across the last {@link GROWTH_SUSTAINED_WINDOWS} consecutive
+ * windows: each window ends where the one before it began, and starts at the
+ * newest sample at least {@link GROWTH_WINDOW_MS} before it. A step inside one
+ * window therefore never reads as growth. Null while the history cannot fill
+ * every window. `history` holds the samples before `now`.
+ */
+export function sustainedGrowthPerMinute(
+  history: readonly RssSample[],
+  now: RssSample,
+): number | null {
+  let end = now;
+  let lowest: number | null = null;
+  for (let window = 0; window < GROWTH_SUSTAINED_WINDOWS; window += 1) {
+    const base = newestWindowBase(history, end);
+    if (base === null) {
+      return null;
     }
+    const rate = ratePerMinute(base, end);
+    lowest = lowest === null ? rate : Math.min(lowest, rate);
+    end = base;
   }
-  if (base === null) {
-    return null;
-  }
-  return Math.round(
-    ((now.rssBytes - base.rssBytes) * 60_000) / (now.at - base.at),
-  );
+  return lowest;
 }
 
 export interface ThreadReading {
   runId: string;
   rssBytes: number;
   growthBytesPerMinute: number | null;
+  sustainedGrowthBytesPerMinute: number | null;
 }
 
 export interface ResourceReading {
@@ -84,12 +122,14 @@ export function parseConditionKey(key: string): {
  * Which conditions hold after this reading. A condition starts at its
  * threshold and holds until the reading clears it by the re-arm margin, so a
  * value hovering at the line fires once. A reading that could not be taken
- * leaves its condition as it was, and never starts one.
+ * leaves its condition as it was, and never starts one. A key in `quiet` does
+ * not start, though one already held keeps holding.
  */
 export function firingConditions(
   config: ResourceAlertConfig,
   previous: ReadonlySet<string>,
   reading: ResourceReading,
+  quiet: ReadonlySet<string> = new Set(),
 ): Set<string> {
   const firing = new Set<string>();
   const hold = (
@@ -98,7 +138,8 @@ export function firingConditions(
     holds: boolean | null,
   ): void => {
     const was = previous.has(key);
-    if (was ? (holds ?? true) : (starts ?? false)) {
+    const mayStart = !quiet.has(key) && (starts ?? false);
+    if (was ? (holds ?? true) : mayStart) {
       firing.add(key);
     }
   };
@@ -108,7 +149,7 @@ export function firingConditions(
       thread.rssBytes >= config.threadMemoryBytes,
       thread.rssBytes >= config.threadMemoryBytes * RE_ARM_RATIO,
     );
-    const growth = thread.growthBytesPerMinute;
+    const growth = thread.sustainedGrowthBytesPerMinute;
     hold(
       conditionKey('thread-growth', thread.runId),
       growth === null

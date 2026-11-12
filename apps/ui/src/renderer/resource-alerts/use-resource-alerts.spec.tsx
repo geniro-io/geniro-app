@@ -57,8 +57,13 @@ describe('useResourceAlerts', () => {
   const notify = vi.fn<GeniroApi['notify']>(async () => {});
   const listResourceAlerts = vi.fn(async () => ({ alerts: listed }));
   const stopResourceAlertCommand = vi.fn(async () => ({ stoppedPids: [4242] }));
+  const dismissResourceAlert = vi.fn(async () => ({ alerts: [] }));
   const apis = {
-    chats: { listResourceAlerts, stopResourceAlertCommand },
+    chats: {
+      listResourceAlerts,
+      stopResourceAlertCommand,
+      dismissResourceAlert,
+    },
   } as unknown as Pick<DaemonApis, 'chats'>;
   const client = {
     onResourceAlertsChanged: (listener: () => void) => {
@@ -87,6 +92,13 @@ describe('useResourceAlerts', () => {
     });
   };
 
+  const settle = async (action: () => void): Promise<void> => {
+    await act(async () => {
+      action();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  };
+
   const announce = async (): Promise<void> => {
     act(() => {
       for (const listener of changed) {
@@ -100,6 +112,7 @@ describe('useResourceAlerts', () => {
     notify.mockClear();
     listResourceAlerts.mockClear();
     stopResourceAlertCommand.mockClear();
+    dismissResourceAlert.mockClear();
     listed = [];
     changed = new Set();
     reconnected = new Set();
@@ -176,6 +189,88 @@ describe('useResourceAlerts', () => {
     act(() => state?.dismiss('ra1'));
 
     expect(state?.alerts.map((a) => a.id)).toEqual(['ra2']);
+  });
+
+  it('puts a growth alert away on the daemon, then reads the list again', async () => {
+    listed = [alert('ra1', { kind: 'thread-growth' })];
+    act(() => root.render(<Probe />));
+    await flush();
+    listResourceAlerts.mockClear();
+    listed = [];
+
+    await settle(() => state?.dismiss('ra1'));
+
+    expect(dismissResourceAlert).toHaveBeenCalledWith({ alertId: 'ra1' });
+    expect(listResourceAlerts).toHaveBeenCalledTimes(1);
+    expect(state?.alerts).toEqual([]);
+    expect(state?.error).toBeNull();
+  });
+
+  it('says why a growth alert could not be put away, and hides it in this window', async () => {
+    listed = [alert('ra1', { kind: 'thread-growth' })];
+    dismissResourceAlert.mockRejectedValueOnce(
+      new Error(
+        'daemon POST /v1/resource-alerts/ra1/dismiss failed (500): boom',
+      ),
+    );
+    act(() => root.render(<Probe />));
+    await flush();
+
+    await settle(() => state?.dismiss('ra1'));
+
+    expect(state?.error).toBe(
+      'Could not dismiss the alert: daemon POST /v1/resource-alerts/ra1/dismiss failed (500): boom',
+    );
+    expect(state?.alerts).toEqual([]);
+  });
+
+  it('says nothing when the growth alert had already cleared on the daemon', async () => {
+    listed = [alert('ra1', { kind: 'thread-growth' })];
+    dismissResourceAlert.mockRejectedValueOnce(
+      new Error(
+        'daemon POST /v1/resource-alerts/ra1/dismiss failed (404): {"code":"RESOURCE_ALERT_NOT_FOUND"}',
+      ),
+    );
+    act(() => root.render(<Probe />));
+    await flush();
+    listed = [];
+
+    await settle(() => state?.dismiss('ra1'));
+
+    expect(state?.error).toBeNull();
+    expect(state?.alerts).toEqual([]);
+  });
+
+  it('clears an earlier dismiss error when another growth alert is put away', async () => {
+    listed = [
+      alert('ra1', { kind: 'thread-growth' }),
+      alert('ra2', { kind: 'thread-growth', runId: 'r2' }),
+    ];
+    dismissResourceAlert.mockRejectedValueOnce(
+      new Error(
+        'daemon POST /v1/resource-alerts/ra1/dismiss failed (500): boom',
+      ),
+    );
+    act(() => root.render(<Probe />));
+    await flush();
+    await settle(() => state?.dismiss('ra1'));
+    expect(state?.error).not.toBeNull();
+
+    listed = [];
+    await settle(() => state?.dismiss('ra2'));
+
+    expect(state?.error).toBeNull();
+  });
+
+  it('hides a low-disk alert in this window only, without calling the daemon', async () => {
+    listed = [alert('ra2', { kind: 'low-disk', runId: null })];
+    act(() => root.render(<Probe />));
+    await flush();
+
+    act(() => state?.dismiss('ra2'));
+
+    expect(state?.alerts).toEqual([]);
+    expect(dismissResourceAlert).not.toHaveBeenCalled();
   });
 
   it('forgets what was dismissed once it talks to another daemon', async () => {

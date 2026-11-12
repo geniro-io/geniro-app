@@ -27,6 +27,7 @@ import type { TeamProposalBroker } from '../../agents/services/team-proposal.bro
 import type { ThreadReaderService } from '../../agents/services/thread-reader.service';
 import type { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
+import type { LessonFilingService } from '../../lessons/services/lesson-filing.service';
 import type { MemoryService } from '../../memory/services/memory.service';
 import type { ShareService } from '../../shares/services/share.service';
 import type { TeamHistoryService } from '../../stats/services/team-history.service';
@@ -74,6 +75,7 @@ import { ReadTeamsTool } from './read-teams/read-teams.tool';
 import { RecordOutcomeTool } from './record-outcome/record-outcome.tool';
 import { RemoveActionTool } from './remove-action/remove-action.tool';
 import { ReportFindingsTool } from './report-findings/report-findings.tool';
+import { ProposeLessonsTool } from './propose-lessons/propose-lessons.tool';
 import { ReportRecommendationsTool } from './report-recommendations/report-recommendations.tool';
 import { SaveProjectInstructionsTool } from './save-project-instructions/save-project-instructions.tool';
 import { SaveTeamChangeTool } from './save-team-change/save-team-change.tool';
@@ -119,6 +121,7 @@ export interface McpToolDeps {
   knowledge: KnowledgeService;
   knowledgeItems: KnowledgeItemsService;
   analysis: AnalysisBroker;
+  lessons: LessonFilingService;
   threads: ThreadReaderService;
   teamChanges: TeamChangeService;
   projectInstructions: ProjectInstructionsChangeService;
@@ -210,6 +213,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
       deps.knowledge,
     ),
     new MarkRecommendationsTool(deps.analysis),
+    new ProposeLessonsTool(deps.analysis, deps.lessons),
     new SaveTeamChangeTool(
       deps.analysis,
       deps.teamBuilders,

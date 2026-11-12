@@ -68,6 +68,7 @@ export function analysisTurnOf(
     | 'analysisSourceWorking'
     | 'analysisTeamSlug'
     | 'analysisRuns'
+    | 'analysisPurpose'
   >,
 ): AnalysisTurn | null {
   if (run.analysisSourceRunId !== null && run.analysisSourceSeq !== null) {
@@ -76,6 +77,7 @@ export function analysisTurnOf(
       sourceRunId: run.analysisSourceRunId,
       snapshotSeq: run.analysisSourceSeq,
       sourceWorking: run.analysisSourceWorking ?? false,
+      ...(run.analysisPurpose === 'lessons' ? { purpose: 'lessons' } : {}),
     };
   }
   if (run.analysisTeamSlug === null) {

@@ -125,6 +125,12 @@ export type MemoryActor =
 
 export type MemoryScopeChoice = 'project' | 'global' | 'team';
 
+/** Where a saved lesson came from: its thread and its proposal. */
+export interface MemoryLessonSource {
+  sourceRunId: string;
+  proposalId: string;
+}
+
 export interface MemorySaveInput {
   /** An existing entry's handle (`m12`) to update in place. */
   handle?: string;

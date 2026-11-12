@@ -163,6 +163,7 @@ import { createMcpTools } from '../tools/mcp-tools';
 import { MoveStageTool } from '../tools/move-stage/move-stage.tool';
 import { proposePatchInstructions } from '../tools/propose-patch/propose-patch.instructions';
 import { proposePlanInstructions } from '../tools/propose-plan/propose-plan.instructions';
+import type { LessonFilingService } from '../../lessons/services/lesson-filing.service';
 import { McpServerService } from './mcp-server.service';
 
 /** One row of `tools/list`, as the description audit reads it. */
@@ -301,6 +302,7 @@ function service(
       memory,
       knowledge,
       knowledgeItems: {} as KnowledgeItemsService,
+      lessons: {} as LessonFilingService,
     }),
     {
       token: 'launch',
@@ -3968,6 +3970,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
       knowledgeItems: {} as KnowledgeItemsService,
+      lessons: {} as LessonFilingService,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
     }).find((t) => t.handles(HOST_RECORD_OUTCOME_TOOL))!;
@@ -4592,6 +4595,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
       knowledgeItems: {} as KnowledgeItemsService,
+      lessons: {} as LessonFilingService,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -4694,6 +4698,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
       knowledgeItems: {} as KnowledgeItemsService,
+      lessons: {} as LessonFilingService,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -4980,6 +4985,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
       knowledgeItems: {} as KnowledgeItemsService,
+      lessons: {} as LessonFilingService,
       monitors: monitorBroker().broker,
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
@@ -5097,6 +5103,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         memory: fakeMemory(false).service,
         knowledge: fakeKnowledge(false).service,
         knowledgeItems: {} as KnowledgeItemsService,
+        lessons: {} as LessonFilingService,
         monitors: monitorBroker().broker,
         teamNotes: teamNoteBroker(),
         runOutcomes: runOutcomeBroker(),
@@ -5241,6 +5248,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       memory: fakeMemory(false).service,
       knowledge: fakeKnowledge(false).service,
       knowledgeItems: {} as KnowledgeItemsService,
+      lessons: {} as LessonFilingService,
     } as Parameters<typeof createMcpTools>[0]);
     const tool = tools.find((t) => t.handles(HOST_PROPOSE_TEAM_TOOL))!;
 
@@ -5323,6 +5331,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         memory: fakeMemory(false).service,
         knowledge: fakeKnowledge(false).service,
         knowledgeItems: {} as KnowledgeItemsService,
+        lessons: {} as LessonFilingService,
         monitors: monitorBroker().broker,
         teamNotes: teamNoteBroker(),
         runOutcomes: runOutcomeBroker(),

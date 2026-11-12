@@ -38,6 +38,8 @@ import {
   type HostArtifact,
   type HostArtifactOutcome,
   type HostArtifactRow,
+  type HostProjectInstructions,
+  type HostProjectInstructionsOutcome,
   type HostRowWire,
   type HostWakeOpener,
   type ItemWire,
@@ -85,6 +87,7 @@ import {
   PartialStreamService,
 } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunKindRowsCache } from '../../agents/services/run-kind-rows.cache';
@@ -92,6 +95,7 @@ import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { TeamNoteBroker } from '../../agents/services/team-note.broker';
+import { TeamProposalBroker } from '../../agents/services/team-proposal.broker';
 import { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { SPAN_ROW_KINDS } from '../../agents/utils/active-spans';
@@ -132,7 +136,12 @@ import { subagentsWouldBeCancelled } from '../../agents/utils/follow-up-backgrou
 import { isHostBrowserCall } from '../../agents/utils/host-browser';
 import { isHostKnowledgeCall } from '../../agents/utils/host-knowledge';
 import { isHostMemoryCall } from '../../agents/utils/host-memory';
+import { isHostProjectInstructionsCall } from '../../agents/utils/host-project-instructions';
 import { hostMcpServerName } from '../../agents/utils/host-question';
+import {
+  isHostTeamProposalCall,
+  standingProposalCardId,
+} from '../../agents/utils/host-teams';
 import { threadCardFields } from '../../agents/utils/host-thread-message';
 import { asRecord, parseJsonColumn } from '../../agents/utils/json-util';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
@@ -180,6 +189,7 @@ import {
 import { isSlashCommand } from '../../agents/utils/session-replacement-notes';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import { snapshotPoolKinds } from '../../agents/utils/snapshot-config-dirs';
+import { teamProjectCardId } from '../../agents/utils/team-project-card';
 import {
   threadMessagesPrompt,
   threadMessagesRow,
@@ -268,6 +278,7 @@ import { stageLabel, stageMapOf, stageNotice } from '../utils/stage-text';
 import {
   calleesOf as calleesOfTeam,
   onDemandMemberIds,
+  possibleLeadsOf,
   startingLeadOf,
   triggerMemberId,
 } from '../utils/team-roster';
@@ -855,6 +866,11 @@ export class TeamExecutorService
     @Optional() private readonly threadInbox?: ThreadInboxService,
     /** The in-app browser's tools, optional on `artifacts`' terms. */
     @Optional() private readonly browser?: BrowserBroker,
+    /** The lead's `read_teams` / `propose_team`, optional on `artifacts`' terms. */
+    @Optional() private readonly teamProposals?: TeamProposalBroker,
+    /** The lead's `save_project_instructions`, optional on `artifacts`' terms. */
+    @Optional()
+    private readonly projectInstructionCards?: ProjectInstructionsBroker,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -894,6 +910,17 @@ export class TeamExecutorService
 
   /** Each run's browser sinks, on the same terms. */
   private readonly browserDisposers = new Map<string, (() => void)[]>();
+
+  /** Each run's lead-only card sinks (`registerLeadCardSinks`), on the same terms. */
+  private readonly leadCardDisposers = new Map<string, (() => void)[]>();
+
+  /** How the lead's `save_project_instructions` card is raised — set by `TeamCardsService`. */
+  private leadProjectCards:
+    | ((
+        runId: string,
+        change: HostProjectInstructions,
+      ) => Promise<HostProjectInstructionsOutcome>)
+    | null = null;
 
   /**
    * How a monitor's output reaches one of a run's conversations — installed by
@@ -1065,11 +1092,12 @@ export class TeamExecutorService
    * mode (`StageService` holds it with the progress).
    */
   private async leadNow(runId: string, team: Team): Promise<string | null> {
-    if (team.mode !== 'relay') {
-      return triggerMemberId(team);
-    }
-    const loaded = await this.stages?.current(runId);
-    return loaded?.leadId ?? startingLeadOf(team);
+    return leadIn(
+      team,
+      team.mode === 'relay'
+        ? (await this.stages?.current(runId))?.leadId
+        : undefined,
+    );
   }
 
   onModuleInit(): void {
@@ -2136,6 +2164,7 @@ export class TeamExecutorService
       this.teamNoteDisposers,
       this.runOutcomeDisposers,
       this.browserDisposers,
+      this.leadCardDisposers,
     ]) {
       for (const dispose of disposers.get(runId) ?? []) {
         dispose();
@@ -2576,6 +2605,98 @@ export class TeamExecutorService
   }
 
   /**
+   * Give each member that can lead this run `read_teams`, `propose_team` and
+   * `save_project_instructions` (user decision: only the lead), offered while
+   * it leads and only in its own conversation — the one the user talks to.
+   * The project tool also needs every pool member on a CLI that holds a call
+   * open; a cursor lead is not offered it yet.
+   */
+  private registerLeadCardSinks(
+    runId: string,
+    team: Team,
+    hostToolNodes: readonly TeamMember[],
+  ): void {
+    for (const dispose of this.leadCardDisposers.get(runId) ?? []) {
+      dispose();
+    }
+    const leads = possibleLeadsOf(team);
+    const disposers: (() => void)[] = [];
+    for (const node of hostToolNodes) {
+      if (!leads.has(node.id)) {
+        continue;
+      }
+      const offeredTo = (conversationId: string | null): boolean =>
+        conversationId === null && this.isLeadNow(runId, team, node.id);
+      if (this.teamProposals !== undefined) {
+        disposers.push(
+          this.teamProposals.register(runId, node.id, { runId }, { offeredTo }),
+        );
+      }
+      const propose = this.leadProjectCards;
+      const holdsCallsOpen = Array.from(
+        { length: poolSize(node) },
+        (_, index) => (index === 0 ? node : poolMemberNode(node, index + 1)),
+      ).every(
+        (member) =>
+          member !== null &&
+          this.adapterFor(member.agent).getConfig()
+            .hostQuestionDeferredReason === null,
+      );
+      if (
+        this.projectInstructionCards !== undefined &&
+        propose !== null &&
+        holdsCallsOpen
+      ) {
+        disposers.push(
+          this.projectInstructionCards.register(
+            runId,
+            node.id,
+            (change) => propose(runId, change),
+            { offeredTo, answersAtOnce: true },
+          ),
+        );
+      }
+    }
+    this.leadCardDisposers.set(runId, disposers);
+  }
+
+  /**
+   * {@link leadNow}, answered synchronously for a tool listing. A relay run
+   * whose progress is not loaded yet (a restart mid-stage) offers nobody until
+   * it is, rather than the starting lead.
+   */
+  private isLeadNow(runId: string, team: Team, memberId: string): boolean {
+    if (team.mode !== 'relay' || this.stages === undefined) {
+      return leadIn(team, undefined) === memberId;
+    }
+    const loaded = this.stages.cached(runId);
+    return loaded !== null && leadIn(team, loaded.leadId) === memberId;
+  }
+
+  /** Install how the lead's project card is raised (`TeamCardsService`). */
+  useLeadProjectCards(
+    propose: (
+      runId: string,
+      change: HostProjectInstructions,
+    ) => Promise<HostProjectInstructionsOutcome>,
+  ): void {
+    this.leadProjectCards = propose;
+  }
+
+  /** Who leads a team run now, or null for no team run or no lead. */
+  async currentLead(runId: string): Promise<string | null> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (run === null || run.teamId === null) {
+      return null;
+    }
+    return this.leadNow(
+      runId,
+      await this.runTeams.teamOf(assertTeamRun(run, runId), em),
+    );
+  }
+
+  /**
    * Give each call-capable member of this pass `record_outcome`, on
    * {@link registerArtifactPublishers}' terms. The row goes into the recording
    * conversation's own transcript and, when that conversation answers a call,
@@ -2706,7 +2827,7 @@ export class TeamExecutorService
    * `status: null`: the badge's status belongs to whatever settles the run,
    * and an announce that never read the row must not assert one.
    */
-  private announceAwaiting(runId: string): void {
+  announceAwaiting(runId: string): void {
     this.bus.publishRunStatus({
       runId,
       status: null,
@@ -3053,13 +3174,23 @@ export class TeamExecutorService
         });
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
+        // Not the lead's standing cards, which are put back at boot from their
+        // columns (the chat twin spares its own the same way).
         const history = await this.itemDao.rowsOfKinds(
           run.id,
           [...ANSWERABILITY_KINDS, ...OPEN_WORK_KINDS],
           undefined,
           em,
         );
-        for (const request of unansweredRequests(history)) {
+        const standing = new Set(
+          [
+            standingProposalCardId(run.pendingTeamProposal ?? null),
+            teamProjectCardId(run.pendingTeamProjectCard ?? null),
+          ].filter((id): id is string => id !== null),
+        );
+        for (const request of unansweredRequests(history).filter(
+          (request) => !standing.has(request.payload.id),
+        )) {
           await this.persist(
             em,
             run.id,
@@ -5367,11 +5498,21 @@ export class TeamExecutorService
               !isQuestion &&
               (isHostMemoryCall(hostMcpServerName(runId), event.toolName) ||
                 isHostKnowledgeCall(hostMcpServerName(runId), event.toolName) ||
-                isHostBrowserCall(hostMcpServerName(runId), event.toolName))
+                isHostBrowserCall(hostMcpServerName(runId), event.toolName) ||
+                isHostTeamProposalCall(
+                  hostMcpServerName(runId),
+                  event.toolName,
+                ) ||
+                isHostProjectInstructionsCall(
+                  hostMcpServerName(runId),
+                  event.toolName,
+                ))
             ) {
               // The shared memory and the knowledge store, at every approval
               // level, as in a chat: their limits live in their services — see
-              // `isHostMemoryCall` and `isHostKnowledgeCall`.
+              // `isHostMemoryCall` and `isHostKnowledgeCall`. The lead's
+              // `propose_team` and `save_project_instructions` write nothing:
+              // their own card is the gate.
               handle.respondApproval(event.id, true, event.input);
               return;
             }
@@ -5726,7 +5867,12 @@ export class TeamExecutorService
           )) ||
         isHostMemoryCall(hostMcpServerName(runId), request.toolName) ||
         isHostKnowledgeCall(hostMcpServerName(runId), request.toolName) ||
-        isHostBrowserCall(hostMcpServerName(runId), request.toolName)
+        isHostBrowserCall(hostMcpServerName(runId), request.toolName) ||
+        isHostTeamProposalCall(hostMcpServerName(runId), request.toolName) ||
+        isHostProjectInstructionsCall(
+          hostMcpServerName(runId),
+          request.toolName,
+        )
           ? true
           : null;
       // One registry key per CONVERSATION, never per member: a member
@@ -8035,6 +8181,7 @@ export class TeamExecutorService
       (node) => resolveApproval(node).mode,
       persistItem,
     );
+    this.registerLeadCardSinks(runId, team, hostToolNodes);
     /**
      * Open a turn of a member's OWN conversation on the write chain — what a
      * wake (`wakeNode`) and a monitor's output share: counted live from now
@@ -8454,4 +8601,15 @@ export class TeamExecutorService
       },
     );
   }
+}
+
+/** Who leads: the trigger's member in `lead` mode, else the stage lead the progress names or the starting lead. */
+function leadIn(
+  team: Team,
+  stageLead: string | null | undefined,
+): string | null {
+  if (team.mode !== 'relay') {
+    return triggerMemberId(team);
+  }
+  return stageLead ?? startingLeadOf(team);
 }

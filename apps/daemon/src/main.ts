@@ -64,6 +64,7 @@ import { ShareService } from './v1/shares/services/share.service';
 import { TeamLedgerService } from './v1/stats/services/team-ledger.service';
 import { StorageService } from './v1/storage/services/storage.service';
 import { TaskSettleService } from './v1/tasks/services/task-settle.service';
+import { TeamCardsService } from './v1/teams/services/team-cards.service';
 import { TeamExecutorService } from './v1/teams/services/team-executor.service';
 import { TeamProposalService } from './v1/teams/services/team-proposal.service';
 import { ThreadDeliveryService } from './v1/teams/services/thread-delivery.service';
@@ -325,6 +326,8 @@ bootstrapper.addExtension(
       await app.get(ChatService).rehydrateDeferredQuestions();
       // And every standing team proposal card, for the same reason.
       await app.get(TeamProposalService).rehydrate();
+      // And a team lead's standing project-instructions card.
+      await app.get(TeamCardsService).rehydrate();
 
       // Arm again every continue geniro PROMISED a team run at a
       // usage-limit reset. Its agents were told to wait for it rather than set

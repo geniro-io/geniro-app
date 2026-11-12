@@ -15,8 +15,12 @@ export type ProjectInstructionsProposer = (
 /** The rendezvous behind `save_project_instructions`' card; it parks like {@link PatchBroker}. */
 @Injectable()
 export class ProjectInstructionsBroker extends HostSinkBroker<ProjectInstructionsProposer> {
-  canPropose(runId: string, memberId: string): boolean {
-    return this.has(runId, memberId);
+  canPropose(
+    runId: string,
+    memberId: string,
+    conversationId: string | null = null,
+  ): boolean {
+    return this.offers(runId, memberId, conversationId);
   }
 
   answersAtOnce(runId: string, memberId: string): boolean {

@@ -64,6 +64,14 @@ export type PendingCardSnapshot =
   | PendingPatchSnapshot
   | PendingProjectInstructionsSnapshot;
 
+/**
+ * What an agent is told when it raises a DIFFERENT card while one is already
+ * standing — or is still being put up. One per run: a chat's durable half is a
+ * single column, shared by a question, a plan, a patch and a project card.
+ */
+export const QUESTION_ALREADY_STANDING =
+  'a card is already on the user’s screen waiting to be answered — wait for that answer before raising another';
+
 /** Render one snapshot for `Run.pendingQuestion`. */
 export function serializePendingQuestion(
   snapshot: PendingCardSnapshot,

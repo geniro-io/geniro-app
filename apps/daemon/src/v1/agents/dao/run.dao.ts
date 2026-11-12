@@ -984,6 +984,28 @@ export class RunDao extends BaseDao<Run> {
     );
   }
 
+  /** A team run's standing project card (`Run.pendingTeamProjectCard`), on {@link setPendingQuestion}'s terms. */
+  async setPendingTeamProjectCard(
+    runId: string,
+    value: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: runId },
+      { pendingTeamProjectCard: value },
+    );
+  }
+
+  /** Every team run standing on a project card — the boot rehydration's read. */
+  async listRunsWithPendingTeamProjectCard(
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { pendingTeamProjectCard: { $ne: null } },
+      { disableIdentityMap: true },
+    );
+  }
+
   /**
    * Move the row's `updatedAt` and nothing else — "the user just did something
    * in this thread".

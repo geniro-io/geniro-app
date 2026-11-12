@@ -434,6 +434,40 @@ export type DeferredCardResponder = (
 ) => void;
 
 /**
+ * Who writes a deferred card's rows and delivers its verdict for one kind of
+ * run: `ChatService` for a chat, `TeamCardsService` (`v1/teams`) for a team
+ * run, whose verdict reaches its lead.
+ */
+export interface OwnedCardHost {
+  raiseOwnedCard(
+    runId: string,
+    requestId: string,
+    card: DeferredCard,
+    respond: DeferredCardResponder,
+  ): Promise<void>;
+  trackOwnedCard(
+    runId: string,
+    requestId: string,
+    card: DeferredCard,
+    respond: DeferredCardResponder,
+  ): void | Promise<void>;
+  retireOwnedCard(
+    runId: string,
+    requestId: string,
+    toolName: string,
+  ): Promise<void>;
+  isArchived(runId: string): Promise<boolean>;
+  deliverOwnedCardVerdict(
+    runId: string,
+    requestId: string,
+    allow: boolean,
+    message: string,
+    answer?: string,
+    outcome?: TeamProposalOutcome,
+  ): Promise<void>;
+}
+
+/**
  * How a `propose_team` card was answered, as the agent is told it; `note`
  * is what the user typed on either button.
  */

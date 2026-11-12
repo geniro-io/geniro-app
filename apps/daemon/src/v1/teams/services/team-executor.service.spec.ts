@@ -54,6 +54,8 @@ import {
   type HistoryWindow,
   HOST_BROWSER_OPEN_TOOL,
   HOST_MEMORY_SAVE_TOOL,
+  HOST_PROJECT_INSTRUCTIONS_TOOL,
+  HOST_PROPOSE_TEAM_TOOL,
   type OwnToolCallCount,
   type RunCreatedEvent,
   type RunDeltaEvent,
@@ -88,6 +90,7 @@ import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { MessageSendService } from '../../agents/services/message-send.service';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { ProjectInstructionsBroker } from '../../agents/services/project-instructions.broker';
 import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunOutcomeBroker } from '../../agents/services/run-outcome.broker';
@@ -98,6 +101,7 @@ import { RunWriteQueue } from '../../agents/services/run-write.queue';
 import { SessionTranscriptsService } from '../../agents/services/session-transcripts.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import { TeamNoteBroker } from '../../agents/services/team-note.broker';
+import { TeamProposalBroker } from '../../agents/services/team-proposal.broker';
 import type { ThreadInboxService } from '../../agents/services/thread-inbox.service';
 import { WallWorkService } from '../../agents/services/wall-work.service';
 import { readAgentOptions } from '../../agents/utils/agent-options';
@@ -1165,6 +1169,10 @@ function setup(
     threadInbox?: ThreadInboxService;
     /** The in-app browser's tools, when a test drives them. */
     browser?: BrowserBroker;
+    /** The lead's `read_teams` / `propose_team` gate, when a test reads it. */
+    teamProposals?: TeamProposalBroker;
+    /** The lead's `save_project_instructions` gate, when a test reads it. */
+    projectInstructionCards?: ProjectInstructionsBroker;
     /** What the run's project tells it; no project when absent. */
     projectScope?: Partial<
       Pick<ProjectScopeService, 'placeNewRun' | 'liveNamesOf'>
@@ -1661,6 +1669,8 @@ function setup(
     opts.health as TeamHealthService | undefined,
     opts.threadInbox,
     opts.browser,
+    opts.teamProposals,
+    opts.projectInstructionCards,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -3776,6 +3786,59 @@ describe('TeamExecutorService', () => {
     expect(node.betweenTurnApproval({ toolName: browserCall })).toBe(true);
   });
 
+  it("approves an ask lead's propose_team and save_project_instructions calls, in a turn and between turns, without a permission card", async () => {
+    const { service, claude, approvals } = setup();
+    const run = await service.startRun({
+      slug: 'ask',
+      team: teamOf([member('a', { approval: 'ask' })], { name: 'ask' }),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+    const node = claude.starts[0]!;
+    const input = {};
+    const proposeCall = `mcp__${hostMcpServerName(run.id)}__${HOST_PROPOSE_TEAM_TOOL}`;
+    const projectCall = `mcp__${hostMcpServerName(run.id)}__${HOST_PROJECT_INSTRUCTIONS_TOOL}`;
+
+    node.emit({
+      type: 'approval_request',
+      id: 'req-propose',
+      toolName: proposeCall,
+      input,
+    });
+    node.emit({
+      type: 'approval_request',
+      id: 'req-project',
+      toolName: projectCall,
+      input,
+    });
+    node.emit({
+      type: 'approval_request',
+      id: 'req-other',
+      toolName: `mcp__someone-else__${HOST_PROJECT_INSTRUCTIONS_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(node.respondApproval).toHaveBeenCalledWith(
+      'req-propose',
+      true,
+      input,
+    );
+    expect(node.respondApproval).toHaveBeenCalledWith(
+      'req-project',
+      true,
+      input,
+    );
+    expect(node.respondApproval).toHaveBeenCalledTimes(2);
+    expect(() => cardIdFor(approvals, run.id, 'req-other')).not.toThrow();
+
+    completeTurn(node, 'done');
+    await drain();
+    expect(node.betweenTurnApproval({ toolName: proposeCall })).toBe(true);
+    expect(node.betweenTurnApproval({ toolName: projectCall })).toBe(true);
+  });
+
   it('closes a member’s card when its CLI withdraws the request', async () => {
     // The request's own abort fired, so nothing can take a verdict: the card
     // must stop being answerable and the run must stop reading as waiting.
@@ -4148,6 +4211,43 @@ describe('TeamExecutorService', () => {
       (i) => i.runId === orphan.id && i.kind === 'error',
     );
     expect(errorItem).toBeDefined();
+  });
+
+  it("spares the lead's standing cards at boot, closing every other unanswered card", async () => {
+    const { service, runDao, itemDao } = setup();
+    const orphan = await runDao.create({
+      teamId: 'ghost',
+      status: 'running',
+      cwd: dir,
+    });
+    runDao.runs.get(orphan.id)!.pendingTeamProposal = JSON.stringify({
+      requestId: 'proposal-1',
+    });
+    runDao.runs.get(orphan.id)!.pendingTeamProjectCard = JSON.stringify({
+      requestId: 'project-1',
+    });
+    const cards = [
+      ['proposal-1', HOST_PROPOSE_TEAM_TOOL],
+      ['project-1', HOST_PROJECT_INSTRUCTIONS_TOOL],
+      ['perm-1', 'Bash'],
+    ] as const;
+    for (const [index, [id, toolName]] of cards.entries()) {
+      await itemDao.create({
+        runId: orphan.id,
+        memberId: 'a',
+        seq: index,
+        kind: 'approval_request',
+        payload: JSON.stringify({ id, nodeId: 'a', toolName, input: {} }),
+      });
+    }
+
+    await service.reconcileOrphanedRuns('crash');
+
+    expect(
+      itemDao.items
+        .filter((i) => i.runId === orphan.id && i.kind === 'unanswerable')
+        .map((i) => (JSON.parse(i.payload) as { id: string }).id),
+    ).toEqual(['perm-1']);
   });
 
   it('writes WHY the daemon stopped onto the interrupted team row', async () => {
@@ -6682,6 +6782,86 @@ describe('TeamExecutorService — agent calls', () => {
     await service.deleteRun(run.id);
     expect(teamNotes.canUse(run.id, 'a')).toBe(false);
     expect(teamNotes.canUse(run.id, 'b')).toBe(false);
+  });
+
+  describe("the lead's team and project tools", () => {
+    function leadSetup(cursorLead = false) {
+      const teamProposals = new TeamProposalBroker();
+      const projectInstructionCards = new ProjectInstructionsBroker();
+      const harness = setup(4870, { teamProposals, projectInstructionCards });
+      const raised: string[] = [];
+      harness.service.useLeadProjectCards(async (runId) => {
+        raised.push(runId);
+        return { status: 'posted' };
+      });
+      const team = teamOf(
+        [
+          member('a', cursorLead ? { agent: 'cursor-agent' } : {}),
+          member('b', { name: 'Reviewer' }),
+        ],
+        { name: 'lead' },
+      );
+      return {
+        ...harness,
+        teamProposals,
+        projectInstructionCards,
+        raised,
+        team,
+      };
+    }
+
+    it('offers them to the lead in its own conversation only, never another member, and drops them with the run', async () => {
+      const { service, teamProposals, projectInstructionCards, raised, team } =
+        leadSetup();
+      const run = await service.startRun({
+        slug: 'lead',
+        team,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      expect(teamProposals.canPropose(run.id, 'a', null)).toBe(true);
+      expect(projectInstructionCards.canPropose(run.id, 'a', null)).toBe(true);
+      expect(projectInstructionCards.answersAtOnce(run.id, 'a')).toBe(true);
+      expect(teamProposals.canPropose(run.id, 'a', 'call-1')).toBe(false);
+      expect(projectInstructionCards.canPropose(run.id, 'a', 'call-1')).toBe(
+        false,
+      );
+      expect(teamProposals.canPropose(run.id, 'b', null)).toBe(false);
+      expect(projectInstructionCards.canPropose(run.id, 'b', null)).toBe(false);
+
+      await projectInstructionCards.propose(run.id, 'a', {
+        projectId: 'p1',
+        project: 'P',
+        previous: null,
+        next: 'x',
+        blocks: [],
+        baseRevision: 0,
+        ids: [],
+        cardSeq: null,
+      });
+      expect(raised).toEqual([run.id]);
+
+      await service.deleteRun(run.id);
+      expect(teamProposals.canPropose(run.id, 'a', null)).toBe(false);
+      expect(projectInstructionCards.canPropose(run.id, 'a', null)).toBe(false);
+    });
+
+    it('withholds save_project_instructions from a lead on a CLI that will not hold a call open, and keeps the team tools', async () => {
+      const { service, teamProposals, projectInstructionCards, team } =
+        leadSetup(true);
+      const run = await service.startRun({
+        slug: 'lead',
+        team,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      expect(teamProposals.canPropose(run.id, 'a', null)).toBe(true);
+      expect(projectInstructionCards.canPropose(run.id, 'a', null)).toBe(false);
+    });
   });
 
   describe('the browser tools', () => {
@@ -18462,6 +18642,36 @@ describe('TeamExecutorService — relay mode', () => {
     await drain();
     return { ...harness, run, ada };
   }
+
+  it('moves the lead-only team tools to the new lead on a hand-off', async () => {
+    const teamProposals = new TeamProposalBroker();
+    const projectInstructionCards = new ProjectInstructionsBroker();
+    const harness = setup(4870, { teamProposals, projectInstructionCards });
+    harness.service.useLeadProjectCards(async () => ({ status: 'posted' }));
+    const run = await harness.service.startRun({
+      slug: 'relay',
+      team: RELAY,
+      cwd: dir,
+      prompt: 'ship the feature',
+    });
+    await drain();
+    expect(teamProposals.canPropose(run.id, 'ada', null)).toBe(true);
+    expect(teamProposals.canPropose(run.id, 'bob', null)).toBe(false);
+    expect(teamProposals.canPropose(run.id, 'cy', null)).toBe(false);
+
+    const moved = await harness.stages.move(
+      run.id,
+      { action: 'complete', stage: 'plan', text: 'planned' },
+      { kind: 'agent', nodeId: 'ada' },
+    );
+    expect(moved.ok).toBe(true);
+    await drain();
+
+    expect(teamProposals.canPropose(run.id, 'bob', null)).toBe(true);
+    expect(teamProposals.canPropose(run.id, 'ada', null)).toBe(false);
+    expect(projectInstructionCards.canPropose(run.id, 'bob', null)).toBe(true);
+    expect(projectInstructionCards.canPropose(run.id, 'ada', null)).toBe(false);
+  });
 
   it('hands the run to the next stage lead on move_stage with a brief', async () => {
     const { claude, itemDao, runDao, run, ada } = await handedToBob();

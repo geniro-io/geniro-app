@@ -20,11 +20,18 @@ export interface HostSinkOptions {
    * answers at once and its listing says so (`hostQuestionDeferredReason`).
    */
   answersAtOnce?: boolean;
+  /**
+   * Read live at every listing and call: whether the member, speaking in this
+   * conversation (null for its own), is offered the tool now. Absent offers it
+   * in every conversation.
+   */
+  offeredTo?: (conversationId: string | null) => boolean;
 }
 
 interface HostSinkEntry<TSink> {
   sink: TSink;
   answersAtOnce: boolean;
+  offeredTo: ((conversationId: string | null) => boolean) | null;
 }
 
 /**
@@ -87,6 +94,7 @@ export abstract class HostSinkBroker<TSink> {
     const entry: HostSinkEntry<TSink> = {
       sink,
       answersAtOnce: options.answersAtOnce ?? false,
+      offeredTo: options.offeredTo ?? null,
     };
     this.sinks.set(key, entry);
     return () => {
@@ -103,6 +111,19 @@ export abstract class HostSinkBroker<TSink> {
    */
   protected has(runId: string, memberId: string): boolean {
     return this.sinks.has(this.key(runId, memberId));
+  }
+
+  /** {@link has}, held to the sink's {@link HostSinkOptions.offeredTo}. */
+  protected offers(
+    runId: string,
+    memberId: string,
+    conversationId: string | null,
+  ): boolean {
+    const entry = this.sinks.get(this.key(runId, memberId));
+    return (
+      entry !== undefined &&
+      (entry.offeredTo === null || entry.offeredTo(conversationId))
+    );
   }
 
   /** This member's sink as it stands, for a gate that reads what the sink carries. */

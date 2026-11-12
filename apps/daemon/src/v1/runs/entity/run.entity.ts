@@ -430,6 +430,16 @@ export class Run extends TimestampsEntity {
   pendingTeamProposal: string | null = null;
 
   /**
+   * A team run's standing `save_project_instructions` card, raised by its
+   * lead (`TeamCardsService`), or null. A team run never uses
+   * {@link pendingQuestion}, whose boot rehydration treats every row as a
+   * chat's card. Cleared BEFORE an applied change is written, on
+   * {@link pendingTeamProposal}'s terms.
+   */
+  @Property({ type: 'text', nullable: true })
+  pendingTeamProjectCard: string | null = null;
+
+  /**
    * The library team this chat EDITS — the slug of a `*.team.yaml` file
    * the builder's chat panel opened a conversation about; null for every other
    * run.

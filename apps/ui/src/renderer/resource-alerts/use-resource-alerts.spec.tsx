@@ -224,6 +224,44 @@ describe('useResourceAlerts', () => {
     expect(state?.alerts).toEqual([]);
   });
 
+  it('says nothing when the growth alert had already cleared on the daemon', async () => {
+    listed = [alert('ra1', { kind: 'thread-growth' })];
+    dismissResourceAlert.mockRejectedValueOnce(
+      new Error(
+        'daemon POST /v1/resource-alerts/ra1/dismiss failed (404): {"code":"RESOURCE_ALERT_NOT_FOUND"}',
+      ),
+    );
+    act(() => root.render(<Probe />));
+    await flush();
+    listed = [];
+
+    await settle(() => state?.dismiss('ra1'));
+
+    expect(state?.error).toBeNull();
+    expect(state?.alerts).toEqual([]);
+  });
+
+  it('clears an earlier dismiss error when another growth alert is put away', async () => {
+    listed = [
+      alert('ra1', { kind: 'thread-growth' }),
+      alert('ra2', { kind: 'thread-growth', runId: 'r2' }),
+    ];
+    dismissResourceAlert.mockRejectedValueOnce(
+      new Error(
+        'daemon POST /v1/resource-alerts/ra1/dismiss failed (500): boom',
+      ),
+    );
+    act(() => root.render(<Probe />));
+    await flush();
+    await settle(() => state?.dismiss('ra1'));
+    expect(state?.error).not.toBeNull();
+
+    listed = [];
+    await settle(() => state?.dismiss('ra2'));
+
+    expect(state?.error).toBeNull();
+  });
+
   it('hides a low-disk alert in this window only, without calling the daemon', async () => {
     listed = [alert('ra2', { kind: 'low-disk', runId: null })];
     act(() => root.render(<Probe />));

@@ -199,6 +199,37 @@ describe('LessonProposalService.save', () => {
     );
   });
 
+  it.each([
+    ['refines', 'm12'],
+    ['broken_again', 'm12'],
+  ] as const)(
+    'names the entry a %s lesson refines as not a duplicate, so the write goes through',
+    async (verdict, handle) => {
+      const row = proposal({
+        dedup: JSON.stringify({ verdict, handle }),
+      });
+      const { service, memory } = build(row);
+
+      await service.save('lp-1', {});
+
+      expect(memory.create).toHaveBeenCalledWith(
+        expect.objectContaining({ notDuplicateOf: ['m12'] }),
+        expect.anything(),
+      );
+    },
+  );
+
+  it('names no entry as not a duplicate for a new lesson', async () => {
+    const { service, memory } = build(proposal());
+
+    await service.save('lp-1', {});
+
+    const [input] = memory.create.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+    ];
+    expect(input).not.toHaveProperty('notDuplicateOf');
+  });
+
   it('refuses a lesson that is already decided, writing nothing', async () => {
     const row = proposal({ status: 'rejected' });
     const { service, memory, rows, em } = build(row);

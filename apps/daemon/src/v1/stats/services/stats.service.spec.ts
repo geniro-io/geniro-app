@@ -476,6 +476,27 @@ describe('StatsService (in-memory sqlite)', () => {
       expect(stats.totals.costUsd).toBeNull();
       expect(stats.totals.costedTurns).toBe(0);
     });
+
+    it('counts a reflection’s polled spend under lessons, and a chat’s under none', async () => {
+      await recordPolled(
+        pricedRun({
+          id: 'reflection-poll',
+          analysisPurpose: 'lessons',
+          polledCostCents: 300,
+        }),
+      );
+      await recordPolled(pricedRun({ id: 'chat-poll', polledCostCents: 250 }));
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 11),
+      );
+
+      expect(
+        stats.byPurpose.map((row) => [row.key, row.totals.costUsd]),
+      ).toEqual([['lessons', 3]]);
+      expect(stats.totals.costUsd).toBe(5.5);
+    });
   });
 
   describe('totals', () => {

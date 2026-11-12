@@ -2968,4 +2968,61 @@ describe('MemoryService', () => {
       );
     });
   });
+  describe('a lessons reflection as a writer', () => {
+    beforeEach(() => {
+      db.service.setConfig(DEFAULT_MEMORY_CONFIG);
+    });
+
+    async function analysisActor(
+      id: string,
+      analysisPurpose: 'lessons' | 'review',
+    ) {
+      const em = db.em.fork();
+      em.persist(
+        make(Run, {
+          id,
+          status: 'running',
+          agentKind: 'claude',
+          model: 'opus',
+          analysisSourceRunId: 'source',
+          analysisPurpose,
+        }),
+      );
+      await em.flush();
+      return db.service.actorOf(id, 'agent');
+    }
+
+    it('is refused a save and a forget, leaving the entry as it was', async () => {
+      const reflection = await analysisActor('reflection', 'lessons');
+      const kept = savedOf(
+        await db.service.save(USER, { title: 'Kept', body: 'x' }, NONE),
+      );
+
+      expect(
+        await db.service.save(reflection, { title: 'Lesson', body: 'y' }, NONE),
+      ).toMatchObject({ kind: 'refused', code: 'REFLECTION_READ_ONLY' });
+      expect(
+        await db.service.forget(reflection, kept.handle, 'no', NONE),
+      ).toMatchObject({ kind: 'refused', code: 'REFLECTION_READ_ONLY' });
+      expect((await db.service.get(kept.id))?.status).toBe('active');
+    });
+
+    it('is not refused as a review analysis is not, a save or a forget', async () => {
+      const review = await analysisActor('review', 'review');
+      const kept = savedOf(
+        await db.service.save(USER, { title: 'Kept', body: 'x' }, NONE),
+      );
+
+      expect(
+        await db.service.save(
+          review,
+          { title: 'Review note', body: 'y' },
+          NONE,
+        ),
+      ).toMatchObject({ kind: 'created' });
+      expect(
+        await db.service.forget(review, kept.handle, 'no', NONE),
+      ).toMatchObject({ kind: 'forgotten' });
+    });
+  });
 });

@@ -350,6 +350,22 @@ describe('LessonFilingService.file', () => {
     expect(refining).toEqual({ status: 'recorded', count: 1 });
   });
 
+  it('refuses a new lesson that says a visible entry in other words, and records one that says another thing', async () => {
+    const fixture = build({
+      visible: [{ handle: 'm3', title: 'Run pnpm test before a commit' }],
+    });
+
+    const similar = await fixture.service.file(fixture.turn, [
+      lesson({ title: 'Run pnpm test before any commit' }),
+    ]);
+    const unrelated = await fixture.service.file(fixture.turn, [
+      lesson({ title: 'Keep cache keys free of run ids' }),
+    ]);
+
+    expect(codesOf(similar)).toEqual(['NEAR_DUPLICATE']);
+    expect(unrelated).toEqual({ status: 'recorded', count: 1 });
+  });
+
   it.each([
     ['refines', { verdict: 'refines', handle: 'm99' }],
     [

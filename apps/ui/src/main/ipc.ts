@@ -57,6 +57,7 @@ import {
   browserRunIdSchema,
   browserTabActionSchema,
   browserTabIdSchema,
+  browserTabLabelSchema,
   changesPullRequestsSchema,
   chatExportSaveSchema,
   cliKindSchema,
@@ -1066,6 +1067,18 @@ export function registerIpc(
       getBrowser().stopAgent(
         browserRunIdSchema.parse(runId),
         browserTabIdSchema.parse(tabId),
+      );
+    },
+  );
+  handle(
+    IPC.browserLabelTab,
+    denyRemotely(browserDenial),
+    (_event, runId: unknown, tabId: unknown, label: unknown) => {
+      getBrowser().labelTab(
+        browserRunIdSchema.parse(runId),
+        browserTabIdSchema.parse(tabId),
+        browserTabLabelSchema.parse(label),
+        'user',
       );
     },
   );

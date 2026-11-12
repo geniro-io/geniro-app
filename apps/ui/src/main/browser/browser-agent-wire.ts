@@ -1,5 +1,11 @@
 import { z } from 'zod';
 
+import {
+  BROWSER_TAB_NAME_MAX,
+  BROWSER_TAB_NAME_PATTERN,
+  PROFILE_COLORS,
+} from '../../shared/contracts';
+
 /**
  * One operation an agent asks of a chat's in-app browser, relayed by the
  * renderer from the daemon's `browser_request`.
@@ -27,6 +33,12 @@ export const BROWSER_VIEWPORT_MAX_WIDTH = 3840;
 export const BROWSER_VIEWPORT_MAX_HEIGHT = 4320;
 
 const tab = z.string().min(1).max(128);
+const tabName = z
+  .string()
+  .min(1)
+  .max(BROWSER_TAB_NAME_MAX)
+  .regex(BROWSER_TAB_NAME_PATTERN);
+const tabColor = z.enum(PROFILE_COLORS);
 const ref = z.string().min(1).max(32);
 
 export const browserOpSchema = z.discriminatedUnion('kind', [
@@ -39,6 +51,14 @@ export const browserOpSchema = z.discriminatedUnion('kind', [
         cookies: z.array(cookieSchema).max(200),
       })
       .optional(),
+    name: tabName.optional(),
+    color: tabColor.optional(),
+  }),
+  z.strictObject({
+    kind: z.literal('label'),
+    tab,
+    name: tabName.optional(),
+    color: tabColor.optional(),
   }),
   z.strictObject({
     kind: z.literal('navigate'),

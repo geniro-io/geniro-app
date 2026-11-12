@@ -9,6 +9,7 @@ import {
   ListChecks,
   MousePointerClick,
   PanelTop,
+  Tag,
   Terminal,
   X,
 } from 'lucide-react';
@@ -44,6 +45,8 @@ export interface BrowserToolEntry {
   cookies: number | null;
   /** The label of an own-cookie tab `browser_open` made. */
   ownLabel: string | null;
+  /** The name a label call gave its tab. */
+  name: string | null;
   /** The open was put to the user as a card instead of being run. */
   waitingForApproval: boolean;
   /** The first line of a refusal; null when the call did not fail. */
@@ -103,6 +106,7 @@ export function browserToolEntryOf(pair: ToolPair): BrowserToolEntry | null {
     key: readString(args.key),
     cookies,
     ownLabel: readString(ownCookies?.label),
+    name: readString(args.name),
     waitingForApproval: text.startsWith(WAITING_FOR_APPROVAL),
     failure: failed && text !== '' ? refusalReason(text) : null,
   };
@@ -120,6 +124,7 @@ const TOOL_ICON = {
   browser_console: Terminal,
   browser_evaluate: Code,
   browser_tabs: PanelTop,
+  browser_label_tab: Tag,
   browser_close: X,
   browser_set_cookies: Cookie,
   browser_get_cookies: Cookie,
@@ -213,6 +218,12 @@ function wordsOf(
         verb: on('Listed tabs', 'Listing tabs'),
         object: null,
         aside: null,
+      };
+    case 'browser_label_tab':
+      return {
+        verb: on('Labelled tab', 'Labelling tab'),
+        object: entry.tab,
+        aside: entry.name,
       };
     case 'browser_close':
       return {

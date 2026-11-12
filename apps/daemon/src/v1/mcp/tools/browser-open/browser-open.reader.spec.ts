@@ -25,6 +25,15 @@ describe('readBrowserOpen', () => {
         },
       },
     ],
+    [
+      { url: 'https://docs.acme.dev', name: ' API docs ', color: 'teal' },
+      {
+        kind: 'open',
+        url: 'https://docs.acme.dev',
+        name: 'API docs',
+        color: 'teal',
+      },
+    ],
   ])('reads %j into the operation main runs', (args, op) => {
     expect(readBrowserOpen(args)).toEqual({ ok: true, query: op });
   });
@@ -38,6 +47,9 @@ describe('readBrowserOpen', () => {
       ownCookies: { label: 'x', cookies: [{ name: 'sid', value: 'v' }] },
     },
     { url: 'https://a.dev', extra: true },
+    { url: 'https://a.dev', name: '' },
+    { url: 'https://a.dev', name: 'x'.repeat(61) },
+    { url: 'https://a.dev', color: 'magenta' },
   ])('refuses %j as malformed', (args) => {
     expect(readBrowserOpen(args)).toMatchObject({ ok: false });
   });

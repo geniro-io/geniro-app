@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-import type { BrowserOp } from '../../../browser/browser.types';
+import { RUN_GROUP_COLORS } from '../../../agents/chat.types';
+import {
+  BROWSER_TAB_NAME_MAX,
+  BROWSER_TAB_NAME_PATTERN,
+  type BrowserOp,
+} from '../../../browser/browser.types';
 import type { ToolArgs } from '../../mcp.types';
 import { readToolArgs } from '../tool-args';
 
@@ -31,6 +36,22 @@ export const browserRefField = z
   );
 
 export const browserUrlField = z.string().trim().min(1).max(2048);
+
+export const browserTabNameField = z
+  .string()
+  .trim()
+  .min(1)
+  .max(BROWSER_TAB_NAME_MAX)
+  .regex(BROWSER_TAB_NAME_PATTERN, 'Use plain text on one line')
+  .describe(
+    'A short name saying what the tab is for, shown on the tab instead of the page title — e.g. "Staging login", "API docs", "Admin view".',
+  );
+
+export const browserTabColorField = z
+  .enum(RUN_GROUP_COLORS)
+  .describe(
+    'The colour of the tab’s dot, so the user can tell tabs apart at a glance. Give related tabs the same colour.',
+  );
 
 export const BrowserCookieSchema = z
   .object({

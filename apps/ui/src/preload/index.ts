@@ -368,6 +368,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.browserStopAgent, runId, tabId) as ReturnType<
       GeniroApi['browserStopAgent']
     >,
+  browserLabelTab: (runId, tabId, label) =>
+    ipcRenderer.invoke(IPC.browserLabelTab, runId, tabId, label) as ReturnType<
+      GeniroApi['browserLabelTab']
+    >,
   browserAgentRequest: (request) =>
     ipcRenderer.invoke(IPC.browserAgentRequest, request) as ReturnType<
       GeniroApi['browserAgentRequest']

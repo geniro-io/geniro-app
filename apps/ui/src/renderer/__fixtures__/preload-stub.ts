@@ -507,6 +507,10 @@ export function createPreloadStub(
       note('browserStopAgent');
       return Promise.resolve();
     },
+    browserLabelTab: () => {
+      note('browserLabelTab');
+      return Promise.resolve();
+    },
     browserAgentRequest: () => {
       note('browserAgentRequest');
       return Promise.resolve({ ok: false, error: 'Storybook has no browser.' });

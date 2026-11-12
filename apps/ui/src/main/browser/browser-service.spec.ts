@@ -355,6 +355,55 @@ describe('BrowserService', () => {
     expect(popout.focus).toHaveBeenCalled();
   });
 
+  it('opens a tab under the name and colour it was given', async () => {
+    const { service } = makeService();
+    await service.openTab('run-1', null, {
+      openedBy: 'Agent',
+      name: 'Staging login',
+      color: 'teal',
+    });
+
+    expect(service.state('run-1').tabs[0]).toMatchObject({
+      name: 'Staging login',
+      color: 'teal',
+    });
+  });
+
+  it("keeps the user's name and colour from an agent, field by field", async () => {
+    const { service } = makeService();
+    await service.openTab('run-1', null, { openedBy: 'Agent', name: 'Login' });
+
+    service.labelTab('run-1', 't1', { name: '  Admin view ' }, 'user');
+    const kept = service.labelTab(
+      'run-1',
+      't1',
+      { name: 'Login again', color: 'green' },
+      'agent',
+    );
+
+    expect(kept).toEqual(['name']);
+    expect(service.state('run-1').tabs[0]).toMatchObject({
+      name: 'Admin view',
+      color: 'green',
+    });
+
+    service.labelTab('run-1', 't1', { color: null }, 'user');
+    expect(service.labelTab('run-1', 't1', { color: 'red' }, 'agent')).toEqual([
+      'color',
+    ]);
+    expect(service.state('run-1').tabs[0]?.color).toBeNull();
+  });
+
+  it("clears the user's empty rename back to the page title and still keeps it from agents", async () => {
+    const { service } = makeService();
+    await service.openTab('run-1', null, { openedBy: 'Agent', name: 'Login' });
+
+    service.labelTab('run-1', 't1', { name: '   ' }, 'user');
+    service.labelTab('run-1', 't1', { name: 'Login' }, 'agent');
+
+    expect(service.state('run-1').tabs[0]?.name).toBeNull();
+  });
+
   it('opens each own-cookie tab on an in-memory session of its own', async () => {
     const { service } = makeService();
     await service.openTab('run-1', null, { openedBy: 'Agent' });

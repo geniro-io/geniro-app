@@ -2148,6 +2148,7 @@ export const HOST_BROWSER_SCREENSHOT_TOOL = 'browser_screenshot';
 export const HOST_BROWSER_CONSOLE_TOOL = 'browser_console';
 export const HOST_BROWSER_EVALUATE_TOOL = 'browser_evaluate';
 export const HOST_BROWSER_TABS_TOOL = 'browser_tabs';
+export const HOST_BROWSER_LABEL_TAB_TOOL = 'browser_label_tab';
 export const HOST_BROWSER_CLOSE_TOOL = 'browser_close';
 export const HOST_BROWSER_SET_COOKIES_TOOL = 'browser_set_cookies';
 export const HOST_BROWSER_GET_COOKIES_TOOL = 'browser_get_cookies';
@@ -2166,6 +2167,7 @@ export const HOST_BROWSER_TOOLS = [
   HOST_BROWSER_CONSOLE_TOOL,
   HOST_BROWSER_EVALUATE_TOOL,
   HOST_BROWSER_TABS_TOOL,
+  HOST_BROWSER_LABEL_TAB_TOOL,
   HOST_BROWSER_CLOSE_TOOL,
   HOST_BROWSER_SET_COOKIES_TOOL,
   HOST_BROWSER_GET_COOKIES_TOOL,

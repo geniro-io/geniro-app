@@ -4,6 +4,8 @@ import type { BrowserOp } from '../../../browser/browser.types';
 import type { ToolArgs } from '../../mcp.types';
 import {
   browserCookiesField,
+  browserTabColorField,
+  browserTabNameField,
   browserUrlField,
   readBrowserOp,
 } from '../browser-shared/browser-args';
@@ -29,15 +31,23 @@ export const BrowserOpenArgsSchema = z.object({
     .describe(
       'Open the tab with ITS OWN in-memory cookies instead of this chat’s: they are set before the first load and vanish with the tab, so two tabs can be signed in as two users at once.',
     ),
+  name: browserTabNameField.optional(),
+  color: browserTabColorField.optional(),
 });
 
 /** `browser_open`'s arguments as the operation main runs. */
 export function readBrowserOpen(
   args: Record<string, unknown>,
 ): ToolArgs<BrowserOp> {
-  return readBrowserOp(BrowserOpenArgsSchema, args, ({ url, ownCookies }) => ({
-    kind: 'open',
-    url,
-    ...(ownCookies === undefined ? {} : { ownCookies }),
-  }));
+  return readBrowserOp(
+    BrowserOpenArgsSchema,
+    args,
+    ({ url, ownCookies, name, color }) => ({
+      kind: 'open',
+      url,
+      ...(ownCookies === undefined ? {} : { ownCookies }),
+      ...(name === undefined ? {} : { name }),
+      ...(color === undefined ? {} : { color }),
+    }),
+  );
 }

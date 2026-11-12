@@ -7,6 +7,7 @@ import { BrowserCloseTool } from '../browser-close/browser-close.tool';
 import { BrowserConsoleTool } from '../browser-console/browser-console.tool';
 import { BrowserEvaluateTool } from '../browser-evaluate/browser-evaluate.tool';
 import { BrowserGetCookiesTool } from '../browser-get-cookies/browser-get-cookies.tool';
+import { BrowserLabelTabTool } from '../browser-label-tab/browser-label-tab.tool';
 import { BrowserNavigateTool } from '../browser-navigate/browser-navigate.tool';
 import { BrowserOpenTool } from '../browser-open/browser-open.tool';
 import { BrowserPressTool } from '../browser-press/browser-press.tool';
@@ -36,6 +37,7 @@ export function createBrowserTools(
     new BrowserConsoleTool(broker),
     new BrowserEvaluateTool(broker),
     new BrowserTabsTool(broker),
+    new BrowserLabelTabTool(broker),
     new BrowserCloseTool(broker),
     new BrowserSetCookiesTool(broker),
     new BrowserGetCookiesTool(broker),

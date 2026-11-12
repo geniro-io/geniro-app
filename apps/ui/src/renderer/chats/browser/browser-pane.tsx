@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bot,
+  Globe,
   Maximize2,
   MoreHorizontal,
   PictureInPicture2,
@@ -12,13 +13,17 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
-import type {
-  BrowserRunState,
-  BrowserTabAction,
-  BrowserTabState,
+import {
+  BROWSER_TAB_NAME_MAX,
+  type BrowserRunState,
+  type BrowserTabAction,
+  type BrowserTabLabel,
+  type BrowserTabState,
 } from '../../../shared/contracts';
+import { ColorRenameMenu } from '../../components/color-rename-menu';
 import { EmptyState } from '../../components/empty-state';
 import { ErrorBanner } from '../../components/error-banner';
+import { InlineRenameInput } from '../../components/inline-rename-input';
 import { tabPanelId, TabStrip } from '../../components/tab-strip';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -43,9 +48,13 @@ function hostOf(address: string): string {
   }
 }
 
-function tabLabel(tab: BrowserTabState): string {
+function pageLabel(tab: BrowserTabState): string {
   const text = tab.title !== '' ? tab.title : hostOf(tab.url);
-  const label = text === '' ? 'New tab' : text;
+  return text === '' ? 'New tab' : text;
+}
+
+function tabLabel(tab: BrowserTabState): string {
+  const label = tab.name ?? pageLabel(tab);
   return label.length > TAB_LABEL_MAX
     ? `${label.slice(0, TAB_LABEL_MAX - 1)}…`
     : label;
@@ -165,6 +174,9 @@ export function BrowserPane({
   const [menuOpen, setMenuOpen] = useState(false);
   const [expandOpen, setExpandOpen] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+
+  useEffect(() => setRenaming(null), [runId]);
   const [compact, setCompact] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const placeholderRef = useRef<HTMLDivElement | null>(null);
@@ -254,6 +266,10 @@ export function BrowserPane({
     return null;
   }
 
+  const labelTab = (tabId: string, label: BrowserTabLabel): void => {
+    attempt(window.geniro.browserLabelTab(runId, tabId, label));
+  };
+
   const history = (action: 'back' | 'forward' | 'reload' | 'stop'): void => {
     if (active !== null) {
       attempt(window.geniro.browserHistory(runId, active.id, action));
@@ -269,11 +285,55 @@ export function BrowserPane({
           className="min-w-0 flex-1"
           label="Browser tabs"
           idPrefix={`browser-${runId}`}
-          tabs={tabs.map((tab) => ({ id: tab.id, label: tabLabel(tab) }))}
+          tabs={tabs.map((tab) => ({
+            id: tab.id,
+            label: tabLabel(tab),
+            title:
+              tab.name === null
+                ? `${pageLabel(tab)} — double-click to rename`
+                : `${tab.name} · ${pageLabel(tab)} — double-click to rename`,
+            leading: (
+              <ColorRenameMenu
+                color={tab.color}
+                onRecolor={(color) => labelTab(tab.id, { color })}
+                onRename={() => setRenaming(tab.id)}
+                ariaLabel={`Options for tab ${tabLabel(tab)}`}
+                emptyIcon={
+                  <Globe
+                    aria-hidden="true"
+                    className="size-3 shrink-0 text-muted-foreground"
+                  />
+                }
+                side="bottom"
+                triggerSlot="browser-tab-color"
+                focusable={false}
+              />
+            ),
+            ...(renaming === tab.id
+              ? {
+                  editor: (
+                    <InlineRenameInput
+                      value={tab.name ?? pageLabel(tab)}
+                      maxLength={BROWSER_TAB_NAME_MAX}
+                      ariaLabel={`Rename tab ${tabLabel(tab)}`}
+                      className="h-6 w-36"
+                      onCommit={(name) => {
+                        setRenaming(null);
+                        labelTab(tab.id, {
+                          name: name.trim().slice(0, BROWSER_TAB_NAME_MAX),
+                        });
+                      }}
+                      onCancel={() => setRenaming(null)}
+                    />
+                  ),
+                }
+              : {}),
+          }))}
           value={active?.id ?? ''}
           onSelect={(tabId) =>
             attempt(window.geniro.browserSelectTab(runId, tabId))
           }
+          onDoubleClick={setRenaming}
           onClose={(tabId) =>
             attempt(window.geniro.browserCloseTab(runId, tabId))
           }

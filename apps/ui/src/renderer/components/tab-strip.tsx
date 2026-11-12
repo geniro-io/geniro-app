@@ -8,6 +8,12 @@ export interface TabStripTab<T extends string> {
   label: string;
   /** A figure drawn after the label (a count), or null for none. */
   count?: number | null;
+  /** Drawn before the tab, beside it rather than inside it (a colour menu's trigger). */
+  leading?: React.ReactNode;
+  /** Drawn in place of the tab while set (a rename field). */
+  editor?: React.ReactNode;
+  /** The tab's tooltip. */
+  title?: string;
 }
 
 /** The DOM id of a tab's panel, for `aria-controls` / `aria-labelledby`. */
@@ -33,6 +39,7 @@ export function TabStrip<T extends string>({
   idPrefix,
   className,
   onClose,
+  onDoubleClick,
 }: {
   tabs: readonly TabStripTab<T>[];
   value: T;
@@ -41,6 +48,7 @@ export function TabStrip<T extends string>({
   idPrefix: string;
   className?: string;
   onClose?: (id: T) => void;
+  onDoubleClick?: (id: T) => void;
 }): React.JSX.Element {
   const refs = useRef(new Map<T, HTMLButtonElement>());
   const [underline, setUnderline] = useState<{
@@ -103,7 +111,7 @@ export function TabStrip<T extends string>({
       <div role="tablist" aria-label={label} className="flex gap-6">
         {tabs.map((tab, index) => {
           const selected = tab.id === value;
-          const tabButton = (
+          const tabButton = tab.editor ?? (
             <button
               ref={(element) => {
                 if (element === null) {
@@ -118,6 +126,7 @@ export function TabStrip<T extends string>({
               aria-selected={selected}
               aria-controls={tabPanelId(idPrefix, tab.id)}
               tabIndex={selected ? 0 : -1}
+              title={tab.title}
               className={cn(
                 'relative flex h-10 shrink-0 items-center gap-1.5 text-base font-medium whitespace-nowrap text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:rounded-control focus-visible:ring-2 focus-visible:ring-ring',
                 selected && 'text-foreground',
@@ -126,6 +135,11 @@ export function TabStrip<T extends string>({
                   'after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:rounded-pill after:bg-primary',
               )}
               onClick={() => onSelect(tab.id)}
+              onDoubleClick={
+                onDoubleClick === undefined
+                  ? undefined
+                  : () => onDoubleClick(tab.id)
+              }
               onKeyDown={(event) => onKeyDown(event, index)}>
               {tab.label}
               {tab.count === undefined || tab.count === null ? null : (
@@ -135,22 +149,27 @@ export function TabStrip<T extends string>({
               )}
             </button>
           );
-          return onClose ? (
+          return onClose ||
+            tab.leading !== undefined ||
+            tab.editor !== undefined ? (
             <div
               key={tab.id}
               role="presentation"
               className="flex shrink-0 items-center gap-1">
+              {tab.leading}
               {tabButton}
-              <button
-                type="button"
-                tabIndex={-1}
-                data-slot="tab-close"
-                aria-label={`Close ${tab.label}`}
-                title="Close tab"
-                onClick={() => onClose(tab.id)}
-                className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground">
-                <X aria-hidden="true" className="size-3.5" />
-              </button>
+              {onClose === undefined ? null : (
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  data-slot="tab-close"
+                  aria-label={`Close ${tab.label}`}
+                  title="Close tab"
+                  onClick={() => onClose(tab.id)}
+                  className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground">
+                  <X aria-hidden="true" className="size-3.5" />
+                </button>
+              )}
             </div>
           ) : (
             <Fragment key={tab.id}>{tabButton}</Fragment>

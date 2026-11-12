@@ -24,6 +24,7 @@ const call = (over: Partial<RunCallState> = {}): RunCallState => ({
   brief: null,
   mode: null,
   thread: null,
+  callerConversationId: null,
   startSeq: 2,
   startedAt: '2026-11-08T12:00:00.000Z',
   endedAt: null,
@@ -247,6 +248,55 @@ describe('workingAgentRows', () => {
       calleeKey: 'researcher',
       caller: null,
       callerKey: null,
+    });
+  });
+
+  describe('a callee holding its call for a call of its own', () => {
+    const engineerCallingResearcher = [
+      call({ callId: 'call-1' }),
+      call({
+        callId: 'call-2',
+        callerMemberId: 'engineer',
+        calleeMemberId: 'researcher',
+        callerConversationId: 'call-1',
+        startSeq: 5,
+      }),
+    ];
+
+    it('reads as waiting, naming whom it waits for, while the call it made works', () => {
+      const rows = rowsOf({
+        calls: engineerCallingResearcher,
+        blocks: { open: [block({ heldOn: 1 })], drawn: new Set() },
+      });
+
+      expect(rows.find((row) => row.callId === 'call-1')).toMatchObject({
+        state: 'waiting',
+        waitingFor: ['Researcher'],
+      });
+      expect(stateOf(rows, 'call-2')).toBe('working');
+      expect(workingAgentsSummary(rows)).toBe('1 working · 1 waiting');
+    });
+
+    it('reads as working while it is not held', () => {
+      const rows = rowsOf({
+        calls: engineerCallingResearcher,
+        blocks: { open: [block()], drawn: new Set() },
+      });
+
+      expect(stateOf(rows, 'call-1')).toBe('working');
+    });
+
+    it('names nobody once the call it made has settled', () => {
+      const rows = rowsOf({
+        calls: [
+          engineerCallingResearcher[0]!,
+          { ...engineerCallingResearcher[1]!, status: 'completed' },
+        ],
+      });
+
+      expect(rows.find((row) => row.callId === 'call-1')?.waitingFor).toEqual(
+        [],
+      );
     });
   });
 

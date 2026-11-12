@@ -9,6 +9,7 @@ const clampedVariants = cva('m-0 whitespace-pre-wrap break-words', {
       2: 'line-clamp-2',
       3: 'line-clamp-3',
       4: 'line-clamp-4',
+      10: 'line-clamp-10',
       none: '',
     },
   },
@@ -30,7 +31,7 @@ export function ClampedText({
   actions,
 }: {
   text: string;
-  lines: 2 | 3 | 4;
+  lines: 2 | 3 | 4 | 10;
   slot: string;
   className?: string;
   toggleClassName?: string;

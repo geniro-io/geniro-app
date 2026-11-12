@@ -6657,3 +6657,71 @@ describe('withLiveText — a card being WRITTEN', () => {
     ]);
   });
 });
+
+describe('a call a callee made', () => {
+  const started = (
+    callId: string,
+    caller: string,
+    callee: string,
+    extra: Record<string, unknown> = {},
+  ): ChatItem =>
+    item('call_started', { callId, calleeNodeId: callee, ...extra }, caller);
+  const status = (callId: string, member: string, value: string): ChatItem =>
+    item('status', { status: value, nodeId: member, callId }, member);
+  const said = (callId: string, member: string, text: string): ChatItem =>
+    item('message', { text, callId }, member);
+
+  function engineerCallingMiddle(nestedInCall?: string | null): ChatItem[] {
+    const parent = [
+      started('call-1', 'manager', 'engineer'),
+      status('call-1', 'engineer', 'running'),
+      said('call-1', 'engineer', 'handing the stand to middle'),
+    ];
+    const nested = started('call-2', 'engineer', 'middle', {
+      callerConversationId: 'call-1',
+    });
+    return [
+      ...parent,
+      nestedInCall === undefined ? nested : { ...nested, inCall: nestedInCall },
+      status('call-2', 'middle', 'running'),
+      said('call-2', 'middle', 'stand is up'),
+      status('call-2', 'middle', 'completed'),
+    ];
+  }
+
+  function topLevelCards(entries: readonly TranscriptEntry[]): string[] {
+    return entries.flatMap((entry) =>
+      entry.type === 'call-block' ? [entry.callId] : [],
+    );
+  }
+
+  it("is drawn as a card inside its caller's card, never in the run's own flow", () => {
+    const entries = groupTranscript(engineerCallingMiddle());
+
+    expect(topLevelCards(entries)).toEqual(['call-1']);
+    const parent = indexCallBlocks(entries).get('call-1')!;
+    expect(topLevelCards(parent.entries)).toEqual(['call-2']);
+    expect(indexCallBlocks(entries).get('call-2')?.status).toBe('completed');
+  });
+
+  it("leaves the caller's own status and words its own", () => {
+    const parent = indexCallBlocks(
+      groupTranscript(engineerCallingMiddle()),
+    ).get('call-1')!;
+
+    expect(parent.status).toBe('running');
+    expect(callBlockSummary(parent)).toBe('handing the stand to middle');
+  });
+
+  it('follows the call the daemon filed it in', () => {
+    const entries = groupTranscript(engineerCallingMiddle('call-1'));
+
+    expect(topLevelCards(entries)).toEqual(['call-1']);
+  });
+
+  it("stays in the run's own flow when the daemon filed it there", () => {
+    const entries = groupTranscript(engineerCallingMiddle(null));
+
+    expect(topLevelCards(entries)).toEqual(['call-1', 'call-2']);
+  });
+});

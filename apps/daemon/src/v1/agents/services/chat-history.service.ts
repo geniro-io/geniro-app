@@ -222,7 +222,13 @@ export class ChatHistoryService {
       add(await this.cardRowsFor(runId, [...kept, ...byId.values()]));
       add(await this.deadCardsOf(runId, kept));
     } else {
-      add(await this.cardRowsOfCalls(runId, inCalls));
+      const nested = kept.flatMap((row) => {
+        const start = callStartOf(row);
+        return start === null || inCalls.includes(start.callId)
+          ? []
+          : [start.callId];
+      });
+      add(await this.cardRowsOfCalls(runId, [...inCalls, ...nested]));
     }
     return {
       items,
@@ -248,9 +254,17 @@ export class ChatHistoryService {
       return [];
     }
     const rows = await callRows();
+    const startedInRunFlow = new Set(
+      rows
+        .filter((row) => typeof row.inCall !== 'string')
+        .map(callStartOf)
+        .filter((start) => start !== null)
+        .map((start) => start.callId),
+    );
     const across = callSpansFrom(rows)
       .filter(
         (span) =>
+          startedInRunFlow.has(span.callId) &&
           span.startSeq < bounds.firstSeq &&
           (span.settleSeq === null || span.settleSeq >= bounds.firstSeq),
       )

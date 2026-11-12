@@ -6,7 +6,13 @@ import type { TranscriptNodeMeta } from './transcript-payload';
 import { parsedAt } from './turn-duration';
 
 export type WorkingAgentState =
-  'working' | 'queued' | 'quiet' | 'finished' | 'failed' | 'stopped';
+  | 'working'
+  | 'waiting'
+  | 'queued'
+  | 'quiet'
+  | 'finished'
+  | 'failed'
+  | 'stopped';
 
 /** One conversation a team member was called into, as the working-agents card lists it. */
 export interface WorkingAgentRow {
@@ -23,6 +29,8 @@ export interface WorkingAgentRow {
   callerAvatar?: AvatarLook;
   title: string | null;
   state: WorkingAgentState;
+  /** Who the calls this conversation made and has not heard back from went to, by name. */
+  waitingFor: readonly string[];
   /** When the newest call started, epoch ms, null when nothing recorded it. */
   startedAt: number | null;
   clocks: readonly CallClock[];
@@ -31,7 +39,10 @@ export interface WorkingAgentRow {
 /** Whether the agent is still out: a queued call is out too, though nobody works on it. */
 export function isWorkingAgentLive(row: WorkingAgentRow): boolean {
   return (
-    row.state === 'working' || row.state === 'queued' || row.state === 'quiet'
+    row.state === 'working' ||
+    row.state === 'waiting' ||
+    row.state === 'queued' ||
+    row.state === 'quiet'
   );
 }
 
@@ -110,7 +121,9 @@ export function workingAgentRows({
           ? 'queued'
           : block.stalled
             ? 'quiet'
-            : 'working'
+            : block.heldOn !== undefined
+              ? 'waiting'
+              : 'working'
         : call === undefined ||
             call.status !== 'running' ||
             blocks.drawn.has(call.callId)
@@ -125,6 +138,19 @@ export function workingAgentRows({
       ? 'finished'
       : SETTLED_STATE[call.status];
   };
+
+  const waitingFor = (conversationId: string): string[] => [
+    ...new Set(
+      calls
+        .filter(
+          (call) =>
+            call.status === 'running' &&
+            call.callerConversationId === conversationId &&
+            !blocks.drawn.has(call.callId),
+        )
+        .map((call) => faces(call.calleeMemberId, null).callee),
+    ),
+  ];
 
   const rows = new Map<string, { row: WorkingAgentRow; order: number }>();
   const add = (
@@ -158,6 +184,7 @@ export function workingAgentRows({
               .map((callId) => callsById.get(callId)!.title)
               .find((title) => title !== null) ?? null,
           state: stateOf(newest, block),
+          waitingFor: waitingFor(chain[0]!),
           startedAt: parsedAt(newest.startedAt),
           clocks: conversationClocks(clocks, chain),
         },
@@ -178,6 +205,7 @@ export function workingAgentRows({
         ...faces(block.calleeMemberId, block.callerMemberId),
         title: block.title,
         state: stateOf(undefined, block),
+        waitingFor: waitingFor(chain[0]!),
         startedAt: parsedAt(block.createdAt),
         clocks: conversationClocks(clocks, chain),
       },
@@ -201,6 +229,7 @@ function workingAgentsCounts(
   return (
     [
       ['working', count(isWorkingAgentBusy)],
+      ['waiting', count((row) => row.state === 'waiting')],
       ['queued', count((row) => row.state === 'queued')],
       ['finished', count((row) => row.state === 'finished')],
       ['failed', count((row) => row.state === 'failed')],

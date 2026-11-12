@@ -232,6 +232,82 @@ describe('ChatHistoryService (in-memory sqlite)', () => {
       expect(items.map((item) => item.seq)).toEqual([3, 8]);
     });
 
+    describe('a call a callee made', () => {
+      async function nestedCall(): Promise<void> {
+        await teamRun();
+        const row = (
+          seq: number,
+          kind: ItemKind,
+          memberId: string,
+          payload: unknown,
+        ) =>
+          dao.create({
+            runId: 'run-a',
+            seq,
+            kind,
+            memberId,
+            payload: JSON.stringify(payload),
+          });
+        await row(9, 'call_started', 'eng', {
+          callId: 'call-4',
+          calleeNodeId: 'middle',
+          callerConversationId: 'call-1',
+        });
+        await row(10, 'status', 'middle', {
+          callId: 'call-4',
+          status: 'running',
+        });
+        await row(11, 'message', 'middle', {
+          text: 'standing up',
+          callId: 'call-4',
+        });
+        await row(12, 'message', 'manager', { text: 'waiting on eng' });
+      }
+
+      it("leaves the run's own flow, and no page of it anchors the call's own rows", async () => {
+        await nestedCall();
+
+        const whole = await readingService().read(
+          'run-a',
+          -1,
+          { limit: 50 },
+          { root: true },
+        );
+        const newest = await readingService().read(
+          'run-a',
+          -1,
+          { limit: 1, take: 'newest' },
+          { root: true },
+        );
+
+        expect(whole.items.map((item) => item.seq)).toEqual([
+          1, 2, 4, 5, 7, 12,
+        ]);
+        expect(newest.anchors.map((row) => row.seq)).not.toEqual(
+          expect.arrayContaining([10]),
+        );
+        expect(newest.anchors.map((row) => row.seq)).not.toEqual(
+          expect.arrayContaining([11]),
+        );
+      });
+
+      it("is read with its caller's conversation, with what its folded card is drawn from", async () => {
+        await nestedCall();
+
+        const { items, anchors } = await readingService().read(
+          'run-a',
+          -1,
+          { limit: 50 },
+          { call: 'call-3' },
+        );
+
+        expect(items.map((item) => item.seq)).toEqual([3, 8, 9]);
+        expect(anchors.map((row) => row.seq)).toEqual(
+          expect.arrayContaining([10, 11]),
+        );
+      });
+    });
+
     it("anchors each call card's readings to a page of the run's own flow — and nothing only an opened card draws", async () => {
       await teamRun();
       const row = (

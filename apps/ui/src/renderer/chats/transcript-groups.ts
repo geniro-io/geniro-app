@@ -2592,6 +2592,52 @@ interface CallShell {
   started: ChatItem;
   calleeMemberId: string | null;
   bucket: ChatItem[];
+  /** The calls its callee made, each with its own rows: drawn inside the card, never read for its status. */
+  nested: ChatItem[];
+}
+
+/**
+ * The call whose card a call made by a callee is drawn in, or null for a call
+ * made from a member's own conversation.
+ *
+ * TWIN PARSER: `parentCallOf` in apps/daemon/src/v1/agents/utils/call-membership.ts,
+ * whose answer the row carries as `inCall`; a row no build stamped is matched
+ * the same way the daemon matches it — the newest call of the calling
+ * conversation started before it, whose callee is the caller.
+ */
+function parentCallOf(
+  started: ChatItem,
+  shells: ReadonlyMap<string, CallShell>,
+  chains: ReadonlyMap<string, readonly string[]>,
+): string | null {
+  const before = (callId: string): boolean => {
+    const shell = shells.get(callId);
+    return shell !== undefined && shell.started.seq < started.seq;
+  };
+  if (typeof started.inCall === 'string') {
+    return before(started.inCall) ? started.inCall : null;
+  }
+  if (started.inCall === null) {
+    return null;
+  }
+  const calling = payloadString(started.payload, 'callerConversationId');
+  if (calling === null || started.memberId === null) {
+    return null;
+  }
+  let parent: CallShell | null = null;
+  for (const [callId, shell] of shells) {
+    if (
+      before(callId) &&
+      shell.calleeMemberId === started.memberId &&
+      (chains.get(callId)?.[0] ?? callId) === calling &&
+      (parent === null || shell.started.seq > parent.started.seq)
+    ) {
+      parent = shell;
+    }
+  }
+  return parent === null
+    ? null
+    : payloadString(parent.started.payload, 'callId');
 }
 
 /** One thread's task list as folded so far, mid-scan. */
@@ -2706,6 +2752,7 @@ export function groupTranscript(
         started: item,
         calleeMemberId: payloadString(item.payload, 'calleeNodeId'),
         bucket: [],
+        nested: [],
       });
     }
   }
@@ -2813,6 +2860,19 @@ export function groupTranscript(
         claimed.add(item.id);
         shell.bucket.push(item);
       }
+    }
+    const deepestFirst = [...shells.values()].sort(
+      (a, b) => b.started.seq - a.started.seq,
+    );
+    for (const shell of deepestFirst) {
+      const parent = parentCallOf(shell.started, shells, chains);
+      if (parent === null) {
+        continue;
+      }
+      claimed.add(shell.started.id);
+      shells
+        .get(parent)!
+        .nested.push(shell.started, ...shell.bucket, ...shell.nested);
     }
   }
 
@@ -3818,11 +3878,24 @@ function buildCallBlock(
     // out is the ordinary thread's own shape.
     entries: buildTurnBlocks(
       buildWorkflowCards(
-        buildSubagentBlocks(groupTranscript(visibleInner), visibleInner),
+        buildSubagentBlocks(
+          groupTranscript(withNestedCalls(visibleInner, shell.nested)),
+          visibleInner,
+        ),
         visibleInner,
       ),
     ),
   };
+}
+
+/** A card's own rows with the calls its callee made laid in, in seq order. */
+function withNestedCalls(
+  own: readonly ChatItem[],
+  nested: readonly ChatItem[],
+): ChatItem[] {
+  return nested.length === 0
+    ? [...own]
+    : [...own, ...nested].sort((a, b) => a.seq - b.seq);
 }
 
 /**

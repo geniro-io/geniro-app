@@ -194,6 +194,7 @@ const row = (over: Partial<WorkingAgentRow> = {}): WorkingAgentRow => ({
   callerKey: 'manager',
   title: 'Fix the drop zone',
   state: 'working',
+  waitingFor: [],
   startedAt: Date.now() - 125_000,
   clocks: [],
   ...over,
@@ -704,7 +705,7 @@ describe('WorkingAgentsCard', () => {
       expect(el.querySelector('strong')).toBeNull();
     });
 
-    it('draws a message whole, its line breaks kept, past any length', async () => {
+    it('holds a long message to ten lines, its whole text and line breaks kept', async () => {
       const long = `first line\n${'word '.repeat(400)}last words`;
       const { el } = await renderPinned([chained()], (read) =>
         read.mockResolvedValueOnce({
@@ -713,10 +714,39 @@ describe('WorkingAgentsCard', () => {
         }),
       );
 
-      const text = slot(el, 'working-agent-message')!.querySelector('p')!;
+      const text = slot(el, 'working-agent-message-text')!;
       expect(text.textContent).toBe(long);
       expect(text.className).toContain('whitespace-pre-wrap');
-      expect(text.className).not.toContain('line-clamp');
+      expect(text.className).toContain('line-clamp-10');
+    });
+
+    it('unfolds a cut message in place on Show more, opening no conversation', async () => {
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(
+        400,
+      );
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(
+        200,
+      );
+      try {
+        const { el } = await renderPinned([chained()], (read) =>
+          read.mockResolvedValueOnce({
+            messages: [message(10, 'line\n'.repeat(40))],
+            hasOlder: false,
+          }),
+        );
+        const toggle = [
+          ...slot(el, 'working-agent-message')!.querySelectorAll('button'),
+        ].find((button) => button.textContent === 'Show more')!;
+
+        await press(toggle);
+
+        expect(slot(el, 'working-agent-message-text')!.className).not.toContain(
+          'line-clamp',
+        );
+        expect(dialog()).toBeNull();
+      } finally {
+        vi.restoreAllMocks();
+      }
     });
 
     it('lifts the newest message over the older ones, and the live newest stays the newest', async () => {
@@ -984,6 +1014,40 @@ describe('WorkingAgentsCard', () => {
       emit(message(51, 'second answer', 'call-3'));
 
       expect(dialog()?.textContent).toContain('second answer');
+    });
+
+    it('draws a call the callee makes as a card of its own inside, and takes its live rows', async () => {
+      const { el, listRunItems, emit } = await renderPinned([
+        row({ callIds: ['call-1'] }),
+      ]);
+      listRunItems.mockResolvedValueOnce({
+        items: [message(40, 'handing the stand to middle', 'call-1')],
+        anchors: [callStart(2, { callId: 'call-1' })],
+      });
+      await press(slot(el, 'working-agents-open-run')!);
+
+      emit({
+        ...callStart(50, {
+          callId: 'call-2',
+          callerNodeId: 'engineer',
+          calleeNodeId: 'middle',
+          callerConversationId: 'call-1',
+          message: 'Stand up slot 57',
+        }),
+        memberId: 'engineer',
+        inCall: 'call-1',
+      });
+      emit(
+        message(51, 'stand is up', 'call-2', {
+          memberId: 'middle',
+        }),
+      );
+
+      const inside = dialog()?.querySelector(
+        '[data-role="call-block"][data-call-block="start-50"]',
+      );
+      expect(inside?.textContent).toContain('engineer → middle');
+      expect(inside?.textContent).toContain('stand is up');
     });
 
     it('says the read failed, and not that the agent has written nothing', async () => {

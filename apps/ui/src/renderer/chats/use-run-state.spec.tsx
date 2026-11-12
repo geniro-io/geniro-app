@@ -21,6 +21,7 @@ const state = (calls: number): RunStateDto => ({
     brief: null,
     mode: null,
     thread: null,
+    callerConversationId: null,
     startSeq: index,
     startedAt: 'now',
     endedAt: null,

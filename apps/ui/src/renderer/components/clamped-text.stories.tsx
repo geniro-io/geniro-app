@@ -27,6 +27,13 @@ export const Clamped: Story = {};
 
 export const TwoLines: Story = { args: { lines: 2 } };
 
+export const TenLines: Story = {
+  args: {
+    lines: 10,
+    text: Array.from({ length: 4 }, () => LONG_TEXT).join('\n\n'),
+  },
+};
+
 export const Short: Story = {
   args: { text: 'Plans a change, builds it and ships a pull request.' },
 };

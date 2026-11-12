@@ -396,9 +396,18 @@ const GroupedTools = memo(function GroupedTools({
       </button>
       {open ? (
         <div className="flex flex-col gap-1.5 text-muted-foreground">
-          {group.pairs.map((pair) => (
-            <ToolRow key={pair.call.id} pair={pair} settled={settled} />
-          ))}
+          {group.pairs.map((pair) => {
+            const browser = browserToolEntryOf(pair);
+            return browser === null ? (
+              <ToolRow key={pair.call.id} pair={pair} settled={settled} />
+            ) : (
+              <BrowserToolRow
+                key={pair.call.id}
+                entry={browser}
+                status={toolPairStatus(pair, settled)}
+              />
+            );
+          })}
         </div>
       ) : null}
     </div>
@@ -418,15 +427,11 @@ export const ToolGroup = memo(function ToolGroup({
     action: agentActionOf(pair),
     memory: memoryToolEntryOf(pair),
     knowledge: knowledgeToolEntryOf(pair),
-    browser: browserToolEntryOf(pair),
   }));
   if (
     lifted.every(
-      ({ action, memory, knowledge, browser }) =>
-        action === null &&
-        memory === null &&
-        knowledge === null &&
-        browser === null,
+      ({ action, memory, knowledge }) =>
+        action === null && memory === null && knowledge === null,
     )
   ) {
     return <GroupedTools group={group} />;
@@ -442,7 +447,7 @@ export const ToolGroup = memo(function ToolGroup({
     run = [];
   };
   group.pairs.forEach((pair, index) => {
-    const { action, memory, knowledge, browser } = lifted[index]!;
+    const { action, memory, knowledge } = lifted[index]!;
     const status = toolPairStatus(pair, group.closed || runSettled);
     if (action !== null) {
       flush();
@@ -468,11 +473,6 @@ export const ToolGroup = memo(function ToolGroup({
           entry={knowledge}
           status={status}
         />,
-      );
-    } else if (browser !== null) {
-      flush();
-      rows.push(
-        <BrowserToolRow key={pair.call.id} entry={browser} status={status} />,
       );
     } else {
       run.push(pair);

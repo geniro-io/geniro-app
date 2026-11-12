@@ -922,3 +922,80 @@ describe('a file edit shows itself', () => {
     expect(container.querySelector('[data-slot="diff"]')).not.toBeNull();
   });
 });
+
+describe('ToolGroup — in-app browser calls', () => {
+  const browserGroup = (): ToolGroupEntry =>
+    makeGroup([
+      toolItem('tool_call', {
+        id: 'b1',
+        name: 'mcp__geniro-run-1__browser_click',
+        input: { tab: 't1', ref: 'e12' },
+      }),
+      toolItem('tool_result', { id: 'b1', name: null, result: 'Clicked.' }),
+      toolItem('tool_call', {
+        id: 'b2',
+        name: 'mcp__geniro-run-1__browser_close',
+        input: { tab: 't2' },
+      }),
+      toolItem('tool_result', { id: 'b2', name: null, result: 'Closed.' }),
+    ]);
+
+  const browserLines = (): Element[] => [
+    ...container.querySelectorAll('[data-role="browser-tool"]'),
+  ];
+
+  it('folds a run of browser calls into the tool group like any MCP call', () => {
+    render(browserGroup());
+
+    const header = container.querySelector('button[aria-expanded]');
+    expect(header?.getAttribute('aria-expanded')).toBe('false');
+    expect(browserLines()).toHaveLength(0);
+
+    click(header);
+    const group = container.querySelector('[data-role="tool-group"]');
+    const lines = browserLines();
+    expect(lines).toHaveLength(2);
+    expect(lines.every((line) => group?.contains(line))).toBe(true);
+    expect(lines[0]?.textContent).toContain('Clicked e12');
+    expect(lines[1]?.textContent).toContain('Closed tab t2');
+  });
+
+  it('keeps a browser call in its place among the ordinary calls of one group', () => {
+    render(
+      makeGroup([
+        toolItem('tool_call', {
+          id: 't1',
+          name: 'Bash',
+          input: { command: 'ls' },
+        }),
+        toolItem('tool_result', { id: 't1', name: null, result: 'files' }),
+        toolItem('tool_call', {
+          id: 'b1',
+          name: 'mcp__geniro-run-1__browser_click',
+          input: { tab: 't1', ref: 'e12' },
+        }),
+        toolItem('tool_result', { id: 'b1', name: null, result: 'Clicked.' }),
+        toolItem('tool_call', {
+          id: 'r1',
+          name: 'Read',
+          input: { file_path: '/proj/a.ts' },
+        }),
+        toolItem('tool_result', { id: 'r1', name: null, result: 'contents' }),
+      ]),
+    );
+
+    click(container.querySelector('button[aria-expanded]'));
+
+    expect(container.querySelectorAll('[data-role="tool-group"]')).toHaveLength(
+      1,
+    );
+    const kinds = [
+      ...container.querySelectorAll(
+        '[data-slot="tool-row"], [data-role="browser-tool"]',
+      ),
+    ].map((el) =>
+      el.getAttribute('data-role') === 'browser-tool' ? 'browser' : 'tool',
+    );
+    expect(kinds).toEqual(['tool', 'browser', 'tool']);
+  });
+});

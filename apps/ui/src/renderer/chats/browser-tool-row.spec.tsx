@@ -123,6 +123,33 @@ describe('a browser tool row', () => {
     expect(openPane).toHaveBeenCalledWith('t3');
   });
 
+  it('offers no Show in browser on a close, whether it worked or not', () => {
+    draw(pair('browser_close', { tab: 't2' }, { text: 'Closed.' }));
+    expect(line()).toContain('Closed tab t2');
+    expect(showButton()).toBeUndefined();
+
+    draw(
+      pair(
+        'browser_close',
+        { tab: 't2' },
+        { text: 'no such tab', isError: true },
+      ),
+      {
+        status: 'error',
+      },
+    );
+    expect(showButton()).toBeUndefined();
+
+    draw(
+      pair(
+        'browser_navigate',
+        { tab: 't1', url: 'https://acme.dev/a' },
+        { text: 'ok' },
+      ),
+    );
+    expect(showButton()).toBeDefined();
+  });
+
   it.each([
     [
       'browser_navigate',

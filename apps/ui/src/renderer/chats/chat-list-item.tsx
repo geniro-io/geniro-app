@@ -2,6 +2,7 @@ import {
   Archive,
   ArchiveRestore,
   Ellipsis,
+  Lightbulb,
   NotebookPen,
   Palette,
   Pencil,
@@ -159,6 +160,7 @@ export const ChatListItem = memo(function ChatListItem({
   onArchive,
   onUnarchive,
   onAnalyze,
+  onReflect,
   archived = false,
   pinned = false,
   notes = null,
@@ -271,6 +273,8 @@ export const ChatListItem = memo(function ChatListItem({
   onUnarchive?: (runId: string) => void;
   /** Open the Analyze thread dialog for this row; absent offers no item. */
   onAnalyze?: (runId: string) => void;
+  /** Start a lessons reflection on this row; absent offers no item. */
+  onReflect?: (runId: string) => void;
   /**
    * This row is being drawn in the ARCHIVE, which decides which pair of
    * actions it offers: Archive on the desk, Unarchive + Delete on the shelf.
@@ -414,16 +418,23 @@ export const ChatListItem = memo(function ChatListItem({
     if (naming.length > 0) {
       groups.push({ items: naming });
     }
+    const thread: MenuItem[] = [];
     if (onAnalyze) {
-      groups.push({
-        items: [
-          {
-            value: 'analyze',
-            label: 'Analyze thread…',
-            icon: <Sparkles className="size-3.5 shrink-0" />,
-          },
-        ],
+      thread.push({
+        value: 'analyze',
+        label: 'Analyze thread…',
+        icon: <Sparkles className="size-3.5 shrink-0" />,
       });
+    }
+    if (onReflect) {
+      thread.push({
+        value: 'reflect',
+        label: 'Reflect now',
+        icon: <Lightbulb className="size-3.5 shrink-0" />,
+      });
+    }
+    if (thread.length > 0) {
+      groups.push({ items: thread });
     }
     const shelf: MenuItem[] = [];
     if (!archived && onArchive) {
@@ -465,6 +476,7 @@ export const ChatListItem = memo(function ChatListItem({
     onArchive,
     onUnarchive,
     onAnalyze,
+    onReflect,
   ]);
 
   const startEditing = (): void => {
@@ -495,6 +507,8 @@ export const ChatListItem = memo(function ChatListItem({
       onDelete(runId);
     } else if (value === 'analyze') {
       onAnalyze?.(runId);
+    } else if (value === 'reflect') {
+      onReflect?.(runId);
     } else if (value.startsWith(COLOR_ROW_PREFIX)) {
       const next = colorOfMenuValue(value);
       if (next !== undefined && next !== color) {

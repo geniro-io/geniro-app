@@ -50,6 +50,7 @@ import {
   TabStrip,
   type TabStripTab,
 } from '../components/tab-strip';
+import { LessonsSettingsPanel } from './lessons-settings';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
@@ -1002,6 +1003,12 @@ export function Memory({
           />
         )}
       </SettingsPanel>
+
+      <LessonsSettingsPanel
+        agentsApi={agentsApi}
+        capabilities={capabilities}
+        remote={remote}
+      />
 
       <section aria-label="Entries" className="flex flex-col gap-3">
         <div className="flex min-h-8 items-center justify-between gap-2">

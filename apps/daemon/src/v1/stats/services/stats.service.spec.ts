@@ -906,6 +906,43 @@ describe('StatsService (in-memory sqlite)', () => {
       expect(stats.byTeam).toEqual([]);
     });
   });
+
+  describe('by purpose', () => {
+    it('sums every lessons reflection turn of the period into one lessons row, and keeps the user’s own work out', async () => {
+      await record(new Date(2026, 7, 10, 9), {
+        runId: 'reflection-1',
+        purpose: 'lessons',
+        costUsd: 0.02,
+      });
+      await record(new Date(2026, 7, 10, 10), {
+        runId: 'reflection-2',
+        purpose: 'lessons',
+        costUsd: 0.03,
+      });
+      await record(new Date(2026, 7, 10, 11), { runId: 'chat', costUsd: 4 });
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 11),
+      );
+
+      expect(
+        stats.byPurpose.map((row) => [row.key, row.totals.costUsd]),
+      ).toEqual([['lessons', 0.05]]);
+      expect(stats.totals.costUsd).toBe(4.05);
+    });
+
+    it('has no rows when nothing was spent on reflections', async () => {
+      await record(new Date(2026, 7, 10, 9), { runId: 'chat' });
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 11),
+      );
+
+      expect(stats.byPurpose).toEqual([]);
+    });
+  });
 });
 
 describe('StatsService — tools and MCP servers in a period', () => {

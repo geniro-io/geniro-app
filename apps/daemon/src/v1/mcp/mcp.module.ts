@@ -49,6 +49,8 @@ import { TeamsModule } from '../teams/teams.module';
 import { McpController } from './controllers/mcp.controller';
 import { McpServerService } from './services/mcp-server.service';
 import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
+import { LessonsModule } from '../lessons/lessons.module';
+import { LessonFilingService } from '../lessons/services/lesson-filing.service';
 
 /**
  * geniro's own MCP surface: the per-run endpoint (`/v1/mcp/<runId>/<nodeId>`)
@@ -72,6 +74,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
     MemoryModule,
     KnowledgeModule,
     StatsModule,
+    LessonsModule,
   ],
   controllers: [McpController],
   providers: [
@@ -118,6 +121,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         shares: ShareService,
         threadDelivery: ThreadDeliveryService,
         knowledgeItems: KnowledgeItemsService,
+        lessons: LessonFilingService,
       ) =>
         createMcpTools({
           calls,
@@ -160,6 +164,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           shares,
           threadDelivery,
           knowledgeItems,
+          lessons,
         }),
       inject: [
         CallBroker,
@@ -202,6 +207,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         ShareService,
         ThreadDeliveryService,
         KnowledgeItemsService,
+        LessonFilingService,
       ],
     },
     McpServerService,

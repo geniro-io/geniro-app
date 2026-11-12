@@ -16,6 +16,7 @@ import { DiagnosticsModule } from './v1/diagnostics/diagnostics.module';
 import { HandoffModule } from './v1/handoff/handoff.module';
 import { KnowledgeModule } from './v1/knowledge/knowledge.module';
 import { McpModule } from './v1/mcp/mcp.module';
+import { LessonsModule } from './v1/lessons/lessons.module';
 import { MemoryModule } from './v1/memory/memory.module';
 import { MigrationsModule } from './v1/migrations/migrations.module';
 import { NotificationsModule } from './v1/notifications/notifications.module';
@@ -59,6 +60,7 @@ export class AppModule {
         TasksModule,
         SharesModule,
         MemoryModule,
+        LessonsModule,
         KnowledgeModule,
         StorageModule,
         MigrationsModule,

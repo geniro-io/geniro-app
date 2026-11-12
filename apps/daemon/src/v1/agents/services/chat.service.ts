@@ -30,6 +30,7 @@ import { placedFacts } from '../../projects/utils/placed-facts';
 import { Run } from '../../runs/entity/run.entity';
 import {
   type AgentKind,
+  type AnalysisPurpose,
   isTerminalRunStatus,
   type ItemKind,
   type RunStatus,
@@ -145,6 +146,7 @@ import { subagentsWouldBeCancelled } from '../utils/follow-up-background-work';
 import { isHostActionCall } from '../utils/host-action';
 import {
   isHostAnalysisReadCall,
+  isHostLessonsCall,
   isHostRecommendationsCall,
 } from '../utils/host-analysis';
 import { isHostArtifactCall } from '../utils/host-artifact';
@@ -2316,7 +2318,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
      * The run this chat analyses and the seq its reads stop at — set only by
      * `ThreadAnalysisService.start`. See `Run.analysisSourceRunId`.
      */
-    analysisSource?: { runId: string; seq: number; working: boolean };
+    analysisSource?: {
+      runId: string;
+      seq: number;
+      working: boolean;
+      purpose?: AnalysisPurpose;
+    };
     /**
      * The library team this chat analyses and the runs it reads — set
      * only by `ThreadAnalysisService.startTeam`. See
@@ -2416,6 +2423,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         analysisSourceRunId: input.analysisSource?.runId ?? null,
         analysisSourceSeq: input.analysisSource?.seq ?? null,
         analysisSourceWorking: input.analysisSource?.working ?? null,
+        analysisPurpose: input.analysisSource?.purpose ?? null,
         analysisTeamSlug: input.analysisTeam?.slug ?? null,
         analysisRuns:
           input.analysisTeam === undefined
@@ -3178,7 +3186,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     prefer?: string,
   ): Promise<RunWire | null> {
     const em = this.em.fork();
-    const analyses = await this.runDao.listAnalysesOf(sourceRunId, em);
+    const analyses = await this.runDao.listReviewAnalysesOf(sourceRunId, em);
     const run =
       analyses.find((analysis) => analysis.id === prefer) ?? analyses[0];
     if (!run) {
@@ -6117,6 +6125,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         // analysis and scoped to its one source — see `isHostAnalysisReadCall`.
         isHostAnalysisReadCall(hostServerName, toolName) ||
         isHostRecommendationsCall(hostServerName, toolName) ||
+        isHostLessonsCall(hostServerName, toolName) ||
         // The shared memory: its limits live in `MemoryService` — see
         // `isHostMemoryCall`.
         isHostMemoryCall(hostServerName, toolName) ||

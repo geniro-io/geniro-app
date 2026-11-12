@@ -161,7 +161,7 @@ export function hostProjectInstructionsResultText(
       case 'stale':
         return `The user accepted the change but it could not be saved (${outcome.reason}). Nothing was written; tell the user, and propose it again on their word.`;
       case 'posted':
-        return 'The change is now on the user’s screen, waiting for them. STOP HERE and end your turn, and do not call this tool again for the same change. Their Apply or Reject arrives as your next user message.';
+        return `The change is now on the user’s screen, waiting for them. STOP HERE and end your turn, and do not call this tool again for the same change. Their ${outcome.buttons ?? 'Apply or Reject'} arrives as your next user message.`;
       default:
         break;
     }

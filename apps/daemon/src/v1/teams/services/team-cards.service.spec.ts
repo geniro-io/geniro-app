@@ -166,13 +166,15 @@ async function settle(wakeLead: ReturnType<typeof vi.fn>): Promise<void> {
   await vi.waitFor(() => expect(wakeLead).toHaveBeenCalled());
 }
 
+const POSTED = { status: 'posted', buttons: 'Approve or Deny' };
+
 describe('TeamCardsService', () => {
   it("puts the lead's project card in the lead's own flow, answers at once and stands one card per run", async () => {
     const { service, runs, rowsOf, approvals } = harness();
 
-    expect(await service.proposeProjectInstructions(RUN, CHANGE)).toEqual({
-      status: 'posted',
-    });
+    expect(await service.proposeProjectInstructions(RUN, CHANGE)).toEqual(
+      POSTED,
+    );
     const [request] = rowsOf('approval_request');
     expect(request).toMatchObject({
       runId: RUN,
@@ -187,9 +189,9 @@ describe('TeamCardsService', () => {
       requestId,
     ]);
 
-    expect(await service.proposeProjectInstructions(RUN, CHANGE)).toEqual({
-      status: 'posted',
-    });
+    expect(await service.proposeProjectInstructions(RUN, CHANGE)).toEqual(
+      POSTED,
+    );
     expect(
       await service.proposeProjectInstructions(RUN, {
         ...CHANGE,
@@ -327,7 +329,7 @@ describe('TeamCardsService', () => {
       runId: string,
       change: HostProjectInstructions,
     ) => Promise<HostProjectInstructionsOutcome>;
-    expect(await propose(RUN, CHANGE)).toEqual({ status: 'posted' });
+    expect(await propose(RUN, CHANGE)).toEqual(POSTED);
     expect(rowsOf('approval_request')).toHaveLength(1);
   });
 
@@ -344,8 +346,8 @@ describe('TeamCardsService', () => {
       }),
     ]);
 
-    expect(first).toEqual({ status: 'posted' });
-    expect(second).toEqual({ status: 'posted' });
+    expect(first).toEqual(POSTED);
+    expect(second).toEqual(POSTED);
     expect(other).toEqual({
       status: 'unavailable',
       reason: QUESTION_ALREADY_STANDING,

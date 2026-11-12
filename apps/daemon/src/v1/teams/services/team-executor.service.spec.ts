@@ -6848,6 +6848,28 @@ describe('TeamExecutorService — agent calls', () => {
       expect(projectInstructionCards.canPropose(run.id, 'a', null)).toBe(false);
     });
 
+    it('refuses them to the lead between its turns, as an idle chat is refused, and offers them again in its next turn', async () => {
+      const { service, claude, teamProposals, projectInstructionCards, team } =
+        leadSetup();
+      const run = await service.startRun({
+        slug: 'lead',
+        team,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+
+      expect(teamProposals.canPropose(run.id, 'a', null)).toBe(false);
+      expect(projectInstructionCards.canPropose(run.id, 'a', null)).toBe(false);
+
+      await service.sendMessage(run.id, 'again');
+      await drain();
+      expect(teamProposals.canPropose(run.id, 'a', null)).toBe(true);
+      expect(projectInstructionCards.canPropose(run.id, 'a', null)).toBe(true);
+    });
+
     it('withholds save_project_instructions from a lead on a CLI that will not hold a call open, and keeps the team tools', async () => {
       const { service, teamProposals, projectInstructionCards, team } =
         leadSetup(true);
@@ -18591,8 +18613,8 @@ describe('TeamExecutorService — relay mode', () => {
   );
 
   /** A harness with the stage wakes and the host-wake delivery wired, as the module wires them. */
-  function relaySetup() {
-    const harness = setup();
+  function relaySetup(opts: Parameters<typeof setup>[1] = {}) {
+    const harness = setup(4870, opts);
     const wakes = new HostWakeBus();
     new HostWakeGraphDelivery(
       wakes,
@@ -18646,7 +18668,7 @@ describe('TeamExecutorService — relay mode', () => {
   it('moves the lead-only team tools to the new lead on a hand-off', async () => {
     const teamProposals = new TeamProposalBroker();
     const projectInstructionCards = new ProjectInstructionsBroker();
-    const harness = setup(4870, { teamProposals, projectInstructionCards });
+    const harness = relaySetup({ teamProposals, projectInstructionCards });
     harness.service.useLeadProjectCards(async () => ({ status: 'posted' }));
     const run = await harness.service.startRun({
       slug: 'relay',
@@ -18666,6 +18688,7 @@ describe('TeamExecutorService — relay mode', () => {
     );
     expect(moved.ok).toBe(true);
     await drain();
+    expect(turnsOf(harness.claude, 'You Bob.')).toHaveLength(1);
 
     expect(teamProposals.canPropose(run.id, 'bob', null)).toBe(true);
     expect(teamProposals.canPropose(run.id, 'ada', null)).toBe(false);

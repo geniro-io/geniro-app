@@ -39,6 +39,11 @@ import type { ItemKind } from '../../runs/runs.types';
 import { StageWakeService } from './stage-wake.service';
 import { TeamExecutorService } from './team-executor.service';
 
+const LEAD_CARD_POSTED: HostProjectInstructionsOutcome = {
+  status: 'posted',
+  buttons: 'Approve or Deny',
+};
+
 /**
  * The deferred cards a team run's LEAD raises — `propose_team` (for
  * `TeamProposalService`) and `save_project_instructions` — on the terms
@@ -218,7 +223,7 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
     );
     if (standing !== null) {
       return projectInstructionsCardKey(standing.change) === key
-        ? { status: 'posted' }
+        ? LEAD_CARD_POSTED
         : { status: 'unavailable', reason: QUESTION_ALREADY_STANDING };
     }
     const requestId = randomUUID();
@@ -261,7 +266,7 @@ export class TeamCardsService implements OwnedCardHost, OnModuleInit {
             : 'the card could not be written',
       };
     }
-    return { status: 'posted' };
+    return LEAD_CARD_POSTED;
   }
 
   private async undoRaise(runId: string, requestId: string): Promise<void> {

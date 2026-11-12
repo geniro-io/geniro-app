@@ -2494,7 +2494,11 @@ export type HostProjectInstructionsOutcome =
   | { status: 'saved'; instructionsRevision: number }
   | { status: 'declined' }
   | { status: 'stale'; reason: string }
-  | { status: 'posted' }
+  | {
+      status: 'posted';
+      /** The card's two buttons as its host draws them; absent is a chat's Apply or Reject. */
+      buttons?: string;
+    }
   | { status: 'unavailable'; reason: string };
 
 /**

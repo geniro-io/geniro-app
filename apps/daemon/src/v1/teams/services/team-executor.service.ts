@@ -2607,7 +2607,8 @@ export class TeamExecutorService
   /**
    * Give each member that can lead this run `read_teams`, `propose_team` and
    * `save_project_instructions` (user decision: only the lead), offered while
-   * it leads and only in its own conversation — the one the user talks to.
+   * it leads and only inside a turn of its own conversation — the one the
+   * user talks to; between turns it is refused as an idle chat's is.
    * The project tool also needs every pool member on a CLI that holds a call
    * open; a cursor lead is not offered it yet.
    */
@@ -2615,6 +2616,7 @@ export class TeamExecutorService
     runId: string,
     team: Team,
     hostToolNodes: readonly TeamMember[],
+    ownTurnLive: (memberId: string) => boolean,
   ): void {
     for (const dispose of this.leadCardDisposers.get(runId) ?? []) {
       dispose();
@@ -2626,7 +2628,9 @@ export class TeamExecutorService
         continue;
       }
       const offeredTo = (conversationId: string | null): boolean =>
-        conversationId === null && this.isLeadNow(runId, team, node.id);
+        conversationId === null &&
+        ownTurnLive(node.id) &&
+        this.isLeadNow(runId, team, node.id);
       if (this.teamProposals !== undefined) {
         disposers.push(
           this.teamProposals.register(runId, node.id, { runId }, { offeredTo }),
@@ -8181,7 +8185,9 @@ export class TeamExecutorService
       (node) => resolveApproval(node).mode,
       persistItem,
     );
-    this.registerLeadCardSinks(runId, team, hostToolNodes);
+    this.registerLeadCardSinks(runId, team, hostToolNodes, (memberId) =>
+      liveConversations.has(memberId),
+    );
     /**
      * Open a turn of a member's OWN conversation on the write chain — what a
      * wake (`wakeNode`) and a monitor's output share: counted live from now

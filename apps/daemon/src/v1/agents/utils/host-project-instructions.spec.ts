@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { HOST_PROJECT_INSTRUCTIONS_TOOL } from '../chat.types';
 import {
+  hostProjectInstructionsResultText,
   instructionsDiff,
   isHostProjectInstructionsCall,
   projectInstructionsCardInput,
@@ -102,6 +103,20 @@ describe('projectInstructionsVerdict', () => {
       }),
     ).toEqual({ outcome: 'not-saved', answer: 'the project has been deleted' });
     expect(projectInstructionsVerdict({ status: 'declined' })).toEqual({});
+  });
+});
+
+describe('hostProjectInstructionsResultText', () => {
+  it('tells the agent which buttons the posted card carries, a chat’s Apply or Reject unless its host names others', () => {
+    expect(
+      hostProjectInstructionsResultText({ status: 'posted' }, true),
+    ).toContain('Their Apply or Reject arrives');
+    const team = hostProjectInstructionsResultText(
+      { status: 'posted', buttons: 'Approve or Deny' },
+      true,
+    );
+    expect(team).toContain('Their Approve or Deny arrives');
+    expect(team).not.toContain('Apply');
   });
 });
 

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createPreloadStub } from '../../__fixtures__/preload-stub';
+import { Popover } from '../../components/ui/popover';
 import { ThreadUiMemoryContext, writeThreadFlag } from '../thread-ui-memory';
 import { BrowserGrid } from './browser-grid';
 import {
@@ -341,5 +342,47 @@ describe('BrowserGrid — the pane the links read', () => {
     });
     expect(click()).toBe(false);
     expect(openTab).toHaveBeenCalledExactlyOnceWith(RUN, HREF);
+  });
+});
+
+describe('ChatLink — inside a popover', () => {
+  function LinkInPopover({
+    pane,
+  }: {
+    pane: BrowserPaneControls;
+  }): React.JSX.Element | null {
+    const [open, setOpen] = useState(true);
+    return (
+      <BrowserPaneContext.Provider value={pane}>
+        <Popover
+          open={open}
+          onClose={() => setOpen(false)}
+          label="Pull requests">
+          <ChatLink href={HREF}>pull request</ChatLink>
+        </Popover>
+      </BrowserPaneContext.Provider>
+    );
+  }
+
+  it('keeps the popover open through a menu pick, so the pick runs', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await render(<LinkInPopover pane={controls()} />);
+
+    rightClick();
+    const option = [
+      ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((entry) => entry.textContent === 'Open in system browser');
+    if (option === undefined) {
+      throw new Error('no menu option "Open in system browser"');
+    }
+    dispatch(option, 'mousedown', { button: 0 });
+    act(() => {
+      option.click();
+    });
+
+    expect(open).toHaveBeenCalledExactlyOnceWith(HREF, '_blank', 'noopener');
+    expect(
+      container.querySelector('[data-slot="popover-panel"]'),
+    ).not.toBeNull();
   });
 });

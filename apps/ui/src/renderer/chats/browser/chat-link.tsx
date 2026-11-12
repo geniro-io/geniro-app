@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { writeClipboard } from '../../clipboard';
 import { PanelLinkRow } from '../../components/panel-link-row';
 import { ContextMenu, useContextMenu } from '../../components/ui/context-menu';
 import type { MenuGroup } from '../../components/ui/menu';
+import { POPOVER_PANEL_SELECTOR } from '../../components/ui/popover';
 import { useLatestCallback } from '../../components/use-latest-callback';
 import {
   type BrowserPaneControls,
@@ -63,7 +65,22 @@ export interface ChatLinkHandlers {
 export function useChatLink(href: string | undefined): ChatLinkHandlers {
   const pane = useBrowserPane();
   const contextMenu = useContextMenu();
+  const [menuHost, setMenuHost] = useState<Element | null>(null);
   const web = href !== undefined && WEB_ADDRESS.test(href) ? href : null;
+
+  // Inside a popover the menu must stay in its panel: the popover closes on a
+  // press outside it, which would unmount the link before the item's click.
+  const onContextMenu = useLatestCallback(
+    (event: React.MouseEvent): void => {
+      setMenuHost(
+        event.currentTarget instanceof Element
+          ? event.currentTarget.closest(POPOVER_PANEL_SELECTOR)
+          : null,
+      );
+      contextMenu.onContextMenu(event);
+    },
+    [contextMenu.onContextMenu],
+  );
 
   const onClick = useLatestCallback(
     (event: React.MouseEvent<HTMLAnchorElement>): void => {
@@ -98,7 +115,7 @@ export function useChatLink(href: string | undefined): ChatLinkHandlers {
   }
   return {
     onClick,
-    onContextMenu: contextMenu.onContextMenu,
+    onContextMenu,
     // Portalled: a paragraph cannot hold the menu's `div`, and a transform or
     // containment on a transcript ancestor would capture the fixed panel.
     menu:
@@ -116,7 +133,7 @@ export function useChatLink(href: string | undefined): ChatLinkHandlers {
                 onClose={contextMenu.close}
               />
             </div>,
-            document.body,
+            menuHost ?? document.body,
           ),
   };
 }

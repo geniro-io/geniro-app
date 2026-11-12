@@ -341,6 +341,11 @@ class FakeRunDao {
       .filter((run) => run.analysisSourceRunId === sourceRunId)
       .reverse();
   }
+  async listReviewAnalysesOf(sourceRunId: string): Promise<Run[]> {
+    return (await this.listAnalysesOf(sourceRunId)).filter(
+      (run) => run.analysisPurpose !== 'lessons',
+    );
+  }
   /** Newest first, as the real one orders by `createdAt` (insertion here). */
   async newestTeamRuns(slug: string, limit: number): Promise<Run[]> {
     return [...this.runs.values()]
@@ -6253,6 +6258,29 @@ describe('ChatService', () => {
       );
       // Its own was replaced meanwhile: the thread's analysis is the answer.
       expect((await service.findAnalysis('source', 'gone'))?.id).toBe(newer.id);
+    });
+  });
+
+  describe('findAnalysis — lessons reflections', () => {
+    it('never answers a lessons reflection as the thread’s analysis, newer or not', async () => {
+      const { service } = setup();
+      const review = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        analysisSource: { runId: 'source', seq: 3, working: false },
+      });
+      await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        analysisSource: {
+          runId: 'source',
+          seq: 5,
+          working: false,
+          purpose: 'lessons',
+        },
+      });
+
+      expect((await service.findAnalysis('source'))?.id).toBe(review.id);
     });
   });
 

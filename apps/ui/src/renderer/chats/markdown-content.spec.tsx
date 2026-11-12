@@ -386,18 +386,22 @@ describe('MarkdownContent — links and the chat browser', () => {
     });
     return notPrevented;
   };
-  const withPane = (openUrl: (url: string) => void): HTMLAnchorElement =>
+  const withPane = (
+    openUrl: (url: string) => void,
+    isOpen: boolean,
+  ): HTMLAnchorElement =>
     link(
       render(
-        <BrowserPaneContext.Provider value={{ openPane: vi.fn(), openUrl }}>
+        <BrowserPaneContext.Provider
+          value={{ openPane: vi.fn(), openUrl, isOpen: () => isOpen }}>
           <MarkdownContent content="[docs](https://example.com/a)" />
         </BrowserPaneContext.Provider>,
       ),
     );
 
-  it('opens a transcript link in the pane; ⌘-click opens the system browser', () => {
+  it('opens a transcript link in the pane while the pane is open; ⌘-click opens the system browser', () => {
     const openUrl = vi.fn();
-    const anchor = withPane(openUrl);
+    const anchor = withPane(openUrl, true);
 
     expect(click(anchor, { button: 0 })).toBe(false);
     expect(openUrl).toHaveBeenCalledExactlyOnceWith('https://example.com/a');
@@ -406,6 +410,14 @@ describe('MarkdownContent — links and the chat browser', () => {
     expect(click(anchor, { button: 0, ctrlKey: true })).toBe(true);
     expect(openUrl).toHaveBeenCalledTimes(1);
     expect(anchor.target).toBe('_blank');
+  });
+
+  it('leaves a transcript link to the system browser while the pane is closed', () => {
+    const openUrl = vi.fn();
+    const anchor = withPane(openUrl, false);
+
+    expect(click(anchor, { button: 0 })).toBe(true);
+    expect(openUrl).not.toHaveBeenCalled();
   });
 
   it('leaves a link alone where the chat has no pane', () => {
@@ -419,7 +431,8 @@ describe('MarkdownContent — links and the chat browser', () => {
     const openUrl = vi.fn();
     const anchor = link(
       render(
-        <BrowserPaneContext.Provider value={{ openPane: vi.fn(), openUrl }}>
+        <BrowserPaneContext.Provider
+          value={{ openPane: vi.fn(), openUrl, isOpen: () => true }}>
           <MarkdownContent content="[mail](mailto:a@b.co)" />
         </BrowserPaneContext.Provider>,
       ),

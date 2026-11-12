@@ -32,7 +32,9 @@ export function BrowserGrid({
   style?: React.CSSProperties;
   children: React.ReactNode;
 }): React.JSX.Element {
-  const [, setOpen] = useThreadFlag(BROWSER_PANE_OPEN_KEY, false);
+  const [open, setOpen] = useThreadFlag(BROWSER_PANE_OPEN_KEY, false);
+  const openRef = useRef(open);
+  openRef.current = open;
   const runIdRef = useRef<string | null>(runId);
   runIdRef.current = runId;
 
@@ -55,6 +57,12 @@ export function BrowserGrid({
     });
   }, [enabled]);
 
+  // A stable setter, so the controls below change only with the run: the flag's
+  // own setter changes identity on every toggle, and every row that reads the
+  // pane would re-render with it.
+  const showPane = useLatestCallback((value: boolean): void => {
+    setOpen(value);
+  }, []);
   const openPane = useLatestCallback(
     (tabId: string | null): void => {
       if (runId === null) {
@@ -64,9 +72,9 @@ export function BrowserGrid({
       if (tabId !== null) {
         void window.geniro.browserSelectTab(runId, tabId);
       }
-      setOpen(true);
+      showPane(true);
     },
-    [runId, setOpen],
+    [runId, showPane],
   );
   const openUrl = useLatestCallback(
     (url: string): void => {
@@ -75,12 +83,16 @@ export function BrowserGrid({
       }
       void window.geniro.browserOpenTab(runId, url).then(() => {
         clearAgentTabUnseen(runId);
-        setOpen(true);
+        showPane(true);
       });
     },
-    [runId, setOpen],
+    [runId, showPane],
   );
-  const controls = useMemo(() => ({ openPane, openUrl }), [openPane, openUrl]);
+  const isOpen = useLatestCallback((): boolean => openRef.current, []);
+  const controls = useMemo(
+    () => ({ openPane, openUrl, isOpen }),
+    [openPane, openUrl, isOpen],
+  );
 
   return (
     <BrowserPaneContext.Provider value={enabled ? controls : null}>

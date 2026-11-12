@@ -44,7 +44,7 @@ import { ErrorBanner } from '../components/error-banner';
 import type { McpConfigActions } from '../components/mcp-add-dialog';
 import { McpDialogButton } from '../components/mcp-dialog-button';
 import { MemberAvatar } from '../components/member-avatar';
-import { PanelActionRow, PanelLinkRow } from '../components/panel-link-row';
+import { PanelActionRow } from '../components/panel-link-row';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { PanelSection } from '../components/panel-section';
 import { Button } from '../components/ui/button';
@@ -81,6 +81,7 @@ import type { RunArtifact } from './artifact-payload';
 import { ArtifactShareContext, hasLink } from './artifact-share';
 import { bareUrl, briefParts, plainMarkdownText } from './brief-text';
 import { BrowserToggleButton } from './browser/browser-toggle-button';
+import { ChatLink, ChatPanelLinkRow } from './browser/chat-link';
 import { callClockTitle, useCallClockMs } from './call-clock';
 import { callTitle } from './call-title';
 import { ContextMeter } from './context-meter';
@@ -1310,16 +1311,14 @@ function BriefBody({ lines }: { lines: readonly string[] }): React.JSX.Element {
       {/* An inline link inside the brief rather than a `PanelLinkRow`: that
           row is a bordered block, and this sits in the body's running text. */}
       {links.map((url, index) => (
-        <a
+        <ChatLink
           key={`${index}:${url.href}`}
           href={url.href}
-          target="_blank"
-          rel="noreferrer"
           title={url.href}
           className="truncate text-[11px] text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground">
           {url.host}
           {url.pathname === '/' ? '' : url.pathname}
-        </a>
+        </ChatLink>
       ))}
     </div>
   );
@@ -3164,7 +3163,7 @@ export function AgentsPanel({
             <ul className="m-0 flex list-none flex-col gap-1 p-0">
               {artifacts.map((artifact) => (
                 <li key={artifact.id}>
-                  <PanelLinkRow
+                  <ChatPanelLinkRow
                     href={artifact.url}
                     title={artifact.title}
                     tooltip={artifact.url}

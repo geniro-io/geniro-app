@@ -48,7 +48,7 @@ const meta = {
   decorators: [
     (story) => (
       <BrowserPaneContext.Provider
-        value={{ openPane: () => {}, openUrl: () => {} }}>
+        value={{ openPane: () => {}, openUrl: () => {}, isOpen: () => false }}>
         <div className="w-[560px] bg-background p-4">{story()}</div>
       </BrowserPaneContext.Provider>
     ),

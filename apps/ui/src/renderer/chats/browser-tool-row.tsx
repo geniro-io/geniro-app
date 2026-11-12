@@ -246,9 +246,10 @@ function wordsOf(
 
 /**
  * One in-app browser tool call as a single compact line inside the
- * transcript's tool run — "Opened staging.acme.dev", "Clicked e12" — with a way
- * back to the tab in the chat's browser pane. Never the text typed or a cookie
- * value: the row names what was acted on, not what was sent.
+ * transcript's tool group — "Opened staging.acme.dev", "Clicked e12" — with a
+ * way back to the tab in the chat's browser pane while that tab is still open;
+ * a close has none. Never the text typed or a cookie value: the row names what
+ * was acted on, not what was sent.
  */
 export function BrowserToolRow({
   entry,
@@ -294,7 +295,7 @@ export function BrowserToolRow({
       {status === 'stopped' ? (
         <span className="text-muted-foreground/70">no result</span>
       ) : null}
-      {pane === null || running ? null : (
+      {pane === null || running || entry.tool === 'browser_close' ? null : (
         <Button
           type="button"
           variant="link"

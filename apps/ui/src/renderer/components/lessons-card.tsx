@@ -67,6 +67,8 @@ export interface LessonsCardProps {
   reflection: LessonsReflectionView;
   onSave?: (proposalId: string, request: LessonSaveRequest) => Promise<void>;
   onReject?: (proposalId: string, reason: string | null) => Promise<void>;
+  /** Scroll the transcript to the evidence's row; absent draws no link. */
+  onShowInThread?: (seq: number) => void;
 }
 
 const SIGNAL_LABELS: Record<LessonSignalKind, string> = {
@@ -159,6 +161,7 @@ export function LessonsCard({
   reflection,
   onSave,
   onReject,
+  onShowInThread,
 }: LessonsCardProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const saved = lessons.filter(
@@ -189,6 +192,7 @@ export function LessonsCard({
           outcome={outcomes[lesson.id] ?? null}
           onSave={onSave}
           onReject={onReject}
+          onShowInThread={onShowInThread}
         />
       ))}
       <p className="m-0 text-[11px] text-muted-foreground">
@@ -225,11 +229,13 @@ function LessonRow({
   outcome,
   onSave,
   onReject,
+  onShowInThread,
 }: {
   lesson: LessonView;
   outcome: LessonOutcomeView | null;
   onSave?: LessonsCardProps['onSave'];
   onReject?: LessonsCardProps['onReject'];
+  onShowInThread?: LessonsCardProps['onShowInThread'];
 }): React.JSX.Element {
   const [scope, setScope] = useState<LessonScope>(lesson.target.scope);
   const [editing, setEditing] = useState(false);
@@ -307,6 +313,9 @@ function LessonRow({
       ) : (
         <>
           <p className="m-0 text-sm font-medium">{lesson.title}</p>
+          {lesson.rule.trim() === lesson.title.trim() ? null : (
+            <p className="m-0 text-xs">{lesson.rule}</p>
+          )}
           <p className="m-0 text-xs text-muted-foreground">{lesson.why}</p>
         </>
       )}
@@ -321,6 +330,18 @@ function LessonRow({
         onToggle={() => setEvidenceOpen((value) => !value)}>
         <p className="m-0 text-xs text-muted-foreground">
           {`“${lesson.evidence.quote}”`}
+          {onShowInThread === undefined ? null : (
+            <>
+              {' '}
+              <Button
+                size="sm"
+                variant="link"
+                className="h-auto p-0 text-xs"
+                onClick={() => onShowInThread(lesson.evidence.seq)}>
+                Show in thread
+              </Button>
+            </>
+          )}
         </p>
       </Disclosure>
       <div className="flex min-w-0 items-center gap-2">

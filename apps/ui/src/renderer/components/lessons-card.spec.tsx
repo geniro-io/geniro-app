@@ -140,6 +140,28 @@ describe('LessonsCard', () => {
     expect(el.textContent).toContain('не запускай vitest');
   });
 
+  it('jumps the transcript to the evidence row from Show in thread, and draws no link without a jump', async () => {
+    const onShowInThread = vi.fn();
+    const el = await render({ lessons: [LESSON_CORRECTION], onShowInThread });
+
+    await press(buttonContaining(el, 'Evidence · message #31'));
+    await press(buttonNamed(el, 'Show in thread'));
+
+    expect(onShowInThread).toHaveBeenCalledWith(31);
+
+    const bare = await render({ lessons: [LESSON_CORRECTION] });
+    await press(buttonContaining(bare, 'Evidence · message #31'));
+    expect(() => buttonNamed(bare, 'Show in thread')).toThrow();
+  });
+
+  it('shows the rule in full under its title when the two differ', async () => {
+    const el = await render({
+      lessons: [{ ...LESSON_CORRECTION, rule: 'Run tests through the package script only.' }],
+    });
+
+    expect(el.textContent).toContain('Run tests through the package script only.');
+  });
+
   it('names the dedup verdict with the memory entry it refines or breaks', async () => {
     const el = await render({
       lessons: [LESSON_REFINES, LESSON_BROKEN_AGAIN],

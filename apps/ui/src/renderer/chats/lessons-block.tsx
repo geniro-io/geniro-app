@@ -11,7 +11,7 @@ import {
 import { describeDaemonError } from '../daemon-api';
 import { formatDuration } from '../stats/stats-format';
 import { formatUsd } from './agent-activity';
-import { LessonsApiContext } from './lessons-api-context';
+import { LessonsApiContext, LessonsJumpContext } from './lessons-api-context';
 import type { LessonsEntry } from './transcript-groups';
 
 const LOOK: LessonsLook = {
@@ -32,6 +32,7 @@ export function LessonsBlock({
   entry: LessonsEntry;
 }): React.JSX.Element {
   const api = useContext(LessonsApiContext);
+  const jump = useContext(LessonsJumpContext);
   const identities = useContext(AgentIdentityContext);
   const reflectionRunId = entry.card.reflectionRunId;
   const [facts, setFacts] = useState<LessonReflectionFactsDto | null>(null);
@@ -78,6 +79,7 @@ export function LessonsBlock({
       lessons={entry.card.proposals}
       outcomes={entry.outcomes}
       reflection={reflection}
+      onShowInThread={jump ?? undefined}
       onSave={
         api === null
           ? undefined

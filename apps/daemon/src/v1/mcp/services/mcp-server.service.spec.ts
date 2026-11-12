@@ -79,6 +79,7 @@ import { FindingsReportBroker } from '../../agents/services/findings-report.brok
 import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { GalleryImageService } from '../../agents/services/gallery-image.service';
 import { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
+import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import type { GoalsService } from '../../agents/services/goals.service';
 import type { KnowledgeItemsService } from '../../agents/services/knowledge-items.service';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
@@ -274,6 +275,7 @@ function service(
       teamNotes,
       runOutcomes,
       goals,
+      goalWriters: new GoalWritersBroker(),
       stages,
       patches,
       plans,
@@ -4584,6 +4586,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
       goals: {} as GoalsService,
+      goalWriters: new GoalWritersBroker(),
       stages: stageService(),
     } as Parameters<typeof createMcpTools>[0]);
     const listing = tools.flatMap((tool) =>
@@ -4685,6 +4688,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
       goals: {} as GoalsService,
+      goalWriters: new GoalWritersBroker(),
       stages: stageService(),
     } as Parameters<typeof createMcpTools>[0]);
   };
@@ -4970,6 +4974,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       teamNotes: teamNoteBroker(),
       runOutcomes: runOutcomeBroker(),
       goals: {} as GoalsService,
+      goalWriters: new GoalWritersBroker(),
       stages: stageService(),
     }).find((t) => t.handles(HOST_READ_TEAMS_TOOL))!;
 
@@ -5086,6 +5091,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         teamNotes: teamNoteBroker(),
         runOutcomes: runOutcomeBroker(),
         goals: {} as GoalsService,
+        goalWriters: new GoalWritersBroker(),
         stages: stageService(),
       }).find((t) => t.handles(HOST_PROPOSE_TEAM_TOOL))!;
       return {
@@ -5311,6 +5317,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
         teamNotes: teamNoteBroker(),
         runOutcomes: runOutcomeBroker(),
         goals: {} as GoalsService,
+        goalWriters: new GoalWritersBroker(),
         stages: stageService(),
       });
     type ToolCallContext = Parameters<
@@ -6283,18 +6290,21 @@ interface ToolCallReply {
   result: { content: { text: string }[]; isError?: boolean };
 }
 
-/** One `tools/call` of `goals` through the endpoint, as `member` of `run-1`. */
+/** One `tools/call` of `goals` through the endpoint, as `member` of `run-1` unless `at` names another run or a callee conversation. */
 async function callGoals(
   target: McpServerService,
   member: string,
   args: Record<string, unknown>,
+  at: { runId?: string; conversationId?: string } = {},
 ): Promise<{ text: string; isError: boolean }> {
+  const runId = at.runId ?? 'run-1';
+  const conversationId = at.conversationId ?? null;
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
       void target.handlePost(
-        'run-1',
+        runId,
         member,
         {
           raw: req,
@@ -6302,25 +6312,29 @@ async function callGoals(
           headers: req.headers,
         } as unknown as FastifyRequest,
         { raw: res, hijack: () => {} } as unknown as FastifyReply,
+        conversationId,
       );
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const port = (server.address() as AddressInfo).port;
-    const res = await fetch(`http://127.0.0.1:${port}/v1/mcp/run-1/${member}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream',
+    const res = await fetch(
+      `http://127.0.0.1:${port}/v1/mcp/${runId}/${member}`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'goals', arguments: args },
+        }),
       },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: { name: 'goals', arguments: args },
-      }),
-    });
+    );
     const { result } = (await res.json()) as ToolCallReply;
     return { text: result.content[0]!.text, isError: result.isError === true };
   } finally {
@@ -6331,11 +6345,25 @@ async function callGoals(
 describe('goals through the MCP endpoint', () => {
   let db: GoalsDb;
   let endpoint: McpServerService;
+  let writers: GoalWritersBroker;
 
   beforeEach(async () => {
     db = await goalsDb();
     await db.seedRun('run-1', { teamId: 'dev-team' });
-    endpoint = new McpServerService([new GoalsTool(db.service)], {
+    writers = new GoalWritersBroker();
+    writers.register(
+      'run-1',
+      'dev',
+      { runId: 'run-1' },
+      { offeredTo: (conversationId) => conversationId === null },
+    );
+    writers.register(
+      'run-1',
+      'qa',
+      { runId: 'run-1' },
+      { offeredTo: () => false },
+    );
+    endpoint = new McpServerService([new GoalsTool(db.service, writers)], {
       token: 'launch',
       version: '9.9.9',
       startedAt: 0,
@@ -6472,6 +6500,109 @@ describe('goals through the MCP endpoint', () => {
       id: 'g1',
     });
     expect(removal.text).toContain('GOAL_CLOSED');
+  });
+
+  const WRITES: Record<string, unknown>[] = [
+    { action: 'set', goals: [{ text: 'mine', source: 'agent' }] },
+    { action: 'add', goals: [{ text: 'mine', source: 'agent' }] },
+    { action: 'update', id: 'g1', text: 'reworded' },
+    { action: 'remove', id: 'g1' },
+    {
+      action: 'complete',
+      id: 'g1',
+      status: 'achieved',
+      evidence: 'it passed',
+    },
+    { action: 'reopen', id: 'g1' },
+  ];
+
+  it("refuses every write from a team member that is not the lead, keeps the lead's goals, and still lists them", async () => {
+    await callGoals(endpoint, 'dev', {
+      action: 'set',
+      goals: [{ text: 'the lead goal', source: 'user' }],
+    });
+
+    for (const args of WRITES) {
+      const refused = await callGoals(endpoint, 'qa', args);
+      expect(refused.isError).toBe(true);
+      expect(refused.text).toMatch(
+        /^Not changed: only the lead of this team run writes its goals/,
+      );
+    }
+
+    expect(
+      (await db.service.list('run-1'))!.map((goal) => [
+        goal.id,
+        goal.status,
+        goal.text,
+      ]),
+    ).toEqual([['g1', 'open', 'the lead goal']]);
+    const list = await callGoals(endpoint, 'qa', { action: 'list' });
+    expect(list).toEqual({
+      isError: false,
+      text: '1 goal, 1 open:\n- g1 [open] the lead goal',
+    });
+  });
+
+  it('refuses the lead a write while it answers a call, and lets it list there', async () => {
+    const refused = await callGoals(
+      endpoint,
+      'dev',
+      { action: 'set', goals: [{ text: 'mine', source: 'agent' }] },
+      { conversationId: 'call-1' },
+    );
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toMatch(/^Not changed: only the lead/);
+    expect(await db.service.list('run-1')).toEqual([]);
+
+    const list = await callGoals(
+      endpoint,
+      'dev',
+      { action: 'list' },
+      { conversationId: 'call-1' },
+    );
+    expect(list).toEqual({
+      isError: false,
+      text: 'This run has no goals yet; its lead records them.',
+    });
+  });
+
+  it('refuses a write from a team run member the executor registered no sink for', async () => {
+    const refused = await callGoals(endpoint, 'ghost', {
+      action: 'add',
+      goals: [{ text: 'mine', source: 'agent' }],
+    });
+    expect(refused.isError).toBe(true);
+    expect(await db.service.list('run-1')).toEqual([]);
+  });
+
+  it('lets a chat write its goals with no sink registered', async () => {
+    await db.seedRun('chat-1', { teamId: null });
+    const saved = await callGoals(
+      endpoint,
+      'agent',
+      { action: 'set', goals: [{ text: 'chat goal', source: 'user' }] },
+      { runId: 'chat-1' },
+    );
+    expect(saved).toMatchObject({ isError: false });
+    expect(saved.text).toContain('Saved g1.');
+    expect((await db.service.list('chat-1'))!.map((goal) => goal.text)).toEqual(
+      ['chat goal'],
+    );
+  });
+
+  it('tells a team member who writes the goals in its description, and a chat nothing of it', async () => {
+    const tool = new GoalsTool(db.service, writers);
+    const description = (runId: string, memberId: string): string =>
+      tool.list({ runId, memberId, conversationId: null })[0]!.description;
+
+    expect(description('run-1', 'qa')).toContain(
+      'In this team run only its lead writes the goals',
+    );
+    expect(description('run-1', 'dev')).toContain(
+      'In this team run only its lead writes the goals',
+    );
+    expect(description('chat-1', 'agent')).not.toContain('team run');
   });
 });
 

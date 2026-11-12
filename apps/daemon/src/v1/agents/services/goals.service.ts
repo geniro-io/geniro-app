@@ -58,6 +58,11 @@ export class GoalsService implements OnModuleInit {
     return (await this.goalDao.listByRun(runId, em)).map(toWire);
   }
 
+  async isTeamRun(runId: string): Promise<boolean> {
+    const run = await this.runDao.getById(runId, this.em.fork());
+    return run !== null && run.teamId !== null;
+  }
+
   /** Replace the run's open goals with these; closed goals stay. */
   set(
     runId: string,

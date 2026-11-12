@@ -9,6 +9,7 @@ import type { FindingsReportBroker } from '../../agents/services/findings-report
 import type { GalleryBroker } from '../../agents/services/gallery.broker';
 import type { GalleryImageService } from '../../agents/services/gallery-image.service';
 import type { GlobalChatSearchService } from '../../agents/services/global-chat-search.service';
+import type { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import type { GoalsService } from '../../agents/services/goals.service';
 import type { KnowledgeItemsService } from '../../agents/services/knowledge-items.service';
 import type { MetricsBroker } from '../../agents/services/metrics.broker';
@@ -107,6 +108,7 @@ export interface McpToolDeps {
   teamNotes: TeamNoteBroker;
   runOutcomes: RunOutcomeBroker;
   goals: GoalsService;
+  goalWriters: GoalWritersBroker;
   stages: StageService;
   patches: PatchBroker;
   plans: PlanBroker;
@@ -154,7 +156,7 @@ export function createMcpTools(deps: McpToolDeps): McpTool[] {
     new TeamNotesTool(deps.teamNotes),
     new RecordOutcomeTool(deps.runOutcomes),
     new MoveStageTool(deps.stages, deps.calls),
-    new GoalsTool(deps.goals),
+    new GoalsTool(deps.goals, deps.goalWriters),
     new AskUserQuestionTool(deps.questions),
     new ReportFindingsTool(deps.findings),
     new ShowChartTool(deps.charts),

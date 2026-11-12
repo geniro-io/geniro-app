@@ -115,9 +115,14 @@ export function readGoals(
 }
 
 /** The goal list as the agent reads it back. */
-export function goalsListText(goals: readonly RunGoal[]): string {
+export function goalsListText(
+  goals: readonly RunGoal[],
+  mayWrite = true,
+): string {
   if (goals.length === 0) {
-    return 'This run has no goals yet. Record them with action "set".';
+    return mayWrite
+      ? 'This run has no goals yet. Record them with action "set".'
+      : 'This run has no goals yet; its lead records them.';
   }
   const open = goals.filter((goal) => goal.status === 'open').length;
   return [
@@ -127,6 +132,11 @@ export function goalsListText(goals: readonly RunGoal[]): string {
         `- ${goal.id} [${goal.status}] ${goal.text}${goal.evidence === null ? '' : ` — evidence: ${goal.evidence}`}`,
     ),
   ].join('\n');
+}
+
+/** The refusal of a write from a team member that is not leading in its own turn. */
+export function goalsLeadOnlyText(): string {
+  return "Not changed: only the lead of this team run writes its goals, in its own conversation — `list` still reads them. Keep your own checklist in your CLI's task list, and tell whoever called you what a goal needs.";
 }
 
 /** The receipt for a write. */

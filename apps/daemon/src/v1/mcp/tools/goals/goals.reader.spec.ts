@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { goalsListText, goalsResultText, readGoals } from './goals.reader';
+import {
+  goalsLeadOnlyText,
+  goalsListText,
+  goalsResultText,
+  readGoals,
+} from './goals.reader';
 
 describe('readGoals', () => {
   it('reads each action into its call', () => {
@@ -97,6 +102,14 @@ describe('goalsResultText', () => {
       text: 'Not changed (TOO_MANY_GOALS): too many.',
       isError: true,
     });
-    expect(goalsListText([])).toContain('no goals yet');
+    expect(goalsListText([])).toBe(
+      'This run has no goals yet. Record them with action "set".',
+    );
+    expect(goalsListText([], false)).toBe(
+      'This run has no goals yet; its lead records them.',
+    );
+    expect(goalsLeadOnlyText()).toMatch(
+      /^Not changed: only the lead of this team run writes its goals, in its own conversation/,
+    );
   });
 });

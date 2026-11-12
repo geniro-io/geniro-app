@@ -274,7 +274,7 @@ export class StageService implements OnModuleInit, OnModuleDestroy {
       ) {
         return refuse(
           'GOALS_REQUIRED',
-          `${stage.title} needs the run's goals recorded before it is done: record them with ${HOST_GOALS_TOOL} (action "set"), then complete the stage.`,
+          `${stage.title} needs the run's goals recorded before it is done: the run's lead records them with ${HOST_GOALS_TOOL} (action "set") in its own conversation, then the stage can be completed.`,
         );
       }
       const forks = stage.next ?? [];

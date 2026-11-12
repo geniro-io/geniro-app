@@ -307,7 +307,7 @@ export interface HandOffBriefInput {
 }
 
 /** What a stage that requires goals adds to its goal line. */
-const GOALS_REQUIRED_NOTE = ` (the run's goals must be recorded with ${HOST_GOALS_TOOL} before it is done)`;
+const GOALS_REQUIRED_NOTE = ` (the run's lead must record its goals with ${HOST_GOALS_TOOL} before it is done)`;
 
 /** Open goals a hand-off brief lists by name; the rest are counted. */
 const MAX_HANDOFF_GOALS = 8;

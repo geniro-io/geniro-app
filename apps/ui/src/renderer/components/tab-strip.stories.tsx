@@ -56,3 +56,26 @@ export const Narrow: Story = {
     </div>
   ),
 };
+
+function ClosableStateful(): React.JSX.Element {
+  const [tabs, setTabs] = useState([
+    { id: 'a', label: 'Manifest Law' },
+    { id: 'b', label: 'localhost:3560' },
+    { id: 'c', label: 'Docs' },
+  ]);
+  const [value, setValue] = useState('a');
+  return (
+    <div className="w-[480px] border-b border-border">
+      <TabStrip
+        tabs={tabs}
+        value={value}
+        onSelect={setValue}
+        onClose={(id) => setTabs((all) => all.filter((tab) => tab.id !== id))}
+        label="Browser tabs"
+        idPrefix="closable"
+      />
+    </div>
+  );
+}
+
+export const Closable: Story = { render: () => <ClosableStateful /> };

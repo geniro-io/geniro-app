@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bot,
+  Maximize2,
   MoreHorizontal,
   PictureInPicture2,
   Plus,
@@ -54,10 +55,7 @@ function isBlank(tab: BrowserTabState): boolean {
   return tab.url === '' || tab.url === 'about:blank';
 }
 
-function menuGroups(
-  tab: BrowserTabState | null,
-  poppedOut: boolean,
-): MenuGroup[] {
+function pageMenuGroups(tab: BrowserTabState | null): MenuGroup[] {
   const forTab = tab === null;
   return [
     {
@@ -79,19 +77,36 @@ function menuGroups(
     {
       items: [
         {
-          value: poppedOut ? 'dock' : 'popOut',
-          label: poppedOut ? 'Dock back' : 'Pop out',
-        },
-      ],
-    },
-    {
-      items: [
-        {
           value: 'close',
           label: 'Close tab',
           tone: 'destructive',
           disabled: forTab,
         },
+      ],
+    },
+  ];
+}
+
+function expandMenuGroups(
+  poppedOut: boolean,
+  fullScreen: boolean | null,
+): MenuGroup[] {
+  return [
+    {
+      items: [
+        {
+          value: poppedOut ? 'dock' : 'popOut',
+          label: poppedOut ? 'Dock back' : 'Open in new window',
+        },
+        ...(fullScreen === null
+          ? []
+          : [
+              {
+                value: fullScreen ? 'exitFullScreen' : 'fullScreen',
+                label: fullScreen ? 'Exit full screen' : 'Open full screen',
+                disabled: poppedOut && !fullScreen,
+              },
+            ]),
       ],
     },
   ];
@@ -126,11 +141,17 @@ export function BrowserPane({
   visible,
   onClose,
   chatTitle = 'Chat',
+  fullScreen = false,
+  onFullScreen,
 }: {
   runId: string;
   visible: boolean;
   onClose: () => void;
   chatTitle?: string;
+  /** Drawn inside the full-screen dialog, whose ✕ takes the pane's place. */
+  fullScreen?: boolean;
+  /** Absent, the expand menu offers no full-screen view. */
+  onFullScreen?: (on: boolean) => void;
 }): React.JSX.Element | null {
   const read = useBrowserState(runId);
   const state = read ?? EMPTY_RUN(runId);
@@ -138,11 +159,13 @@ export function BrowserPane({
   const active =
     tabs.find((tab) => tab.id === state.activeTabId) ?? tabs[0] ?? null;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [expandOpen, setExpandOpen] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [compact, setCompact] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const placeholderRef = useRef<HTMLDivElement | null>(null);
   const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const expandTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const startPage = active === null || (isBlank(active) && !active.error);
   const noticeShown =
@@ -191,11 +214,7 @@ export function BrowserPane({
   const onMenuSelect = useLatestCallback(
     (value: string): void => {
       setMenuOpen(false);
-      if (value === 'popOut') {
-        attempt(window.geniro.browserPopOut(runId, chatTitle));
-      } else if (value === 'dock') {
-        attempt(window.geniro.browserDock(runId));
-      } else if (active === null) {
+      if (active === null) {
         return;
       } else if (value === 'close') {
         attempt(window.geniro.browserCloseTab(runId, active.id));
@@ -203,7 +222,24 @@ export function BrowserPane({
         attempt(window.geniro.browserTabAction(runId, active.id, value));
       }
     },
-    [runId, active, chatTitle],
+    [runId, active],
+  );
+
+  const onExpandSelect = useLatestCallback(
+    (value: string): void => {
+      setExpandOpen(false);
+      if (value === 'popOut') {
+        onFullScreen?.(false);
+        attempt(window.geniro.browserPopOut(runId, chatTitle));
+      } else if (value === 'dock') {
+        attempt(window.geniro.browserDock(runId));
+      } else if (value === 'fullScreen') {
+        onFullScreen?.(true);
+      } else if (value === 'exitFullScreen') {
+        onFullScreen?.(false);
+      }
+    },
+    [runId, chatTitle, onFullScreen],
   );
 
   if (!visible) {
@@ -230,6 +266,9 @@ export function BrowserPane({
           onSelect={(tabId) =>
             attempt(window.geniro.browserSelectTab(runId, tabId))
           }
+          onClose={(tabId) =>
+            attempt(window.geniro.browserCloseTab(runId, tabId))
+          }
         />
       )}
       <Button
@@ -244,41 +283,75 @@ export function BrowserPane({
       </Button>
       <span className="relative inline-flex">
         <Button
-          ref={menuTriggerRef}
+          ref={expandTriggerRef}
           type="button"
           variant="ghost"
           size="icon"
           data-menu-trigger
           aria-haspopup="menu"
-          aria-expanded={menuOpen}
+          aria-expanded={expandOpen}
           className="size-7 text-muted-foreground"
-          aria-label="Tab menu"
-          title="Tab menu"
-          onClick={() => setMenuOpen((wasOpen) => !wasOpen)}>
-          <MoreHorizontal />
+          aria-label="Expand"
+          title="Expand"
+          onClick={() => setExpandOpen((wasOpen) => !wasOpen)}>
+          <Maximize2 />
         </Button>
         <Menu
-          open={menuOpen}
+          open={expandOpen}
           side="bottom"
           align="end"
           anchor="viewport"
-          triggerRef={menuTriggerRef}
-          groups={menuGroups(active, state.poppedOut)}
-          onSelect={onMenuSelect}
-          onClose={() => setMenuOpen(false)}
+          triggerRef={expandTriggerRef}
+          groups={expandMenuGroups(
+            state.poppedOut,
+            onFullScreen === undefined ? null : fullScreen,
+          )}
+          onSelect={onExpandSelect}
+          onClose={() => setExpandOpen(false)}
         />
       </span>
+      {fullScreen ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-7 text-muted-foreground"
+          aria-label="Close browser"
+          title="Close browser"
+          onClick={onClose}>
+          <X />
+        </Button>
+      )}
+    </div>
+  );
+
+  const pageMenu = (
+    <span className="relative inline-flex">
       <Button
+        ref={menuTriggerRef}
         type="button"
         variant="ghost"
         size="icon"
-        className="size-7 text-muted-foreground"
-        aria-label="Close browser"
-        title="Close browser"
-        onClick={onClose}>
-        <X />
+        data-menu-trigger
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        className="size-8 text-muted-foreground"
+        aria-label="Page menu"
+        title="Page menu"
+        onClick={() => setMenuOpen((wasOpen) => !wasOpen)}>
+        <MoreHorizontal />
       </Button>
-    </div>
+      <Menu
+        open={menuOpen}
+        side="bottom"
+        align="end"
+        anchor="viewport"
+        triggerRef={menuTriggerRef}
+        groups={pageMenuGroups(active)}
+        onSelect={onMenuSelect}
+        onClose={() => setMenuOpen(false)}
+      />
+    </span>
   );
 
   const loading = active?.loading ?? false;
@@ -336,6 +409,7 @@ export function BrowserPane({
           loading={loading}
           onSubmit={openAddress}
         />
+        {pageMenu}
       </div>
       {active === null ||
       (active.ownCookiesLabel === null && active.openedBy === null) ? null : (

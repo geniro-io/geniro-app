@@ -5,6 +5,7 @@ import {
   PanelResizeHandle,
   usePanelWidth,
 } from '../../components/panel-resize';
+import { Dialog } from '../../components/ui/dialog';
 import { cn } from '../../components/ui/utils';
 import { ThreadUiMemoryContext, useThreadFlag } from '../thread-ui-memory';
 import { BrowserPane } from './browser-pane';
@@ -43,6 +44,13 @@ export function BrowserColumn({
   });
   const [column, setColumn] = useState<HTMLElement | null>(null);
   const [area, setArea] = useState<number | null>(null);
+  const [fullScreen, setFullScreen] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setFullScreen(false);
+    }
+  }, [open]);
 
   useEffect(() => {
     if (open && runId !== null) {
@@ -78,19 +86,43 @@ export function BrowserColumn({
   const pane = (
     <BrowserPane
       runId={runId}
-      visible={open}
+      visible={open && !fullScreen}
       onClose={() => setOpen(false)}
       chatTitle={chatTitle}
+      onFullScreen={setFullScreen}
     />
+  );
+
+  const fullScreenDialog = (
+    <Dialog
+      open={open && fullScreen}
+      onClose={() => setFullScreen(false)}
+      fullScreen
+      coversBrowser={false}
+      title={`Browser · ${chatTitle}`}>
+      <div data-slot="browser-full-screen" className="h-full">
+        <BrowserPane
+          runId={runId}
+          visible={open && fullScreen}
+          onClose={() => setOpen(false)}
+          chatTitle={chatTitle}
+          fullScreen
+          onFullScreen={setFullScreen}
+        />
+      </div>
+    </Dialog>
   );
 
   if (narrow) {
     return open ? (
-      <div
-        data-slot="browser-column"
-        className="absolute inset-0 z-20 bg-background">
-        {pane}
-      </div>
+      <>
+        <div
+          data-slot="browser-column"
+          className="absolute inset-0 z-20 bg-background">
+          {pane}
+        </div>
+        {fullScreenDialog}
+      </>
     ) : null;
   }
 
@@ -139,6 +171,7 @@ export function BrowserColumn({
           </>
         )
       ) : null}
+      {fullScreenDialog}
     </aside>
   );
 }

@@ -32,6 +32,7 @@ export function Dialog({
   fullScreen = false,
   flush = false,
   initialFocus,
+  coversBrowser = true,
 }: {
   open: boolean;
   onClose: () => void;
@@ -51,6 +52,8 @@ export function Dialog({
    * `?` that would open its explanation over everything else).
    */
   initialFocus?: React.RefObject<HTMLElement | null>;
+  /** False only for a dialog that hosts the in-app browser's own view. */
+  coversBrowser?: boolean;
 }): React.JSX.Element | null {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   // Read through a ref rather than put in the effect's dependencies: callers
@@ -62,7 +65,7 @@ export function Dialog({
   const initialFocusRef = React.useRef(initialFocus);
   initialFocusRef.current = initialFocus;
 
-  useReportOverlayOpen(open);
+  useReportOverlayOpen(open && coversBrowser);
 
   React.useEffect(() => {
     if (!open) {

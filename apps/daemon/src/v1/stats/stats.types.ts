@@ -978,7 +978,7 @@ export const UsageStatsWireSchema = z.object({
   byPurpose: z
     .array(UsageGroupWireSchema)
     .describe(
-      'spend the app made for itself, keyed by purpose: `lessons` is the hidden lessons reflections; the user\'s own work is in no row',
+      "spend the app made for itself, keyed by purpose: `lessons` is the hidden lessons reflections; the user's own work is in no row",
     ),
   metrics: ThreadMetricsSchema.describe(
     'the threads started in the period: goals, outcomes, and every tool and MCP server called in it',

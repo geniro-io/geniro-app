@@ -53,7 +53,8 @@ export class LessonProposalService {
           title,
           body: memoryBodyOf(row, rule),
           type: target.type,
-          projectId: target.scope === 'project' ? this.placeOf(row, 'project') : null,
+          projectId:
+            target.scope === 'project' ? this.placeOf(row, 'project') : null,
           teamSlug: target.scope === 'team' ? this.placeOf(row, 'team') : null,
         },
         { sourceRunId: row.sourceRunId, proposalId: row.id },
@@ -110,10 +111,16 @@ export class LessonProposalService {
   }
 
   /** What a lessons card's footer states about the reflection behind it, from the ledger. */
-  async reflectionFacts(reflectionRunId: string): Promise<LessonReflectionFacts> {
+  async reflectionFacts(
+    reflectionRunId: string,
+  ): Promise<LessonReflectionFacts> {
     const em = this.em.fork();
     const run = await this.runDao.getById(reflectionRunId, em);
-    if (run === null || run.analysisPurpose !== 'lessons' || run.agentKind === null) {
+    if (
+      run === null ||
+      run.analysisPurpose !== 'lessons' ||
+      run.agentKind === null
+    ) {
       throw new NotFoundException(
         'LESSONS_REFLECTION_NOT_FOUND',
         `no lessons reflection ${reflectionRunId}`,
@@ -138,7 +145,10 @@ export class LessonProposalService {
     };
   }
 
-  private async undecided(id: string, em: EntityManager): Promise<LessonProposal> {
+  private async undecided(
+    id: string,
+    em: EntityManager,
+  ): Promise<LessonProposal> {
     const row = await this.proposals.getById(id, em);
     if (row === null) {
       throw new NotFoundException('LESSON_NOT_FOUND', `no lesson ${id}`);
@@ -168,11 +178,13 @@ export class LessonProposalService {
 
 /** The memory entry's body: the rule in full, then why, then where it came from. */
 export function memoryBodyOf(
-  row: Pick<LessonProposal, 'why' | 'sourceTitle' | 'evidenceSeq' | 'evidenceQuote'>,
+  row: Pick<
+    LessonProposal,
+    'why' | 'sourceTitle' | 'evidenceSeq' | 'evidenceQuote'
+  >,
   rule: string,
 ): string {
-  const from =
-    row.sourceTitle === null ? 'a thread' : `"${row.sourceTitle}"`;
+  const from = row.sourceTitle === null ? 'a thread' : `"${row.sourceTitle}"`;
   return `${rule}\n\nWhy: ${row.why}\n\nLesson from ${from}, message #${row.evidenceSeq}: “${row.evidenceQuote}”`;
 }
 

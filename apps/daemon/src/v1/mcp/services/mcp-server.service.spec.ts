@@ -118,6 +118,7 @@ import { MAX_HOST_QUESTION_TITLE_LENGTH } from '../../agents/utils/host-question
 import { RemoteImageError } from '../../agents/utils/remote-image';
 import type { BrowserOp } from '../../browser/browser.types';
 import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
+import type { LessonFilingService } from '../../lessons/services/lesson-filing.service';
 import { memoryDb } from '../../memory/__tests__/memory-db';
 import type {
   MemoryActor,
@@ -162,7 +163,6 @@ import { createMcpTools } from '../tools/mcp-tools';
 import { MoveStageTool } from '../tools/move-stage/move-stage.tool';
 import { proposePatchInstructions } from '../tools/propose-patch/propose-patch.instructions';
 import { proposePlanInstructions } from '../tools/propose-plan/propose-plan.instructions';
-import type { LessonFilingService } from '../../lessons/services/lesson-filing.service';
 import { McpServerService } from './mcp-server.service';
 
 /** One row of `tools/list`, as the description audit reads it. */

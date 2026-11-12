@@ -586,15 +586,7 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
         (await this.refuseUnknownTeam(input.teamSlug ?? null, null));
       return (
         unknown ??
-        this.writeRow(
-          USER,
-          input,
-          placeOfInput(input),
-          null,
-          em,
-          true,
-          lesson,
-        )
+        this.writeRow(USER, input, placeOfInput(input), null, em, true, lesson)
       );
     });
   }

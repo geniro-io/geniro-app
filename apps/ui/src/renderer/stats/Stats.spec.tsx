@@ -217,7 +217,12 @@ describe('Stats', () => {
         byPurpose: [
           {
             key: 'lessons',
-            totals: { ...totals(), costUsd: 0.31, estimatedCostUsd: null, turns: 14 },
+            totals: {
+              ...totals(),
+              costUsd: 0.31,
+              estimatedCostUsd: null,
+              turns: 14,
+            },
           },
         ],
       }),

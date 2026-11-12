@@ -20,10 +20,7 @@ import { runSnapshotOf } from '../../agents/utils/run-snapshots';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { Run } from '../../runs/entity/run.entity';
-import {
-  AgentKind,
-  isTerminalRunStatus,
-} from '../../runs/runs.types';
+import { AgentKind, isTerminalRunStatus } from '../../runs/runs.types';
 import { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import { LessonSegmentDao } from '../dao/lesson-segment.dao';
 import {
@@ -77,13 +74,13 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     this.deletedSubscription = this.bus.allDeleted().subscribe((runId) => {
-      this.segments.deleteOfRuns([runId], this.em.fork()).catch(
-        (err: unknown) => {
+      this.segments
+        .deleteOfRuns([runId], this.em.fork())
+        .catch((err: unknown) => {
           this.logger.warn(
             `lesson segments of deleted ${runId} not dropped: ${err instanceof Error ? err.message : String(err)}`,
           );
-        },
-      );
+        });
     });
   }
 
@@ -166,14 +163,14 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       settings.agentKind ??
       source.agentKind ??
       AgentKind.Claude;
-    const fromSettings = settings.agentKind === null || settings.agentKind === agentKind;
+    const fromSettings =
+      settings.agentKind === null || settings.agentKind === agentKind;
     const run = await this.chats.createChat({
       agentKind,
       cwd: this.folderFor(source, project?.folder ?? null),
       projectId: place.projectId,
       approval: ANALYSIS_DEFAULT_APPROVAL,
-      model:
-        input.model ?? (fromSettings ? settings.model : null) ?? undefined,
+      model: input.model ?? (fromSettings ? settings.model : null) ?? undefined,
       effort:
         input.effort ?? (fromSettings ? settings.effort : null) ?? undefined,
       configDir:
@@ -190,11 +187,7 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
         purpose: 'lessons',
       },
     });
-    await this.segments.updateById(
-      segment.id,
-      { reflectionRunId: run.id },
-      em,
-    );
+    await this.segments.updateById(segment.id, { reflectionRunId: run.id }, em);
     try {
       await this.chats.sendMessage(
         run.id,
@@ -240,9 +233,7 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       sourceRunId,
       em,
     );
-    return (
-      reflections.find((run) => !isTerminalRunStatus(run.status)) ?? null
-    );
+    return reflections.find((run) => !isTerminalRunStatus(run.status)) ?? null;
   }
 
   private async signalsOf(
@@ -292,6 +283,8 @@ function isReflectable(
   >,
 ): boolean {
   return (
-    !isAnalysisRun(run) && run.editsTeamSlug === null && run.editsProjectId === null
+    !isAnalysisRun(run) &&
+    run.editsTeamSlug === null &&
+    run.editsProjectId === null
   );
 }

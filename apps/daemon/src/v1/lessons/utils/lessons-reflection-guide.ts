@@ -7,8 +7,8 @@ import {
   LESSON_RULE_MAX_CHARS,
   LESSON_TITLE_MAX_CHARS,
   LESSON_WHY_MAX_CHARS,
-  type LessonSignal,
   LESSONS_PER_REFLECTION_MAX,
+  type LessonSignal,
 } from '../lessons.types';
 
 /**

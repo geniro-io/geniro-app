@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { foldLessonSignals, type LessonSignalItem } from './lesson-signals.fold';
+import {
+  foldLessonSignals,
+  type LessonSignalItem,
+} from './lesson-signals.fold';
 
 function item(
   seq: number,

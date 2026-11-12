@@ -9,10 +9,7 @@ import {
 } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
-import type {
-  LessonProposalStatus,
-  LessonSignalKind,
-} from '../lessons.types';
+import type { LessonProposalStatus, LessonSignalKind } from '../lessons.types';
 
 /**
  * One lesson a reflection proposed, and what the user did with it.

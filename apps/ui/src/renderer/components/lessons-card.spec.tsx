@@ -156,10 +156,17 @@ describe('LessonsCard', () => {
 
   it('shows the rule in full under its title when the two differ', async () => {
     const el = await render({
-      lessons: [{ ...LESSON_CORRECTION, rule: 'Run tests through the package script only.' }],
+      lessons: [
+        {
+          ...LESSON_CORRECTION,
+          rule: 'Run tests through the package script only.',
+        },
+      ],
     });
 
-    expect(el.textContent).toContain('Run tests through the package script only.');
+    expect(el.textContent).toContain(
+      'Run tests through the package script only.',
+    );
   });
 
   it('names the dedup verdict with the memory entry it refines or breaks', async () => {

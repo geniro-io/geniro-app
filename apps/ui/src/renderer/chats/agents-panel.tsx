@@ -375,7 +375,8 @@ const LESSONS_BUTTON: Record<
   },
   reflecting: {
     label: 'Reflecting…',
-    title: 'A reflection on this thread is working — its lessons card lands in the thread',
+    title:
+      'A reflection on this thread is working — its lessons card lands in the thread',
     disabled: true,
   },
 };

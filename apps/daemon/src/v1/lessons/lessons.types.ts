@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-import { AgentKindSchema } from '../runs/runs.types';
 import { MEMORY_TITLE_MAX_CHARS, MEMORY_TYPES } from '../memory/memory.types';
+import { AgentKindSchema } from '../runs/runs.types';
 
 export const LESSON_TITLE_MAX_CHARS = MEMORY_TITLE_MAX_CHARS;
 export const LESSON_RULE_MAX_CHARS = 300;
@@ -275,71 +275,74 @@ export type RejectLesson = z.infer<typeof RejectLessonSchema>;
 export const ProposeLessonsCallSchema = z.object({
   lessons: z
     .array(
-      z.object({
-        title: z
-          .string()
-          .min(1)
-          .describe(
-            `The rule itself, as later agents see it in their memory index: "WHEN <observable condition> → DO / DON'T <action>", at most ${LESSON_TITLE_MAX_CHARS} characters`,
+      z
+        .object({
+          title: z
+            .string()
+            .min(1)
+            .describe(
+              `The rule itself, as later agents see it in their memory index: "WHEN <observable condition> → DO / DON'T <action>", at most ${LESSON_TITLE_MAX_CHARS} characters`,
+            ),
+          rule: z
+            .string()
+            .min(1)
+            .describe(
+              `The rule in full, at most ${LESSON_RULE_MAX_CHARS} characters`,
+            ),
+          why: z
+            .string()
+            .min(1)
+            .describe(
+              `What went wrong in the thread that this rule prevents, at most ${LESSON_WHY_MAX_CHARS} characters`,
+            ),
+          signalKind: LessonSignalKindSchema.describe(
+            'What kind of learning signal the evidence is',
           ),
-        rule: z
-          .string()
-          .min(1)
-          .describe(
-            `The rule in full, at most ${LESSON_RULE_MAX_CHARS} characters`,
-          ),
-        why: z
-          .string()
-          .min(1)
-          .describe(
-            `What went wrong in the thread that this rule prevents, at most ${LESSON_WHY_MAX_CHARS} characters`,
-          ),
-        signalKind: LessonSignalKindSchema.describe(
-          'What kind of learning signal the evidence is',
-        ),
-        evidence: z
-          .object({
-            seq: z
-              .number()
-              .int()
-              .describe(
-                'The seq of the row holding the signal, inside the stretch your brief names',
-              ),
-            quote: z
-              .string()
-              .describe(
-                'A verbatim quote of 8–200 characters from that row (view=item seq=N)',
-              ),
-          })
-          .strict(),
-        target: z
-          .object({
-            kind: z.literal('memory'),
-            scope: z
-              .enum(LESSON_MEMORY_SCOPES)
-              .describe(
-                'global: how the user wants to work anywhere; project: this project; team: one role of this team',
-              ),
-            type: z
-              .enum(MEMORY_TYPES)
-              .describe('feedback for a way of working, project for a fact'),
-          })
-          .strict(),
-        dedup: z
-          .object({
-            verdict: z
-              .enum(['new', 'refines', 'broken_again'])
-              .describe(
-                'new; refines: an existing memory entry says it less well; broken_again: the entry existed and was broken anyway',
-              ),
-            handle: z
-              .string()
-              .nullable()
-              .describe('The memory entry (m12) refines / broken_again names; null for new'),
-          })
-          .strict(),
-      })
-      .strict(),
+          evidence: z
+            .object({
+              seq: z
+                .number()
+                .int()
+                .describe(
+                  'The seq of the row holding the signal, inside the stretch your brief names',
+                ),
+              quote: z
+                .string()
+                .describe(
+                  'A verbatim quote of 8–200 characters from that row (view=item seq=N)',
+                ),
+            })
+            .strict(),
+          target: z
+            .object({
+              kind: z.literal('memory'),
+              scope: z
+                .enum(LESSON_MEMORY_SCOPES)
+                .describe(
+                  'global: how the user wants to work anywhere; project: this project; team: one role of this team',
+                ),
+              type: z
+                .enum(MEMORY_TYPES)
+                .describe('feedback for a way of working, project for a fact'),
+            })
+            .strict(),
+          dedup: z
+            .object({
+              verdict: z
+                .enum(['new', 'refines', 'broken_again'])
+                .describe(
+                  'new; refines: an existing memory entry says it less well; broken_again: the entry existed and was broken anyway',
+                ),
+              handle: z
+                .string()
+                .nullable()
+                .describe(
+                  'The memory entry (m12) refines / broken_again names; null for new',
+                ),
+            })
+            .strict(),
+        })
+        .strict(),
     )
     .describe(
       `At most ${LESSONS_PER_REFLECTION_MAX}; an empty list when no lesson passes all five gates`,

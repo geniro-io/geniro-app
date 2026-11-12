@@ -10473,7 +10473,6 @@ export function Chats({
                     {activeRun ? (
                       <ChatHeader
                         label={runLabel(activeRun, teamNames)}
-                        browserRunId={browserEnabled ? activeRun.id : null}
                         analysisSource={analysisSourceOf(activeRun)}
                         actions={
                           hosted?.headerActions?.({
@@ -11473,6 +11472,9 @@ export function Chats({
                       // agent by `scanTurns`, so each card adds the turn in
                       // flight that belongs to it.
                       openTurns={openTurnsShown}
+                      browserRunId={
+                        browserEnabled && activeRun ? activeRun.id : null
+                      }
                       onOpenShell={setOpenShell}
                       onKillShell={handleKillShell}
                       leftRunningOf={sidePanelLive.shellsLeftRunning}

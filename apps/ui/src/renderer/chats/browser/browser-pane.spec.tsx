@@ -432,3 +432,163 @@ describe('the chat grid and the pane it hosts', () => {
     expect(column?.style.width).toBe('0px');
   });
 });
+
+function option(label: string): HTMLElement | undefined {
+  return [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(
+    (candidate) => candidate.textContent?.trim() === label,
+  );
+}
+
+describe('BrowserPane — closing a tab', () => {
+  const twoTabs = (): BrowserRunState =>
+    run([tab(), tab({ id: 't2', title: 'Second', url: 'https://b.test/' })]);
+
+  it('draws a close button on every tab and closes that tab', async () => {
+    const close = vi.fn(() => Promise.resolve());
+    overrides.browserCloseTab = close;
+    showState(twoTabs());
+    await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
+
+    expect(
+      container.querySelectorAll('[role="tablist"] [data-slot="tab-close"]'),
+    ).toHaveLength(2);
+
+    await act(async () => button('Close Second').click());
+
+    expect(close).toHaveBeenCalledExactlyOnceWith(RUN, 't2');
+  });
+
+  it('closes the focused tab on Delete', async () => {
+    const close = vi.fn(() => Promise.resolve());
+    overrides.browserCloseTab = close;
+    showState(twoTabs());
+    await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
+
+    const selected = container.querySelector<HTMLElement>(
+      '[role="tab"][aria-selected="true"]',
+    )!;
+    await act(async () => {
+      selected.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }),
+      );
+    });
+
+    expect(close).toHaveBeenCalledExactlyOnceWith(RUN, 't1');
+  });
+});
+
+describe('BrowserPane — the expand and page menus', () => {
+  it('offers a new window and full screen from Expand, not the page tools', async () => {
+    const popOut = vi.fn(() => Promise.resolve());
+    overrides.browserPopOut = popOut;
+    showState(run([tab()]));
+    const onFullScreen = vi.fn();
+    await render(
+      <BrowserPane
+        runId={RUN}
+        visible
+        onClose={() => undefined}
+        chatTitle="My chat"
+        onFullScreen={onFullScreen}
+      />,
+    );
+
+    await act(async () => button('Expand').click());
+    expect(option('Open DevTools')).toBeUndefined();
+    expect(option('Open full screen')).toBeDefined();
+
+    await act(async () => option('Open in new window')!.click());
+    expect(popOut).toHaveBeenCalledExactlyOnceWith(RUN, 'My chat');
+
+    await act(async () => button('Expand').click());
+    await act(async () => option('Open full screen')!.click());
+    expect(onFullScreen).toHaveBeenLastCalledWith(true);
+  });
+
+  it('keeps the page tools in the page menu beside the address', async () => {
+    const tabAction = vi.fn(() => Promise.resolve());
+    overrides.browserTabAction = tabAction;
+    showState(run([tab()]));
+    await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
+
+    await act(async () => button('Page menu').click());
+    expect(option('Open in new window')).toBeUndefined();
+    await act(async () => option('Open DevTools')!.click());
+
+    expect(tabAction).toHaveBeenCalledExactlyOnceWith(RUN, 't1', 'devtools');
+  });
+
+  it('offers no full screen where the host gives none', async () => {
+    showState(run([tab()]));
+    await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
+
+    await act(async () => button('Expand').click());
+
+    expect(option('Open in new window')).toBeDefined();
+    expect(option('Open full screen')).toBeUndefined();
+  });
+});
+
+describe('BrowserColumn — full screen', () => {
+  const column = (): React.ReactElement => (
+    <ThreadUiMemoryContext.Provider value={RUN}>
+      <BrowserGrid runId={RUN}>
+        <BrowserColumn narrow={false} chatTitle="Chat" />
+      </BrowserGrid>
+    </ThreadUiMemoryContext.Provider>
+  );
+
+  async function openPane(): Promise<void> {
+    await render(column());
+    act(() => {
+      for (const listener of listeners) {
+        listener({ state: run([tab()]), agentOpenedTabId: 't1' });
+      }
+    });
+  }
+
+  it('moves the live page into a full-screen dialog and back', async () => {
+    await openPane();
+
+    await act(async () => button('Expand').click());
+    setBounds.mockClear();
+    capture.mockClear();
+    await act(async () => option('Open full screen')!.click());
+
+    const dialog = container.querySelector('[role="dialog"]');
+    expect(
+      dialog?.querySelector('[data-slot="browser-full-screen"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelectorAll('[data-slot="browser-pane"]'),
+    ).toHaveLength(1);
+    expect(capture).not.toHaveBeenCalled();
+    expect(setBounds).toHaveBeenLastCalledWith(RUN, {
+      x: 10,
+      y: 20,
+      width: 300,
+      height: 200,
+    });
+    expect(
+      dialog?.querySelector('button[aria-label="Close browser"]'),
+    ).toBeNull();
+
+    await act(async () => button('Close').click());
+
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(
+      container.querySelector('[data-slot="browser-pane"]'),
+    ).not.toBeNull();
+  });
+
+  it('still hides the page behind a menu opened over the full-screen view', async () => {
+    await openPane();
+    await act(async () => button('Expand').click());
+    await act(async () => option('Open full screen')!.click());
+    capture.mockClear();
+
+    await act(async () => button('Page menu').click());
+
+    expect(capture).toHaveBeenCalledWith(RUN);
+  });
+});

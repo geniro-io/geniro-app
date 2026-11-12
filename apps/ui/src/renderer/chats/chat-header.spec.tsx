@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CHAT_AGENT_KEY } from './agent-activity';
 import { ChatHeader } from './chat-header';
-import { ThreadUiMemoryContext } from './thread-ui-memory';
 
 const remote = vi.hoisted(() => ({ value: false }));
 
@@ -831,44 +830,8 @@ describe('ChatHeader — what this thread SPENT', () => {
 });
 
 describe('ChatHeader — the browser globe', () => {
-  const globe = (el: HTMLElement): HTMLButtonElement | null =>
-    el.querySelector<HTMLButtonElement>('[data-slot="browser-toggle"]');
-
-  const inThread = (element: React.ReactElement): React.ReactElement => (
-    <ThreadUiMemoryContext.Provider value="run-1">
-      {element}
-    </ThreadUiMemoryContext.Provider>
-  );
-
-  it('draws no globe for a surface with no browser', () => {
-    expect(globe(render(<ChatHeader {...baseProps} />))).toBeNull();
-  });
-
-  it("toggles the chat's pane through the thread memory", () => {
-    const el = render(
-      inThread(<ChatHeader {...baseProps} browserRunId="run-1" />),
-    );
-    expect(globe(el)?.getAttribute('aria-pressed')).toBe('false');
-    act(() => {
-      globe(el)!.click();
-    });
-    expect(globe(el)?.getAttribute('aria-pressed')).toBe('true');
-    expect(localStorage.getItem('geniro.threadUi.run-1')).toContain(
-      '"browser:open":true',
-    );
-  });
-
-  it('disables the globe on a paired device', () => {
-    remote.value = true;
-    const el = render(
-      inThread(<ChatHeader {...baseProps} browserRunId="run-1" />),
-    );
-    const button = globe(el);
-    expect(button?.getAttribute('aria-disabled')).toBe('true');
-    expect(button?.title).toBe('The browser runs on your Mac');
-    act(() => {
-      button!.click();
-    });
-    expect(localStorage.getItem('geniro.threadUi.run-1')).toBeNull();
+  it('draws no browser globe: the agents panel draws it', () => {
+    const el = render(<ChatHeader {...baseProps} />);
+    expect(el.querySelector('[data-slot="browser-toggle"]')).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { X } from 'lucide-react';
+import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 
 import { cn } from './ui/utils';
 
@@ -21,7 +22,8 @@ export function tabId(idPrefix: string, tab: string): string {
 /**
  * A row of page tabs with a sliding underline. Arrow keys move between tabs
  * and Home/End jump to the ends, selecting as they go; the row scrolls
- * sideways when it is wider than its column.
+ * sideways when it is wider than its column. Given `onClose`, every tab draws
+ * a × beside it and Delete closes the focused tab.
  */
 export function TabStrip<T extends string>({
   tabs,
@@ -30,6 +32,7 @@ export function TabStrip<T extends string>({
   label,
   idPrefix,
   className,
+  onClose,
 }: {
   tabs: readonly TabStripTab<T>[];
   value: T;
@@ -37,6 +40,7 @@ export function TabStrip<T extends string>({
   label: string;
   idPrefix: string;
   className?: string;
+  onClose?: (id: T) => void;
 }): React.JSX.Element {
   const refs = useRef(new Map<T, HTMLButtonElement>());
   const [underline, setUnderline] = useState<{
@@ -69,6 +73,12 @@ export function TabStrip<T extends string>({
   };
 
   const onKeyDown = (event: React.KeyboardEvent, index: number): void => {
+    const current = tabs[index];
+    if (event.key === 'Delete' && onClose && current !== undefined) {
+      event.preventDefault();
+      onClose(current.id);
+      return;
+    }
     const moves: Record<string, number> = {
       ArrowRight: index + 1,
       ArrowLeft: index - 1,
@@ -93,9 +103,8 @@ export function TabStrip<T extends string>({
       <div role="tablist" aria-label={label} className="flex gap-6">
         {tabs.map((tab, index) => {
           const selected = tab.id === value;
-          return (
+          const tabButton = (
             <button
-              key={tab.id}
               ref={(element) => {
                 if (element === null) {
                   refs.current.delete(tab.id);
@@ -125,6 +134,26 @@ export function TabStrip<T extends string>({
                 </span>
               )}
             </button>
+          );
+          return onClose ? (
+            <div
+              key={tab.id}
+              role="presentation"
+              className="flex shrink-0 items-center gap-1">
+              {tabButton}
+              <button
+                type="button"
+                tabIndex={-1}
+                data-slot="tab-close"
+                aria-label={`Close ${tab.label}`}
+                title="Close tab"
+                onClick={() => onClose(tab.id)}
+                className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground">
+                <X aria-hidden="true" className="size-3.5" />
+              </button>
+            </div>
+          ) : (
+            <Fragment key={tab.id}>{tabButton}</Fragment>
           );
         })}
       </div>

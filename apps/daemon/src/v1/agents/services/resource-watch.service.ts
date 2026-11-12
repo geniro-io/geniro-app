@@ -18,10 +18,12 @@ import {
   type ThreadResourceSample,
 } from '../chat.types';
 import {
+  conditionKey,
   firingConditions,
   growthPerMinute,
   parseConditionKey,
   type RssSample,
+  sustainedGrowthPerMinute,
   SYSTEM_SCOPE,
   type ThreadReading,
 } from '../utils/resource-alert-rules';
@@ -37,7 +39,10 @@ import { RunProcessesService } from './run-processes.service';
 
 export const RESOURCE_WATCH_EVERY_MS = 30_000;
 
+/** Three growth windows at 30 s readings reach back about 270 s, so 5 min covers them. */
 const HISTORY_KEEP_MS = 5 * 60_000;
+
+export const GROWTH_QUIET_MS = 30 * 60_000;
 
 export interface ResourceWatchOptions {
   readPressureLevel?: () => Promise<number | null>;
@@ -78,6 +83,7 @@ export class ResourceWatchService
   private readonly alerts = new Map<string, ResourceAlert>();
   private readonly targets = new Map<string, StopTarget>();
   private readonly unreadable = new Set<string>();
+  private readonly quietUntil = new Map<string, number>();
   private hadThreads = false;
   private seq = 0;
   private readonly bootId = randomUUID().slice(0, 8);
@@ -120,6 +126,7 @@ export class ResourceWatchService
     this.config = config;
     if (!config.enabled) {
       this.history.clear();
+      this.quietUntil.clear();
       this.hadThreads = false;
       this.dropWhere(() => true);
     }
@@ -131,13 +138,7 @@ export class ResourceWatchService
   }
 
   async stop(alertId: string): Promise<StoppedResourceAlertCommand> {
-    const entry = [...this.alerts].find(([, alert]) => alert.id === alertId);
-    if (entry === undefined) {
-      throw new NotFoundException(
-        'RESOURCE_ALERT_NOT_FOUND',
-        `no resource alert: ${alertId}`,
-      );
-    }
+    const [key] = this.entryOf(alertId);
     const target = this.targets.get(alertId);
     if (target === undefined) {
       throw new BadRequestException(
@@ -148,12 +149,40 @@ export class ResourceWatchService
     const { stopped } = await this.reaper.stopRecorded(target.runId, [
       { pid: target.pid, startedAt: target.startedAt },
     ]);
-    const [key] = entry;
     if (this.alerts.get(key)?.id === alertId) {
       this.drop(key);
       this.bus.publish();
     }
     return { stoppedPids: stopped };
+  }
+
+  /**
+   * The user put a growth alert away: it leaves the daemon, and its thread
+   * stays quiet for {@link GROWTH_QUIET_MS}. Other kinds are put away in the
+   * window only, so the daemon refuses them.
+   */
+  dismiss(alertId: string): ResourceAlertsWire {
+    const [key, alert] = this.entryOf(alertId);
+    if (alert.kind !== 'thread-growth') {
+      throw new BadRequestException(
+        'RESOURCE_ALERT_NOT_DISMISSIBLE',
+        `a ${alert.kind} alert is put away in the window, not on the daemon`,
+      );
+    }
+    this.drop(key);
+    this.bus.publish();
+    return this.list();
+  }
+
+  private entryOf(alertId: string): [string, ResourceAlert] {
+    const entry = [...this.alerts].find(([, alert]) => alert.id === alertId);
+    if (entry === undefined) {
+      throw new NotFoundException(
+        'RESOURCE_ALERT_NOT_FOUND',
+        `no resource alert: ${alertId}`,
+      );
+    }
+    return entry;
   }
 
   /** One reading; a reading still under way is joined, not doubled. */
@@ -196,11 +225,16 @@ export class ResourceWatchService
     }
     const readings = samples === null ? [] : this.record(samples, now);
     const previous = new Set(this.alerts.keys());
-    const firing = firingConditions(this.config, previous, {
-      threads: readings,
-      pressureLevel,
-      freeDiskBytes,
-    });
+    const firing = firingConditions(
+      this.config,
+      previous,
+      {
+        threads: readings,
+        pressureLevel,
+        freeDiskBytes,
+      },
+      this.quietGrowthKeys(now),
+    );
     if (samples === null) {
       for (const key of previous) {
         if (parseConditionKey(key).scope !== SYSTEM_SCOPE) {
@@ -284,13 +318,27 @@ export class ResourceWatchService
         (s) => now - s.at <= HISTORY_KEEP_MS,
       );
       const growth = growthPerMinute(kept, current);
+      const sustained = sustainedGrowthPerMinute(kept, current);
       this.history.set(sample.runId, [...kept, current]);
       return {
         runId: sample.runId,
         rssBytes: sample.rssBytes,
         growthBytesPerMinute: growth,
+        sustainedGrowthBytesPerMinute: sustained,
       };
     });
+  }
+
+  private quietGrowthKeys(now: number): Set<string> {
+    const keys = new Set<string>();
+    for (const [runId, until] of this.quietUntil) {
+      if (until <= now) {
+        this.quietUntil.delete(runId);
+      } else {
+        keys.add(conditionKey('thread-growth', runId));
+      }
+    }
+    return keys;
   }
 
   private async raise(
@@ -362,10 +410,21 @@ export class ResourceWatchService
     return kind === 'low-disk' ? this.config.minFreeDiskBytes : null;
   }
 
+  /**
+   * Removes a held alert. A growth alert that leaves while the watch is on
+   * starts its thread's quiet period; a switch-off clears them all instead.
+   */
   private drop(key: string): void {
     const alert = this.alerts.get(key);
     if (alert !== undefined) {
       this.targets.delete(alert.id);
+      if (
+        alert.kind === 'thread-growth' &&
+        alert.runId !== null &&
+        this.config.enabled
+      ) {
+        this.quietUntil.set(alert.runId, this.now() + GROWTH_QUIET_MS);
+      }
     }
     this.alerts.delete(key);
   }

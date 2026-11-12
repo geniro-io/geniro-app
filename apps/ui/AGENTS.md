@@ -454,7 +454,7 @@ Appearance:
 - A turn ending with a command still running is announced provisionally and withdrawn (`retractNotification`) if the run goes back to work. Never guess with a timer.
 - `notify_user` arrives as `RunStatusEvent.notify` and is posted once (`AgentNotice` id).
 - `share-sign-in` is posted once per agent share that starts waiting on the user's sign-in (`shares_changed` with `signInRequested`, `useShareSignInNotifications`), never for the user's own press and never carrying the link.
-- `resource-alert` is posted once per resource alert the daemon raises while the window watches (`resource_alerts_changed`, `resource-alerts/use-resource-alerts.ts`); what the first read finds is shown in the strip but not announced. An alert that blames no thread posts with an empty `runId`, which the activation path refuses.
+- `resource-alert` is posted once per resource alert the daemon raises while the window watches (`resource_alerts_changed`, `resource-alerts/use-resource-alerts.ts`); what the first read finds is shown in the strip but not announced. An alert that blames no thread posts with an empty `runId`, which the activation path refuses. A growth alert's × is the daemon's (`dismissResourceAlert`), so the thread does not post again under a new id; any other alert put away stays hidden in this window only.
 - An open thread's ending is held (`settleOwed`) until its settle arrives, then posted or dropped by that settle's own flag.
 - The rules read `runs + offScopeRuns`, because "absent" reads as deleted.
 

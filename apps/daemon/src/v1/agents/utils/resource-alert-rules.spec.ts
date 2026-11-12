@@ -7,6 +7,9 @@ import {
   growthPerMinute,
   parseConditionKey,
   type ResourceReading,
+  type RssSample,
+  sustainedGrowthPerMinute,
+  type ThreadReading,
 } from './resource-alert-rules';
 
 const GIB = 1024 ** 3;
@@ -26,7 +29,41 @@ function thread(
   growthBytesPerMinute: number | null = null,
   runId = 'r1',
 ) {
-  return { runId, rssBytes, growthBytesPerMinute };
+  return {
+    runId,
+    rssBytes,
+    growthBytesPerMinute,
+    sustainedGrowthBytesPerMinute: growthBytesPerMinute,
+  };
+}
+
+/** Samples every 30 s, the watch's reading interval, up to `endAt`. */
+function samplesEvery30s(
+  endAt: number,
+  rssAt: (seconds: number) => number,
+): RssSample[] {
+  const samples: RssSample[] = [];
+  for (let at = 0; at <= endAt; at += 30_000) {
+    samples.push({ at, rssBytes: rssAt(at / 1000) });
+  }
+  return samples;
+}
+
+/** The newest sample becomes `now`; the rest is the history it is read against. */
+function split(samples: RssSample[]): {
+  history: RssSample[];
+  now: RssSample;
+} {
+  const now = samples[samples.length - 1];
+  if (now === undefined) {
+    throw new Error('no samples');
+  }
+  return { history: samples.slice(0, -1), now };
+}
+
+function splitTuple(samples: RssSample[]): [RssSample[], RssSample] {
+  const { history, now } = split(samples);
+  return [history, now];
 }
 
 describe('growthPerMinute', () => {
@@ -211,6 +248,89 @@ describe('firingConditions', () => {
         new Set(),
         reading({ threads: [thread(2 * GIB)] }),
       ).has(memory),
+    ).toBe(true);
+  });
+});
+
+function readingOf(samples: RssSample[]): ThreadReading {
+  const { history, now } = split(samples);
+  return {
+    runId: 'r1',
+    rssBytes: now.rssBytes,
+    growthBytesPerMinute: growthPerMinute(history, now),
+    sustainedGrowthBytesPerMinute: sustainedGrowthPerMinute(history, now),
+  };
+}
+
+describe('sustainedGrowthPerMinute', () => {
+  it('is null until three consecutive windows of history exist', () => {
+    const rss = (seconds: number) => 2 * GIB + (seconds / 60) * GIB;
+    expect(
+      sustainedGrowthPerMinute(...splitTuple(samplesEvery30s(120_000, rss))),
+    ).toBeNull();
+    expect(
+      sustainedGrowthPerMinute(...splitTuple(samplesEvery30s(150_000, rss))),
+    ).toBeNull();
+  });
+
+  it('is the lowest rate across three windows, so one step does not read as growth', () => {
+    const rss = (seconds: number) => (seconds < 30 ? 0.1 * GIB : 2.1 * GIB);
+    for (let end = 60_000; end <= 300_000; end += 30_000) {
+      expect(
+        firingConditions(
+          config,
+          new Set(),
+          reading({ threads: [readingOf(samplesEvery30s(end, rss))] }),
+        ).has(conditionKey('thread-growth', 'r1')),
+      ).toBe(false);
+    }
+  });
+
+  it('reads steady growth at one GB a minute across three windows as one GB a minute', () => {
+    const rss = (seconds: number) => 2 * GIB + (seconds / 60) * GIB;
+    expect(
+      sustainedGrowthPerMinute(...splitTuple(samplesEvery30s(180_000, rss))),
+    ).toBe(GIB);
+  });
+});
+
+describe('growth conditions over sustained windows', () => {
+  const growth = conditionKey('thread-growth', 'r1');
+
+  it('starts thread-growth only once three windows hold the threshold above the floor', () => {
+    const rss = (seconds: number) => 2 * GIB + (seconds / 60) * GIB;
+    expect(
+      firingConditions(
+        config,
+        new Set(),
+        reading({ threads: [readingOf(samplesEvery30s(150_000, rss))] }),
+      ).has(growth),
+    ).toBe(false);
+    expect(
+      firingConditions(
+        config,
+        new Set(),
+        reading({ threads: [readingOf(samplesEvery30s(180_000, rss))] }),
+      ).has(growth),
+    ).toBe(true);
+  });
+
+  it('keeps a quiet thread from starting growth, while a held one keeps holding', () => {
+    expect(
+      firingConditions(
+        config,
+        new Set(),
+        reading({ threads: [thread(3 * GIB, GIB)] }),
+        new Set([growth]),
+      ).has(growth),
+    ).toBe(false);
+    expect(
+      firingConditions(
+        config,
+        new Set([growth]),
+        reading({ threads: [thread(3 * GIB, 0.9 * GIB)] }),
+        new Set([growth]),
+      ).has(growth),
     ).toBe(true);
   });
 });

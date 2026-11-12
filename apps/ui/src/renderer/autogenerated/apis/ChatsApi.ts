@@ -123,6 +123,10 @@ export interface ChatsApiDismissChatActionRequest {
     seq: number;
 }
 
+export interface ChatsApiDismissResourceAlertRequest {
+    alertId: string;
+}
+
 export interface ChatsApiEditRunGoalRequest {
     runId: string;
     goalId: string;
@@ -859,6 +863,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async dismissChatAction(requestParameters: ChatsApiDismissChatActionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ActionPressDto> {
         const response = await this.dismissChatActionRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async dismissResourceAlertRaw(requestParameters: ChatsApiDismissResourceAlertRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ResourceAlertsDto>> {
+        if (requestParameters['alertId'] == null) {
+            throw new runtime.RequiredError(
+                'alertId',
+                'Required parameter "alertId" was null or undefined when calling dismissResourceAlert().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/resource-alerts/{alertId}/dismiss`;
+        urlPath = urlPath.replace(`{${"alertId"}}`, encodeURIComponent(String(requestParameters['alertId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async dismissResourceAlert(requestParameters: ChatsApiDismissResourceAlertRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ResourceAlertsDto> {
+        const response = await this.dismissResourceAlertRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

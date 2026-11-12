@@ -22,7 +22,9 @@ function errorText(err: unknown): string {
  * The daemon's resource alerts, kept current from `resource_alerts_changed`,
  * with a system notification for each one raised while this is mounted. What
  * the first read finds was raised before this window was watching, so it is
- * shown but not announced again.
+ * shown but not announced again. `dismiss` puts a thread growth alert away on
+ * the daemon, which starts that thread's quiet period; any other alert is put
+ * away in this window only.
  */
 export function useResourceAlerts({
   apis,
@@ -86,7 +88,28 @@ export function useResourceAlerts({
     };
   }, [client, refresh]);
 
+  const dismissOnDaemon = useLatestCallback(
+    async (id: string): Promise<void> => {
+      if (apis === null) {
+        return;
+      }
+      try {
+        await apis.chats.dismissResourceAlert({ alertId: id });
+      } catch (err) {
+        setError(`Could not dismiss the alert: ${errorText(err)}`);
+        setDismissed((prev) => new Set([...prev, id]));
+      }
+      await refresh();
+    },
+    [apis, refresh],
+  );
+
   const dismiss = useLatestCallback((id: string): void => {
+    const kind = alerts.find((alert) => alert.id === id)?.kind;
+    if (kind === 'thread-growth' && apis !== null) {
+      void dismissOnDaemon(id);
+      return;
+    }
     setDismissed((prev) => new Set([...prev, id]));
   }, []);
 

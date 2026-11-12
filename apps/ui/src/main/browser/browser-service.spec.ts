@@ -289,6 +289,17 @@ describe('BrowserService', () => {
     expect(main.contentView.addChildView).not.toHaveBeenCalled();
   });
 
+  it('docks back when the pop-out window goes away without a close event', async () => {
+    const { service } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    service.popOut('run-1', 'Fix the build');
+    const popout = h.windows[1] as FakeWindow;
+
+    popout.emit('closed');
+
+    expect(service.state('run-1').poppedOut).toBe(false);
+  });
+
   it('sends state to the pop-out window as well as the main window', async () => {
     const { service, main } = makeService();
     await service.openTab('run-1', 'https://stand.test/', { openedBy: null });

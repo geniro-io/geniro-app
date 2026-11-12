@@ -393,6 +393,7 @@ export class BrowserService {
     }
     const win = this.options.createPopout(runId, title);
     win.on('close', () => this.dockBack(chat, win));
+    win.on('closed', () => this.dockBack(chat, win));
     chat.popout = win;
     chat.popoutBounds = null;
     chat.poppedOut = true;

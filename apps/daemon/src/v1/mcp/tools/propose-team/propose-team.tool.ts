@@ -44,8 +44,12 @@ export class ProposeTeamTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, memberId }: McpListContext): boolean {
-    return this.gate.canPropose(runId, memberId);
+  protected isOffered({
+    runId,
+    memberId,
+    conversationId,
+  }: McpListContext): boolean {
+    return this.gate.canPropose(runId, memberId, conversationId);
   }
 
   private audienceOf(runId: string, memberId: string): ProposeTeamAudience {
@@ -75,9 +79,9 @@ export class ProposeTeamTool extends BaseMcpTool {
   ): Promise<McpToolResult> {
     const { runId, memberId } = context;
     // A call is not checked against the listing, so the gate is asked again.
-    if (!this.gate.canPropose(runId, memberId)) {
+    if (!this.isOffered(context)) {
       return this.text(
-        'Not proposed: teams are proposed from a chat, never by a member of a running team.',
+        'Not proposed: teams are proposed from a chat or by the lead of a team run in its own conversation, never by another member.',
         true,
       );
     }

@@ -4451,7 +4451,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       content: [
         {
           type: 'text',
-          text: 'Not proposed: teams are proposed from a chat, never by a member of a running team.',
+          text: 'Not proposed: teams are proposed from a chat or by the lead of a team run in its own conversation, never by another member.',
         },
       ],
       isError: true,
@@ -4469,11 +4469,64 @@ describe('McpServerService — what the descriptions tell a model', () => {
       content: [
         {
           type: 'text',
-          text: 'Not read: the team library is offered to chats, never to a member of a running team.',
+          text: 'Not read: the team library is offered to chats and to the lead of a team run in its own conversation, never to another member.',
         },
       ],
       isError: true,
     });
+  });
+
+  it("offers a sink's tools only in the conversations its predicate names, and re-checks a call against it", async () => {
+    const gate = new TeamProposalBroker();
+    const cards = new ProjectInstructionsBroker();
+    let leading = true;
+    const offeredTo = (conversationId: string | null): boolean =>
+      leading && conversationId === null;
+    gate.register('run-1', 'lead', { runId: 'run-1' }, { offeredTo });
+    cards.register(
+      'run-1',
+      'lead',
+      () => Promise.resolve({ status: 'posted' }),
+      { offeredTo, answersAtOnce: true },
+    );
+    const tools = projectChatTools(
+      new ProjectChatBroker(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      gate,
+      cards,
+    );
+    const names = (conversationId: string | null): string[] =>
+      tools
+        .flatMap((tool) =>
+          tool.list({ runId: 'run-1', memberId: 'lead', conversationId }),
+        )
+        .map((tool) => tool.name);
+    const leadTools = [
+      HOST_READ_TEAMS_TOOL,
+      HOST_PROPOSE_TEAM_TOOL,
+      HOST_PROJECT_INSTRUCTIONS_TOOL,
+    ];
+
+    expect(names(null)).toEqual(expect.arrayContaining(leadTools));
+    for (const name of leadTools) {
+      expect(names('call-1')).not.toContain(name);
+    }
+
+    leading = false;
+    for (const name of leadTools) {
+      expect(names(null)).not.toContain(name);
+    }
+    const propose = tools.find((tool) => tool.handles(HOST_PROPOSE_TEAM_TOOL))!;
+    const refused = await propose.call(
+      HOST_PROPOSE_TEAM_TOOL,
+      { team: teamOf([member('lead')], { name: 'x' }) },
+      { ...proposalContext, memberId: 'lead', caller: 'lead' },
+    );
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0]?.text).toMatch(/^Not proposed:/);
   });
 
   const openGate = (): TeamProposalBroker => {
@@ -4586,8 +4639,9 @@ describe('McpServerService — what the descriptions tell a model', () => {
     teamStore = {} as TeamStoreService,
     teamOverlays = {} as TeamOverlayService,
     analysis = new AnalysisBroker(),
+    teamGate = openGate(),
+    cards = new ProjectInstructionsBroker(),
   ) => {
-    const cards = new ProjectInstructionsBroker();
     cards.register('run-1', 'agent', () =>
       Promise.resolve({ status: 'declined' }),
     );
@@ -4616,7 +4670,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       projectInstructions: {} as ProjectInstructionsChangeService,
       projectInstructionCards: cards,
       teamHistory: {} as TeamHistoryService,
-      teamGate: openGate(),
+      teamGate,
       teamBuilders: new TeamBuilderBroker(),
       projectChats,
       teamStore,

@@ -28,6 +28,7 @@ import { StageWakeService } from './services/stage-wake.service';
 import { TaskBoardBroker } from './services/task-board.broker';
 import { TeamActionsService } from './services/team-actions.service';
 import { TeamAnalysisService } from './services/team-analysis.service';
+import { TeamCardsService } from './services/team-cards.service';
 import { TeamChangeService } from './services/team-change.service';
 import { TeamChangeLogService } from './services/team-change-log.service';
 import { TeamChatService } from './services/team-chat.service';
@@ -109,6 +110,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
     TeamChangeLogService,
     TeamActionsService,
     TeamProposalService,
+    TeamCardsService,
     TeamHealthService,
   ],
   // `TeamExecutorService` is exported for `TasksModule`, whose cards may name
@@ -122,7 +124,8 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
   // team outside this module (the handoff): a run's team is its snapshot,
   // and reading the library there is how an edit would reach a run it must not.
   // `TeamProposalService` is exported for the MCP host's `propose_team`
-  // and for `main.ts`'s boot rehydration of standing proposal cards.
+  // and for `main.ts`'s boot rehydration of standing proposal cards;
+  // `TeamCardsService` for the same rehydration of a team lead's project card.
   // `TeamChangeLogService` is exported for the stats module's version
   // restore, which writes the library too, and for its team history read.
   exports: [
@@ -138,6 +141,7 @@ import { ThreadDeliveryService } from './services/thread-delivery.service';
     TeamChangeService,
     TeamChangeLogService,
     TeamProposalService,
+    TeamCardsService,
   ],
 })
 export class TeamsModule {}

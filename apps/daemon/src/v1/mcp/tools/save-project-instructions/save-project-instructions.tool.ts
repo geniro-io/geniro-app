@@ -48,8 +48,12 @@ export class SaveProjectInstructionsTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, memberId }: McpListContext): boolean {
-    return this.cards.canPropose(runId, memberId);
+  protected isOffered({
+    runId,
+    memberId,
+    conversationId,
+  }: McpListContext): boolean {
+    return this.cards.canPropose(runId, memberId, conversationId);
   }
 
   private audienceOf(
@@ -89,7 +93,7 @@ export class SaveProjectInstructionsTool extends BaseMcpTool {
     // A call is not checked against the listing, so the gate is asked again.
     if (!this.isOffered(context)) {
       return this.text(
-        'Nothing saved: no turn is running in this chat that may change project instructions.',
+        'Nothing saved: project instructions are changed from a chat or by the lead of a team run in its own conversation, and no such turn is running here.',
         true,
       );
     }

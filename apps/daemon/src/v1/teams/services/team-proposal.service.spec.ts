@@ -18,10 +18,11 @@ import {
 } from '@packages/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type {
-  DeferredCard,
-  DeferredCardResponder,
-  TeamProposalOutcome,
+import {
+  type DeferredCard,
+  type DeferredCardResponder,
+  HOST_PROPOSE_TEAM_TOOL,
+  type TeamProposalOutcome,
 } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
@@ -40,6 +41,7 @@ import {
 import { TEAM_BACKUP_DIR } from '../utils/team-backup';
 import type { TeamEdit } from '../utils/team-edits';
 import { teamVersionOf } from '../utils/team-version';
+import type { TeamCardsService } from './team-cards.service';
 import { TeamChangeLogService } from './team-change-log.service';
 import type { TeamExecutorService } from './team-executor.service';
 import { TeamOverlayService } from './team-overlay.service';
@@ -74,6 +76,8 @@ class FakeRuns {
   readonly column = new Map<string, string | null>();
   /** The team each builder chat edits, by run. */
   readonly edits = new Map<string, string>();
+  /** The runs that are team runs. */
+  readonly teamRuns = new Set<string>();
   readonly writes: { runId: string; value: string | null }[] = [];
   /** Set by a test to watch what was on disk at the moment of a write. */
   onWrite: ((value: string | null) => void) | null = null;
@@ -85,10 +89,12 @@ class FakeRuns {
   getById(id: string): Promise<{
     pendingTeamProposal: string | null;
     editsTeamSlug: string | null;
+    teamId: string | null;
   }> {
     return Promise.resolve({
       pendingTeamProposal: this.column.get(id) ?? null,
       editsTeamSlug: this.edits.get(id) ?? null,
+      teamId: this.teamRuns.has(id) ? 'team' : null,
     });
   }
   setPendingTeamProposal(id: string, value: string | null): Promise<void> {
@@ -228,6 +234,7 @@ describe('TeamProposalService', () => {
   let logged: TeamChangeLogRecord[];
   let overlayStore: TeamOverlayStoreService;
   let service: TeamProposalService;
+  let build: (teamCards?: ReturnType<typeof fakeChats>) => TeamProposalService;
   let projectRows: Map<string, FakeProject>;
   let projectsFake: ProjectsService;
 
@@ -285,39 +292,42 @@ describe('TeamProposalService', () => {
       ],
     ]);
     projectsFake = fakeProjects(projectRows);
-    service = new TeamProposalService(
-      store,
-      { assertRunnable } as unknown as TeamExecutorService,
-      { fork: () => ({}) } as unknown as EntityManager,
-      runs as unknown as RunDao,
-      {
-        rowAtSeq: (runId: string, seq: number) =>
-          Promise.resolve(cardRows.get(runId)?.get(seq) ?? null),
-        userMessagesInOrder: (runId: string) =>
-          Promise.resolve(
-            (applyRows.get(runId) ?? []).map((payload) => ({ payload })),
-          ),
-        recommendationOutcomeRows: (runId: string) =>
-          Promise.resolve(
-            (markRows.get(runId) ?? []).map((payload) => ({ payload })),
-          ),
-        rowsByPayloadId: (runId: string, _kinds: unknown, ids: string[]) =>
-          Promise.resolve(
-            (closedCards.get(runId) ?? [])
-              .filter((id) => ids.includes(id))
-              .map((id) => ({ id })),
-          ),
-      } as unknown as ItemDao,
-      chats as unknown as ChatService,
-      new TeamChangeLogService({
-        append: (record: TeamChangeLogRecord) => {
-          logged.push(record);
-          return Promise.resolve();
-        },
-      } as unknown as TeamChangeLogDao),
-      overlays,
-      projectsFake,
-    );
+    build = (teamCards) =>
+      new TeamProposalService(
+        store,
+        { assertRunnable } as unknown as TeamExecutorService,
+        { fork: () => ({}) } as unknown as EntityManager,
+        runs as unknown as RunDao,
+        {
+          rowAtSeq: (runId: string, seq: number) =>
+            Promise.resolve(cardRows.get(runId)?.get(seq) ?? null),
+          userMessagesInOrder: (runId: string) =>
+            Promise.resolve(
+              (applyRows.get(runId) ?? []).map((payload) => ({ payload })),
+            ),
+          recommendationOutcomeRows: (runId: string) =>
+            Promise.resolve(
+              (markRows.get(runId) ?? []).map((payload) => ({ payload })),
+            ),
+          rowsByPayloadId: (runId: string, _kinds: unknown, ids: string[]) =>
+            Promise.resolve(
+              (closedCards.get(runId) ?? [])
+                .filter((id) => ids.includes(id))
+                .map((id) => ({ id })),
+            ),
+        } as unknown as ItemDao,
+        chats as unknown as ChatService,
+        new TeamChangeLogService({
+          append: (record: TeamChangeLogRecord) => {
+            logged.push(record);
+            return Promise.resolve();
+          },
+        } as unknown as TeamChangeLogDao),
+        overlays,
+        projectsFake,
+        teamCards as unknown as TeamCardsService | undefined,
+      );
+    service = build();
   });
 
   /** The verdict the agent was handed, once the press has been carried out. */
@@ -354,6 +364,28 @@ describe('TeamProposalService', () => {
     }
     return prepared.proposal;
   }
+
+  it("raises a team run's card through the team host and hands its verdict to the lead, never through the chat", async () => {
+    const teamCards = fakeChats(approvals);
+    const teamService = build(teamCards);
+    runs.teamRuns.add('team-run');
+
+    const outcome = await teamService.propose('team-run', { team: TEAM });
+    expect(outcome.status).toBe('shown');
+    expect(teamCards.raiseOwnedCard).toHaveBeenCalledWith(
+      'team-run',
+      expect.any(String),
+      expect.objectContaining({ toolName: HOST_PROPOSE_TEAM_TOOL }),
+      expect.any(Function),
+    );
+    expect(chats.raiseOwnedCard).not.toHaveBeenCalled();
+
+    approvals.resolve('team-run', standingCard('team-run'), false);
+    await vi.waitFor(() =>
+      expect(teamCards.deliverOwnedCardVerdict).toHaveBeenCalled(),
+    );
+    expect(chats.deliverOwnedCardVerdict).not.toHaveBeenCalled();
+  });
 
   it('refuses a proposal whose member omits approval, rather than defaulting it to auto', async () => {
     const { approval: _omitted, ...bare } = TEAM.members[1]!;

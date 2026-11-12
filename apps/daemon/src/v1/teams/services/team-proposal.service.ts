@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import {
   BaseException,
   ConflictException,
@@ -12,6 +12,7 @@ import {
   type DeferredCardResponder,
   HOST_PROPOSE_TEAM_TOOL,
   HOST_READ_TEAMS_TOOL,
+  type OwnedCardHost,
   type RecommendationApply,
   type TeamProposalOutcome,
   type TeamProposalVerdict,
@@ -61,6 +62,7 @@ import { checkTeam } from '../utils/team-check';
 import { diffTeams } from '../utils/team-diff';
 import { parseTeamYaml } from '../utils/team-yaml';
 import { agentsThatRunAuto } from '../utils/unattended';
+import { TeamCardsService } from './team-cards.service';
 import { TeamChangeLogService } from './team-change-log.service';
 import { TeamExecutorService } from './team-executor.service';
 import {
@@ -135,7 +137,18 @@ export class TeamProposalService {
     private readonly changeLog: TeamChangeLogService,
     private readonly overlays: TeamOverlayService,
     private readonly projects: ProjectsService,
+    /** A team run's cards; optional only so specs that build no team run need not supply it. */
+    @Optional() private readonly teamCards?: TeamCardsService,
   ) {}
+
+  /** Who raises and answers this run's card: its lead's host for a team run, else the chat. */
+  private async cardsOf(runId: string): Promise<OwnedCardHost> {
+    if (this.teamCards === undefined) {
+      return this.chats;
+    }
+    const run = await this.runDao.getById(runId, this.em.fork());
+    return run !== null && run.teamId !== null ? this.teamCards : this.chats;
+  }
 
   /**
    * Check a proposal and, if it holds, put its card up in place of the run's
@@ -289,6 +302,7 @@ export class TeamProposalService {
     }
     const { proposal } = prepared;
     const em = this.em.fork();
+    const cards = await this.cardsOf(runId);
     const requestId = randomUUID();
     const done: RaiseProgress = {
       standing: null,
@@ -306,14 +320,14 @@ export class TeamProposalService {
         !this.answering.has(done.standing.requestId)
       ) {
         done.retire = 'started';
-        await this.chats.retireOwnedCard(
+        await cards.retireOwnedCard(
           runId,
           done.standing.requestId,
           HOST_PROPOSE_TEAM_TOOL,
         );
         done.retire = 'done';
       }
-      await this.chats.raiseOwnedCard(
+      await cards.raiseOwnedCard(
         runId,
         requestId,
         { toolName: HOST_PROPOSE_TEAM_TOOL, input: proposal },
@@ -333,8 +347,8 @@ export class TeamProposalService {
       // Again AFTER the column: an archive that began after the raise's own
       // check read the column before this write, and would leave the card
       // standing on an archived chat.
-      if (await this.chats.isArchived(runId)) {
-        throw new Error('the chat was archived while the card was raised');
+      if (await cards.isArchived(runId)) {
+        throw new Error('the run was archived while the card was raised');
       }
     } catch (error) {
       // Logged and replaced: a persist failure names a database path, and this
@@ -342,7 +356,7 @@ export class TeamProposalService {
       this.logger.error(
         `run ${runId} could not put a team proposal on screen: ${error instanceof Error ? error.message : String(error)}`,
       );
-      await this.undoRaise(runId, requestId, done);
+      await this.undoRaise(cards, runId, requestId, done);
       return {
         status: 'refused',
         code: 'CARD_NOT_SHOWN',
@@ -360,20 +374,17 @@ export class TeamProposalService {
    * retired is cleared, or it would come back at boot as a live one.
    */
   private async undoRaise(
+    cards: OwnedCardHost,
     runId: string,
     requestId: string,
     done: RaiseProgress,
   ): Promise<void> {
     try {
       if (done.raised) {
-        await this.chats.retireOwnedCard(
-          runId,
-          requestId,
-          HOST_PROPOSE_TEAM_TOOL,
-        );
+        await cards.retireOwnedCard(runId, requestId, HOST_PROPOSE_TEAM_TOOL);
       }
       if (done.retire === 'started' && done.standing !== null) {
-        this.chats.trackOwnedCard(
+        await cards.trackOwnedCard(
           runId,
           done.standing.requestId,
           {
@@ -452,14 +463,15 @@ export class TeamProposalService {
         )
       ).length > 0;
     const pending = readPending(column);
+    const cards = await this.cardsOf(runId);
     if (cardId !== null && !closed && pending === null) {
-      await this.chats.retireOwnedCard(runId, cardId, HOST_PROPOSE_TEAM_TOOL);
+      await cards.retireOwnedCard(runId, cardId, HOST_PROPOSE_TEAM_TOOL);
     }
     if (pending === null || closed) {
       await this.runDao.setPendingTeamProposal(runId, null, em);
       return false;
     }
-    this.chats.trackOwnedCard(
+    await cards.trackOwnedCard(
       runId,
       pending.requestId,
       { toolName: HOST_PROPOSE_TEAM_TOOL, input: pending.proposal },
@@ -542,7 +554,8 @@ export class TeamProposalService {
         };
       }
     }
-    await this.chats.deliverOwnedCardVerdict(
+    const cards = await this.cardsOf(runId);
+    await cards.deliverOwnedCardVerdict(
       runId,
       requestId,
       allow,

@@ -26,8 +26,8 @@ import {
 import { readTeamsSchema } from './read-teams.schema';
 
 /**
- * `read_teams` — the team library, read by any chat, ahead of `propose_team`
- * or to bring text from one team to another. Never a team member.
+ * `read_teams` — the team library, read by any chat and by a team run's lead,
+ * ahead of `propose_team` or to bring text from one team to another.
  */
 export class ReadTeamsTool extends BaseMcpTool {
   readonly name = HOST_READ_TEAMS_TOOL;
@@ -42,8 +42,12 @@ export class ReadTeamsTool extends BaseMcpTool {
     super();
   }
 
-  protected isOffered({ runId, memberId }: McpListContext): boolean {
-    return this.gate.canPropose(runId, memberId);
+  protected isOffered({
+    runId,
+    memberId,
+    conversationId,
+  }: McpListContext): boolean {
+    return this.gate.canPropose(runId, memberId, conversationId);
   }
 
   protected instructions(): string {
@@ -66,7 +70,7 @@ export class ReadTeamsTool extends BaseMcpTool {
     // A call is not checked against the listing, so the gate is asked again.
     if (!this.isOffered(context)) {
       return this.text(
-        'Not read: the team library is offered to chats, never to a member of a running team.',
+        'Not read: the team library is offered to chats and to the lead of a team run in its own conversation, never to another member.',
         true,
       );
     }

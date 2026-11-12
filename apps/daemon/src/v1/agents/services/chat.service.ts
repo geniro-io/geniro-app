@@ -207,6 +207,7 @@ import {
   type PendingCardSnapshot,
   type PendingPatchSnapshot,
   type PendingQuestionSnapshot,
+  QUESTION_ALREADY_STANDING,
   readPendingQuestion,
   serializePendingQuestion,
 } from '../utils/pending-question';
@@ -220,6 +221,7 @@ import { type RunStatusAnnounce, writeRunStatus } from '../utils/run-status';
 import { isSlashCommand } from '../utils/session-replacement-notes';
 import { createSessionIdSaver } from '../utils/session-saver';
 import { StandingQuestions } from '../utils/standing-questions';
+import { teamProjectCardId } from '../utils/team-project-card';
 import {
   threadMessageReturnedRow,
   threadMessagesPrompt,
@@ -345,14 +347,6 @@ interface RunWireRead {
   /** The name of the run's project while it exists. */
   projectName: string | null;
 }
-
-/**
- * What an agent is told when it raises a DIFFERENT card while one is already
- * standing — or is still being put up. One per run: the durable half is a
- * single column, shared by a question, a plan, a patch and a project card.
- */
-const QUESTION_ALREADY_STANDING =
-  'a card is already on the user’s screen waiting to be answered — wait for that answer before raising another';
 
 /** What identifies a deferred plan, so an identical re-ask adopts the card. */
 function deferredPlanKey(plan: HostPlan): string {
@@ -1946,12 +1940,22 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       // Read again, after the stop: a proposal raised while the turn was being
       // cancelled is the one standing now.
       const em = this.em.fork();
-      const cardId = standingProposalCardId(
-        (await this.runDao.getById(runId, em))?.pendingTeamProposal ?? null,
-      );
+      const run = await this.runDao.getById(runId, em);
+      const cardId = standingProposalCardId(run?.pendingTeamProposal ?? null);
       if (cardId !== null) {
         await this.retireOwnedCard(runId, cardId, HOST_PROPOSE_TEAM_TOOL);
         await this.runDao.setPendingTeamProposal(runId, null, em);
+      }
+      const projectCardId = teamProjectCardId(
+        run?.pendingTeamProjectCard ?? null,
+      );
+      if (projectCardId !== null) {
+        await this.retireOwnedCard(
+          runId,
+          projectCardId,
+          HOST_PROJECT_INSTRUCTIONS_TOOL,
+        );
+        await this.runDao.setPendingTeamProjectCard(runId, null, em);
       }
       for (const entry of this.approvals.listByRun(runId)) {
         if (entry.toolName === HOST_BROWSER_HOST_CARD) {

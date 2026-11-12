@@ -8,6 +8,7 @@ import { quoteIn } from '../../agents/utils/memory-check-prompt';
 import { redactSecrets } from '../../diagnostics/utils/redact';
 import { memoryHandle, parseMemoryHandle } from '../../memory/memory.types';
 import { MemoryService } from '../../memory/services/memory.service';
+import { similarTitles } from '../../memory/utils/memory-text';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import { AgentKind } from '../../runs/runs.types';
 import { LessonSegmentDao } from '../dao/lesson-segment.dao';
@@ -23,7 +24,6 @@ import {
   type LessonsPayload,
   type LessonTarget,
 } from '../lessons.types';
-import { normalizedTitle } from '../utils/lesson-text';
 import { LessonRowWriter } from './lesson-row.writer';
 
 /** One lesson as `propose_lessons` hands it over, already shape-checked. */
@@ -148,9 +148,8 @@ export class LessonFilingService {
           reason: `${at}: ${lesson.dedup.verdict} names ${handle ?? 'no entry'}, which is not an active memory entry this thread's agents can see`,
         });
       }
-      const title = normalizedTitle(lesson.title);
-      const same = visible.find(
-        (entry) => normalizedTitle(entry.title) === title,
+      const same = visible.find((entry) =>
+        similarTitles(entry.title, lesson.title),
       );
       if (same !== undefined && lesson.dedup.verdict === 'new') {
         problems.push({

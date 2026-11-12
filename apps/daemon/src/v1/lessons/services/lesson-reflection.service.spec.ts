@@ -66,6 +66,8 @@ function build(
   options: {
     source?: Partial<Run>;
     maxSeq?: number;
+    /** The newest row that is not a lessons row; defaults to `maxSeq`. */
+    newestOwn?: number;
     items?: Item[];
     running?: Partial<Run>[];
     project?: { id: string; folder: string } | null;
@@ -86,6 +88,7 @@ function build(
   };
   const itemDao = {
     maxSeq: vi.fn(() => Promise.resolve(maxSeq)),
+    maxSeqExcept: vi.fn(() => Promise.resolve(options.newestOwn ?? maxSeq)),
     analysisPage: vi.fn(
       (
         _runId: string,
@@ -197,6 +200,20 @@ describe('LessonReflectionService.start', () => {
       errorCode: 'LESSONS_REFLECTING',
     });
     expect(fixture.chats.createChat).not.toHaveBeenCalled();
+  });
+
+  it('refuses a reflection whose only rows past the watermark are the lessons card and its outcomes', async () => {
+    const { service, chats } = build({
+      source: { reflectedThroughSeq: SNAPSHOT_SEQ },
+      maxSeq: SNAPSHOT_SEQ + 3,
+      newestOwn: SNAPSHOT_SEQ,
+    });
+
+    await expect(service.start('src-run', {})).rejects.toMatchObject({
+      errorCode: 'LESSONS_NOTHING_NEW',
+    });
+    expect(chats.createChat).not.toHaveBeenCalled();
+    expect((await service.state('src-run')).reflectable).toBe(false);
   });
 
   it('starts a new reflection once the earlier one has finished', async () => {

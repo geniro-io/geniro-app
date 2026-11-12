@@ -14,8 +14,6 @@ import {
 /**
  * The method a lessons reflection follows, as its `taskInstructions`: the five
  * gates every lesson passes, where each kind of lesson goes, and how to send.
- * Grounded in the GEN-237 research (external signals over self-critique,
- * redundant context hurts, short guardrails, poisoning through thread text).
  */
 export function lessonsReflectionGuide(memory: boolean): string {
   return [

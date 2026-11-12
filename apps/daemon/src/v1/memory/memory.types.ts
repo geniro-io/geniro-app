@@ -886,7 +886,8 @@ export type MemoryRefusalCode =
   | 'UNDER_REVIEW'
   | 'USER_ONLY'
   | 'NOT_ACTIVE'
-  | 'ALWAYS_INDEXED';
+  | 'ALWAYS_INDEXED'
+  | 'REFLECTION_READ_ONLY';
 
 export type MemorySaveOutcome =
   | { kind: 'created'; entry: MemoryEntry }

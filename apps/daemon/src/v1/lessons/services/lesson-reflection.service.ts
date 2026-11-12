@@ -20,7 +20,12 @@ import { runSnapshotOf } from '../../agents/utils/run-snapshots';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
 import type { Run } from '../../runs/entity/run.entity';
-import { AgentKind, isTerminalRunStatus } from '../../runs/runs.types';
+import {
+  AgentKind,
+  AgentKindSchema,
+  isTerminalRunStatus,
+  type ItemKind,
+} from '../../runs/runs.types';
 import { LessonProposalDao } from '../dao/lesson-proposal.dao';
 import { LessonSegmentDao } from '../dao/lesson-segment.dao';
 import {
@@ -41,6 +46,9 @@ import { LessonsConfigService } from './lessons-config.service';
 
 const SIGNAL_PAGE_SIZE = 500;
 
+/** The rows a reflection writes into the thread it read: never new activity to reflect on. */
+const LESSON_ROW_KINDS: readonly ItemKind[] = ['lessons', 'lesson_outcome'];
+
 export interface LessonsReflectStarted {
   reflectionRunId: string;
   segmentId: string;
@@ -58,6 +66,8 @@ export interface LessonsReflectStarted {
 export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(LessonReflectionService.name);
   private deletedSubscription: Subscription | null = null;
+  /** Sources between a start's checks and its chat, so a second press cannot start a twin. */
+  private readonly starting = new Set<string>();
 
   constructor(
     private readonly em: EntityManager,
@@ -93,18 +103,41 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
     const em = this.em.fork();
     const source = await this.sourceOf(sourceRunId, em);
     const running = await this.runningReflectionOf(source.id, em);
-    const maxSeq = await this.itemDao.maxSeq(source.id, em);
+    const newest = await this.itemDao.maxSeqExcept(
+      source.id,
+      LESSON_ROW_KINDS,
+      em,
+    );
     return {
       reflectable:
         isReflectable(source) &&
         running === null &&
-        maxSeq > (source.reflectedThroughSeq ?? -1),
+        !this.starting.has(source.id) &&
+        newest > (source.reflectedThroughSeq ?? -1),
       reflectionRunId: running?.id ?? null,
       reflectedThroughSeq: source.reflectedThroughSeq,
     };
   }
 
   async start(
+    sourceRunId: string,
+    input: ReflectLessons,
+  ): Promise<LessonsReflectStarted> {
+    if (this.starting.has(sourceRunId)) {
+      throw new ConflictException(
+        'LESSONS_REFLECTING',
+        'a reflection on this thread is already starting',
+      );
+    }
+    this.starting.add(sourceRunId);
+    try {
+      return await this.startNow(sourceRunId, input);
+    } finally {
+      this.starting.delete(sourceRunId);
+    }
+  }
+
+  private async startNow(
     sourceRunId: string,
     input: ReflectLessons,
   ): Promise<LessonsReflectStarted> {
@@ -123,6 +156,17 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       );
     }
     const fromSeq = source.reflectedThroughSeq ?? -1;
+    const newest = await this.itemDao.maxSeqExcept(
+      source.id,
+      LESSON_ROW_KINDS,
+      em,
+    );
+    if (newest <= fromSeq) {
+      throw new ConflictException(
+        'LESSONS_NOTHING_NEW',
+        'nothing has happened in this thread since its last reflection',
+      );
+    }
     const { snapshotSeq, working } = await runSnapshotOf(
       { em: this.em, runDao: this.runDao, itemDao: this.itemDao },
       source.id,
@@ -158,9 +202,10 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       em,
     );
     const settings = this.config.config;
+    const settingsAgent = AgentKindSchema.safeParse(settings.agentKind);
     const agentKind =
       input.agentKind ??
-      settings.agentKind ??
+      (settingsAgent.success ? settingsAgent.data : null) ??
       source.agentKind ??
       AgentKind.Claude;
     const fromSettings =
@@ -261,7 +306,7 @@ export class LessonReflectionService implements OnModuleInit, OnModuleDestroy {
       }
       cursor = page[page.length - 1]!.seq;
     }
-    return foldLessonSignals(items);
+    return foldLessonSignals(items, { afterFinishedTurn: afterSeq >= 0 });
   }
 
   private folderFor(source: Run, projectFolder: string | null): string {

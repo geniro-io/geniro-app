@@ -6232,10 +6232,10 @@ export interface LessonsConfigAckDto {
     mode: LessonsConfigAckDtoModeEnum;
     /**
      * 
-     * @type {AgentKind}
+     * @type {string}
      * @memberof LessonsConfigAckDto
      */
-    agentKind: AgentKind | null;
+    agentKind: string | null;
     /**
      * 
      * @type {string}
@@ -6274,10 +6274,10 @@ export interface LessonsConfigDto {
     mode: LessonsConfigDtoModeEnum;
     /**
      * 
-     * @type {AgentKind}
+     * @type {string}
      * @memberof LessonsConfigDto
      */
-    agentKind: AgentKind | null;
+    agentKind: string | null;
     /**
      * 
      * @type {string}

@@ -44,9 +44,13 @@ const CORRECTION_CUES =
  */
 export function foldLessonSignals(
   items: readonly LessonSignalItem[],
+  options: {
+    /** The stretch starts after a reflected one, which ended on a finished turn. */
+    afterFinishedTurn?: boolean;
+  } = {},
 ): LessonSignal[] {
   const signals: LessonSignal[] = [];
-  let agentFinished = false;
+  let agentFinished = options.afterFinishedTurn ?? false;
   const failedTools = new Map<string, { seq: number; excerpt: string }>();
   for (const item of items) {
     const payload = parsePayload(item.payload);

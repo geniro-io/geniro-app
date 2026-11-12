@@ -8,7 +8,7 @@ import remarkGfm from 'remark-gfm';
 import { CodeBlock } from '../components/ui/code-block';
 import { languageForFence } from '../components/ui/code-language';
 import { cn } from '../components/ui/utils';
-import { useBrowserPane } from './browser/browser-pane-context';
+import { ChatLink } from './browser/chat-link';
 import { MarkdownImage } from './markdown-image';
 import { wrapSpacedImagePaths } from './markdown-paths';
 
@@ -123,12 +123,8 @@ export function alignClass(
   }
 }
 
-const WEB_ADDRESS = /^https?:\/\//i;
-
 /**
- * A transcript link. Where the chat has a browser pane a plain click opens the
- * address there; a modified click, a middle click and a surface with no pane
- * keep the system browser.
+ * A transcript link, with the chat's link rules (`chats/browser/chat-link.tsx`).
  */
 function TranscriptLink({
   href,
@@ -137,35 +133,16 @@ function TranscriptLink({
   href: string | undefined;
   children: React.ReactNode;
 }): React.JSX.Element {
-  const browser = useBrowserPane();
   return (
-    <a
+    // `break-all` for the same reason as inline code, and this one was
+    // measured as the widest offender in a real transcript: an autolinked
+    // URL is a single unbreakable token whose link TEXT is the URL, and one
+    // of them pushed the transcript 139px past its pane.
+    <ChatLink
       href={href}
-      target="_blank"
-      rel="noreferrer"
-      // `break-all` for the same reason as inline code, and this one was
-      // measured as the widest offender in a real transcript: an autolinked
-      // URL is a single unbreakable token whose link TEXT is the URL, and one
-      // of them pushed the transcript 139px past its pane.
-      className="text-primary underline underline-offset-2 break-all"
-      onClick={(event) => {
-        if (
-          browser === null ||
-          href === undefined ||
-          !WEB_ADDRESS.test(href) ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
-          return;
-        }
-        event.preventDefault();
-        browser.openUrl(href);
-      }}>
+      className="text-primary underline underline-offset-2 break-all">
       {children}
-    </a>
+    </ChatLink>
   );
 }
 

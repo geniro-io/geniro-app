@@ -80,7 +80,11 @@ async function draw(
           value={
             options.pane == null
               ? null
-              : { openPane: options.pane.openPane, openUrl: vi.fn() }
+              : {
+                  openPane: options.pane.openPane,
+                  openUrl: vi.fn(),
+                  isOpen: () => false,
+                }
           }>
           <BrowserScreenshotCard pair={source} />
         </BrowserPaneContext.Provider>

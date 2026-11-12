@@ -24,6 +24,8 @@ export function PanelLinkRow({
   icon,
   meta,
   detail,
+  onClick,
+  onContextMenu,
 }: {
   href: string;
   title: string;
@@ -39,6 +41,8 @@ export function PanelLinkRow({
    * panel. The title gets the whole first line.
    */
   detail?: ReactNode;
+  onClick?: (event: React.MouseEvent<HTMLAnchorElement>) => void;
+  onContextMenu?: (event: React.MouseEvent<HTMLAnchorElement>) => void;
 }): React.JSX.Element {
   return (
     <a
@@ -46,6 +50,8 @@ export function PanelLinkRow({
       target="_blank"
       rel="noreferrer"
       title={tooltip}
+      onClick={onClick}
+      onContextMenu={onContextMenu}
       className={cn(PANEL_ROW_CLASS, detail !== undefined && 'items-start')}>
       {icon === undefined ? null : (
         // On a two-line row the glyph sits beside the TITLE, not between the

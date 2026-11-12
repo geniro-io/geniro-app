@@ -5,6 +5,8 @@ import { cn } from '../components/ui/utils';
 import { useLatestCallback } from '../components/use-latest-callback';
 import { useThemeAppearance } from '../theme/apply-theme';
 import { themeVars } from './artifact-theme';
+import { useBrowserPane } from './browser/browser-pane-context';
+import { openInChatBrowserByDefault } from './browser/chat-link';
 import {
   ArtifactUrlContext,
   type PublishedArtifact,
@@ -95,6 +97,7 @@ export function ArtifactFrame({
   // Re-sent on a theme change: the page holds whatever it was last given, so
   // without this an artifact stays in the palette it was opened under.
   const appearance = useThemeAppearance();
+  const pane = useBrowserPane();
 
   const postTheme = useLatestCallback(() => {
     frame.current?.contentWindow?.postMessage(
@@ -104,6 +107,15 @@ export function ArtifactFrame({
       '*',
     );
   }, []);
+
+  const openLink = useLatestCallback(
+    (link: string): void => {
+      if (!openInChatBrowserByDefault(pane, link)) {
+        window.open(link, '_blank', 'noopener');
+      }
+    },
+    [pane],
+  );
 
   useEffect(() => {
     const onMessage = (event: MessageEvent): void => {
@@ -130,7 +142,7 @@ export function ArtifactFrame({
       if (message.type === 'link') {
         const link = linkToOpen(message.href);
         if (link !== null) {
-          window.open(link, '_blank', 'noopener');
+          openLink(link);
         }
         return;
       }
@@ -144,7 +156,7 @@ export function ArtifactFrame({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [postTheme]);
+  }, [postTheme, openLink]);
 
   useEffect(() => {
     postTheme();

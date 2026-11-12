@@ -6,6 +6,8 @@ export interface BrowserPaneControls {
   openPane(tabId: string | null): void;
   /** Open an address in a new tab of this chat's browser and show the pane. */
   openUrl(url: string): void;
+  /** Whether this chat's browser pane is open now. */
+  isOpen(): boolean;
 }
 
 /** Null where no chat browser exists: a paired device, a surface without a run. */

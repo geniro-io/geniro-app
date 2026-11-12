@@ -1,5 +1,6 @@
 import { Dialog } from '../components/ui/dialog';
 import { ArtifactFrame } from './artifact-frame';
+import { BrowserPaneContext } from './browser/browser-pane-context';
 import type { PublishedArtifact } from './published-artifact';
 
 /**
@@ -62,11 +63,14 @@ export function ArtifactDialog({
         </div>
       }>
       <div className="h-full">
-        <ArtifactFrame
-          artifact={artifact}
-          fill
-          className="h-full rounded-none border-0"
-        />
+        {/* The full-screen page hides the chat browser, so its links go to the system one. */}
+        <BrowserPaneContext.Provider value={null}>
+          <ArtifactFrame
+            artifact={artifact}
+            fill
+            className="h-full rounded-none border-0"
+          />
+        </BrowserPaneContext.Provider>
       </div>
     </Dialog>
   );

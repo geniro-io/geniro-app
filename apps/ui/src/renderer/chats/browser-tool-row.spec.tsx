@@ -78,7 +78,11 @@ function draw(
   act(() =>
     root.render(
       <BrowserPaneContext.Provider
-        value={options.pane === false ? null : { openPane, openUrl: vi.fn() }}>
+        value={
+          options.pane === false
+            ? null
+            : { openPane, openUrl: vi.fn(), isOpen: () => false }
+        }>
         <BrowserToolRow entry={entry} status={options.status ?? 'done'} />
       </BrowserPaneContext.Provider>,
     ),

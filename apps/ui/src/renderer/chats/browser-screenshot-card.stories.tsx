@@ -55,7 +55,11 @@ const meta = {
     (story) => (
       <LocalImageLoaderContext.Provider value={() => Promise.resolve(PICTURE)}>
         <BrowserPaneContext.Provider
-          value={{ openPane: () => {}, openUrl: () => {} }}>
+          value={{
+            openPane: () => {},
+            openUrl: () => {},
+            isOpen: () => false,
+          }}>
           <div className="w-[560px] bg-background p-4">{story()}</div>
         </BrowserPaneContext.Provider>
       </LocalImageLoaderContext.Provider>

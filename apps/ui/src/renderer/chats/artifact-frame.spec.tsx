@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ArtifactFrame } from './artifact-frame';
 import {
+  BrowserPaneContext,
+  type BrowserPaneControls,
+} from './browser/browser-pane-context';
+import {
   ArtifactUrlContext,
   type PublishedArtifact,
 } from './published-artifact';
@@ -40,11 +44,14 @@ afterEach(() => {
 async function render(
   artifact: PublishedArtifact = ARTIFACT,
   url: string | null = URL,
+  pane: BrowserPaneControls | null = null,
 ): Promise<void> {
   await act(async () => {
     root.render(
       <ArtifactUrlContext.Provider value={url === null ? null : () => url}>
-        <ArtifactFrame artifact={artifact} />
+        <BrowserPaneContext.Provider value={pane}>
+          <ArtifactFrame artifact={artifact} />
+        </BrowserPaneContext.Provider>
       </ArtifactUrlContext.Provider>,
     );
   });
@@ -238,6 +245,53 @@ describe('ArtifactFrame — a link the page asks the host to open', () => {
     await postLink('file:///etc/hosts');
     await postLink('other.html');
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it('hands a web link to the chat browser while its pane is open', async () => {
+    const openUrl = vi.fn();
+    await render(ARTIFACT, URL, {
+      openPane: vi.fn(),
+      openUrl,
+      isOpen: () => true,
+    });
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await postLink('https://example.com/a');
+    expect(openUrl).toHaveBeenCalledExactlyOnceWith('https://example.com/a');
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('opens a web link in the system browser while the chat pane is closed', async () => {
+    const openUrl = vi.fn();
+    await render(ARTIFACT, URL, {
+      openPane: vi.fn(),
+      openUrl,
+      isOpen: () => false,
+    });
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await postLink('https://example.com/a');
+    expect(open).toHaveBeenCalledExactlyOnceWith(
+      'https://example.com/a',
+      '_blank',
+      'noopener',
+    );
+    expect(openUrl).not.toHaveBeenCalled();
+  });
+
+  it('keeps a mail link in the system browser even with the chat pane open', async () => {
+    const openUrl = vi.fn();
+    await render(ARTIFACT, URL, {
+      openPane: vi.fn(),
+      openUrl,
+      isOpen: () => true,
+    });
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await postLink('mailto:someone@example.com');
+    expect(open).toHaveBeenCalledExactlyOnceWith(
+      'mailto:someone@example.com',
+      '_blank',
+      'noopener',
+    );
+    expect(openUrl).not.toHaveBeenCalled();
   });
 
   it('ignores a link posted from anything that is not its own frame', async () => {

@@ -3,6 +3,8 @@ import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 
 import {
+  BROWSER_TAB_NAME_MAX,
+  BROWSER_TAB_NAME_PATTERN,
   CLI_KINDS,
   type CliKind,
   hasControlCharacters,
@@ -880,6 +882,16 @@ export const browserTabActionSchema = z.enum([
   'copyUrl',
 ]);
 export const browserPopOutTitleSchema = z.string().max(256);
+
+export const browserTabLabelSchema = z.strictObject({
+  name: z
+    .string()
+    .max(BROWSER_TAB_NAME_MAX)
+    .regex(BROWSER_TAB_NAME_PATTERN)
+    .nullable()
+    .optional(),
+  color: z.enum(PROFILE_COLORS).nullable().optional(),
+});
 
 const browserLength = z.number().finite().min(0).max(100_000);
 export const browserBoundsSchema = z

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import type { RunGroupColor } from '../agents/chat.types';
+
 /** How long the daemon waits on the desktop window for one browser operation. */
 export const BROWSER_REQUEST_TIMEOUT_MS = 20_000;
 
@@ -14,6 +16,15 @@ export const BROWSER_REPLY_MAX_BYTES = 16 * 1024 * 1024;
 export const BROWSER_VIEWPORT_MIN = 200;
 export const BROWSER_VIEWPORT_MAX_WIDTH = 3840;
 export const BROWSER_VIEWPORT_MAX_HEIGHT = 4320;
+
+/** The longest name a tab may carry. TWIN: `BROWSER_TAB_NAME_MAX` in `apps/ui/src/shared/contracts.ts`. */
+export const BROWSER_TAB_NAME_MAX = 60;
+
+/** A tab's colour: the daemon's palette, `RUN_GROUP_COLORS`. TWIN: `PROFILE_COLORS` in `apps/ui/src/shared/contracts.ts`. */
+export type BrowserTabColor = RunGroupColor;
+
+/** TWIN: `BROWSER_TAB_NAME_PATTERN` in `apps/ui/src/shared/contracts.ts`. */
+export const BROWSER_TAB_NAME_PATTERN = /^[^\p{Cc}\p{Cf}]*$/u;
 
 /** One cookie an agent puts into a browser jar. */
 export interface BrowserCookieInput {
@@ -38,7 +49,10 @@ export type BrowserOp =
       kind: 'open';
       url: string;
       ownCookies?: { label: string; cookies: BrowserCookieInput[] };
+      name?: string;
+      color?: BrowserTabColor;
     }
+  | { kind: 'label'; tab: string; name?: string; color?: BrowserTabColor }
   | { kind: 'navigate'; tab: string; url: string }
   | { kind: 'snapshot'; tab: string; interactive: boolean; text: boolean }
   | { kind: 'click'; tab: string; ref: string }

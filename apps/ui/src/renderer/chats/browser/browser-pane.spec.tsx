@@ -41,6 +41,8 @@ function tab(overrides: Partial<BrowserTabState> = {}): BrowserTabState {
     ownCookiesLabel: null,
     drivenBy: null,
     authRequest: null,
+    name: null,
+    color: null,
     ...overrides,
   };
 }
@@ -110,6 +112,34 @@ afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
 });
+
+function setValue(input: HTMLInputElement | null, value: string): void {
+  if (input === null) {
+    throw new Error('no field to type into');
+  }
+  Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    'value',
+  )!.set!.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function press(input: HTMLInputElement | null, key: string): void {
+  input?.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+}
+
+function renameField(): HTMLInputElement | null {
+  return container.querySelector<HTMLInputElement>(
+    'input[aria-label^="Rename tab"]',
+  );
+}
+
+async function doubleClickTab(): Promise<void> {
+  const tabButton = container.querySelector<HTMLElement>('[role="tab"]');
+  await act(async () =>
+    tabButton?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })),
+  );
+}
 
 async function render(element: React.ReactElement): Promise<void> {
   await act(async () => {
@@ -265,13 +295,6 @@ describe('BrowserPane', () => {
       }
       return input;
     };
-    const setValue = (input: HTMLInputElement, value: string): void => {
-      Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        'value',
-      )!.set!.call(input, value);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    };
     await act(async () => {
       setValue(field('Username'), 'anna');
       setValue(field('Password'), 's3cret');
@@ -377,6 +400,105 @@ describe('BrowserPane', () => {
     await act(async () => button('Back').click());
 
     expect(history).toHaveBeenCalledExactlyOnceWith(RUN, 't1', 'back');
+  });
+
+  it('shows a named tab by its name and colour, keeping the page title in its tooltip', async () => {
+    showState(run([tab({ name: 'Staging login', color: 'teal' })]));
+    await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
+
+    const tabButton = container.querySelector<HTMLElement>('[role="tab"]');
+    expect(tabButton?.textContent).toBe('Staging login');
+    expect(tabButton?.title).toContain('Example');
+    expect(
+      container.querySelector(
+        '[data-slot="browser-tab-color"] [data-color="teal"]',
+      ),
+    ).not.toBeNull();
+  });
+
+  it('recolours a tab from its menu as the user', async () => {
+    const label = vi.fn(() => Promise.resolve());
+    overrides.browserLabelTab = label;
+    showState(run([tab()]));
+    await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
+
+    await act(async () => button('Options for tab Example').click());
+    await act(async () => option('Teal')!.click());
+
+    expect(label).toHaveBeenCalledExactlyOnceWith(RUN, 't1', { color: 'teal' });
+  });
+
+  it('renames a tab from Rename tab… with Enter', async () => {
+    const label = vi.fn(() => Promise.resolve());
+    overrides.browserLabelTab = label;
+    showState(run([tab()]));
+    await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
+
+    await act(async () => button('Options for tab Example').click());
+    await act(async () => option('Rename tab…')!.click());
+    expect(renameField()?.value).toBe('Example');
+    await act(async () => setValue(renameField(), 'API docs'));
+    await act(async () => press(renameField(), 'Enter'));
+
+    expect(label).toHaveBeenCalledExactlyOnceWith(RUN, 't1', {
+      name: 'API docs',
+    });
+    expect(renameField()).toBeNull();
+  });
+
+  it('drops an edited name on Escape and closes the field', async () => {
+    const label = vi.fn(() => Promise.resolve());
+    overrides.browserLabelTab = label;
+    showState(run([tab()]));
+    await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
+
+    await doubleClickTab();
+    await act(async () => setValue(renameField(), 'Something else'));
+    await act(async () => press(renameField(), 'Escape'));
+
+    expect(renameField()).toBeNull();
+    expect(label).not.toHaveBeenCalled();
+  });
+
+  it("clears a tab's name back to the page title when the user empties it", async () => {
+    const label = vi.fn(() => Promise.resolve());
+    overrides.browserLabelTab = label;
+    showState(run([tab({ name: 'Staging login' })]));
+    await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
+
+    await doubleClickTab();
+    await act(async () => setValue(renameField(), ''));
+    await act(async () => press(renameField(), 'Enter'));
+
+    expect(label).toHaveBeenCalledExactlyOnceWith(RUN, 't1', { name: '' });
+  });
+
+  it('cuts an edited long page title to the name limit before it is sent', async () => {
+    const label = vi.fn(() => Promise.resolve());
+    overrides.browserLabelTab = label;
+    const title = 'A page title that runs well past sixty characters — Docs';
+    showState(run([tab({ title })]));
+    await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
+
+    await doubleClickTab();
+    await act(async () => setValue(renameField(), `${title} v2`));
+    await act(async () => press(renameField(), 'Enter'));
+
+    expect(label).toHaveBeenCalledExactlyOnceWith(RUN, 't1', {
+      name: `${title} v2`.slice(0, 60),
+    });
+  });
+
+  it('clears a tab colour from No colour', async () => {
+    const label = vi.fn(() => Promise.resolve());
+    overrides.browserLabelTab = label;
+    showState(run([tab({ color: 'teal' })]));
+    await render(<BrowserPane runId={RUN} visible onClose={() => undefined} />);
+
+    await act(async () => button('Options for tab Example').click());
+    await act(async () => option('No colour')!.click());
+
+    expect(label).toHaveBeenCalledExactlyOnceWith(RUN, 't1', { color: null });
   });
 
   it('lists the recent addresses on a tab with no address', async () => {

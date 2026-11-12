@@ -784,7 +784,8 @@ describe('registerIpc browser channels', () => {
   const setBounds = vi.fn();
   const openTab = vi.fn(async () => 't1');
   const noteUserAddress = vi.fn();
-  const browser = { setBounds, openTab, noteUserAddress };
+  const labelTab = vi.fn();
+  const browser = { setBounds, openTab, noteUserAddress, labelTab };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -829,6 +830,31 @@ describe('registerIpc browser channels', () => {
     expect(mocks.fromWebContents).toHaveBeenCalledWith(sender);
     expect(setBounds).toHaveBeenNthCalledWith(1, 'run-1', bounds, { sender });
     expect(setBounds).toHaveBeenNthCalledWith(2, 'run-1', null, { sender });
+  });
+
+  it('labels a tab as the user and refuses a colour outside the palette', () => {
+    handler(IPC.browserLabelTab)({}, 'run-1', 't2', {
+      name: 'Docs',
+      color: 'teal',
+    });
+
+    expect(labelTab).toHaveBeenCalledWith(
+      'run-1',
+      't2',
+      { name: 'Docs', color: 'teal' },
+      'user',
+    );
+    expect(() =>
+      handler(IPC.browserLabelTab)({}, 'run-1', 't2', { color: 'magenta' }),
+    ).toThrow(ZodError);
+    expect(() =>
+      handler(IPC.browserLabelTab)({}, 'run-1', 't2', {
+        name: 'x'.repeat(61),
+      }),
+    ).toThrow(ZodError);
+    expect(() =>
+      handler(IPC.browserLabelTab)({}, 'run-1', 't2', { name: 'a\u202eb' }),
+    ).toThrow(ZodError);
   });
 
   it('opens a typed address as the user, resolving bare words and hosts', async () => {

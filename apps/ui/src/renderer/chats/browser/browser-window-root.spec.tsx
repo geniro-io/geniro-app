@@ -29,6 +29,8 @@ const POPPED_OUT: BrowserRunState = {
       ownCookiesLabel: null,
       drivenBy: null,
       authRequest: null,
+      name: null,
+      color: null,
     },
   ],
   activeTabId: 't1',

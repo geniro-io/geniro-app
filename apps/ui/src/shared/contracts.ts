@@ -205,6 +205,12 @@ export const PROFILE_COLORS = [
 ] as const;
 export type ProfileColor = (typeof PROFILE_COLORS)[number];
 
+/** The longest name a browser tab may carry. TWIN: `BROWSER_TAB_NAME_MAX` in `apps/daemon/src/v1/browser/browser.types.ts`. */
+export const BROWSER_TAB_NAME_MAX = 60;
+
+/** A tab name holds no control or format character, so it stays one plain line wherever it is shown or listed. */
+export const BROWSER_TAB_NAME_PATTERN = /^[^\p{Cc}\p{Cf}]*$/u;
+
 /**
  * One of the user's named agent configurations — a config directory with a name
  * and a colour on it.
@@ -1696,6 +1702,15 @@ export interface BrowserTabState {
   /** The agent or member running an operation on the tab right now. */
   drivenBy: string | null;
   authRequest: BrowserAuthRequest | null;
+  /** What the tab is for, set by an agent or the user; null shows the page title. */
+  name: string | null;
+  color: ProfileColor | null;
+}
+
+/** A rename or recolour of one tab; a field left out is unchanged, null clears it. */
+export interface BrowserTabLabel {
+  name?: string | null;
+  color?: ProfileColor | null;
 }
 
 /** One chat's in-app browser: its tabs, which one shows, and where it is drawn. */
@@ -2255,6 +2270,12 @@ export interface GeniroApi {
   browserForgetRun(runId: string): Promise<void>;
   /** Stop the agent operation running on a tab. */
   browserStopAgent(runId: string, tabId: string): Promise<void>;
+  /** The user's rename or recolour of a tab; an agent never overwrites what it sets. */
+  browserLabelTab(
+    runId: string,
+    tabId: string,
+    label: BrowserTabLabel,
+  ): Promise<void>;
   /** Run one agent operation the daemon relayed (`browser_request`); answers its `browser_reply`. */
   browserAgentRequest(request: unknown): Promise<unknown>;
   onBrowserState(listener: (event: BrowserStateEvent) => void): () => void;
@@ -2424,6 +2445,7 @@ export const IPC = {
   browserCapture: 'geniro:browserCapture',
   browserForgetRun: 'geniro:browserForgetRun',
   browserStopAgent: 'geniro:browserStopAgent',
+  browserLabelTab: 'geniro:browserLabelTab',
   browserAgentRequest: 'geniro:browserAgentRequest',
   onBrowserState: 'geniro:onBrowserState',
 } as const satisfies Record<

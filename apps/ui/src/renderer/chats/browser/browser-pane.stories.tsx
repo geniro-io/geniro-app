@@ -22,6 +22,8 @@ function tab(overrides: Partial<BrowserTabState> = {}): BrowserTabState {
     ownCookiesLabel: null,
     drivenBy: null,
     authRequest: null,
+    name: null,
+    color: null,
     ...overrides,
   };
 }
@@ -121,5 +123,21 @@ export const ChatWindow: Story = {
       [tab(), tab({ id: 't2', title: 'Docs', url: 'https://docs.acme.dev/' })],
       { poppedOut: true },
     ),
+  ],
+};
+
+export const NamedTabs: Story = {
+  decorators: [
+    withState([
+      tab({ name: 'Staging login', color: 'teal', openedBy: 'Engineer' }),
+      tab({
+        id: 't2',
+        title: 'Docs',
+        url: 'https://docs.acme.dev/',
+        name: 'API docs',
+        color: 'purple',
+      }),
+      tab({ id: 't3', title: 'Status', url: 'https://status.acme.dev/' }),
+    ]),
   ],
 };

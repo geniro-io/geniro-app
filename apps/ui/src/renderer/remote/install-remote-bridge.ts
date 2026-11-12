@@ -398,6 +398,7 @@ export function installRemoteBridge(): void {
     browserCapture: () => browserOnTheMac(),
     browserForgetRun: () => browserOnTheMac(),
     browserStopAgent: () => browserOnTheMac(),
+    browserLabelTab: () => browserOnTheMac(),
     browserAgentRequest: () => browserOnTheMac(),
     onBrowserState: () => noSubscription(),
     // PRELOAD-LOCAL (`PreloadLocalMethod` in contracts.ts) — the real preload

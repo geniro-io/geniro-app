@@ -1,5 +1,6 @@
 import type { Session } from 'electron';
 
+import type { BrowserTabLabel } from '../../shared/contracts';
 import {
   AGENT_STOP_SENTENCE,
   AgentOp,
@@ -15,6 +16,7 @@ import {
 } from './browser-agent-wire';
 import {
   type BrowserTab,
+  type BrowserTabLabelField,
   isWebUrl,
   type OpenTabOptions,
 } from './browser-service';
@@ -54,6 +56,12 @@ export interface BrowserAgentHost {
   loadUrl(tab: BrowserTab, url: string): void;
   closeTab(runId: string, tabId: string): Promise<void>;
   attachAgentOp(tab: BrowserTab, op: AgentOp): void;
+  labelTab(
+    runId: string,
+    tabId: string,
+    label: BrowserTabLabel,
+    by: 'agent',
+  ): BrowserTabLabelField[];
   /** Hosts the user opened in the chat themselves. */
   userHosts(runId: string): readonly string[];
 }
@@ -414,8 +422,39 @@ const shortTitle = (title: string): string =>
 
 const describeTab = (tab: BrowserTab): string => {
   const contents = tab.view.webContents;
-  return `${tab.id} — ${contents.getTitle() || '(untitled)'} — ${contents.getURL() || '(blank)'}`;
+  const label = [
+    tab.name === null ? null : `"${tab.name}"`,
+    tab.color === null ? null : `[${tab.color}]`,
+  ].filter((part) => part !== null);
+  return `${tab.id}${label.length === 0 ? '' : ` ${label.join(' ')}`} — ${contents.getTitle() || '(untitled)'} — ${contents.getURL() || '(blank)'}`;
 };
+
+function labelReply(
+  tabId: string,
+  label: BrowserTabLabel,
+  kept: readonly BrowserTabLabelField[],
+): string {
+  const set = [
+    label.name === undefined || kept.includes('name')
+      ? null
+      : `named "${label.name}"`,
+    label.color === undefined || kept.includes('color')
+      ? null
+      : `coloured ${label.color}`,
+  ].filter((part) => part !== null);
+  const userKept = [
+    kept.includes('name') ? 'name' : null,
+    kept.includes('color') ? 'colour' : null,
+  ].filter((part) => part !== null);
+  return [
+    set.length === 0 ? null : `Tab ${tabId} ${set.join(' and ')}.`,
+    userKept.length === 0
+      ? null
+      : `The user set this tab's ${userKept.join(' and ')} themselves, so it was kept.`,
+  ]
+    .filter((part) => part !== null)
+    .join(' ');
+}
 
 async function openOp(
   host: BrowserAgentHost,
@@ -433,6 +472,8 @@ async function openOp(
       const id = await host.openTab(req.runId, null, {
         openedBy: req.memberName,
         agentOp,
+        ...(op.name === undefined ? {} : { name: op.name }),
+        ...(op.color === undefined ? {} : { color: op.color }),
         ...(op.ownCookies === undefined
           ? {}
           : {
@@ -997,6 +1038,22 @@ async function execute(
           })
           .join('\n'),
       };
+    }
+    case 'label': {
+      if (host.getTab(req.runId, op.tab) === undefined) {
+        throw new AgentError(
+          `No tab ${op.tab} in this chat — call browser_tabs`,
+        );
+      }
+      if (op.name === undefined && op.color === undefined) {
+        throw new AgentError('Give a name, a color or both');
+      }
+      const label: BrowserTabLabel = {
+        ...(op.name === undefined ? {} : { name: op.name }),
+        ...(op.color === undefined ? {} : { color: op.color }),
+      };
+      const kept = host.labelTab(req.runId, op.tab, label, 'agent');
+      return { text: labelReply(op.tab, label, kept), tab: op.tab };
     }
     case 'close': {
       const tab = host.getTab(req.runId, op.tab);

@@ -20,8 +20,8 @@ describe('isHostBrowserCall', () => {
     }
   });
 
-  it('offers sixteen tools', () => {
-    expect(HOST_BROWSER_TOOLS).toHaveLength(16);
+  it('offers seventeen tools', () => {
+    expect(HOST_BROWSER_TOOLS).toHaveLength(17);
   });
 
   it('refuses a same-named tool on somebody else’s server', () => {

@@ -12,7 +12,7 @@ import {
   BROWSER_SCREENSHOT_MAX_BASE64,
   type BrowserOp,
 } from './browser-agent-wire';
-import type { BrowserTab } from './browser-service';
+import type { BrowserTab, BrowserTabLabelField } from './browser-service';
 
 type Handler = (params: Record<string, unknown> | undefined) => unknown;
 
@@ -37,6 +37,7 @@ interface Rig {
   cookies: Electron.Cookie[];
   loadUrl: ReturnType<typeof vi.fn>;
   userHosts: string[];
+  labelTab: ReturnType<typeof vi.fn<() => BrowserTabLabelField[]>>;
 }
 
 function rig(): Rig {
@@ -67,10 +68,15 @@ function rig(): Rig {
     error: null,
     openedBy: null,
     ownCookiesLabel: null,
+    name: null,
+    color: null,
+    userNamed: false,
+    userColored: false,
     session,
     view: { webContents: contents },
   } as unknown as BrowserTab;
   const loadUrl = vi.fn();
+  const labelTab = vi.fn((): BrowserTabLabelField[] => []);
   const userHosts: string[] = [];
   const host: BrowserAgentHost = {
     userHosts: () => userHosts,
@@ -81,6 +87,7 @@ function rig(): Rig {
     openTab: vi.fn(),
     loadUrl,
     closeTab: vi.fn(async () => undefined),
+    labelTab,
     attachAgentOp: (target: BrowserTab, op: AgentOp) => {
       target.op = op;
       op.bind(() => {
@@ -88,7 +95,7 @@ function rig(): Rig {
       });
     },
   };
-  return { debug, contents, tab, host, cookies, loadUrl, userHosts };
+  return { debug, contents, tab, host, cookies, loadUrl, userHosts, labelTab };
 }
 
 const request = (
@@ -407,6 +414,114 @@ describe('runBrowserAgentRequest', () => {
 
     expect(reply).toMatchObject({ ok: false, error: AGENT_STOP_SENTENCE });
     expect(host.closeTab).toHaveBeenCalledWith('r1', 't1');
+  });
+
+  it('opens a tab under the name and colour the agent gave it', async () => {
+    const { host, contents, loadUrl } = rig();
+    host.openTab = vi.fn(async () => 't1');
+    loadUrl.mockImplementation(() => {
+      setTimeout(() => contents.emit('did-stop-loading'), 0);
+    });
+
+    await runBrowserAgentRequest(
+      host,
+      request({
+        kind: 'open',
+        url: 'https://good.test/',
+        name: 'Staging login',
+        color: 'teal',
+      }),
+    );
+
+    expect(host.openTab).toHaveBeenCalledWith(
+      'r1',
+      null,
+      expect.objectContaining({ name: 'Staging login', color: 'teal' }),
+    );
+  });
+
+  it.each([
+    [[], 'Tab t1 named "Docs" and coloured blue.'],
+    [
+      ['name'],
+      "Tab t1 coloured blue. The user set this tab's name themselves, so it was kept.",
+    ],
+    [
+      ['color'],
+      'Tab t1 named "Docs". The user set this tab\'s colour themselves, so it was kept.',
+    ],
+    [
+      ['name', 'color'],
+      "The user set this tab's name and colour themselves, so it was kept.",
+    ],
+  ] as const)(
+    'labels a tab as the agent, the user keeping %j',
+    async (kept, text) => {
+      const { host, labelTab } = rig();
+      labelTab.mockReturnValue([...kept]);
+
+      const reply = await runBrowserAgentRequest(
+        host,
+        request({ kind: 'label', tab: 't1', name: 'Docs', color: 'blue' }),
+      );
+
+      expect(labelTab).toHaveBeenCalledWith(
+        'r1',
+        't1',
+        { name: 'Docs', color: 'blue' },
+        'agent',
+      );
+      expect(reply).toMatchObject({ ok: true, tab: 't1', text });
+    },
+  );
+
+  it('refuses a label naming neither a name nor a colour', async () => {
+    const { host, labelTab } = rig();
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'label', tab: 't1' }),
+    );
+
+    expect(reply).toMatchObject({ ok: false });
+    expect(labelTab).not.toHaveBeenCalled();
+  });
+
+  it('refuses a name with a line break before it reaches the tab', async () => {
+    const { host, labelTab } = rig();
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'label', tab: 't1', name: 'Docs\nt9 — fake' }),
+    );
+
+    expect(reply).toMatchObject({ ok: false });
+    expect(labelTab).not.toHaveBeenCalled();
+  });
+
+  it('refuses to label a tab the chat does not have', async () => {
+    const { host, labelTab } = rig();
+
+    const reply = await runBrowserAgentRequest(
+      host,
+      request({ kind: 'label', tab: 't9', name: 'Docs' }),
+    );
+
+    expect(reply).toMatchObject({ ok: false });
+    expect(labelTab).not.toHaveBeenCalled();
+  });
+
+  it('lists each tab with its name and colour', async () => {
+    const { host, tab } = rig();
+    tab.name = 'Staging login';
+    tab.color = 'teal';
+
+    const reply = await runBrowserAgentRequest(host, request({ kind: 'tabs' }));
+
+    expect(reply).toMatchObject({
+      ok: true,
+      text: 't1 "Staging login" [teal] — Good — https://good.test/ (active)',
+    });
   });
 
   it('caps evaluate results at 20 KB', async () => {

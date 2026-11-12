@@ -170,6 +170,11 @@ describe('a browser tool row', () => {
     ['browser_press', { tab: 't1', key: 'Enter' }, 'Pressed Enter'],
     ['browser_tabs', {}, 'Listed tabs'],
     ['browser_close', { tab: 't2' }, 'Closed tab t2'],
+    [
+      'browser_label_tab',
+      { tab: 't2', name: 'API docs', color: 'teal' },
+      'Labelled tab t2',
+    ],
     ['browser_get_cookies', {}, 'Read cookies'],
     ['browser_clear_cookies', {}, 'Cleared cookies'],
   ])('words %s as a short sentence', (tool, input, words) => {

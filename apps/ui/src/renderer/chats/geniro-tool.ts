@@ -225,6 +225,7 @@ export const GENIRO_BROWSER_TOOLS = [
   'browser_console',
   'browser_evaluate',
   'browser_tabs',
+  'browser_label_tab',
   'browser_close',
   'browser_set_cookies',
   'browser_get_cookies',

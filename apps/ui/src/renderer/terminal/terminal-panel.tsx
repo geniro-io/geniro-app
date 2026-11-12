@@ -1,13 +1,11 @@
-import { ChevronDown, Pencil, Plus, TerminalIcon, X } from 'lucide-react';
-import { lazy, Suspense, useRef, useState } from 'react';
+import { ChevronDown, Plus, TerminalIcon, X } from 'lucide-react';
+import { lazy, Suspense, useState } from 'react';
 
-import { PROFILE_COLORS, type ProfileColor } from '../../shared/contracts';
+import type { ProfileColor } from '../../shared/contracts';
+import { ColorRenameMenu } from '../components/color-rename-menu';
 import { InlineRenameInput } from '../components/inline-rename-input';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
-import { Menu } from '../components/ui/menu';
-import { PaletteDot } from '../components/ui/palette-dot';
-import { paletteMenuItems } from '../components/ui/palette-menu';
 import { cn } from '../components/ui/utils';
 import {
   MAX_TERMINAL_TAB_NAME,
@@ -15,14 +13,6 @@ import {
   terminalTabLabel,
   type TerminalTabs,
 } from './use-terminal-tabs';
-
-/** The menu's two non-colour rows, kept apart from any palette value. */
-const RENAME_ROW = 'rename';
-const NO_COLOR_ROW = 'no-color';
-
-function isProfileColor(value: string): value is ProfileColor {
-  return (PROFILE_COLORS as readonly string[]).includes(value);
-}
 
 // Split out: xterm and its stylesheet are only worth loading once somebody
 // actually opens a terminal.
@@ -175,9 +165,7 @@ function TerminalTabButton({
   onRecolor: (color: ProfileColor | null) => void;
 }): React.JSX.Element {
   const label = terminalTabLabel(tab);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [editing, setEditing] = useState(false);
-  const menuTriggerRef = useRef<HTMLButtonElement>(null);
 
   return (
     <div
@@ -187,68 +175,18 @@ function TerminalTabButton({
           ? 'bg-accent text-foreground'
           : 'text-muted-foreground hover:bg-accent/50',
       )}>
-      <span className="relative inline-flex shrink-0">
-        <button
-          ref={menuTriggerRef}
-          type="button"
-          data-menu-trigger
-          aria-haspopup="listbox"
-          aria-expanded={menuOpen}
-          aria-label={`Options for terminal ${label}`}
-          title="Colour and name"
-          onClick={() => setMenuOpen((open) => !open)}
-          className="ml-1 flex size-5 items-center justify-center rounded-sm text-xs hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none">
-          {tab.color === null ? (
-            <TerminalIcon aria-hidden="true" className="size-3 shrink-0" />
-          ) : (
-            <PaletteDot
-              data-slot="terminal-tab-color"
-              color={tab.color}
-              size="sm"
-            />
-          )}
-        </button>
-        <Menu
-          open={menuOpen}
-          side="top"
-          align="start"
-          anchor="viewport"
-          triggerRef={menuTriggerRef}
-          className="w-44 min-w-0"
-          groups={[
-            {
-              label: 'Colour',
-              items: paletteMenuItems({
-                colors: PROFILE_COLORS,
-                current: tab.color,
-                valueOf: (color) => color,
-                noneValue: NO_COLOR_ROW,
-              }),
-            },
-            {
-              items: [
-                {
-                  value: RENAME_ROW,
-                  label: 'Rename tab…',
-                  icon: <Pencil className="size-3.5" />,
-                  action: true,
-                },
-              ],
-            },
-          ]}
-          onSelect={(value) => {
-            setMenuOpen(false);
-            if (value === RENAME_ROW) {
-              setEditing(true);
-            } else if (value === NO_COLOR_ROW) {
-              onRecolor(null);
-            } else if (isProfileColor(value)) {
-              onRecolor(value);
-            }
-          }}
-          onClose={() => setMenuOpen(false)}
-        />
-      </span>
+      <ColorRenameMenu
+        color={tab.color}
+        onRecolor={onRecolor}
+        onRename={() => setEditing(true)}
+        ariaLabel={`Options for terminal ${label}`}
+        emptyIcon={
+          <TerminalIcon aria-hidden="true" className="size-3 shrink-0" />
+        }
+        side="top"
+        className="ml-1"
+        dotSlot="terminal-tab-color"
+      />
       {editing ? (
         <InlineRenameInput
           value={label}

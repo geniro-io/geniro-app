@@ -22,6 +22,7 @@ import {
   HOST_BOARD_TOOLS,
   HOST_BROWSER_CLICK_TOOL,
   HOST_BROWSER_GET_COOKIES_TOOL,
+  HOST_BROWSER_LABEL_TAB_TOOL,
   HOST_BROWSER_OPEN_TOOL,
   HOST_BROWSER_SCREENSHOT_TOOL,
   HOST_BROWSER_SET_COOKIES_TOOL,
@@ -6651,7 +6652,7 @@ describe('McpServerService — the in-app browser tools', () => {
     );
   });
 
-  it('is not listed without a browser sink, and lists all sixteen tools with one', async () => {
+  it('is not listed without a browser sink, and lists all seventeen tools with one', async () => {
     const without = browserService({ status: 'done', text: '' }, false);
     const withSink = browserService({ status: 'done', text: '' }, true);
     const list = async (subject: McpServerService) =>
@@ -6772,6 +6773,8 @@ describe('McpServerService — the in-app browser tools', () => {
         tools.find((tool) => tool.name === name)?.description ?? '';
       const pairs: [string, string][] = [
         ['browser_open', 'browser_navigate'],
+        ['browser_open', 'browser_label_tab'],
+        ['browser_tabs', 'browser_label_tab'],
         ['browser_snapshot', 'browser_screenshot'],
         ['browser_snapshot', 'browser_evaluate'],
         ['browser_click', 'browser_type'],
@@ -6801,6 +6804,12 @@ describe('McpServerService — the in-app browser tools', () => {
       }
       expect(describes(HOST_BROWSER_OPEN_TOOL)).toContain('asked once');
       expect(describes(HOST_BROWSER_OPEN_TOOL)).toContain('ownCookies');
+      expect(describes(HOST_BROWSER_OPEN_TOOL)).toMatch(
+        /Always give the new tab a `name`.*and a `color`/,
+      );
+      expect(describes(HOST_BROWSER_LABEL_TAB_TOOL)).toMatch(
+        /the user set themselves is theirs/,
+      );
       expect(describes(HOST_BROWSER_GET_COOKIES_TOOL)).toMatch(
         /never the value/,
       );

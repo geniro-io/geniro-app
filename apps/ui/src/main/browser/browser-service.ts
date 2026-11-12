@@ -18,8 +18,10 @@ import {
   type BrowserStateEvent,
   type BrowserTabAction,
   type BrowserTabError,
+  type BrowserTabLabel,
   type BrowserTabState,
   IPC,
+  type ProfileColor,
 } from '../../shared/contracts';
 import { type AgentOp } from './browser-agent-op';
 import {
@@ -47,7 +49,14 @@ export interface BrowserTab {
   authCallback: ((username?: string, password?: string) => void) | null;
   loading: boolean;
   attachedTo: BrowserWindow | null;
+  name: string | null;
+  color: ProfileColor | null;
+  /** The user named or coloured the tab: an agent's label leaves that field alone. */
+  userNamed: boolean;
+  userColored: boolean;
 }
+
+export type BrowserTabLabelField = 'name' | 'color';
 
 interface ChatBrowser {
   readonly runId: string;
@@ -84,6 +93,8 @@ export interface OpenTabOptions {
   agentOp?: AgentOp;
   /** Runs once the session is configured and before the first load. */
   beforeLoad?: (session: Session) => Promise<void>;
+  name?: string;
+  color?: ProfileColor;
 }
 
 interface NavigationEvent {
@@ -266,6 +277,10 @@ export class BrowserService {
       authCallback: null,
       loading: false,
       attachedTo: null,
+      name: options.name ?? null,
+      color: options.color ?? null,
+      userNamed: false,
+      userColored: false,
     };
     chat.tabs.set(id, tab);
     chat.activeTabId = id;
@@ -351,6 +366,39 @@ export class BrowserService {
     this.disposeTab(chat, tab);
     this.layout(chat);
     this.emitRun(runId);
+  }
+
+  /**
+   * Rename or recolour a tab. The user's edit always applies and locks that
+   * field; an agent's skips a field the user set, which is returned as kept.
+   */
+  labelTab(
+    runId: string,
+    tabId: string,
+    label: BrowserTabLabel,
+    by: 'user' | 'agent',
+  ): BrowserTabLabelField[] {
+    const tab = this.requireTab(runId, tabId);
+    const kept: BrowserTabLabelField[] = [];
+    if (label.name !== undefined) {
+      if (by === 'agent' && tab.userNamed) {
+        kept.push('name');
+      } else {
+        const name = label.name?.trim() ?? '';
+        tab.name = name === '' ? null : name;
+        tab.userNamed ||= by === 'user';
+      }
+    }
+    if (label.color !== undefined) {
+      if (by === 'agent' && tab.userColored) {
+        kept.push('color');
+      } else {
+        tab.color = label.color;
+        tab.userColored ||= by === 'user';
+      }
+    }
+    this.emitRun(runId);
+    return kept;
   }
 
   selectTab(runId: string, tabId: string): void {
@@ -677,6 +725,8 @@ export class BrowserService {
       ownCookiesLabel: tab.ownCookiesLabel,
       drivenBy: tab.op?.memberName ?? null,
       authRequest: tab.authRequest,
+      name: tab.name,
+      color: tab.color,
     };
   }
 

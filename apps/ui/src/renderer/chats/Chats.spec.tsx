@@ -190,6 +190,16 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     tasks: tasksApi,
     projects: projectsApi,
     shares: { listShares: vi.fn(() => Promise.resolve({ shares: [] })) },
+    lessons: {
+      getThreadLessonsState: vi.fn(() =>
+        Promise.resolve({
+          reflectable: false,
+          reflectionRunId: null,
+          reflectedThroughSeq: null,
+        }),
+      ),
+      reflectLessons: vi.fn(),
+    },
   })),
 }));
 // The module reads `window.geniro` once at import, before this spec installs its

@@ -41,6 +41,7 @@ import {
 } from '../components/memory-import-dialog';
 import { MemoryRow } from '../components/memory-row';
 import { SettingsPanel, SettingsPanelRow } from '../components/settings-panel';
+import { LessonsSettingsPanel } from './lessons-settings';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
@@ -909,6 +910,12 @@ export function Memory({
           />
         )}
       </SettingsPanel>
+
+      <LessonsSettingsPanel
+        agentsApi={agentsApi}
+        capabilities={capabilities}
+        remote={remote}
+      />
 
       {waitingShown ? (
         <SettingsPanel>

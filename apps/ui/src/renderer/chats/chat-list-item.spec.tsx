@@ -220,6 +220,21 @@ describe('ChatListItem', () => {
       expect(onAnalyze).toHaveBeenCalledWith('run-1');
     });
 
+    it('offers Reflect now beside Analyze thread', async () => {
+      const onReflect = vi.fn();
+      const container = await mount(
+        <ChatListItem {...props({ onAnalyze: vi.fn(), onReflect })} />,
+      );
+      expect(await openMenu(container)).toEqual([
+        'Rename',
+        'Analyze thread…',
+        'Reflect now',
+        'Archive',
+      ]);
+      await clickMenuRow('Reflect now');
+      expect(onReflect).toHaveBeenCalledWith('run-1');
+    });
+
     it('asks for the state the row should END in, never a toggle', async () => {
       const onSetPinned = vi.fn();
       const container = await mount(

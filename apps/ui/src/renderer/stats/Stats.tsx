@@ -38,6 +38,7 @@ import { Select } from '../components/ui/select';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { BreakdownColumn } from './breakdown-card';
+import { LessonsSpendLine } from './lessons-spend-line';
 import { toDayPoints } from './chart-data';
 import {
   CumulativeSpendChart,
@@ -433,6 +434,7 @@ export function Stats({
                 emptyLabel="No thread activity in this period."
               />
             </StatGrid>
+            <LessonsSpendLine groups={data.byPurpose} />
 
             <GoalCells metrics={data.metrics} />
 

@@ -84,6 +84,7 @@ import type { AttachmentStoreService } from '../../agents/services/attachment-st
 import { BrowserBroker } from '../../agents/services/browser.broker';
 import { ChatActionsService } from '../../agents/services/chat-actions.service';
 import type { ChatUploadStoreService } from '../../agents/services/chat-upload-store.service';
+import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import { HostWakeBus } from '../../agents/services/host-wake.bus';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
@@ -1173,6 +1174,8 @@ function setup(
     teamProposals?: TeamProposalBroker;
     /** The lead's `save_project_instructions` gate, when a test reads it. */
     projectInstructionCards?: ProjectInstructionsBroker;
+    /** Who writes the run's goals, when a test reads it. */
+    goalWriters?: GoalWritersBroker;
     /** What the run's project tells it; no project when absent. */
     projectScope?: Partial<
       Pick<ProjectScopeService, 'placeNewRun' | 'liveNamesOf'>
@@ -1671,6 +1674,7 @@ function setup(
     opts.browser,
     opts.teamProposals,
     opts.projectInstructionCards,
+    opts.goalWriters,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -6788,7 +6792,12 @@ describe('TeamExecutorService — agent calls', () => {
     function leadSetup(cursorLead = false) {
       const teamProposals = new TeamProposalBroker();
       const projectInstructionCards = new ProjectInstructionsBroker();
-      const harness = setup(4870, { teamProposals, projectInstructionCards });
+      const goalWriters = new GoalWritersBroker();
+      const harness = setup(4870, {
+        teamProposals,
+        projectInstructionCards,
+        goalWriters,
+      });
       const raised: string[] = [];
       harness.service.useLeadProjectCards(async (runId) => {
         raised.push(runId);
@@ -6805,6 +6814,7 @@ describe('TeamExecutorService — agent calls', () => {
         ...harness,
         teamProposals,
         projectInstructionCards,
+        goalWriters,
         raised,
         team,
       };
@@ -6883,6 +6893,35 @@ describe('TeamExecutorService — agent calls', () => {
 
       expect(teamProposals.canPropose(run.id, 'a', null)).toBe(true);
       expect(projectInstructionCards.canPropose(run.id, 'a', null)).toBe(false);
+    });
+
+    it("lets only the lead write the run's goals, in its own conversation while its turn runs", async () => {
+      const { service, claude, goalWriters, team } = leadSetup();
+      const run = await service.startRun({
+        slug: 'lead',
+        team,
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+
+      expect(goalWriters.canWrite(run.id, 'a', null)).toBe(true);
+      expect(goalWriters.canWrite(run.id, 'a', 'call-1')).toBe(false);
+      expect(goalWriters.canWrite(run.id, 'b', null)).toBe(false);
+      expect(goalWriters.isTeamMember(run.id, 'a')).toBe(true);
+      expect(goalWriters.isTeamMember(run.id, 'b')).toBe(true);
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+      expect(goalWriters.canWrite(run.id, 'a', null)).toBe(false);
+
+      await service.sendMessage(run.id, 'again');
+      await drain();
+      expect(goalWriters.canWrite(run.id, 'a', null)).toBe(true);
+
+      await service.deleteRun(run.id);
+      expect(goalWriters.isTeamMember(run.id, 'a')).toBe(false);
+      expect(goalWriters.isTeamMember(run.id, 'b')).toBe(false);
     });
   });
 
@@ -18694,6 +18733,36 @@ describe('TeamExecutorService — relay mode', () => {
     expect(teamProposals.canPropose(run.id, 'ada', null)).toBe(false);
     expect(projectInstructionCards.canPropose(run.id, 'bob', null)).toBe(true);
     expect(projectInstructionCards.canPropose(run.id, 'ada', null)).toBe(false);
+  });
+
+  it("moves the right to write the run's goals to the new lead on a hand-off, and refuses the former lead", async () => {
+    const goalWriters = new GoalWritersBroker();
+    const harness = relaySetup({ goalWriters });
+    const run = await harness.service.startRun({
+      slug: 'relay',
+      team: RELAY,
+      cwd: dir,
+      prompt: 'ship the feature',
+    });
+    await drain();
+    expect(goalWriters.canWrite(run.id, 'ada', null)).toBe(true);
+    expect(goalWriters.canWrite(run.id, 'bob', null)).toBe(false);
+    expect(goalWriters.canWrite(run.id, 'cy', null)).toBe(false);
+
+    const moved = await harness.stages.move(
+      run.id,
+      { action: 'complete', stage: 'plan', text: 'planned' },
+      { kind: 'agent', nodeId: 'ada' },
+    );
+    expect(moved.ok).toBe(true);
+    await drain();
+    expect(turnsOf(harness.claude, 'You Bob.')).toHaveLength(1);
+
+    expect(goalWriters.canWrite(run.id, 'bob', null)).toBe(true);
+    expect(goalWriters.canWrite(run.id, 'bob', 'call-1')).toBe(false);
+    expect(goalWriters.canWrite(run.id, 'ada', null)).toBe(false);
+    expect(goalWriters.canWrite(run.id, 'cy', null)).toBe(false);
+    expect(goalWriters.isTeamMember(run.id, 'ada')).toBe(true);
   });
 
   it('hands the run to the next stage lead on move_stage with a brief', async () => {

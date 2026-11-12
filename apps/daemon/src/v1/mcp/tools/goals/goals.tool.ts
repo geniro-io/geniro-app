@@ -5,27 +5,39 @@ import {
   type GoalsWriteOutcome,
   HOST_GOALS_TOOL,
 } from '../../../agents/chat.types';
+import type { GoalWritersBroker } from '../../../agents/services/goal-writers.broker';
 import type { GoalsService } from '../../../agents/services/goals.service';
 import { ALWAYS_LOADED_TOOL_META } from '../../../teams/teams.types';
-import type { McpCallContext, McpToolResult } from '../../mcp.types';
+import type {
+  McpCallContext,
+  McpListContext,
+  McpToolResult,
+} from '../../mcp.types';
 import { BaseMcpTool } from '../base-mcp-tool';
 import { goalsInstructions } from './goals.instructions';
 import {
   type GoalsCall,
+  goalsLeadOnlyText,
   goalsListText,
   goalsResultText,
   readGoals,
 } from './goals.reader';
 import { goalsSchema } from './goals.schema';
 
-/** `goals` — record a task's goals and close each with evidence. Offered in every run. */
+/**
+ * `goals` — record a task's goals and close each with evidence. Offered in
+ * every run; in a team run only the lead writes them (`GoalWritersBroker`).
+ */
 export class GoalsTool extends BaseMcpTool {
   readonly name = HOST_GOALS_TOOL;
   protected readonly meta: Record<string, unknown> | null =
     ALWAYS_LOADED_TOOL_META;
   private readonly logger = new Logger(GoalsTool.name);
 
-  constructor(private readonly goals: GoalsService) {
+  constructor(
+    private readonly goals: GoalsService,
+    private readonly writers: GoalWritersBroker,
+  ) {
     super();
   }
 
@@ -33,8 +45,8 @@ export class GoalsTool extends BaseMcpTool {
     return true;
   }
 
-  protected instructions(): string {
-    return goalsInstructions();
+  protected instructions({ runId, memberId }: McpListContext): string {
+    return goalsInstructions(this.writers.isTeamMember(runId, memberId));
   }
 
   protected inputSchema(): Record<string, unknown> {
@@ -43,8 +55,9 @@ export class GoalsTool extends BaseMcpTool {
 
   protected async run(
     args: Record<string, unknown>,
-    { runId, memberId }: McpCallContext,
+    context: McpCallContext,
   ): Promise<McpToolResult> {
+    const { runId, memberId } = context;
     const call = readGoals(args);
     if ('error' in call) {
       return this.invalidArgs(call.error);
@@ -53,9 +66,18 @@ export class GoalsTool extends BaseMcpTool {
     try {
       if (call.action === 'list') {
         const goals = await this.goals.list(runId);
-        return goals === null
-          ? this.text('This run no longer exists.', true)
-          : this.text(goalsListText(goals));
+        if (goals === null) {
+          return this.text('This run no longer exists.', true);
+        }
+        return this.text(
+          goalsListText(
+            goals,
+            goals.length > 0 || (await this.mayWrite(context)),
+          ),
+        );
+      }
+      if (!(await this.mayWrite(context))) {
+        return this.text(goalsLeadOnlyText(), true);
       }
       const outcome = await this.write(runId, actor, call);
       const reply = goalsResultText(call.action, outcome);
@@ -66,6 +88,17 @@ export class GoalsTool extends BaseMcpTool {
       );
       return this.text('Not changed: the goals could not be written.', true);
     }
+  }
+
+  private async mayWrite({
+    runId,
+    memberId,
+    conversationId,
+  }: McpCallContext): Promise<boolean> {
+    return (
+      this.writers.canWrite(runId, memberId, conversationId) ||
+      !(await this.goals.isTeamRun(runId))
+    );
   }
 
   private write(

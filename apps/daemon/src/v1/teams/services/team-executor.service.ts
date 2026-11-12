@@ -76,6 +76,7 @@ import {
   BrowserBroker,
   type BrowserSink,
 } from '../../agents/services/browser.broker';
+import { GoalWritersBroker } from '../../agents/services/goal-writers.broker';
 import { ItemCallIndexService } from '../../agents/services/item-call-index.service';
 import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
@@ -871,6 +872,8 @@ export class TeamExecutorService
     /** The lead's `save_project_instructions`, optional on `artifacts`' terms. */
     @Optional()
     private readonly projectInstructionCards?: ProjectInstructionsBroker,
+    /** Who writes the run's goals (the lead alone), optional on `artifacts`' terms. */
+    @Optional() private readonly goalWriters?: GoalWritersBroker,
   ) {
     this.parallelism = parallelism ?? MAX_PARALLEL_AGENTS;
   }
@@ -2608,7 +2611,9 @@ export class TeamExecutorService
    * Give each member that can lead this run `read_teams`, `propose_team` and
    * `save_project_instructions` (user decision: only the lead), offered while
    * it leads and only inside a turn of its own conversation — the one the
-   * user talks to; between turns it is refused as an idle chat's is.
+   * user talks to; between turns it is refused as an idle chat's is. Every
+   * member gets a goal writer's sink on the same terms, so only the lead
+   * writes the run's goals and the rest are known as the team's.
    * The project tool also needs every pool member on a CLI that holds a call
    * open; a cursor lead is not offered it yet.
    */
@@ -2624,13 +2629,19 @@ export class TeamExecutorService
     const leads = possibleLeadsOf(team);
     const disposers: (() => void)[] = [];
     for (const node of hostToolNodes) {
-      if (!leads.has(node.id)) {
-        continue;
-      }
       const offeredTo = (conversationId: string | null): boolean =>
+        leads.has(node.id) &&
         conversationId === null &&
         ownTurnLive(node.id) &&
         this.isLeadNow(runId, team, node.id);
+      if (this.goalWriters !== undefined) {
+        disposers.push(
+          this.goalWriters.register(runId, node.id, { runId }, { offeredTo }),
+        );
+      }
+      if (!leads.has(node.id)) {
+        continue;
+      }
       if (this.teamProposals !== undefined) {
         disposers.push(
           this.teamProposals.register(runId, node.id, { runId }, { offeredTo }),

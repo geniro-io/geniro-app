@@ -12,6 +12,7 @@ import { FindingsReportBroker } from '../agents/services/findings-report.broker'
 import { GalleryBroker } from '../agents/services/gallery.broker';
 import { GalleryImageService } from '../agents/services/gallery-image.service';
 import { GlobalChatSearchService } from '../agents/services/global-chat-search.service';
+import { GoalWritersBroker } from '../agents/services/goal-writers.broker';
 import { GoalsService } from '../agents/services/goals.service';
 import { KnowledgeItemsService } from '../agents/services/knowledge-items.service';
 import { MetricsBroker } from '../agents/services/metrics.broker';
@@ -93,6 +94,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         teamNotes: TeamNoteBroker,
         runOutcomes: RunOutcomeBroker,
         goals: GoalsService,
+        goalWriters: GoalWritersBroker,
         stages: StageService,
         patches: PatchBroker,
         plans: PlanBroker,
@@ -134,6 +136,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
           teamNotes,
           runOutcomes,
           goals,
+          goalWriters,
           stages,
           patches,
           plans,
@@ -175,6 +178,7 @@ import { createMcpTools, MCP_TOOLS } from './tools/mcp-tools';
         TeamNoteBroker,
         RunOutcomeBroker,
         GoalsService,
+        GoalWritersBroker,
         StageService,
         PatchBroker,
         PlanBroker,

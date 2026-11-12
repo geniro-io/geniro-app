@@ -90,6 +90,7 @@ import { FindingsReportBroker } from './services/findings-report.broker';
 import { GalleryBroker } from './services/gallery.broker';
 import { GalleryImageService } from './services/gallery-image.service';
 import { GlobalChatSearchService } from './services/global-chat-search.service';
+import { GoalWritersBroker } from './services/goal-writers.broker';
 import { GoalsService } from './services/goals.service';
 import { HostWakeBus } from './services/host-wake.bus';
 import { HostWakeChatDelivery } from './services/host-wake-chat-delivery.service';
@@ -274,6 +275,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     BrowserBroker,
     ArtifactBroker,
     ActionBroker,
+    GoalWritersBroker,
     TeamProposalBroker,
     TeamBuilderBroker,
     ActionPublishService,
@@ -679,6 +681,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // press beside it.
     ActionPublishService,
     ActionPressService,
+    GoalWritersBroker,
     TeamProposalBroker,
     TeamBuilderBroker,
     ProjectChatBroker,

@@ -358,6 +358,15 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     };
   }
 
+  /** Whether the actor is a lessons reflection, which proposes lessons and writes no memory itself. */
+  private async isReflection(actor: MemoryActor): Promise<boolean> {
+    if (actor.kind !== 'analysis') {
+      return false;
+    }
+    const run = await this.runs.getById(actor.runId, this.em.fork());
+    return run?.analysisPurpose === 'lessons';
+  }
+
   /** The best active entries a run in `place` may see, best first. */
   async search(
     query: string,
@@ -1020,6 +1029,9 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
     if (invalid) {
       return invalid;
     }
+    if (await this.isReflection(actor)) {
+      return refusedForReflection();
+    }
     if (input.handle !== undefined && this.underReview(actor)) {
       return refused(
         'UNDER_REVIEW',
@@ -1109,6 +1121,9 @@ export class MemoryService implements OnModuleInit, OnApplicationShutdown {
   ): Promise<MemoryForgetOutcome> {
     if (isAgent(actor) && !this.config.enabled) {
       return refused('MEMORY_DISABLED', 'the user has turned memory off');
+    }
+    if (await this.isReflection(actor)) {
+      return refusedForReflection();
     }
     if (this.underReview(actor)) {
       return refused(
@@ -1426,6 +1441,13 @@ function markText(row: Memory): void {
   row.referencedPaths = storedPaths(referencedPathsOf(row.title, row.body));
   row.referencesGone = null;
   row.referencesCheckedAt = null;
+}
+
+function refusedForReflection(): Refusal {
+  return refused(
+    'REFLECTION_READ_ONLY',
+    'a lessons reflection proposes lessons with propose_lessons; the user saves them',
+  );
 }
 
 function stampSource(

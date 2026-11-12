@@ -15,14 +15,14 @@ import {
 } from '../agents/chat.types';
 import type { AgentKind } from '../runs/runs.types';
 
+/** What a turn's spend was for, beside the user's own work: a lessons reflection. */
+export type UsagePurpose = 'lessons';
+
 /**
  * One ledger row as its writers hand it over — the shape both the live recorder
  * and the boot backfill produce, so the two cannot disagree about what a usage
  * event is made of.
  */
-/** What a turn's spend was for, beside the user's own work: a lessons reflection. */
-export type UsagePurpose = 'lessons';
-
 export interface UsageEventInput {
   runId: string;
   memberId: string | null;

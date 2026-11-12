@@ -157,7 +157,14 @@ export type LessonReflectionMode = (typeof LESSON_REFLECTION_MODES)[number];
 export const LessonsConfigSchema = z
   .object({
     mode: z.enum(LESSON_REFLECTION_MODES),
-    agentKind: AgentKindSchema.nullable(),
+    agentKind: z
+      .string()
+      .min(1)
+      .max(64)
+      .nullable()
+      .describe(
+        'An agent kind; one this daemon does not know reads as null, the thread’s own CLI',
+      ),
     model: z.string().min(1).max(200).nullable(),
     effort: z.string().min(1).max(50).nullable(),
   })

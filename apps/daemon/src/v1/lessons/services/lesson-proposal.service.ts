@@ -47,6 +47,7 @@ export class LessonProposalService {
     const target = input.target ?? targetOf(row);
     const title = input.title ?? row.title;
     const rule = input.rule ?? row.rule;
+    const dedup = JSON.parse(row.dedup) as LessonDedup;
     const entry = savedEntryOrThrow(
       await this.memory.create(
         {
@@ -56,6 +57,9 @@ export class LessonProposalService {
           projectId:
             target.scope === 'project' ? this.placeOf(row, 'project') : null,
           teamSlug: target.scope === 'team' ? this.placeOf(row, 'team') : null,
+          ...(dedup.verdict !== 'new' && dedup.handle !== null
+            ? { notDuplicateOf: [dedup.handle] }
+            : {}),
         },
         { sourceRunId: row.sourceRunId, proposalId: row.id },
       ),

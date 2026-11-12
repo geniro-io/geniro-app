@@ -845,7 +845,8 @@ export type MemoryRefusalCode =
   | 'NO_PROJECT'
   | 'NO_TEAM'
   | 'UNDER_REVIEW'
-  | 'USER_ONLY';
+  | 'USER_ONLY'
+  | 'REFLECTION_READ_ONLY';
 
 export type MemorySaveOutcome =
   | { kind: 'created'; entry: MemoryEntry }

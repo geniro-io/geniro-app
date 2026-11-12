@@ -16,7 +16,8 @@ import type {
 
 /**
  * One stretch of a thread a reflection reads: the items after `fromSeq`, up to
- * and including `toSeq`. Dropped with its run by `RunTeardownService`.
+ * and including `toSeq`. Dropped with its run by `LessonReflectionService`
+ * on `bus.allDeleted()`.
  */
 @Entity({ tableName: 'lesson_segments' })
 @Index({ properties: ['runId', 'status'] })

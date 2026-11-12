@@ -29,7 +29,6 @@ import {
 } from './browser-sessions';
 
 const RECENT_LIMIT = 20;
-const POP_OUT_SIZE = { width: 1100, height: 760 };
 const SEARCH_URL = 'https://duckduckgo.com/?q=';
 
 export interface BrowserTab {
@@ -57,6 +56,7 @@ interface ChatBrowser {
   poppedOut: boolean;
   popout: BrowserWindow | null;
   bounds: BrowserBounds | null;
+  popoutBounds: BrowserBounds | null;
   recent: string[];
   counter: number;
   /** Hosts the user opened in this chat themselves; an agent may read them unasked. */
@@ -68,6 +68,8 @@ export interface BrowserServiceOptions {
   /** Resolves once the launch sweep of orphaned jars is done; no session is made before. */
   ready: Promise<void>;
   mainWindow: () => BrowserWindow | null;
+  /** Makes the window a chat's browser moves into, loaded with that chat's browser pane. */
+  createPopout: (runId: string, title: string) => BrowserWindow;
   log?: (message: string) => void;
   /** Whether a chat's jar folder is on disk from an earlier launch. */
   hasJarOnDisk?: (runId: string) => boolean;
@@ -142,7 +144,6 @@ function hostOf(url: string): string | null {
 
 export class BrowserService {
   private readonly chats = new Map<string, ChatBrowser>();
-  private readonly popouts = new Set<BrowserWindow>();
   private readonly byContents = new WeakMap<object, BrowserTab>();
   private readonly insecureHosts = new WeakMap<Session, Set<string>>();
   private readonly onCertificateError: (
@@ -362,12 +363,22 @@ export class BrowserService {
     this.emitRun(runId);
   }
 
-  setBounds(runId: string, bounds: BrowserBounds | null): void {
+  setBounds(
+    runId: string,
+    bounds: BrowserBounds | null,
+    from: BrowserWindow | null,
+  ): void {
     const chat = this.chats.get(runId);
-    if (chat === undefined) {
+    if (chat === undefined || from === null) {
       return;
     }
-    chat.bounds = bounds;
+    if (from === chat.popout) {
+      chat.popoutBounds = bounds;
+    } else if (from === this.options.mainWindow()) {
+      chat.bounds = bounds;
+    } else {
+      return;
+    }
     this.layout(chat);
   }
 
@@ -380,21 +391,10 @@ export class BrowserService {
       chat.popout.focus();
       return;
     }
-    const win = new BrowserWindow({
-      ...POP_OUT_SIZE,
-      title: `Browser — ${title}`,
-      backgroundColor: '#ffffff',
-      webPreferences: {
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-      },
-    });
-    win.on('page-title-updated', (event) => event.preventDefault());
-    win.on('resize', () => this.layout(chat));
+    const win = this.options.createPopout(runId, title);
     win.on('close', () => this.dockBack(chat, win));
-    this.popouts.add(win);
     chat.popout = win;
+    chat.popoutBounds = null;
     chat.poppedOut = true;
     this.layout(chat);
     this.emitRun(runId);
@@ -492,11 +492,8 @@ export class BrowserService {
       for (const tab of tabs) {
         this.disposeTab(chat, tab);
       }
-      if (win !== null) {
-        this.popouts.delete(win);
-        if (!win.isDestroyed()) {
-          win.destroy();
-        }
+      if (win !== null && !win.isDestroyed()) {
+        win.destroy();
       }
     }
     if (chat !== undefined || (this.options.hasJarOnDisk?.(runId) ?? false)) {
@@ -550,7 +547,6 @@ export class BrowserService {
         win.destroy();
       }
     }
-    this.popouts.clear();
   }
 
   private chatOf(runId: string): ChatBrowser {
@@ -563,6 +559,7 @@ export class BrowserService {
         poppedOut: false,
         popout: null,
         bounds: null,
+        popoutBounds: null,
         recent: [],
         counter: 0,
         userHosts: new Set(),
@@ -609,8 +606,8 @@ export class BrowserService {
       return;
     }
     chat.popout = null;
+    chat.popoutBounds = null;
     chat.poppedOut = false;
-    this.popouts.delete(win);
     for (const tab of chat.tabs.values()) {
       if (tab.attachedTo === win) {
         this.detach(tab);
@@ -633,10 +630,14 @@ export class BrowserService {
 
   private layout(chat: ChatBrowser): void {
     const host = chat.poppedOut ? chat.popout : this.options.mainWindow();
-    const placed =
-      host !== null && !host.isDestroyed() && (chat.poppedOut || chat.bounds);
+    const bounds = chat.poppedOut ? chat.popoutBounds : chat.bounds;
     for (const tab of chat.tabs.values()) {
-      if (!placed || host === null || tab.id !== chat.activeTabId) {
+      if (
+        host === null ||
+        host.isDestroyed() ||
+        bounds === null ||
+        tab.id !== chat.activeTabId
+      ) {
         this.detach(tab);
         continue;
       }
@@ -645,17 +646,12 @@ export class BrowserService {
         host.contentView.addChildView(tab.view);
         tab.attachedTo = host;
       }
-      if (chat.poppedOut) {
-        const { width, height } = host.getContentBounds();
-        tab.view.setBounds({ x: 0, y: 0, width, height });
-      } else if (chat.bounds !== null) {
-        tab.view.setBounds({
-          x: Math.round(chat.bounds.x),
-          y: Math.round(chat.bounds.y),
-          width: Math.round(chat.bounds.width),
-          height: Math.round(chat.bounds.height),
-        });
-      }
+      tab.view.setBounds({
+        x: Math.round(bounds.x),
+        y: Math.round(bounds.y),
+        width: Math.round(bounds.width),
+        height: Math.round(bounds.height),
+      });
       tab.view.setVisible(true);
     }
   }
@@ -687,7 +683,7 @@ export class BrowserService {
 
   private emitState(event: BrowserStateEvent): void {
     for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed() && !this.popouts.has(win)) {
+      if (!win.isDestroyed()) {
         win.webContents.send(IPC.onBrowserState, event);
       }
     }

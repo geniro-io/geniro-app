@@ -3,6 +3,7 @@ import './styles/global.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { parseBrowserWindowHash } from '../shared/browser-window-route';
 import { renderLoadedApp } from './boot-app';
 import { ErrorBoundary } from './components/error-boundary';
 import { PairingScreen } from './components/pairing-screen';
@@ -66,8 +67,18 @@ if (container) {
   // already mounted into (which React itself warns is a mistake).
   const root = createRoot(container);
 
+  const browserWindow = parseBrowserWindowHash(window.location.hash);
+
   function renderApp(): void {
     applyStoredTheme();
+    if (browserWindow !== null) {
+      void renderLoadedApp(root, () =>
+        import('./chats/browser/browser-window-root').then((module) => ({
+          App: module.browserWindowApp(browserWindow),
+        })),
+      );
+      return;
+    }
     void renderLoadedApp(root, () => import('./App'));
   }
 

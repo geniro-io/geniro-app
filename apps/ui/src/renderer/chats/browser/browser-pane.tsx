@@ -143,15 +143,19 @@ export function BrowserPane({
   chatTitle = 'Chat',
   fullScreen = false,
   onFullScreen,
+  windowed = false,
 }: {
   runId: string;
   visible: boolean;
-  onClose: () => void;
+  /** Absent, the pane has no close button. */
+  onClose?: () => void;
   chatTitle?: string;
   /** Drawn inside the full-screen dialog, whose ✕ takes the pane's place. */
   fullScreen?: boolean;
   /** Absent, the expand menu offers no full-screen view. */
   onFullScreen?: (on: boolean) => void;
+  /** Drawn in the chat's own browser window, which holds the page while popped out. */
+  windowed?: boolean;
 }): React.JSX.Element | null {
   const read = useBrowserState(runId);
   const state = read ?? EMPTY_RUN(runId);
@@ -171,7 +175,11 @@ export function BrowserPane({
   const noticeShown =
     active !== null && (active.error !== null || active.authRequest !== null);
   const wantsView =
-    visible && read !== null && !state.poppedOut && !startPage && !noticeShown;
+    visible &&
+    read !== null &&
+    (windowed || !state.poppedOut) &&
+    !startPage &&
+    !noticeShown;
   const { still } = useBrowserView(runId, placeholderRef, wantsView);
 
   useEffect(() => {
@@ -310,7 +318,7 @@ export function BrowserPane({
           onClose={() => setExpandOpen(false)}
         />
       </span>
-      {fullScreen ? null : (
+      {fullScreen || onClose === undefined ? null : (
         <Button
           type="button"
           variant="ghost"
@@ -491,16 +499,26 @@ export function BrowserPane({
             }
             onReload={() => history('reload')}
           />
-        ) : state.poppedOut ? (
+        ) : state.poppedOut && !windowed ? (
           <EmptyState
             icon={<PictureInPicture2 />}
             actions={
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => attempt(window.geniro.browserDock(runId))}>
-                Dock back
-              </Button>
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    attempt(window.geniro.browserPopOut(runId, chatTitle))
+                  }>
+                  Show window
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => attempt(window.geniro.browserDock(runId))}>
+                  Dock back
+                </Button>
+              </>
             }>
             Open in its own window
           </EmptyState>

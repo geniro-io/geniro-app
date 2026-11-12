@@ -87,6 +87,9 @@ const mocks = vi.hoisted(() => {
     settings,
     sendToWindow,
     getAllWindows,
+    fromWebContents: vi.fn((sender: unknown) =>
+      sender === undefined ? null : { sender },
+    ),
     applyTheme: vi.fn(() => 'light' as const),
     handle: vi.fn((channel: string, handler: IpcHandler) => {
       handlers.set(channel, handler);
@@ -108,7 +111,10 @@ vi.mock('electron', () => ({
     showSaveDialog: vi.fn(),
   },
   ipcMain: { handle: mocks.handle },
-  BrowserWindow: { getAllWindows: mocks.getAllWindows },
+  BrowserWindow: {
+    getAllWindows: mocks.getAllWindows,
+    fromWebContents: mocks.fromWebContents,
+  },
 }));
 vi.mock('./cli-detect', () => ({ detectClis: vi.fn(() => []) }));
 vi.mock('./native-appearance', () => ({ applyTheme: mocks.applyTheme }));
@@ -813,14 +819,16 @@ describe('registerIpc browser channels', () => {
     expect(setBounds).not.toHaveBeenCalled();
   });
 
-  it('passes valid bounds, and null to hide, through to the service', () => {
+  it("passes valid bounds, and null to hide, with the sending window's BrowserWindow", () => {
     const bounds = { x: 1, y: 2, width: 300, height: 200 };
+    const sender = { id: 7 };
 
-    handler(IPC.browserSetBounds)({}, 'run-1', bounds);
-    handler(IPC.browserSetBounds)({}, 'run-1', null);
+    handler(IPC.browserSetBounds)({ sender }, 'run-1', bounds);
+    handler(IPC.browserSetBounds)({ sender }, 'run-1', null);
 
-    expect(setBounds).toHaveBeenNthCalledWith(1, 'run-1', bounds);
-    expect(setBounds).toHaveBeenNthCalledWith(2, 'run-1', null);
+    expect(mocks.fromWebContents).toHaveBeenCalledWith(sender);
+    expect(setBounds).toHaveBeenNthCalledWith(1, 'run-1', bounds, { sender });
+    expect(setBounds).toHaveBeenNthCalledWith(2, 'run-1', null, { sender });
   });
 
   it('opens a typed address as the user, resolving bare words and hosts', async () => {

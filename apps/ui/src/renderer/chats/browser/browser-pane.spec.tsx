@@ -306,6 +306,53 @@ describe('BrowserPane', () => {
     expect(dock).toHaveBeenCalledExactlyOnceWith(RUN);
   });
 
+  it('brings the pop-out window forward from Show window', async () => {
+    const popOut = vi.fn(() => Promise.resolve());
+    overrides.browserPopOut = popOut;
+    showState(run([tab()], { poppedOut: true }));
+    await render(
+      <BrowserPane
+        runId={RUN}
+        visible
+        onClose={() => undefined}
+        chatTitle="Fix the build"
+      />,
+    );
+
+    await act(async () => button('Show window').click());
+
+    expect(popOut).toHaveBeenCalledExactlyOnceWith(RUN, 'Fix the build');
+  });
+
+  it('places the page in the chat window while popped out, with no close button', async () => {
+    showState(run([tab()], { poppedOut: true }));
+    await render(<BrowserPane runId={RUN} visible windowed />);
+
+    expect(setBounds).toHaveBeenCalledWith(RUN, {
+      x: PLACEHOLDER.left,
+      y: PLACEHOLDER.top,
+      width: PLACEHOLDER.width,
+      height: PLACEHOLDER.height,
+    });
+    expect(container.textContent).not.toContain('Open in its own window');
+    expect(
+      container.querySelector('button[aria-label="Close browser"]'),
+    ).toBeNull();
+    expect(container.querySelector('[role="tablist"]')).not.toBeNull();
+  });
+
+  it('docks back from Expand in the chat window', async () => {
+    const dock = vi.fn(() => Promise.resolve());
+    overrides.browserDock = dock;
+    showState(run([tab()], { poppedOut: true }));
+    await render(<BrowserPane runId={RUN} visible windowed />);
+
+    await act(async () => button('Expand').click());
+    await act(async () => option('Dock back')!.click());
+
+    expect(dock).toHaveBeenCalledExactlyOnceWith(RUN);
+  });
+
   it('asks for a sign-in in the pane while the tabs are popped out', async () => {
     showState(
       run(

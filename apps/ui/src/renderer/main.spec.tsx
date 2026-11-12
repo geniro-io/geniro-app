@@ -3,16 +3,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
+  browserWindowApp: vi.fn(() => () => null),
+  App: function MockApp() {
+    return null;
+  },
   createRoot: vi.fn(() => ({ render: vi.fn(), unmount: vi.fn() })),
 }));
 
 // The real tree pulls in the whole app; this spec is about what runs BEFORE it.
 vi.mock('react-dom/client', () => ({ createRoot: mocks.createRoot }));
-vi.mock('./App', () => ({ App: () => null }));
+vi.mock('./App', () => ({ App: mocks.App }));
+vi.mock('./chats/browser/browser-window-root', () => ({
+  browserWindowApp: mocks.browserWindowApp,
+}));
 vi.mock('./components/error-boundary', () => ({
   ErrorBoundary: ({ children }: { children: React.ReactNode }) => children,
 }));
 vi.mock('./styles/global.css', () => ({}));
+
+function containsType(node: unknown, type: unknown): boolean {
+  if (Array.isArray(node)) {
+    return node.some((child) => containsType(child, type));
+  }
+  if (node === null || typeof node !== 'object' || !('props' in node)) {
+    return false;
+  }
+  const element = node as { type: unknown; props: { children?: unknown } };
+  return element.type === type || containsType(element.props.children, type);
+}
 
 function stubMatchMedia(dark: boolean): void {
   vi.stubGlobal(
@@ -42,6 +60,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  window.location.hash = '';
+  mocks.browserWindowApp.mockClear();
 });
 
 describe('renderer entry', () => {
@@ -86,5 +106,42 @@ describe('renderer entry', () => {
     // worse answer than a media-query-resolved one.
     expect(document.documentElement.dataset.theme).toBe('dark');
     error.mockRestore();
+  });
+
+  it("renders only the chat's browser in a pop-out window, never the app", async () => {
+    stubMatchMedia(false);
+    mocks.getSettings.mockReturnValue(new Promise(() => {}));
+    window.location.hash = '#browser-window?run=run-1&title=Fix+the+build';
+    const render = vi.fn();
+    mocks.createRoot.mockImplementation(() => ({ render, unmount: vi.fn() }));
+
+    await import('./main');
+
+    await vi.waitFor(() => expect(render).toHaveBeenCalled());
+    expect(mocks.browserWindowApp).toHaveBeenCalledExactlyOnceWith({
+      runId: 'run-1',
+      title: 'Fix the build',
+    });
+    expect(render).toHaveBeenCalledOnce();
+    expect(containsType(render.mock.calls[0]?.[0], mocks.App)).toBe(false);
+  });
+
+  it('renders the app, not the pop-out browser, on an app route', async () => {
+    stubMatchMedia(false);
+    mocks.getSettings.mockReturnValue(new Promise(() => {}));
+    window.location.hash = '#chats/run-1';
+    let rendered: unknown;
+    mocks.createRoot.mockImplementation(() => ({
+      render: vi.fn((tree: unknown) => {
+        rendered = tree;
+      }),
+      unmount: vi.fn(),
+    }));
+
+    await import('./main');
+
+    await vi.waitFor(() => expect(rendered).toBeDefined());
+    expect(mocks.browserWindowApp).not.toHaveBeenCalled();
+    expect(containsType(rendered, mocks.App)).toBe(true);
   });
 });

@@ -22,6 +22,7 @@ function row(over: Partial<WorkingAgentRow>): WorkingAgentRow {
     callerKey: 'manager',
     title: 'Build the export button and its tests',
     state: 'working',
+    waitingFor: [],
     startedAt: Date.now() - 695_000,
     clocks: [],
     ...over,
@@ -142,6 +143,25 @@ export const OnlyWaiting: Story = {
       }),
     ],
   },
+};
+
+export const WaitingOnItsOwnCall: Story = {
+  args: {
+    rows: [
+      row({
+        conversationId: 'call-4',
+        callId: 'call-4',
+        callIds: ['call-4'],
+        callee: 'Middle Engineer',
+        calleeKey: 'middle',
+        caller: 'Senior Engineer',
+        callerKey: 'senior',
+        title: 'Stand up slot 57 and run the acceptance preview',
+      }),
+      row({ state: 'waiting', waitingFor: ['Middle Engineer'] }),
+    ],
+  },
+  play: pinPanel,
 };
 
 export const SeveralRunsOfOneAgent: Story = {

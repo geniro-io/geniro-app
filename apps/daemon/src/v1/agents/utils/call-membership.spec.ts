@@ -47,7 +47,7 @@ describe('callMembershipOf', () => {
     }
   });
 
-  it("keeps the call's start, the pickup note, approval cards and a callee's published page or button in the run's own flow", () => {
+  it("keeps a member's own call start, the pickup note, approval cards and a callee's published page or button in the run's own flow", () => {
     for (const kind of [
       'call_started',
       'await_collected',
@@ -61,6 +61,67 @@ describe('callMembershipOf', () => {
         callMembershipOf(row(kind, 'engineer', { callId: 'call-1' }), lookup),
       ).toBe(OUTSIDE_ANY_CALL);
     }
+  });
+
+  describe('a call made by a callee', () => {
+    const nested = (
+      callId: string,
+      memberId: string,
+      callerConversationId: string,
+    ): CallMembershipRow =>
+      row('call_started', memberId, {
+        callId,
+        calleeNodeId: 'middle',
+        callerConversationId,
+      });
+
+    it("is filed in the call its caller's conversation answers", () => {
+      const rows = [start, nested('call-2', 'engineer', 'call-1')];
+      expect(callMembershipOf(rows[1]!, callMembershipLookupOf(rows))).toBe(
+        'call-1',
+      );
+    });
+
+    it('is filed in the newest call of a continued conversation started before it', () => {
+      const rows = [
+        start,
+        row('call_started', 'manager', {
+          callId: 'call-2',
+          calleeNodeId: 'engineer',
+          thread: 'call-1',
+        }),
+        nested('call-3', 'engineer', 'call-1'),
+        row('call_started', 'manager', {
+          callId: 'call-4',
+          calleeNodeId: 'engineer',
+          thread: 'call-2',
+        }),
+      ];
+      expect(callMembershipOf(rows[2]!, callMembershipLookupOf(rows))).toBe(
+        'call-2',
+      );
+    });
+
+    it('is filed the same way when its row is learned as it is written', () => {
+      const lookup = callMembershipLookupOf([start]);
+      const made = nested('call-2', 'engineer', 'call-1');
+      lookup.learn(made);
+      expect(callMembershipOf(made, lookup)).toBe('call-1');
+    });
+
+    it("stays in the run's own flow when its caller is not that conversation's callee", () => {
+      const rows = [start, nested('call-2', 'qa', 'call-1')];
+      expect(callMembershipOf(rows[1]!, callMembershipLookupOf(rows))).toBe(
+        OUTSIDE_ANY_CALL,
+      );
+    });
+
+    it("stays in the run's own flow when the conversation it names never started", () => {
+      const rows = [start, nested('call-2', 'engineer', 'call-9')];
+      expect(callMembershipOf(rows[1]!, callMembershipLookupOf(rows))).toBe(
+        OUTSIDE_ANY_CALL,
+      );
+    });
   });
 
   it('keeps a row another member wrote about the call in the main flow', () => {

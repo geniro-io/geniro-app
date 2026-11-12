@@ -209,6 +209,7 @@ describe('callEndedPerDaemon', () => {
           brief: null,
           mode: null,
           thread: null,
+          callerConversationId: null,
           startSeq,
           startedAt: 'now',
           endedAt: null,

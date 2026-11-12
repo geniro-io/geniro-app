@@ -10338,6 +10338,12 @@ export interface RunCallState {
     thread: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof RunCallState
+     */
+    callerConversationId: string | null;
+    /**
+     * 
      * @type {number}
      * @memberof RunCallState
      */

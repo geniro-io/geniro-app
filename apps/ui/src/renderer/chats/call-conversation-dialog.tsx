@@ -26,9 +26,10 @@ import type { WorkingAgentRow } from './working-agents';
 const CONVERSATION_PAGE = 200;
 
 /**
- * The conversation's calls, and every call the rows name as continuing one of
- * them: a continuation the popup sees start is on nobody's list yet. Read in seq
- * order, so a continuation of a continuation counts too.
+ * The conversation's calls, every call the rows name as continuing one of them
+ * — a continuation the popup sees start is on nobody's list yet — and every call
+ * the callee made from them, drawn as a card inside. Read in seq order, so a
+ * continuation of a continuation counts too.
  */
 function callsInside(
   rows: readonly ChatItem[],
@@ -36,13 +37,15 @@ function callsInside(
 ): ReadonlySet<string> {
   const inside = new Set(chain);
   for (const row of rows) {
+    if (row.kind !== 'call_started') {
+      continue;
+    }
     const callId = payloadString(row.payload, 'callId');
     const thread = payloadString(row.payload, 'thread');
+    const madeInside = typeof row.inCall === 'string' && inside.has(row.inCall);
     if (
-      row.kind === 'call_started' &&
       callId !== null &&
-      thread !== null &&
-      inside.has(thread)
+      ((thread !== null && inside.has(thread)) || madeInside)
     ) {
       inside.add(callId);
     }

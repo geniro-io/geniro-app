@@ -77,6 +77,7 @@ export function foldRunCalls(
       brief: brief === null ? null : brief.slice(0, RUN_CALL_BRIEF_MAX),
       mode: callField(row.payload, 'mode'),
       thread: callField(row.payload, 'thread'),
+      callerConversationId: callField(row.payload, 'callerConversationId'),
       startSeq: row.seq,
       startedAt: row.createdAt,
       endedAt: null,

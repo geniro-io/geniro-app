@@ -13,7 +13,7 @@ export const OUTSIDE_ANY_CALL = '';
  * what the rule answers: a launch that finds stamps of another version clears
  * them and stamps every row again (`ItemCallIndexService.indexAllQuietly`).
  */
-export const CALL_MEMBERSHIP_VERSION = 2;
+export const CALL_MEMBERSHIP_VERSION = 3;
 
 /**
  * Rows about a call that sit in the run's own flow even though they name it —
@@ -24,9 +24,11 @@ export const CALL_MEMBERSHIP_VERSION = 2;
  * bump: no row of either kind carries a top-level `callId` (a callee's call is
  * named inside its `publisher`), so every stored one already answered
  * {@link OUTSIDE_ANY_CALL}.
+ *
+ * A `call_started` is filed where its CALLER speaks: the run's own flow, or the
+ * call the calling conversation answers ({@link CallMembershipLookup.parentCallOf}).
  */
 const CALLER_FLOW_KINDS = new Set<ItemKind>([
-  'call_started',
   'await_collected',
   'approval_request',
   'approval_verdict',
@@ -54,6 +56,12 @@ export interface CallMembershipLookup {
   calleeNodeOf(callId: string): string | null | undefined;
   /** The call a delegate was launched in, from its first declaration naming one. */
   delegateCallOf(delegateId: string): string | null;
+  /**
+   * The call whose card a call made by a callee is drawn in: the newest call of
+   * the calling conversation started before it, whose callee is the caller.
+   * Null for a call made from a member's own conversation.
+   */
+  parentCallOf(callId: string): string | null;
 }
 
 /** The kinds a {@link CallMembershipLookup} is built from. */
@@ -77,12 +85,29 @@ export function callMembershipLookupOf(
   const callees = new Map<string, string | null>();
   const starts: CallStart[] = [];
   const delegates = new Map<string, string>();
+  const conversationOf = new Map<string, string>();
+  const newestOf = new Map<string, string>();
+  const parents = new Map<string, string>();
   const learn = (row: CallMembershipRow): void => {
     if (row.kind === 'call_started') {
       const callId = payloadString(row.payload, 'callId');
       if (callId !== null && !callees.has(callId)) {
+        const thread = payloadString(row.payload, 'thread');
+        const calling = payloadString(row.payload, 'callerConversationId');
+        const parent = calling === null ? undefined : newestOf.get(calling);
+        if (
+          parent !== undefined &&
+          row.memberId !== null &&
+          callees.get(parent) === row.memberId
+        ) {
+          parents.set(callId, parent);
+        }
         callees.set(callId, payloadString(row.payload, 'calleeNodeId'));
-        starts.push({ callId, thread: payloadString(row.payload, 'thread') });
+        starts.push({ callId, thread });
+        const conversation =
+          (thread === null ? undefined : conversationOf.get(thread)) ?? callId;
+        conversationOf.set(callId, conversation);
+        newestOf.set(conversation, callId);
       }
     } else if (row.kind === 'subagent_info') {
       const id = payloadString(row.payload, 'id');
@@ -98,6 +123,7 @@ export function callMembershipLookupOf(
     starts: () => [...starts],
     calleeNodeOf: (callId) => callees.get(callId),
     delegateCallOf: (delegateId) => delegates.get(delegateId) ?? null,
+    parentCallOf: (callId) => parents.get(callId) ?? null,
   };
 }
 
@@ -117,6 +143,13 @@ export function callMembershipOf(
 ): string {
   if (CALLER_FLOW_KINDS.has(row.kind)) {
     return OUTSIDE_ANY_CALL;
+  }
+  if (row.kind === 'call_started') {
+    const started = payloadString(row.payload, 'callId');
+    return (
+      (started === null ? null : lookup.parentCallOf(started)) ??
+      OUTSIDE_ANY_CALL
+    );
   }
   const delegateId =
     row.kind === 'subagent_info' ? payloadString(row.payload, 'id') : null;

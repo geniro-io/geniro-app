@@ -27,6 +27,13 @@ const STATE_LOOK: Record<
     pill: 'bg-success/15 text-success',
     rail: 'border-success/50',
   },
+  waiting: {
+    word: 'waiting',
+    tone: 'ok',
+    hollow: true,
+    pill: 'bg-accent text-muted-foreground',
+    rail: 'border-success/30',
+  },
   queued: {
     word: 'queued',
     tone: 'unknown',
@@ -129,6 +136,14 @@ function WorkingAgentStateLine({
         <WorkingAgentStateDot state={row.state} />
         <span data-slot="working-agent-state">{look.word}</span>
       </span>
+      {row.state === 'waiting' && row.waitingFor.length > 0 ? (
+        <span
+          data-slot="working-agent-waiting-for"
+          title={`Waiting for ${row.waitingFor.join(', ')}`}
+          className="truncate">
+          for {row.waitingFor.join(', ')}
+        </span>
+      ) : null}
       {row.caller === null ? null : (
         <span className="truncate">from {row.caller}</span>
       )}

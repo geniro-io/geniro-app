@@ -4260,6 +4260,12 @@ export const RunCallStateSchema = z
       .string()
       .nullable()
       .describe('the earlier call this one continues, or null'),
+    callerConversationId: z
+      .string()
+      .nullable()
+      .describe(
+        'the callee conversation (its first call) the caller made this call from; null when it called from its own conversation',
+      ),
     startSeq: z.number().int(),
     startedAt: z.string(),
     endedAt: z

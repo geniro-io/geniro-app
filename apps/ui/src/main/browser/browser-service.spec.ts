@@ -2,7 +2,7 @@ import type { EventEmitter } from 'node:events';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { IPC } from '../../shared/contracts';
+import { type BrowserStateEvent, IPC } from '../../shared/contracts';
 import { AgentOp } from './browser-agent-op';
 
 interface FakeContents extends EventEmitter {
@@ -165,10 +165,10 @@ function makeService(): {
 const DOCKED = { x: 10, y: 20, width: 300, height: 200 };
 const WINDOWED = { x: 0, y: 92, width: 1100, height: 640 };
 
-const stateEvents = (main: FakeWindow): { agentOpenedTabId: string | null }[] =>
+const stateEvents = (main: FakeWindow): BrowserStateEvent[] =>
   main.webContents.send.mock.calls
     .filter(([channel]) => channel === IPC.onBrowserState)
-    .map(([, event]) => event as { agentOpenedTabId: string | null });
+    .map(([, event]) => event as BrowserStateEvent);
 
 beforeEach(() => {
   h.views.length = 0;
@@ -299,6 +299,33 @@ describe('BrowserService', () => {
 
     expect(service.state('run-1').poppedOut).toBe(false);
   });
+
+  it.each([
+    ['the Dock back press', (service: BrowserService) => service.dock('run-1')],
+    [
+      'closing the window',
+      (_service: BrowserService, popout: FakeWindow) => popout.emit('close'),
+    ],
+  ])(
+    'marks exactly one state event as docked back on %s',
+    async (_, dockBy) => {
+      const { service, main } = makeService();
+      await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+      service.popOut('run-1', 'Fix the build');
+      const popout = h.windows[1] as FakeWindow;
+      expect(stateEvents(main).some((event) => event.dockedBack)).toBe(false);
+      main.webContents.send.mockClear();
+
+      dockBy(service, popout);
+
+      const docked = stateEvents(main).filter((event) => event.dockedBack);
+      expect(docked).toHaveLength(1);
+      expect(docked[0]?.state).toMatchObject({
+        runId: 'run-1',
+        poppedOut: false,
+      });
+    },
+  );
 
   it('sends state to the pop-out window as well as the main window', async () => {
     const { service, main } = makeService();

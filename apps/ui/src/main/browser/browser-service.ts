@@ -510,6 +510,7 @@ export class BrowserService {
         recent: [],
       },
       agentOpenedTabId: null,
+      dockedBack: false,
     });
   }
 
@@ -615,7 +616,11 @@ export class BrowserService {
       }
     }
     this.layout(chat);
-    this.emitRun(chat.runId);
+    this.emitState({
+      state: this.state(chat.runId),
+      agentOpenedTabId: null,
+      dockedBack: true,
+    });
   }
 
   private detach(tab: BrowserTab): void {
@@ -679,7 +684,11 @@ export class BrowserService {
     if (!this.chats.has(runId)) {
       return;
     }
-    this.emitState({ state: this.state(runId), agentOpenedTabId });
+    this.emitState({
+      state: this.state(runId),
+      agentOpenedTabId,
+      dockedBack: false,
+    });
   }
 
   private emitState(event: BrowserStateEvent): void {

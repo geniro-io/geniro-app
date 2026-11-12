@@ -12,10 +12,11 @@ import type {
 import { createPreloadStub } from '../../__fixtures__/preload-stub';
 import { stubResizeObserver } from '../../__tests__/stub-resize-observer';
 import { Dialog } from '../../components/ui/dialog';
-import { ThreadUiMemoryContext } from '../thread-ui-memory';
+import { readThreadFlag, ThreadUiMemoryContext } from '../thread-ui-memory';
 import { BrowserColumn } from './browser-column';
 import { BrowserGrid } from './browser-grid';
 import { BrowserPane } from './browser-pane';
+import { BROWSER_PANE_OPEN_KEY } from './browser-pane-store';
 import { BrowserToggleButton } from './browser-toggle-button';
 
 (
@@ -420,12 +421,13 @@ describe('the chat grid and the pane it hosts', () => {
     await render(grid());
     expect(paneShown()).toBe(false);
 
-    emit({ state: run([tab()]), agentOpenedTabId: null });
+    emit({ state: run([tab()]), agentOpenedTabId: null, dockedBack: false });
     expect(paneShown()).toBe(false);
 
     emit({
       state: run([tab({ openedBy: 'Engineer' })]),
       agentOpenedTabId: 't1',
+      dockedBack: false,
     });
     expect(paneShown()).toBe(true);
 
@@ -435,6 +437,7 @@ describe('the chat grid and the pane it hosts', () => {
     emit({
       state: run([tab({ drivenBy: 'Engineer' })]),
       agentOpenedTabId: null,
+      dockedBack: false,
     });
     expect(paneShown()).toBe(false);
   });
@@ -444,6 +447,7 @@ describe('the chat grid and the pane it hosts', () => {
     emit({
       state: { ...run([tab()]), runId: 'run-2' },
       agentOpenedTabId: 't1',
+      dockedBack: false,
     });
     expect(paneShown()).toBe(false);
 
@@ -455,6 +459,33 @@ describe('the chat grid and the pane it hosts', () => {
     expect(
       container.querySelector('[data-slot="browser-unseen-dot"]'),
     ).not.toBeNull();
+  });
+
+  it('reopens the column closed during the pop-out once the browser docks back', async () => {
+    await render(grid());
+    emit({
+      state: run([tab()], { poppedOut: true }),
+      agentOpenedTabId: null,
+      dockedBack: false,
+    });
+    expect(paneShown()).toBe(false);
+
+    emit({ state: run([tab()]), agentOpenedTabId: null, dockedBack: true });
+
+    expect(paneShown()).toBe(true);
+  });
+
+  it('opens the column of a chat not on screen when its browser docks back', async () => {
+    await render(grid());
+
+    emit({
+      state: { ...run([tab()]), runId: 'run-2' },
+      agentOpenedTabId: null,
+      dockedBack: true,
+    });
+
+    expect(paneShown()).toBe(false);
+    expect(readThreadFlag('run-2', BROWSER_PANE_OPEN_KEY)).toBe(true);
   });
 
   it('keeps the browser column between its neighbours, zero wide while closed', async () => {
@@ -589,7 +620,11 @@ describe('BrowserColumn — full screen', () => {
     await render(column());
     act(() => {
       for (const listener of listeners) {
-        listener({ state: run([tab()]), agentOpenedTabId: 't1' });
+        listener({
+          state: run([tab()]),
+          agentOpenedTabId: 't1',
+          dockedBack: false,
+        });
       }
     });
   }

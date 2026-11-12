@@ -1713,6 +1713,8 @@ export interface BrowserStateEvent {
   state: BrowserRunState;
   /** Set when an agent has just opened this tab: the pane opens for it once. */
   agentOpenedTabId: string | null;
+  /** Set when the browser has just come back from its own window: the chat's column opens for it. */
+  dockedBack: boolean;
 }
 
 /** Where the pane's placeholder sits in the window, in CSS pixels. */

@@ -2908,4 +2908,64 @@ describe('MemoryService', () => {
       ]);
     });
   });
+
+  describe('a lesson saved to memory', () => {
+    const LESSON = { sourceRunId: 'run-lesson-src', proposalId: 'lp-1' };
+    const LESSON_ENTRY = {
+      title: 'Check before retrying',
+      body: 'Change the check input before rerunning it.',
+      type: 'feedback' as const,
+      projectId: 'p1',
+      teamSlug: null,
+    };
+
+    async function project() {
+      const em = db.em.fork();
+      em.persist(make(Project, { id: 'p1', name: 'App', folder: '/repo/app' }));
+      await em.flush();
+    }
+
+    beforeEach(() => {
+      db.service.setConfig({
+        enabled: true,
+        agentWrites: 'pending',
+        nativeMemoryOff: false,
+        autoForgetAfterDays: null,
+      });
+    });
+
+    it('lands active while agent writes wait for review, naming its thread and proposal', async () => {
+      await project();
+
+      const saved = savedOf(await db.service.create(LESSON_ENTRY, LESSON));
+      const agentWrite = created(
+        await db.service.save(
+          AGENT,
+          { title: 'Agent note', body: 'x' },
+          inProject('p1'),
+        ),
+      );
+
+      expect(agentWrite.status).toBe('pending');
+      expect(saved.status).toBe('active');
+      expect(saved.source.runId).toBe('run-lesson-src');
+      const row = await db.em.fork().findOneOrFail(Memory, { id: saved.id });
+      expect(row.lessonProposalId).toBe('lp-1');
+    });
+
+    it('is in the memory index of the project it was filed under', async () => {
+      await project();
+      const saved = savedOf(await db.service.create(LESSON_ENTRY, LESSON));
+
+      const { memoryIndex, indexIds } = await db.service.runSnapshot({
+        taskId: null,
+        cwd: '/repo/app',
+      });
+
+      expect(indexIds).toEqual([saved.id]);
+      expect(memoryIndex?.split('\n')).toContainEqual(
+        expect.stringContaining(` ${LESSON_ENTRY.title} (`),
+      );
+    });
+  });
 });

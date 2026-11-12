@@ -63,6 +63,15 @@ describe('foldLessonSignals', () => {
     expect(signals).toEqual([]);
   });
 
+  it('counts a correction that opens a stretch after a finished turn, when told the stretch follows one', () => {
+    const items = [item(7, 'message', { text: 'No, that is wrong' }, 'user')];
+
+    expect(foldLessonSignals(items)).toEqual([]);
+    expect(foldLessonSignals(items, { afterFinishedTurn: true })).toEqual([
+      { kind: 'user_correction', seq: 7, excerpt: 'No, that is wrong' },
+    ]);
+  });
+
   it('ignores a host-started turn, which is a system row, not a user message', () => {
     const signals = foldLessonSignals([
       item(1, 'turn_complete', {}),

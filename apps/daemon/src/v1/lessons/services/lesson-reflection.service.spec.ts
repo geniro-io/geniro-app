@@ -127,7 +127,11 @@ function build(
       Promise.resolve({ id: 'seg-1', ...input }),
     ),
     updateById: vi.fn(() => Promise.resolve()),
+    deleteOfRuns: vi.fn((_runIds: readonly string[], _em: unknown) =>
+      Promise.resolve(),
+    ),
   };
+  const deleted = new Subject<string>();
   const proposals = {
     rejectedIn: vi.fn(() => Promise.resolve(options.rejected ?? [])),
   };
@@ -141,9 +145,7 @@ function build(
     runDao as unknown as RunDao,
     itemDao as unknown as ItemDao,
     chats as unknown as ChatService,
-    {
-      allDeleted: () => new Subject<string>().asObservable(),
-    } as unknown as AgentEventBus,
+    { allDeleted: () => deleted.asObservable() } as unknown as AgentEventBus,
     { enabled: true } as MemoryService,
     projectScope as unknown as ProjectScopeService,
     segments as unknown as LessonSegmentDao,
@@ -159,6 +161,7 @@ function build(
     segments,
     proposals,
     projectScope,
+    deleted,
   };
 }
 
@@ -442,6 +445,86 @@ describe('LessonReflectionService.start', () => {
     expect(fixture.segments.updateById).toHaveBeenCalledWith(
       'seg-1',
       { status: 'failed' },
+      fixture.em,
+    );
+  });
+});
+
+describe('LessonReflectionService — review findings', () => {
+  it('reads the signals of a stretch past its first page of 500 rows', async () => {
+    const items = Array.from({ length: 520 }, (_, index) => index + 1).map(
+      (seq) =>
+        seq === 510 ? userMessage(510, 'no, that is wrong') : turnComplete(seq),
+    );
+    const fixture = build({ maxSeq: 520, items });
+
+    await fixture.service.start('src', {});
+
+    const [, brief] = fixture.chats.sendMessage.mock.calls[0]!;
+    expect(brief).toContain(
+      '- seq 510 · user_correction · "no, that is wrong"',
+    );
+  });
+
+  it('finds a correction that opens a stretch after a reflected one, which starts on a finished turn', async () => {
+    const fixture = build({
+      source: { reflectedThroughSeq: 9 },
+      maxSeq: 10,
+      items: [userMessage(10, 'no, that is wrong')],
+    });
+
+    await fixture.service.start('src', {});
+
+    const [, brief] = fixture.chats.sendMessage.mock.calls[0]!;
+    expect(brief).toContain('- seq 10 · user_correction · "no, that is wrong"');
+  });
+
+  it('lets one of two simultaneous starts through and refuses the other as already reflecting', async () => {
+    const fixture = build();
+
+    const [first, second] = await Promise.allSettled([
+      fixture.service.start('src', {}),
+      fixture.service.start('src', {}),
+    ]);
+
+    expect(first.status).toBe('fulfilled');
+    expect(second).toMatchObject({
+      status: 'rejected',
+      reason: { errorCode: 'LESSONS_REFLECTING' },
+    });
+    expect(fixture.chats.createChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the thread’s own agent when the settings name an agent this app does not know', async () => {
+    const fixture = build({
+      source: { agentKind: 'claude' },
+      config: {
+        mode: 'offer',
+        agentKind: 'mystery-cli' as never,
+        model: 'haiku',
+        effort: 'low',
+      },
+    });
+
+    await fixture.service.start('src', {});
+
+    const input = fixture.chats.createChat.mock.calls[0]![0];
+    expect(input).toMatchObject({ agentKind: 'claude' });
+    expect(input.model).toBeUndefined();
+    expect(input.effort).toBeUndefined();
+  });
+
+  it('drops the segments of a run when the run is deleted, and stops listening once destroyed', () => {
+    const fixture = build();
+
+    fixture.service.onModuleInit();
+    fixture.deleted.next('run-gone');
+    fixture.service.onModuleDestroy();
+    fixture.deleted.next('run-later');
+
+    expect(fixture.segments.deleteOfRuns).toHaveBeenCalledTimes(1);
+    expect(fixture.segments.deleteOfRuns).toHaveBeenCalledWith(
+      ['run-gone'],
       fixture.em,
     );
   });

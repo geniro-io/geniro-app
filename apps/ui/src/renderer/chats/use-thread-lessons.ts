@@ -7,7 +7,8 @@ import type { DaemonApis } from '../daemon-api';
  * start one, or wait for the one still working. `unknown` until the daemon
  * answers, and when it cannot.
  */
-export type ThreadLessonsMark = 'unknown' | 'nothing_new' | 'ready' | 'reflecting';
+export type ThreadLessonsMark =
+  'unknown' | 'nothing_new' | 'ready' | 'reflecting';
 
 /** How often a working reflection is asked whether it has filed its lessons. */
 export const LESSONS_POLL_MS = 5_000;

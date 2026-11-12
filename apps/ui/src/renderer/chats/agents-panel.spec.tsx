@@ -1190,9 +1190,9 @@ describe('AgentsPanel', () => {
           lessonsMark={mark}
         />,
       );
-      expect(
-        held.querySelector<HTMLButtonElement>(selector)?.disabled,
-      ).toBe(true);
+      expect(held.querySelector<HTMLButtonElement>(selector)?.disabled).toBe(
+        true,
+      );
     }
   });
 

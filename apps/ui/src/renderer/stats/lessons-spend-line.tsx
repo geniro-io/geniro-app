@@ -22,16 +22,16 @@ export function LessonsSpendLine({
       ? null
       : (inputTokens ?? 0) + (outputTokens ?? 0);
   const spend = [
-    costUsd === null ? null : markEstimate(formatUsd(costUsd), estimatedCostUsd),
+    costUsd === null
+      ? null
+      : markEstimate(formatUsd(costUsd), estimatedCostUsd),
     tokens === null ? null : `${formatTokens(tokens)} tokens`,
     `${turns} ${turns === 1 ? 'turn' : 'turns'}`,
   ].filter((part): part is string => part !== null);
   return (
-    <p
-      data-slot="lessons-spend"
-      className="px-1 text-xs text-muted-foreground">
-      <span className="font-medium text-foreground">Lessons</span> —
-      reflections spent {spend.join(' · ')} in this period.
+    <p data-slot="lessons-spend" className="px-1 text-xs text-muted-foreground">
+      <span className="font-medium text-foreground">Lessons</span> — reflections
+      spent {spend.join(' · ')} in this period.
     </p>
   );
 }

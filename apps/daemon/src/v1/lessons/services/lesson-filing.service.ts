@@ -1,11 +1,11 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
-import { redactSecrets } from '../../diagnostics/utils/redact';
 import type { AnalysisTurn } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { quoteIn } from '../../agents/utils/memory-check-prompt';
+import { redactSecrets } from '../../diagnostics/utils/redact';
 import { memoryHandle, parseMemoryHandle } from '../../memory/memory.types';
 import { MemoryService } from '../../memory/services/memory.service';
 import { ProjectScopeService } from '../../projects/services/project-scope.service';
@@ -18,9 +18,9 @@ import {
   LESSON_WHY_MAX_CHARS,
   type LessonDedup,
   type LessonProposalCard,
+  LESSONS_PER_REFLECTION_MAX,
   type LessonSignalKind,
   type LessonsPayload,
-  LESSONS_PER_REFLECTION_MAX,
   type LessonTarget,
 } from '../lessons.types';
 import { normalizedTitle } from '../utils/lesson-text';
@@ -119,7 +119,10 @@ export class LessonFilingService {
     for (const [index, lesson] of lessons.entries()) {
       const at = `lessons[${index}]`;
       for (const problem of this.textProblems(lesson)) {
-        problems.push({ code: problem.code, reason: `${at}: ${problem.reason}` });
+        problems.push({
+          code: problem.code,
+          reason: `${at}: ${problem.reason}`,
+        });
       }
       const { seq, quote } = lesson.evidence;
       if (seq <= segment.fromSeq || seq > segment.toSeq) {
@@ -221,7 +224,12 @@ export class LessonFilingService {
         });
       }
     }
-    const texts = [lesson.title, lesson.rule, lesson.why, lesson.evidence.quote];
+    const texts = [
+      lesson.title,
+      lesson.rule,
+      lesson.why,
+      lesson.evidence.quote,
+    ];
     if (texts.some((text) => redactSecrets(text) !== text)) {
       problems.push({
         code: 'CONTAINS_SECRET',

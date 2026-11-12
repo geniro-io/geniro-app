@@ -23,10 +23,12 @@ function recordingFetch(status = 200) {
 describe('LessonsConfigPush', () => {
   it('PUTs the lessons settings to the daemon with the launch token', async () => {
     const http = recordingFetch();
-    await new LessonsConfigPush(() => undefined, http.fetchImpl).push(
-      HANDLE,
-      { mode: 'off', agentKind: 'codex', model: 'gpt-5-mini', effort: 'low' },
-    );
+    await new LessonsConfigPush(() => undefined, http.fetchImpl).push(HANDLE, {
+      mode: 'off',
+      agentKind: 'codex',
+      model: 'gpt-5-mini',
+      effort: 'low',
+    });
 
     expect(http.calls).toHaveLength(1);
     const [call] = http.calls;

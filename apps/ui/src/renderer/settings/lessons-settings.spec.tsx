@@ -110,7 +110,12 @@ describe('Lessons settings', () => {
   });
 
   it('a new agent pick clears the model and effort picked for the last one', async () => {
-    install({ mode: 'offer', agentKind: 'claude', model: 'opus', effort: 'high' });
+    install({
+      mode: 'offer',
+      agentKind: 'claude',
+      model: 'opus',
+      effort: 'high',
+    });
     await render();
 
     await press(agentOf());
@@ -118,7 +123,12 @@ describe('Lessons settings', () => {
 
     expect(writes).toEqual([
       {
-        lessons: { mode: 'offer', agentKind: 'codex', model: null, effort: null },
+        lessons: {
+          mode: 'offer',
+          agentKind: 'codex',
+          model: null,
+          effort: null,
+        },
       },
     ]);
   });

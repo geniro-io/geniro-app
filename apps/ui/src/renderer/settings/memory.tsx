@@ -50,7 +50,6 @@ import {
   TabStrip,
   type TabStripTab,
 } from '../components/tab-strip';
-import { LessonsSettingsPanel } from './lessons-settings';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
@@ -64,6 +63,7 @@ import {
 import { type DaemonApis, describeDaemonError } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { isRemoteRuntime } from '../remote/remote-session';
+import { LessonsSettingsPanel } from './lessons-settings';
 import { MemoryAutoForgetRow } from './memory-auto-forget';
 import { MemoryCheckPanel } from './memory-check-panel';
 import {

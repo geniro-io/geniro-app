@@ -38,7 +38,6 @@ import { Select } from '../components/ui/select';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { BreakdownColumn } from './breakdown-card';
-import { LessonsSpendLine } from './lessons-spend-line';
 import { toDayPoints } from './chart-data';
 import {
   CumulativeSpendChart,
@@ -46,6 +45,7 @@ import {
   TokenSplitChart,
 } from './charts/time-charts';
 import { DAILY_METRIC_OPTIONS, type DailyMetricId } from './daily-metrics';
+import { LessonsSpendLine } from './lessons-spend-line';
 import { StatCell, StatGrid } from './stat-card';
 import {
   cacheHitRate,

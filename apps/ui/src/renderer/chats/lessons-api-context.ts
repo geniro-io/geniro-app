@@ -9,3 +9,8 @@ import type { DaemonApis } from '../daemon-api';
 export const LessonsApiContext = createContext<DaemonApis['lessons'] | null>(
   null,
 );
+
+/** Scroll the open transcript to a seq, for a lesson's "Show in thread"; null draws no link. */
+export const LessonsJumpContext = createContext<((seq: number) => void) | null>(
+  null,
+);

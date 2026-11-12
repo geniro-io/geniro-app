@@ -60,6 +60,8 @@ import { type TurnDuration, TurnDurationContext } from './turn-duration';
 import type { ArtifactSharing } from './use-artifact-sharing';
 import { type ChatActions, ChatActionsContext } from './use-chat-actions';
 import { type JumpMark, JumpMarkContext } from './use-transcript-jump';
+import { LessonsApiContext, LessonsJumpContext } from './lessons-api-context';
+import type { DaemonApis } from '../daemon-api';
 
 /** The values only a transcript row reads, provided by {@link TranscriptContexts}. */
 export interface TranscriptValues {
@@ -121,6 +123,8 @@ export function ChatProviders({
   chatActions = null,
   loadMemory = null,
   loadKnowledge = null,
+  lessonsApi = null,
+  lessonsJump = null,
   children,
 }: {
   /**
@@ -199,6 +203,10 @@ export function ChatProviders({
   loadMemory?: MemoryLoader | null;
   /** How a knowledge row reads its documents — see `KnowledgeLoaderContext`. */
   loadKnowledge?: KnowledgeLoader | null;
+  /** A lessons card's Save and Reject — see `LessonsApiContext`. */
+  lessonsApi?: DaemonApis['lessons'] | null;
+  /** A lesson's "Show in thread" — see `LessonsJumpContext`. */
+  lessonsJump?: ((seq: number) => void) | null;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -224,7 +232,13 @@ export function ChatProviders({
                                     value={loadMemory}>
                                     <KnowledgeLoaderContext.Provider
                                       value={loadKnowledge}>
-                                      {children}
+                                      <LessonsApiContext.Provider
+                                        value={lessonsApi}>
+                                        <LessonsJumpContext.Provider
+                                          value={lessonsJump}>
+                                          {children}
+                                        </LessonsJumpContext.Provider>
+                                      </LessonsApiContext.Provider>
                                       {chatActions === null ? null : (
                                         <CommandConfirmDialog
                                           action={chatActions.confirming}

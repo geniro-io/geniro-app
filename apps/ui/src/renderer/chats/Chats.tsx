@@ -9692,7 +9692,9 @@ export function Chats({
         notSent={notSent}
         chatActions={chatActions}
         loadMemory={loadMemory}
-        loadKnowledge={loadKnowledge}>
+        loadKnowledge={loadKnowledge}
+        lessonsApi={apis.lessons}
+        lessonsJump={jumpToSeq}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

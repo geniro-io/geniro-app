@@ -12,10 +12,11 @@ import type {
 import { createPreloadStub } from '../../__fixtures__/preload-stub';
 import { stubResizeObserver } from '../../__tests__/stub-resize-observer';
 import { Dialog } from '../../components/ui/dialog';
-import { ThreadUiMemoryContext } from '../thread-ui-memory';
+import { readThreadFlag, ThreadUiMemoryContext } from '../thread-ui-memory';
 import { BrowserColumn } from './browser-column';
 import { BrowserGrid } from './browser-grid';
 import { BrowserPane } from './browser-pane';
+import { BROWSER_PANE_OPEN_KEY } from './browser-pane-store';
 import { BrowserToggleButton } from './browser-toggle-button';
 
 (
@@ -306,6 +307,53 @@ describe('BrowserPane', () => {
     expect(dock).toHaveBeenCalledExactlyOnceWith(RUN);
   });
 
+  it('brings the pop-out window forward from Show window', async () => {
+    const popOut = vi.fn(() => Promise.resolve());
+    overrides.browserPopOut = popOut;
+    showState(run([tab()], { poppedOut: true }));
+    await render(
+      <BrowserPane
+        runId={RUN}
+        visible
+        onClose={() => undefined}
+        chatTitle="Fix the build"
+      />,
+    );
+
+    await act(async () => button('Show window').click());
+
+    expect(popOut).toHaveBeenCalledExactlyOnceWith(RUN, 'Fix the build');
+  });
+
+  it('places the page in the chat window while popped out, with no close button', async () => {
+    showState(run([tab()], { poppedOut: true }));
+    await render(<BrowserPane runId={RUN} visible windowed />);
+
+    expect(setBounds).toHaveBeenCalledWith(RUN, {
+      x: PLACEHOLDER.left,
+      y: PLACEHOLDER.top,
+      width: PLACEHOLDER.width,
+      height: PLACEHOLDER.height,
+    });
+    expect(container.textContent).not.toContain('Open in its own window');
+    expect(
+      container.querySelector('button[aria-label="Close browser"]'),
+    ).toBeNull();
+    expect(container.querySelector('[role="tablist"]')).not.toBeNull();
+  });
+
+  it('docks back from Expand in the chat window', async () => {
+    const dock = vi.fn(() => Promise.resolve());
+    overrides.browserDock = dock;
+    showState(run([tab()], { poppedOut: true }));
+    await render(<BrowserPane runId={RUN} visible windowed />);
+
+    await act(async () => button('Expand').click());
+    await act(async () => option('Dock back')!.click());
+
+    expect(dock).toHaveBeenCalledExactlyOnceWith(RUN);
+  });
+
   it('asks for a sign-in in the pane while the tabs are popped out', async () => {
     showState(
       run(
@@ -373,12 +421,13 @@ describe('the chat grid and the pane it hosts', () => {
     await render(grid());
     expect(paneShown()).toBe(false);
 
-    emit({ state: run([tab()]), agentOpenedTabId: null });
+    emit({ state: run([tab()]), agentOpenedTabId: null, dockedBack: false });
     expect(paneShown()).toBe(false);
 
     emit({
       state: run([tab({ openedBy: 'Engineer' })]),
       agentOpenedTabId: 't1',
+      dockedBack: false,
     });
     expect(paneShown()).toBe(true);
 
@@ -388,6 +437,7 @@ describe('the chat grid and the pane it hosts', () => {
     emit({
       state: run([tab({ drivenBy: 'Engineer' })]),
       agentOpenedTabId: null,
+      dockedBack: false,
     });
     expect(paneShown()).toBe(false);
   });
@@ -397,6 +447,7 @@ describe('the chat grid and the pane it hosts', () => {
     emit({
       state: { ...run([tab()]), runId: 'run-2' },
       agentOpenedTabId: 't1',
+      dockedBack: false,
     });
     expect(paneShown()).toBe(false);
 
@@ -408,6 +459,33 @@ describe('the chat grid and the pane it hosts', () => {
     expect(
       container.querySelector('[data-slot="browser-unseen-dot"]'),
     ).not.toBeNull();
+  });
+
+  it('reopens the column closed during the pop-out once the browser docks back', async () => {
+    await render(grid());
+    emit({
+      state: run([tab()], { poppedOut: true }),
+      agentOpenedTabId: null,
+      dockedBack: false,
+    });
+    expect(paneShown()).toBe(false);
+
+    emit({ state: run([tab()]), agentOpenedTabId: null, dockedBack: true });
+
+    expect(paneShown()).toBe(true);
+  });
+
+  it('opens the column of a chat not on screen when its browser docks back', async () => {
+    await render(grid());
+
+    emit({
+      state: { ...run([tab()]), runId: 'run-2' },
+      agentOpenedTabId: null,
+      dockedBack: true,
+    });
+
+    expect(paneShown()).toBe(false);
+    expect(readThreadFlag('run-2', BROWSER_PANE_OPEN_KEY)).toBe(true);
   });
 
   it('keeps the browser column between its neighbours, zero wide while closed', async () => {
@@ -542,7 +620,11 @@ describe('BrowserColumn — full screen', () => {
     await render(column());
     act(() => {
       for (const listener of listeners) {
-        listener({ state: run([tab()]), agentOpenedTabId: 't1' });
+        listener({
+          state: run([tab()]),
+          agentOpenedTabId: 't1',
+          dockedBack: false,
+        });
       }
     });
   }

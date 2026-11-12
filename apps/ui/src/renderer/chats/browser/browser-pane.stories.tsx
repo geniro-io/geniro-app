@@ -113,3 +113,13 @@ export const SignInPrompt: Story = {
 export const PoppedOut: Story = {
   decorators: [withState([tab()], { poppedOut: true })],
 };
+
+export const ChatWindow: Story = {
+  args: { windowed: true, onClose: undefined },
+  decorators: [
+    withState(
+      [tab(), tab({ id: 't2', title: 'Docs', url: 'https://docs.acme.dev/' })],
+      { poppedOut: true },
+    ),
+  ],
+};

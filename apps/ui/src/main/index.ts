@@ -10,6 +10,7 @@ import {
   shell,
 } from 'electron';
 
+import { browserWindowHash } from '../shared/browser-window-route';
 import { type DaemonHandle, TRAFFIC_LIGHT_INSET } from '../shared/contracts';
 import { EXTERNAL_LINK_SCHEMES } from '../shared/link-schemes';
 import { themeWindowBackground } from '../shared/themes';
@@ -434,80 +435,38 @@ async function loadDevToolsExtension(): Promise<void> {
   }
 }
 
-function createWindow(): void {
-  // Asked, not applied: `themeSource` is already current (set at launch and by
-  // every theme change), so this path only needs to KNOW what is being painted.
-  // It runs on macOS `activate` too, which can reopen a window long after the
-  // theme was last changed.
-  const theme = resolvedTheme(readSettings().theme);
-  const win = new BrowserWindow({
-    width: 1440,
-    height: 920,
-    // Keep the builder's palette + canvas + inspector (and the library grid)
-    // usable — below this the three-pane layout starts to crowd.
-    minWidth: 960,
-    minHeight: 640,
-    show: false,
-    // The ground the window paints where the page has not (yet). Unset it is
-    // WHITE — see {@link ThemeDescriptor.windowBackground} for the band that
-    // produced, and why it is per-theme.
-    backgroundColor: themeWindowBackground(theme),
-    title: 'Geniro',
-    icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
-    /**
-     * The app draws its own title bar — the shape Chrome and Cursor use.
-     *
-     * `hiddenInset` removes the system's strip while KEEPING the traffic
-     * lights, which is the whole point: the band the OS drew held nothing but
-     * the word "Geniro" directly above a row of ours that already named the
-     * open chat, so the window spent ~28px saying something it said again
-     * underneath. `frame: false` would take the lights with it and leave the
-     * app owing the user three buttons it would have to draw and wire itself.
-     *
-     * The lights are positioned INTO the nav rail's own top row (see
-     * `components/nav-rail.tsx`, which reserves the width) rather than left at
-     * the default inset, because that default assumes a title bar's height and
-     * ours is the rail's. Both values are macOS-only and ignored elsewhere.
-     *
-     * The inset is SHARED with the renderer rather than spelled here, because
-     * placing the buttons and leaving room for them are two halves of one
-     * fact — see `TRAFFIC_LIGHT_INSET` in `shared/contracts.ts`.
-     */
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: TRAFFIC_LIGHT_INSET,
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      // Renderer runs sandboxed; the preload only uses `electron`, so nothing
-      // here needs an unsandboxed context.
-      sandbox: true,
-    },
-  });
-  mainWindow = win;
+const RENDERER_WEB_PREFERENCES = {
+  preload: join(__dirname, '../preload/index.js'),
+  contextIsolation: true,
+  nodeIntegration: false,
+  // Renderer runs sandboxed; the preload only uses `electron`, so nothing
+  // here needs an unsandboxed context.
+  sandbox: true,
+};
+
+const BROWSER_POPOUT_SIZE = {
+  width: 1100,
+  height: 760,
+  minWidth: 480,
+  minHeight: 360,
+};
+
+function loadRenderer(win: BrowserWindow, hash?: string): void {
+  // electron-vite sets ELECTRON_RENDERER_URL in dev; otherwise load the build.
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+  if (rendererUrl) {
+    void win.loadURL(
+      hash === undefined ? rendererUrl : `${rendererUrl}#${hash}`,
+    );
+  } else {
+    void win.loadFile(join(__dirname, '../renderer/index.html'), { hash });
+  }
+}
+
+function guardRendererWindow(win: BrowserWindow): void {
   // Electron ships no right-click menu of its own, so without this every
   // right-click in the app does nothing — see `context-menu.ts`.
   installContextMenu(win.webContents);
-  win.on('closed', () => {
-    if (mainWindow === win) {
-      mainWindow = null;
-    }
-  });
-  // On macOS ⌘W HIDES the window rather than destroying it. The app stays in
-  // the Dock either way, but every notification is decided in the RENDERER
-  // (`renderer/notifications/use-run-notifications.ts`) — a destroyed window
-  // decides nothing, so closing it silenced every "done" and every question
-  // banner until the Dock icon was clicked again. A hidden window keeps its
-  // socket and its rules running, and is what ⌘W means in a Mac app anyway. A
-  // real quit sets `isQuitting` in `before-quit`, which fires first.
-  win.on('close', (event) => {
-    if (process.platform === 'darwin' && !isQuitting) {
-      event.preventDefault();
-      win.hide();
-    }
-  });
-
-  win.on('ready-to-show', () => win.show());
 
   // Open external links in the user's browser, never in-app — and only for
   // web/mail schemes, so a compromised renderer can't hand file:// or a custom
@@ -532,22 +491,12 @@ function createWindow(): void {
       event.preventDefault();
     }
   });
+}
 
-  // `will-navigate` is the main frame's alone. The one subframe is a sandboxed
-  // artifact page, and neither its sandbox nor its CSP stops a link in it from
-  // navigating the frame itself, which then goes blank.
-  guardArtifactFrameNavigations(win.webContents, daemonOriginNow);
-
-  // electron-vite sets ELECTRON_RENDERER_URL in dev; otherwise load the build.
-  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
-  const load = (): void => {
-    if (rendererUrl) {
-      void win.loadURL(rendererUrl);
-    } else {
-      void win.loadFile(join(__dirname, '../renderer/index.html'));
-    }
-  };
-
+function recoverRendererLoads(
+  win: BrowserWindow,
+  load: () => void,
+): { failures: () => number } {
   /**
    * Say what this window actually loaded, and retry ONCE if it loaded nothing.
    *
@@ -616,6 +565,100 @@ function createWindow(): void {
       win.webContents.reload();
     }
   });
+  return { failures: () => failures };
+}
+
+function createBrowserPopout(runId: string, title: string): BrowserWindow {
+  const win = new BrowserWindow({
+    ...BROWSER_POPOUT_SIZE,
+    title: `Browser — ${title}`,
+    backgroundColor: themeWindowBackground(resolvedTheme(readSettings().theme)),
+    icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
+    webPreferences: RENDERER_WEB_PREFERENCES,
+  });
+  win.on('page-title-updated', (event) => event.preventDefault());
+  guardRendererWindow(win);
+  const load = (): void =>
+    loadRenderer(win, browserWindowHash({ runId, title }));
+  recoverRendererLoads(win, load);
+  load();
+  return win;
+}
+
+function createWindow(): void {
+  // Asked, not applied: `themeSource` is already current (set at launch and by
+  // every theme change), so this path only needs to KNOW what is being painted.
+  // It runs on macOS `activate` too, which can reopen a window long after the
+  // theme was last changed.
+  const theme = resolvedTheme(readSettings().theme);
+  const win = new BrowserWindow({
+    width: 1440,
+    height: 920,
+    // Keep the builder's palette + canvas + inspector (and the library grid)
+    // usable — below this the three-pane layout starts to crowd.
+    minWidth: 960,
+    minHeight: 640,
+    show: false,
+    // The ground the window paints where the page has not (yet). Unset it is
+    // WHITE — see {@link ThemeDescriptor.windowBackground} for the band that
+    // produced, and why it is per-theme.
+    backgroundColor: themeWindowBackground(theme),
+    title: 'Geniro',
+    icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
+    /**
+     * The app draws its own title bar — the shape Chrome and Cursor use.
+     *
+     * `hiddenInset` removes the system's strip while KEEPING the traffic
+     * lights, which is the whole point: the band the OS drew held nothing but
+     * the word "Geniro" directly above a row of ours that already named the
+     * open chat, so the window spent ~28px saying something it said again
+     * underneath. `frame: false` would take the lights with it and leave the
+     * app owing the user three buttons it would have to draw and wire itself.
+     *
+     * The lights are positioned INTO the nav rail's own top row (see
+     * `components/nav-rail.tsx`, which reserves the width) rather than left at
+     * the default inset, because that default assumes a title bar's height and
+     * ours is the rail's. Both values are macOS-only and ignored elsewhere.
+     *
+     * The inset is SHARED with the renderer rather than spelled here, because
+     * placing the buttons and leaving room for them are two halves of one
+     * fact — see `TRAFFIC_LIGHT_INSET` in `shared/contracts.ts`.
+     */
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: TRAFFIC_LIGHT_INSET,
+    webPreferences: RENDERER_WEB_PREFERENCES,
+  });
+  mainWindow = win;
+  guardRendererWindow(win);
+  win.on('closed', () => {
+    if (mainWindow === win) {
+      mainWindow = null;
+    }
+  });
+  // On macOS ⌘W HIDES the window rather than destroying it. The app stays in
+  // the Dock either way, but every notification is decided in the RENDERER
+  // (`renderer/notifications/use-run-notifications.ts`) — a destroyed window
+  // decides nothing, so closing it silenced every "done" and every question
+  // banner until the Dock icon was clicked again. A hidden window keeps its
+  // socket and its rules running, and is what ⌘W means in a Mac app anyway. A
+  // real quit sets `isQuitting` in `before-quit`, which fires first.
+  win.on('close', (event) => {
+    if (process.platform === 'darwin' && !isQuitting) {
+      event.preventDefault();
+      win.hide();
+    }
+  });
+
+  win.on('ready-to-show', () => win.show());
+
+  // `will-navigate` is the main frame's alone. The one subframe is a sandboxed
+  // artifact page, and neither its sandbox nor its CSP stops a link in it from
+  // navigating the frame itself, which then goes blank.
+  guardArtifactFrameNavigations(win.webContents, daemonOriginNow);
+
+  const load = (): void => loadRenderer(win);
+
+  const loads = recoverRendererLoads(win, load);
   win.webContents.on('did-finish-load', () => {
     // Worded off the failure count rather than reported as a plain success,
     // because this fires for Chromium's ERROR PAGE too — and it keeps the
@@ -626,10 +669,10 @@ function createWindow(): void {
     void reportMainLog(
       supervisor.getHandle(),
       'info',
-      failures === 0
+      loads.failures() === 0
         ? `the window loaded ${win.webContents.getURL()}`
-        : `the window finished loading ${win.webContents.getURL()} after ${failures} failed attempt(s) — this may be the browser's error page`,
-      { kind: 'renderer-loaded', failures: String(failures) },
+        : `the window finished loading ${win.webContents.getURL()} after ${loads.failures()} failed attempt(s) — this may be the browser's error page`,
+      { kind: 'renderer-loaded', failures: String(loads.failures()) },
     );
   });
 
@@ -898,6 +941,7 @@ function main(): void {
         proxyPort: egressProxy.port,
         ready: browserReady,
         mainWindow: () => mainWindow,
+        createPopout: createBrowserPopout,
         hasJarOnDisk: (runId) =>
           existsSync(chatPartitionDir(app.getPath('userData'), runId)),
         log: (message) => {

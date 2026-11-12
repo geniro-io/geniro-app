@@ -44,15 +44,21 @@ export function BrowserGrid({
     if (!enabled) {
       return;
     }
-    return window.geniro.onBrowserState((event) => {
-      if (event.agentOpenedTabId === null) {
-        return;
-      }
-      const id = event.state.runId;
-      if (id !== runIdRef.current) {
-        markAgentTabUnseen(id);
-      } else if (readThreadFlag(id, BROWSER_PANE_OPEN_KEY) !== true) {
+    const openColumn = (id: string): void => {
+      if (readThreadFlag(id, BROWSER_PANE_OPEN_KEY) !== true) {
         writeThreadFlag(id, BROWSER_PANE_OPEN_KEY, true);
+      }
+    };
+    return window.geniro.onBrowserState((event) => {
+      const id = event.state.runId;
+      if (event.dockedBack) {
+        openColumn(id);
+      } else if (event.agentOpenedTabId === null) {
+        return;
+      } else if (id !== runIdRef.current) {
+        markAgentTabUnseen(id);
+      } else {
+        openColumn(id);
       }
     });
   }, [enabled]);

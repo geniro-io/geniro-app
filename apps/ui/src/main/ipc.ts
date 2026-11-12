@@ -991,10 +991,11 @@ export function registerIpc(
   handle(
     IPC.browserSetBounds,
     denyRemotely(browserDenial),
-    (_event, runId: unknown, bounds: unknown) => {
+    (event, runId: unknown, bounds: unknown) => {
       getBrowser().setBounds(
         browserRunIdSchema.parse(runId),
         browserBoundsSchema.parse(bounds),
+        BrowserWindow.fromWebContents(event.sender),
       );
     },
   );

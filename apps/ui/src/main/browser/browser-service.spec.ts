@@ -2,7 +2,7 @@ import type { EventEmitter } from 'node:events';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { IPC } from '../../shared/contracts';
+import { type BrowserStateEvent, IPC } from '../../shared/contracts';
 import { AgentOp } from './browser-agent-op';
 
 interface FakeContents extends EventEmitter {
@@ -140,20 +140,35 @@ import { BrowserWindow } from 'electron';
 
 import { BrowserService, resolveAddress } from './browser-service';
 
-function makeService(): { service: BrowserService; main: FakeWindow } {
-  const main = new (BrowserWindow as unknown as new () => FakeWindow)();
+const newWindow = (): FakeWindow =>
+  new (BrowserWindow as unknown as new () => FakeWindow)();
+
+const asWindow = (win: FakeWindow): BrowserWindow =>
+  win as unknown as BrowserWindow;
+
+function makeService(): {
+  service: BrowserService;
+  main: FakeWindow;
+  createPopout: ReturnType<typeof vi.fn>;
+} {
+  const main = newWindow();
+  const createPopout = vi.fn(() => asWindow(newWindow()));
   const service = new BrowserService({
     proxyPort: 4000,
     ready: Promise.resolve(),
-    mainWindow: () => main as unknown as BrowserWindow,
+    mainWindow: () => asWindow(main),
+    createPopout,
   });
-  return { service, main };
+  return { service, main, createPopout };
 }
 
-const stateEvents = (main: FakeWindow): { agentOpenedTabId: string | null }[] =>
+const DOCKED = { x: 10, y: 20, width: 300, height: 200 };
+const WINDOWED = { x: 0, y: 92, width: 1100, height: 640 };
+
+const stateEvents = (main: FakeWindow): BrowserStateEvent[] =>
   main.webContents.send.mock.calls
     .filter(([channel]) => channel === IPC.onBrowserState)
-    .map(([, event]) => event as { agentOpenedTabId: string | null });
+    .map(([, event]) => event as BrowserStateEvent);
 
 beforeEach(() => {
   h.views.length = 0;
@@ -185,30 +200,159 @@ describe('BrowserService', () => {
     expect(h.sessions.size).toBe(1);
   });
 
-  it('moves views to the pop-out window without loadURL', async () => {
-    const { service, main } = makeService();
+  it('moves the view into the pop-out over its own pane, without loadURL', async () => {
+    const { service, main, createPopout } = makeService();
     await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
-    service.setBounds('run-1', { x: 10, y: 20, width: 300, height: 200 });
+    service.setBounds('run-1', DOCKED, asWindow(main));
     const view = h.views[0] as FakeView;
     expect(main.contentView.addChildView).toHaveBeenCalledWith(view);
 
     service.popOut('run-1', 'Fix the build');
     const popout = h.windows[1] as FakeWindow;
 
-    expect(popout.contentView.addChildView).toHaveBeenCalledWith(view);
-    expect(view.setBounds).toHaveBeenLastCalledWith({
-      x: 0,
-      y: 0,
-      width: 900,
-      height: 600,
-    });
+    expect(createPopout).toHaveBeenCalledWith('run-1', 'Fix the build');
+    expect(main.contentView.removeChildView).toHaveBeenCalledWith(view);
+    expect(popout.contentView.addChildView).not.toHaveBeenCalled();
     expect(service.state('run-1').poppedOut).toBe(true);
+
+    service.setBounds('run-1', WINDOWED, asWindow(popout));
+
+    expect(popout.contentView.addChildView).toHaveBeenCalledWith(view);
+    expect(view.setBounds).toHaveBeenLastCalledWith(WINDOWED);
+    expect(view.webContents.loadURL).toHaveBeenCalledTimes(1);
+  });
+
+  it('places the view only by the bounds of the window that holds it', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    service.popOut('run-1', 'Fix the build');
+    const popout = h.windows[1] as FakeWindow;
+    service.setBounds('run-1', WINDOWED, asWindow(popout));
+    const view = h.views[0] as FakeView;
+
+    service.setBounds('run-1', DOCKED, asWindow(main));
+    service.setBounds('run-1', { x: 1, y: 1, width: 5, height: 5 }, null);
+    service.setBounds(
+      'run-1',
+      { x: 2, y: 2, width: 6, height: 6 },
+      asWindow(newWindow()),
+    );
+
+    expect(view.setBounds).toHaveBeenLastCalledWith(WINDOWED);
+    expect(main.contentView.addChildView).not.toHaveBeenCalled();
+  });
+
+  it('docks back once the docked pane measures again after the pop-out closes', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    await service.openTab('run-1', 'https://other.test/', { openedBy: null });
+    service.setBounds('run-1', DOCKED, asWindow(main));
+    service.popOut('run-1', 'Fix the build');
+    service.setBounds('run-1', null, asWindow(main));
+    const popout = h.windows[1] as FakeWindow;
+    service.setBounds('run-1', WINDOWED, asWindow(popout));
+    service.selectTab('run-1', 't1');
+    const first = h.views[0] as FakeView;
 
     popout.emit('close');
 
+    expect(service.state('run-1')).toMatchObject({
+      poppedOut: false,
+      activeTabId: 't1',
+    });
+    expect(popout.contentView.removeChildView).toHaveBeenLastCalledWith(first);
+    main.contentView.addChildView.mockClear();
+
+    service.setBounds('run-1', DOCKED, asWindow(main));
+
+    expect(main.contentView.addChildView).toHaveBeenCalledExactlyOnceWith(
+      first,
+    );
+    expect(first.setBounds).toHaveBeenLastCalledWith(DOCKED);
+    expect(service.state('run-1').tabs.map((tab) => tab.id)).toEqual([
+      't1',
+      't2',
+    ]);
+  });
+
+  it('takes the page out of the pop-out while it reports no room for it', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    service.popOut('run-1', 'Fix the build');
+    const popout = h.windows[1] as FakeWindow;
+    service.setBounds('run-1', WINDOWED, asWindow(popout));
+    const view = h.views[0] as FakeView;
+
+    service.setBounds('run-1', null, asWindow(popout));
+
+    expect(popout.contentView.removeChildView).toHaveBeenCalledWith(view);
+    expect(main.contentView.addChildView).not.toHaveBeenCalled();
+  });
+
+  it('docks back when the pop-out window goes away without a close event', async () => {
+    const { service } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    service.popOut('run-1', 'Fix the build');
+    const popout = h.windows[1] as FakeWindow;
+
+    popout.emit('closed');
+
     expect(service.state('run-1').poppedOut).toBe(false);
-    expect(main.contentView.addChildView).toHaveBeenCalledTimes(2);
-    expect(view.webContents.loadURL).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['the Dock back press', (service: BrowserService) => service.dock('run-1')],
+    [
+      'closing the window',
+      (_service: BrowserService, popout: FakeWindow) => popout.emit('close'),
+    ],
+  ])(
+    'marks exactly one state event as docked back on %s',
+    async (_, dockBy) => {
+      const { service, main } = makeService();
+      await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+      service.popOut('run-1', 'Fix the build');
+      const popout = h.windows[1] as FakeWindow;
+      expect(stateEvents(main).some((event) => event.dockedBack)).toBe(false);
+      main.webContents.send.mockClear();
+
+      dockBy(service, popout);
+
+      const docked = stateEvents(main).filter((event) => event.dockedBack);
+      expect(docked).toHaveLength(1);
+      expect(docked[0]?.state).toMatchObject({
+        runId: 'run-1',
+        poppedOut: false,
+      });
+    },
+  );
+
+  it('sends state to the pop-out window as well as the main window', async () => {
+    const { service, main } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    service.popOut('run-1', 'Fix the build');
+    const popout = h.windows[1] as FakeWindow;
+    main.webContents.send.mockClear();
+    popout.webContents.send.mockClear();
+
+    await service.openTab('run-1', 'https://other.test/', { openedBy: null });
+
+    expect(stateEvents(popout).length).toBeGreaterThan(0);
+    expect(stateEvents(main).length).toBe(stateEvents(popout).length);
+  });
+
+  it('focuses the open pop-out instead of making a second one', async () => {
+    const { service, createPopout } = makeService();
+    await service.openTab('run-1', 'https://stand.test/', { openedBy: null });
+    service.popOut('run-1', 'Fix the build');
+    const popout = h.windows[1] as FakeWindow & {
+      focus: ReturnType<typeof vi.fn>;
+    };
+
+    service.popOut('run-1', 'Fix the build');
+
+    expect(createPopout).toHaveBeenCalledTimes(1);
+    expect(popout.focus).toHaveBeenCalled();
   });
 
   it('opens each own-cookie tab on an in-memory session of its own', async () => {

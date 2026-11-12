@@ -18707,12 +18707,7 @@ describe('TeamExecutorService — relay mode', () => {
   it('moves the lead-only team tools to the new lead on a hand-off', async () => {
     const teamProposals = new TeamProposalBroker();
     const projectInstructionCards = new ProjectInstructionsBroker();
-    const goalWriters = new GoalWritersBroker();
-    const harness = relaySetup({
-      teamProposals,
-      projectInstructionCards,
-      goalWriters,
-    });
+    const harness = relaySetup({ teamProposals, projectInstructionCards });
     harness.service.useLeadProjectCards(async () => ({ status: 'posted' }));
     const run = await harness.service.startRun({
       slug: 'relay',
@@ -18724,8 +18719,6 @@ describe('TeamExecutorService — relay mode', () => {
     expect(teamProposals.canPropose(run.id, 'ada', null)).toBe(true);
     expect(teamProposals.canPropose(run.id, 'bob', null)).toBe(false);
     expect(teamProposals.canPropose(run.id, 'cy', null)).toBe(false);
-    expect(goalWriters.canWrite(run.id, 'ada', null)).toBe(true);
-    expect(goalWriters.canWrite(run.id, 'bob', null)).toBe(false);
 
     const moved = await harness.stages.move(
       run.id,
@@ -18740,8 +18733,36 @@ describe('TeamExecutorService — relay mode', () => {
     expect(teamProposals.canPropose(run.id, 'ada', null)).toBe(false);
     expect(projectInstructionCards.canPropose(run.id, 'bob', null)).toBe(true);
     expect(projectInstructionCards.canPropose(run.id, 'ada', null)).toBe(false);
+  });
+
+  it("moves the right to write the run's goals to the new lead on a hand-off, and refuses the former lead", async () => {
+    const goalWriters = new GoalWritersBroker();
+    const harness = relaySetup({ goalWriters });
+    const run = await harness.service.startRun({
+      slug: 'relay',
+      team: RELAY,
+      cwd: dir,
+      prompt: 'ship the feature',
+    });
+    await drain();
+    expect(goalWriters.canWrite(run.id, 'ada', null)).toBe(true);
+    expect(goalWriters.canWrite(run.id, 'bob', null)).toBe(false);
+    expect(goalWriters.canWrite(run.id, 'cy', null)).toBe(false);
+
+    const moved = await harness.stages.move(
+      run.id,
+      { action: 'complete', stage: 'plan', text: 'planned' },
+      { kind: 'agent', nodeId: 'ada' },
+    );
+    expect(moved.ok).toBe(true);
+    await drain();
+    expect(turnsOf(harness.claude, 'You Bob.')).toHaveLength(1);
+
     expect(goalWriters.canWrite(run.id, 'bob', null)).toBe(true);
+    expect(goalWriters.canWrite(run.id, 'bob', 'call-1')).toBe(false);
     expect(goalWriters.canWrite(run.id, 'ada', null)).toBe(false);
+    expect(goalWriters.canWrite(run.id, 'cy', null)).toBe(false);
+    expect(goalWriters.isTeamMember(run.id, 'ada')).toBe(true);
   });
 
   it('hands the run to the next stage lead on move_stage with a brief', async () => {

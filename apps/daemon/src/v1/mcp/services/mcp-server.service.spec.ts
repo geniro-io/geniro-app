@@ -6544,6 +6544,50 @@ describe('goals through the MCP endpoint', () => {
     });
   });
 
+  it('moves the write to whoever leads at the call on a relay hand-off, and refuses the former lead', async () => {
+    await db.seedRun('relay-1', { teamId: 'relay-team' });
+    let lead = 'ada';
+    const relayWriters = new GoalWritersBroker();
+    for (const memberId of ['ada', 'bob']) {
+      relayWriters.register(
+        'relay-1',
+        memberId,
+        { runId: 'relay-1' },
+        {
+          offeredTo: (conversationId) =>
+            conversationId === null && lead === memberId,
+        },
+      );
+    }
+    const relay = new McpServerService(
+      [new GoalsTool(db.service, relayWriters)],
+      { token: 'launch', version: '9.9.9', startedAt: 0, port: 4870 },
+    );
+    const add = (member: string, text: string) =>
+      callGoals(
+        relay,
+        member,
+        { action: 'add', goals: [{ text, source: 'agent' }] },
+        { runId: 'relay-1' },
+      );
+    const texts = async (): Promise<string[]> =>
+      (await db.service.list('relay-1'))!.map((goal) => goal.text);
+
+    expect(await add('ada', 'plan goal')).toMatchObject({ isError: false });
+    const bobBefore = await add('bob', 'early build goal');
+    expect(bobBefore.isError).toBe(true);
+    expect(bobBefore.text).toMatch(/^Not changed: only the lead/);
+    expect(await texts()).toEqual(['plan goal']);
+
+    lead = 'bob';
+
+    expect(await add('bob', 'build goal')).toMatchObject({ isError: false });
+    const adaAfter = await add('ada', 'late plan goal');
+    expect(adaAfter.isError).toBe(true);
+    expect(adaAfter.text).toMatch(/^Not changed: only the lead/);
+    expect(await texts()).toEqual(['plan goal', 'build goal']);
+  });
+
   it('refuses the lead a write while it answers a call, and lets it list there', async () => {
     const refused = await callGoals(
       endpoint,

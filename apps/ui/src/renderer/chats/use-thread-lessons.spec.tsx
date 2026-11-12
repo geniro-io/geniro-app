@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DaemonApis } from '../daemon-api';
+import type { DaemonClient, RunStatusEvent } from '../daemon-client';
 import {
   LESSONS_POLL_MS,
   type ThreadLessonsMark,
@@ -66,6 +67,13 @@ function harness(
     options.api === false
       ? null
       : ({ getThreadLessonsState } as unknown as DaemonApis['lessons']);
+  const listeners = new Set<(event: RunStatusEvent) => void>();
+  const client = {
+    onRunStatus: (listener: (event: RunStatusEvent) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  } as unknown as DaemonClient;
   let mark: ThreadLessonsMark = 'unknown';
   function Probe({
     source,
@@ -74,7 +82,12 @@ function harness(
     source: string | null;
     refreshKey: number;
   }): null {
-    mark = useThreadLessons({ lessonsApi, sourceRunId: source, refreshKey });
+    mark = useThreadLessons({
+      lessonsApi,
+      client,
+      sourceRunId: source,
+      refreshKey,
+    });
     return null;
   }
   const container = document.createElement('div');
@@ -85,6 +98,13 @@ function harness(
     render: async (source: string | null, refreshKey = 0) => {
       await act(async () => {
         root!.render(<Probe source={source} refreshKey={refreshKey} />);
+      });
+    },
+    status: async (runId: string, status: RunStatusEvent['status']) => {
+      await act(async () => {
+        for (const listener of listeners) {
+          listener({ runId, status } as RunStatusEvent);
+        }
       });
     },
     elapse: async (ms: number) => {
@@ -166,5 +186,23 @@ describe('useThreadLessons', () => {
     await h.render('source', 1);
 
     expect(h.getThreadLessonsState).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads again when the thread’s own turn ends, and not for another thread or a turn starting', async () => {
+    const h = harness([
+      () => Promise.resolve(NOTHING_NEW),
+      () => Promise.resolve(READY),
+    ]);
+    await h.render('source');
+    expect(h.mark()).toBe('nothing_new');
+
+    await h.status('source', 'running');
+    await h.status('other', 'completed');
+    expect(h.getThreadLessonsState).toHaveBeenCalledTimes(1);
+
+    await h.status('source', 'completed');
+
+    expect(h.getThreadLessonsState).toHaveBeenCalledTimes(2);
+    expect(h.mark()).toBe('ready');
   });
 });

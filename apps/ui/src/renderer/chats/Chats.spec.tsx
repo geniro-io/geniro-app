@@ -1235,9 +1235,9 @@ describe('Chats — the chat browser column', () => {
       column!.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(column!.parentElement).toBe(panel.parentElement);
-    expect(
-      container.querySelector('[data-slot="browser-toggle"]'),
-    ).not.toBeNull();
+    const toggle = container.querySelector('[data-slot="browser-toggle"]');
+    expect(toggle).not.toBeNull();
+    expect(panel.contains(toggle)).toBe(true);
   });
 
   it('draws no browser column or globe on a paired device', async () => {

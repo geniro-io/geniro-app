@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   CliKind,
@@ -17,6 +17,10 @@ import { POINTER_GRACE_MS } from '../components/use-pointer-grace';
 import type { AgentDisplay, AgentThread } from './agent-activity';
 import { AgentsPanel } from './agents-panel';
 import { ArtifactShareContext } from './artifact-share';
+import {
+  clearAgentTabUnseen,
+  markAgentTabUnseen,
+} from './browser/browser-pane-store';
 import { THREAD_PULL_REQUESTS_SETTLED_FLAG } from './panel-flags';
 import type { PublishedArtifact } from './published-artifact';
 import type { RunStages } from './stages-section';
@@ -24,6 +28,17 @@ import { ThreadUiMemoryContext, writeThreadFlag } from './thread-ui-memory';
 import type { WorkflowEntry } from './transcript-groups';
 import { mcpScopeKey } from './use-agent-mcp';
 import type { ArtifactSharing } from './use-artifact-sharing';
+
+const remote = vi.hoisted(() => ({ value: null as boolean | null }));
+
+vi.mock('../remote/remote-session', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../remote/remote-session')>();
+  return {
+    ...actual,
+    isRemoteRuntime: () => remote.value ?? actual.isRemoteRuntime(),
+  };
+});
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -4342,5 +4357,122 @@ describe('AgentsPanel — the run’s stages', () => {
       />,
     );
     expect(section(el)).toBeNull();
+  });
+});
+
+describe('AgentsPanel — the browser globe', () => {
+  beforeEach(() => {
+    remote.value = false;
+  });
+
+  afterEach(() => {
+    remote.value = null;
+    clearAgentTabUnseen('run-1');
+  });
+
+  const globe = (el: HTMLElement): HTMLButtonElement | null =>
+    el.querySelector<HTMLButtonElement>('[data-slot="browser-toggle"]');
+
+  const inThread = (element: React.ReactElement): React.ReactElement => (
+    <ThreadUiMemoryContext.Provider value="run-1">
+      {element}
+    </ThreadUiMemoryContext.Provider>
+  );
+
+  it('draws no globe without a browser run', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(globe(el)).toBeNull();
+  });
+
+  it('draws the globe in the row and on the rail', () => {
+    const el = render(
+      inThread(
+        <AgentsPanel
+          terminalReasons={TERMINALS}
+          agents={agents}
+          onOpenThread={vi.fn()}
+          browserRunId="run-1"
+        />,
+      ),
+    );
+    expect(globe(el)?.classList.contains('size-6')).toBe(true);
+    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
+    expect(globe(el)?.classList.contains('size-7')).toBe(true);
+  });
+
+  it('draws the rail divider when the globe is the only run control', () => {
+    const el = renderFolded(
+      inThread(
+        <AgentsPanel
+          terminalReasons={TERMINALS}
+          agents={agents}
+          onOpenThread={vi.fn()}
+          browserRunId="run-1"
+        />,
+      ),
+    );
+    expect(globe(el)).not.toBeNull();
+    expect(el.querySelector('[data-slot="rail-divider"]')).not.toBeNull();
+  });
+
+  it("toggles the thread's pane through the thread memory", () => {
+    const el = render(
+      inThread(
+        <AgentsPanel
+          terminalReasons={TERMINALS}
+          agents={agents}
+          onOpenThread={vi.fn()}
+          browserRunId="run-1"
+        />,
+      ),
+    );
+    expect(globe(el)?.getAttribute('aria-pressed')).toBe('false');
+    click(globe(el));
+    expect(globe(el)?.getAttribute('aria-pressed')).toBe('true');
+    expect(localStorage.getItem('geniro.threadUi.run-1')).toContain(
+      '"browser:open":true',
+    );
+  });
+
+  it('marks the globe until its pane is opened', () => {
+    markAgentTabUnseen('run-1');
+    const el = render(
+      inThread(
+        <AgentsPanel
+          terminalReasons={TERMINALS}
+          agents={agents}
+          onOpenThread={vi.fn()}
+          browserRunId="run-1"
+        />,
+      ),
+    );
+    expect(el.querySelector('[data-slot="browser-unseen-dot"]')).not.toBeNull();
+    click(globe(el));
+    expect(el.querySelector('[data-slot="browser-unseen-dot"]')).toBeNull();
+  });
+
+  it('disables the globe on a paired device', () => {
+    remote.value = true;
+    const el = renderFolded(
+      inThread(
+        <AgentsPanel
+          terminalReasons={TERMINALS}
+          agents={agents}
+          onOpenThread={vi.fn()}
+          browserRunId="run-1"
+        />,
+      ),
+    );
+    const button = globe(el);
+    expect(button?.getAttribute('aria-disabled')).toBe('true');
+    expect(button?.title).toBe('The browser runs on your Mac');
+    click(button);
+    expect(localStorage.getItem('geniro.threadUi.run-1')).toBeNull();
   });
 });

@@ -80,6 +80,7 @@ import { ArtifactDialog } from './artifact-dialog';
 import type { RunArtifact } from './artifact-payload';
 import { ArtifactShareContext, hasLink } from './artifact-share';
 import { bareUrl, briefParts, plainMarkdownText } from './brief-text';
+import { BrowserToggleButton } from './browser/browser-toggle-button';
 import { callClockTitle, useCallClockMs } from './call-clock';
 import { callTitle } from './call-title';
 import { ContextMeter } from './context-meter';
@@ -1867,6 +1868,7 @@ export function AgentsPanel({
   onOpenSubagent,
   onSearch,
   timeline,
+  browserRunId,
   onOpenFolderTerminal,
   onExportChat,
   onAnalyzeThread,
@@ -2107,6 +2109,7 @@ export function AgentsPanel({
     inProgress: boolean;
   };
   onOpenFolderTerminal?: () => void;
+  browserRunId?: string | null;
   /**
    * Write this run's whole conversation to a file the user picks.
    *
@@ -2444,6 +2447,13 @@ export function AgentsPanel({
         ) : null,
       ],
       [
+        browserRunId ? (
+          <BrowserToggleButton
+            key="browser"
+            runId={browserRunId}
+            className={size}
+          />
+        ) : null,
         onOpenFolderTerminal ? (
           <OpenFolderTerminalButton
             key="terminal"
@@ -2538,6 +2548,7 @@ export function AgentsPanel({
         </Button>
         {timeline ||
         onSearch ||
+        browserRunId ||
         onOpenFolderTerminal ||
         onExportChat ||
         onAnalyzeThread ||

@@ -12,11 +12,13 @@ import {
 
 export const BROWSER_REMOTE_TITLE = 'The browser runs on your Mac';
 
-/** The chat header's globe: shows or hides the chat's browser pane. */
+/** The agents panel's globe: shows or hides the chat's browser pane. */
 export function BrowserToggleButton({
   runId,
+  className,
 }: {
   runId: string;
+  className?: string;
 }): React.JSX.Element {
   const [open, setOpen] = useThreadFlag(BROWSER_PANE_OPEN_KEY, false);
   const unseen = useAgentTabUnseen(runId);
@@ -34,7 +36,11 @@ export function BrowserToggleButton({
       variant="ghost"
       size="icon"
       data-slot="browser-toggle"
-      className={cn('relative size-7', open && 'text-primary')}
+      className={cn(
+        'relative shrink-0',
+        open ? 'text-primary' : 'text-muted-foreground',
+        className,
+      )}
       aria-label="Browser"
       aria-pressed={remote ? undefined : open}
       aria-disabled={remote ? true : undefined}

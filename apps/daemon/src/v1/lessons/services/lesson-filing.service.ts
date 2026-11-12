@@ -87,7 +87,13 @@ export class LessonFilingService {
     }
     const em = this.em.fork();
     const segment = await this.segments.ofReflection(turn.analysisRunId, em);
-    if (segment === null || segment.status === 'reflected') {
+    if (segment === null) {
+      return refusedWith(
+        'NOT_A_REFLECTION',
+        'this reflection was started on no stretch of the thread',
+      );
+    }
+    if (segment.status === 'reflected') {
       return refusedWith(
         'ALREADY_FILED',
         'this reflection has already filed its lessons',

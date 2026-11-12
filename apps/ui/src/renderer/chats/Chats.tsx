@@ -5177,6 +5177,7 @@ export function Chats({
   // The open thread's lessons state, for its Reflect now button.
   const lessonsMark = useThreadLessons({
     lessonsApi: apis.lessons,
+    client,
     sourceRunId: activeRun && !isAnalysisRun(activeRun) ? activeRun.id : null,
     refreshKey: lessonsGeneration,
   });

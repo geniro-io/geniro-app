@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import type { DaemonApis } from '../daemon-api';
+import type { DaemonClient } from '../daemon-client';
 
 /**
  * What a thread's "Reflect now" can do: nothing new since its last reflection,
@@ -15,15 +16,18 @@ export const LESSONS_POLL_MS = 5_000;
 
 /**
  * The open thread's lessons state, for its "Reflect now" button. Read when the
- * thread opens and whenever `refreshKey` moves (a reflection was just started),
- * and re-read while one is working, so the button returns once the card lands.
+ * thread opens, whenever `refreshKey` moves (a reflection was just started) and
+ * whenever the thread's own turn ends, and re-read while one is working, so the
+ * button returns once the card lands or the thread has something new.
  */
 export function useThreadLessons({
   lessonsApi,
+  client,
   sourceRunId,
   refreshKey,
 }: {
   lessonsApi: DaemonApis['lessons'] | null;
+  client: DaemonClient | null;
   sourceRunId: string | null;
   refreshKey: number;
 }): ThreadLessonsMark {
@@ -31,6 +35,22 @@ export function useThreadLessons({
     source: string;
     mark: ThreadLessonsMark;
   } | null>(null);
+  const [turnsEnded, setTurnsEnded] = useState(0);
+
+  useEffect(() => {
+    if (client === null || sourceRunId === null) {
+      return;
+    }
+    return client.onRunStatus((event) => {
+      if (
+        event.runId === sourceRunId &&
+        event.status !== null &&
+        event.status !== 'running'
+      ) {
+        setTurnsEnded((count) => count + 1);
+      }
+    });
+  }, [client, sourceRunId]);
 
   useEffect(() => {
     if (lessonsApi === null || sourceRunId === null) {
@@ -69,7 +89,7 @@ export function useThreadLessons({
         clearTimeout(timer);
       }
     };
-  }, [lessonsApi, sourceRunId, refreshKey]);
+  }, [lessonsApi, sourceRunId, refreshKey, turnsEnded]);
 
   return reading !== null && reading.source === sourceRunId
     ? reading.mark

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
+import { ItemDao } from './item.dao';
 import { RunDao } from './run.dao';
 
 /**
@@ -989,6 +990,58 @@ describe('RunDao (in-memory sqlite)', () => {
       await dao.rememberPromptCache(run.id, { ttlMs: null, reason: null }, at);
 
       expect((await dao.readWork(run.id))?.promptCacheExpiresAt).toBeNull();
+    });
+  });
+
+  describe('reconcileMarks', () => {
+    it('answers each run with its newest item seq and the seq recorded for it', async () => {
+      await dao.create({ id: 'never-read' });
+      await dao.create({ id: 'recorded' });
+      await dao.create({ id: 'empty' });
+      const items = new ItemDao(orm.em.fork());
+      for (const [runId, seq] of [
+        ['never-read', 0],
+        ['never-read', 4],
+        ['recorded', 2],
+        ['recorded', 7],
+      ] as const) {
+        await items.create({ runId, seq, kind: 'message', payload: '{}' });
+      }
+      await dao.markReconciledThrough('recorded', 7);
+
+      const marks = await new RunDao(orm.em.fork()).reconcileMarks();
+
+      expect(
+        new Map(
+          marks.map((mark) => [
+            mark.runId,
+            [mark.newestSeq, mark.reconciledThroughSeq],
+          ]),
+        ),
+      ).toEqual(
+        new Map([
+          ['never-read', [4, null]],
+          ['recorded', [7, 7]],
+          ['empty', [-1, null]],
+        ]),
+      );
+    });
+
+    it('counts a soft-deleted row as the newest seq', async () => {
+      await dao.create({ id: 'r1' });
+      const items = new ItemDao(orm.em.fork());
+      await items.create({ runId: 'r1', seq: 1, kind: 'message', payload: '{}' });
+      await items.create({
+        runId: 'r1',
+        seq: 2,
+        kind: 'message',
+        payload: '{}',
+        deletedAt: new Date(),
+      });
+
+      const [mark] = await new RunDao(orm.em.fork()).reconcileMarks();
+
+      expect(mark?.newestSeq).toBe(2);
     });
   });
 

@@ -1,3 +1,4 @@
+import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 
 import type {
@@ -7,6 +8,8 @@ import type {
   MonitorStopOutcome,
 } from '../chat.types';
 import type { MonitorOwner } from '../chat.types';
+import { ItemDao } from '../dao/item.dao';
+import { monitorRowOf } from '../utils/monitor-text';
 import { HostSinkBroker, type HostSinkUnavailable } from './host-sink.broker';
 import { MonitorRegistry } from './monitor.registry';
 
@@ -28,7 +31,11 @@ export interface MonitorSink {
  */
 @Injectable()
 export class MonitorBroker extends HostSinkBroker<MonitorSink> {
-  constructor(private readonly monitors: MonitorRegistry) {
+  constructor(
+    private readonly monitors: MonitorRegistry,
+    private readonly itemDao: ItemDao,
+    private readonly em: EntityManager,
+  ) {
     super();
   }
 
@@ -48,17 +55,16 @@ export class MonitorBroker extends HostSinkBroker<MonitorSink> {
       memberId,
       'no turn is running that could own it',
       'start a monitor',
-      (sink) => {
+      async (sink) => {
         const { owner, cwd } = sink.ownerOf(caller);
-        return Promise.resolve(
-          this.monitors.start({
-            owner,
-            cwd,
-            command: input.command,
-            description: input.description,
-            timeoutMs: input.timeoutMs,
-          }),
-        );
+        await this.learnUsedIds(owner.runId);
+        return this.monitors.start({
+          owner,
+          cwd,
+          command: input.command,
+          description: input.description,
+          timeoutMs: input.timeoutMs,
+        });
       },
     );
   }
@@ -94,6 +100,24 @@ export class MonitorBroker extends HostSinkBroker<MonitorSink> {
             .list(runId, caller)
             .map(({ owner: _owner, ...listing }) => listing),
         ),
+    );
+  }
+
+  /**
+   * The ids a run's transcript already holds, read before its first monitor of
+   * this launch when the boot sweep did not read the run (it reads only the runs
+   * written to since it last found them closed).
+   */
+  private async learnUsedIds(runId: string): Promise<void> {
+    if (this.monitors.knowsUsedIds(runId)) {
+      return;
+    }
+    const rows = await this.itemDao.monitorRowsOfRuns([runId], this.em.fork());
+    this.monitors.noteUsedIds(
+      runId,
+      rows.flatMap(
+        (row) => monitorRowOf(row.payload)?.monitors.map(({ id }) => id) ?? [],
+      ),
     );
   }
 }

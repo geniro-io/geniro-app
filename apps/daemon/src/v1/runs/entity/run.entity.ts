@@ -806,6 +806,15 @@ export class Run extends TimestampsEntity {
   payloadRefsVersion: number | null = null;
 
   /**
+   * The newest item seq through which the boot reconcile of stranded work
+   * (`main.ts`) last found nothing of this run left open, or null for a run it
+   * has not read since the column existed. A launch reads only the runs whose
+   * newest seq is above it: anything left open was written after it.
+   */
+  @Property({ type: 'integer', nullable: true })
+  reconciledThroughSeq: number | null = null;
+
+  /**
    * When this run was ARCHIVED — shelved out of the chat list but destroyed in
    * no way — or null while it is not.
    *

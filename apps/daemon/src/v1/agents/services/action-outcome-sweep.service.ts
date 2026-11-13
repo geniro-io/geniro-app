@@ -27,13 +27,17 @@ export class ActionOutcomeSweep {
     private readonly actions: ChatActionsService,
   ) {}
 
-  async sweep(): Promise<void> {
+  /** Answers the runs of `runIds` it did not reconcile: every one on a failure. */
+  async sweep(runIds: readonly string[]): Promise<string[]> {
     try {
       const byRun = new Map<
         string,
         Pick<Item, 'runId' | 'kind' | 'seq' | 'payload'>[]
       >();
-      for (const row of await this.itemDao.allActionRows(this.em.fork())) {
+      for (const row of await this.itemDao.actionRowsOfRuns(
+        runIds,
+        this.em.fork(),
+      )) {
         const rows = byRun.get(row.runId);
         if (rows) {
           rows.push(row);
@@ -80,10 +84,12 @@ export class ActionOutcomeSweep {
           `marked ${interrupted} command action(s) a previous launch left running as interrupted`,
         );
       }
+      return [];
     } catch (err: unknown) {
       this.logger.error(
         `could not sweep the command actions left running: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return [...runIds];
     }
   }
 }

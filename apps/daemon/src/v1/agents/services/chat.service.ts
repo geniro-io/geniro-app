@@ -5250,7 +5250,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
     runId: string,
     /** The user's Stop closed the session, which is what ended them. */
     stopped = false,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const em = this.em.fork();
       // WHERE each delegate belongs, taken from its own rows — the member, and the
@@ -5300,6 +5300,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           `run ${runId}: closed ${stranded.length} sub-agent(s) left out by its agent session`,
         );
       }
+      return true;
     } catch (err: unknown) {
       // Best-effort, like every other note on this path: the process is already
       // gone, and failing to record that must not also fail the badge restore
@@ -5307,6 +5308,7 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
       this.logger.error(
         `run ${runId} failed to close its stranded sub-agents: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return false;
     } finally {
       // The rows above are persisted directly rather than raised as agent
       // events, so `recordDelegateBracket` never sees them — the badge count is
@@ -5333,11 +5335,13 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * reconciles and in their order, before listen: an `OnApplicationBootstrap`
    * hook would fire later, inside `listen()`, unordered against them.
    */
-  async reconcileStrandedDelegates(): Promise<void> {
+  async reconcileStrandedDelegates(
+    runIds: readonly string[],
+  ): Promise<string[]> {
     try {
       const em = this.em.fork();
       const byRun = new Map<string, unknown[]>();
-      for (const row of await this.itemDao.allSubagentInfoRows(em)) {
+      for (const row of await this.itemDao.subagentInfoRowsOfRuns(runIds, em)) {
         const payloads = byRun.get(row.runId);
         if (payloads) {
           payloads.push(parsePayload(row.payload));
@@ -5346,24 +5350,30 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
         }
       }
       let repaired = 0;
+      const unsettled: string[] = [];
       for (const [runId, payloads] of byRun) {
         if (openDelegateIds(payloads).length === 0) {
           continue;
         }
-        await this.closeStrandedDelegates(runId);
-        repaired += 1;
+        if (await this.closeStrandedDelegates(runId)) {
+          repaired += 1;
+        } else {
+          unsettled.push(runId);
+        }
       }
       if (repaired > 0) {
         this.logger.warn(
           `closed the stranded sub-agents of ${repaired} run(s) on boot`,
         );
       }
+      return unsettled;
     } catch (err: unknown) {
       // Never block boot — a fresh database whose schema sync has not created
       // the table yet has nothing to reconcile.
       this.logger.error(
         `boot reconcile of stranded sub-agents failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return [...runIds];
     }
   }
 
@@ -5378,11 +5388,11 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
    * whatever its members still had out. No process can exist this early, so every
    * open command on disk is stranded by construction.
    */
-  async reconcileStrandedShells(): Promise<void> {
+  async reconcileStrandedShells(runIds: readonly string[]): Promise<string[]> {
     try {
       const em = this.em.fork();
       const byRun = new Map<string, ShellRow[]>();
-      for (const row of await this.itemDao.allShellRows(em)) {
+      for (const row of await this.itemDao.shellRowsOfRuns(runIds, em)) {
         const rows = byRun.get(row.runId);
         if (rows) {
           rows.push(row);
@@ -5420,10 +5430,12 @@ export class ChatService implements OnModuleInit, BeforeApplicationShutdown {
           `closed the stranded background commands of ${repaired} run(s) on boot`,
         );
       }
+      return [];
     } catch (err: unknown) {
       this.logger.error(
         `boot reconcile of stranded background commands failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return [...runIds];
     }
   }
 

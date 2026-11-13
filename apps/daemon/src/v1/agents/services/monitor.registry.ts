@@ -65,6 +65,7 @@ export class MonitorRegistry implements BeforeApplicationShutdown {
   private readonly logger = new Logger(MonitorRegistry.name);
   private readonly running = new Map<string, Map<string, RunningMonitor>>();
   private readonly counters = new Map<string, number>();
+  private readonly seeded = new Set<string>();
   private readonly abortedAt = new Map<string, number>();
   private readonly endedOf = new Map<
     string,
@@ -235,12 +236,18 @@ export class MonitorRegistry implements BeforeApplicationShutdown {
    * monitor is never minted under one of them: the counter is per launch.
    */
   noteUsedIds(runId: string, ids: Iterable<string>): void {
+    this.seeded.add(runId);
     let highest = this.counters.get(runId) ?? 0;
     for (const id of ids) {
       const n = Number(/^m(\d+)$/.exec(id)?.[1] ?? 0);
       highest = Math.max(highest, n);
     }
     this.counters.set(runId, highest);
+  }
+
+  /** Whether {@link noteUsedIds} has run for this run this launch. */
+  knowsUsedIds(runId: string): boolean {
+    return this.seeded.has(runId);
   }
 
   /** Archive or delete: stop the run's monitors and refuse new ones for a moment. */

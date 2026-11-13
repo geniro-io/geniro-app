@@ -682,17 +682,23 @@ class FakeItemDao {
       .sort((a, b) => a.seq - b.seq)
       .map((i) => ({ payload: i.payload, memberId: i.memberId }));
   }
-  async allSubagentInfoRows(): Promise<Pick<Item, 'runId' | 'payload'>[]> {
+  async subagentInfoRowsOfRuns(
+    runIds: readonly string[],
+  ): Promise<Pick<Item, 'runId' | 'payload'>[]> {
     return this.items
-      .filter((i) => i.kind === 'subagent_info')
+      .filter((i) => runIds.includes(i.runId) && i.kind === 'subagent_info')
       .sort((a, b) => a.runId.localeCompare(b.runId) || a.seq - b.seq)
       .map((i) => ({ runId: i.runId, payload: i.payload }));
   }
-  async allShellRows(): Promise<
-    Pick<Item, 'runId' | 'kind' | 'payload' | 'memberId'>[]
-  > {
+  async shellRowsOfRuns(
+    runIds: readonly string[],
+  ): Promise<Pick<Item, 'runId' | 'kind' | 'payload' | 'memberId'>[]> {
     return this.items
-      .filter((i) => i.kind === 'shell_open' || i.kind === 'shell_info')
+      .filter(
+        (i) =>
+          runIds.includes(i.runId) &&
+          (i.kind === 'shell_open' || i.kind === 'shell_info'),
+      )
       .sort((a, b) => a.runId.localeCompare(b.runId) || a.seq - b.seq)
       .map((i) => ({
         runId: i.runId,
@@ -2383,7 +2389,11 @@ describe('ChatService', () => {
 
     it('starts a monitor after its turn ended, on the folder that turn ran in', async () => {
       const registry = new MonitorRegistry(new ProcessRegistry());
-      const monitorSinks = new MonitorBroker(registry);
+      const monitorSinks = new MonitorBroker(
+        registry,
+        { monitorRowsOfRuns: async () => [] } as unknown as ItemDao,
+        { fork: () => ({}) } as unknown as EntityManager,
+      );
       const { service, claude } = setup({ monitors: registry, monitorSinks });
       const run = await service.createChat({ agentKind: 'claude', cwd: dir });
       await service.sendMessage(run.id, 'hello');
@@ -2411,6 +2421,8 @@ describe('ChatService', () => {
     it('keeps the monitor tools only where a call is put to the user first, since the chip can move between turns', async () => {
       const monitorSinks = new MonitorBroker(
         new MonitorRegistry(new ProcessRegistry()),
+        { monitorRowsOfRuns: async () => [] } as unknown as ItemDao,
+        { fork: () => ({}) } as unknown as EntityManager,
       );
       const { service, claude } = setup({ monitorSinks });
       const config = claude.adapter.getConfig();
@@ -9873,7 +9885,7 @@ describe('ChatService', () => {
       payload: JSON.stringify({ id: 'Task_92', backgroundOpen: true }),
     });
 
-    await service.reconcileStrandedDelegates();
+    await service.reconcileStrandedDelegates([run.id]);
 
     const closes = (await itemDao.getByRun(run.id)).filter(
       (i) =>
@@ -9909,7 +9921,7 @@ describe('ChatService', () => {
       }),
     });
 
-    await service.reconcileStrandedDelegates();
+    await service.reconcileStrandedDelegates([run.id]);
 
     const close = (await itemDao.getByRun(run.id)).find(
       (i) =>
@@ -9963,7 +9975,7 @@ describe('ChatService', () => {
       });
     }
 
-    await service.reconcileStrandedShells();
+    await service.reconcileStrandedShells([run.id]);
 
     const closes = (await itemDao.getByRun(run.id)).filter(
       (i) => i.kind === 'shell_info' && i.seq >= rows.length,
@@ -9975,6 +9987,67 @@ describe('ChatService', () => {
       workId: 'b-left',
       nodeId: 'manager',
     });
+  });
+
+  it('boot reconcile reads only the runs it is handed', async () => {
+    const { service, runDao, itemDao } = setup();
+    const run = await runDao.create({ teamId: 'wf-1', status: 'completed' });
+    await itemDao.create({
+      runId: run.id,
+      memberId: 'qa',
+      seq: 0,
+      kind: 'subagent_info',
+      payload: JSON.stringify({ id: 'Task_1', backgroundOpen: true }),
+    });
+    await itemDao.create({
+      runId: run.id,
+      memberId: 'qa',
+      seq: 1,
+      kind: 'shell_open',
+      payload: JSON.stringify({ id: 'toolu_1', workId: 'b-1' }),
+    });
+
+    expect(await service.reconcileStrandedDelegates(['other-run'])).toEqual(
+      [],
+    );
+    expect(await service.reconcileStrandedShells(['other-run'])).toEqual([]);
+
+    expect(await itemDao.getByRun(run.id)).toHaveLength(2);
+  });
+
+  it('answers a run whose stranded sub-agents could not be closed, so the next boot reads it again', async () => {
+    const { service, runDao, itemDao } = setup();
+    const run = await runDao.create({ teamId: 'wf-1', status: 'completed' });
+    await itemDao.create({
+      runId: run.id,
+      memberId: 'qa',
+      seq: 0,
+      kind: 'subagent_info',
+      payload: JSON.stringify({ id: 'Task_1', backgroundOpen: true }),
+    });
+    vi.spyOn(itemDao, 'subagentInfoRows').mockRejectedValueOnce(
+      new Error('disk I/O error'),
+    );
+
+    expect(await service.reconcileStrandedDelegates([run.id])).toEqual([
+      run.id,
+    ]);
+  });
+
+  it('answers every run it was handed when its read fails', async () => {
+    const { service, itemDao } = setup();
+    vi.spyOn(itemDao, 'shellRowsOfRuns').mockRejectedValueOnce(
+      new Error('disk I/O error'),
+    );
+    vi.spyOn(itemDao, 'subagentInfoRowsOfRuns').mockRejectedValueOnce(
+      new Error('disk I/O error'),
+    );
+
+    expect(await service.reconcileStrandedShells(['a', 'b'])).toEqual([
+      'a',
+      'b',
+    ]);
+    expect(await service.reconcileStrandedDelegates(['a'])).toEqual(['a']);
   });
 
   it('reconcile SKIPS a running run whose turn is legitimately in flight', async () => {

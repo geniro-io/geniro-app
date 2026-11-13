@@ -8189,6 +8189,7 @@ export interface ChatTextDatabase {
   runs: {
     id: Run['id'];
     payload_refs_version: Run['payloadRefsVersion'];
+    reconciled_through_seq: Run['reconciledThroughSeq'];
     title: Run['title'];
     cwd: Run['cwd'];
     archived_at: StoredDate | null;

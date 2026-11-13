@@ -1,3 +1,4 @@
+import type { EntityManager } from '@mikro-orm/sqlite';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -233,7 +234,7 @@ function service(
   actions = new ActionBroker(),
   teamGate = new TeamProposalBroker(),
   teamStore = {} as TeamStoreService,
-  monitors = new MonitorBroker(new MonitorRegistry(new ProcessRegistry())),
+  monitors = noMonitorHistoryBroker(new MonitorRegistry(new ProcessRegistry())),
   // Never asked by the cases that pass none: no sink, so neither tool is listed.
   teamNotes = teamNoteBroker(),
   teamBuilders = new TeamBuilderBroker(),
@@ -458,10 +459,19 @@ function teamNoteBroker(
   return new TeamNoteBroker(em, items);
 }
 
+/** A monitor broker whose runs have no monitor rows of an earlier launch. */
+function noMonitorHistoryBroker(registry: MonitorRegistry): MonitorBroker {
+  return new MonitorBroker(
+    registry,
+    { monitorRowsOfRuns: async () => [] } as unknown as ItemDao,
+    { fork: () => ({}) } as unknown as EntityManager,
+  );
+}
+
 /** A monitor broker with run-1's `agent` registered, over a real registry. */
 function monitorBroker(): { broker: MonitorBroker; registry: MonitorRegistry } {
   const registry = new MonitorRegistry(new ProcessRegistry());
-  const broker = new MonitorBroker(registry);
+  const broker = noMonitorHistoryBroker(registry);
   broker.register('run-1', 'agent', {
     ownerOf: (caller) => ({
       owner: {

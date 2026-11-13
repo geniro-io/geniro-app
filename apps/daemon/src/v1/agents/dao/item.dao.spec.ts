@@ -1407,12 +1407,19 @@ describe('ItemDao (in-memory sqlite)', () => {
       ['shell_info', 'manager'],
     ]);
     expect(
-      (await dao.allShellRows()).map((row) => [row.runId, row.kind]),
+      (await dao.shellRowsOfRuns(['run-b', 'run-a'])).map((row) => [
+        row.runId,
+        row.kind,
+      ]),
     ).toEqual([
       ['run-a', 'shell_open'],
       ['run-a', 'shell_info'],
       ['run-b', 'shell_open'],
     ]);
+    expect(
+      (await dao.shellRowsOfRuns(['run-b'])).map((row) => row.runId),
+    ).toEqual(['run-b']);
+    expect(await dao.shellRowsOfRuns([])).toEqual([]);
   });
 
   it('reads the named tool calls of one run, in seq order, and nothing else', async () => {

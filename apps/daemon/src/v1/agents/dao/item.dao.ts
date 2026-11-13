@@ -21,6 +21,7 @@ import type {
   ToolCallTime,
   WireRow,
 } from '../chat.types';
+import { idBatches } from '../utils/id-batches';
 import { parseJsonColumn, payloadString } from '../utils/json-util';
 import { messagePreview, messageText } from '../utils/message-preview';
 import {
@@ -2649,24 +2650,23 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * EVERY run's `subagent_info` rows, grouped by run and in seq order — the
-   * boot sweep's one read.
-   *
-   * Unbounded by run on purpose: the sweep has to find the runs it must repair,
-   * and which those are is exactly what the fold decides. It is served by the
-   * `kind` index and stays small next to a transcript — 2,365 rows across 27
-   * runs on a 400MB profile with months of history in it, read once per launch.
+   * These runs' `subagent_info` rows, grouped by run and in seq order — the
+   * boot sweep's read, over the runs `RunDao.reconcileMarks` says changed since
+   * it last found them closed.
    */
-  async allSubagentInfoRows(
+  async subagentInfoRowsOfRuns(
+    runIds: readonly string[],
     txEm?: EntityManager,
   ): Promise<Pick<Item, 'runId' | 'payload'>[]> {
-    return this.getRepo(txEm).find(
-      { kind: 'subagent_info' },
-      {
-        orderBy: { runId: 'asc', seq: 'asc' },
-        fields: ['runId', 'payload'],
-        disableIdentityMap: true,
-      },
+    return inRunBatches(runIds, (batch) =>
+      this.getRepo(txEm).find(
+        { runId: { $in: batch }, kind: 'subagent_info' },
+        {
+          orderBy: { runId: 'asc', seq: 'asc' },
+          fields: ['runId', 'payload'],
+          disableIdentityMap: true,
+        },
+      ),
     );
   }
 
@@ -2691,55 +2691,63 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
-  /**
-   * EVERY run's shell rows, grouped by run and in seq order — the boot sweep's
-   * one read, served by the `kind` index like {@link allSubagentInfoRows}.
-   */
-  async allShellRows(
+  /** These runs' shell rows, grouped by run and in seq order — the boot sweep's read. */
+  async shellRowsOfRuns(
+    runIds: readonly string[],
     txEm?: EntityManager,
   ): Promise<Pick<Item, 'runId' | 'kind' | 'payload' | 'memberId'>[]> {
-    return this.getRepo(txEm).find(
-      { kind: { $in: ['shell_open', 'shell_info'] } },
-      {
-        orderBy: { runId: 'asc', seq: 'asc' },
-        fields: ['runId', 'kind', 'payload', 'memberId'],
-        disableIdentityMap: true,
-      },
+    return inRunBatches(runIds, (batch) =>
+      this.getRepo(txEm).find(
+        { runId: { $in: batch }, kind: { $in: ['shell_open', 'shell_info'] } },
+        {
+          orderBy: { runId: 'asc', seq: 'asc' },
+          fields: ['runId', 'kind', 'payload', 'memberId'],
+          disableIdentityMap: true,
+        },
+      ),
     );
   }
 
   /**
-   * Every `system` row that records a monitor (`monitors` in its payload),
-   * oldest first per run — what the boot sweep reads a monitor's last word
-   * from. The payload match is a pre-filter; the sweep parses each row.
+   * These runs' `system` rows that record a monitor (`monitors` in their
+   * payload), oldest first per run — what the boot sweep reads a monitor's last
+   * word from, and what a run's used monitor ids are read from. The payload
+   * match is a pre-filter; the reader parses each row.
    */
-  async allMonitorRows(
+  async monitorRowsOfRuns(
+    runIds: readonly string[],
     txEm?: EntityManager,
   ): Promise<Pick<Item, 'runId' | 'memberId' | 'seq' | 'payload'>[]> {
-    return this.getRepo(txEm).find(
-      { kind: 'system', payload: { $like: '%"monitors":[%' } },
-      {
-        orderBy: { runId: 'asc', seq: 'asc' },
-        fields: ['runId', 'memberId', 'seq', 'payload'],
-        disableIdentityMap: true,
-      },
+    return inRunBatches(runIds, (batch) =>
+      this.getRepo(txEm).find(
+        {
+          runId: { $in: batch },
+          kind: 'system',
+          payload: { $like: '%"monitors":[%' },
+        },
+        {
+          orderBy: { runId: 'asc', seq: 'asc' },
+          fields: ['runId', 'memberId', 'seq', 'payload'],
+          disableIdentityMap: true,
+        },
+      ),
     );
   }
 
-  /**
-   * EVERY run's action rows, grouped by run and in seq order — the boot
-   * sweep's one read, as {@link allShellRows} is for shells.
-   */
-  async allActionRows(
+  /** These runs' action rows, grouped by run and in seq order — the boot sweep's read. */
+  async actionRowsOfRuns(
+    runIds: readonly string[],
     txEm?: EntityManager,
   ): Promise<Pick<Item, 'runId' | 'kind' | 'seq' | 'payload'>[]> {
-    return this.getRepo(txEm).find(
-      { kind: { $in: ['action', 'action_outcome'] } },
-      {
-        orderBy: { runId: 'asc', seq: 'asc' },
-        fields: ['runId', 'kind', 'seq', 'payload'],
-        disableIdentityMap: true,
-      },
+    return inRunBatches(runIds, (batch) =>
+      this.getRepo(txEm).find(
+        { runId: { $in: batch }, kind: { $in: ['action', 'action_outcome'] } },
+        {
+          orderBy: { runId: 'asc', seq: 'asc' },
+          fields: ['runId', 'kind', 'seq', 'payload'],
+          disableIdentityMap: true,
+        },
+      ),
     );
   }
 
@@ -3002,4 +3010,15 @@ export class ItemDao extends BaseDao<Item> {
     }
     return times;
   }
+}
+
+async function inRunBatches<T>(
+  runIds: readonly string[],
+  read: (batch: string[]) => Promise<T[]>,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (const batch of idBatches(runIds)) {
+    rows.push(...(await read(batch)));
+  }
+  return rows;
 }

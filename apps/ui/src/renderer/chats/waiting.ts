@@ -198,11 +198,18 @@ export function waitCounts(
   return counts;
 }
 
-/** How many threads wait on the user, the ones `keep` admits when given. */
-export function owedCount(
-  ranked: readonly WaitReading[],
-  keep: (reading: WaitReading) => boolean = () => true,
-): number {
-  return ranked.filter((reading) => waitsOnUser(reading.state) && keep(reading))
-    .length;
+/** How many threads wait on the user. */
+export function owedCount(ranked: readonly WaitReading[]): number {
+  return ranked.filter((reading) => waitsOnUser(reading.state)).length;
+}
+
+/** How many board cards have a thread waiting on the user. */
+export function owedCardCount(ranked: readonly WaitReading[]): number {
+  const cards = new Set<string>();
+  for (const { state, taskId } of ranked) {
+    if (taskId !== null && waitsOnUser(state)) {
+      cards.add(taskId);
+    }
+  }
+  return cards.size;
 }

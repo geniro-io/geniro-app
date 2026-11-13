@@ -902,6 +902,17 @@ describe('App — the menu counts what waits on you', () => {
     expect(railCount('Stats')).toBeNull();
   });
 
+  it('counts a card once on Tasks when two of its threads wait on you', async () => {
+    await bootWithCounts({ pending: 0, knowledgeWaiting: 0 });
+    await report([
+      { runId: 'card-old', state: 'unseen', since, taskId: 'task-1' },
+      { runId: 'card-new', state: 'asking', since, taskId: 'task-1' },
+    ]);
+
+    expect(railCount('Chats')).toBe('2');
+    expect(railCount('Tasks')).toBe('1');
+  });
+
   it('draws no count at zero', async () => {
     await bootWithCounts({ pending: 0, knowledgeWaiting: 0 });
     await report([waits[3]!]);

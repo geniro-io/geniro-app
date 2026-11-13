@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { RunStatusKind } from './run-status';
 import {
   nextWaiting,
+  owedCardCount,
   owedCount,
   rankByUrgency,
   waitCounts,
@@ -276,7 +277,13 @@ describe('owedCount', () => {
     );
   });
 
-  it('counts only the waits the filter keeps', () => {
+  it('is zero when nothing waits on the user', () => {
+    expect(owedCount(readings([row('busy', 'running', null)]))).toBe(0);
+  });
+});
+
+describe('owedCardCount', () => {
+  it('counts the cards with a thread waiting on the user, leaving plain chats and working cards out', () => {
     const ranked = readings(
       [
         {
@@ -292,10 +299,35 @@ describe('owedCount', () => {
       ],
       ['card-reply'],
     );
-    expect(owedCount(ranked, (reading) => reading.taskId !== null)).toBe(2);
+    expect(owedCardCount(ranked)).toBe(2);
   });
 
-  it('is zero when nothing waits on the user', () => {
-    expect(owedCount(readings([row('busy', 'running', null)]))).toBe(0);
+  it('counts a card once when two of its threads wait on the user', () => {
+    const ranked = readings(
+      [
+        {
+          ...row('card-old', 'completed', '2026-01-01T00:00:00.000Z'),
+          taskId: 'task-1',
+        },
+        {
+          ...row('card-new', 'needs-input', '2026-01-01T00:01:00.000Z'),
+          taskId: 'task-1',
+        },
+      ],
+      ['card-old'],
+    );
+    expect(owedCount(ranked)).toBe(2);
+    expect(owedCardCount(ranked)).toBe(1);
+  });
+
+  it('is zero when no card waits on the user', () => {
+    expect(
+      owedCardCount(
+        readings([
+          row('chat-ask', 'needs-input', '2026-01-01T00:00:00.000Z'),
+          { ...row('card-busy', 'running', null), taskId: 'task-1' },
+        ]),
+      ),
+    ).toBe(0);
   });
 });

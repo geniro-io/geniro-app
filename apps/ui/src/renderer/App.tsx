@@ -8,6 +8,7 @@ import { REMOTE_HISTORY_PAGE } from './chats/use-chat-run';
 import { useNextWaitingShortcut } from './chats/use-next-waiting-shortcut';
 import {
   nextWaiting,
+  owedCardCount,
   owedCount,
   type WaitReading,
   waitsOnUser,
@@ -586,7 +587,7 @@ export function App(): React.JSX.Element {
   const navCounts = useMemo(
     () => ({
       chats: owedCount(waiting),
-      tasks: owedCount(waiting, (reading) => reading.taskId !== null),
+      tasks: owedCardCount(waiting),
       knowledge: knowledgeCounts?.waiting ?? 0,
       settings: memoryPending ?? 0,
     }),

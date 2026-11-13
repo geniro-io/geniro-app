@@ -211,3 +211,12 @@ export function isAnalysisRun(
 ): boolean {
   return run.analysisSourceRunId !== null || run.analysisTeamSlug !== null;
 }
+
+/**
+ * Whether a run's permission requests nobody approved by rule are refused at
+ * once: a lessons reflection is hidden and read-only, so a card raised in it
+ * would never be seen and must never be granted.
+ */
+export function deniesUnanswered(run: Pick<Run, 'analysisPurpose'>): boolean {
+  return run.analysisPurpose === 'lessons';
+}

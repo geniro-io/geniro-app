@@ -201,6 +201,10 @@ export class LessonFilingService {
       agentKind: reflection?.agentKind ?? AgentKind.Claude,
       model: reflection?.model ?? null,
       proposals: rows.map(cardOf),
+      places: {
+        project: place.projectId !== null,
+        team: place.teamSlug !== null,
+      },
     };
     await this.rows.write(source.id, { kind: 'lessons', payload });
     return { status: 'recorded', count: rows.length };

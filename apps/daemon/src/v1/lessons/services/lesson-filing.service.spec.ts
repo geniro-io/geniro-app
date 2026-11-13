@@ -67,7 +67,8 @@ function lesson(overrides: Partial<ProposedLesson> = {}): ProposedLesson {
 function build(
   options: {
     turn?: AnalysisTurn;
-    source?: { reflectedThroughSeq: number | null } | null;
+    source?: { reflectedThroughSeq: number | null; teamId?: string } | null;
+    project?: { id: string } | null;
     visible?: { handle: string; title: string }[];
     items?: Item[];
   } = {},
@@ -133,7 +134,7 @@ function build(
     listVisible: vi.fn(() => Promise.resolve(options.visible ?? [])),
   };
   const projectScope = {
-    projectOfRun: vi.fn(() => Promise.resolve(null)),
+    projectOfRun: vi.fn(() => Promise.resolve(options.project ?? null)),
   };
   const segments = {
     ofReflection: vi.fn(() => Promise.resolve(segment)),
@@ -471,8 +472,30 @@ describe('LessonFilingService.file', () => {
             dedup: second.dedup,
           },
         ],
+        places: { project: false, team: false },
       },
     });
+  });
+
+  it('tells the card which memory scopes the thread can save to', async () => {
+    const fixture = build({
+      source: { reflectedThroughSeq: SEGMENT_FROM, teamId: 'reviewers' },
+      project: { id: 'proj-1' },
+    });
+
+    await fixture.service.file(fixture.turn, [lesson()]);
+
+    expect(fixture.rows.write).toHaveBeenCalledWith('src', {
+      kind: 'lessons',
+      payload: expect.objectContaining({
+        places: { project: true, team: true },
+      }),
+    });
+    expect(
+      fixture.tx.persist.mock.calls.map(([row]) => row as LessonProposal),
+    ).toEqual([
+      expect.objectContaining({ projectId: 'proj-1', teamSlug: 'reviewers' }),
+    ]);
   });
 
   it('keeps the source watermark where it is when it is already past the stretch', async () => {

@@ -683,13 +683,11 @@ describe('App — ⌘J to what waits on the user', () => {
     runId: 'approval',
     state: 'asking',
     since: '2026-10-21T10:01:00.000Z',
-    taskId: null,
   };
   const reply: WaitReading = {
     runId: 'reply',
     state: 'unseen',
     since: '2026-10-21T10:02:00.000Z',
-    taskId: null,
   };
 
   async function boot(): Promise<void> {
@@ -760,7 +758,6 @@ describe('App — ⌘J to what waits on the user', () => {
       runId: 'second',
       state: 'asking',
       since: '2026-10-21T10:01:30.000Z',
-      taskId: null,
     };
     await boot();
     await report([approval, second, reply]);
@@ -780,7 +777,6 @@ describe('App — ⌘J to what waits on the user', () => {
       runId: 'later',
       state: 'unseen',
       since: '2026-10-21T10:03:00.000Z',
-      taskId: null,
     };
     await boot();
     await report([approval, reply, later]);
@@ -816,10 +812,10 @@ describe('App — ⌘J to what waits on the user', () => {
 describe('App — the menu counts what waits on you', () => {
   const since = '2026-10-21T10:01:00.000Z';
   const waits: readonly WaitReading[] = [
-    { runId: 'chat-ask', state: 'asking', since, taskId: null },
-    { runId: 'card-ask', state: 'asking', since, taskId: 'task-1' },
-    { runId: 'card-reply', state: 'unseen', since, taskId: 'task-2' },
-    { runId: 'card-busy', state: 'working', since, taskId: 'task-3' },
+    { runId: 'chat-ask', state: 'asking', since },
+    { runId: 'card-ask', state: 'asking', since },
+    { runId: 'card-reply', state: 'unseen', since },
+    { runId: 'card-busy', state: 'working', since },
   ];
 
   const jsonResponse = (body: unknown): Response =>
@@ -889,28 +885,17 @@ describe('App — the menu counts what waits on you', () => {
     return tab!.getAttribute('aria-label');
   }
 
-  it('counts beside the rail what waits on you for Chats, Tasks, Knowledge and Settings, and nothing else', async () => {
+  it('counts beside the rail what waits on you for Chats, Knowledge and Settings, and nothing on Tasks or elsewhere', async () => {
     await bootWithCounts({ pending: 4, knowledgeWaiting: 5 });
     await report(waits);
 
     expect(railCount('Chats')).toBe('3');
-    expect(railCount('Tasks')).toBe('2');
+    expect(railCount('Tasks')).toBeNull();
     expect(railCount('Knowledge')).toBe('5');
     expect(railCount('Settings')).toBe('4');
     expect(railCount('Projects')).toBeNull();
     expect(railCount('Teams')).toBeNull();
     expect(railCount('Stats')).toBeNull();
-  });
-
-  it('counts a card once on Tasks when two of its threads wait on you', async () => {
-    await bootWithCounts({ pending: 0, knowledgeWaiting: 0 });
-    await report([
-      { runId: 'card-old', state: 'unseen', since, taskId: 'task-1' },
-      { runId: 'card-new', state: 'asking', since, taskId: 'task-1' },
-    ]);
-
-    expect(railCount('Chats')).toBe('2');
-    expect(railCount('Tasks')).toBe('1');
   });
 
   it('draws no count at zero', async () => {
@@ -929,7 +914,7 @@ describe('App — the menu counts what waits on you', () => {
     await report(waits);
 
     expect(tabLabel('Chats')).toBe('Chats, 3 waiting');
-    expect(tabLabel('Tasks')).toBe('Tasks, 2 waiting');
+    expect(tabLabel('Tasks')).toBe('Tasks');
     expect(tabLabel('Knowledge')).toBe('Knowledge, 5 waiting');
     expect(tabLabel('Settings')).toBe('Settings, 4 waiting');
     expect(tabLabel('Projects')).toBe('Projects');

@@ -4,7 +4,7 @@ import type { WaitReading } from './waiting';
 import { WaitingStatus } from './waiting-status';
 
 function reading(runId: string, state: WaitReading['state']): WaitReading {
-  return { runId, state, since: '2026-10-21T10:00:00.000Z' };
+  return { runId, state, since: '2026-10-21T10:00:00.000Z', taskId: null };
 }
 
 const meta = {

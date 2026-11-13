@@ -6,7 +6,12 @@ import { AgentIdentityContext, agentShortName } from './agent-identity';
 import { Chats } from './chats/Chats';
 import { REMOTE_HISTORY_PAGE } from './chats/use-chat-run';
 import { useNextWaitingShortcut } from './chats/use-next-waiting-shortcut';
-import { nextWaiting, type WaitReading, waitsOnUser } from './chats/waiting';
+import {
+  nextWaiting,
+  owedCount,
+  type WaitReading,
+  waitsOnUser,
+} from './chats/waiting';
 import { WaitingStatus } from './chats/waiting-status';
 import { AppUsageButton } from './components/app-usage-button';
 import { AvatarImageLoaderContext } from './components/avatar-images';
@@ -59,6 +64,7 @@ const Teams = lazy(() =>
   import('./teams/Teams').then((m) => ({ default: m.Teams })),
 );
 import type { SettingsSection } from './settings/Settings';
+import { useMemoryPendingCount } from './settings/use-memory-pending-count';
 
 const Settings = lazy(() =>
   import('./settings/Settings').then((m) => ({ default: m.Settings })),
@@ -567,6 +573,7 @@ export function App(): React.JSX.Element {
     }
   }, [openRunId]);
   const knowledgeCounts = useKnowledgeCounts(apis, clientRef.current);
+  const memoryPending = useMemoryPendingCount(apis, clientRef.current);
   const agentName = useLatestCallback(
     (kind: string): string => agentShortName(agentIdentities, kind),
     [agentIdentities],
@@ -577,8 +584,13 @@ export function App(): React.JSX.Element {
     agentName,
   });
   const navCounts = useMemo(
-    () => ({ knowledge: knowledgeCounts?.waiting ?? 0 }),
-    [knowledgeCounts],
+    () => ({
+      chats: owedCount(waiting),
+      tasks: owedCount(waiting, (reading) => reading.taskId !== null),
+      knowledge: knowledgeCounts?.waiting ?? 0,
+      settings: memoryPending ?? 0,
+    }),
+    [waiting, knowledgeCounts, memoryPending],
   );
   const waitingByRun = useMemo(
     () => new Map(waiting.map((reading) => [reading.runId, reading.state])),

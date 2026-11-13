@@ -106,7 +106,9 @@ function build(opts: {
   configDir?: string | null;
   /** Where the transcript stands NOW — what a stored `atSeq` is checked against. */
   maxSeq?: number;
-  readPlanLimits?: () => Promise<PlanLimitsWire | typeof NO_PLAN_LIMITS | null>;
+  readPlanLimits?: (input: {
+    live: unknown;
+  }) => Promise<PlanLimitsWire | typeof NO_PLAN_LIMITS | null>;
   planReading?: UsageReading;
   /** Each run's profile — overrides `configDir`. */
   configDirFor?: (runId: string) => string | null;
@@ -114,6 +116,14 @@ function build(opts: {
   pinFor?: (runId: string) => string | null;
   /** Which session keys hold a live process — overrides `liveSession`. */
   peek?: (sessionKey: string) => unknown;
+  /** Every kept process the registry holds, whichever run it serves. */
+  liveSessions?: {
+    key: string;
+    agent: string;
+    cwd: string;
+    configDir: string | null;
+    session: unknown;
+  }[];
   /** A TEAM run: its turns by member, its member kinds, its polled bill. */
   team?: {
     rows: { memberId: string | null; payload: string }[];
@@ -166,6 +176,7 @@ function build(opts: {
     {
       peek: (sessionKey: string) =>
         opts.peek ? opts.peek(sessionKey) : (opts.liveSession ?? null),
+      liveSessions: () => opts.liveSessions ?? [],
       onIdleFarewell: (listener: (runId: string) => Promise<void>) => {
         farewell = listener;
       },
@@ -298,6 +309,7 @@ describe('ChatMetricsService — one team member', () => {
       } as unknown as NodeStateDao,
       {
         peek,
+        liveSessions: () => [],
         onIdleFarewell: (listener: (key: string) => Promise<void>) => {
           farewell = listener;
         },
@@ -642,6 +654,7 @@ describe('ChatMetricsService — one agent-to-agent call', () => {
       {
         peek,
         agentOf,
+        liveSessions: () => [],
         onIdleFarewell: () => {},
       } as unknown as AgentSessionRegistry,
       {
@@ -1895,6 +1908,220 @@ describe('ChatMetricsService — plan limits are the ACCOUNT’s', () => {
     expect(closed.plan?.windows[0]?.percent).toBe(70);
     expect(closed.planReason).toBeNull();
     expect(closed.planTakenAt).not.toBeNull();
+  });
+
+  it('asks another running agent on the same account when this conversation’s own process was evicted', async () => {
+    const otherProcess = { id: 'other-conversation' };
+    const readPlanLimits = vi
+      .fn<(input: { live: unknown }) => Promise<PlanLimitsWire | null>>()
+      .mockResolvedValue(reading(64, false));
+    const { service } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      peek: () => null,
+      liveSessions: [
+        {
+          key: 'run-9::call:call-3',
+          agent: AgentKind.Claude,
+          cwd: '/proj/run-9',
+          configDir: null,
+          session: otherProcess,
+        },
+      ],
+      readPlanLimits,
+    });
+
+    const evicted = await service.read('run-1');
+
+    expect(readPlanLimits).toHaveBeenCalledTimes(1);
+    expect(readPlanLimits.mock.calls[0]?.[0].live).toBe(otherProcess);
+    expect(evicted.plan?.windows[0]?.percent).toBe(64);
+    expect(evicted.planReason).toBeNull();
+  });
+
+  it('asks the context breakdown only of the conversation’s own process, never of another one on its account', async () => {
+    const readContextUsage = vi.fn().mockResolvedValue(BREAKDOWN);
+    const { service } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      breakdownReading: { kind: 'reads', channel: 'live-process' },
+      readContextUsage,
+      peek: () => null,
+      liveSessions: [
+        {
+          key: 'run-9::call:call-3',
+          agent: AgentKind.Claude,
+          cwd: '/proj/run-9',
+          configDir: null,
+          session: {},
+        },
+      ],
+      readPlanLimits: () => Promise.resolve(reading(64, false)),
+    });
+
+    const evicted = await service.read('run-1');
+
+    expect(readContextUsage).not.toHaveBeenCalled();
+    expect(evicted.context).toBeNull();
+    expect(evicted.plan?.windows[0]?.percent).toBe(64);
+  });
+
+  it('never asks a running agent on another account for this conversation’s limits', async () => {
+    const readPlanLimits = vi.fn().mockResolvedValue(reading(64, false));
+    const { service } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      peek: () => null,
+      liveSessions: [
+        {
+          key: 'run-9::call:call-3',
+          agent: AgentKind.Claude,
+          cwd: '/proj/run-9',
+          configDir: '/Users/x/.claude-work',
+          session: {},
+        },
+      ],
+      readPlanLimits,
+    });
+
+    const evicted = await service.read('run-1');
+
+    expect(readPlanLimits).not.toHaveBeenCalled();
+    expect(evicted.plan).toBeNull();
+  });
+
+  it('never asks a default-profile agent in a PINNED folder for an unpinned conversation’s limits', async () => {
+    const readPlanLimits = vi.fn().mockResolvedValue(reading(64, false));
+    const { service } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      peek: () => null,
+      pinFor: (runId) => (runId === 'run-9' ? '/Users/x/.claude-team' : null),
+      liveSessions: [
+        {
+          key: 'run-9',
+          agent: AgentKind.Claude,
+          cwd: '/proj/run-9',
+          configDir: null,
+          session: {},
+        },
+      ],
+      readPlanLimits,
+    });
+
+    const evicted = await service.read('run-1');
+
+    expect(readPlanLimits).not.toHaveBeenCalled();
+    expect(evicted.plan).toBeNull();
+  });
+
+  it('asks an agent in a pinned folder for a conversation on the pinned profile', async () => {
+    const pinned = { id: 'pinned-folder' };
+    const readPlanLimits = vi
+      .fn<(input: { live: unknown }) => Promise<PlanLimitsWire | null>>()
+      .mockResolvedValue(reading(64, false));
+    const { service } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      peek: () => null,
+      pinFor: (runId) => (runId === 'run-9' ? '/Users/x/.claude-team' : null),
+      configDirFor: (runId) =>
+        runId === 'run-1' ? '/Users/x/.claude-team' : null,
+      liveSessions: [
+        {
+          key: 'run-9',
+          agent: AgentKind.Claude,
+          cwd: '/proj/run-9',
+          configDir: null,
+          session: pinned,
+        },
+      ],
+      readPlanLimits,
+    });
+
+    const evicted = await service.read('run-1');
+
+    expect(readPlanLimits.mock.calls[0]?.[0].live).toBe(pinned);
+    expect(evicted.plan?.windows[0]?.percent).toBe(64);
+  });
+
+  it('passes over other CLIs and other accounts, and prefers an idle agent on the account to a busy one', async () => {
+    const busy = { idle: false };
+    const idle = { idle: true };
+    const readPlanLimits = vi
+      .fn<(input: { live: unknown }) => Promise<PlanLimitsWire | null>>()
+      .mockResolvedValue(reading(64, false));
+    const { service } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      peek: () => null,
+      liveSessions: [
+        {
+          key: 'run-5',
+          agent: AgentKind.CursorAgent,
+          cwd: '/proj/run-5',
+          configDir: null,
+          session: { idle: true },
+        },
+        {
+          key: 'run-6',
+          agent: AgentKind.Claude,
+          cwd: '/proj/run-6',
+          configDir: '/Users/x/.claude-work',
+          session: { idle: true },
+        },
+        {
+          key: 'run-7',
+          agent: AgentKind.Claude,
+          cwd: '/proj/run-7',
+          configDir: null,
+          session: busy,
+        },
+        {
+          key: 'run-8',
+          agent: AgentKind.Claude,
+          cwd: '/proj/run-8',
+          configDir: null,
+          session: idle,
+        },
+      ],
+      readPlanLimits,
+    });
+
+    await service.read('run-1');
+
+    expect(readPlanLimits).toHaveBeenCalledTimes(1);
+    expect(readPlanLimits.mock.calls[0]?.[0].live).toBe(idle);
+  });
+
+  it('keeps the stored context breakdown when another agent answers only the plan', async () => {
+    const { service, remembered } = build({
+      planReading: { kind: 'reads', channel: 'live-process' },
+      breakdownReading: { kind: 'reads', channel: 'live-process' },
+      peek: () => null,
+      lastMetricsReading: JSON.stringify({
+        takenAt: '2026-11-13T08:00:00.000Z',
+        atSeq: 7,
+        configDir: null,
+        context: BREAKDOWN,
+        plan: null,
+      }),
+      liveSessions: [
+        {
+          key: 'run-9::call:call-3',
+          agent: AgentKind.Claude,
+          cwd: '/proj/run-9',
+          configDir: null,
+          session: {},
+        },
+      ],
+      readPlanLimits: () => Promise.resolve(reading(64, false)),
+    });
+
+    const evicted = await service.read('run-1');
+
+    expect(evicted.context).toEqual(BREAKDOWN);
+    expect(remembered).toHaveBeenCalledTimes(1);
+    const filed = JSON.parse(String(remembered.mock.calls[0]?.[1])) as {
+      context: unknown;
+      plan: PlanLimitsWire | null;
+    };
+    expect(filed.context).toEqual(BREAKDOWN);
+    expect(filed.plan?.windows[0]?.percent).toBe(64);
   });
 
   it('keeps accounts apart — another profile’s reading is not this chat’s', async () => {

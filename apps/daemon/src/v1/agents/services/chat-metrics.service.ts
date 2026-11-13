@@ -5,6 +5,7 @@ import { BadRequestException, NotFoundException } from '@packages/common';
 import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind, AgentKindSchema } from '../../runs/runs.types';
 import {
+  type AgentSession,
   NO_PLAN_LIMITS,
   type UsageReadChannel,
 } from '../adapters/adapter.types';
@@ -353,7 +354,11 @@ export class ChatMetricsService implements OnModuleInit {
     // so does every open after it, since nothing was written down. Not awaited:
     // the user is waiting on this reply and the write is for the next reader.
     if (usable === null && (agent.context !== null || agent.plan !== null)) {
-      void this.store(target, agent.context, agent.plan);
+      void this.store(
+        target,
+        agent.context ?? current?.context ?? null,
+        agent.plan,
+      );
     }
     // The stored last reading is consulted ONLY where the live one is missing
     // and could not have been taken — a CLI that answers is always preferred,
@@ -826,6 +831,14 @@ export class ChatMetricsService implements OnModuleInit {
     // answers from the live process, cursor from the session store it wrote
     // to disk — which is why the id is fetched even when a process exists.
     const live = this.sessions.peek(target.sessionKey);
+    // Plan limits are the ACCOUNT's: a conversation whose own process was
+    // evicted or reaped asks any other process kept on the same account.
+    const planLive =
+      live ??
+      (usage.planLimits.kind === 'reads' &&
+      usage.planLimits.channel === 'live-process'
+        ? this.accountSession(agentKind, target.account)
+        : null);
     let sessionId: string | null = target.sessionId ?? null;
     if (target.sessionId === undefined) {
       try {
@@ -855,10 +868,13 @@ export class ChatMetricsService implements OnModuleInit {
     // Reproduced from the author's own daemon log: session for run 2262b385
     // closed as unused at 13:18:49, the readout opened at 13:37:07, and not one
     // warning in between because nothing was attempted.
-    const available = (channel: UsageReadChannel): boolean => {
+    const available = (
+      channel: UsageReadChannel,
+      session: AgentSession | null,
+    ): boolean => {
       switch (channel) {
         case 'live-process':
-          return live !== null;
+          return session !== null;
         case 'session-store':
           return sessionId !== null;
         case 'account':
@@ -866,9 +882,11 @@ export class ChatMetricsService implements OnModuleInit {
       }
     };
     const askedContext =
-      usage.breakdown.kind === 'reads' && available(usage.breakdown.channel);
+      usage.breakdown.kind === 'reads' &&
+      available(usage.breakdown.channel, live);
     const askedPlan =
-      usage.planLimits.kind === 'reads' && available(usage.planLimits.channel);
+      usage.planLimits.kind === 'reads' &&
+      available(usage.planLimits.channel, planLive);
     if (!askedContext && !askedPlan) {
       return nothing;
     }
@@ -882,7 +900,7 @@ export class ChatMetricsService implements OnModuleInit {
         : null,
       askedPlan
         ? this.attempt(runId, 'plan limits', () =>
-            adapter.readPlanLimits(input),
+            adapter.readPlanLimits({ ...input, live: planLive }),
           )
         : null,
     ]);
@@ -1135,11 +1153,19 @@ export class ChatMetricsService implements OnModuleInit {
     if (agentKind === null) {
       return null;
     }
+    return this.accountKeyIn(agentKind, configDir, run.cwd);
+  }
+
+  private accountKeyIn(
+    agentKind: AgentKind,
+    configDir: string | null,
+    cwd: string | null,
+  ): string | null {
     return effectiveAccountKey(
       agentKind,
       configDir,
-      this.configDirPins.forRun(agentKind, run.cwd)?.effective ?? null,
-      run.cwd,
+      this.configDirPins.forRun(agentKind, cwd)?.effective ?? null,
+      cwd,
     );
   }
 
@@ -1157,6 +1183,28 @@ export class ChatMetricsService implements OnModuleInit {
       run,
       agentKind,
       snapshotNodeConfigDirs(run.teamSnapshot).get(memberId) ?? null,
+    );
+  }
+
+  /**
+   * A live kept process of this CLI on this account, whichever run it serves —
+   * an idle one first, since a busy one may answer only after its turn.
+   */
+  private accountSession(
+    agentKind: AgentKind,
+    account: string | null,
+  ): AgentSession | null {
+    const onAccount = this.sessions
+      .liveSessions()
+      .filter(
+        (kept) =>
+          kept.agent === agentKind &&
+          this.accountKeyIn(agentKind, kept.configDir, kept.cwd) === account,
+      );
+    return (
+      onAccount.find((kept) => kept.session.idle)?.session ??
+      onAccount[0]?.session ??
+      null
     );
   }
 

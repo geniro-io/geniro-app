@@ -289,6 +289,7 @@ export const lessonsSchema = z.strictObject({
   agentKind: z.string().min(1).max(64).nullable(),
   model: z.string().min(1).max(200).nullable(),
   effort: z.string().min(1).max(50).nullable(),
+  quietWindowHours: z.union([z.literal(1), z.literal(3), z.literal(6)]),
 });
 
 /** Twin of the day bound in `MemoryConfigSchema` (`apps/daemon/src/v1/memory/memory.types.ts`). */

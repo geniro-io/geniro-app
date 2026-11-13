@@ -28,6 +28,7 @@ describe('LessonsConfigPush', () => {
       agentKind: 'codex',
       model: 'gpt-5-mini',
       effort: 'low',
+      quietWindowHours: 6,
     });
 
     expect(http.calls).toHaveLength(1);
@@ -42,6 +43,7 @@ describe('LessonsConfigPush', () => {
       agentKind: 'codex',
       model: 'gpt-5-mini',
       effort: 'low',
+      quietWindowHours: 6,
     });
   });
 
@@ -58,6 +60,7 @@ describe('LessonsConfigPush', () => {
       agentKind: null,
       model: null,
       effort: null,
+      quietWindowHours: 3 as const,
     };
     await push.push(HANDLE, settings);
     await push.pushIfChanged(HANDLE, settings);

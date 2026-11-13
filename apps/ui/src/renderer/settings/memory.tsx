@@ -70,6 +70,7 @@ import {
   MemoryTriageSettings,
   triageChoiceFor,
 } from './memory-triage-settings';
+import { NotReflectedPanel } from './not-reflected-panel';
 import { type CheckClient, useMemoryCheck } from './use-memory-check';
 import { type CleanupClient, useMemoryCleanup } from './use-memory-cleanup';
 import { useMemoryTriage } from './use-memory-triage';
@@ -371,9 +372,14 @@ export function Memory({
   agentsApi = null,
   capabilities = null,
   capabilitiesLoading = false,
+  lessonsApi = null,
+  lessonsClient = null,
 }: {
   api: MemoriesClient | null;
   client: Pick<DaemonClient, 'onMemoryChanged'> | null;
+  /** The lessons reads of Not reflected yet, and the live socket they follow. */
+  lessonsApi?: DaemonApis['lessons'] | null;
+  lessonsClient?: DaemonClient | null;
   /** The team library, whose agents' profiles the import reads too. */
   teams?: TeamsClient | null;
   projects: readonly ProjectOption[];
@@ -1009,6 +1015,14 @@ export function Memory({
         capabilities={capabilities}
         remote={remote}
       />
+
+      {lessonsApi === null ? null : (
+        <NotReflectedPanel
+          lessonsApi={lessonsApi}
+          client={lessonsClient}
+          remote={remote}
+        />
+      )}
 
       <section aria-label="Entries" className="flex flex-col gap-3">
         <div className="flex min-h-8 items-center justify-between gap-2">

@@ -326,6 +326,9 @@ function salvageLessons(value: unknown): LessonsSettings {
     effort: lessonsSchema.shape.effort
       .catch(DEFAULT_LESSONS.effort)
       .parse(record.effort ?? null),
+    quietWindowHours: lessonsSchema.shape.quietWindowHours
+      .catch(DEFAULT_LESSONS.quietWindowHours)
+      .parse(record.quietWindowHours),
   };
 }
 

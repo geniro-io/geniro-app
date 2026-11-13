@@ -20,7 +20,10 @@ import { ProjectScopeService } from '../../projects/services/project-scope.servi
 import type { Run } from '../../runs/entity/run.entity';
 import { isTerminalRunStatus } from '../../runs/runs.types';
 import { LessonProposalDao } from '../dao/lesson-proposal.dao';
-import { LessonSegmentDao, OPEN_SEGMENT_STATUSES } from '../dao/lesson-segment.dao';
+import {
+  LessonSegmentDao,
+  OPEN_SEGMENT_STATUSES,
+} from '../dao/lesson-segment.dao';
 import type { LessonSegment } from '../entity/lesson-segment.entity';
 import {
   LESSON_REJECTED_BRIEF_MAX,

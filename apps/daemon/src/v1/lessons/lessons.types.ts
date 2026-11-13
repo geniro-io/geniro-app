@@ -208,7 +208,9 @@ export const ReflectLessonsSchema = z.object({
     .min(1)
     .max(200)
     .optional()
-    .describe('The offered stretch to reflect on; omitted = everything past the last reflection'),
+    .describe(
+      'The offered stretch to reflect on; omitted = everything past the last reflection',
+    ),
   agentKind: AgentKindSchema.optional(),
   model: z.string().min(1).max(200).optional(),
   effort: z.string().min(1).max(50).optional(),
@@ -223,12 +225,16 @@ export const LessonEstimateSchema = z
     model: z
       .string()
       .nullable()
-      .describe('The model the reflection would run as; null when the CLI cannot say before a turn'),
+      .describe(
+        'The model the reflection would run as; null when the CLI cannot say before a turn',
+      ),
     tokens: z.number().int().min(0),
     usd: z
       .number()
       .nullable()
-      .describe('Null when the model has no list price (cursor-agent, an unlisted id) — never 0'),
+      .describe(
+        'Null when the model has no list price (cursor-agent, an unlisted id) — never 0',
+      ),
   })
   .meta({ id: 'LessonEstimate' });
 export type LessonEstimate = z.infer<typeof LessonEstimateSchema>;
@@ -248,7 +254,9 @@ export const ThreadLessonEstimateSchema = z
       .number()
       .int()
       .min(0)
-      .describe('Learning signals past the last reflection; 0 = nothing worth reflecting on'),
+      .describe(
+        'Learning signals past the last reflection; 0 = nothing worth reflecting on',
+      ),
     fromSeq: z.number().int(),
     toSeq: z.number().int(),
   })
@@ -311,7 +319,9 @@ export const LessonSegmentListQuerySchema = z.object({
     .string()
     .max(200)
     .optional()
-    .describe('Comma-separated statuses; omitted = offered, dismissed and failed'),
+    .describe(
+      'Comma-separated statuses; omitted = offered, dismissed and failed',
+    ),
   runId: z.string().min(1).max(200).optional(),
 });
 export type LessonSegmentListQuery = z.infer<

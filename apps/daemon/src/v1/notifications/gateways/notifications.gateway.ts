@@ -1,9 +1,4 @@
-import {
-  Inject,
-  Logger,
-  type OnModuleDestroy,
-  Optional,
-} from '@nestjs/common';
+import { Inject, Logger, type OnModuleDestroy, Optional } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,

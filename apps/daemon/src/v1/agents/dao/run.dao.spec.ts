@@ -1030,7 +1030,12 @@ describe('RunDao (in-memory sqlite)', () => {
     it('counts a soft-deleted row as the newest seq', async () => {
       await dao.create({ id: 'r1' });
       const items = new ItemDao(orm.em.fork());
-      await items.create({ runId: 'r1', seq: 1, kind: 'message', payload: '{}' });
+      await items.create({
+        runId: 'r1',
+        seq: 1,
+        kind: 'message',
+        payload: '{}',
+      });
       await items.create({
         runId: 'r1',
         seq: 2,

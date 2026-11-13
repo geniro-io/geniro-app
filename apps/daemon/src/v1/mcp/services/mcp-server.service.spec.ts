@@ -1,4 +1,3 @@
-import type { EntityManager } from '@mikro-orm/sqlite';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -6,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { EntityManager } from '@mikro-orm/sqlite';
 import { Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';

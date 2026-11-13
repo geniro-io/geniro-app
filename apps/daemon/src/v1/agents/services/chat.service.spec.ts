@@ -10007,9 +10007,7 @@ describe('ChatService', () => {
       payload: JSON.stringify({ id: 'toolu_1', workId: 'b-1' }),
     });
 
-    expect(await service.reconcileStrandedDelegates(['other-run'])).toEqual(
-      [],
-    );
+    expect(await service.reconcileStrandedDelegates(['other-run'])).toEqual([]);
     expect(await service.reconcileStrandedShells(['other-run'])).toEqual([]);
 
     expect(await itemDao.getByRun(run.id)).toHaveLength(2);

@@ -115,7 +115,9 @@ describe('StrandedWorkReconcileService', () => {
 
     await h.service.reconcile('quit');
 
-    expect(h.markReconciledThrough.mock.calls.map(([id, seq]) => [id, seq])).toEqual([
+    expect(
+      h.markReconciledThrough.mock.calls.map(([id, seq]) => [id, seq]),
+    ).toEqual([
       ['a', 6],
       ['e', 5],
     ]);

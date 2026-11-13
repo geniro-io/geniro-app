@@ -3033,7 +3033,7 @@ async function inRunBatches<T>(
 function inSeqOrderPerRun<T extends Pick<Item, 'runId' | 'seq'>>(
   rows: T[],
 ): T[] {
-  return rows.sort(
-    (a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : a.seq - b.seq),
+  return rows.sort((a, b) =>
+    a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : a.seq - b.seq,
   );
 }

@@ -125,7 +125,7 @@ import { type AgentMcpScope, mcpScopeKey } from './use-agent-mcp';
 import type { RunProcessesState } from './use-run-processes';
 import type { RunWaterfallState } from './use-run-waterfall';
 import type { ThreadAnalysisMark } from './use-thread-analysis';
-import type { ThreadLessonsMark } from './use-thread-lessons';
+import { LESSONS_BUTTON, type ThreadLessonsMark } from './use-thread-lessons';
 import { rankByUrgency, type WaitState, waitStateOf } from './waiting';
 import { WorkflowPanelRow } from './workflow-block';
 
@@ -352,34 +352,6 @@ function ExportChatButton({
     </Button>
   );
 }
-
-/** What the Reflect now button says, by the thread's lessons state. */
-const LESSONS_BUTTON: Record<
-  ThreadLessonsMark,
-  { label: string; title: string; disabled: boolean }
-> = {
-  unknown: {
-    label: 'Reflect now',
-    title: 'Reflect now — propose lessons from this thread',
-    disabled: false,
-  },
-  ready: {
-    label: 'Reflect now',
-    title: 'Reflect now — propose lessons from this thread',
-    disabled: false,
-  },
-  nothing_new: {
-    label: 'Reflect now (nothing new)',
-    title: 'Nothing has happened in this thread since its last reflection',
-    disabled: true,
-  },
-  reflecting: {
-    label: 'Reflecting…',
-    title:
-      'A reflection on this thread is working — its lessons card lands in the thread',
-    disabled: true,
-  },
-};
 
 /**
  * "Reflect now": a hidden reflection that proposes lessons from this thread,

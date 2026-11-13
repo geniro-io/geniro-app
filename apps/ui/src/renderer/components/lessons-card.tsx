@@ -34,9 +34,15 @@ export interface LessonView {
 export interface LessonOutcomeView {
   proposalId: string;
   status: 'saved' | 'rejected';
+  title: string;
   target: LessonMemoryTarget;
   memoryHandle: string | null;
   reason: string | null;
+}
+
+export interface LessonPlaces {
+  project: boolean;
+  team: boolean;
 }
 
 export interface LessonSaveRequest {
@@ -65,6 +71,7 @@ export interface LessonsCardProps {
   lessons: readonly LessonView[];
   outcomes: Readonly<Record<string, LessonOutcomeView>>;
   reflection: LessonsReflectionView;
+  places?: LessonPlaces;
   onSave?: (proposalId: string, request: LessonSaveRequest) => Promise<void>;
   onReject?: (proposalId: string, reason: string | null) => Promise<void>;
   /** Scroll the transcript to the evidence's row; absent draws no link. */
@@ -82,14 +89,7 @@ const SIGNAL_LABELS: Record<LessonSignalKind, string> = {
 
 const LESSON_SCOPES: readonly LessonScope[] = ['project', 'team', 'global'];
 
-const SCOPE_GROUPS: MenuGroup[] = [
-  {
-    items: LESSON_SCOPES.map((scope) => ({
-      value: scope,
-      label: scopeLabel(scope),
-    })),
-  },
-];
+const EVERY_PLACE: LessonPlaces = { project: true, team: true };
 
 const TITLE_MAX_CHARS = 120;
 const RULE_MAX_CHARS = 300;
@@ -101,6 +101,21 @@ function scopeLabel(scope: LessonScope): string {
 
 function isScope(value: string): value is LessonScope {
   return (LESSON_SCOPES as readonly string[]).includes(value);
+}
+
+function offeredScopes(places: LessonPlaces): LessonScope[] {
+  return LESSON_SCOPES.filter((scope) => scope === 'global' || places[scope]);
+}
+
+function scopeGroups(scopes: readonly LessonScope[]): MenuGroup[] {
+  return [
+    {
+      items: scopes.map((scope) => ({
+        value: scope,
+        label: scopeLabel(scope),
+      })),
+    },
+  ];
 }
 
 function dedupLabel(dedup: LessonView['dedup']): string {
@@ -117,12 +132,13 @@ function dedupLabel(dedup: LessonView['dedup']): string {
 }
 
 function verdictText(outcome: LessonOutcomeView): string {
+  const named = `“${outcome.title}”`;
   if (outcome.status === 'rejected') {
     return outcome.reason === null
-      ? '✗ Rejected'
-      : `✗ Rejected — ${outcome.reason}`;
+      ? `✗ ${named} rejected`
+      : `✗ ${named} rejected — ${outcome.reason}`;
   }
-  const where = `Saved to memory · ${outcome.target.scope}`;
+  const where = `${named} saved to memory · ${outcome.target.scope}`;
   return outcome.memoryHandle === null
     ? `✓ ${where}`
     : `✓ ${where} as ${outcome.memoryHandle}`;
@@ -159,6 +175,7 @@ export function LessonsCard({
   lessons,
   outcomes,
   reflection,
+  places = EVERY_PLACE,
   onSave,
   onReject,
   onShowInThread,
@@ -171,6 +188,13 @@ export function LessonsCard({
     (lesson) => outcomes[lesson.id]?.status === 'rejected',
   ).length;
   const allHandled = lessons.length > 0 && saved + rejected === lessons.length;
+  const scopes = offeredScopes(places);
+  const hint =
+    lessons.length === 0
+      ? 'No lessons from this stretch — nothing passed the bar.'
+      : allHandled
+        ? null
+        : "Nothing reaches agents' instructions until you save it.";
 
   const body = (
     <>
@@ -179,17 +203,16 @@ export function LessonsCard({
           <span aria-hidden>💡</span>
           {`Lessons from this thread · ${lessons.length} proposed`}
         </p>
-        <p className="m-0 text-xs text-muted-foreground">
-          {lessons.length === 0
-            ? 'No lessons from this stretch — nothing passed the bar.'
-            : "Nothing reaches agents' instructions until you save it."}
-        </p>
+        {hint === null ? null : (
+          <p className="m-0 text-xs text-muted-foreground">{hint}</p>
+        )}
       </div>
       {lessons.map((lesson) => (
         <LessonRow
           key={lesson.id}
           lesson={lesson}
           outcome={outcomes[lesson.id] ?? null}
+          scopes={scopes}
           onSave={onSave}
           onReject={onReject}
           onShowInThread={onShowInThread}
@@ -227,17 +250,21 @@ export function LessonsCard({
 function LessonRow({
   lesson,
   outcome,
+  scopes,
   onSave,
   onReject,
   onShowInThread,
 }: {
   lesson: LessonView;
   outcome: LessonOutcomeView | null;
+  scopes: readonly LessonScope[];
   onSave?: LessonsCardProps['onSave'];
   onReject?: LessonsCardProps['onReject'];
   onShowInThread?: LessonsCardProps['onShowInThread'];
 }): React.JSX.Element {
-  const [scope, setScope] = useState<LessonScope>(lesson.target.scope);
+  const [scope, setScope] = useState<LessonScope>(() =>
+    scopes.includes(lesson.target.scope) ? lesson.target.scope : 'global',
+  );
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(lesson.title);
   const [rule, setRule] = useState(lesson.rule);
@@ -348,7 +375,7 @@ function LessonRow({
         <span className="shrink-0 text-xs text-muted-foreground">Save to</span>
         <Select
           aria-label="Save to"
-          groups={SCOPE_GROUPS}
+          groups={scopeGroups(scopes)}
           value={scope}
           disabled={saveDisabled}
           onValueChange={(value) => {

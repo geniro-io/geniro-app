@@ -133,6 +133,18 @@ describe('Lessons settings', () => {
     ]);
   });
 
+  it('stacks the reflection agent’s pickers under its label, so they cannot squeeze its description', async () => {
+    install({ mode: 'offer', agentKind: 'claude', model: null, effort: null });
+    await render();
+
+    const row = agentOf().closest<HTMLElement>(
+      '[data-slot="settings-panel-row"]',
+    )!;
+    expect(row.textContent).toContain('Which CLI, model and effort');
+    expect(row.className).not.toContain('@[26rem]:flex-row');
+    expect(row.querySelector('[aria-label="Reflection model"]')).not.toBeNull();
+  });
+
   it('names the thread’s own CLI while no agent is picked', async () => {
     install(DEFAULT_SETTINGS.lessons);
     await render();

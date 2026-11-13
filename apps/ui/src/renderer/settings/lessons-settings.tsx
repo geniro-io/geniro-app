@@ -98,10 +98,11 @@ export function LessonsSettingsPanel({
         />
       </SettingsPanelRow>
       <SettingsPanelRow
+        layout="block"
         label="Reflection agent"
         htmlFor="settings-lessons-agent"
         description="Which CLI, model and effort a reflection runs as. A reflection's cost shows on its lessons card and under Lessons in Stats.">
-        <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
+        <div className="flex min-w-0 flex-wrap items-center justify-start gap-1">
           <Select
             id="settings-lessons-agent"
             aria-label="Reflection agent"

@@ -936,7 +936,7 @@ describe('ActionPressService (in-memory sqlite)', () => {
         state: 'running',
       });
 
-      await new ActionOutcomeSweep(orm.em, items, actions).sweep();
+      await new ActionOutcomeSweep(orm.em, items, actions).sweep(['run-c']);
 
       expect(await lastOutcome('check')).toMatchObject({
         state: 'interrupted',
@@ -959,7 +959,7 @@ describe('ActionPressService (in-memory sqlite)', () => {
       });
       await commandPublisher.remove({ ...ctx, runId: 'run-c' }, 'check');
 
-      await new ActionOutcomeSweep(orm.em, items, actions).sweep();
+      await new ActionOutcomeSweep(orm.em, items, actions).sweep(['run-c']);
 
       expect(await lastOutcome('check')).toMatchObject({
         state: 'interrupted',
@@ -985,13 +985,52 @@ describe('ActionPressService (in-memory sqlite)', () => {
         { label: 'Check', command: { argv: ['true'] } },
       );
 
-      await new ActionOutcomeSweep(orm.em, items, actions).sweep();
+      await new ActionOutcomeSweep(orm.em, items, actions).sweep(['run-c']);
 
       expect(await lastOutcome('check')).toMatchObject({
         actionSeq: old,
         state: 'interrupted',
       });
       expect(await actions.live('run-c')).toMatchObject([{ pending: false }]);
+    });
+
+    it('boot sweep answers every run it was handed when it fails', async () => {
+      const failing = {
+        actionRowsOfRuns: async () => {
+          throw new Error('disk I/O error');
+        },
+      } as unknown as ItemDao;
+
+      expect(
+        await new ActionOutcomeSweep(orm.em, failing, actions).sweep([
+          'run-c',
+          'run-d',
+        ]),
+      ).toEqual(['run-c', 'run-d']);
+    });
+
+    it('boot sweep reads only the runs it is handed', async () => {
+      await commandPublisher.publish(
+        { ...ctx, runId: 'run-c' },
+        { label: 'Check', command: { argv: ['true'] } },
+      );
+      const seq = (await actions.live('run-c'))[0]!.seq;
+      await actions.appendOutcome('run-c', null, {
+        actionSeq: seq,
+        actionId: 'check',
+        nodeId: SINGLE_AGENT_NODE,
+        conversationId: '',
+        state: 'running',
+      });
+
+      const unsettled = await new ActionOutcomeSweep(
+        orm.em,
+        items,
+        actions,
+      ).sweep(['run-other']);
+
+      expect(unsettled).toEqual([]);
+      expect(await lastOutcome('check')).toMatchObject({ state: 'running' });
     });
 
     const publishIn = (runId: string, command: ActionCommandInput) =>

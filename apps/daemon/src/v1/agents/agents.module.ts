@@ -159,6 +159,7 @@ import { ShellOutputService } from './services/shell-output.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
+import { StrandedWorkReconcileService } from './services/stranded-work-reconcile.service';
 import { SubagentRecoveryService } from './services/subagent-recovery.service';
 import { TaskListCaptureService } from './services/task-list-capture.service';
 import { TeamBuilderBroker } from './services/team-builder.broker';
@@ -290,6 +291,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     MonitorAnnouncer,
     MonitorChatDelivery,
     MonitorOutcomeSweep,
+    StrandedWorkReconcileService,
     MonitorBroker,
     TeamNoteBroker,
     RunOutcomeBroker,

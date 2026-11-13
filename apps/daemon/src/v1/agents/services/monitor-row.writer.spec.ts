@@ -72,7 +72,7 @@ describe('MonitorRowWriter', () => {
       woke: false,
       monitors: [{ id: 'm1', end: { kind: 'stopped' } }],
     });
-    // `ItemDao.allMonitorRows` pre-filters on this substring.
+    // `ItemDao.monitorRowsOfRuns` pre-filters on this substring.
     expect(created[0]?.payload).toContain('"monitors":[');
   });
 

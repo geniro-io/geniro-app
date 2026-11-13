@@ -5,8 +5,11 @@ import type { InterruptCause } from '../../../utils/stop-cause';
 import type { MonitorEnd, MonitorRowPayload } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { RunDao } from '../dao/run.dao';
-import { parseJsonColumn } from '../utils/json-util';
-import { type MonitorMessage, monitorRowEntry } from '../utils/monitor-text';
+import {
+  type MonitorMessage,
+  monitorRowEntry,
+  monitorRowOf,
+} from '../utils/monitor-text';
 import { callSessionKey, nodeSessionKey } from '../utils/session-keys';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { MonitorRegistry } from './monitor.registry';
@@ -39,8 +42,9 @@ interface CutOff {
  * turn is owed a note instead. A team's turn state did not survive, so the
  * owning conversation's next turn is owed one. An archived run gets neither.
  *
- * Every id a run's rows hold is handed to the registry, whose counter is per
- * launch, so a new monitor never reuses one.
+ * Every id the rows of a run it reads hold is handed to the registry, whose
+ * counter is per launch, so a new monitor never reuses one; `MonitorBroker`
+ * reads the ids of any other run before its first monitor of the launch.
  */
 @Injectable()
 export class MonitorOutcomeSweep {
@@ -56,48 +60,58 @@ export class MonitorOutcomeSweep {
     private readonly monitors: MonitorRegistry,
   ) {}
 
-  /** `cause` is the stop note the boot already read — it is gone from disk. */
-  async sweep(cause: InterruptCause): Promise<void> {
+  /**
+   * `cause` is the stop note the boot already read — it is gone from disk.
+   * Answers the runs of `runIds` left with a monitor not durably ended: every
+   * one on a failure, else each chat whose end waits on a delivery after listen.
+   */
+  async sweep(
+    cause: InterruptCause,
+    runIds: readonly string[],
+  ): Promise<string[]> {
     try {
       let interrupted = 0;
-      for (const [runId, cutOff] of await this.cutOffByRun()) {
+      const unsettled: string[] = [];
+      for (const [runId, cutOff] of await this.cutOffByRun(runIds)) {
         interrupted += cutOff.length;
-        await this.close(runId, cutOff, cause);
+        if (await this.close(runId, cutOff, cause)) {
+          unsettled.push(runId);
+        }
       }
       if (interrupted > 0) {
         this.logger.warn(
           `marked ${interrupted} monitor(s) a previous launch left running as interrupted`,
         );
       }
+      return unsettled;
     } catch (err: unknown) {
       this.logger.error(
         `could not sweep the monitors left running: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return [...runIds];
     }
   }
 
-  /** Every run's monitors whose newest row is not an end. */
-  private async cutOffByRun(): Promise<Map<string, CutOff[]>> {
+  /** These runs' monitors whose newest row is not an end. */
+  private async cutOffByRun(
+    runIds: readonly string[],
+  ): Promise<Map<string, CutOff[]>> {
     const newest = new Map<
       string,
       Map<string, { entry: MonitorRowPayload; cutOff: CutOff }>
     >();
-    for (const row of await this.itemDao.allMonitorRows(this.em.fork())) {
-      const payload = parseJsonColumn(row.payload) as {
-        monitors?: unknown;
-        callId?: unknown;
-        conversationId?: unknown;
-      } | null;
-      if (payload === null || !Array.isArray(payload.monitors)) {
+    for (const row of await this.itemDao.monitorRowsOfRuns(
+      runIds,
+      this.em.fork(),
+    )) {
+      const payload = monitorRowOf(row.payload);
+      if (payload === null) {
         continue;
       }
       const byId =
         newest.get(row.runId) ??
         new Map<string, { entry: MonitorRowPayload; cutOff: CutOff }>();
-      for (const entry of payload.monitors as MonitorRowPayload[]) {
-        if (typeof entry?.id !== 'string' || typeof entry.event !== 'string') {
-          continue;
-        }
+      for (const entry of payload.monitors) {
         // Its owner is read off its first row (its start, which the writer
         // stamps whole); a delivered message's row names no conversation.
         const first = byId.get(entry.id)?.cutOff;
@@ -107,11 +121,8 @@ export class MonitorOutcomeSweep {
             id: entry.id,
             description: String(entry.description ?? entry.id),
             memberId: row.memberId,
-            callId: typeof payload.callId === 'string' ? payload.callId : null,
-            conversationId:
-              typeof payload.conversationId === 'string'
-                ? payload.conversationId
-                : null,
+            callId: payload.callId,
+            conversationId: payload.conversationId,
           },
         });
       }
@@ -144,14 +155,15 @@ export class MonitorOutcomeSweep {
       : callSessionKey(runId, monitor.conversationId);
   }
 
+  /** Whether an end of the run is not on disk yet: held for a delivery after listen, or its write failed. */
   private async close(
     runId: string,
     cutOff: CutOff[],
     cause: InterruptCause,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const run = await this.runDao.getById(runId, this.em.fork());
     if (run === null) {
-      return;
+      return false;
     }
     const isChat = run.teamId === null || run.teamId === undefined;
     const message = (monitor: CutOff): MonitorMessage => ({
@@ -171,10 +183,11 @@ export class MonitorOutcomeSweep {
         },
         cutOff.map(message),
       );
-      return;
+      return true;
     }
+    let unwritten = false;
     for (const monitor of cutOff) {
-      await this.rows.write(
+      const written = await this.rows.write(
         {
           runId,
           memberId: monitor.memberId,
@@ -183,9 +196,10 @@ export class MonitorOutcomeSweep {
         },
         monitorRowEntry(message(monitor), 'end'),
       );
+      unwritten ||= !written;
     }
     if (run.archivedAt !== null) {
-      return;
+      return unwritten;
     }
     for (const monitor of cutOff) {
       const note = `[geniro] geniro restarted, which stopped your monitor ${monitor.id} (${monitor.description}). It was not started again — start one with monitor if you still need it.`;
@@ -194,5 +208,6 @@ export class MonitorOutcomeSweep {
         note,
       );
     }
+    return unwritten;
   }
 }

@@ -6,6 +6,7 @@ import { Run } from '../../runs/entity/run.entity';
 import { baseTeamSnapshotOf } from '../../teams/utils/team-snapshot';
 import type {
   ChatListScope,
+  ChatTextDatabase,
   ContextLevel,
   PromptCacheTtlReason,
   RunFacts,
@@ -741,6 +742,48 @@ export class RunDao extends BaseDao<Run> {
     await this.getRepo(txEm).nativeUpdate(
       { id: runId },
       { payloadRefsVersion: version },
+    );
+  }
+
+  /**
+   * Every run with its newest item seq (soft-deleted rows included, -1 for a
+   * run with none) and the seq the boot reconcile last recorded for it. One
+   * index-only lookup per run.
+   */
+  async reconcileMarks(
+    txEm?: EntityManager,
+  ): Promise<
+    { runId: string; newestSeq: number; reconciledThroughSeq: number | null }[]
+  > {
+    const rows = await (txEm ?? this.em.fork())
+      .getKysely<ChatTextDatabase>({ convertValues: false })
+      .selectFrom('runs')
+      .select((eb) => [
+        'runs.id',
+        'runs.reconciled_through_seq',
+        eb
+          .selectFrom('items')
+          .select((sub) => sub.fn.max('items.seq').as('seq'))
+          .whereRef('items.run_id', '=', 'runs.id')
+          .as('newest_seq'),
+      ])
+      .execute();
+    return rows.map((row) => ({
+      runId: row.id,
+      newestSeq: row.newest_seq == null ? -1 : Number(row.newest_seq),
+      reconciledThroughSeq: row.reconciled_through_seq,
+    }));
+  }
+
+  /** Bookkeeping, not activity: a bare `nativeUpdate`, like {@link setResetWakes}. */
+  async markReconciledThrough(
+    runId: string,
+    seq: number,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: runId },
+      { reconciledThroughSeq: seq },
     );
   }
 

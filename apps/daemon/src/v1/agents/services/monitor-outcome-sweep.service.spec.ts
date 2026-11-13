@@ -50,14 +50,17 @@ function harness(
   rows = [row(1, 'm1', 'start'), row(2, 'm1', 'end'), row(3, 'm2', 'start')],
 ) {
   const em = { fork: () => em } as unknown as EntityManager;
-  const write = vi.fn(async () => undefined);
+  const write = vi.fn(async () => true);
   const holdInterrupted = vi.fn();
   const oweRunNote = vi.fn();
   const oweKeyNote = vi.fn();
   const noteUsedIds = vi.fn();
   const sweep = new MonitorOutcomeSweep(
     em,
-    { allMonitorRows: async () => rows } as unknown as ItemDao,
+    {
+      monitorRowsOfRuns: async (runIds: readonly string[]) =>
+        rows.filter((r) => runIds.includes(r.runId)),
+    } as unknown as ItemDao,
     { getById: async () => ({ id: 'run-1', ...run }) } as unknown as RunDao,
     { write } as unknown as MonitorRowWriter,
     { holdInterrupted } as unknown as MonitorChatDelivery,
@@ -69,13 +72,14 @@ function harness(
 
 describe('MonitorOutcomeSweep', () => {
   it('matches the rows the writer persists with the pre-filter its DAO query uses', () => {
-    // `ItemDao.allMonitorRows` filters `payload LIKE '%"monitors":[%'`.
+    // `ItemDao.monitorRowsOfRuns` filters `payload LIKE '%"monitors":[%'`.
     expect(row(1, 'm1', 'start').payload).toContain('"monitors":[');
   });
 
   it('hands a chat the wake for the monitors left without an end, and only those, after a quit', async () => {
     const h = harness({ teamId: null, archivedAt: null });
-    await h.sweep.sweep('quit');
+    // Its end is written only when that wake goes out, after listen.
+    expect(await h.sweep.sweep('quit', ['run-1'])).toEqual(['run-1']);
     expect(h.holdInterrupted).toHaveBeenCalledTimes(1);
     expect(h.holdInterrupted).toHaveBeenCalledWith(
       { runId: 'run-1', memberId: 'agent', callId: null, conversationId: null },
@@ -88,7 +92,7 @@ describe('MonitorOutcomeSweep', () => {
     'records the end but wakes nobody after a %s',
     async (cause) => {
       const h = harness({ teamId: null, archivedAt: null });
-      await h.sweep.sweep(cause);
+      expect(await h.sweep.sweep(cause, ['run-1'])).toEqual([]);
       expect(h.holdInterrupted).not.toHaveBeenCalled();
       // Not woken, but told on the chat's next turn.
       expect(h.oweKeyNote).toHaveBeenCalledWith(
@@ -113,7 +117,7 @@ describe('MonitorOutcomeSweep', () => {
 
   it("owes a team member's own conversation a note instead of waking it", async () => {
     const h = harness({ teamId: 'wf', archivedAt: null });
-    await h.sweep.sweep('quit');
+    expect(await h.sweep.sweep('quit', ['run-1'])).toEqual([]);
     expect(h.holdInterrupted).not.toHaveBeenCalled();
     expect(h.write).toHaveBeenCalledTimes(1);
     expect(h.oweKeyNote).toHaveBeenCalledWith(
@@ -127,7 +131,7 @@ describe('MonitorOutcomeSweep', () => {
     const h = harness({ teamId: 'wf', archivedAt: null }, [
       row(1, 'm1', 'start', 'call-3', 'call-1'),
     ]);
-    await h.sweep.sweep('quit');
+    await h.sweep.sweep('quit', ['run-1']);
     expect(h.write).toHaveBeenCalledWith(
       {
         runId: 'run-1',
@@ -173,7 +177,7 @@ describe('MonitorOutcomeSweep', () => {
       row(1, 'm1', 'start', 'call-3', 'call-1'),
       delivered,
     ]);
-    await h.sweep.sweep('quit');
+    await h.sweep.sweep('quit', ['run-1']);
     expect(h.oweKeyNote).toHaveBeenCalledWith(
       callSessionKey('run-1', 'call-1'),
       expect.stringContaining('m1 (CI)'),
@@ -182,7 +186,7 @@ describe('MonitorOutcomeSweep', () => {
 
   it('hands the registry every id the run already used, so none is minted again', async () => {
     const h = harness({ teamId: null, archivedAt: null });
-    await h.sweep.sweep('quit');
+    await h.sweep.sweep('quit', ['run-1']);
     expect(h.noteUsedIds).toHaveBeenCalledWith('run-1', expect.anything());
     expect([...(h.noteUsedIds.mock.calls[0]?.[1] as Iterable<string>)]).toEqual(
       ['m1', 'm2'],
@@ -191,9 +195,32 @@ describe('MonitorOutcomeSweep', () => {
 
   it('owes an archived run nothing', async () => {
     const h = harness({ teamId: null, archivedAt: new Date() });
-    await h.sweep.sweep('quit');
+    expect(await h.sweep.sweep('quit', ['run-1'])).toEqual([]);
     expect(h.holdInterrupted).not.toHaveBeenCalled();
     expect(h.oweKeyNote).not.toHaveBeenCalled();
     expect(h.write).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads only the runs it is handed', async () => {
+    const h = harness({ teamId: null, archivedAt: null });
+    expect(await h.sweep.sweep('quit', ['other-run'])).toEqual([]);
+    expect(h.holdInterrupted).not.toHaveBeenCalled();
+    expect(h.write).not.toHaveBeenCalled();
+    expect(h.noteUsedIds).not.toHaveBeenCalled();
+  });
+
+  it('answers a run whose interrupted end could not be written, so the next boot reads it again', async () => {
+    const h = harness({ teamId: 'wf', archivedAt: null });
+    h.write.mockResolvedValueOnce(false);
+    expect(await h.sweep.sweep('quit', ['run-1'])).toEqual(['run-1']);
+  });
+
+  it('answers every run it was handed when it fails', async () => {
+    const h = harness({ teamId: 'wf', archivedAt: null });
+    h.write.mockRejectedValueOnce(new Error('disk I/O error'));
+    expect(await h.sweep.sweep('quit', ['run-1', 'run-2'])).toEqual([
+      'run-1',
+      'run-2',
+    ]);
   });
 });

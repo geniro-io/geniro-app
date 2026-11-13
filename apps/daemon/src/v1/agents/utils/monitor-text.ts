@@ -7,6 +7,7 @@ import type {
 import type { MonitorEvent } from '../chat.types';
 import type { MonitorBatch } from '../chat.types';
 import { randomFenceTag } from './fence-tag';
+import { parseJsonColumn } from './json-util';
 import {
   mergeMonitorBatch,
   MONITOR_FLOOD_MAX_BYTES,
@@ -14,6 +15,35 @@ import {
   MONITOR_FLOOD_WINDOW_MS,
   omittedLinesNote,
 } from './monitor-batcher';
+
+/**
+ * The monitor entries a stored `system` row records, with the call and callee
+ * conversation it was filed under, or null for a row that records none. An
+ * entry without a string `id` and `event` is left out.
+ */
+export function monitorRowOf(payload: unknown): {
+  monitors: MonitorRowPayload[];
+  callId: string | null;
+  conversationId: string | null;
+} | null {
+  const row = parseJsonColumn(payload) as {
+    monitors?: unknown;
+    callId?: unknown;
+    conversationId?: unknown;
+  } | null;
+  if (row === null || typeof row !== 'object' || !Array.isArray(row.monitors)) {
+    return null;
+  }
+  return {
+    monitors: (row.monitors as MonitorRowPayload[]).filter(
+      (entry) =>
+        typeof entry?.id === 'string' && typeof entry.event === 'string',
+    ),
+    callId: typeof row.callId === 'string' ? row.callId : null,
+    conversationId:
+      typeof row.conversationId === 'string' ? row.conversationId : null,
+  };
+}
 
 /** How a monitor ended, as its message header and `stop_monitor` say it. */
 export function describeMonitorEnd(end: MonitorEnd): string {

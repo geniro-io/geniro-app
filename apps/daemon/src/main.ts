@@ -29,18 +29,17 @@ import { closeInterruptedRuns } from './utils/interrupted-runs';
 import { writeCrashMark, writePidfile } from './utils/pidfile';
 import { consumeStopCause } from './utils/stop-cause';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
-import { ActionOutcomeSweep } from './v1/agents/services/action-outcome-sweep.service';
 import { AgentAdapterRegistry } from './v1/agents/services/agent-adapter.registry';
 import { ChatService } from './v1/agents/services/chat.service';
 import { ChatTextIndexService } from './v1/agents/services/chat-text-index.service';
 import { HostWakeChatDelivery } from './v1/agents/services/host-wake-chat-delivery.service';
 import { ItemCallIndexService } from './v1/agents/services/item-call-index.service';
 import { MonitorChatDelivery } from './v1/agents/services/monitor-chat-delivery.service';
-import { MonitorOutcomeSweep } from './v1/agents/services/monitor-outcome-sweep.service';
 import { PartialStreamService } from './v1/agents/services/partial-stream.service';
 import { PayloadRefsSweepService } from './v1/agents/services/payload-refs-sweep.service';
 import { PullRequestCaptureService } from './v1/agents/services/pull-request-capture.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
+import { StrandedWorkReconcileService } from './v1/agents/services/stranded-work-reconcile.service';
 import { WallWorkService } from './v1/agents/services/wall-work.service';
 import {
   CHILD_JOURNAL_FILE_NAME,
@@ -301,20 +300,11 @@ bootstrapper.addExtension(
         logError: (message) => new Logger('TaskSettleService').error(message),
       });
 
-      // Close the background sub-agents a prior daemon left declared out. Their
-      // ordinary writer is the agent session closing, which runs in-process, so
-      // a SIGKILL leaves them open forever — a settled chat that goes on
-      // reporting delegates at work. No session can exist this early, so every
-      // open delegate on disk is stranded by construction.
-      await app.get(ChatService).reconcileStrandedDelegates();
-      // The same for detached commands: their close is announced by the CLI
-      // process's own exit, which a SIGKILLed daemon never heard.
-      await app.get(ChatService).reconcileStrandedShells();
-      // And the command actions a prior daemon was running: their finish row
-      // is written in-process, and their child died with it.
-      await app.get(ActionOutcomeSweep).sweep();
-      // And the monitors: their end row is written in-process too.
-      await app.get(MonitorOutcomeSweep).sweep(stopCause);
+      // Close the background sub-agents, detached commands, command actions
+      // and monitors a prior daemon left open: their ordinary writers run
+      // in-process, so a SIGKILL leaves them open forever. No session can
+      // exist this early, so every one still open on disk is stranded.
+      await app.get(StrandedWorkReconcileService).reconcile(stopCause);
 
       // Put every STANDING question card back in the approval registry. Unlike
       // the reconciles above this restores something rather than closing it:

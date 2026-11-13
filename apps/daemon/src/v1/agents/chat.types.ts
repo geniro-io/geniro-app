@@ -8200,6 +8200,7 @@ export interface ChatTextDatabase {
     edits_team_slug: Run['editsTeamSlug'];
     analysis_source_run_id: Run['analysisSourceRunId'];
     analysis_team_slug: Run['analysisTeamSlug'];
+    pending_delete_at: StoredDate | null;
     deleted_at: StoredDate | null;
   };
   chat_text: {

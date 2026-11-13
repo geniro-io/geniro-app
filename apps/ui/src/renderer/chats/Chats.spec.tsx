@@ -19,6 +19,7 @@ import { withHistoryPages } from '../__tests__/history-page';
 import { emptyRunState } from '../__tests__/run-state';
 import type {
   ItemDto as ChatItem,
+  LessonSegment,
   ProjectDto,
   RunDto as ChatRun,
   RunGroupDto,
@@ -176,6 +177,9 @@ const projectsApi = vi.hoisted(() => ({
 const lessonsApi = vi.hoisted(() => ({
   getThreadLessonsState: vi.fn(),
   reflectLessons: vi.fn(),
+  estimateLessons: vi.fn(),
+  listLessonSegments: vi.fn(),
+  dismissLessonSegment: vi.fn(),
 }));
 
 vi.mock('../daemon-api', async (importOriginal) => ({
@@ -878,6 +882,19 @@ beforeEach(() => {
     reflectionRunId: null,
     reflectedThroughSeq: null,
   });
+  lessonsApi.estimateLessons.mockReset().mockResolvedValue({
+    estimate: {
+      agentKind: 'claude',
+      model: null,
+      tokens: 0,
+      usd: null,
+    },
+    signals: 0,
+    fromSeq: 0,
+    toSeq: 0,
+  });
+  lessonsApi.listLessonSegments.mockReset().mockResolvedValue({ segments: [] });
+  lessonsApi.dismissLessonSegment.mockReset().mockResolvedValue(undefined);
   lessonsApi.reflectLessons.mockReset().mockResolvedValue({
     reflectionRunId: 'refl-1',
     segmentId: 'seg-1',
@@ -12968,6 +12985,104 @@ describe('Chats sidebar list', () => {
     ).toBeUndefined();
   });
 
+  describe('the lessons offered when a chat is archived', () => {
+    const OFFERED: LessonSegment = {
+      id: 'seg-1',
+      runId: 'r1',
+      sourceTitle: 'My chat',
+      archived: true,
+      fromSeq: 0,
+      toSeq: 12,
+      closedBy: 'archive',
+      closedAt: 'then',
+      signals: [{ kind: 'user_correction', seq: 3 }],
+      status: 'offered',
+      reflectionRunId: null,
+      estimate: {
+        agentKind: 'claude',
+        model: 'claude-haiku-5-5',
+        tokens: 1200,
+        usd: 0.5,
+      },
+    };
+
+    /** Archive the open chat, then let the notice's delay pass and its offer load. */
+    async function archiveAndOffer(): Promise<HTMLElement> {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+      const { client } = makeClient();
+      const container = await mount(client);
+      await archiveRow(container);
+      await act(async () => {
+        vi.advanceTimersByTime(1_000);
+      });
+      await act(async () => {});
+      return container;
+    }
+
+    function noticeButton(
+      container: HTMLElement,
+      label: string,
+    ): HTMLButtonElement {
+      return [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[data-slot="action-notice"] button',
+        ),
+      ].find((b) => b.textContent === label)!;
+    }
+
+    it('names the agent, model and price of the stretch it offers', async () => {
+      lessonsApi.listLessonSegments.mockResolvedValue({ segments: [OFFERED] });
+
+      const container = await archiveAndOffer();
+
+      expect(lessonsApi.listLessonSegments).toHaveBeenCalledWith({
+        runId: 'r1',
+        status: 'offered',
+      });
+      const notice = container.querySelector('[data-slot="action-notice"]')!;
+      expect(notice.textContent).toContain('Learning signal in “My chat”');
+      expect(notice.textContent).toContain(
+        'claude · claude-haiku-5-5 · ≈$0.50 (≈1.2k tokens)',
+      );
+    });
+
+    it('extracts the stretch the notice names', async () => {
+      lessonsApi.listLessonSegments.mockResolvedValue({ segments: [OFFERED] });
+      const container = await archiveAndOffer();
+
+      await act(async () => {
+        noticeButton(container, 'Extract lessons').click();
+      });
+
+      expect(lessonsApi.reflectLessons).toHaveBeenCalledWith({
+        runId: 'r1',
+        reflectLessonsDto: { segmentId: 'seg-1' },
+      });
+      expect(container.querySelector('[data-slot="action-notice"]')).toBeNull();
+    });
+
+    it('closes the notice with Not now and calls the daemon for nothing', async () => {
+      lessonsApi.listLessonSegments.mockResolvedValue({ segments: [OFFERED] });
+      const container = await archiveAndOffer();
+
+      await act(async () => {
+        noticeButton(container, 'Not now').click();
+      });
+
+      expect(lessonsApi.dismissLessonSegment).not.toHaveBeenCalled();
+      expect(lessonsApi.reflectLessons).not.toHaveBeenCalled();
+      expect(container.querySelector('[data-slot="action-notice"]')).toBeNull();
+    });
+
+    it('shows no notice when the archived chat has nothing to offer', async () => {
+      const container = await archiveAndOffer();
+
+      expect(lessonsApi.listLessonSegments).toHaveBeenCalled();
+      expect(container.querySelector('[data-slot="action-notice"]')).toBeNull();
+    });
+  });
+
   it('asks before archiving a RUNNING chat, and says the turn will be cancelled', async () => {
     // The user chose cancel-then-archive over leaving the turn running, so
     // the one irreversible part of archiving has to be stated before it
@@ -13297,6 +13412,138 @@ describe('Chats sidebar list', () => {
         ),
       ].find((el) => el.textContent?.includes('My chat')),
     ).toBeUndefined();
+  });
+
+  it('offers Extract lessons first only when the thread has signals, unticked every time, and asks the daemon to extract only when ticked', async () => {
+    api.deleteChat.mockResolvedValue({ deleted: true });
+    lessonsApi.estimateLessons.mockResolvedValue({
+      estimate: {
+        agentKind: 'claude',
+        model: 'claude-haiku-5-5',
+        tokens: 1200,
+        usd: 0.5,
+      },
+      signals: 2,
+      fromSeq: 1,
+      toSeq: 40,
+    });
+    const { client } = makeClient();
+    const container = await mountArchived(client);
+
+    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
+    const dialog = container.querySelector('[role="dialog"]')!;
+    expect(lessonsApi.estimateLessons).toHaveBeenCalledWith({ runId: 'r1' });
+    const box = dialog.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    )!;
+    expect(box.checked).toBe(false);
+    expect(dialog.textContent).toContain(
+      'Extract lessons first · claude · claude-haiku-5-5 · ≈$0.50 (≈1.2k tokens)',
+    );
+
+    await act(async () => {
+      box.click();
+    });
+    await act(async () => {
+      [...dialog.querySelectorAll('button')]
+        .find((b) => b.textContent === 'Delete')!
+        .click();
+    });
+    expect(api.deleteChat).toHaveBeenCalledWith({
+      runId: 'r1',
+      extractLessons: 'true',
+    });
+  });
+
+  it('shows no Extract lessons box when the thread has no signals to learn from', async () => {
+    api.deleteChat.mockResolvedValue({ deleted: true });
+    const { client } = makeClient();
+    const container = await mountArchived(client);
+
+    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
+    const dialog = container.querySelector('[role="dialog"]')!;
+    expect(dialog.querySelector('input[type="checkbox"]')).toBeNull();
+  });
+
+  it('unticks Extract lessons again when the delete dialog is reopened after a cancel', async () => {
+    lessonsApi.estimateLessons.mockResolvedValue({
+      estimate: { agentKind: 'claude', model: null, tokens: 1200, usd: 0.5 },
+      signals: 2,
+      fromSeq: 1,
+      toSeq: 40,
+    });
+    const { client } = makeClient();
+    const container = await mountArchived(client);
+    const box = () =>
+      container.querySelector<HTMLInputElement>(
+        '[role="dialog"] input[type="checkbox"]',
+      )!;
+
+    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
+    await act(async () => {
+      box().click();
+    });
+    expect(box().checked).toBe(true);
+    await act(async () => {
+      [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[role="dialog"] button',
+        ),
+      ]
+        .find((b) => b.textContent === 'Cancel')!
+        .click();
+    });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+
+    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
+    expect(box().checked).toBe(false);
+    expect(api.deleteChat).not.toHaveBeenCalled();
+  });
+
+  it('passes the Extract lessons box on to a TEAM run’s delete when it is ticked', async () => {
+    lessonsApi.estimateLessons.mockResolvedValue({
+      estimate: { agentKind: 'claude', model: null, tokens: 1200, usd: 0.5 },
+      signals: 2,
+      fromSeq: 1,
+      toSeq: 40,
+    });
+    api.listChats.mockResolvedValue([]);
+    teamApi.listTeamRuns.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(
+          params?.scope === 'archived'
+            ? [
+                {
+                  ...run1,
+                  id: 'wf-run-1',
+                  title: 'Call Demo',
+                  teamId: 'call-demo',
+                  archivedAt: 'then',
+                },
+              ]
+            : [],
+        ),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await pickScope(container, 'Archived only');
+
+    await clickRowMenu(container, 'Unarchive Call Demo', 'Delete permanently');
+    const dialog = container.querySelector('[role="dialog"]')!;
+    await act(async () => {
+      dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+    });
+    await act(async () => {
+      [...dialog.querySelectorAll('button')]
+        .find((b) => b.textContent === 'Delete')!
+        .click();
+    });
+
+    expect(teamApi.deleteTeamRun).toHaveBeenCalledWith({
+      runId: 'wf-run-1',
+      extractLessons: 'true',
+    });
+    expect(api.deleteChat).not.toHaveBeenCalled();
   });
 
   it('drops the row when ANOTHER client deletes the run', async () => {

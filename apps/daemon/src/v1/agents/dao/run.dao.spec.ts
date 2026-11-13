@@ -1131,4 +1131,132 @@ describe('RunDao (in-memory sqlite)', () => {
       await expect(dao.readWork('missing-run')).resolves.toBeNull();
     });
   });
+
+  describe('a run being deleted with lessons extracted first', () => {
+    it('leaves a chat being deleted out of the chat listings, the thread listing and the shelf counts', async () => {
+      const kept = await dao.create({
+        title: 'kept',
+        createdAt: new Date(1_000),
+      });
+      await dao.create({
+        title: 'deleting',
+        createdAt: new Date(2_000),
+        pendingDeleteAt: new Date(9_000),
+      });
+
+      expect((await dao.listChats('active')).map((r) => r.id)).toEqual([
+        kept.id,
+      ]);
+      expect((await dao.listThreads(null, 50)).map((r) => r.id)).toEqual([
+        kept.id,
+      ]);
+      expect(await dao.countByShelf()).toEqual({ active: 1, archived: 0 });
+    });
+
+    it('leaves a team run being deleted out of the team listing and the shelf counts', async () => {
+      const kept = await dao.create({
+        teamId: 'wf-1',
+        createdAt: new Date(1_000),
+      });
+      await dao.create({
+        teamId: 'wf-1',
+        createdAt: new Date(2_000),
+        archivedAt: new Date(9_000),
+        pendingDeleteAt: new Date(9_000),
+      });
+
+      expect((await dao.listTeamRuns('all')).map((r) => r.id)).toEqual([
+        kept.id,
+      ]);
+      expect(await dao.countByShelf()).toEqual({ active: 1, archived: 0 });
+    });
+
+    it('lists only the runs pending delete, for the start-up delete', async () => {
+      await dao.create({ createdAt: new Date(1_000) });
+      const pending = await dao.create({
+        teamId: 'wf-1',
+        createdAt: new Date(2_000),
+        pendingDeleteAt: new Date(9_000),
+      });
+
+      expect((await dao.listPendingDeletes()).map((r) => r.id)).toEqual([
+        pending.id,
+      ]);
+    });
+
+    it('lists the card’s runs, archived ones included, and leaves a pending delete out', async () => {
+      const live = await dao.create({
+        taskId: 'task-1',
+        createdAt: new Date(1_000),
+      });
+      const archived = await dao.create({
+        taskId: 'task-1',
+        createdAt: new Date(2_000),
+        archivedAt: new Date(9_000),
+      });
+      await dao.create({
+        taskId: 'task-1',
+        createdAt: new Date(3_000),
+        pendingDeleteAt: new Date(9_000),
+      });
+      await dao.create({ taskId: 'task-2', createdAt: new Date(4_000) });
+
+      const ids = (await dao.listOfTask('task-1')).map((r) => r.id);
+
+      expect([...ids].sort()).toEqual([archived.id, live.id].sort());
+    });
+  });
+
+  describe('listLessonCandidates', () => {
+    it('lists the threads worked in since the cut-off, on the desk, outside analysis, builder and project chats', async () => {
+      const since = new Date(5_000);
+      const worked = await dao.create({
+        title: 'worked',
+        updatedAt: new Date(6_000),
+      });
+      await dao.create({
+        title: 'too old',
+        updatedAt: new Date(4_000),
+      });
+      await dao.create({
+        title: 'archived',
+        updatedAt: new Date(6_000),
+        archivedAt: new Date(9_000),
+      });
+      await dao.create({
+        title: 'deleting',
+        updatedAt: new Date(6_000),
+        pendingDeleteAt: new Date(9_000),
+      });
+      await dao.create({
+        title: 'builder',
+        updatedAt: new Date(6_000),
+        editsTeamSlug: 'dev-team',
+      });
+      await dao.create({
+        title: 'project',
+        updatedAt: new Date(6_000),
+        editsProjectId: 'project-1',
+      });
+      await dao.create({
+        title: 'analysis',
+        updatedAt: new Date(6_000),
+        analysisSourceRunId: 'source-1',
+      });
+      await dao.create({
+        title: 'team analysis',
+        updatedAt: new Date(6_000),
+        analysisTeamSlug: 'dev-team',
+      });
+      const teamRun = await dao.create({
+        title: 'team run',
+        teamId: 'wf-1',
+        updatedAt: new Date(7_000),
+      });
+
+      const candidates = await dao.listLessonCandidates(since);
+
+      expect(candidates.map((run) => run.id)).toEqual([teamRun.id, worked.id]);
+    });
+  });
 });

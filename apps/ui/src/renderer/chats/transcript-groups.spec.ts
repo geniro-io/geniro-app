@@ -6794,3 +6794,57 @@ describe('groupTranscript — lessons cards', () => {
     expect(groupTranscript([outcome('saved')])).toEqual([]);
   });
 });
+
+describe('groupTranscript — lesson offer rows', () => {
+  const offerPayload = (segmentId: string, toSeq: number) => ({
+    segmentId,
+    fromSeq: 1,
+    toSeq,
+    closedBy: 'idle',
+    signals: [{ kind: 'user_correction', seq: 31 }],
+    estimate: { agentKind: 'claude', model: null, tokens: 4200, usd: 0.02 },
+  });
+
+  it('draws an offer as a card, and only the newest offer of a stretch acts', () => {
+    const first = item('lesson_offer', offerPayload('seg-1', 20));
+    const second = item('lesson_offer', offerPayload('seg-1', 40));
+
+    const entries = groupTranscript([first, second]);
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      type: 'lesson-offer',
+      id: first.id,
+      runId: 'run-1',
+      latest: false,
+    });
+    expect(entries[1]).toMatchObject({
+      type: 'lesson-offer',
+      id: second.id,
+      latest: true,
+      offer: { segmentId: 'seg-1', toSeq: 40 },
+    });
+  });
+
+  it('keeps the newest offer of each stretch acting, stretch by stretch', () => {
+    const entries = groupTranscript([
+      item('lesson_offer', offerPayload('seg-1', 20)),
+      item('lesson_offer', offerPayload('seg-2', 30)),
+    ]);
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ latest: true });
+    expect(entries[1]).toMatchObject({ latest: true });
+  });
+
+  it('draws nothing for an offer row that does not read', () => {
+    expect(
+      groupTranscript([
+        item('lesson_offer', {
+          ...offerPayload('seg-1', 20),
+          closedBy: 'lunch',
+        }),
+      ]),
+    ).toEqual([]);
+  });
+});

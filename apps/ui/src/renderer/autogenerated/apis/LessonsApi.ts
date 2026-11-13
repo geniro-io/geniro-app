@@ -15,18 +15,33 @@
 
 import * as runtime from '../runtime';
 import type {
+  AgentKind,
   LessonProposal,
   LessonProposalListDto,
   LessonProposalStatus,
   LessonReflectionFactsDto,
+  LessonSegment,
+  LessonSegmentListDto,
   LessonsConfigAckDto,
   LessonsConfigDto,
+  LessonsReflectAllDto,
   LessonsReflectStartedDto,
   ReflectLessonsDto,
   RejectLessonDto,
   SaveLessonDto,
+  ThreadLessonEstimateDto,
   ThreadLessonsStateDto,
 } from '../models/index';
+
+export interface LessonsApiDismissLessonSegmentRequest {
+    segmentId: string;
+}
+
+export interface LessonsApiEstimateLessonsRequest {
+    runId: string;
+    agentKind?: AgentKind;
+    model?: string;
+}
 
 export interface LessonsApiGetLessonReflectionRequest {
     reflectionRunId: string;
@@ -39,6 +54,11 @@ export interface LessonsApiGetThreadLessonsStateRequest {
 export interface LessonsApiListLessonProposalsRequest {
     status?: LessonProposalStatus;
     sourceRunId?: string;
+}
+
+export interface LessonsApiListLessonSegmentsRequest {
+    status?: string;
+    runId?: string;
 }
 
 export interface LessonsApiReflectLessonsRequest {
@@ -64,6 +84,107 @@ export interface LessonsApiSetLessonsConfigRequest {
  * 
  */
 export class LessonsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async dismissLessonSegmentRaw(requestParameters: LessonsApiDismissLessonSegmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LessonSegment>> {
+        if (requestParameters['segmentId'] == null) {
+            throw new runtime.RequiredError(
+                'segmentId',
+                'Required parameter "segmentId" was null or undefined when calling dismissLessonSegment().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/lessons/segments/{segmentId}/dismiss`;
+        urlPath = urlPath.replace(`{${"segmentId"}}`, encodeURIComponent(String(requestParameters['segmentId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async dismissLessonSegment(requestParameters: LessonsApiDismissLessonSegmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonSegment> {
+        const response = await this.dismissLessonSegmentRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async estimateLessonsRaw(requestParameters: LessonsApiEstimateLessonsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ThreadLessonEstimateDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling estimateLessons().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['runId'] != null) {
+            queryParameters['runId'] = requestParameters['runId'];
+        }
+
+        if (requestParameters['agentKind'] != null) {
+            queryParameters['agentKind'] = requestParameters['agentKind'];
+        }
+
+        if (requestParameters['model'] != null) {
+            queryParameters['model'] = requestParameters['model'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/lessons/estimate`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async estimateLessons(requestParameters: LessonsApiEstimateLessonsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ThreadLessonEstimateDto> {
+        const response = await this.estimateLessonsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -197,6 +318,88 @@ export class LessonsApi extends runtime.BaseAPI {
      */
     async listLessonProposals(requestParameters: LessonsApiListLessonProposalsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonProposalListDto> {
         const response = await this.listLessonProposalsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listLessonSegmentsRaw(requestParameters: LessonsApiListLessonSegmentsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LessonSegmentListDto>> {
+        const queryParameters: any = {};
+
+        if (requestParameters['status'] != null) {
+            queryParameters['status'] = requestParameters['status'];
+        }
+
+        if (requestParameters['runId'] != null) {
+            queryParameters['runId'] = requestParameters['runId'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/lessons/segments`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listLessonSegments(requestParameters: LessonsApiListLessonSegmentsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonSegmentListDto> {
+        const response = await this.listLessonSegmentsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async reflectAllLessonSegmentsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LessonsReflectAllDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/lessons/segments/reflect-all`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async reflectAllLessonSegments(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LessonsReflectAllDto> {
+        const response = await this.reflectAllLessonSegmentsRaw(initOverrides);
         return await response.value();
     }
 

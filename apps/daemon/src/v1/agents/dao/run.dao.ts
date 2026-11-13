@@ -94,6 +94,7 @@ export class RunDao extends BaseDao<Run> {
     return this.getRepo(txEm).find(
       {
         archivedAt: null,
+        pendingDeleteAt: null,
         editsTeamSlug: null,
         editsProjectId: null,
         analysisSourceRunId: null,
@@ -119,7 +120,7 @@ export class RunDao extends BaseDao<Run> {
     txEm?: EntityManager,
   ): Promise<Run[]> {
     const { before, runId, limit } = page;
-    const narrowed: FilterQuery<Run>[] = [where];
+    const narrowed: FilterQuery<Run>[] = [where, { pendingDeleteAt: null }];
     if (runId !== undefined) {
       narrowed.push({ id: runId });
     }
@@ -132,7 +133,7 @@ export class RunDao extends BaseDao<Run> {
       });
     }
     return this.getRepo(txEm).find(
-      narrowed.length === 1 ? where : { $and: narrowed },
+      { $and: narrowed },
       // Read-only list paths: skip identity-map tracking so a long run history
       // doesn't accumulate managed entities in the forked EM (see item.dao).
       {
@@ -223,6 +224,46 @@ export class RunDao extends BaseDao<Run> {
     return this.getRepo(txEm).find(
       { analysisSourceRunId: sourceRunId, analysisPurpose: 'lessons' },
       { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
+    );
+  }
+
+  /** The runs deleted with "Extract lessons first" whose delete has not happened yet. */
+  async listPendingDeletes(txEm?: EntityManager): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { pendingDeleteAt: { $ne: null } },
+      { disableIdentityMap: true },
+    );
+  }
+
+  /** The live runs a board card started, archived ones included. */
+  async listOfTask(taskId: string, txEm?: EntityManager): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { taskId, pendingDeleteAt: null },
+      { disableIdentityMap: true },
+    );
+  }
+
+  /**
+   * Threads that may have a stretch left open for lessons: on the desk, not
+   * being deleted, no analysis, builder or project chat, worked in since
+   * `since`. Read at daemon start, when the quiet timers of the last launch
+   * are gone.
+   */
+  async listLessonCandidates(
+    since: Date,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      {
+        archivedAt: null,
+        pendingDeleteAt: null,
+        editsTeamSlug: null,
+        editsProjectId: null,
+        analysisSourceRunId: null,
+        analysisTeamSlug: null,
+        updatedAt: { $gte: since },
+      },
+      { orderBy: { updatedAt: 'desc' }, disableIdentityMap: true },
     );
   }
 
@@ -372,8 +413,8 @@ export class RunDao extends BaseDao<Run> {
   ): Promise<{ active: number; archived: number }> {
     const repo = this.getRepo(txEm);
     const [active, archived] = await Promise.all([
-      repo.count({ archivedAt: null }),
-      repo.count({ archivedAt: { $ne: null } }),
+      repo.count({ archivedAt: null, pendingDeleteAt: null }),
+      repo.count({ archivedAt: { $ne: null }, pendingDeleteAt: null }),
     ]);
     return { active, archived };
   }

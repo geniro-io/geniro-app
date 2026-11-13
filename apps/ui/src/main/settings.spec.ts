@@ -771,7 +771,13 @@ describe('knowledge settings', () => {
 describe('lessons settings', () => {
   it('a half-valid lessons object keeps its valid fields and defaults the rest', () => {
     writeRaw({
-      lessons: { mode: 'off', agentKind: 'codex', model: 42, effort: 'low' },
+      lessons: {
+        mode: 'off',
+        agentKind: 'codex',
+        model: 42,
+        effort: 'low',
+        quietWindowHours: 6,
+      },
     });
 
     expect(readSettings().lessons).toEqual({
@@ -779,6 +785,27 @@ describe('lessons settings', () => {
       agentKind: 'codex',
       model: null,
       effort: 'low',
+      quietWindowHours: 6,
+    });
+  });
+
+  it('a quiet window outside 1, 3 and 6 hours falls back to 3 and keeps the other fields', () => {
+    writeRaw({
+      lessons: {
+        mode: 'off',
+        agentKind: null,
+        model: null,
+        effort: null,
+        quietWindowHours: 2,
+      },
+    });
+
+    expect(readSettings().lessons).toEqual({
+      mode: 'off',
+      agentKind: null,
+      model: null,
+      effort: null,
+      quietWindowHours: 3,
     });
   });
 
@@ -790,6 +817,7 @@ describe('lessons settings', () => {
       agentKind: null,
       model: null,
       effort: null,
+      quietWindowHours: 3,
     });
   });
 });

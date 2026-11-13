@@ -5070,7 +5070,8 @@ export const ItemKind = {
     StageChange: 'stage_change',
     ThreadOutcome: 'thread_outcome',
     Lessons: 'lessons',
-    LessonOutcome: 'lesson_outcome'
+    LessonOutcome: 'lesson_outcome',
+    LessonOffer: 'lesson_offer'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 
@@ -5931,6 +5932,39 @@ export type LessonDedupVerdictEnum = typeof LessonDedupVerdictEnum[keyof typeof 
 /**
  * 
  * @export
+ * @interface LessonEstimate
+ */
+export interface LessonEstimate {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof LessonEstimate
+     */
+    agentKind: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof LessonEstimate
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof LessonEstimate
+     */
+    tokens: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof LessonEstimate
+     */
+    usd: number | null;
+}
+
+
+/**
+ * 
+ * @export
  * @interface LessonEvidence
  */
 export interface LessonEvidence {
@@ -6002,6 +6036,17 @@ export const LessonMemoryTargetTypeEnum = {
     Reference: 'reference'
 } as const;
 export type LessonMemoryTargetTypeEnum = typeof LessonMemoryTargetTypeEnum[keyof typeof LessonMemoryTargetTypeEnum];
+
+
+/**
+ * 
+ * @export
+ */
+export const LessonOverride = {
+    On: 'on',
+    Off: 'off'
+} as const;
+export type LessonOverride = typeof LessonOverride[keyof typeof LessonOverride];
 
 /**
  * 
@@ -6203,6 +6248,129 @@ export interface LessonReflectionFactsDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface LessonSegment
+ */
+export interface LessonSegment {
+    /**
+     * 
+     * @type {string}
+     * @memberof LessonSegment
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LessonSegment
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LessonSegment
+     */
+    sourceTitle: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof LessonSegment
+     */
+    archived: boolean;
+    /**
+     * 
+     * @type {number}
+     * @memberof LessonSegment
+     */
+    fromSeq: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof LessonSegment
+     */
+    toSeq: number;
+    /**
+     * 
+     * @type {LessonSegmentCloser}
+     * @memberof LessonSegment
+     */
+    closedBy: LessonSegmentCloser;
+    /**
+     * 
+     * @type {string}
+     * @memberof LessonSegment
+     */
+    closedAt: string;
+    /**
+     * 
+     * @type {Array<LessonSignalRef>}
+     * @memberof LessonSegment
+     */
+    signals: Array<LessonSignalRef>;
+    /**
+     * 
+     * @type {LessonSegmentStatus}
+     * @memberof LessonSegment
+     */
+    status: LessonSegmentStatus;
+    /**
+     * 
+     * @type {string}
+     * @memberof LessonSegment
+     */
+    reflectionRunId: string | null;
+    /**
+     * 
+     * @type {LessonEstimate}
+     * @memberof LessonSegment
+     */
+    estimate: LessonEstimate;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const LessonSegmentCloser = {
+    Manual: 'manual',
+    Archive: 'archive',
+    Done: 'done',
+    Idle: 'idle',
+    Delete: 'delete'
+} as const;
+export type LessonSegmentCloser = typeof LessonSegmentCloser[keyof typeof LessonSegmentCloser];
+
+/**
+ * 
+ * @export
+ * @interface LessonSegmentListDto
+ */
+export interface LessonSegmentListDto {
+    /**
+     * 
+     * @type {Array<LessonSegment>}
+     * @memberof LessonSegmentListDto
+     */
+    segments: Array<LessonSegment>;
+}
+
+/**
+ * 
+ * @export
+ */
+export const LessonSegmentStatus = {
+    Offered: 'offered',
+    Dismissed: 'dismissed',
+    Reflecting: 'reflecting',
+    Reflected: 'reflected',
+    Failed: 'failed',
+    Empty: 'empty'
+} as const;
+export type LessonSegmentStatus = typeof LessonSegmentStatus[keyof typeof LessonSegmentStatus];
+
 
 /**
  * 
@@ -6217,6 +6385,27 @@ export const LessonSignalKind = {
     ReviewFinding: 'review_finding'
 } as const;
 export type LessonSignalKind = typeof LessonSignalKind[keyof typeof LessonSignalKind];
+
+/**
+ * 
+ * @export
+ * @interface LessonSignalRef
+ */
+export interface LessonSignalRef {
+    /**
+     * 
+     * @type {LessonSignalKind}
+     * @memberof LessonSignalRef
+     */
+    kind: LessonSignalKind;
+    /**
+     * 
+     * @type {number}
+     * @memberof LessonSignalRef
+     */
+    seq: number;
+}
+
 
 /**
  * 
@@ -6248,6 +6437,12 @@ export interface LessonsConfigAckDto {
      * @memberof LessonsConfigAckDto
      */
     effort: string | null;
+    /**
+     * How long a thread left open sits with no new message before its stretch is offered
+     * @type {number}
+     * @memberof LessonsConfigAckDto
+     */
+    quietWindowHours: LessonsConfigAckDtoQuietWindowHoursEnum;
 }
 
 
@@ -6259,6 +6454,16 @@ export const LessonsConfigAckDtoModeEnum = {
     Offer: 'offer'
 } as const;
 export type LessonsConfigAckDtoModeEnum = typeof LessonsConfigAckDtoModeEnum[keyof typeof LessonsConfigAckDtoModeEnum];
+
+/**
+ * @export
+ */
+export const LessonsConfigAckDtoQuietWindowHoursEnum = {
+    NUMBER_1: 1,
+    NUMBER_3: 3,
+    NUMBER_6: 6
+} as const;
+export type LessonsConfigAckDtoQuietWindowHoursEnum = typeof LessonsConfigAckDtoQuietWindowHoursEnum[keyof typeof LessonsConfigAckDtoQuietWindowHoursEnum];
 
 /**
  * 
@@ -6290,6 +6495,12 @@ export interface LessonsConfigDto {
      * @memberof LessonsConfigDto
      */
     effort: string | null;
+    /**
+     * How long a thread left open sits with no new message before its stretch is offered
+     * @type {number}
+     * @memberof LessonsConfigDto
+     */
+    quietWindowHours?: LessonsConfigDtoQuietWindowHoursEnum;
 }
 
 
@@ -6302,6 +6513,35 @@ export const LessonsConfigDtoModeEnum = {
 } as const;
 export type LessonsConfigDtoModeEnum = typeof LessonsConfigDtoModeEnum[keyof typeof LessonsConfigDtoModeEnum];
 
+/**
+ * @export
+ */
+export const LessonsConfigDtoQuietWindowHoursEnum = {
+    NUMBER_1: 1,
+    NUMBER_3: 3,
+    NUMBER_6: 6
+} as const;
+export type LessonsConfigDtoQuietWindowHoursEnum = typeof LessonsConfigDtoQuietWindowHoursEnum[keyof typeof LessonsConfigDtoQuietWindowHoursEnum];
+
+/**
+ * 
+ * @export
+ * @interface LessonsReflectAllDto
+ */
+export interface LessonsReflectAllDto {
+    /**
+     * 
+     * @type {number}
+     * @memberof LessonsReflectAllDto
+     */
+    started: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof LessonsReflectAllDto
+     */
+    refused: number;
+}
 /**
  * 
  * @export
@@ -9675,6 +9915,12 @@ export interface ProjectDto {
     provider: TaskSource;
     /**
      * 
+     * @type {LessonOverride}
+     * @memberof ProjectDto
+     */
+    lessons: LessonOverride | null;
+    /**
+     * 
      * @type {string}
      * @memberof ProjectDto
      */
@@ -9845,6 +10091,12 @@ export interface ProjectForFolderDtoProject {
      * @memberof ProjectForFolderDtoProject
      */
     provider: TaskSource;
+    /**
+     * 
+     * @type {LessonOverride}
+     * @memberof ProjectForFolderDtoProject
+     */
+    lessons: LessonOverride | null;
     /**
      * 
      * @type {string}
@@ -10223,6 +10475,12 @@ export interface ReconcileTasksDto {
  * @interface ReflectLessonsDto
  */
 export interface ReflectLessonsDto {
+    /**
+     * The offered stretch to reflect on; omitted = everything past the last reflection
+     * @type {string}
+     * @memberof ReflectLessonsDto
+     */
+    segmentId?: string;
     /**
      * 
      * @type {AgentKind}
@@ -14954,6 +15212,12 @@ export interface Team {
      * @memberof Team
      */
     stages?: Array<TeamStage>;
+    /**
+     * Whether this team's runs are offered lessons reflections; omitted = inherit the project's and the app's setting. The app's Off always wins
+     * @type {LessonOverride}
+     * @memberof Team
+     */
+    lessons?: LessonOverride;
 }
 
 
@@ -16256,6 +16520,37 @@ export interface ThreadAnalysisDto {
 /**
  * 
  * @export
+ * @interface ThreadLessonEstimateDto
+ */
+export interface ThreadLessonEstimateDto {
+    /**
+     * 
+     * @type {LessonEstimate}
+     * @memberof ThreadLessonEstimateDto
+     */
+    estimate: LessonEstimate;
+    /**
+     * Learning signals past the last reflection; 0 = nothing worth reflecting on
+     * @type {number}
+     * @memberof ThreadLessonEstimateDto
+     */
+    signals: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadLessonEstimateDto
+     */
+    fromSeq: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ThreadLessonEstimateDto
+     */
+    toSeq: number;
+}
+/**
+ * 
+ * @export
  * @interface ThreadLessonsStateDto
  */
 export interface ThreadLessonsStateDto {
@@ -17294,6 +17589,12 @@ export interface UpdateProjectDto {
      * @memberof UpdateProjectDto
      */
     teamSlug?: string | null;
+    /**
+     * 
+     * @type {LessonOverride}
+     * @memberof UpdateProjectDto
+     */
+    lessons?: LessonOverride | null;
     /**
      * 
      * @type {boolean}

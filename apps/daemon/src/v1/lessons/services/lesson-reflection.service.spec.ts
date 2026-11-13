@@ -7,6 +7,7 @@ import { Subject } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { environment } from '../../../environments';
+import type { RunStatusEvent } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
 import type { AgentEventBus } from '../../agents/services/agent-events.bus';
@@ -19,6 +20,7 @@ import type { LessonSegmentDao } from '../dao/lesson-segment.dao';
 import { DEFAULT_LESSONS_CONFIG, type LessonsConfig } from '../lessons.types';
 import { LessonReflectionService } from './lesson-reflection.service';
 import { LessonsConfigService } from './lessons-config.service';
+import { LessonsEventBus } from './lessons-events.bus';
 
 type Item = {
   seq: number;
@@ -58,6 +60,8 @@ function runOf(overrides: Partial<Run>): Run {
     editsTeamSlug: null,
     editsProjectId: null,
     reflectedThroughSeq: null,
+    pendingDeleteAt: null,
+    archivedAt: null,
     ...overrides,
   } as unknown as Run;
 }
@@ -68,12 +72,19 @@ function build(
     maxSeq?: number;
     /** The newest row that is not a lessons row; defaults to `maxSeq`. */
     newestOwn?: number;
+    /** The thread's open stretch, as `openOf` finds it. */
+    open?: Record<string, unknown> | null;
+    /** The stretch a press named, as `getById` finds it. */
+    segment?: Record<string, unknown> | null;
+    /** The stretch a reflection run belongs to, as `ofReflection` finds it. */
+    reflectionSegment?: Record<string, unknown> | null;
     items?: Item[];
     running?: Partial<Run>[];
     project?: { id: string; folder: string } | null;
-    config?: LessonsConfig;
+    config?: Omit<LessonsConfig, 'quietWindowHours'>;
     rejected?: { title: string; rejectReason: string | null }[];
     sendFails?: Error;
+    createFails?: Error;
   } = {},
 ) {
   const source = runOf(options.source ?? {});
@@ -113,7 +124,9 @@ function build(
   };
   const chats = {
     createChat: vi.fn((_input: Record<string, unknown>) =>
-      Promise.resolve({ id: 'refl-run' }),
+      options.createFails === undefined
+        ? Promise.resolve({ id: 'refl-run' })
+        : Promise.reject(options.createFails),
     ),
     sendMessage: vi.fn((_runId: string, _brief: string) =>
       options.sendFails === undefined
@@ -130,8 +143,14 @@ function build(
     deleteOfRuns: vi.fn((_runIds: readonly string[], _em: unknown) =>
       Promise.resolve(),
     ),
+    openOf: vi.fn(() => Promise.resolve(options.open ?? null)),
+    getById: vi.fn(() => Promise.resolve(options.segment ?? null)),
+    ofReflection: vi.fn(() =>
+      Promise.resolve(options.reflectionSegment ?? null),
+    ),
   };
   const deleted = new Subject<string>();
+  const statuses = new Subject<RunStatusEvent>();
   const proposals = {
     rejectedIn: vi.fn(() => Promise.resolve(options.rejected ?? [])),
   };
@@ -139,22 +158,28 @@ function build(
     projectOfRun: vi.fn(() => Promise.resolve(options.project ?? null)),
   };
   const config = new LessonsConfigService();
-  config.set(options.config ?? DEFAULT_LESSONS_CONFIG);
+  config.set({ ...DEFAULT_LESSONS_CONFIG, ...options.config });
+  const events = new LessonsEventBus();
   const service = new LessonReflectionService(
     em,
     runDao as unknown as RunDao,
     itemDao as unknown as ItemDao,
     chats as unknown as ChatService,
-    { allDeleted: () => deleted.asObservable() } as unknown as AgentEventBus,
+    {
+      allDeleted: () => deleted.asObservable(),
+      allStatuses: () => statuses.asObservable(),
+    } as unknown as AgentEventBus,
     { enabled: true } as MemoryService,
     projectScope as unknown as ProjectScopeService,
     segments as unknown as LessonSegmentDao,
     proposals as unknown as LessonProposalDao,
     config,
+    events,
   );
   return {
     service,
     em,
+    events,
     runDao,
     itemDao,
     chats,
@@ -162,6 +187,7 @@ function build(
     proposals,
     projectScope,
     deleted,
+    statuses,
   };
 }
 
@@ -448,6 +474,36 @@ describe('LessonReflectionService.start', () => {
       fixture.em,
     );
   });
+
+  it('marks the segment failed and announces it when the chat cannot be created', async () => {
+    const fixture = build({ createFails: new Error('no agent') });
+    const announced: (string | null)[] = [];
+    fixture.events
+      .allChanges()
+      .subscribe((event) => announced.push(event.runId));
+
+    await expect(fixture.service.start('src', {})).rejects.toThrow('no agent');
+
+    expect(fixture.chats.sendMessage).not.toHaveBeenCalled();
+    expect(fixture.segments.updateById).toHaveBeenCalledWith(
+      'seg-1',
+      { status: 'failed' },
+      fixture.em,
+    );
+    expect(announced).toEqual(['src']);
+  });
+
+  it('announces the started reflection on its thread', async () => {
+    const fixture = build();
+    const announced: (string | null)[] = [];
+    fixture.events
+      .allChanges()
+      .subscribe((event) => announced.push(event.runId));
+
+    await fixture.service.start('src', {});
+
+    expect(announced).toEqual(['src']);
+  });
 });
 
 describe('LessonReflectionService — review findings', () => {
@@ -574,5 +630,231 @@ describe('LessonReflectionService.state', () => {
     expect(await fixture.service.state('src')).toMatchObject({
       reflectable: false,
     });
+  });
+
+  it('is never reflectable on a thread being deleted, whatever is past the watermark', async () => {
+    const fixture = build({
+      source: { pendingDeleteAt: new Date() },
+      maxSeq: SNAPSHOT_SEQ + 1,
+    });
+
+    expect(await fixture.service.state('src')).toEqual({
+      reflectable: false,
+      reflectionRunId: null,
+      reflectedThroughSeq: null,
+    });
+  });
+});
+
+describe('LessonReflectionService.start on a waiting stretch', () => {
+  const OPEN = {
+    id: 'seg-open',
+    runId: 'src',
+    status: 'offered',
+    attempts: 2,
+    fromSeq: -1,
+    toSeq: 4,
+    closedBy: 'idle',
+  };
+
+  it('adopts the open stretch of the thread: no new row, one more attempt, reflecting', async () => {
+    const fixture = build({ open: OPEN });
+
+    const started = await fixture.service.start('src', {});
+
+    expect(started.segmentId).toBe('seg-open');
+    expect(fixture.segments.create).not.toHaveBeenCalled();
+    expect(fixture.segments.updateById).toHaveBeenCalledWith(
+      'seg-open',
+      expect.objectContaining({
+        status: 'reflecting',
+        attempts: 3,
+        reflectionRunId: null,
+      }),
+      fixture.em,
+    );
+    expect(fixture.segments.updateById).toHaveBeenCalledWith(
+      'seg-open',
+      { reflectionRunId: 'refl-run' },
+      fixture.em,
+    );
+  });
+
+  it('adopts the stretch a press named, without looking for the open one', async () => {
+    const fixture = build({
+      segment: { ...OPEN, id: 'seg-named', status: 'dismissed' },
+    });
+
+    const started = await fixture.service.start('src', {
+      segmentId: 'seg-named',
+    });
+
+    expect(started.segmentId).toBe('seg-named');
+    expect(fixture.segments.getById).toHaveBeenCalledWith(
+      'seg-named',
+      fixture.em,
+    );
+    expect(fixture.segments.openOf).not.toHaveBeenCalled();
+    expect(fixture.segments.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['reflected', 'reflecting', 'empty'])(
+    'refuses a named stretch that is already %s, with 409 LESSON_SEGMENT_DECIDED',
+    async (status) => {
+      const fixture = build({ segment: { ...OPEN, status } });
+
+      await expect(
+        fixture.service.start('src', { segmentId: 'seg-open' }),
+      ).rejects.toMatchObject({ errorCode: 'LESSON_SEGMENT_DECIDED' });
+      expect(fixture.chats.createChat).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses a named stretch of another thread with 404 LESSON_SEGMENT_NOT_FOUND', async () => {
+    const fixture = build({ segment: { ...OPEN, runId: 'other-thread' } });
+
+    await expect(
+      fixture.service.start('src', { segmentId: 'seg-open' }),
+    ).rejects.toMatchObject({ errorCode: 'LESSON_SEGMENT_NOT_FOUND' });
+    expect(fixture.chats.createChat).not.toHaveBeenCalled();
+  });
+
+  it('refuses a stretch id the thread does not have, with 404 LESSON_SEGMENT_NOT_FOUND', async () => {
+    const fixture = build({ segment: null });
+
+    await expect(
+      fixture.service.start('src', { segmentId: 'missing' }),
+    ).rejects.toMatchObject({ errorCode: 'LESSON_SEGMENT_NOT_FOUND' });
+    expect(fixture.chats.createChat).not.toHaveBeenCalled();
+  });
+});
+
+describe('LessonReflectionService: a reflection that ends without filing', () => {
+  it('marks its stretch failed when its terminal status arrives while the stretch is still reflecting', async () => {
+    const fixture = build({
+      reflectionSegment: {
+        id: 'seg-9',
+        runId: 'src',
+        status: 'reflecting',
+      },
+    });
+    fixture.service.onModuleInit();
+
+    fixture.statuses.next({ runId: 'refl-9', status: 'completed' });
+
+    await vi.waitFor(() =>
+      expect(fixture.segments.updateById).toHaveBeenCalledWith(
+        'seg-9',
+        { status: 'failed' },
+        fixture.em,
+      ),
+    );
+    fixture.service.onModuleDestroy();
+  });
+
+  it('announces the failed stretch on its thread', async () => {
+    const fixture = build({
+      reflectionSegment: {
+        id: 'seg-9',
+        runId: 'src',
+        status: 'reflecting',
+      },
+    });
+    const announced: (string | null)[] = [];
+    fixture.events
+      .allChanges()
+      .subscribe((event) => announced.push(event.runId));
+    fixture.service.onModuleInit();
+
+    fixture.statuses.next({ runId: 'refl-9', status: 'completed' });
+
+    await vi.waitFor(() => expect(announced).toEqual(['src']));
+    fixture.service.onModuleDestroy();
+  });
+
+  it('leaves a stretch that already filed its lessons alone', async () => {
+    const fixture = build({
+      reflectionSegment: {
+        id: 'seg-9',
+        runId: 'src',
+        status: 'reflected',
+      },
+    });
+    fixture.service.onModuleInit();
+
+    fixture.statuses.next({ runId: 'refl-9', status: 'completed' });
+    await vi.waitFor(() =>
+      expect(fixture.segments.ofReflection).toHaveBeenCalledWith(
+        'refl-9',
+        fixture.em,
+      ),
+    );
+
+    expect(fixture.segments.updateById).not.toHaveBeenCalled();
+    fixture.service.onModuleDestroy();
+  });
+
+  it('leaves a reflection still running alone', async () => {
+    const fixture = build({
+      reflectionSegment: {
+        id: 'seg-9',
+        runId: 'src',
+        status: 'reflecting',
+      },
+    });
+    fixture.service.onModuleInit();
+
+    fixture.statuses.next({ runId: 'refl-9', status: 'running' });
+
+    expect(fixture.segments.ofReflection).not.toHaveBeenCalled();
+    expect(fixture.segments.updateById).not.toHaveBeenCalled();
+    fixture.service.onModuleDestroy();
+  });
+});
+
+describe('LessonReflectionService.runningReflectionId', () => {
+  it('names the reflection still working on the thread', async () => {
+    const fixture = build({
+      running: [{ id: 'r1', status: 'running' }],
+    });
+
+    await expect(fixture.service.runningReflectionId('src')).resolves.toBe(
+      'r1',
+    );
+  });
+
+  it('answers null once every reflection on the thread has finished', async () => {
+    const fixture = build({
+      running: [{ id: 'r0', status: 'completed' }],
+    });
+
+    await expect(
+      fixture.service.runningReflectionId('src'),
+    ).resolves.toBeNull();
+  });
+});
+
+describe('LessonReflectionService.start on a thread being deleted', () => {
+  const DELETING = { pendingDeleteAt: new Date() };
+
+  it('refuses a reflection on it unless it is the delete that asked for one', async () => {
+    const fixture = build({ source: DELETING });
+
+    await expect(fixture.service.start('src', {})).rejects.toMatchObject({
+      errorCode: 'LESSONS_NOT_REFLECTABLE',
+    });
+    expect(fixture.chats.createChat).not.toHaveBeenCalled();
+  });
+
+  it('starts the reflection of a delete that extracts lessons first', async () => {
+    const fixture = build({ source: DELETING });
+
+    const started = await fixture.service.start('src', {}, 'delete');
+
+    expect(started.reflectionRunId).toBe('refl-run');
+    expect(fixture.segments.create).toHaveBeenCalledWith(
+      expect.objectContaining({ closedBy: 'delete', status: 'reflecting' }),
+      fixture.em,
+    );
   });
 });

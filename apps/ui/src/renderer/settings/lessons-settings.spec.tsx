@@ -74,6 +74,10 @@ function agentOf(): HTMLButtonElement {
   return container.querySelector<HTMLButtonElement>('#settings-lessons-agent')!;
 }
 
+function quietOf(): HTMLButtonElement {
+  return container.querySelector<HTMLButtonElement>('#settings-lessons-quiet')!;
+}
+
 function option(label: string): HTMLElement {
   return [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
     (node) => node.textContent?.trim() === label,
@@ -115,6 +119,7 @@ describe('Lessons settings', () => {
       agentKind: 'claude',
       model: 'opus',
       effort: 'high',
+      quietWindowHours: 3,
     });
     await render();
 
@@ -128,13 +133,33 @@ describe('Lessons settings', () => {
           agentKind: 'codex',
           model: null,
           effort: null,
+          quietWindowHours: 3,
         },
       },
     ]);
   });
 
+  it('saves the left-open quiet window the user picks, and shows the saved one', async () => {
+    install({ ...DEFAULT_SETTINGS.lessons, quietWindowHours: 1 });
+    await render();
+
+    expect(quietOf().textContent).toContain('1 h');
+    await press(quietOf());
+    await press(option('6 h'));
+
+    expect(writes).toEqual([
+      { lessons: { ...DEFAULT_SETTINGS.lessons, quietWindowHours: 6 } },
+    ]);
+  });
+
   it('stacks the reflection agent’s pickers under its label, so they cannot squeeze its description', async () => {
-    install({ mode: 'offer', agentKind: 'claude', model: null, effort: null });
+    install({
+      mode: 'offer',
+      agentKind: 'claude',
+      model: null,
+      effort: null,
+      quietWindowHours: 3,
+    });
     await render();
 
     const row = agentOf().closest<HTMLElement>(
@@ -157,6 +182,7 @@ describe('Lessons settings', () => {
     await render(true);
 
     expect(modeOf().disabled).toBe(true);
+    expect(quietOf().disabled).toBe(true);
     expect(agentOf().disabled).toBe(true);
   });
 });

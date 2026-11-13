@@ -1224,6 +1224,8 @@ export function Settings({
               agentsApi={apis?.agents ?? null}
               capabilities={capabilities}
               capabilitiesLoading={capabilitiesLoading}
+              lessonsApi={apis?.lessons ?? null}
+              lessonsClient={client}
             />
           ) : section === 'knowledge' ? (
             <Knowledge />

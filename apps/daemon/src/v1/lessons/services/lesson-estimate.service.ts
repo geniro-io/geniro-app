@@ -11,16 +11,18 @@ import { lessonsReflectionGuide } from '../utils/lessons-reflection-guide';
 import { reflectionChoiceOf } from '../utils/reflection-choice';
 import { LessonsConfigService } from './lessons-config.service';
 
-/** What a reflection reads besides the stretch: the brief, tool schemas, the rows around it. */
-export const LESSON_READ_OVERHEAD_TOKENS = 8_000;
+/** What a reflection reads besides the stretch: the CLI's own system prompt and tool schemas, the brief, the rows around it. */
+export const LESSON_READ_OVERHEAD_TOKENS = 30_000;
+/** How many times a reflection's turns read that context again, one tool call after another. */
+export const LESSON_READ_PASSES = 3;
 /** What a reflection writes: its reasoning and one `propose_lessons` call. */
-export const LESSON_ANSWER_TOKENS = 2_000;
+export const LESSON_ANSWER_TOKENS = 4_000;
 const CHARS_PER_TOKEN = 4;
 
 /**
  * Prices a reflection before it runs: the stretch's stored characters and the
- * guide's, a fixed allowance for reading around them, at the list price of the
- * model it would run as. No list price (cursor-agent, an unlisted id) prices
+ * guide's plus a fixed allowance for the CLI's own context, read once per
+ * pass of its tool calls, at the list price of the model it would run as. No list price (cursor-agent, an unlisted id) prices
  * nothing — tokens only, never $0.
  */
 @Injectable()
@@ -51,10 +53,12 @@ export class LessonEstimateService {
       em,
     );
     const inputTokens =
-      Math.ceil(
+      (Math.ceil(
         (chars + lessonsReflectionGuide(this.memory.enabled).length) /
           CHARS_PER_TOKEN,
-      ) + LESSON_READ_OVERHEAD_TOKENS;
+      ) +
+        LESSON_READ_OVERHEAD_TOKENS) *
+      LESSON_READ_PASSES;
     const rates = adapter.billingRatesOf(model);
     return {
       agentKind: choice.agentKind,

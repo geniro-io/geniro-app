@@ -320,7 +320,7 @@ export const LessonSegmentListQuerySchema = z.object({
     .max(200)
     .optional()
     .describe(
-      'Comma-separated statuses; omitted = offered, dismissed and failed',
+      'Comma-separated statuses; omitted = the ones waiting in "Not reflected yet": offered and failed',
     ),
   runId: z.string().min(1).max(200).optional(),
 });

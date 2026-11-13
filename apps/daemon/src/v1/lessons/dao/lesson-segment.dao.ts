@@ -5,11 +5,16 @@ import { BaseDao } from '@packages/mikroorm';
 import { LessonSegment } from '../entity/lesson-segment.entity';
 import type { LessonSegmentStatus } from '../lessons.types';
 
-/** A stretch waiting on the user: offered, put aside with "Not now", or a reflection that failed. */
-export const OPEN_SEGMENT_STATUSES: readonly LessonSegmentStatus[] = [
+/** A stretch waiting on the user in "Not reflected yet": offered (a "Not now" leaves it so), or a reflection that failed. */
+export const WAITING_SEGMENT_STATUSES: readonly LessonSegmentStatus[] = [
   'offered',
-  'dismissed',
   'failed',
+];
+
+/** A stretch no reflection has read yet — waiting, or dismissed from "Not reflected yet"; a later close extends it. */
+export const OPEN_SEGMENT_STATUSES: readonly LessonSegmentStatus[] = [
+  ...WAITING_SEGMENT_STATUSES,
+  'dismissed',
 ];
 
 @Injectable()

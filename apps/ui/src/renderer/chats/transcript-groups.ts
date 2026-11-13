@@ -27,7 +27,10 @@ import {
 } from './geniro-tool';
 import {
   foldLessonOutcomes,
+  type LessonOfferView,
   type LessonsCardData,
+  newestLessonOfferSeqs,
+  readLessonOffer,
   readLessons,
 } from './lessons-payload';
 import {
@@ -717,6 +720,23 @@ export interface LessonsEntry {
 }
 
 /**
+ * A closed stretch's offer to reflect on it, drawn as its row. Only the newest
+ * offer of a stretch acts; one re-offered later reads as updated below.
+ */
+export interface LessonOfferEntry {
+  type: 'lesson-offer';
+  id: string;
+  createdAt: string;
+  seq: number;
+  memberId: string | null;
+  /** Read exactly as {@link FindingsEntry.parentToolUseId} is. */
+  parentToolUseId: string | null;
+  runId: string;
+  offer: LessonOfferView;
+  latest: boolean;
+}
+
+/**
  * One chart an agent handed over, plotted as its own card.
  *
  * A row each, on {@link FindingsEntry}'s reasoning and for the same reason: a
@@ -981,6 +1001,7 @@ export type TranscriptEntry =
   | FindingsEntry
   | RecommendationsEntry
   | LessonsEntry
+  | LessonOfferEntry
   | ChartEntry
   | MetricsEntry
   | ComparisonEntry
@@ -1018,6 +1039,7 @@ export type CardEntry =
   | FindingsEntry
   | RecommendationsEntry
   | LessonsEntry
+  | LessonOfferEntry
   | ChartEntry
   | MetricsEntry
   | ComparisonEntry
@@ -1033,6 +1055,7 @@ export function isCardEntry(entry: TranscriptEntry): entry is CardEntry {
     entry.type === 'findings' ||
     entry.type === 'recommendations' ||
     entry.type === 'lessons' ||
+    entry.type === 'lesson-offer' ||
     entry.type === 'chart' ||
     entry.type === 'metrics' ||
     entry.type === 'comparison' ||
@@ -2745,6 +2768,7 @@ export function groupTranscript(
   const outcomesByAction = new Map<number, ActionOutcomeView>();
   const lessonOutcomes: Readonly<Record<string, LessonOutcomeView>> =
     foldLessonOutcomes(items);
+  const newestOffers = newestLessonOfferSeqs(items);
   for (const item of items) {
     const actionOutcome = readActionOutcome(item);
     if (actionOutcome !== null) {
@@ -3188,6 +3212,26 @@ export function groupTranscript(
         parentToolUseId: subagentIdOf(item),
         card,
         outcomes: lessonOutcomes,
+      });
+      continue;
+    }
+    if (item.kind === 'lesson_offer') {
+      const offer = readLessonOffer(item);
+      if (offer === null) {
+        continue;
+      }
+      openGroups.delete(groupKey(item));
+      openTaskCards.delete(groupKey(item));
+      entries.push({
+        type: 'lesson-offer',
+        id: item.id,
+        createdAt: item.createdAt,
+        seq: item.seq,
+        memberId: item.memberId,
+        parentToolUseId: subagentIdOf(item),
+        runId: item.runId,
+        offer,
+        latest: newestOffers.get(offer.segmentId) === item.seq,
       });
       continue;
     }
